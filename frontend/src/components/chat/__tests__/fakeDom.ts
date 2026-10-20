@@ -90,6 +90,18 @@ class FNode {
     walk(this);
     return hit;
   }
+  // querySelectorAll: тег-селекторы (через запятую: 'h1,h2,...') — useHeadings/FileViewer.
+  // Прочие формы (атрибуты, классы) — пусто, как в реальном DOM для простого div.
+  querySelectorAll(sel: string): FNode[] {
+    const tags = sel.split(',').map(s => s.trim()).filter(Boolean);
+    const out: FNode[] = [];
+    const walk = (x: FNode) => {
+      if (x.nodeType === 1 && tags.includes(x.nodeName.toLowerCase())) out.push(x);
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(this);
+    return out;
+  }
   getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }; }
 
   _link(child: FNode, at: number) {

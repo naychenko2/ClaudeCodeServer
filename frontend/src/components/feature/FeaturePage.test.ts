@@ -1,11 +1,12 @@
-// Страница фичи (волна 2 «Обзор фич», шаг Ф2.4): рендер-тесты пяти состояний
-// (loading | ok | notFound | disabled | error, макет §5.7) + шапки (глиф, название,
-// тег статуса, ветка, возраст, «M задач», ⋯, главное действие) и блока тревоги.
+// Страница фичи (волна 2 «Обзор фич», шаг Ф2.4). «Быстрый трек — страница как файл»:
+// рендер-тесты пяти состояний (loading | ok | notFound | disabled | error, макет §5.7)
+// + шапки-«файла» (глиф, название, тег статуса, «Закрыть» как у FileViewer) и тела —
+// ТОЛЬКО конвейер (PipelineFlow).
 //
-// Крошка читает указатель возврата (featureBackNav):
-//   • пришли из чата (back.to = эта фича) — «← К чату «…»» (название — из api.chats.get);
-//   • указателя нет — «← К списку» (мобила) / «← Назад» (десктоп).
-// Клик — onBack(target) + clearBackNav.
+// Закрытие читает указатель возврата (featureBackNav):
+//   • пришли из чата (back.to = эта фича) — «К чату «…»» (название — из api.chats.get);
+//   • указателя нет — «К списку» (мобила) / «Назад» (десктоп).
+// Клик/Escape — onBack(target) + clearBackNav.
 //
 // Окружение node (без jsdom): fakeDom (mount) + управляемые сторы (featurePage,
 // featuresIndex, featureBackNav) и mock api (chats.get, tasks.getFeature).
@@ -15,7 +16,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { stripStepCode, featureTaskTotal, taskCounters } from './featurePageBody';
+import { featureTaskTotal, taskCounters } from './featurePageBody';
 import { __test as pageTest } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -125,15 +126,26 @@ function pageData(over: Partial<FeaturePageData> = {}): FeaturePageData {
   };
 }
 
-function render(props: { featureId?: string; projectId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void; chatNames?: Record<string, string>; chatPersonas?: Record<string, string> }) {
+function render(props: { featureId?: string; projectId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void }) {
   installFakeDom();
+  // fakeDom'ов window/document без addEventListener/querySelector — ставим минимальные:
+  // Esc-обработчик FeaturePage (как у FileViewer) вешает window.addEventListener('keydown')
+  // и читает document.querySelector; без них mount падал. dispatchEvent → реальные слушатели.
+  const win = globalThis as any;
+  const doc = (globalThis as any).document;
+  if (!win.window.addEventListener) {
+    const listeners: Record<string, Set<Function>> = {};
+    win.window.addEventListener = (t: string, f: Function) => { (listeners[t] ??= new Set()).add(f); };
+    win.window.removeEventListener = (t: string, f: Function) => { listeners[t]?.delete(f); };
+    win.window.dispatchEvent = (e: { type: string }) => { listeners[e.type]?.forEach(f => f(e)); return true; };
+    win.__winListeners = listeners;
+  }
+  if (!doc.querySelector) doc.querySelector = () => null;
   const { container } = mount(createElement(FeaturePage, {
     featureId: props.featureId ?? 'f1',
     projectId: props.projectId ?? 'p1',
     isMobile: props.isMobile ?? false,
     onBack: props.onBack ?? (() => {}),
-    chatNames: props.chatNames,
-    chatPersonas: props.chatPersonas,
   }));
   return container;
 }
@@ -156,7 +168,11 @@ async function settle() {
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
 }
 
-describe('FeaturePage: пять состояний + шапка + тревога', () => {
+// Быстрый трек «страница как файл»: активны пять состояний + шапка-«файл» (глиф,
+// название, тег, «Закрыть» как у FileViewer) + закрытие (кнопка/Esc) + back-nav.
+// ЗАМОРОЖЕНЫ (it.skip, «вернём позже»): блоки, убранные из рендера — тревога, шаги,
+// чаты фичи, задачи, лента событий, «Мерж», меню ⋯, главное действие, M2-подсказка.
+describe('FeaturePage: пять состояний + шапка-«файл» + закрытие', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -184,51 +200,66 @@ describe('FeaturePage: пять состояний + шапка + тревога
     vi.restoreAllMocks();
   });
 
-  // === 1. loading: скелет (6 полос + блок 120) + полоса-скелет в шапке вместо названия ===
-  it('loading: скелет в теле и полоса-скелет в шапке (крошка рабочая)', async () => {
+  // === 1. loading: скелет (6 полос + блок 120) в теле; шапка-«файл» — глиф/название/тег/«Закрыть» ===
+  it('loading: скелет в теле; шапка-«файл» — глиф, название, тег, «Закрыть»', async () => {
     mockGetFeature.pending = true; // fetch не разрешается → состояние держится loading
     const c = render({});
     await settle();
     // Тело: скелет.
-    const sk = findNodeByAttr(c, 'data-testid', 'feature-page-skeleton');
-    expect(sk).not.toBeNull();
-    // Шапка: вместо названия — полоса-скелет, крошка на месте.
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-title-skeleton')).not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-back')).not.toBeNull();
-    // Название/тег/ветка в загрузке не видны.
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-title')).toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-status')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-skeleton')).not.toBeNull();
+    // Шапка-«файл»: название (из индекса), тег, глиф, «Закрыть» — на месте (как у файла).
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-title')!).join('')).toContain('Моя фича');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-status')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-glyph')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close')).not.toBeNull();
   });
 
-  // === 2. ok: шапка (глиф, название, тег, ветка, возраст, «M задач», ⋯, главное действие) + тревога ===
-  it('ok: шапка — название, тег «Идёт», ветка, «5 задач», ⋯, главное действие «Ключевой чат»', async () => {
+  // === 2. ok: шапка-«файл» (глиф, название, тег, «Закрыть») + тело — ТОЛЬКО конвейер ===
+  it('ok: шапка-«файл» — глиф, название, тег «Идёт», «Закрыть»; тело — только конвейер', async () => {
     const c = render({});
     await settle();
-    const page = findNodeByAttr(c, 'data-testid', 'feature-page');
-    expect(page).not.toBeNull();
-    // Название.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page')).not.toBeNull();
+    // Название (mono, как «имя файла»).
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-title')!).join('')).toContain('Моя фича');
-    // Тег статуса: «идёт» (активная стадия run, без тревоги).
+    // Тег статуса: «Идёт» (активная стадия run, без тревоги).
     const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
     expect(tag).not.toBeNull();
     expect(textNodes(tag!).join('')).toContain('Идёт');
-    // Ветка.
-    const branch = findNodeByAttr(c, 'data-testid', 'feature-page-branch');
-    expect(branch).not.toBeNull();
-    expect(textNodes(branch!).join('')).toContain('feat/my-feature');
-    // «M задач».
-    const tc = findNodeByAttr(c, 'data-testid', 'feature-page-taskcount');
-    expect(tc).not.toBeNull();
-    expect(textNodes(tc!).join('')).toContain('5 задач');
-    // ⋯.
-    expect(findNodeByAttr(c, 'aria-label', 'Ещё действия')).not.toBeNull();
-    // Главное действие (featureQuickAction: нет тревоги, есть ключевой чат → «Ключевой чат»).
-    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
-    expect(main).not.toBeNull();
-    expect(textNodes(main!).join('')).toContain('Ключевой чат');
+    // Глиф состояния + «Закрыть» (как у файла).
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-glyph')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close')).not.toBeNull();
+    // Тело — только конвейер (PipelineFlow); убранных блоков нет.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-body')).not.toBeNull();
   });
 
-  it('ok: ⋯ открывает меню «Скопировать ветку» (без «Закрыть без мержа» и «Открыть эпик в «Задачах»»)', async () => {
+  // п.1: тултип НАЗВАНИЯ фичи = title (nameTitle={title}), а не label «К чату «…»».
+  // Мутация (в отчёте): вернуть nameTitle={label} → title ≠ название → тест краснеет.
+  it('п.1: title имени фичи = название (не «К чату «…»»)', async () => {
+    const c = render({});
+    await settle();
+    const name = findNodeByAttr(c, 'data-testid', 'feature-page-title')!;
+    const title = (name as unknown as { attributes: Record<string, string> }).attributes?.title;
+    expect(title, 'title имени = название фичи (не label возврата)').toBe('Моя фича');
+  });
+
+  // === 2b. «как файл»: белый фон C.bgCard, Toolbar-шапка, убранных блоков нет в DOM ===
+  it('as a file: фон C.bgCard, Toolbar-шапка; нет тревоги/чатов/задач/ленты/⋯/главного действия', async () => {
+    const c = render({});
+    await settle();
+    // Белый фон страницы — по токену C.bgCard (var(--c-bg-card)), как у просмотра файла.
+    const page = findNodeByAttr(c, 'data-testid', 'feature-page')!;
+    expect((page as unknown as { style: Record<string, string> }).style.background, 'фон страницы не C.bgCard (as a file)').toBe('var(--c-bg-card)');
+    // Убранные блоки/элементы шапки — в DOM нет (мёртвое действие/контент).
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-alarm'), 'тревога на месте (as a file: убрана)').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-main-action'), 'главное действие на месте (as a file: убрано)').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-branch'), 'ветка на месте (as a file: убрана)').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-taskcount'), '«M задач» на месте (as a file: убрано)').toBeNull();
+    expect(findNodeByAttr(c, 'aria-label', 'Ещё действия'), 'меню ⋯ на месте (as a file: убрано)').toBeNull();
+    // Строки чатов/шагов/событий фичи — нет. («Мерж»-стадия конвейера — легитимна, не проверяем по тексту.)
+    expect(findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key'), 'строка чата на месте (as a file: убрана)').toBeNull();
+  });
+
+  it.skip('ok: ⋯ открывает меню «Скопировать ветку» (без «Закрыть без мержа» и «Открыть эпик в «Задачах»»)', async () => {
     const c = render({});
     await settle();
     const kebab = findNodeByAttr(c, 'aria-label', 'Ещё действия')!;
@@ -242,7 +273,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(all).not.toContain('Открыть эпик в «Задачах»');
   });
 
-  it('ok: тревога «ждёт вас» (infoBg) + кнопка «Ответить»', async () => {
+  it.skip('ok: тревога «ждёт вас» (infoBg) + кнопка «Ответить»', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'wait', since: '2026-10-19T10:00:00Z', reason: 'выбрать вариант', personaId: 'p', sessionId: 'chat-key' },
@@ -262,7 +293,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(textNodes(main!).join('')).toContain('Ответить');
   });
 
-  it('ok: тревога «стоит» (dangerBg) + кнопка «Открыть его чат»', async () => {
+  it.skip('ok: тревога «стоит» (dangerBg) + кнопка «Открыть его чат»', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'stopped', since: '2026-10-19T09:00:00Z', reason: 'ход упал', personaId: 'p', sessionId: 'chat-x' },
@@ -278,7 +309,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === m1: пробел перед датой (не «решения18.10») + единый формат даты с лентой ===
-  it('m1: тревога — пробел перед датой (не «решения18.10»), формат даты как в ленте', async () => {
+  it.skip('m1: тревога — пробел перед датой (не «решения18.10»), формат даты как в ленте', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       // since — НЕ сегодня (18.10): дата выводится, и перед ней обязателен пробел.
@@ -293,7 +324,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === m2: кнопка тревоги на 360 — тач-цель ≥ 40 ===
-  it('m2: кнопка тревоги на 360 — minHeight 40 (тач-цель)', async () => {
+  it.skip('m2: кнопка тревоги на 360 — minHeight 40 (тач-цель)', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'wait', since: '2026-10-19T10:00:00Z', reason: 'выбрать вариант', personaId: 'p', sessionId: 'chat-key' },
@@ -307,7 +338,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === m3: тревога «к мержу» (kind=merge) — текст «К мержу», не «Ждёт вашего решения» ===
-  it('m3: тревога kind=merge — текст «К мержу» (не «Ждёт вашего решения»)', async () => {
+  it.skip('m3: тревога kind=merge — текст «К мержу» (не «Ждёт вашего решения»)', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
@@ -322,7 +353,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
 
   // === Ф2.6: главное действие «Мерж» (состояние «к мержу») ===
 
-  it('Ф2.6: тревога kind=merge → главное действие «Мерж» (не «К мержу»/«Ответить»)', async () => {
+  it.skip('Ф2.6: тревога kind=merge → главное действие «Мерж» (не «К мержу»/«Ответить»)', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
@@ -336,7 +367,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(text).not.toContain('Ответить');
   });
 
-  it('Ф2.6: кнопка «Мерж» есть ТОЛЬКО в состоянии «к мержу» (идущая фича → «Ключевой чат»)', async () => {
+  it.skip('Ф2.6: кнопка «Мерж» есть ТОЛЬКО в состоянии «к мержу» (идущая фича → «Ключевой чат»)', async () => {
     // Идущая фича (нет тревоги, есть ключевой чат) → «Ключевой чат», НЕ «Мерж» (мёртвая кнопка).
     const c = render({});
     await settle();
@@ -346,7 +377,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(text).not.toContain('Мерж');
   });
 
-  it('Ф2.6: 409 → причина из ответа (body.error) под кнопкой', async () => {
+  it.skip('Ф2.6: 409 → причина из ответа (body.error) под кнопкой', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
@@ -363,7 +394,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(textNodes(err!).join('')).toContain('Финал не принят: мерж преждевременно');
   });
 
-  it('Ф2.6: двойной клик → один запрос (кнопка заблокирована на время запроса)', async () => {
+  it.skip('Ф2.6: двойной клик → один запрос (кнопка заблокирована на время запроса)', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
@@ -382,7 +413,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(mockMergeFeature.calls, 'двойной клик дал >1 запроса (Ф2.6: кнопка не заблокирована)').toHaveLength(1);
   });
 
-  it('Ф2.6: успех → название задачи мержа + статус (без мёртвой ссылки)', async () => {
+  it.skip('Ф2.6: успех → название задачи мержа + статус (без мёртвой ссылки)', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'merge', since: '2026-10-19T10:00:00Z', reason: null, personaId: 'p', sessionId: 'chat-key' },
@@ -402,7 +433,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === Ф2.6: ключи ленты уникальны при равном at (taskId в ключе) ===
-  it('Ф2.6: два события одного вида в одном чате с равным at → ключи уникальны (taskId в ключе)', async () => {
+  it.skip('Ф2.6: два события одного вида в одном чате с равным at → ключи уникальны (taskId в ключе)', async () => {
     mockGetFeature.result = pageData({
       events: [
         { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: 'chat-x', round: null, reason: null },
@@ -427,7 +458,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(dupKey, 'дубль ключа ленты (Ф2.6: taskId не в ключе)').toBe(false);
   });
 
-  it('ok: закрытая смержена — итог «Смержена …» (successBg)', async () => {
+  it.skip('ok: закрытая смержена — итог «Смержена …» (successBg)', async () => {
     mockIndex.features = [feat({
       bucket: 'closed',
       summary: { mergedAt: '2026-10-15T12:00:00Z', durationMinutes: 2000 },
@@ -472,45 +503,111 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(all).toContain('Повторить');
   });
 
-  // === Крошка (сохраняю проверки Ф2.3) ===
-  it('крошка: указатель «чат → фича» → «← К чату «…»» (название из api.chats.get), onBack → chat', async () => {
+  // === Back-nav: закрытие (кнопка/Esc) ведёт туда, откуда открыли ===
+  it('back-nav: указатель «чат → фича» → короткая «Чат», полный «К чату «…»» в title, onBack → chat', async () => {
+    recordBackNav('chatA', { kind: 'feature', id: 'f1' });
+    mockChats.set('chatA', { id: 'chatA', name: 'Чат Дениса', mode: 'chat', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session);
+    const onBack = vi.fn();
+    const c = render({ onBack, isMobile: true });
+    await settle();
+    const close = findNodeByAttr(c, 'data-testid', 'feature-page-close')!;
+    // Майя M2: на 360 длинное «К чату «…»» ломало шапку. Видимая подпись — КОРОТКАЯ
+    // (одна строка, «Чат»), полный текст — только в title/aria-label.
+    expect(textNodes(close).join(''), 'видимая подпись не короткая').toBe('Чат');
+    expect(close.childNodes[0].getAttribute('title'), 'полный текст не в title').toBe('К чату «Чат Дениса»');
+    act(() => { (reactProps(close.childNodes[0])!.onClick as () => void)(); });
+    expect(onBack).toHaveBeenCalledWith({ kind: 'chat', chatId: 'chatA' });
+    expect(backNavTest.getBackNav()).toBeNull();
+  });
+
+  it('back-nav: десктоп, без указателя → «Закрыть» (X), onBack → list', async () => {
+    const onBack = vi.fn();
+    const c = render({ onBack });
+    await settle();
+    const close = findNodeByAttr(c, 'data-testid', 'feature-page-close')!;
+    // Десктоп: X-иконка (ToolbarIconButton), без текстовой подписи.
+    act(() => { (reactProps(close.childNodes[0])!.onClick as () => void)(); });
+    expect(onBack).toHaveBeenCalledWith({ kind: 'list' });
+  });
+
+  it('back-nav: мобила, без указателя → «К списку», onBack → list', async () => {
+    const onBack = vi.fn();
+    const c = render({ onBack, isMobile: true });
+    await settle();
+    const close = findNodeByAttr(c, 'data-testid', 'feature-page-close')!;
+    expect(textNodes(close).join('')).toContain('К списку');
+    act(() => { (reactProps(close.childNodes[0])!.onClick as () => void)(); });
+    expect(onBack).toHaveBeenCalledWith({ kind: 'list' });
+  });
+
+  // === m2 (Майя): aria-label с полным текстом возврата; видимая подпись — короткая ===
+  // Полный текст («К чату «…»»/«К списку») раньше был ТОЛЬКО в title; добавлен aria-label
+  // (скринридеры читают aria-label, не title). Видимая подпись остаётся короткой.
+  it('m2: aria-label «К чату «…»» (полный текст), видимая подпись короткая «Чат»', async () => {
+    recordBackNav('chatA', { kind: 'feature', id: 'f1' });
+    mockChats.set('chatA', { id: 'chatA', name: 'Чат Дениса', mode: 'chat', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session);
+    const c = render({ isMobile: true });
+    await settle();
+    // aria-label — полный текст возврата (мутация «убрать aria-label» красит).
+    const back = findNodeByAttr(c, 'aria-label', 'К чату «Чат Дениса»');
+    expect(back, 'aria-label с полным текстом «К чату «…»»').not.toBeNull();
+    // Видимая подпись — короткая «Чат» (не длинный «К чату «…»»).
+    const close = findNodeByAttr(c, 'data-testid', 'feature-page-close')!;
+    expect(textNodes(close).join(''), 'видимая подпись короткая').toBe('Чат');
+  });
+
+  it('m2: aria-label «К списку» (мобила, без указателя), видимая подпись «К списку»', async () => {
+    const c = render({ isMobile: true });
+    await settle();
+    const back = findNodeByAttr(c, 'aria-label', 'К списку');
+    expect(back, 'aria-label «К списку» (мобила, без указателя)').not.toBeNull();
+  });
+
+  // === Esc закрывает страницу (ровно как файл: FileViewer) — onBack(target) ===
+  it('Esc: закрывает → onBack (target по back-nav); в поле — не перехватывает', async () => {
     recordBackNav('chatA', { kind: 'feature', id: 'f1' });
     mockChats.set('chatA', { id: 'chatA', name: 'Чат Дениса', mode: 'chat', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session);
     const onBack = vi.fn();
     const c = render({ onBack });
     await settle();
-    const back = findNodeByAttr(c, 'data-testid', 'feature-page-back')!;
-    expect(textNodes(back).join('')).toContain('К чату «Чат Дениса»');
-    act(() => { (reactProps(back)!.onClick as () => void)(); });
-    expect(onBack).toHaveBeenCalledWith({ kind: 'chat', chatId: 'chatA' });
-    expect(backNavTest.getBackNav()).toBeNull();
+    // Esc вне поля/диалога → закрытие (target: chat).
+    act(() => { (globalThis as any).window.dispatchEvent({ type: 'keydown', key: 'Escape', defaultPrevented: false, target: null }); });
+    expect(onBack, 'Esc не закрыл страницу').toHaveBeenCalledWith({ kind: 'chat', chatId: 'chatA' });
+    // Esc, когда печатают в поле (INPUT) — не перехватываем (Escape нужнее полю).
+    onBack.mockClear();
+    act(() => { (globalThis as any).window.dispatchEvent({ type: 'keydown', key: 'Escape', defaultPrevented: false, target: { tagName: 'INPUT' } }); });
+    expect(onBack, 'Esc в поле перехватил закрытие (должен уступить полю)').not.toHaveBeenCalled();
   });
 
-  it('крошка: десктоп, без указателя → «← Назад», onBack → list', async () => {
+  // п.3 (Глеб, желательно): правило «скрытый центр не перехватывает Esc» — и для страницы.
+  // Страница передаёт rootRef в оболочку (useEscapeClose): скрытая (display:none →
+  // offsetParent=null) — Esc её не закрывает. Мутация «не передавать rootRef» → проверка
+  // offsetParent не идёт (el=null) → Esc закрывает скрытую → red.
+  it('п.3: скрытая страница (offsetParent=null) — Esc не перехватывает', async () => {
     const onBack = vi.fn();
     const c = render({ onBack });
     await settle();
-    const back = findNodeByAttr(c, 'data-testid', 'feature-page-back')!;
-    expect(textNodes(back).join('')).toContain('Назад');
-    act(() => { (reactProps(back)!.onClick as () => void)(); });
-    expect(onBack).toHaveBeenCalledWith({ kind: 'list' });
-  });
-
-  it('крошка: мобила, без указателя → «← К списку»', async () => {
-    const c = render({ isMobile: true });
-    await settle();
-    const back = findNodeByAttr(c, 'data-testid', 'feature-page-back')!;
-    expect(textNodes(back).join('')).toContain('К списку');
+    // Корень страницы (data-testid=feature-page) — тот, что useEscapeClose проверяет (rootRef).
+    const root = findNodeByAttr(c, 'data-testid', 'feature-page') as unknown as { offsetParent?: unknown } | null;
+    expect(root, 'корень страницы (rootRef оболочки)').not.toBeNull();
+    // Скрытый центр (display:none → offsetParent=null) — Esc не закрывает.
+    root!.offsetParent = null;
+    act(() => { (globalThis as any).window.dispatchEvent({ type: 'keydown', key: 'Escape', defaultPrevented: false, target: null }); });
+    expect(onBack, 'скрытая страница — Esc не закрывает').not.toHaveBeenCalled();
+    // Контроль: видимая страница (offsetParent ≠ null) — Esc закрывает.
+    root!.offsetParent = { tagName: 'BODY' };
+    act(() => { (globalThis as any).window.dispatchEvent({ type: 'keydown', key: 'Escape', defaultPrevented: false, target: null }); });
+    expect(onBack, 'видимая страница — Esc закрывает').toHaveBeenCalledTimes(1);
   });
 
   // === M2: крошка на 360 — minHeight 40 (тач-цель, §6) ===
-  it('M2: крошка на 360 — minHeight 40 (тач-цель)', () => {
+  it.skip('M2: крошка на 360 — minHeight 40 (тач-цель)', () => {
     const html = renderToStaticMarkup(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', isMobile: true, onBack: () => {} }));
     expect(html).toContain('min-height:40px');
   });
 
   // === m2: крошка по таблице §5.1 — поля, gap, вес, maxWidth, многоточие ===
-  it('m2: крошка по таблице §5.1 — поля 4 8 4 4, gap 5, вес 400, maxWidth 260, многоточие', () => {
+  it.skip('m2: крошка по таблице §5.1 — поля 4 8 4 4, gap 5, вес 400, maxWidth 260, многоточие', () => {
     const html = renderToStaticMarkup(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', onBack: () => {} }));
     expect(html).toContain('padding:4px 8px 4px 4px');
     expect(html).toContain('gap:5px');
@@ -520,14 +617,14 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === m3: крошка — фокус SHADOW.focus (класс cc-feature-page-crumb, §0) + шрифт Hanken ===
-  it('m3: крошка несёт focus-класс (SHADOW.focus, §0) и шрифт Hanken (ловушка <button>)', () => {
+  it.skip('m3: крошка несёт focus-класс (SHADOW.focus, §0) и шрифт Hanken (ловушка <button>)', () => {
     const html = renderToStaticMarkup(createElement(FeaturePage, { featureId: 'f1', projectId: 'p1', onBack: () => {} }));
     expect(html).toContain('cc-feature-page-crumb');
     expect(html).toContain('Hanken Grotesk');
   });
 
   // === Ф2.5: чаты фичи — ключевой первым ===
-  it('Ф2.5: чаты фичи — ключевой чат первым, остальные по порядку индекса', async () => {
+  it.skip('Ф2.5: чаты фичи — ключевой чат первым, остальные по порядку индекса', async () => {
     // Два чата: 'chat-key' (ключевой) и 'chat-other'.
     // В индексе 'chat-other' идёт ПЕРЕД 'chat-key' (Object.entries порядок).
     mockIndex.chats = {
@@ -559,7 +656,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === Ф2.5: архивный ключевой чат помечен ===
-  it('Ф2.5: архивный ключевой чат — метка «архив»', async () => {
+  it.skip('Ф2.5: архивный ключевой чат — метка «архив»', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
     };
@@ -571,7 +668,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === Ф2.5: «Показать все» — перезапрос без лимита ===
-  it('Ф2.5: «Показать все» перезапрашивает getFeature с eventsLimit=all', async () => {
+  it.skip('Ф2.5: «Показать все» перезапрашивает getFeature с eventsLimit=all', async () => {
     // Лента обрезана: 2 события, всего 5.
     mockGetFeature.result = pageData({
       events: [
@@ -597,7 +694,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === Ф2.5: событие без sessionId не даёт ссылки на чат ===
-  it('Ф2.5: событие без sessionId — нет ссылки «открыть чат»', async () => {
+  it.skip('Ф2.5: событие без sessionId — нет ссылки «открыть чат»', async () => {
     mockGetFeature.result = pageData({
       events: [
         { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: null, round: null, reason: null },
@@ -613,7 +710,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === Ф2.5: событие С sessionId даёт ссылку ===
-  it('Ф2.5: событие с sessionId — ссылка «открыть чат» на месте', async () => {
+  it.skip('Ф2.5: событие с sessionId — ссылка «открыть чат» на месте', async () => {
     mockGetFeature.result = pageData({
       events: [
         { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: 'chat-x', round: null, reason: null },
@@ -627,7 +724,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === Ф2.5: «шагов нет» — пустое состояние ===
-  it('Ф2.5: «шагов нет» — пустое состояние в блоке Шаги', async () => {
+  it.skip('Ф2.5: «шагов нет» — пустое состояние в блоке Шаги', async () => {
     // stepChains = [] (нет в pageData по умолчанию).
     const c = render({});
     await settle();
@@ -636,7 +733,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === M1: главное действие и тревога — в ВЕРНЫЙ чат (не в ключевой) ===
-  it('M1: без тревоги, есть ключевой чат → «Ключевой чат» → onBack {kind:key, chat-key}', async () => {
+  it.skip('M1: без тревоги, есть ключевой чат → «Ключевой чат» → onBack {kind:key, chat-key}', async () => {
     const onBack = vi.fn();
     const c = render({ onBack });
     await settle();
@@ -647,7 +744,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(onBack).toHaveBeenCalledWith({ kind: 'key', chatId: 'chat-key' });
   });
 
-  it('M1: тревога про «chat-x» (не ключевой чат) → «Ответить» → onBack {kind:chat, chat-x}', async () => {
+  it.skip('M1: тревога про «chat-x» (не ключевой чат) → «Ответить» → onBack {kind:chat, chat-x}', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'wait', since: '2026-10-19T10:00:00Z', reason: 'выбрать вариант', personaId: 'p', sessionId: 'chat-x' },
@@ -665,7 +762,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(onBack).not.toHaveBeenCalledWith({ kind: 'key', chatId: 'chat-key' });
   });
 
-  it('M1: «Ответить», но чата тревоги нет → кнопки нет (нет мёртвых действий)', async () => {
+  it.skip('M1: «Ответить», но чата тревоги нет → кнопки нет (нет мёртвых действий)', async () => {
     mockIndex.features = [feat({
       bucket: 'attention',
       attention: { kind: 'wait', since: '2026-10-19T10:00:00Z', reason: 'выбрать вариант', personaId: 'p', sessionId: null },
@@ -679,7 +776,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === M2: подпись шага — готовая подпись бэка chain.status (одна точка правды) ===
-  it('M2: подпись шага — chain.status бэка как есть', async () => {
+  it.skip('M2: подпись шага — chain.status бэка как есть', async () => {
     mockGetFeature.result = pageData({
       run: {
         ...pageData().run,
@@ -694,7 +791,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(textNodes(row).join('')).toContain('ждёт ревью');
   });
 
-  it('M2: status отсутствует (старый ответ) → фолбэк словами бэка: pending=«ждёт ревью», returned=«закрыт без повторного ревью»', async () => {
+  it.skip('M2: status отсутствует (старый ответ) → фолбэк словами бэка: pending=«ждёт ревью», returned=«закрыт без повторного ревью»', async () => {
     mockGetFeature.result = pageData({
       run: {
         ...pageData().run,
@@ -714,7 +811,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === M3: строка чата и «открыть чат» — настоящие <button> (ловушки §0) ===
-  it('M3: строка чата — <button>; клик → onBack {kind:chat, chatId}', async () => {
+  it.skip('M3: строка чата — <button>; клик → onBack {kind:chat, chatId}', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
     };
@@ -728,7 +825,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(onBack).toHaveBeenCalledWith({ kind: 'chat', chatId: 'chat-key' });
   });
 
-  it('M3: «открыть чат» в ленте — <button>; клик → onBack {kind:chat, chatId}', async () => {
+  it.skip('M3: «открыть чат» в ленте — <button>; клик → onBack {kind:chat, chatId}', async () => {
     mockGetFeature.result = pageData({
       events: [
         { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: 'chat-x', round: null, reason: null },
@@ -746,7 +843,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
 
   // === m5: «открыть чат» — блок display:flex + alignItems:flex-start, прижат к тексту;
   // на 360 тач-цель ≥ 40 через minHeight (не большими полями). ===
-  it('m5: «открыть чат» — display:flex + alignItems:flex-start (прижат к тексту), на 360 minHeight 40', async () => {
+  it.skip('m5: «открыть чат» — display:flex + alignItems:flex-start (прижат к тексту), на 360 minHeight 40', async () => {
     mockGetFeature.result = pageData({
       events: [
         { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: 'chat-x', round: null, reason: null },
@@ -766,19 +863,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === M4: название чата вместо GUID (без новых запросов) ===
-  it('M4: есть chatNames → название; GUID наружу не попадает', async () => {
-    mockIndex.chats = {
-      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
-    };
-    const c = render({ chatNames: { 'chat-key': 'Чат Дениса' } });
-    await settle();
-    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
-    expect(textNodes(row).join('')).toContain('Чат Дениса');
-    // GUID ('chat-key') — только в data-testid (атрибут), в ТЕКСТ не попадает.
-    expect(textNodes(c).join('')).not.toContain('chat-key');
-  });
-
-  it('M4: названия нет (чат вне проекта / список не пришёл) → «Чат»', async () => {
+  it.skip('M4: названия нет (чат вне проекта / список не пришёл) → «Чат»', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
     };
@@ -790,39 +875,36 @@ describe('FeaturePage: пять состояний + шапка + тревога
   });
 
   // === Blocker: минимальный run (бэк не отдал steps/reviews/qa) — страница не падает ===
-  it('blocker: минимальный run (без steps/reviews/qa) — страница рендерится, «Задачи» на месте', async () => {
+  it('blocker: минимальный run (без steps/reviews/qa) — страница рендерится', async () => {
     mockGetFeature.result = {
       run: { featureId: 'f1', epic: { id: 'f1', title: 'Моя фича' } },
       events: [], eventsTotal: 0,
     } as unknown as FeaturePageData;
     const c = render({});
     await settle();
-    // Страница и шапка на месте (taskCounters не упал TypeError'ом на spread).
+    // Страница и шапка-«файл» на месте (минимальный run не роняет).
     expect(findNodeByAttr(c, 'data-testid', 'feature-page')).not.toBeNull();
     expect(textNodes(c).join('')).toContain('Моя фича');
-    // Блок «Задачи» с счётчиками (1 задача — эпик, впереди).
-    expect(textNodes(c).join('')).toContain('впереди 1');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close')).not.toBeNull();
   });
 
-  // === Глеб major: run БЕЗ epic — taskCounters не падает (защита run.epic ? [..] : []) ===
-  it('epic: минимальный run БЕЗ epic — страница не падает (taskCounters защищён)', async () => {
+  // === Глеб major: run БЕЗ epic — страница не падает (фолбэк названия, run.epic?.title) ===
+  it('epic: минимальный run БЕЗ epic — страница не падает', async () => {
     mockGetFeature.result = {
       run: { featureId: 'f1' },
       events: [], eventsTotal: 0,
     } as unknown as FeaturePageData;
     const c = render({});
     await settle();
-    // Страница на месте: taskCounters не упал TypeError'ом на run.epic (undefined.status).
-    // Мутация «убрать защиту run.epic ? [..] : []» красит: белый экран (feature-page null).
+    // Страница на месте: run без epic не роняет (название — из индекса, run.epic?.title — safe).
+    // Мутация «убрать ?. у run.epic» красит: TypeError → белый экран (feature-page null).
     expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница упала (epic: run без epic)').not.toBeNull();
-    // Блок «Всего N» (п.63: «Задачи · N» → «Всего N») на месте (0 задач — счётчики пустые,
-    // но блок страницу не роняет).
-    expect(textNodes(c).join('')).toContain('Всего');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-title'), 'название не на месте (epic: run без epic)').not.toBeNull();
   });
 
   // === R6-1: чаты — роль русским словом, аватар персоны, «ключевой» ===
 
-  it('R6-1: роль чата — русское слово (curator→«куратор», executor→«исполнитель»), не сырой kind', async () => {
+  it.skip('R6-1: роль чата — русское слово (curator→«куратор», executor→«исполнитель»), не сырой kind', async () => {
     mockIndex.chats = {
       'chat-c': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
       'chat-x': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'back' }],
@@ -839,7 +921,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(xText).not.toContain('executor');
   });
 
-  it('R6-1: ключевой чат — метка «ключевой» (accentLight), без кода роли', async () => {
+  it.skip('R6-1: ключевой чат — метка «ключевой» (accentLight), без кода роли', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
     };
@@ -853,7 +935,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect((row as unknown as { style: Record<string, string> }).style.background).toBe('var(--c-accent-light)');
   });
 
-  it('Ф3.2: метка «ключевой» — aria-describedby ведёт на скрытый span (минор 46: id всегда в DOM)', async () => {
+  it.skip('Ф3.2: метка «ключевой» — aria-describedby ведёт на скрытый span (минор 46: id всегда в DOM)', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
     };
@@ -873,19 +955,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(chip, 'метка «ключевой» (data-testid) есть').not.toBeNull();
   });
 
-  it('R6-1: аватар 18 — персона из chatPersonas (инициалы); без персоны — нейтральный круг', async () => {
-    personaMap.set('p1', 'Денис');
-    mockIndex.chats = {
-      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
-    };
-    const c = render({ chatPersonas: { 'chat-key': 'p1' } });
-    await settle();
-    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
-    // Аватар персоны: инициал (mock personaInitials → первая буква).
-    expect(textNodes(row).join('')).toContain('Д');
-  });
-
-  it('R6-1: персоны нет — инициалов в строке чата нет (нейтральный круг)', async () => {
+  it.skip('R6-1: персоны нет — инициалов в строке чата нет (нейтральный круг)', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
     };
@@ -897,7 +967,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
 
   // === R6-2: лента — исполнитель, дата+время, сетка 44·16 ===
 
-  it('R6-2: лента — исполнитель по personaId (имя), без персоны — без прочерка', async () => {
+  it.skip('R6-2: лента — исполнитель по personaId (имя), без персоны — без прочерка', async () => {
     personaMap.set('p1', 'Денис');
     mockGetFeature.result = pageData({
       events: [
@@ -919,7 +989,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(t2).not.toContain('—');
   });
 
-  it('R6-2: время — сегодня «ЧЧ:ММ» (одна строка); другой день — ДВЕ строки: дата сверху, время снизу (N2)', async () => {
+  it.skip('R6-2: время — сегодня «ЧЧ:ММ» (одна строка); другой день — ДВЕ строки: дата сверху, время снизу (N2)', async () => {
     mockGetFeature.result = pageData({
       events: [
         { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: null, round: null, reason: null },
@@ -943,7 +1013,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(nodes.some(t => /^\d{2}\.\d{2} \d{2}:\d{2}$/.test(t)), 'дата+время склеены в одну строку (N2: должны быть в две строки)').toBe(false);
   });
 
-  it('R6-2: строка события — сетка 44px 16px minmax(0,1fr), column-gap 8', async () => {
+  it.skip('R6-2: строка события — сетка 44px 16px minmax(0,1fr), column-gap 8', async () => {
     mockGetFeature.result = pageData({
       events: [
         { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't1', personaId: null, sessionId: null, round: null, reason: null },
@@ -960,14 +1030,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
 
   // === R6-3: шаги — код не повторяется, число отдельно, «Показать все» Button, строка-кнопка ===
 
-  it('R6-3: код шага в названии не повторяется (stripStepCode, чистая функция)', () => {
-    expect(stripStepCode('Ш1 · индекс поиска', 'Ш1')).toBe('индекс поиска');
-    expect(stripStepCode('Ш10 · индекс', 'Ш1')).toBe('Ш10 · индекс'); // «Ш10» для кода «Ш1» не режется
-    expect(stripStepCode('Ш10 · индекс', 'Ш10')).toBe('индекс');
-    expect(stripStepCode('Индекс без кода', 'Ш1')).toBe('Индекс без кода');
-  });
-
-  it('R6-3: строка шага — код один раз; с чатом — <button>, без — <div>', async () => {
+  it.skip('R6-3: строка шага — код один раз; с чатом — <button>, без — <div>', async () => {
     mockGetFeature.result = pageData({
       run: {
         ...pageData().run,
@@ -995,7 +1058,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(row2.nodeName).toBe('DIV');
   });
 
-  it('R6-3: число шагов отделено от подписи (отдельный span, не «ШАГИ2»)', async () => {
+  it.skip('R6-3: число шагов отделено от подписи (отдельный span, не «ШАГИ2»)', async () => {
     mockGetFeature.result = pageData({
       run: {
         ...pageData().run,
@@ -1021,7 +1084,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
 
   // === R6-4: каркас §5.4 — колонки, открытые блоки, порядок на 360 ===
 
-  it('R6-4: десктоп — grid minmax(0,1fr) 300px, gap 18, align start; блоки открытые (marginBottom 18, без фона)', async () => {
+  it.skip('R6-4: десктоп — grid minmax(0,1fr) 300px, gap 18, align start; блоки открытые (marginBottom 18, без фона)', async () => {
     const c = render({});
     await settle();
     const body = findNodeByAttr(c, 'data-testid', 'feature-page-body')!;
@@ -1038,7 +1101,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(bst.border).toBeUndefined();
   });
 
-  it('R6-4: 360 — одна колонка, порядок «чаты → шаги» (R-11)', async () => {
+  it.skip('R6-4: 360 — одна колонка, порядок «чаты → шаги» (R-11)', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
     };
@@ -1074,7 +1137,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
 
   // === R6-5: склонение, тач-цель «Повторить», счётчики-теги ===
 
-  it('R6-5: шапка — «1 задача», «2 задачи», «5 задач» (lib/plural, не «3 задач»)', async () => {
+  it.skip('R6-5: шапка — «1 задача», «2 задачи», «5 задач» (lib/plural, не «3 задач»)', async () => {
     for (const [count, expected] of [[1, '1 задача'], [2, '2 задачи'], [5, '5 задач']] as const) {
       mockIndex.features = [feat({ taskCount: count })];
       const c = render({});
@@ -1093,7 +1156,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect((btn as unknown as { style: Record<string, string> }).style.minHeight).toBe('40px');
   });
 
-  it('R6-5: счётчики задач — теги §5.1 (11/600, R 6, padding 1 7), ряд gap 6, marginBottom 6', async () => {
+  it.skip('R6-5: счётчики задач — теги §5.1 (11/600, R 6, padding 1 7), ряд gap 6, marginBottom 6', async () => {
     const c = render({});
     await settle();
     const body = findNodeByAttr(c, 'data-testid', 'feature-page-body')!;
@@ -1118,7 +1181,7 @@ describe('FeaturePage: пять состояний + шапка + тревога
   // beforeEach: index.taskCount=5; run.epic есть (taskCounters: pending=1, total=1) →
   // «Всего 5» + «прочее 4» (5 − 1: consult не виден в счётчиках по статусам).
   // Мутация (в отчёте): убрать тег «прочее» из TaskCountersView → тест краснеет.
-  it('п.63: «Всего N» + «прочее K» (итог из индекса > сумма счётчиков)', async () => {
+  it.skip('п.63: «Всего N» + «прочее K» (итог из индекса > сумма счётчиков)', async () => {
     const c = render({});
     await settle();
     const text = textNodes(c).join('');
@@ -1145,7 +1208,9 @@ describe('п.64: featureTaskTotal (один фолбэк)', () => {
 // зелёными. Здесь — сам ТЕКСТ плашки в DOM: по наведению (задержка 350 мс) и по фокусу
 // на кнопке-строке (клавиатура), исчезает по уходу/blur. Мутация «убрать <Tooltip>»
 // краснит: без обёртки нет ни onMouseEnter, ни focused-состояния → текст не появляется.
-describe('FeaturePage: M2 подсказка «ключевой» (наведение + фокус + уход)', () => {
+// Заморожено (быстрый трек «страница как файл»): блок «Чаты фичи» убран из рендера —
+// строки чатов (feature-chat-*) и метка «ключевой» больше не на странице. Вернём вместе.
+describe.skip('FeaturePage: M2 подсказка «ключевой» (наведение + фокус + уход)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -1256,3 +1321,58 @@ function findButtonWithText(n: FNodeLike, text: string): FNodeLike | null {
   }
   return null;
 }
+
+// === Esc: общий хук useEscapeClose (в CenterViewShell) — FileViewer и FeaturePage ===
+// Правило: не перехватываем, если печатают в поле/редакторе или открыт [role=dialog]/[role=menu].
+// Мутации: (1) убрать removeEventListener в cleanup → «слушатель снят при размонтировании» краснеет;
+// (2) убрать проверку [role=dialog] → «Esc при открытом диалоге» краснеет.
+describe('Esc: useEscapeClose (общий хук, CenterViewShell)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  function mountPage(onBack: (t: FeaturePageBackTarget) => void) {
+    installFakeDom();
+    const win = globalThis as any;
+    const doc = (globalThis as any).document;
+    if (!win.window.addEventListener) {
+      const listeners: Record<string, Set<Function>> = {};
+      win.window.addEventListener = (t: string, f: Function) => { (listeners[t] ??= new Set()).add(f); };
+      win.window.removeEventListener = (t: string, f: Function) => { listeners[t]?.delete(f); };
+      win.window.dispatchEvent = (e: { type: string }) => { listeners[e.type]?.forEach(f => f(e)); return true; };
+      win.__winListeners = listeners;
+    }
+    if (!doc.querySelector) doc.querySelector = () => null;
+    const { root, container } = mount(createElement(FeaturePage, {
+      featureId: 'f1', projectId: 'p1', isMobile: false, onBack,
+    }));
+    return { root, container, win, doc };
+  }
+  function esc(win: any) {
+    win.window.dispatchEvent({ type: 'keydown', key: 'Escape', target: { tagName: 'DIV', isContentEditable: false } });
+  }
+  afterEach(() => { vi.useRealTimers(); uninstallFakeDom(); vi.restoreAllMocks(); });
+
+  it('Esc: закрывает (onBack) — как у файла', async () => {
+    const onBack = vi.fn();
+    const { win } = mountPage(onBack);
+    await settle();
+    esc(win);
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('Esc при открытом [role=dialog]/[role=menu]: не перехватывает (Escape нужнее им)', async () => {
+    const onBack = vi.fn();
+    const { win, doc } = mountPage(onBack);
+    await settle();
+    doc.querySelector = () => ({ role: 'dialog' });
+    esc(win);
+    expect(onBack, 'Esc перехвачен при открытом диалоге').not.toHaveBeenCalled();
+  });
+
+  it('Esc-слушатель снят при размонтировании (мутация: убрать removeEventListener → red)', async () => {
+    const onBack = vi.fn();
+    const { root, win } = mountPage(onBack);
+    await settle();
+    act(() => { root.unmount(); });
+    esc(win);
+    expect(onBack, 'слушатель Esc не снят при размонтировании (stale listener)').not.toHaveBeenCalled();
+  });
+});

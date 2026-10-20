@@ -477,11 +477,16 @@ public class TasksController(
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
         // Сессии владельца → узкий снимок (id, taskId, projectId, archived). GetAllOwnedBy
         // отдаёт только живые сессии владельца: чужие/удалённые id чатов в снимок не попадают.
-        var snapshot = sessions.GetAllOwnedBy(UserId)
+        return Ok(features.BuildIndex(UserId, SessionSnapshot(), projectId));
+    }
+
+    // Узкий снимок сессий владельца (id, taskId, projectId, archived) — единый источник для
+    // индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/удалённые
+    // id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца).
+    private List<FeatureIndexSession> SessionSnapshot() =>
+        sessions.GetAllOwnedBy(UserId)
             .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived))
             .ToList();
-        return Ok(features.BuildIndex(UserId, snapshot, projectId));
-    }
 
     // Одна фича по id эпика (волна 2 «Обзор фич», GET /api/tasks/features/{featureId}):
     // обёртка { run, events, eventsTotal } — агрегат (Project, без новой арифметики) + лента
@@ -491,27 +496,35 @@ public class TasksController(
     // (features == null) → честный 503 (ADR-014, как у GetFeatures/GetFeaturesIndex). Ручка
     // от фич-флагов не зависит. ?eventsLimit=: не задан → 100; "all"/"0" → все; N (целое > 0)
     // → N; прочее → 100.
+    // п.7: белый список символов id фичи (как resumeSessionId): GUID/строка id без спецсимволов.
+    // Нестандартный id (слеш, «..», >128) → 404 «Фича не найдена» (тело как у «нет эпика»).
+    private static readonly System.Text.RegularExpressions.Regex FeatureIdPattern =
+        new(@"^[A-Za-z0-9_-]{1,128}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     [HttpGet("features/{featureId}")]
     public IActionResult GetFeature(string featureId, [FromQuery] string? eventsLimit = null)
     {
         if (features is null)
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // п.7: нестандартный id (символы вне белого списка) → тот же 404, что «нет эпика»:
+        // lookup по кривому id (с «/» или «..») не идёт, фронт 404 не различает.
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
         // Project: null — эпика нет (нет/чужой/удалён — один 404, см. выше).
         // Тело совпадает с 404 POST merge: { error: "Фича не найдена" } (фронт читает error).
         var run = features.Project(featureId, UserId);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
-        // Снимок сессий владельца — как для индекса: sessionId события наружу только если в нём
-        // (fail-closed: удалённый/чужой чат → null).
-        var snapshot = sessions.GetAllOwnedBy(UserId)
-            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived))
-            .ToList();
-        var all = FeatureProjector.BuildEvents(run, snapshot);
+        // Снимок сессий владельца — как для индекса (SessionSnapshot): sessionId события наружу
+        // только если в нём (fail-closed: удалённый/чужой чат → null).
+        var all = FeatureProjector.BuildEvents(run, SessionSnapshot());
         var eventsTotal = all.Count;
         var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
         return Ok(new { run, events, eventsTotal });
     }
 
-    // ?eventsLimit= : не задан → 100; "all"/"0" → все (int.MaxValue); N (целое > 0) → N; прочее → 100.
+    // ?eventsLimit= : не задан (null) → 100; строка «0» или «all» → все (int.MaxValue) — «0»
+    // читается как «без лимита», а не как числовой ноль (отдельного числового 0 на wire нет:
+    // параметр всегда строка); N (целое > 0) → N; прочее → 100.
     private static int ResolveEventsLimit(string? eventsLimit)
     {
         if (eventsLimit is null) return 100;
@@ -552,7 +565,10 @@ public class TasksController(
         // Worktree фичи: непустые путь и ветка, путь на диске и числится в `git worktree list`
         // проекта (тот же предикат, что AttachWorktreeAsync) — иначе исполнитель тихо стартовал бы
         // в корне проекта. Текст 409 — без абсолютного пути хоста (п.4).
-        var worktreeError = await FeatureWorktreeErrorAsync(run.Epic);
+        var (gitDisabled, worktreeError) = await FeatureWorktreeErrorAsync(run.Epic);
+        // п.57: подсистема Git выключена → честный 503 (как у Tasks), а не 409 «не найден».
+        if (gitDisabled)
+            return StatusCode(503, new { error = "Подсистема Git выключена на этом сервере" });
         if (worktreeError is not null)
             return Conflict(new { error = worktreeError });
 
@@ -608,9 +624,11 @@ public class TasksController(
 
             // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.
             // Description — самодостаточный шаблон постановки (исход/цель, push, конфликт, критерий, уборка).
+            // ProjectId! — здесь не null: гард worktree (FeatureWorktreeErrorAsync) выше уже вернул 409,
+            // если у эпика нет проекта.
             var req = new CreateTaskRequest(
                 Title: $"Мерж фичи: {run.Epic.Title}",
-                Description: BuildMergeDescription(run),
+                Description: BuildMergeDescription(run, projects.GetById(run.Epic.ProjectId!)?.RootPath),
                 FeatureId: featureId,
                 Role: TaskRoles.Merge,
                 PersonaId: persona.Id,
@@ -646,6 +664,12 @@ public class TasksController(
         finally
         {
             gate.Release();
+            // п.42: убираем запись из словаря после завершения, чтобы MergeGates не рос безboundedly
+            // (по одному SemaphoreSlim на featureId навсегда). Гонки с ждущими нет: кто уже взял
+            // gate — держит собственную ссылку на этот SemaphoreSlim; новый запрос, упустивший его,
+            // создаст свежий gate, но идемпотентность (свежий снимок features.Project после gate)
+            // всё равно не даст завести вторую merge-задачу — гейт лишь сериализует создание.
+            MergeGates.TryRemove(featureId, out _);
         }
     }
 
@@ -653,29 +677,59 @@ public class TasksController(
     // что AttachWorktreeAsync (SessionManager): путь непустой, на диске и числится в
     // `git worktree list` проекта — иначе чат-исполнитель не привяжется к дереву и тихо
     // стартовал бы в корне проекта. Текст 409 — без абсолютного пути хоста (п.4).
-    private async Task<string?> FeatureWorktreeErrorAsync(TaskItem epic)
+    // Возврат (gitDisabled, reason): gitDisabled=true → честный 503 (подсистема Git выключена,
+    // п.57, как у Tasks), иначе reason — текст 409 (null — worktree годен).
+    private async Task<(bool GitDisabled, string? Reason)> FeatureWorktreeErrorAsync(TaskItem epic)
     {
-        if (string.IsNullOrWhiteSpace(epic.WorktreePath)) return "Worktree фичи не задан";
-        if (string.IsNullOrWhiteSpace(epic.WorktreeBranch)) return "Ветка фичи не задана";
-        if (projects.GetById(epic.ProjectId) is not { } project) return "Worktree фичи не найден";
-        var path = Path.GetFullPath(epic.WorktreePath.Trim());
-        if (!Directory.Exists(path)) return "Worktree фичи не найден";
-        if (git is null) return "Worktree фичи не найден";
+        if (string.IsNullOrWhiteSpace(epic.WorktreePath)) return (false, "Worktree фичи не задан");
+        if (string.IsNullOrWhiteSpace(epic.WorktreeBranch)) return (false, "Ветка фичи не задана");
+        // п.56: у эпика нет проекта (личная задача) → 409, а не ArgumentNullException из GetById(null).
+        if (epic.ProjectId is null) return (false, "Worktree фичи не найден");
+        if (projects.GetById(epic.ProjectId) is not { } project) return (false, "Worktree фичи не найден");
+        // п.56: некорректный путь (недопустимые символы) → 409, а не 500 из Path.GetFullPath.
+        string path;
+        try
+        {
+            path = Path.GetFullPath(epic.WorktreePath.Trim());
+        }
+        catch (Exception)
+        {
+            return (false, "Worktree фичи не найден");
+        }
+        if (!Directory.Exists(path)) return (false, "Worktree фичи не найден");
+        // п.54: гард принимает корень проекта как worktree (WorktreePath = RootPath) — запрещаем:
+        // иначе «мерж в основную ветку» происходил бы в том же дереве, что и исход.
+        if (PathNormalizer.NormalizePath(path) == PathNormalizer.NormalizePath(project.RootPath))
+            return (false, "Worktree фичи совпадает с корнем проекта");
+        // п.57: подсистема Git выключена → честный 503 (как у Tasks), а не 409 «не найден».
+        if (git is null) return (true, null);
         var wanted = PathNormalizer.NormalizePath(path);
-        var list = await git.WorktreeListAsync(UserId, project.RootPath);
+        IReadOnlyList<GitWorktreeInfo> list;
+        try
+        {
+            // п.53: сбой git (worktree list) → 409 с честной причиной, не 500 (как AttachWorktreeAsync).
+            list = await git.WorktreeListAsync(UserId, project.RootPath);
+        }
+        catch (Exception)
+        {
+            return (false, "Не удалось прочитать git worktree list проекта");
+        }
         if (!list.Any(w => PathNormalizer.NormalizePath(w.Path) == wanted))
-            return "Worktree фичи не найден";
-        return null;
+            return (false, "Worktree фичи не найден");
+        return (false, null);
     }
 
     // Шаблон постановки merge-задачи (M1): самодостаточный — исход/цель, push, конфликт, критерий, уборка.
-    // Названия ветки и пути worktree подставляются из эпика.
-    private static string BuildMergeDescription(FeatureRun run)
+    // Названия ветки и пути worktree подставляются из эпика; основное рабочее дерево (корень проекта,
+    // куда мержим) — абсолютный путь (п.40; прецедент TeamImplementPrompts: путь дерева в постановке).
+    private static string BuildMergeDescription(FeatureRun run, string? projectRoot)
     {
         var branch = string.IsNullOrWhiteSpace(run.Epic.WorktreeBranch) ? "ветку фичи" : run.Epic.WorktreeBranch;
         var worktree = string.IsNullOrWhiteSpace(run.Epic.WorktreePath) ? "worktree фичи" : run.Epic.WorktreePath;
+        var mainTree = string.IsNullOrWhiteSpace(projectRoot) ? "корень проекта" : projectRoot;
         return string.Join("\n",
-            $"Смержить ветку фичи «{branch}» в основную ветку проекта (master) в основном рабочем дереве проекта (корень проекта); исход — worktree фичи {worktree}.",
+            $"Смержить ветку фичи «{branch}» в основную ветку проекта (master) в основном рабочем дереве проекта; исход — worktree фичи {worktree}.",
+            $"Основное рабочее дерево (сюда мержим): {mainTree}.",
             "Предусловие: финал фичи принят (проверено сервером).",
             "Push НЕ делать — только локальный мерж.",
             "При конфликте не разрешать молча: остановиться и доложить в отчёте задачи, что именно конфликтует.",
@@ -684,6 +738,8 @@ public class TasksController(
     }
 
     // Семафоры создания merge-задач по featureId: статика, т.к. контроллер transient (по одному на запрос).
+    // Запись живёт, пока есть идущий/ждущий мерж этой фичи, и убирается в finally (п.42) — словарь не
+    // растёт навсегда; идемпотентность (свежий снимок после gate) держит корректность, гейт — лишь сериализация.
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> MergeGates = new();
 
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)

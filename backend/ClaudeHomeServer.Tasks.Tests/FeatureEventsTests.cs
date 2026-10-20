@@ -318,4 +318,41 @@ public class FeatureEventsTests
         stopped.At.Should().Be(new DateTime(2026, 10, 2, 9, 30, 0));
         stopped.Reason.Should().Be("auth_failed");
     }
+
+    // ─── Truncate: кириллица (BMP) и суррогатные пары (эмодзи) ───────────────────────────────
+
+    // null → null; ≤ 200 → как есть; > 200 (BMP, 1 кодовая точка = 1 единица) → ровно 200.
+    [Fact]
+    public void Truncate_Киллица_ОбрезкаДо200()
+    {
+        FeatureProjector.Truncate(null).Should().BeNull();
+        FeatureProjector.Truncate("короткая").Should().Be("короткая");
+        FeatureProjector.Truncate(new string('а', 200)).Should().Be(new string('а', 200));
+        FeatureProjector.Truncate(new string('а', 250)).Should().Be(new string('а', 200));
+    }
+
+    // Суррогатная пара (эмодзи, 2 UTF-16-единицы) на границе 200 не рвётся: 199 BMP + эмодзи =
+    // 201 единица; s[..200] = 199 BMP + старший суррогат → пара разорвана → старший суррогат
+    // отбрасывается (199 BMP), висячего суррогата нет. Мутация: вернуть s[..200] без проверки →
+    // висячий старший суррогат → тест краснеет.
+    [Fact]
+    public void Truncate_СуррогатнаяПара_НеРвётся()
+    {
+        var s = new string('a', 199) + "😀"; // 199 + 2 = 201 единица
+        s.Length.Should().Be(201);
+
+        var r = FeatureProjector.Truncate(s);
+
+        r!.Length.Should().Be(199, "старший суррогат эмодзи отброшен — пара не разорвана");
+        r.Should().Be(new string('a', 199));
+        char.IsHighSurrogate(r[^1]).Should().BeFalse("висячего старшего суррогата нет");
+    }
+
+    // Эмодзи НЕ на границе (внутри лимита) — пара целиком сохраняется, обрезки нет.
+    [Fact]
+    public void Truncate_ЭмодзиВнутриЛимита_Целиком()
+    {
+        var s = new string('a', 100) + "😀😀😀"; // 100 + 6 = 106 единиц < 200
+        FeatureProjector.Truncate(s).Should().Be(s);
+    }
 }

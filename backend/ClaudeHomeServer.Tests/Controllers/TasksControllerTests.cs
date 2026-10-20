@@ -1,13 +1,24 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
+using System.IdentityModel.Tokens.Jwt;
+using System.Reflection;
+using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Spheres;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -126,6 +137,45 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             null, null, true, null, null, PersonaAccess.Full, null,
             PersonaSpecialty.DevopsExecutor);
     }
+
+    // Прямая сборка контроллера с реальными DI-сервисами (для тестов, где нужен контроль над git).
+    // git — явный: реальный (из DI) / null (подсистема Git выключена → 503) / stub (сбой WorktreeListAsync).
+    // HttpContext/User подставляем вручную (прямая сборка — без HTTP): claim Sub = OwnerId,
+    // иначе UserId (User.FindFirstValue(Sub)) бросает ArgumentNullException.
+    private TasksController BuildController(GitService? git)
+    {
+        var controller = new TasksController(
+            tasks: _factory.Services.GetRequiredService<TaskManager>(),
+            broadcaster: _factory.Services.GetRequiredService<ISessionBroadcaster>(),
+            ai: _factory.Services.GetRequiredService<TaskAiService>(),
+            projects: _factory.Services.GetRequiredService<ProjectManager>(),
+            personas: _factory.Services.GetRequiredService<PersonaManager>(),
+            executor: _factory.Services.GetRequiredService<TaskExecutionService>(),
+            bindings: _factory.Services.GetRequiredService<PersonaBindingsService>(),
+            sessions: _factory.Services.GetRequiredService<SessionManager>(),
+            spheres: _factory.Services.GetRequiredService<ISphereDirectory>(),
+            noteSync: null,
+            features: _factory.Services.GetRequiredService<FeatureProjector>(),
+            git: git);
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, OwnerId)], "test");
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) },
+        };
+        return controller;
+    }
+
+    // Реальный GitService из DI (worktree-гард проходит штатно).
+    private GitService RealGit() => _factory.Services.GetRequiredService<GitService>();
+
+    // Статический словарь гейтов мержа (MergeGates) — для проверки, что запись убрана после мержа.
+    private static ConcurrentDictionary<string, SemaphoreSlim> MergeGatesDict() =>
+        (ConcurrentDictionary<string, SemaphoreSlim>)typeof(TasksController)
+            .GetField("MergeGates", BindingFlags.NonPublic | BindingFlags.Static)!
+            .GetValue(null)!;
+
+    // GitService со stub-запускателем: Start бросает → WorktreeListAsync бросает (сбой git, п.53).
+    private static GitService ThrowingGit() => new(new ThrowingLauncherFactory());
 
     // Индекс: GET /api/tasks/features/index?projectId=… → JsonElement.
     private async Task<JsonElement> GetIndexAsync(string? projectId = null)
@@ -695,6 +745,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             description.Should().Contain(worktree);
             description.Should().Contain("Push НЕ делать");
             description.Should().Contain("конфликт");
+            // п.40: шаблон несёт абсолютный путь корня проекта (основное рабочее дерево — сюда мержим).
+            var projectRoot = Projects.GetById(projectId)!.RootPath;
+            description.Should().Contain(projectRoot);
         }
         finally
         {
@@ -963,6 +1016,216 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         finally
         {
             Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // п.52/41: гонка — merge-задача уже Done внутри гейта. Снимок ПЕРЕД гейтом (верхний гард)
+    // видел Todo, а внутри гейта (после await gate.WaitAsync) задача уже Done → 409 «смержена».
+    // Воспроизведение: гейт заранее удержан (reflection), фоновая задача переворачивает merge в Done
+    // и отпускает гейт; верхний гард (до гейта) уже отработал на Todo. Мутация: снять
+    // `if (existing.Status == Done) return Conflict` → тест краснеет.
+    [Fact]
+    public async Task MergeFeature_Гонка_MergeDoneВнутриГейта_409()
+    {
+        var (epicId, wt, branch, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-race-done");
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+
+        // merge-задача как Todo: верхний гард (run.Merge is { Status: Done }) её не видит как Done.
+        var merge = tasks.Create(projectId, OwnerId, new CreateTaskRequest(
+            Title: "мерж", FeatureId: epicId, Role: "merge",
+            PersonaId: persona.Id, Assignee: TaskItemAssignee.Claude,
+            WorktreePath: wt, WorktreeBranch: branch));
+
+        try
+        {
+            // Гейт заранее удержан (count=0): await gate.WaitAsync() внутри MergeFeature заблокируется.
+            var gate = new SemaphoreSlim(0, 1);
+            MergeGatesDict()[epicId] = gate;
+
+            // Фоновая задача: после верхнего гарда (до гейта) переворачивает merge в Done и отпускает гейт.
+            var flip = Task.Run(async () =>
+            {
+                await Task.Delay(50);
+                tasks.Update(merge.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+                gate.Release();
+            });
+
+            var result = await BuildController(RealGit()).MergeFeature(epicId);
+
+            await flip;
+            result.Should().BeAssignableTo<Microsoft.AspNetCore.Mvc.ObjectResult>()
+                .Which.StatusCode.Should().Be(409, "merge-задача стала Done внутри гейта → 409 «смержена»");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+            MergeGatesDict().TryRemove(epicId, out _);
+        }
+    }
+
+    // п.53: сбой git (WorktreeListAsync бросает) → 409 с честной причиной, не 500.
+    // Stub-запускатель: Start бросает → RunAsync бросает → WorktreeListAsync бросает.
+    // Мутация: убрать try/catch вокруг WorktreeListAsync → 500 (GitCommandException) → тест краснеет.
+    [Fact]
+    public async Task MergeFeature_СбойGitWorktreeList_409()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-gitfail");
+
+        try
+        {
+            var result = await BuildController(ThrowingGit()).MergeFeature(epicId);
+
+            result.Should().BeAssignableTo<Microsoft.AspNetCore.Mvc.ObjectResult>()
+                .Which.StatusCode.Should().Be(409, "сбой git worktree list → 409 с честной причиной, не 500");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // п.55: настоящий случай — репозиторий ЕСТЬ, путь эпика — просто папка рядом (не в `git worktree
+    // list`) → 409. Отличается от M6c (там корень проекта вообще не git-репо).
+    [Fact]
+    public async Task MergeFeature_РепоЕсть_ПапкаРядомНеВList_409()
+    {
+        var projectId = CreateProject("merge");
+        var projectRoot = Projects.GetById(projectId)!.RootPath;
+        // Корень — реальный git-репо; worktree-путь — обычная папка, НЕ добавленная через `git worktree add`.
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, projectRoot);
+        var wt = Path.Combine(_factory.TempDir, "merge_plain_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(wt);
+        var branch = "feat/merge-plain-" + Guid.NewGuid().ToString("N")[..6];
+        var epic = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "эпик: папка рядом, не в worktree list", role = "feature",
+            worktreePath = wt, worktreeBranch = branch,
+        });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-plain");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("error").GetString().Should().Contain("Worktree");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // п.56: некорректный worktree-путь (Path.GetFullPath бросает) → 409, не 500.
+    // Ноль-символ недопустим на обеих ОС (Windows/Unix) → GetFullPath бросает ArgumentException.
+    [Fact]
+    public async Task MergeFeature_НекорректныйПуть_409()
+    {
+        var projectId = CreateProject("merge");
+        var badPath = "merge_bad_" + Guid.NewGuid().ToString("N")[..6] + "\0";
+        var branch = "feat/merge-bad-" + Guid.NewGuid().ToString("N")[..6];
+        var epic = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "эпик с некорректным путём", role = "feature",
+            worktreePath = badPath, worktreeBranch = branch,
+        });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-badpath");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("error").GetString().Should().Contain("Worktree");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // п.57: подсистема Git выключена (git == null) → честный 503 (как у Tasks), а не 409 «не найден».
+    // Мутация: вернуть 409 при git==null → тест краснеет.
+    [Fact]
+    public async Task MergeFeature_GitВыключен_503()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-gitoff");
+
+        try
+        {
+            var result = await BuildController(git: null).MergeFeature(epicId);
+
+            result.Should().BeAssignableTo<Microsoft.AspNetCore.Mvc.ObjectResult>()
+                .Which.StatusCode.Should().Be(503, "подсистема Git выключена → честный 503, не 409");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // п.54: worktree фичи совпадает с корнем проекта (WorktreePath = RootPath) → 409:
+    // иначе «мерж в основную ветку» происходил бы в том же дереве, что и исход.
+    [Fact]
+    public async Task MergeFeature_WorktreeСовпадаетСКорнем_409()
+    {
+        var projectId = CreateProject("merge");
+        var projectRoot = Projects.GetById(projectId)!.RootPath;
+        // worktree = корень проекта (реальная директория, но та же, что RootPath).
+        var branch = "feat/merge-root-" + Guid.NewGuid().ToString("N")[..6];
+        var epic = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "эпик: worktree = корень", role = "feature",
+            worktreePath = projectRoot, worktreeBranch = branch,
+        });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-root");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("error").GetString().Should().Contain("совпадает с корнем");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // п.42: после завершения создания merge-задачи запись из MergeGates убрана (словарь не растёт).
+    [Fact]
+    public async Task MergeFeature_GейтУбранПослеМержа()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var persona = CreateDevopsPersona("DevOps-gate");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            MergeGatesDict().ContainsKey(epicId).Should().BeFalse(
+                "после завершения мержа гейт убран из словаря (MergeGates не растёт безboundedly)");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+            MergeGatesDict().TryRemove(epicId, out _);
         }
     }
 
@@ -1258,5 +1521,34 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         featureIds.Should().Contain(epicA.GetProperty("id").GetString());
         featureIds.Should().NotContain(epicB.GetProperty("id").GetString(),
             "эпик B (проект B) вне области projectId=A");
+    }
+
+    // ─── Stub-запускатель: Start бросает → GitService.WorktreeListAsync бросает (сбой git, п.53) ─
+
+    private sealed class ThrowingLauncherFactory : ILauncherFactory
+    {
+        public IProcessLauncher Local => new ThrowingLauncher();
+        public IProcessLauncher ForOwner(string? ownerId) => new ThrowingLauncher();
+        public IProcessLauncher ForProject(Project project) => new ThrowingLauncher();
+    }
+
+    private sealed class ThrowingLauncher : IProcessLauncher
+    {
+        public bool IsSandboxed => false;
+        public bool TargetIsWindows => false;
+        public IPathMapper Paths => new IdentityPathMapper();
+        public string ClaudeCliCommand => "claude";
+        public string HostTempDir => "";
+        public string? McpApiUrlOverride => null;
+        public Process Start(ProcessSpec spec) =>
+            throw new InvalidOperationException("git не запустился (тест: сбой WorktreeListAsync)");
+        public void Kill(Process process, string? turnId = null) { }
+        public int EstimateCommandLineLength(ProcessSpec spec) => 0;
+    }
+
+    private sealed class IdentityPathMapper : IPathMapper
+    {
+        public string ToRuntime(string hostPath) => hostPath;
+        public string ToHost(string runtimePath) => runtimePath;
     }
 }

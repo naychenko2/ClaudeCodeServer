@@ -510,9 +510,19 @@ public sealed class FeatureProjector(TaskManager tasks)
             .ToList();
     }
 
-    // reason ≤ 200 символов (обрезка по кодовым позициям; null — как есть).
-    private static string? Truncate(string? s) =>
-        s is null ? null : s.Length <= 200 ? s : s[..200];
+    // reason ≤ 200 символов (обрезка по кодовым позициям; null — как есть). internal — для золотого
+    // теста (ClaudeHomeServer.Tasks.Tests): кириллица (1 кодовая точка = 1 UTF-16-единица) и
+    // суррогатные пары (эмодзи, 2 единицы) не рвутся — разорванный старший суррогат отбрасывается.
+    internal static string? Truncate(string? s)
+    {
+        if (s is null) return null;
+        if (s.Length <= 200) return s;
+        var cut = s.AsSpan(0, 200);
+        // s[..200] режет по UTF-16-единицам: если 200-я позиция — старший суррогат пары, пара
+        // разорвана (висит без младшего) → отбрасываем его, чтобы не оставлять висячий суррогат.
+        if (char.IsHighSurrogate(cut[^1])) cut = cut.Slice(0, cut.Length - 1);
+        return cut.ToString();
+    }
 
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 

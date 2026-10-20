@@ -81,8 +81,8 @@ public class PluginUninstall
         //     словарь singleton'а прокси не растёт бесконечно (ключ на каждый плагин).
         _netProxy?.RemoveRateWindow(ownerId, id);
 
-        // 7) Кэш манифестов (rework 12, minor 4): плагин удалён — освободить его записи.
-        PluginManifestCache.Invalidate(id);
+        // 7) Кэш манифестов (rework 12, minor 4): плагин удалён — освободить его записи (по (owner, id)).
+        PluginManifestCache.Invalidate(ownerId, id);
 
         return true;
     }

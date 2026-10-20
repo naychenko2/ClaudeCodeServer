@@ -70,7 +70,7 @@ public class PluginsController(
     // манифест неизменяем по (id, version, sha), кэш в PluginManifestCache, инвалидация при
     // установке/обновлении/удалении (в PluginInstaller/PluginUninstall).
     private PluginManifest? ManifestFor(PluginInstall record) =>
-        PluginManifestCache.GetOrLoad(record.Id, record.Version, record.Sha256,
+        PluginManifestCache.GetOrLoad(UserId, record.Id, record.Version, record.Sha256,
             () => PluginInstaller.ReadManifest(store!.PackageDir(UserId, record.Id, record.Version)).Manifest);
 
     // --- GET /api/plugins — список установленных (DTO без значений секретов, C5) ---

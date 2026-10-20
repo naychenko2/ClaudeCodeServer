@@ -20,7 +20,7 @@ import { onMessage } from '../../lib/signalr';
 import { api } from '../../lib/api';
 import { isNetPermission, permissionLabel, NET_PERMISSION_WARNING } from './permissionLabels';
 import {
-  acceptDisabledReason, buildFixReply, diffFileLabel, draftContributions, problemCount,
+  acceptDisabledReason, buildFixReply, diffFileLabel, draftContributions, isRejectedExpired, problemCount,
   type DraftContribution,
 } from './draftModel';
 import { buildInitMessage, buildPanelSrcdoc, validateFrameMessage, panelWindowOf, MAX_PANEL_FILE_BYTES } from './bridge';
@@ -440,6 +440,7 @@ export function DraftCard(props: DraftCardProps) {
         stale={stale}
         name={preview?.name ?? summary.id}
         version={summary.version}
+        expiresAt={summary.expiresAt}
         actionError={actionError}
         onRestore={onRestore}
         onOpenInPlugins={onOpenInPlugins}
@@ -591,12 +592,14 @@ function cardShell(justUpdated?: boolean): React.CSSProperties {
 }
 
 // Свёрнутая строка: отклонён / установлен / устарел
-function CollapsedRow({ rejected, installed, stale, name, version, actionError, onRestore, onOpenInPlugins }: {
+function CollapsedRow({ rejected, installed, stale, name, version, expiresAt, actionError, onRestore, onOpenInPlugins }: {
   rejected: boolean;
   installed: boolean;
   stale: boolean;
   name: string;
   version: string;
+  // Когда отклонённый исчезнет (rejectedAt + 30 дней); null — активный (не истёк)
+  expiresAt: string | null;
   // Ошибка действия (здесь — «Вернуть»): текст сервера, пока действие не повторят
   actionError?: string | null;
   onRestore?: () => void;
@@ -604,6 +607,9 @@ function CollapsedRow({ rejected, installed, stale, name, version, actionError, 
 }) {
   const label = stale ? 'Черновик устарел' : installed ? `Установлен · ${version}` : 'Отклонён';
   const tone: 'neutral' | 'success' | 'plan' = stale ? 'plan' : installed ? 'success' : 'neutral';
+  // «Вернуть» — пока срок не истёк (rejectedAt + 30 дней, isRejectedExpired);
+  // после — черновик исчезает, кнопки нет (макет V6).
+  const restoreVisible = rejected && onRestore && !isRejectedExpired({ rejected, expiresAt } as PluginDraftSummary, Date.now());
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', gap: SP.xs,
@@ -616,7 +622,7 @@ function CollapsedRow({ rejected, installed, stale, name, version, actionError, 
         {installed && onOpenInPlugins && (
           <Button variant="ghost" size="xs" onClick={onOpenInPlugins}>Открыть в «Плагинах»</Button>
         )}
-        {rejected && onRestore && (
+        {restoreVisible && (
           <Button variant="ghost" size="xs" leftIcon={<RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={onRestore}>
             Вернуть
           </Button>

@@ -307,3 +307,50 @@ beforeEach(() => {
   vi.mocked(api.plugins.draftRestore).mockReset();
   vi.mocked(api.plugins.draftPanel).mockReset();
 });
+
+// === «Вернуть» отклонённого черновика (макет V6, 30 дней) ===
+// Отклонённый черновик показывает «Вернуть», пока срок (rejectedAt + 30 дней) не истёк;
+// после — кнопки нет. Рендерим DraftCard (свёрнутый режим) через renderToStaticMarkup.
+describe('CollapsedRow: «Вернуть» отклонённого черновика (V6, 30 дней)', () => {
+  const baseSummary: PluginDraftSummary = {
+    slug: SLUG, id: 'local-1/my-plugin', version: '1.0.0',
+    installedSameVersion: false, rejected: true, expiresAt: null,
+  };
+
+  it('срок не истёк (expiresAt=null) → «Вернуть» показывается', () => {
+    const html = renderToStaticMarkup(createElement(DraftCard, {
+      summary: baseSummary, preview: null, diff: null,
+      onRestore: () => {},
+    }));
+    expect(html).toContain('Вернуть');
+    expect(html).toContain('Отклонён');
+  });
+
+  it('срок не истёк (expiresAt в будущем) → «Вернуть» показывается', () => {
+    const future = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
+    const html = renderToStaticMarkup(createElement(DraftCard, {
+      summary: { ...baseSummary, expiresAt: future }, preview: null, diff: null,
+      onRestore: () => {},
+    }));
+    expect(html).toContain('Вернуть');
+  });
+
+  it('срок истёк (expiresAt в прошлом) → «Вернуть» нет', () => {
+    const past = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const html = renderToStaticMarkup(createElement(DraftCard, {
+      summary: { ...baseSummary, expiresAt: past }, preview: null, diff: null,
+      onRestore: () => {},
+    }));
+    // «Отклонён» (бейдж) есть, но кнопки «Вернуть» нет
+    expect(html).toContain('Отклонён');
+    expect(html).not.toContain('Вернуть');
+  });
+
+  it('onRestore не передан → «Вернуть» нет (даже если срок не истёк)', () => {
+    const html = renderToStaticMarkup(createElement(DraftCard, {
+      summary: baseSummary, preview: null, diff: null,
+      // onRestore не передан
+    }));
+    expect(html).not.toContain('Вернуть');
+  });
+});

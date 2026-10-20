@@ -270,10 +270,13 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     inflightRef.current++;
     logEvent(`← call ${msg.id} ${msg.op}`);
     try {
+      // Тело HTTP-запроса: {capability, args, projectId} (контракт бэкенда, PluginCallContractTests).
+      // `op` — внутреннее имя поля моста (FrameMessage.call.op); в HTTP оно уходит как `capability`.
+      // projectId — проект слота (null — вне проекта); context/op в тело не попадают.
       const res = await api.plugins.call(plugin.id, {
-        op: msg.op,
+        capability: msg.op,
         args,
-        context: { projectId: s.project.id },
+        projectId: s.project.id ?? null,
       });
       if (res.ok) {
         postToFrame(buildResultMessage(msg.id, true, res.result));

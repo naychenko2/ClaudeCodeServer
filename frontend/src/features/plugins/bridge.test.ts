@@ -97,7 +97,7 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
 const m = vi.hoisted(() => ({
   list: vi.fn<(id: string) => Promise<unknown[]>>(async () => []),
   panelHtml: vi.fn<(id: string, version: string) => Promise<string>>(async () => '<html><body>panel</body></html>'),
-  call: vi.fn<(id: string, body: { op: string; args?: Record<string, unknown>; context?: unknown }) => Promise<unknown>>(
+  call: vi.fn<(id: string, body: { capability: string; args: Record<string, unknown>; projectId: string | null }) => Promise<unknown>>(
     async () => ({ ok: true, result: { hello: 'world' } }),
   ),
 }));
@@ -107,7 +107,7 @@ vi.mock('../../lib/api', () => ({
     plugins: {
       list: () => m.list('p1'),
       panelHtml: (id: string, version: string) => m.panelHtml(id, version),
-      call: (id: string, body: { op: string; args?: Record<string, unknown>; context?: unknown }) => m.call(id, body),
+      call: (id: string, body: { capability: string; args: Record<string, unknown>; projectId: string | null }) => m.call(id, body),
     },
   },
 }));
@@ -548,11 +548,15 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(m.call).toHaveBeenCalledTimes(1);
-    const [callId, callBody] = m.call.mock.calls[0] as [string, { op: string; args?: Record<string, unknown>; context?: unknown }];
+    // Контракт (ADR-031 §3.4, PluginCallContractTests): тело = {capability, args, projectId};
+    // op → capability, context.projectId → projectId; лишних полей (op, context) нет.
+    const [callId, callBody] = m.call.mock.calls[0] as [string, { capability: string; args: Record<string, unknown>; projectId: string | null }];
     expect(callId).toBe('acme/notes-panel');
-    expect(callBody.op).toBe('notes.read');
+    expect(callBody.capability).toBe('notes.read');
     expect(callBody.args).toEqual({ id: 'n1' });
-    expect(callBody.context).toEqual({ projectId: 'p1' });
+    expect(callBody.projectId).toBe('p1');
+    expect(callBody).not.toHaveProperty('op');
+    expect(callBody).not.toHaveProperty('context');
 
     // result с тем же id возвращается фрейму
     const result = posted.find(p => (p as { type?: string }).type === 'result') as Record<string, unknown>;

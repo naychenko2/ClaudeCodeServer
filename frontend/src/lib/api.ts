@@ -1074,11 +1074,12 @@ export const api = {
       request<{ id: string; enabled: boolean }>(`/plugins/${pluginUrlId(id)}/${enabled ? 'enable' : 'disable'}`, {
         method: 'POST',
       }),
-    // Вызов операции моста (ADR-031 §3.4): {op, args, context}. Хост сам добавляет
-    // id/версию плагина (id в URL) и контекст слота (projectId) — фрейм их не подставляет.
-    // Ответ — {ok, result?} | {ok:false, error:{code, message}}; коды error — ADR §3.4
-    // (denied/not_found/invalid/unavailable/upstream/timeout/limit).
-    call: (id: string, body: { op: string; args?: Record<string, unknown>; context?: { projectId?: string | null; objectId?: string | null } }) =>
+    // Вызов операции моста (ADR-031 §3.4). Тело HTTP-запроса — РОВНО {capability, args, projectId}
+    // (контракт бэкенда, PluginCallContractTests): capability — имя операции (внутренне в мосту
+    // это `op`, но в HTTP — capability), args — объект, projectId — проект слота (null — вне проекта).
+    // Лишних полей (op, context) сервер не принимает. Ответ — {ok, result?} | {ok:false, error:{code,
+    // message}}; коды error — ADR §3.4 (denied/not_found/invalid/unavailable/upstream/timeout/limit).
+    call: (id: string, body: { capability: string; args: Record<string, unknown>; projectId: string | null }) =>
       request<{ ok: boolean; result?: unknown; error?: { code: string; message: string } }>(
         `/plugins/${pluginUrlId(id)}/call`,
         { method: 'POST', body: JSON.stringify(body) },

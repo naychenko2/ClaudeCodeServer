@@ -45,11 +45,13 @@ public class PluginDraftDiff
         if (!Directory.Exists(draftDir))
             throw new FileNotFoundException($"Черновик {slug} не найден", nameof(slug));
 
-        // id из манифеста (ccs-plugin.json → .claude-plugin/plugin.json); без id — не с чем сравнивать.
+        // id — ТОЛЬКО из PluginIdentity.Resolve (QA-фикс N: сервер выводит; сырой manifest.Id
+        // не читаем). Пустой id в манифесте → выведенный (local-{ownerShort}/{slug}): сравнение
+        // идёт с установленной версией того же id, а «нового плагина» (status "new") — не 404
+        // (раньше: без id в манифесте diff падал ArgumentException → 404, хотя плагин новый).
         var (manifest, _) = PluginInstaller.ReadManifest(draftDir);
-        if (manifest is null || string.IsNullOrEmpty(manifest.Id))
-            throw new ArgumentException($"Манифест черновика {slug} без id", nameof(slug));
-        var id = manifest.Id;
+        var (resolvedId, _) = PluginIdentity.Resolve(manifest, ownerId, slug);
+        var id = resolvedId ?? PluginIdentity.DeriveId(ownerId, slug);
 
         // Последняя установленная версия того же id (installed.json: одна запись на id;
         // если записей несколько — берём максимальную по semver).
@@ -59,15 +61,17 @@ public class PluginDraftDiff
             .FirstOrDefault();
 
         if (installed is null)
-            return NewPlugin(slug, manifest, draftDir);
+            return NewPlugin(slug, id, manifest, draftDir);
 
         var installedDir = _store.PackageDir(ownerId, id, installed.Version);
-        return Compare(slug, draftDir, installedDir, manifest, installed);
+        return Compare(slug, id, draftDir, installedDir, manifest, installed);
     }
 
 
     // «Новый плагин»: установленной версии нет → список файлов черновика (всё «добавлено»).
-    private static PluginDraftDiffResult NewPlugin(string slug, PluginManifest manifest, string draftDir)
+    // id — выведенный сервером (см. Diff): manifest.Id может быть пустым, а выведенный id
+    // всегда валиден.
+    private static PluginDraftDiffResult NewPlugin(string slug, string id, PluginManifest? manifest, string draftDir)
     {
         var added = EnumerateFiles(draftDir)
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
@@ -77,8 +81,8 @@ public class PluginDraftDiff
         {
             Status = "new",
             Slug = slug,
-            Id = manifest.Id,
-            Version = manifest.Version,
+            Id = id,
+            Version = manifest?.Version ?? "",
             InstalledVersion = null,
             Truncated = false,
             Added = added, Removed = [], Modified = [],
@@ -88,7 +92,7 @@ public class PluginDraftDiff
 
     // Сравнение дерева черновика с деревом установленного пакета.
     private PluginDraftDiffResult Compare(
-        string slug, string draftDir, string installedDir, PluginManifest draftManifest, PluginInstall installed)
+        string slug, string id, string draftDir, string installedDir, PluginManifest? draftManifest, PluginInstall installed)
     {
         var draftFiles = EnumerateFiles(draftDir);
         var installedFiles = EnumerateFiles(installedDir);
@@ -154,14 +158,16 @@ public class PluginDraftDiff
         {
             Status = "updated",
             Slug = slug,
-            Id = draftManifest.Id,
-            Version = draftManifest.Version,
+            Id = id,
+            Version = draftManifest?.Version ?? "",
             InstalledVersion = installed.Version,
             Truncated = totalTruncated,
             Added = added,
             Removed = removed,
             Modified = modified,
-            Manifest = DiffManifest(draftManifest, installedDir),
+            // Манифеста черновика нет вовсе → сравнивать не с чем (null, как при битом
+            // манифесте установленного пакета).
+            Manifest = draftManifest is null ? null : DiffManifest(draftManifest, installedDir),
         };
     }
 

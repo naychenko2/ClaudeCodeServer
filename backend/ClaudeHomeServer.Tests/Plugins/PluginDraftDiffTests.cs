@@ -23,6 +23,9 @@ public class PluginDraftDiffTests : IDisposable
 {
     private const string Owner = "owner-a";
     private const string Stranger = "owner-b";
+    // QA-фикс N: id выводит сервер (local-{ownerShort}/{slug}) — тесты используют выведенный,
+    // не сырой: diff/сводка/accept берут id из PluginIdentity.Resolve, а не из manifest.Id.
+    private static string PkgId => PluginIdentity.DeriveId(Owner, "pkg");
 
     private readonly string _dir;
     private readonly PluginStore _store;
@@ -165,7 +168,7 @@ public class PluginDraftDiffTests : IDisposable
     [Fact]
     public void Diff_НетУстановленной_НовыйПлагин_СписокФайлов()
     {
-        CreateDraft(Owner, "local-a/pkg", "1.0.0", ["notes:read"], null,
+        CreateDraft(Owner, PkgId, "1.0.0", ["notes:read"], null,
             new() { ["skills/a/SKILL.md"] = "# A\n", ["commands/b.md"] = "# B\n" });
 
         var res = _diff.Diff(Owner, "pkg");
@@ -186,10 +189,10 @@ public class PluginDraftDiffTests : IDisposable
     public void Diff_Файлы_ДобавленУдалёнИзменён()
     {
         // Установленный v1.0.0: A, B, C.
-        CreateInstalled(Owner, "local-a/pkg", "1.0.0", ["notes:read"], null,
+        CreateInstalled(Owner, PkgId, "1.0.0", ["notes:read"], null,
             new() { ["A.txt"] = "a1\na2\n", ["B.txt"] = "b\n", ["C.txt"] = "c\n" });
         // Черновик v2.0.0: A изменён, C тот же, D новый; B удалён.
-        CreateDraft(Owner, "local-a/pkg", "2.0.0", ["notes:read"], null,
+        CreateDraft(Owner, PkgId, "2.0.0", ["notes:read"], null,
             new() { ["A.txt"] = "a1\na2\na3\n", ["C.txt"] = "c\n", ["D.txt"] = "d\n" });
 
         var res = _diff.Diff(Owner, "pkg");
@@ -219,8 +222,8 @@ public class PluginDraftDiffTests : IDisposable
         // Старый: 10 строк; новый: 250 других строк → diff = 10 del + 250 add = 260 > 200.
         var oldContent = string.Join("", Enumerable.Range(1, 10).Select(i => $"old-{i}\n"));
         var newContent = string.Join("", Enumerable.Range(1, 250).Select(i => $"new-{i}\n"));
-        CreateInstalled(Owner, "local-a/pkg", "1.0.0", [], null, new() { ["A.txt"] = oldContent });
-        CreateDraft(Owner, "local-a/pkg", "2.0.0", [], null, new() { ["A.txt"] = newContent });
+        CreateInstalled(Owner, PkgId, "1.0.0", [], null, new() { ["A.txt"] = oldContent });
+        CreateDraft(Owner, PkgId, "2.0.0", [], null, new() { ["A.txt"] = newContent });
 
         var res = _diff.Diff(Owner, "pkg");
 
@@ -245,8 +248,8 @@ public class PluginDraftDiffTests : IDisposable
             oldFiles[$"F{i}.txt"] = oldContent;
             newFiles[$"F{i}.txt"] = newContent;
         }
-        CreateInstalled(Owner, "local-a/pkg", "1.0.0", [], null, oldFiles);
-        CreateDraft(Owner, "local-a/pkg", "2.0.0", [], null, newFiles);
+        CreateInstalled(Owner, PkgId, "1.0.0", [], null, oldFiles);
+        CreateDraft(Owner, PkgId, "2.0.0", [], null, newFiles);
 
         var res = _diff.Diff(Owner, "pkg");
 
@@ -263,9 +266,9 @@ public class PluginDraftDiffTests : IDisposable
     {
         // Старый: текстовый; новый: бинарный (NUL-байт) → «изменён, N байт», Lines=null.
         var binary = new byte[] { 0x00, 0x01, 0x02, 0xFF, 0x00 };
-        CreateInstalled(Owner, "local-a/pkg", "1.0.0", [], null, new() { ["img.bin"] = "old text\n" });
+        CreateInstalled(Owner, PkgId, "1.0.0", [], null, new() { ["img.bin"] = "old text\n" });
         var draftRoot = _store.DraftDir(Owner, "pkg");
-        WriteManifest(draftRoot, "local-a/pkg", "2.0.0", [], null);
+        WriteManifest(draftRoot, PkgId, "2.0.0", [], null);
         WriteTextFile(draftRoot, "img.bin", "old text\n");
         WriteBinaryFile(draftRoot, "img.bin", binary);
 
@@ -285,8 +288,8 @@ public class PluginDraftDiffTests : IDisposable
         // Текстовый, но больше 256 КБ → без содержимого (как бинарный).
         var bigOld = new string('a', 256 * 1024 + 10);
         var bigNew = new string('b', 256 * 1024 + 20);
-        CreateInstalled(Owner, "local-a/pkg", "1.0.0", [], null, new() { ["big.txt"] = bigOld });
-        CreateDraft(Owner, "local-a/pkg", "2.0.0", [], null, new() { ["big.txt"] = bigNew });
+        CreateInstalled(Owner, PkgId, "1.0.0", [], null, new() { ["big.txt"] = bigOld });
+        CreateDraft(Owner, PkgId, "2.0.0", [], null, new() { ["big.txt"] = bigNew });
 
         var res = _diff.Diff(Owner, "pkg");
 
@@ -302,10 +305,10 @@ public class PluginDraftDiffTests : IDisposable
     public void Diff_SymlinkВЧерновике_НеВDiff_ИНеЧитается()
     {
         // Установленная версия: обычный файл; черновик: тот же файл + symlink на внешний файл.
-        CreateInstalled(Owner, "local-a/pkg", "1.0.0", [], null,
+        CreateInstalled(Owner, PkgId, "1.0.0", [], null,
             new() { ["A.txt"] = "a\n" });
         var draftRoot = _store.DraftDir(Owner, "pkg");
-        WriteManifest(draftRoot, "local-a/pkg", "2.0.0", [], null);
+        WriteManifest(draftRoot, PkgId, "2.0.0", [], null);
         WriteTextFile(draftRoot, "A.txt", "a\n");
 
         // Внешний файл с характерным содержимым + symlink на него в черновике (panel/** — allow-list).
@@ -342,10 +345,10 @@ public class PluginDraftDiffTests : IDisposable
     public void Diff_Манифест_ПраваДобавленыУбраны()
     {
         // Установленный: requested = [notes:read, tasks:read].
-        CreateInstalled(Owner, "local-a/pkg", "1.0.0", ["notes:read", "tasks:read"], null,
+        CreateInstalled(Owner, PkgId, "1.0.0", ["notes:read", "tasks:read"], null,
             new() { ["A.txt"] = "x\n" });
         // Черновик: requested = [notes:read, net:api.linear.app] → +net, −tasks.
-        CreateDraft(Owner, "local-a/pkg", "2.0.0", ["notes:read", "net:api.linear.app"], null,
+        CreateDraft(Owner, PkgId, "2.0.0", ["notes:read", "net:api.linear.app"], null,
             new() { ["A.txt"] = "x\n" });
 
         var res = _diff.Diff(Owner, "pkg");
@@ -360,12 +363,12 @@ public class PluginDraftDiffTests : IDisposable
     public void Diff_Манифест_СекретыДобавленУбранСменилсяRequired()
     {
         // Установленный: secrets = [LINEAR_TOKEN(required=true), OLD_TOKEN(required=true)].
-        CreateInstalled(Owner, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN", "secret:OLD_TOKEN"],
+        CreateInstalled(Owner, PkgId, "1.0.0", ["secret:LINEAR_TOKEN", "secret:OLD_TOKEN"],
             secrets: [("LINEAR_TOKEN", true), ("OLD_TOKEN", true)],
             files: new() { ["A.txt"] = "x\n" });
         // Черновик: secrets = [LINEAR_TOKEN(required=false), NEW_TOKEN(required=true)]
         // → OLD_TOKEN убран, NEW_TOKEN добавлен, LINEAR_TOKEN сменил required (true→false).
-        CreateDraft(Owner, "local-a/pkg", "2.0.0", ["secret:LINEAR_TOKEN", "secret:NEW_TOKEN"],
+        CreateDraft(Owner, PkgId, "2.0.0", ["secret:LINEAR_TOKEN", "secret:NEW_TOKEN"],
             secrets: [("LINEAR_TOKEN", false), ("NEW_TOKEN", true)],
             files: new() { ["A.txt"] = "x\n" });
 
@@ -383,8 +386,8 @@ public class PluginDraftDiffTests : IDisposable
     [Fact]
     public void Diff_ВОтветеНетАбсолютныхПутей()
     {
-        CreateInstalled(Owner, "local-a/pkg", "1.0.0", [], null, new() { ["A.txt"] = "a\n" });
-        CreateDraft(Owner, "local-a/pkg", "2.0.0", [], null, new() { ["A.txt"] = "a\nb\n", ["B.txt"] = "b\n" });
+        CreateInstalled(Owner, PkgId, "1.0.0", [], null, new() { ["A.txt"] = "a\n" });
+        CreateDraft(Owner, PkgId, "2.0.0", [], null, new() { ["A.txt"] = "a\nb\n", ["B.txt"] = "b\n" });
 
         var res = _diff.Diff(Owner, "pkg");
         var json = JsonSerializer.Serialize(res);
@@ -402,7 +405,7 @@ public class PluginDraftDiffTests : IDisposable
     [Fact]
     public void Diff_СервисныйJwt_Отдаёт403()
     {
-        CreateDraft(Owner, "local-a/pkg", "1.0.0", ["notes:read"], null, new() { ["A.txt"] = "a\n" });
+        CreateDraft(Owner, PkgId, "1.0.0", ["notes:read"], null, new() { ["A.txt"] = "a\n" });
         var ctl = NewController(Owner, serviceToken: true);
         var res = ctl.Diff("pkg");
         var obj = (ObjectResult)res;
@@ -412,7 +415,7 @@ public class PluginDraftDiffTests : IDisposable
     [Fact]
     public void Diff_ЧужойВладелец_Отдаёт404()
     {
-        CreateDraft(Owner, "local-a/pkg", "1.0.0", ["notes:read"], null, new() { ["A.txt"] = "a\n" });
+        CreateDraft(Owner, PkgId, "1.0.0", ["notes:read"], null, new() { ["A.txt"] = "a\n" });
         var ctl = NewController(Stranger);
         var res = ctl.Diff("pkg");
         res.Should().BeOfType<NotFoundObjectResult>();

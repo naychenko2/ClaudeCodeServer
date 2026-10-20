@@ -471,7 +471,7 @@ public class PluginDraftServiceTests : IDisposable
             System.Text.Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
         _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
             System.Text.Encoding.UTF8.GetBytes(
-                """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"permissions":{"requested":["unknown:perm"]}}"""))
+                """{"id":"local-952568751510/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"permissions":{"requested":["unknown:perm"]}}"""))
             .Ok.Should().BeTrue();
         var validation = _service.Validate(Owner, "my-plugin");
         validation.IsValid.Should().BeFalse();
@@ -489,11 +489,11 @@ public class PluginDraftServiceTests : IDisposable
         // hooks — запрещённое поле манифеста (RCE/обход) → deny-manifest-field.
         _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
             System.Text.Encoding.UTF8.GetBytes(
-                """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"hooks":{}}"""))
+                """{"id":"local-952568751510/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"hooks":{}}"""))
             .Ok.Should().BeFalse("запись с запрещённым полем отбивается deny-manifest-field");
         // Записали манифест напрямую (WriteFile его отклонил), чтобы валидатор сам его нашёл.
         File.WriteAllText(Path.Combine(DraftDir(Owner, "my-plugin"), "ccs-plugin.json"),
-            """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"hooks":{}}""");
+            """{"id":"local-952568751510/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"hooks":{}}""");
         var validation = _service.Validate(Owner, "my-plugin");
         validation.IsValid.Should().BeFalse();
         validation.Problems.Should().Contain(p => p.Code == "deny-manifest-field");
@@ -507,10 +507,10 @@ public class PluginDraftServiceTests : IDisposable
         _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
         _service.WriteFile(Owner, "my-plugin", "skills/a/SKILL.md",
             System.Text.Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
-        // name = "Другое имя" ≠ slug "my-plugin" (из id local-x/my-plugin) → deny.
+        // name = "Другое имя" ≠ slug "my-plugin" (из id local-952568751510/my-plugin) → deny.
         _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
             System.Text.Encoding.UTF8.GetBytes(
-                """{"id":"local-x/my-plugin","name":"Другое имя","version":"0.1.0","contributes":{"skills":["skills/a"]}}"""))
+                """{"id":"local-952568751510/my-plugin","name":"Другое имя","version":"0.1.0","contributes":{"skills":["skills/a"]}}"""))
             .Ok.Should().BeTrue();
         var validation = _service.Validate(Owner, "my-plugin");
         validation.IsValid.Should().BeFalse();
@@ -527,7 +527,7 @@ public class PluginDraftServiceTests : IDisposable
             System.Text.Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
         _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
             System.Text.Encoding.UTF8.GetBytes(
-                """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"permissions":{"requested":["notes:read"]}}"""))
+                """{"id":"local-952568751510/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"permissions":{"requested":["notes:read"]}}"""))
             .Ok.Should().BeTrue();
         var validation = _service.Validate(Owner, "my-plugin");
         validation.IsValid.Should().BeTrue(
@@ -653,7 +653,7 @@ public class PluginDraftServiceTests : IDisposable
             System.Text.Encoding.UTF8.GetBytes("# Skill A\n")).Ok.Should().BeTrue();
         _service.WriteFile(Owner, "my-plugin", "ccs-plugin.json",
             System.Text.Encoding.UTF8.GetBytes(
-                """{"id":"local-x/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"permissions":{"requested":["notes:read"]}}"""))
+                """{"id":"local-952568751510/my-plugin","name":"my-plugin","version":"0.1.0","contributes":{"skills":["skills/a"]},"permissions":{"requested":["notes:read"]}}"""))
             .Ok.Should().BeTrue();
 
         _service.Reject(Owner, "my-plugin").Ok.Should().BeTrue();

@@ -238,7 +238,11 @@ public class PluginDraftService
             {
                 var slug = Path.GetFileName(dir);
                 var (manifest, _) = PluginInstaller.ReadManifest(dir);
-                var id = manifest?.Id ?? "";
+                // id — ТОЛЬКО из PluginIdentity.Resolve (QA-фикс N: сервер выводит; сырой
+                // manifest.Id не читаем): пустой id → выведенный, bad-id → выведенный (сводка
+                // показывает id, который сервер присвоит, а не то, что агент записал).
+                var (resolvedId, _) = PluginIdentity.Resolve(manifest, ownerId, slug);
+                var id = resolvedId ?? PluginIdentity.DeriveId(ownerId, slug);
                 var version = manifest?.Version ?? TemplateVersion;
                 var validation = _validator.ValidateFull(dir, ownerId, slug);
                 result.Add(new PluginDraftSummary(
@@ -266,7 +270,9 @@ public class PluginDraftService
                     continue;
                 }
                 var (manifest, _) = PluginInstaller.ReadManifest(dir);
-                var id = manifest?.Id ?? "";
+                // id — из PluginIdentity.Resolve (QA-фикс N), как у активных черновиков.
+                var (resolvedId, _) = PluginIdentity.Resolve(manifest, ownerId, slug);
+                var id = resolvedId ?? PluginIdentity.DeriveId(ownerId, slug);
                 var version = manifest?.Version ?? TemplateVersion;
                 var validation = _validator.ValidateFull(dir, ownerId, slug);
                 result.Add(new PluginDraftSummary(
@@ -419,10 +425,12 @@ public class PluginDraftService
 
     // ── Шаблоны ────────────────────────────────────────────────────────────────
 
-    // Наш манифест: id/name = slug, version 0.1.0, contributes пуст (агент заполнит).
+    // Наш манифест: name = slug, version 0.1.0, contributes пуст (агент заполнит).
+    // id НЕ задаём (QA-фикс N, минор): раньше шаблон писал `id = slug` — невалидный id
+    // (без издателя, не по {publisher}/{slug}), и агент, не тронув id, получал bad-id при
+    // проверке. Теперь id выводит сервер (PluginIdentity.Resolve) — в шаблоне его нет вовсе.
     private static string CcsManifest(string slug) => JsonSerializer.Serialize(new
     {
-        id = slug,
         name = slug,
         version = TemplateVersion,
         contributes = new PluginContributes(),

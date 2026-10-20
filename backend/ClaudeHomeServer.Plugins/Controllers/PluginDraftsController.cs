@@ -186,12 +186,18 @@ public class PluginDraftsController(
         if (!drafts!.Exists(UserId, slug))
             return NotFound(new { error = $"Черновик {slug} не найден" });
 
-        // Манифест черновика: id/version/permissions (потолок). id из него — ключ старой записи.
+        // Манифест черновика: id/version/permissions (потолок). id — ТОЛЬКО из
+        // PluginIdentity.Resolve (QA-фикс N: сервер выводит; сырой manifest.Id не читаем —
+        // иначе агент записал бы id уже установленного плагина и нашёл бы его старую запись
+        // здесь, унаследовав granted без диалога согласия).
         var (manifest, _) = PluginInstaller.ReadManifest(store!.DraftDir(UserId, slug));
+        var (resolvedId, _) = PluginIdentity.Resolve(manifest, UserId, slug);
         // Старая запись по id (любой версии) — для granted/secrets при обновлении версии.
         // (Bump vs 409 решает сам Install: Conflict — только та же id+version, другой sha.)
-        var oldById = manifest?.Id is { } mid
-            ? store.LoadInstalled(UserId).FirstOrDefault(r => r.Id == mid)
+        // resolvedId null (bad-id) — Install всё равно упадёт; семантик «первой установки»
+        // (все запрошенные = новые) допустим, до ответа не дойдёт.
+        var oldById = resolvedId is { } rid
+            ? store.LoadInstalled(UserId).FirstOrDefault(r => r.Id == rid)
             : null;
 
         // Установка: валидация, no-op/409/400 — единственный арбитр PluginInstaller:

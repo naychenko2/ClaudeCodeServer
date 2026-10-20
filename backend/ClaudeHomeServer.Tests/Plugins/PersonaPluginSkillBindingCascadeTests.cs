@@ -113,6 +113,24 @@ public class PersonaPluginSkillBindingCascadeTests : IDisposable
             "каскад удаления плагина снял Skill-привязку");
     }
 
+    // QA-фикс N (major 3): шов IPersonaPluginBindingPurger — опциональная зависимость
+    // каскада. Без шва (подсистема самодостаточна, Main не регистрировал адаптер) каскад
+    // строится и OnUninstalled — no-op (не бросает, шов не трогает); с шовом — шов вызван.
+    [Fact]
+    public void КаскадБезШова_NoOp_СШовом_ШовВызван()
+    {
+        // Без шва: null — DI отдаёт, когда адаптер не зарегистрирован (подсистема самодостаточна).
+        var noSeam = new PluginInstallCascade(purger: null);
+        noSeam.OnUninstalled(Owner, PluginId); // не бросает — no-op
+
+        // С шовом: вызов снимает привязки (тот же контракт, что в сквозном тесте выше).
+        var purger = new Mock<IPersonaPluginBindingPurger>();
+        purger.Setup(p => p.PurgePluginSkillBindings(Owner, PluginId)).Returns(3);
+        var withSeam = new PluginInstallCascade(purger.Object);
+        withSeam.OnUninstalled(Owner, PluginId);
+        purger.Verify(p => p.PurgePluginSkillBindings(Owner, PluginId), Times.Once());
+    }
+
     // Мутация «убрать каскад»: no-op-каскад не снимает привязку → она остаётся → тест красный.
     // Проверяем, что именно PluginInstallCascade (а не no-op) делает работу.
     [Fact]

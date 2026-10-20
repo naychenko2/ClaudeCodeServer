@@ -242,12 +242,13 @@ Slug — грамматика `PluginId` (`[a-z0-9-]+`) с потолком дл
    `PluginIdentity.Resolve` (Core-модель `ClaudeHomeServer.Models`-совместимая, живёт в
    Services.Plugins) — ЕЁ зовут и `ValidateFull` (проверка, которую видит человек), и
    `PluginInstaller.Install` («Принять»): коды 1:1, поэтому «проверка пройдена» ⇒ «Принять»
-   не упадёт по id/version/именам/путям. Агент **издателя не выбирает**: `id` не задан →
-   выводится `local-{ownerShort}/{slug}` (ownerShort = 8 hex-символов SHA-256 владельца,
-   slug — из метки источника `draft:{slug}`); `version` обязателен (нет → `missing-version`,
-   не-semver → `bad-version`); заданный `id` обязан быть валиден по `PluginId`
-   (`{publisher}/{slug}`, `[a-z0-9-]+`) — иначе `bad-id` (чужой издатель не запрещён
-   дополнительно: формат уже не пускает `..`/юникод/длину).
+   не упадёт по id/version/именам/путям. Агент **ни издателя, ни id не выбирает** (QA-фикс N):
+   `id` выводит ТОЛЬКО сервер — `id` не задан → выводится `local-{ownerShort}/{slug}`
+   (ownerShort = 12 hex-символов SHA-256 владельца, slug — из метки источника `draft:{slug}`);
+   `id` задан → обязан СОПADAТЬСЯ с выведенным `DeriveId(ownerId, slug)`, иначе `bad-id`
+   (агент не может записать id уже установленного плагина/чужого издателя и унаследовать
+   его granted-права без диалога согласия). `version` обязателен (нет → `missing-version`,
+   не-semver → `bad-version`).
 
 ## Статика панели: `Assets` (ADR-031 §3.1, §3.6, шаг 3.1)
 

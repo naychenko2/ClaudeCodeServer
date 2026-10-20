@@ -791,7 +791,9 @@ public class PluginPackageValidatorTests
         Directory.CreateDirectory(root);
         var manifest = new
         {
-            id = "local-x/pkg",
+            // id выведен сервером (owner-test, slug pkg) — валиден, чтобы единственной
+            // проблемой был bad-panel-entry, а не bad-id.
+            id = PluginIdentity.DeriveId("owner-test", "pkg"),
             name = "pkg",
             version = "0.1.0",
             contributes = new

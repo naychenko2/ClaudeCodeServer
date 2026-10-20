@@ -66,25 +66,26 @@ public class PluginAcceptInvariantTests : IDisposable
     // Это и есть критерий: человек не увидит «Проверка пройдена» для пакета, который не принять.
 
     [Theory]
-    // 1) нормальный: валидный id + version + вклад → ValidateFull чисто → accept Ok.
-    [InlineData("pkg", """{"id":"local-a/pkg","name":"pkg","version":"1.0.0","contributes":{"skills":["skills/a"]}}""")]
+    // 1) нормальный: id = выведенный сервером (local-{ownerShort}/pkg) + version + вклад → ValidateFull чисто → accept Ok.
+    [InlineData("pkg", """{"id":"local-952568751510/pkg","name":"pkg","version":"1.0.0","contributes":{"skills":["skills/a"]}}""")]
     // 2) без id: id выводится (local-{ownerShort}/pkg) → ValidateFull чисто → accept Ok (выведенный id).
     [InlineData("pkg", """{"name":"pkg","version":"1.0.0","contributes":{"skills":["skills/a"]}}""")]
     // 3) без version: missing-version → ValidateFull с проблемами (accept может упасть — vacuous).
-    [InlineData("pkg", """{"id":"local-a/pkg","name":"pkg","contributes":{"skills":["skills/a"]}}""")]
+    [InlineData("pkg", """{"id":"local-952568751510/pkg","name":"pkg","contributes":{"skills":["skills/a"]}}""")]
     // 4) пустые строки id+version: id выводится, version пуст → missing-version (проблемы).
     [InlineData("pkg", """{"id":"","name":"pkg","version":"","contributes":{"skills":["skills/a"]}}""")]
     // 5) id с «../»: «..» не в [a-z0-9-] → bad-id (проблемы).
     [InlineData("pkg", """{"id":"../pkg","name":"pkg","version":"1.0.0","contributes":{"skills":["skills/a"]}}""")]
-    // 6) id чужого издателя (валидный формат other-pub/pkg): ValidateFull чисто → accept Ok.
+    // 6) id чужого издателя (other-pub/pkg ≠ выведенный local-{ownerShort}/pkg) → bad-id (QA-фикс N:
+    //    id выводит сервер; чужой издатель = подмена) → ValidateFull с проблемами (vacuous).
     [InlineData("pkg", """{"id":"other-pub/pkg","name":"pkg","version":"1.0.0","contributes":{"skills":["skills/a"]}}""")]
-    // 7) слишком длинный id (валидный формат, slug 80 символов > 64): PluginId не режет длину
-    //    → ValidateFull чисто → accept Ok (инвариант держится и для длинных, но валидных значений).
-    [InlineData("pkg", """{"id":"local-a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"pkg","version":"1.0.0","contributes":{"skills":["skills/a"]}}""")]
+    // 7) длинный выведенный id (slug 60 символов ≤ 64): id = local-{ownerShort}/{slug} → ValidateFull
+    //    чисто → accept Ok (инвариант держится и для длинных, но валидных значений).
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", """{"id":"local-952568751510/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","name":"pkg","version":"1.0.0","contributes":{"skills":["skills/a"]}}""")]
     // 8) юникод в id (кириллица в slug, не в [a-z0-9-]) → bad-id (проблемы).
     [InlineData("pkg", """{"id":"local-a/пакет","name":"pkg","version":"1.0.0","contributes":{"skills":["skills/a"]}}""")]
     // 9) юникод в version (pre-release с кириллицей, не в [A-Za-z0-9.-]) → bad-version (проблемы).
-    [InlineData("pkg", """{"id":"local-a/pkg","name":"pkg","version":"1.0.0-пр","contributes":{"skills":["skills/a"]}}""")]
+    [InlineData("pkg", """{"id":"local-952568751510/pkg","name":"pkg","version":"1.0.0-пр","contributes":{"skills":["skills/a"]}}""")]
     public void Инвариант_ValidateFullБезПроблем_ТогдаAcceptУспешен(string slug, string ccsJson)
     {
         var source = CreateDraft(slug, ccsJson);
@@ -129,7 +130,7 @@ public class PluginAcceptInvariantTests : IDisposable
     public void БезVersion_MissingVersion_ВПроверкеИВAccept()
     {
         const string slug = "pkg";
-        var source = CreateDraft(slug, """{"id":"local-a/pkg","name":"pkg","contributes":{"skills":["skills/a"]}}""");
+        var source = CreateDraft(slug, """{"id":"local-952568751510/pkg","name":"pkg","contributes":{"skills":["skills/a"]}}""");
         var draftDir = _store.DraftDir(Owner, slug);
 
         _validator.ValidateFull(draftDir, Owner, slug).Problems
@@ -156,17 +157,109 @@ public class PluginAcceptInvariantTests : IDisposable
         result.Problems.Should().Contain(p => p.Code == "bad-id");
     }
 
+    // QA-фикс N (critical): id выводит ТОЛЬКО сервер. Заданный в манифесте id обязан совпасть
+    // с выведенным (DeriveId(ownerId, slug)), иначе bad-id. Агент выбирает только slug.
+
+    // id чужого издателя (other-pub/pkg ≠ выведенный local-{ownerShort}/pkg) → bad-id
+    // в проверке (которую видит человек) и в accept одним кодом.
+    [Fact]
+    public void IdЧужогоИздателя_BadId_ВПроверкеИВAccept()
+    {
+        const string slug = "pkg";
+        var source = CreateDraft(slug, """{"id":"other-pub/pkg","name":"pkg","version":"1.0.0","contributes":{"skills":["skills/a"]}}""");
+        var draftDir = _store.DraftDir(Owner, slug);
+
+        _validator.ValidateFull(draftDir, Owner, slug).Problems
+            .Should().Contain(p => p.Code == "bad-id", "id чужого издателя ≠ выведенный сервером");
+
+        var result = _installer.Install(Owner, source);
+        result.Status.Should().Be(InstallStatus.Fail);
+        result.Problems.Should().Contain(p => p.Code == "bad-id", "accept тем же кодом, что проверка");
+    }
+
+    // id уже установленного плагина, но черновик с ДРУГИМ slug: выведенный id другого slug
+    // ≠ id установленного → bad-id (агент не может «дослать» id чужого пакета).
+    [Fact]
+    public void IdУстановленного_ЧерновикДругогоSlug_BadId()
+    {
+        // Установлен local-{ownerShort}/pkg (slug "pkg").
+        var installedId = PluginIdentity.DeriveId(Owner, "pkg");
+        _store.SaveInstalled(Owner,
+        [
+            new PluginInstall { Id = installedId, Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+        ]);
+
+        // Черновик с slug "other", но id в манифесте = id установленного плагина.
+        // name в обоих манифестах = "pkg" (slug из id), чтобы файловая проверка
+        // name==slug не заслоняла bad-id (manifest-проверка идёт только при чистых файлах).
+        const string slug = "other";
+        var json = "{\"id\":\"" + installedId + "\",\"name\":\"pkg\",\"version\":\"2.0.0\",\"contributes\":{\"skills\":[\"skills/a\"]}}";
+        var source = CreateDraft(slug, json);
+        var draftDir = _store.DraftDir(Owner, slug);
+        File.WriteAllText(Path.Combine(draftDir, ".claude-plugin", "plugin.json"),
+            "{\"name\":\"pkg\",\"version\":\"2.0.0\"}");
+
+        _validator.ValidateFull(draftDir, Owner, slug).Problems
+            .Should().Contain(p => p.Code == "bad-id",
+                "id установленного плагина ≠ выведенный для slug «other»");
+
+        var result = _installer.Install(Owner, source);
+        result.Status.Should().Be(InstallStatus.Fail);
+        result.Problems.Should().Contain(p => p.Code == "bad-id");
+    }
+
+    // Сценарий из ревью (подмена): установлен local-{ownerShort}/pkg с выданным правом,
+    // черновик другого slug записал id установленного плагина (v2) → accept ОТКЛОНЯЕТ
+    // (bad-id), и granted НЕ унаследован: запись установленного плагина не тронута,
+    // новой записи (с другим slug) нет.
+    [Fact]
+    public void Подмена_Установленного_GrantedНеУнаследован()
+    {
+        // 1) Установить плагин (slug "pkg") и выдать право (как человек через grant).
+        var installedId = PluginIdentity.DeriveId(Owner, "pkg");
+        var json1 = "{\"id\":\"" + installedId + "\",\"name\":\"pkg\",\"version\":\"1.0.0\",\"contributes\":{\"skills\":[\"skills/a\"]},\"permissions\":{\"requested\":[\"notes:read\"]}}";
+        var source1 = CreateDraft("pkg", json1);
+        _installer.Install(Owner, source1).Status.Should().Be(InstallStatus.Ok);
+        _store.Update(Owner, records =>
+        {
+            records.Single(r => r.Id == installedId).Granted = ["notes:read"];
+            return records;
+        });
+
+        // 2) Черновик другого slug (other) с id УСТАНОВЛЕННОГО плагина, версия 2.0.0.
+        // name = "pkg" (slug из id) в обоих манифестах: файловая проверка name==slug чистая,
+        // bad-id (manifest-уровень) не заслонён.
+        var json2 = "{\"id\":\"" + installedId + "\",\"name\":\"pkg\",\"version\":\"2.0.0\",\"contributes\":{\"skills\":[\"skills/a\"]}}";
+        var source2 = CreateDraft("other", json2);
+        var draftDir2 = _store.DraftDir(Owner, "other");
+        File.WriteAllText(Path.Combine(draftDir2, ".claude-plugin", "plugin.json"),
+            "{\"name\":\"pkg\",\"version\":\"2.0.0\"}");
+        var result = _installer.Install(Owner, source2);
+
+        // 3) Отказ (bad-id): granted не унаследован.
+        result.Status.Should().Be(InstallStatus.Fail, "подмена id отбита bad-id");
+        result.Problems.Should().Contain(p => p.Code == "bad-id");
+
+        // Запись установленного плагина не тронута: та же версия, то же выданное право.
+        var installed = _store.LoadInstalled(Owner).Single(r => r.Id == installedId);
+        installed.Version.Should().Be("1.0.0", "версия установленного плагина не «обновилась» чужим черновиком");
+        installed.Granted.Should().Equal(["notes:read"], "granted не унаследован/не сброшен");
+        // Новой записи (выведенный id другого slug) не появилось.
+        _store.LoadInstalled(Owner).Should().NotContain(r => r.Id == PluginIdentity.DeriveId(Owner, "other"),
+            "черновик другого slug не создал запись — granted остался у своего плагина");
+    }
+
     // Мутация (критерий): убрать вывод id (DeriveId) из Resolve → «без id» даёт null id →
     // Install падает, хотя ValidateFull (с выводом) был бы чист. Здесь фиксируем: вывод id
-    // реально происходит (DeriveId детерминирован, ownerShort = 8 hex).
+    // реально происходит (DeriveId детерминирован, ownerShort = 12 hex, QA-фикс N).
     [Fact]
-    public void ВыводId_Детерминирован_OwnerShort8Hex()
+    public void ВыводId_Детерминирован_OwnerShort12Hex()
     {
         var id1 = PluginIdentity.DeriveId("owner-a", "pkg");
         var id2 = PluginIdentity.DeriveId("owner-a", "pkg");
         id1.Should().Be(id2, "вывод id детерминирован (один владелец+slug → один id)");
-        // Формат local-{8 hex}/{slug}: publisher = local-<8 hex-символов>.
-        id1.Should().MatchRegex(@"^local-[0-9a-f]{8}/pkg$");
+        // Формат local-{12 hex}/{slug}: publisher = local-<12 hex-символов> (QA-фикс N: 12, не 8).
+        id1.Should().MatchRegex(@"^local-[0-9a-f]{12}/pkg$");
         // Другой владелец → другой publisher (ownerShort зависит от ownerId).
         PluginIdentity.DeriveId("owner-b", "pkg").Should().NotBe(id1);
     }

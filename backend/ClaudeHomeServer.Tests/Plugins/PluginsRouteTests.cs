@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Tests.Plugins;
 
 // M1: {id} в маршрутах работает с publisher/slug. URL несёт один сегмент publisher~slug
 // ('~' вместо '/'), экшен декодирует. Тест — через TestServer с реальным HTTP:
-//   200 для local-test/pkg, 404 для несуществующего.
+//   200 для local-952568751510/pkg, 404 для несуществующего.
 public class PluginsRouteTests : IAsyncLifetime
 {
     private const string Owner = "owner-a";
@@ -82,7 +82,7 @@ public class PluginsRouteTests : IAsyncLifetime
         try { Directory.Delete(_dir, recursive: true); } catch { }
     }
 
-    // Установить пакет local-test/pkg (через installer, как в реальном install).
+    // Установить пакет local-952568751510/pkg (через installer, как в реальном install).
     private void InstallPackage()
     {
         var root = _store.DraftDir(Owner, "pkg");
@@ -91,7 +91,7 @@ public class PluginsRouteTests : IAsyncLifetime
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(new
             {
-                id = "local-test/pkg", name = "pkg", version = "1.0.0",
+                id = "local-952568751510/pkg", name = "pkg", version = "1.0.0",
                 contributes = new { skills = new[] { "skills/a" } },
                 permissions = new { requested = new[] { "notes:read" } },
             }, new JsonSerializerOptions { WriteIndented = true }));
@@ -108,8 +108,8 @@ public class PluginsRouteTests : IAsyncLifetime
     {
         InstallPackage();
 
-        // id = local-test/pkg → в URL: local-test~pkg (один сегмент).
-        var resp = await _client.GetAsync("/api/plugins/local-test~pkg/permissions");
+        // id = local-952568751510/pkg → в URL: local-952568751510~pkg (один сегмент).
+        var resp = await _client.GetAsync("/api/plugins/local-952568751510~pkg/permissions");
         resp.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
     }
 

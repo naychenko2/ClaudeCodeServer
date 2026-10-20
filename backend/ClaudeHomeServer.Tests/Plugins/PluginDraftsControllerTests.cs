@@ -119,6 +119,28 @@ public class PluginDraftsControllerTests : IDisposable
         return "draft:" + slug;
     }
 
+    // Черновик БЕЗ id в манифесте (QA-фикс N): id выводит сервер (local-{ownerShort}/{slug}).
+    // Тело то же, что у CreateDraftPackage, но поле id в ccs-plugin.json отсутствует.
+    private void CreateDraftWithoutId(string ownerId, string slug, string version, List<string> requested)
+    {
+        var root = _store.DraftDir(ownerId, slug);
+        Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
+        File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+
+        var manifest = new
+        {
+            name = slug,
+            version,
+            contributes = new { skills = new[] { "skills/a" } },
+            permissions = new { requested },
+        };
+        File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
+        Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+            JsonSerializer.Serialize(new { name = slug, version }, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
     // Изменить содержимое навыка в черновике (→ новый sha256, тот же id+version).
     private void MutateDraft(string ownerId, string slug)
     {
@@ -192,7 +214,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Preview_СервисныйJwt_Отдаёт403()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA, serviceToken: true);
         var res = ctl.Preview("pkg");
         var obj = (ObjectResult)res;
@@ -202,7 +224,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Accept_СервисныйJwt_Отдаёт403()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA, serviceToken: true);
         var res = ctl.Accept("pkg");
         var obj = (ObjectResult)res;
@@ -214,7 +236,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Preview_ЧужойВладелец_Отдаёт404()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerB);
         var res = ctl.Preview("pkg");
         res.Should().BeOfType<NotFoundObjectResult>();
@@ -223,7 +245,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Accept_ЧужойВладелец_Отдаёт404()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerB);
         var res = ctl.Accept("pkg");
         res.Should().BeOfType<NotFoundObjectResult>();
@@ -234,13 +256,13 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void List_СводкаЧерновиков_СодержитПоля()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
 
         var ok = (OkObjectResult)ctl.List();
         var json = JsonSerializer.Serialize(ok.Value);
         json.Should().Contain("\"Slug\":\"pkg\"", "slug в списке");
-        json.Should().Contain("\"Id\":\"local-a/pkg\"", "id из манифеста");
+        json.Should().Contain("\"Id\":\"local-952568751510/pkg\"", "id из манифеста");
         json.Should().Contain("\"Version\":\"1.0.0\"", "версия из манифеста");
         json.Should().Contain("\"Problems\":0", "валидный черновик — 0 проблем");
         json.Should().Contain("\"InstalledSameVersion\":false", "ещё не установлена такая версия");
@@ -249,7 +271,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void List_УстановленаТакаяВерсия_ПризнакTrue()
     {
-        var source = CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var source = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
@@ -264,7 +286,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Preview_ВозвращаетСводку_КакDraftPreview()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
 
         var ok = (OkObjectResult)ctl.Preview("pkg");
@@ -281,7 +303,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Panel_СыройФайл_БайтВБайт()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         const string html = "<html><head><title>T</title></head><body><h1>Panel</h1></body></html>";
         AddPanelToDraft(OwnerA, "pkg", html);
         var ctl = NewController(OwnerA);
@@ -299,7 +321,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Panel_ПолныйДокумент_СыройФайлНеТрогнут()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         const string panel =
             "<!DOCTYPE html>\n<html>\n<head>\n" +
             "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'\">\n" +
@@ -322,7 +344,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Panel_Заголовки_CspSandboxINosniff()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         AddPanelToDraft(OwnerA, "pkg", "<html></html>");
         var ctl = NewController(OwnerA);
 
@@ -341,7 +363,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Panel_СервисныйJwt_Отдаёт403()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         AddPanelToDraft(OwnerA, "pkg", "<html></html>");
         var ctl = NewController(OwnerA, serviceToken: true);
         var obj = (ObjectResult)ctl.Panel("pkg");
@@ -353,7 +375,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Panel_ЧужойВладелец_Отдаёт404()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         AddPanelToDraft(OwnerA, "pkg", "<html></html>");
         var ctl = NewController(OwnerB);
         ctl.Panel("pkg").Should().BeOfType<NotFoundObjectResult>();
@@ -365,7 +387,7 @@ public class PluginDraftsControllerTests : IDisposable
     public void Panel_БезПанели_Отдаёт404()
     {
         // Черновик есть, но panel/index.html нет.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Panel("pkg").Should().BeOfType<NotFoundObjectResult>();
     }
@@ -376,7 +398,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Panel_ФайлБольшой256КиБ_Отдаёт413()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var root = _store.DraftDir(OwnerA, "pkg");
         Directory.CreateDirectory(Path.Combine(root, "panel"));
         File.WriteAllBytes(Path.Combine(root, "panel", "index.html"),
@@ -391,7 +413,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Panel_ФайлРовно256КиБ_Отдаёт200()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var root = _store.DraftDir(OwnerA, "pkg");
         Directory.CreateDirectory(Path.Combine(root, "panel"));
         File.WriteAllBytes(Path.Combine(root, "panel", "index.html"),
@@ -405,7 +427,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Panel_ТочкаТочкаВSlug_Отбита()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         AddPanelToDraft(OwnerA, "pkg", "<html></html>");
         var ctl = NewController(OwnerA);
         ctl.Panel("../pkg").Should().BeOfType<NotFoundObjectResult>();
@@ -428,7 +450,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Panel_Symlink_Отбита()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var root = _store.DraftDir(OwnerA, "pkg");
         Directory.CreateDirectory(Path.Combine(root, "panel"));
         var outside = Path.Combine(_dir, "outside.html");
@@ -452,7 +474,7 @@ public class PluginDraftsControllerTests : IDisposable
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(new
             {
-                id = "local-a/badpkg",
+                id = "local-952568751510/badpkg",
                 name = slug,
                 version = "1.0.0",
                 contributes = new PluginContributes(),
@@ -477,7 +499,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Accept_ПерваяУстановкаСПравами_ConsentRequired_NewPermissionsВсе_GrantedПусто()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "net:api.linear.app"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read", "net:api.linear.app"]);
         var ctl = NewController(OwnerA);
 
         var ok = (OkObjectResult)ctl.Accept("pkg");
@@ -487,7 +509,7 @@ public class PluginDraftsControllerTests : IDisposable
         json.Should().Contain("notes:read", "notes:read в newPermissions");
         json.Should().Contain("net:api.linear.app", "net:api.linear.app в newPermissions");
 
-        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Granted.Should().BeEmpty("granted при первой установке пуст");
         record.Requested.Should().Equal("notes:read", "net:api.linear.app");
         record.Enabled.Should().BeTrue();
@@ -499,7 +521,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Accept_ПерваяУстановкаБезПрав_ConsentRequiredFalse()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", []);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", []);
         var ctl = NewController(OwnerA);
 
         var ok = (OkObjectResult)ctl.Accept("pkg");
@@ -507,7 +529,7 @@ public class PluginDraftsControllerTests : IDisposable
         json.Should().Contain("\"consentRequired\":false", "без запрошенных прав → согласия не требуется");
         json.Should().Contain("\"newPermissions\":[", "newPermissions пуст");
 
-        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Granted.Should().BeEmpty();
         record.Requested.Should().BeEmpty();
     }
@@ -518,19 +540,19 @@ public class PluginDraftsControllerTests : IDisposable
     public void Accept_ОбновлениеБезНовыхПрав_ConsentRequiredFalse()
     {
         // v1: requested = [notes:read]; accept → granted = [notes:read].
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
-        GrantDirectly(OwnerA, "local-a/pkg", ["notes:read"]);
+        GrantDirectly(OwnerA, "local-952568751510/pkg", ["notes:read"]);
 
         // v2: та же id, версия 2.0.0, тот же requested = [notes:read] (нет новых прав).
-        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["notes:read"]);
         var ok = (OkObjectResult)ctl.Accept("pkg");
         var json = JsonSerializer.Serialize(ok.Value);
         json.Should().Contain("\"consentRequired\":false", "обновление без новых прав → согласия не требуется");
         json.Should().Contain("\"newPermissions\":[", "newPermissions пуст");
 
-        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Version.Should().Be("2.0.0");
         record.Granted.Should().Equal(new[] { "notes:read" }, "granted = старые ∩ новые");
     }
@@ -541,13 +563,13 @@ public class PluginDraftsControllerTests : IDisposable
     public void Accept_ОбновлениеСНовымПравом_ConsentRequired_НеРасширяетGranted()
     {
         // v1: requested = [notes:read]; accept (granted=[]) → человек выдал notes:read.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
-        GrantDirectly(OwnerA, "local-a/pkg", ["notes:read"]);
+        GrantDirectly(OwnerA, "local-952568751510/pkg", ["notes:read"]);
 
         // v2: та же id, версия 2.0.0, requested = [notes:read, net:api.linear.app] (новое право).
-        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read", "net:api.linear.app"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["notes:read", "net:api.linear.app"]);
         var res = ctl.Accept("pkg");
 
         var ok = (OkObjectResult)res;
@@ -555,7 +577,7 @@ public class PluginDraftsControllerTests : IDisposable
         json.Should().Contain("\"consentRequired\":true", "новое запрошенное право → требуется согласие");
         json.Should().Contain("net:api.linear.app", "новое право в списке newPermissions");
 
-        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Version.Should().Be("2.0.0");
         record.Granted.Should().Equal(new[] { "notes:read" }, "granted = старые ∩ новые: новое право не выдано");
     }
@@ -571,26 +593,26 @@ public class PluginDraftsControllerTests : IDisposable
     public void Accept_Bump_УкладываетНовуюВерсиюНаДиск_СтараяОстаётся()
     {
         // v1: устанавливаем.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
         // v2: bump версии (содержимое навыка то же, версия в манифесте 2.0.0 → другой sha).
-        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["notes:read"]);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
         // Пакет НОВОЙ версии на диске (навык + панель этой версии доставляются).
-        var newDir = _store.PackageDir(OwnerA, "local-a/pkg", "2.0.0");
+        var newDir = _store.PackageDir(OwnerA, "local-952568751510/pkg", "2.0.0");
         Directory.Exists(newDir).Should().BeTrue("каталог packages/{id}/2.0.0/ создан при bump");
         File.Exists(Path.Combine(newDir, "skills", "a", "SKILL.md")).Should().BeTrue(
             "навык новой версии на диске");
 
         // Старая версия остаётся на диске (пакеты неизменяемы, bump не затирает старую).
-        var oldDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        var oldDir = _store.PackageDir(OwnerA, "local-952568751510/pkg", "1.0.0");
         Directory.Exists(oldDir).Should().BeTrue("каталог старой версии 1.0.0 остаётся");
 
         // Запись: версия 2.0.0, granted = старые ∩ новые.
-        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Version.Should().Be("2.0.0");
     }
 
@@ -604,18 +626,18 @@ public class PluginDraftsControllerTests : IDisposable
     public void Accept_Bump_ОшибкаВалидации_СтараяВерсияРаботает()
     {
         // v1: устанавливаем + выдаём право.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
-        GrantDirectly(OwnerA, "local-a/pkg", ["notes:read"]);
+        GrantDirectly(OwnerA, "local-952568751510/pkg", ["notes:read"]);
 
         // v2: bump версии, но битый манифест (unknown-permission) → валидация падает.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["notes:read"]);
         var root = _store.DraftDir(OwnerA, "pkg");
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(new
             {
-                id = "local-a/pkg", name = "pkg", version = "2.0.0",
+                id = "local-952568751510/pkg", name = "pkg", version = "2.0.0",
                 contributes = new { skills = new[] { "skills/a" } },
                 permissions = new { requested = new[] { "unknown:perm" } },
             }, new JsonSerializerOptions { WriteIndented = true }));
@@ -625,13 +647,13 @@ public class PluginDraftsControllerTests : IDisposable
 
         // Старая запись 1.0.0 (с granted) остаётся, битой записи 2.0.0 нет.
         var records = _store.LoadInstalled(OwnerA);
-        var rec = records.Single(r => r.Id == "local-a/pkg");
+        var rec = records.Single(r => r.Id == "local-952568751510/pkg");
         rec.Version.Should().Be("1.0.0", "запись осталась старой версией");
         rec.Granted.Should().Equal(new[] { "notes:read" }, "granted старой версии не сброшен");
         records.Count(r => r.Version == "2.0.0").Should().Be(0, "битой записи 2.0.0 нет");
 
         // Пакет старой версии на диске работает.
-        Directory.Exists(_store.PackageDir(OwnerA, "local-a/pkg", "1.0.0")).Should().BeTrue();
+        Directory.Exists(_store.PackageDir(OwnerA, "local-952568751510/pkg", "1.0.0")).Should().BeTrue();
     }
 
     // --- Accept: isUpdate/previousVersion (Глеб MAJOR 4) ---
@@ -643,7 +665,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Accept_ПерваяУстановка_IsUpdateFalse_PreviousVersionNull()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
 
         var ok = (OkObjectResult)ctl.Accept("pkg");
@@ -656,16 +678,53 @@ public class PluginDraftsControllerTests : IDisposable
     public void Accept_Обновление_IsUpdateTrue_PreviousVersionСтарая()
     {
         // v1: устанавливаем.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
         // v2: bump версии → обновление.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["notes:read"]);
         var ok = (OkObjectResult)ctl.Accept("pkg");
         var json = JsonSerializer.Serialize(ok.Value);
         json.Should().Contain("\"isUpdate\":true", "обновление — isUpdate true");
         json.Should().Contain("\"previousVersion\":\"1.0.0\"", "previousVersion — старая версия");
+    }
+
+    // QA-фикс N (major 2, единая точка id): плагин БЕЗ id в манифесте — id выводит сервер
+    // (local-{ownerShort}/{slug}). Установка, затем обновление черновиком: isUpdate=true,
+    // previousVersion заполнен; diff — 200 (не 404: раньше пустой id в манифесте бросал
+    // ArgumentException); сводка списка — с непустым (выведенным) id.
+    // Мутация: вернуть сырой manifest.Id в контроллере/diff/сводке → id пуст → красный.
+    [Fact]
+    public void Accept_БезIdВМанифесте_ВыведенныйId_ОбновлениеDiffИСводка()
+    {
+        var expectedId = PluginIdentity.DeriveId(OwnerA, "pkg");
+
+        // v1: черновик без id → accept Ok, id выведен сервером.
+        CreateDraftWithoutId(OwnerA, "pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        var first = (OkObjectResult)ctl.Accept("pkg");
+        var firstJson = JsonSerializer.Serialize(first.Value);
+        firstJson.Should().Contain($"\"id\":\"{expectedId}\"", "id выведен сервером, не взят из (пустого) манифеста");
+
+        // v2: bump версии → обновление.
+        CreateDraftWithoutId(OwnerA, "pkg", "2.0.0", ["notes:read"]);
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"isUpdate\":true", "обновление — isUpdate true");
+        json.Should().Contain("\"previousVersion\":\"1.0.0\"", "previousVersion — старая версия");
+
+        // diff: 200 (не 404) — установленная версия того же (выведенного) id найдена.
+        // (Сериализация здесь — PascalCase: JsonSerializer.Serialize без web-опций.)
+        var diff = (OkObjectResult)ctl.Diff("pkg");
+        var diffJson = JsonSerializer.Serialize(diff.Value);
+        diffJson.Should().Contain("\"Status\":\"updated\"", "diff с установленной версией того же выведенного id");
+        diffJson.Should().Contain($"\"Id\":\"{expectedId}\"", "id в diff — выведенный, не пустой");
+
+        // Сводка списка: непустой (выведенный) id.
+        var list = (OkObjectResult)ctl.List();
+        var listJson = JsonSerializer.Serialize(list.Value);
+        listJson.Should().Contain($"\"Id\":\"{expectedId}\"", "сводка черновика — с выведенным id");
     }
 
     [Fact]
@@ -673,7 +732,7 @@ public class PluginDraftsControllerTests : IDisposable
     {
         // Повторный accept той же версии (sha не изменился) → no-op; isUpdate true
         // (плагин уже установлен), previousVersion = текущая версия.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
@@ -688,7 +747,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Accept_ТотжеIdВерсия_ДругойSha_Отдаёт409()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
@@ -704,11 +763,11 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Accept_ТотжеSha_NoOp_СохраняетGrantedИСекреты()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"],
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read", "secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", true)]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
-        GrantDirectly(OwnerA, "local-a/pkg", ["notes:read", "secret:LINEAR_TOKEN"],
+        GrantDirectly(OwnerA, "local-952568751510/pkg", ["notes:read", "secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", "tok")]);
 
         // Повторный accept того же пакета (sha не изменился) → no-op.
@@ -717,11 +776,11 @@ public class PluginDraftsControllerTests : IDisposable
         var json = JsonSerializer.Serialize(ok.Value);
         json.Should().Contain("\"consentRequired\":false", "no-op — новых прав нет");
 
-        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Granted.Should().Equal(new[] { "notes:read", "secret:LINEAR_TOKEN" }, "granted не сброшен no-op");
         record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
             "секреты не сброшены no-op");
-        _secrets.Get(OwnerA, "local-a/pkg", "LINEAR_TOKEN").Should().Be("tok", "значение секрета сохранено");
+        _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().Be("tok", "значение секрета сохранено");
     }
 
     // --- Accept: заданные секреты прошлой версии сохраняются при обновлении ---
@@ -730,22 +789,22 @@ public class PluginDraftsControllerTests : IDisposable
     public void Accept_Обновление_СохраняетСекретыПрошлойВерсии()
     {
         // v1: secret LINEAR_TOKEN (required); accept → человек выдал secret:LINEAR_TOKEN + значение.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", true)]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
-        GrantDirectly(OwnerA, "local-a/pkg", ["secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", "tok")]);
+        GrantDirectly(OwnerA, "local-952568751510/pkg", ["secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", "tok")]);
 
         // v2: та же id, версия 2.0.0, тот же secret (required), тот же requested.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["secret:LINEAR_TOKEN"],
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", true)]);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
-        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Version.Should().Be("2.0.0");
         record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
             "заданный секрет прошлой версии сохранён при обновлении");
-        _secrets.Get(OwnerA, "local-a/pkg", "LINEAR_TOKEN").Should().Be("tok", "значение секрета пережило обновление");
+        _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().Be("tok", "значение секрета пережило обновление");
     }
 
     // --- Accept: обновление сохраняет включённость (minor 3: выключенный не включается) ---
@@ -755,24 +814,24 @@ public class PluginDraftsControllerTests : IDisposable
     public void Accept_Обновление_СохраняетВключённость()
     {
         // v1: secret + выдать + выключить плагин.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", true)]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
-        GrantDirectly(OwnerA, "local-a/pkg", ["secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", "tok")]);
+        GrantDirectly(OwnerA, "local-952568751510/pkg", ["secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", "tok")]);
         _store.Update(OwnerA, records =>
         {
-            var r = records.Single(x => x.Id == "local-a/pkg");
+            var r = records.Single(x => x.Id == "local-952568751510/pkg");
             r.Enabled = false;
             return records;
         });
 
         // v2: bump версии, тот же secret в requested.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["secret:LINEAR_TOKEN"],
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", true)]);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
-        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Version.Should().Be("2.0.0");
         record.Enabled.Should().BeFalse("выключенный плагин не включается accept-обновлением");
     }
@@ -783,17 +842,17 @@ public class PluginDraftsControllerTests : IDisposable
     public void Accept_Обновление_СекретИсчезИзМанифеста_Чистится()
     {
         // v1: secret LINEAR_TOKEN (в requested) задан.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["secret:LINEAR_TOKEN"],
             secrets: [("LINEAR_TOKEN", true)]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
-        GrantDirectly(OwnerA, "local-a/pkg", ["secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", "tok")]);
+        GrantDirectly(OwnerA, "local-952568751510/pkg", ["secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", "tok")]);
 
         // v2: bump версии, но secret:LINEAR_TOKEN НЕ в requested (имя исчезло из нового манифеста).
-        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["notes:read"]);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
-        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Secrets.Should().NotContain(s => s.Name == "LINEAR_TOKEN",
             "секрет, чьё имя исчезло из нового манифеста, не остаётся висеть");
     }
@@ -803,7 +862,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Accept_Успех_ЧерновикНеУдаляется()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
 
@@ -816,7 +875,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public async Task Accept_ДваПараллельных_НеПортятInstalledJson()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
 
         // Два параллельных accept одного slug: каждый делает store.Update (load→mutate→save
@@ -828,8 +887,8 @@ public class PluginDraftsControllerTests : IDisposable
         results[1].Should().BeOfType<OkObjectResult>();
 
         var records = _store.LoadInstalled(OwnerA);
-        records.Count(r => r.Id == "local-a/pkg").Should().Be(1, "ровно одна запись, installed.json не потерян");
-        records.Single(r => r.Id == "local-a/pkg").Sha256.Should().NotBeEmpty("запись целая (sha на месте)");
+        records.Count(r => r.Id == "local-952568751510/pkg").Should().Be(1, "ровно одна запись, installed.json не потерян");
+        records.Single(r => r.Id == "local-952568751510/pkg").Sha256.Should().NotBeEmpty("запись целая (sha на месте)");
     }
 
     // --- Reject: перенос в _rejected, убирает из активных (шаг 4.3c) ---
@@ -837,7 +896,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Reject_Переносит_ИУбираетИзАктивных()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
 
         var ok = (OkObjectResult)ctl.Reject("pkg");
@@ -857,7 +916,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Reject_СервисныйJwt_Отдаёт403()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA, serviceToken: true);
         var obj = (ObjectResult)ctl.Reject("pkg");
         obj.StatusCode.Should().Be(403);
@@ -866,7 +925,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Reject_ЧужойВладелец_Отдаёт404()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerB);
         ctl.Reject("pkg").Should().BeOfType<NotFoundObjectResult>();
     }
@@ -874,7 +933,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Reject_ТочкаТочкаВSlug_Отбита()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         // «../pkg» — не по грамматике slug → Exists=false → 404 (не 500 от SafePath.Join).
         ctl.Reject("../pkg").Should().BeOfType<NotFoundObjectResult>();
@@ -885,7 +944,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Restore_Возвращает_ВDrafts()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Reject("pkg").Should().BeOfType<OkObjectResult>();
 
@@ -899,11 +958,11 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Restore_КонфликтSlug_Отдаёт409()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA);
         ctl.Reject("pkg").Should().BeOfType<OkObjectResult>();
         // Новый черновик того же slug занял _drafts/pkg.
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
 
         var conflict = (ConflictObjectResult)ctl.Restore("pkg");
         conflict.StatusCode.Should().Be(409);
@@ -912,7 +971,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Restore_СервисныйJwt_Отдаёт403()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerA, serviceToken: true);
         var obj = (ObjectResult)ctl.Restore("pkg");
         obj.StatusCode.Should().Be(403);
@@ -921,7 +980,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Restore_ЧужойВладелец_Отдаёт404()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewController(OwnerB);
         ctl.Restore("pkg").Should().BeOfType<NotFoundObjectResult>();
     }
@@ -934,7 +993,7 @@ public class PluginDraftsControllerTests : IDisposable
     [Fact]
     public void Accept_ЗаписьInstalledJson_ОдинРаз()
     {
-        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
 
         var counting = new CountingPluginStore(BuildConfig(_dir));
         var drafts = new PluginDraftService(counting, new PluginPackageValidator());

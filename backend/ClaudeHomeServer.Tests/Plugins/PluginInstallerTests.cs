@@ -41,6 +41,11 @@ public class PluginInstallerTests : IDisposable
             })
             .Build();
 
+    // id пакета — выведен сервером (QA-фикс N: id = local-{ownerShort}/{slug}, агент издателя
+    // не выбирает). Тестовые пакеты несут валидный (выведенный) id, поэтому установка/валидация
+    // проходят. slug — часть id после '/'; id выводится из (Owner, slug).
+    private static string PkgId(string slug) => PluginIdentity.DeriveId(Owner, slug);
+
     // Пакет в каталоге черновика: ccs-plugin.json (id/version) + нативный .claude-plugin/plugin.json
     // (R10-1: обязателен, name = slug) + файлы skills. Возвращает метку источника (draft:<slug>).
     private string CreateDraft(string id, string version, params string[] extraFiles)
@@ -56,7 +61,7 @@ public class PluginInstallerTests : IDisposable
             File.WriteAllText(p, "content of " + f + "\n");
         }
 
-        var manifest = new { id, name = slug, version, contributes = new { skills = new[] { "skills/a" } }, permissions = new { requested = new[] { "notes:read" } } };
+        var manifest = new { id = PkgId(slug), name = slug, version, contributes = new { skills = new[] { "skills/a" } }, permissions = new { requested = new[] { "notes:read" } } };
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
         // R10-1: нативный манифест обязателен; name = slug (CLI берёт из него имя пакета).
@@ -74,7 +79,7 @@ public class PluginInstallerTests : IDisposable
         var root = _store.DraftDir(Owner, slug);
         Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
         File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
-        var manifest = new { id, name = slug, version, contributes = new { skills = new[] { "skills/a" } }, permissions = new { requested } };
+        var manifest = new { id = PkgId(slug), name = slug, version, contributes = new { skills = new[] { "skills/a" } }, permissions = new { requested } };
         File.WriteAllText(Path.Combine(root, "ccs-plugin.json"),
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }));
         Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
@@ -92,7 +97,7 @@ public class PluginInstallerTests : IDisposable
         var result = _sut.Install(Owner, source);
 
         result.Status.Should().Be(InstallStatus.Ok);
-        var targetDir = _store.PackageDir(Owner, "local-a/pkg", "1.0.0");
+        var targetDir = _store.PackageDir(Owner, PkgId("pkg"), "1.0.0");
         Directory.Exists(targetDir).Should().BeTrue("пакет перемещён в packages/{id}/{version}");
         // Временный .staging-{guid} в корне packages/ убран после Directory.Move.
         var packagesRoot = Path.GetDirectoryName(targetDir)!;
@@ -106,7 +111,7 @@ public class PluginInstallerTests : IDisposable
     public void Install_Атомарность_СтарыйКаталогЗаменёнЦеликом()
     {
         // Предсуществующий каталог пакета (остаток прошлой установки) с «чужим» файлом.
-        var targetDir = _store.PackageDir(Owner, "local-a/pkg", "1.0.0");
+        var targetDir = _store.PackageDir(Owner, PkgId("pkg"), "1.0.0");
         Directory.CreateDirectory(Path.Combine(targetDir, "panel"));
         File.WriteAllText(Path.Combine(targetDir, "panel", "old.txt"), "old\n");
 
@@ -133,7 +138,7 @@ public class PluginInstallerTests : IDisposable
         // Выдать права и секрет (имитация grant) — они живут в записи.
         _store.Update(Owner, records =>
         {
-            var r = records.Single(x => x.Id == "local-a/pkg");
+            var r = records.Single(x => x.Id == PkgId("pkg"));
             r.Granted = ["notes:read"];
             r.Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Set = true }];
             return records;
@@ -143,7 +148,7 @@ public class PluginInstallerTests : IDisposable
         var second = _sut.Install(Owner, source);
         second.Status.Should().Be(InstallStatus.NoOp, "повторная установка (совпал sha) — no-op");
 
-        var record = _store.LoadInstalled(Owner).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(Owner).Single(r => r.Id == PkgId("pkg"));
         record.Granted.Should().Equal(new[] { "notes:read" }, "granted не сброшен повторной установкой");
         record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
             "секреты не сброшены повторной установкой");
@@ -185,10 +190,12 @@ public class PluginInstallerTests : IDisposable
     // staging-копии (того, что перемещается в target), не из источника.
     //
     // Детерминированная гонка: фон-поток меняет id в ccs-plugin.json источника (OrigId ↔ OtherId).
-    // R11-1: оба id — с ОДИНАКОВЫМ slug (local-a/pkg ↔ local-b/pkg), чтобы нативный манифест
-    // (name = slug = "pkg", создаётся CreateDraft) оставался неизменным: фон-поток его НЕ трогает
-    // (два отдельных File.Move давали смешанный снимок → deny-name-not-equal-slug). TOCTOU
-    // по-прежнему проверяется через расхождение id записи и пакета.
+    // R11-1: оба id — с ОДИНАКОВЫМ slug (выведенный {Owner}/pkg ↔ чужой local-b/pkg), чтобы
+    // нативный манифест (name = slug = "pkg", создаётся CreateDraft) оставался неизменным:
+    // фон-поток его НЕ трогает (два отдельных File.Move давали смешанный снимок →
+    // deny-name-not-equal-slug). QA-фикс N: OrigId — выведенный сервером (валиден), OtherId —
+    // чужой издатель (bad-id): установка Ok, когда прочитан выведенный id, и Fail (bad-id),
+    // когда чужой. TOCTOU проверяется, когда установка прошла (запись и пакет — из одного снапшота).
     //   FIX  (copy → read из staging): staging — снапшот; запись и пакет берут id из одного
     //         снапшота → совпадают (и запись, и пакет имеют тот же id).
     //   МУТАЦИЯ (read из source → copy): read и copy — по разные стороны изменения → запись
@@ -198,8 +205,8 @@ public class PluginInstallerTests : IDisposable
     [Fact]
     public void TOCTOU_МанифестИзStaging_ЗаписьСовпадаетСПакетом()
     {
-        const string OrigId = "local-a/pkg";
-        const string OtherId = "local-b/pkg"; // тот же slug "pkg" — нативный name = slug не трогается
+        string OrigId = PkgId("pkg");   // выведенный сервером (валиден): установка Ok, когда прочитан
+        const string OtherId = "local-b/pkg"; // чужой издатель, тот же slug "pkg" (bad-id) — name = slug не трогается
         var source = CreateDraft(OrigId, "1.0.0");
         var manifestPath = Path.Combine(_store.DraftDir(Owner, "pkg"), "ccs-plugin.json");
 
@@ -253,7 +260,19 @@ public class PluginInstallerTests : IDisposable
         try
         {
             var result = _sut.Install(Owner, source);
-            result.Status.Should().Be(InstallStatus.Ok);
+            // QA-фикс N: id в ccs чередуется (выведенный ↔ чужой): Ok (выведенный прочитан)
+            // или Fail (bad-id, чужой id). TOCTOU проверяем, когда установка прошла: запись
+            // (id из staging) и пакет (файлы из staging) — из одного снапшота, id совпадает.
+            result.Status.Should().BeOneOf(InstallStatus.Ok, InstallStatus.Fail);
+            if (result.Status == InstallStatus.Ok)
+            {
+                var record = _store.LoadInstalled(Owner).Single();
+                var targetDir = _store.PackageDir(Owner, record.Id, record.Version);
+                var (targetManifest, _) = PluginInstaller.ReadManifest(targetDir);
+                targetManifest.Should().NotBeNull("манифест перемещён вместе с пакетом");
+                targetManifest!.Id.Should().Be(record.Id,
+                    "id из перемещённого пакета = id в записи (TOCTOU: оба из одного снапшота)");
+            }
         }
         finally
         {
@@ -261,14 +280,6 @@ public class PluginInstallerTests : IDisposable
             writer.Join(2000);
             try { Directory.Delete(tmpDir, recursive: true); } catch { }
         }
-
-        // Запись (id из манифеста) и пакет (файлы, sha256) не разойдутся.
-        var record = _store.LoadInstalled(Owner).Single();
-        var targetDir = _store.PackageDir(Owner, record.Id, record.Version);
-        var (targetManifest, _) = PluginInstaller.ReadManifest(targetDir);
-        targetManifest.Should().NotBeNull("манифест перемещён вместе с пакетом");
-        targetManifest!.Id.Should().Be(record.Id,
-            "id из перемещённого пакета = id в записи (TOCTOU: оба из одного снапшота)");
     }
 
     [Fact]
@@ -277,7 +288,7 @@ public class PluginInstallerTests : IDisposable
         var source = CreateDraft("local-a/pkg", "1.0.0");
         _sut.Install(Owner, source).Status.Should().Be(InstallStatus.Ok);
 
-        var record = _store.LoadInstalled(Owner).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(Owner).Single(r => r.Id == PkgId("pkg"));
         record.Source.Should().Be("draft:pkg", "source в installed.json — метка, не путь");
     }
 
@@ -289,7 +300,7 @@ public class PluginInstallerTests : IDisposable
         var source = CreateDraft("local-a/pkg", "1.0.0");
         _sut.Install(Owner, source).Status.Should().Be(InstallStatus.Ok);
 
-        var record = _store.LoadInstalled(Owner).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(Owner).Single(r => r.Id == PkgId("pkg"));
         record.Granted.Should().BeEmpty("granted при установке пуст (C2)");
         record.Requested.Should().Equal("notes:read");
         record.Enabled.Should().BeTrue("первая установка по умолчанию Enabled=true");
@@ -308,7 +319,7 @@ public class PluginInstallerTests : IDisposable
         _sut.Install(Owner, source1).Status.Should().Be(InstallStatus.Ok);
         _store.Update(Owner, records =>
         {
-            var r = records.Single(x => x.Id == "local-a/pkg");
+            var r = records.Single(x => x.Id == PkgId("pkg"));
             r.Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Set = true }];
             r.Enabled = false;
             return records;
@@ -319,7 +330,7 @@ public class PluginInstallerTests : IDisposable
         var result = _sut.Install(Owner, source2);
         result.Status.Should().Be(InstallStatus.Ok);
 
-        var record = _store.LoadInstalled(Owner).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(Owner).Single(r => r.Id == PkgId("pkg"));
         record.Version.Should().Be("2.0.0");
         record.Secrets.Should().Contain(s => s.Name == "LINEAR_TOKEN" && s.Set,
             "секреты прошлой версии сохранены при обновлении");
@@ -337,7 +348,7 @@ public class PluginInstallerTests : IDisposable
         _sut.Install(Owner, source1).Status.Should().Be(InstallStatus.Ok);
         _store.Update(Owner, records =>
         {
-            var r = records.Single(x => x.Id == "local-a/pkg");
+            var r = records.Single(x => x.Id == PkgId("pkg"));
             r.Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Set = true }];
             return records;
         });
@@ -347,7 +358,7 @@ public class PluginInstallerTests : IDisposable
         var result = _sut.Install(Owner, source2);
         result.Status.Should().Be(InstallStatus.Ok);
 
-        var record = _store.LoadInstalled(Owner).Single(r => r.Id == "local-a/pkg");
+        var record = _store.LoadInstalled(Owner).Single(r => r.Id == PkgId("pkg"));
         record.Secrets.Should().NotContain(s => s.Name == "LINEAR_TOKEN",
             "секрет, чьё имя исчезло из нового манифеста, не остаётся висеть");
     }
@@ -370,7 +381,7 @@ public class PluginInstallerTests : IDisposable
         File.CreateSymbolicLink(Path.Combine(root, "panel", "link.txt"), outside);
         var manifest = new
         {
-            id = "local-a/pkg", name = "pkg", version = "1.0.0",
+            id = PkgId("pkg"), name = "pkg", version = "1.0.0",
             contributes = new { skills = new[] { "skills/a" } },
             permissions = new { requested = new[] { "notes:read" } },
         };
@@ -436,7 +447,7 @@ public class PluginInstallerTests : IDisposable
         File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
         var manifest = new
         {
-            id = "local-a/pkg", name = "pkg", version = "1.0.0",
+            id = PkgId("pkg"), name = "pkg", version = "1.0.0",
             contributes = new { skills = new[] { "skills/a" } },
             permissions = new { requested = new[] { "unknown:perm" } },
         };
@@ -464,7 +475,7 @@ public class PluginInstallerTests : IDisposable
         File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
         var manifest = new
         {
-            id = "local-a/pkg", name = "pkg", version = "1.0.0",
+            id = PkgId("pkg"), name = "pkg", version = "1.0.0",
             contributes = new { skills = new[] { "skills/a" } },
             permissions = new { requested = new[] { "net:bad/host" } },
         };

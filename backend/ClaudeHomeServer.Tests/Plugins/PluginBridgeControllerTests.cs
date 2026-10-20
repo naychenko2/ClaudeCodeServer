@@ -166,10 +166,10 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_ПанельПоНовомуПути_ОтдаётFileResult()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         res.Should().BeOfType<FileContentResult>("файл панели отдаётся FileContentResult (200)");
     }
 
@@ -179,10 +179,10 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_СервисныйJwt_Отдаёт403()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA, serviceToken: true);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(403);
     }
@@ -193,16 +193,16 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_ФайлБольшой256КиБ_Отдаёт413()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // index.html панели больше потолка 256 КиБ.
-        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        var packageDir = _store.PackageDir(OwnerA, "local-952568751510/pkg", "1.0.0");
         System.IO.File.WriteAllBytes(
             System.IO.Path.Combine(packageDir, "panel", "index.html"),
             new byte[PluginPackageValidator.MaxPanelFileBytes + 1]);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(413);
     }
@@ -212,15 +212,15 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_ФайлРовно256КиБ_Отдаёт200()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
-        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        var packageDir = _store.PackageDir(OwnerA, "local-952568751510/pkg", "1.0.0");
         System.IO.File.WriteAllBytes(
             System.IO.Path.Combine(packageDir, "panel", "index.html"),
             new byte[PluginPackageValidator.MaxPanelFileBytes]);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         res.Should().BeOfType<FileContentResult>("ровно потолок → 200");
     }
 
@@ -230,7 +230,7 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_СыройФайл_БайтВБайт()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // Записываем известный HTML с «ловушками» для разбора: </head> в строке скрипта,
@@ -242,10 +242,10 @@ public class PluginBridgeControllerTests : IDisposable
             "<meta http-equiv=\"refresh\" content=\"0;url=https://evil\">\n" +
             "<h1>Panel</h1>\n" +
             "</body></html>";
-        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        var packageDir = _store.PackageDir(OwnerA, "local-952568751510/pkg", "1.0.0");
         System.IO.File.WriteAllText(System.IO.Path.Combine(packageDir, "panel", "index.html"), html);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         var fileRes = (FileContentResult)res;
         fileRes.FileContents.Should().BeEquivalentTo(
             System.IO.File.ReadAllBytes(System.IO.Path.Combine(packageDir, "panel", "index.html")),
@@ -258,7 +258,7 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_255КиБПовторовHead_ВремяОтветыМенее500мс()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // 255 КиБ = 255 * 1024 байт, заполнено повторами "<head" (по 5 байт).
@@ -268,11 +268,11 @@ public class PluginBridgeControllerTests : IDisposable
             System.Buffer.BlockCopy(pattern, 0, chunk, i,
                 Math.Min(pattern.Length, chunk.Length - i));
 
-        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        var packageDir = _store.PackageDir(OwnerA, "local-952568751510/pkg", "1.0.0");
         System.IO.File.WriteAllBytes(System.IO.Path.Combine(packageDir, "panel", "index.html"), chunk);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         sw.Stop();
 
         res.Should().BeOfType<FileContentResult>("255 КиB < потолка 256 КиB → 200");
@@ -286,11 +286,11 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_Заголовки_CspSandboxINosniff()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // Заголовки ставятся на Response — проверяем через HttpContext.
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         res.Should().BeOfType<FileContentResult>();
 
         var csp = ctl.Response.Headers["Content-Security-Policy"].ToString();
@@ -308,11 +308,11 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_SymlinkВСерединеПути_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // panel/sub — symlink на внешний каталог; файл sub/inner.html «внутри» ссылки.
-        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        var packageDir = _store.PackageDir(OwnerA, "local-952568751510/pkg", "1.0.0");
         var outsideDir = Path.Combine(_dir, "outside_dir");
         System.IO.Directory.CreateDirectory(outsideDir);
         System.IO.File.WriteAllText(Path.Combine(outsideDir, "inner.html"), "<html>inner</html>");
@@ -327,7 +327,7 @@ public class PluginBridgeControllerTests : IDisposable
             System.IO.File.Copy(Path.Combine(outsideDir, "inner.html"), Path.Combine(linkDir, "inner.html"));
         }
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/sub/inner.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/sub/inner.html");
         res.Should().BeOfType<NotFoundResult>("symlink-каталог в середине пути → 404 (не следовать)");
     }
 
@@ -336,10 +336,10 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_ФайлаНет_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/missing.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/missing.html");
         res.Should().BeOfType<NotFoundResult>();
     }
 
@@ -349,10 +349,10 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_СтарыйПутьIndexHtml_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "index.html");
         res.Should().BeOfType<NotFoundResult>("старый путь (без panel/) — 404, совместимость не нужна");
     }
 
@@ -361,10 +361,10 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_ЧужойПакет_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerB);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         res.Should().BeOfType<NotFoundResult>();
     }
 
@@ -373,11 +373,11 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_ВыключенныйПакет_Отдаёт409()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        Disable(OwnerA, "local-a/pkg");
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        Disable(OwnerA, "local-952568751510/pkg");
         var ctl = NewBridgeController(OwnerA);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(409);
     }
@@ -391,18 +391,18 @@ public class PluginBridgeControllerTests : IDisposable
     public void Assets_Bump_СтараяВерсия_404_Новая_200()
     {
         // v1: установка 1.0.0.
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         // v2: bump на 2.0.0 (тот же id, новая версия → другой sha; каталог 1.0.0 остаётся).
-        InstallPanel(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "2.0.0", ["notes:read"]);
 
         var ctl = NewBridgeController(OwnerA);
 
         // Запрос старой версии (1.0.0, каталог ещё на диске) → 404 (не установленная версия).
-        var resOld = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var resOld = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         resOld.Should().BeOfType<NotFoundResult>("старая версия после bump → 404");
 
         // Запрос установленной версии (2.0.0) → 200.
-        var resNew = ctl.Assets("local-a~pkg", "2.0.0", "panel/index.html");
+        var resNew = ctl.Assets("local-952568751510~pkg", "2.0.0", "panel/index.html");
         resNew.Should().BeOfType<FileContentResult>("установленная версия → 200");
     }
 
@@ -411,10 +411,10 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_ПодсистемаВыключена_Отдаёт503()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA, subsystemEnabled: false);
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(503);
     }
@@ -442,7 +442,7 @@ public class PluginBridgeControllerTests : IDisposable
         };
 
         // Гейт (503) срабатывает ДО обращения к null-store → не 500.
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/index.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/index.html");
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(503);
     }
@@ -454,62 +454,62 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public void Assets_ПутьTraversal_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // «../ccs-plugin.json» — выводит за корень пакета (path traversal).
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "../ccs-plugin.json");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "../ccs-plugin.json");
         res.Should().BeOfType<NotFoundResult>("«../» вывел за корень пакета → 404");
     }
 
     [Fact]
     public void Assets_ПанельParentParent_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // «panel/../../x» — начинается с panel/, но разрешается в root/x (вне panel/).
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/../../x");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/../../x");
         res.Should().BeOfType<NotFoundResult>("«panel/../../x» разрешается вне panel/ → 404");
     }
 
     [Fact]
     public void Assets_ФайлВнеPanel_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // skills/a/SKILL.md — внутри пакета, но НЕ под panel/ → 404.
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "skills/a/SKILL.md");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "skills/a/SKILL.md");
         res.Should().BeOfType<NotFoundResult>("файл вне panel/ → 404");
     }
 
     [Fact]
     public void Assets_Манифест_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // ccs-plugin.json — манифест, не должен торчать наружу.
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "ccs-plugin.json");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "ccs-plugin.json");
         res.Should().BeOfType<NotFoundResult>("манифест вне panel/ → 404");
     }
 
     [Fact]
     public void Assets_Symlink_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
         // Symlink в panel/ на внешний файл → не следовать → 404.
-        var packageDir = _store.PackageDir(OwnerA, "local-a/pkg", "1.0.0");
+        var packageDir = _store.PackageDir(OwnerA, "local-952568751510/pkg", "1.0.0");
         var outside = Path.Combine(_dir, "outside.html");
         System.IO.File.WriteAllText(outside, "<html>outside</html>");
         var link = Path.Combine(packageDir, "panel", "link.html");
         try { System.IO.File.CreateSymbolicLink(link, outside); }
         catch (PlatformNotSupportedException) { System.IO.File.Copy(outside, link); }
 
-        var res = ctl.Assets("local-a~pkg", "1.0.0", "panel/link.html");
+        var res = ctl.Assets("local-952568751510~pkg", "1.0.0", "panel/link.html");
         res.Should().BeOfType<NotFoundResult>("symlink в panel/ → 404 (не следовать)");
     }
 
@@ -519,10 +519,10 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_СервисныйJwt_Отдаёт403()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA, serviceToken: true);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(403);
@@ -533,10 +533,10 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_ЧужойПакет_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerB);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         res.Should().BeOfType<NotFoundResult>();
     }
@@ -549,10 +549,10 @@ public class PluginBridgeControllerTests : IDisposable
     public async Task Call_ТолькоЧерновик_Отдаёт404()
     {
         // Черновик создан (draft), но НЕ установлен — записи в installed.json нет.
-        CreatePanelPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        CreatePanelPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         res.Should().BeOfType<NotFoundResult>();
     }
@@ -562,11 +562,11 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_ВыключенныйПакет_Отдаёт409()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        Disable(OwnerA, "local-a/pkg");
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        Disable(OwnerA, "local-952568751510/pkg");
         var ctl = NewBridgeController(OwnerA);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(409);
@@ -578,11 +578,11 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_НетОбработчика_Отдаёт503()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-952568751510/pkg", ["notes:read"]);
         var ctl = NewBridgeController(OwnerA);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(503);
@@ -593,14 +593,14 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_ЕстьОбработчикИПраво_Отдаёт200()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-952568751510/pkg", ["notes:read"]);
 
         var handler = new StubCapability("notes:read");
         var bridge = new PluginBridge([handler]);
         var ctl = NewBridgeController(OwnerA, bridge: bridge);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         var ok = (OkObjectResult)res;
         var resp = (PluginCallResponse)ok.Value!;
@@ -613,12 +613,12 @@ public class PluginBridgeControllerTests : IDisposable
     public async Task Call_ПравоНеВыдано_Отдаёт403()
     {
         // Пакет установлен, но grant не сделан — granted пуст.
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
         var handler = new StubCapability("notes:read");
         var bridge = new PluginBridge([handler]);
         var ctl = NewBridgeController(OwnerA, bridge: bridge);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(403);
@@ -631,12 +631,12 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_Timeout_Отдаёт504()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-952568751510/pkg", ["notes:read"]);
         var bridge = new PluginBridge([new StubErrorCapability("notes:read", "timeout")]);
         var ctl = NewBridgeController(OwnerA, bridge: bridge);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(504);
@@ -645,12 +645,12 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_Limit_Отдаёт429()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-952568751510/pkg", ["notes:read"]);
         var bridge = new PluginBridge([new StubErrorCapability("notes:read", "limit")]);
         var ctl = NewBridgeController(OwnerA, bridge: bridge);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(429);
@@ -659,12 +659,12 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_Upstream_Отдаёт502()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-952568751510/pkg", ["notes:read"]);
         var bridge = new PluginBridge([new StubErrorCapability("notes:read", "upstream")]);
         var ctl = NewBridgeController(OwnerA, bridge: bridge);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read" }, CancellationToken.None);
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(502);
@@ -677,14 +677,14 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_ProjectIdЧужогоПроекта_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-952568751510/pkg", ["notes:read"]);
         var bridge = new PluginBridge([new StubCapability("notes:read")]);
         // Проект существует, но принадлежит OwnerB (чужой для OwnerA).
         var projects = new StubProjectManager(new Project { Id = "proj-b", OwnerId = OwnerB });
         var ctl = NewBridgeController(OwnerA, bridge: bridge, projects: projects);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read", ProjectId = "proj-b" }, CancellationToken.None);
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(404, "чужой проект → 404 (not_found), а не данные");
@@ -695,14 +695,14 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_ProjectIdНесуществующего_Отдаёт404()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
-        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-952568751510/pkg", ["notes:read"]);
         var bridge = new PluginBridge([new StubCapability("notes:read")]);
         // Пустый менеджер: GetById → null.
         var projects = new StubProjectManager();
         var ctl = NewBridgeController(OwnerA, bridge: bridge, projects: projects);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "notes.read", ProjectId = "no-such" }, CancellationToken.None);
         var obj = (ObjectResult)res;
         obj.StatusCode.Should().Be(404, "несуществующий проект → 404");
@@ -716,8 +716,8 @@ public class PluginBridgeControllerTests : IDisposable
     [Fact]
     public async Task Call_ProjectIdСвоего_ТаскиОграниченыПроектомСлота()
     {
-        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["tasks:read"]);
-        Grant(OwnerA, "local-a/pkg", ["tasks:read"]);
+        InstallPanel(OwnerA, "local-952568751510/pkg", "1.0.0", ["tasks:read"]);
+        Grant(OwnerA, "local-952568751510/pkg", ["tasks:read"]);
 
         // TaskManager в изолированном подкаталоге (tasks.json отдельно от projects.json).
         var taskDir = Path.Combine(_dir, "tasks");
@@ -739,7 +739,7 @@ public class PluginBridgeControllerTests : IDisposable
         var projects = new StubProjectManager(new Project { Id = "proj-x", OwnerId = OwnerA });
         var ctl = NewBridgeController(OwnerA, bridge: bridge, projects: projects);
 
-        var res = await ctl.Call("local-a~pkg",
+        var res = await ctl.Call("local-952568751510~pkg",
             new PluginCallRequest { Capability = "tasks.list", ProjectId = "proj-x" }, CancellationToken.None);
         var ok = (OkObjectResult)res;
         var resp = (PluginCallResponse)ok.Value!;

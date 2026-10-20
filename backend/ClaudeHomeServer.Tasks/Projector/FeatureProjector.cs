@@ -134,7 +134,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Since = stoppedTask.ExecutorStoppedAt,
                 Reason = stoppedTask.ExecutorStopReason,
                 PersonaId = stoppedTask.PersonaId,
-                LinkedSessionId = stoppedTask.LinkedSessionId,
+                LinkedSessionId = LiveSession(stoppedTask.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
             };
         }
 
@@ -148,14 +148,15 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Since = waitTask.AwaitingHumanSince,
                 Reason = waitTask.AwaitingHumanReason,
                 PersonaId = waitTask.PersonaId,
-                LinkedSessionId = waitTask.LinkedSessionId,
+                LinkedSessionId = LiveSession(waitTask.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
             };
         }
 
-        // 3. merge — вычисляется, не хранится: финал принят (accepted/awr, закрыт),
-        //    а merge-задачи НЕТ (merge_pending). since = CompletedAt финала.
-        //    У идущего мержа (merge-задача есть и не Done) тревоги нет: state = merging.
-        if (attention is null && finalAccepted && merge is null)
+        // 3. merge — вычисляется, не хранится: финал принят (accepted/awr, закрыт), а
+        //    merge-задачи НЕТ или она создана, но не запущена (Todo, merge_pending).
+        //    since = CompletedAt финала. У идущего мержа (merge-задача InProgress) тревоги нет:
+        //    state = merging.
+        if (attention is null && finalAccepted && (merge is null || merge.Status == TaskItemStatus.Todo))
         {
             attention = new FeatureAttention
             {
@@ -164,7 +165,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Since = final.CompletedAt,
                 Reason = "мерж",
                 PersonaId = final.PersonaId,
-                LinkedSessionId = final.LinkedSessionId,
+                LinkedSessionId = LiveSession(final.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
             };
         }
 
@@ -314,7 +315,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             // Б2: границы, длительность, пересечение с идущим, исполнители.
             var firstStartedAt = StageFirstStartedAt(tasks);
             var lastCompletedAt = StageLastCompletedAt(tasks);
-            var approxMinutes = StageApproxMinutes(tasks, nowUtc);
+            var approxMinutes = StageApproxMinutes(tasks, nowUtc, lastCompletedAt);
             var overlapsActive = StageOverlapsActive(i, stageDefs, nowUtc);
             var executors = tasks.Select(t =>
             {
@@ -379,7 +380,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 StepRef = t.StepRef,
                 Title = t.Title,
                 StartedAt = t.ClaudeStartedAt,
-                LinkedSessionId = t.LinkedSessionId,
+                LinkedSessionId = LiveSession(t.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
             })
             .ToList();
 
@@ -993,31 +994,40 @@ public sealed class FeatureProjector(TaskManager tasks)
         => tasks.Where(t => t.ClaudeStartedAt is not null).Min(t => t.ClaudeStartedAt);
 
     // Б2: конец стадии — максимальный CompletedAt, ТОЛЬКО если все задачи стадии закрыты (Done),
-    // иначе null. Done-задача без CompletedAt (аномалия данных) учитывается по CreatedAt
-    // (тот же fallback, что порядок в StageVerdict).
+    // иначе null. Done-задача без CompletedAt (аномалия данных) в max не входит (ранее
+    // подставлялся CreatedAt — конец мог оказаться позже реального: новая задача, созданная
+    // позже закрытия старой).
     private static DateTime? StageLastCompletedAt(List<TaskItem> tasks)
     {
         if (tasks.Count == 0 || !tasks.All(t => t.Status == TaskItemStatus.Done))
             return null;
-        return tasks.Max(t => t.CompletedAt ?? t.CreatedAt);
+        var completed = tasks
+            .Where(t => t.CompletedAt is not null)
+            .Select(t => t.CompletedAt!.Value)
+            .ToList();
+        return completed.Count > 0 ? completed.Max() : null;
     }
 
-    // Б2: интервал задачи: [ClaudeStartedAt, CompletedAt ?? now]. Не стартовала (нет
-    // ClaudeStartedAt) → интервала нет. Конец раньше начала (аномалия) → нулевая длительность.
-    private static (DateTime start, DateTime end)? IntervalOf(TaskItem t, DateTime now)
+    // Б2: интервал задачи: [ClaudeStartedAt, конец]. Не стартовала (нет ClaudeStartedAt) →
+    // интервала нет. Конец: CompletedAt; если его нет — now (задача идёт) или конец стадии
+    // (stageEnd: Done-задача без CompletedAt в закрытой стадии не растягивает интервал до now,
+    // иначе длительность закрытой стадии росла со временем). Конец раньше начала (аномалия)
+    // → нулевая длительность.
+    private static (DateTime start, DateTime end)? IntervalOf(TaskItem t, DateTime now, DateTime? stageEnd = null)
     {
         if (t.ClaudeStartedAt is null) return null;
-        var end = t.CompletedAt ?? now;
+        var end = t.CompletedAt ?? (t.Status == TaskItemStatus.Done ? stageEnd : null) ?? now;
         return (t.ClaudeStartedAt.Value, end < t.ClaudeStartedAt.Value ? t.ClaudeStartedAt.Value : end);
     }
 
     // Б2: длительность по часам стены (минуты): ОБЪЕДИНЕНИЕ интервалов задач стадии —
     // параллельные задачи не складываются (объединение, не сумма). Округление вверх до минуты;
-    // стадия без интервалов → 0.
-    private static int StageApproxMinutes(List<TaskItem> tasks, DateTime now)
+    // стадия без интервалов → 0. stageEnd (конец стадии, null — стадия не закрыта) — конец
+    // интервала Done-задачи без CompletedAt (не растягивается до now).
+    private static int StageApproxMinutes(List<TaskItem> tasks, DateTime now, DateTime? stageEnd = null)
     {
         var intervals = tasks
-            .Select(t => IntervalOf(t, now))
+            .Select(t => IntervalOf(t, now, stageEnd))
             .Where(iv => iv is not null)
             .Select(iv => iv!.Value)
             .OrderBy(iv => iv.start)
@@ -1045,11 +1055,14 @@ public sealed class FeatureProjector(TaskManager tasks)
 
     // Б2: пересечение с идущим — интервалы стадии пересекаются с интервалами задач ДРУГОЙ стадии,
     // которая ещё идёт (имеет ≥1 задачу, не все Done). Стадия без интервалов → false.
+    // Пересечение строгое (положительный нахлёст): касание «подряд» (конец одного = старт
+    // другого) пересечением не считается.
     private static bool StageOverlapsActive(
         int index, (string key, List<TaskItem> tasks)[] stageDefs, DateTime now)
     {
+        var selfEnd = StageLastCompletedAt(stageDefs[index].tasks);
         var selfIntervals = stageDefs[index].tasks
-            .Select(t => IntervalOf(t, now))
+            .Select(t => IntervalOf(t, now, selfEnd))
             .Where(iv => iv is not null)
             .Select(iv => iv!.Value)
             .ToList();
@@ -1064,8 +1077,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             if (other.Count == 0 || other.All(t => t.Status == TaskItemStatus.Done))
                 continue;
             if (other.Any(t =>
-                    IntervalOf(t, now) is { } o
-                    && selfIntervals.Any(iv => iv.start <= o.end && o.start <= iv.end)))
+                    IntervalOf(t, now, StageLastCompletedAt(other)) is { } o
+                    && selfIntervals.Any(iv => iv.start < o.end && o.start < iv.end)))
                 return true;
         }
         return false;
@@ -1074,6 +1087,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Б2: статус исполнителя из полей задачи. Приоритет: running (идёт: ClaudeStartedAt,
     // без завершения, не остановлена, не ждёт) → waiting (AwaitingHumanSince) → stopped
     // (ExecutorStoppedAt) → done (Done) → pending (остальное, в том числе не стартовала).
+    // waiting/stopped — тот же guard, что у тревоги: только InProgress-задачи; закрытая
+    // вручную (Done) задача со stale-пометками не «stopped»/«waiting» (тревоги по ней тоже нет).
     private static string ExecutorStatus(TaskItem t)
     {
         if (t.ClaudeStartedAt is not null
@@ -1081,9 +1096,9 @@ public sealed class FeatureProjector(TaskManager tasks)
             && t.ExecutorStoppedAt is null
             && t.AwaitingHumanSince is null)
             return "running";
-        if (t.AwaitingHumanSince is not null)
+        if (t.Status == TaskItemStatus.InProgress && t.AwaitingHumanSince is not null)
             return "waiting";
-        if (t.ExecutorStoppedAt is not null)
+        if (t.Status == TaskItemStatus.InProgress && t.ExecutorStoppedAt is not null)
             return "stopped";
         if (t.Status == TaskItemStatus.Done)
             return "done";
@@ -1162,9 +1177,15 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // 2. Не закрытые идущие (Now не пуст, Attention null): по max ClaudeStartedAt descending.
         //    Now[0] — задача с самым поздним ClaudeStartedAt (Now отсортирован по убыванию).
+        //    Guard: Now пуст — один «отравленный» run не должен ронять весь список/индекс
+        //    (до фикса машины состояний так попадал merge-задача в Todo: state=merging →
+        //    bucket=running, Now пуст → r.Now[0] падал → 500). Пустой Now → последняя
+        //    активность, затем MinValue.
         var running = runs
             .Where(r => Bucket(r) == "running")
-            .OrderByDescending(r => r.Now[0].StartedAt ?? DateTime.MinValue)
+            .OrderByDescending(r => r.Now.Count > 0
+                ? r.Now[0].StartedAt ?? DateTime.MinValue
+                : r.LastActivityAt ?? DateTime.MinValue)
             .ToList();
 
         // 3. Не закрытые прочие (без Attention, не идут): по LastActivityAt descending.
@@ -1313,8 +1334,10 @@ public sealed class FeatureProjector(TaskManager tasks)
             .Where(e => e is not null)
             .Cast<TaskItem>()
             .ToList();
+        // Снимок — и в Build (fail-closed полей run: now/attention/исполнители), и в BuildRow
+        // (строка): один снимок — одна семантика, живые чаты не теряются, чужие не попадают.
         var runs = survivingEpics
-            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now))
+            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now, sessions))
             .ToList();
         var rows = OrderRuns(runs)
             .Select(run => BuildRow(run, FeatureTasks(run.Epic, byFeature), sessions,
@@ -1506,10 +1529,11 @@ public sealed class FeatureProjector(TaskManager tasks)
         if (hasStopped) return FeatureStates.Stopped;
         // 4. waiting: явное ожидание человека (как тревога kind=wait, КРОМЕ «мерж»).
         if (hasExplicitWait) return FeatureStates.Waiting;
-        // 5. merging: merge-задача есть и не Done.
-        if (merge is not null && merge.Status != TaskItemStatus.Done) return FeatureStates.Merging;
-        // 6. merge_pending: финал принят, merge-задачи нет (сегодняшняя тревога «мерж»).
-        if (finalAccepted && merge is null) return FeatureStates.MergePending;
+        // 5. merging: merge-задача запущена (InProgress) — мерж идёт.
+        if (merge is not null && merge.Status == TaskItemStatus.InProgress) return FeatureStates.Merging;
+        // 6. merge_pending: финал принят, merge-задачи нет ИЛИ она создана, но не запущена
+        //    (Todo) — ждёт согласия/запуска (тревога «мерж», как и у merge is null).
+        if (finalAccepted && (merge is null || merge.Status == TaskItemStatus.Todo)) return FeatureStates.MergePending;
         // 7. running: Now не пуст (идут задачи).
         if (nowCount > 0) return FeatureStates.Running;
         // 8. not_started: ни одна задача фичи не стартовала.

@@ -321,9 +321,10 @@ public static class FeatureStates
     public const string Stopped = "stopped";
     // Явное ожидание человека (тревога kind=wait, КРОМЕ ожидания «мерж»).
     public const string Waiting = "waiting";
-    // merge-задача есть и не Done — мерж идёт.
+    // merge-задача запущена (InProgress) — мерж идёт.
     public const string Merging = "merging";
-    // Финал принят, merge-задачи нет — ждём мержа (сегодняшняя тревога «мерж»).
+    // Финал принят, merge-задачи нет ИЛИ она создана, но не запущена (Todo) — ждём
+    // согласия/запуска мержа (тревога «мерж»).
     public const string MergePending = "merge_pending";
     // Now не пуст — идут задачи.
     public const string Running = "running";

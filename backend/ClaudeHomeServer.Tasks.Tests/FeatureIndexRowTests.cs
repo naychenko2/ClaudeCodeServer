@@ -14,12 +14,14 @@ public class FeatureIndexRowTests
     // ── Хелперы сборки ──────────────────────────────────────────────────────────────────────
 
     // Строка из эпика + дочерних: Build → BuildRow (sessions/chatCount — опционально).
+    // Снимок — и в Build (fail-closed полей run: now/attention/исполнители), и в BuildRow
+    // (строка) — как в продуктовом маршруте BuildIndexCore: один снимок, одна семантика.
     private static FeatureIndexRow Row(
         TaskItem epic, List<TaskItem> tasks,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null, int chatCount = 0)
     {
         sessions ??= Array.Empty<FeatureIndexSession>();
-        var run = FeatureProjector.Build(epic, tasks);
+        var run = FeatureProjector.Build(epic, tasks, null, sessions);
         return FeatureProjector.BuildRow(run, tasks, sessions, chatCount);
     }
 

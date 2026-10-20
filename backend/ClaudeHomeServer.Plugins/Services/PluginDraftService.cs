@@ -114,14 +114,22 @@ public class PluginDraftService
             return PluginDraftOpResult.Fail(contentProblems[0].Code, msg);
         }
 
-        // 5) Лимит размера отдельного файла.
-        if (content.Length > PluginPackageValidator.MaxSingleFileSizeBytes)
+        // QA-фикс K (minor 6): потолок — в БАЙТАХ (UTF-8), а не в символах. content — UTF-8-байты
+        // (MCP-тулсет кодирует текст в UTF-8 перед вызовом); кириллица = 2 байта/символ, поэтому
+        // «200 КБ кириллицы» = 100 000 символов, но 200 000 байт. Валидатор и Assets считают байты
+        // (FileInfo.Length) — запись черновика обязана считать те же байты, иначе панель на 200 КБ
+        // кириллицы прошла бы запись (100 000 «символов» < 256 КБ) и упала при установке
+        // (panel-file-too-large). byteLength = UTF-8-байты файла (итоговые байты, не символы).
+        var byteLength = content.Length;
+
+        // 5) Лимит размера отдельного файла (в байтах).
+        if (byteLength > PluginPackageValidator.MaxSingleFileSizeBytes)
             return PluginDraftOpResult.Fail("file-size-limit",
                 $"Файл больше {PluginPackageValidator.MaxSingleFileSizeBytes / 1024 / 1024} МБ: {norm}");
 
-        // 5b) Потолок файла панели (ADR-031 §3.6, QA-фикс H): файл под panel/** > 256 КиБ.
+        // 5b) Потолок файла панели (ADR-031 §3.6, QA-фикс H): файл под panel/** > 256 КиБ (в байтах).
         if (norm.StartsWith("panel/", StringComparison.Ordinal)
-            && content.Length > PluginPackageValidator.MaxPanelFileBytes)
+            && byteLength > PluginPackageValidator.MaxPanelFileBytes)
             return PluginDraftOpResult.Fail("panel-file-too-large",
                 $"Файл панели больше {PluginPackageValidator.MaxPanelFileBytes / 1024} КиБ: {norm}");
 
@@ -129,7 +137,7 @@ public class PluginDraftService
         var (fileCount, totalSize) = CountAndSize(dir);
         var existing = File.Exists(full);
         var existingSize = existing ? new FileInfo(full).Length : 0;
-        if (totalSize - existingSize + content.Length > PluginPackageValidator.MaxTotalSizeBytes)
+        if (totalSize - existingSize + byteLength > PluginPackageValidator.MaxTotalSizeBytes)
             return PluginDraftOpResult.Fail("size-limit",
                 $"Пакет больше {PluginPackageValidator.MaxTotalSizeBytes / 1024 / 1024} МБ");
         if (!existing && fileCount >= PluginPackageValidator.MaxFileCount)

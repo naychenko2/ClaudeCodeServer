@@ -213,6 +213,40 @@ public class PluginDraftServiceTests : IDisposable
         result.Ok.Should().BeTrue("ровно потолок → запись проходит");
     }
 
+    // ── draft_write_file: потолок в БАЙТАХ (UTF-8), а не в символах (QA-фикс K, minor 6) ─────
+    // Кириллица = 2 байта/символ в UTF-8: «200 КБ кириллицы» = 100 000 символов, но 200 000
+    // байт. Валидатор и Assets считают байты (FileInfo.Length) — запись обязана считать те же
+    // байты, иначе панель на 200 КБ кириллицы прошла бы запись (100 000 «символов» < 256 КБ)
+    // и упала при установке (panel-file-too-large). Мутация: считать символы (GetCharCount)
+    // вместо байт → тесты ниже красные.
+
+    [Fact]
+    public void WriteFile_Панель200КиБКириллицы_Ок()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        // 100 000 кириллических символов = 200 000 UTF-8-байт (2 байта/символ) ≈ 200 КБ < 256 КБ.
+        var content = new string('а', 100_000);
+        var bytes = Encoding.UTF8.GetBytes(content);
+        bytes.Length.Should().Be(200_000, "100 000 кириллических символов = 200 000 UTF-8-байт");
+        var result = _service.WriteFile(Owner, "my-plugin", "panel/big.html", bytes);
+        result.Ok.Should().BeTrue("200 КБ кириллицы < потолка 256 КБ (в байтах) → запись проходит");
+    }
+
+    [Fact]
+    public void WriteFile_ПанельКириллица_БайтыПревышаютЛимит_Отказ()
+    {
+        _service.Create(Owner, "my-plugin").Ok.Should().BeTrue();
+        // 150 000 кириллических символов = 300 000 UTF-8-байт (≈ 293 КБ) > 256 КБ (лимит в байтах),
+        // но 150 000 «символов» < 262 144 — если потолок считать символами, запись прошла бы (дефект).
+        var content = new string('а', 150_000);
+        var bytes = Encoding.UTF8.GetBytes(content);
+        bytes.Length.Should().Be(300_000);
+        bytes.Length.Should().BeGreaterThan((int)PluginPackageValidator.MaxPanelFileBytes, "байты превышают лимит 256 КБ");
+        var result = _service.WriteFile(Owner, "my-plugin", "panel/big.html", bytes);
+        result.Ok.Should().BeFalse();
+        result.Code.Should().Be("panel-file-too-large", "потолок считается в байтах (UTF-8), не в символах");
+    }
+
     [Fact]
     public void WriteFile_ЛимитОбщегоРазмера_Отказ()
     {

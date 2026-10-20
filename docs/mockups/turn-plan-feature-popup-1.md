@@ -1,5 +1,9 @@
 # Попап плана хода, вкладка «Исполнение фичи»: под новый дизайн (Майя, 20.10)
 
+- **Фича:** 9919bd75-0b1c-4fda-8196-72354cbcba29
+- **Статус:** черновик
+- **Файлы:** turn-plan-feature-popup-1.html, turn-plan-feature-popup-1-tokens.md
+
 Привязка: эпик `9919bd75-0b1c-4fda-8196-72354cbcba29` («Обзор фич, волна 3»), задача `3a4f64d1` (lane front).
 Макет: [`turn-plan-feature-popup-1.html`](turn-plan-feature-popup-1.html). Токены:
 [`turn-plan-feature-popup-1-tokens.md`](turn-plan-feature-popup-1-tokens.md). Согласован со страницей фичи

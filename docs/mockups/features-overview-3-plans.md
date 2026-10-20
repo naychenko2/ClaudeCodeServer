@@ -1,5 +1,9 @@
 # Страница фичи: вкладка «Планы» (Майя, 20.10)
 
+- **Фича:** 9919bd75-0b1c-4fda-8196-72354cbcba29
+- **Статус:** отклонён
+- **Файлы:** features-overview-3-plans.html, features-overview-3-plans-tokens.md
+
 Привязка: эпик `9919bd75-0b1c-4fda-8196-72354cbcba29` («Обзор фич, волна 3»), шаг **M-plans-card** (lane front),
 задача `349541c8`. Прототип: [`features-overview-3-plans.html`](features-overview-3-plans.html), токены —
 [`features-overview-3-plans-tokens.md`](features-overview-3-plans-tokens.md).

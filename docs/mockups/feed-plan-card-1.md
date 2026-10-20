@@ -1,5 +1,9 @@
 # Карточка плана хода в ленте чата (Майя, 20.10)
 
+- **Фича:** 9919bd75-0b1c-4fda-8196-72354cbcba29
+- **Статус:** черновик
+- **Файлы:** feed-plan-card-1.html, feed-plan-card-1-tokens.md
+
 Привязка: эпик `9919bd75-0b1c-4fda-8196-72354cbcba29` («Обзор фич, волна 3»), шаг **M-plans-card** (lane front),
 задача `349541c8`. Прототип: [`feed-plan-card-1.html`](feed-plan-card-1.html), токены —
 [`feed-plan-card-1-tokens.md`](feed-plan-card-1-tokens.md).

@@ -1,5 +1,9 @@
 # Страница фичи: вкладка «Планы и макеты» (Майя, 20.10)
 
+- **Фича:** 9919bd75-0b1c-4fda-8196-72354cbcba29
+- **Статус:** черновик
+- **Файлы:** features-overview-3-plans-2.html
+
 Привязка: эпик `9919bd75-0b1c-4fda-8196-72354cbcba29` («Обзор фич, волна 3»), шаг **M-plans-card** (lane front),
 задача `f4577d94`. Прототип: [`features-overview-3-plans-2.html`](features-overview-3-plans-2.html).
 

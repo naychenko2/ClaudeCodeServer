@@ -1,5 +1,9 @@
 # Страница фичи, волна 3: три варианта
 
+- **Фича:** 9919bd75-0b1c-4fda-8196-72354cbcba29
+- **Статус:** отклонён
+- **Файлы:** features-overview-3.html, features-overview-3-tokens.md
+
 Привязка: эпик `9919bd75-0b1c-4fda-8196-72354cbcba29` («Обзор фич, волна 3»), шаг **М0** (lane front, макеты).
 Макет: [`features-overview-3.html`](features-overview-3.html). Токены: [`features-overview-3-tokens.md`](features-overview-3-tokens.md).
 Источники: заметки «Идеи для фич «Обзор фич», волна 3 (Андрей, 19.10)», «Статистика и метрики фичи», «Волна 2 — итоги

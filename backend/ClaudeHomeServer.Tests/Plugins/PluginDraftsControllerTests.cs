@@ -616,6 +616,55 @@ public class PluginDraftsControllerTests : IDisposable
         Directory.Exists(_store.PackageDir(OwnerA, "local-a/pkg", "1.0.0")).Should().BeTrue();
     }
 
+    // --- Accept: isUpdate/previousVersion (Глеб MAJOR 4) ---
+    //
+    // isUpdate — признак, что плагин уже был установлен (обновление/повторный accept), а не
+    // первая установка; previousVersion — версия до этого accept (null — первая установка).
+    // Фронт по isUpdate открывает диалог согласия в режиме modify (обновление) / install (первая).
+
+    [Fact]
+    public void Accept_ПерваяУстановка_IsUpdateFalse_PreviousVersionNull()
+    {
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"isUpdate\":false", "первая установка — не обновление");
+        json.Should().Contain("\"previousVersion\":null", "первая установка — предыдущей версии нет");
+    }
+
+    [Fact]
+    public void Accept_Обновление_IsUpdateTrue_PreviousVersionСтарая()
+    {
+        // v1: устанавливаем.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+
+        // v2: bump версии → обновление.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "2.0.0", ["notes:read"]);
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"isUpdate\":true", "обновление — isUpdate true");
+        json.Should().Contain("\"previousVersion\":\"1.0.0\"", "previousVersion — старая версия");
+    }
+
+    [Fact]
+    public void Accept_NoOp_ТотжеSha_IsUpdateTrue()
+    {
+        // Повторный accept той же версии (sha не изменился) → no-op; isUpdate true
+        // (плагин уже установлен), previousVersion = текущая версия.
+        CreateDraftPackage(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"isUpdate\":true", "no-op повторного accept — плагин уже установлен");
+        json.Should().Contain("\"previousVersion\":\"1.0.0\"", "previousVersion = текущая версия");
+    }
+
     // --- Accept: 409 при том же id+version и другом sha ---
 
     [Fact]

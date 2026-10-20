@@ -240,6 +240,12 @@ public class PluginDraftsController(
             return recs;
         });
 
+        // isUpdate: есть ли уже запись этого id (обновление/повторный accept), а не первая
+        // установка. Фронт открывает диалог согласия в режиме modify (новые права НЕ отмечены),
+        // когда isUpdate, и install (все запрошенные отмечены), когда первая установка
+        // (Глеб MAJOR 4: раньше всегда install → новое право при обновлении приходило отмеченным).
+        // previousVersion: версия, на которую плагин был установлен до этого accept (null — первая
+        // установка). Права по-прежнему не выдаёт (granted не расширяется accept'ом).
         return Ok(new
         {
             id = record.Id,
@@ -251,6 +257,8 @@ public class PluginDraftsController(
             granted = record.Granted,
             consentRequired,
             newPermissions,
+            isUpdate = oldById is not null,
+            previousVersion = oldById?.Version,
             secrets = record.Secrets
                 .Select(s => new { s.Name, s.Set, s.UpdatedAt })
                 .ToList(),

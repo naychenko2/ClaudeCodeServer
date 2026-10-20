@@ -169,11 +169,21 @@ Slug — грамматика `PluginId` (`[a-z0-9-]+`) с потолком дл
   - **обновление** (`oldById != null`): `newPermissions = Requested \ старые Requested`,
     `consentRequired = newPermissions непусто`.
   - **no-op** (совпал sha): `newPermissions = []`, `consentRequired = false`.
+  **`isUpdate` + `previousVersion`** (Глеб MAJOR 4): признак, что это обновление уже
+  установленного плагина, а не первая установка.
+  - `isUpdate = true`, когда запись этого `id` уже существовала (обновление/повторный accept);
+    `isUpdate = false` — первая установка.
+  - `previousVersion` — версия, на которую плагин был установлен ДО этого accept
+    (`null` при первой установке; при no-op совпадает с текущей).
+  Фронт по `isUpdate` открывает диалог согласия в режиме `modify` (новые права НЕ отмечены,
+  выданные остаются отмеченными) при обновлении и в режиме `install` (все запрошенные отмечены)
+  при первой установке — иначе новое право при обновлении приходило бы уже отмеченным.
   Ответ (анонимный объект, ключи camelCase):
   ```json
   { "id": "local-a/pkg", "version": "2.0.0", "sha256": "…", "source": "draft:pkg",
     "enabled": true, "requested": ["notes:read", "net:api.linear.app"],
     "granted": ["notes:read"], "consentRequired": true, "newPermissions": ["net:api.linear.app"],
+    "isUpdate": true, "previousVersion": "1.0.0",
     "secrets": [{ "name": "LINEAR_TOKEN", "set": true, "updatedAt": "2026-10-19T05:24:56Z" }] }
   ```
   Заданные секреты прошлой версии сохраняются; черновик после успеха НЕ удаляется (агент может

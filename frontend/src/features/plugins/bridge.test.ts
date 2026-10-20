@@ -241,14 +241,16 @@ describe('panelWindowOf + приём сообщений (ADR-031 §3.6)', () => 
   });
 });
 
-describe('buildPanelSrcdoc: круговой разбор (ADR-031 §3.6)', () => {
-  function roundTrip(panelHtml: string) {
-    const outer = buildPanelSrcdoc(panelHtml);
-    const doc = new DOMParser().parseFromString(outer, 'text/html');
-    const iframe = doc.querySelector('iframe');
-    return { doc, iframe, srcdoc: iframe?.getAttribute('srcdoc') ?? null };
-  }
+// Круговой разбор: buildPanelSrcdoc → DOMParser → (doc, iframe, srcdoc).
+// Модульный уровень: используют и блок «круговой разбор», и блок «входы панели».
+function roundTrip(panelHtml: string) {
+  const outer = buildPanelSrcdoc(panelHtml);
+  const doc = new DOMParser().parseFromString(outer, 'text/html');
+  const iframe = doc.querySelector('iframe');
+  return { doc, iframe, srcdoc: iframe?.getAttribute('srcdoc') ?? null };
+}
 
+describe('buildPanelSrcdoc: круговой разбор (ADR-031 §3.6)', () => {
   it('ровно один iframe, ноль <script> снаружи, первым в head — meta с PANEL_CSP', () => {
     const { doc, iframe } = roundTrip('<body>panel</body>');
     expect(doc.querySelectorAll('iframe').length).toBe(1);
@@ -283,6 +285,64 @@ describe('buildPanelSrcdoc: круговой разбор (ADR-031 §3.6)', () =
     expect(doc.head.firstElementChild?.getAttribute('content')).toBe(PANEL_CSP);
     expect(srcdoc).toContain('content="' + PANEL_CSP + '"');
     expect(PANEL_CSP).toContain("frame-src 'none'");
+  });
+
+  it('оболочка несёт script-src \'unsafe-inline\' (иначе наследование CSP убьёт скрипты панели)', () => {
+    const { doc } = roundTrip('<body>x</body>');
+    // Мутация «убрать script-src из оболочки» красит этот тест: srcdoc наследует
+    // политику создателя, и без script-src 'unsafe-inline' инлайн-скрипты панели гаснут.
+    expect(doc.head.firstElementChild?.getAttribute('content')).toContain("script-src 'unsafe-inline'");
+  });
+});
+
+// Входы панели (ADR-031 §3.6): HTML панели НЕ разбирается — идёт конкатенацией,
+// барьер — оболочка. Каждый вход обязан: (1) round-trip — srcdoc === внутренний
+// документ, (2) во внешнем документе ровно 1 iframe и 0 <script> (теги панели внутри
+// значения атрибута srcdoc, не реальные элементы).
+describe('buildPanelSrcdoc: входы панели (edge cases, ADR-031 §3.6)', () => {
+  function invariants(panelHtml: string) {
+    const { doc, srcdoc } = roundTrip(panelHtml);
+    expect(doc.querySelectorAll('iframe').length).toBe(1);
+    expect(doc.querySelectorAll('script').length).toBe(0);
+    expect(srcdoc).toBe(expectedInner(panelHtml));
+  }
+
+  it('кавычка " — экранируется, round-trip строгий', () => invariants('"'));
+  it('сущность &quot; — round-trip строгий', () => invariants('&quot;'));
+  it('сущность &amp; — round-trip строгий', () => invariants('&amp;'));
+
+  it('"></iframe><script>… — не закрывает оболочку: 1 iframe, 0 script', () =>
+    invariants('"></iframe><script>evil()</script>'));
+
+  it('</iframe> в html панели — внутри атрибута, не закрывает оболочку', () =>
+    invariants('<div>x</div></iframe>'));
+
+  it('</head> внутри строки скрипта — проходит как есть (барьер — оболочка)', () =>
+    invariants('<script>var s = "</head>";</script>'));
+
+  it('несколько <HEAD foo> (регистр) — проходят как есть', () =>
+    invariants('<HEAD foo="1"><HEAD bar="2">'));
+
+  it('атрибуты с > — проходят как есть', () =>
+    invariants('<div data-x="a>b" data-y="c>d">x</div>'));
+
+  it('<meta http-equiv=refresh> — проходит как есть (навигацию держит оболочка)', () =>
+    invariants('<meta http-equiv="refresh" content="0;url=https://evil.example/x">'));
+
+  it('255 КиБ повторов <head — линейно (без ReDoS), round-trip строгий', () => {
+    const panelHtml = '<head'.repeat(Math.ceil((255 * 1024) / '<head'.length));
+    const t0 = Date.now();
+    invariants(panelHtml);
+    // конкатенация + 2 линейных replace: < 200мс (ReDoS дал бы секунды)
+    expect(Date.now() - t0).toBeLessThan(200);
+  });
+
+  it('потолок 256 КиБ: ровно MAX_PANEL_FILE_BYTES — монтируем, +1 — «слишком большая»', () => {
+    const atLimit = 'x'.repeat(MAX_PANEL_FILE_BYTES);
+    const overLimit = 'x'.repeat(MAX_PANEL_FILE_BYTES + 1);
+    // та же логика, что в PluginFrame/DraftCard: html.length > MAX_PANEL_FILE_BYTES
+    expect(atLimit.length > MAX_PANEL_FILE_BYTES).toBe(false);
+    expect(overLimit.length > MAX_PANEL_FILE_BYTES).toBe(true);
   });
 });
 

@@ -238,6 +238,16 @@ Slug — грамматика `PluginId` (`[a-z0-9-]+`) с потолком дл
    пустой/отсутствующий `name` — как `deny-name-missing`, `name` обязан равняться slug).
    `ccs-plugin.json` — источник `id`/прав/метаданных; без него `id` берётся из нативного.
    Корневой `plugin.json` — НЕ нативный манифест (из allow-list убран).
+8. **id/version — единая точка (QA-фикс L4).** `id`/`version` разрешает и проверяет
+   `PluginIdentity.Resolve` (Core-модель `ClaudeHomeServer.Models`-совместимая, живёт в
+   Services.Plugins) — ЕЁ зовут и `ValidateFull` (проверка, которую видит человек), и
+   `PluginInstaller.Install` («Принять»): коды 1:1, поэтому «проверка пройдена» ⇒ «Принять»
+   не упадёт по id/version/именам/путям. Агент **издателя не выбирает**: `id` не задан →
+   выводится `local-{ownerShort}/{slug}` (ownerShort = 8 hex-символов SHA-256 владельца,
+   slug — из метки источника `draft:{slug}`); `version` обязателен (нет → `missing-version`,
+   не-semver → `bad-version`); заданный `id` обязан быть валиден по `PluginId`
+   (`{publisher}/{slug}`, `[a-z0-9-]+`) — иначе `bad-id` (чужой издатель не запрещён
+   дополнительно: формат уже не пускает `..`/юникод/длину).
 
 ## Статика панели: `Assets` (ADR-031 §3.1, §3.6, шаг 3.1)
 

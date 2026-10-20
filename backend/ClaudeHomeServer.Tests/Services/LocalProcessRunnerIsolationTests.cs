@@ -531,6 +531,71 @@ public class LocalProcessRunnerIsolationTests
             .Should().Be("dummy".Length + CmdlineEstimate.ArgCost("--print"));
     }
 
+    // --- Before=<юнит сервера>: порядок остановки scope при выключении (инцидент 20.10 15:33) ---
+    // При выключении МАШИНЫ менеджер пользователя systemd останавливает ccs.service и scope-юниты
+    // CLI одной транзакцией БЕЗ порядка: CLI раньше сервера получал SIGTERM, присылал
+    // result{subtype:error} и чат уходил в Error, а не оставался Working для авто-продолжения.
+    // Before=<юнит> ставит scope ПОСЛЕ сервера, и путь сводится к штатной остановке.
+
+    [Fact]
+    public void Before_ЮнитОпределён_СвойствоСтавится()
+    {
+        var options = new IsolationOptions { StopAfterUnit = "ccs.service" };
+
+        var args = LocalProcessRunner.WrapperArgs(options, Unit).ToList();
+
+        args.Should().Contain("--property=Before=ccs.service",
+            "scope обязан гаситься ПОСЛЕ сервера, иначе CLI раньше сервера получает SIGTERM");
+    }
+
+    [Fact]
+    public void Before_ЮнитНеОпределён_СвойстваНет()
+    {
+        var options = new IsolationOptions(); // StopAfterUnit = null (dev-стенд, Windows)
+
+        var args = LocalProcessRunner.WrapperArgs(options, Unit).ToList();
+
+        args.Should().NotContain(a => a.StartsWith("--property=Before="),
+            "без юнита сервера свойство Before= не ставится — порядок не задан, как раньше");
+    }
+
+    // Разбор /proc/self/cgroup — чистая функция от содержимого (тестам настоящий /proc не нужен).
+    // cgroup v2 — одна строка «0::/path»; cgroup v1 — несколько строк «N:subsys:/path»,
+    // релевантна иерархия name=systemd. Последний сегмент — юнит, только если это валидное
+    // имя *.service (LooksLikeServiceUnit): scope, пусто, не суффикс, пробел в имени — null.
+    [Theory]
+    [InlineData("0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs.service", "ccs.service")]
+    [InlineData("0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs-run-1a2b3c4d-0.scope", null)]
+    [InlineData("", null)]
+    [InlineData("0:name=systemd:/user.slice/user-1000.slice/user@1000.service/app.slice/ccs.service\n11:cpuset:/\n10:cpu,cpuacct:/", "ccs.service")]
+    // Сомнительные имена: пробел в имени и сегмент без суффикса .service — null
+    [InlineData("0::/user.slice/user-1000.slice/user@1000.service/app.slice/bad name.service", null)]
+    [InlineData("0::/user.slice/user-1000.slice/user@1000.service/app.slice/ccs", null)]
+    public void ParseServerUnit_РазбираетЮнитИлиNull(string content, string? expected)
+    {
+        IsolationOptions.ParseServerUnit(content).Should().Be(expected);
+    }
+
+    // Ключ Execution:Isolation:StopAfterUnit: явное значение сильнее автоопределения, но
+    // обязано быть похожим на имя юнита — сомнительное (пробел, нет суффикса .service) —
+    // null: лучше не ставить Before=, чем провалить пробу systemd-run и, с ней, всю
+    // обёртку scope (fail-open). @ в имени допустим (user@1000.service — живой пример).
+    [Theory]
+    [InlineData("ccs.service", "ccs.service")]
+    [InlineData("user@1000.service", "user@1000.service")]
+    [InlineData("bad name.service", null)]
+    [InlineData("ccs", null)]
+    public void StopAfterUnit_ИзКонфига_СомнительноеЗначениеNull(string value, string? expected)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Execution:Isolation:StopAfterUnit"] = value,
+        }).Build();
+
+        IsolationOptions.FromConfig(config).StopAfterUnit.Should().Be(expected,
+            "сомнительное значение конфига — null: свойство Before= не ставится");
+    }
+
     [Fact]
     public void FindSystemdRun_ИщетПоPath()
     {

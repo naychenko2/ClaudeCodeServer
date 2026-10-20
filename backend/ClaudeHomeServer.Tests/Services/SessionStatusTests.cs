@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Protocol;
@@ -384,5 +385,103 @@ public class SessionStatusTests : IDisposable
         s.RestartResumeAttempts = 5;
         s.RestartResumeAttempts = 0; // то, что делает обработчик result
         s.UpdatedAt.Should().Be(before, "сброс счётчика UpdatedAt не двигает");
+    }
+
+    // --- B: сброс счётчика новым ходом человека (инцидент 20.10, чат df485156) ---
+    // Один раз продолженный и снова оборванный чат иначе навсегда терял бы авто-продолжение,
+    // даже если следующий ход запустил человек. Ход человека (hub или из очереди) обнуляет
+    // счётчик в момент, когда он РЕАЛЬНО стартует (SendDirectAsync, после гейтов отказа/парковки);
+    // авто-ходы (ServerRestartResume/WorkLoop/Direct/подталкивания) счётчик не трогают —
+    // защита от crash-loop цела, а человекское сообщение не повторяется автоматически.
+    // Проект создаём реальный: SendDirectAsync после точки сброса доходит до EnsureProcess,
+    // который без проекта бросает «Проект не найден» (сброс уже прошёл, но тест не должен
+    // падать на побочном эффекте).
+
+    private const string TestUserId = "test-user-id";
+    private const string TestUsername = "test-user";
+
+    private Project MakeProject(string name) =>
+        _projectManager.Create(name, Path.Combine(_tempDir, "proj_" + name),
+            TestUserId, TestUsername, createDirectory: true);
+
+    [Fact]
+    public async Task ХодЧеловека_СбрасываетСчётчикAutoResume()
+    {
+        var project = MakeProject("human-reset");
+        var s = MakeSession(SessionStatus.Active, projectId: project.Id);
+        s.RestartResumeAttempts = 1;
+        WriteSessions([s]);
+
+        var sut = CreateSessionManager();
+
+        // Сообщение человека из хаба: auto=false (дефолт), cause=Unknown (дефолт) →
+        // effectiveCause=User. Чат свободен → ход стартует → счётчик обнуляется.
+        await sut.SendMessageAsync(s.Id, "продолжи", []);
+
+        sut.GetById(s.Id)!.RestartResumeAttempts.Should().Be(0,
+            "ход по сообщению человека обнуляет счётчик auto-resume");
+    }
+
+    [Theory]
+    [InlineData(SessionManager.DeliveryCause.ServerRestartResume)]
+    [InlineData(SessionManager.DeliveryCause.WorkLoop)]
+    public async Task АвтоХод_СчётчикНеТрогает(SessionManager.DeliveryCause cause)
+    {
+        var project = MakeProject("auto-" + cause);
+        var s = MakeSession(SessionStatus.Active, projectId: project.Id);
+        s.RestartResumeAttempts = 1;
+        WriteSessions([s]);
+
+        var sut = CreateSessionManager();
+
+        // Авто-ход (не человек): effectiveCause=cause, не User/QueueUser → счётчик не сбрасывается.
+        await sut.SendMessageAsync(s.Id, "авто", [], auto: true, cause: cause);
+
+        sut.GetById(s.Id)!.RestartResumeAttempts.Should().Be(1,
+            $"авто-ход {cause} счётчик auto-resume не трогает (защита от crash-loop)");
+    }
+
+    // --- B: ветка очереди (QueueUser) — самый частый человеческий путь, стоявший за инцидентом 20.10 ---
+    // Чат занят → сообщение человека встаёт в очередь → разбор очереди (DeliverPendingAsync →
+    // SendDirectAsync с cause=QueueUser) обнуляет счётчик в момент фактической доставки, а не
+    // постановки в очередь. Сброс обязан дойти до диска: иначе после рестарта счётчик
+    // «продолженного человеком» чата снова блокировал бы авто-продолжение.
+    [Fact]
+    public async Task Очередь_ДоставкаСообщенияЧеловека_СбрасываетСчётчикAutoResume()
+    {
+        var project = MakeProject("queue-reset");
+        var s = MakeSession(SessionStatus.Working, projectId: project.Id);
+        s.RestartResumeAttempts = 1;
+        WriteSessions([s]);
+
+        var sut = CreateSessionManager();
+        // LoadSessions переводит Working → Orphaned (ADR-033): возвращаем Working,
+        // чтобы чат был «занят» (ход в полёте) в момент сообщения человека.
+        sut.GetById(s.Id)!.Status = SessionStatus.Working;
+
+        // Чат занят (Working) → сообщение человека встаёт в очередь, а не в новый ход.
+        var outcome = await sut.SendMessageAsync(s.Id, "из очереди", []);
+        outcome.Should().Be(SessionManager.SendUserOutcome.Queued,
+            "занятый чат: сообщение человека уходит в очередь");
+
+        // Разбор очереди: DeliverPendingAsync → SendDirectAsync (fromQueue, cause=QueueUser).
+        // Приватный метод вызываем рефлексией (прецедент — ChatContinueServiceTests: _sessions/Pending).
+        var entry = GetEntry(sut, s.Id);
+        var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
+        var head = (SessionManager.QueuedMessage)pending[0];
+        var deliver = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)deliver.Invoke(sut, [s.Id, entry, head])!;
+
+        sut.GetById(s.Id)!.RestartResumeAttempts.Should().Be(0,
+            "сообщение человека, доставленное из очереди, обнуляет счётчик auto-resume");
+        File.ReadAllText(_sessionsJsonPath).Should().Contain("\"RestartResumeAttempts\":0",
+            "сброс доехал до диска: счётчик не переживёт рестарт");
+    }
+
+    private static object GetEntry(SessionManager sut, string sessionId)
+    {
+        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        return ((System.Collections.IDictionary)field.GetValue(sut)!)[sessionId]!;
     }
 }

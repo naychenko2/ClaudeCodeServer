@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ClaudeHomeServer.Services.Plugins;
 
 /// <summary>
@@ -15,19 +17,25 @@ public class PluginGrantRequest
     public List<string> Permissions { get; set; } = [];
 
     /// <summary>
-    /// Секреты: имя (из манифеста) + значение. Значение <c>null</c> — явное удаление секрета
-    /// (значение уходит из plugin-secrets.json, set=false); непустое — установить/обновить.
+    /// Секреты: имя (из манифеста) + значение. Три правила (QA-фикс Q): непустое значение —
+    /// установить/обновить; <c>null</c> явно — явное удаление (значение уходит из
+    /// plugin-secrets.json, set=false); ключ <c>value</c> обязателен (отсутствующий → 400,
+    /// иначе «не прислано» неотличимо от «удалить»); дубликаты имён в теле → 400.
     /// Секрет, отсутствующий в этом списке, не трогается.
     /// </summary>
     public List<PluginGrantSecret> Secrets { get; set; } = [];
 }
 
 /// <summary>
-/// Одно значение секрета: имя (из манифеста) + значение. <see cref="Value"/> = <c>null</c>
-/// — явное удаление (QA-фикс P); непустое — установка/обновление значения.
+/// Одно значение секрета: имя (из манифеста) + значение. <see cref="Value"/>: непустое —
+/// установка/обновление; <c>null</c> явно — явное удаление (QA-фикс P); <c>null</c> из-за
+/// отсутствующего ключа — 400 (<see cref="JsonRequiredAttribute"/>, QA-фикс Q): «не
+/// прислано» должно отличаться от «явно удалить», а без атрибута System.Text.Json даёт
+/// обе ситуации как <c>null</c>.
 /// </summary>
 public class PluginGrantSecret
 {
     public string Name { get; set; } = "";
+    [JsonRequired]
     public string? Value { get; set; }
 }

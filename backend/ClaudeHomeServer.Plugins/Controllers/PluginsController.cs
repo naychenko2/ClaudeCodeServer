@@ -146,14 +146,37 @@ public class PluginsController(
             if (secretNotRequested.Count > 0)
                 return GrantOutcome.BadRequest("Секрет не покрыт запрошенным правом secret:{name}", secretNotRequested);
 
+            // QA-фикс Q: пустое/пробельное значение → 400 (как PutSecret: пустой секрет
+            // неинформативен). Такие имена НЕ попадают в bodySet (ниже) — иначе required-секрет
+            // проходил бы проверку с пустым значением. Значение на диске не меняется (400
+            // возвращается до применения).
+            var emptyValues = req.Secrets
+                .Where(s => s.Value is not null && string.IsNullOrWhiteSpace(s.Value))
+                .Select(s => s.Name).ToList();
+            if (emptyValues.Count > 0)
+                return GrantOutcome.BadRequest("Значение секрета не задано", emptyValues);
+
+            // QA-фикс Q: дубликаты имён в теле → 400 (проще и безопаснее, чем фолд «последний
+            // побеждает», обходивший проверку required: union считал имя заданным, а последний
+            // элемент значение удалял).
+            var duplicateNames = req.Secrets
+                .GroupBy(s => s.Name, StringComparer.Ordinal)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key).ToList();
+            if (duplicateNames.Count > 0)
+                return GrantOutcome.BadRequest("Дубликаты имён секретов в теле", duplicateNames);
+
             // Обязательные секреты манифеста (requires.secrets[].required=true) обязаны быть заданы.
             // QA-фикс P: «задан» = уже Set в записи (значение в plugin-secrets.json) ИЛИ прислан
             // в этом теле (value != null). Раньше проверяли только присланные — подтверждение
             // согласия по обновлению (secrets: []) давало 400, хотя секрет давно задан.
+            // QA-фикс Q: bodySet исключает пустые значения (они 400 выше) — проверка required
+            // считает то же эффективное состояние, что и применение.
             var existingSet = record.Secrets
                 .Where(s => s.Set).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
             var bodySet = req.Secrets
-                .Where(s => s.Value is not null).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+                .Where(s => s.Value is not null && !string.IsNullOrWhiteSpace(s.Value))
+                .Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
             var bodyCleared = req.Secrets
                 .Where(s => s.Value is null).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
             var effectiveSet = existingSet.Except(bodyCleared).Union(bodySet).ToHashSet(StringComparer.Ordinal);

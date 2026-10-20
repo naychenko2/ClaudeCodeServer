@@ -571,6 +571,104 @@ public class PluginsControllerTests : IDisposable
         _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().Be("tok");
     }
 
+    // --- QA-фикс Q: пустое значение, пропущенный ключ value, дубликаты имён ---
+
+    // (е) пустое/пробельное значение → 400 «Значение секрета не задано», и значение на диске
+    // цело (400 возвращается до применения — рабочее значение не затёрто пустым).
+    [Fact]
+    public void Grant_ПустоеЗначение_Отдаёт400_ЗначениеНаДискеЦело()
+    {
+        var source = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+        // Сначала — рабочее значение.
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "working-value" }],
+        }).Should().BeOfType<OkObjectResult>();
+
+        // Пустое (пробельное) значение → 400.
+        var res = ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "   " }],
+        });
+        var bad = (BadRequestObjectResult)res;
+        bad.StatusCode.Should().Be(400);
+
+        _secrets.Get(OwnerA, "local-952568751510/pkg", "LINEAR_TOKEN").Should().Be("working-value",
+            "пустое значение не затерло рабочее");
+    }
+
+    // (ж) required-секрет с пустым значением → 400: имя не попадает в bodySet, поэтому
+    // проверка required не проходит «с пустым значением» (иначе 200, а рантайм подставит "").
+    [Fact]
+    public void Grant_RequiredСекрет_ПустоеЗначение_Отдаёт400()
+    {
+        var source = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", true)]);
+        var ctl = NewController(OwnerA);
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+
+        var res = ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets = [new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "" }],
+        });
+        var bad = (BadRequestObjectResult)res;
+        bad.StatusCode.Should().Be(400);
+    }
+
+    // (з) тело БЕЗ ключа value → 400: ключ обязателен ([JsonRequired]), иначе «не прислано»
+    // неотличимо от «явное удаление». Тест на РЕАЛЬНОМ теле JSON (не на объекте): MVC
+    // десериализует тело и бросает JsonException → 400. Явный "value": null — не бросает.
+    [Fact]
+    public void Grant_ТелоБезКлючаValue_ДесериализацияБросает_ЯвныйNullНеБросает()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        // Без ключа value → JsonException (MVC → 400).
+        const string missing = """
+            { "permissions": ["notes:read"], "secrets": [ { "name": "LINEAR_TOKEN" } ] }
+            """;
+        var ex = Record.Exception(() =>
+            JsonSerializer.Deserialize<PluginGrantRequest>(missing, options));
+        ex.Should().BeOfType<JsonException>(
+            "отсутствующий ключ value → JsonException, а не тихое null");
+
+        // Явный "value": null → десериализуется, Value == null (явное удаление, не 400).
+        const string explicitNull = """
+            { "permissions": ["notes:read"], "secrets": [ { "name": "LINEAR_TOKEN", "value": null } ] }
+            """;
+        var req = JsonSerializer.Deserialize<PluginGrantRequest>(explicitNull, options);
+        req!.Secrets.Single().Value.Should().BeNull("явный null остаётся явным удалением");
+    }
+
+    // (и) дубликаты имён в теле → 400 (раньше фолд «последний побеждает» обходил проверку
+    // required: union считал имя заданным, а последний элемент значение удалял).
+    [Fact]
+    public void Grant_ДубликатыИмен_Отдаёт400()
+    {
+        var source = CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0",
+            ["notes:read", "secret:LINEAR_TOKEN"], secrets: [("LINEAR_TOKEN", false)]);
+        var ctl = NewController(OwnerA);
+        ctl.Install(new PluginInstallRequest { Source = source }).Should().BeOfType<OkObjectResult>();
+
+        var res = ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["notes:read", "secret:LINEAR_TOKEN"],
+            Secrets =
+            [
+                new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = "tok" },
+                new PluginGrantSecret { Name = "LINEAR_TOKEN", Value = null },
+            ],
+        });
+        var bad = (BadRequestObjectResult)res;
+        bad.StatusCode.Should().Be(400);
+    }
+
     // --- Grant: не включает выключенный плагин (minor) ---
 
     [Fact]

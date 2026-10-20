@@ -71,7 +71,9 @@ Tone.js, где встроен, инварианты ленивой загруз
 [voice-barge-in.md](features/voice-barge-in.md) (перебивание голосом в разговоре:
 устройство, ограничения, критерии снятия флага),
 [architecture-section.md](features/architecture-section.md) (раздел «Архитектура»: C4-модель
-проекта файлом под git, мост с Viaduct, сборка из кода, тулсет `arch_*`, ограничения).
+проекта файлом под git, мост с Viaduct, сборка из кода, тулсет `arch_*`, ограничения),
+[plugins.md](features/plugins.md) (плагины: зачем фича, что видит человек, «Что нового»
+и границы; за двумя флагами `plugins-mvp` и `plugins-build-yourself`).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
 [audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),

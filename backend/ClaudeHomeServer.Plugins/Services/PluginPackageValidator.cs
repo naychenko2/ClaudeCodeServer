@@ -40,6 +40,11 @@ public class PluginPackageValidator
     // minor 8: лимит числа каталогов (пустые каталоги не считаются в лимит файлов).
     public const int MaxDirCount = 200;
 
+    // Потолок размера файла панели (ADR-031 §3.6, QA-фикс H): 256 КиБ. Единая константа:
+    // валидатор (panel-file-too-large), draft_write_file, Assets (413), панель черновика (413).
+    // Начинаем с малого намеренно: поднять можно без поломки, опустить — нет.
+    public const long MaxPanelFileBytes = 256 * 1024;
+
     // Имена/каталоги allow-list. R10-1: корневой plugin.json убран (не нативный манифест);
     // нативный — .claude-plugin/plugin.json (обязателен, см. CheckNativeManifest).
     private static readonly string[] ManifestNames =
@@ -267,6 +272,12 @@ public class PluginPackageValidator
             if (file.Size > MaxSingleFileSizeBytes)
                 problems.Add(new PluginPackageProblem(
                     "file-size-limit", $"Файл больше {MaxSingleFileSizeBytes / 1024 / 1024} МБ: {file.RelativePath}"));
+
+            // 7) Потолок файла панели (ADR-031 §3.6, QA-фикс H): файл под panel/** > 256 КиБ.
+            if (rel.StartsWith("panel/", StringComparison.Ordinal) && file.Size > MaxPanelFileBytes)
+                problems.Add(new PluginPackageProblem(
+                    "panel-file-too-large",
+                    $"Файл панели больше {MaxPanelFileBytes / 1024} КиБ: {file.RelativePath}"));
         }
 
         // Рекурсия в обычные подкаталоги (symlink-каталоги уже отсечены: no-symlink + continue).

@@ -119,6 +119,12 @@ public class PluginDraftService
             return PluginDraftOpResult.Fail("file-size-limit",
                 $"Файл больше {PluginPackageValidator.MaxSingleFileSizeBytes / 1024 / 1024} МБ: {norm}");
 
+        // 5b) Потолок файла панели (ADR-031 §3.6, QA-фикс H): файл под panel/** > 256 КиБ.
+        if (norm.StartsWith("panel/", StringComparison.Ordinal)
+            && content.Length > PluginPackageValidator.MaxPanelFileBytes)
+            return PluginDraftOpResult.Fail("panel-file-too-large",
+                $"Файл панели больше {PluginPackageValidator.MaxPanelFileBytes / 1024} КиБ: {norm}");
+
         // 6) Лимиты пакета: общий размер, число файлов и число каталогов (minor 2, после записи).
         var (fileCount, totalSize) = CountAndSize(dir);
         var existing = File.Exists(full);

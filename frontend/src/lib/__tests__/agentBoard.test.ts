@@ -18,12 +18,19 @@ vi.mock('../api', () => ({
 import type { ServerMessage } from '../../types';
 import { api } from '../api';
 import { onMessage } from '../signalr';
-import { ensureAgentsLoaded, refreshAgentBoard, resetBoardStore } from '../agentBoard';
+import { ensureAgentsLoaded, refreshAgentBoard, resetBoardStore, subscribe } from '../agentBoard';
 
 // Обработчик, который стор передал в onMessage при wireRealtime
 function handler(): (msg: ServerMessage) => void {
   const calls = vi.mocked(onMessage).mock.calls;
   return calls[calls.length - 1][0] as (msg: ServerMessage) => void;
+}
+
+// Симулирует смонтированный компонент: подписчик на доску. Вызывается ПОСЛЕ
+// первичной загрузки (ensureAgentsLoaded), чтобы не дублировать запрос, но чтобы
+// guard «не ходить, пока _listeners пуст» видел слушателя и пускал фоновые полёты.
+function mountBoard(): void {
+  subscribe(() => {});
 }
 
 const statusChanged = (sessionId: string) =>
@@ -51,6 +58,7 @@ describe('доска агентов: троттл и дедуп полётов',
 
   it('пачка событий подряд даёт ОДИН запрос, а не по одному на событие', async () => {
     await ensureAgentsLoaded();
+    mountBoard();
     const send = handler();
     for (let i = 0; i < 20; i++) send(statusChanged('s1'));
 
@@ -66,6 +74,7 @@ describe('доска агентов: троттл и дедуп полётов',
     vi.mocked(api.board.agents).mockReturnValueOnce(new Promise(r => { release = r; }));
 
     const first = ensureAgentsLoaded();
+    mountBoard();
     refreshAgentBoard();
     refreshAgentBoard();
     refreshAgentBoard();
@@ -82,9 +91,10 @@ describe('доска агентов: троттл и дедуп полётов',
     vi.mocked(api.board.agents).mockReturnValueOnce(new Promise(r => { release = r; }));
 
     const first = ensureAgentsLoaded();
+    mountBoard();
     // событие приходит, пока предыдущий запрос ещё летит
     handler()(statusChanged('s1'));
-    // таймер догона отрабатывает — и должен упереться в занятый полёт
+    // таймер догона отрабатывает — и должен уперться в занятый полёт
     await vi.advanceTimersByTimeAsync(5_000);
     expect(agentsCalls()).toHaveBeenCalledTimes(1);
 
@@ -97,6 +107,7 @@ describe('доска агентов: троттл и дедуп полётов',
     vi.mocked(api.board.agents).mockReturnValueOnce(new Promise(r => { release = r; }));
 
     const first = ensureAgentsLoaded();
+    mountBoard();
     // событие в полёте: догон
     refreshAgentBoard();
     release({ items: [] });
@@ -108,6 +119,7 @@ describe('доска агентов: троттл и дедуп полётов',
 
   it('зазор между стартами соблюдается даже при непрерывном потоке', async () => {
     await ensureAgentsLoaded();
+    mountBoard();
     const send = handler();
 
     // минута работы: событие каждые 100 мс
@@ -121,10 +133,49 @@ describe('доска агентов: троттл и дедуп полётов',
 
   it('сброс стора снимает взведённый таймер', async () => {
     await ensureAgentsLoaded();
+    mountBoard();
     handler()(statusChanged('s1'));
     resetBoardStore();
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(agentsCalls()).toHaveBeenCalledTimes(1);
+  });
+
+  it('пока доску никто не смотрит, события не вызывают запросов', async () => {
+    await ensureAgentsLoaded();   // подписчиков нет
+    const send = handler();
+    send(statusChanged('s1'));
+    refreshAgentBoard();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(agentsCalls()).toHaveBeenCalledTimes(1);
+  });
+
+  it('сброс стора отписывается от signalr', async () => {
+    const off = vi.fn();
+    vi.mocked(onMessage).mockReturnValueOnce(off);
+    await ensureAgentsLoaded();
+    resetBoardStore();
+    expect(off).toHaveBeenCalledTimes(1);
+  });
+
+  // Догон: событие, пришедшее в полёте, помечает _pending; когда полёт
+  // завершается, блок if (_pending) в finally взводит единственный догон.
+  // Удаление этого блока даёт красный: таймер не взводится, запроса не будет.
+  it('догон после полёта: _pending взводит единственный свежий запрос', async () => {
+    let release!: (v: { items: [] }) => void;
+    vi.mocked(api.board.agents).mockReturnValueOnce(new Promise(r => { release = r; }));
+
+    const first = ensureAgentsLoaded();
+    // Подписчик в полёте: fetchBoard дедупится и помечает _pending (без отдельного
+    // refreshAgentBoard — единственный повод догона именно блок if (_pending) в finally)
+    mountBoard();
+    release({ items: [] });
+    await first;
+
+    // Пока таймер не продвинут — догон ещё не ушёл
+    expect(agentsCalls()).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(agentsCalls()).toHaveBeenCalledTimes(2);
   });
 });

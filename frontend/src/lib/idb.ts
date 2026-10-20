@@ -36,8 +36,21 @@ function openDb(): Promise<IDBDatabase> {
         db.createObjectStore(name, keyPath ? { keyPath } : undefined);
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Смена версии из другой вкладки: закрываем своё соединение, чтобы
+      // upgrade-транзакция той вкладки смогла пройти (иначе она висит onblocked).
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
+    // onblocked: другая вкладка держит БД и ждёт смену версии — открытие зависнет
+    // вечно. Реджектим с причиной и сбрасываем промис, чтобы следующий вызов
+    // попробовал открыть заново, а не копил вызовы на этом вечно ждущем открытии.
+    req.onblocked = () => {
+      _dbPromise = null;
+      reject(new Error('IDB: открытие заблокировано (onblocked)'));
+    };
   });
   // Если открытие упало — сбрасываем промис, чтобы следующая попытка могла повториться
   _dbPromise.catch(() => { _dbPromise = null; });
@@ -47,11 +60,10 @@ function openDb(): Promise<IDBDatabase> {
 // Итог транзакции, а не запроса. Успех запроса (req.onsuccess) НЕ означает, что
 // запись состоялась: commit случается позже, и на большом значении он может упасть
 // — квота IndexedDB при переполнении, прерывание при смене версии БД, onblocked
-// при чужой вкладке. Прежде резолв шёл по req.onsuccess, обработчиков на самой
-// транзакции не было, и такой обрыв оставлял промис навсегда нерешённым: он
-// висел в памяти вместе с замыканием на db/транзакцию и данными записи, а вызовы
-// глотали это .catch'ем. При потоке ответов, пишущихся в кэш, такие висящие
-// записи копились и удерживали кучу.
+// при чужой вкладке. Прежде резолв шёл по req.onsuccess, и такой сбой коммита
+// давал ЛОЖНЫЙ УСПЕХ: промис уже резолвился, а запись откатилась. Сам обрыв промис
+// НЕ оставлял висеть — по спеке IDB §5.5 запрос на прерванной транзакции получает
+// error, и старый req.onerror реджектил.
 function tx<T>(store: StoreName, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return openDb().then(db => new Promise<T>((resolve, reject) => {
     const t = db.transaction(store, mode);

@@ -29,10 +29,17 @@ function emit() {
 let _tailTimer: ReturnType<typeof setTimeout> | null = null;
 let _lastStartedAt = 0;
 let _pending = false;
+// off-функции от onMessage/onReconnected — resetBoardStore отписывается, иначе
+// следующий тест (после reset) не переподписался бы и видел бы старую подписку.
+let _offMessage: (() => void) | null = null;
+let _offReconnected: (() => void) | null = null;
 
 // Догон: взвести таймер на конец зазора. Действующий таймер не переставляется —
 // пачка событий даёт один запрос, а не по одному на событие.
+// Пока доску никто не смотрит (_listeners пуст) — фоновых запросов нет: realtime-
+// события и реконнект не должны тянуть 0,86 МБ в пустоту.
 function scheduleFetch() {
+  if (_listeners.size === 0) return;
   if (_tailTimer !== null) return;
   const wait = Math.max(0, MIN_GAP_MS - (Date.now() - _lastStartedAt));
   _tailTimer = setTimeout(() => {
@@ -76,7 +83,7 @@ function wireRealtime() {
   if (_realtimeWired) return;
   _realtimeWired = true;
 
-  onMessage(msg => {
+  _offMessage = onMessage(msg => {
     // task_changed — задача обновилась или удалилась → обновляем доску
     if (msg.type === 'task_changed') {
       scheduleFetch();
@@ -113,7 +120,7 @@ function wireRealtime() {
     }
   });
 
-  onReconnected(() => {
+  _offReconnected = onReconnected(() => {
     // После реконнекта — свежие данные (через троттл: реконнект часто ложится
     // на пачку status_changed, и два полёта на одну и ту же доску не нужны)
     scheduleFetch();
@@ -133,16 +140,22 @@ export function refreshAgentBoard(): void {
   scheduleFetch();
 }
 
-export function useAgentBoard(): BoardItem[] {
-  return useSyncExternalStore(
-    fn => { _listeners.add(fn); return () => _listeners.delete(fn); },
-    () => _items,
-    () => _items,
-  );
+// Подписка на стор: добавляет слушателя. Первый подписчик (доску никто не смотрел)
+// — один свежий запрос; фоновые полёты дальше только через троттл.
+// Экспортирована: тесты симулируют смонтированный компонент через неё.
+export function subscribe(fn: () => void): () => void {
+  _listeners.add(fn);
+  if (_listeners.size === 1 && !_loaded) void fetchBoard();
+  return () => { _listeners.delete(fn); };
 }
 
-// Очистка (для тестов). Снимает и взведённый таймер, и флаг виртуальной подписки:
-// иначе следующий тест не переподписался бы на signalr и видел бы пустой мок.
+export function useAgentBoard(): BoardItem[] {
+  return useSyncExternalStore(subscribe, () => _items, () => _items);
+}
+
+// Очистка (для тестов). Снимает и взведённый таймер, и флаг виртуальной подписки,
+// и подписки на signalr (onMessage/onReconnected): иначе следующий тест не
+// переподписался бы и видел бы старую подписку.
 export function resetBoardStore() {
   _items = [];
   _loaded = false;
@@ -151,5 +164,7 @@ export function resetBoardStore() {
   _pending = false;
   _lastStartedAt = 0;
   _realtimeWired = false;
+  _offMessage?.(); _offMessage = null;
+  _offReconnected?.(); _offReconnected = null;
   if (_tailTimer !== null) { clearTimeout(_tailTimer); _tailTimer = null; }
 }

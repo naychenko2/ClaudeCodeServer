@@ -1,12 +1,12 @@
 // Тесты промисов транзакций офлайн-кэша (lib/idb).
 //
 // Дефект (дефектная карточка 034a96c3, профиль CDP): промис резолвился по успеху
-// ЗАПРОСА (req.onsuccess), а сама транзакция могла не состояться — прерваться по
-// квоте при переполнении IndexedDB, при смене версии БД или onblocked. Обработчиков на
-// транзакции не было, и такой обрыв оставлял промис навсегда нерешённым: он висел в
-// памяти вместе с замыканием и данными записи, а вызовы глотали это .catch'ем.
-// Поток ответов, пишущихся в кэш (доска агентов — ~0,86 МБ на ответ), копил такие
-// висящие записи. Теперь резолв — на коммите транзакции, обрыв реджектит.
+// ЗАПРОСА (req.onsuccess), а сама транзакция могла не состояться — commit падал по
+// квоте при переполнении IndexedDB, при смене версии БД или onblocked. Сбой коммита
+// после req.onsuccess давал ЛОЖНЫЙ УСПЕХ: промис уже резолвился, а запись откатилась.
+// Сам обрыв промис не оставлял висеть — по спеке IDB §5.5 запрос на прерванной
+// транзакции получает error, и старый req.onerror реджектил. Теперь резолв — на
+// коммите транзакции, а обрыв реджектит.
 //
 // Мок IndexedDB собственный: fake-indexeddb в проекте нет, нужен тут контроль над
 // моментом коммита и прерывания, а не поведение настоящей БД.
@@ -25,6 +25,11 @@ interface Tx {
 let lastTx: Tx;
 let lastReq: Req;
 
+// Судьба открытия БД: autoOpenSuccess — резолвить onsuccess сразу (дефолт);
+// lastOpenBlocked — обработчик onblocked, который тест вызывает вручную.
+let autoOpenSuccess = true;
+let lastOpenBlocked: (() => void) | null = null;
+
 function installIndexedDb(): void {
   lastTx = {
     oncomplete: null, onabort: null, onerror: null, error: null,
@@ -35,6 +40,8 @@ function installIndexedDb(): void {
     }),
   };
   lastReq = { onsuccess: null, onerror: null, result: undefined, error: null };
+  autoOpenSuccess = true;
+  lastOpenBlocked = null;
 
   const db = {
     close: () => {},
@@ -47,10 +54,15 @@ function installIndexedDb(): void {
   // успех раздаём сеттеру: как только модуль повесил onsuccess, он тут же вызывается.
   Object.defineProperty(openReq, 'onsuccess', {
     get: () => null,
-    set: (fn: (() => void) | null) => { queueMicrotask(() => fn?.()); },
+    set: (fn: (() => void) | null) => { if (autoOpenSuccess) queueMicrotask(() => fn?.()); },
   });
   Object.defineProperty(openReq, 'onupgradeneeded', { get: () => null, set: () => {} });
   Object.defineProperty(openReq, 'onerror', { get: () => null, set: () => {} });
+  // onblocked не авторезолвим: тест сам решает, когда открытие заблокировано
+  Object.defineProperty(openReq, 'onblocked', {
+    get: () => null,
+    set: (fn: (() => void) | null) => { lastOpenBlocked = fn; },
+  });
 
   vi.stubGlobal('indexedDB', { open: () => openReq, deleteDatabase: () => ({}) });
 }
@@ -134,5 +146,26 @@ describe('idb: итог транзакции, а не запроса', () => {
 
     lastTx.oncomplete?.();
     await expect(p).resolves.toEqual({ data: 'v', savedAt: 5 });
+  });
+
+  it('onblocked при открытии реджектит, следующий вызов пробует заново', async () => {
+    const { idbSet } = await import('../idb');
+    // Открытие зависает: onsuccess не авторезолвим, пока не придёт onblocked
+    autoOpenSuccess = false;
+    const p = idbSet('/api/x', { data: { a: 1 }, savedAt: 1 });
+    await flush();
+
+    // Блокировка открытия: реджект с причиной, промис сбрасывается
+    lastOpenBlocked?.();
+    await expect(p).rejects.toThrow(/onblocked|заблокировано/);
+
+    // Следующий вызов — свежее открытие, не тот же вечно ждущий промис
+    autoOpenSuccess = true;
+    const p2 = idbSet('/api/x', { data: { a: 2 }, savedAt: 2 });
+    await flush();
+    lastReq.result = '/api/x';
+    lastReq.onsuccess?.();   // заполняет внутренний result
+    lastTx.oncomplete?.();
+    await expect(p2).resolves.toBe('/api/x');
   });
 });

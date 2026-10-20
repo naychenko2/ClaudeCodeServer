@@ -15,6 +15,16 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Personas.Tests (шаг 3.4): PersonaAccessPolicyTests читает internal
+         ArchitectureToolset.AllTools/WriteTools. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Architecture.Tests (шаг 3.9): тесты вертикали переехали из монолита сюда;
+         допуск internals — как ClaudeHomeServer.Tests, но отдельной сборке. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Architecture.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

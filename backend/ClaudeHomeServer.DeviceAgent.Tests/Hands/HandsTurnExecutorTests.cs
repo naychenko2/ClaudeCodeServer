@@ -348,7 +348,7 @@ public class HandsTurnExecutorTests : IDisposable
     /// <summary>Аргументы узла моста из материализованного MCP-конфига.</summary>
     private static List<string> BridgeArgsOf(JsonNode config) =>
         (config!["mcpServers"]![DeviceExecPlaceholders.HandsServerName]!["args"]!.AsArray())
-            .Select(a => (string?)a!).ToList();
+            .Select(a => a!.GetValue<string>()).ToList();
 
     /// <summary>Аргументы узла моста из аренды рук.</summary>
     private static List<string> BridgeArgsOf(HandsTurnLease lease) =>

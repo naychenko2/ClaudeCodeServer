@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertCircle, Layers, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, Session } from '../../../types';
 import { api } from '../../../lib/api';
+import { listProjectSessions } from '../../../lib/sessionsList';
 import { C, FS, SP } from '../../../lib/design';
 import { Button, ConfirmDialog, Notice } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
@@ -27,7 +28,7 @@ export function ChatSubjectsSection({ project, online }: { project: Project; onl
     let cancelled = false;
     const load = () => {
       api.projects.subjects.list(project.id).then(r => { if (!cancelled) setSubjects(r); }).catch(() => {});
-      api.sessions.list(project.id).then(r => { if (!cancelled) setSessions(r); }).catch(() => {});
+      listProjectSessions(project.id).then(r => { if (!cancelled) setSessions(r); }).catch(() => {});
     };
     load();
     const off = onSubjectRunFinished(pid => { if (pid === project.id) load(); });

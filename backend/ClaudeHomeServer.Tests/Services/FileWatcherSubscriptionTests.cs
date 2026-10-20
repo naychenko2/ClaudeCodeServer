@@ -45,13 +45,16 @@ public class FileWatcherSubscriptionTests : IDisposable
     }
 
     // Корень репозитория от каталога сборки тестов вверх до папки с .git и backend/.
+    // .git — и файл (git worktree), и каталог (обычный репозиторий): в worktree
+    // Directory.Exists ложится в false, и тест молча пропускался (TreeExcludes.HasOwnGit).
     private static string? FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
         {
-            if (Directory.Exists(Path.Combine(dir.FullName, ".git"))
-                && Directory.Exists(Path.Combine(dir.FullName, "backend"))) return dir.FullName;
+            var hasGit = File.Exists(Path.Combine(dir.FullName, ".git"))
+                || Directory.Exists(Path.Combine(dir.FullName, ".git"));
+            if (hasGit && Directory.Exists(Path.Combine(dir.FullName, "backend"))) return dir.FullName;
             dir = dir.Parent;
         }
         return null;

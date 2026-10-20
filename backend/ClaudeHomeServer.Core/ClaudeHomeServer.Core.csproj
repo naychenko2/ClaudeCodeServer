@@ -29,6 +29,18 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Llm.Tests (шаг 3.2): перенесённые Claude*Tests (ClaudeCliUpdateWatcherTests)
+         используют internal CliVersionCache (Services.Execution) — доступ по IVT, как у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Llm.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Telemetry.Tests (шаг 3.14, пачка G): перенесённые Telemetry-тесты читают internal-члены
+         Core.Telemetry: TurnTelemetry.ExecutableName/ClassifyErrorType (ProcessSpanPath/
+         ExecutionSpan/TurnResultMetrics) и TagValueLimiter (MetricTagGuard, MetricTagGuardTests) —
+         тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Telemetry.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>

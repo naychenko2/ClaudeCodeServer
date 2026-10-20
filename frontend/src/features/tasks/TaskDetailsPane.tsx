@@ -13,6 +13,7 @@ import { useNarrowContainer } from '../../hooks/useContainerWidth';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
+import { listProjectSessions } from '../../lib/sessionsList';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import {
@@ -148,7 +149,8 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
   useEffect(() => {
     if (!task.linkedSessionId) return;
     if (project) {
-      api.sessions.list(project.id).then(setSessions).catch(() => {});
+      // Недавний список годится, если в нём уже есть чат задачи: переключение карточек не плодит запросы
+      listProjectSessions(project.id, { maxAgeMs: 10_000, mustContain: task.linkedSessionId }).then(setSessions).catch(() => {});
     } else {
       api.chats.get(task.linkedSessionId).then(s => setSessions([s])).catch(() => {});
     }

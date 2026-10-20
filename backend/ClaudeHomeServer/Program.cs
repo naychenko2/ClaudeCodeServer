@@ -347,6 +347,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
+// Кэш ответа /api/usage (перф-3 B6): лёгкий scope=limits отдаётся из кэша, пока не изменились
+// входы (версии снимков/пула/опроса + mtime тарифа) — см. UsageResponseCache.
+builder.Services.AddSingleton<UsageResponseCache>();
 // История медиа-генераций (ADR-030, шаг 3): индекс 7 дней (читает журнал, получает события
 // от ComfyRunHistory через IMediaHistoryEventSink) и кэш миниатюр. Флаг/роль проверяет контроллер
 builder.Services.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex>();
@@ -458,6 +461,9 @@ builder.Services.AddSingleton<ProjectEventLogService>();
 // Notes видит только Append.
 builder.Services.AddSingleton<IProjectEventLogService>(sp => sp.GetRequiredService<ProjectEventLogService>());
 builder.Services.AddSingleton<PersonaManager>();
+// Миниатюры аватара (64/128/256): ленивая генерация через IImageRaster (подсистема Images,
+// ADR-018 §9) + сохранение рядом с оригиналом. Stateless — singleton.
+builder.Services.AddSingleton<PersonaAvatarThumbService>();
 // Форвардер, а не вторая регистрация: иначе второй стор персон и резолвер handle не видит
 // персон, созданных после старта (см. DuplicateSingletonRegistrationTests).
 builder.Services.AddSingleton<IPersonaHandleResolver>(sp => sp.GetRequiredService<PersonaManager>());
@@ -753,6 +759,9 @@ builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Watchdog.Watchd
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
 builder.Services.AddSingleton<ProjectFileSessionsIndex>();
+// Кэш отпечатков префиксов истории (Перф-3 B8): SHA-256 2,5 МБ-истории не пересчитывается
+// на каждый запрос с курсором, а берётся по (csid, версия истории)
+builder.Services.AddSingleton<PrefixFingerprintCache>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<NotificationStore>();
 builder.Services.AddSingleton<NotificationService>();
@@ -1125,6 +1134,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.IShellCom
 builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>();
 builder.Services.AddSingleton<IHostedService>(sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>());
+// Авто-возобновление ходов после рестарта (флаг turn-auto-resume): параметры из секции TurnAutoResume.
+builder.Services.Configure<ClaudeHomeServer.Models.TurnAutoResumeOptions>(builder.Configuration.GetSection(ClaudeHomeServer.Models.TurnAutoResumeOptions.Section));
+// Фоновый оркестратор: шов-хост (адаптер над SessionManager) + hosted-сервис (в Testing не стартует)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ITurnAutoResumeHost, ClaudeHomeServer.Services.SessionManagerTurnResumeHost>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.TurnAutoResume.TurnAutoResumeService>(builder.Configuration);
 // Секция DifyOptions + KnowledgeService + ProjectKnowledgeSyncService (singleton + hosted
 // мост ProjectKnowledgeTurnSync) + UserKnowledgeCascade + IKnowledgeAlertNotifier +
 // KnowledgeIndexReconciler (singleton + hosted) — DI в подсистеме `KnowledgeSubsystem`

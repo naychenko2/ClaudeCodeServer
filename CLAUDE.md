@@ -37,6 +37,8 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 
 Хостовый дев-стенд поднимаем **только через `dotnet run`** (или с явным `ASPNETCORE_ENVIRONMENT=Development`): порождённые процессы наследуют `Production`, а там `Kestrel:Endpoints` уводит стенд на занятый боевым инстансом :80, и `ASPNETCORE_URLS` это не чинит. Стенд :5000 раздаёт `frontend/dist` ПОСЛЕДНЕЙ сборки (`wwwroot` в репозитории не живёт). Разбор и фоновый запуск — [docs/operations/dev-stand-host.md](docs/operations/dev-stand-host.md).
 
+Свежий worktree подготавливается скриптом `scripts/worktree-setup.sh` (symlink `frontend/node_modules` → primary checkout; без него `CodeGraph.Tests` падает). Чек-лист — [worktree.md](docs/operations/worktree.md).
+
 ## Среда исполнения пользователей (local / container)
 
 Изоляция per-**пользователь**: `User.ExecutionEnvironment` = `local` | `container` (общая

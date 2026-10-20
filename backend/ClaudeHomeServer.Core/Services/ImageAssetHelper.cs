@@ -81,4 +81,31 @@ public static class ImageAssetHelper
             contentType = "application/octet-stream";
         return new PhysicalFileResult(full, contentType);
     }
+
+    // Фиксированные ступени миниатюры аватара (px). Фронт просит ближайшую ступень,
+    // покрывающую размер показа; сервер переступирует любой размер в ту же сетку.
+    public static readonly int[] AvatarThumbSteps = [64, 128, 256];
+
+    // Ступень, покрывающая размер показа (device px): наименьшая ступень ≥ size; null —
+    // миниатюра не нужна (size ≤ 0 или больше старшей ступени — нужен оригинал).
+    // FirstOrDefault без совпадения вернул бы 0 (default), а не null: size > 256 ушёл бы
+    // в генерацию «-0», а не в оригинал с immutable-кэшем (дефект de740a5b).
+    public static int? AvatarThumbStep(int? size)
+    {
+        if (size is not { } s || s <= 0) return null;
+        foreach (var step in AvatarThumbSteps)
+            if (step >= s) return step;
+        return null;
+    }
+
+    // Имя миниатюры детерминированно от имени оригинала: avatar-<guid>.jpg → avatar-<guid>-<step>.jpg.
+    // Та же пара (оригинал, ступень) всегда даёт одно имя, а смена аватара (новое имя)
+    // осиротляет старую миниатюру — её чистит PersonaManager.DeleteAvatarAssets.
+    public static string? AvatarThumbName(string? imageFile, int step)
+    {
+        if (string.IsNullOrEmpty(imageFile)) return null;
+        var ext = Path.GetExtension(imageFile);
+        var stem = imageFile[..^ext.Length];
+        return $"{stem}-{step}{ext}";
+    }
 }

@@ -38,7 +38,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var qa = children.Where(t => t.Role == TaskRoles.Qa).ToList();
         var final = children.LastOrDefault(t => t.Role == TaskRoles.Final);
         var merge = children.LastOrDefault(t => t.Role == TaskRoles.Merge);
-        var cut = children.Where(t => t.Role == TaskRoles.Cut).ToList();
+        var cut = children.Where(t => t.Role is TaskRoles.Cut or TaskRoles.Consult).ToList();
         var plan = children.Where(t => t.Role == TaskRoles.Plan).ToList();
 
         // Вердикты — только по задачам, которые их несут (ревью/проверка/финал).
@@ -169,16 +169,26 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // activeIndex: текущая стадия конвейера.
         // 1) Первая стадия, которая ИМЕТ задачи и НЕ пройдена (есть работа).
-        // 2) Если таких нет (все стадии с задачами пройдены) — merge (последняя),
-        //    если не пройдена: финал зелёный, merge-задачи ещё нет → мерж active.
-        // 3) -1 — все стадии пройдены.
+        // 2) Если таких нет (все стадии с задачами пройдены) и merge не пройдена —
+        //    активной считается стадия СРАЗУ ПОСЛЕДНЕЙ стадии, у которой есть задачи
+        //    (все стадии с задачами пройдены, merge ещё нет): фича «дошла» до последней
+        //    заполненной стадии и ждёт следующую. Задач нет вообще (все стадии пусты) →
+        //    cut (Разрез) — фича ещё не стартовала. Честный мерж (финал принят, merge-задачи
+        //    нет) — частный случай: последняя с задачами = final → active = merge.
+        //    Ложного «Мерж · сейчас» нет: cut done + пусто дальше → plan, plan done + пусто → prod.
+        // 3) -1 — все стадии пройдены (merge done).
         int activeIndex = -1;
         for (int i = 0; i < isDone.Length; i++)
         {
             if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
         }
         if (activeIndex == -1 && !isDone[^1])
-            activeIndex = isDone.Length - 1;
+        {
+            int lastWithTasks = -1;
+            for (int i = 0; i < stageDefs.Length; i++)
+                if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
+            activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
+        }
 
         var stages = new List<FeatureStage>(stageDefs.Length);
         for (int i = 0; i < stageDefs.Length; i++)
@@ -363,22 +373,26 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
+        // Все расчёты выше идут по исходным задачам; в ВЫХОД (REST) уходят облегчённые копии:
+        // тексты (Description/ResultMarkdown), Verification.Notes, Repro, подзадачи и файлы
+        // пульту фичи не нужны (причина витка уже лежит в Rounds[].Reason), а на фиче из десятков
+        // задач именно они делали ответ в сотни КБ. Полную карточку пульт берёт по id.
         return new FeatureRun
         {
             FeatureId = epic.Id,
-            Epic = epic,
-            Steps = steps,
-            Reviews = reviews,
-            Qa = qa,
-            Final = final,
-            Merge = merge,
+            Epic = Slim(epic),
+            Steps = SlimAll(steps),
+            Reviews = SlimAll(reviews),
+            Qa = SlimAll(qa),
+            Final = final is null ? null : Slim(final),
+            Merge = merge is null ? null : Slim(merge),
             AwaitingHumanSince = epic.AwaitingHumanSince,
             AwaitingHumanReason = epic.AwaitingHumanReason,
             Verdicts = verdicts,
             Progress = progress,
             Ready = ready,
-            Cut = cut,
-            Plan = plan,
+            Cut = SlimAll(cut),
+            Plan = SlimAll(plan),
             Stages = stages,
             StepChains = stepChains,
             ReturnsBySource = returnsBySource,
@@ -524,6 +538,29 @@ public sealed class FeatureProjector(TaskManager tasks)
         return cut.ToString();
     }
 
+    // Облегчённая копия задачи для выхода агрегата: TaskListItem (без Description/ResultMarkdown,
+    // с маркером listItem — фронт догрузит полную карточку по id) + без Verification.Notes,
+    // Repro, подзадач, файлов и меток. Остальные поля — как есть (роль, статус, связи, времена).
+    private static TaskItem Slim(TaskItem t)
+    {
+        var item = TaskListItem.From(t);
+        item.Verification = t.Verification is null
+            ? null
+            : new TaskVerification
+            {
+                VerifiedAt = t.Verification.VerifiedAt,
+                PersonaId = t.Verification.PersonaId,
+                Verdict = t.Verification.Verdict,
+            };
+        item.Repro = null;
+        item.LinkedFiles = [];
+        item.Subtasks = [];
+        item.Labels = [];
+        return item;
+    }
+
+    private static List<TaskItem> SlimAll(List<TaskItem> tasks) => tasks.Select(Slim).ToList();
+
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 
     // Старт задачи: ClaudeStartedAt (запуск исполнителя), иначе CreatedAt.
@@ -563,11 +600,11 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Роль задачи → ключ стадии конвейера (для блока «Сейчас»).
-    // step/rework → prod; consult/прочее → prod. Эпик (feature) сюда не доходит:
-    // он контейнер фичи и исключён из Now (см. «Сейчас» в Build).
+    // cut/consult → cut (Разрез); step/rework → prod; прочее → prod.
+    // Эпик (feature) сюда не доходит: он контейнер фичи и исключён из Now (см. «Сейчас» в Build).
     private static string RoleToStage(string? role) => role switch
     {
-        TaskRoles.Cut => "cut",
+        TaskRoles.Cut or TaskRoles.Consult => "cut",
         TaskRoles.Plan => "plan",
         TaskRoles.Step or TaskRoles.Rework => "prod",
         TaskRoles.Review => "review",
@@ -967,7 +1004,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var epics = owner.Where(t => t.Role == TaskRoles.Feature).ToList();
         // Задачи, сгруппированные по FeatureId, ОДИН раз (ToLookup): O(E×T) старого
         // FeatureTasks (полный скан owner на каждый эпик) уходит.
-        var byFeature = owner.Where(t => t.FeatureId is not null).ToLookup(t => t.FeatureId);
+        var byFeature = owner.Where(t => t.FeatureId is not null).ToLookup(t => t.FeatureId!);
 
         // curator: кто создал эпик (SourceSessionId) → фичи.
         var curatorBySession = new Dictionary<string, HashSet<string>>();

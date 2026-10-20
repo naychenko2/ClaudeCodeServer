@@ -339,7 +339,7 @@ public class CharacterStoreTests : IDisposable
         var explicitOne = CharacterStore.ForRequest(_root, Owner, m.Slug, explicitPhotos: [files[2]])!;
 
         explicitOne.Photos.Should().ContainSingle();
-        explicitOne.Ref.FacePhotos.Should().HaveCount(3).And.Subject.Select(Hex).Should().Equal(byDefault.Select(Hex));
+        explicitOne.Ref.FacePhotos.Should().HaveCount(3).And.Subject.Select(Hex).Should().Equal(byDefault!.Select(Hex));
     }
 
     [Fact]

@@ -70,6 +70,11 @@ public sealed partial class SubscriptionOAuthUsageService(
 
     private readonly ConcurrentDictionary<string, string> _status = new();
 
+    // Версия статусов опроса: растёт на каждом SetStatus. Для инвалидации кэша /api/usage:
+    // блок pollStatuses в ответе меняется только когда опрос поменял статус аккаунта.
+    private long _version;
+    public long Version => Interlocked.Read(ref _version);
+
     // Состояние backoff по ключу подписки: до какого момента не опрашивать
     // и сколько 429 подряд уже словили (для удвоения интервала)
     private readonly Dictionary<string, (DateTime AllowedAt, int Strikes)> _backoff = new();
@@ -412,6 +417,7 @@ public sealed partial class SubscriptionOAuthUsageService(
         var prev = _status.TryGetValue(key, out var p) ? p : null;
         _status[key] = status;
         if (prev == status) return;
+        Interlocked.Increment(ref _version);
         if (status == StatusUnauthorized)
             Console.Error.WriteLine($"[OAuthUsage] аккаунт '{key}': HTTP {httpCode} — токен не принят эндпоинтом usage " +
                 "(setup-токен вместо полноценного входа?); нужен `claude login` в профиле подписки");

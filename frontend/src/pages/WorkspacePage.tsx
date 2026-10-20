@@ -89,6 +89,13 @@ import { ReaderHeaderBar } from './workspace/reader/ReaderHeaderBar';
 import { ReaderBody } from './workspace/reader/ReaderBody';
 import { ChatContextBar } from '../features/chatContext/ChatContextBar';
 import { useHasChatContext } from '../lib/chatContext';
+import { listProjectSessions } from '../lib/sessionsList';
+
+// Читателям списка чатов, которым не нужна секундная свежесть (сторожа, проверка восстановленного
+// чата, переход из карточки задачи), хватает результата не старше этого: опрос SessionList держит
+// его свежим, а лишний запрос на каждый переход не нужен. Устаревший список без нужного чата не годится
+// (mustContain) — идём на сервер.
+const FRESH_LIST_MS = 10_000;
 
 interface Props {
   project: Project;
@@ -690,7 +697,7 @@ const windowWidth = useWindowWidth();
     let cancelled = false;
     // Своего списка чатов у воркспейса нет (его держит SessionList), а стор знает
     // только id — пересечение добирает запросом и лишь пока в проекте есть сторожа
-    api.sessions.list(project.id).then(list => {
+    listProjectSessions(project.id, { maxAgeMs: FRESH_LIST_MS }).then(list => {
       if (!cancelled) setWatchdogChats(list.map(s => s.id).filter(id => watchdogs.sessions.has(id)));
     }).catch(() => { /* офлайн — рельса живёт на событиях watchdogs_changed */ });
     return () => { cancelled = true; };
@@ -1224,7 +1231,7 @@ const windowWidth = useWindowWidth();
       // без него найти первого неархивного чата воркспейс не может (свой стейт
       // чатов не ведёт). 409 от бэка — в тост как есть; сам факт сетевой
       // ошибки пользователю важнее, чем наша обёртка.
-      void api.sessions.list(project.id).then(list => {
+      void listProjectSessions(project.id).then(list => {
         // Сосед — «предыдущий» по порядку списка и только ВИДИМЫЙ под фильтрами проекта:
         // скрытый фильтром чат (напр., выполненная задача под чипом «Готово») на экране
         // отсутствует, и центр открыл бы ещё одного призрака. Фильтры живут в SessionList
@@ -1277,7 +1284,7 @@ const windowWidth = useWindowWidth();
       const gen = guard.next();
       inFlight = raw;
       try {
-        const sessions = await api.sessions.list(project.id);
+        const sessions = await listProjectSessions(project.id);
         if (!guard.isCurrent(gen)) return;
         inFlight = null;
         const s = sessions.find(x => x.id === chatId);
@@ -1330,7 +1337,7 @@ const windowWidth = useWindowWidth();
   // Переход из карточки задачи в связанный диалог
   const handleOpenTaskSession = async (sessionId: string) => {
     try {
-      const sessions = await api.sessions.list(project.id);
+      const sessions = await listProjectSessions(project.id, { maxAgeMs: FRESH_LIST_MS, mustContain: sessionId });
       const s = sessions.find(x => x.id === sessionId);
       if (!s) return;
       if (!isMobile) navPush({ screen: 'project', project, view: 'sidebar', file: null, task: null });
@@ -1464,7 +1471,7 @@ const windowWidth = useWindowWidth();
     const restored = stored?.activeSession;
     if (!restored || restored.id !== activeSession?.id) return;
     let cancelled = false;
-    api.sessions.list(project.id).then(sessions => {
+    listProjectSessions(project.id, { maxAgeMs: FRESH_LIST_MS, mustContain: restored.id }).then(sessions => {
       if (cancelled) return;
       // Пока запрос летал, пользователь мог переключиться на другой чат —
       // тогда трогать активную сессию нельзя.
@@ -1493,7 +1500,7 @@ const windowWidth = useWindowWidth();
       const sess = activeSessionRef.current;
       if (!sess) return;
       try {
-        const sessions = await api.sessions.list(project.id);
+        const sessions = await listProjectSessions(project.id);
         const fresh = sessions.find(s => s.id === sess.id);
         if (fresh && fresh.status !== sess.status) {
           setActiveSession(prev => prev?.id === fresh.id ? { ...prev, status: fresh.status } : prev);

@@ -14,7 +14,7 @@ import { Button, EmptyState } from '../../components/ui';
 import { requestOpenModelsSpend } from '../../lib/modelProvidersNav';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import type { LocalModelStats } from './api';
-import { formatSince, formatTps, formatUpdatedAt, gpuCountLabel, whoRows, type WhoRow } from './format';
+import { formatSince, formatTps, formatUpdatedAt, gpuCountLabel, notReportedText, whoRows, type WhoRow } from './format';
 import { useAllProjects } from '../projects/useAllProjects';
 import { HwLinkRow } from './HwLinkRow';
 import { ThroughputChart, WindowToggle, type Window } from './ThroughputChart';
@@ -40,17 +40,9 @@ function Card({ title, right, children }: { title: string; right?: React.ReactNo
   );
 }
 
-// Текст «не сообщает»: с именем движка — «Движок {имя} это не сообщает»,
-// без имени — «Движок этого не сообщает» (иначе было бы «Движок движок»).
-// Чистая функция — тестируется отдельно (TextTab.test.ts).
-export function notReportedText(engine: string | null | undefined): string {
-  const name = engine?.trim();
-  return name ? `Движок ${name} это не сообщает` : 'Движок этого не сообщает';
-}
-
 // «Движок {имя} это не сообщает» / «Движок этого не сообщает» — вместо блока,
 // чьё поле движок не отдал (не рисовать нули: ноль — это значение, а не
-// отсутствие данных).
+// отсутствие данных). Текст — общий helper фичи (format.ts), его же берёт график.
 function NotReported({ data }: { data: LocalModelStats }) {
   return (
     <p style={{ margin: 0, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.45 }}>
@@ -179,6 +171,10 @@ function NowCard({ data }: { data: LocalModelStats }) {
 // === «Скорость»: генерация и чтение промпта, ток/с на поток, «сейчас» (окно ~60 с) ===
 // Два KPI — «сейчас» (genPerStream/prefillPerStream, как чувствует отдельный чат).
 // Среднее и пик за окно графика — ТОЛЬКО у графика (дубль под KPI убран).
+// «Чтение промпта С ОЖИДАНИЕМ»: знаменатель — время prefill запроса от старта до
+// первого токена, а оно включает ожидание очереди шагов, поэтому величина ниже
+// реальной скорости вычисления. Без слова «с ожиданием» показатель вводит в
+// заблуждение.
 function SpeedCard({ data }: { data: LocalModelStats }) {
   if (data.speed == null) {
     return <Card title="Скорость"><NotReported data={data} /></Card>;
@@ -190,7 +186,7 @@ function SpeedCard({ data }: { data: LocalModelStats }) {
           value={formatTps(data.speed.genPerStream)}
           label="генерация на запрос, ток/с, за последнюю минуту"
         />
-        <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта, ток/с, за последнюю минуту" />
+        <Kpi value={formatTps(data.speed.prefillPerStream)} label="чтение промпта с ожиданием, ток/с, за последнюю минуту" />
       </div>
     </Card>
   );
@@ -213,7 +209,7 @@ function ChartCard({ data, window, onWindowChange, isMobile }: {
 }) {
   return (
     <Card title="Нагрузка и кэш" right={<WindowToggle value={window} onChange={onWindowChange} isMobile={isMobile} />}>
-      <ThroughputChart history={data.history} window={window} engine={data.engine} />
+      <ThroughputChart history={data.history} window={window} engine={data.engine} cleanStepMs={data.cleanStepMs ?? null} />
     </Card>
   );
 }

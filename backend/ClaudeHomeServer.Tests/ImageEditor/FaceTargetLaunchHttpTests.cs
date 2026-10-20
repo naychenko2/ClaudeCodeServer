@@ -362,8 +362,8 @@ public class FaceTargetLaunchHttpTests : IDisposable
         var slug = CharacterStore.Create(root, new CharacterDraft("Боря", null,
             [.. Enumerable.Range(1, 3).Select(i => new CharacterPhotoUpload(TestImages.Jpeg((byte)i)))]),
             DateTime.UtcNow).Value!.Manifest.Slug;
-        var chat = factory.Services.GetRequiredService<SessionManager>()
-            .CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат").GetAwaiter().GetResult();
+        var chat = await factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат");
         File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"), new byte[] { 0x89, 0x50, 0x4E, 0x47 });
         var store = factory.Services.GetRequiredService<ImageThreadStore>();
         var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
@@ -427,8 +427,8 @@ public class FaceTargetLaunchHttpTests : IDisposable
         var root = factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
         var ownerId = factory.Services.GetRequiredService<UserStore>()
             .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        var chat = factory.Services.GetRequiredService<SessionManager>()
-            .CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат").GetAwaiter().GetResult();
+        var chat = await factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат");
         File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"), new byte[] { 0x89, 0x50, 0x4E, 0x47 });
         var store = factory.Services.GetRequiredService<ImageThreadStore>();
         var thread = store.Open(ownerId, chat.Id, "test.png", null, store.Get(ownerId, chat.Id).Revision);
@@ -485,7 +485,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
         var slug = created.Value!.Manifest.Slug;
 
         var sessions = factory.Services.GetRequiredService<SessionManager>();
-        var chat = sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат").GetAwaiter().GetResult();
+        var chat = await sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат");
         File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"),
             new byte[] { 0x89, 0x50, 0x4E, 0x47 });
         var store = factory.Services.GetRequiredService<ImageThreadStore>();
@@ -541,7 +541,7 @@ public class FaceTargetLaunchHttpTests : IDisposable
         var slug = created.Value!.Manifest.Slug;
 
         var sessions = factory.Services.GetRequiredService<SessionManager>();
-        var chat = sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат").GetAwaiter().GetResult();
+        var chat = await sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, name: "Чат");
         File.WriteAllBytes(System.IO.Path.Combine(root, "test.png"),
             new byte[] { 0x89, 0x50, 0x4E, 0x47 });
         var store = factory.Services.GetRequiredService<ImageThreadStore>();

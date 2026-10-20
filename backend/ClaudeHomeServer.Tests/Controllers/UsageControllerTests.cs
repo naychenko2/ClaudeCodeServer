@@ -239,6 +239,65 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(System.Net.HttpStatusCode.NotFound);
     }
 
+    // === scope=limits (перф-3 B6): лёгкий ответ шапки чата ===
+
+    // Лёгкий ответ — только свежий снимок на окно (не 8-дневная история) и без блока Ollama;
+    // полный ответ — вся история. Одна служба (UsageService) считает, проекции разные.
+    [Fact]
+    public async Task GetUsage_ScopeLimits_ОтдаётТолькоСвежийСнимок_АПолный_Историю()
+    {
+        var usage = _factory.Services.GetRequiredService<UsageService>();
+        var future = DateTime.UtcNow.AddHours(2).ToString("o");
+        usage.Record("five_hour", 0.1, "allowed", isUsingOverage: false, resetsAt: future, subscriptionKey: "claude");
+        usage.Record("five_hour", 0.2, "allowed", isUsingOverage: false, resetsAt: future, subscriptionKey: "claude");
+        usage.Record("five_hour", 0.3, "allowed", isUsingOverage: false, resetsAt: future, subscriptionKey: "claude");
+
+        var client = await AuthenticateAsync(_factory);
+        var limits = await client.GetFromJsonAsync<JsonElement>("/api/usage?scope=limits");
+        var full = await client.GetFromJsonAsync<JsonElement>("/api/usage");
+
+        // Лёгкий: ровно один снимок (самый свежий, 0.3) и без Ollama
+        limits.GetProperty("snapshots").EnumerateArray().Should().ContainSingle()
+            .Which.GetProperty("utilization").GetDouble().Should().Be(0.3);
+        limits.GetProperty("ollama").ValueKind.Should().Be(JsonValueKind.Null);
+
+        // Полный: вся история (3 снимка) — экран «Квоты» строит по ней спарклайн тренда
+        full.GetProperty("snapshots").EnumerateArray().Should().HaveCount(3);
+    }
+
+    // Кэш лёгкого ответа инвалидируется по НОВОЙ ЗАПИСИ (версия UsageService), а не по таймеру:
+    // записали свежий процент — следующий запрос уже его видит, а не закешированный старый.
+    [Fact]
+    public async Task GetUsage_ScopeLimits_КэшИнвалидируетсяПоНовойЗаписи()
+    {
+        var usage = _factory.Services.GetRequiredService<UsageService>();
+        var future = DateTime.UtcNow.AddHours(2).ToString("o");
+        usage.Record("five_hour", 0.1, "allowed", isUsingOverage: false, resetsAt: future, subscriptionKey: "claude");
+
+        var client = await AuthenticateAsync(_factory);
+        var first = await client.GetFromJsonAsync<JsonElement>("/api/usage?scope=limits");
+        first.GetProperty("snapshots").EnumerateArray().Should().ContainSingle()
+            .Which.GetProperty("utilization").GetDouble().Should().Be(0.1);
+
+        // Кэш заполнен первым запросом — проверим, что запись в нём лежит (а не «всегда пересбор»).
+        // Отпечаток собираем теми же версиями, что контроллер: в тестовом хосте пул/опрос не
+        // меняют состояния, поэтому их версии стабильны между GET и этой проверкой.
+        var pool = _factory.Services.GetRequiredService<ClaudeSubscriptionPool>();
+        var oauth = _factory.Services.GetRequiredService<SubscriptionOAuthUsageService>();
+        var providers = _factory.Services.GetRequiredService<LlmProviderRegistry>();
+        var cache = _factory.Services.GetRequiredService<UsageResponseCache>();
+        var fp = new UsageResponseCache.Fingerprint(
+            Usage: usage.Version, Pool: pool.Version, Poll: oauth.Version, Plan: usage.PlanVersion,
+            Providers: UsageResponseCache.ProviderFingerprint(providers.All));
+        cache.TryGet("limits", admin: true, fp, out _).Should().BeTrue("после GET кэш лёгкого ответа заполнен");
+
+        // Новая запись (версия выросла) — кэш пересобран, ответ отражает свежий процент
+        usage.Record("five_hour", 0.9, "allowed", isUsingOverage: false, resetsAt: future, subscriptionKey: "claude");
+        var second = await client.GetFromJsonAsync<JsonElement>("/api/usage?scope=limits");
+        second.GetProperty("snapshots").EnumerateArray().Should().ContainSingle()
+            .Which.GetProperty("utilization").GetDouble().Should().Be(0.9);
+    }
+
     // WithWebHostBuilder возвращает базовый WebApplicationFactory<Program> — расширение
     // CreateAuthenticatedClient из TestWebApplicationFactory ему недоступно, логинимся вручную.
     private static async Task<HttpClient> AuthenticateAsync(WebApplicationFactory<Program> factory,

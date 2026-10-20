@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
@@ -30,6 +31,15 @@ public class PersonasControllerAvatarTests : IClassFixture<TestWebApplicationFac
     // Минимальный «PNG»: валидная сигнатура + произвольный хвост (валидация — по magic bytes)
     private static byte[] FakePng() =>
         [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5, 6, 7, 8];
+
+    // Настоящий PNG 100×100 (градиент) — SkiaSharp его декодирует, и миниатюра генерируется.
+    // FakePng той же сигнатурой Skia не читается — тест фолбэка на оригинал.
+    private static byte[] RealPng() => Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAIAAAD/gAIDAAACmklEQVR4nO2cwU7DMBBEx07//5s5VKUlid1uY3vfopU4RINE5w0kegfiIqmqbCpVZVO9X/9eDAl3350Rji3coripFun+VQ8XUcJFn3jT5o4aYymp3v+yaPzEpaRy00bjhy6ll2cWhJ+7lB7PLAg/eimpvt6G/m3ISymgOnjWiKUOzjUCqYN/jSjqgKgRQh0gNQKoA6RGEV4dIDXK45nFVQdIjec1Vh0gNf6ETHWA1NiHQHWA1DgJaeoAqXEeotQBUqMZctQBUqMXQtSBNUorJKgDbpRW6K4OxFFaoa86+PObQkd1QPCbQi91oPCbQhd1APGbwvXqwOI3hYvVAcdvCleqA5HfFC5TB3/U6+HxNsylmhS72zCX6lHMVgcI6hiKqeoAQR1GMU8dIKgjKSapAwR1MMUMdYCgjqcYrg4Q1CkUY9UBgjqLYqA6QFAnUoxSBwjqXIoh6gBBnU5xXR0gqCsoLqoDBHXR7/uKOkBQFy11vA1zqV74nTpAUJcupa/UAYK6einZ1QGC6rDU8ZmVS/XCz9UBguq2lD5WBwiq51LH2zCX6oVv1QGC6r+U3qkDBBWxlLrqAEGlLHV8ZtFQQUupoQ4QVNZSYvy3coylOrdh6HDWDwe+6ARdSrwXnbhLCfaiE3opkV50oi8lzItOAZbSv1CHdZ8YXR2WfmJodVj9iXHVwaFGUHXwqRFRHdxqhFMHzxqx1MG5RiB18K8RRR0QNUKoA6RGAHWA1CjCqwOkRnk8s7jqAKnxvMaqA6TGn5CpDpAa+xCoDpAaJyFNHSA1zkOUOkBqNEOOOkBq9EKIOrBGaYUEdcCN0grd1YE4SivMk9kMYZ7MZgjzZDZDmCezGcI8mc0Q5slshjBPZjOEeTKbIcyT2QwUP2GvNdcQjiWyAAAAAElFTkSuQmCC");
+
+    // PNG: ширина/высота в IHDR — байты 16..19 и 20..23 (big-endian)
+    private static (int W, int H) PngSize(byte[] png) =>
+        ((int)BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(16)), (int)BinaryPrimitives.ReadUInt32BigEndian(png.AsSpan(20)));
 
     private async Task<string> CreatePersonaAsync()
     {
@@ -146,6 +156,137 @@ public class PersonasControllerAvatarTests : IClassFixture<TestWebApplicationFac
         var response = await _client.GetAsync($"/api/personas/{id}/avatar/original");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task GetAvatar_БезРазмера_Оригинал_КэшImmutable()
+    {
+        var id = await CreatePersonaAsync();
+        var uploaded = await _client.PostAsync($"/api/personas/{id}/avatar/upload", UploadForm(RealPng(), RealPng()));
+        var persona = await uploaded.Content.ReadFromJsonAsync<JsonElement>();
+        var imageFile = persona.GetProperty("avatar").GetProperty("imageFile").GetString()!;
+
+        var response = await _client.GetAsync($"/api/personas/{id}/avatar");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadAsByteArrayAsync()).Should().BeEquivalentTo(RealPng());
+        // ASP.NET нормализует Cache-Control в канонический порядок (max-age первым)
+        response.Headers.GetValues("Cache-Control").Should().ContainSingle()
+            .Which.Should().Be("max-age=604800, private, immutable");
+        File.Exists(Path.Combine(_factory.TempDir, "personas", id, imageFile)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetAvatar_СРазмером_Миниатюра64_ГенерируетсяОдинРаз()
+    {
+        var id = await CreatePersonaAsync();
+        var uploaded = await _client.PostAsync($"/api/personas/{id}/avatar/upload", UploadForm(RealPng(), RealPng()));
+        var persona = await uploaded.Content.ReadFromJsonAsync<JsonElement>();
+        var imageFile = persona.GetProperty("avatar").GetProperty("imageFile").GetString()!;
+        var dir = Path.Combine(_factory.TempDir, "personas", id);
+
+        var response = await _client.GetAsync($"/api/personas/{id}/avatar?size=40");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsByteArrayAsync();
+        PngSize(body).Should().Be((64, 64));
+        body.Should().NotBeEquivalentTo(RealPng());   // не оригинал, а уменьшенная копия
+        // Миниатюра сохранена рядом с оригиналом: avatar-<guid>-64.png
+        var thumb = Path.Combine(dir, imageFile[..^4] + "-64.png");
+        File.Exists(thumb).Should().BeTrue();
+        File.ReadAllBytes(thumb).Should().BeEquivalentTo(body);
+
+        // Второй запрос — из сохранённого файла: байты те же, файл не тронут (нет регенерации)
+        var mtimeBefore = File.GetLastWriteTimeUtc(thumb);
+        var second = await _client.GetAsync($"/api/personas/{id}/avatar?size=40");
+        second.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await second.Content.ReadAsByteArrayAsync()).Should().BeEquivalentTo(body);
+        File.GetLastWriteTimeUtc(thumb).Should().Be(mtimeBefore);
+    }
+
+    [Fact]
+    public async Task GetAvatar_РазмерБольшеСетки_Оригинал()
+    {
+        var id = await CreatePersonaAsync();
+        await _client.PostAsync($"/api/personas/{id}/avatar/upload", UploadForm(RealPng(), RealPng()));
+
+        var response = await _client.GetAsync($"/api/personas/{id}/avatar?size=512");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadAsByteArrayAsync()).Should().BeEquivalentTo(RealPng());
+        // Дефект de740a5b: size > 256 → ступень null → оригинал с immutable-кэшем,
+        // а не попытка миниатюры «-0» с no-cache.
+        response.Headers.GetValues("Cache-Control").Should().ContainSingle()
+            .Which.Should().Be("max-age=604800, private, immutable");
+    }
+
+    [Fact]
+    public async Task GetAvatar_БитаяКартинка_ФолбэкНаОригинал()
+    {
+        var id = await CreatePersonaAsync();
+        await _client.PostAsync($"/api/personas/{id}/avatar/upload", UploadForm(FakePng(), FakePng()));
+
+        // 16-байтовый «PNG» Skia не декодирует — миниатюра не генерируется, отдаётся оригинал
+        var response = await _client.GetAsync($"/api/personas/{id}/avatar?size=40");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadAsByteArrayAsync()).Should().BeEquivalentTo(FakePng());
+    }
+
+    // Дефект (Перф-3 B10, п.0): при сбое генерации фолбэк на оригинал НЕ должен
+    // залипать в кэше браузера. До фикса заголовок immutable выставлялся до попытки
+    // генерации, и 1,5 МБ PNG с size=64 держался в кэше неделю. Теперь — no-cache:
+    // следующий запрос попробует миниатюру снова.
+    [Fact]
+    public async Task GetAvatar_СбойГенерации_ФолбэкБезImmutable()
+    {
+        var id = await CreatePersonaAsync();
+        await _client.PostAsync($"/api/personas/{id}/avatar/upload", UploadForm(FakePng(), FakePng()));
+
+        var response = await _client.GetAsync($"/api/personas/{id}/avatar?size=40");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.GetValues("Cache-Control").Should().ContainSingle()
+            .Which.Should().Be("no-cache");
+    }
+
+    [Fact]
+    public async Task GetAvatar_ЧужаяПерсона_404()
+    {
+        var id = await CreatePersonaAsync();   // персона основного юзера
+
+        var response = await _stranger.GetAsync($"/api/personas/{id}/avatar?size=40");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Recrop_СтараяМиниатюра_Удаляется()
+    {
+        var id = await CreatePersonaAsync();
+        var uploaded = await _client.PostAsync($"/api/personas/{id}/avatar/upload", UploadForm(RealPng(), RealPng()));
+        var before = await uploaded.Content.ReadFromJsonAsync<JsonElement>();
+        var oldImageFile = before.GetProperty("avatar").GetProperty("imageFile").GetString()!;
+        var dir = Path.Combine(_factory.TempDir, "personas", id);
+        var oldThumb = Path.Combine(dir, oldImageFile[..^4] + "-64.png");
+
+        await _client.GetAsync($"/api/personas/{id}/avatar?size=40");   // сгенерировать миниатюру
+        File.Exists(oldThumb).Should().BeTrue();
+
+        var form = new MultipartFormDataContent();
+        var cropped = new ByteArrayContent(RealPng());
+        cropped.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+        form.Add(cropped, "cropped", "avatar.png");
+        form.Add(new StringContent("""{"scale":3,"offsetX":0,"offsetY":0}"""), "crop");
+        var response = await _client.PostAsync($"/api/personas/{id}/avatar/recrop", form);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var after = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var newImageFile = after.GetProperty("avatar").GetProperty("imageFile").GetString()!;
+
+        newImageFile.Should().NotBe(oldImageFile);
+        File.Exists(oldThumb).Should().BeFalse();               // миниатюра старого аватара осиротела — удалена
+        File.Exists(Path.Combine(dir, oldImageFile)).Should().BeFalse();
+        File.Exists(Path.Combine(dir, newImageFile)).Should().BeTrue();
     }
 
     [Fact]

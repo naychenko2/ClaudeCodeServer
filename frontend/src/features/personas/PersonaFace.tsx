@@ -2,7 +2,7 @@ import { useState, type CSSProperties } from 'react';
 import type { Persona } from '../../types';
 import { FONT } from '../../lib/design';
 import { api } from '../../lib/api';
-import { personaInitials } from '../../lib/personas';
+import { avatarThumbStep, personaInitials } from '../../lib/personas';
 import { agentDotColor } from '../../components/AgentSelector';
 
 interface Props {
@@ -91,7 +91,10 @@ export function PersonaBackdrop({ persona, width = 84, fontSize = 38, neutral = 
  */
 export function PersonaFace({ persona, align, fontSize, style }: Props) {
   const [hasError, setHasError] = useState(false);
-  const imageUrl = persona.avatar?.kind === 'image' ? api.personas.avatarUrl(persona) : null;
+  // Полоса-подложка (width 84 px по умолчанию) — миниатюра 128/256, не оригинал
+  const imageUrl = persona.avatar?.kind === 'image'
+    ? api.personas.avatarUrl(persona, avatarThumbStep(84))
+    : null;
 
   if (imageUrl && !hasError) {
     return (

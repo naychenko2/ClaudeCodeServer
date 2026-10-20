@@ -614,7 +614,7 @@ public class FaceTargetLaunchTests : IDisposable
 
         // Открываем нить на JPEG (текущий revision, не 0 — иначе Conflict); facesKey — из файловых байтов
         var revision = _store.Get(Owner, Chat).Revision;
-        _threads.OpenAsync(Owner, "p1", Chat, "exif6.jpg", null, revision, default).GetAwaiter().GetResult();
+        await _threads.OpenAsync(Owner, "p1", Chat, "exif6.jpg", null, revision, default);
         var threadId = _store.Get(Owner, Chat).Threads.Last().Id;
         var facesKey = FaceDetectionCache.FacesKey(File.ReadAllBytes(jpegPath));
 
@@ -785,7 +785,7 @@ public class FaceTargetLaunchTests : IDisposable
         var input = await AssembleNAsync(TwoFacesMedia(), TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]), 2);
 
         input.FacePasses.Should().HaveCount(2);
-        var p1 = input.FacePasses[0];
+        var p1 = input.FacePasses![0];
         var p2 = input.FacePasses[1];
         // Порядок по возрастанию номера лица
         p1.Face.Should().Be(1);
@@ -821,7 +821,7 @@ public class FaceTargetLaunchTests : IDisposable
     public async Task Два_лица_маска_первого_нулевая_на_соседе_с_запасом()
     {
         var input = await AssembleNAsync(TwoFacesMedia(), TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]), 2);
-        var p1 = input.FacePasses[0];
+        var p1 = input.FacePasses![0];
         var p2 = input.FacePasses[1];
 
         var (w, h) = MaskSize(p1.Mask!.Bytes);
@@ -866,7 +866,7 @@ public class FaceTargetLaunchTests : IDisposable
     public async Task Два_лица_кроп_каждого_прохода_по_базовой_геометрии()
     {
         var input = await AssembleNAsync(TwoFacesMedia(), TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]), 2);
-        var p1 = input.FacePasses[0];
+        var p1 = input.FacePasses![0];
         var p2 = input.FacePasses[1];
 
         // Кроп 1: вокруг bbox лица 1 (10,10)-(100,100) → левый край холста (X=0)
@@ -887,7 +887,7 @@ public class FaceTargetLaunchTests : IDisposable
         // В запросе лицо 2 первым, лицо 1 вторым — в проходах всё равно 1, потом 2
         var input = await AssembleNAsync(TwoFacesMedia(), TwoFaceJson(_facesKey, [(2, _charB), (1, _charA)]), 2);
 
-        input.FacePasses[0].Face.Should().Be(1);
+        input.FacePasses![0].Face.Should().Be(1);
         input.FacePasses[0].Character.Slug.Should().Be(_charA);
         input.FacePasses[1].Face.Should().Be(2);
         input.FacePasses[1].Character.Slug.Should().Be(_charB);

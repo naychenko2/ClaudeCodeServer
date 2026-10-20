@@ -361,6 +361,19 @@ JUNK_WINDOW = int(os.environ.get("JUNK_WINDOW", "80"))          # слов в с
 JUNK_RATIO = float(os.environ.get("JUNK_RATIO", "0.35"))        # доля мусорных слов — обрыв
 JUNK_MIN_WORDS = int(os.environ.get("JUNK_MIN_WORDS", "60"))    # раньше не срабатывать
 JUNK_RUN = int(os.environ.get("JUNK_RUN", "40"))                # одинаковых «слов» без букв подряд
+# 2026-10-19: третий признак — узор внутри одного «слова». Ход 17:46 (rework-задача, контекст ~90K):
+# после «(сод-т-в-ог-д) … из-за-ог-ог-ог-ог-ог» ответ ушёл в 16 321 пятёрку подряд до лимита
+# вывода, чат останавливал человек. Доля мусорных слов не сработала: на 18 000 символов пришлось
+# 64 «слова», пробег пятёрок — одно из них, и оценивалось бы оно только по пробелу после него.
+# Цепочка «like-» была 9 при пороге 40. Поэтому: (а) пробег одного символа с буквой или цифрой
+# от JUNK_CHAR_RUN и повтор узора из 2–4 символов от JUNK_PERIOD_REPEATS раз — мусор, причём
+# проверяется и недописанный хвост слова, а не только слово по пробелу; знаки без букв
+# («────», «-----») не считаются — это разделители; (б) цепочка одинаковых слов с буквами — от
+# JUNK_RUN_WORD, у «слов» без букв порог JUNK_RUN прежний (таблицы). Число «1000000000000» и
+# base64 «AAAA…» в тексте короче JUNK_CHAR_RUN, «../» в путях реже JUNK_PERIOD_REPEATS.
+JUNK_RUN_WORD = int(os.environ.get("JUNK_RUN_WORD", "12"))            # одинаковых слов с буквами подряд
+JUNK_CHAR_RUN = int(os.environ.get("JUNK_CHAR_RUN", "48"))            # пробег одного символа в слове
+JUNK_PERIOD_REPEATS = int(os.environ.get("JUNK_PERIOD_REPEATS", "12"))  # повторов узора 2–4 символа
 
 # Тело запроса, на котором сработал предохранитель петли или мусора (2026-10-17). Причину
 # срывов (порча состояния после prefix cache, DFlash2 или сама модель) по транскриптам не
@@ -1631,20 +1644,46 @@ def мусорное_слово(w):
             and not set(ядро) <= _JUNK_HEX)
 
 
+def узор_мусора(w, char_run=None, repeats=None):
+    """Пробег одного символа с буквой или цифрой от `char_run` подряд либо повтор узора из 2–4
+    символов от `repeats` раз внутри одного «слова» («5555…», «-ог-ог-ог-», «likelikelike»).
+    Возвращает причину или None. Знаки без букв («────») — разделители, не мусор; инлайн-код — нет.
+    """
+    char_run = JUNK_CHAR_RUN if char_run is None else char_run
+    repeats = JUNK_PERIOD_REPEATS if repeats is None else repeats
+    if "`" in w:
+        return None
+    m = re.search(r"(.)\1{%d,}" % (char_run - 1), w)
+    if m and m.group(1).isalnum():
+        return f"пробег {len(m.group(0))}× {m.group(1)!r}"
+    for m in re.finditer(r"(.{2,4}?)\1{%d,}" % (repeats - 1), w):
+        узор = m.group(1)
+        # Узор из одного символа («AA» в base64 «AAAA…») — это пробег, у него свой порог выше
+        if len(set(узор)) > 1 and any(ch.isalnum() for ch in узор):
+            return f"узор {len(m.group(0)) // len(узор)}× {узор!r}"
+    return None
+
+
 class ДетекторМусора:
     """Скользящее окно слов из дельт thinking/text; мусор — доля мусорных слов `ratio` и выше.
 
     Слова режутся так же, как у детектора петли: дельты рвут слова где угодно, код внутри
     ```-заборов не считается (длинные токены там легальны). «Слова» без букв и цифр в долю не
     идут, зато `run` одинаковых токенов подряд — второй признак мусора: вырождение в «- - - -»
-    или в одно слово «like like like…» (числа не в счёт).
+    (порог `run`) или в одно слово «like like like…» (порог `run_word`, числа не в счёт).
+    Третий признак — узор внутри слова (узор_мусора): проверяется и на недописанном хвосте,
+    иначе пробег из тысяч символов без пробела ждал бы конца блока.
     """
 
-    def __init__(self, window=None, ratio=None, min_words=None, run=None):
+    def __init__(self, window=None, ratio=None, min_words=None, run=None, run_word=None,
+                 char_run=None, repeats=None):
         self.window = window or JUNK_WINDOW
         self.ratio = JUNK_RATIO if ratio is None else ratio
         self.min_words = JUNK_MIN_WORDS if min_words is None else min_words
         self.run = run or JUNK_RUN
+        self.run_word = run_word or JUNK_RUN_WORD
+        self.char_run = char_run or JUNK_CHAR_RUN
+        self.repeats = repeats or JUNK_PERIOD_REPEATS
         self.окно = deque(maxlen=self.window)  # True — мусорное слово
         self.мусорных = 0
         self.всего = 0
@@ -1670,7 +1709,20 @@ class ДетекторМусора:
         текст = self.хвост + текст
         слова = текст.split()
         self.хвост = слова.pop() if слова and not текст[-1].isspace() else ""
-        return any(self._слово(w) for w in слова)
+        if any(self._слово(w) for w in слова):
+            return True
+        # Недописанное слово: пробег «5555…» без пробела иначе ждал бы конца блока
+        if len(self.хвост) >= self.char_run and not self.в_коде and "```" not in self.хвост:
+            return self._узор(self.хвост)
+        return False
+
+    def _узор(self, w):
+        причина = узор_мусора(w, self.char_run, self.repeats)
+        if причина:
+            self.причина = причина
+            self.сработал = True
+            return True
+        return False
 
     def _слово(self, w):
         if "```" in w:
@@ -1680,13 +1732,15 @@ class ДетекторМусора:
         if self.в_коде:
             return False
         без_букв = "\ufffd" not in w and not any(ch.isalnum() for ch in w)
+        if not без_букв and self._узор(w):
+            return True
         # Одинаковый токен подряд: «слово» без букв и цифр как есть, слово с буквами — без
         # регистра и краевой пунктуации («like like like…», 18.10). Числа («0 0 0») — не в счёт.
         ключ = w if без_букв else w.strip(_JUNK_TRIM).lower()
         if без_букв or any(ch.isalpha() for ch in ключ):
             self.подряд = self.подряд + 1 if ключ == self.пустое else 1
             self.пустое = ключ
-            if self.подряд >= self.run:
+            if self.подряд >= (self.run if без_букв else self.run_word):
                 self.причина = f"цепочка {self.подряд}× {ключ!r}"
                 self.сработал = True
                 return True

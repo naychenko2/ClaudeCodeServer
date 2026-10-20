@@ -15,9 +15,13 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/sessions")]
 public class SessionsController(SessionManager sessions, ProjectManager projects,
     DefaultAssistantProvisioner provisioner,
-    PersonaManager personas, SessionContextResolver contextResolver) : ControllerBase
+    PersonaManager personas, SessionContextResolver contextResolver,
+    PrefixFingerprintCache prefixFpCache) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Кэш отпечатков префиксов истории (Перф-3 B8) — см. ChatsController._prefixFpCache
+    private readonly PrefixFingerprintCache _prefixFpCache = prefixFpCache;
 
     // Проект принадлежит текущему пользователю; чужой/несуществующий — как отсутствующий (404)
     private bool OwnsProject(string projectId) =>
@@ -28,8 +32,10 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     {
         if (!OwnsProject(projectId)) return NotFound();
         // Вычисляемые parentSessionId/taskDone дописывает конвертер Session на границе
-        // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно
-        return Ok(sessions.GetByProject(projectId));
+        // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно.
+        // Условный GET: фронт опрашивает список каждые несколько секунд, а меняется он редко;
+        // тег считается по готовому телу, так что updatedAt в ответе всегда точный
+        return new ETagJsonResult(sessions.GetByProject(projectId).ToList());
     }
 
     [HttpPost]
@@ -124,17 +130,38 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // не ломаются). С limit и/или before включает постраничный режим и возвращает объект
     // { messages, hasMore, cursor }: это режет длинную историю (5+ МБ целиком) до ~100
     // сообщений хвоста, а более ранние догружаются по курсору кнопкой «Показать ранее».
+    // С after (+ fp) — докачка хвоста (Перф-2 B5): клиент, у которого лента уже в памяти,
+    // просит только записи после курсора; ответ — объект { reset, messages, anchorIndex,
+    // anchorFp }: reset=false — messages = хвост (дописывается), reset=true — messages =
+    // полная история (замена), anchor* — новый курсор для следующего запроса.
     [HttpGet("{sessionId}/history")]
     public async Task<IActionResult> GetHistory(
         string projectId, string sessionId,
         [FromQuery] int? limit = null,
-        [FromQuery] int? before = null)
+        [FromQuery] int? before = null,
+        [FromQuery] int? after = null,
+        [FromQuery] string? fp = null)
     {
         if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
 
         var history = await sessions.GetHistoryAsync(sessionId);
+
+        // Курсор докачки (after) — приоритетнее пагинации: клиент пришёл за хвостом, не за страницей
+        if (after is not null)
+        {
+            // Ключ кэша — csid (HistoryKeyOf): отпечатки префиксов не пересчитываются на каждый запрос
+            var tail = ChatHistoryTail.Compute(history, after, fp,
+                _prefixFpCache.GetOrCompute(session.ClaudeSessionId ?? sessionId, history));
+            return Ok(new
+            {
+                reset = tail.Reset,
+                messages = tail.Messages,
+                anchorIndex = tail.AnchorIndex,
+                anchorFp = tail.AnchorFp,
+            });
+        }
 
         // Ни одного параметра пагинации — прежний контракт: полный список как плоский массив
         if (limit is null && before is null)

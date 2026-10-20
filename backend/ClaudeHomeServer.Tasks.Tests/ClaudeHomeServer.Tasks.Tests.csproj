@@ -16,11 +16,10 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Tasks\ClaudeHomeServer.Tasks.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <!-- ProjectReference на Main ради SessionManager/PersonaManager/UserStore/ProjectManager
-         и пр. — тесты Tasks резолвят полный стек для воссоздания сессии и её истории.
-         Прецедент — Knowledge.Tests/Notes.Tests/Spend.Tests. -->
+    <!-- Main (шаг 2.1, оставлен): PersonaManager + namespace Controllers (Main)
+         конструируются напрямую (TaskPersonaValidatorTests), хост НЕ поднимается
+         (нет TestWebApplicationFactory) — прямая ссылка на Main обязательна. -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
   </ItemGroup>
 
   <!-- Золотые фикстуры FeatureProjector (12 фич из 4 чатов, задача 1f4e6a620): копируются

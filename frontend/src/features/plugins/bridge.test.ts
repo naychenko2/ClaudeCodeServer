@@ -177,6 +177,15 @@ describe('validateFrameMessage (ADR-031 §3.2: четыре условия пр�
   });
 });
 
+// PANEL_CSP — единая константа: стоит и в meta оболочки, и в meta панели (ADR-031 §3.1/§3.6).
+// Оболочка держит навигацию панели (frame-src 'none'), base-uri 'none' закрывает <base>.
+describe('PANEL_CSP (ADR-031 §3.1/§3.6: единая политика оболочки и панели)', () => {
+  it('содержит frame-src \'none\' (оболочка держит навигацию) и base-uri \'none\'', () => {
+    expect(PANEL_CSP).toContain("frame-src 'none'");
+    expect(PANEL_CSP).toContain("base-uri 'none'");
+  });
+});
+
 describe('buildPanelSrcdoc (ADR-031 §3.1)', () => {
   it('несёт CSP, шим и html панели; тёмная тема — атрибутом', () => {
     const s = buildPanelSrcdoc({ html: '<body>panel</body>', shimJs: 'SHIM_JS', shimCss: 'SHIM_CSS', theme: 'dark' });

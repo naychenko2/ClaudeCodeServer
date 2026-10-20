@@ -19,10 +19,13 @@ export const HOST_SOURCE = 'ccs-host';
 export const OPAQUE_ORIGIN = 'null';
 
 // CSP srcdoc (ADR-031 §3.1): внешних ресурсов нет, inline-скрипты/стили работают,
-// сеть из кадра закрыта — весь выход наружу только мостом.
+// сеть из кадра закрыта — весь выход наружу только мостом. Единая константа: стоит
+// и в meta оболочки, и в meta панели (§3.6) — оболочка держит навигацию (frame-src 'none'),
+// base-uri 'none' закрывает <base>.
 export const PANEL_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-  "img-src data: blob:; connect-src 'none'; form-action 'none'";
+  "img-src data: blob:; connect-src 'none'; form-action 'none'; " +
+  "base-uri 'none'; frame-src 'none'";
 
 // Таймаут ожидания ready (макет 3: «Скелет 3 с, затем — состояние «не отвечает»»)
 export const READY_TIMEOUT_MS = 3000;

@@ -369,7 +369,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
 
     // 4. Страница фичи показана (крошка «← К чату «…»»).
-    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
     expect(back, 'крошка страницы фичи не найдена').not.toBeNull();
     expect(textNodes(back!).join('')).toContain('К чату');
 
@@ -383,8 +383,8 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect((reactProps(taAfterOpen!) as any).value, 'черновик композера потерян при открытой странице').toBe(draft);
 
     // 7. Возврат: клик по крошке → страница фичи закрывается (центр возвращается).
-    act(() => { (reactProps(back!) as any).onClick(); });
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-back'), 'крошка не скрыта после возврата').toBeNull();
+    act(() => { (reactProps(back!.childNodes[0]) as any).onClick(); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'крошка не скрыта после возврата').toBeNull();
     // ChatPanel/черновик переживают переход: страница закрыта, центр снова чат.
     expect(chatPanelInDom(), 'центр не вернулся к чату (ChatPanel пропал) после возврата').toBe(true);
     // Композер (обязательно): textarea в DOM и черновик пережил возврат.
@@ -418,7 +418,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
 
     // Страница фичи открыта: крошка есть (указателя нет → «← К ключевому чату»).
-    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
     expect(back, 'крошка страницы фичи не найдена (диплинк не открыл страницу)').not.toBeNull();
     // ChatPanel НЕ размонтирован (display:none): testid в DOM.
     expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'ChatPanel не в DOM (диплинк)').not.toBeNull();
@@ -436,7 +436,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
 
     // Страница не открыта: ни крошки, ни testid feature-page (сегмент игнорируется).
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-back'), 'крошка есть при выключенном флаге').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'крошка есть при выключенном флаге').toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница фичи открыта при выключенном флаге').toBeNull();
   });
 
@@ -466,9 +466,9 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(win.window.location.hash, 'после открытия feature не в hash').toContain('/feature/f1');
 
     // Клик по крошке (kind 'chat', chatA = текущий чат): navReplace на снимок БЕЗ feature.
-    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
     expect(back, 'крошка не найдена').not.toBeNull();
-    act(() => { (reactProps(back!) as any).onClick(); });
+    act(() => { (reactProps(back!.childNodes[0]) as any).onClick(); });
     // Хэш больше не содержит feature (крошка и история — в одно место).
     expect(win.window.location.hash, 'feature остался в hash после возврата').not.toContain('/feature/');
     // Снимок истории (history.state) тоже без feature: «назад» ведёт туда же, что крошка.
@@ -500,17 +500,17 @@ describe('WorkspacePage: центр — страница фичи соседом
 
     // 3. КЛЮЧЕВОЕ (C1): страница фичи в DOM на ДЕСКТОПЕ (было: только мобильная ветка).
     //    Мутация «убрать вставку страницы в десктоп» (FeatureCenter из DesktopWorkspace)
-    //    красит этот тест: feature-page/feature-page-back пропадают из DOM.
+    //    красит этот тест: feature-page/feature-page-close пропадают из DOM.
     const page = findNodeByAttr(container, 'data-testid', 'feature-page');
     expect(page, 'страница фичи не в DOM на десктопе (C1)').not.toBeNull();
-    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
     expect(back, 'крошка страницы фичи не найдена (C1)').not.toBeNull();
 
     // 4. ChatPanel НЕ размонтирован (display:none): testid в DOM.
     expect(chatPanelInDom(), 'ChatPanel размонтирован на десктопе (C1)').toBe(true);
 
     // 5. Возврат: клик по крошке → страница закрывается, центр (чат) возвращается.
-    act(() => { (reactProps(back!) as any).onClick(); });
+    act(() => { (reactProps(back!.childNodes[0]) as any).onClick(); });
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница не скрыта после возврата (C1)').toBeNull();
     expect(chatPanelInDom(), 'чат не восстановлен после возврата (C1)').toBe(true);
   });
@@ -520,7 +520,9 @@ describe('WorkspacePage: центр — страница фичи соседом
   // WorkspacePage пусты → chatNames/chatPersonas пусты → у всех чатов фичи «Чат» + круг.
   // Тест ловит именно эту цепочку (SessionList → колбэк → WorkspacePage → FeatureCenter →
   // страница), а не проп напрямую. Мутация «убрать проп из DesktopWorkspace» красит.
-  it('N1: десктоп 1280 — название чата фичи из SessionList-колбэка (не «Чат»)', async () => {
+  // Заморожен (быстрый трек «страница как файл»): блок «Чаты фичи» убран из рендера —
+  // строки чатов (feature-chat-*) больше не на странице. Вернём вместе с блоком.
+  it.skip('N1: десктоп 1280 — название чата фичи из SessionList-колбэка (не «Чат»)', async () => {
     (globalThis as any).window.innerWidth = 1280;
     // SessionList «загрузил» список с именованным чатом (session.name = 'Чат Дениса').
     mockSessionList.length = 0;
@@ -578,7 +580,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     });
     await act(async () => { vi.advanceTimersByTime(100); });
 
-    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
     expect(back, 'крошка страницы фичи не найдена (M3/m4)').not.toBeNull();
     // m4: крошка «К списку» (мобила), НЕ «К ключевому чату» и НЕ «К чату».
     const text = textNodes(back!).join('');
@@ -603,12 +605,12 @@ describe('WorkspacePage: центр — страница фичи соседом
     } as any));
     await act(async () => { vi.advanceTimersByTime(100); });
     // Пока флаги не загружены — страница ещё не показана (гейт по флагу), но адрес цел.
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-back'), 'страница открыта до прихода флагов').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница открыта до прихода флагов').toBeNull();
 
     // Флаги «пришли» включёнными (ответ /me): страница открывается, крошка есть.
     act(() => { setAllFlags({ 'features-overview': true }); });
     await act(async () => { vi.advanceTimersByTime(100); });
-    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
     expect(back, 'крошка не появилась после прихода флагов (M1: страница не открылась)').not.toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'ChatPanel не в DOM (M1)').not.toBeNull();
   });
@@ -628,7 +630,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     // Флаги «пришли» выключенными: страница не открывается, адрес приводится к проекту.
     act(() => { setAllFlags({ 'features-overview': false }); });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-back'), 'крошка есть при выключенном флаге (M1б)').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'крошка есть при выключенном флаге (M1б)').toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница открыта при выключенном флаге (M1б)').toBeNull();
   });
 
@@ -688,9 +690,9 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(index, 'страница не открыта (navPush)').toBe(1);
 
     // Крошка «К списку»: m5 — history.back() (index 0), НЕ navReplace (index остался бы 1)
-    const back = findNodeByAttr(container, 'data-testid', 'feature-page-back');
+    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
     expect(back, 'крошка не найдена (m5)').not.toBeNull();
-    act(() => { (reactProps(back!) as any).onClick(); });
+    act(() => { (reactProps(back!.childNodes[0]) as any).onClick(); });
     await act(async () => { vi.advanceTimersByTime(100); });
     // КЛЮЧЕВОЕ (m5): index=0 (history.back() снял запись страницы). Мутация «navReplace»
     // красит: index остался бы 1 (дубль [список, список]), первое «назад» — пустой шаг.

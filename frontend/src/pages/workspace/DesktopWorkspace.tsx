@@ -58,8 +58,7 @@ interface Props {
   onSelectSession: (s: Session, firstMessage?: string, autoSelect?: boolean) => void;
   onSessionUpdated: (s: Session) => void;
   // Полный список сессий проекта → WorkspacePage (N1): тот же колбэк, что у мобильной
-  // раскладки. Без него на десктопе chatNames/chatPersonas пусты → у всех чатов фичи
-  // название «Чат» и нейтральный круг.
+  // раскладки. Без него на десктопе sessions пуст.
   onSessionsListChanged?: (sessions: Session[]) => void;
   // Создание чата по клику (кнопка в пустом состоянии центра) + сброс при удалении последнего
   onCreateSession: () => void;
@@ -154,12 +153,6 @@ interface Props {
   // страница рисуется соседом (FeatureCenter). Исполнитель «← назад» — от WorkspacePage.
   openFeatureId: string | null;
   onFeatureBack: (t: import('../../components/feature/FeaturePage').FeaturePageBackTarget) => void;
-  // Названия чатов (M4): список сессий проекта, уже загружен SessionList (через
-  // WorkspacePage) — страница фичи показывает название вместо GUID.
-  chatNames?: Record<string, string>;
-  // Персоны чатов (sessionId → personaId) — из того же списка сессий: аватары 18
-  // в строках чатов (макет §5).
-  chatPersonas?: Record<string, string>;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -486,7 +479,7 @@ export function DesktopWorkspace(p: Props) {
           Страница фичи (Ф2.3/C1) — СОСЕД центра: при открытой (openFeatureId) весь центр
           прячется display:none (не размонтируется), страница рисуется рядом. FeatureCenter —
           общий паттерн с мобильной веткой. */}
-      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} chatNames={p.chatNames} chatPersonas={p.chatPersonas}>
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />

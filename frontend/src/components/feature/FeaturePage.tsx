@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { AlertTriangle, Inbox, RotateCw, X } from 'lucide-react';
+import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useFeaturePage, refetchFeaturePage } from '../../lib/featurePage';
@@ -9,8 +9,7 @@ import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { featureDisplayState, featureStatusTag, type FeatureStatusTag, type FeatureStatusTone } from '../../lib/chatGroups';
-import { Toolbar, ToolbarIconButton } from '../Toolbar';
-import { BackButton } from '../ui/BackButton';
+import { CenterViewShell } from '../CenterViewShell';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import type { FeatureGlyph as GlyphKind } from '../chat/feature/FeatureGlyphs';
 import { Notice } from '../ui/Notice';
@@ -18,14 +17,12 @@ import { EmptyState } from '../ui/EmptyState';
 import { Button } from '../ui/Button';
 import { PipelineFlow } from '../chat/feature/PipelineFlow';
 
-// Куда ведёт закрытие (крошка «← …»):
+// Куда ведёт закрытие (кнопка «Закрыть»):
 //   chat — в исходный чат (указатель back-nav «чат → фича»);
-//   key  — в ключевой чат фичи (указателя нет, но ключевой чат есть);
-//   list — в список (указателя и ключевого чата нет).
+//   list — в список (указателя нет).
 // WorkspacePage исполняет выбор: закрывает страницу и ведёт в target.
 export type FeaturePageBackTarget =
   | { kind: 'chat'; chatId: string }
-  | { kind: 'key'; chatId: string }
   | { kind: 'list' };
 
 export interface FeaturePageProps {
@@ -162,24 +159,9 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
     target = { kind: 'list' };
     label = 'Назад';
   }
+  // Esc закрывает страницу — общим хуком useEscapeClose (в CenterViewShell): не
+  // перехватываем, если печатают в поле/редакторе или уже открыт диалог/меню.
   const goBack = () => { onBack(target); clearBackNav(); };
-
-  // Esc закрывает страницу — ровно как файл (FileViewer): не перехватываем, если
-  // печатают в поле/редакторе или уже открыт диалог/меню — там Escape нужнее им.
-  // Через ref: слушатель вешаем один раз, но зовём всегда свежий goBack.
-  const closeRef = useRef(goBack);
-  closeRef.current = goBack;
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
-      void closeRef.current();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
 
   // Тело: одно из пяти состояний (макет §5.7). В ok — только конвейер (PipelineFlow).
   let body: ReactNode;
@@ -235,52 +217,37 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
     );
   }
 
+  // Короткая ВИДИМая подпись BackButton (Майя M2): на 360 «К чату «…»» переносится
+  // на 4 строки и ломает шапку. Видимое — «Чат»/«К списку», полный текст — в title/aria-label.
+  const shortLabel = fromChat ? 'Чат' : (isMobile ? 'К списку' : 'Назад');
+
   return (
-    <div
-      data-testid="feature-page"
-      style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.bgCard }}
+    <CenterViewShell
+      isMobile={isMobile}
+      onClose={goBack}
+      closeLabel={shortLabel}
+      mobileTitle={label}
+      closeTitle="Закрыть"
+      closeTestId="feature-page-close"
+      name={title}
+      nameTitle={label}
+      nameTestId="feature-page-title"
+      leading={
+        // Глиф состояния — аналог плитки типа файла (14 px).
+        <span data-testid="feature-page-glyph" style={{ display: 'flex', flexShrink: 0 }}>
+          <FeatureGlyph kind={glyph} size={14} />
+        </span>
+      }
+      trailing={statusTag && <StatusTag tag={statusTag} />}
+      rootTestId="feature-page"
+      // Мобила: страница — прямой ребёнок колонки центра (flex: 1); десктоп — в Island
+      // (FeatureCenter), корень height:100% по умолчанию.
+      rootStyle={isMobile ? { flex: 1, overflow: 'hidden', height: 'auto' } : undefined}
     >
-      {/* Шапка-«файл»: [Закрыть] [глиф] [имя] [тег статуса]. Закрыть — там же и того
-          же вида, что у FileViewer (десктоп — X слева, мобила — BackButton). */}
-      <Toolbar isMobile={isMobile}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-          {isMobile ? (
-            <span data-testid="feature-page-close">
-              <BackButton onClick={goBack} title={label} style={{ height: 32 }}>
-                <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>{label}</span>
-              </BackButton>
-            </span>
-          ) : (
-            <span data-testid="feature-page-close">
-              <ToolbarIconButton onClick={goBack} title="Закрыть">
-                <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              </ToolbarIconButton>
-            </span>
-          )}
-          {/* Глиф состояния — аналог плитки типа файла (14 px). */}
-          <span data-testid="feature-page-glyph" style={{ display: 'flex', flexShrink: 0 }}>
-            <FeatureGlyph kind={glyph} size={14} />
-          </span>
-          {/* Название фичи как «имя файла»: mono 700, единственный гибкий элемент, ellipsis. */}
-          <span
-            data-testid="feature-page-title"
-            title={title}
-            style={{
-              flex: '1 1 auto', minWidth: 0,
-              fontFamily: FONT.mono, fontWeight: 700, fontSize: FS.base, color: C.textHeading,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}
-          >
-            {title}
-          </span>
-          {/* Тег статуса — аналог чипов файла (diff/комментарии). */}
-          {statusTag && <StatusTag tag={statusTag} />}
-        </div>
-      </Toolbar>
-      {/* Тело: прокрутка, поля 14 16 20 (макет §5.4). */}
-      <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: '14px 16px 20px' }}>
+      {/* Тело: прокрутка, поля 16 16 20 (макет §5.4; 16 сверху — как у файла, Майя m2). */}
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: '16px 16px 20px' }}>
         {body}
       </div>
-    </div>
+    </CenterViewShell>
   );
 }

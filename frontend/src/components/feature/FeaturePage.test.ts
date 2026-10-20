@@ -16,7 +16,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { stripStepCode, featureTaskTotal, taskCounters } from './featurePageBody';
+import { featureTaskTotal, taskCounters } from './featurePageBody';
 import { __test as pageTest } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -126,7 +126,7 @@ function pageData(over: Partial<FeaturePageData> = {}): FeaturePageData {
   };
 }
 
-function render(props: { featureId?: string; projectId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void; chatNames?: Record<string, string>; chatPersonas?: Record<string, string> }) {
+function render(props: { featureId?: string; projectId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void }) {
   installFakeDom();
   // fakeDom'ов window/document без addEventListener/querySelector — ставим минимальные:
   // Esc-обработчик FeaturePage (как у FileViewer) вешает window.addEventListener('keydown')
@@ -494,15 +494,17 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
   });
 
   // === Back-nav: закрытие (кнопка/Esc) ведёт туда, откуда открыли ===
-  it('back-nav: указатель «чат → фича» → «К чату «…»» (название из api.chats.get), onBack → chat', async () => {
+  it('back-nav: указатель «чат → фича» → короткая «Чат», полный «К чату «…»» в title, onBack → chat', async () => {
     recordBackNav('chatA', { kind: 'feature', id: 'f1' });
     mockChats.set('chatA', { id: 'chatA', name: 'Чат Дениса', mode: 'chat', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session);
     const onBack = vi.fn();
     const c = render({ onBack, isMobile: true });
     await settle();
     const close = findNodeByAttr(c, 'data-testid', 'feature-page-close')!;
-    // Мобила: BackButton с подписью «К чату «…»» (название из api.chats.get).
-    expect(textNodes(close).join('')).toContain('К чату «Чат Дениса»');
+    // Майя M2: на 360 длинное «К чату «…»» ломало шапку. Видимая подпись — КОРОТКАЯ
+    // (одна строка, «Чат»), полный текст — только в title/aria-label.
+    expect(textNodes(close).join(''), 'видимая подпись не короткая').toBe('Чат');
+    expect(close.childNodes[0].getAttribute('title'), 'полный текст не в title').toBe('К чату «Чат Дениса»');
     act(() => { (reactProps(close.childNodes[0])!.onClick as () => void)(); });
     expect(onBack).toHaveBeenCalledWith({ kind: 'chat', chatId: 'chatA' });
     expect(backNavTest.getBackNav()).toBeNull();
@@ -807,18 +809,6 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
   });
 
   // === M4: название чата вместо GUID (без новых запросов) ===
-  it.skip('M4: есть chatNames → название; GUID наружу не попадает', async () => {
-    mockIndex.chats = {
-      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
-    };
-    const c = render({ chatNames: { 'chat-key': 'Чат Дениса' } });
-    await settle();
-    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
-    expect(textNodes(row).join('')).toContain('Чат Дениса');
-    // GUID ('chat-key') — только в data-testid (атрибут), в ТЕКСТ не попадает.
-    expect(textNodes(c).join('')).not.toContain('chat-key');
-  });
-
   it.skip('M4: названия нет (чат вне проекта / список не пришёл) → «Чат»', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
@@ -911,18 +901,6 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(chip, 'метка «ключевой» (data-testid) есть').not.toBeNull();
   });
 
-  it.skip('R6-1: аватар 18 — персона из chatPersonas (инициалы); без персоны — нейтральный круг', async () => {
-    personaMap.set('p1', 'Денис');
-    mockIndex.chats = {
-      'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
-    };
-    const c = render({ chatPersonas: { 'chat-key': 'p1' } });
-    await settle();
-    const row = findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key')!;
-    // Аватар персоны: инициал (mock personaInitials → первая буква).
-    expect(textNodes(row).join('')).toContain('Д');
-  });
-
   it.skip('R6-1: персоны нет — инициалов в строке чата нет (нейтральный круг)', async () => {
     mockIndex.chats = {
       'chat-key': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
@@ -997,13 +975,6 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
   });
 
   // === R6-3: шаги — код не повторяется, число отдельно, «Показать все» Button, строка-кнопка ===
-
-  it.skip('R6-3: код шага в названии не повторяется (stripStepCode, чистая функция)', () => {
-    expect(stripStepCode('Ш1 · индекс поиска', 'Ш1')).toBe('индекс поиска');
-    expect(stripStepCode('Ш10 · индекс', 'Ш1')).toBe('Ш10 · индекс'); // «Ш10» для кода «Ш1» не режется
-    expect(stripStepCode('Ш10 · индекс', 'Ш10')).toBe('индекс');
-    expect(stripStepCode('Индекс без кода', 'Ш1')).toBe('Индекс без кода');
-  });
 
   it.skip('R6-3: строка шага — код один раз; с чатом — <button>, без — <div>', async () => {
     mockGetFeature.result = pageData({
@@ -1296,3 +1267,58 @@ function findButtonWithText(n: FNodeLike, text: string): FNodeLike | null {
   }
   return null;
 }
+
+// === Esc: общий хук useEscapeClose (в CenterViewShell) — FileViewer и FeaturePage ===
+// Правило: не перехватываем, если печатают в поле/редакторе или открыт [role=dialog]/[role=menu].
+// Мутации: (1) убрать removeEventListener в cleanup → «слушатель снят при размонтировании» краснеет;
+// (2) убрать проверку [role=dialog] → «Esc при открытом диалоге» краснеет.
+describe('Esc: useEscapeClose (общий хук, CenterViewShell)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  function mountPage(onBack: (t: FeaturePageBackTarget) => void) {
+    installFakeDom();
+    const win = globalThis as any;
+    const doc = (globalThis as any).document;
+    if (!win.window.addEventListener) {
+      const listeners: Record<string, Set<Function>> = {};
+      win.window.addEventListener = (t: string, f: Function) => { (listeners[t] ??= new Set()).add(f); };
+      win.window.removeEventListener = (t: string, f: Function) => { listeners[t]?.delete(f); };
+      win.window.dispatchEvent = (e: { type: string }) => { listeners[e.type]?.forEach(f => f(e)); return true; };
+      win.__winListeners = listeners;
+    }
+    if (!doc.querySelector) doc.querySelector = () => null;
+    const { root, container } = mount(createElement(FeaturePage, {
+      featureId: 'f1', projectId: 'p1', isMobile: false, onBack,
+    }));
+    return { root, container, win, doc };
+  }
+  function esc(win: any) {
+    win.window.dispatchEvent({ type: 'keydown', key: 'Escape', target: { tagName: 'DIV', isContentEditable: false } });
+  }
+  afterEach(() => { vi.useRealTimers(); uninstallFakeDom(); vi.restoreAllMocks(); });
+
+  it('Esc: закрывает (onBack) — как у файла', async () => {
+    const onBack = vi.fn();
+    const { win } = mountPage(onBack);
+    await settle();
+    esc(win);
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('Esc при открытом [role=dialog]/[role=menu]: не перехватывает (Escape нужнее им)', async () => {
+    const onBack = vi.fn();
+    const { win, doc } = mountPage(onBack);
+    await settle();
+    doc.querySelector = () => ({ role: 'dialog' });
+    esc(win);
+    expect(onBack, 'Esc перехвачен при открытом диалоге').not.toHaveBeenCalled();
+  });
+
+  it('Esc-слушатель снят при размонтировании (мутация: убрать removeEventListener → red)', async () => {
+    const onBack = vi.fn();
+    const { root, win } = mountPage(onBack);
+    await settle();
+    act(() => { root.unmount(); });
+    esc(win);
+    expect(onBack, 'слушатель Esc не снят при размонтировании (stale listener)').not.toHaveBeenCalled();
+  });
+});

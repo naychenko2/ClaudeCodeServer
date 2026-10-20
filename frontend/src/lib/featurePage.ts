@@ -21,7 +21,6 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
 import { onMessage } from './signalr';
 import { getFlag, FLAGS } from './featureFlags';
-import { showToast } from './toast';
 import type { FeaturePage } from '../types/featureIndex';
 import type { ServerMessage } from '../types';
 
@@ -133,22 +132,6 @@ function wireRealtime() {
 export function refetchFeaturePage(fid: string) {
   if (_fid !== fid) return;
   fetchPage(fid, true);
-}
-
-// «Показать все» (макет §5): перезапрос ленты БЕЗ лимита (eventsLimit='all').
-// Не сбрасывает в loading: данные уже есть, просто обновляем events/eventsTotal.
-// p.15: включает режим «все» на время жизни страницы (живые перезапросы держат лимит).
-// p.16: сбой НЕ проглатывается — тост по канону (showToast), иначе клик без признака.
-// Действует, только пока страница открыта (_fid === fid).
-export function refetchFeaturePageAll(fid: string) {
-  if (_fid !== fid) return;
-  _showAll = true;
-  void api.tasks.getFeature(fid, 'all')
-    .then(page => { if (_fid === fid) setState({ status: 'ok', page }); })
-    .catch((e: Error) => {
-      if (_fid !== fid) return; // страница сменилась — поздний сбой не трогает
-      showToast('Лента событий', e instanceof Error ? e.message : 'Не удалось загрузить все события', 'error');
-    });
 }
 
 // Хук: данные страницы фичи.

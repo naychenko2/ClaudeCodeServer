@@ -55,10 +55,10 @@ import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
 import { ExcalidrawViewer, type ExcalidrawHandle } from './ExcalidrawViewer';
 import { base64ToBytes } from '../lib/binary';
 import { C, FONT, FS, MODAL_W, R, SHADOW, SP, TB } from '../lib/design';
-import { Toolbar, ToolbarIconButton, PillSwitch } from './Toolbar';
+import { ToolbarIconButton, PillSwitch } from './Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
-import { BackButton, Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
+import { Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
 import { DiffView } from './DiffView';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
 // Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
@@ -67,6 +67,8 @@ import { wsPanels, zoneOf } from '../pages/workspace/panelStackState';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { MidiEditor } from '../lib/shell-kit';
+import { CenterViewShell } from './CenterViewShell';
+import { useEscapeClose } from '../lib/useEscapeClose';
 
 const CodeEditor = lazy(() =>
   import('./CodeEditor').then(m => ({ default: m.CodeEditor }))
@@ -1024,22 +1026,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     }
   };
 
-  // Escape закрывает файл (handleClose сам спросит про несохранённое). Не перехватываем,
-  // если печатают в поле/редакторе или уже открыт диалог/меню — там Escape нужнее им.
-  // Через ref: слушатель вешаем один раз, но зовём всегда свежий handleClose.
-  const closeRef = useRef(handleClose);
-  closeRef.current = handleClose;
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
-      void closeRef.current();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // Escape закрывает файл (handleClose сам спросит про несохранённое) — общим хуком
+  // useEscapeClose (в CenterViewShell): не перехватываем, если печатают в поле/редакторе
+  // или уже открыт диалог/меню — там Escape нужнее им.
+  useEscapeClose(handleClose);
 
   // Смена режима «сплит ↔ на весь экран»: FileViewer при этом пересоздаётся
   // (в WorkspacePage это две разные ветки дерева), поэтому несохранённые правки
@@ -1724,59 +1714,52 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   }
 
   return (
-    <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
-      {/* Шапка-«ступени»: [☰ + имя] [бейджи · вкладки · главное действие]
-          [вторичные иконки] [«···»] [якорь-выход]. Гибкое только имя; чем уже панель,
-          тем больше контролов схлопывается в иконки и уезжает в «···». Якорь
-          [режим][закрыть] не сжимается и доступен при любой ширине. */}
-      <Toolbar isMobile={isMobile}>
-        <div ref={stripRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flex: 1, minWidth: 0 }}>
-        {/* Левый блок: на десктопе «Закрыть» + ☰ + back/forward, на мобиле «Файлы».
-            Ширина входит в fixedLeftRef — useToolbarOverflow учитывает её в расчёте «···». */}
-        <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
-          {isMobile ? (
-            <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
-              <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
-            </BackButton>
-          ) : (
-            <>
-              {/* Закрыть файл — слева */}
-              <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
-                <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              </ToolbarIconButton>
-              {onOpenSidebar && !iconTier && (
-                <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
-                  <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                </ToolbarIconButton>
-              )}
-              {/* Back/Forward: видимы, пока есть хотя бы одно направление навигации; неактивная — disabled */}
-              {(canFileBack || canFileForward) && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                  <ToolbarIconButton isMobile={isMobile} onClick={onFileBack} disabled={!canFileBack} title="Назад по истории файлов">
-                    <ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                  </ToolbarIconButton>
-                  <ToolbarIconButton isMobile={isMobile} onClick={onFileForward} disabled={!canFileForward} title="Вперёд по истории файлов">
-                    <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                  </ToolbarIconButton>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Плитка расширения перед именем — как в списке файлов */}
-        <FileTypeTile name={fileName} />
-
-        {/* Имя файла — единственный гибкий элемент строки. Расширение отдельным span'ом:
-            ellipsis режет хвост, а по нему и узнают файл. title — полный путь. */}
-        <span title={filePath} style={{
-          display: 'flex', alignItems: 'baseline', flex: '1 1 auto', minWidth: 0,
-          fontFamily: FONT.mono, fontWeight: 700, fontSize: FS.base, color: C.textHeading,
-        }}>
+    // Оболочка «просмотр в центре» — общая с FeaturePage (CenterViewShell): корень bgCard,
+    // шапка Toolbar (close слева + имя mono 700) и Esc. Шапка-«ступени»: [☰ + имя]
+    // [бейджи · вкладки · главное действие] [вторичные иконки] [«···»] [якорь-выход].
+    // Гибкое только имя; чем уже панель, тем больше контролов уезжает в «···».
+    <CenterViewShell
+      isMobile={isMobile}
+      onClose={handleClose}
+      rootRef={rootRef}
+      stripRef={stripRef}
+      fixedLeftRef={fixedLeftRef}
+      closeLabel="Файлы"
+      mobileTitle="К списку файлов"
+      closeTitle="Закрыть"
+      name={
+        // Имя файла — единственный гибкий элемент. Расширение отдельным span'ом:
+        // ellipsis режет хвост, а по нему и узнают файл. title — полный путь.
+        <>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameBase}</span>
           {nameExt && <span style={{ flexShrink: 0 }}>{nameExt}</span>}
-        </span>
-
+        </>
+      }
+      nameTitle={filePath}
+      leftExtra={
+        // ☰ + back/forward (в fixedLeftRef, после close): useToolbarOverflow учитывает их.
+        <>
+          {onOpenSidebar && !iconTier && (
+            <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
+              <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+            </ToolbarIconButton>
+          )}
+          {/* Back/Forward: видимы, пока есть хотя бы одно направление; неактивная — disabled */}
+          {(canFileBack || canFileForward) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <ToolbarIconButton isMobile={isMobile} onClick={onFileBack} disabled={!canFileBack} title="Назад по истории файлов">
+                <ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+              </ToolbarIconButton>
+              <ToolbarIconButton isMobile={isMobile} onClick={onFileForward} disabled={!canFileForward} title="Вперёд по истории файлов">
+                <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+              </ToolbarIconButton>
+            </div>
+          )}
+        </>
+      }
+      leading={<FileTypeTile name={fileName} />}
+      trailing={
+        <>
         {/* Бейджи + вкладки — несжимаемый блок */}
         {badgesVisible && (
         <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
@@ -1903,8 +1886,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             {actionSlot}
           </div>
         )}
-        </div>{/* конец строки шапки */}
-      </Toolbar>
+        </>
+      }
+    >
 
       {/* Баннер ошибки мутации (офлайн/сбой) */}
       {actionError && (
@@ -2540,7 +2524,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           }
         />
       )}
-    </div>
+    </CenterViewShell>
   );
 }
 

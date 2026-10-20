@@ -1,7 +1,7 @@
 // Центр WorkspacePage (волна 2 «Обзор фич», Ф2.3): страница фичи — СОСЕД центра,
 // а ChatPanel прячется display:none (не размонтируется) — иначе рвётся стрим хода
 // и теряется черновик композера. Тест: при открытой странице textarea композера
-// остаётся в DOM, его значение (черновик) переживает переход и возврат; крошка
+// остаётся в DOM, его значение (черновик) переживает переход и возврат; «Закрыть»
 // «← К чату…» закрывает страницу и возвращает центр; системное «назад» (popstate)
 // делает то же (проверка по исходнику).
 //
@@ -336,7 +336,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     vi.restoreAllMocks();
   });
 
-  it('открытая страница: ChatPanel в DOM (data-testid), черновик композера переживает возврат, крошка закрывает страницу', async () => {
+  it('открытая страница: ChatPanel в DOM (data-testid), черновик композера переживает возврат, «Закрыть» закрывает страницу', async () => {
     const { container } = mount(createElement(WorkspacePage, {
       project,
       auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
@@ -360,7 +360,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     act(() => { (reactProps(ta!) as any).onChange({ target: { value: draft, selectionStart: 0 } }); });
 
     // 3. Открываем страницу фичи из ЧАТА (fromChat: true): обработчик cc-open-feature
-    //    сам пишет указатель возврата (chatA → фича) — крошка «← К чату «…»».
+    //    сам пишет указатель возврата (chatA → фича) — «Закрыть» «← К чату «…»».
     act(() => {
       (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
         detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
@@ -368,10 +368,11 @@ describe('WorkspacePage: центр — страница фичи соседом
     });
     await act(async () => { vi.advanceTimersByTime(100); });
 
-    // 4. Страница фичи показана (крошка «← К чату «…»»).
+    // 4. Страница фичи показана. Майя M2: видимая подпись КОРОТКАЯ («Чат»),
+    //    полный «К чату «…»» — только в title (на 360 длинная ломала шапку).
     const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
-    expect(back, 'крошка страницы фичи не найдена').not.toBeNull();
-    expect(textNodes(back!).join('')).toContain('К чату');
+    expect(back, '«Закрыть» страницы фичи не найдена').not.toBeNull();
+    expect(textNodes(back!).join(''), 'видимая подпись не короткая «Чат»').toBe('Чат');
 
     // 5. КЛЮЧЕВОЕ (MAJOR-3): ChatPanel НЕ размонтирован при открытой странице
     //    (display:none, а не unmount) — testid в DOM. Мутация «display → условный
@@ -382,9 +383,9 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(taAfterOpen, 'textarea композера пропал из DOM (ChatPanel размонтирован)').not.toBeNull();
     expect((reactProps(taAfterOpen!) as any).value, 'черновик композера потерян при открытой странице').toBe(draft);
 
-    // 7. Возврат: клик по крошке → страница фичи закрывается (центр возвращается).
+    // 7. Возврат: клик по «Закрыть» → страница фичи закрывается (центр возвращается).
     act(() => { (reactProps(back!.childNodes[0]) as any).onClick(); });
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'крошка не скрыта после возврата').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), '«Закрыть» не скрыта после возврата').toBeNull();
     // ChatPanel/черновик переживают переход: страница закрыта, центр снова чат.
     expect(chatPanelInDom(), 'центр не вернулся к чату (ChatPanel пропал) после возврата').toBe(true);
     // Композер (обязательно): textarea в DOM и черновик пережил возврат.
@@ -405,7 +406,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(centerSrc, 'центр не прячет ChatPanel display:none').toContain("display: open ? 'none' : 'flex'");
   });
 
-  it('диплинк #/project/p1/feature/f1: страница открывается при первом монтировании (чат в DOM, крошка)', async () => {
+  it('диплинк #/project/p1/feature/f1: страница открывается при первом монтировании (чат в DOM, «Закрыть»)', async () => {
     // Свежая загрузка/перезагрузка: history.state ещё не сидирован (null), адрес — диплинк.
     // openFeatureId инициализируется из хэша (getNav() null → parseHash).
     (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
@@ -417,9 +418,9 @@ describe('WorkspacePage: центр — страница фичи соседом
     } as any));
     await act(async () => { vi.advanceTimersByTime(100); });
 
-    // Страница фичи открыта: крошка есть (указателя нет → «← К ключевому чату»).
+    // Страница фичи открыта: «Закрыть» есть (указателя нет → «← К ключевому чату»).
     const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
-    expect(back, 'крошка страницы фичи не найдена (диплинк не открыл страницу)').not.toBeNull();
+    expect(back, '«Закрыть» страницы фичи не найдена (диплинк не открыл страницу)').not.toBeNull();
     // ChatPanel НЕ размонтирован (display:none): testid в DOM.
     expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'ChatPanel не в DOM (диплинк)').not.toBeNull();
   });
@@ -435,12 +436,12 @@ describe('WorkspacePage: центр — страница фичи соседом
     } as any));
     await act(async () => { vi.advanceTimersByTime(100); });
 
-    // Страница не открыта: ни крошки, ни testid feature-page (сегмент игнорируется).
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'крошка есть при выключенном флаге').toBeNull();
+    // Страница не открыта: ни «Закрыть», ни testid feature-page (сегмент игнорируется).
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), '«Закрыть» есть при выключенном флаге').toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница фичи открыта при выключенном флаге').toBeNull();
   });
 
-  it('крошка: navReplace синхронизирует URL (feature исчезает из хэша), «назад» ведёт туда же', async () => {
+  it('«Закрыть»: navReplace синхронизирует URL (feature исчезает из хэша), «назад» ведёт туда же', async () => {
     // Фейк-история, которая реально записывает hash: navReplace/navPush пишут toHash,
     // и window.location.hash отражает снимок (в beforeEach replaceState — no-op).
     const win = globalThis as any;
@@ -465,13 +466,13 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
     expect(win.window.location.hash, 'после открытия feature не в hash').toContain('/feature/f1');
 
-    // Клик по крошке (kind 'chat', chatA = текущий чат): navReplace на снимок БЕЗ feature.
+    // Клик по «Закрыть» (kind 'chat', chatA = текущий чат): navReplace на снимок БЕЗ feature.
     const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
-    expect(back, 'крошка не найдена').not.toBeNull();
+    expect(back, '«Закрыть» не найдена').not.toBeNull();
     act(() => { (reactProps(back!.childNodes[0]) as any).onClick(); });
-    // Хэш больше не содержит feature (крошка и история — в одно место).
+    // Хэш больше не содержит feature («Закрыть» и история — в одно место).
     expect(win.window.location.hash, 'feature остался в hash после возврата').not.toContain('/feature/');
-    // Снимок истории (history.state) тоже без feature: «назад» ведёт туда же, что крошка.
+    // Снимок истории (history.state) тоже без feature: «назад» ведёт туда же, что «Закрыть».
     expect(win.window.history.state?.feature ?? null, 'feature остался в снимке истории').toBeNull();
   });
 
@@ -504,12 +505,12 @@ describe('WorkspacePage: центр — страница фичи соседом
     const page = findNodeByAttr(container, 'data-testid', 'feature-page');
     expect(page, 'страница фичи не в DOM на десктопе (C1)').not.toBeNull();
     const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
-    expect(back, 'крошка страницы фичи не найдена (C1)').not.toBeNull();
+    expect(back, '«Закрыть» страницы фичи не найдена (C1)').not.toBeNull();
 
     // 4. ChatPanel НЕ размонтирован (display:none): testid в DOM.
     expect(chatPanelInDom(), 'ChatPanel размонтирован на десктопе (C1)').toBe(true);
 
-    // 5. Возврат: клик по крошке → страница закрывается, центр (чат) возвращается.
+    // 5. Возврат: клик по «Закрыть» → страница закрывается, центр (чат) возвращается.
     act(() => { (reactProps(back!.childNodes[0]) as any).onClick(); });
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница не скрыта после возврата (C1)').toBeNull();
     expect(chatPanelInDom(), 'чат не восстановлен после возврата (C1)').toBe(true);
@@ -558,9 +559,9 @@ describe('WorkspacePage: центр — страница фичи соседом
     ).toContain(session.name);
   });
 
-  // === M3 + m4: вход из списка (fromChat: false) — крошка «К списку», не в активный чат ===
-  it('M3/m4: вход из списка — крошка «К списку» (мобила), не в активный (не открытый) чат', async () => {
-    // Активный чат (chatA) ≠ ключевой чат фичи (chat-key). m4: крошка и системное «назад»
+  // === M3 + m4: вход из списка (fromChat: false) — «Закрыть» «К списку», не в активный чат ===
+  it('M3/m4: вход из списка — «Закрыть» «К списку» (мобила), не в активный (не открытый) чат', async () => {
+    // Активный чат (chatA) ≠ ключевой чат фичи (chat-key). m4: «Закрыть» и системное «назад»
     // ведут в одно место — в список (не в ключевой чат и не в активный chatA, который
     // пользователь не открывал: на экране был список).
     const idx = { features: [feat({ keySessionId: 'chat-key' })], chats: {} } as FeaturesIndex;
@@ -581,12 +582,12 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
 
     const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
-    expect(back, 'крошка страницы фичи не найдена (M3/m4)').not.toBeNull();
-    // m4: крошка «К списку» (мобила), НЕ «К ключевому чату» и НЕ «К чату».
+    expect(back, '«Закрыть» страницы фичи не найдена (M3/m4)').not.toBeNull();
+    // m4: «Закрыть» «К списку» (мобила), НЕ «К ключевому чату» и НЕ «К чату».
     const text = textNodes(back!).join('');
-    expect(text, 'крошка не «К списку» (m4: из списка — в список, не в ключевой/активный чат)').toContain('К списку');
-    expect(text, 'крошка ведёт в ключевой чат (m4: должна вести в список)').not.toContain('К ключевому чату');
-    expect(text, 'крошка ведёт в активный (не открытый) чат (M3)').not.toContain('К чату');
+    expect(text, '«Закрыть» не «К списку» (m4: из списка — в список, не в ключевой/активный чат)').toContain('К списку');
+    expect(text, '«Закрыть» ведёт в ключевой чат (m4: должна вести в список)').not.toContain('К ключевому чату');
+    expect(text, '«Закрыть» ведёт в активный (не открытый) чат (M3)').not.toContain('К чату');
   });
 
   // === M1: диплинк — флаги приходят ПОЗЖЕ разбора адреса ===
@@ -607,11 +608,11 @@ describe('WorkspacePage: центр — страница фичи соседом
     // Пока флаги не загружены — страница ещё не показана (гейт по флагу), но адрес цел.
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница открыта до прихода флагов').toBeNull();
 
-    // Флаги «пришли» включёнными (ответ /me): страница открывается, крошка есть.
+    // Флаги «пришли» включёнными (ответ /me): страница открывается, «Закрыть» есть.
     act(() => { setAllFlags({ 'features-overview': true }); });
     await act(async () => { vi.advanceTimersByTime(100); });
     const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
-    expect(back, 'крошка не появилась после прихода флагов (M1: страница не открылась)').not.toBeNull();
+    expect(back, '«Закрыть» не появилась после прихода флагов (M1: страница не открылась)').not.toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'ChatPanel не в DOM (M1)').not.toBeNull();
   });
 
@@ -630,7 +631,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     // Флаги «пришли» выключенными: страница не открывается, адрес приводится к проекту.
     act(() => { setAllFlags({ 'features-overview': false }); });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'крошка есть при выключенном флаге (M1б)').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), '«Закрыть» есть при выключенном флаге (M1б)').toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница открыта при выключенном флаге (M1б)').toBeNull();
   });
 
@@ -645,7 +646,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     } as any));
     await act(async () => { vi.advanceTimersByTime(100); });
 
-    // Страница открыта (крошка + testid feature-page)
+    // Страница открыта («Закрыть» + testid feature-page)
     const page = findNodeByAttr(container, 'data-testid', 'feature-page');
     expect(page, 'страница фичи не открыта (M1-360)').not.toBeNull();
     // M1-360: на мобиле страница живёт в виде chat. При featureId в адресе mobileView='chat',
@@ -656,11 +657,11 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(centerContainer?.style?.display, 'центр (страница) не виден на 360 (M1-360: на экране список)').toBe('flex');
   });
 
-  // === m5: вход из списка → крошка «К списку» → history.back() (не navReplace) ===
-  it('m5: вход из списка — крошка «К списку» делает history.back() (индекс 0), не navReplace (дубль)', async () => {
+  // === m5: вход из списка → «Закрыть» «К списку» → history.back() (не navReplace) ===
+  it('m5: вход из списка — «Закрыть» «К списку» делает history.back() (индекс 0), не navReplace (дубль)', async () => {
     const win = globalThis as any;
-    // Фейк-история со стеком и индексом: navPush=pushState, крошка=history.back()/navReplace.
-    // Сценарий: [список] (index 0) → открытие страницы (navPush → index 1) → крошка.
+    // Фейк-история со стеком и индексом: navPush=pushState, «Закрыть»=history.back()/navReplace.
+    // Сценарий: [список] (index 0) → открытие страницы (navPush → index 1) → «Закрыть».
     const listRecord = { screen: 'project', project, view: 'sidebar', file: null, task: null, feature: null };
     const stack: any[] = [listRecord];
     let index = 0;
@@ -691,12 +692,12 @@ describe('WorkspacePage: центр — страница фичи соседом
 
     // Крошка «К списку»: m5 — history.back() (index 0), НЕ navReplace (index остался бы 1)
     const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
-    expect(back, 'крошка не найдена (m5)').not.toBeNull();
+    expect(back, '«Закрыть» не найдена (m5)').not.toBeNull();
     act(() => { (reactProps(back!.childNodes[0]) as any).onClick(); });
     await act(async () => { vi.advanceTimersByTime(100); });
     // КЛЮЧЕВОЕ (m5): index=0 (history.back() снял запись страницы). Мутация «navReplace»
     // красит: index остался бы 1 (дубль [список, список]), первое «назад» — пустой шаг.
-    expect(index, 'крошка не сняла запись страницы (m5: navReplace дал дубль, index=1)').toBe(0);
+    expect(index, '«Закрыть» не сняла запись страницы (m5: navReplace дал дубль, index=1)').toBe(0);
   });
 
   // === m7: 360, флаг выключен, тёплый браузер (mobileView=sidebar) — адрес не обещает /chat/{id} ===

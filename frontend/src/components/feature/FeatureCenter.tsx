@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { C, ISLAND } from '../../lib/design';
+import { Island } from '../ui/Island';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 
 // Центр + страница фичи-сосед (волна 2 «Обзор фич», Ф2.3/C1).
@@ -23,6 +25,12 @@ export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, ch
   // Контент центра.
   children: ReactNode;
 }) {
+  // Страница фичи — как открытый файл (Глеб M2 = Майя M1): на десктопе в Island
+  // (R14, рамка, тень, зазор centerGap — ровно как centerIsland у файла), на мобиле —
+  // без острова (как и файл). Чат под страницей остаётся в DOM (display:none, не unmount).
+  const page = (
+    <FeaturePage featureId={featureId!} projectId={projectId} isMobile={isMobile} onBack={onBack} />
+  );
   return (
     <>
       {/* Центр: display:none при открытой странице (не размонтируется).
@@ -31,9 +39,11 @@ export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, ch
       <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: open ? 'none' : 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: 'hidden' }}>
         {children}
       </div>
-      {/* Страница фичи: сосед центра, показана при open. */}
+      {/* Страница фичи: сосед центра, показана при open. Десктоп — в Island, мобила — без. */}
       {open && featureId && (
-        <FeaturePage featureId={featureId} projectId={projectId} isMobile={isMobile} onBack={onBack} />
+        isMobile
+          ? page
+          : <Island bg={C.bgMain} style={{ flex: 1, minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>{page}</Island>
       )}
     </>
   );

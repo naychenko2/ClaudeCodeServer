@@ -45,7 +45,6 @@ import { showArchivedToast } from '../lib/archiveToast';
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib/nav';
 import { FeatureCenter } from '../components/feature/FeatureCenter';
 import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
-import { openChatById } from '../lib/openChat';
 import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
 import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
@@ -1641,12 +1640,11 @@ const windowWidth = useWindowWidth();
     // закрывала страницу, но URL #/project/{pid}/feature/{fid} оставался — системное
     // «назад» (popstate) уводило не туда. navReplace на снимок БЕЗ feature: адрес схлопывается
     // к чату/списку, и «назад» ведёт туда же, куда и крошка.
-    const chatId = target.kind === 'chat' || target.kind === 'key' ? target.chatId : undefined;
+    const chatId = target.kind === 'chat' ? target.chatId : undefined;
     const restore = target.kind === 'chat' ? chatToRestore(chatId, activeSessionRef.current?.id) : null;
     const view = target.kind === 'list' ? 'sidebar' : (restore ? 'chat' : mobileView);
     navReplace({ screen: 'project', project, view, file: null, task: null, chatId, feature: null });
-    if (target.kind === 'key') void openChatById(target.chatId);
-    else if (target.kind === 'list') setMobileView('sidebar');
+    if (target.kind === 'list') setMobileView('sidebar');
     else if (target.kind === 'chat' && restore) {
       // Исходный чат ≠ текущий (редкий): переключаем через штатный pending (как popstate).
       sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, restore, { file: null, task: null }));

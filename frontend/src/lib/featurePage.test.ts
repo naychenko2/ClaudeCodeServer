@@ -8,16 +8,15 @@
 //   3. Мутация: сломанный фильтр/дебаунс красит тест.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { __test, refetchFeaturePageAll } from './featurePage';
+import { __test } from './featurePage';
 import { api } from './api';
 import { setAllFlags } from './featureFlags';
 import type { Task } from '../types';
 import type { FeaturePage } from '../types/featureIndex';
 
-// p.16: тост по канону (showToast) — мок-шпион, чтобы проверить, что сбой «Показать все»
-// не проглочен (реальный showToast диспатчит window-событие, в node-окружении его нет).
-const { showToastMock } = vi.hoisted(() => ({ showToastMock: vi.fn() }));
-vi.mock('./toast', () => ({ showToast: showToastMock }));
+// showToast диспатчит window-событие, в node-окружении его нет — no-op-мок на случай
+// транзитного импорта (сам стор фичи тост больше не шлёт).
+vi.mock('./toast', () => ({ showToast: () => {} }));
 
 const FLAG = 'features-overview';
 
@@ -272,65 +271,5 @@ describe('смена fid: устаревший запрос отменяется
   });
 });
 
-// ── p.15 / p.16: «Показать все» переживает живой перезапрос; сбой — тостом ──────
-describe('«Показать все»: персист режима и тост при сбое (p.15, p.16)', () => {
-  let getFeatureSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    __test.reset();
-    setAllFlags({ [FLAG]: true });
-    showToastMock.mockClear();
-  });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    __test.reset();
-    vi.useRealTimers();
-  });
-
-  it('p.15: живой перезапрос (task_changed) держит eventsLimit=all после «Показать все»', async () => {
-    getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockResolvedValue(page('epic-1'));
-    __test.setFid('epic-1');
-    // Первичный запрос — без 'all' (дефолтный лимит).
-    __test.fetchPage('epic-1', true);
-    await vi.runAllTimersAsync();
-    // «Показать все» — режим включается, запрос с 'all'.
-    refetchFeaturePageAll('epic-1');
-    await vi.runAllTimersAsync();
-    expect(__test.showAll(), 'режим «все» не включился').toBe(true);
-    // Живой перезапрос (task_changed → scheduleRefresh → fetchPage) — держит 'all'.
-    __test.scheduleRefresh('epic-1');
-    await vi.runAllTimersAsync();
-    // Последний вызов getFeature — с eventsLimit='all' (не undefined/дефолт).
-    const calls = getFeatureSpy.mock.calls as unknown as [string, string | undefined, AbortSignal?][];
-    const last = calls[calls.length - 1];
-    expect(last[1], 'живой перезапрос потерял eventsLimit=all (p.15)').toBe('all');
-  });
-
-  it('p.15: режим «все» сбрасывается при закрытии страницы (новая лента — дефолт)', async () => {
-    getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockResolvedValue(page('epic-1'));
-    __test.setFid('epic-1');
-    __test.fetchPage('epic-1', true);
-    await vi.runAllTimersAsync();
-    refetchFeaturePageAll('epic-1');
-    await vi.runAllTimersAsync();
-    expect(__test.showAll()).toBe(true);
-    // Закрытие страницы (fid → null) сбрасывает режим: setPage — тот же шов, что эффект.
-    __test.setPage(null);
-    expect(__test.showAll(), 'режим «все» не сброшен при закрытии (p.15)').toBe(false);
-  });
-
-  it('p.16: сбой «Показать все» → тост (не проглочен .catch(() => {}))', async () => {
-    const err = new Error('Сбой сети') as Error;
-    getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockRejectedValue(err);
-    __test.setFid('epic-1');
-    refetchFeaturePageAll('epic-1');
-    await vi.runAllTimersAsync();
-    // Тост по канону вызван (showToast) — клик не прошёл без признака.
-    expect(showToastMock, 'сбой «Показать все» проглочен (p.16)').toHaveBeenCalled();
-    const [title, body, kind] = showToastMock.mock.calls[0] as [string, string, string];
-    expect(kind, 'тост не с тоном error').toBe('error');
-    expect(body, 'сообщение тоста').toContain('Сбой сети');
-    void title;
-  });
-});
+// p.15/p.16 («Показать все») — замороженный блок: функция refetchFeaturePageAll убрана,
+// её тесты (персист режима + тост при сбое) — с ней.

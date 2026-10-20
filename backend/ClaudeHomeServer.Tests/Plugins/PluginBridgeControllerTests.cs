@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Plugins.Controllers;
+using ClaudeHomeServer.Services.Tasks;
 using PluginBridge = ClaudeHomeServer.Services.Plugins.PluginBridge;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
@@ -54,12 +55,12 @@ public class PluginBridgeControllerTests : IDisposable
 
     private PluginBridgeController NewBridgeController(string userId, bool serviceToken = false,
         bool subsystemEnabled = true, bool flagOn = true,
-        PluginBridge? bridge = null)
+        PluginBridge? bridge = null, IProjectManager? projects = null)
     {
         var config = NewConfig(userId, subsystemEnabled, flagOn);
-        // projects: null — серверный гейт ProjectCapabilities (minor 7) в 3.1 no-op
-        // (ProjectId в контексте всегда null); тест гейта — отдельно со стабом.
-        var ctl = new PluginBridgeController(config, new StubFlagGate { PluginsMvp = flagOn }, _store, bridge ?? _bridge, null);
+        // projects: null — гейт по проекту слота (QA-фикс L1) no-op (ProjectId в теле null);
+        // тест гейта (чужой/свой/локальный проект) — со стабом IProjectManager.
+        var ctl = new PluginBridgeController(config, new StubFlagGate { PluginsMvp = flagOn }, _store, bridge ?? _bridge, projects);
         ctl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = Principal(userId, serviceToken) },
@@ -669,6 +670,84 @@ public class PluginBridgeControllerTests : IDisposable
         obj.StatusCode.Should().Be(502);
     }
 
+    // --- Call: 404 (projectId чужого проекта, QA-фикс L1) ---
+    // GetById не фильтрует по владельцу (IProjectManager) — проверка владельца в контроллере.
+    // Мутация: убрать проверку владельца (project.OwnerId != UserId) → этот тест красный.
+
+    [Fact]
+    public async Task Call_ProjectIdЧужогоПроекта_Отдаёт404()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        var bridge = new PluginBridge([new StubCapability("notes:read")]);
+        // Проект существует, но принадлежит OwnerB (чужой для OwnerA).
+        var projects = new StubProjectManager(new Project { Id = "proj-b", OwnerId = OwnerB });
+        var ctl = NewBridgeController(OwnerA, bridge: bridge, projects: projects);
+
+        var res = await ctl.Call("local-a~pkg",
+            new PluginCallRequest { Capability = "notes.read", ProjectId = "proj-b" }, CancellationToken.None);
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(404, "чужой проект → 404 (not_found), а не данные");
+    }
+
+    // --- Call: 404 (projectId несуществующего проекта, QA-фикс L1) ---
+
+    [Fact]
+    public async Task Call_ProjectIdНесуществующего_Отдаёт404()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["notes:read"]);
+        Grant(OwnerA, "local-a/pkg", ["notes:read"]);
+        var bridge = new PluginBridge([new StubCapability("notes:read")]);
+        // Пустый менеджер: GetById → null.
+        var projects = new StubProjectManager();
+        var ctl = NewBridgeController(OwnerA, bridge: bridge, projects: projects);
+
+        var res = await ctl.Call("local-a~pkg",
+            new PluginCallRequest { Capability = "notes.read", ProjectId = "no-such" }, CancellationToken.None);
+        var obj = (ObjectResult)res;
+        obj.StatusCode.Should().Be(404, "несуществующий проект → 404");
+    }
+
+    // --- Call: projectId своего → tasks.list ограничен проектом слота (QA-фикс L1) ---
+    // Два проекта владельца, в каждом задача; слот = X → видны только задачи X.
+    // Мутация: игнорировать projectId (ProjectId: null в контексте) → этот тест красный
+    // (без слота capability вернёт только личные, а не задачи X).
+
+    [Fact]
+    public async Task Call_ProjectIdСвоего_ТаскиОграниченыПроектомСлота()
+    {
+        InstallPanel(OwnerA, "local-a/pkg", "1.0.0", ["tasks:read"]);
+        Grant(OwnerA, "local-a/pkg", ["tasks:read"]);
+
+        // TaskManager в изолированном подкаталоге (tasks.json отдельно от projects.json).
+        var taskDir = Path.Combine(_dir, "tasks");
+        Directory.CreateDirectory(taskDir);
+        var taskConfig = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(taskDir, "projects.json"),
+                ["Tasks:SaveDebounceMs"] = "0",
+            })
+            .Build();
+        var tasks = new TaskManager(taskConfig);
+        tasks.Create("proj-x", OwnerA, new CreateTaskRequest("x-task"));
+        tasks.Create("proj-y", OwnerA, new CreateTaskRequest("y-task"));
+        tasks.Create(null, OwnerA, new CreateTaskRequest("personal-task"));
+
+        var bridge = new PluginBridge([new TasksPluginCapability(tasks)]);
+        // Проект X принадлежит OwnerA (свой) → гейт пропускает.
+        var projects = new StubProjectManager(new Project { Id = "proj-x", OwnerId = OwnerA });
+        var ctl = NewBridgeController(OwnerA, bridge: bridge, projects: projects);
+
+        var res = await ctl.Call("local-a~pkg",
+            new PluginCallRequest { Capability = "tasks.list", ProjectId = "proj-x" }, CancellationToken.None);
+        var ok = (OkObjectResult)res;
+        var resp = (PluginCallResponse)ok.Value!;
+        resp.Ok.Should().BeTrue();
+        var json = JsonSerializer.SerializeToElement(resp.Result!);
+        json.GetProperty("tasks").GetArrayLength().Should().Be(1, "слот = X → только задачи X");
+        json.GetProperty("tasks")[0].GetProperty("title").GetString().Should().Be("x-task");
+    }
 
     // --- Тестовые заглушки ---
 
@@ -706,5 +785,17 @@ public class PluginBridgeControllerTests : IDisposable
         public Task<PluginCapabilityResult> HandleAsync(
             PluginCallContext context, string op, JsonElement args, IReadOnlyList<string> granted, CancellationToken ct)
             => Task.FromResult(new PluginCapabilityResult(false, Error: new PluginCallError(_code, "test")));
+    }
+
+    // Стаб IProjectManager для гейта по проекту слота (QA-фикс L1): GetById возвращает
+    // заданный проект, если его id совпадает, иначе null. Остальные методы — пустые.
+    private sealed class StubProjectManager : IProjectManager
+    {
+        private readonly Project? _project;
+        public StubProjectManager(Project? project = null) => _project = project;
+        public Project? GetById(string id) => _project is not null && _project.Id == id ? _project : null;
+        public IReadOnlyCollection<Project> GetByOwner(string userId) => [];
+        public IReadOnlyCollection<Project> GetAll() => [];
+        public IReadOnlyCollection<Project> GetByRootPath(string rootPath) => [];
     }
 }

@@ -165,24 +165,27 @@ public class PluginBridgeController(
             return BadRequest(new { error = "Не задана capability (операция моста)" });
 
         // Контекст вызова (ADR-031 §3.3, M8): владелец + id плагина + контекст слота.
+        // ProjectId — проект слота из тела запроса (QA-фикс L1): хост подставляет,
+        // панель (недоверенная) сама тело не формирует.
         var context = new PluginCallContext(
             OwnerId: UserId,
             PluginId: pluginId,
-            ProjectId: null,   // контекст слота приходит с фронтенда (3.2), в 3.1 — null
+            ProjectId: req.ProjectId,
             ObjectId: null);
 
-        // Серверный гейт (rework 12, minor 7, defense in depth): если у вызова есть контекст
-        // проекта (слот), проект должен допускать плагины (локальный в MVP — нет).
-        // В 3.1 ProjectId всегда null (контекст слота приходит с фронта в 3.2) — гейт no-op.
+        // Серверный гейт (rework 12, minor 7, defense in depth) + QA-фикс L1: если у вызова
+        // есть контекст проекта (слот), проект должен (1) существовать и принадлежать
+        // ВЛАДЕЛЬЦУ запроса (GetById не фильтрует по владельцу — проверяем сами) и (2)
+        // допускать плагины (локальный в MVP — нет). Чужой/несуществующий → 404 (not_found),
+        // а не данные.
         if (context.ProjectId is not null)
         {
             var project = projects?.GetById(context.ProjectId);
-            if (project is not null)
-            {
-                var caps = ProjectCapabilities.PluginsFor(project);
-                if (!caps.Available)
-                    return StatusCode(409, new { error = caps.Reason });
-            }
+            if (project is null || project.OwnerId != UserId)
+                return StatusCode(404, new { error = "Проект слота не найден" });
+            var caps = ProjectCapabilities.PluginsFor(project);
+            if (!caps.Available)
+                return StatusCode(409, new { error = caps.Reason });
         }
 
         var result = await bridge!.DispatchAsync(context, req.Capability, req.Args, record.Granted, ct);

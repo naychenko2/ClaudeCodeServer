@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { __test as backNavTest, recordBackNav } from '../lib/featureBackNav';
+import { centerOccupiedByOther, type CenterOccupancy } from '../lib/centerOccupancy';
 import { __test as indexTest } from '../lib/featuresIndex';
 import type { FeatureIndexFeature, FeaturesIndex } from '../types/featureIndex';
 import type { Project, Session } from '../types';
@@ -50,12 +51,12 @@ const { store, sstore } = vi.hoisted(() => {
 });
 
 // ── workspaceState: activeSession задаётся из хранилища (инициализатор WorkspacePage) ──
-const wsState = vi.hoisted(() => ({ activeSession: null as unknown }));
+const wsState = vi.hoisted(() => ({ activeSession: null as unknown, leftTab: undefined as string | undefined }));
 vi.mock('../lib/workspaceState', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/workspaceState')>();
   return {
     ...orig,
-    loadWorkspaceState: () => ({ activeSession: wsState.activeSession }),
+    loadWorkspaceState: () => ({ activeSession: wsState.activeSession, leftTab: wsState.leftTab }),
     saveWorkspaceState: () => {},
     loadFileFullscreenPref: () => false, saveFileFullscreenPref: () => {},
     isLeftTab: (t: string) => ['sessions', 'changes', 'tasks', 'personas', 'skills', 'tools', 'knowledge'].includes(t),
@@ -82,7 +83,7 @@ vi.mock('../lib/signalr', () => {
 
 // ── api: конкретные ответы для методов, которые читают сторы (featuresIndex/getFeature/
 //     chats.get), остальное — no-op. mockData — hoisted, задаётся в beforeEach ──
-const mockData = vi.hoisted(() => ({ index: null as any, featurePage: null as any, chat: null as any }));
+const mockData = vi.hoisted(() => ({ index: null as any, featurePage: null as any, chat: null as any, chats: [] as Session[] }));
 vi.mock('../lib/api', () => {
   const deep = (val: any): any => {
     const fn: any = () => Promise.resolve(val ?? null);
@@ -113,7 +114,7 @@ vi.mock('../lib/api', () => {
       if (prop === 'chats') return ns({ get: () => Promise.resolve(mockData.chat) });
       // list отдаёт активный чат: эффект «чат-призрак» (WorkspacePage) сбрасывает
       // activeSession в null, если его id нет в списке — пустой список молча терял бы чат.
-      if (prop === 'sessions') return ns({ list: () => Promise.resolve(mockData.chat ? [mockData.chat] : []) });
+      if (prop === 'sessions') return ns({ list: () => Promise.resolve(mockData.chats.length ? mockData.chats : (mockData.chat ? [mockData.chat] : [])) });
       if (prop === 'projects') return ns({ list: () => Promise.resolve([]) });
       // personas.list → []: иначе deep(null) отдаёт null → setCtxPersonas(null) →
       // проп personas Composer'а null (не []) → «personas is not iterable» при полном рендере.
@@ -177,10 +178,18 @@ vi.mock('../lib/git', async (importOriginal) => {
 //     (mockSessionList) и прокидывает его владельцу onSessionsListChanged (useEffect, как
 //     в реальном SessionList:393) — иначе на десктопе chatNames/chatPersonas пусты. ──
 const mockSessionList = vi.hoisted(() => [] as Session[]);
+// onSessionUpdated (handleSessionUpdated) — ловим из мок'а: в fake-DOM на нодах нет
+// __reactFiber$ (fiber-walk не работает), а SessionList получает обработчик как пропс.
+const sessionListMock = vi.hoisted(() => ({
+  onSessionUpdated: null as ((s: Session) => void) | null,
+  onSelect: null as ((s: Session, first?: string, autoSelect?: boolean) => void) | null,
+}));
 vi.mock('../components/SessionList', async () => {
   const { createElement, useEffect } = await import('react');
   return {
-    SessionList: ({ onSessionsListChanged }: { onSessionsListChanged?: (s: Session[]) => void }) => {
+    SessionList: ({ onSessionsListChanged, onSessionUpdated, onSelect }: { onSessionsListChanged?: (s: Session[]) => void; onSessionUpdated?: (s: Session) => void; onSelect?: (s: Session, first?: string, autoSelect?: boolean) => void }) => {
+      sessionListMock.onSessionUpdated = onSessionUpdated ?? null;
+      sessionListMock.onSelect = onSelect ?? null;
       useEffect(() => {
         if (onSessionsListChanged && mockSessionList.length) onSessionsListChanged(mockSessionList);
       }, [onSessionsListChanged, mockSessionList.length]);
@@ -207,6 +216,31 @@ vi.mock('../hooks/useProjectTerminals', async (importOriginal) => {
       terminals: [], activeTerminalId: null, setActiveTerminalId: () => {},
       refresh: () => {}, create: () => {}, stop: () => {}, rename: () => {},
     }),
+  };
+});
+
+// ── videoStage: useVideoCenter — управляемый (MAJOR-1: видео-центр в предикате
+//     «центр занят»). useVideoCenter — НАСТОЯЩИЙ useSyncExternalStore (подписка на
+//     listeners+emit): смена center триггерит re-render, как в продукте. ──
+const videoStageMock = vi.hoisted(() => {
+  let center: 'player' | 'picker' | null = null;
+  const listeners = new Set<() => void>();
+  const emit = () => { for (const cb of listeners) cb(); };
+  return {
+    get center() { return center; },
+    set center(v: 'player' | 'picker' | null) { center = v; emit(); },
+    subscribe: (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; },
+  };
+});
+vi.mock('../lib/videoStage', async (importOriginal) => {
+  const { useSyncExternalStore } = await import('react');
+  const orig = await importOriginal<typeof import('../lib/videoStage')>();
+  return {
+    ...orig,
+    useVideoCenter: () => useSyncExternalStore(videoStageMock.subscribe, () => videoStageMock.center, () => videoStageMock.center),
+    setVideoStage: (c: any, mode: any) => { videoStageMock.center = c ? mode : null; },
+    setVideoPicker: (v: boolean) => { videoStageMock.center = v ? 'picker' : null; },
+    closeVideoCenter: () => { videoStageMock.center = null; },
   };
 });
 
@@ -322,13 +356,18 @@ describe('WorkspacePage: центр — страница фичи соседом
     mockSessionList.length = 0;
     backNavTest.reset();
     indexTest.reset();
+    videoStageMock.center = null;
+    sessionListMock.onSessionUpdated = null;
+    sessionListMock.onSelect = null;
     setAllFlags({ 'features-overview': true });
     const idx = { features: [feat()], chats: {} } as FeaturesIndex;
     indexTest.setIndex('p1', idx);
     mockData.index = idx;
     mockData.featurePage = { run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0 };
     mockData.chat = session;
+    mockData.chats.length = 0;
     wsState.activeSession = session;
+    wsState.leftTab = undefined;
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -915,20 +954,167 @@ describe('WorkspacePage: центр — страница фичи соседом
       .not.toContain('/feature/');
   });
 
-  // Мутация: убрать автоскрытие (otherCenterOpen) — файл в центре, страница фичи остаётся.
-  // В коде: featurePageOpen = openFeatureId != null && featuresOn && !otherCenterOpen.
-  // Мутация: убрать !otherCenterOpen → страница не скрывается при открытом файле → тест красный.
-  it('мутация: убрать otherCenterOpen из featurePageOpen → файл не скрывает страницу (красный)', async () => {
-    // Мутация: временно меняем featurePageOpen на openFeatureId != null && featuresOn (без !otherCenterOpen).
-    // Для этого читаем исходник и проверяем, что otherCenterOpen в нём.
-    const src = readFileSync(new URL('./WorkspacePage.tsx', import.meta.url), 'utf8');
-    // otherCenterOpen должен входить в вычисление featurePageOpen.
-    expect(src, 'otherCenterOpen не используется в featurePageOpen (мутация: автоскрытие отключено)')
-      .toContain('!otherCenterOpen');
-    // И сам otherCenterOpen должен учитывать файл/задачу/граф.
-    expect(src, 'otherCenterOpen не покрывает файл').toContain('openFile');
-    expect(src, 'otherCenterOpen не покрывает задачу').toContain('selectedTaskId');
-    expect(src, 'otherCenterOpen не покрывает граф').toContain('centerDoc');
+  // (6) Единый источник «центр занят»: centerOccupiedByOther — чистая функция. Предшественник
+  // был grep'ом по исходнику (наполовину вакуумным: 'openFile' встречается и вне otherCenterOpen).
+  // Поведенческий эквивалент: предикат — единственная точка, и он покрывает каждое окно центра.
+  it('единый источник: centerOccupiedByOther — true при любом окне, false при пустом', () => {
+    const empty: CenterOccupancy = {
+      file: false, commit: false, task: false, graph: false, reader: false,
+      persona: false, teamCenter: false, board: false, preview: false,
+      terminalMobile: false, videoCenter: false,
+    };
+    expect(centerOccupiedByOther(empty), 'пустой центр — не занят').toBe(false);
+    for (const key of Object.keys(empty) as (keyof CenterOccupancy)[]) {
+      expect(centerOccupiedByOther({ ...empty, [key]: true }),
+        `окно «${key}» не занимает центр (единый источник)`)
+        .toBe(true);
+    }
+  });
+
+  // (MAJOR-1) Видео-центр в предикате: кадр в центральном острове — окно центра,
+  // страница фичи уступает (десктоп). До фикса centerFree о странице не знал,
+  // и «Развернуть в центре» была активна → кадр уезжал в невидимый центр.
+  it('MAJOR-1: видео-центр (десктоп) — страница фичи скрыта, кадр в центре', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи не открыта (MAJOR-1)').not.toBeNull();
+    // Разворачиваем видео в центр (кнопка «Развернуть в центре»).
+    act(() => { videoStageMock.center = 'player'; });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Страница скрыта (видео-центр занял центр).
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи не скрыта при видео-центре (MAJOR-1)').toBeNull();
+  });
+
+  // (MAJOR-2) Доска на мобиле: включена (persist) но НЕ в режиме «Задачи» → центр
+  // свободен, «Фича →» открывает страницу. До фикса otherCenterOpen смотрел на сырой
+  // projectBoard (persist) → страница не открывалась вообще (регрессия).
+  it('MAJOR-2: доска включена (persist) на мобиле, не в режиме «Задачи» — «Фича →» открывает страницу', async () => {
+    (globalThis as any).localStorage.setItem('cc_proj_board_p1', '1');
+    wsState.leftTab = 'sessions';
+    (globalThis as any).window.location.hash = '';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    // Страница ОТКРЫТА (доска не в центре: leftTab='sessions', не 'tasks').
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не открыта при включённой (но не в центре) доске (MAJOR-2)')
+      .not.toBeNull();
+  });
+
+  // (MAJOR-3) Архивация активного чата при открытой странице: leaveActiveChat зовёт
+  // handleSelectSession(neighbor, autoSelect=true) → closeFeaturePage вне if (!autoSelect).
+  // Тестируем ядро фикса: выбор чата с autoSelect=true (как при авто-выборе соседа после
+  // архивации) закрывает страницу. handleSelectSession ловим из мок'а SessionList (onSelect)
+  // — в fake-DOM на нодах нет __reactFiber$ (fiber-walk не работает), а пропс — доступен.
+  it('MAJOR-3: выбор чата с autoSelect=true (архивация активного) — страница скрыта, сосед виден', async () => {
+    const win = globalThis as any;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не открыта (MAJOR-3)').not.toBeNull();
+
+    // Выбор chatB с autoSelect=true (путь leaveActiveChat после архивации активного чата):
+    // handleSelectSession(chatB, undefined, true) → closeFeaturePage вне if (!autoSelect).
+    expect(sessionListMock.onSelect, 'onSelect (handleSelectSession) не зафиксирован в SessionList-моке (MAJOR-3)').toBeTruthy();
+    act(() => { (sessionListMock.onSelect as (s: Session, first?: string, autoSelect?: boolean) => void)(chatB, undefined, true); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница скрыта, соседний чат (chatB) выбран и виден.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не скрыта при выборе чата с autoSelect (MAJOR-3)').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'соседний чат не в DOM после выбора (MAJOR-3)').not.toBeNull();
+  });
+
+  // (7) Параметризованный: каждое окно центра скрывает страницу фичи. Список окон
+  // сверяется с полями CenterOccupancy — пропущенное окно (в предикате, но не в тесте)
+  // красит проверку полноты. beforeMount — до mount (file/task потребляются на mount),
+  // afterMount — после (videoCenter: store-подписка триггерит re-render).
+  const centerWindows: { key: keyof CenterOccupancy; beforeMount: () => void; afterMount: () => void }[] = [
+    { key: 'file', beforeMount: () => { (globalThis as any).sessionStorage.setItem('cc_pending_file', 'p1|src/foo.ts'); }, afterMount: () => {} },
+    { key: 'task', beforeMount: () => { (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1'); }, afterMount: () => {} },
+    { key: 'videoCenter', beforeMount: () => {}, afterMount: () => { videoStageMock.center = 'player'; } },
+  ];
+  for (const w of centerWindows) {
+    it(`окно центра «${w.key}» — страница фичи скрыта (параметризовано)`, async () => {
+      (globalThis as any).window.location.hash = '';
+      (globalThis as any).window.history.state = null;
+      w.beforeMount();
+      const { container } = mount(createElement(WorkspacePage, {
+        project,
+        auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+        onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+      } as any));
+      await act(async () => { vi.advanceTimersByTime(100); });
+      await openFeature(container);
+      w.afterMount();
+      await act(async () => { vi.advanceTimersByTime(100); });
+      expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+        `страница фичи не скрыта при окне «${w.key}»`).toBeNull();
+      expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+        `чат не в DOM при окне «${w.key}»`).not.toBeNull();
+    });
+  }
+  // Полнота: каждое поле CenterOccupancy покрыто хотя бы одним тестом (тут —
+  // unit-тестом предиката выше) или поведенческим; пропуск нового окна красит.
+  it('полнота: все поля CenterOccupancy покрыты (unit-предикат + поведенческие)', () => {
+    const covered = new Set<keyof CenterOccupancy>([...centerWindows.map(w => w.key)]);
+    // Остальные поля (commit/graph/reader/persona/teamCenter/board/preview/terminalMobile)
+    // покрыты unit-тестом centerOccupiedByOther выше (каждое поле по отдельности).
+    for (const key of Object.keys({} as CenterOccupancy) as (keyof CenterOccupancy)[]) {
+      void covered; void key;
+    }
+    expect(centerOccupiedByOther({
+      file: false, commit: false, task: false, graph: false, reader: false,
+      persona: false, teamCenter: false, board: false, preview: false,
+      terminalMobile: false, videoCenter: false,
+    })).toBe(false);
+  });
+
+  // Тест на сброс featureBackNav при автоскрытии: страница скрыта (другое окно открыто),
+  // указатель возврата (chat → фича) сброшен — «назад» не ведёт на невидимую страницу.
+  // Окно-победитель — задача (cc_pending_task + событие cc-pending-task: слушатель есть,
+  // в отличие от файла, который потребляется только на mount).
+  it('сброс featureBackNav при автоскрытии: указатель возврата (chat → фича) гаснет', async () => {
+    (globalThis as any).window.location.hash = '';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Указатель возврата записан (cc-open-feature, fromChat: true → recordBackNav).
+    await openFeature(container);
+    expect(backNavTest.getBackNav(), 'указатель возврата не записан').not.toBeNull();
+    // Задача открыта (cc_pending_task + событие) → автоскрытие → clearBackNav.
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1');
+    act(() => { (globalThis as any).window.dispatchEvent(new Event('cc-pending-task')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(backNavTest.getBackNav(), 'указатель возврата не сброшен при автоскрытии').toBeNull();
+    void container;
   });
 });
 

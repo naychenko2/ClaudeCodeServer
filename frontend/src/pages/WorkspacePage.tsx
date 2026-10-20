@@ -11,7 +11,7 @@ import { FileViewer } from '../components/FileViewer';
 import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
-import { useVideoPlaying } from '../lib/videoStage';
+import { useVideoPlaying, useVideoCenter } from '../lib/videoStage';
 import { isPanelKey, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
@@ -46,6 +46,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib
 import { FeatureCenter } from '../components/feature/FeatureCenter';
 import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
 import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
+import { centerOccupiedByOther, type CenterOccupancy } from '../lib/centerOccupancy';
 import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
@@ -540,6 +541,10 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const handleShowTeam = () => {
     setSelectedPersonaId(null);
     setPersonaCreating(false);
+    // MINOR-4: командный центр — окно центра, ставим флаг, чтобы страница уступила
+    // (на мобиле центр команды показывается по leftTab='personas' без персоны, но
+    // признак «занят» читает именно teamCenterOpen).
+    setTeamCenterOpen(true);
     navPush({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: null, task: null, persona: null });
     if (isMobile) setMobileView('chat');
   };
@@ -771,18 +776,32 @@ const windowWidth = useWindowWidth();
   // Страница фичи — СОСЕД центра: при открытой она прячет центр (чат) display:none.
   // Автоскрытие (дефект 20.10): страница должна вести себя как открытый файл — уступать
   // центр ЛЮБОМУ другому окну (файл/задача/граф/коммит/ридер/персона/командный центр/
-  // доска/превью/терминал). Единый источник: один вычисляемый признак «центр занят
-  // другим окном» — новое окно центра в будущем добавляется сюда, а не в россыпь
-  // обработчиков. Чат — базовый режим (не «другое окно»), его выбор закрывает страницу
-  // отдельно (closeFeaturePage в handleSelectSession).
-  const otherCenterOpen = !!(
-    openFile || openCommitSha || selectedTaskId || centerDoc
-    || reader.state.open || selectedPersonaId || personaCreating || teamCenterOpen
-    || projectBoard || ccActivePreview
+  // доска/превью/терминал/видео-центр). Единый источник: один вычисляемый признак
+  // «центр занят другим окном» (lib/centerOccupancy) — новое окно центра в будущем
+  // добавляется одним полем, а не в россыпь обработчиков. Чат — базовый режим (не
+  // «другое окно»), его выбор закрывает страницу отдельно (closeFeaturePage в
+  // handleSelectSession). Тот же предикат (centerFree) использует DesktopWorkspace для
+  // видео-центра — один источник, не два расходящихся перечня.
+  const videoCenter = useVideoCenter();
+  const centerOccupancy: CenterOccupancy = {
+    file: !!openFile,
+    commit: !!openCommitSha,
+    task: !!selectedTaskId,
+    graph: centerDoc != null,
+    reader: reader.state.open,
+    persona: !!selectedPersonaId || personaCreating,
+    teamCenter: teamCenterOpen,
+    // Доска: ВИДИМОЕ состояние (showProjectBoard), а не сырой projectBoard: на мобиле
+    // доска занимает центр только в режиме «Задачи» (MAJOR-2), на десктопе — всегда.
+    board: showProjectBoard,
+    preview: !!ccActivePreview,
     // Терминал — в центре только на мобиле (leftTab 'tools'); на десктопе он в правой
     // рельсе и центр не занимает. Превью (ccActivePreview) — в центре на обеих раскладках.
-    || (isMobile && leftTab === 'tools' && activeTerminalId)
-  );
+    terminalMobile: isMobile && leftTab === 'tools' && !!activeTerminalId,
+    // Видео-центр (MAJOR-1): кадр/каталог в центральном острове — окно центра.
+    videoCenter: videoCenter != null,
+  };
+  const otherCenterOpen = centerOccupiedByOther(centerOccupancy);
   // Показ страницы гейтится по флагу (openFeatureId ставится из хэша/снимка без гейта —
   // инициализатор выше) и по «центр не занят другим окном»: при открытом другом окне
   // страница уступает ему (автоскрытие).
@@ -802,6 +821,27 @@ const windowWidth = useWindowWidth();
   useEffect(() => {
     if (openFeatureId != null && !featurePageOpen) clearBackNav();
   }, [openFeatureId, featurePageOpen]);
+
+  // Автоскрытие = настоящее закрытие (MINOR-5): страница скрыта, но openFeatureId ещё
+  // задан — иначе после закрытия окна-победителя (otherCenterOpen → false) страница
+  // «воскресала» сама, а в адресе /feature/ уже не было (navPush окна переписал адрес).
+  // Сбрасываем openFeatureId и синхронизируем адрес (navReplace без feature), как у
+  // явного «Закрыть»: экран и адрес показывают одно, перезагрузка даёт то же.
+  // Гейт flagsLoaded && featuresOn: пока флаги НЕ пришли (featuresOn=false) страница
+  // ещё не открылась — чистить openFeatureId рано (M1(а): диплинк ждёт ответа /me).
+  // Выключенный флаг ведёт отдельный эффект (нормализация адреса, mobileView=sidebar).
+  useEffect(() => {
+    if (openFeatureId == null || featurePageOpen || !flagsLoaded || !featuresOn) return;
+    setOpenFeatureId(null);
+    const view = isMobile ? 'chat' : 'sidebar';
+    navReplace({
+      screen: 'project', project, view, file: null, task: null,
+      chatId: activeSessionId ?? undefined, feature: null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на
+    // переход «открыто → скрыто» (автоскрытие); project/mobileView/activeSessionId в
+    // замыкании — текущие, deps плодили бы лишние записи истории
+  }, [openFeatureId, featurePageOpen, flagsLoaded, featuresOn]);
 
   const handleProjectBoard = (on: boolean) => {
     setProjectBoard(on);
@@ -1175,6 +1215,11 @@ const windowWidth = useWindowWidth();
     // списках метка непрочитанности не гасла никогда — markChatRead звался
     // только в глобальном ChatsPage
     markChatRead(session.id);
+    // Явный выбор чата закрывает страницу фичи (автоскрытие, дефект 20.10): чат —
+    // базовый режим, otherCenterOpen его не покрывает, поэтому единая точка closeFeaturePage.
+    // Вне if (!autoSelect) (MAJOR-3): leaveActiveChat (архивация активного чата) зовёт
+    // с autoSelect=true, и без этого страница осталась бы поверх нового соседнего чата.
+    closeFeaturePage();
     if (!autoSelect) {
       // Файл, открытый В СПЛИТЕ, смену чата переживает: там чат и файл стоят рядом
       // двумя островами и друг другу не мешают — закрывать нечего. Так же ведёт себя
@@ -1193,9 +1238,6 @@ const windowWidth = useWindowWidth();
       setOpenCommitFile(null);
       setSelectedTaskId(null);
       setGraphOpen(false);
-      // Явный выбор чата закрывает страницу фичи (автоскрытие, дефект 20.10): чат —
-      // базовый режим, otherCenterOpen его не покрывает, поэтому единая точка closeFeaturePage.
-      closeFeaturePage();
       // Пишем запись истории с chatId — для URL #/project/{id}/chat/{chatId}
       // и кнопки «назад/вперёд» браузера. Оставленный в сплите файл несём в том же
       // снимке: popstate восстанавливает file и chatId независимо, иначе «назад»

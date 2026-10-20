@@ -205,9 +205,15 @@ function escapeSrcdoc(s: string): string {
 // (frame-src 'none' в PANEL_CSP): браузер сверяет навигацию фрейма с политикой
 // родителя. srcdoc — внутренний документ: CSP + шим + HTML панели (простая
 // конкатенация, без разбора); значение экранировано.
-export function buildPanelSrcdoc(panelHtml: string): string {
+//
+// theme — тема в первом кадре (ADR-031 §3.3): до init панель рисовалась светлой,
+// затем переключалась сообщением (вспышка в тёмной теме). Атрибут data-cc-theme
+// встраивается в ВНУТРЕННИЙ <html> (шим обновляет его по init/theme); HTML панели
+// не меняется.
+export function buildPanelSrcdoc(panelHtml: string, theme: BridgeTheme = 'light'): string {
+  const themeAttr = theme === 'dark' ? ' data-cc-theme="dark"' : '';
   const inner =
-    '<!doctype html><html><head>' +
+    '<!doctype html><html' + themeAttr + '><head>' +
     '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
     '<style>' + shimCss + '</style>' +
     '<script>' + shimJs + '</script>' +

@@ -191,7 +191,9 @@ function PanelPreview({ slug }: { slug: string }) {
   // Тема входит в ключ фрейма: смена темы перемонтирует iframe (простой предпросмотр —
   // без живого обновления темы сообщением, как в PluginFrame).
   const tooBig = html != null && html.length > MAX_PANEL_FILE_BYTES;
-  const srcdoc = html != null && !tooBig ? buildPanelSrcdoc(html) : null;
+  // theme — тема первого кадра (ADR-031 §3.3); здесь смена темы и так перемонтирует
+  // (frameKey включает theme), поэтому тема идёт напрямую, без замыкания.
+  const srcdoc = html != null && !tooBig ? buildPanelSrcdoc(html, theme) : null;
   const frameKey = `${slug}#${rev}#${theme}`;
 
   // Мост: ready → init (granted: [] — предпросмотр без прав), resize → высота.

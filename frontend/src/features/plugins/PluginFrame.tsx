@@ -225,10 +225,13 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   // Пересобирается при смене панели/версии, но НЕ при смене темы: тема доходит
   // сообщением (шим проставляет data-cc-theme, см. эффект ниже), состояние панели
   // держится. Панель больше MAX_PANEL_FILE_BYTES — srcdoc null (показываем ошибку).
+  // theme — тема первого кадра (ADR-031 §3.3): берётся из замыкания, в deps не
+  // входит, чтобы смена темы НЕ перемонтировала панель (только init/theme сообщением).
   const srcdoc = useMemo(() => {
     if (fetch.kind !== 'html') return null;
     if (fetch.html.length > MAX_PANEL_FILE_BYTES) return null;
-    return buildPanelSrcdoc(fetch.html);
+    return buildPanelSrcdoc(fetch.html, theme);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- theme намерено вне deps
   }, [fetch]);
 
   // Ключ iframe: пересборка srcdoc (тема) НЕ перемонтирует (key не меняется),

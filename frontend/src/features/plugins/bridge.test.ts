@@ -131,9 +131,11 @@ type Project = import('../../types').Project;
 
 // Ожидаемый ВНУТРЕННИЙ документ (srcdoc): CSP + шим + html панели, конкатенация.
 // Строится так же, как в buildPanelSrcdoc, — чтобы сверить getAttribute('srcdoc') строго.
-function expectedInner(panelHtml: string): string {
+// theme — атрибут data-cc-theme на <html> (тёмная тема в первом кадре, ADR-031 §3.3).
+function expectedInner(panelHtml: string, theme: 'light' | 'dark' = 'light'): string {
+  const themeAttr = theme === 'dark' ? ' data-cc-theme="dark"' : '';
   return (
-    '<!doctype html><html><head>' +
+    '<!doctype html><html' + themeAttr + '><head>' +
     '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
     '<style>' + shimCss + '</style>' +
     '<script>' + shimJs + '</script>' +
@@ -292,6 +294,28 @@ describe('buildPanelSrcdoc: круговой разбор (ADR-031 §3.6)', () =
     // Мутация «убрать script-src из оболочки» красит этот тест: srcdoc наследует
     // политику создателя, и без script-src 'unsafe-inline' инлайн-скрипты панели гаснут.
     expect(doc.head.firstElementChild?.getAttribute('content')).toContain("script-src 'unsafe-inline'");
+  });
+
+  // Тема в первом кадре (ADR-031 §3.3, минор 7 Глеба): до init панель рисовалась
+  // светлой, затем переключалась сообщением (вспышка в тёмной теме). Фикс — атрибут
+  // data-cc-theme="dark" на ВНУТРЕННЕМ <html>; светлая тема — без атрибута.
+  it('тема в первом кадре: dark → data-cc-theme="dark" на внутреннем <html>, light — нет', () => {
+    const dark = buildPanelSrcdoc('<body>x</body>', 'dark');
+    const darkDoc = new DOMParser().parseFromString(dark, 'text/html');
+    const darkSrcdoc = darkDoc.querySelector('iframe')?.getAttribute('srcdoc') ?? '';
+    expect(darkSrcdoc).toBe(expectedInner('<body>x</body>', 'dark'));
+    expect(darkSrcdoc).toContain('<html data-cc-theme="dark">');
+
+    const light = buildPanelSrcdoc('<body>x</body>', 'light');
+    const lightDoc = new DOMParser().parseFromString(light, 'text/html');
+    const lightSrcdoc = lightDoc.querySelector('iframe')?.getAttribute('srcdoc') ?? '';
+    expect(lightSrcdoc).toBe(expectedInner('<body>x</body>'));
+    // <html> без атрибута (CSS theme.css несёт :root[data-cc-theme="dark"], но не <html>)
+    expect(lightSrcdoc).not.toContain('<html data-cc-theme');
+
+    // Без явной темы — по умолчанию светлая (обратная совместимость со старыми вызовами).
+    const def = buildPanelSrcdoc('<body>x</body>');
+    expect(def).toBe(buildPanelSrcdoc('<body>x</body>', 'light'));
   });
 });
 

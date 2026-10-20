@@ -41,9 +41,9 @@ public class PluginDraftsController(
     private const string TokenKindClaim = "typ";
     private const string ServiceTokenKind = "svc";
 
-    // Потолок размера файла панели (тот же, что в PluginBridgeController): больше 4 MiB → 413,
-    // чтобы предпросмотр черновика не выкачивал неограниченный файл в память сервера.
-    private const long MaxPanelBytes = 4 * 1024 * 1024; // 4 MiB
+    // CSP сырого ответа панели черновика (ADR-031 §3.6, QA-фикс H): тот же, что у
+    // PluginBridgeController.Assets.
+    private const string RawPanelCsp = "sandbox; default-src 'none'";
 
     private string UserId => User.FindFirstValue(SubClaim)!;
     private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
@@ -96,9 +96,11 @@ public class PluginDraftsController(
     }
 
     // --- GET /api/plugins/drafts/{slug}/panel — предпросмотр панели черновика (шаг 4.3d) ---
-    // Тот же srcdoc-ready HTML (CSP + шим моста), что у PluginBridgeController.PanelSrcdoc,
-    // но из _drafts/{slug}/panel/index.html. Гейты те же, что у остальных ручек черновиков:
-    // сервисный JWT → 403, чужой/несуществующий → 404, нет панели → 404, файл > 4 MiB → 413.
+    // Сырой файл панели (ADR-031 §3.6: сервер HTML не разбирает; документ собирает фронт).
+    // Файл берётся по entry из манифеста черновика (тот же контракт, что у установленной
+    // панели: entry — относительный путь panel/…); без манифеста/панели → panel/index.html.
+    // Гейты те же, что у остальных ручек черновиков:
+    // сервисный JWT → 403, чужой/несуществующий → 404, нет панели → 404, файл > 256 КиБ → 413.
     // Путь только через SafePath.Join (без выхода из каталога черновика); symlink не следовать.
 
     [HttpGet("{slug}/panel")]
@@ -113,21 +115,31 @@ public class PluginDraftsController(
         if (draftDir is null || !System.IO.Directory.Exists(draftDir))
             return NotFound(new { error = $"Черновик {slug} не найден" });
 
-        // Путь панели: _drafts/{slug}/panel/index.html, только через SafePath.Join.
-        string indexPath;
-        try { indexPath = SafePath.Join(Path.Combine(draftDir, "panel"), "index.html"); }
+        // Entry панели: из манифеста черновика (тот же контракт, что у установленной панели).
+        // Без манифеста или без панели — fallback на panel/index.html.
+        var entry = "panel/index.html";
+        var (manifest, _) = PluginInstaller.ReadManifest(draftDir);
+        var panel = manifest?.Contributes?.Panels?.FirstOrDefault();
+        if (panel is not null && !string.IsNullOrEmpty(panel.Entry)
+            && PluginManifestValidation.IsValidPanelEntry(panel.Entry))
+            entry = panel.Entry;
+
+        // Путь панели: _drafts/{slug}/{entry}, только через SafePath.Join.
+        string filePath;
+        try { filePath = SafePath.Join(draftDir, entry); }
         catch (Exception) { return NotFound(new { error = $"Черновик {slug} не найден" }); }
 
-        // Нет панели → 404; symlink → 404 (не следовать); файл > 4 MiB → 413.
-        if (!System.IO.File.Exists(indexPath)
-            || (System.IO.File.GetAttributes(indexPath) & System.IO.FileAttributes.ReparsePoint) != 0)
+        // Нет панели → 404; symlink → 404 (не следовать); файл > 256 КиБ → 413.
+        if (!System.IO.File.Exists(filePath)
+            || (System.IO.File.GetAttributes(filePath) & System.IO.FileAttributes.ReparsePoint) != 0)
             return NotFound(new { error = $"Черновик {slug} без панели" });
-        if (new System.IO.FileInfo(indexPath).Length > MaxPanelBytes)
-            return StatusCode(413, new { error = "Файл панели превышает лимит размера (4 MiB)" });
+        if (new System.IO.FileInfo(filePath).Length > PluginPackageValidator.MaxPanelFileBytes)
+            return StatusCode(413, new { error = $"Файл панели превышает лимит размера ({PluginPackageValidator.MaxPanelFileBytes / 1024} КиБ)" });
 
-        // Тот же код сборки HTML (CSP + шим моста), что у PanelSrcdoc — не копия.
-        var srcdoc = PluginBridgeController.BuildSrcdoc(System.IO.File.ReadAllText(indexPath));
-        return Content(srcdoc, "text/html; charset=utf-8");
+        var content = System.IO.File.ReadAllBytes(filePath);
+        Response.Headers["Content-Security-Policy"] = RawPanelCsp;
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return File(content, "text/html; charset=utf-8");
     }
 
     // --- GET /api/plugins/drafts/{slug}/diff — сравнение с установленной версией (шаг 4.3b) ---

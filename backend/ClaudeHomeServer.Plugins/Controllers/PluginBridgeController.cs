@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -12,16 +11,16 @@ namespace ClaudeHomeServer.Services.Plugins.Controllers;
 // Мост панели v1 (ADR-031 §3, шаг 3.1): раздача статики панели + эндпоинт call.
 //
 //   GET  /api/plugins/{id}/{ver}/assets/{**path} — статика панели: path относительно корня
-//        пакета (entry из манифеста), отдаёт только файлы под panel/**
-//   GET  /api/plugins/{id}/{ver}/panel            — srcdoc-ready HTML (index.html + шим + CSP)
+//        пакета (entry из манифеста), отдаёт только файлы под panel/**. Сырой файл (ADR-031
+//        §3.6: сервер HTML не разбирает; документ панели собирает фронт).
 //   POST /api/plugins/{id}/call                   — вызов capability {capability, args}
 //
 // Гейты (как в PluginsController): подсистема выключена → 503, флаг plugins-mvp off → 403.
 // Дополнительно на call: сервисный JWT → 403, чужой пакет → 404, выключенный → 409.
 //
-// CSP: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';
-// frame-ancestors 'self'; connect-src 'self'. X-Frame-Options: DENY НЕ ставим — мы сами
-// показываем фрейм (ADR-031 §3.1). srcdoc — строже: default-src 'none', connect-src 'none'.
+// CSP сырого ответа (ADR-031 §3.6): sandbox; default-src 'none' + X-Content-Type-Options:
+// nosniff. Документ инертен даже при открытии верхним окном через ?access_token=;
+// fetch().text() с фронта на заголовки не реагирует.
 //
 // Навигация iframe не несёт Authorization (ADR-031 §3.4): панель авторизуется САМОСТОЯТЕЛЬНО
 // через call с user-JWT из cookie хоста.
@@ -45,24 +44,10 @@ public class PluginBridgeController(
     private string UserId => User.FindFirstValue(SubClaim)!;
     private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
 
-    // CSP для раздачи файлов панели (ADR-031 §3.1).
-    private const string PanelCsp =
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-        "frame-ancestors 'self'; connect-src 'self'";
-
-    // CSP для srcdoc (строже: внешних ресурсов нет, ADR-031 §3.1).
-    private const string SrcdocCsp =
-        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-        "img-src data: blob:; connect-src 'none'; form-action 'none'";
-
-    // Потолок размера файла панели (rework 12, minor 6): больше — 413, чтобы одна
-    // установка не выкачивала неограниченный файл в память сервера.
-    private const long MaxAssetBytes = 4 * 1024 * 1024; // 4 MiB
-
-    // Потолок размера index.html панели для srcdoc (rework 12, minor 3): srcdoc встраивает
-    // HTML в страницу хоста, поэтому его раздувание бьёт по памяти. Константа в одном месте:
-    // Александр может поменять число в своём решении (256 КБ → 413).
-    private const long MaxPanelSrcdocBytes = 256 * 1024; // 256 КБ
+    // CSP сырого ответа панели (ADR-031 §3.6, QA-фикс H): документ инертен даже при
+    // открытии верхним окном через ?access_token= (Program.cs ≈ 1316); fetch().text()
+    // с фронта на заголовки не реагирует.
+    private const string RawPanelCsp = "sandbox; default-src 'none'";
 
     // Гейт: null — прошёл; иначе отказ.
     private IActionResult? Gate()
@@ -142,52 +127,15 @@ public class PluginBridgeController(
         if (!System.IO.File.Exists(filePath))
             return NotFound();
 
-        // Потолок размера (rework 12, minor 6): больше 4 MiB → 413.
-        if (new System.IO.FileInfo(filePath).Length > MaxAssetBytes)
-            return StatusCode(413, new { error = "Файл панели превышает лимит размера (4 MiB)" });
+        // Потолок размера файла панели (ADR-031 §3.6, QA-фикс H): больше 256 КиБ → 413
+        // (на чтении, на случай подмены на диске).
+        if (new System.IO.FileInfo(filePath).Length > PluginPackageValidator.MaxPanelFileBytes)
+            return StatusCode(413, new { error = $"Файл панели превышает лимит размера ({PluginPackageValidator.MaxPanelFileBytes / 1024} КиБ)" });
 
         var content = System.IO.File.ReadAllBytes(filePath);
-        Response.Headers["Content-Security-Policy"] = PanelCsp;
+        Response.Headers["Content-Security-Policy"] = RawPanelCsp;
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
         return File(content, GetContentType(path));
-    }
-
-    // --- GET /api/plugins/{id}/{ver}/panel — srcdoc-ready HTML (ADR-031 §3.1) ---
-    //
-    // Хост собирает HTML из panel/index.html + шим plugin-kit + CSP (meta), вставляет
-    // через <iframe srcdoc=...>. Это снимает проблему навигации iframe (нет Authorization).
-
-    [HttpGet("{id}/{ver}/panel")]
-    public IActionResult PanelSrcdoc(string id, string ver)
-    {
-        var gate = Gate(); if (gate is not null) return gate;
-
-        // Сервисный JWT → 403: панель (srcdoc) — только пользовательский токен (rework 12,
-        // minor 1: единообразие с call, Assets и ручками черновиков).
-        if (IsServiceToken)
-            return StatusCode(403, new { error = "Сервисный JWT: статика/панель — только пользовательский токен" });
-
-        var pluginId = NormalizeId(id);
-        if (!PluginVersion.IsValid(ver))
-            return NotFound();
-
-        var record = store!.LoadInstalled(UserId).FirstOrDefault(r => r.Id == pluginId);
-        if (record is null) return NotFound();
-        if (!record.Enabled)
-            return StatusCode(409, new { error = "Плагин выключен" });
-
-        var panelDir = Path.Combine(store.PackageDir(UserId, pluginId, ver), "panel");
-        var indexPath = SafePath.Join(panelDir, "index.html");
-        if (!System.IO.File.Exists(indexPath)) return NotFound();
-
-        // Потолок размера index.html для srcdoc (rework 12, minor 3): srcdoc встраивает HTML
-        // в страницу хоста, поэтому его раздувание бьёт по памяти. Константа в одном месте
-        // (Александр может поменять число в своём решении): 256 КБ → 413.
-        if (new System.IO.FileInfo(indexPath).Length > MaxPanelSrcdocBytes)
-            return StatusCode(413, new { error = "Панель превышает лимит размера (256 КБ)" });
-
-        var html = System.IO.File.ReadAllText(indexPath);
-        var srcdoc = BuildSrcdoc(html);
-        return Content(srcdoc, "text/html; charset=utf-8");
     }
 
     // --- POST /api/plugins/{id}/call — вызов capability ---
@@ -258,68 +206,6 @@ public class PluginBridgeController(
     }
 
     // --- Хелперы ---
-
-    // srcdoc: HTML + CSP (meta) + шим plugin-kit (мост + CSS-токены).
-    // CSP в meta (не в HTTP-заголовке): srcdoc не имеет собственного HTTP-контекста.
-    // internal: переиспользуется PluginDraftsController.Panel (предпросмотр панели черновика, 4.3d).
-    //
-    // Дефект 3caf4f13: если панель — полный HTML-документ со своим <head>, прежний код
-    // вставлял его целиком в <body> хоста; браузер игнорировал <head> внутри <body>
-    // (в т.ч. meta CSP панели). Фикс: извлечь содержимое <head> и <body> панели и
-    // вставить их в соответствующие секции хоста; meta CSP хоста остаётся ПЕРВОЙ.
-    internal static string BuildSrcdoc(string html)
-    {
-        // Если панель — полный документ с <head>, разделим head/body.
-        // Иначе (фрагмент) — весь HTML в body.
-        var (panelHead, panelBody) = SplitPanelDocument(html);
-
-        var sb = new StringBuilder();
-        sb.Append("<!DOCTYPE html>\n");
-        sb.Append("<html>\n<head>\n");
-        sb.Append("  <meta http-equiv=\"Content-Security-Policy\" content=\"" + SrcdocCsp + "\">\n");
-        sb.Append("  <meta charset=\"utf-8\">\n");
-        sb.Append("  <style>/* CSS-токены тем (plugin-kit) */\n");
-        sb.Append("    :root { --cc-bg: #fff; --cc-fg: #222; --cc-accent: #6366f1; }\n");
-        sb.Append("    @media (prefers-color-scheme: dark) { :root { --cc-bg: #1a1a1a; --cc-fg: #eee; } }\n");
-        sb.Append("  </style>\n");
-        sb.Append("  <script>/* Шим plugin-kit: мост v1 (ready/call/resize) */\n");
-        sb.Append("    window.ccsPlugin = {\n");
-        sb.Append("      ready() { parent.postMessage({ source: 'ccs-plugin', v: 1, type: 'ready' }, '*'); },\n");
-        sb.Append("      call(id, op, args) { parent.postMessage({ source: 'ccs-plugin', v: 1, type: 'call', id, op, args }, '*'); },\n");
-        sb.Append("      resize(h) { parent.postMessage({ source: 'ccs-plugin', v: 1, type: 'resize', height: h }, '*'); }\n");
-        sb.Append("    };\n");
-        sb.Append("  </script>\n");
-
-        // Содержимое <head> панели (meta CSP панели, <title>, <link> и т.д.) —
-        // после хостовых meta/style/script, но ВНУТРИ <head> хоста.
-        if (panelHead.Length > 0)
-            sb.Append("  " + panelHead + "\n");
-
-        sb.Append("</head>\n<body>\n");
-        sb.Append(panelBody);
-        sb.Append("\n</body>\n</html>");
-        return sb.ToString();
-    }
-
-    // Разбор HTML панели: если есть <head> — вернуть (headContent, bodyContent);
-    // иначе (фрагмент) — ("", html). Regex: Singleline (точка = любой символ, включая \n).
-    private static (string Head, string Body) SplitPanelDocument(string html)
-    {
-        var headMatch = System.Text.RegularExpressions.Regex.Match(
-            html, "<head[^>]*>(.*?)</head>",
-            System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        if (!headMatch.Success)
-            return ("", html.Trim());
-
-        var head = headMatch.Groups[1].Value.Trim();
-
-        var bodyMatch = System.Text.RegularExpressions.Regex.Match(
-            html, "<body[^>]*>(.*?)</body>",
-            System.Text.RegularExpressions.RegexOptions.Singleline | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        var body = bodyMatch.Success ? bodyMatch.Groups[1].Value.Trim() : "";
-
-        return (head, body);
-    }
 
     // MIME-тип по расширению файла.
     private static string GetContentType(string path)

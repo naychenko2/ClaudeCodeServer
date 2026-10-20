@@ -4818,6 +4818,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             sessionId, deliverySrc, effectiveCause, senderOrigin ?? "-", mode ?? "-",
             (text.Length > 60 ? text[..60] : text).Replace('\n', ' '));
 
+        // Ход РЕАЛЬНО стартует по сообщению человека (hub или из очереди) — обнуляем счётчик
+        // auto-resume: один раз продолженный и снова оборванный чат иначе навсегда терял бы
+        // авто-продолжение, даже если следующий ход запустил человек (инцидент 20.10, чат df485156).
+        // Точка — после гейтов отказа/парковки (выше), т.е. ход действительно пошёл, а не встал
+        // в очередь. Авто-причины (ServerRestartResume/WorkLoop/Direct/подталкивания/Unknown)
+        // счётчик не трогают: защита от crash-loop цела, человекское сообщение не повторяется
+        // автоматически, поэтому зациклиться обнуление не может.
+        if (effectiveCause is DeliveryCause.User or DeliveryCause.QueueUser)
+            entry.Info.RestartResumeAttempts = 0;
+
         if (TurnStarting is { } onTurnStarting)
         {
             try { await onTurnStarting(sessionId); }

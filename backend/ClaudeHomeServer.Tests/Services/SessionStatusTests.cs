@@ -385,4 +385,58 @@ public class SessionStatusTests : IDisposable
         s.RestartResumeAttempts = 0; // то, что делает обработчик result
         s.UpdatedAt.Should().Be(before, "сброс счётчика UpdatedAt не двигает");
     }
+
+    // --- B: сброс счётчика новым ходом человека (инцидент 20.10, чат df485156) ---
+    // Один раз продолженный и снова оборванный чат иначе навсегда терял бы авто-продолжение,
+    // даже если следующий ход запустил человек. Ход человека (hub или из очереди) обнуляет
+    // счётчик в момент, когда он РЕАЛЬНО стартует (SendDirectAsync, после гейтов отказа/парковки);
+    // авто-ходы (ServerRestartResume/WorkLoop/Direct/подталкивания) счётчик не трогают —
+    // защита от crash-loop цела, а человекское сообщение не повторяется автоматически.
+    // Проект создаём реальный: SendDirectAsync после точки сброса доходит до EnsureProcess,
+    // который без проекта бросает «Проект не найден» (сброс уже прошёл, но тест не должен
+    // падать на побочном эффекте).
+
+    private const string TestUserId = "test-user-id";
+    private const string TestUsername = "test-user";
+
+    private Project MakeProject(string name) =>
+        _projectManager.Create(name, Path.Combine(_tempDir, "proj_" + name),
+            TestUserId, TestUsername, createDirectory: true);
+
+    [Fact]
+    public async Task ХодЧеловека_СбрасываетСчётчикAutoResume()
+    {
+        var project = MakeProject("human-reset");
+        var s = MakeSession(SessionStatus.Active, projectId: project.Id);
+        s.RestartResumeAttempts = 1;
+        WriteSessions([s]);
+
+        var sut = CreateSessionManager();
+
+        // Сообщение человека из хаба: auto=false (дефолт), cause=Unknown (дефолт) →
+        // effectiveCause=User. Чат свободен → ход стартует → счётчик обнуляется.
+        await sut.SendMessageAsync(s.Id, "продолжи", []);
+
+        sut.GetById(s.Id)!.RestartResumeAttempts.Should().Be(0,
+            "ход по сообщению человека обнуляет счётчик auto-resume");
+    }
+
+    [Theory]
+    [InlineData(SessionManager.DeliveryCause.ServerRestartResume)]
+    [InlineData(SessionManager.DeliveryCause.WorkLoop)]
+    public async Task АвтоХод_СчётчикНеТрогает(SessionManager.DeliveryCause cause)
+    {
+        var project = MakeProject("auto-" + cause);
+        var s = MakeSession(SessionStatus.Active, projectId: project.Id);
+        s.RestartResumeAttempts = 1;
+        WriteSessions([s]);
+
+        var sut = CreateSessionManager();
+
+        // Авто-ход (не человек): effectiveCause=cause, не User/QueueUser → счётчик не сбрасывается.
+        await sut.SendMessageAsync(s.Id, "авто", [], auto: true, cause: cause);
+
+        sut.GetById(s.Id)!.RestartResumeAttempts.Should().Be(1,
+            $"авто-ход {cause} счётчик auto-resume не трогает (защита от crash-loop)");
+    }
 }

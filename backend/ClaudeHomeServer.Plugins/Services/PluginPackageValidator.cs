@@ -100,20 +100,24 @@ public class PluginPackageValidator
     /// <summary>
     /// Полная валидация пакета: файловые проверки (<see cref="Validate"/>) + структурная
     /// валидация манифеста (<see cref="ClaudeHomeServer.Models.PluginManifest.Validate"/>:
-    /// <c>no-contribution</c>, <c>unknown-permission</c>, required secrets). Единый арбитр:
-    /// установка (<see cref="PluginInstaller"/>) и черновик (<see cref="PluginDraftService"/>)
-    /// зовут этот метод, чтобы коды проблем совпадали 1:1 (инвариант «Валидатор пакета —
-    /// единственный арбитр»). Манифест читаем ТОЛЬКО если файловая валидация прошла (нет
-    /// файловых проблем): иначе symlink-манифест (no-symlink) не дойдёт до чтения — тот же
-    /// порядок «read после validate», что в <see cref="PluginInstaller"/>.
+    /// <c>no-contribution</c>, <c>unknown-permission</c>, required secrets) + id/version
+    /// (<see cref="ClaudeHomeServer.Models.PluginIdentity.Resolve"/>: <c>missing-version</c>,
+    /// <c>bad-version</c>, <c>bad-id</c>). Единый арбитр: установка (<see cref="PluginInstaller"/>)
+    /// и черновик (<see cref="PluginDraftService"/>) зовут этот метод, чтобы коды проблем
+    /// совпадали 1:1 (инвариант «Валидатор пакета — единственный арбитр»). Манифест читаем
+    /// ТОЛЬКО если файловая валидация прошла (нет файловых проблем): иначе symlink-манифест
+    /// (no-symlink) не дойдёт до чтения — тот же порядок «read после validate», что в
+    /// <see cref="PluginInstaller"/>. <paramref name="ownerId"/>/<paramref name="slug"/> —
+    /// для вывода id, когда он не задан в манифесте (агент издателя не выбирает).
     /// </summary>
-    public PluginPackageValidationResult ValidateFull(string packageRoot)
+    public PluginPackageValidationResult ValidateFull(string packageRoot, string ownerId, string slug)
     {
         var (problems, files, limitHit) = ValidateFiles(packageRoot);
 
         // Манифестная валидация — та же, что в установщике: ccs-plugin.json → модель →
         // PluginManifest.Validate (no-contribution / unknown-permission / required secrets,
-        // bad-panel-entry по ФОРМЕ entry).
+        // bad-panel-entry по ФОРМЕ entry) + id/version (PluginIdentity.Resolve — единая точка
+        // с PluginInstaller: то, что здесь не дало проблемы, accept не сможет отбить).
         if (problems.Count == 0)
         {
             var (manifest, _) = PluginInstaller.ReadManifest(packageRoot);
@@ -121,6 +125,10 @@ public class PluginPackageValidator
             {
                 foreach (var p in manifest.Validate().Problems)
                     problems.Add(new PluginPackageProblem(p.Code, p.Message));
+
+                // id/version: единая точка с установщиком (PluginIdentity.Resolve).
+                var (_, idProblems) = PluginIdentity.Resolve(manifest, ownerId, slug);
+                problems.AddRange(idProblems);
 
                 // bad-panel-entry (существование): файл по entry обязан быть в пакете. Форма
                 // уже проверена в PluginManifest.Validate (IsValidPanelEntry) — сюда доходят

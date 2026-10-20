@@ -185,7 +185,7 @@ public class PluginDraftService
             throw new ArgumentException($"Недопустимый slug: {slug}", nameof(slug));
         if (!Directory.Exists(dir))
             throw new FileNotFoundException($"Черновик {slug} не найден", nameof(slug));
-        return _validator.ValidateFull(dir);
+        return _validator.ValidateFull(dir, ownerId, slug);
     }
 
     // ── draft_preview ──────────────────────────────────────────────────────────
@@ -201,7 +201,7 @@ public class PluginDraftService
 
         var manifest = ReadManifest(dir);
         var files = new List<PluginDraftFile>();
-        var validation = _validator.ValidateFull(dir);
+        var validation = _validator.ValidateFull(dir, ownerId, slug);
         AddTree(dir, dir, files);
         files.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
 
@@ -240,7 +240,7 @@ public class PluginDraftService
                 var (manifest, _) = PluginInstaller.ReadManifest(dir);
                 var id = manifest?.Id ?? "";
                 var version = manifest?.Version ?? TemplateVersion;
-                var validation = _validator.ValidateFull(dir);
+                var validation = _validator.ValidateFull(dir, ownerId, slug);
                 result.Add(new PluginDraftSummary(
                     slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
                     installed.Any(r => r.Id == id && r.Version == version),
@@ -268,7 +268,7 @@ public class PluginDraftService
                 var (manifest, _) = PluginInstaller.ReadManifest(dir);
                 var id = manifest?.Id ?? "";
                 var version = manifest?.Version ?? TemplateVersion;
-                var validation = _validator.ValidateFull(dir);
+                var validation = _validator.ValidateFull(dir, ownerId, slug);
                 result.Add(new PluginDraftSummary(
                     slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
                     installed.Any(r => r.Id == id && r.Version == version),

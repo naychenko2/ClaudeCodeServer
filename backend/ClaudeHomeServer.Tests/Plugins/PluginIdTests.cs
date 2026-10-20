@@ -90,9 +90,11 @@ public class PluginIdTests : IDisposable
         PluginId.TryNormalize("../foo", out _).Should().BeFalse();
     }
 
-    // --- Мутация (критерий): убираем PluginId.IsValid из PluginInstaller.Install → тест падает.
+    // --- Мутация (критерий): убираем PluginId.IsValid из PluginIdentity.Resolve → тест падает.
     //     id «local.a/pkg» (точка в publisher) — не по формату; без проверки установка прошла бы
-    //     (валидатор пакета и sha256 не видят формат id) → статус Ok, а не Fail. ---
+    //     (валидатор пакета и sha256 не видят формат id) → статус Ok, а не Fail.
+    //     QA-фикс L4: id/version — единая точка PluginIdentity.Resolve (FailValidation + bad-id),
+    //     а не отдельный Fail с текстом — поэтому ждём проблему bad-id, а не текст «id». ---
 
     [Fact]
     public void Install_id_СНедопустимымСимволом()
@@ -121,6 +123,7 @@ public class PluginIdTests : IDisposable
 
         result.Status.Should().Be(InstallStatus.Fail,
             "id с недопустимым символом → 400 (Fail), не 500 (M3)");
-        result.Error.Should().Contain("id");
+        result.Problems.Should().Contain(p => p.Code == "bad-id",
+            "id «local.a/pkg» (точка в publisher) → проблема bad-id (единая точка PluginIdentity.Resolve)");
     }
 }

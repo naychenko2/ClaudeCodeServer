@@ -61,8 +61,10 @@ public class PluginPackageValidatorTests
 
     // Полная валидация (файлы + манифест, включая bad-panel-entry): установка и черновик
     // идут через ValidateFull (единый арбитр), поэтому тесты entry используют её.
-    private static PluginPackageValidationResult ValidateFullPkg(string root) =>
-        new PluginPackageValidator().ValidateFull(root);
+    // ownerId/slug — для вывода id, когда он не задан; тестовые пакеты несут валидный id,
+    // поэтому вывод не срабатывает (slug по умолчанию «pkg» — slug тестового пакета).
+    private static PluginPackageValidationResult ValidateFullPkg(string root, string slug = "pkg") =>
+        new PluginPackageValidator().ValidateFull(root, "owner-test", slug);
 
     private static bool Has(PluginPackageValidationResult r, string code) =>
         r.Problems.Any(p => p.Code == code);

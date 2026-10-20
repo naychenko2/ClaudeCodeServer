@@ -75,9 +75,10 @@ public class PluginInstaller
             // (ccs-plugin.json/.claude-plugin/plugin.json → чужой файл) отбивается no-symlink валидатором,
             // и JsonException с куском содержимого чужого файла не уходит в ответ 400
             // (non-blocker: leak через symlink manifest). ValidateFull — единый арбитр с
-            // черновиком: файловые проверки + манифест (no-contribution/unknown-permission),
-            // коды 1:1. sha256 — того, что будет перемещено.
-            var validation = _validator.ValidateFull(stagingDir);
+            // черновиком: файловые проверки + манифест (no-contribution/unknown-permission) +
+            // id/version (PluginIdentity.Resolve), коды 1:1. sha256 — того, что будет перемещено.
+            // slug — из метки источника (draft:slug): вывод id при его отсутствии в манифесте.
+            var validation = _validator.ValidateFull(stagingDir, ownerId, param);
             if (!validation.IsValid)
                 return InstallResult.FailValidation(validation.Problems);
             sha256 = validation.Sha256!;
@@ -88,24 +89,25 @@ public class PluginInstaller
             var (readManifest, manifestError) = ReadManifest(stagingDir);
             if (manifestError is not null)
                 return InstallResult.Fail(manifestError);
-            if (readManifest is null || string.IsNullOrWhiteSpace(readManifest.Id) || string.IsNullOrWhiteSpace(readManifest.Version))
-                return InstallResult.Fail("Манифест пакета не найден или без id/version");
-            PluginManifest m = readManifest; // non-null после проверки выше
+            if (readManifest is null)
+                return InstallResult.Fail("Манифест пакета не найден");
 
-            // M3: формат id/version из манифеста — 400 ДО PackageDir (иначе «..» в id/version
-            // дал бы UnauthorizedAccessException = 500, а не 400). Единый метод PluginId/PluginVersion.
-            if (!PluginId.IsValid(m.Id))
-                return InstallResult.Fail($"Недопустимый формат id пакета: {m.Id}");
-            if (!PluginVersion.IsValid(m.Version))
-                return InstallResult.Fail($"Недопустимый формат version пакета: {m.Version}");
-            id = m.Id;
-            version = m.Version;
+            // id/version — ЕДИНАЯ точка с ValidateFull (PluginIdentity.Resolve): то, что
+            // проверка (которую видит человек) не отбила, установка не сможет отбить (инвариант
+            // QA-фикс L4). id не задан → выводится (local-{ownerShort}/{slug}, slug из метки
+            // источника draft:slug); version обязателен; заданный id — валиден по PluginId.
+            // M3: 400 ДО PackageDir (иначе «..» в id дал бы UnauthorizedAccessException = 500).
+            var (resolvedId, idProblems) = PluginIdentity.Resolve(readManifest, ownerId, param);
+            if (idProblems.Count > 0)
+                return InstallResult.FailValidation(idProblems);
+            id = resolvedId!;
+            version = readManifest.Version;
 
             // manifest.Validate() (no-contribution/unknown-permission) — в ValidateFull (шаг 1):
             // единый арбитр с черновиком, пакет ещё не перемещён (раньше валидировался отдельно
             // после чтения; установка могла принять битый манифест, а проверка после Move дала бы
             // «половинную» установку).
-            manifest = m;
+            manifest = readManifest;
 
             var targetDir = _store.PackageDir(ownerId, id, version);
 

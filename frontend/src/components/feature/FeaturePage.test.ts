@@ -249,12 +249,14 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     // Белый фон страницы — по токену C.bgCard (var(--c-bg-card)), как у просмотра файла.
     const page = findNodeByAttr(c, 'data-testid', 'feature-page')!;
     expect((page as unknown as { style: Record<string, string> }).style.background, 'фон страницы не C.bgCard (as a file)').toBe('var(--c-bg-card)');
-    // Убранные блоки/элементы шапки — в DOM нет (мёртвое действие/контент).
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-alarm'), 'тревога на месте (as a file: убрана)').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-main-action'), 'главное действие на месте (as a file: убрано)').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-branch'), 'ветка на месте (as a file: убрана)').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-taskcount'), '«M задач» на месте (as a file: убрано)').toBeNull();
-    expect(findNodeByAttr(c, 'aria-label', 'Ещё действия'), 'меню ⋯ на месте (as a file: убрано)').toBeNull();
+    // Волна 3 (Ф1): шапка стала полной — мета-строка (ветка, «M задач») и меню ⋯
+    // теперь НА МЕСТЕ; тревога и главное действие — только при attention/«не начата»
+    // (в дефолте running/без тревоги их нет).
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-alarm'), 'тревога (running, без attention — нет)').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-main-action'), 'главное действие (running, без attention — нет)').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-branch'), 'ветка в мета-строке (волна 3)').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-taskcount'), '«M задач» в мета-строке (волна 3)').not.toBeNull();
+    expect(findNodeByAttr(c, 'aria-label', 'Ещё'), 'меню ⋯ (волна 3) — триггер на месте').not.toBeNull();
     // Строки чатов/шагов/событий фичи — нет. («Мерж»-стадия конвейера — легитимна, не проверяем по тексту.)
     expect(findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key'), 'строка чата на месте (as a file: убрана)').toBeNull();
   });

@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab } from '../../lib/featurePage';
 import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
-import { featureDisplayState, featureStatusTag, type FeatureStatusTag, type FeatureStatusTone } from '../../lib/chatGroups';
+import { featureStatusTag, featureDisplayState, STAGE_NAME } from '../../lib/chatGroups';
+import { featureTaskTotal } from './featurePageBody';
 import { CenterViewShell } from '../CenterViewShell';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import type { FeatureGlyph as GlyphKind } from '../chat/feature/FeatureGlyphs';
@@ -16,6 +17,12 @@ import { Notice } from '../ui/Notice';
 import { EmptyState } from '../ui/EmptyState';
 import { Button } from '../ui/Button';
 import { PipelineFlow } from '../chat/feature/PipelineFlow';
+import {
+  FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
+  featureRunStatusTag, toRunTag, type FeatureRunTag,
+} from './FeaturePageHeader';
+import { FeaturePageTabs } from './FeaturePageTabs';
+import type { FeatureRun } from '../../types/featureRun';
 
 // Куда ведёт закрытие (кнопка «Закрыть»):
 //   chat — в исходный чат (указатель back-nav «чат → фича»);
@@ -33,43 +40,6 @@ export interface FeaturePageProps {
   isMobile?: boolean;
   // Исполнитель закрытия: закрывает страницу и ведёт в target.
   onBack: (target: FeaturePageBackTarget) => void;
-}
-
-// Тон тега статуса (макет §5.1): run — идёт, wait/merge — ждёт/к мержу,
-// stop — стоит, loop — доработка, merged — смержена, closed — без мержа.
-// Единый источник — chatGroups (та же пара типов, что у featureStatusTag).
-const TAG_STYLE: Record<FeatureStatusTone, CSSProperties> = {
-  run:    { background: C.bgSelected, color: C.textHeading },
-  wait:   { background: C.infoBg, color: C.textPrimary },
-  merge:  { background: C.infoBg, color: C.textPrimary },
-  stop:   { background: C.dangerBg, color: C.dangerText, boxShadow: `inset 0 0 0 1px ${C.danger}` },
-  loop:   { background: C.warningBg, color: C.warningText },
-  merged: { background: C.successBg, color: C.successText },
-  closed: { background: C.bgSelected, color: C.textSecondary },
-};
-
-// Точка-глиф (info) — у «ждёт вас»/«к мержу»: тон держит фон, текст — textPrimary (Р-10).
-function TagDot() {
-  return <span aria-hidden style={{ width: 6, height: 6, borderRadius: R.full, background: C.info, flexShrink: 0 }} />;
-}
-
-// Тег статуса в шапке: 11/600, поля 1 7, R 6, gap 4 (макет §5.1). Аналог чипов
-// файлового просмотра (diff/комментарии) — единственный «статусный» элемент строки.
-function StatusTag({ tag }: { tag: FeatureStatusTag }) {
-  return (
-    <span
-      data-testid="feature-page-status"
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
-        fontSize: FS.xs, fontWeight: 600, fontFamily: FONT.sans,
-        padding: '1px 7px', borderRadius: R.sm,
-        ...TAG_STYLE[tag.tone],
-      }}
-    >
-      {(tag.tone === 'wait' || tag.tone === 'merge') && <TagDot />}
-      {tag.label}
-    </span>
-  );
 }
 
 // Скелет загрузки (макет §5.7): 6 полос 14 px разной ширины (bgSelected, R 6, gap 10,
@@ -103,20 +73,61 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-feature-page
   document.head.appendChild(el);
 }
 
-// Страница фичи (волна 2 «Обзор фич»). «Быстрый трек»: открывается КАК ФАЙЛ —
-// оболочка просмотра файла (Toolbar-шапка, белый фон C.bgCard, «Закрыть» как у файла,
-// Esc, возврат к месту открытия), а в теле — только конвейер (PipelineFlow).
+// Имя активной стадии для тега «идёт · {этап}»: первая active-стадия run.
+function activeStageName(run: FeatureRun): string | null {
+  const stage = (run.stages ?? []).find(s => s.state === 'active');
+  return stage ? STAGE_NAME[stage.key] : null;
+}
+
+// Мини-сводка времени — ЗАГЛУШКА (наполнит Ф8): карточка по каркасу макета
+// (bgCard, рамка borderLight, R.lg) со ссылкой «Статистика ›» во вкладку.
+function MiniSummaryStub({ onOpenStats }: { onOpenStats: () => void }) {
+  return (
+    <div
+      data-testid="feature-page-mini-summary"
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+        background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+        padding: '8px 10px', marginBottom: 12, fontFamily: FONT.sans,
+      }}
+    >
+      <span style={{ fontSize: FS.sm, color: C.textMuted }}>Сводка по времени — скоро</span>
+      <button
+        type="button"
+        onClick={onOpenStats}
+        style={{
+          border: 'none', background: 'transparent', cursor: 'pointer', padding: '2px 4px',
+          fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600, color: C.accent,
+        }}
+      >
+        Статистика ›
+      </button>
+    </div>
+  );
+}
+
+// «Скоро» — заглушка вкладок, которые наполняют следующие шаги (Ф2–Ф7):
+// тот же каркас (белое тело, поля страницы), одна строка.
+function ComingSoon() {
+  return (
+    <div
+      data-testid="feature-page-tab-stub"
+      style={{ padding: '24px 0', textAlign: 'center', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}
+    >
+      Скоро
+    </div>
+  );
+}
+
+// Страница фичи (волна 3, Ф1 — каркас). Оболочка — «как файл» (CenterViewShell):
+// Toolbar-шапка (закрытие, глиф, название, тег/действие/⋯), Esc, возврат к месту
+// открытия; тело — мета-строка (макет §1), блок тревоги по attention (макет §2),
+// липкие вкладки (макет §4) и содержимое: «Хронология» — мини-сводка (заглушка Ф8)
+// + конвейер, остальные вкладки — «Скоро».
 //
-// Шапка — как у файла (FileViewer): слева «Закрыть» (десктоп — иконка X, мобила —
-// BackButton, ровно как у FileViewer), затем глиф состояния (аналог плитки типа файла),
-// название фичи как «имя файла» (mono 700, единственный гибкий элемент) и тег статуса
-// (аналог чипов файла). Ветка/возраст/«M задач»/главное действие/⋯ — вне шапки
-// (у файла их нет) — вернём позже.
-//
-// Компонент самодостаточен: данные — из стора useFeaturePage, название/глиф/тег — из
-// индекса фич (фолбэк — эпик страницы). Закрытие читает указатель возврата
-// (featureBackNav). Тело — одно из пяти состояний: loading | ok | notFound | disabled |
-// error (макет §5.7); в ok — конвейер.
+// Тег статуса — единая точка правды run.state (9 состояний, макет §3); старые данные
+// (state нет) — фолбэк на тег индекса. Выбранная вкладка — в сторе страницы
+// (useFeaturePageTab): переживает скрытие/возврат, не живёт в DOM.
 export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: FeaturePageProps) {
   // Данные страницы (run + events) — из стора; здесь для фолбэка заголовка и 404/503.
   const page = useFeaturePage(featureId);
@@ -131,10 +142,19 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
   // UI обязан пережить отсутствие любого поля ответа — эпик без title не роняет страницу.
   const title = feature?.title ?? (page.status === 'ok' ? (page.page.run.epic?.title ?? 'Фича') : 'Фича');
 
-  // Глиф + тег статуса: из индекса (display state); нет фичи в индексе — нейтральные.
+  // Глиф + тег: тег — run.state (9 состояний), фолбэк — индекс (старые данные);
+  // глиф — как раньше (из индекса, display state).
   const display = feature ? featureDisplayState(feature) : null;
   const glyph: GlyphKind = display ? display.kind : 'run';
-  const statusTag: FeatureStatusTag | null = feature ? featureStatusTag(feature) : null;
+  let tag: FeatureRunTag | null = null;
+  if (page.status === 'ok' && page.page.run.state) {
+    tag = featureRunStatusTag(page.page.run.state, activeStageName(page.page.run));
+  } else if (feature) {
+    tag = toRunTag(featureStatusTag(feature));
+  }
+
+  // Вкладка: из стора страницы (сохраняется при скрытии/возврате).
+  const tab = useFeaturePageTab();
 
   // Закрытие: куда ведёт. Из чата — в исходный чат («К чату «…»»); из списка/диплинк —
   // в список: мобила «К списку», десктоп «Назад».
@@ -166,7 +186,11 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
   // перехватываем, если печатают в поле/редакторе или уже открыт диалог/меню.
   const goBack = () => { onBack(target); clearBackNav(); };
 
-  // Тело: одно из пяти состояний (макет §5.7). В ok — только конвейер (PipelineFlow).
+  // run для тела: null вне ok (loading/error/…) — мета строится по индексу.
+  const run: FeatureRun | null = page.status === 'ok' ? page.page.run : null;
+
+  // Тело: одно из пяти состояний (макет §5.7). В ok — каркас: мета, тревога,
+  // вкладки, содержимое вкладки.
   let body: ReactNode;
   if (page.status === 'loading') {
     body = <LoadingSkeleton />;
@@ -212,11 +236,36 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
       </Notice>
     );
   } else {
-    // ok: только конвейер (быстрый трек). Тревога/шаги/чаты/задачи/лента — вернём позже.
+    // ok: мета-строка (макет §1), тревога по attention (макет §2), липкие вкладки
+    // (макет §4) и содержимое: «Хронология» — мини-сводка (заглушка Ф8) + конвейер,
+    // остальные — «Скоро».
+    // ok: run есть (page.page.run) — локальная переменная без null.
+    const okRun = page.page.run;
+    const chatsCount = (page.page.chats ?? []).filter(c => !c.archived).length;
     body = (
-      <div data-testid="feature-page-body">
-        <PipelineFlow run={page.page.run} />
-      </div>
+      <>
+        <FeaturePageHeader run={okRun} feature={feature} isMobile={isMobile} tag={tag} />
+        <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} />
+        <FeaturePageTabs
+          value={tab}
+          onChange={setFeaturePageTab}
+          isMobile={isMobile}
+          chatsCount={chatsCount}
+          tasksCount={featureTaskTotal(feature, okRun)}
+          eventsCount={page.page.eventsTotal}
+          waitingDot={okRun.attention?.kind === 'wait'}
+        />
+        <div data-testid="feature-page-body" style={{ marginTop: 14 }}>
+          {tab === 'timeline' ? (
+            <>
+              <MiniSummaryStub onOpenStats={() => setFeaturePageTab('stats')} />
+              <PipelineFlow run={okRun} />
+            </>
+          ) : (
+            <ComingSoon />
+          )}
+        </div>
+      </>
     );
   }
 
@@ -245,7 +294,10 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
           <FeatureGlyph kind={glyph} size={14} />
         </span>
       }
-      trailing={statusTag && <StatusTag tag={statusTag} />}
+      trailing={
+        // Тег (1280) · главное действие (1280) · ⋯ (макет §1/§11).
+        <FeaturePageToolbar run={run} feature={feature} isMobile={isMobile} tag={tag} />
+      }
       rootRef={rootRef}
       rootTestId="feature-page"
       // Мобила: страница — прямой ребёнок колонки центра (flex: 1); десктоп — в Island

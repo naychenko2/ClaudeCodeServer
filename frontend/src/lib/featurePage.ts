@@ -16,6 +16,10 @@
 // Стор — ОДНА страница (fid → state): страница фичи одна на вкладку (маршрут
 // #/project/{pid}/feature/{fid}), Map по fid не нужен. Срез — стабильная ссылка
 // (тот же объект, пока не пришёл новый fetch), иначе useSyncExternalStore зациклит.
+//
+// Стор держит и UI-состояние страницы (выбранная вкладка, волна 3 Ф1): оно живёт
+// на уровне модуля (не в DOM/компоненте), поэтому выбор вкладки переживает
+// скрытие/возврат страницы и перемонтирование.
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
@@ -80,8 +84,35 @@ function fetchPage(fid: string, initial: boolean, signal?: AbortSignal) {
 }
 
 // Открытие/смена страницы: fid. Эффект хука зовёт её, тесты — напрямую.
+// Смена fid (открыли другую фичу / закрыли) — вкладка сбрасывается к дефолту.
 function setPage(fid: string | null) {
+  if (fid !== _fid) _tab = DEFAULT_TAB;
   _fid = fid;
+}
+
+// === Вкладка страницы (волна 3, Ф1) ===
+//
+// Выбранная вкладка сохраняется при скрытии/возврате страницы: состояние — в этом
+// сторе (уровень модуля), а не в DOM/компоненте. Страница одна на вкладку —
+// одно значение; смена fid сбрасывает к дефолту («Хронология»).
+export type FeaturePageTab = 'timeline' | 'plans' | 'chats' | 'tasks' | 'events' | 'stats';
+const DEFAULT_TAB: FeaturePageTab = 'timeline';
+let _tab: FeaturePageTab = DEFAULT_TAB;
+
+// Установить вкладку (no-op при том же значении — лишний emit не плодим).
+export function setFeaturePageTab(t: FeaturePageTab) {
+  if (_tab === t) return;
+  _tab = t;
+  emit();
+}
+
+// Хук: выбранная вкладка страницы (тот же стор, что и данные).
+export function useFeaturePageTab(): FeaturePageTab {
+  return useSyncExternalStore(
+    subscribe,
+    () => _tab,
+    () => _tab,
+  );
 }
 
 // Живой перезапрос по task_changed: дебаунс 1,5 с. Если перезапрос уже в очереди —
@@ -165,6 +196,7 @@ export const __test = {
     _state = LOADING;
     _fid = null;
     _pending = null;
+    _tab = DEFAULT_TAB;
     _listeners.clear();
     _realtimeWired = false;
   },

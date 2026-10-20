@@ -511,6 +511,15 @@ export function featureChipCounts(features: FeatureIndexFeature[]): Record<Featu
   return counts;
 }
 
+// Закрытые фичи, которые РИСУЮТСЯ (имеют хотя бы один чат: chatCount > 0). ОДНО число
+// для тумблера «Показывать закрытые фичи · N» (FilterBar) и заголовка секции
+// «Закрытые · M» (SessionList) (m2): раньше тумблер считал ВСЕ закрытые (featureChipCounts),
+// а секция — только нарисованные (closedGroups), и фича без чатов давала расхождение.
+// Фича без чатов не рисуется → не считаем.
+export function drawnClosedFeatures(features: FeatureIndexFeature[]): number {
+  return features.filter(f => f.bucket === 'closed' && f.chatCount > 0).length;
+}
+
 // Число ДРУГИХ фич, к которым принадлежит чат (кроме первой, в группе которой он
 // нарисован). Мультифичевый чат (оркестратор/куратор нескольких фич) — «ещё N» на
 // строке в группе первой фичи: след, где живут его ключевые чаты остальных фич
@@ -522,17 +531,6 @@ export function otherFeatureCount(chatId: string, index: FeaturesIndex): number 
   return links.length - 1;
 }
 
-
-// Ссылка на «чужую» группу (F3.3): чат, связанный с текущей фичей в индексе,
-// но нарисованный в группе другой фичи (мультифичевый чат — в группе первой фичи,
-// а счётчик другой группы его считает). Считается из chats уже загруженного индекса,
-// без запросов. Чистая функция — тестируется без DOM.
-export interface OtherGroupLink {
-  featureId: string;
-  featureTitle: string;
-  count: number;
-  firstChatId: string;
-}
 
 // Чаты «чужой» группы по id (F3.3, п.49): chatIds, связанные с текущей фичей в
 // индексе и нарисованные в группе другой фичи. Список (не счётчик) — чтобы
@@ -571,17 +569,6 @@ export function otherGroupChatIds(
     result.push({ featureId: fid, featureTitle: f.title, chatIds });
   }
   return result;
-}
-
-export function otherGroupLinks(
-  currentFeatureId: string,
-  index: FeaturesIndex,
-  currentGroupSessions: Session[],
-): OtherGroupLink[] {
-  return otherGroupChatIds(currentFeatureId, index, currentGroupSessions)
-    .map(({ featureId, featureTitle, chatIds }) => ({
-      featureId, featureTitle, count: chatIds.length, firstChatId: chatIds[0],
-    }));
 }
 
 // Роль чата в группе фичи (макет features-overview.html, .fg .kids): «ключевой»

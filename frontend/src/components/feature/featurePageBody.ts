@@ -190,6 +190,16 @@ export function taskCounters(run: FeatureRun): TaskCounters {
   return { done, inProgress, pending, total: all.length };
 }
 
+// Число задач фичи — ОДНА точка правды для шапки (FeaturePage) и блока «Задачи»
+// (FeaturePageBody) (п.64): из индекса (эпик + ВСЕ дочерние, включая consult);
+// фичи нет в индексе — ОДИН фолбэк на сумму по шагам (taskCounters). Раньше шапка
+// при feature==null не показывала число вовсе, а блок — показывал counters.total:
+// два расходящихся фолбэка. Теперь один.
+export function featureTaskTotal(feature: FeatureIndexFeature | null, run: FeatureRun): number {
+  if (feature?.taskCount != null) return feature.taskCount;
+  return taskCounters(run).total;
+}
+
 // === Лента событий ===
 
 // Строка события для рендера: время, вид, исполнитель, роль/шаг, чат (если есть).

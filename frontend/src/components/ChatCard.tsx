@@ -38,6 +38,18 @@ import { featureDisplayState, KEY_SESSION_TOOLTIP } from '../lib/chatGroups';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 
+// Единый focus-visible ring (клавиатура) для карточки-строки (m1): корень —
+// role="button" tabIndex 0, и нативное кольцо браузера в тёмной теме не видно.
+// SHADOW.focus через :focus-visible (паттерн FeaturePageHeader/SessionList).
+const FOCUS_CLASS = 'cc-chat-card-focus';
+if (typeof document !== 'undefined' && !document.getElementById('cc-chat-card-focus-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-chat-card-focus-style';
+  el.textContent = `.${FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  // head ?? body: fake-DOM тестов (vi.hoisted) не всегда несёт head — не роняем импорт.
+  (document.head ?? document.body).appendChild(el);
+}
+
 // Ширина правой зоны под лицо собеседника; на её левой кромке стоит столбик действий
 const COMPANION_W = 84;
 
@@ -791,11 +803,20 @@ function ChatCardView({
   const isKeyRole = featureRole !== undefined && featureRole.startsWith('ключевой');
   // Общий обработчик открытия чата (п.61): мышиный onClick и клавиатурный onKeyDown
   // (Enter/Space) идут теми же гардами — свайп/long-press/раскрытие/подсистема.
+  // (п.68) Мышь и клавиатура — РАЗНЫЕ ветки: флаги свайпа/long-press (swipeMoved/lpFired)
+  // — тач-состояния, и клавиатурное нажатие их НЕ тратит (иначе после свайпа первый Enter
+  // «съедал» бы флаг и чат не открылся). Мышиный клик флаги трать (поведение мыши/тача
+  // сохранено), клавиатура — нет.
   const openChat = () => {
     // Свайп-жест прошёл (даже без открытия) — клик не открывает чат
     if (swipeMoved.current) { swipeMoved.current = false; return; }
     if (lpFired.current) { lpFired.current = false; return; }
-    // Раскрытая свайпом карточка: тап закрывает раскрытие, а не открывает чат
+    openChatByKeyboard();
+  };
+  // Клавиатура (Enter/Space): не тратит флаги свайпа/long-press (п.68), но уважает
+  // раскрытие свайпом (тап закрывает) и подсистему (action.open).
+  const openChatByKeyboard = () => {
+    // Раскрытая свайпом карточка: нажатие закрывает раскрытие, а не открывает чат
     if (swipeOpen) { onSwipeToggle?.(false); return; }
     // Подсистема может открыть чат по-своему (чат картинки — в редакторе)
     if (badges.some(b => b.action?.open?.(s))) return;
@@ -811,9 +832,11 @@ function ChatCardView({
       // по клавиатуре; onFocus/onBlur — единственный источник фокус-состояния метки.
       // M4: role="button" + onKeyDown (handlePressableKey) — Enter/Space открывают чат;
       // e.target === e.currentTarget защищает от перехвата Enter на вложенных кнопках.
+      // m1: кольцо фокуса — SHADOW.focus через :focus-visible (FOCUS_CLASS), не браузерное.
+      className={FOCUS_CLASS}
       role="button"
       tabIndex={0}
-      onKeyDown={e => handlePressableKey(e, openChat)}
+      onKeyDown={e => handlePressableKey(e, openChatByKeyboard)}
       aria-describedby={isKeyRole ? `key-desc-${s.id}` : undefined}
       // п.51: «ключевой» поднимается ТОЛЬКО при фокусе самой карточки, не от вложенных
       // действий (фокус на вложенной кнопке — e.target ≠ e.currentTarget).

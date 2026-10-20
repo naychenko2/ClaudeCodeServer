@@ -43,7 +43,7 @@ import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, otherGroupChatIds, NO_SUBJECT_KEY, FEATURE_CHIP_LABEL, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, otherGroupChatIds, drawnClosedFeatures, NO_SUBJECT_KEY, FEATURE_CHIP_LABEL, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { plural } from '../lib/plural';
 import { tagColor } from '../lib/tagRegistry';
 import { dateOnly } from './chat/feature/featureTime';
@@ -1017,7 +1017,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
             </button>
           )}
           {/* F3.3: строка-ссылка на «чужую» группу (мультифичевый чат). Компонент,
-              чтобы otherGroupLinks был в useMemo (не пересчитывался на каждом рендере). */}
+              чтобы otherGroupChatIds был в useMemo (не пересчитывался на каждом рендере). */}
           {expanded && (
             <OtherGroupLinks
               featureId={g.feature.featureId}
@@ -1168,11 +1168,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           <>
             {/* Заголовок секции «Закрытые · N · на втором плане» (таблица §2, макет А):
                 строка БЕЗ шеврона — сворачивать больше нечего, видимость решает тумблер.
-                N = нарисованные закрытые группы (единый источник, как в волне 1);
+                N = нарисованные (имеющие чаты) закрытые фичи (m2: ОДНО число с тумблером
+                «Показывать закрытые фичи · N» — drawnClosedFeatures, не raw-closedGroups);
                 подсказка справа 11/400, без капса. На 360 — minHeight 40. */}
             <div
               data-testid="closed-section-header"
-              data-closed-count={closedGroups.length}
+              data-closed-count={drawnClosedFeatures(featuresIndex.features)}
               style={{
                 display: 'flex', alignItems: 'baseline', gap: 6,
                 padding: '12px 6px 5px',
@@ -1183,7 +1184,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
                 fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase',
                 letterSpacing: '0.06em', color: C.textMuted, fontFamily: FONT.sans,
               }}>
-                Закрытые · <span style={{ fontFamily: FONT.mono, letterSpacing: 0 }}>{closedGroups.length}</span>
+                Закрытые · <span style={{ fontFamily: FONT.mono, letterSpacing: 0 }}>{drawnClosedFeatures(featuresIndex.features)}</span>
               </span>
               <span style={{
                 marginLeft: 'auto', fontSize: FS.xs, fontWeight: 400,

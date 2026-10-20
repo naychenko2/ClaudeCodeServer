@@ -12,7 +12,7 @@
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
 import { describe, it, expect } from 'vitest';
-import { groupByFeatures, featureChipCounts, featureGroupTreeRows, otherFeatureCount, featureRoleFor, otherGroupLinks } from '../chatGroups';
+import { groupByFeatures, featureChipCounts, featureGroupTreeRows, otherFeatureCount, featureRoleFor, drawnClosedFeatures } from '../chatGroups';
 import type { FeatureBucket, FeatureChatLink, FeatureChip, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { Session } from '../../types';
 
@@ -414,77 +414,17 @@ describe('M3: featureRoleFor (роль по id строки, не корня)', 
   });
 });
 
-
-// === F3.3: otherGroupLinks (ссылки на «чужие» группы) ===
-// Сценарий: мультифичевый чат нарисован в группе первой фичи (A), но связан и с B.
-// В раскрытой группе B (где чат НЕ нарисован, но счётчик его считает) — ссылка
-// «+1 чат в группе «A»». Функция ищет чаты, связанные с текущей фичей, но НЕ
-// в текущей группе (они нарисованы в другой).
-describe('F3.3: otherGroupLinks', () => {
-  it('мультифичевый чат нарисован в A, связан с B → в группе B ссылка на A', () => {
-    const feats = [feature('A', 'running'), feature('B', 'running')];
-    const idx = index(feats, {
-      // cur — мультифичевый: A (первая → группа A) + B
-      'cur': [link('A', 'curator'), link('B', 'curator')],
-      // b1 — только B (нарисован в B)
-      'b1': [link('B', 'executor')],
-    });
-    // Рендерим группу B: sessions = [b1] (cur нарисован в A, не в B)
-    const sessionsB = [chat('b1')];
-    const links = otherGroupLinks('B', idx, sessionsB);
-    // cur связан с B, но не в sessionsB → нарисован в A → ссылка на A
-    expect(links).toHaveLength(1);
-    expect(links[0].featureId).toBe('A');
-    expect(links[0].count).toBe(1);
-    expect(links[0].firstChatId).toBe('cur');
-  });
-
-  it('два мультифичевых чата в A, связанные с B → count=2', () => {
-    const feats = [feature('A', 'running'), feature('B', 'running')];
-    const idx = index(feats, {
-      'c1': [link('A', 'curator'), link('B', 'curator')],
-      'c2': [link('A', 'executor'), link('B', 'executor')],
-      'b1': [link('B', 'executor')],
-    });
-    // Рендерим группу B: sessions = [b1]
-    const sessionsB = [chat('b1')];
-    const links = otherGroupLinks('B', idx, sessionsB);
-    expect(links).toHaveLength(1);
-    expect(links[0].featureId).toBe('A');
-    expect(links[0].count).toBe(2);
-    expect(links[0].firstChatId).toBe('c1');
-  });
-
-  it('все чаты текущей группы не мультифичевые → ссылок нет', () => {
-    const feats = [feature('A', 'running'), feature('B', 'running')];
-    const idx = index(feats, {
-      'b1': [link('B', 'executor')],
-      'b2': [link('B', 'executor')],
-    });
-    const sessionsB = [chat('b1'), chat('b2')];
-    expect(otherGroupLinks('B', idx, sessionsB)).toHaveLength(0);
-  });
-
-  it('чат связан с фичей, которой нет в features[] → ссылка не рисуется', () => {
-    const feats = [feature('A', 'running'), feature('B', 'running')];
-    const idx = index(feats, {
-      'cur': [link('A', 'curator'), link('GHOST', 'curator')],
-      'b1': [link('B', 'executor')],
-    });
-    // GHOST не в features[] → группы нет → ссылка не рисуется
-    const sessionsB = [chat('b1')];
-    expect(otherGroupLinks('B', idx, sessionsB)).toHaveLength(0);
-  });
-
-  it('чат в текущей группе (нарисован здесь) → не считается чужим', () => {
-    const feats = [feature('A', 'running'), feature('B', 'running')];
-    const idx = index(feats, {
-      // b1 — мультифичевый: B (первая → группа B) + A
-      'b1': [link('B', 'curator'), link('A', 'curator')],
-    });
-    // b1 нарисован в B (первая фича) → в sessionsB
-    const sessionsB = [chat('b1')];
-    // b1 в текущей группе → не «чужой» → ссылок нет
-    expect(otherGroupLinks('B', idx, sessionsB)).toHaveLength(0);
+// === m2: drawnClosedFeatures — закрытые фичи, которые РИСУЮТСЯ (≥1 чат) ===
+// Тумблер «Показывать закрытые фичи · N» и заголовок секции «Закрытые · M» должны
+// показывать ОДНО число: фича без чатов не рисуется — её не считаем (chatCount > 0).
+// Мутация (в отчёте): убрать условие chatCount > 0 → фича без чатов считается, тест краснеет.
+describe('m2: drawnClosedFeatures (закрытые, которые рисуются)', () => {
+  it('считает только закрытые с ≥1 чатом; без чатов и running — не считает', () => {
+    const withChat = { ...feature('A', 'closed'), chatCount: 3 };
+    const noChat = { ...feature('B', 'closed'), chatCount: 0 };
+    const running = { ...feature('C', 'running'), chatCount: 5 };
+    expect(drawnClosedFeatures([withChat, noChat, running])).toBe(1);
   });
 });
+
+

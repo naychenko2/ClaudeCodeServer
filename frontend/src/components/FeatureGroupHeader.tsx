@@ -12,6 +12,18 @@ import { dateOnly } from './chat/feature/featureTime';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 import type { Persona } from '../types';
 
+// Единый focus-visible ring (клавиатура) для шеврона и тела плашки (m1): нативное
+// кольцо браузера в тёмной теме не видно, поэтому — SHADOW.focus через :focus-visible
+// (паттерн FeaturePageHeader/SessionList: один <style>, outline:none + box-shadow).
+const FOCUS_CLASS = 'cc-feature-group-header-focus';
+if (typeof document !== 'undefined' && !document.getElementById('cc-feature-group-header-focus-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-feature-group-header-focus-style';
+  el.textContent = `.${FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  // head ?? body: fake-DOM тестов (vi.hoisted) не всегда несёт head — не роняем импорт.
+  (document.head ?? document.body).appendChild(el);
+}
+
 // Заголовок группы фичи в списке (макет features-overview-2.html, .ha — вариант А):
 //   обёртка div (рамка, фон, кромка тревоги 3px) → ДВЕ СОСЕДНИЕ кнопки:
 //     • шеврон — отдельная тач-цель (26 px десктоп / 40 на 360): сворачивает/разворачивает
@@ -148,6 +160,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
       <button
         type="button"
         data-testid="feature-group-chevron"
+        className={FOCUS_CLASS}
         aria-label={expanded ? 'Свернуть чаты фичи' : 'Развернуть чаты фичи'}
         aria-expanded={expanded}
         onClick={e => featureGroupChevronClick(onToggle, e)}
@@ -180,6 +193,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
       <button
         type="button"
         data-testid="feature-group-body"
+        className={FOCUS_CLASS}
         aria-label={`Открыть страницу фичи «${feature.title}»`}
         onClick={onOpen}
         style={{

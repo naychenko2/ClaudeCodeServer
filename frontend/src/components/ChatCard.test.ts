@@ -225,17 +225,23 @@ describe('Ф3.2: M2 подсказка «ключевой» (fakeDom: навед
   });
   afterEach(() => { vi.useRealTimers(); });
 
-  const renderCard = () => {
+  const renderCard = (role: string = 'ключевой') => {
     const { container } = mount(createElement(ChatCard, {
       session: session('chat-1'), isActive: false, isMobile: false, online: true,
       onSelect: () => {}, onHover: () => {}, onDelete: () => {},
-      featureRole: 'ключевой',
+      featureRole: role,
     }));
     return container;
   };
   // п.59: текст подсказки живёт и в СКРЫТОМ span (aria-describedby), поэтому «есть ли
   // плашка» детектируем по элементу role="tooltip", а не по тексту (текст всегда в DOM).
-  const hasTip = (c: Parameters<typeof findNodeByAttr>[0]) => findNodeByAttr(c, 'role', 'tooltip') !== null;
+  // (M1) Плашка — ПОРТАЛ в document.body (position: fixed), не в контейнер рендера:
+  // ищем в body, а не в контейнере (c — не используется, но держим сигнатуру для вызывающих).
+  const hasTip = (_c: Parameters<typeof findNodeByAttr>[0]) => {
+    const body = (globalThis as { document?: { body?: Parameters<typeof findNodeByAttr>[0] } }).document?.body;
+    if (!body) return false;
+    return findNodeByAttr(body, 'role', 'tooltip') !== null;
+  };
 
   it('по наведению: плашка появляется (задержка 350 мс) и исчезает по уходу', async () => {
     const c = renderCard();
@@ -275,6 +281,20 @@ describe('Ф3.2: M2 подсказка «ключевой» (fakeDom: навед
     // target — вложенный элемент ({}), currentTarget — сама карточка → не совпадают.
     await act(async () => { (cp.onFocus as (e: unknown) => void)({ target: {}, currentTarget: card }); });
     expect(hasTip(c), 'фокус на вложенном элементе поднял плашку (п.51: target ≠ currentTarget)').toBe(false);
+  });
+
+  // (M1) Метка «ключевой · ещё 1» (активная карточка, центр закрыт кнопками действий)
+  // — та же подсказка «что значит ключевой»: по наведению на обёртку Tooltip плашка
+  // поднимается (портал в document.body). Мутация «убрать <Tooltip>» красит.
+  it('«ключевой · ещё 1»: метка поднимает подсказку (M1)', async () => {
+    const c = renderCard('ключевой · ещё 1');
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    const chip = findNodeByAttr(c, 'data-testid', 'chat-feature-role')!;
+    const wrapper = (chip as unknown as { parentNode: Parameters<typeof findNodeByAttr>[0] }).parentNode;
+    const wp = reactProps(wrapper)!;
+    expect(hasTip(c), 'до наведения — плашки нет').toBe(false);
+    await act(async () => { (wp.onMouseEnter as () => void)(); await vi.advanceTimersByTimeAsync(350); });
+    expect(hasTip(c), '«ключевой · ещё 1» → плашка в DOM').toBe(true);
   });
 });
 

@@ -12,7 +12,7 @@ import { showToast } from '../../lib/toast';
 import { featureDisplayState, featureQuickAction, featureStatusTag, formatDuration } from '../../lib/chatGroups';
 import { plural } from '../../lib/plural';
 import { dateOnly } from '../chat/feature/featureTime';
-import { eventTimeLabel } from './featurePageBody';
+import { eventTimeLabel, featureTaskTotal } from './featurePageBody';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { Notice } from '../ui/Notice';
 import { EmptyState } from '../ui/EmptyState';
@@ -111,7 +111,9 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, ch
 
   // Ветка, «M задач», «идёт/шла …».
   const branch = feature?.branch ?? null;
-  const taskCount = feature?.taskCount ?? null;
+  // Число задач — ОДНА функция с одним фолбэком (п.64): из индекса, иначе по шагам.
+  // Страница ещё грузится (page.page нет) — null, число не рисуем.
+  const taskCount = page.status === 'ok' ? featureTaskTotal(feature, page.page.run) : null;
   const ageLabel = featureAgeLabel(feature);
 
   // Крошка: куда ведёт и как подписана. Из чата — в исходный чат («К чату «…»»);

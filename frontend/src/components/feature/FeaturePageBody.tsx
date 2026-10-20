@@ -8,7 +8,7 @@ import { KEY_SESSION_TOOLTIP } from '../../lib/chatGroups';
 import { useCanHover } from '../../lib/pointer';
 import { PipelineFlow } from '../chat/feature/PipelineFlow';
 import {
-  featureChats, stepRows, stepStatusLabel, taskCounters, eventRows, showAllNeeded,
+  featureChats, stepRows, stepStatusLabel, taskCounters, featureTaskTotal, eventRows, showAllNeeded,
   laneLabel, eventTimeParts,
   type FeatureChatEntry, type StepRow, type TaskCounters, type EventRow,
 } from './featurePageBody';
@@ -254,7 +254,7 @@ function StepRowView({ row, onOpenChat, isMobile }: {
 
 // Счётчики задач (таблица §5.5): теги §5.1 (11/600, R 6, padding 1 7, gap 4),
 // ряд gap 6, marginBottom 6. Метрика «0» не выводится.
-function TaskCountersView({ c }: { c: TaskCounters }) {
+function TaskCountersView({ c, total }: { c: TaskCounters; total: number }) {
   const tag = (text: string, bg: string, fg: string) => (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -263,11 +263,15 @@ function TaskCountersView({ c }: { c: TaskCounters }) {
       background: bg, color: fg,
     }}>{text}</span>
   );
+  // p.63: итог (total, из индекса — включает consult) может быть БОЛЬШЕ суммы видимых
+  // счётчиков (taskCounters не считает consult). Разницу — «прочее K» (K > 0).
+  const other = total - (c.done + c.inProgress + c.pending);
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
       {c.done > 0 && tag(`готово ${c.done}`, C.successBg, C.successText)}
       {c.inProgress > 0 && tag(`в работе ${c.inProgress}`, C.bgSelected, C.textHeading)}
       {c.pending > 0 && tag(`впереди ${c.pending}`, C.bgSelected, C.textMuted)}
+      {other > 0 && tag(`прочее ${other}`, C.bgSelected, C.textMuted)}
     </div>
   );
 }
@@ -457,14 +461,15 @@ export function FeaturePageBody({ run, index, feature, chatNames, chatPersonas, 
         )}
     </Block>
   );
-  // p.12: итог (число задач) — ОДНА точка правды с шапкой: index.taskCount (эпик +
-  // ВСЕ дочерние, включая consult). Счётчики по статусам (готово/в работе/впереди) —
-  // по шагам (run), но итог один и тот же, что в шапке. Фичи нет в индексе — фолбэк
-  // на сумму по шагам (best available), чтобы не терять число.
-  const tasksTotal = feature?.taskCount ?? counters.total;
+  // p.12/64: итог (число задач) — ОДНА точка правды с шапкой: featureTaskTotal
+  // (index.taskCount — эпик + ВСЕ дочерние, включая consult; фолбэк — сумма по шагам).
+  // Счётчики по статусам (готово/в работе/впереди) — по шагам (run) и НЕ включают
+  // consult, поэтому их сумма может быть МЕНЬШЕ итога: разницу показываем отдельным
+  // «прочее K» (п.63), а не прячем в расхождении.
+  const tasksTotal = featureTaskTotal(feature, run);
   const tasksBlock = (
-    <Block cap={`Задачи · ${tasksTotal}`}>
-      <TaskCountersView c={counters} />
+    <Block cap={`Всего ${tasksTotal}`}>
+      <TaskCountersView c={counters} total={tasksTotal} />
     </Block>
   );
   // Лента событий — отдельный компонент (FeaturePageEvents), одна реализация.

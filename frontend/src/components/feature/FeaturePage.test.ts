@@ -15,7 +15,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { stripStepCode } from './featurePageBody';
+import { stripStepCode, featureTaskTotal, taskCounters } from './featurePageBody';
 import { __test as pageTest } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -815,8 +815,9 @@ describe('FeaturePage: пять состояний + шапка + тревога
     // Страница на месте: taskCounters не упал TypeError'ом на run.epic (undefined.status).
     // Мутация «убрать защиту run.epic ? [..] : []» красит: белый экран (feature-page null).
     expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница упала (epic: run без epic)').not.toBeNull();
-    // Блок «Задачи» на месте (0 задач — счётчики пустые, но блок страницу не роняет).
-    expect(textNodes(c).join('')).toContain('Задачи');
+    // Блок «Всего N» (п.63: «Задачи · N» → «Всего N») на месте (0 задач — счётчики пустые,
+    // но блок страницу не роняет).
+    expect(textNodes(c).join('')).toContain('Всего');
   });
 
   // === R6-1: чаты — роль русским словом, аватар персоны, «ключевой» ===
@@ -1112,6 +1113,31 @@ describe('FeaturePage: пять состояний + шапка + тревога
     expect(tst.padding).toBe('1px 7px');
     expect(tst.borderRadius).toBe('6px');
   });
+
+  // === п.63: «Всего N» + «прочее K» — итог (из индекса, включает consult) > сумма счётчиков ===
+  // beforeEach: index.taskCount=5; run.epic есть (taskCounters: pending=1, total=1) →
+  // «Всего 5» + «прочее 4» (5 − 1: consult не виден в счётчиках по статусам).
+  // Мутация (в отчёте): убрать тег «прочее» из TaskCountersView → тест краснеет.
+  it('п.63: «Всего N» + «прочее K» (итог из индекса > сумма счётчиков)', async () => {
+    const c = render({});
+    await settle();
+    const text = textNodes(c).join('');
+    expect(text, '«Всего 5» (итог из индекса, не «Задачи · N»)').toContain('Всего 5');
+    expect(text, '«прочее 4» (5 − 1: эпик в счётчиках, consult не виден)').toContain('прочее 4');
+  });
+});
+
+// === п.64: featureTaskTotal — ОДИН фолбэк (индекс → иначе сумма по шагам) ===
+// Чистая функция: taskCount из индекса имеет приоритет; фичи нет в индексе (null) —
+// фолбэк на taskCounters(run).total. Мутация (в отчёте): фолбэк на 0 → тест краснеет.
+describe('п.64: featureTaskTotal (один фолбэк)', () => {
+  const run = pageData().run;
+  it('индекс (taskCount) имеет приоритет над суммой по шагам', () => {
+    expect(featureTaskTotal(feat({ taskCount: 7 }), run)).toBe(7);
+  });
+  it('фичи нет в индексе (null) — фолбэк на taskCounters(run).total', () => {
+    expect(featureTaskTotal(null, run)).toBe(taskCounters(run).total);
+  });
 });
 
 // === M2: подсказка «ключевой» — рендер-тесты (наведение + фокус + уход) ===
@@ -1159,7 +1185,12 @@ describe('FeaturePage: M2 подсказка «ключевой» (наведе�
   };
   // Плашка = элемент role="tooltip" (не по тексту: скрытый span-описание всегда
   // содержит текст подсказки — aria-describedby, минор 59).
-  const hasTip = (c: FNodeLike) => findNodeByAttr(c as never, 'role', 'tooltip') !== null;
+  // (M1) Плашка — ПОРТАЛ в document.body (position: fixed), не в контейнер: ищем в body.
+  const hasTip = (_c: FNodeLike) => {
+    const body = (globalThis as { document?: { body?: unknown } }).document?.body;
+    if (!body) return false;
+    return findNodeByAttr(body as never, 'role', 'tooltip') !== null;
+  };
 
   it('по наведению: плашка появляется (задержка 350 мс) и исчезает по уходу', async () => {
     const c = render({});

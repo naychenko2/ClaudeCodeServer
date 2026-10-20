@@ -15,7 +15,7 @@ import {
   chatStatusOf, isDefaultFilters, defaultChatFiltersKeepingView,
   type ChatFilters, type ChatStatusChip, type ChatOnlyFilter,
 } from '../lib/chatFilters';
-import { featureChipCounts, FEATURE_CHIP_LABEL } from '../lib/chatGroups';
+import { featureChipCounts, drawnClosedFeatures, FEATURE_CHIP_LABEL } from '../lib/chatGroups';
 import type { FeatureChip, FeatureIndexFeature } from '../types/featureIndex';
 
 // === Фильтр списка чатов: IconButton-триггер с бейджем скрытых + поповер (десктоп)
@@ -246,7 +246,7 @@ function FilterContent({
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: FS.base, color: C.textPrimary, fontFamily: FONT.sans }}>
-                    Показывать закрытые фичи · <span style={{ fontFamily: FONT.mono }}>{featureCounts.closed}</span>
+                    Показывать закрытые фичи · <span style={{ fontFamily: FONT.mono }}>{drawnClosedFeatures(features)}</span>
                   </div>
                   <div style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans }}>
                     Секцией внизу списка, на втором плане

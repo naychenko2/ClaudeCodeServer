@@ -11,15 +11,15 @@
 import { createElement } from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { FilterBar } from './FilterBar';
-import { featureChipCounts } from '../lib/chatGroups';
-import type { ChatFilters } from '../lib/chatFilters';
-import type { FeatureIndexFeature } from '../types/featureIndex';
-import type { Session, Persona } from '../types';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// === fake-DOM (копия минимального набора из SessionList.test.ts) ===
-class _FakeNode {
+// === fake-DOM (п.66): vi.hoisted — window/document обязаны быть fake ДО импорта FilterBar.
+// ESM-импорты выполняются РАНЬШЕ тела модуля: раньше setup стоял в теле, и FilterBar
+// импортировался без document/window (работало, т.к. React читает document лениво, но
+// любое обращение к document на уровне модуля в FilterBar.tsx уронило бы файл).
+// Механизм — как в Tooltip.test.ts. ===
+const { _doc, _FakeNode } = vi.hoisted(() => {
+  class _FakeNode {
   nodeType = 1;
   nodeName = 'div';
   childNodes: _FakeNode[] = [];
@@ -27,6 +27,8 @@ class _FakeNode {
   _attrs: Record<string, string> = {};
   style: any = { setProperty: () => {} };
   textContent = '';
+  // dataset — для themeMode (document.documentElement.dataset.theme) на уровне модуля.
+  dataset: Record<string, string> = {};
   getBoundingClientRect() { return { top: 0, left: 0, right: 100, bottom: 30, width: 100, height: 30, x: 0, y: 0, toJSON() { return {}; } }; }
   focus() {}
   blur() {}
@@ -61,20 +63,32 @@ const _doc: any = {
   createTextNode: (t: string) => { const n = new _FakeNode(); n.nodeType = 3; n.textContent = t; return n; },
   createComment: (t: string) => { const n = new _FakeNode(); n.nodeType = 8; n.textContent = t; return n; },
   body: new _FakeNode(),
+  // head — для инъекции <style> focus-ring'а (IconButton/Chip/… на уровне модуля):
+  // vi.hoisted ставит fake-DOM ДО импортов, поэтому document.head обязана существовать.
+  head: new _FakeNode(),
   documentElement: new _FakeNode(),
   getElementById: () => null,
   addEventListener: () => {},
   removeEventListener: () => {},
 };
-(globalThis as any).document = _doc;
-(globalThis as any).window = {
+const _win: any = {
   document: _doc, defaultView: null,
   HTMLIFrameElement: _FakeIframe, HTMLInputElement: class {}, HTMLSelectElement: class {}, HTMLTextAreaElement: class {},
   addEventListener: () => {}, removeEventListener: () => {}, location: { href: '' }, navigator: { userAgent: 'test' },
   setTimeout: () => 0, clearTimeout: () => {},
   matchMedia: (q: string) => ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {}, onchange: null, dispatchEvent: () => true }),
 };
-_doc.defaultView = (globalThis as any).window;
+(globalThis as any).document = _doc;
+(globalThis as any).window = _win;
+_doc.defaultView = _win;
+return { _doc, _FakeNode: _FakeNode as typeof _FakeNode };
+});
+
+import { FilterBar } from './FilterBar';
+import { featureChipCounts } from '../lib/chatGroups';
+import type { ChatFilters } from '../lib/chatFilters';
+import type { FeatureIndexFeature } from '../types/featureIndex';
+import type { Session, Persona } from '../types';
 
 // === фикстуры ===
 const feat = (id: string, bucket: 'running' | 'closed', chips: string[]): FeatureIndexFeature => ({

@@ -18,14 +18,27 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Project/ProjectAll/ProjectForSession/BuildIndexCore). Полный (необлегчённый) run —
     // BuildCore: страница фичи (GetFeature) считает на нём ленту событий (BuildEvents:
     // reason вердикта = Verification.Notes, который Slim обнуляет) и облегчает run для ответа.
-    public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null)
-        => SlimRun(BuildCore(epic, featureTasks, now));
+    // sessions — снимок сессий владельца (Б7): LinkedSessionId наружу (chatId/reviewChatId)
+    // только если в нём (fail-closed); null — снимка нет, все чаты null (как в BuildIndexCore).
+    public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
+        => SlimRun(BuildCore(epic, featureTasks, now, sessions));
 
-    internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null)
+    internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
     {
         var nowUtc = now ?? DateTime.UtcNow;
         ArgumentNullException.ThrowIfNull(epic);
         ArgumentNullException.ThrowIfNull(featureTasks);
+
+        // Б7: снимок сессий владельца → lookup по id: LinkedSessionId наружу (chatId/reviewChatId)
+        // только если в снимке (fail-closed, как SessionOf/KeySession: чужой/удалённый/неизвестный
+        // чат → null). sessions null → пустой lookup (все чаты null).
+        var sessionById = sessions is null
+            ? new Dictionary<string, FeatureIndexSession>()
+            : sessions.ToDictionary(s => s.Id);
+        FeatureIndexSession? LiveSession(string? chatId) =>
+            chatId is not null && sessionById.TryGetValue(chatId, out var s) ? s : null;
 
         // Вход обещает «эпик + дочерние»: дочерние обязаны иметь FeatureId == epic.Id.
         // Эпик сам — единственный, у кого FeatureId может отличаться (у него null: он и есть фича).
@@ -74,7 +87,7 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // Цепочки: по одной на шаг (stepRef). Шаг = stepRef; в цепочку входят задача шага
         // (role=step) и её доработки (role=rework, тот же stepRef), в порядке времени.
-        var stepChains = BuildStepChains(steps, verdictTasks, nowUtc);
+        var stepChains = BuildStepChains(steps, verdictTasks, nowUtc, sessions);
 
         // Возвраты по источникам (ревью/проверка/финал): число возвратов и сколько открыто.
         var returnsBySource = BuildReturnsBySource(reviews, qa, final, steps);
@@ -288,6 +301,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                     Verdict = RoundVerdict(t),
                     ReviewTaskId = t.Id,
                     PersonaId = t.PersonaId,
+                    ReviewChatId = LiveSession(t.LinkedSessionId)?.Id, // Б7: чат витка (fail-closed)
                     StartedAt = TaskStart(t),
                     CompletedAt = t.CompletedAt,
                     Reason = t.Verification?.Notes,
@@ -300,18 +314,22 @@ public sealed class FeatureProjector(TaskManager tasks)
             var lastCompletedAt = StageLastCompletedAt(tasks);
             var approxMinutes = StageApproxMinutes(tasks, nowUtc);
             var overlapsActive = StageOverlapsActive(i, stageDefs, nowUtc);
-            var executors = tasks.Select(t => new FeatureStageExecutor
+            var executors = tasks.Select(t =>
             {
-                PersonaId = t.PersonaId,
-                TaskId = t.Id,
-                TaskRole = t.Role,
-                StepRef = t.StepRef,
-                Lane = t.Lane,
-                Status = ExecutorStatus(t),
-                ChatId = null,        // Б7: LinkedSessionId (fail-closed, как остальной агрегат)
-                ChatArchived = false, // Б7
-                ModelLabel = null,    // Б4
-                ModelFull = null,    // Б4
+                var chat = LiveSession(t.LinkedSessionId); // Б7: чат исполнителя (fail-closed)
+                return new FeatureStageExecutor
+                {
+                    PersonaId = t.PersonaId,
+                    TaskId = t.Id,
+                    TaskRole = t.Role,
+                    StepRef = t.StepRef,
+                    Lane = t.Lane,
+                    Status = ExecutorStatus(t),
+                    ChatId = chat?.Id,               // Б7: LinkedSessionId, только если в снимке владельца (иначе null)
+                    ChatArchived = chat?.Archived ?? false, // Б7: чат исполнителя в архиве
+                    ModelLabel = null,    // Б4
+                    ModelFull = null,    // Б4
+                };
             }).ToList();
 
             stages.Add(new FeatureStage
@@ -695,8 +713,17 @@ public sealed class FeatureProjector(TaskManager tasks)
     // появлению (порядок вызывающего); внутри группы — по времени (стабильная сортировка: равные
     // старты сохраняют порядок вызывающего).
     private static List<FeatureStepChain> BuildStepChains(
-        List<TaskItem> steps, List<TaskItem> verdictTasks, DateTime nowUtc)
+        List<TaskItem> steps, List<TaskItem> verdictTasks, DateTime nowUtc,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
     {
+        // Б7: снимок сессий владельца → lookup по id: чаты шага/витка наружу только если в снимке
+        // (fail-closed, как в BuildCore; sessions null → все чаты null).
+        var sessionById = sessions is null
+            ? new Dictionary<string, FeatureIndexSession>()
+            : sessions.ToDictionary(s => s.Id);
+        FeatureIndexSession? LiveSession(string? chatId) =>
+            chatId is not null && sessionById.TryGetValue(chatId, out var s) ? s : null;
+
         var groups = new List<(string Key, List<TaskItem> Tasks)>();
         var index = new Dictionary<string, int>();
         foreach (var t in steps)
@@ -730,6 +757,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Verdict = RoundVerdict(t),
                 ReviewTaskId = t.Id,
                 PersonaId = t.PersonaId,
+                ReviewChatId = LiveSession(t.LinkedSessionId)?.Id, // Б7: чат витка (fail-closed)
                 StartedAt = TaskStart(t),
                 CompletedAt = t.CompletedAt,
                 Reason = t.Verification?.Notes,
@@ -808,6 +836,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Lane = head.Lane,
                 Title = head.Title,
                 PersonaId = head.PersonaId,
+                ChatId = LiveSession(head.LinkedSessionId)?.Id, // Б7: чат шага (fail-closed)
                 TaskIds = ordered.Select(t => t.Id).ToList(),
                 Outcome = outcome,
                 Status = status,
@@ -1065,20 +1094,24 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Лента событий (BuildEvents) считается по полным задачам (reason вердикта =
     // Verification.Notes, который Slim обнуляет для списков/ответа); run для ответа
     // облегчается отдельно (SlimRun, контракт master). null — эпика нет (как у Project).
-    public FeatureRun? ProjectFull(string featureId, string ownerId)
+    public FeatureRun? ProjectFull(string featureId, string ownerId,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner));
+        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner), null, sessions);
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
-    public IReadOnlyList<FeatureRun> ProjectAll(string ownerId)
+    // sessions (Б7) — снимок сессий владельца: исполнители (chatId/chatArchived) fail-closed,
+    // как в ProjectForSession/ProjectFull — все ветвления GetFeatures дают одинаковых исполнителей.
+    public IReadOnlyList<FeatureRun> ProjectAll(string ownerId,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         return owner
             .Where(t => t.Role == TaskRoles.Feature)
-            .Select(epic => Build(epic, FeatureTasks(epic, owner)))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions))
             .ToList();
     }
 
@@ -1088,13 +1121,14 @@ public sealed class FeatureProjector(TaskManager tasks)
     // 2) не закрытые идущие — по max ClaudeStartedAt descending; 3) не закрытые прочие —
     // по LastActivityAt descending; 4) закрытые — по LastActivityAt descending.
     // Пилюля показывает runs[0], поэтому порядок определяет бэк, фронт его не пересортирует.
-    public IReadOnlyList<FeatureRun> ProjectForSession(string sessionId, string ownerId)
+    public IReadOnlyList<FeatureRun> ProjectForSession(string sessionId, string ownerId,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature
                 && (t.SourceSessionId == sessionId || t.ExecutorLaunchedBySessionId == sessionId))
-            .Select(epic => Build(epic, FeatureTasks(epic, owner)))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions))
             .ToList();
         return OrderRuns(runs);
     }
@@ -1510,7 +1544,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             a.Since,
             isMerge ? null : a.Reason,
             a.PersonaId,
-            sessionId);
+            sessionId,
+            a.TaskId); // Б7: id задачи тревоги (FeatureAttention.TaskId)
     }
 
     // Рельса: ровно 7 стадий FeatureRun.Stages → сегменты {key, state, tone}.

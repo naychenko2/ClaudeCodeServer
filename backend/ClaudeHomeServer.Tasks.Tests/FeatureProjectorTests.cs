@@ -1884,6 +1884,91 @@ public class FeatureProjectorTests
         prod.Executors[0].ModelFull.Should().BeNull();
     }
 
+    // Б7: чат исполнителя (LinkedSessionId) наружу (chatId) только если в снимке сессий владельца
+    // (fail-closed, как SessionOf/KeySession): живой чат → id; чужой/удалённый (не в снимке) → null;
+    // архивный (в снимке, archived) → chatArchived=true.
+    // Мутация «брать любую сессию» (убрать проверку по снимку) → чужой чат (2) даёт chatId ≠ null →
+    // тест краснеет.
+    [Fact]
+    public void Build_Stage_ЧатИсполнителя_СнимокСессий()
+    {
+        const string epicId = "epic-b7-exec-chat";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            LinkedSessionId = "chat-live",
+        };
+
+        // (1) Живой чат (в снимке) → chatId = id, chatArchived = false.
+        var runLive = FeatureProjector.Build(epic, [epic, s1], null,
+            [new FeatureIndexSession("chat-live", "s1", null, false)]);
+        var live = Stage(runLive, "prod").Executors[0];
+        live.ChatId.Should().Be("chat-live", "живой чат (в снимке) → chatId = id");
+        live.ChatArchived.Should().BeFalse();
+
+        // (2) Чужой/удалённый чат (не в снимке) → chatId = null (изоляция).
+        var runForeign = FeatureProjector.Build(epic, [epic, s1], null,
+            [new FeatureIndexSession("other-chat", "s1", null, false)]);
+        var foreign = Stage(runForeign, "prod").Executors[0];
+        foreign.ChatId.Should().BeNull("чужой/удалённый чат (не в снимке) → chatId = null");
+        foreign.ChatArchived.Should().BeFalse();
+
+        // (3) Архивный чат (в снимке, archived) → chatId = id, chatArchived = true.
+        var runArchived = FeatureProjector.Build(epic, [epic, s1], null,
+            [new FeatureIndexSession("chat-live", "s1", null, true)]);
+        var archived = Stage(runArchived, "prod").Executors[0];
+        archived.ChatId.Should().Be("chat-live");
+        archived.ChatArchived.Should().BeTrue("архивный чат (в снимке) → chatArchived = true");
+    }
+
+    // Б7: чат шага (FeatureStepChain.ChatId) и чат витка (FeatureRound.ReviewChatId) — LinkedSessionId
+    // задачи, наружу только если в снимке (fail-closed): живой → id, чужой/удалённый → null.
+    [Fact]
+    public void Build_Цепочки_ЧатШагаИВитка_СнимокСессий()
+    {
+        const string epicId = "epic-b7-chain-chat";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            LinkedSessionId = "chat-step",
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 11, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 11, 30, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            LinkedSessionId = "chat-review",
+            ReviewOf = ["s1"],
+        };
+
+        // (1) Живые чаты (в снимке) → chatId шага и reviewChatId витка наружу.
+        var runLive = FeatureProjector.Build(epic, [epic, s1, r1], null,
+        [
+            new FeatureIndexSession("chat-step", "s1", null, false),
+            new FeatureIndexSession("chat-review", "r1", null, false),
+        ]);
+        var chain = runLive.StepChains.Single();
+        chain.ChatId.Should().Be("chat-step", "чат шага (в снимке) → chatId = id");
+        chain.Rounds.Should().ContainSingle()
+            .Which.ReviewChatId.Should().Be("chat-review", "чат витка (в снимке) → reviewChatId = id");
+
+        // (2) Чужие/удалённые чаты (не в снимке) → null.
+        var runForeign = FeatureProjector.Build(epic, [epic, s1, r1], null,
+            [new FeatureIndexSession("other", "s1", null, false)]);
+        var foreignChain = runForeign.StepChains.Single();
+        foreignChain.ChatId.Should().BeNull("чат шага (не в снимке) → chatId = null");
+        foreignChain.Rounds.Should().ContainSingle()
+            .Which.ReviewChatId.Should().BeNull("чат витка (не в снимке) → reviewChatId = null");
+    }
+
     // SlimRun (контракт ответа GET features/{id}): исполнители стадии обязаны пережить
     // облегчение и попасть в сериализованный JSON (camelCase, как остальной агрегат).
     // Мутация: не копировать Executors/стадии в SlimRun (Stages = []) → «executors» в JSON нет
@@ -1913,5 +1998,46 @@ public class FeatureProjectorTests
         json.Should().Contain("\"lastCompletedAt\"", "границы стадии в JSON (camelCase)");
         json.Should().Contain("\"approxMinutes\"", "длительность стадии в JSON (camelCase)");
         json.Should().Contain("\"overlapsActive\"", "пересечение в JSON (camelCase)");
+    }
+
+    // Б7: новые поля (chatId/chatArchived/reviewChatId) переживают SlimRun и уходят в сериализованный
+    // JSON (camelCase, как остальной агрегат). Мутация: SlimRun не копирует Stages/StepChains
+    // (Stages = [] / StepChains = []) → «chatId»/«reviewChatId» в JSON нет → тест краснеет.
+    [Fact]
+    public void Build_SlimRun_ЧатыВСериализованномОтвете()
+    {
+        const string epicId = "epic-b7-slim-chat";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            LinkedSessionId = "chat-live",
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 11, 0, 0),
+            CompletedAt = new DateTime(2026, 10, 17, 11, 30, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            LinkedSessionId = "chat-review",
+            ReviewOf = ["s1"],
+        };
+
+        // Build = SlimRun(BuildCore) со снимком: живые чаты → chatId/reviewChatId наружу.
+        var run = FeatureProjector.Build(epic, [epic, s1, r1], new DateTime(2026, 10, 17, 12, 0, 0),
+        [
+            new FeatureIndexSession("chat-live", "s1", null, false),
+            new FeatureIndexSession("chat-review", "r1", null, false),
+        ]);
+
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var json = System.Text.Json.JsonSerializer.Serialize(run, options);
+
+        json.Should().Contain("\"chatId\":\"chat-live\"", "чат исполнителя в JSON после SlimRun (camelCase)");
+        json.Should().Contain("\"chatArchived\":false", "архивность чата исполнителя в JSON");
+        json.Should().Contain("\"reviewChatId\":\"chat-review\"", "чат витка в JSON после SlimRun (camelCase)");
     }
 }

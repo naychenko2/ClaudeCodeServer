@@ -458,9 +458,11 @@ public class TasksController(
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
         // Связь фичи с чатом: эпик через SourceSessionId/ExecutorLaunchedBySessionId (разрез §2:
         // «фича переезжает за оркестратором»). sessionId — id сессии (GUID-строка).
+        // Б7: снимок сессий владельца в оба ветвления — исполнители (chatId/chatArchived)
+        // одинаковы для features?sessionId= и features/{id} (ProjectFull); fail-closed.
         var runs = sessionId is null
-            ? features.ProjectAll(UserId)
-            : features.ProjectForSession(sessionId, UserId);
+            ? features.ProjectAll(UserId, SessionSnapshot())
+            : features.ProjectForSession(sessionId, UserId, SessionSnapshot());
         return Ok(runs);
     }
 
@@ -513,7 +515,9 @@ public class TasksController(
         // ProjectFull: ПОЛНЫЙ (необлегчённый) run — null, если эпика нет (нет/чужой/удалён —
         // один 404, см. выше). Тело совпадает с 404 POST merge: { error: "Фича не найдена" }
         // (фронт читает error).
-        var run = features.ProjectFull(featureId, UserId);
+        // Б7: снимок сессий владельца → исполнители/шаги/витки (chatId/reviewChatId) fail-closed,
+        // как sessionId события ниже; одинаковые исполнители, что в features?sessionId= (ProjectForSession).
+        var run = features.ProjectFull(featureId, UserId, SessionSnapshot());
         if (run is null) return NotFound(new { error = "Фича не найдена" });
         // Снимок сессий владельца — как для индекса (SessionSnapshot): sessionId события наружу
         // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по

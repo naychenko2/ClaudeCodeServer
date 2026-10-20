@@ -230,6 +230,9 @@ public sealed class FeatureRound
     public string? ReviewTaskId { get; init; }
     // Исполнитель витка (PersonaId задачи ревью/проверки/финала).
     public string? PersonaId { get; init; }
+    // Чат витка (Б7: LinkedSessionId задачи ревью/проверки/финала, fail-closed: наружу только
+    // если в снимке сессий владельца; чужой/удалённый/неизвестный чат → null).
+    public string? ReviewChatId { get; init; }
     // Старт витка: ClaudeStartedAt задачи, иначе CreatedAt.
     public DateTime? StartedAt { get; init; }
     // Закрытие витка: CompletedAt задачи; null — ещё идёт.
@@ -250,6 +253,9 @@ public sealed class FeatureStepChain
     public string Title { get; init; } = "";
     // Исполнитель шага (PersonaId первой задачи цепочки).
     public string? PersonaId { get; init; }
+    // Чат шага (Б7: LinkedSessionId задачи-шага, fail-closed: наружу только если в снимке
+    // сессий владельца; чужой/удалённый/неизвестный чат → null).
+    public string? ChatId { get; init; }
     // Задачи цепочки (шаг + доработки) в порядке времени.
     public List<string> TaskIds { get; init; } = [];
     // Исход: accepted | withdrawn | returned | running | pending.

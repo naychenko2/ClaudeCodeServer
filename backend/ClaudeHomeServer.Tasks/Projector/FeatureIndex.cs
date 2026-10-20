@@ -90,7 +90,8 @@ public sealed record FeatureIndexAttention(
     DateTime? Since,
     string? Reason,
     string? PersonaId,
-    string? SessionId);
+    string? SessionId,
+    string? TaskId);    // id задачи тревоги (Б7: FeatureAttention.TaskId)
 
 // Сегмент рельсы: одна стадия конвейера. state — словарь FeatureStage.State один в один;
 // tone — только у active, иначе null (как FeatureStage.Tone).

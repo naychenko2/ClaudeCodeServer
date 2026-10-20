@@ -411,6 +411,25 @@ public class FeatureIndexRowTests
             "живой чат (в снимке) → sessionId = id");
     }
 
+    // Б7: id задачи тревоги (FeatureIndexAttention.TaskId) — из FeatureRun.Attention.TaskId
+    // (та же задача, к которой относится тревога). Мутация: AttentionOf не копирует TaskId →
+    // taskId = null → тест краснеет.
+    [Fact]
+    public void Attention_TaskId_ИзRun()
+    {
+        const string epicId = "epic-att-taskid";
+        var epic = Epic(epicId);
+        var stopped = Child("a1", epicId, status: TaskItemStatus.InProgress);
+        stopped.ClaudeStartedAt = new DateTime(2026, 10, 17, 8, 0, 0);
+        stopped.ExecutorStoppedAt = new DateTime(2026, 10, 17, 8, 30, 0);
+        stopped.ExecutorStopReason = "auth_failed";
+
+        var row = Row(epic, [epic, stopped], Array.Empty<FeatureIndexSession>());
+        row.Attention.Should().NotBeNull("исполнитель встал — тревога есть");
+        row.Attention!.Kind.Should().Be("stopped");
+        row.Attention.TaskId.Should().Be("a1", "id задачи тревоги = id остановленной задачи");
+    }
+
     // ── 8. аддитивные поля (волна 2, без хранения) ───────────────────────────────────────────
 
     // branch/createdAt — из полей эпика (WorktreeBranch/CreatedAt); null — эпик без worktree.

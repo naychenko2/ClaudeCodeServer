@@ -431,6 +431,47 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         run.GetProperty("ready").GetBoolean().Should().BeFalse();
     }
 
+    // Б7: список (features?sessionId=) отдаёт чаты исполнителей (chatId/chatArchived) — те же,
+    // что страница (features/{id}, ProjectFull): оба маршрута дают одинаковых исполнителей.
+    // Мутация: не передать снимок в GetFeatures (ProjectForSession без SessionSnapshot) →
+    // chatId = null → тест краснеет.
+    [Fact]
+    public async Task GetFeatures_Список_ЧатыИсполнителей_КакВСтранице()
+    {
+        var sessionId = await CreatePersonalChatAsync(OwnerId);
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
+        var epicId = epic.GetProperty("id").GetString();
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            linkedSessionId = sessionId,
+        });
+        var stepId = step.GetProperty("id").GetString();
+
+        // Список: чат исполнителя (chatId) наружу, chatArchived=false.
+        var list = await (await _client.GetAsync($"/api/tasks/features?sessionId={sessionId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var listRun = list.EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        var listExec = listRun.GetProperty("stages").EnumerateArray()
+            .Single(s => s.GetProperty("key").GetString() == "prod")
+            .GetProperty("executors").EnumerateArray()
+            .Single(e => e.GetProperty("taskId").GetString() == stepId);
+        listExec.GetProperty("chatId").GetString().Should().Be(sessionId, "список: чат исполнителя наружу");
+        listExec.GetProperty("chatArchived").GetBoolean().Should().BeFalse();
+
+        // Страница: те же исполнители (оба маршрута одинаковы).
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var pageExec = page.GetProperty("run").GetProperty("stages").EnumerateArray()
+            .Single(s => s.GetProperty("key").GetString() == "prod")
+            .GetProperty("executors").EnumerateArray()
+            .Single(e => e.GetProperty("taskId").GetString() == stepId);
+        pageExec.GetProperty("chatId").GetString().Should().Be(sessionId, "страница: чат исполнителя наружу");
+        pageExec.GetProperty("chatId").GetString().Should().Be(
+            listExec.GetProperty("chatId").GetString(), "оба маршрута дают одинаковых исполнителей");
+    }
+
     // Подсистема Tasks выключена (FeatureProjector не зарегистрирован) → честный 503, а не 500.
     // Прямая сборка контроллера: GetFeatures проверяет features==null ДО обращения к задачам.
     [Fact]

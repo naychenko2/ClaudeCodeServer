@@ -19,3 +19,21 @@ export function acceptDraftReplyByChat(
   if (typeof activeChatId !== 'string' || activeChatId.length === 0) return false;
   return chatId === activeChatId;
 }
+
+// Глеб MAJOR-3: решение WorkspacePage (два источника события cc-draft-reply):
+//  (1) карточка черновика в ленте — chatId = активный чат воркспейса (acceptDraftReplyByChat,
+//      проект НЕ сравниваем: черновик может быть из проекта, а чат — вне проекта);
+//  (2) настройки проекта — project события = проект страницы (eventProjectId === pageProjectId).
+// Пустая реплика — нет. Источники независимы: приём, если сработал ЛЮБОЙ.
+export function acceptDraftReplyInWorkspace(
+  chatId: unknown,
+  activeChatId: string | null | undefined,
+  reply: string | undefined,
+  eventProjectId: string | null | undefined,
+  pageProjectId: string | null | undefined,
+): boolean {
+  if (!reply) return false;
+  const byChat = acceptDraftReplyByChat(chatId, activeChatId, reply);
+  const bySettings = eventProjectId != null && eventProjectId === pageProjectId;
+  return byChat || bySettings;
+}

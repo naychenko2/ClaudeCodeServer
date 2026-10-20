@@ -94,7 +94,7 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
   // Диалог согласия для «Принять…» (consentRequired): данные + новые права + режим.
   // Режим (MAJOR 4): обновление → modify (новые права не отмечены, выданные — отмечены);
   // первая установка → install (все запрошенные, кроме net:*).
-  const [consent, setConsent] = useState<{ data: PluginConsentData; newPermissions: string[]; mode: 'install' | 'modify' } | null>(null);
+  const [consent, setConsent] = useState<{ data: PluginConsentData; newPermissions: string[]; inheritedPermissions: string[]; mode: 'install' | 'modify' } | null>(null);
   // Ошибка действия («Принять…», «Вернуть») per slug: текст сервера, пока не повторят
   const [actionErrors, setActionErrors] = useState<Record<string, string>>({});
 
@@ -143,7 +143,7 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
         // отмечены); первая установка (isUpdate false/undefined) → install (все запрошенные,
         // кроме net:*). Иначе новое право при обновлении приходило бы уже отмеченным.
         const mode: 'install' | 'modify' = res.isUpdate ? 'modify' : 'install';
-        setConsent({ data: toConsentDataFromAccept(res), newPermissions: res.newPermissions, mode });
+        setConsent({ data: toConsentDataFromAccept(res), newPermissions: res.newPermissions, inheritedPermissions: res.inheritedPermissions ?? [], mode });
       } else {
         void loadList();
         onUpdated?.(project);
@@ -213,6 +213,7 @@ export function DraftsSection({ project, onUpdated, onEdit }: {
           data={consent.data}
           mode={consent.mode}
           newPermissions={consent.newPermissions}
+          inheritedPermissions={consent.inheritedPermissions}
           onClose={() => setConsent(null)}
           onSubmit={async (permissions, secrets) => {
             // Выдача прав: успех — диалог закрывается. Сбой — ошибка показывается

@@ -266,6 +266,33 @@ describe('ConsentDialog: consentRequired', () => {
   });
 });
 
+// === Глеб MAJOR-1: golden-контракт ответа accept — точные ключи, согласованные с бэком ===
+// Бэк (Денис) параллельно возвращает inheritedPermissions (права, переходящие на новое
+// содержимое). Фронт читает ровно этот ключ; отсутствие поля (старый сервер) → undefined → ?? [].
+// Тест фиксирует контракт: имя ключа и фолбэк на пустой массив (не падать).
+describe('PluginDraftAcceptResult: golden-контракт (MAJOR-1)', () => {
+  it('ответ с inheritedPermissions → поле читается (ключ точно inheritedPermissions)', () => {
+    const raw: PluginDraftAcceptResult = {
+      id: 'local-1/my-plugin', version: '2.0.0', sha256: 'abc12345', source: 'upload:my-plugin',
+      enabled: true, requested: ['notes:read'], granted: ['notes:read'],
+      consentRequired: true, newPermissions: [], isUpdate: true, previousVersion: '1.0.0',
+      inheritedPermissions: ['notes:read'], secrets: [],
+    };
+    expect(raw.inheritedPermissions).toEqual(['notes:read']);
+  });
+
+  it('ответ БЕЗ inheritedPermissions (старый сервер) → undefined → ?? [] (не падает)', () => {
+    const raw: PluginDraftAcceptResult = {
+      id: 'local-1/my-plugin', version: '2.0.0', sha256: 'abc12345', source: 'upload:my-plugin',
+      enabled: true, requested: ['notes:read'], granted: ['notes:read'],
+      consentRequired: true, newPermissions: [], isUpdate: true, previousVersion: '1.0.0',
+      secrets: [],
+    };
+    expect(raw.inheritedPermissions).toBeUndefined();
+    expect(raw.inheritedPermissions ?? []).toEqual([]);
+  });
+});
+
 // === Событие plugin_draft_changed обновляет карточку (подсветка) ===
 // Здесь эффекты работают: минимальный фейк-DOM для createRoot (паттерн fakeDom).
 describe('useDraftCard: событие plugin_draft_changed', () => {

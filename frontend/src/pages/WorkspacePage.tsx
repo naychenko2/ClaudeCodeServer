@@ -30,7 +30,7 @@ import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFil
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
 import { useWatchdogPresence } from '../lib/watchdogPresence';
-import { acceptDraftReplyByChat } from '../lib/draftReply';
+import { acceptDraftReplyInWorkspace } from '../lib/draftReply';
 import { C, FONT } from '../lib/design';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
@@ -384,11 +384,10 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   useEffect(() => {
     const onDraftReply = (e: Event) => {
       const { chatId, project: p, reply } = (e as CustomEvent<{ chatId?: unknown; project?: { id?: string }; reply?: string }>).detail ?? {};
-      if (!reply) return;
-      const isCard = acceptDraftReplyByChat(chatId, activeSessionRef.current?.id, reply);
-      const isSettings = p?.id != null && p.id === project.id;
-      if (!isCard && !isSettings) return;
-      sessionStorage.setItem('cc_pending_chat_prompt', reply);
+      // Решение (MAJOR-3) — в чистой функции: приём по chatId (активный чат) или по проекту
+      // (настройки проекта). Реплика кладётся в поле ввода (префилл), а не отправляется.
+      if (!acceptDraftReplyInWorkspace(chatId, activeSessionRef.current?.id, reply, p?.id, project.id)) return;
+      sessionStorage.setItem('cc_pending_chat_prompt', reply!);
       window.dispatchEvent(new Event('cc-compose-prefill'));
     };
     window.addEventListener('cc-draft-reply', onDraftReply);

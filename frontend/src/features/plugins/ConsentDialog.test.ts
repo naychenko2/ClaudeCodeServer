@@ -131,6 +131,67 @@ describe('ConsentDialog (рендер)', () => {
   });
 });
 
+// === Глеб MAJOR-1: блок «уже выданные права» при обновлении (modify) ===
+// При обновлении уже установленного плагина выданные ранее права переходят на новое
+// содержимое. Диалог показывает их отдельным блоком (явное подтверждение), даже если новых
+// прав нет. Только режим modify (обновление); install (первая установка) блок не показывает.
+function renderConsentInherited(
+  overrides: Partial<PluginConsentData> = {},
+  mode: 'install' | 'modify' = 'modify',
+  inheritedPermissions?: string[],
+  newPermissions?: string[],
+) {
+  const data: PluginConsentData = {
+    id: 'local-1/my-plugin',
+    name: 'My Plugin',
+    version: '2.0.0',
+    contributions: [],
+    requested: ['notes:read'],
+    secrets: [],
+    granted: ['notes:read'],
+    ...overrides,
+  };
+  return renderToStaticMarkup(createElement(ConsentDialog, {
+    data, mode,
+    onClose: () => {},
+    onSubmit: async () => {},
+    newPermissions,
+    inheritedPermissions,
+  }));
+}
+
+const INHERITED_TITLE = 'Эти права уже выданы и продолжат действовать для новой версии';
+
+describe('ConsentDialog: MAJOR-1 — блок «уже выданные права» (обновление)', () => {
+  it('modify + inheritedPermissions → блок с человеческим названием права', () => {
+    const html = renderConsentInherited({}, 'modify', ['notes:read'], []);
+    expect(html).toContain(INHERITED_TITLE);
+    expect(html).toContain('Читать заметки проекта');
+  });
+
+  it('modify + inheritedPermissions=[] → блока нет', () => {
+    const html = renderConsentInherited({}, 'modify', [], []);
+    expect(html).not.toContain(INHERITED_TITLE);
+  });
+
+  it('modify, поле inheritedPermissions отсутствует (старый клиент) → блока нет, не падает', () => {
+    const html = renderConsentInherited({}, 'modify', undefined, []);
+    expect(html).not.toContain(INHERITED_TITLE);
+  });
+
+  it('install + inheritedPermissions → блока нет (только режим modify)', () => {
+    const html = renderConsentInherited({}, 'install', ['notes:read'], []);
+    expect(html).not.toContain(INHERITED_TITLE);
+  });
+
+  it('modify, newPermissions=[] + inheritedPermissions непусто → «Сохранить» активна (явное подтверждение)', () => {
+    const html = renderConsentInherited({}, 'modify', ['notes:read'], []);
+    // в режиме modify основная кнопка «Сохранить» не блокируется (в отличие от install)
+    expect(html).toContain('Сохранить');
+    expect(html).not.toMatch(/<button[^>]*disabled/);
+  });
+});
+
 // === Остаточный риск (ADR-031 §3.6): WebRTC/ICE и dns-prefetch CSP не закрывает,
 // === поэтому выдача notes:read/tasks:read — доверие пакету и в части утечки.
 // === Показывается, когда запрошено хотя бы одно из этих прав.

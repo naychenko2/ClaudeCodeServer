@@ -62,6 +62,10 @@ interface Props {
   // Права, появившиеся при обновлении (accept вернул consentRequired): выделяем как «новые»
   // (макет 4, карточка черновика) — человек видит, что именно добавилось.
   newPermissions?: string[];
+  // Глеб MAJOR-1: права, которые переходят на новое содержимое при обновлении. В режиме
+  // modify показываем отдельным блоком «уже выданные — продолжат действовать» (явное
+  // подтверждение, даже если новых прав нет). Пусто/undefined → блок не показываем.
+  inheritedPermissions?: string[];
 }
 
 // === Чистые хелперы (тестируются в ConsentDialog.test.ts) ===
@@ -155,7 +159,7 @@ function shortDate(iso: string | null | undefined): string | null {
 
 // === Диалог согласия: права с чекбоксами, секреты «задан/не задан»,
 // === подпись основной кнопки по числу выданных прав.
-export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret, newPermissions }: Props) {
+export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret, newPermissions, inheritedPermissions }: Props) {
   const isMobile = useIsMobile();
 
   // Умолчание галок (В1) / в «изменить» — по granted
@@ -369,6 +373,31 @@ export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret, new
               {RESIDUAL_RISK_NOTE}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Глеб MAJOR-1: уже выданные права, которые переходят на новое содержимое при обновлении.
+          Отдельный блок (не чекбоксы) — явное подтверждение, что выданное продолжит действовать
+          даже если новых прав нет. Только режим «изменить» (обновление) и непустой список. */}
+      {mode === 'modify' && (inheritedPermissions ?? []).length > 0 && (
+        <div>
+          <SectionLabel>Эти права уже выданы и продолжат действовать для новой версии</SectionLabel>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {inheritedPermissions!.map(key => {
+              const label = permissionLabel(key);
+              if (label === null) return null; // secret:* — в блоке секретов
+              return (
+                <div key={key} style={{
+                  display: 'flex', alignItems: 'center', gap: SP.sm,
+                  padding: '8px 0', borderTop: '1px solid ' + C.borderLight,
+                }}>
+                  <Shield size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
+                  <span style={{ fontWeight: 600, color: C.textHeading, fontSize: FS.base, flex: 1, minWidth: 0 }}>{label}</span>
+                  <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{key}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

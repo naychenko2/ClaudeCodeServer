@@ -713,6 +713,11 @@ export interface PluginDraftAcceptResult {
   // true + newPermissions — только если обновление добавило новые запрошенные права
   consentRequired: boolean;
   newPermissions: string[];
+  // Глеб MAJOR-1: права, которые переходят на новое содержимое при обновлении (пусто, если
+  // не обновление). consentRequired=true и когда newPermissions пуст, но у установленного
+  // плагина есть выданные — диалог показывает блок «уже выданные» и требует явного подтверждения.
+  // Старый сервер поле не отдаёт → undefined → фронт считает [] (не падать).
+  inheritedPermissions?: string[];
   // Глеб MAJOR 4: признак обновления уже установленного плагина (true) vs первая установка
   // (false). Старый сервер поле не отдаёт → undefined → фронт считает false (режим install).
   isUpdate?: boolean;

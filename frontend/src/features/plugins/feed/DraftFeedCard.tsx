@@ -82,7 +82,7 @@ export function DraftFeedCard({ slug, fallback, projectId, chatId }: {
 
   // «Принять…»: consentRequired → диалог согласия с newPermissions + режим (MAJOR 4:
   // обновление → modify, первая установка → install)
-  const [consent, setConsent] = useState<{ data: PluginConsentData; newPermissions: string[]; mode: 'install' | 'modify' } | null>(null);
+  const [consent, setConsent] = useState<{ data: PluginConsentData; newPermissions: string[]; inheritedPermissions: string[]; mode: 'install' | 'modify' } | null>(null);
   // Ошибка действия («Принять…», «Вернуть»): текст сервера, пока действие не повторят
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -106,7 +106,7 @@ export function DraftFeedCard({ slug, fallback, projectId, chatId }: {
         // отмечены); первая установка (isUpdate false/undefined) → install (все запрошенные,
         // кроме net:*). Иначе новое право при обновлении приходило бы уже отмеченным.
         const mode: 'install' | 'modify' = res.isUpdate ? 'modify' : 'install';
-        setConsent({ data: toConsentDataFromAccept(res), newPermissions: res.newPermissions, mode });
+        setConsent({ data: toConsentDataFromAccept(res), newPermissions: res.newPermissions, inheritedPermissions: res.inheritedPermissions ?? [], mode });
       } else {
         void refreshDraft(slug);
       }
@@ -158,6 +158,7 @@ export function DraftFeedCard({ slug, fallback, projectId, chatId }: {
           data={consent.data}
           mode={consent.mode}
           newPermissions={consent.newPermissions}
+          inheritedPermissions={consent.inheritedPermissions}
           onClose={() => setConsent(null)}
           onSubmit={async (permissions, secrets) => {
             // Выдача прав: успех — диалог закрывается. Сбой — ошибка показывается

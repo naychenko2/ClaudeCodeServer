@@ -282,6 +282,55 @@ describe('DraftsSection: MAJOR 4 — режим диалога согласия 
   });
 });
 
+// === Глеб MAJOR-1: обновление УСТАНОВЛЕННОГО плагина с унаследованными правами ===
+// Сценарий: агент обновляет установленный плагин (isUpdate), просит ТЕ ЖЕ права (newPermissions=[])
+// → consentRequired=true (у установленного есть выданные), inheritedPermissions=['notes:read'].
+// Диалог (modify) показывает блок «уже выданные права» и требует явного подтверждения («Сохранить»),
+// даже когда новых прав нет. При обеих пустых (первая установка / права не выданы) →
+// consentRequired=false → диалога нет.
+describe('DraftsSection: MAJOR-1 — обновление с унаследованными правами', () => {
+  const body = () => (globalThis as { document: { body: FNode } }).document.body;
+  const allText = () => textNodes(body()).join(' ');
+
+  async function openConsent(accept: object) {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftAccept).mockResolvedValue(accept as never);
+    const { container } = await renderSection();
+    const b = body();
+    for (const c of [...b.childNodes]) b.removeChild(c);
+    const acceptBtn = findButton(container, 'Принять…');
+    expect(acceptBtn, 'кнопка «Принять…» не найдена').not.toBeNull();
+    await act(async () => { acceptBtn!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+  }
+
+  it('newPermissions пуст + inheritedPermissions=notes:read (isUpdate) → блок «уже выданные» виден, «Сохранить» активна', async () => {
+    await openConsent({
+      id: 'local-1/my-plugin', version: '2.0.0', sha256: 'abc12345', source: 'upload:my-plugin',
+      enabled: true, requested: ['notes:read'], granted: ['notes:read'],
+      consentRequired: true, newPermissions: [], isUpdate: true, previousVersion: '1.0.0',
+      inheritedPermissions: ['notes:read'], secrets: [],
+    });
+    expect(allText(), 'блок «уже выданные права» не показан')
+      .toContain('Эти права уже выданы и продолжат действовать для новой версии');
+    // явное подтверждение: «Сохранить» (modify) доступна, даже без новых прав
+    expect(findButton(body(), 'Сохранить'), '«Сохранить» не найдена (явное подтверждение недоступно)').not.toBeNull();
+  });
+
+  it('обе пусты (newPermissions=[] + inheritedPermissions=[]) → consentRequired=false → диалога нет', async () => {
+    await openConsent({
+      id: 'local-1/my-plugin', version: '2.0.0', sha256: 'abc12345', source: 'upload:my-plugin',
+      enabled: true, requested: ['notes:read'], granted: [],
+      consentRequired: false, newPermissions: [], isUpdate: false, previousVersion: null,
+      inheritedPermissions: [], secrets: [],
+    });
+    // диалог не открыт: ни «Сохранить» (modify), ни «Установить» (install) в body
+    expect(findButton(body(), 'Сохранить'), 'диалог modify открылся без consentRequired').toBeNull();
+    expect(findButton(body(), 'Установить'), 'диалог install открылся без consentRequired').toBeNull();
+  });
+});
+
 // === Минор 7: «Отклонить» — ошибка (409/сеть) видна на карточке, а не проглатывается ===
 // Как «Принять…»/«Вернуть»: текст сервера на карточке, состояние согласовано. Мутация
 // «вернуть пустой catch» красит тест.

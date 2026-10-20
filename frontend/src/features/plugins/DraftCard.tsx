@@ -23,10 +23,7 @@ import {
   acceptDisabledReason, buildFixReply, diffFileLabel, draftContributions, problemCount,
   type DraftContribution,
 } from './draftModel';
-import { buildInitMessage, buildPanelSrcdoc, validateFrameMessage } from './bridge';
-// Шим plugin-kit: хост встраивает его в srcdoc (мост + CSS-токены тем) — как в PluginFrame
-import shimJs from '../../../public/plugin-kit/plugin-kit.js?raw';
-import shimCss from '../../../public/plugin-kit/theme.css?raw';
+import { buildInitMessage, buildPanelSrcdoc, validateFrameMessage, MAX_PANEL_FILE_BYTES } from './bridge';
 import type {
   PluginDraftDiff, PluginDraftDiffFile, PluginDraftDiffLine, PluginDraftPreview, PluginDraftSummary,
 } from '../../lib/api';
@@ -189,9 +186,12 @@ function PanelPreview({ slug }: { slug: string }) {
     return () => { cancelled = true; };
   }, [slug, rev]);
 
-  // srcdoc: CSP + шим + тема. Тема входит в ключ фрейма: смена темы перемонтирует
-  // iframe (простой предпросмотр — без живого обновления темы сообщением, как в PluginFrame).
-  const srcdoc = html != null ? buildPanelSrcdoc({ html, shimJs, shimCss, theme }) : null;
+  // srcdoc: оболочка (CSP + iframe) + внутренний документ (CSP + шим + html панели).
+  // Панель больше потолка (256 КиБ) — не монтируем (показываем «слишком большая»).
+  // Тема входит в ключ фрейма: смена темы перемонтирует iframe (простой предпросмотр —
+  // без живого обновления темы сообщением, как в PluginFrame).
+  const tooBig = html != null && html.length > MAX_PANEL_FILE_BYTES;
+  const srcdoc = html != null && !tooBig ? buildPanelSrcdoc(html) : null;
   const frameKey = `${slug}#${rev}#${theme}`;
 
   // Мост: ready → init (granted: [] — предпросмотр без прав), resize → высота.
@@ -240,10 +240,12 @@ function PanelPreview({ slug }: { slug: string }) {
         ? <div style={{ padding: SP.md, fontSize: FS.sm, color: C.textMuted }}>Загружаем панель…</div>
         : error
           ? <Notice tone="danger" icon={AlertTriangle} title="Не удалось загрузить панель">{error}</Notice>
-          : srcdoc
-            ? <iframe key={frameKey} ref={frameRef} srcDoc={srcdoc} sandbox="allow-scripts" title="Предпросмотр панели черновика"
-                style={{ width: '100%', height, border: 'none', display: 'block', background: 'transparent' }} />
-            : <div style={{ padding: SP.md, fontSize: FS.sm, color: C.textMuted }}>Панель не найдена</div>}
+          : tooBig
+            ? <div style={{ padding: SP.md, fontSize: FS.sm, color: C.warningText }}>Панель слишком большая</div>
+            : srcdoc
+              ? <iframe key={frameKey} ref={frameRef} srcDoc={srcdoc} sandbox="allow-scripts" title="Предпросмотр панели черновика"
+                  style={{ width: '100%', height, border: 'none', display: 'block', background: 'transparent' }} />
+              : <div style={{ padding: SP.md, fontSize: FS.sm, color: C.textMuted }}>Панель не найдена</div>}
     </div>
   );
 }

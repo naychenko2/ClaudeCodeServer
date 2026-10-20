@@ -12,16 +12,11 @@ import { api, type PluginInfo, type PluginPanelView } from '../../lib/api';
 import { useInstalledPlugins } from './useInstalledPlugins';
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import {
-  BRIDGE_VERSION, READY_TIMEOUT_MS,
+  BRIDGE_VERSION, READY_TIMEOUT_MS, MAX_PANEL_FILE_BYTES,
   buildInitMessage, buildPanelSrcdoc, buildResultMessage, buildThemeMessage,
   bridgeErrorText, clampPanelHeight, deniedKeyOf, validateFrameMessage,
   type BridgeErrorCode, type FrameMessage, type HostMessage,
 } from './bridge';
-// Шим plugin-kit: хост встраивает его в srcdoc (мост + CSS-токены тем).
-// ?raw — содержимое файла строкой; из public/ — файл одновременно доступен как
-// статика (PWA precache), но в srcdoc он нужен именно текстом.
-import shimJs from '../../../public/plugin-kit/plugin-kit.js?raw';
-import shimCss from '../../../public/plugin-kit/theme.css?raw';
 
 // === Слот панели плагина в sidebar (экран 3 макетов, ADR-031 §3, флаг plugins-mvp) ===
 // Остров «Панели плагинов» в боковой колонке. Тело — sandbox-iframe
@@ -224,13 +219,15 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     // корректны и там (перезапуск только при смене панели/версии/entry).
   }, [activeTarget?.plugin.id, activeTarget?.plugin.version, activeTarget?.panel.entry, reloadKey, logEvent]);
 
-  // srcdoc: CSP + шим plugin-kit + тема + html панели. Пересобирается при
-  // смене темы (атрибут data-cc-theme), но без перемонтирования iframe —
-  // состояние панели держится, тема доходит сообщением (см. эффект ниже).
+  // srcdoc: оболочка (CSP + iframe) + внутренний документ (CSP + шим + html панели).
+  // Пересобирается при смене панели/версии, но НЕ при смене темы: тема доходит
+  // сообщением (шим проставляет data-cc-theme, см. эффект ниже), состояние панели
+  // держится. Панель больше MAX_PANEL_FILE_BYTES — srcdoc null (показываем ошибку).
   const srcdoc = useMemo(() => {
     if (fetch.kind !== 'html') return null;
-    return buildPanelSrcdoc({ html: fetch.html, shimJs, shimCss, theme });
-  }, [fetch, theme]);
+    if (fetch.html.length > MAX_PANEL_FILE_BYTES) return null;
+    return buildPanelSrcdoc(fetch.html);
+  }, [fetch]);
 
   // Ключ iframe: пересборка srcdoc (тема) НЕ перемонтирует (key не меняется),
   // «Перезагрузить» и смена панели (плагин+панель) — да (reloadKey / targetKey).
@@ -426,6 +423,14 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     }
     if (fetch.kind === 'fetching') {
       return <LoadingSkeleton />;
+    }
+    // Панель больше потолка (256 КиБ): не монтируем, показываем понятную ошибку
+    if (fetch.kind === 'html' && fetch.html.length > MAX_PANEL_FILE_BYTES) {
+      return (
+        <Notice tone="warning" icon={AlertTriangle} title="Панель слишком большая">
+          Файл панели больше 256 КиБ — панель не смонтирована.
+        </Notice>
+      );
     }
     if (isBridgeError) {
       return (

@@ -9,6 +9,12 @@
 // REST (user JWT) и монтирует через srcdoc: вставляет CSP, шим plugin-kit и
 // текущую тему. JWT и стор хоста во фрейм не передаются (ADR-031, инвариант 1).
 
+// Шим plugin-kit: мост + CSS-токены тем (ADR-031 §3.1). ?raw — содержимое строкой;
+// файл одновременно доступен как статика (PWA precache), но в srcdoc нужен текстом.
+// buildPanelSrcdoc встраивает его сам, поэтому сборка не зависит от React/DOM.
+import shimJs from '../../../public/plugin-kit/plugin-kit.js?raw';
+import shimCss from '../../../public/plugin-kit/theme.css?raw';
+
 // === Протокол ===
 
 export const BRIDGE_VERSION = 1;
@@ -169,31 +175,41 @@ export function buildContextMessage(context: SlotContext): HostMessage {
   return { source: 'ccs-host', v: 1, type: 'context', context };
 }
 
-// === srcdoc ===
+// === srcdoc (ADR-031 §3.6: сборка документа панели) ===
 
-export interface PanelSrcdocParts {
-  // Сырой panel/index.html пакета (хост забирает его по REST с user JWT)
-  html: string;
-  // Шим plugin-kit: мост + CSS-токены тем (frontend/public/plugin-kit/)
-  shimJs: string;
-  shimCss: string;
-  // Текущая тема хоста: закладывается в атрибут data-cc-theme, шим обновляет
-  // его по сообщениям theme
-  theme: BridgeTheme;
+// Потолок размера файла панели (ADR-031 §3.6). Дублирует
+// PluginPackageValidator.MaxPanelFileBytes (256 КиБ): панель больше — не монтируем,
+// показываем «Панель слишком большая». Начали с малого намеренно: поднять можно,
+// опустить — нет.
+export const MAX_PANEL_FILE_BYTES = 256 * 1024;
+
+// Экранирование значения атрибута srcdoc (ADR-031 §3.6): & → &amp;, " → &quot;,
+// и больше ничего. < и > не экранируются: внутри двойнокавычного атрибута они
+// значение не закрывают, а HTML панели идёт «как есть» (без разбора).
+function escapeSrcdoc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
-// Полный документ для iframe.srcDoc: CSP (meta — srcdoc не имеет собственного
-// HTTP-контекста) + токены тем + шим + html панели. CSP наша стоит первой:
-// даже если панель добавит свою, действует пересечение (строже, не слабее).
-export function buildPanelSrcdoc(p: PanelSrcdocParts): string {
-  const themeAttr = p.theme === 'dark' ? ' data-cc-theme="dark"' : '';
-  return (
-    '<!DOCTYPE html><html' + themeAttr + '><head>' +
-    '<meta charset="utf-8">' +
+// ЕДИНАЯ сборка документа панели: для установленной панели (PluginFrame) и для
+// предпросмотра черновика (DraftCard) — одна функция, одна PANEL_CSP. Возвращает
+// ВНЕШНИЙ документ (оболочку): meta-CSP PANEL_CSP + ровно один
+// <iframe sandbox="allow-scripts" srcdoc="…">. Навигацию панели держит оболочка
+// (frame-src 'none' в PANEL_CSP): браузер сверяет навигацию фрейма с политикой
+// родителя. srcdoc — внутренний документ: CSP + шим + HTML панели (простая
+// конкатенация, без разбора); значение экранировано.
+export function buildPanelSrcdoc(panelHtml: string): string {
+  const inner =
+    '<!doctype html><html><head>' +
     '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
-    '<style>' + p.shimCss + '</style>' +
-    '<script>' + p.shimJs + '<\/script>' +
-    '</head><body>' + p.html + '</body></html>'
+    '<style>' + shimCss + '</style>' +
+    '<script>' + shimJs + '</script>' +
+    '</head><body>' + panelHtml + '</body></html>';
+  return (
+    '<!doctype html><html><head>' +
+    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
+    '</head><body>' +
+    '<iframe sandbox="allow-scripts" srcdoc="' + escapeSrcdoc(inner) + '"></iframe>' +
+    '</body></html>'
   );
 }
 

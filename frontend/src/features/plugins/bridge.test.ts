@@ -115,12 +115,31 @@ vi.mock('../../lib/api', () => ({
 // Динамический импорт ПОСЛЕ стабов: модули читают window/document при загрузке.
 const {
   PANEL_CSP, PANEL_MAX_HEIGHT, PANEL_MAX_HEIGHT_MOBILE, PANEL_MIN_HEIGHT,
+  MAX_PANEL_FILE_BYTES,
   validateFrameMessage, buildPanelSrcdoc, buildInitMessage, buildResultMessage,
   buildThemeMessage, clampPanelHeight, deniedKeyOf, bridgeErrorText,
 } = await import('./bridge');
 const { PluginFrame } = await import('./PluginFrame');
+// Круговой разбор (ADR-031 §3.6): DOMParser только в тесте — парсит ВНЕШНИЙ документ
+// и проверяет инварианты (1 iframe, 0 script снаружи, meta CSP первым, srcdoc === внутренний).
+const { DOMParser } = await import('linkedom');
+// Шим plugin-kit: тот же файл, что встраивает buildPanelSrcdoc (?raw — строкой).
+const shimJs = (await import('../../../public/plugin-kit/plugin-kit.js?raw')).default as string;
+const shimCss = (await import('../../../public/plugin-kit/theme.css?raw')).default as string;
 type PluginInfo = import('../../lib/api').PluginInfo;
 type Project = import('../../types').Project;
+
+// Ожидаемый ВНУТРЕННИЙ документ (srcdoc): CSP + шим + html панели, конкатенация.
+// Строится так же, как в buildPanelSrcdoc, — чтобы сверить getAttribute('srcdoc') строго.
+function expectedInner(panelHtml: string): string {
+  return (
+    '<!doctype html><html><head>' +
+    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
+    '<style>' + shimCss + '</style>' +
+    '<script>' + shimJs + '</script>' +
+    '</head><body>' + panelHtml + '</body></html>'
+  );
+}
 
 // === Часть 1: чистый протокол ===
 
@@ -186,19 +205,52 @@ describe('PANEL_CSP (ADR-031 §3.1/§3.6: единая политика обол
   });
 });
 
-describe('buildPanelSrcdoc (ADR-031 §3.1)', () => {
-  it('несёт CSP, шим и html панели; тёмная тема — атрибутом', () => {
-    const s = buildPanelSrcdoc({ html: '<body>panel</body>', shimJs: 'SHIM_JS', shimCss: 'SHIM_CSS', theme: 'dark' });
-    expect(s).toContain('Content-Security-Policy');
-    expect(s).toContain(PANEL_CSP);
-    expect(s).toContain('SHIM_JS');
-    expect(s).toContain('SHIM_CSS');
-    expect(s).toContain('data-cc-theme="dark"');
-    expect(s).toContain('<body>panel</body>');
+// Круговой разбор (ADR-031 §3.6): DOMParser (только в тесте) от результата
+// buildPanelSrcdoc. Главный инвариант: ровно один iframe, ноль <script> во внешнем
+// документе, первым в head — meta с PANEL_CSP, и getAttribute('srcdoc') строго равен
+// внутреннему документу (после разэкранирования).
+describe('buildPanelSrcdoc: круговой разбор (ADR-031 §3.6)', () => {
+  function roundTrip(panelHtml: string) {
+    const outer = buildPanelSrcdoc(panelHtml);
+    const doc = new DOMParser().parseFromString(outer, 'text/html');
+    const iframe = doc.querySelector('iframe');
+    return { doc, iframe, srcdoc: iframe?.getAttribute('srcdoc') ?? null };
+  }
+
+  it('ровно один iframe, ноль <script> снаружи, первым в head — meta с PANEL_CSP', () => {
+    const { doc, iframe } = roundTrip('<body>panel</body>');
+    expect(doc.querySelectorAll('iframe').length).toBe(1);
+    expect(doc.querySelectorAll('script').length).toBe(0);
+    const first = doc.head.firstElementChild;
+    expect(first?.getAttribute('http-equiv')).toBe('Content-Security-Policy');
+    expect(first?.getAttribute('content')).toBe(PANEL_CSP);
+    // iframe — sandbox="allow-scripts" (без allow-same-origin)
+    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts');
   });
 
-  it('светлая тема — без атрибута', () => {
-    expect(buildPanelSrcdoc({ html: '', shimJs: '', shimCss: '', theme: 'light' })).not.toContain('data-cc-theme');
+  it('srcdoc строго равен внутреннему документу (CSP + шим + html панели, конкатенация)', () => {
+    const panelHtml = '<div id="p">hello</div>';
+    const { srcdoc } = roundTrip(panelHtml);
+    expect(srcdoc).toBe(expectedInner(panelHtml));
+  });
+
+  it('экранирование srcdoc: & → &amp;, " → &quot; (обратно — строго исходный)', () => {
+    // Внутренний документ несёт " (в meta) и & (в html панели) — экранируются,
+    // а разэкранированный srcdoc снова даёт исходный внутренний документ.
+    const panelHtml = 'a &amp; b &quot; c';
+    const { srcdoc } = roundTrip(panelHtml);
+    expect(srcdoc).toBe(expectedInner(panelHtml));
+    // сырая строка srcdoc в оболочке: " экранированы, & — тоже
+    const outer = buildPanelSrcdoc(panelHtml);
+    expect(outer).toContain('srcdoc="');
+  });
+
+  it('meta оболочки и meta панели — одна PANEL_CSP с frame-src \'none\'', () => {
+    const { doc, srcdoc } = roundTrip('<body>x</body>');
+    // meta оболочки (первый в head) и meta панели (в srcdoc) — одна константа
+    expect(doc.head.firstElementChild?.getAttribute('content')).toBe(PANEL_CSP);
+    expect(srcdoc).toContain('content="' + PANEL_CSP + '"');
+    expect(PANEL_CSP).toContain("frame-src 'none'");
   });
 });
 

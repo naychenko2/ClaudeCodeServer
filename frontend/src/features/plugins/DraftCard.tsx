@@ -23,7 +23,7 @@ import {
   acceptDisabledReason, buildFixReply, diffFileLabel, draftContributions, problemCount,
   type DraftContribution,
 } from './draftModel';
-import { buildInitMessage, buildPanelSrcdoc, validateFrameMessage, MAX_PANEL_FILE_BYTES } from './bridge';
+import { buildInitMessage, buildPanelSrcdoc, validateFrameMessage, panelWindowOf, MAX_PANEL_FILE_BYTES } from './bridge';
 import type {
   PluginDraftDiff, PluginDraftDiffFile, PluginDraftDiffLine, PluginDraftPreview, PluginDraftSummary,
 } from '../../lib/api';
@@ -195,12 +195,12 @@ function PanelPreview({ slug }: { slug: string }) {
   const frameKey = `${slug}#${rev}#${theme}`;
 
   // Мост: ready → init (granted: [] — предпросмотр без прав), resize → высота.
-  // frameWindow = contentWindow нашего iframe: validateFrameMessage принимает только
-  // сообщения от него (иначе чужие postMessage просачивались бы в обработчик).
+  // Окно панели = frames[0] оболочки: e.source сверяется с ним, init уходит в него
+  // (сообщения от самой оболочки и чужих окон отбрасываются, ADR-031 §3.6).
   useEffect(() => {
     const onMsg = (e: MessageEvent) => {
-      const frameWindow = frameRef.current?.contentWindow ?? null;
-      const msg = validateFrameMessage(e, frameWindow);
+      const panelWindow = panelWindowOf(frameRef.current);
+      const msg = validateFrameMessage(e, panelWindow);
       if (!msg) return;
       if (msg.type === 'ready') {
         const init = buildInitMessage({
@@ -211,7 +211,7 @@ function PanelPreview({ slug }: { slug: string }) {
           locale: typeof navigator !== 'undefined' ? navigator.language : '',
           granted: [],
         });
-        frameWindow?.postMessage(init, '*');
+        panelWindow?.postMessage(init, '*');
       } else if (msg.type === 'resize') {
         setHeight(Math.min(800, Math.max(48, Math.round(msg.height))));
       }

@@ -14,7 +14,7 @@ import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import {
   BRIDGE_VERSION, READY_TIMEOUT_MS, MAX_PANEL_FILE_BYTES,
   buildInitMessage, buildPanelSrcdoc, buildResultMessage, buildThemeMessage,
-  bridgeErrorText, clampPanelHeight, deniedKeyOf, validateFrameMessage,
+  bridgeErrorText, clampPanelHeight, deniedKeyOf, panelWindowOf, validateFrameMessage,
   type BridgeErrorCode, type FrameMessage, type HostMessage,
 } from './bridge';
 
@@ -173,8 +173,10 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
 
   // Отправить сообщение хоста во фрейм: адресат — конкретное окно, targetOrigin
   // '*' (непрозрачный origin назвать нельзя, ADR-031 §3.2)
+  // Адресат — окно ПАНЕЛИ (frames[0] оболочки), не оболочка: init/result/theme/context
+  // уходят в панель, а e.source при приёме сверяется с тем же окном (ADR-031 §3.6).
   const postToFrame = useCallback((msg: HostMessage) => {
-    const win = iframeRef.current?.contentWindow;
+    const win = panelWindowOf(iframeRef.current);
     if (win) win.postMessage(msg, '*');
     logEvent(`→ ${msg.type}${'id' in msg ? ` ${msg.id}` : ''}`);
   }, [logEvent]);
@@ -292,9 +294,11 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   }, [postToFrame, logEvent]);
 
   // === Приём сообщений фрейма (ADR-031 §3.2: все четыре условия) ===
+  // e.source сверяется с окном ПАНЕЛИ (frames[0] оболочки): сообщения от самой
+  // оболочки и от чужих окон отбрасываются.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      const msg = validateFrameMessage(e, iframeRef.current?.contentWindow);
+      const msg = validateFrameMessage(e, panelWindowOf(iframeRef.current));
       if (!msg) return; // всё невалидное — тихий игнор
       const s = stateRef.current;
       if (msg.type === 'ready') {

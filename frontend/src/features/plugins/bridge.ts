@@ -105,6 +105,14 @@ export function validateFrameMessage(e: RawMessageEvent, frameWindow: unknown): 
   }
 }
 
+// Окно панели (ADR-031 §3.6): панель — frames[0] оболочки (внешний iframe хоста).
+// Индексный доступ к кросс-доменному WindowProxy разрешён. Приём и отправка сообщений
+// моста идут именно в это окно (не в оболочку): e.source сверяется с ним, и
+// postMessage(init/result/theme/context) уходит в него. null — iframe ещё не смонтирован.
+export function panelWindowOf(outerIframe: HTMLIFrameElement | null | undefined): Window | null {
+  return outerIframe?.contentWindow?.frames[0] ?? null;
+}
+
 // === Сообщения хоста → фрейм ===
 
 export type BridgeTheme = 'light' | 'dark';

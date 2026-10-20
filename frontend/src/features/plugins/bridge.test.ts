@@ -115,7 +115,7 @@ vi.mock('../../lib/api', () => ({
 // Динамический импорт ПОСЛЕ стабов: модули читают window/document при загрузке.
 const {
   PANEL_CSP, PANEL_MAX_HEIGHT, PANEL_MAX_HEIGHT_MOBILE, PANEL_MIN_HEIGHT,
-  MAX_PANEL_FILE_BYTES,
+  MAX_PANEL_FILE_BYTES, panelWindowOf,
   validateFrameMessage, buildPanelSrcdoc, buildInitMessage, buildResultMessage,
   buildThemeMessage, clampPanelHeight, deniedKeyOf, bridgeErrorText,
 } = await import('./bridge');
@@ -209,6 +209,38 @@ describe('PANEL_CSP (ADR-031 §3.1/§3.6: единая политика обол
 // buildPanelSrcdoc. Главный инвариант: ровно один iframe, ноль <script> во внешнем
 // документе, первым в head — meta с PANEL_CSP, и getAttribute('srcdoc') строго равен
 // внутреннему документу (после разэкранирования).
+// panelWindowOf (ADR-031 §3.6): окно панели = frames[0] оболочки. Приём и отправка
+// моста — только в это окно: сообщения от самой оболочки (contentWindow) и чужих окон
+// отбрасываются. Мутация «сверять с contentWindow, а не frames[0]» красит тест.
+describe('panelWindowOf + приём сообщений (ADR-031 §3.6)', () => {
+  // Фейк оболочки: contentWindow — окно оболочки, frames[0] — окно панели.
+  const panelWindow = { __panel: true };
+  const shellWindow = { frames: [panelWindow] };
+  const outerIframe = { contentWindow: shellWindow } as unknown as HTMLIFrameElement;
+
+  it('panelWindowOf возвращает frames[0] (окно панели), null — без iframe', () => {
+    expect(panelWindowOf(outerIframe)).toBe(panelWindow);
+    expect(panelWindowOf(null)).toBeNull();
+    expect(panelWindowOf(undefined)).toBeNull();
+  });
+
+  it('сообщение от окна панели (frames[0]) принимается', () => {
+    const e = { source: panelWindow, origin: 'null', data: { source: 'ccs-plugin', v: 1, type: 'ready' } };
+    expect(validateFrameMessage(e, panelWindowOf(outerIframe))).toEqual({ source: 'ccs-plugin', v: 1, type: 'ready' });
+  });
+
+  it('сообщение от самой оболочки (contentWindow) отбрасывается', () => {
+    const e = { source: shellWindow, origin: 'null', data: { source: 'ccs-plugin', v: 1, type: 'ready' } };
+    expect(validateFrameMessage(e, panelWindowOf(outerIframe))).toBeNull();
+  });
+
+  it('сообщение от чужого окна отбрасывается', () => {
+    const foreign = { __foreign: true };
+    const e = { source: foreign, origin: 'null', data: { source: 'ccs-plugin', v: 1, type: 'ready' } };
+    expect(validateFrameMessage(e, panelWindowOf(outerIframe))).toBeNull();
+  });
+});
+
 describe('buildPanelSrcdoc: круговой разбор (ADR-031 §3.6)', () => {
   function roundTrip(panelHtml: string) {
     const outer = buildPanelSrcdoc(panelHtml);
@@ -391,13 +423,14 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     expect(iframeEl!.props.sandbox).toBe('allow-scripts');
     expect(String(iframeEl!.props.srcDoc)).toContain('Content-Security-Policy');
 
-    // Фейковый фрейм: contentWindow с postMessage-шпионом
+    // Фейковый фрейм: оболочка (contentWindow) + окно панели (frames[0]) с postMessage-шпионом
     const posted: unknown[] = [];
-    const fakeFrame = { contentWindow: { postMessage: (msg: unknown) => { posted.push(msg); } } };
+    const panelWindow = { postMessage: (msg: unknown) => { posted.push(msg); } };
+    const fakeFrame = { contentWindow: { frames: [panelWindow] } };
     (iframeEl!.props.ref as { current: unknown }).current = fakeFrame;
 
-    // ready от фрейма (валидный конверт, origin 'null', source — окно фрейма)
-    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+    // ready от панели (валидный конверт, origin 'null', source — окно панели frames[0])
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
 
     // host ответил init (тема, права, контекст слота)
     const init = posted.find(p => (p as { type?: string }).type === 'init') as Record<string, unknown>;
@@ -408,7 +441,7 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     expect(init.granted).toEqual(['notes:read']);
 
     // Валидный call: host шлёт POST /plugins/{id}/call (id и контекст — от хоста)
-    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c1', op: 'notes.read', args: { id: 'n1' } });
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c1', op: 'notes.read', args: { id: 'n1' } });
     await Promise.resolve();
     await Promise.resolve();
     expect(m.call).toHaveBeenCalledTimes(1);
@@ -446,16 +479,17 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     const iframeEl = findElement(tree, 'iframe');
     expect(iframeEl).not.toBeNull();
     const posted: unknown[] = [];
-    const fakeFrame = { contentWindow: { postMessage: (msg: unknown) => { posted.push(msg); } } };
+    const panelWindow = { postMessage: (msg: unknown) => { posted.push(msg); } };
+    const fakeFrame = { contentWindow: { frames: [panelWindow] } };
     (iframeEl!.props.ref as { current: unknown }).current = fakeFrame;
 
-    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
 
     m.call.mockImplementationOnce(async () => ({
       ok: false,
       error: { code: 'denied', message: 'Нет права: notes:read' },
     }));
-    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c2', op: 'notes.read', args: {} });
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c2', op: 'notes.read', args: {} });
     await Promise.resolve();
     await Promise.resolve();
 
@@ -484,12 +518,13 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     const tree = render();
     const iframeEl = findElement(tree, 'iframe');
     expect(iframeEl).not.toBeNull();
-    const fakeFrame = { contentWindow: { postMessage: () => {} } };
+    const panelWindow = { postMessage: () => {} };
+    const fakeFrame = { contentWindow: { frames: [panelWindow] } };
     (iframeEl!.props.ref as { current: unknown }).current = fakeFrame;
 
-    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
     // Высота 5000 → потолок 800 (десктоп)
-    fireMessage(fakeFrame.contentWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 5000 });
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 5000 });
 
     // Перерисовка: iframe получает клампнутую высоту
     const tree2 = render();

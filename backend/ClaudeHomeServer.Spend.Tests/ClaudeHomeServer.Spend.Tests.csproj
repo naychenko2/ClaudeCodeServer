@@ -16,12 +16,12 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <!-- ProjectReference на Main ради SessionManager/TaskManager/PersonaManager/UserStore/
-         ProjectManager/ChatHistoryService/JwtService/и пр. — тесты Spend резолвят полный
-         стек для воссоздания сессии и её истории, как это делает прод. Прецедент —
-         Knowledge.Tests/Notes.Tests. -->
-    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
+    <!-- TestKit (Core-only хелперы: FakeHostEnvironment/TestConfig/TestSessionBroadcaster/
+         TestLauncherFactory — internal, IVT в TestKit) + TestKit.Host (TestWebApplicationFactory) — шаг 1.3.
+         Main приходит транзитно через TestKit.Host (TestWebApplicationFactory поднимает
+         хост) — прямая ссылка на Main убрана в шаге 2.1. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -55,6 +55,9 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/Gateway/LlmGatewayEndpoints.cs"] = (2, "LLM-провайдер"),
         // Поллер: источник метрик выбирается по провайдеру, помеченному IsLocal (LLM-провайдер).
         ["backend/ClaudeHomeServer.Llm/LocalStats/LocalModelStatsPoller.cs"] = (2, "LLM-провайдер"),
+        // Тестовый хелпер шлюза: IsLocal — признак локального LLM-провайдера (vLLM), не проекта.
+        // Жил в ClaudeHomeServer.Tests (сторож его пропускал как .Tests); переехал в TestKit.Host (шаг 3.3).
+        ["backend/ClaudeHomeServer.TestKit.Host/GatewayTestKit.cs"] = (2, "LLM-провайдер"),
     };
 
     private static string RepoRoot()

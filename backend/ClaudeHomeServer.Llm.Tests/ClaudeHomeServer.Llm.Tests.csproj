@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали Llm (шаг 3.1). По образцу Turn.Tests/Notes.Tests:
+         SDK=Web ради FrameworkReference Microsoft.AspNetCore.App (ILogger/IServiceCollection
+         и пр. ASP.NET-типы, на которые опираются ClaudeSession*Tests), OutputType=Library
+         ради отсутствия Main. -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Llm — продуктовая сборка вертикали: ClaudeSession/CheapTextRunner и остальные
+         internal-типы, на которые опираются перенесённые ClaudeSession*Tests. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
+    <!-- Core — спинка: Models/Protocol/Services.Execution/Services.Turn/Services.Llm,
+         на которые ссылаются using'ы перенесённых тестов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- TestKit — Core-only хелперы (TestConfig и соседи), используемые тестами. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <!-- TestKit.Host — Main-зависимые хелперы (TestWebApplicationFactory/DeviceWaitTestHost);
+         по факту перенесённая первая половина ClaudeSession*Tests их не поднимает, но ссылка
+         держит доступ к Main (см. ниже) и совпадает с составом остальных вертикальных тестов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
+    <!-- Main: перенесённые ClaudeSession*Tests ссылаются на const
+         `ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt` (Main-тип), поэтому
+         прямая ссылка на Main обязательна; хост (TestWebApplicationFactory) они не поднимают.
+         Main транзитно приходит и через TestKit.Host, но явная ссылка — само-документирующая. -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- AudioEditor/VideoEditor — динамические модули (ADR-021/022): Main тянет их с
+         ReferenceOutputAssembly=false, поэтому типы (AudioEditorStateContributor/
+         VideoEditorStateContributor) не приходят транзитно. ClaudeSessionPromptSectionsOrderTests
+         их использует напрямую — нужна прямая ссылка, как в монолите (ClaudeHomeServer.Tests.csproj). -->
+    <ProjectReference Include="..\ClaudeHomeServer.AudioEditor\ClaudeHomeServer.AudioEditor.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.VideoEditor\ClaudeHomeServer.VideoEditor.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+    <!-- [SkippableFact] в перенесённых InotifyLeakRegression/TurnFileWatcherSubscription
+         (шаг 3.3) — тот же пакет, что в монолите. -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Сериализация коллекций: InotifyLeakRegressionTests меряет inotify-бюджет процесса,
+         а TurnFileWatcher*Tests/FileWatcherService открывают наблюдатели — параллельный прогон
+         выедал лимит. Глобально отключаем параллелизацию ТОЛЬКО для Llm.Tests (как в монолите). -->
+    <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

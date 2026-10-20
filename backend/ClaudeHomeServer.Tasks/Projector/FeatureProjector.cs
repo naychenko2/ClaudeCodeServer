@@ -873,7 +873,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var epics = owner.Where(t => t.Role == TaskRoles.Feature).ToList();
         // Задачи, сгруппированные по FeatureId, ОДИН раз (ToLookup): O(E×T) старого
         // FeatureTasks (полный скан owner на каждый эпик) уходит.
-        var byFeature = owner.Where(t => t.FeatureId is not null).ToLookup(t => t.FeatureId);
+        var byFeature = owner.Where(t => t.FeatureId is not null).ToLookup(t => t.FeatureId!);
 
         // curator: кто создал эпик (SourceSessionId) → фичи.
         var curatorBySession = new Dictionary<string, HashSet<string>>();

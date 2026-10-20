@@ -913,7 +913,8 @@ public class ChatSubjectSweeperTests : IDisposable
         // Локаль упала исключением (обрыв соединения, 500 движка)
         public Exception? Throw { get; set; }
         public int Calls;
-        public int FreeCalls;
+        // = 0: после переработки маршрута RunFreeAsync-инкремент убран, поле всегда 0 (CS0649)
+        public int FreeCalls = 0;
         public int PaidCalls;
         public List<string> Prompts { get; } = [];
         public List<object?> JsonFormats { get; } = [];

@@ -1550,7 +1550,7 @@ public class ImageEditorToolsetTests : IDisposable
             var dict = (System.Collections.IDictionary)field.GetValue(toolset)!;
             var total = 0;
             foreach (System.Collections.DictionaryEntry entry in dict)
-                total += (int)entry.Value;
+                total += (int)entry.Value!;
             return total;
         }
     }

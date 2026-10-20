@@ -145,11 +145,19 @@ public sealed partial class TestRunService
         _ => DotnetSpec(phase, request, turnId, resultsDirectory),
     };
 
+    // Потолок параллельных проектов MSBuild — а значит, и одновременных testhost при прогоне
+    // решения. Лимит из backend/Directory.Build.rsp (-maxcpucount:6) здесь НЕ работает: dotnet
+    // test/build сам передаёт MSBuild голый `-maxcpucount` (= все ядра), и он перебивает файл.
+    // Явный ключ в командной строке перебивает уже его (замер 2026-10-19: без ключа 24 testhost
+    // и ~5,8 GB пика, с ключом — 6 и ~3,6 GB). Число держим равным значению в .rsp.
+    internal const string MaxCpuCountArg = "-m:6";
+
     private static ProcessSpec DotnetSpec(TestRunPhase phase, TestRunRequest request, string turnId,
         string resultsDirectory)
     {
         var args = new List<string> { phase == TestRunPhase.Build ? "build" : "test" };
         if (!string.IsNullOrWhiteSpace(request.Target)) args.Add(request.Target);
+        args.Add(MaxCpuCountArg);
         if (phase != TestRunPhase.Build)
         {
             args.Add("--no-build");

@@ -473,6 +473,12 @@ builder.Services.AddSingleton<PersonaBindingsService>();
 // секций промпта из чужих вертикалей (CodeGraph → codegraph). Без шва вертикаль
 // CodeGraph тянула бы root Services напрямую — запрет архитектуры.
 builder.Services.AddSingleton<IPersonaServerToolGate>(sp => sp.GetRequiredService<PersonaBindingsService>());
+// QA-фикс L3: форвардер IPersonaPluginBindingPurger → PersonaBindingsService — каскад
+// Plugins (PluginInstallCascade) снимает Skill-привязки plugin:{id} персон владельца, не
+// ссылаясь на Main напрямую (ADR-014). Регистрация неусловная: шов нужен, только когда
+// подсистема Plugins включена, но адаптер stateless и дёшево живёт всегда (как IPersonaServerToolGate).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Plugins.IPersonaPluginBindingPurger,
+    ClaudeHomeServer.Services.PluginBindingPurgerAdapter>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftService>();

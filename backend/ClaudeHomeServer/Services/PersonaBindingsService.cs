@@ -413,6 +413,30 @@ public class PersonaBindingsService : IPersonaServerToolGate
         return touched;
     }
 
+    // Подвести Skill-привязки «plugin:{pluginId}/…» у всех персон владельца — вызывается
+    // каскадом удаления установки плагина (IPluginInstallCascade → IPersonaPluginBindingPurger,
+    // QA-фикс L3). Без этого мёртвая привязка (плагин удалён, а навык из его пакета) оставалась
+    // бы в персоне: READ-путь её тихо пропускал, но список привязок нес бы запись «в пустоту».
+    // UpdateBindings поднимает OnPersonaChanged → SessionManager инвалидирует сессии персоны.
+    // Возвращает число тронутых персон (0 — некого чистить).
+    public int PurgePluginSkillBindings(string ownerId, string pluginId)
+    {
+        var prefix = PluginSkillTarget.Prefix + pluginId + "/";
+        var touched = 0;
+        foreach (var persona in _personas.GetByOwner(ownerId))
+        {
+            if (persona.Bindings is not { Count: > 0 } bindings) continue;
+            var kept = bindings.Where(b => b.Type != PersonaBindingType.Skill
+                || !b.Target.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (kept.Count == bindings.Count) continue;
+            _personas.UpdateBindings(persona.Id, ownerId, kept);
+            touched++;
+        }
+        if (touched > 0)
+            _log.LogInformation("Skill-привязки на удалённый плагин «{Id}» убраны у {Count} персон", pluginId, touched);
+        return touched;
+    }
+
     // --- Сужение зоны workspace ---
 
     // Проекты из Project/ProjectPath-привязок (Mode != Off) — для сужения AllowedProjectIds

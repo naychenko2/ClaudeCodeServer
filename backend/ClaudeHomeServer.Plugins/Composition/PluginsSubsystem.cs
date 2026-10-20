@@ -66,9 +66,10 @@ public sealed class PluginsSubsystem : IAppSubsystem
             sp.GetRequiredService<PluginSecretsStore>(),
             sp.GetRequiredService<IPluginInstallCascade>(),
             sp.GetRequiredService<PluginNetProxy>()));
-        // Каскад «внешних» ссылок (привязки персон, слоты). MVP — no-op: реальный
-        // адаптер, снимающий биндинги/слоты, приходит с UI-шагом 2.x (ADR-031 §4).
-        services.AddSingleton<IPluginInstallCascade, NoOpPluginInstallCascade>();
+        // Каскад «внешних» ссылок (привязки персон, слоты). QA-фикс L3: реальный адаптер —
+        // снимает Skill-привязки plugin:{id} персон владельца (ADR-031 §4). Слоты панелей
+        // приходят с UI-шагом 2.x; до них каскад чистит только привязки.
+        services.AddSingleton<IPluginInstallCascade, PluginInstallCascade>();
         // Мост панели v1 (шаг 3.1): диспетчер IPluginCapability. Stateless — singleton;
         // список обработчиков (Notes/Tasks) резолвится DI'ем из вертикалей-владельцев.
         // PluginBridgeController — ApplicationPart (Web SDK), регистрируется MVC'ом.

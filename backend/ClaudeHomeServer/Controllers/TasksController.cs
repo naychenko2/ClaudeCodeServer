@@ -587,6 +587,9 @@ public class TasksController(
         var all = FeatureProjector.BuildEvents(run, snapshot);
         var eventsTotal = all.Count;
         var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
+        // Б-pl: документы фичи (вкладка «Планы и макеты») — СПИСОК (без текста) по ПОЛНОМУ run
+        // (до SlimRun: Slim обнуляет ResultMarkdown, а hasText/mockupPaths — из него).
+        var plans = FeatureProjector.BuildPlans(run);
         // Б4: chats[] — все чаты фичи (эпик + дочерние) из снимка владельца; только features/{id}
         // (в SlimRun/индекс chats не входит). kind: executor — чат задачи, curator/orchestrator/key
         // — чат эпика по признакам (BuildFeatureChats).
@@ -599,7 +602,7 @@ public class TasksController(
         allFeatureTasks.AddRange(run.Cut);
         allFeatureTasks.AddRange(run.Plan);
         var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
-        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats });
+        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans });
     }
 
     // ?eventsLimit= : не задан (null) → 100; строка «0» или «all» → все (int.MaxValue) — «0»

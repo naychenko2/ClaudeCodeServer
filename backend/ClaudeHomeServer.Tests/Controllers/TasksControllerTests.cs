@@ -778,6 +778,40 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             .Should().Be("accepted");
     }
 
+    // Б-pl: вкладка «Планы и макеты» — plans[] в ответе GET features/{id}. plans — СПИСОК
+    // документов (role/hasText/mockupPaths) БЕЗ текста: текст (ResultMarkdown) подгружается по
+    // клику (GET /api/tasks/{id}). Мутация «plans по SlimRun» → hasText=false (краснеет);
+    // «plans не в ответе» → поле отсутствует (краснеет).
+    [Fact]
+    public async Task GetFeature_Plans_СписокБезТекста()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var plan = await CreateTaskAsync(new
+        {
+            title = "план", featureId = epicId, role = "plan",
+            resultMarkdown = "См. docs/mockups/features-overview-3-plans-2.md",
+        });
+        var planId = plan.GetProperty("id").GetString()!;
+
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        // plans[] — массив; план на месте: role=plan, hasText=true, mockupPaths — путь.
+        var plans = body.GetProperty("plans");
+        plans.ValueKind.Should().Be(JsonValueKind.Array);
+        var p = plans.EnumerateArray().Single(x => x.GetProperty("taskId").GetString() == planId);
+        p.GetProperty("role").GetString().Should().Be("plan");
+        p.GetProperty("hasText").GetBoolean().Should().BeTrue();
+        p.GetProperty("mockupPaths").EnumerateArray()
+            .Select(x => x.GetString()).Should().Equal("docs/mockups/features-overview-3-plans-2.md");
+
+        // Текст (ResultMarkdown) в ответ НЕ попадает: run облегчён (Slim обнуляет ResultMarkdown).
+        var runPlan = body.GetProperty("run").GetProperty("plan").EnumerateArray()
+            .Single(r => r.GetProperty("id").GetString() == planId);
+        runPlan.GetProperty("resultMarkdown").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
     // ─── REST POST /api/tasks/features/{featureId}/merge: мерж фичи ─────────────────────────
 
     // 503: подсистема Tasks выключена (FeatureProjector не зарегистрирован) — прямой сборкой контроллера.

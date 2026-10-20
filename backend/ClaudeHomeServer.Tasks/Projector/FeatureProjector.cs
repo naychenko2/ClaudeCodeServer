@@ -594,6 +594,74 @@ public sealed class FeatureProjector(TaskManager tasks)
             .ToList();
     }
 
+    // ─── Б-pl: документы фичи (волна 3 «Обзор фич», вкладка «Планы и макеты») ────────────────
+    // Чистая проекция FeatureRun → List<FeaturePlan> БЕЗ хранилища: разрез (cut), план (plan) и
+    // консультация (consult) фичи — СПИСОК документов вкладки, без текста. Text (ResultMarkdown)
+    // в ответ НЕ попадает: вкладка берёт список, текст подгружает по клику (GET /api/tasks/{id}).
+    // Считается по ПОЛНОМУ (необлегчённому) run ДО SlimRun: Slim обнуляет ResultMarkdown, а
+    // hasText/mockupPaths — из него.
+    //
+    // Источник: run.Cut (несёт cut И consult) + run.Plan (plan). Роль — из TaskItem.Role как есть
+    // (step в документы не попадает, догадок по заголовку нет). hasText — ResultMarkdown не пуст
+    // после Trim; mockupPaths — пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct,
+    // порядок появления, ≤ 20, пути с «..» отброшены.
+    //
+    // Порядок списка: роль (cut → plan → consult), внутри роли — по CreatedAt.
+    public static List<FeaturePlan> BuildPlans(FeatureRun run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        // cut/consult — из run.Cut (там обе роли); plan — из run.Plan. Роль — из TaskItem.Role
+        // как есть (у задач run.Cut/run.Plan она всегда non-null: cut/consult/plan).
+        var cut = run.Cut.Where(t => t.Role == TaskRoles.Cut).ToList();
+        var consult = run.Cut.Where(t => t.Role == TaskRoles.Consult).ToList();
+        var plan = run.Plan.Where(t => t.Role == TaskRoles.Plan).ToList();
+
+        // Порядок: cut → plan → consult; внутри роли — по CreatedAt (OrderBy стабилен: равные
+        // CreatedAt сохраняют порядок, в котором задачи дал вызывающий).
+        var ordered = new List<TaskItem>();
+        ordered.AddRange(cut.OrderBy(t => t.CreatedAt));
+        ordered.AddRange(plan.OrderBy(t => t.CreatedAt));
+        ordered.AddRange(consult.OrderBy(t => t.CreatedAt));
+
+        return ordered
+            .Select(t => new FeaturePlan(
+                t.Id,
+                t.Role ?? "",
+                t.Title,
+                t.PersonaId,
+                t.CreatedAt,
+                t.CompletedAt,
+                HasText(t),
+                MockupPaths(t)))
+            .ToList();
+    }
+
+    // hasText: ResultMarkdown не пуст после Trim (null/""/пробелы → false).
+    private static bool HasText(TaskItem t) => !string.IsNullOrWhiteSpace(t.ResultMarkdown);
+
+    // Пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct, порядок появления,
+    // ≤ 20, пути с «..» отброшены. null/пусто → [].
+    private static List<string> MockupPaths(TaskItem t)
+    {
+        var text = t.ResultMarkdown;
+        if (string.IsNullOrEmpty(text)) return [];
+        var paths = new List<string>();
+        foreach (System.Text.RegularExpressions.Match m in MockupPathRegex.Matches(text))
+        {
+            var p = m.Value;
+            // «..» — выход за docs/mockups (pathtraversal) → отбрасываем.
+            if (p.Contains("..")) continue;
+            if (!paths.Contains(p)) paths.Add(p);
+            if (paths.Count >= 20) break;
+        }
+        return paths;
+    }
+
+    // docs/mockups/ + путь из [A-Za-z0-9._/-] + «.html»/«.md».
+    private static readonly System.Text.RegularExpressions.Regex MockupPathRegex =
+        new(@"docs/mockups/[A-Za-z0-9._/-]+\.(html|md)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     // reason ≤ 200 символов (обрезка по кодовым позициям; null — как есть). internal — для золотого
     // теста (ClaudeHomeServer.Tasks.Tests): кириллица (1 кодовая точка = 1 UTF-16-единица) и
     // суррогатные пары (эмодзи, 2 единицы) не рвутся — разорванный старший суррогат отбрасывается.

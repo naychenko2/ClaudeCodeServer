@@ -31,8 +31,10 @@ export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, ch
 }) {
   return (
     <>
-      {/* Центр: display:none при открытой странице (не размонтируется). */}
-      <div style={{ flex: 1, display: open ? 'none' : 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Центр: display:none при открытой странице (не размонтируется).
+          minHeight/minWidth: 0 — иначе flex-ребёнок растёт по контенту ленты и композер уезжает за экран.
+          Направление повторяет родителя: на десктопе — строка (split чат|файл), на мобиле — колонка. */}
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: open ? 'none' : 'flex', flexDirection: isMobile ? 'column' : 'row', overflow: 'hidden' }}>
         {children}
       </div>
       {/* Страница фичи: сосед центра, показана при open. */}

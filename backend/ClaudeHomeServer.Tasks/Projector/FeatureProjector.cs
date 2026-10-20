@@ -14,7 +14,14 @@ public sealed class FeatureProjector(TaskManager tasks)
     // featureTasks — в порядке, в котором их отдал вызывающий (фикстура/трекер): шаги/ревью/
     // проверки сохраняют этот порядок, финал/мерж берутся как последние по этому порядку.
     // now — «сейчас» для длительностей идущих задач (null = DateTime.UtcNow); тесты фиксируют.
+    // Выход — облегчённые копии задач (Slim, контракт master для списков/ответа:
+    // Project/ProjectAll/ProjectForSession/BuildIndexCore). Полный (необлегчённый) run —
+    // BuildCore: страница фичи (GetFeature) считает на нём ленту событий (BuildEvents:
+    // reason вердикта = Verification.Notes, который Slim обнуляет) и облегчает run для ответа.
     public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null)
+        => SlimRun(BuildCore(epic, featureTasks, now));
+
+    internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null)
     {
         var nowUtc = now ?? DateTime.UtcNow;
         ArgumentNullException.ThrowIfNull(epic);
@@ -373,26 +380,28 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
-        // Все расчёты выше идут по исходным задачам; в ВЫХОД (REST) уходят облегчённые копии:
-        // тексты (Description/ResultMarkdown), Verification.Notes, Repro, подзадачи и файлы
-        // пульту фичи не нужны (причина витка уже лежит в Rounds[].Reason), а на фиче из десятков
-        // задач именно они делали ответ в сотни КБ. Полную карточку пульт берёт по id.
+        // Все расчёты выше идут по исходным задачам. BuildCore возвращает ПОЛНЫЙ (необлегчённый)
+        // run: на нём страница фичи (GetFeature) считает ленту событий (BuildEvents: reason
+        // вердикта = Verification.Notes, который Slim обнуляет). Облегчение для списков/ответа
+        // (контракт master) — SlimRun: тексты (Description/ResultMarkdown), Verification.Notes,
+        // Repro, подзадачи и файлы пульту фичи не нужны (причина витка уже лежит в Rounds[].Reason),
+        // а на фиче из десятков задач именно они делали ответ в сотни КБ.
         return new FeatureRun
         {
             FeatureId = epic.Id,
-            Epic = Slim(epic),
-            Steps = SlimAll(steps),
-            Reviews = SlimAll(reviews),
-            Qa = SlimAll(qa),
-            Final = final is null ? null : Slim(final),
-            Merge = merge is null ? null : Slim(merge),
+            Epic = epic,
+            Steps = steps,
+            Reviews = reviews,
+            Qa = qa,
+            Final = final,
+            Merge = merge,
             AwaitingHumanSince = epic.AwaitingHumanSince,
             AwaitingHumanReason = epic.AwaitingHumanReason,
             Verdicts = verdicts,
             Progress = progress,
             Ready = ready,
-            Cut = SlimAll(cut),
-            Plan = SlimAll(plan),
+            Cut = cut,
+            Plan = plan,
             Stages = stages,
             StepChains = stepChains,
             ReturnsBySource = returnsBySource,
@@ -560,6 +569,39 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     private static List<TaskItem> SlimAll(List<TaskItem> tasks) => tasks.Select(Slim).ToList();
+
+    // Облегчённая копия агрегата (контракт master для списков/ответа): коллекции задач заменяются
+    // облегчёнными копиями (Slim), вычисленные поля (стадии/цепочки/счётчики/«сейчас»/тревога)
+    // передаются по ссылке — они уже вычислены по исходным задачам. Страница фичи (GetFeature)
+    // сначала считает ленту событий (BuildEvents) по ПОЛНОМУ run, а в ответ run облегчает SlimRun.
+    internal static FeatureRun SlimRun(FeatureRun run) => new()
+    {
+        FeatureId = run.FeatureId,
+        Epic = Slim(run.Epic),
+        Steps = SlimAll(run.Steps),
+        Reviews = SlimAll(run.Reviews),
+        Qa = SlimAll(run.Qa),
+        Final = run.Final is null ? null : Slim(run.Final),
+        Merge = run.Merge is null ? null : Slim(run.Merge),
+        AwaitingHumanSince = run.AwaitingHumanSince,
+        AwaitingHumanReason = run.AwaitingHumanReason,
+        Verdicts = run.Verdicts,
+        Progress = run.Progress,
+        Ready = run.Ready,
+        Cut = SlimAll(run.Cut),
+        Plan = SlimAll(run.Plan),
+        Stages = run.Stages,
+        StepChains = run.StepChains,
+        ReturnsBySource = run.ReturnsBySource,
+        Lanes = run.Lanes,
+        Now = run.Now,
+        Attention = run.Attention,
+        StepsAccepted = run.StepsAccepted,
+        StepsTotal = run.StepsTotal,
+        LastActivityAt = run.LastActivityAt,
+        Closed = run.Closed,
+        Summary = run.Summary,
+    };
 
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 
@@ -878,6 +920,17 @@ public sealed class FeatureProjector(TaskManager tasks)
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
         return epic is null ? null : Build(epic, FeatureTasks(epic, owner));
+    }
+
+    // Одна фича по id эпика — ПОЛНЫЙ (необлегчённый) run: для страницы фичи (GetFeature).
+    // Лента событий (BuildEvents) считается по полным задачам (reason вердикта =
+    // Verification.Notes, который Slim обнуляет для списков/ответа); run для ответа
+    // облегчается отдельно (SlimRun, контракт master). null — эпика нет (как у Project).
+    public FeatureRun? ProjectFull(string featureId, string ownerId)
+    {
+        var owner = tasks.GetByOwner(ownerId).ToList();
+        var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
+        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner));
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.

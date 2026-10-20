@@ -510,16 +510,19 @@ public class TasksController(
         // lookup по кривому id (с «/» или «..») не идёт, фронт 404 не различает.
         if (!FeatureIdPattern.IsMatch(featureId))
             return NotFound(new { error = "Фича не найдена" });
-        // Project: null — эпика нет (нет/чужой/удалён — один 404, см. выше).
-        // Тело совпадает с 404 POST merge: { error: "Фича не найдена" } (фронт читает error).
-        var run = features.Project(featureId, UserId);
+        // ProjectFull: ПОЛНЫЙ (необлегчённый) run — null, если эпика нет (нет/чужой/удалён —
+        // один 404, см. выше). Тело совпадает с 404 POST merge: { error: "Фича не найдена" }
+        // (фронт читает error).
+        var run = features.ProjectFull(featureId, UserId);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
         // Снимок сессий владельца — как для индекса (SessionSnapshot): sessionId события наружу
-        // только если в нём (fail-closed: удалённый/чужой чат → null).
+        // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по
+        // ПОЛНОМУ run: reason вердикта = Verification.Notes, который Slim обнуляет для
+        // списков/ответа (контракт master). run в ответе облегчён (SlimRun) — тот же контракт.
         var all = FeatureProjector.BuildEvents(run, SessionSnapshot());
         var eventsTotal = all.Count;
         var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
-        return Ok(new { run, events, eventsTotal });
+        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal });
     }
 
     // ?eventsLimit= : не задан (null) → 100; строка «0» или «all» → все (int.MaxValue) — «0»

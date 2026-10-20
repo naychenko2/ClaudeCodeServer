@@ -56,12 +56,14 @@ public class FeatureEventsTests
         ReviewOf = reviewOf,
     };
 
-    // FeatureRun из эпика + дочерних (чистое ядро Build).
+    // FeatureRun из эпика + дочерних (чистое ядро BuildCore — ПОЛНЫЙ, необлегщённый run:
+    // лента событий считается по полным задачам — reason вердикта = Verification.Notes,
+    // который Slim обнуляет; Build = SlimRun(BuildCore) — контракт master для списков/ответа).
     private static FeatureRun Run(TaskItem epic, params TaskItem[] children)
     {
         var all = new List<TaskItem> { epic };
         all.AddRange(children);
-        return FeatureProjector.Build(epic, all);
+        return FeatureProjector.BuildCore(epic, all);
     }
 
     // Снимок сессий владельца: id → FeatureIndexSession.

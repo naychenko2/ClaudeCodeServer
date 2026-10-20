@@ -571,6 +571,39 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         afterEvent.GetProperty("sessionId").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // Reason вердикта в ленте: BuildEvents считается по ПОЛНОМУ run (reason = Verification.Notes),
+    // а run в ответе облегчён (Slim обнуляет Notes — контракт master; verdict сохраняется).
+    // Мутация «BuildEvents на облегчённом run» (features.Project вместо ProjectFull) →
+    // reason = null → тест краснеет.
+    [Fact]
+    public async Task GetFeature_Вердикт_ReasonИзПолногоRun_RunВОтветеОблегчён()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var review = await CreateTaskAsync(new
+        {
+            title = "ревью", featureId = epicId, role = "review",
+            status = "done",
+            verification = new { verdict = "accepted", notes = "принято: по контракту" },
+        });
+        var reviewId = review.GetProperty("id").GetString()!;
+
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        // Вердикт-событие несёт причину витка (Verification.Notes полной задачи).
+        var accepted = FindEvent(body.GetProperty("events"), "accepted", reviewId);
+        accepted.GetProperty("reason").GetString().Should().Be("принято: по контракту");
+
+        // Run в ответе облегчён: Notes обнулён (контракт master), verdict на месте.
+        var runReview = body.GetProperty("run").GetProperty("reviews").EnumerateArray()
+            .Single(r => r.GetProperty("id").GetString() == reviewId);
+        runReview.GetProperty("verification").GetProperty("notes").ValueKind
+            .Should().Be(JsonValueKind.Null);
+        runReview.GetProperty("verification").GetProperty("verdict").GetString()
+            .Should().Be("accepted");
+    }
+
     // ─── REST POST /api/tasks/features/{featureId}/merge: мерж фичи ─────────────────────────
 
     // 503: подсистема Tasks выключена (FeatureProjector не зарегистрирован) — прямой сборкой контроллера.

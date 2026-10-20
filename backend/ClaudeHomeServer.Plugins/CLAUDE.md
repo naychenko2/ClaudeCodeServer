@@ -269,6 +269,32 @@ symlink/ReparsePoint → 404.
 Увеличение пределов — ломающее изменение для панелей, рассчитанных на текущие (меняется,
 сколько данных панель может выкачать за ход), поэтому править только с осознанием.
 
+## REST `call`: тело запроса (ADR-031 §3.4, QA-фикс L1)
+
+`POST /api/plugins/{id}/call` принимает тело (camelCase, `JsonSerializerDefaults.Web`):
+```json
+{ "capability": "notes.search", "args": { "query": "a", "limit": 3 }, "projectId": "<uuid проекта слота или null>" }
+```
+- `capability` — **обязательное**, строка из реестра операций `{область}.{глагол}`
+  (notes.search, tasks.list, net.fetch, …); пусто → 400 «Не задана capability».
+- `args` — объект, по умолчанию `{}` (сырой JSON, M8).
+- `projectId` — **необязательное**, строка или null: проект слота, в котором открыта панель.
+  **Хост (доверенный) подставляет** `projectId` из контекста слота; **панель (недоверенная)
+  сама тело не формирует** (шим моста шлёт `{capability, args, projectId}`).
+- Старое `op` и вложенный `context` **не принимаются** (никакой двойной поддержки): фронт,
+  шлющий `{op, context}`, получает 400 (capability пустое).
+
+Правила `projectId` (контроллер `PluginBridgeController.Call`):
+- задан и проект **существует и принадлежит владельцу** запроса (`IProjectManager.GetById` не
+  фильтрует по владельцу — проверка `project.OwnerId == sub` в контроллере) → вызов идёт,
+  `tasks.list`/`notes.*` ограничены проектом слота (`PluginCallContext.ProjectId`);
+- чужой/несуществующий проект → **404** (not_found), а не данные;
+- локальный проект (ADR-016) → **409** (`ProjectCapabilities.PluginsFor`), как и раньше;
+- `projectId` не задан (null) → поведение прежнее: только данные владельца (личные).
+
+Фронт: `frontend/src/lib/api.ts` `plugins.call`; контрактные тесты с двух сторон
+(бэк `PluginCallContractTests`, фронт `frontend/src/lib/__tests__/pluginCallContract.test.ts`).
+
 ## Прокси `net:{host}` (шаг 3.3, ADR-031 §3.4)
 
 Панель (sandbox-iframe, `connect-src 'none'`) не ходит в сеть сама — весь выход наружу делает

@@ -348,7 +348,9 @@ function AlarmBlock({ feature, onOpenChat, isMobile = false }: {
   // «{с}» — с какого момента (attention.since), «{причина}» — attention.reason.
   // m1: ЕДИНЫЙ формат даты с лентой (eventTimeLabel: сегодня «ЧЧ:ММ», иначе «dd.mm ЧЧ:ММ»,
   // локальный пояс, не сырой ISO); пробел перед датой — внутри since (trim не срезает его).
-  const since = att.since && eventTimeLabel(att.since) ? ` ${eventTimeLabel(att.since)}` : '';
+  // p.30: значение времени считаем ОДИН раз в переменную (не дважды в шаблоне).
+  const sinceLabel = att.since ? eventTimeLabel(att.since) : '';
+  const since = sinceLabel ? ` ${sinceLabel}` : '';
   const reason = att.reason ? `: ${att.reason}` : '';
   // m3: тревога «к мержу» — текст «К мержу» (не «Ждёт вашего решения»): главное действие
   // и макет §5.3 различают «ждёт вас»/«к мержу».

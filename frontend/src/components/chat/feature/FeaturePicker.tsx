@@ -54,7 +54,8 @@ function FeatureChip({ run, on, isPill, isMobile, inMenu, onPick }: {
       role="radio"
       aria-checked={on}
       // r-1: tooltip — полное название (текст чипа обрезается многоточием).
-      title={run.epic.title}
+      // п.32: epic nullable-терпимо — без названия tooltip/текст пустые.
+      title={run.epic?.title}
       onClick={onPick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -76,7 +77,7 @@ function FeatureChip({ run, on, isPill, isMobile, inMenu, onPick }: {
     >
       <FeatureGlyph kind={pickerGlyph(run)} size={ICON_SIZE.xs} />
       <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
-        {run.epic.title}
+        {run.epic?.title}
       </span>
       {isPill && (
         <span

@@ -4,7 +4,7 @@
 // Все функции чистые: тестируются в node без DOM.
 
 import { laneOfChain } from '../chat/feature/PipelineFlow';
-import { hhmm, dateTimeLabel, dateOnly } from '../chat/feature/featureTime';
+import { hhmm, dateOnly } from '../chat/feature/featureTime';
 import type { FeaturesIndex, FeatureIndexFeature, FeatureChatLink, FeatureEvent } from '../../types/featureIndex';
 import type { FeatureRun } from '../../types/featureRun';
 
@@ -25,18 +25,8 @@ export interface FeatureChatEntry {
   personaId: string | null;
 }
 
-// Роль чата (FeatureChatLink.kind) → русское слово (M1: не сырые коды
-// curator/executor/orchestrator). Неизвестный kind (бэк расширил контракт) —
-// как есть, не роняем строку.
-export const CHAT_ROLE_LABEL: Record<string, string> = {
-  key: 'ключевой',
-  curator: 'куратор',
-  orchestrator: 'оркестратор',
-  executor: 'исполнитель',
-};
-export function chatRoleLabel(kind: string): string {
-  return CHAT_ROLE_LABEL[kind] ?? kind;
-}
+// Роль чата (FeatureChatLink.kind) → русское слово — общий словарь (lib/featureChatRole,
+// один с плашкой FeatureBanner; M1: не сырые коды curator/executor/orchestrator).
 
 // Чаты фичи из индекса: все sessionId, у которых есть связь с featureId.
 // Ключевой чат — первым (feature.keySessionId); остальные — в порядке индекса.
@@ -241,23 +231,12 @@ export function showAllNeeded(events: FeatureEvent[], eventsTotal: number): bool
   return events.length < eventsTotal;
 }
 
-// Время в ленте (M3): сегодня — «ЧЧ:ММ», другой день — «dd.mm ЧЧ:ММ» (дата
-// вместе со временем: иначе события разных дней в ленте не различить).
-// now — «сейчас» в мс (стабильные тесты; не задано — Date.now()).
-export function eventTimeLabel(at: string, now?: number): string {
-  const d = new Date(at);
-  if (Number.isNaN(d.getTime())) return '';
-  const n = new Date(now ?? Date.now());
-  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
-  if (sameDay) return hhmm(at) ?? '';
-  return dateTimeLabel(at) ?? hhmm(at) ?? '';
-}
-
-// Время события в ленте (N2): сегодня — «ЧЧ:ММ» (одна строка); другой день — ДВЕ строки
-// в колонке 44: дата «dd.mm» сверху, время «ЧЧ:ММ» снизу. Сетка 44·16 не меняется:
-// «dd.mm ЧЧ:ММ» одной строкой в 44 px не влезает (минуты уходили под аватар).
-// now — «сейчас» в мс (стабильные тесты; не задано — Date.now()).
-export function eventTimeParts(at: string, now?: number): { date: string | null; time: string } {
+// Единая функция времени события (M3/N2): «сегодня» — только время, другой день —
+// дата + время. Отдаёт ЧАСТИ (date + time) в местном поясе; КАК их склеить (одна
+// строка «dd.mm ЧЧ:ММ» для тревоги vs две строки для ленты) решает МЕСТО РЕНДЕРА,
+// не эта функция — логика «сегодня» не продублирована. now — «сейчас» в мс
+// (стабильные тесты; не задано — Date.now()).
+function eventTimeCore(at: string, now?: number): { date: string | null; time: string } {
   const d = new Date(at);
   if (Number.isNaN(d.getTime())) return { date: null, time: '' };
   const n = new Date(now ?? Date.now());
@@ -265,4 +244,20 @@ export function eventTimeParts(at: string, now?: number): { date: string | null;
   const time = hhmm(at) ?? '';
   if (sameDay) return { date: null, time };
   return { date: dateOnly(at) ?? null, time };
+}
+
+// Время события в ЛЕНТЕ (N2): сегодня — «ЧЧ:ММ» (одна строка); другой день — ДВЕ строки
+// в колонке 44: дата «dd.mm» сверху, время «ЧЧ:ММ» снизу. Сетка 44·16 не меняется:
+// «dd.mm ЧЧ:ММ» одной строкой в 44 px не влезает (минуты уходили под аватар).
+export function eventTimeParts(at: string, now?: number): { date: string | null; time: string } {
+  return eventTimeCore(at, now);
+}
+
+// Время события ОДНОЙ строкой (тревога страницы фичи): сегодня — «ЧЧ:ММ»,
+// другой день — «dd.mm ЧЧ:ММ» (дата вместе со временем: иначе события разных дней
+// в тревоге не различить).
+export function eventTimeLabel(at: string, now?: number): string {
+  const { date, time } = eventTimeCore(at, now);
+  if (!date && !time) return '';
+  return date ? `${date} ${time}` : time;
 }

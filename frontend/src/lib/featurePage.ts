@@ -21,6 +21,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
 import { onMessage } from './signalr';
 import { getFlag, FLAGS } from './featureFlags';
+import { showToast } from './toast';
 import type { FeaturePage } from '../types/featureIndex';
 import type { ServerMessage } from '../types';
 
@@ -43,6 +44,10 @@ const LOADING: FeaturePageState = { status: 'loading' };
 let _state: FeaturePageState = LOADING;
 // Открытая страница (fid эпика); null — страница закрыта.
 let _fid: string | null = null;
+// p.15: режим «Показать все» (лента без лимита) — на время жизни страницы. Живой
+// перезапрос (task_changed → fetchPage) иначе теряет eventsLimit='all' и лента
+// сужается обратно до дефолтного лимита. Сбрасывается при закрытии/смене страницы.
+let _showAll = false;
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
 
@@ -68,7 +73,8 @@ function setState(s: FeaturePageState) {
 // прочее → error.
 function fetchPage(fid: string, initial: boolean, signal?: AbortSignal) {
   if (initial) setState({ status: 'loading' });
-  void api.tasks.getFeature(fid, undefined, signal)
+  // p.15: eventsLimit — по режиму «все» (если включён на время жизни страницы), иначе дефолт.
+  void api.tasks.getFeature(fid, _showAll ? 'all' : undefined, signal)
     .then(page => { if (_fid === fid) setState({ status: 'ok', page }); })
     .catch((e: Error & { status?: number }) => {
       if (_fid !== fid) return; // страница сменилась/закрыта — поздний ответ не затирает
@@ -77,6 +83,13 @@ function fetchPage(fid: string, initial: boolean, signal?: AbortSignal) {
       else if (e.status === 503) setState({ status: 'disabled' });
       else setState({ status: 'error' });
     });
+}
+
+// Открытие/смена страницы: fid + сброс режима «все» (p.15) одним швом. Эффект хука
+// зовёт её, тесты — напрямую (сброс живит в сторе, не в эффекте).
+function setPage(fid: string | null) {
+  _fid = fid;
+  _showAll = false;
 }
 
 // Живой перезапрос по task_changed: дебаунс 1,5 с. Если перезапрос уже в очереди —
@@ -124,12 +137,18 @@ export function refetchFeaturePage(fid: string) {
 
 // «Показать все» (макет §5): перезапрос ленты БЕЗ лимита (eventsLimit='all').
 // Не сбрасывает в loading: данные уже есть, просто обновляем events/eventsTotal.
+// p.15: включает режим «все» на время жизни страницы (живые перезапросы держат лимит).
+// p.16: сбой НЕ проглатывается — тост по канону (showToast), иначе клик без признака.
 // Действует, только пока страница открыта (_fid === fid).
 export function refetchFeaturePageAll(fid: string) {
   if (_fid !== fid) return;
+  _showAll = true;
   void api.tasks.getFeature(fid, 'all')
     .then(page => { if (_fid === fid) setState({ status: 'ok', page }); })
-    .catch(() => {});
+    .catch((e: Error) => {
+      if (_fid !== fid) return; // страница сменилась — поздний сбой не трогает
+      showToast('Лента событий', e instanceof Error ? e.message : 'Не удалось загрузить все события', 'error');
+    });
 }
 
 // Хук: данные страницы фичи.
@@ -145,12 +164,12 @@ export function useFeaturePage(fid: string | null): FeaturePageState {
     wireRealtime();
     if (!fid) {
       // Страница закрыта: сбрасываем fid (live-события больше не наши) и в loading.
-      _fid = null;
+      setPage(null);
       if (_pending) { clearTimeout(_pending); _pending = null; }
       setState(LOADING);
       return;
     }
-    _fid = fid;
+    setPage(fid); // p.15: новая страница — режим «все» сбрасывается (свежая лента)
     // Первичный запрос: один, пока страница открыта. AbortController отменяет в-полёте
     // запрос при быстрой смене fid (не плодим параллельных GET); cancel-метка _fid не
     // даёт позднему ответу (fid сменился/страница закрыта) затереть свежий срез.
@@ -170,6 +189,7 @@ export const __test = {
     _state = LOADING;
     _fid = null;
     _pending = null;
+    _showAll = false;
     _listeners.clear();
     _realtimeWired = false;
   },
@@ -177,9 +197,12 @@ export const __test = {
   state: () => _state,
   fid: () => _fid,
   setFid: (f: string | null) => { _fid = f; },
+  setPage,
   handleTaskChanged,
   isOwnEvent,
   pending: () => _pending !== null,
   scheduleRefresh,
   fetchPage,
+  showAll: () => _showAll,
+  setShowAll: (v: boolean) => { _showAll = v; },
 };

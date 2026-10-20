@@ -9,9 +9,10 @@ import { useCanHover } from '../../lib/pointer';
 import { PipelineFlow } from '../chat/feature/PipelineFlow';
 import {
   featureChats, stepRows, stepStatusLabel, taskCounters, eventRows, showAllNeeded,
-  chatRoleLabel, laneLabel, eventTimeParts,
+  laneLabel, eventTimeParts,
   type FeatureChatEntry, type StepRow, type TaskCounters, type EventRow,
 } from './featurePageBody';
+import { chatRoleLabel } from '../../lib/featureChatRole';
 import type { FeatureIndexFeature, FeaturesIndex, FeatureEvent } from '../../types/featureIndex';
 import type { FeatureRun } from '../../types/featureRun';
 
@@ -90,21 +91,18 @@ function RowAvatar({ personaId }: { personaId: string | null }) {
 // R 6, padding 0 5. «Ключевой» — фон accentLight, текст accent, 700.
 // Роль — русским словом (M1: не коды curator/executor); у исполнителя —
 // код шага и линия, если есть.
-function RoleTag({ kind, stepRef, lane, isKey, focused, tipId }: {
+function RoleTag({ kind, stepRef, lane, isKey, focused }: {
   kind: string; stepRef?: string | null; lane?: string | null; isKey?: boolean;
   // M1: фокус на кнопке-строке (предок обёртки Tooltip) — плашка поднимается по фокусу.
   focused?: boolean;
-  // M1 (минор): id плашки — кнопка-строка ссылается на неё через aria-describedby,
-  // т. к. aria-label на неинтерактивном span скринридер, скорее всего, проигнорирует.
-  tipId?: string;
 }) {
   // Ф3.2: подсказка «что значит ключевой» (единый KEY_SESSION_TOOLTIP). По наведению —
   // ui/Tooltip; по клавиатуре (M1) — тоже Tooltip, когда фокус на кнопке-строке (focused);
   // на тач Tooltip не поднимается (свой комментарий) → нативный title (long-press).
-  // Описание для скринридера — через aria-describedby на кнопке-строке (tipId), а не
-  // aria-label на span: метка неинтерактивна, и label на ней скринридер игнорирует.
-  // Метка — span (не интерактив), поэтому вложенность в <button> строки чата клик по
-  // строке не ломает (вложенный интерактив в <button> недопустим).
+  // Описание для скринридера — aria-describedby на кнопке-строке ведёт на СКРЫТЫЙ span
+  // с текстом (descId), а не aria-label на метке: метка-роль неинтерактивна, и label
+  // на ней скринридер игнорирует. Метка — span (не интерактив), поэтому вложенность в
+  // <button> строки чата клик по строке не ломает (вложенный интерактив недопустим).
   const canHover = useCanHover();
   if (isKey) {
     const chip = (
@@ -117,7 +115,7 @@ function RoleTag({ kind, stepRef, lane, isKey, focused, tipId }: {
         }}
       >ключевой</span>
     );
-    return <Tooltip content={KEY_SESSION_TOOLTIP} focused={focused} id={tipId}>{chip}</Tooltip>;
+    return <Tooltip content={KEY_SESSION_TOOLTIP} focused={focused}>{chip}</Tooltip>;
   }
   const parts = [chatRoleLabel(kind)];
   if (stepRef) parts.push(stepRef);
@@ -146,8 +144,9 @@ function ChatRow({ entry, onOpenChat, isMobile }: {
   // M1 (минор 46): описание подсказки «ключевой» — на кнопке-строке через aria-describedby,
   // ведущее на СКРЫТЫЙ span с постоянным id (не на плашку Tooltip, которая в DOM только
   // когда открыта; на тач Tooltip не поднимается → описание было бы недоступно никогда).
-  const descId = entry.isKey ? `key-desc-${entry.sessionId}` : undefined;
-  const tipId = entry.isKey ? `key-tip-${entry.sessionId}` : undefined;
+  // Префикс id — по МЕСТУ (п.58): строка страницы фичи и карточка списка могут быть в
+  // DOM одновременно (тот же чат), поэтому префиксы различны, id не коллидируют.
+  const descId = entry.isKey ? `feat-key-desc-${entry.sessionId}` : undefined;
   return (
     <button
       type="button"
@@ -160,7 +159,10 @@ function ChatRow({ entry, onOpenChat, isMobile }: {
       style={rowBase(isMobile, entry.isKey ? { background: C.accentLight } : undefined)}
     >
       {entry.isKey && (
-        <span id={descId} aria-label={KEY_SESSION_TOOLTIP} style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap' }} />
+        // Описание — ТЕКСТОМ внутри скрытого span (п.59), не aria-label на span без роли:
+        // aria-describedby читает содержимое элемента, а label на неинтерактивном span
+        // скринридер, скорее всего, проигнорирует.
+        <span id={descId} style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap' }}>{KEY_SESSION_TOOLTIP}</span>
       )}
       <span style={{ display: 'flex', flexShrink: 0 }}>
         <RowAvatar personaId={entry.personaId} />
@@ -179,7 +181,7 @@ function ChatRow({ entry, onOpenChat, isMobile }: {
             borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap',
           }}>в архиве</span>
         )}
-        <RoleTag kind={entry.link.kind} stepRef={entry.link.stepRef} lane={entry.link.lane} isKey={entry.isKey} focused={focused} tipId={tipId} />
+        <RoleTag kind={entry.link.kind} stepRef={entry.link.stepRef} lane={entry.link.lane} isKey={entry.isKey} focused={focused} />
       </span>
     </button>
   );
@@ -455,8 +457,13 @@ export function FeaturePageBody({ run, index, feature, chatNames, chatPersonas, 
         )}
     </Block>
   );
+  // p.12: итог (число задач) — ОДНА точка правды с шапкой: index.taskCount (эпик +
+  // ВСЕ дочерние, включая consult). Счётчики по статусам (готово/в работе/впереди) —
+  // по шагам (run), но итог один и тот же, что в шапке. Фичи нет в индексе — фолбэк
+  // на сумму по шагам (best available), чтобы не терять число.
+  const tasksTotal = feature?.taskCount ?? counters.total;
   const tasksBlock = (
-    <Block cap="Задачи">
+    <Block cap={`Задачи · ${tasksTotal}`}>
       <TaskCountersView c={counters} />
     </Block>
   );

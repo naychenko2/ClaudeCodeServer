@@ -9,12 +9,13 @@ import { useBackNavFrom, getBackNav, clearBackNav, recordBackNav } from '../../.
 import { openChatById } from '../../../lib/openChat';
 import { openTaskInSection } from '../../../lib/tasks';
 import { featureDisplayState } from '../../../lib/chatGroups';
+import { CHAT_ROLE_LABEL } from '../../../lib/featureChatRole';
 import { FeatureGlyph, type FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 import { FeatureRail } from './FeatureRail';
 import { FeatureModeBody } from './FeatureModeBody';
 import { FeatureBannerSheet } from './FeatureBannerSheet';
 import { dateOnly } from './featureTime';
-import type { FeatureIndexFeature, FeatureChatLink, FeatureChatKind } from '../../../types/featureIndex';
+import type { FeatureIndexFeature, FeatureChatLink } from '../../../types/featureIndex';
 import type { FeatureRun } from '../../../types/featureRun';
 
 // Плашка фичи в чате (макет features-overview.html, .fs; записка
@@ -72,13 +73,10 @@ export interface FeatureBannerModel {
   button: BannerButton;
 }
 
-// Подпись роли чата по виду связи (для curator/orchestrator без stepRef/lane).
-const KIND_LABEL: Record<FeatureChatKind, string> = {
-  key: 'ключевой',
-  curator: 'куратор',
-  orchestrator: 'оркестратор',
-  executor: 'исполнитель',
-};
+// Подпись роли чата по виду связи — общий словарь (lib/featureChatRole, один с
+// featurePageBody): curator/orchestrator/executor. Мёртвая ветка `key` убрана
+// (ADR-031 §1: бэк вид key в chats не отдаёт — ключевой чат приходит как
+// curator/orchestrator и определяется по keySessionId, не по kind).
 
 // Чистая модель: строка фичи + связь «этот чат × фича» → что рисует плашка.
 // sessionId — id текущего чата: «этот чат ключевой» = (sessionId === keySessionId)
@@ -122,7 +120,7 @@ export function featureBannerModel(
     role = 'ключевой';
   } else {
     const parts = [link.stepRef, link.lane].filter(Boolean) as string[];
-    role = parts.length ? parts.join(' · ') : (KIND_LABEL[link.kind] ?? 'участник');
+    role = parts.length ? parts.join(' · ') : (CHAT_ROLE_LABEL[link.kind] ?? 'участник');
   }
 
   // Кнопка: в КЛЮЧЕВОМ чате — «Конвейер ▾» (раскрывает тело фичи); в другом
@@ -153,7 +151,7 @@ export function backRoleLabel(sourceChatId: string, featureId: string): string {
   const entry = featureOf(sourceChatId).find(e => e.feature.featureId === featureId);
   if (!entry) return '';
   const parts = [entry.link.stepRef, entry.link.lane].filter(Boolean) as string[];
-  return parts.length ? parts.join(' · ') : (KIND_LABEL[entry.link.kind] ?? 'участник');
+  return parts.length ? parts.join(' · ') : (CHAT_ROLE_LABEL[entry.link.kind] ?? 'участник');
 }
 
 // Мультифича: число ДРУГИХ фич (entries.length − 1). Фронт не сортирует и не

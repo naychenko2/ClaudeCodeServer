@@ -4,7 +4,7 @@
 // в отличие от статической разметки, которая лишь проверяет наличие атрибутов.
 // Окружение node (без jsdom): монтируем на минимальном фейк-DOM (см. fakeDom.ts).
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { ContinueHint } from '../ContinueChat';
 import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from './fakeDom';
 
@@ -23,7 +23,7 @@ describe('ContinueHint: поведение (клики вызывают колб
     expect(props?.onClick, 'у кнопки ✕ нет onClick').toBeDefined();
     (props!.onClick as () => void)();
     expect(onSnooze, 'onSnooze не вызван кликом по ✕').toHaveBeenCalledTimes(1);
-    root.unmount();
+    act(() => { root.unmount(); });
   });
 
   it('клик по «Продолжить» вызывает onOpen', () => {
@@ -37,6 +37,6 @@ describe('ContinueHint: поведение (клики вызывают колб
     expect(props?.onClick, 'у кнопки «Продолжить» нет onClick').toBeDefined();
     (props!.onClick as () => void)();
     expect(onOpen, 'onOpen не вызван кликом по «Продолжить»').toHaveBeenCalledTimes(1);
-    root.unmount();
+    act(() => { root.unmount(); });
   });
 });

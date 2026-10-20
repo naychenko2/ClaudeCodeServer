@@ -5,7 +5,7 @@
 // Окружение node: минимальный фейк-DOM (createRoot + act, паттерн fakeDom); диалог
 // согласия — портал в document.body.
 
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import type { Project } from '../../types';
 import type { PluginDraftPreview, PluginDraftSummary } from '../../lib/api';
@@ -36,6 +36,9 @@ const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
   '../../components/chat/__tests__/fakeDom'
 );
 const { DraftsSection } = await import('./DraftsSection');
+// Корни, смонтированные тестами: unmount в afterEach снимает подписки useFeature/useDraftCard
+// на модульных сторах, иначе beforeEach-emit следующего теста рендерит «зомби»-секции вне act
+const mountedRoots: { unmount: () => void }[] = [];
 
 // === Фиксированные данные ===
 const SLUG = 'local-1/my-plugin';
@@ -110,7 +113,8 @@ function findButton(container: FNode, label: string): { onClick: () => void } | 
 // Монтирует секцию и даёт асинхронной загрузке (список + предпросмотр) дойти
 async function renderSection() {
   installFakeDom();
-  const { container } = mount(createElement(DraftsSection, { project: PROJECT }));
+  const { root, container } = mount(createElement(DraftsSection, { project: PROJECT }));
+  mountedRoots.push(root);
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
   return { container, text: () => textNodes(container).join(' ') };
 }
@@ -124,6 +128,10 @@ beforeEach(() => {
   vi.mocked(api.plugins.grant).mockReset();
   vi.mocked(api.plugins.setSecret).mockReset();
   setAllFlags({});
+});
+
+afterEach(() => {
+  for (const r of mountedRoots.splice(0, mountedRoots.length)) act(() => r.unmount());
 });
 
 afterAll(() => { uninstallFakeDom(); });

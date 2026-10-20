@@ -5,7 +5,7 @@
 // Окружение node: асинхронные загрузки (список + предпросмотр) и событие — на минимальном
 // фейк-DOM (createRoot + act, паттерн fakeDom).
 
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import type { ChatItem, ServerMessage } from '../../../types';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
@@ -39,6 +39,9 @@ const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
   '../../../components/chat/__tests__/fakeDom'
 );
 const { DraftAnchor } = await import('./records');
+// Корни, смонтированные тестами: unmount в afterEach (см. ниже) — иначе подписки
+// useFeature/useDraftEntry на модульных сторах переживают тест и дёргают «зомби»-карточки
+const mountedRoots: { unmount: () => void }[] = [];
 const { __resetDraftsStore, getDraftSnapshot } = await import('./draftsStore');
 
 // === Фиксированные данные ===
@@ -103,7 +106,8 @@ async function flushDrafts(slug: string) {
 // Монтирует якорь и даёт асинхронным загрузкам (список + предпросмотр) дойти
 async function renderAnchor(item: ChatItem) {
   installFakeDom();
-  const { container } = mount(createElement(DraftAnchor, { ctx: ctxFor(item) }));
+  const { root, container } = mount(createElement(DraftAnchor, { ctx: ctxFor(item) }));
+  mountedRoots.push(root);
   const slug = String((item as { data?: { slug?: unknown } }).data?.slug ?? '');
   await act(async () => { await flushDrafts(slug); });
   return { container, text: () => textNodes(container).join(' ') };
@@ -120,6 +124,13 @@ beforeEach(() => {
   vi.mocked(api.plugins.setSecret).mockReset();
   setAllFlags({});
   __resetDraftsStore();
+});
+
+// Unmount всех смонтированных корней: снимает подписки useFeature/useDraftEntry на
+// модульных сторах (featureFlags/draftsStore), иначе beforeEach-emit следующего теста
+// рендерит «зомби»-карточки из предыдущих тестов вне act → «not wrapped in act».
+afterEach(() => {
+  for (const r of mountedRoots.splice(0, mountedRoots.length)) act(() => r.unmount());
 });
 
 afterAll(() => { uninstallFakeDom(); });

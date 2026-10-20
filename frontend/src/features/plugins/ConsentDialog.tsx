@@ -109,6 +109,20 @@ export function submitLabelFor(mode: 'install' | 'modify', checkedCount: number,
   return `Установить · прав ${checkedCount} из ${totalCount}`;
 }
 
+// Остаточный риск (ADR-031 §3.6): WebRTC/ICE и dns-prefetch CSP не закрывает ни в
+// одном движке, поэтому выдача права на чтение данных (notes:read/tasks:read) — это
+// доверие пакету и в части утечки. По-человечески, без жаргона.
+export const RESIDUAL_RISK_NOTE =
+  'Панель плагина работает в изолированной песочнице и не может обращаться к интернету. ' +
+  'Но полностью исключить, что она незаметно передаст небольшую часть выданных ей данных наружу, ' +
+  'браузер не позволяет. Выдавайте доступ к заметкам и задачам только плагинам, которым доверяете.';
+
+// Показываем подпись, когда запрошено хотя бы одно из прав на чтение данных
+// (notes:read / tasks:read) — именно они несут остаточный риск утечки.
+export function showsResidualRiskNote(requested: string[]): boolean {
+  return requested.some(p => p === 'notes:read' || p === 'tasks:read');
+}
+
 // Инициалы для плитки: первые буквы слов имени (до 2)
 function initialsOf(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -349,6 +363,12 @@ export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret, new
               );
             })}
           </div>
+          {/* Остаточный риск: только когда запрошено чтение данных (notes:read/tasks:read) */}
+          {showsResidualRiskNote(data.requested) && (
+            <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5, marginTop: SP.sm }}>
+              {RESIDUAL_RISK_NOTE}
+            </div>
+          )}
         </div>
       )}
 

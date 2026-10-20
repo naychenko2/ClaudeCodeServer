@@ -28,6 +28,7 @@ vi.stubGlobal('document', {
 
 const {
   ConsentDialog, defaultCheckedState, findBlockingSecret, submitLabelFor,
+  RESIDUAL_RISK_NOTE, showsResidualRiskNote,
 } = await import('./ConsentDialog');
 type PluginConsentData = import('./ConsentDialog').PluginConsentData;
 type PluginConsentSecret = import('./ConsentDialog').PluginConsentSecret;
@@ -127,6 +128,39 @@ describe('ConsentDialog (рендер)', () => {
   it('значение секрета не в данных диалога (поле пустое при открытии/повторном)', () => {
     const s: PluginConsentSecret = { name: 'T', required: true, set: true, setAt: '2026-01-01T00:00:00Z' };
     expect('value' in s).toBe(false);
+  });
+});
+
+// === Остаточный риск (ADR-031 §3.6): WebRTC/ICE и dns-prefetch CSP не закрывает,
+// === поэтому выдача notes:read/tasks:read — доверие пакету и в части утечки.
+// === Показывается, когда запрошено хотя бы одно из этих прав.
+describe('ConsentDialog: остаточный риск (ADR-031 §3.6)', () => {
+  it('notes:read запрошено → подпись про остаточный риск видна', () => {
+    const html = renderConsent({ requested: ['notes:read'] }, 'install');
+    expect(html).toContain(RESIDUAL_RISK_NOTE);
+  });
+
+  it('tasks:read запрошено → подпись видна', () => {
+    const html = renderConsent({ requested: ['tasks:read'] }, 'install');
+    expect(html).toContain(RESIDUAL_RISK_NOTE);
+  });
+
+  it('notes:read + tasks:read → одна подпись (не дублируется)', () => {
+    const html = renderConsent({ requested: ['notes:read', 'tasks:read'] }, 'install');
+    expect((html.match(new RegExp(RESIDUAL_RISK_NOTE, 'g')) ?? []).length).toBe(1);
+  });
+
+  it('только net:* → подписи нет (нет прав на чтение данных)', () => {
+    const html = renderConsent({ requested: ['net:api.example.com'] }, 'install');
+    expect(html).not.toContain(RESIDUAL_RISK_NOTE);
+  });
+
+  it('showsResidualRiskNote: true для notes/tasks, false для net/secret', () => {
+    expect(showsResidualRiskNote(['notes:read'])).toBe(true);
+    expect(showsResidualRiskNote(['tasks:read'])).toBe(true);
+    expect(showsResidualRiskNote(['net:api.example.com'])).toBe(false);
+    expect(showsResidualRiskNote(['secret:API_TOKEN'])).toBe(false);
+    expect(showsResidualRiskNote([])).toBe(false);
   });
 });
 

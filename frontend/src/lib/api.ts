@@ -631,9 +631,13 @@ export interface PluginDraftPanelView {
   title: string;
 }
 // Секрет в предпросмотре (PluginDraftSecret): имя + признак «обязательный»
+// + задан ли у установленного плагина (QA-фикс R; отсутствие = старое поведение, false)
 export interface PluginDraftSecretView {
   name: string;
   required: boolean;
+  // Задан ли секрет у установленного плагина с тем же id (бэк QA-фикс R).
+  // Отсутствие (старый сервер) = false.
+  set?: boolean;
 }
 // Файл в предпросмотре (PluginDraftFile): путь, каталог/файл, размер
 export interface PluginDraftFileView {
@@ -658,6 +662,8 @@ export interface PluginDraftPreview {
   secrets: PluginDraftSecretView[];
   files: PluginDraftFileView[];
   validation: { isValid: boolean; problems: PluginDraftProblemView[] };
+  // Версия установленного плагина с тем же id (QA-фикс R); null/отсутствие = первая установка
+  installedVersion?: string | null;
 }
 // Строка diff (PluginDraftDiffLine): kind = ctx/del/add
 export interface PluginDraftDiffLine {

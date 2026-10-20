@@ -111,7 +111,11 @@ function PermsAndSecrets({ preview, isMobile }: { preview: PluginDraftPreview; i
             <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textPrimary, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {s.name}
             </span>
-            {s.required && <Badge tone="warning" size="xs" dot>не задан</Badge>}
+            {s.set === true
+              ? <Badge tone="success" size="xs" dot>задан</Badge>
+              : s.required
+                ? <Badge tone="warning" size="xs" dot>не задан</Badge>
+                : <Badge tone="neutral" size="xs">не обязателен</Badge>}
           </div>
         ))}
       </div>
@@ -496,7 +500,9 @@ export function DraftCard(props: DraftCardProps) {
             {summary.id} · {summary.version}
           </div>
           <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
-            Собран агентом · ещё не установлен · виден только вам
+            {preview.installedVersion
+              ? `Обновление установленной версии ${preview.installedVersion} · виден только вам`
+              : 'Собран агентом · ещё не установлен · виден только вам'}
           </div>
         </div>
         {preview.validation.isValid

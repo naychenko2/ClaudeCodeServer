@@ -214,6 +214,44 @@ describe('DraftCard: состояния', () => {
   });
 });
 
+// === QA-фикс R: статус «обновление» + бейдж секрета «задан» ===
+describe('DraftCard: QA-фикс R (обновление + заданный секрет)', () => {
+  it('installedVersion=8.0.0 → «установленной версии 8.0.0», без «ещё не установлен»', () => {
+    const html = renderCard({ preview: { ...PREVIEW, installedVersion: '8.0.0' } });
+    expect(html).toContain('установленной версии 8.0.0');
+    expect(html).not.toContain('ещё не установлен');
+  });
+
+  it('без installedVersion (старый сервер) → прежний статус «ещё не установлен»', () => {
+    const html = renderCard({ preview: PREVIEW });
+    expect(html).toContain('ещё не установлен');
+    expect(html).not.toContain('установленной версии');
+  });
+
+  it('секрет set=true → «задан», без «не задан»', () => {
+    const html = renderCard({ preview: { ...PREVIEW, secrets: [{ name: 'API_TOKEN', required: true, set: true }] } });
+    expect(html).toContain('задан');
+    expect(html).not.toContain('не задан');
+  });
+
+  it('секрет set=false (обязательный) → «не задан» (прежнее)', () => {
+    const html = renderCard({ preview: { ...PREVIEW, secrets: [{ name: 'API_TOKEN', required: true, set: false }] } });
+    expect(html).toContain('не задан');
+  });
+
+  it('секрет без set (старый сервер, обязательный) → «не задан» (прежнее)', () => {
+    // PREVIEW.secrets[0] = { name: 'API_TOKEN', required: true } — без set
+    const html = renderCard({ preview: PREVIEW });
+    expect(html).toContain('не задан');
+  });
+
+  it('секрет необязательный, не задан → «не обязателен»', () => {
+    const html = renderCard({ preview: { ...PREVIEW, secrets: [{ name: 'OPT_TOKEN', required: false, set: false }] } });
+    expect(html).toContain('не обязателен');
+    expect(html).not.toContain('не задан');
+  });
+});
+
 // === Ошибки сервера — понятным текстом ===
 describe('DraftCard: ошибки сервера', () => {
   it('ошибка 403/404/409 → человекочитаемый текст, не сырой статус', () => {
@@ -290,6 +328,35 @@ describe('PluginDraftAcceptResult: golden-контракт (MAJOR-1)', () => {
     };
     expect(raw.inheritedPermissions).toBeUndefined();
     expect(raw.inheritedPermissions ?? []).toEqual([]);
+  });
+});
+
+// === QA-фикс R: golden-контракт ответа превью — точные ключи installedVersion / secrets[].set ===
+// Бэк (Денис) параллельно возвращает в превью installedVersion (версия установленного плагина
+// с тем же id) и secrets[].set (задан ли секрет у установленного). Фронт читает ровно эти
+// ключи; оба опциональны — отсутствие (старый сервер) = первая установка / не задан.
+describe('PluginDraftPreview: golden-контракт (QA-фикс R)', () => {
+  it('ответ с installedVersion + secrets[].set → ключи читаются (точно installedVersion / set)', () => {
+    const raw: PluginDraftPreview = {
+      slug: 'local-1/my-plugin', name: 'My Plugin', version: '2.0.0',
+      panels: [], commands: [], skills: [], requestedPermissions: [],
+      secrets: [{ name: 'API_TOKEN', required: true, set: true }],
+      files: [], validation: { isValid: true, problems: [] },
+      installedVersion: '1.0.0',
+    };
+    expect(raw.installedVersion).toBe('1.0.0');
+    expect(raw.secrets[0].set).toBe(true);
+  });
+
+  it('ответ БЕЗ installedVersion / set (старый сервер) → undefined (не падает)', () => {
+    const raw: PluginDraftPreview = {
+      slug: 'local-1/my-plugin', name: 'My Plugin', version: '2.0.0',
+      panels: [], commands: [], skills: [], requestedPermissions: [],
+      secrets: [{ name: 'API_TOKEN', required: true }],
+      files: [], validation: { isValid: true, problems: [] },
+    };
+    expect(raw.installedVersion).toBeUndefined();
+    expect(raw.secrets[0].set).toBeUndefined();
   });
 });
 

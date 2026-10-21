@@ -3033,12 +3033,15 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         statsA2.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
             .Should().Be("approx", "журнала соседки B нет → method=approx");
-        // now-ходы (r1-r4) те же (approx-активность = now-периоды, совпадают с журналом);
-        // дневная строка r5 НЕ делится (approx: A/B не активны на pastDay) → journal ≠ approx.
-        //   A: r1(50) + r3(0) + r4(100) + r5(0) = 150 input, 75 output, 1.5 cost.
+        // Источник интервалов — ПО УЧАСТНИЦЕ (Б9c-4): у A журнал полный → её интервалы из
+        // журнала (pastDay-период есть), у B журнала нет → approx (на pastDay не активна), у C
+        // журнал полный. now-ходы (r1-r4) те же; дневная строка r5 (pastDay) — активна только A
+        // → вся (100) у A, а не пополам, как при едином источнике на всех.
+        //   A: r1(50) + r3(0) + r4(100) + r5(100) = 250 input, 125 output, 2.5 cost.
         //   B: r1(50) + r3(0) + r4(0) + r5(0) + r2(50) = 100 input, 50 output, 1.0 cost.
         //   C: r2(50) = 50 input, 25 output, 0.5 cost.
-        AssertShared(statsA2, 150, 75, 1.5);
+        // Сохранение: 250 + 100 + 50 + неактивный r3 (100) = 500.
+        AssertShared(statsA2, 250, 125, 2.5);
         AssertShared(statsB2, 100, 50, 1.0);
         AssertShared(statsC2, 50, 25, 0.5);
         foreach (var st in new[] { statsA2, statsB2, statsC2 })
@@ -3160,9 +3163,81 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         AssertShared(statsF, 45, 22, 0.5);
         AssertShared(statsG, 45, 22, 0.5);
         var hShared = statsH.GetProperty("spend").GetProperty("shared");
-        (hShared.ValueKind == JsonValueKind.Null ? 0 : hShared.GetProperty("inputTokens").GetInt64())
-            .Should().Be(0, "H не в c1 → доля 0 (знаменатель = состав c1, не объединение)");
-        (45 + 45 + 0).Should().Be(90, "сумма долей = расходу c1 (90)");
+        var inH = hShared.ValueKind == JsonValueKind.Null ? 0 : hShared.GetProperty("inputTokens").GetInt64();
+        inH.Should().Be(0, "H не в c1 → доля 0 (знаменатель = состав c1, не объединение)");
+        (SharedInput(statsF) + SharedInput(statsG) + inH).Should()
+            .Be(90, "сумма ФАКТИЧЕСКИХ долей = расходу c1 (90)");
+    }
+
+    // ─── Б9c-4, сторож: источник интервалов — ПО УЧАСТНИЦЕ (проба Глеба) ───────────────────────
+
+    // F и H делят c2; F ещё делит c1 с G, у G журнала нет. Ход в c2 в t1: по журналу F активна
+    // в t1 (approx-интервалы F начались бы только с t2). Если источник интервалов выбирается по
+    // объединению составов запроса (мутация М11), запрос F видит G без журнала → всё approx →
+    // F неактивна в t1 → доля F = 0, а запрос H (журналы F и H полные) даёт H = 45: сумма 45.
+    // По участнице: F всегда из своего журнала → F = 45, H = 45, сумма = расходу чата (90).
+    [Fact]
+    public async Task GetFeature_Сторож_ИсточникИнтерваловПоУчастнице_СохранениеРасходаЧата()
+    {
+        var now = DateTime.UtcNow;
+        var t1 = now.AddHours(-1);
+        var t2 = t1.AddMinutes(30);
+
+        var (epicFId, stepFId, c1) = await MakeFeature("g11-F");
+        var epicG = await CreateTaskAsync(new { title = "эпик-g11-G", role = "feature" });
+        var epicGId = epicG.GetProperty("id").GetString()!;
+        var stepG = await CreateTaskAsync(new { title = "шаг-g11-G", featureId = epicGId, role = "step" });
+        var stepGId = stepG.GetProperty("id").GetString()!;
+        var epicH = await CreateTaskAsync(new { title = "эпик-g11-H", role = "feature" });
+        var epicHId = epicH.GetProperty("id").GetString()!;
+        var stepH = await CreateTaskAsync(new { title = "шаг-g11-H", featureId = epicHId, role = "step" });
+        var stepHId = stepH.GetProperty("id").GetString()!;
+        var c2 = await CreatePersonalChatAsync(OwnerId, stepHId);
+        await _client.PutAsJsonAsync($"/api/tasks/{stepHId}", new { linkedSessionId = c2 });
+
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+        tasks.GetById(stepGId)!.ExecutorLaunchedBySessionId = c1;   // c1 = {F, G}
+        tasks.GetById(epicFId)!.ExecutorLaunchedBySessionId = c2;   // c2 = {F, H}
+        SetCreatedAt(tasks.GetById(epicFId)!, t1.AddHours(-1));
+        SetCreatedAt(tasks.GetById(epicGId)!, t1.AddHours(-1));
+        SetCreatedAt(tasks.GetById(epicHId)!, t1.AddHours(-1));
+        // approx F начинается ПОСЛЕ хода (t2); журнал F говорит, что в t1 она была активна.
+        tasks.GetById(stepFId)!.ClaudeStartedAt = t2;
+        tasks.GetById(stepFId)!.CompletedAt = t2.AddMinutes(20);
+        tasks.GetById(stepGId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepGId)!.CompletedAt = t1.AddMinutes(10);
+        tasks.GetById(stepHId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepHId)!.CompletedAt = t1.AddMinutes(10);
+
+        // Полные журналы только у F и H; у G журнала нет.
+        var journalDir = Path.Combine(_factory.TempDir, "journal_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(journalDir);
+        var journal = new FeatureJournalStore(journalDir);
+        AppendJournal(journal, OwnerId, epicFId,
+            ("created", t1.AddMinutes(-20), epicFId),
+            ("started", t1.AddMinutes(-10), stepFId),
+            ("stopped", t1.AddMinutes(10), stepFId));
+        AppendJournal(journal, OwnerId, epicHId,
+            ("created", t1.AddMinutes(-20), epicHId),
+            ("started", t1.AddMinutes(-10), stepHId),
+            ("stopped", t1.AddMinutes(10), stepHId));
+
+        // Ход в c2 на 90 токенов в t1.
+        var (store, reader) = SpendStoreWith(
+            ProdRecord(OwnerId, c2, stepHId, "claude-opus-4", 90, 44, 1.0, t1));
+
+        var statsF = GetFeatureStats(reader, epicFId, journal);
+        var statsH = GetFeatureStats(reader, epicHId, journal);
+
+        // Нулевая доля приходит как shared: null — читаем её как 0, а не падаем на разборе.
+        long InputOrZero(JsonElement st) =>
+            st.GetProperty("spend").GetProperty("shared") is { ValueKind: JsonValueKind.Object } sh
+                ? sh.GetProperty("inputTokens").GetInt64() : 0;
+        var inF = InputOrZero(statsF);
+        var inH = InputOrZero(statsH);
+        (inF + inH).Should().Be(90L, "сохранение: F + H = расходу чата c2 (90)");
+        inF.Should().Be(45L);
+        inH.Should().Be(45L);
     }
 
     // ─── Б9c-3, сторож (iii): B создана ПОСЛЕ хода, ход целиком у A (ход до создания) ──────────

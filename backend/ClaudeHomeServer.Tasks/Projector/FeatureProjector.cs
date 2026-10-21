@@ -77,11 +77,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         int decided = verdictBearing.Count(t => !string.IsNullOrEmpty(t.Verification?.Verdict));
         double progress = total == 0 ? 0 : Math.Round((double)decided / total, 4);
 
-        // Ready: финал ЗАКРЫТ (Done) и принят (accepted/accepted_with_remarks).
-        // Согласовано с Attention «мерж» (блок ниже в Build): и там, и тут «финал принят» = Done + accepted/awr.
-        bool ready = final is not null
-            && final.Status == TaskItemStatus.Done
-            && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
+        // Ready: финал ЗАКРЫТ (Done) и принят (accepted/accepted_with_remarks) — единый хелпер
+        // IsFinalAccepted (тот же, что у merge_pending/merged и гарда role=merge в TaskManager).
+        bool ready = IsFinalAccepted(final);
 
         // ─── Б2: цепочки шагов, источники возврата, линии ─────────────────────────────────
         // Задачи, несущие вердикт витка (ревью/проверка/финал) — для витков и возвратов.
@@ -105,15 +103,13 @@ public sealed class FeatureProjector(TaskManager tasks)
         FeatureAttention? attention = null;
 
         // waitTask — явный wait (AwaitingHumanSince, ждущий дольше всех); finalAccepted —
-        // для merge (attention) и для state (merge_pending). Вынесены в scope метода:
+        // для merge (attention) и для state (merge_pending/merged). Вынесены в scope метода:
         // используются и в attention, и в расчёте state.
         var waitTask = featureTasks
             .Where(t => t.AwaitingHumanSince is not null)
             .OrderBy(t => t.AwaitingHumanSince)
             .FirstOrDefault();
-        bool finalAccepted = final is not null
-            && final.Status == TaskItemStatus.Done
-            && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
+        bool finalAccepted = IsFinalAccepted(final);
 
         // 1. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
         //    Guard «позже ClaudeStartedAt» — защита от stale-пометки: если исполнитель
@@ -399,20 +395,32 @@ public sealed class FeatureProjector(TaskManager tasks)
                 lastActivityAt = t.ClaudeStartedAt;
         }
 
-        // Закрыта: merge-задача Done или эпик Done.
-        bool closed = (merge is not null && merge.Status == TaskItemStatus.Done)
-            || epic.Status == TaskItemStatus.Done;
+        // Состояние фичи (единая точка правды; из него bucket строки и порядок OrderRuns —
+        // см. FeatureStates). Приоритет: merged → closed → stopped → waiting → merging →
+        // merge_pending → running → not_started → idle. finalAccepted/waitTask — выше (scope метода).
+        string featureState = ComputeState(
+            epic, merge, finalAccepted,
+            hasStopped: stoppedTask is not null,
+            hasExplicitWait: waitTask is not null,
+            nowCount: nowList.Count,
+            anyStarted: featureTasks.Any(t => t.ClaudeStartedAt is not null));
+
+        // Закрыта: выводится из State (единая точка правды, §1 разреза «момент закрытия фичи»):
+        // merged или closed. Старое «merge Done || epic Done» — вторая точка правды: частичный
+        // мерж (merge Done, финал не принят, эпик открыт) закрывал фичу (инцидент 21.10).
+        bool closed = featureState is FeatureStates.Merged or FeatureStates.Closed;
 
         // Итог смерженной фичи: только у закрытой, иначе null.
         FeatureSummary? summary = null;
         if (closed)
         {
-            // МergedAt: CompletedAt merge-задачи; только когда merge-задача ЗАКРЫТА (Done).
-            // Закрытая эпиком БЕЗ merge-задачи (эпик Done, мержа нет) → mergedAt = null:
-            // фронт читает «закрыта» (bucket=closed && mergedAt=null), а не «смержена».
-            // (Раньше сюда падал CompletedAt эпика — дефект n4: закрытая без мержа
-            // показывалась «смержена <дата закрытия эпика>».)
-            var mergedAt = merge is not null && merge.Status == TaskItemStatus.Done
+            // MergedAt: CompletedAt merge-задачи — только когда State == merged (полный мерж
+            // после принятого финала, либо мерж через epic Done). Закрытая эпиком Done БЕЗ
+            // смерженной merge-задачи («честный мерж») → mergedAt = null: фронт читает «закрыта»
+            // (bucket=closed && mergedAt=null), а не «смержена». (Раньше сюда падал CompletedAt
+            // эпика — дефект n4: закрытая без мержа показывалась «смержена <дата закрытия эпика>».)
+            var mergedAt = featureState == FeatureStates.Merged
+                && merge is not null && merge.Status == TaskItemStatus.Done
                 ? merge.CompletedAt
                 : null;
             // Длительность: от старта первой задачи (ClaudeStartedAt, иначе CreatedAt) до mergedAt.
@@ -429,16 +437,6 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Loops = verdicts.Loops,
             };
         }
-
-        // Состояние фичи (единая точка правды; из него bucket строки и порядок OrderRuns —
-        // см. FeatureStates). Приоритет: merged → closed → stopped → waiting → merging →
-        // merge_pending → running → not_started → idle. finalAccepted/waitTask — выше (scope метода).
-        string featureState = ComputeState(
-            epic, merge, finalAccepted,
-            hasStopped: stoppedTask is not null,
-            hasExplicitWait: waitTask is not null,
-            nowCount: nowList.Count,
-            anyStarted: featureTasks.Any(t => t.ClaudeStartedAt is not null));
 
         // Все расчёты выше идут по исходным задачам. BuildCore возвращает ПОЛНЫЙ (необлегчённый)
         // run: на нём страница фичи (GetFeature) считает ленту событий (BuildEvents: reason
@@ -1637,6 +1635,14 @@ public sealed class FeatureProjector(TaskManager tasks)
         return chain.Distinct().ToList();
     }
 
+    // «Финал принят»: задача финала ЗАКРЫТА (Done) и вердикт accepted/accepted_with_remarks.
+    // Единая точка правды для Ready, merge_pending, merged (ComputeState) и гарда role=merge
+    // (TaskManager.ValidateFeatureFields) — без копий условия «принят/принят с замечаниями».
+    public static bool IsFinalAccepted(TaskItem? final) =>
+        final is not null
+        && final.Status == TaskItemStatus.Done
+        && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
+
     // Состояние фичи (9 значений, приоритет сверху вниз; первое совпавшее побеждает):
     // merged → closed → stopped → waiting → merging → merge_pending → running → not_started → idle.
     // Чистая функция от полей эпика/merge/тревог/«сейчас» — на ней золотые тесты (FeatureProjectorTests).
@@ -1650,11 +1656,15 @@ public sealed class FeatureProjector(TaskManager tasks)
         int nowCount,
         bool anyStarted)
     {
-        // 1. merged: merge-задача Done.
-        if (merge is not null && merge.Status == TaskItemStatus.Done) return FeatureStates.Merged;
-        // 2. closed: эпик Done, мержа нет (merged уже отфильтрован выше),
-        //    И нет активной работы (running/stopped/waiting) — иначе фича ещё «живёт».
-        if (epic.Status == TaskItemStatus.Done && nowCount == 0 && !hasStopped && !hasExplicitWait) return FeatureStates.Closed;
+        // 1. merged: merge-задача Done И (финал принят ИЛИ эпик Done).
+        //    Частичный мерж (merge Done, финал не принят, эпик открыт) фичу НЕ закрывает:
+        //    инцидент 21.10 — фича с двенадцатью шагами в работе стала «смержена».
+        if (merge is not null && merge.Status == TaskItemStatus.Done
+            && (finalAccepted || epic.Status == TaskItemStatus.Done)) return FeatureStates.Merged;
+        // 2. closed: эпик Done и не merged (merged уже отфильтрован выше).
+        //    Эпик Done — решение человека «фича закончена»: даже если работа ещё идёт
+        //    (running/stopped/waiting) — фича закрыта (старое «и нет активной работы» убрано).
+        if (epic.Status == TaskItemStatus.Done) return FeatureStates.Closed;
         // 3. stopped: есть остановленная задача (как тревога kind=stopped).
         if (hasStopped) return FeatureStates.Stopped;
         // 4. waiting: явное ожидание человека (как тревога kind=wait, КРОМЕ «мерж»).

@@ -1060,11 +1060,89 @@ public class TaskManagerTests : IDisposable
         foreach (var role in BoundRoles)
         {
             List<string>? reviewOf = role == TaskRoles.Rework ? [review.Id] : null;
-            var task = _sut.Create(null, "u", new CreateTaskRequest("t",
-                FeatureId: epic.Id, Role: role, ReviewOf: reviewOf));
+            // merge-роль (Б-cl) требует принятого финала: финал в цикле создаём принятым
+            // (Done + accepted) — он последний, поэтому гард merge (LastOrDefault) его видит.
+            var req = new CreateTaskRequest("t",
+                FeatureId: epic.Id, Role: role, ReviewOf: reviewOf);
+            if (role == TaskRoles.Final)
+                req = req with { Status = TaskItemStatus.Done,
+                    Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted } };
+            var task = _sut.Create(null, "u", req);
             task.FeatureId.Should().Be(epic.Id);
             task.Role.Should().Be(role);
         }
+    }
+
+    // ─── Б-cl: гард role=merge (финал принят) ─────────────────────────────────────────────────
+    // role=merge (создание; update — только при СМЕНЕ роли на merge) при фиче НЕ Ready
+    // (финал не принят) → 400. Update merge-задачи без смены роли — гард не срабатывает.
+
+    // 7a. tasks_create role=merge, финал НЕ принят ⇒ 400 с текстом.
+    [Fact]
+    public void Create_Merge_ФиналНеПринят_400()
+    {
+        var epic = CreateEpic("u");
+        // Финал есть, но returned (не принят).
+        _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Returned }));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Фича ещё не готова к мержу*")
+            .WithMessage("*финал не принят*");
+    }
+
+    // 7b. tasks_create role=merge, финал принят ⇒ ок.
+    [Fact]
+    public void Create_Merge_ФиналПринят_Ок()
+    {
+        var epic = CreateEpic("u");
+        _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+
+        var task = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        task.Role.Should().Be(TaskRoles.Merge);
+        task.FeatureId.Should().Be(epic.Id);
+    }
+
+    // 7c. update: смена роли НА merge при непринятом финале ⇒ гард.
+    [Fact]
+    public void Update_РольНаMerge_Гард()
+    {
+        var epic = CreateEpic("u");
+        // Обычная задача фичи (роль step), финала нет.
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "Ш1"));
+
+        var act = () => _sut.Update(step.Id, new UpdateTaskRequest(Role: TaskRoles.Merge));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Фича ещё не готова к мержу*");
+    }
+
+    // 7d. update merge-задачи БЕЗ смены роли (roleBefore == merge) ⇒ гард не срабатывает.
+    [Fact]
+    public void Update_Merge_БезСменыРоль_ГардНеСрабатывает()
+    {
+        var epic = CreateEpic("u");
+        // Финал принят → merge-задачу можно создать.
+        _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        // Обновляем merge-задачу, НЕ меняя роль (roleBefore == merge) — гард не срабатывает,
+        // даже если финал «разпринять» (здесь финал всё ещё принят, но ключевое — роль не меняется).
+        var updated = _sut.Update(merge.Id, new UpdateTaskRequest(Title: "мерж (правка)"));
+
+        updated.Role.Should().Be(TaskRoles.Merge);
     }
 
     [Fact]

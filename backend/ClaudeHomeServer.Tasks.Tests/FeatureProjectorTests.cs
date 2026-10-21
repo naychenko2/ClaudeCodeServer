@@ -909,6 +909,240 @@ public class FeatureProjectorTests
             "закрыта эпиком без мержа → mergedAt = null (мутация: epic.CompletedAt красит)");
     }
 
+    // ─── Б-cl: правило закрытия (единая функция ComputeState) ─────────────────────────────────
+    // merged ⇔ merge Done ∧ (финал принят ∨ эпик Done); closed ⇔ эпик Done ∧ ¬merged.
+    // Инцидент 21.10: merge Done без принятого финала закрывал фичу (12 шагов в работе).
+
+    // Хелпер: финал с заданным вердиктом (Done + вердикт).
+    private static TaskItem Final(string epicId, string verdict) => new()
+    {
+        Id = "f1", FeatureId = epicId, Role = TaskRoles.Final,
+        Status = TaskItemStatus.Done,
+        CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+        Verification = new TaskVerification { Verdict = verdict },
+    };
+
+    // 1. Частичный мерж на ЖИВОЙ форме (инцидент 21.10): merge Done, финала нет, эпик открыт,
+    //    ВСЕ шаги в работе ⇒ НЕ merged, НЕ closed, Closed=false, Summary=null.
+    [Fact]
+    public void Build_ЧастичныйМерж_ЖиваяФорма_НеЗакрыта()
+    {
+        const string epicId = "epic-partial-merge";
+        var t = new DateTime(2026, 10, 17, 8, 0, 0);
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        // Двенадцать шагов в работе — как в инциденте (фича с двенадцатью шагами).
+        var steps = Enumerable.Range(1, 12).Select(n => new TaskItem
+        {
+            Id = $"s{n}", FeatureId = epicId, Role = TaskRoles.Step, StepRef = $"Ш{n}",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddMinutes(n),
+        }).ToList();
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done, CompletedAt = t.AddHours(3),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, merge, ..steps]);
+
+        run.State.Should().NotBe(FeatureStates.Merged, "merge Done, но финал не принят и эпик открыт → не merged");
+        run.State.Should().NotBe(FeatureStates.Closed, "эпик не Done → не closed");
+        run.Closed.Should().BeFalse("частичный мерж (12 шагов в работе) фичу не закрывает");
+        run.Summary.Should().BeNull("не закрыта → Summary=null");
+    }
+
+    // 2. merge Done, финал returned (не принят), эпик открыт ⇒ не закрыта.
+    [Fact]
+    public void Build_МержDone_ФиналReturned_НеЗакрыта()
+    {
+        const string epicId = "epic-merge-final-returned";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var final = Final(epicId, TaskVerdicts.Returned);
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done, CompletedAt = new DateTime(2026, 10, 17, 15, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final, merge]);
+
+        run.State.Should().NotBe(FeatureStates.Merged, "финал returned (не принят) → не merged");
+        run.Closed.Should().BeFalse("финал не принят, эпик не Done → не закрыта");
+    }
+
+    // 3. merge Done + финал принят (accepted И отдельно accepted_with_remarks) ⇒ merged,
+    //    MergedAt = merge.CompletedAt.
+    [Theory]
+    [InlineData(TaskVerdicts.Accepted)]
+    [InlineData(TaskVerdicts.AcceptedWithRemarks)]
+    public void Build_МержDone_ФиналПринят_Merged(string verdict)
+    {
+        const string epicId = "epic-merge-final-accepted";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var final = Final(epicId, verdict);
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done, CompletedAt = new DateTime(2026, 10, 17, 15, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final, merge]);
+
+        run.State.Should().Be(FeatureStates.Merged, $"финал {verdict} + merge Done → merged");
+        run.Closed.Should().BeTrue();
+        run.Summary!.MergedAt.Should().Be(new DateTime(2026, 10, 17, 15, 0, 0),
+            "merged → MergedAt = merge.CompletedAt");
+    }
+
+    // 4. эпик Done, merge-задачи нет ⇒ closed, MergedAt=null. (StepsOpen > 0 — в Б-pr2.)
+    [Fact]
+    public void Build_ЭпикDone_БезМержа_Closed()
+    {
+        const string epicId = "epic-closed-no-merge-2";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done, CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic]);
+
+        run.State.Should().Be(FeatureStates.Closed, "эпик Done, мержа нет → closed");
+        run.Closed.Should().BeTrue();
+        run.Summary!.MergedAt.Should().BeNull("closed без merge-задачи → MergedAt=null");
+    }
+
+    // 5. эпик Done + merge Done БЕЗ принятого финала (как ghostcli) ⇒ merged.
+    [Fact]
+    public void Build_ЭпикDone_МержDone_БезФинала_Merged()
+    {
+        const string epicId = "epic-ghostcli";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Status = TaskItemStatus.Done, CompletedAt = new DateTime(2026, 10, 18, 12, 0, 0),
+        };
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done, CompletedAt = new DateTime(2026, 10, 18, 15, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, merge]);
+
+        run.State.Should().Be(FeatureStates.Merged, "merge Done ∧ эпик Done → merged (финала не нужно)");
+        run.Summary!.MergedAt.Should().Be(new DateTime(2026, 10, 18, 15, 0, 0),
+            "merged → MergedAt = merge.CompletedAt");
+    }
+
+    // 6. Табличный: Closed, Bucket, ClosureAt согласованы с State на всех 9 состояниях.
+    //    Мутация: вернуть Closed = «merge Done || epic Done» (старая вторая точка) →
+    //    merged-строка (merge Done, финал не принят, эпик открыт) даст Closed=true ≠ State.
+    [Fact]
+    public void Закрытие_СогласованоСState_ВсеДевять()
+    {
+        var t = new DateTime(2026, 10, 17);
+
+        // (state, epic, children) — epic один объект (и в параметре, и в children),
+        // children — только дочерние (FeatureId = epic.Id).
+        (string State, TaskItem Epic, List<TaskItem> Children)[] cases =
+        [
+            ("merged",
+                new TaskItem { Id = "e1", Role = TaskRoles.Feature, CreatedAt = t },
+                [Final("e1", TaskVerdicts.Accepted),
+                 new TaskItem { Id = "m1", FeatureId = "e1", Role = TaskRoles.Merge, Status = TaskItemStatus.Done, CompletedAt = t.AddHours(3) }]),
+            ("closed",
+                new TaskItem { Id = "e2", Role = TaskRoles.Feature, Status = TaskItemStatus.Done, CompletedAt = t.AddHours(2), CreatedAt = t },
+                []),
+            ("stopped",
+                new TaskItem { Id = "e3", Role = TaskRoles.Feature, CreatedAt = t },
+                [new TaskItem { Id = "s1", FeatureId = "e3", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.InProgress,
+                     ClaudeStartedAt = t, ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed" }]),
+            ("waiting",
+                new TaskItem { Id = "e4", Role = TaskRoles.Feature, CreatedAt = t },
+                [new TaskItem { Id = "s1", FeatureId = "e4", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.InProgress,
+                     AwaitingHumanSince = t, AwaitingHumanReason = "ждём" }]),
+            ("merging",
+                new TaskItem { Id = "e5", Role = TaskRoles.Feature, CreatedAt = t },
+                [new TaskItem { Id = "m2", FeatureId = "e5", Role = TaskRoles.Merge, Status = TaskItemStatus.InProgress }]),
+            ("merge_pending",
+                new TaskItem { Id = "e6", Role = TaskRoles.Feature, CreatedAt = t },
+                [Final("e6", TaskVerdicts.Accepted)]),
+            ("running",
+                new TaskItem { Id = "e7", Role = TaskRoles.Feature, CreatedAt = t },
+                [new TaskItem { Id = "s1", FeatureId = "e7", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.InProgress, ClaudeStartedAt = t }]),
+            ("not_started",
+                new TaskItem { Id = "e8", Role = TaskRoles.Feature, CreatedAt = t },
+                [new TaskItem { Id = "s1", FeatureId = "e8", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.Todo }]),
+            ("idle",
+                new TaskItem { Id = "e9", Role = TaskRoles.Feature, CreatedAt = t },
+                [new TaskItem { Id = "s1", FeatureId = "e9", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.Done,
+                     ClaudeStartedAt = t, CompletedAt = t.AddHours(1) }]),
+        ];
+
+        foreach (var (state, epic, children) in cases)
+        {
+            var run = FeatureProjector.Build(epic, [epic, ..children]);
+            run.State.Should().Be(state, $"сценарий обязан дать state={state}");
+
+            // Closed выводится из State: merged/closed → true, иначе false.
+            run.Closed.Should().Be(state is FeatureStates.Merged or FeatureStates.Closed,
+                $"Closed согласован с State={state}");
+
+            // Bucket выводится из State (единая точка правды, FeatureProjector.Bucket):
+            // merged/closed → closed; stopped/waiting/merge_pending → attention;
+            // merging/running → running; not_started/idle → idle.
+            var expectedBucket = state switch
+            {
+                FeatureStates.Merged or FeatureStates.Closed => "closed",
+                FeatureStates.Stopped or FeatureStates.Waiting or FeatureStates.MergePending => "attention",
+                FeatureStates.Merging or FeatureStates.Running => "running",
+                _ => "idle",
+            };
+            FeatureProjector.Bucket(run).Should().Be(expectedBucket,
+                $"Bucket согласован с State={state}");
+
+            // ClosureAt (через FeatureTimeline.To = ClosureAt(run) ?? now) согласован с State:
+            // merged → merge.CompletedAt; closed → epic.CompletedAt; иначе → now (ClosureAt=null).
+            // Мутация 4 (ClosureAt снова по Merge.Done) красит: для merged/closed To сместится,
+            // а для открытых состояний — нет.
+            var now = t.AddHours(5);
+            var timeline = FeatureTimeline.Build(run, null, now);
+            var expectedTo = state switch
+            {
+                FeatureStates.Merged => run.Merge!.CompletedAt,
+                FeatureStates.Closed => run.Epic.CompletedAt,
+                _ => now,
+            };
+            timeline.To.Should().Be(expectedTo, $"ClosureAt согласован с State={state}");
+        }
+    }
+
+    // 6b. Частичный мерж (merge Done, финал не принят, эпик открыт) → ClosureAt = null (To = now),
+    //     НЕ merge.CompletedAt. Мутация 4 (ClosureAt по Merge.Done) красит: To = merge.CompletedAt.
+    [Fact]
+    public void Закрытие_ЧастичныйМерж_ClosureAtNull()
+    {
+        var t = new DateTime(2026, 10, 17);
+        const string epicId = "e-partial-closure";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+        };
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done, CompletedAt = t.AddHours(3),
+        };
+        var run = FeatureProjector.Build(epic, [epic, step, merge]);
+
+        var now = t.AddHours(5);
+        var timeline = FeatureTimeline.Build(run, null, now);
+        timeline.To.Should().Be(now,
+            "частичный мерж (State != merged) → ClosureAt = null → To = now, не merge.CompletedAt");
+    }
+
     // ─── Б3: порядок фич (правило v2) ────────────────────────────────────────────────────────
 
     // Порядок на трёх фичах (ждёт · идёт · спокойная) + закрытая — последней.
@@ -1598,12 +1832,19 @@ public class FeatureProjectorTests
     {
         var t = new DateTime(2026, 10, 17);
 
-        // 1. merged: merge-задача Done.
+        // 1. merged: merge-задача Done И (финал принят ИЛИ эпик Done).
         {
             var epic = new TaskItem { Id = "e-merged", Role = TaskRoles.Feature };
+            var final = new TaskItem
+            {
+                Id = "f1", FeatureId = "e-merged", Role = TaskRoles.Final,
+                Status = TaskItemStatus.Done,
+                CompletedAt = t,
+                Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+            };
             var merge = new TaskItem { Id = "m1", FeatureId = "e-merged", Role = TaskRoles.Merge, Status = TaskItemStatus.Done };
-            var run = FeatureProjector.Build(epic, [epic, merge]);
-            run.State.Should().Be(FeatureStates.Merged, "merge Done → merged");
+            var run = FeatureProjector.Build(epic, [epic, final, merge]);
+            run.State.Should().Be(FeatureStates.Merged, "merge Done + финал принят → merged");
         }
 
         // 2. closed: эпик Done, мержа нет.
@@ -1721,8 +1962,15 @@ public class FeatureProjectorTests
             ("merged", () =>
             {
                 var epic = new TaskItem { Id = "e-lit-1", Role = TaskRoles.Feature };
+                var final = new TaskItem
+                {
+                    Id = "f1", FeatureId = "e-lit-1", Role = TaskRoles.Final,
+                    Status = TaskItemStatus.Done,
+                    CompletedAt = t,
+                    Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+                };
                 var merge = new TaskItem { Id = "m1", FeatureId = "e-lit-1", Role = TaskRoles.Merge, Status = TaskItemStatus.Done };
-                return FeatureProjector.Build(epic, [epic, merge]);
+                return FeatureProjector.Build(epic, [epic, final, merge]);
             }),
             ("closed", () =>
             {
@@ -1858,10 +2106,16 @@ public class FeatureProjectorTests
         runPending.State.Should().Be(FeatureStates.MergePending);
         FeatureProjector.Bucket(runPending).Should().Be("attention", "merge_pending → attention (ждёт мержа)");
 
-        // merged: merge Done → bucket = closed.
+        // merged: merge Done + финал принят → bucket = closed.
         var epicMg = new TaskItem { Id = "e-bk-merged", Role = TaskRoles.Feature };
+        var finalMg = new TaskItem
+        {
+            Id = "f1", FeatureId = "e-bk-merged", Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done, CompletedAt = t,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
         var mergeDone = new TaskItem { Id = "m1", FeatureId = "e-bk-merged", Role = TaskRoles.Merge, Status = TaskItemStatus.Done };
-        var runMerged = FeatureProjector.Build(epicMg, [epicMg, mergeDone]);
+        var runMerged = FeatureProjector.Build(epicMg, [epicMg, finalMg, mergeDone]);
         runMerged.State.Should().Be(FeatureStates.Merged);
         FeatureProjector.Bucket(runMerged).Should().Be("closed", "merged → closed");
 

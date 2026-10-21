@@ -564,14 +564,17 @@ public sealed record FeatureTimeline(
 
     // ─── Вспомогательные ──────────────────────────────────────────────────────────────────────
 
-    // Момент мержа/закрытия: merge Done → CompletedAt merge; epic Done → CompletedAt epic;
-    // иначе null (To = now).
+    // Момент мержа/закрытия: выводится из State (единая точка правды, §1 разреза
+    // «момент закрытия фичи»): merged → CompletedAt merge-задачи (аномалия данных —
+    // merge Done без CompletedAt → CompletedAt эпика, прежний фолбэк); closed → CompletedAt
+    // эпика; иначе null (To = now). Старое «merge Done → merge, иначе epic» — вторая точка
+    // правды: частичный мерж (merge Done, фича НЕ закрыта) обрезал график до момента мержа.
     private static DateTime? ClosureAt(FeatureRun run)
     {
-        if (run.Merge is { Status: TaskItemStatus.Done } && run.Merge.CompletedAt is not null)
-            return run.Merge.CompletedAt.Value;
-        if (run.Epic.Status == TaskItemStatus.Done && run.Epic.CompletedAt is not null)
-            return run.Epic.CompletedAt.Value;
+        if (run.State == FeatureStates.Merged)
+            return run.Merge is { CompletedAt: not null } ? run.Merge.CompletedAt : run.Epic.CompletedAt;
+        if (run.State == FeatureStates.Closed)
+            return run.Epic.CompletedAt;
         return null;
     }
 

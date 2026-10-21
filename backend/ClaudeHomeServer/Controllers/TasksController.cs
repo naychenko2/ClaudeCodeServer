@@ -919,9 +919,11 @@ public class TasksController(
         // 404 с телом: фича чужая/удалена — то же тело, что у GET features/{id} (фронт читает error).
         if (run is null) return NotFound(new { error = "Фича не найдена" });
 
-        // «Уже смержена» (merge-задача Done) и «закрыта» (эпик Done) — ПЕРЕД «финал не принят»:
-        // у закрытой фичи без принятого финала причина — «закрыта», а не «финал не принят» (п.5).
-        if (run.Merge is { Status: TaskItemStatus.Done })
+        // «Уже смержена» (State == merged: merge Done ∧ (финал принят ∨ эпик Done)) и «закрыта»
+        // (State == closed) — ПЕРЕД «финал не принят»: у закрытой фичи без принятого финала
+        // причина — «закрыта», а не «финал не принят» (п.5). Частичный мерж (merge Done, финал не
+        // принят, эпик открыт) → State != merged: верхний гард НЕ срабатывает (инцидент 21.10).
+        if (run.State == FeatureStates.Merged)
             return Conflict(new { error = "Фича уже смержена" });
         if (run.Closed)
             return Conflict(new { error = "Фича закрыта" });
@@ -969,8 +971,14 @@ public class TasksController(
         try
         {
             // Идемпотентность: merge-задача уже есть (свежий снимок — после gate).
-            var existing = features.Project(featureId, UserId)?.Merge;
-            if (existing is not null)
+            var freshRun = features.Project(featureId, UserId);
+            var existing = freshRun?.Merge;
+            // Частичный мерж (инцидент 21.10): merge-задача Done, но фича НЕ смержена
+            // (State != merged) — для идемпотентности считается отсутствующей: создаём новую,
+            // не 409 (старая Done-задача остаётся в трекере как история частичного мержа).
+            bool existingIsPartialDone = existing is { Status: TaskItemStatus.Done }
+                && freshRun?.State != FeatureStates.Merged;
+            if (existing is not null && !existingIsPartialDone)
             {
                 // п.2/п.73: merge-задача закрыта (Done) в окне между снимком и гейтом → 409: дубль
                 // не проходит (верхний гард смотрел на устаревший снимок). Текст отличен от верхнего

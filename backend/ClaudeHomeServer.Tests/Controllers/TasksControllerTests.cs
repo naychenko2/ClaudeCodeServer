@@ -1476,6 +1476,40 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         }
     }
 
+    // Б-cl (тест 8): частичный мерж — merge-задача Done, но State != merged (финал не принят,
+    // эпик открыт). Старый верхний гард «Merge.Done → Фича уже смержена» давал ложный 409;
+    // новый — по State == merged, поэтому фича не «уже смержена» и упирается в «финал не принят».
+    // (Полный путь «создать новую» в идемпотентности — race-only: pre-gate/post-gate расходятся.)
+    [Fact]
+    public async Task MergeFeature_ЧастичныйМерж_НеУжеСмержена()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        // 1. Принятый финал — чтобы гард role=merge при создании merge-задачи прошёл.
+        var final = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "финал", featureId = epicId, role = "final", status = "done",
+            verification = new { verdict = "accepted" },
+        });
+        // 2. Merge-задача (Done) — гард прошёл (финал принят).
+        await CreateProjectTaskAsync(projectId, new
+        {
+            title = "мерж", featureId = epicId, role = "merge", status = "done",
+        });
+        // 3. «Разпринимаем» финал (returned) → частичный мерж: merge Done, финал не принят,
+        //    эпик открыт → State != merged.
+        await _client.PutAsJsonAsync($"/api/tasks/{final.GetProperty("id").GetString()}",
+            new { verification = new { verdict = "returned" } });
+
+        var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var error = body.GetProperty("error").GetString()!;
+        error.Should().Contain("Финал не принят",
+            "частичный мерж (merge Done, финал не принят) → «финал не принят»");
+        error.Should().NotContain("уже смержена",
+            "верхний гард теперь по State == merged, а не по Merge.Done — ложного «уже смержена» нет");
+    }
+
     // M5: кросс-проектная DevOps-персона (проектная, с ProjectTasks-привязкой к проекту эпика)
     // не даёт ложного 409 — валидация идёт с externalScopes, как в Create.
     [Fact]

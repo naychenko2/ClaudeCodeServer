@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks.Journal;
+using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.Tasks;
@@ -505,13 +506,15 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // по нему сверяются ВСЕ ссылки (эпик и reviewOf), иначе чужой владелец читал бы разметку.
     // planSteps — эффективный список шагов плана (только у role=plan); enforceReworkReviewOf —
     // проверять ли обязательную связь доработки с ревью (Create — всегда, Update — только если
-    // поле reviewOf меняют). Бросает InvalidOperationException с внятным текстом — вызывающая
-    // сторона превращает в 400. Тихо отбрасывать неверное значение нельзя: агент не узнает,
-    // что разметка не легла.
+    // поле reviewOf меняют). roleBefore — роль ДО операции (Create — null, Update — текущая
+    // роль задачи): гард role=merge срабатывает только при СМЕНЕ роли на merge. Бросает
+    // InvalidOperationException с внятным текстом — вызывающая сторона превращает в 400.
+    // Тихо отбрасывать неверное значение нельзя: агент не узнает, что разметка не легла.
     private void ValidateFeatureFields(
         string? featureId, string? role, string? verdict,
         List<string>? reviewOf, string? personaId, string ownerId,
-        List<PlannedStep>? planSteps = null, bool enforceReworkReviewOf = false)
+        List<PlannedStep>? planSteps = null, bool enforceReworkReviewOf = false,
+        string? roleBefore = null)
     {
         // role — только из списка TaskRoles
         if (role is not null && !TaskRoles.All.Contains(role))
@@ -545,6 +548,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 throw new InvalidOperationException("Эпик принадлежит другому владельцу.");
             if (epic.Role != TaskRoles.Feature)
                 throw new InvalidOperationException($"Это не эпик фичи: у задачи «{featureId}» роль ≠ feature.");
+
+            // role=merge (создание, либо update с СМЕНЕЙ роли на merge): фича обязана быть
+            // Ready — финал принят (тот же хелпер, что в проекторе). Частичный мерж/выкатка
+            // куска — без роли, с featureId эпика; «полный мерж без финала» человек оформляет
+            // закрытием эпика (правило закрытия даёт merged). Flag обхода не заводим.
+            // Update merge-задачи без смены роли (roleBefore == merge) — гард не срабатывает.
+            if (role == TaskRoles.Merge && (roleBefore is null || roleBefore != TaskRoles.Merge)
+                && !FeatureProjector.IsFinalAccepted(FeatureFinal(featureId, ownerId)))
+                throw new InvalidOperationException(
+                    "Фича ещё не готова к мержу: финал не принят. Кусок работы (частичный мерж, выкатка части) "
+                    + "заводите без роли, с featureId эпика. Закрыть фичу без финала может человек — закрытием эпика.");
         }
 
         // reviewOf: каждая ссылка — на задачу той же фичи (featureId) и того же владельца
@@ -653,6 +667,14 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (candidate.FeatureId is not null) return GetById(candidate.FeatureId);
         return candidate.Role == TaskRoles.Feature ? candidate : null;
     }
+
+    // Финал фичи: тот же выбор, что в проекторе (FeatureProjector.BuildCore:
+    // children.LastOrDefault(role=final)) в порядке GetByOwner. null — финала нет.
+    // Единая точка правды для гарда role=merge (ValidateFeatureFields) и ComputeState.
+    private TaskItem? FeatureFinal(string featureId, string ownerId) =>
+        GetByOwner(ownerId)
+            .Where(t => t.FeatureId == featureId)
+            .LastOrDefault(t => t.Role == TaskRoles.Final);
 
     // Следующее значение Order для новой задачи владельца — в конец глобального порядка.
     // Внутри колонки относительный порядок сохраняется (сортировка на доске по Order).
@@ -779,7 +801,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var enforceReworkReviewOf = req.ReviewOf is not null
             || (effRole == TaskRoles.Rework && task.Role != TaskRoles.Rework);
         ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "",
-            planSteps: effPlanSteps, enforceReworkReviewOf);
+            planSteps: effPlanSteps, enforceReworkReviewOf, roleBefore: task.Role);
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;

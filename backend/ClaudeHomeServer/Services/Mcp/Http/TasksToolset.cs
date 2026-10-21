@@ -1478,14 +1478,14 @@ public sealed class TasksToolset(
     private static JsonObject FeatureIdSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Id задачи-эпика фичи (см. инструкции сервера tasks)",
+        ["description"] = "Id задачи-эпика фичи; без роли — частичный мерж (см. инструкции сервера tasks)",
     };
 
     private static JsonObject RoleSchema() => new()
     {
         ["type"] = "string",
         ["enum"] = StringArray(TaskRoles.All),
-        ["description"] = "Роль в фиче: feature · cut · plan · step · rework · review · qa · final · merge · consult",
+        ["description"] = "Роль в фиче: feature · cut · plan · step · rework · review · qa · final · merge (после принятого финала) · consult",
     };
 
     private static JsonObject StepRefSchema() => new()

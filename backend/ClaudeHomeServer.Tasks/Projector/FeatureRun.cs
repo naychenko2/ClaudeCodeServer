@@ -64,7 +64,8 @@ public sealed class FeatureRun
     public int StepsTotal { get; init; }
     // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
     public DateTime? LastActivityAt { get; init; }
-    // Закрыта: merge-задача Done или эпик Done.
+    // Закрыта: выводится из State (merged или closed) — единая точка правды
+    // (старое «merge Done || epic Done» — вторая точка, закрывало фичу частичным мержем).
     public bool Closed { get; init; }
     // Итог смерженной фичи: только у закрытой, иначе null.
     public FeatureSummary? Summary { get; init; }
@@ -337,9 +338,11 @@ public sealed class FeatureLane
 // (FeatureProjector.Bucket) и порядок OrderRuns — они не расходятся.
 public static class FeatureStates
 {
-    // merge-задача фичи Done — фича смержена.
+    // merge-задача Done И (финал принят ИЛИ эпик Done) — фича смержена. Частичный мерж
+    // (merge Done, финал не принят, эпик открыт) фичу не смерживает (инцидент 21.10).
     public const string Merged = "merged";
-    // Эпик Done, мержа нет — фича закрыта (без мержа).
+    // Эпик Done и не merged — фича закрыта: решение человека «фича закончена»
+    // (даже если работа ещё идёт; без мержа — «честный мерж»).
     public const string Closed = "closed";
     // Есть остановленная задача (тревога kind=stopped).
     public const string Stopped = "stopped";

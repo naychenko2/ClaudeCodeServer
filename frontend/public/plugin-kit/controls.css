@@ -10,8 +10,10 @@
  * (в тёмной теме --cc-accent виден на любом фоне).
  *
  * Токены, доступные панели (CC_TOKEN_MAP, PluginFrame.tsx):
- *   --cc-bg, --cc-fg, --cc-fg-muted, --cc-accent, --cc-accent-fg,
- *   --cc-border, --cc-bg-inset, --cc-success, --cc-warning, --cc-danger, --cc-info
+ *   --cc-bg, --cc-fg, --cc-fg-muted, --cc-accent, --cc-accent-fg, --cc-accent-soft,
+ *   --cc-border, --cc-bg-inset, --cc-bg-panel, --cc-bg-selected, --cc-surface,
+ *   --cc-success, --cc-warning, --cc-danger, --cc-info,
+ *   --cc-success-text, --cc-warning-text, --cc-danger-text, --cc-danger-border
  */
 
 /* === Кнопка === */
@@ -29,11 +31,14 @@
   border: 1px solid transparent;
   border-radius: 10px;       /* R.lg */
   padding: 8px 12px;         /* SP.sm SP.md */
-  background: var(--cc-bg-inset);
+  min-height: 40px;          /* тач-цель ≥ 40px (docs/design/guidelines.md) */
+  /* приподнятая поверхность (bg-panel), а не утопленный inset: в тёмной теме
+     --cc-bg-inset темнее подложки карточки и кнопка читалась чёрной ямой */
+  background: var(--cc-bg-panel);
   color: var(--cc-fg);
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.cc-btn:hover { background: var(--cc-border); }
+.cc-btn:hover { background: var(--cc-bg-selected); }
 .cc-btn:focus-visible { outline: 2px solid var(--cc-accent); outline-offset: 2px; }
 .cc-btn:disabled { opacity: 0.55; cursor: not-allowed; }
 
@@ -43,7 +48,9 @@
   color: var(--cc-accent-fg);
   border-color: transparent;
 }
-.cc-btn--primary:hover { background: color-mix(in srgb, var(--cc-accent) 88%, black); }
+/* hover без затемнения заливки: у Button хоста его нет (только transition + ореол),
+   color-mix(..., black) в тёмной теме «проваливал» кнопку в темноту */
+.cc-btn--primary:hover { background: var(--cc-accent); }
 
 /* призрак: прозрачный фон, рамка */
 .cc-btn--ghost {
@@ -59,13 +66,28 @@
   color: var(--cc-accent-fg);
   border-color: transparent;
 }
-.cc-btn--danger:hover { background: color-mix(in srgb, var(--cc-danger) 88%, black); }
+/* как primary: hover без затемнения — заливка danger статична (поведение Button хоста) */
+.cc-btn--danger:hover { background: var(--cc-danger); }
 
-/* малый: компактнее */
+/* малый: компактнее (шрифт/радиус), но тач-цель та же ≥ 40px */
 .cc-btn--sm {
   font-size: 12px;          /* FS.sm */
   padding: 4px 8px;         /* SP.xs SP.sm */
   border-radius: 8px;       /* R.md */
+  min-height: 40px;
+}
+
+/* кнопка в работе: спиннер + приглушённая заливка accentSoft (как loading у Button хоста).
+   Определяется ПОСЛЕ --primary/--danger: при обоих классах заливка loading побеждает. */
+.cc-btn--loading { background: var(--cc-accent-soft); color: var(--cc-accent-fg); cursor: progress; }
+.cc-btn--loading::before {
+  content: '';
+  width: 14px; height: 14px;
+  flex-shrink: 0;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: cc-cc-spin 0.8s linear infinite;
 }
 
 /* === Поле ввода === */
@@ -75,7 +97,9 @@
   font-family: inherit;
   font-size: 14px;          /* FS.md */
   color: var(--cc-fg);
-  background: var(--cc-bg);
+  /* приподнятая поверхность (surface = --c-bg-white), а не общий тон body:
+     наши поля белые (FIELD.background = C.bgWhite), а не в тон подложке */
+  background: var(--cc-surface);
   border: 1px solid var(--cc-border);
   border-radius: 12px;       /* R.xl */
   padding: 10px 13px;
@@ -88,6 +112,14 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--cc-accent) 16%, transparent);
 }
 .cc-input:disabled { opacity: 0.55; cursor: not-allowed; }
+/* поле с ошибкой: рамка dangerBorder + текст ошибки цветом danger-text (как Field.tsx) */
+.cc-input--invalid { border-color: var(--cc-danger-border); }
+.cc-input--invalid:focus {
+  border-color: var(--cc-danger-border);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cc-danger) 16%, transparent);
+}
+/* текст ошибки поля: автор панели вешает этот класс на элемент-подпись под полем */
+.cc-field-error { color: var(--cc-danger-text); }
 
 /* === Список === */
 .cc-list {
@@ -106,16 +138,21 @@
   padding: 8px 12px;         /* SP.sm SP.md */
   border-radius: 10px;       /* R.lg */
   cursor: pointer;
+  min-height: 40px;          /* тач-цель ≥ 40px (docs/design/guidelines.md) */
   transition: background 0.15s;
 }
-.cc-list-item:hover { background: var(--cc-bg-inset); }
+/* hover — слабый слой (bg-selected); в тёмной теме inset темнее подложки и гасил строку */
+.cc-list-item:hover { background: var(--cc-bg-selected); }
 .cc-list-item:focus-visible { outline: 2px solid var(--cc-accent); outline-offset: -2px; }
-.cc-list-item.is-active { background: var(--cc-bg-inset); }
+/* выбранный — тот же приподнятый слой + кольцо акцентом: отличается от hover */
+.cc-list-item.is-active { background: var(--cc-bg-selected); box-shadow: inset 0 0 0 1.5px var(--cc-accent); }
 
 /* === Карточка-контейнер === */
 .cc-card {
   box-sizing: border-box;
-  background: var(--cc-bg);
+  /* приподнятая поверхность (surface), а не общий тон body: внутри панели карточка
+     того же тона, что подложка, читалась только по рамке */
+  background: var(--cc-surface);
   border: 1px solid var(--cc-border);
   border-radius: 12px;       /* R.xl */
   padding: 12px 16px;        /* SP.md SP.lg */
@@ -137,11 +174,14 @@
   color: var(--cc-fg-muted);
   border: none;
 }
-/* тона: цвет текста — токен статуса, фон — его 14%-ная альфа (color-mix, без hex) */
-.cc-badge--success { color: var(--cc-success); background: color-mix(in srgb, var(--cc-success) 14%, transparent); }
-.cc-badge--warning { color: var(--cc-warning); background: color-mix(in srgb, var(--cc-warning) 14%, transparent); }
-.cc-badge--danger  { color: var(--cc-danger);  background: color-mix(in srgb, var(--cc-danger) 14%, transparent); }
-.cc-badge--info    { color: var(--cc-info);    background: color-mix(in srgb, var(--cc-info) 14%, transparent); }
+/* тона: текст — парный текстовый токен (--cc-*-text), фон — слабая альфа тона.
+   Альфа 4% (не 14%): при 14% контраст текста на фоне < 4.5:1 (success 4.14, warning 4.22,
+   danger 4.25); при 4% — 4.59/4.59/4.89, все ≥ 4.5:1 (WCAG AA для 11px). */
+.cc-badge--success { color: var(--cc-success-text); background: color-mix(in srgb, var(--cc-success) 4%, transparent); }
+.cc-badge--warning { color: var(--cc-warning-text); background: color-mix(in srgb, var(--cc-warning) 4%, transparent); }
+.cc-badge--danger  { color: var(--cc-danger-text);  background: color-mix(in srgb, var(--cc-danger) 4%, transparent); }
+/* info: парного текстового токена в теме хоста нет (см. Notice.tsx) — текст основной */
+.cc-badge--info    { color: var(--cc-fg);          background: color-mix(in srgb, var(--cc-info) 4%, transparent); }
 
 /* === Пустое состояние === */
 .cc-empty {
@@ -197,6 +237,11 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
 }
+/* спиннер loading-кнопки: вращение кольца (border-top-color transparent = разрыв) */
+@keyframes cc-cc-spin {
+  to { transform: rotate(360deg); }
+}
 @media (prefers-reduced-motion: reduce) {
   .cc-skeleton { animation: none; }
+  .cc-btn--loading::before { animation: none; }
 }

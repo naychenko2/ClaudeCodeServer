@@ -24,17 +24,25 @@ import { humanizeId, panelDisplayName } from './panelNaming';
 // Единственный источник правды по палитре — тема хоста (lib/theme.css, обе темы);
 // в панели нет ручной копии. Каждый --cc-* ниже есть в теме хоста (критерий S8.3).
 const CC_TOKEN_MAP: Record<string, string> = {
-  '--cc-bg':        '--c-bg-card',
-  '--cc-fg':        '--c-text-primary',
-  '--cc-fg-muted':  '--c-text-muted',
-  '--cc-accent':    '--c-accent',
-  '--cc-accent-fg': '--c-on-accent',
-  '--cc-border':    '--c-border',
-  '--cc-bg-inset':  '--c-bg-inset',
-  '--cc-success':   '--c-success',
-  '--cc-warning':   '--c-warning',
-  '--cc-danger':    '--c-danger',
-  '--cc-info':      '--c-info',
+  '--cc-bg':            '--c-bg-card',
+  '--cc-fg':            '--c-text-primary',
+  '--cc-fg-muted':      '--c-text-muted',
+  '--cc-accent':        '--c-accent',
+  '--cc-accent-fg':     '--c-on-accent',
+  '--cc-accent-soft':   '--c-accent-soft',
+  '--cc-border':        '--c-border',
+  '--cc-bg-inset':      '--c-bg-inset',
+  '--cc-bg-panel':      '--c-bg-panel',
+  '--cc-bg-selected':   '--c-bg-selected',
+  '--cc-surface':       '--c-bg-white',
+  '--cc-success':       '--c-success',
+  '--cc-warning':       '--c-warning',
+  '--cc-danger':        '--c-danger',
+  '--cc-info':          '--c-info',
+  '--cc-success-text':  '--c-success-text',
+  '--cc-warning-text':  '--c-warning-text',
+  '--cc-danger-text':   '--c-danger-text',
+  '--cc-danger-border': '--c-danger-border',
 };
 
 // Чтец токенов текущей темы: getComputedStyle(<html>) несёт активную тему

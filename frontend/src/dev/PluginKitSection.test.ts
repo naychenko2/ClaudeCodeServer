@@ -33,7 +33,7 @@ const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
   '../components/chat/__tests__/fakeDom'
 );
 type FNode = Parameters<typeof textNodes>[0];
-const { PluginKitSection, buildKitStyle, KIT_CLASSES } = await import('./PluginKitSection');
+const { PluginKitSection, buildKitStyle, KIT_CLASSES, CC_TOKEN_MAP } = await import('./PluginKitSection');
 
 const mountedRoots: { unmount: () => void }[] = [];
 
@@ -151,5 +151,80 @@ describe('PluginKitSection: флаг plugins-mvp off', () => {
     const text = textNodes(container).join(' ');
     expect(text).toContain('Флаг выключен');
     expect(nodesByTag(container, 'BUTTON').length).toBe(0);
+  });
+});
+
+// === R-Design-2: кит — контраст бейджей, состояния, поверхности, тач-цели ===
+// Карта токенов (CC_TOKEN_MAP) проверяется юнитом: новые --cc-* обязаны ссылаться на
+// парные --c-* хоста, а не на сырой тон. CSS кита (controls.css, ?raw = реальный файл)
+// проверяем по содержимому: бейджи по --cc-*-text, input/card по --cc-surface,
+// кнопка/hover/active по --cc-bg-panel/--cc-bg-selected, invalid/loading, min-height 40.
+// Мутации: --cc-success-text → '--c-success' → «парные текстовые» краснеет;
+// background .cc-input → var(--cc-bg) → «поверхности» краснеет; убрать min-height: 40px
+// у .cc-btn → «тач-цель» краснеет.
+describe('R-Design-2: карта токенов кита (CC_TOKEN_MAP)', () => {
+  it('бейджи: парные текстовые токены и рамка danger (не сырой тон)', () => {
+    expect(CC_TOKEN_MAP['--cc-success-text']).toBe('--c-success-text');
+    expect(CC_TOKEN_MAP['--cc-warning-text']).toBe('--c-warning-text');
+    expect(CC_TOKEN_MAP['--cc-danger-text']).toBe('--c-danger-text');
+    expect(CC_TOKEN_MAP['--cc-danger-border']).toBe('--c-danger-border');
+  });
+
+  it('поверхности и состояния: surface/panel/selected/accent-soft → --c-*', () => {
+    expect(CC_TOKEN_MAP['--cc-surface']).toBe('--c-bg-white');
+    expect(CC_TOKEN_MAP['--cc-bg-panel']).toBe('--c-bg-panel');
+    expect(CC_TOKEN_MAP['--cc-bg-selected']).toBe('--c-bg-selected');
+    expect(CC_TOKEN_MAP['--cc-accent-soft']).toBe('--c-accent-soft');
+  });
+});
+
+describe('R-Design-2: CSS кита (controls.css)', () => {
+  // ?raw в vitest даёт пустую строку, поэтому buildKitStyle({}) здесь — реальный
+  // controls.css (замочен fs-импортом выше); читаем его содержимое.
+  const css = () => buildKitStyle({});
+
+  it('бейджи: текст по парным --cc-*-text; info — основной текст (парного токена нет)', () => {
+    const s = css();
+    expect(s).toContain('color: var(--cc-success-text)');
+    expect(s).toContain('color: var(--cc-warning-text)');
+    expect(s).toContain('color: var(--cc-danger-text)');
+    expect(s).toMatch(/\.cc-badge--info\s*\{[^}]*color:\s*var\(--cc-fg\)/);
+  });
+
+  it('поверхности: .cc-input и .cc-card на --cc-surface, а не на общем --cc-bg', () => {
+    const s = css();
+    expect(s).toMatch(/\.cc-input\s*\{[^}]*background:\s*var\(--cc-surface\)/);
+    expect(s).toMatch(/\.cc-card\s*\{[^}]*background:\s*var\(--cc-surface\)/);
+  });
+
+  it('кнопка и hover/выбранный списка — приподнятые слои, а не утопленный inset', () => {
+    const s = css();
+    expect(s).toMatch(/\.cc-btn\s*\{[^}]*background:\s*var\(--cc-bg-panel\)/);
+    expect(s).toMatch(/\.cc-list-item:hover\s*\{[^}]*background:\s*var\(--cc-bg-selected\)/);
+    expect(s).toMatch(/\.cc-list-item\.is-active\s*\{[^}]*background:\s*var\(--cc-bg-selected\)/);
+  });
+
+  it('выбранный элемент списка отличается от hover: кольцо акцентом', () => {
+    const s = css();
+    expect(s).toMatch(/\.cc-list-item\.is-active\s*\{[^}]*box-shadow:\s*inset 0 0 0 1\.5px var\(--cc-accent\)/);
+  });
+
+  it('состояния: .cc-input--invalid (dangerBorder) и .cc-btn--loading (спиннер + accentSoft)', () => {
+    const s = css();
+    expect(s).toMatch(/\.cc-input--invalid\s*\{[^}]*border-color:\s*var\(--cc-danger-border\)/);
+    expect(s).toMatch(/\.cc-btn--loading\s*\{[^}]*background:\s*var\(--cc-accent-soft\)/);
+    expect(s).toContain('@keyframes cc-cc-spin');
+  });
+
+  it('тач-цель ≥ 40px: min-height: 40px у .cc-btn, .cc-btn--sm, .cc-list-item', () => {
+    const s = css();
+    expect(s).toMatch(/\.cc-btn\s*\{[^}]*min-height:\s*40px/);
+    expect(s).toMatch(/\.cc-btn--sm\s*\{[^}]*min-height:\s*40px/);
+    expect(s).toMatch(/\.cc-list-item\s*\{[^}]*min-height:\s*40px/);
+  });
+
+  it('hover-primary не затемняет заливку (background остаётся --cc-accent, нет color-mix…black)', () => {
+    const s = css();
+    expect(s).toMatch(/\.cc-btn--primary:hover\s*\{[^}]*background:\s*var\(--cc-accent\)/);
   });
 });

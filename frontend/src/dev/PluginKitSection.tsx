@@ -35,19 +35,28 @@ export const KIT_CLASSES = [
 
 // --cc-* → --c-* хоста: та же карта, что CC_TOKEN_MAP (PluginFrame.tsx, S8).
 // Копия, а не импорт: код панелей рельсы (S5/S7) задачей не трогаем, а карта
-// мала и стабильна — палитра кита есть палитра хоста.
-const CC_TOKEN_MAP: Record<string, string> = {
-  '--cc-bg':        '--c-bg-card',
-  '--cc-fg':        '--c-text-primary',
-  '--cc-fg-muted':  '--c-text-muted',
-  '--cc-accent':    '--c-accent',
-  '--cc-accent-fg': '--c-on-accent',
-  '--cc-border':    '--c-border',
-  '--cc-bg-inset':  '--c-bg-inset',
-  '--cc-success':   '--c-success',
-  '--cc-warning':   '--c-warning',
-  '--cc-danger':    '--c-danger',
-  '--cc-info':      '--c-info',
+// мала и стабильна — палитра кита есть палитра хоста. Экспортирована, чтобы
+// юнит проверял её состав (R-Design-2: новые токены поверхностей/состояний).
+export const CC_TOKEN_MAP: Record<string, string> = {
+  '--cc-bg':            '--c-bg-card',
+  '--cc-fg':            '--c-text-primary',
+  '--cc-fg-muted':      '--c-text-muted',
+  '--cc-accent':        '--c-accent',
+  '--cc-accent-fg':     '--c-on-accent',
+  '--cc-accent-soft':   '--c-accent-soft',
+  '--cc-border':        '--c-border',
+  '--cc-bg-inset':      '--c-bg-inset',
+  '--cc-bg-panel':      '--c-bg-panel',
+  '--cc-bg-selected':   '--c-bg-selected',
+  '--cc-surface':       '--c-bg-white',
+  '--cc-success':       '--c-success',
+  '--cc-warning':       '--c-warning',
+  '--cc-danger':        '--c-danger',
+  '--cc-info':          '--c-info',
+  '--cc-success-text':  '--c-success-text',
+  '--cc-warning-text':  '--c-warning-text',
+  '--cc-danger-text':   '--c-danger-text',
+  '--cc-danger-border': '--c-danger-border',
 };
 
 // Чтец токенов текущей темы: getComputedStyle(<html>) несёт активную тему
@@ -171,17 +180,24 @@ export function PluginKitSection() {
                 Заметки
               </h1>
 
-              {/* .cc-btn: базовая, primary, ghost, danger, sm */}
+              {/* .cc-btn: базовая, primary, ghost, danger, sm, loading */}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center' }}>
                 <button className="cc-btn">Базовая</button>
                 <button className="cc-btn cc-btn--primary">Основная</button>
                 <button className="cc-btn cc-btn--ghost">Призрак</button>
                 <button className="cc-btn cc-btn--danger">Опасная</button>
                 <button className="cc-btn cc-btn--sm">Малая</button>
+                <button className="cc-btn cc-btn--primary cc-btn--loading">Сохранение…</button>
               </div>
 
               {/* .cc-input */}
               <input className="cc-input" placeholder="Поиск…" />
+
+              {/* .cc-input--invalid + .cc-field-error: поле с ошибкой (рамка dangerBorder, текст danger-text) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+                <input className="cc-input cc-input--invalid" defaultValue="abc" />
+                <span className="cc-field-error">Поле не прошло проверку</span>
+              </div>
 
               {/* .cc-list / .cc-list-item (.is-active) */}
               <ul className="cc-list">

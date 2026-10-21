@@ -682,6 +682,244 @@ public class FeatureTimelineJournalTests
         work.TaskId.Should().Be("s1");
     }
 
+    // ── 15. (major) Инвариант на дробных минутах: числа из пробы Глеба ───────────────────────
+
+    // Окно 600 мин; сырые span-ы видов: work=598.5, waiting=0.8, error=0.5, idle=0.2 (сумма 600).
+    // Независимые ceil дали бы 599+1+1+1 = 602 ≠ 600. Метод наибольшего остатка: floor (598,0,0,0)
+    // + дефицит 2 (elapsed 600 − 598) видам с наибольшей дробной (waiting 0.8, work 0.5) →
+    // work=599, waiting=1, error=0, idle=0; сумма = 600 = elapsed РОВНО.
+    [Fact]
+    public void Build_Инвариант_ДробныеМинуты_ЧислаПробы()
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddMinutes(600); // 08:00 → 18:00
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic");
+
+        // work [08:00, 17:58:30] (598.5 мин); waiting [17:58:30, 17:59:18] (0.8 мин);
+        // error [17:59:18, 17:59:48] (0.5 мин); idle [17:59:48, 18:00] (0.2 мин).
+        var journal = Journal(
+            Entry("created", t0, taskId: "epic"),
+            Entry("turn", t0.AddMinutes(598.5), taskId: "s1",
+                startedAt: t0, endedAt: t0.AddMinutes(598.5), outcome: "finished"),
+            Entry("waiting", t0.AddMinutes(598.5), taskId: "s1"),
+            Entry("waiting_cleared", t0.AddMinutes(599.3), taskId: "s1"),
+            Entry("turn", t0.AddMinutes(599.8), taskId: "s1",
+                startedAt: t0.AddMinutes(599.3), endedAt: t0.AddMinutes(599.8), outcome: "error"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.Totals.ElapsedMinutes.Should().Be(600);
+        tl.Totals.WorkWallMinutes.Should().Be(599);
+        tl.Totals.WaitingMinutes.Should().Be(1);
+        tl.Totals.ErrorMinutes.Should().Be(0);
+        tl.Totals.IdleMinutes.Should().Be(0);
+        // Инвариант: 599 + 1 + 0 + 0 = 600 = elapsed (не 602, как при независимых ceil).
+        (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
+            + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
+    }
+
+    // ── 16. (major) Проба 30 с + 20 с + 10 с в окне 2 мин: сумма видов = elapsed ──────────────
+
+    // Ход 30 с + ожидание 20 с + ошибка 10 с в окне 2 мин (остаток 60 с — idle). Независимые ceil
+    // дали work=1, waiting=1, error=1, idle=0 → сумма 3 ≠ 2. Наибольший остаток: floor (0,0,0,1)
+    // + дефицит 1 виду с наибольшей дробной (work 0.5) → work=1, waiting=0, error=0, idle=1;
+    // сумма = 2 = elapsed.
+    [Fact]
+    public void Build_Инвариант_Ход30с_Ожидание20с_Ошибка10с()
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddMinutes(2); // 08:00 → 08:02
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic");
+
+        // work [08:00:00, 08:00:30] (30 с); waiting [08:00:30, 08:00:50] (20 с);
+        // error [08:00:50, 08:01:00] (10 с); idle [08:01:00, 08:02:00] (60 с).
+        var journal = Journal(
+            Entry("created", t0, taskId: "epic"),
+            Entry("turn", t0.AddSeconds(30), taskId: "s1",
+                startedAt: t0, endedAt: t0.AddSeconds(30), outcome: "finished"),
+            Entry("waiting", t0.AddSeconds(30), taskId: "s1"),
+            Entry("waiting_cleared", t0.AddSeconds(50), taskId: "s1"),
+            Entry("turn", t0.AddSeconds(60), taskId: "s1",
+                startedAt: t0.AddSeconds(50), endedAt: t0.AddSeconds(60), outcome: "error"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.Totals.ElapsedMinutes.Should().Be(2);
+        tl.Totals.WorkWallMinutes.Should().Be(1);
+        tl.Totals.WaitingMinutes.Should().Be(0);
+        tl.Totals.ErrorMinutes.Should().Be(0);
+        tl.Totals.IdleMinutes.Should().Be(1);
+        // Инвариант: 1 + 0 + 0 + 1 = 2 = elapsed (не 3, как при независимых ceil).
+        (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
+            + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
+    }
+
+    // ── 17. (major, свойство) Сумма видов == elapsed на нескольких наборах дробных минут ─────
+
+    // МАЛОЕ окно (60 с): work+waiting+error почти заполняют его, idle — крошечный остаток.
+    // Независимые ceil дают sum(ceil) = 3 > elapsed = 1 (каждый дробный вид округляется до 1),
+    // а idle = max(0, 1 − 3) = 0 → сумма 3 ≠ 1. Наибольший остаток: floor (0,0,0,0) + дефицит 1
+    // виду с наибольшей дробной → сумма = 1 = elapsed. Мутация «ceil + max(0, …)» красит ВСЕ
+    // случаи (сумма 3 ≠ 1). Окно 60 с, не 10 мин: в большом окне sum(ceil)=3 < elapsed=10 и
+    // idle поглощает разницу — свойство не нарушается, тест был бы слепым.
+    [Theory]
+    [InlineData(30, 15, 10)]   // 0.5 + 0.25 + 0.17 мин, idle 0.08 мин
+    [InlineData(20, 20, 20)]   // 0.33 + 0.33 + 0.33 мин, idle 0
+    [InlineData(40, 10, 10)]   // 0.67 + 0.17 + 0.17 мин, idle 0
+    [InlineData(15, 20, 25)]   // 0.25 + 0.33 + 0.42 мин, idle 0
+    public void Build_Свойство_СуммаВидов_РавнаElapsed(int workSec, int waitingSec, int errorSec)
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddSeconds(60); // окно 60 с = 1 мин
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic");
+
+        var wEnd = t0.AddSeconds(workSec);
+        var waEnd = wEnd.AddSeconds(waitingSec);
+        var eEnd = waEnd.AddSeconds(errorSec);
+        var journal = Journal(
+            Entry("created", t0, taskId: "epic"),
+            Entry("turn", wEnd, taskId: "s1",
+                startedAt: t0, endedAt: wEnd, outcome: "finished"),
+            Entry("waiting", wEnd, taskId: "s1"),
+            Entry("waiting_cleared", waEnd, taskId: "s1"),
+            Entry("turn", eEnd, taskId: "s1",
+                startedAt: waEnd, endedAt: eEnd, outcome: "error"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.Totals.ElapsedMinutes.Should().Be(1);
+        // Свойство: сумма видов = elapsed ровно (для ЛЮБОГО расклада дробных минут).
+        (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
+            + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes,
+            $"work={workSec}с waiting={waitingSec}с error={errorSec}с: сумма видов ≠ elapsed");
+    }
+
+    // ── 18. (минор 10) AgentsSum: started-период и его ходы — без двойного счёта ─────────────
+
+    // started 08:00 + ход 08:00–08:10 + status Done 08:10. approx: одна задача = один период
+    // [ClaudeStartedAt, CompletedAt] = 10 мин. journal (до фикса): started-период (10) + ход (10)
+    // = 20 (двойной счёт). После фикса: AgentsSum = started-период = 10 (ходы внутри не
+    // пересчитываются). Мутация «AgentsSum = сумма ВСЕХ work-интервалов (ходы + периоды)» → 20 →
+    // краснеет.
+    [Fact]
+    public void Build_AgentsSum_StartedИХоды_БезДвойногоСчёта()
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddMinutes(10); // 08:00 → 08:10
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", startedAt: t0, completedAt: t0.AddMinutes(10));
+
+        var journal = Journal(
+            Entry("created", t0, taskId: "epic"),
+            Entry("started", t0, taskId: "s1", startedAt: t0),
+            Entry("turn", t0.AddMinutes(10), taskId: "s1",
+                startedAt: t0, endedAt: t0.AddMinutes(10), outcome: "finished"),
+            Entry("status", t0.AddMinutes(10), taskId: "s1", to: "Done"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        // AgentsSum = started-период [08:00, 08:10] = 10 мин (не 20 = период + ход).
+        tl.Totals.AgentsSumMinutes.Should().Be(10,
+            "AgentsSum — один период на задачу (как в approx), ходы внутри не пересчитываются");
+        // WorkWall = объединение = 10 (период и ход совпадают).
+        tl.Totals.WorkWallMinutes.Should().Be(10);
+    }
+
+    // ── 19. (минор 2) Ожидание в СЕРЕДИНЕ среди 1000 ходов: склейка не искажает его длительность ─
+
+    // 1000 ходов по 1 мин + 10-мин ожидание В СЕРЕДИНЕ (после 500 ходов) = 1001 сегмент > 500.
+    // Прежняя склейка (ключ (gap, loss, left)) деградировала в «слева направо»: левый work-блок
+    // рос и поглощал ожидание → видимый waiting-сегмент 12 мин (10 + 2 хода) вместо 10. Новое
+    // правило (не сливать разную семантику: work+work прежде work+waiting) схлопывает work-ходы
+    // на обоих краях, и ожидание остаётся ~10-мин сегментом. Мутация «склейка слева направо»
+    // (ключ (gap, loss, left)) → ожидание искажается → краснеет.
+    [Fact]
+    public void Build_Склейка_ОжиданиеВСередине_ДлительностьНеИскажается()
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddMinutes(1010); // 08:00 → 24:50
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic");
+
+        var entries = new List<FeatureJournalEntry>();
+        entries.Add(Entry("created", t0, taskId: "epic"));
+        // 500 ходов по 1 мин: [t0+i, t0+i+1] для i=0..499.
+        for (var i = 0; i < 500; i++)
+        {
+            var at = t0.AddMinutes(i);
+            entries.Add(Entry("turn", at.AddMinutes(1), taskId: "s1",
+                startedAt: at, endedAt: at.AddMinutes(1), outcome: "finished"));
+        }
+        // Ожидание 10 мин В СЕРЕДИНЕ: [t0+500, t0+510].
+        var wStart = t0.AddMinutes(500);
+        entries.Add(Entry("waiting", wStart, taskId: "s1"));
+        entries.Add(Entry("waiting_cleared", wStart.AddMinutes(10), taskId: "s1"));
+        // 500 ходов по 1 мин после ожидания: [t0+510+i, t0+510+i+1] для i=0..499.
+        for (var i = 0; i < 500; i++)
+        {
+            var at = t0.AddMinutes(510 + i);
+            entries.Add(Entry("turn", at.AddMinutes(1), taskId: "s1",
+                startedAt: at, endedAt: at.AddMinutes(1), outcome: "finished"));
+        }
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), Journal(entries.ToArray()), now);
+
+        tl.Totals.ElapsedMinutes.Should().Be(1010);
+        tl.Totals.WaitingMinutes.Should().Be(10);
+        tl.Segments.Count.Should().BeLessOrEqualTo(FeatureTimeline.DefaultMaxSegments);
+        // Ожидание 10 мин — видимый сегмент, длительность НЕ искажена (не 12 = 10 + 2 хода).
+        var waitSegs = Kinds(tl, "waiting");
+        waitSegs.Should().NotBeEmpty("ожидание в середине не должно поглощаться склейкой");
+        foreach (var s in waitSegs)
+            (s.To - s.From).TotalMinutes.Should().BeLessOrEqualTo(10.5,
+                "ожидание 10 мин не должно раздуться до 12+ мин склейкой");
+    }
+
+    // ── 20. (минор 3) Вид склеенного — ДОМИНАНТА по времени (мутация «от левого» краснеет) ─────
+
+    // Две склеиваемые сущности разной длительности: короткий work (1 мин) + длинный waiting
+    // (10 мин) — но чтобы они склеились, нужно > 500 сегментов. Проще: 501 сегмент, где на
+    // границе пары «work(1) + waiting(10)» доминанта по времени — waiting. После склейки вид
+    // склеенного = waiting (доминанта), НЕ work (левый). Мутация «вид = от левого» → work →
+    // краснеет (waiting-сегментов станет меньше).
+    //
+    // Конструкция: 499 work-ходов по 1 мин + 1 waiting 10 мин + 1 work-ход 1 мин = 501 сегмент.
+    // Потолок 500 → 1 склейка. Ключ (mixed, loss, left): пара (work[498], waiting) mixed=1,
+    // пара (waiting, work[500]) mixed=1, пары work+work mixed=0. Склейка идёт по mixed=0 (work+work)
+    // ПЕРВЫМИ — но их 498 (между 499 ходами), а нам нужно ровно 1 склейка (501 → 500). Единственная
+    // склейка — минимальный ключ: mixed=0 (work+work) выигрывает у mixed=1. Хм — тогда waiting не
+    // склеивается. Пересмотр: чтобы заставить склейку work+waiting, сделаем ВСЕ пары mixed, кроме
+    // одной. Проще: 2 сегмента (work 1 мин + waiting 10 мин) + потолок 1 → 1 склейка, доминанта
+    // waiting. Но 2 сегмента < 500. Используем maxSegments=1 (внутренний хук) на 2-сегментном входе.
+    [Fact]
+    public void Build_Склейка_ВидСклеенного_ДоминантаПоВремени()
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddMinutes(11); // 08:00 → 08:11
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic");
+
+        // work-ход 1 мин [08:00, 08:01] + waiting 10 мин [08:01, 08:11] = 2 сегмента.
+        var journal = Journal(
+            Entry("created", t0, taskId: "epic"),
+            Entry("turn", t0.AddMinutes(1), taskId: "s1",
+                startedAt: t0, endedAt: t0.AddMinutes(1), outcome: "finished"),
+            Entry("waiting", t0.AddMinutes(1), taskId: "s1"),
+            Entry("waiting_cleared", t0.AddMinutes(11), taskId: "s1"));
+
+        // maxSegments=1 (внутренний хук): 2 сегмента → 1 склейка. Доминанта по времени — waiting
+        // (10 > 1) → склеенный вид = waiting (не work = «от левого»).
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now, maxSegments: 1);
+
+        tl.Segments.Should().HaveCount(1);
+        // Вид склеенного — доминанта по времени (waiting 10 мин > work 1 мин).
+        tl.Segments[0].Kind.Should().Be("waiting",
+            "вид склеенного — доминанта по времени (waiting 10 мин), не «от левого» (work)");
+    }
+
     // ── Хелпер: сегменты заданного вида ───────────────────────────────────────────────────────
 
     private static List<TimelineSegment> Kinds(FeatureTimeline tl, string kind) =>

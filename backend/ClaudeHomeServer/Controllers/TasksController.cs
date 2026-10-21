@@ -683,52 +683,59 @@ public class TasksController(
         FeatureSpendShared? shared = null;
         bool sharedCostPartial = false;
         var sharedHidden = new List<string>();
-        if (spendTotals is not null)
+        if (spendTotals is not null && sharedChatIds.Count > 0)
         {
-            var sharedChats = sharedChatIds
-                .Select(chatId => (ChatId: chatId, Features: membership[chatId]))
-                .ToList();
+            // Шаг 5: один проход. (1) Участницы = объединение M[c] по общим чатам фичи.
+            var participants = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var chatId in sharedChatIds)
+                foreach (var fid in membership[chatId])
+                    participants.Add(fid);
 
-            if (sharedChats.Count > 0)
+            // (2) Метод: journal, только если журналы ВСЕХ участниц полные (StartsWithCreated &&
+            // !Truncated); иначе approx для всех (гибрида нет — знаменатель одним способом).
+            var method = "approx";
+            if (journal is not null)
             {
-                // Метод оценки: journal, если журнал текущей фичи полный, иначе approx (риск 5
-                // плана: прошлые ожидания в approx неизвестны → доля может уйти другим фичам).
-                var method = journalComplete ? "journal" : "approx";
-                long totIn = 0, totOut = 0, totCr = 0, totCc = 0;
-                double totCost = 0;
-                int totTurns = 0;
-                foreach (var (chatId, feats) in sharedChats)
+                method = "journal";
+                foreach (var fid in participants)
                 {
-                    // Записи расхода этого общего чата: только чат (taskIds пуст), от создания фичи.
-                    var sharedRecords = spend!.Records(UserId, [], [chatId], [], from: run.Epic.CreatedAt);
-                    if (sharedRecords.Count == 0) continue;
-                    // Интервалы активности ВСЕХ фич, в которые чат входит (знаменатель деления):
-                    // journal — по полному журналу фичи; approx — по интервалам её задач.
-                    var activities = new List<FeatureActivity>();
-                    foreach (var fid in feats)
-                    {
-                        var intervals = method == "journal"
-                            ? SharedSpendSplitter.JournalActivity(
-                                journal?.Read(UserId, fid) ?? new FeatureJournalReadResult(), now)
-                            : SharedSpendSplitter.ApproxActivity(
-                                features!.ProjectFull(fid, UserId, snapshot, resolver), now);
-                        activities.Add(new FeatureActivity(fid, intervals));
-                    }
-                    var (share, shareCostPartial, shareHidden) =
-                        SharedSpendSplitter.Split(sharedRecords, activities, run.Epic.Id, method);
-                    totIn += share.InputTokens;
-                    totOut += share.OutputTokens;
-                    totCr += share.CacheReadTokens;
-                    totCc += share.CacheCreationTokens;
-                    totCost += share.CostUsd;
-                    totTurns += share.Turns;
-                    sharedCostPartial |= shareCostPartial;
-                    sharedHidden.AddRange(shareHidden);
+                    var jr = journal.Read(UserId, fid);
+                    if (jr is not { StartsWithCreated: true, Truncated: false })
+                    { method = "approx"; break; }
                 }
-                // Доля есть, только если хоть что-то распределили (иначе shared: null).
-                if (totTurns > 0 || totIn > 0 || totOut > 0 || totCr > 0 || totCc > 0 || totCost > 0)
-                    shared = new FeatureSpendShared(totIn, totOut, totCr, totCc, totCost, totTurns, method);
             }
+
+            // (3) Интервалы активности: ОДИН ProjectFull/journal.Read на участницу.
+            var activities = new List<FeatureActivity>();
+            foreach (var fid in participants)
+            {
+                var intervals = method == "journal"
+                    ? SharedSpendSplitter.JournalActivity(
+                        journal!.Read(UserId, fid), now)
+                    : SharedSpendSplitter.ApproxActivity(
+                        features!.ProjectFull(fid, UserId, snapshot, resolver), now);
+                activities.Add(new FeatureActivity(fid, intervals));
+            }
+
+            // (4) Записи ВСЕХ общих чатов — ОДИН Records (from = min CreatedAt участниц).
+            var minCreated = DateTime.MaxValue;
+            foreach (var fid in participants)
+            {
+                var p = features!.ProjectFull(fid, UserId, snapshot, resolver);
+                if (p is not null && p.Epic.CreatedAt < minCreated)
+                    minCreated = p.Epic.CreatedAt;
+            }
+            if (minCreated == DateTime.MaxValue) minCreated = run.Epic.CreatedAt;
+            var sharedRecords = spend!.Records(UserId, [], sharedChatIds, [], from: minCreated);
+
+            // (5) Деление: один Split на все записи (группировка по SessionId внутри).
+            var (share, shareCostPartial, shareHidden) =
+                SharedSpendSplitter.Split(sharedRecords, activities, run.Epic.Id, method);
+            sharedCostPartial |= shareCostPartial;
+            sharedHidden.AddRange(shareHidden);
+            if (share.Turns > 0 || share.InputTokens > 0 || share.OutputTokens > 0
+                || share.CacheReadTokens > 0 || share.CacheCreationTokens > 0 || share.CostUsd > 0)
+                shared = share;
         }
         sharedHidden = sharedHidden.Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal).ToList();
 

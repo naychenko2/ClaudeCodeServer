@@ -3,6 +3,7 @@ import { Info } from 'lucide-react';
 import { useFeatureStageFocus, clearFeatureStageFocus } from '../../lib/featurePage';
 import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { C, R, FS, SP, FONT } from '../../lib/design';
+import { stepProgressFromRun, formatStepProgress } from '../../lib/featureProgress';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
 import {
@@ -206,6 +207,8 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
 export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: { run: FeatureRun; marks?: NavMarks; isMobile?: boolean }) {
   const stages = run.stages ?? [];
   const chains = run.stepChains ?? [];
+  // Честный прогресс (Ф-pr): из run.stepProgress; null — старые ответы (строки нет).
+  const progress = stepProgressFromRun(run);
   const taskMap = useMemo(() => buildTaskMap(run), [run]);
   // Пометки «в архиве»/«задача закрыта»: страница даёт полные (с чатами), без пропа —
   // из самого агрегата (исполнители стадий + задачи).
@@ -249,6 +252,14 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
   return (
     <div data-testid="feature-timeline-tab" style={{ fontFamily: FONT.sans }}>
       <TimelineNote />
+      {progress && (
+        <div
+          data-testid="timeline-progress"
+          style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.sm }}
+        >
+          {formatStepProgress(progress)}
+        </div>
+      )}
       {stages.map((stage, i) => (
         <StageRow
           key={stage.key}

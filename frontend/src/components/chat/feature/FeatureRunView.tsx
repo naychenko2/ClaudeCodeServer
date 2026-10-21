@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, ChevronRight, GitBranch } from 'lucide-react';
 import { C, FONT, R, FS, SP, SHADOW, TB } from '../../../lib/design';
+import { stepProgressFromRun, formatStepProgress } from '../../../lib/featureProgress';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { useCanHover } from '../../../lib/pointer';
 import { Button, Tooltip } from '../../ui';
@@ -700,6 +701,8 @@ export function FeatureRunView({
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   // Пометки «в архиве»/«задача закрыта» — из агрегата (задачи и исполнители стадий).
   const marks = buildNavMarks(run);
+  // Честный прогресс (Ф-pr): из run.stepProgress; null — старые ответы (строки нет).
+  const progress = stepProgressFromRun(run);
 
   // Навигация: переход в чат/задачу; onClose — закрыть попап (R2 major 3).
   // major 1: точка возврата «← к фиче {название}» — БЕЗ вкладки (из попапа/панели, не из
@@ -750,6 +753,14 @@ export function FeatureRunView({
         <>
           <Header run={run} />
           <Meta run={run} chatTaskId={chatTaskId} isMobile={isMobile} />
+          {progress && (
+            <div
+              data-testid="feature-run-progress"
+              style={{ fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans }}
+            >
+              {formatStepProgress(progress)}
+            </div>
+          )}
           <StatusLine
             line={statusLineFor(run, Date.now())}
             isMobile={isMobile}

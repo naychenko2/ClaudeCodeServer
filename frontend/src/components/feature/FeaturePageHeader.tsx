@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { GitBranch, ListChecks, MessageCircle } from 'lucide-react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
+import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Button } from '../ui/Button';
@@ -140,6 +141,52 @@ export interface FeaturePageHeaderProps {
   tag: FeatureRunTag | null;
 }
 
+// Сегмент честного прогресса (Ф-pr): число (mono, bold) + подпись. `always` — показывать
+// даже при 0 («общий»/«принято» — всегда видны).
+function Seg({ label, value, always = false }: { label: string; value: number; always?: boolean }) {
+  if (value === 0 && !always) return null;
+  return (
+    <span
+      data-testid={`feature-page-seg-${label}`}
+      style={{
+        display: 'inline-flex', alignItems: 'baseline', gap: 4,
+        fontSize: FS.xs, color: C.textSecondary,
+        background: C.bgSelected, borderRadius: R.sm, padding: `${SP.xxs}px ${SP.xs}px`,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <b style={{ color: C.textHeading, fontWeight: 700, fontFamily: FONT.mono }}>{value}</b>
+      <span style={{ fontFamily: FONT.sans }}>{label}</span>
+    </span>
+  );
+}
+
+// Честный прогресс в шапке (Ф-pr): 4 основных сегмента (общий/принято/на ревью/в работе)
+// + 2 вторичных (не заведено/снято).
+// Сегмент с 0 скрыт, кроме «общего» и «принято» (всегда).
+function StepProgressSegments({ p }: { p: StepProgress }) {
+  const hasSecondary = p.notCreated > 0 || p.withdrawn > 0;
+  return (
+    <div
+      data-testid="feature-page-steps"
+      style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, minWidth: 0 }}
+    >
+      <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
+        <Seg label="общий" value={p.total} always />
+        <Seg label="принято" value={p.accepted} always />
+        <Seg label="на ревью" value={p.review} />
+        <Seg label="в работе" value={p.work} />
+      </div>
+      {hasSecondary && (
+        <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
+          <Seg label="не заведено" value={p.notCreated} />
+          <Seg label="снято" value={p.withdrawn} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHeaderProps) {
   const branch = feature?.branch ?? null;
 
@@ -181,6 +228,8 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
   const tasks = total != null
     ? (total > 0 ? `${total} ${pluralTasks(total)}` : 'задач нет')
     : '—';
+  // Честный прогресс (Ф-pr): из run.stepProgress; null — run нет (loading) или старые данные.
+  const progress = run ? stepProgressFromRun(run) : null;
 
   const branchBtn = branch && (
     <button
@@ -204,17 +253,20 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
   );
 
   return (
-    <div
-      data-testid="feature-page-meta"
-      style={{
-        display: 'flex', flexWrap: 'wrap', alignItems: 'center',
-        gap: `${SP.xs}px ${SP.md}px`, fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
-      }}
-    >
-      {isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
-      {branchBtn}
-      {age && <span>{age}</span>}
-      <span data-testid="feature-page-taskcount">{tasks}</span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+      <div
+        data-testid="feature-page-meta"
+        style={{
+          display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+          gap: `${SP.xs}px ${SP.md}px`, fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
+        }}
+      >
+        {isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
+        {branchBtn}
+        {age && <span>{age}</span>}
+        <span data-testid="feature-page-taskcount">{tasks}</span>
+      </div>
+      {progress && <StepProgressSegments p={progress} />}
     </div>
   );
 }

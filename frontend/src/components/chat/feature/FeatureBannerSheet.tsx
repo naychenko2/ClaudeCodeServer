@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { C, R, FS, FONT, SP } from '../../../lib/design';
+import { stepProgressFromRun, formatStepProgress } from '../../../lib/featureProgress';
 import { roleLabel } from '../../../lib/roleLabel';
 import { STAGE_NAME } from '../../../lib/chatGroups';
 import { useCanHover } from '../../../lib/pointer';
@@ -210,10 +211,20 @@ function SheetBody({ run, runs, selected, onSelect, isMobile, projectId }: {
   const current = activeStage(run);
   // Пометки «задача закрыта» — из задач агрегата (чат уже несёт x.chatArchived).
   const marks = buildNavMarks(run);
+  // Честный прогресс (Ф-pr): из run.stepProgress; null — старые ответы (строки нет).
+  const progress = stepProgressFromRun(run);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
       {runs.length > 1 && (
         <FeatureSwitcher runs={runs} selected={selected} onSelect={onSelect} isMobile={isMobile} />
+      )}
+      {progress && (
+        <div
+          data-testid="feature-sheet-progress"
+          style={{ fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans }}
+        >
+          {formatStepProgress(progress)}
+        </div>
       )}
 
       {/* Список 7 этапов: имя · статус · время. */}

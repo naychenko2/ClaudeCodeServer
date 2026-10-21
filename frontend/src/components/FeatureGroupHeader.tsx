@@ -8,6 +8,7 @@ import { FeatureRail } from './chat/feature/FeatureRail';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { Button } from './ui/Button';
 import { featureDisplayState, featureQuickAction, featureAvatarPersonaIds, formatDuration } from '../lib/chatGroups';
+import { stepProgressFromIndex, formatStepProgress } from '../lib/featureProgress';
 import { dateOnly } from './chat/feature/featureTime';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 import type { Persona } from '../types';
@@ -90,6 +91,9 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
 }) {
   const [hovered, setHovered] = useState(false);
   const st = featureDisplayState(feature, { now, personaName });
+  // Честный прогресс (Ф-pr): из строки индекса; null — старые ответы (новых полей нет) →
+  // прежний вид «N/M ↺K», не голый «17/17».
+  const progress = stepProgressFromIndex(feature);
   // Кромка тревоги 3px: 'wait' → info (синий), 'stop' → danger (красный), иначе нет.
   const alarmEdge = st.alarm === 'wait' ? C.info : st.alarm === 'stop' ? C.danger : null;
   // Закрытая фича: статус «смержена {дата} · {длительность}» (макет .closed) или «закрыта».
@@ -283,12 +287,16 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           {!compact && (
             <span
               data-testid="feature-group-progress"
+              title={progress ? formatStepProgress(progress) : undefined}
               style={{
-                flexShrink: 0,
+                flexShrink: 1, minWidth: 0,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                 fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
               }}
             >
-              {feature.stepsAccepted}/{feature.stepsTotal}{feature.loops ? ` ↺${feature.loops}` : ''}
+              {progress
+                ? formatStepProgress(progress)
+                : `${feature.stepsAccepted}/${feature.stepsTotal}${feature.loops ? ` ↺${feature.loops}` : ''}`}
             </span>
           )}
         </div>

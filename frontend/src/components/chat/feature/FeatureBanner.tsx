@@ -11,6 +11,7 @@ import { getPersonaById } from '../../../lib/personas';
 import type { FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 import { FeatureBannerSheet } from './FeatureBannerSheet';
 import { statusPhrase, uniquePersonaNames } from './pillModel';
+import { stepProgressFromIndex, formatStepProgress } from '../../../lib/featureProgress';
 import type { FeatureIndexFeature, FeatureChatLink, FeatureRailKey, FeatureRailTone } from '../../../types/featureIndex';
 
 // Плашка фичи в чате — ОДНА КОМПАКТНАЯ СТРОКА (макет feature-banner-1, вариант «А · Строка»
@@ -398,6 +399,20 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
     </span>
   );
 
+  // Честный прогресс (Ф-pr): из строки индекса; null — старые ответы (не показываем).
+  const progress = stepProgressFromIndex(feature);
+  const progressNode = progress && (
+    <span
+      data-testid="feature-progress"
+      aria-label={formatStepProgress(progress)}
+      style={{
+        fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0,
+      }}
+    >
+      {formatStepProgress(progress)}
+    </span>
+  );
+
   // Ряд точек (7): done/active кликабельны, pending/absent — нет. aria-hidden — только
   // когда кликабельных точек НЕТ (минор 1): интерактивные кнопки внутри aria-hidden
   // скрыты от скринридера, но остаются фокусируемыми — нарушение ARIA.
@@ -442,6 +457,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', rowGap: 6 }}>
           {dotsRow}
           {whereNode}
+          {progressNode}
           {more > 0 && (
             <RowButton testId="feature-more" tone="muted" onClick={() => setSelIdx(i => (i + 1) % entries.length)} style={{ fontSize: FS.xs }}>
               · ещё {more}
@@ -500,6 +516,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
           {feature.title}
         </span>
         {whereNode}
+        {progressNode}
         {more > 0 && (
           <RowButton testId="feature-more" tone="muted" onClick={() => setSelIdx(i => (i + 1) % entries.length)}>
             · ещё {more}

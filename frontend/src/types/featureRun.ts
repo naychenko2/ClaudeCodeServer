@@ -13,6 +13,8 @@
 // Задача в агрегате фичи: подмножество `TaskItem` бэка (camelCase), которое
 // использует карточка. Все поля аддитивны и nullable — UI обязан пережить
 // отсутствие любого (старые задачи без разметки не несут feature-полей).
+import type { StepProgress } from '../lib/featureProgress';
+
 export interface FeatureTask {
   id: string;
   title: string;
@@ -319,6 +321,9 @@ export interface FeatureRun {
   // Счётчик шагов: принятые (Done) / все (из StepChains).
   stepsAccepted?: number;
   stepsTotal?: number;
+  // Честный прогресс по шагам (волна 3, Ф-pr): planState/total/accepted/review/work/
+  // notCreated/withdrawn/unlinkedReworks. Аддитивное: старые ответы не несут.
+  stepProgress?: StepProgress;
   // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
   lastActivityAt?: string | null;
   // Закрыта: merge-задача Done или эпик Done.

@@ -12,6 +12,7 @@
 import type { FeatureRun, FeatureState } from './featureRun';
 import type { FeatureStats } from './featureStats';
 import type { FeaturePlan, FeatureMockup } from './featurePlans';
+import type { PlanState } from '../lib/featureProgress';
 // Чат фичи (GET features/{id}, chats[]) — из featureChats; алиас, чтобы не путать с
 // FeatureChatLink этого файла (запись индекса «чат × фича», бэк: FeatureIndexChatEntry).
 import type { FeatureChatLink as FeaturePageChatLink } from './featureChats';
@@ -94,6 +95,12 @@ export interface FeatureIndexFeature {
   // Счётчики шагов: принятые (Done) / все.
   stepsAccepted: number;
   stepsTotal: number;
+  // Честный прогресс (волна 3, Ф-pr): на ревью / в работе / не заведено (план есть,
+  // задач нет) и состояние плана. Аддитивные: старые ответы их не несут.
+  stepsReview?: number;
+  stepsWork?: number;
+  stepsNotCreated?: number;
+  planState?: PlanState;
   // Число возвратов (Loops).
   loops: number;
   // null — фича не идёт.

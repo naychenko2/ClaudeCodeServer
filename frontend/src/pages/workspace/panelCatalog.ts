@@ -61,7 +61,16 @@ export const PANEL_KEYS = [
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
 ] as const;
-export type PanelKey = typeof PANEL_KEYS[number];
+// Статические ключи реестра: все панели продукта, известные на момент компиляции
+export type StaticPanelKey = typeof PANEL_KEYS[number];
+// Ключ панели плагина (ADR-031, S3): `plugin:{publisher}/{slug}:{panelId}` —
+// ключ на ПАНЕЛЬ, а не на плагин: у каждой панели плагина своя карточка в
+// боковой колонке, и их можно раскладывать по зонам одновременно.
+// Версии в ключе НЕТ: при обновлении плагина ключ стабилен, карточка остаётся
+// на своём месте в раскладке.
+export type PluginPanelKey = `plugin:${string}`;
+// Все панели продукта: статические ключи + семейство плагинов (динамическое, S3)
+export type PanelKey = StaticPanelKey | PluginPanelKey;
 
 // Данные кружков-индикаторов на кнопке панели рельсы. Источник — WorkspacePage
 // (changes/tasks/terminal/preview), useSessionPanels (plan/agents) и ChatsPage
@@ -283,8 +292,70 @@ export const RAIL_GROUPS: readonly (readonly PanelKey[])[] = [
 // не от ключа, а от состояния самой панели («Документация» тянется до низа только с
 // включённой нижней зоной превью), поэтому её объявляет панель — см. panelFill.ts.
 
+// Синтаксис ключа плагина: `plugin:{publisher}/{slug}:{panelId}`. Алфавит
+// исключает ':' и '/' (разделители) и пробелы; ограничение длины защищает
+// формат хранилища от мусора.
+const PLUGIN_KEY_RE = /^plugin:[A-Za-z0-9@._-]+\/[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$/;
+// Ключ — короткие идентификаторы (npm-имя пакета + id панели); длиннее — мусор
+// в раскладке
+const PLUGIN_KEY_MAX_LEN = 64;
+
+// Предикат ключа плагина: принимается по СИНТАКСИСУ, а не по списку установленных
+// плагинов — стор читает localStorage при импорте модуля, а список (асинхронный
+// GET) в этот момент ещё не известен. Иначе карточки молча выселялись бы из
+// раскладки: человек терял бы их место без единого сообщения.
+export function isPluginPanelKey(v: unknown): v is PluginPanelKey {
+  return typeof v === 'string' && v.length <= PLUGIN_KEY_MAX_LEN && PLUGIN_KEY_RE.test(v);
+}
+
+// isPanelKey принимает статические ключи плюс синтаксически валидный ключ
+// плагина: формат хранилища не меняется, старые раскладки читаются как есть
 export function isPanelKey(v: unknown): v is PanelKey {
-  return typeof v === 'string' && (PANEL_KEYS as readonly string[]).includes(v);
+  return typeof v === 'string' && ((PANEL_KEYS as readonly string[]).includes(v) || isPluginPanelKey(v));
+}
+
+// Конструктор ключа плагина: pluginId — id пакета `{publisher}/{slug}`
+// (PluginInfo.id), panelId — id панели из манифеста (PluginPanelView.id)
+export function pluginPanelKey(pluginId: string, panelId: string): PluginPanelKey {
+  return `plugin:${pluginId}:${panelId}` as PluginPanelKey;
+}
+
+// Реестр меты плагинов: заголовок и иконка каждой панели плагина. Наполняет
+// WorkspacePage (S5) по списку установленных плагинов; сам стор о плагинах
+// не знает — принимает только ключи по синтаксису.
+const pluginPanelMeta = new Map<PluginPanelKey, { title: string; Icon: LucideIcon }>();
+
+// Заменить реестр целиком: текущий набор панелей плагинов (пустой — очистить).
+// Следующие вызовы panelMeta читают уже новый набор.
+export function setPluginPanelMeta(meta: Record<PluginPanelKey, { title: string; Icon: LucideIcon }>): void {
+  pluginPanelMeta.clear();
+  for (const [k, v] of Object.entries(meta)) pluginPanelMeta.set(k as PluginPanelKey, v);
+}
+
+// Мета панели по ключу: статические — из реестра, плагины — из реестра меты
+// плагинов. Для ключа плагина без меты — undefined: ключ принят по синтаксису,
+// а мета известна только после GET списка плагинов.
+export function panelMeta(k: PanelKey): { title: string; Icon: LucideIcon } | undefined {
+  return isPluginPanelKey(k) ? pluginPanelMeta.get(k) : PANEL_META[k];
+}
+
+// Домашняя зона панели: статические — из реестра, ключи `plugin:` — 'right'
+// (как у прежней панели pluginPanels, S3)
+export function panelHome(k: PanelKey): Zone {
+  return isPluginPanelKey(k) ? 'right' : PANEL_HOME[k];
+}
+
+// Разрешает ли экран панель: статические ключи — по перечню, ключи плагинов —
+// СЕМЕЙСТВОМ: экран разрешает всё семейство plugin:* (маркер — слот pluginPanels
+// в перечне, либо сам ключ, если экран уже знает установленные плагины), а не
+// перечень отдельных ключей. allowedKeys при этом остаётся статичным: экран
+// объявляет семейство, а стор раскрывает его для каждого ключа.
+export function keyAllowed(k: PanelKey, allowed: readonly PanelKey[]): boolean {
+  if (isPluginPanelKey(k)) {
+    const list = allowed as readonly string[];
+    return list.includes(k) || list.includes('pluginPanels');
+  }
+  return (allowed as readonly string[]).includes(k);
 }
 
 // Переименования ключей при чтении старых раскладок из localStorage. Синонимы

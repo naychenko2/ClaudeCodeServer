@@ -10,10 +10,14 @@ import {
   enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
   markActiveSide, restoreOppositeIfEmpty,
   isTucked, tuckPanel, untuckPanel, parseKeyList, sortRail, reorderRail, mergeTuckDefaults,
-  railSequence, COL_DEFAULT, COL_MIN, COL_MAX, WS_DEFAULT_TUCKED,
+  railSequence, COL_DEFAULT, COL_MIN, COL_MAX, WS_DEFAULT_TUCKED, forgetPluginKeys,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
-import { RAIL_GROUPS } from '../../pages/workspace/panelCatalog';
+import {
+  CHAT_KEYS, PANEL_KEYS, RAIL_GROUPS, WORKSPACE_KEYS,
+  isPanelKey, isPluginPanelKey, keyAllowed, panelHome, panelMeta, pluginPanelKey, setPluginPanelMeta,
+} from '../../pages/workspace/panelCatalog';
+import { Plug } from 'lucide-react';
 
 // Компактный конструктор пары зон: остальные поля берутся дефолтные
 function zones(left: string[][], right: string[][]): PanelZones {
@@ -1052,5 +1056,193 @@ describe('sanitizeZones — runtime-поля эксклюзива', () => {
     const z = sanitizeZones({ restoreCompactSignal: 3, left: { layout: [['chats']] } } as never);
     expect(z.restoreCompactSignal).toBe(0);
     expect(emptyZones().restoreCompactSignal).toBe(0);
+  });
+});
+
+// S3: ключи панелей плагинов — динамическое семейство `plugin:{publisher}/{slug}:{panelId}`
+// в союзе PanelKey. Стор принимает их по синтаксису (список установленных плагинов
+// при чтении localStorage ещё не известен), домашняя зона — 'right', экран
+// разрешает СЕМЕЙСТВО, а не перечень ключей, и формат хранилища не меняется
+// (регрессионная фикстура в конце блока).
+describe('ключи плагинов (S3)', () => {
+  const K = 'plugin:acme/x:main';
+  const K2 = 'plugin:acme/y:side';
+  const K3 = 'plugin:other/z:main';
+  const TOO_LONG = `plugin:acme/x:${'x'.repeat(70)}`;
+
+  it('конструктор и предикат: валидный ключ проходит, битые отбрасываются', () => {
+    expect(pluginPanelKey('acme/x', 'main')).toBe(K);
+    expect(isPluginPanelKey(K)).toBe(true);
+    // битые: пустой, без панели, с пробелом, слишком длинный
+    expect(isPluginPanelKey('plugin:')).toBe(false);
+    expect(isPluginPanelKey('plugin:a')).toBe(false);
+    expect(isPluginPanelKey('plugin:ac me/x:main')).toBe(false);
+    expect(isPluginPanelKey(TOO_LONG)).toBe(false);
+    // не-строки
+    expect(isPluginPanelKey(null)).toBe(false);
+    expect(isPluginPanelKey(42)).toBe(false);
+  });
+
+  it('isPanelKey принимает синтаксически валидный ключ плагина, битый — нет', () => {
+    expect(isPanelKey(K)).toBe(true);
+    expect(isPanelKey('plugin:')).toBe(false);
+    expect(isPanelKey('plugin:a')).toBe(false);
+    expect(isPanelKey('files')).toBe(true);
+  });
+
+  it('sanitizeZones сохраняет ключ в layout, home, weights, railOrder и tucked', () => {
+    const z = sanitizeZones({
+      left: { layout: [['chats']] },
+      right: { layout: [[K, 'files']] },
+      weights: { [K]: 1.5, files: 1 },
+      home: { [K]: 'right' },
+      railOrder: [K, 'files'],
+      tucked: [K],
+    });
+    expect(z.right.layout).toEqual([[K, 'files']]);
+    expect(z.home[K]).toBe('right');
+    expect(z.weights[K]).toBe(1.5);
+    expect(z.railOrder).toEqual([K, 'files']);
+    expect(z.tucked).toEqual([K]);
+  });
+
+  it('sanitizeZones сохраняет ключ в свёрнутом «свернуть все» stash', () => {
+    const z = sanitizeZones({
+      left: { layout: [], stash: [[K]] },
+      right: { layout: [['files']] },
+    });
+    expect(z.left.stash).toEqual([[K]]);
+    expect(z.right.layout).toEqual([['files']]);
+  });
+
+  it('битые ключи отбрасываются из раскладки, прочее не трогается', () => {
+    const z = sanitizeZones({
+      right: { layout: [['plugin:', 'plugin:a', K, 'plugin:ac me/x:main', TOO_LONG, 'files']] },
+    });
+    expect(z.right.layout).toEqual([[K, 'files']]);
+  });
+
+  it('keyAllowed: семейство разрешает маркер pluginPanels, а сам ключ — его наличие в перечне', () => {
+    // WORKSPACE_KEYS содержит слот pluginPanels — маркер семейства
+    expect(keyAllowed(K, WORKSPACE_KEYS)).toBe(true);
+    // экран без маркера и без ключа — не разрешает
+    expect(keyAllowed(K, ['files'] as readonly PanelKey[])).toBe(false);
+    // экран, который уже знает установленные плагины, разрешает сам ключ
+    expect(keyAllowed(K, [K] as readonly PanelKey[])).toBe(true);
+    // статические ключи — по перечню, как раньше
+    expect(keyAllowed('files', ['files'] as readonly PanelKey[])).toBe(true);
+    expect(keyAllowed('files', [] as readonly PanelKey[])).toBe(false);
+  });
+
+  it('evictForeign: с допуском семейства ключ плагина не трогает', () => {
+    expect(evictForeign(zones([['chats']], [[K, 'files']]), 'right', WORKSPACE_KEYS)).toBeNull();
+  });
+
+  it('evictForeign: без допуска выселяет ключ домой в right, соседей не трогает', () => {
+    // экран разрешает 'files', но не семейство плагинов (нет pluginPanels в перечне)
+    const evicted = evictForeign(zones([], [[K, 'files']]), 'right', ['files'] as readonly PanelKey[]);
+    expect(evicted).not.toBeNull();
+    expect(evicted!.right.layout).toEqual([['files']]);
+    expect(homeOf(evicted!, K)).toBe('right');
+  });
+
+  it('panelHome: ключи plugin: — right (как у pluginPanels), статические — из реестра', () => {
+    expect(panelHome(K)).toBe('right');
+    expect(panelHome('chats')).toBe('left');
+    expect(panelHome('files')).toBe('right');
+  });
+
+  it('panelMeta: статические — из реестра, плагины — из реестра меты плагинов', () => {
+    expect(panelMeta('files')?.title).toBe('Файлы');
+    // до наполнения реестра — undefined: ключ принят по синтаксису, а мета
+    // известна только после GET списка плагинов
+    expect(panelMeta(K)).toBeUndefined();
+    setPluginPanelMeta({ [K]: { title: 'Главная', Icon: Plug } });
+    expect(panelMeta(K)?.title).toBe('Главная');
+    // реестр заменяется целиком: новый набор — прежние ключи без меты
+    setPluginPanelMeta({ [K2]: { title: 'Боковая', Icon: Plug } });
+    expect(panelMeta(K)).toBeUndefined();
+    expect(panelMeta(K2)?.title).toBe('Боковая');
+    setPluginPanelMeta({});
+  });
+
+  it('forgetPluginKeys снимает ключи только этого плагина', () => {
+    const z = sanitizeZones({
+      left: { layout: [[K3, 'chats']], stash: [[K2]] },
+      right: { layout: [[K, 'files']] },
+      weights: { [K]: 1.5, [K2]: 2, files: 1 },
+      home: { [K]: 'right', [K2]: 'left' },
+      tucked: [K, 'terminal'],
+      railOrder: [K, K2, 'files'],
+    });
+    const r = forgetPluginKeys(z, 'acme/x');
+    // ключ плагина снят из всех шести мест
+    expect(r.right.layout).toEqual([['files']]);
+    expect(r.home[K]).toBeUndefined();
+    expect(r.weights[K]).toBeUndefined();
+    expect(r.tucked).toEqual(['terminal']);
+    expect(r.railOrder).toEqual([K2, 'files']);
+    // ключи ДРУГОГО плагина и статические — на месте во всех шести местах
+    expect(r.left.layout).toEqual([[K3, 'chats']]);
+    expect(r.left.stash).toEqual([[K2]]);
+    expect(r.home[K2]).toBe('left');
+    expect(r.weights[K2]).toBe(2);
+    expect(r.weights.files).toBe(1);
+    expect(r.railOrder).toContain(K2);
+  });
+
+  // Регрессия: формат хранилища не меняется — старая раскладка (все статические
+  // ключи, включая pluginPanels, плюс упразднённые имена) читается ровно как
+  // раньше. Отличий от прежнего результата нет: pluginPanels по-прежнему
+  // статический ключ (упразднение — S5), упразднённые имена переводятся,
+  // синтаксически валидный ключ плагина добавляется (его раньше отбрасывали).
+  describe('регрессия: старая раскладка читается как раньше', () => {
+    const ALL_STATIC = PANEL_KEYS as readonly string[];
+    const LEGACY = ['personas', 'tools', 'images', 'sound', 'videoEditor'];
+
+    const raw = () => ({
+      left: { layout: [ALL_STATIC.slice(0, 10)] },
+      right: { layout: [ALL_STATIC.slice(10)] },
+      weights: { [ALL_STATIC[0]]: 2, [ALL_STATIC[10]]: 3 },
+      home: { [ALL_STATIC[0]]: 'left' },
+      tucked: [ALL_STATIC[5]],
+      railOrder: [ALL_STATIC[1], ALL_STATIC[2]],
+    });
+
+    it('результат совпадает с прежним, кроме принятого ключа плагина', () => {
+      const withPlugin = {
+        ...raw(),
+        right: { layout: [ALL_STATIC.slice(10), [K]] },
+      };
+      const prev = sanitizeZones(raw());
+      const now = sanitizeZones(withPlugin);
+      // вычёркиваем колонку с ключом плагина (и доли колонок приводим к её
+      // числу) — остальное состояние обязано совпасть с прежним построчно
+      const strippedLayout = now.right.layout.filter(c => !c.includes(K));
+      const stripped = {
+        ...now,
+        right: { ...now.right, layout: strippedLayout, colFlex: normalizeColFlex(strippedLayout.length, now.right.colFlex) },
+      };
+      expect(stripped).toEqual(prev);
+      // ключ плагина на месте, рядом со статическими
+      expect(now.right.layout).toEqual([ALL_STATIC.slice(10), [K]]);
+    });
+
+    it('старый плоский формат (legacyOpen) читается, упразднённые имена переводятся', () => {
+      const flat = [...ALL_STATIC, ...LEGACY, K];
+      const z = parseLayout(null, JSON.stringify(flat));
+      // по две на колонку; упразднённые: personas → team, tools/ images/ sound/
+      // videoEditor → chatContext (дубль снимается), ключ плагина на месте
+      const flatOut = z.flat();
+      expect(flatOut).toContain('team');
+      expect(flatOut).toContain('chatContext');
+      expect(flatOut).toContain(K);
+      expect(flatOut).not.toContain('personas');
+      expect(flatOut).not.toContain('tools');
+      // дубль chatContext (images/sound/videoEditor → одна панель) снят
+      expect(flatOut.filter(k => k === 'chatContext')).toHaveLength(1);
+      // колонки по две
+      expect(z.every(col => col.length <= 2)).toBe(true);
+    });
   });
 });

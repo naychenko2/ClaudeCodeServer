@@ -229,22 +229,12 @@ describe('F9: чип — клик', () => {
     root.unmount();
   });
 
-  it('без живой карточки плана (hasPlanCard=false) — клик открывает меню пилюли', () => {
-    __test.setHasPlanCard('sess-1', false);
+  it('клик ВСЕГДА открывает меню пилюли (решение Андрея 20.10: короткая карточка не потребляет фокус)', () => {
     const { root, container } = mountChip(task(), 'sess-1');
     const chip = findNodeByAttr(container, 'title', 'Открыть план фичи на этом шаге');
     act(() => (reactProps(chip!)!.onClick as (e: { stopPropagation: () => void }) => void)({ stopPropagation: () => {} }));
     expect(__test.pillMenuFor('sess-1'), 'сигнал «открыть меню пилюли»').not.toBeNull();
-    root.unmount();
-  });
-
-  it('живая карточка плана есть (hasPlanCard=true) — меню пилюли НЕ открывается', () => {
-    __test.setHasPlanCard('sess-1', true);
-    const { root, container } = mountChip(task(), 'sess-1');
-    const chip = findNodeByAttr(container, 'title', 'Открыть план фичи на этом шаге');
-    act(() => (reactProps(chip!)!.onClick as (e: { stopPropagation: () => void }) => void)({ stopPropagation: () => {} }));
-    expect(__test.pillMenuFor('sess-1'), 'меню пилюли не зовут').toBeNull();
-    // но сигнал фокуса на месте — его потребит живая карточка
+    // сигнал фокуса тоже на месте
     expect(__test.focusFor('sess-1')).not.toBeNull();
     root.unmount();
   });

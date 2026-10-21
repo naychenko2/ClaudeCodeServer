@@ -194,38 +194,9 @@ export function useFeatureStepFocus(sessionId: string | null): FeatureStepFocus 
   );
 }
 
-// F9: «в ленте есть живая карточка плана» (per chat): ChatPanel пишет (карточка живая
-// только на последней пачке и только когда есть фичи), чип «Шаг N фичи» (TaskCreatedView)
-// читает: есть — сигнал фокуса потребляется в ленте, нет — чип открывает меню пилюли.
-let _planCardBySession = new Map<string, boolean>();
-
-function planCardFor(sessionId: string | null): boolean {
-  if (!sessionId) return false;
-  return _planCardBySession.get(sessionId) ?? false;
-}
-
-export function setHasPlanCard(sessionId: string, has: boolean) {
-  if (!sessionId) return;
-  _planCardBySession = new Map(_planCardBySession);
-  _planCardBySession.set(sessionId, has);
-  emit();
-}
-
-// Хук: есть ли в ленте чата живая карточка плана (false, пока ChatPanel не написал).
-export function useHasPlanCard(sessionId: string | null): boolean {
-  return useSyncExternalStore(
-    subscribeRuns,
-    () => planCardFor(sessionId),
-    () => planCardFor(sessionId),
-  );
-}
-
-// F9: прочитать флаг «живая карточка плана» императивно (не из stale-значения хука):
-// чип «Шаг N фичи» (TaskCreatedView) решает, открывать ли меню пилюли, на следующем кадре
-// ПОСЛЕ клика — когда эффект ChatPanel уже отработал (Глеб: гонка ремоунта).
-export function getHasPlanCard(sessionId: string | null): boolean {
-  return planCardFor(sessionId);
-}
+// F9: флаг «живая карточка плана» (setHasPlanCard/getHasPlanCard/planCardFor) убран
+// (решение Андрея 20.10): чип «Шаг N фичи» теперь ВСЕГДА открывает меню пилюли,
+// короткая карточка плана не потребляет сигнал фокуса сама.
 
 // F9: одноразовый сигнал «открыть меню пилюли» (per chat): чип «Шаг N фичи» открывает
 // меню, когда живой карточки плана в ленте нет. `seq` — монотонный счётчик: повторное
@@ -402,7 +373,6 @@ export const __test = {
     _selectedFeatureBySession = new Map();
     _focusBySession = new Map();
     _focusSeq = 0;
-    _planCardBySession = new Map();
     _pillMenuBySession = new Map();
     _pillMenuSeq = 0;
     _loadingBySession = new Map();
@@ -428,9 +398,7 @@ export const __test = {
   modeFor,
   selectedFeatureIdFor,
   focusFor,
-  // F9: прямой доступ к срезам «живая карточка плана» и «открыть меню пилюли».
-  setHasPlanCard,
-  planCardFor,
+  // F9: прямой доступ к срезам «открыть меню пилюли».
   openPillMenu,
   pillMenuFor,
   // F-pop-a: прямой доступ к срезам загрузки/ошибки.

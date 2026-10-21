@@ -15,7 +15,6 @@ import {
   setSelectedFeatureId,
   getSelectedFeatureId,
   focusFeatureStep,
-  setHasPlanCard,
   openPillMenu,
 } from './featureRuns';
 import { api } from './api';
@@ -343,25 +342,10 @@ describe('F1: useFeatureRunsSnapshot — только читает стор, б�
   });
 });
 
-// ── F9: срез «живая карточка плана» + сигнал «открыть меню пилюли» (per chat) ──
-describe('F9: hasPlanCard (per chat) и openPillMenu (одноразовый сигнал)', () => {
+// ── F9: сигнал «открыть меню пилюли» (per chat, одноразовый) ──
+describe('F9: openPillMenu (одноразовый сигнал, per chat)', () => {
   beforeEach(() => __test.reset());
   afterEach(() => __test.reset());
-
-  it('hasPlanCard: по умолчанию false, setHasPlanCard пишет per-session', () => {
-    expect(__test.planCardFor('A'), 'по умолчанию нет').toBe(false);
-    setHasPlanCard('A', true);
-    expect(__test.planCardFor('A'), 'после записи true').toBe(true);
-    expect(__test.planCardFor('B'), 'чужая сессия не затронута').toBe(false);
-    setHasPlanCard('A', false);
-    expect(__test.planCardFor('A'), 'сброс на false').toBe(false);
-  });
-
-  it('hasPlanCard: null/пустой sessionId — false (нет чата)', () => {
-    expect(__test.planCardFor(null)).toBe(false);
-    setHasPlanCard('', true);
-    expect(__test.planCardFor(null), 'запись в пустой id не видна через null').toBe(false);
-  });
 
   it('openPillMenu: null до сигнала, после — объект с seq', () => {
     expect(__test.pillMenuFor('A'), 'до сигнала null').toBeNull();

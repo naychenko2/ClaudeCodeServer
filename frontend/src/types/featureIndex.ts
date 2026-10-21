@@ -96,11 +96,15 @@ export interface FeatureIndexFeature {
   stepsAccepted: number;
   stepsTotal: number;
   // Честный прогресс (волна 3, Ф-pr): на ревью / в работе / не заведено (план есть,
-  // задач нет) и состояние плана. Аддитивные: старые ответы их не несут.
+  // задач нет), состояние плана и — вне знаменателя — снятые шаги и доработки без
+  // привязки (индекс отдаёт те же числа, что страница фичи; бэк — коммит defd6cd19).
+  // Аддитивные: старые ответы их не несут.
   stepsReview?: number;
   stepsWork?: number;
   stepsNotCreated?: number;
   planState?: PlanState;
+  stepsWithdrawn?: number;
+  unlinkedReworks?: number;
   // Число возвратов (Loops).
   loops: number;
   // null — фича не идёт.

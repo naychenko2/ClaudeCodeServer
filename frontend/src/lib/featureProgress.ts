@@ -78,11 +78,13 @@ export function stepProgressFromRun(run: FeatureRun): StepProgress | null {
 const nonNeg = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 0);
 
 // Честный прогресс из строки индекса (features/index). Индекс несёт
-// stepsAccepted/stepsTotal/stepsReview/stepsWork/stepsNotCreated/planState, но НЕ
-// withdrawn/unlinkedReworks (те — только в run) — дефолт 0. null — старые ответы
-// (новых полей нет): место показывает прежний вид.
+// stepsAccepted/stepsTotal/stepsReview/stepsWork/stepsNotCreated/planState и — вне
+// знаменателя — stepsWithdrawn/unlinkedReworks (те же числа, что страница фичи;
+// бэк — коммит defd6cd19). null — старые ответы (новых полей нет): место показывает
+// прежний вид.
 export function stepProgressFromIndex(f: FeatureIndexFeature): StepProgress | null {
-  const hasNew = f.stepsReview != null || f.stepsWork != null || f.stepsNotCreated != null || f.planState != null;
+  const hasNew = f.stepsReview != null || f.stepsWork != null || f.stepsNotCreated != null
+    || f.planState != null || f.stepsWithdrawn != null || f.unlinkedReworks != null;
   if (!hasNew) return null;
   return {
     planState: f.planState ?? 'done',
@@ -91,7 +93,7 @@ export function stepProgressFromIndex(f: FeatureIndexFeature): StepProgress | nu
     review: nonNeg(f.stepsReview ?? 0),
     work: nonNeg(f.stepsWork ?? 0),
     notCreated: nonNeg(f.stepsNotCreated ?? 0),
-    withdrawn: 0,
-    unlinkedReworks: 0,
+    withdrawn: nonNeg(f.stepsWithdrawn ?? 0),
+    unlinkedReworks: nonNeg(f.unlinkedReworks ?? 0),
   };
 }

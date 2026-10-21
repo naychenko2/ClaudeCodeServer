@@ -5,7 +5,7 @@
 // Окружение node (без jsdom): чистые функции, без DOM. Шаблон — featureProgress.test.ts.
 
 import { describe, expect, it } from 'vitest';
-import { stepProgressFromRun, stepProgressFromIndex } from './featureProgress';
+import { stepProgressFromRun, stepProgressFromIndex, formatStepProgress } from './featureProgress';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 import type { FeatureRun } from '../types/featureRun';
 
@@ -73,5 +73,14 @@ describe('stepProgressFromIndex', () => {
   it('отрицательные значения (баг бэка) → обнулены (нет «принято -2 из -5»)', () => {
     const p = stepProgressFromIndex(idx({ stepsAccepted: -2, stepsTotal: -5, stepsReview: -3, stepsWork: -1, stepsNotCreated: -4, planState: 'partial' }));
     expect(p).toEqual({ planState: 'partial', total: 0, accepted: 0, review: 0, work: 0, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 });
+  });
+
+  it('stepsWithdrawn/unlinkedReworks из индекса подтягиваются (не хардкод 0) → «X снято · Y без привязки»', () => {
+    const f = idx({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 0, stepsWork: 0, stepsNotCreated: 0, planState: 'done', stepsWithdrawn: 2, unlinkedReworks: 1 });
+    const p = stepProgressFromIndex(f);
+    expect(p).not.toBeNull();
+    expect(p!.withdrawn).toBe(2);
+    expect(p!.unlinkedReworks).toBe(1);
+    expect(formatStepProgress(p!)).toBe('принято 3 из 5 · 2 снято · 1 без привязки');
   });
 });

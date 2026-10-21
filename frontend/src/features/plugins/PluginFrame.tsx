@@ -309,6 +309,25 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
         }
       }
     } catch (e) {
+      // Тело HTTP-ошибки: offline.ts прикрепляет разобранный JSON к ошибке (e.body).
+      // Если сервер вернул структурированный отказ {ok:false, error:{code, message}},
+      // код (denied/not_found/…) и человекочитаемое сообщение обязаны доехать до панели,
+      // а не превратиться в '[object Object]' (общий request() строит Error из объекта
+      // err.error, и message теряет структуру). Точечная правка здесь, не в request():
+      // offline.ts общий на весь продукт, ломать его нельзя.
+      const body = (e as { body?: unknown })?.body as
+        | { error?: { code?: string; message?: string } }
+        | undefined;
+      const errObj = body?.error;
+      if (errObj && typeof errObj.code === 'string' && typeof errObj.message === 'string') {
+        postToFrame(buildResultMessage(msg.id, false, { code: errObj.code, message: errObj.message }));
+        // Отказ по праву — плашка «Нет права {key}» поверх контента (не ломает панель)
+        if (errObj.code === 'denied') {
+          const key = deniedKeyOf(errObj.message);
+          if (key) setDeniedKey(key);
+        }
+        return;
+      }
       // Сам запрос к серверу не дошёл (сеть/гейт) — для панели это upstream
       postToFrame(buildResultMessage(msg.id, false, {
         code: 'upstream',

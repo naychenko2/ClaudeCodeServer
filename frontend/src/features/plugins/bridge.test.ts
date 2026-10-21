@@ -128,6 +128,8 @@ const {
   buildThemeMessage, clampContentHeight, deniedKeyOf, bridgeErrorText,
 } = await import('./bridge');
 const { PluginFrame } = await import('./PluginFrame');
+// Плашка «Нет права …» (Notice) — проверяем её наличие в дереве после отказа по праву
+const { Notice } = await import('../../components/ui');
 // Токены панели (S8): buildTokensStyle генерирует <style> с --cc-* из значений хоста.
 const { buildTokensStyle } = await import('./panelSrcdoc');
 // Круговой разбор (ADR-031 §3.6): DOMParser только в тесте — парсит ВНЕШНИЙ документ
@@ -722,6 +724,67 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     expect(result.id).toBe('c2');
     expect(result.ok).toBe(false);
     expect((result.error as { code: string }).code).toBe('denied');
+  });
+
+  // Регрессия (задача 8335891a): сервер отдаёт 403 со структурированным отказом.
+  // Общий request() (offline.ts) строит Error из объекта err.error → message =
+  // '[object Object]', и исключение летит ДО проверки res.error?.code === 'denied'
+  // (та проверка — в try-ветке, после await) → catch делал {code:'upstream',
+  // message:'[object Object]'}, deniedKey не ставился, плашки «Нет права …» не было.
+  // Фикс — в catch: e.body (разобранный JSON) даёт {code, message}; при code==='denied'
+  // ставится deniedKey. Мутация «вернуть catch к {code:'upstream', message:e.message}»
+  // красит оба ассерта (message и плашка).
+  it('403 со структурированным отказом → result {code:denied, message} (не [object Object]) + плашка «Нет права …»', async () => {
+    const project = { id: 'p1' } as Project;
+    const host: Host = { i: 0, states: new Map(), refs: new Map(), cbs: new Map(), effects: new Map() };
+    const render = () => {
+      host.i = 0;
+      rt.state.current = host;
+      try {
+        return PluginFrame({ project, plugin, panel });
+      } finally {
+        rt.state.current = null;
+      }
+    };
+    render();
+    await Promise.resolve();
+    render();
+    await Promise.resolve();
+    const tree = render();
+    const iframeEl = findElement(tree, 'iframe');
+    expect(iframeEl).not.toBeNull();
+    const posted: unknown[] = [];
+    const panelWindow = { postMessage: (msg: unknown) => { posted.push(msg); } };
+    const fakeFrame = { contentWindow: { frames: [panelWindow] } };
+    (iframeEl!.props.ref as { current: unknown }).current = fakeFrame;
+
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+
+    // 403: request() бросает Error с message='[object Object]' (из объекта err.error)
+    // и body = разобранным JSON {ok:false, error:{code, message}}. Симулируем ровно это.
+    const err = new Error('[object Object]') as Error & { status?: number; body?: unknown };
+    err.status = 403;
+    err.body = { ok: false, error: { code: 'denied', message: 'Нет права: tasks:read' } };
+    m.call.mockImplementationOnce(async () => { throw err; });
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c3', op: 'tasks.read', args: {} });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // result дошёл до панели структурированным: code=denied, человекочитаемое сообщение,
+    // а НЕ '[object Object]' (и не code=upstream — отказ в праве не поломка upstream).
+    const result = posted.find(p => (p as { type?: string }).type === 'result') as Record<string, unknown>;
+    expect(result, 'result получен панелью').toBeDefined();
+    expect(result.id).toBe('c3');
+    expect(result.ok).toBe(false);
+    const rerr = result.error as { code: string; message: string };
+    expect(rerr.code).toBe('denied');
+    expect(rerr.message).toBe('Нет права: tasks:read');
+    expect(rerr.message).not.toBe('[object Object]');
+
+    // Плашка «Нет права tasks:read» поверх контента: deniedKey поставлен, bridge alive.
+    const notice = findElement(render(), Notice);
+    expect(notice, 'плашка «Нет права …» в дереве').not.toBeNull();
+    expect((notice!.props as { title: string }).title).toBe('Нет права tasks:read');
   });
 
   it('resize: высота контента (порог 48, потолок 20000), rAF-очередь', async () => {

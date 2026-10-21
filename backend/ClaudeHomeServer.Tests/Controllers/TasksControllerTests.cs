@@ -1015,23 +1015,23 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         counting.FindCalls.Should().Be(0, "Docs не вызывался для локального проекта (G10)");
     }
 
-    // Docs выключена (каталог null) → 200 и mockups: [] (без флага, не 500).
+    // Каталога нет в DI (catalog null) → 200 и mockups: [] (без флага, не 500).
     [Fact]
-    public async Task GetFeature_Mockups_DocsВыключена_200_Пусто()
+    public async Task GetFeature_Mockups_КаталогаНетВDI_200_Пусто()
     {
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
         var epicId = epic.GetProperty("id").GetString()!;
-        // Серверный проект владельца (не локальный): Docs выключена → catalog = null.
+        // Серверный проект владельца (не локальный): каталога нет в DI → catalog = null.
         var dir = Path.Combine(_factory.TempDir, "mk_docs_off_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var project = Projects.Create("mk-docs-off-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
 
-        var controller = BuildController(git: null, catalog: null); // Docs выключена
+        var controller = BuildController(git: null, catalog: null); // каталога нет в DI
         var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
 
         var json = FeatureJson(result);
-        json.GetProperty("mockups").GetArrayLength().Should().Be(0, "Docs выключена → []");
+        json.GetProperty("mockups").GetArrayLength().Should().Be(0, "каталога нет в DI → []");
         json.GetProperty("mockupsUnavailable").GetString().Should().NotBe("device", "не локальный проект");
     }
 
@@ -1055,6 +1055,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         Directory.CreateDirectory(dir);
         var project = Projects.Create("mk-attr-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
+        // Шаг — в том же проекте, что эпик: OwnerTask фильтрует исполнителей по ProjectId эпика,
+        // иначе макет не получил бы taskId/authorPersonaId этой задачи.
+        _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!.ProjectId = project.Id;
 
         var catalog = new FixedMockupCatalog(new MockupEntry(
             Path: "docs/mockups/mine.html", Title: "Макет", Status: null,

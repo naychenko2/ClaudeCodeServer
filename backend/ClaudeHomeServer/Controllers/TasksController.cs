@@ -716,7 +716,9 @@ public class TasksController(
 
     // linkedFiles всех задач ПОЛНОГО run. Резолв идёт от RootPath проекта эпика, поэтому
     // берём linkedFiles только из задач того же проекта (иначе файл чужого проекта дал бы
-    // exists:false-шум в списке макетов); эпик без проекта → фильтр не действует.
+    // exists:false-шум в списке макетов). Фильтр по ProjectId применяется ВСЕГДА: эпик без
+    // проекта (ProjectId=null) → проходят только задачи тоже без проекта (ветка недостижима —
+    // без проекта эпика BuildMockups каталог не вызывает, см. шаг 1).
     private static List<string> AllLinkedFiles(FeatureRun run)
     {
         var epicProject = run.Epic.ProjectId;
@@ -728,12 +730,16 @@ public class TasksController(
 
     // Первая (по CreatedAt) задача фичи, в linkedFiles которой есть path макета или любой из его
     // files; иначе null. Пути нормализуем (регистр/разделители): linkedFiles в сторе может
-    // отличаться от пути каталога регистром или обратным слэшем.
+    // отличаться от пути каталога регистром или обратным слэшем. Фильтр по проекту эпика —
+    // как в AllLinkedFiles: иначе макет (из проекта эпика) мог бы получить taskId/authorPersonaId
+    // задачи ДРУГОГО проекта.
     private static TaskItem? OwnerTask(FeatureRun run, MockupEntry entry)
     {
         var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Path };
         foreach (var f in entry.Files) targets.Add(f.Path);
+        var epicProject = run.Epic.ProjectId;
         return AllRunTasks(run)
+            .Where(t => t.ProjectId == epicProject)
             .Where(t => t.LinkedFiles.Any(p => targets.Contains(NormalizeLinkedPath(p))))
             .OrderBy(t => t.CreatedAt)
             .FirstOrDefault();

@@ -163,9 +163,13 @@ public class MockupCatalog(DocsIndexService docs)
     // Нормализация «..» (тем же приёмом, что ParseFiles → DocsIndexService.ResolveRelative):
     // docs/mockups/../../x.html → x.html (вне области) — путь отбрасывается, иначе наружу
     // ушёл бы путь с «..» (SafePath.Join защищает корень проекта, но не область mockups);
-    // выход выше корня → null. Префикс проверяем ПОСЛЕ нормализации. Регистр схлопнут в
-    // канонический нижний: на Linux «DOCS/MOCKUPS/…» — другой (несуществующий) каталог,
-    // а не шум exists=false в списке.
+    // выход выше корня → null. Префикс проверяем ПОСЛЕ нормализации.
+    //
+    // Регистр: канонизируем ТОЛЬКО префикс docs/mockups/ (на Linux «DOCS/MOCKUPS/…» — другой,
+    // несуществующий каталог → схлопываем в нижний); ХВОСТ (имя файла) оставляем в исходном
+    // регистре — иначе файл MyMockup.html превратился бы в несуществующий mymockup.html
+    // (Exists=false, макет «уехал» в «не в master»). Дедуп — регистронезависимый по
+    // каноническому пути, поэтому MyMockup.html и mymockup.html схлопываются в одну запись.
     private static IEnumerable<string> DistinctLinkedHtml(IReadOnlyCollection<string> linkedPaths)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -176,7 +180,9 @@ public class MockupCatalog(DocsIndexService docs)
             if (norm is null) continue;
             if (!norm.StartsWith(MockupsPrefix, StringComparison.OrdinalIgnoreCase)) continue;
             if (!norm.EndsWith(".html", StringComparison.OrdinalIgnoreCase)) continue;
-            if (seen.Add(norm)) yield return norm.ToLowerInvariant();
+            // Префикс → канонический нижний; хвост (после префикса) — в исходном регистре.
+            var canonical = MockupsPrefix + norm[MockupsPrefix.Length..];
+            if (seen.Add(canonical)) yield return canonical;
         }
     }
 
@@ -197,28 +203,43 @@ public class MockupCatalog(DocsIndexService docs)
         var full = JoinSafe(rootPath, relativePath);
         if (full is null || !File.Exists(full)) return new DiskInfo(null, false);
 
-        // Реальный путь (после разрешения ссылок) обязан лежать внутри docs/mockups/ проекта.
+        // Реальный путь (после разрешения ссылок ПО ВСЕЙ ЦЕПОЧКЕ) обязан лежать внутри
+        // реального пути docs/mockups/ проекта: сравниваем real vs real, иначе symlink-каталог
+        // в корневой области (docs/mockups → /tmp/…) обманывал бы проверку.
         var real = ResolveRealPath(full);
         if (real is null) return new DiskInfo(null, false);
         var mockupsRoot = JoinSafe(rootPath, MockupsPrefix);
-        if (mockupsRoot is null || !IsUnder(mockupsRoot, real))
+        if (mockupsRoot is null) return new DiskInfo(null, false);
+        var mockupsReal = ResolveRealPath(mockupsRoot);
+        if (mockupsReal is null || !IsUnder(mockupsReal, real))
             return new DiskInfo(null, true);   // симлинк на цель вне области → записи нет
 
         return new DiskInfo(new FileInfo(full).LastWriteTimeUtc, false);
     }
 
-    // Реальный путь файла: симлинк разрешается до конечной цели (включая цепочки), обычный
-    // файл — его GetFullPath. null — цель не разрешается (битая/циклическая ссылка).
+    // Реальный путь: симлинки разрешаются ПО ВСЕЙ ЦЕПОЧКЕ (каждый каталог и сам файл), а не
+    // только на последней компоненте. Иначе ссылка на промежуточный каталог
+    // (docs/mockups/sub → /tmp/external/) не раскрывалась: файл внутри ссылочного каталога
+    // выглядел «внутри» docs/mockups/, а его exists/mtime — чужим. null — ссылка не
+    // разрешается (битая/циклическая) или путь не абсолютный.
     private static string? ResolveRealPath(string full)
     {
         try
         {
-            var info = new FileInfo(full);
-            // ResolveLinkTarget → FileSystemInfo? (не string): цель как путь через FullName.
-            var target = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName;
-            if (target is null) return Path.GetFullPath(full);
-            // Цель может быть относительной — резолвим от папки, где лежит ссылка.
-            return Path.GetFullPath(Path.Combine(Path.GetDirectoryName(full)!, target));
+            var absolute = Path.GetFullPath(full);
+            var root = Path.GetPathRoot(absolute);
+            if (string.IsNullOrEmpty(root)) return null;
+            var rest = absolute[root.Length..]
+                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+            var current = root;
+            foreach (var part in rest)
+            {
+                current = Path.Combine(current, part);
+                var resolved = ResolveLinkTarget(current);
+                if (resolved is null) return null;
+                current = resolved;
+            }
+            return current;
         }
         catch
         {
@@ -226,13 +247,31 @@ public class MockupCatalog(DocsIndexService docs)
         }
     }
 
+    // Разрешает симлинк (каталог или файл) до его конечной цели. Не ссылка → GetFullPath(путь).
+    // null — ссылка не разрешается (битая/циклическая).
+    private static string? ResolveLinkTarget(string path)
+    {
+        var info = Directory.Exists(path) ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path);
+        var target = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+        if (target is null) return Path.GetFullPath(path);
+        // Цель может быть относительной — резолвим от папки, где лежит ссылка.
+        return Path.GetFullPath(Path.Combine(Path.GetDirectoryName(path)!, target));
+    }
+
     // real лежит внутри dir (dir — без хвостового разделителя; real == dir тоже «внутри»).
+    // Сравнение — по правилам ФС: Windows регистронезависима, Linux/macOS — нет (иначе на
+    // Linux «docs/MOCKUPS/x» считалось бы «внутри» docs/mockups/).
     private static bool IsUnder(string dir, string real)
     {
         var d = dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return real.Equals(d, StringComparison.OrdinalIgnoreCase)
-            || real.StartsWith(d + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        return real.Equals(d, PathComparison)
+            || real.StartsWith(d + Path.DirectorySeparatorChar, PathComparison);
     }
+
+    // Сравнение путей по правилам файловой системы ОС: Windows — регистронезависимо,
+    // Linux/macOS — регистрозависимо (Ordinal).
+    private static readonly StringComparison PathComparison =
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     // null — путь вывел за пределы проекта (SafePath.Join бросил) либо битый разделитель
     private static string? JoinSafe(string rootPath, string relativePath)

@@ -241,6 +241,96 @@ public class MockupCatalogTests : IDisposable
         }
     }
 
+    // ─── регистр имени файла (major 1) ─────────────────────────────────────────────
+
+    // Файл со смешанным регистром/кириллицей: Path в ответе совпадает с путём на диске,
+    // Exists=true, ModifiedAt!=null. Префикс docs/mockups/ канонизируется в нижний, но ХВОСТ
+    // (имя) — в исходном регистре; иначе на Linux файл превращался бы в несуществующий нижний
+    // (Exists=false, макет «уехал» в «не в master»).
+    // Мутация: вернуть norm.ToLowerInvariant() (схлопнуть весь путь) → Path=mymockup_макет.html,
+    // Exists=false → краснеет.
+    [Fact]
+    public void LinkedFiles_РегистрИмениФайла_PathСовпадаетСДиском()
+    {
+        Write("<html></html>", "docs", "mockups", "MyMockup_Макет.html");
+
+        var result = _catalog.Find(_root, MyFeature, ["docs/mockups/MyMockup_Макет.html"]);
+
+        result.Should().ContainSingle()
+            .Which.Path.Should().Be("docs/mockups/MyMockup_Макет.html");
+        result[0].Files.Single().Exists.Should().BeTrue("файл на диске в исходном регистре");
+        result[0].ModifiedAt.Should().NotBeNull();
+    }
+
+    // Дедуп по пути на сохранённом регистре: два пути, отличающиеся только регистром имени,
+    // схлопываются в одну запись (seen — OrdinalIgnoreCase). Мутация: seen → Ordinal → 2 записи.
+    [Fact]
+    public void LinkedFiles_ДедупПоРегиструИмени_ОднаЗапись()
+    {
+        Write("<html></html>", "docs", "mockups", "MyMockup.html");
+
+        var result = _catalog.Find(_root, MyFeature,
+            ["docs/mockups/MyMockup.html", "docs/mockups/MYMOCKUP.html"]);
+
+        result.Should().HaveCount(1, "дубли, отличающиеся регистром имени, схлопнуты");
+        result[0].Path.Should().Be("docs/mockups/MyMockup.html");
+    }
+
+    // ─── симлинк на промежуточный каталог (major 2) ─────────────────────────────────
+
+    // docs/mockups/sub → внешний каталог: файл внутри ссылочного каталога не «внутри» области —
+    // записи нет вовсе (exists/mtime файла вне области не утекают). Старая реализация разрешала
+    // ссылку только на последнюю компоненту → файл внутри ссылочного каталога проходил.
+    // Мутация: убрать проход по цепочке (только последняя компонента) → запись создаётся → краснеет.
+    [Fact]
+    public void LinkedFiles_СимлинкКаталогВнеОбласти_НетЗаписи()
+    {
+        if (!SupportsSymlinks()) return;
+        var outsideDir = Path.Combine(Path.GetTempPath(), "mk_symdir_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outsideDir);
+        var outsideFile = Path.Combine(outsideDir, "secret.html");
+        File.WriteAllText(outsideFile, "<html>вне области</html>");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(_root, "docs", "mockups"));
+            File.CreateSymbolicLink(Path.Combine(_root, "docs", "mockups", "sub"), outsideDir);
+
+            _catalog.Find(_root, MyFeature, ["docs/mockups/sub/secret.html"])
+                .Should().BeEmpty("симлинк на промежуточный каталог вне области → записи нет");
+        }
+        finally
+        {
+            Directory.Delete(outsideDir, recursive: true);
+        }
+    }
+
+    // Легитимный симлинк: docs/mockups/sub → подкаталог ВНУТРИ docs/mockups/ (_inner/). Реальный
+    // путь цели (docs/mockups/_inner/legit.html) лежит в пределах области → запись есть, Exists=true.
+    // Платформонезависимый: пропускаем, если ссылки недоступны.
+    [Fact]
+    public void LinkedFiles_СимлинкКаталогВнутриОбласти_ЗаписьЕсть()
+    {
+        if (!SupportsSymlinks()) return;
+        var inner = Path.Combine(_root, "docs", "mockups", "_inner");
+        Directory.CreateDirectory(inner);
+        File.WriteAllText(Path.Combine(inner, "legit.html"), "<html>внутри mockups</html>");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(_root, "docs", "mockups"));
+            File.CreateSymbolicLink(Path.Combine(_root, "docs", "mockups", "sub"), inner);
+
+            var result = _catalog.Find(_root, MyFeature, ["docs/mockups/sub/legit.html"]);
+
+            result.Should().ContainSingle()
+                .Which.Path.Should().Be("docs/mockups/sub/legit.html");
+            result[0].Files.Single().Exists.Should().BeTrue();
+        }
+        finally
+        {
+            Directory.Delete(inner, recursive: true);
+        }
+    }
+
     // Символические ссылки доступны (File.CreateSymbolicLink не бросает)?
     private static bool SupportsSymlinks()
     {

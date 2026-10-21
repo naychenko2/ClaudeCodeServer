@@ -344,7 +344,7 @@ function useFocusTrap(ref: React.RefObject<HTMLElement | null>, isMobile: boolea
 // Раскрывающаяся панель на десктопе: role=dialog + aria-modal + focus-trap, Esc, тап по
 // подложке, возврат фокуса. На мобиле подаёт Modal (bottom-sheet) — там Esc/подложка/
 // крестик уже в Modal; ловушка — на оверлее (крестик Modal внутри).
-export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarget, projectId, loading, error, order }: {
+export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarget, projectId, loading, error, order, initialSel = 0 }: {
   runs: FeatureRun[];
   isMobile?: boolean;
   onClose: () => void;
@@ -358,6 +358,9 @@ export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarge
   // Порядок фич (id) — единый источник с строкой (индекс); runs пересортировывается
   // под него, чтобы переключатель и «· ещё N» шли в одном порядке (минор 7).
   order?: string[];
+  // Минор 4: индекс фичи, выбранной в строке («· ещё N») — шторка открывает её,
+  // а не первую по order.
+  initialSel?: number;
 }) {
   // Минор 7: порядок переключателя = порядок строки (индекс), не бэковый порядок runs.
   const orderedRuns = useMemo(() => {
@@ -367,7 +370,8 @@ export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarge
   }, [runs, order]);
 
   // Выбранная фича (индекс в orderedRuns). Кламп, если фич стало меньше.
-  const [sel, setSel] = useState(0);
+  // Минор 4: инициализация из строки (selected feature in the row).
+  const [sel, setSel] = useState(initialSel);
   const idx = Math.min(sel, Math.max(0, orderedRuns.length - 1));
   const run = orderedRuns[idx];
 

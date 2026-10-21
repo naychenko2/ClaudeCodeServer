@@ -293,4 +293,70 @@ describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {
     proto.focus = origFocus;
     root.unmount();
   });
+
+  // Минор 4: initialSel — шторка открывает фичу, выбранную в строке («· ещё N»),
+  // а не первую по order. Мутация initialSel=0 (вместо 1) → red.
+  it('Минор 4: initialSel=1 → шторка открывает ВТОРУЮ фичу (не первую)', async () => {
+    const runs = [mkRun('f1', 'Первая фича'), mkRun('f2', 'Вторая фича')];
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs, isMobile: false, onClose: () => {}, initialSel: 1,
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    // Заголовок панели — «Вторая фича» (initialSel=1).
+    const panel = findNodeByAttr(container, 'data-testid', 'feature-sheet-panel');
+    expect(panel, 'нет панели').not.toBeNull();
+    expect(textNodes(panel!).join(' ')).toContain('Вторая фича');
+    root.unmount();
+  });
+
+  // Минор 5: focus trap на МОБИЛЕ (Modal/bottom-sheet): ловушка на оверлее (cc-overlay),
+  // фокус внутрь при открытии, Tab/Shift+Tab по кругу. fakeDom: keydown → handlers.
+  // На мобиле Modal рисует портал (createPortal → document.body); в fakeDom портал
+  // рендерится в document.body, а не в container — поэтому ищем по document.
+  it('Минор 5: focus trap на мобиле — keydown-обработчик зарегистрирован (ловушка активна)', async () => {
+    const doc = (globalThis as { document: any }).document;
+    const keydownHandlers: Function[] = [];
+    const origAdd = doc.addEventListener;
+    doc.addEventListener = (t: string, f: unknown) => { if (t === 'keydown') keydownHandlers.push(f); return origAdd.call(doc, t, f); };
+
+    const { root } = mount(createElement(FeatureBannerSheet, {
+      runs: [mkRun('f1', 'Моя фича')], isMobile: true, onClose: () => {},
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    doc.addEventListener = origAdd;
+
+    // Ловушка (useFocusTrap) регистрирует keydown-обработчик на document —
+    // без него Tab/Shift+Tab не циклируются. Мутация: убрать useFocusTrap → 0 handlers → red.
+    expect(keydownHandlers.length, 'keydown-обработчик ловушки не зарегистрирован (mobile)').toBeGreaterThanOrEqual(1);
+    root.unmount();
+  });
+
+  // Минор 6 (зонды): фича без исполнителей — «Исполнителей нет» в шторке.
+  it('Минор 6: фича без исполнителей → «Исполнителей нет» (не тишина)', async () => {
+    // prod — active, но executors: [] (пусто).
+    const run: FeatureRun = {
+      featureId: 'f1', state: 'running',
+      epic: { id: 'f1', title: 'Без исполнителей' } as unknown as import('../../../types/featureRun').FeatureTask,
+      steps: [], reviews: [], qa: [], final: null, merge: null,
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      progress: 0, ready: false,
+      stages: [
+        mkStage('cut', 'done'),
+        mkStage('plan', 'done'),
+        mkStage('prod', 'active', 'run', []), // нет исполнителей
+        mkStage('review', 'pending'),
+        mkStage('qa', 'pending'),
+        mkStage('final', 'pending'),
+        mkStage('merge', 'pending'),
+      ],
+    };
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs: [run], isMobile: false, onClose: () => {},
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const all = textNodes(container).join(' ');
+    expect(all, '«Исполнителей нет» не показано').toContain('Исполнителей нет');
+    root.unmount();
+  });
 });

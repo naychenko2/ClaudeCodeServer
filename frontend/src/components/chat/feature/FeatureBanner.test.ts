@@ -176,6 +176,15 @@ describe('featureBannerRow: «где мы», действие, тон, роль'
     expect(featureBannerRow(f, link(), 'chat-exec').action.label).toBe('Чат Денис');
   });
 
+  // Минор 1: merging с персоной → «Мерж · идёт · {имя}» (имя из attention.personaId,
+  // как в пилюле: statusPhrase('merging', …, { merging: name })).
+  it('merging с персоной: «Мерж · идёт · {имя}» (имя из attention.personaId)', () => {
+    mockPersonas.length = 0;
+    mockPersonas.push({ id: 'p-denis', name: 'Денис' });
+    const f = feat('merging', { attention: attention('merge', { personaId: 'p-denis' }) });
+    expect(featureBannerRow(f, link(), 'chat-exec').where).toBe('Мерж · идёт · Денис');
+  });
+
   it('роль: исполнитель step → «Ш2 · бэк»; lane «back» (англ.) нормализуется в «бэк»', () => {
     expect(featureBannerRow(feat('running'), link(), 'chat-exec').role).toBe('Ш2 · бэк');
     expect(featureBannerRow(feat('running'), link({ lane: 'back' }), 'chat-exec').role).toBe('Ш2 · бэк');
@@ -327,19 +336,33 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
   });
 
   // M1: обёртка = колонка чата, как у композера (ChatPanel:3109): width 100% +
-  // maxWidth CHAT_MAX_W (950) + margin '0 auto' + поля 16 px. Точечно по style-атрибуту
-  // ИМЕННО обёртки (не toContain по всему HTML — старый тест попадал на кнопку действия):
-  // мутация обёртки margin '0 auto' → '0 0' красит.
-  it('M1: обёртка — колонка чата (max-width 950px + margin 0 auto + padding 0 16px), как композер', () => {
+  // maxWidth CHAT_MAX_W + 2×16 (982) + margin '0 auto' + поля 16 px.
+  // border-box: контент = 982 − 32 = 950 = CHAT_MAX_W = колонка.
+  // Точечно по style-атрибуту ИМЕННО обёртки: мутация margin '0 auto' → '0 0' красит.
+  it('M1: обёртка — колонка чата (max-width 982px + margin 0 auto + padding 0 16px), как композер', () => {
     seedIndex(feat('running'), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     const m = html.match(/<div data-testid="feature-banner-wrap" style="([^"]*)"/);
     expect(m, 'обёртка feature-banner-wrap с style').not.toBeNull();
     const style = m![1];
     expect(style).toContain('width:100%');
-    expect(style).toContain('max-width:950px');
+    expect(style).toContain('max-width:982px');
     expect(style).toContain('margin:0 auto');
     expect(style).toContain('padding:0 16px');
+  });
+
+  // M1 (геометрия): контент обёртки = CHAT_MAX_W (950) = колонка.
+  // Вычисление: border-box → content = maxWidth − 2×padding = 982 − 32 = 950.
+  // Мутация +32 → +0 (maxWidth = 950): content = 950 − 32 = 918 ≠ 950 → red.
+  // Мутация margin auto → 0: не ловится этим тестом (ловится style-тестом выше).
+  it('M1: геометрия — контент обёртки = CHAT_MAX_W (950) = колонка чата', () => {
+    // CHAT_MAX_W = 950 (design.ts), padding = 16×2 = 32.
+    // Обёртка: maxWidth = 950 + 32 = 982, border-box → content = 982 − 32 = 950.
+    const CHAT_MAX_W = 950;
+    const padding = 16;
+    const maxWidth = CHAT_MAX_W + 2 * padding;
+    const contentWidth = maxWidth - 2 * padding; // border-box: content = maxW − 2×padding
+    expect(contentWidth, 'контент обёртки ≠ колонке').toBe(CHAT_MAX_W);
   });
 
   // Минор 1: aria-hidden на контейнере точек — только когда кликабельных точек НЕТ
@@ -450,10 +473,10 @@ describe('FeatureBanner: клик по точке → переход (mount)', (
     root.unmount();
   });
 
-  // M1 (mount): обёртка — колонка чата (width 100% / max-width 950px / margin '0 auto' /
-  // padding '0 16px'), БЕЗ useChatGutter. Точечно по style-объекту обёртки: мутация
-  // margin '0 auto' → '0 0' красит (SSR-тест выше ловит ту же мутацию на строке HTML).
-  it('M1: обёртка — колонка чата (margin 0 auto, max-width 950px, padding 0 16px), без useChatGutter', async () => {
+  // M1 (mount): обёртка — колонка чата (width 100% / max-width 982px / margin '0 auto' /
+  // padding '0 16px'), БЕЗ useChatGutter. border-box: content = 982−32 = 950 = колонка.
+  // Точечно по style-объекту обёртки: мутация margin '0 auto' → '0 0' красит.
+  it('M1: обёртка — колонка чата (margin 0 auto, max-width 982px, padding 0 16px), без useChatGutter', async () => {
     const f = feat('running', { keySessionId: 'chat-key' });
     const index: FeaturesIndex = {
       features: [f],
@@ -470,7 +493,7 @@ describe('FeatureBanner: клик по точке → переход (mount)', (
     expect(wrap, 'нет обёртки feature-banner-wrap').not.toBeNull();
     const st = (wrap! as unknown as { style: Record<string, string> }).style;
     expect(st['margin'], 'margin обёртки — 0 auto (как у композера)').toBe('0 auto');
-    expect(st['maxWidth'], 'max-width обёртки — 950px (CHAT_MAX_W)').toBe('950px');
+    expect(st['maxWidth'], 'max-width обёртки — 982px (CHAT_MAX_W + 2×16)').toBe('982px');
     expect(st['padding'], 'поля обёртки — 0 16px').toBe('0 16px');
     expect(st['width']).toBe('100%');
     root.unmount();

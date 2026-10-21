@@ -79,6 +79,7 @@ function whereText(f: FeatureIndexFeature): string {
   const p = statusPhrase(f.state, stage, {
     running: uniquePersonaNames(nowIds),
     stopped: f.attention?.personaId ? (getPersonaById(f.attention.personaId)?.name ?? '') : '',
+    merging: f.attention?.personaId ? (getPersonaById(f.attention.personaId)?.name ?? '') : '',
   });
   return `${p.bold}${p.post}`;
 }
@@ -455,6 +456,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
             loading={runsLoading}
             error={runsError}
             order={entries.map(e => e.feature.featureId)}
+            initialSel={idx}
             isMobile
             onClose={() => setSheetOpen(false)}
             focusTarget={whereRef}
@@ -513,6 +515,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
           loading={runsLoading}
           error={runsError}
           order={entries.map(e => e.feature.featureId)}
+          initialSel={idx}
           onClose={() => setSheetOpen(false)}
           focusTarget={whereRef}
           projectId={projectId}
@@ -522,16 +525,18 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
     );
   }
 
-  // M1: ширина = колонка чата, как у композера (ChatPanel:3109): maxWidth CHAT_MAX_W +
-  // margin '0 auto' + поля 16 px. Старая обвязка (CSS-переменные useChatGutter +
-  // marginLeft:auto) прижимала панель к правому краю окна, а лента центрирована.
-  // На узком окне (< CHAT_MAX_W) maxWidth не режет — баннер во всю ширину с полями.
+  // M1: карточка = колонка чата (950), как у композера (ChatPanel:3109).
+  // Обёртка: maxWidth = CHAT_MAX_W + 2×16 (982) при padding 0 16px и border-box →
+  // контент = 982 − 32 = 950 = колонка. margin '0 auto' центрирует.
+  // Старая обвязка (CSS-переменные useChatGutter + marginLeft:auto) прижимала панель
+  // к правому краю окна, а лента центрирована.
+  // На узком окне (< 982) maxWidth не режет — баннер во всю ширину с полями.
   return (
     <div
       data-testid="feature-banner-wrap"
       style={{
         width: '100%',
-        maxWidth: CHAT_MAX_W,
+        maxWidth: CHAT_MAX_W + 2 * 16,
         margin: '0 auto',
         padding: '0 16px',
         boxSizing: 'border-box',

@@ -1152,36 +1152,31 @@ public class TaskManagerTests : IDisposable
         updated.FeatureId.Should().Be(epic.Id);
     }
 
-    // 7e. update merge-задачи: ПЕРЕНОС в другую фичу (featureId меняется), финал целевой
-    //     фичи НЕ принят ⇒ 400. Мутация «убрать сравнение фичи» (mergeMoved) красит.
+    // 7e. update merge-задачи: ПЕРЕНОС в другую фичу запрещён (целевая фича не Ready) ⇒ 400.
     [Fact]
     public void Update_Merge_ПереносВДругуюФичу_ФиналНеПринят_400()
     {
         var epicA = CreateEpic("u", "фича A");
         var epicB = CreateEpic("u", "фича B");
-        // Финал A принят → merge-задачу на A можно создать.
         _sut.Create(null, "u", new CreateTaskRequest("финал A",
             FeatureId: epicA.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
             Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
         var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
             FeatureId: epicA.Id, Role: TaskRoles.Merge));
-        // Фича B: финала нет (не Ready).
 
         var act = () => _sut.Update(merge.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
 
         act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*Фича ещё не готова к мержу*");
+            .WithMessage("*Роль merge привязана к своей фиче*");
     }
 
-    // 7f. update merge-задачи: перенос в Ready-фичу (финал принят) ⇒ ок.
-    //     Решение: перенос merge-задачи из фичи в фичу допустим, только если целевая фича Ready
-    //     (финал принят) — иначе гард 7e даёт 400.
+    // 7f (П5). перенос merge-задачи в Ready-фичу тоже запрещён: иначе Done-merge из A объявил бы B
+    //     смерженной чужой задачей. Мутация «снять запрет (mergeMoved)» красит.
     [Fact]
-    public void Update_Merge_ПереносВReadyФичу_Ок()
+    public void Update_Merge_ПереносВReadyФичу_400()
     {
         var epicA = CreateEpic("u", "фича A");
         var epicB = CreateEpic("u", "фича B");
-        // Финалы обеих фич приняты.
         _sut.Create(null, "u", new CreateTaskRequest("финал A",
             FeatureId: epicA.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
             Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
@@ -1191,11 +1186,62 @@ public class TaskManagerTests : IDisposable
         var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
             FeatureId: epicA.Id, Role: TaskRoles.Merge));
 
-        // Перенос merge-задачи в Ready-фичу B ⇒ ок (гард не срабатывает: финал B принят).
-        var updated = _sut.Update(merge.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
+        var act = () => _sut.Update(merge.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
 
-        updated.FeatureId.Should().Be(epicB.Id);
-        updated.Role.Should().Be(TaskRoles.Merge);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Роль merge привязана к своей фиче*");
+        _sut.GetById(merge.Id)!.FeatureId.Should().Be(epicA.Id, "отказ не меняет фичу задачи");
+    }
+
+    // 7f2 (П9). перенос merge-задачи в уже смерженную фичу ⇒ 400 (иначе merged → merge_pending).
+    [Fact]
+    public void Update_Merge_ПереносВСмерженнуюФичу_400()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        foreach (var epic in new[] { epicA, epicB })
+            _sut.Create(null, "u", new CreateTaskRequest("финал",
+                FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+                Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        _sut.Create(null, "u", new CreateTaskRequest("мерж B",
+            FeatureId: epicB.Id, Role: TaskRoles.Merge, Status: TaskItemStatus.Done));
+        var mergeA = _sut.Create(null, "u", new CreateTaskRequest("мерж A",
+            FeatureId: epicA.Id, Role: TaskRoles.Merge));
+
+        var act = () => _sut.Update(mergeA.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Роль merge привязана к своей фиче*");
+    }
+
+    // 7f3. отвязка merge-задачи (featureId:"") ⇒ 400 (роль требует featureId).
+    [Fact]
+    public void Update_Merge_Отвязка_400()
+    {
+        var epic = CreateEpic("u");
+        _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        var act = () => _sut.Update(merge.Id, new UpdateTaskRequest(FeatureId: ""));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*требует featureId*");
+    }
+
+    // 7f4. перенос НЕ-merge задачи между фичами — как раньше, ок.
+    [Fact]
+    public void Update_НеMerge_ПереносВДругуюФичу_Ок()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epicA.Id, Role: TaskRoles.Step, StepRef: "Ш1"));
+
+        var updated = _sut.Update(step.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
+
+        updated!.FeatureId.Should().Be(epicB.Id);
     }
 
     // 7g. гард (4-й потребитель «правды о принятии»): финал Status != Done (InProgress) +

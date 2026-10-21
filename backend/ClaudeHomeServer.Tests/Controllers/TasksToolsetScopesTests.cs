@@ -96,7 +96,7 @@ public class TasksToolsetScopesTests : IDisposable
 
     /// <summary>
     /// Б-cl: перенос merge-задачи в другую фичу (tasks_update featureId), финал целевой фичи
-    /// не принят ⇒ isError (400). C#/REST-аналоги — TaskManagerTests / TasksControllerTests.
+    /// не принят ⇒ isError (400); перенос запрещён в любую фичу. C#/REST-аналоги — TaskManagerTests / TasksControllerTests.
     /// </summary>
     [Fact]
     public async Task Update_Merge_ПереносВДругуюФичу_ФиналНеПринят_IsError()
@@ -126,7 +126,7 @@ public class TasksToolsetScopesTests : IDisposable
         var answer = await CallToolAsync(Client, "tasks", sessionId, "tasks_update",
             new { id = mergeAId, featureId = epicBId });
         answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
-        ToolText(answer).Should().Contain("Фича ещё не готова к мержу");
+        ToolText(answer).Should().Contain("Роль merge привязана к своей фиче");
     }
 
     /// <summary>

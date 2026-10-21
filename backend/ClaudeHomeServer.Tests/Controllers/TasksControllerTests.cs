@@ -406,7 +406,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         got.GetProperty("verification").GetProperty("verdict").GetString().Should().Be("accepted");
     }
 
-    // Б-cl: перенос merge-задачи в другую фичу (PUT featureId), финал целевой фичи не принят ⇒ 400.
+    // Б-cl: перенос merge-задачи в другую фичу (PUT featureId) запрещён ⇒ 400 (и в не-Ready, и в Ready).
     // C#-аналог — TaskManagerTests.Update_Merge_ПереносВДругуюФичу_ФиналНеПринят_400.
     [Fact]
     public async Task Update_Merge_ПереносВДругуюФичу_ФиналНеПринят_400()
@@ -426,7 +426,19 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var response = await _client.PutAsJsonAsync($"/api/tasks/{mergeId}", new { featureId = epicBId });
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("error").GetString().Should().Contain("Фича ещё не готова к мержу");
+        body.GetProperty("error").GetString().Should().Contain("Роль merge привязана к своей фиче");
+
+        // П5: целевая фича Ready (финал принят) — перенос всё равно запрещён.
+        await CreateTaskAsync(new { title = "финал B", featureId = epicBId, role = "final",
+            status = "done", verification = new { verdict = "accepted" } });
+        var ready = await _client.PutAsJsonAsync($"/api/tasks/{mergeId}", new { featureId = epicBId });
+        ready.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ready.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString()
+            .Should().Contain("Роль merge привязана к своей фиче");
+
+        // Отвязка — по-прежнему 400.
+        var unlink = await _client.PutAsJsonAsync($"/api/tasks/{mergeId}", new { featureId = "" });
+        unlink.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     // ─── Мироринг MCP: warning в PUT, когда ревью/проверку/финал фичи закрыли без вердикта ──

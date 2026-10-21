@@ -552,17 +552,21 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 throw new InvalidOperationException($"Это не эпик фичи: у задачи «{featureId}» роль ≠ feature.");
 
             // role=merge: фича обязана быть Ready — финал принят (тот же хелпер, что в проекторе).
-            // Триггеры гарда: (а) задача СТАЛА merge (создание, либо update с сменой роли на merge);
-            // (б) merge-задачу ПЕРЕНЕСЛИ в другую фичу (featureId != featureIdBefore) — иначе
-            // перенос Done-merge в фичу с принятым финалом объявлял её смерженной без мержа
-            // (инцидент 21.10, другая дверь: roleBefore == merge обходил гард, см. Б-cl).
+            // Гард Ready — для СОЗДАНИЯ и СМЕНЫ роли на merge (roleBefore != merge).
+            // Перенос уже существующей merge-задачи в другую фичу запрещён целиком: Done-merge
+            // из A в Ready-фичу B объявлял бы B смерженной чужой задачей (MergedAt чужой), а перенос
+            // в смерженную тихо открывал её (merged → merge_pending); штатных сценариев переноса нет.
             // Частичный мерж/выкатка куска — без роли, с featureId эпика; «полный мерж без финала»
             // человек оформляет закрытием эпика (правило закрытия даёт merged). Flag обхода не заводим.
             // Update merge-задачи без смены роли И фичи (roleBefore == merge, featureId == featureIdBefore)
             // — гард молчит.
             var becameMerge = roleBefore is null || roleBefore != TaskRoles.Merge;
             var mergeMoved = roleBefore == TaskRoles.Merge && featureId != featureIdBefore;
-            if (role == TaskRoles.Merge && (becameMerge || mergeMoved)
+            if (role == TaskRoles.Merge && mergeMoved)
+                throw new InvalidOperationException(
+                    "Роль merge привязана к своей фиче: перенос merge-задачи в другую фичу запрещён. "
+                    + "Завершённый или частичный мерж оформляйте новой задачей (без роли для куска работы) в нужной фиче.");
+            if (role == TaskRoles.Merge && becameMerge
                 && !FeatureProjector.IsFinalAccepted(FeatureFinal(featureId, ownerId)))
                 throw new InvalidOperationException(
                     "Фича ещё не готова к мержу: финал не принят. Кусок работы (частичный мерж, выкатка части) "

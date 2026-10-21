@@ -1443,4 +1443,87 @@ public class TaskManagerTests : IDisposable
         linked.Role.Should().Be(TaskRoles.Rework);
         linked.ReviewOf.Should().BeEquivalentTo([review.Id]);
     }
+
+    // ─── Major 1: обход fail-closed через смену роли ──────────────────────────────
+    // Агент создаёт step, затем tasks_update {role:"rework"} — доработка без связи. Гейт
+    // срабатывает, когда эффективная роль ТОЛЬКО СЕЙЧАС стала rework (задача раньше не была
+    // rework) ИЛИ меняют reviewOf. Старая rework (role уже rework, reviewOf не трогаем) — ок.
+
+    [Fact]
+    public void Update_ReworkЧерезСменуРоли_БезReviewOf_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+
+        // step → rework без reviewOf: раньше гейт не срабатывал (role менялся свободно,
+        // enforce зависел только от явного reviewOf) — теперь 400
+        var act = () => _sut.Update(step.Id, new UpdateTaskRequest(Role: TaskRoles.Rework));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*reviewOf*");
+    }
+
+    [Fact]
+    public void Update_ReworkЧерезСменуРоли_СReviewOf_Ок()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [step.Id]));
+
+        // step → rework с reviewOf на review той же фичи: связь валидна, 400 быть не должно
+        var rework = _sut.Update(step.Id, new UpdateTaskRequest(
+            Role: TaskRoles.Rework, ReviewOf: [review.Id]))!;
+        rework.Role.Should().Be(TaskRoles.Rework);
+        rework.ReviewOf.Should().BeEquivalentTo([review.Id]);
+    }
+
+    [Fact]
+    public void Update_СтараяRework_ПравкаДругогоПоля_Ок()
+    {
+        var epic = CreateEpic("u");
+        // Старая доработка без reviewOf (создана до правила): имитируем прямым полем
+        var orphan = _sut.Create(null, "u", new CreateTaskRequest("сирота",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+        orphan.Role = TaskRoles.Rework;
+
+        // Правим только заголовок: role уже rework, reviewOf не трогаем → 400 быть не должно
+        var updated = _sut.Update(orphan.Id, new UpdateTaskRequest(Title: "доработка v2"))!;
+        updated.Role.Should().Be(TaskRoles.Rework);
+        updated.ReviewOf.Should().BeNull();
+    }
+
+    // ─── Major 3: тупик роли у плана ────────────────────────────────────────────────
+    // План с planSteps: (а) перевод на не-план разрешён и очищает список; (б) явный []
+    // снимает список при сохранении роли plan.
+
+    [Fact]
+    public void Update_ПланНаStep_СписокОчищается_Ок()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "бэк" }]));
+
+        // план → step: раньше 400 «PlanSteps только у плана» (список ≠ null); теперь ок,
+        // список очищается (иначе план с planSteps застревал бы навсегда)
+        var step = _sut.Update(plan.Id, new UpdateTaskRequest(Role: TaskRoles.Step))!;
+        step.Role.Should().Be(TaskRoles.Step);
+        step.PlanSteps.Should().BeNull();
+    }
+
+    [Fact]
+    public void Update_ПланСЯвнымПустымСписком_СнимаетСписок_Ок()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "бэк" }]));
+
+        // Явный [] (не null) при сохранении роли plan — «снять список»: 400 быть не должно
+        var cleared = _sut.Update(plan.Id, new UpdateTaskRequest(PlanSteps: []))!;
+        cleared.Role.Should().Be(TaskRoles.Plan);
+        cleared.PlanSteps.Should().BeEmpty();
+    }
 }

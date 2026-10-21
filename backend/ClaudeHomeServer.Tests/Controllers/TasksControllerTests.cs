@@ -2462,6 +2462,36 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             "итог (costPartial) и разрез (costUsd=null) согласны по признаку ненадёжной цены");
     }
 
+    // ─── Major 2: NRE вместо 400 на кривом planSteps (настоящий JSON → REST) ──────────
+    // Личный эндпоинт POST /api/tasks парсит тело вручную (TaskCreateJson.Options, case-insensitive):
+    // planSteps:[null] и {"title":null} раньше давали NullReferenceException → 500; теперь 400.
+
+    [Fact]
+    public async Task Create_PlanStepsЭлементNull_ЧерезJson_Дает400()
+    {
+        var response = await _client.PostAsJsonAsync("/api/tasks", new
+        {
+            title = "план",
+            role = "plan",
+            planSteps = new object[] { null },
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "элемент-null в planSteps — 400, а не 500 (NRE)");
+    }
+
+    [Fact]
+    public async Task Create_PlanStepsNullTitle_ЧерезJson_Дает400()
+    {
+        var response = await _client.PostAsJsonAsync("/api/tasks", new
+        {
+            title = "план",
+            role = "plan",
+            planSteps = new[] { new { stepRef = "B1", title = (string?)null } },
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "null-title в planSteps — 400, а не 500 (NRE)");
+    }
+
     // ─── Stub-запускатель: Start бросает → GitService.WorktreeListAsync бросает (сбой git, п.53) ─
 
     private sealed class ThrowingLauncherFactory : ILauncherFactory

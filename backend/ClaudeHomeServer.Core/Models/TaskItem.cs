@@ -185,7 +185,8 @@ public class PlannedStep
 {
     // Потолок числа шагов плана на задачу: план — не таблица на тысячу строк.
     public const int MaxSteps = 200;
-    // Максимальная длина кода шага (StepRef) и названия (Title).
+    // Максимальная длина кода шага (StepRef) и названия (Title). Длина — в UTF-16 code units
+    // (string.Length): эмодзи/суперскрипты съедают по 2 единицы (минор 8, оговорено).
     public const int MaxStepRefLength = 40;
     public const int MaxTitleLength = 200;
 

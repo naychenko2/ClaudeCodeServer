@@ -391,7 +391,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             StepRef = Trimmed(req.StepRef),
             Lane = Trimmed(req.Lane),
             ReviewOf = req.ReviewOf,
-            PlanSteps = req.PlanSteps,
+            PlanSteps = NormalizePlanSteps(req.PlanSteps),
             AwaitingHumanSince = req.AwaitingHumanSince,
             AwaitingHumanReason = Trimmed(req.AwaitingHumanReason),
             Verification = req.Verification,
@@ -469,6 +469,29 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     private static string? Trimmed(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    // Нормализация списка шагов плана (миноры 5+6): КОПИЯ (входной список не мутируем —
+    // вызывающий мог удержать ссылку) + трим StepRef/Title. Trim: «Б1» и « Б1» — один код, не
+    // дубль. Регистр — OrdinalIgnoreCase в проверке дубля (ValidateFeatureFields): «B1»/«b1»
+    // — один шаг; Ordinal (не culture) — детерминизм и скорость, регистр кириллицы учитывается.
+    // null в StepRef/Title оставляем null (не «»): валидатор их ловит (пустой stepRef, null
+    // title → 400, а не NRE). null — «не задано» (не менять); пустой список — «снять список».
+    private static List<PlannedStep>? NormalizePlanSteps(List<PlannedStep>? steps)
+    {
+        if (steps is null) return null;
+        var copy = new List<PlannedStep>(steps.Count);
+        foreach (var s in steps)
+        {
+            if (s is null) { copy.Add(null!); continue; }
+            copy.Add(new PlannedStep
+            {
+                StepRef = s.StepRef?.Trim(),
+                Title = s.Title?.Trim(),
+                Lane = s.Lane,
+            });
+        }
+        return copy;
+    }
+
     // Валидация полей фичи (fail-closed, режим «Исполнение фичи»). Проверяет ЭФФЕКТИВНОЕ
     // состояние — то, что окажется на задаче после операции: Create передаёт только что
     // заполненную task, Update — слияние req и текущего состояния. ownerId — владелец задачи;
@@ -534,22 +557,37 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
 
         // PlanSteps: допустимы ТОЛЬКО у role=plan (у прочих ролей — 400); у плана — лимиты
         // числа шагов, длины stepRef/title и уникальность stepRef (разрез §2, честный прогресс).
+        // Тупик роли (major 3): «role != plan → 400» срабатывал на ЛЮБОМ непустом списке, даже
+        // пустом [] — а [] ≠ null, и null в update значит «не менять», поэтому план со списком
+        // нельзя было ни перевести в step/rework, ни снять список. Правило: 400 только когда
+        // список НЕПУСТОЙ и роль не plan; пустой список — «снять список» (у плана — очищает,
+        // у не-плана — no-op). Смена роли с плана разрешена: при переводе на не-план список
+        // очищается (см. Update) — иначе план с planSteps застревал бы навсегда.
+        if (planSteps is not null && planSteps.Count > 0 && role != TaskRoles.Plan)
+            throw new InvalidOperationException(
+                "PlanSteps допустимы только у задачи-плана (role=plan).");
         if (planSteps is not null)
         {
-            if (role != TaskRoles.Plan)
-                throw new InvalidOperationException(
-                    "PlanSteps допустимы только у задачи-плана (role=plan).");
             if (planSteps.Count > PlannedStep.MaxSteps)
                 throw new InvalidOperationException(
                     $"Слишком много шагов плана: {planSteps.Count} (лимит {PlannedStep.MaxSteps}).");
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            // Дубль stepRef — OrdinalIgnoreCase (минор 5): «B1»/«b1» — один шаг. Ordinal (не
+            // culture) — детерминизм; трим уже сделан в NormalizePlanSteps, поэтому « Б1»==«Б1».
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var step in planSteps)
             {
+                // Элемент-null из JSON (planSteps:[null]) — внятный 400, а не NRE (major 2)
+                if (step is null)
+                    throw new InvalidOperationException(
+                        "Шаг плана (planSteps) — null: ожидался объект {stepRef, title, lane}.");
                 if (string.IsNullOrWhiteSpace(step.StepRef))
                     throw new InvalidOperationException("Код шага плана (stepRef) не может быть пустым.");
                 if (step.StepRef.Length > PlannedStep.MaxStepRefLength)
                     throw new InvalidOperationException(
                         $"Код шага плана «{step.StepRef}» длиннее {PlannedStep.MaxStepRefLength} символов.");
+                // Title — non-nullable string, но JSON кладёт null; null-title — 400, а не NRE (major 2)
+                if (step.Title is null)
+                    throw new InvalidOperationException("Название шага плана (title) не может быть null.");
                 if (step.Title.Length > PlannedStep.MaxTitleLength)
                     throw new InvalidOperationException(
                         $"Название шага плана «{step.StepRef}» длиннее {PlannedStep.MaxTitleLength} символов.");
@@ -710,11 +748,21 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var effVerdict = (req.Verification ?? task.Verification)?.Verdict;
         var effReviewOf = req.ReviewOf is null ? task.ReviewOf : req.ReviewOf;
         var effPersonaId = req.PersonaId is null ? task.PersonaId : (req.PersonaId == "" ? null : req.PersonaId);
-        var effPlanSteps = req.PlanSteps is null ? task.PlanSteps : req.PlanSteps;
-        // Связь доработки с ревью (enforceReworkReviewOf) проверяем только если поле reviewOf
-        // меняют: старые доработки без reviewOf можно править, не трогая связь, и можно привязывать.
+        var effPlanSteps = req.PlanSteps is null ? task.PlanSteps : NormalizePlanSteps(req.PlanSteps);
+        // Тупик роли (major 3): перевод плана на не-план очищает список — эффективный список
+        // считаем null, иначе валидатор видел бы «planSteps ≠ null + role ≠ plan» → ложный 400.
+        if (task.Role == TaskRoles.Plan && effRole != TaskRoles.Plan)
+            effPlanSteps = null;
+        // Связь доработки с ревью (enforceReworkReviewOf) проверяем, когда: (а) меняют поле
+        // reviewOf, или (б) эффективная роль ТОЛЬКО СЕЙЧАС стала rework (задача раньше не была
+        // rework) — иначе агент создаёт step и tasks_update {role:"rework"} обходит гейт (major 1
+        // ревью): роль менялась свободно, а гейт срабатывал только при явном reviewOf. Старые
+        // доработки без reviewOf можно править, не трогая связь, и можно привязывать: role уже
+        // rework и reviewOf не меняют → enforce=false.
+        var enforceReworkReviewOf = req.ReviewOf is not null
+            || (effRole == TaskRoles.Rework && task.Role != TaskRoles.Rework);
         ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "",
-            planSteps: effPlanSteps, enforceReworkReviewOf: req.ReviewOf is not null);
+            planSteps: effPlanSteps, enforceReworkReviewOf);
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
@@ -777,12 +825,19 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.Outcome is not null) task.Outcome = req.Outcome;
         // Фича (режим «Исполнение фичи»): null = не менять, "" = сбросить (строки);
         // ReviewOf — null = не менять, список = задать целиком; AwaitingHuman* — null = не менять
+        var roleBefore = task.Role;
         if (req.FeatureId is not null) task.FeatureId = Trimmed(req.FeatureId);
         if (req.Role is not null) task.Role = Trimmed(req.Role);
         if (req.StepRef is not null) task.StepRef = Trimmed(req.StepRef);
         if (req.Lane is not null) task.Lane = Trimmed(req.Lane);
         if (req.ReviewOf is not null) task.ReviewOf = req.ReviewOf;
-        if (req.PlanSteps is not null) task.PlanSteps = req.PlanSteps;
+        // effPlanSteps уже нормализован (копия + трим) — храним его, не пере-нормализуем
+        if (req.PlanSteps is not null) task.PlanSteps = effPlanSteps;
+        // Тупик роли (major 3): перевод плана на не-план очищает список шагов — иначе план с
+        // planSteps нельзя было бы перевести в step/rework (валидатор: «PlanSteps только у плана»).
+        // Снятие списка явным [] при сохранении роли plan — выше (req.PlanSteps = [] → null).
+        if (roleBefore == TaskRoles.Plan && effRole != TaskRoles.Plan)
+            task.PlanSteps = null;
         if (req.AwaitingHumanSince is not null) task.AwaitingHumanSince = req.AwaitingHumanSince;
         if (req.AwaitingHumanReason is not null) task.AwaitingHumanReason = Trimmed(req.AwaitingHumanReason);
 

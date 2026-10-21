@@ -419,3 +419,29 @@ describe('FeatureGroupHeader: m2 поля тела по состоянию', () 
     expect(html).not.toContain('min-height:52px');
   });
 });
+
+// === Ф-pr: мёртвый фолбэк «N/M» убран (один формат «принято N из T») ===
+// Бэк всегда даёт данные (stepProgress non-nullable, новые поля индекса безусловные),
+// поэтому ветка «${stepsAccepted}/${stepsTotal} ↺loops» недостижима; а голое «N/M»
+// (без слов) запрещено ТЗ. Убрана → progress-нода либо «принято N из T», либо пуста.
+describe('FeatureGroupHeader: Ф-pr — мёртвый фолбэк «N/M» убран', () => {
+  it('старый ответ (no new fields) → progress-нода БЕЗ «N/M» (голое «3/5» не возвращается)', () => {
+    // stepsAccepted/stepsTotal есть, новых полей (stepsReview/stepsWork/stepsNotCreated/planState)
+    // нет → stepProgressFromIndex = null. Мёртвый фолбэк «3/5» (убран) не должен возвращаться.
+    const f = feat({ stepsAccepted: 3, stepsTotal: 5 });
+    const html = renderHeader(f);
+    const m = html.match(/<span data-testid="feature-group-progress"[^>]*>([\s\S]*?)<\/span>/);
+    expect(m, 'progress-нода не найдена').not.toBeNull();
+    expect(m![1], 'текст прогресса не должен содержать «N/M»').not.toMatch(/\d+\s*\/\s*\d+/);
+  });
+
+  it('новые поля есть → progress-нода = «принято N из T» (форматтер, не «N/M»)', () => {
+    const f = feat({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, planState: 'partial' });
+    const html = renderHeader(f);
+    const m = html.match(/<span data-testid="feature-group-progress"[^>]*>([\s\S]*?)<\/span>/);
+    expect(m, 'progress-нода не найдена').not.toBeNull();
+    // Форматтер: «принято 3 из 5 · 2 в ревью · план частично» — без голого «3/5».
+    expect(m![1]).toContain('принято 3 из 5');
+    expect(m![1]).not.toMatch(/\d+\s*\/\s*\d+/);
+  });
+});

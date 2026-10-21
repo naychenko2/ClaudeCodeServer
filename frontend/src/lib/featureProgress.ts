@@ -8,7 +8,9 @@
 // Формат (правила задачи):
 //   • «принято N из T» — единственный случай, когда цифры идут с предлогом «из»;
 //     голый «N из M» без слов УБРАН (читается как «сделано»).
-//   • «· ↺R в ревью», «· W в работе», «· ∅N не заведено» — если поле > 0.
+//   • «· R в ревью», «· W в работе», «· ∅N не заведено» — если поле > 0.
+//     ↺ НЕ ставим: тот глиф — за возвратами (loops) в итоге смерженной (FeatureRunView
+//     mergedSummary «↺K»). Один глиф, два смысла — недопустимо: корзина ревью без глифа.
 //   • «· план не разобран» — planState === 'pending'; «· план частично» — 'partial';
 //     метки плана нет, если 'cut'/'done' (там и так понятно).
 //   • «· X снято» — только withdrawn > 0 (слово «снято», не «отменено»).
@@ -45,14 +47,14 @@ export function isStepProgressDone(p: StepProgress): boolean {
 }
 
 // ОДИН форматтер: строка прогресса для плашки/пилюли/попапа/индекса/«Хронологии».
-// Порядок сегментов фиксирован: [готово|принято N из T] → [↺R в ревью] → [W в работе]
+// Порядок сегментов фиксирован: [готово|принято N из T] → [R в ревью] → [W в работе]
 // → [∅N не заведено] → [метка плана] → [X снято] → [Y без привязки].
 export function formatStepProgress(p: StepProgress): string {
   const parts: string[] = [];
   // База: «готово» (только при полном принятии) либо «принято N из T».
   parts.push(isStepProgressDone(p) ? 'готово' : `принято ${p.accepted} из ${p.total}`);
   // Корзины знаменателя — только ненулевые (не вытесняют «принято» в 0 — база всегда есть).
-  if (p.review > 0) parts.push(`↺${p.review} в ревью`);
+  if (p.review > 0) parts.push(`${p.review} в ревью`);
   if (p.work > 0) parts.push(`${p.work} в работе`);
   if (p.notCreated > 0) parts.push(`∅${p.notCreated} не заведено`);
   // Метка плана: pending → «не разобран», partial → «частично», cut/done → нет.
@@ -71,6 +73,10 @@ export function stepProgressFromRun(run: FeatureRun): StepProgress | null {
   return run.stepProgress ?? null;
 }
 
+// Защита от переполнения: отрицательные/NaN значения бэка (баг) не должны давать
+// «принято -2 из -5» — обнуляем (честнее, чем минус).
+const nonNeg = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 0);
+
 // Честный прогресс из строки индекса (features/index). Индекс несёт
 // stepsAccepted/stepsTotal/stepsReview/stepsWork/stepsNotCreated/planState, но НЕ
 // withdrawn/unlinkedReworks (те — только в run) — дефолт 0. null — старые ответы
@@ -80,11 +86,11 @@ export function stepProgressFromIndex(f: FeatureIndexFeature): StepProgress | nu
   if (!hasNew) return null;
   return {
     planState: f.planState ?? 'done',
-    total: f.stepsTotal,
-    accepted: f.stepsAccepted,
-    review: f.stepsReview ?? 0,
-    work: f.stepsWork ?? 0,
-    notCreated: f.stepsNotCreated ?? 0,
+    total: nonNeg(f.stepsTotal),
+    accepted: nonNeg(f.stepsAccepted),
+    review: nonNeg(f.stepsReview ?? 0),
+    work: nonNeg(f.stepsWork ?? 0),
+    notCreated: nonNeg(f.stepsNotCreated ?? 0),
     withdrawn: 0,
     unlinkedReworks: 0,
   };

@@ -51,8 +51,9 @@ describe('formatStepProgress — «готово» (условие явное)', 
 
 describe('formatStepProgress — корзины знаменателя (review/work/notCreated)', () => {
   // Мутация 4: потерять review-сегмент при work === 0.
-  it('м4: «↺R в ревью» при review > 0, даже если work === 0', () => {
-    expect(formatStepProgress(sp({ total: 3, accepted: 0, review: 2, work: 0 }))).toBe('принято 0 из 3 · ↺2 в ревью');
+  // ↺ НЕ ставим (глиф за возвратами/loops в итоге смерженной): корзина ревью — «R в ревью».
+  it('м4: «R в ревью» (БЕЗ ↺) при review > 0, даже если work === 0', () => {
+    expect(formatStepProgress(sp({ total: 3, accepted: 0, review: 2, work: 0 }))).toBe('принято 0 из 3 · 2 в ревью');
   });
 
   it('«W в работе» при work > 0', () => {
@@ -105,7 +106,7 @@ describe('formatStepProgress — порядок сегментов', () => {
   it('м3: порядок фиксирован: база → review → work → notCreated → план → снято → без привязки', () => {
     const p = sp({ planState: 'partial', total: 10, accepted: 3, review: 2, work: 1, notCreated: 4, withdrawn: 1, unlinkedReworks: 1 });
     expect(formatStepProgress(p)).toBe(
-      'принято 3 из 10 · ↺2 в ревью · 1 в работе · ∅4 не заведено · план частично · 1 снято · 1 без привязки',
+      'принято 3 из 10 · 2 в ревью · 1 в работе · ∅4 не заведено · план частично · 1 снято · 1 без привязки',
     );
   });
 

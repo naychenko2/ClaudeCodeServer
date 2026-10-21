@@ -11,6 +11,7 @@ import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeatureRun, FeatureTask, FeatureNow, FeatureAttention, FeatureSummary, FeatureStage } from '../../../types/featureRun';
+import type { StepProgress } from '../../../lib/featureProgress';
 import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 import { FeatureRunView, statusLineFor } from './FeatureRunView';
 import { TurnPlanPill } from '../TurnPlanPill';
@@ -159,6 +160,24 @@ describe('statusLineFor: 9 состояний', () => {
     expect(line.headline).toContain('Закрыта без мержа');
     expect(line.action?.kind).toBe('pair');
     expect(line.action?.taskId).toBe('epic-1');
+  });
+});
+
+// === Ф-pr: ↺ — один глиф, два смысла (review-корзина vs возвраты) различаются ===
+// formatStepProgress: корзина ревью «R в ревью» БЕЗ ↺; mergedSummary: возвраты «↺K» С ↺.
+// Рядом в карточке — оба числа; различимость = review-корзина не несёт глифа возвратов.
+describe('FeatureRunView: Ф-pr — ↺ один глиф, два смысла различаются', () => {
+  it('рядом: review-корзина «R в ревью» (БЕЗ ↺) и возвраты «↺K» — оба числа видны и различаются', () => {
+    const summary: FeatureSummary = { mergedAt: '2026-10-15T21:09:00Z', durationMinutes: 370, tasks: 14, steps: 9, loops: 3 };
+    const stepProgress: StepProgress = { planState: 'done', total: 5, accepted: 2, review: 2, work: 0, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 };
+    const html = render(run({ state: 'merged', summary, stepProgress }));
+    // Оба числа видны: review-корзина (2) и возвраты (3).
+    expect(html).toContain('2 в ревью');
+    expect(html).toContain('↺3');
+    // Различимость: review-корзина (formatStepProgress) НЕ несёт ↺ (глиф за возвратами).
+    const progress = html.match(/<div data-testid="feature-run-progress"[^>]*>([\s\S]*?)<\/div>/);
+    expect(progress, 'progress-нода не найдена').not.toBeNull();
+    expect(progress![1], 'review-корзина без ↺ (глиф за возвратами)').not.toContain('↺');
   });
 });
 

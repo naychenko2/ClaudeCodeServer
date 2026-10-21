@@ -400,13 +400,20 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
   );
 
   // Честный прогресс (Ф-pr): из строки индекса; null — старые ответы (не показываем).
+  // Ellipsis-рецепт (перенос из FeatureGroupHeader): узел сжимается (flexShrink:1 +
+  // minWidth:0) и обрезает текст (overflow:hidden + text-overflow:ellipsis) — на узкой
+  // плашке с пятью корзинами («план частично» + четыре числа) строка не выходит за край;
+  // полная строка — в title/aria-label.
   const progress = stepProgressFromIndex(feature);
   const progressNode = progress && (
     <span
       data-testid="feature-progress"
+      title={formatStepProgress(progress)}
       aria-label={formatStepProgress(progress)}
       style={{
-        fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0,
+        fontSize: FS.xs, color: C.textMuted,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        flexShrink: 1, minWidth: 0,
       }}
     >
       {formatStepProgress(progress)}

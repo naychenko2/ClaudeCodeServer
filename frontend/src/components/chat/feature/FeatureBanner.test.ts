@@ -435,6 +435,23 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(m2, 'контейнер точек').not.toBeNull();
     expect(m2![1], 'с кликабельными точками aria-hidden быть не должно').not.toContain('aria-hidden="true"');
   });
+
+  // Ф-pr: progress-нода — ellipsis-рецепт (перенос из FeatureGroupHeader): на узкой плашке
+  // с пятью корзинами («план частично» + четыре числа) строка не выходит за край; полная
+  // строка — в title/aria-label. Мутация «снять ellipsis» (flex-shrink:0, без overflow) красит.
+  it('Ф-pr: progress-нода — ellipsis-рецепт (flex-shrink:1 + min-width:0 + overflow:hidden + text-overflow:ellipsis) + title с полной строкой', () => {
+    seedIndex(feat('running', { stepsAccepted: 1, stepsTotal: 7, stepsReview: 2, stepsWork: 1, stepsNotCreated: 3, planState: 'partial' }), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const m = html.match(/<span data-testid="feature-progress"([^>]*)>/);
+    expect(m, 'progress-нода не найдена').not.toBeNull();
+    const attrs = m![1];
+    expect(attrs, 'flex-shrink:1 (узел сжимается)').toContain('flex-shrink:1');
+    expect(attrs, 'min-width:0 (не держит минимальную ширину)').toContain('min-width:0');
+    expect(attrs, 'overflow:hidden').toContain('overflow:hidden');
+    expect(attrs, 'text-overflow:ellipsis').toContain('text-overflow:ellipsis');
+    // Полная строка — в title (и aria-label): на узкой плашке текст обрезается, но строка доступна.
+    expect(attrs, 'title с полной строкой').toContain('title="');
+  });
 });
 
 // === 3: клик по точке → cc-open-feature (mount, реальный DOM) ===

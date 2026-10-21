@@ -92,7 +92,8 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
   const [hovered, setHovered] = useState(false);
   const st = featureDisplayState(feature, { now, personaName });
   // Честный прогресс (Ф-pr): из строки индекса; null — старые ответы (новых полей нет) →
-  // прежний вид «N/M ↺K», не голый «17/17».
+  // строка прогресса не рисуется. Мёртвый фолбэк «N/M ↺K» убран: бэк всегда даёт данные,
+  // а голое «N/M» без слов («3/5») запрещено ТЗ — единственный формат «принято N из T».
   const progress = stepProgressFromIndex(feature);
   // Кромка тревоги 3px: 'wait' → info (синий), 'stop' → danger (красный), иначе нет.
   const alarmEdge = st.alarm === 'wait' ? C.info : st.alarm === 'stop' ? C.danger : null;
@@ -294,9 +295,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
                 fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
               }}
             >
-              {progress
-                ? formatStepProgress(progress)
-                : `${feature.stepsAccepted}/${feature.stepsTotal}${feature.loops ? ` ↺${feature.loops}` : ''}`}
+              {progress ? formatStepProgress(progress) : null}
             </span>
           )}
         </div>

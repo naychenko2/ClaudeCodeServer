@@ -1,7 +1,7 @@
 // Список задач проекта в левой панели воркспейса.
 // Подвкладки «Список» (группировка по статусу) и «По дате» (готовые скрыты).
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, ListTodo, Plus, SearchX } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Project, Task, TaskStatus } from '../../types';
@@ -161,11 +161,18 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
 
   // Окно группы «Готово» — только на отрисовку; фильтры и счётчики считаются по всем задачам
   const [doneLimit, setDoneLimit] = useState(DONE_PAGE_SIZE);
+  // Смена фильтров/проекта начинает список заново: окно «Готово» сбрасывается к первой
+  // странице (сброс состояния при смене входа — прямо в рендере, без эффекта)
+  const [doneWindowKey, setDoneWindowKey] = useState({ filters, projectId: project.id });
+  if (doneWindowKey.filters !== filters || doneWindowKey.projectId !== project.id) {
+    setDoneWindowKey({ filters, projectId: project.id });
+    setDoneLimit(DONE_PAGE_SIZE);
+  }
 
   // Стабильный обработчик выбора: актуальный onSelect читаем из ref, чтобы смена
   // функции у родителя не ломала memo строк
   const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
+  useLayoutEffect(() => { onSelectRef.current = onSelect; });
   const handleSelect = useCallback((t: Task) => onSelectRef.current(t), []);
 
   return (

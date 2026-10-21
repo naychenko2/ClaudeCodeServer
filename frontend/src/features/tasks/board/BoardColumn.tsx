@@ -1,7 +1,7 @@
 // Элементы колонки статуса на Kanban-доске: заголовок с WIP-лимитом,
 // ячейка-droppable (lane × status) со списком карточек и быстрым добавлением.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -103,8 +103,14 @@ export function BoardCell({ cellId, cards, windowSize, projectNameOf, deviceName
   const { setNodeRef, isOver } = useDroppable({ id: cellId });
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState('');
-  const [limit, setLimit] = useState(windowSize ?? Infinity);
-  const visible = cards.length > limit ? cards.slice(0, limit) : cards;
+  // В состоянии — только «сколько добавлено сверх окна»; сам лимит выводится из пропса,
+  // поэтому смена windowSize (смена категории колонки, переиспользование ячейки) не залипает
+  const [extra, setExtra] = useState(0);
+  const limit = windowSize === undefined ? Infinity : windowSize + extra;
+  const visible = useMemo(() => cards.length > limit ? cards.slice(0, limit) : cards, [cards, limit]);
+  // Стабильный список id: новая ссылка меняет контекст SortableContext и перерисовывает
+  // все BoardCard (useSortable), даже если сами карточки не менялись
+  const visibleIds = useMemo(() => visible.map(c => c.id), [visible]);
 
   const submit = () => {
     const t = title.trim();
@@ -125,14 +131,14 @@ export function BoardCell({ cellId, cards, windowSize, projectNameOf, deviceName
         minHeight: cards.length === 0 ? minEmptyHeight : undefined,
       }}
     >
-      <SortableContext items={visible.map(c => c.id)} strategy={verticalListSortingStrategy}>
+      <SortableContext items={visibleIds} strategy={verticalListSortingStrategy}>
         {visible.map(t => (
           <BoardCard key={t.id} task={t} projectName={projectNameOf(t)} deviceName={deviceNameOf?.(t)} onOpen={onOpen} />
         ))}
       </SortableContext>
 
       {windowSize !== undefined && cards.length > limit && (
-        <Button variant="secondary" size="sm" fullWidth onClick={() => setLimit(n => n + windowSize)}>
+        <Button variant="secondary" size="sm" fullWidth onClick={() => setExtra(n => n + windowSize)}>
           Показать ещё {Math.min(windowSize, cards.length - limit)}
         </Button>
       )}

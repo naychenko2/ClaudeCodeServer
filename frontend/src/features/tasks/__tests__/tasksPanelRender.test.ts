@@ -10,7 +10,8 @@ import type { Task } from '../../../types';
 
 const m = vi.hoisted(() => ({
   listAll: vi.fn<() => Promise<unknown[]>>(async () => []),
-  cardRenders: vi.fn(),
+  cardRenders: vi.fn(),   // рендеры тела настоящего TaskCard (по useContextButton)
+  outerRenders: vi.fn(),  // рендеры слоя НАД TaskCard (TaskRow / BoardCard): обёртка-шпион ниже
 }));
 
 vi.mock('../../../lib/api', () => ({ api: { tasks: { listAll: () => m.listAll() } } }));
@@ -29,6 +30,20 @@ vi.mock('../../chatContext/useContextButton', () => ({
   },
 }));
 
+// Шпион слоя над карточкой: стоит между TaskRow/BoardCard и настоящим TaskCard и исполняется
+// ровно тогда, когда отрендерился вызывающий слой. Так memo TaskRow/BoardCard проверяется
+// отдельно от memo TaskCard (последний в списке прикрывает остальные). RealTaskCard —
+// настоящий memo-компонент для прямой проверки его собственного memo.
+vi.mock('../TaskCard', async importOriginal => {
+  const orig = await importOriginal<typeof import('../TaskCard')>();
+  const { createElement: h } = await import('react');
+  const Spy = (props: React.ComponentProps<typeof orig.TaskCard>) => {
+    m.outerRenders();
+    return h(orig.TaskCard, props);
+  };
+  return { ...orig, TaskCard: Spy, RealTaskCard: orig.TaskCard };
+});
+
 // DOM для react-dom: linkedom + недостающие браузерные API
 const { window: win, document: doc } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 Object.assign(win, {
@@ -42,13 +57,17 @@ vi.stubGlobal('navigator', { language: 'ru-RU', onLine: true, userAgent: 'node' 
 vi.stubGlobal('HTMLElement', win.HTMLElement);
 vi.stubGlobal('Node', win.Node);
 vi.stubGlobal('Event', win.Event);
+vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
 vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // Динамический импорт ПОСЛЕ стабов: модули читают window/document при загрузке
 const { TasksPanel } = await import('../TasksPanel');
-const { upsertTaskLocal } = await import('../../../lib/tasks');
+const { TaskBoard } = await import('../board/TaskBoard');
+const { BoardCell } = await import('../board/BoardColumn');
+const { RealTaskCard } = await import('../TaskCard') as unknown as { RealTaskCard: typeof import('../TaskCard').TaskCard };
+const { upsertTaskLocal, DEFAULT_BOARD_COLUMNS } = await import('../../../lib/tasks');
 
 function task(i: number, over: Partial<Task> = {}): Task {
   return {
@@ -66,9 +85,9 @@ function seed(): Task[] {
   for (let i = 0; i < TODO; i++) list.push(task(i));
   // completedAt растёт с номером: самые свежие — с большим i
   for (let i = 0; i < DONE; i++) {
-    const day = String(1 + Math.floor(i / 100)).padStart(2, '0');
-    const sec = String(i % 100).padStart(2, '0');
-    list.push(task(TODO + i, { status: 'done', completedAt: `2026-03-${day}T00:00:${sec}Z` }));
+    // Валидная ISO-дата: i секунд от 2026-03-01 (до ~33 минут, без переполнения полей)
+    const completedAt = new Date(Date.UTC(2026, 2, 1, 0, 0, i)).toISOString();
+    list.push(task(TODO + i, { status: 'done', completedAt }));
   }
   return list;
 }
@@ -105,6 +124,73 @@ describe('список задач: перерисовки и окно «Гото
     await act(async () => { (btn as unknown as HTMLElement).click(); });
     expect(m.cardRenders).toHaveBeenCalledTimes(50);
 
+    await act(async () => { root.unmount(); });
+  });
+  // Рендер панели с заданным onSelect; возвращает root для перерисовки и снятия
+  async function mountPanel(all: Task[]) {
+    m.listAll.mockResolvedValue(all);
+    const root = createRoot(doc.getElementById('root') as unknown as HTMLElement);
+    const project = { id: 'p1', name: 'P' } as never;
+    const render = (onSelect: () => void) => act(async () => {
+      root.render(createElement(TasksPanel, { project, selectedTaskId: null, onSelect, isMobile: true }));
+    });
+    await render(() => {});
+    await act(async () => { await Promise.resolve(); });
+    return { root, render };
+  }
+
+  it('слой TaskRow: перерисовка панели с новым onSelect не трогает строки (inline-колбэк / снятие memo краснят)', async () => {
+    const { root, render } = await mountPanel(seed());
+    m.outerRenders.mockClear(); m.cardRenders.mockClear();
+    await render(() => {});   // новая функция onSelect, остальные пропсы те же
+    expect(m.outerRenders).toHaveBeenCalledTimes(0);
+    expect(m.cardRenders).toHaveBeenCalledTimes(0);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('слой TaskCard: тот же набор пропсов при перерисовке родителя не перерисовывает тело карточки', async () => {
+    const t = task(9001);
+    const noop = () => {};
+    const root = createRoot(doc.getElementById('root') as unknown as HTMLElement);
+    const render = () => act(async () => { root.render(createElement(RealTaskCard, { task: t, onClick: noop })); });
+    await render();
+    m.cardRenders.mockClear();
+    await render();   // новый элемент, пропсы по ссылкам прежние
+    expect(m.cardRenders).toHaveBeenCalledTimes(0);
+    await act(async () => { root.unmount(); });
+  });
+
+  it('доска: новый inline onOpenTask у вызывающего не перерисовывает BoardCard и карточки', async () => {
+    const tasks = Array.from({ length: 5 }, (_, i) => task(i));
+    const root = createRoot(doc.getElementById('root') as unknown as HTMLElement);
+    const projectsById = new Map();   // стабильная ссылка, как у useMemo вызывающего
+    const render = (onOpenTask: (t: Task) => void) => act(async () => {
+      root.render(createElement(TaskBoard, {
+        tasks, columns: DEFAULT_BOARD_COLUMNS, projectsById, onOpenTask, isMobile: true,
+      }));
+    });
+    await render(() => {});
+    expect(m.outerRenders).toHaveBeenCalled();
+    m.outerRenders.mockClear(); m.cardRenders.mockClear();
+    await render(() => {});   // inline-стрелка: каждый рендер родителя — новая ссылка
+    expect(m.outerRenders).toHaveBeenCalledTimes(0);
+    expect(m.cardRenders).toHaveBeenCalledTimes(0);
+    await act(async () => { root.unmount(); });
+  });
+  it('окно ячейки доски выводится из windowSize: смена пропса пересчитывает лимит и кнопку', async () => {
+    const cards = Array.from({ length: 5 }, (_, i) => task(i));
+    const root = createRoot(doc.getElementById('root') as unknown as HTMLElement);
+    const render = (windowSize?: number) => act(async () => {
+      root.render(createElement(BoardCell, {
+        cellId: 'l::c', cards, windowSize, projectNameOf: () => undefined, onOpen: () => {}, minEmptyHeight: 10,
+      }));
+    });
+    const more = () => [...doc.querySelectorAll('button')].some(b => (b.textContent ?? '').includes('Показать ещё'));
+    await render(undefined);          // без окна: видны все 5
+    m.outerRenders.mockClear();
+    await render(2);                  // колонка стала «Готово»: окно 2 + кнопка
+    expect(more()).toBe(true);
+    expect(doc.querySelectorAll('[aria-roledescription="sortable"]').length).toBe(2);
     await act(async () => { root.unmount(); });
   });
 });

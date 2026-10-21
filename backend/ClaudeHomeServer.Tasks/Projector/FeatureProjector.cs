@@ -375,7 +375,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             .Select(t => new FeatureNow
             {
                 TaskId = t.Id,
-                Stage = RoleToStage(t.Role),
+                Stage = FeatureTimeMath.RoleToStage(t.Role),
                 PersonaId = t.PersonaId,
                 StepRef = t.StepRef,
                 Title = t.Title,
@@ -771,20 +771,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         return "other";
     }
 
-    // Роль задачи → ключ стадии конвейера (для блока «Сейчас»).
-    // cut/consult → cut (Разрез); step/rework → prod; прочее → prod.
-    // Эпик (feature) сюда не доходит: он контейнер фичи и исключён из Now (см. «Сейчас» в Build).
-    private static string RoleToStage(string? role) => role switch
-    {
-        TaskRoles.Cut or TaskRoles.Consult => "cut",
-        TaskRoles.Plan => "plan",
-        TaskRoles.Step or TaskRoles.Rework => "prod",
-        TaskRoles.Review => "review",
-        TaskRoles.Qa => "qa",
-        TaskRoles.Final => "final",
-        TaskRoles.Merge => "merge",
-        _ => "prod",
-    };
+    // (Роль → ключ стадии — общий FeatureTimeMath.RoleToStage, дедуп с FeatureTimeline, минор 8.
+    // Эпик (feature) в «Сейчас» не доходит: он контейнер фичи и исключён из Now, см. Build.)
 
     // Цепочки шагов: группировка steps (role=step/rework) по stepRef. Порядок групп — по первому
     // появлению (порядок вызывающего); внутри группы — по времени (стабильная сортировка: равные

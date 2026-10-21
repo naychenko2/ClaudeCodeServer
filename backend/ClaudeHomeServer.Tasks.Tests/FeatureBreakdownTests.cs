@@ -149,8 +149,9 @@ public class FeatureBreakdownTests
 
         var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), journal, sessions, AutoResolver(), now);
 
-        // Модель группы = из журнала ("claude-opus-4"), НЕ из снимка (там «Авто»).
-        bd.Models.Should().ContainSingle(g => g.Key == "claude-opus-4");
+        // Модель группы = из журнала: сырой id "claude-opus-4" резолвится в единый ключ
+        // (modelFull, минор 6) — то же имя, что дал бы снимок с этой явной моделью.
+        bd.Models.Should().ContainSingle(g => g.Key == "Claude claude-opus-4");
     }
 
     // Без журнала (null): model группы = из снимка через modelResolver (резолв «Авто»).
@@ -303,16 +304,17 @@ public class FeatureBreakdownTests
             completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
 
         // Снимок: c1 с ЯВНОЙ моделью "claude-sonnet-4" (не «Авто»). Журнал: полный,
-        // turn.model="claude-opus-4". Если бы модель брали из снимка — был бы "Claude claude-sonnet-4"
-        // (через AutoResolver для явной) или "claude-sonnet-4"; из журнала — "claude-opus-4".
+        // turn.model="claude-opus-4". Единый ключ (modelFull, минор 6): сырой id резолвится в
+        // то же имя, что снимок с этой моделью. Из журнала → "Claude claude-opus-4"; если бы
+        // брали из снимка → "Claude claude-sonnet-4".
         var sessions = Sessions(("c1", "s1", "claude-sonnet-4"));
         var journal = CompleteJournal(("c1", "claude-opus-4"));
 
         var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), journal, sessions, AutoResolver(), now);
 
-        // Полный журнал → модель из журнала ("claude-opus-4"), не из снимка ("claude-sonnet-4").
-        bd.Models.Should().ContainSingle(g => g.Key == "claude-opus-4");
-        bd.Models.Should().NotContain(g => g.Key == "claude-sonnet-4");
+        // Полный журнал → модель из журнала (opus), не из снимка (sonnet) — единый ключ.
+        bd.Models.Should().ContainSingle(g => g.Key == "Claude claude-opus-4");
+        bd.Models.Should().NotContain(g => g.Key == "Claude claude-sonnet-4");
     }
 
     // Мутация 2: убрать фильтр по снимку в ChatIds → чужой чат попадёт → кейс 2 краснеет.

@@ -13,6 +13,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Projector;
@@ -594,6 +595,53 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         listExec.GetProperty("modelLabel").GetString().Should().Be(pageExec.GetProperty("modelLabel").GetString());
         listExec.GetProperty("modelFull").GetString().Should().Be(pageExec.GetProperty("modelFull").GetString());
         listExec.GetProperty("modelFull").GetString().Should().Contain("test-opus");
+    }
+
+    // Минор 4: «Авто» → та же модель, что боевой резолвер (ModelAssignmentResolver.ExecutorModel)
+    // для того же исполнителя/персоны. Сверка: страница показывает ровно то, что даёт боевой
+    // резолвер (тот же DI-синглтон, что использует контроллер). Кейс: у персоны ЯВНАЯ модель
+    // ("opus"), у задачи уровня нет → боевой резолвер берёт модель персоны; старая цепочка
+    // (task.ModelTier ?? persona.ModelTier ?? Medium) дала бы Medium-слот, не "opus".
+    // Мутация: вернуть свою цепочку слота (не ExecutorModel) → страница даст Medium-слот → краснеет.
+    [Fact]
+    public async Task GetFeature_Авто_СверкаСБоевымРезолвером()
+    {
+        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        // Medium-слот известен и отличен от "opus": если страница возьмёт Medium (старая цепочка),
+        // а не модель персоны (боевой резолвер) — тест краснеет.
+        Users.SetModelTiers(user.Id, strong: "test-opus", medium: "test-sonnet", weak: null);
+
+        // Персона с явной моделью "opus" (боевой резолвер берёт её; старая цепочка — нет).
+        var persona = Personas.Create(OwnerId, "персона-сверка", null, null, null,
+            "opus", null, PersonaScope.Global, null, null, null, false);
+
+        var epic = await CreateTaskAsync(new { title = "эпик-сверка", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var step = await CreateTaskAsync(new { title = "шаг-сверка", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString();
+        // Задача → персона (без уровня задачи: боевой резолвер идёт через PersonaModel).
+        _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!.PersonaId = persona.Id;
+
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        Sessions.GetById(chatId)!.Model = null; // «Авто»
+        await _client.PutAsJsonAsync($"/api/tasks/{stepId}", new { linkedSessionId = chatId });
+
+        // Боевой резолвер (тот же DI-синглтон, что использует контроллер): ожидаемая модель.
+        var resolver = _factory.Services.GetRequiredService<ModelAssignmentResolver>();
+        var task = _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!;
+        var expected = resolver.ExecutorModel(task, Personas.Get(persona.Id, OwnerId), OwnerId);
+        var expectedFull = expected is null ? "Авто" : $"Авто → {TasksController.ModelDisplayName(expected)}";
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var exec = page.GetProperty("run").GetProperty("stages").EnumerateArray()
+            .Single(s => s.GetProperty("key").GetString() == "prod")
+            .GetProperty("executors").EnumerateArray()
+            .Single(e => e.GetProperty("taskId").GetString() == stepId);
+        exec.GetProperty("modelFull").GetString().Should().Be(expectedFull,
+            "«Авто» = боевой резолвер (модель персоны), не своя цепочка слота");
+        // Конкретно: явная модель персоны → "Claude Opus", не Medium-слот ("test-sonnet").
+        exec.GetProperty("modelFull").GetString().Should().Be("Авто → Claude Opus");
     }
 
     // chats[]: чат задачи фичи — executor; чужой чат (TaskId не задача фичи) — не в списке.

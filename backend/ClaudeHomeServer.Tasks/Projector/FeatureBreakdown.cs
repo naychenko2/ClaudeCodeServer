@@ -113,17 +113,30 @@ public sealed record FeatureBreakdown(
         // Ключ модели задачи: из журнала (полный) или из снимка (резолв «Авто» через
         // modelResolver — готовая функция Б4). Чат вне снимка и без журнала → null (модель не
         // известна — задача в разрез моделей не входит).
+        // Минор 6: ЕДИНЫЙ ключ (modelFull) — сырой id журнала резолвится в то же имя, что снимок
+        // (через modelResolver), иначе одна модель попадала бы под два ключа (сырой id vs подпись).
+        // Чаты без ходов в журнале — осознанный откат на снимок (модель из журнала неизвестна).
         string? ModelKey(TaskItem t)
         {
             var chatId = t.LinkedSessionId;
             if (journalComplete && chatId is not null && journalModelByChat is not null
                 && journalModelByChat.TryGetValue(chatId, out var jm))
-                return jm;
+                return UnifiedModelKey(jm);
             var chat = LiveSession(chatId);
             if (chat is null) return null;
             if (modelResolver is not null)
                 return modelResolver(chat).Full;
             return chat.Model; // без резолвера (тесты) — модель снимка как есть
+        }
+
+        // Сырой id модели → единый ключ (то же имя, что даёт снимок через modelResolver):
+        // синтетическая сессия с этой моделью → modelResolver разворачивает как явную модель.
+        // Без резолвера (тесты) — id как есть (тогда и снимок отдаёт id как есть — ключи совпадают).
+        string? UnifiedModelKey(string? rawModel)
+        {
+            if (modelResolver is null) return rawModel;
+            var synthetic = new FeatureIndexSession("", null, null, false, rawModel);
+            return modelResolver(synthetic).Full;
         }
 
         // Группировка по ключу: key → (work-интервалы, chatIds). key null/пусто → задача в этот
@@ -148,7 +161,7 @@ public sealed record FeatureBreakdown(
             {
                 result.Add(new FeatureBreakdownGroup(
                     Key: key,
-                    Minutes: UnionMinutes(intervals),
+                    Minutes: FeatureTimeMath.UnionMinutes(intervals),
                     Tokens: null, // до Б9
                     CostUsd: null, // до Б9
                     ChatIds: chatIds.Distinct().OrderBy(c => c).ToList()));
@@ -170,11 +183,15 @@ public sealed record FeatureBreakdown(
         // «Дольше всех сейчас»: самая долгая сейчас идущая задача (ClaudeStartedAt, без
         // CompletedAt). Minutes = now − ClaudeStartedAt. ChatId — fail-closed (только из снимка).
         // Tokens/Share = null до Б9. Ничего не идёт → null.
+        // Минор 5: «идущая» = InProgress БЕЗ waiting/stopped: задача, ждущая человека
+        // (AwaitingHumanSince) или остановленная (ExecutorStoppedAt), статусом InProgress, но
+        // реально не работает — в «дольше всех сейчас» не попадает.
         FeatureLongestNow? longest = null;
         DateTime? longestStart = null;
         foreach (var t in tasks)
         {
             if (t.ClaudeStartedAt is null || t.CompletedAt is not null) continue;
+            if (t.AwaitingHumanSince is not null || t.ExecutorStoppedAt is not null) continue;
             if (longestStart is null || t.ClaudeStartedAt.Value < longestStart.Value)
             {
                 longestStart = t.ClaudeStartedAt;
@@ -183,7 +200,7 @@ public sealed record FeatureBreakdown(
                     ChatId: LiveSession(t.LinkedSessionId)?.Id,
                     PersonaId: t.PersonaId,
                     StepRef: t.StepRef,
-                    Minutes: Minutes(t.ClaudeStartedAt.Value, now),
+                    Minutes: FeatureTimeMath.Minutes(t.ClaudeStartedAt.Value, now),
                     Tokens: null, // до Б9
                     Share: null); // до Б9
             }
@@ -207,40 +224,5 @@ public sealed record FeatureBreakdown(
         foreach (var t in run.Plan) yield return t;
     }
 
-    // Объединение work-интервалов → минуты по часам стены (округление вверх до минуты; 0 — нет
-    // интервалов). Та же логика, что FeatureTimeline.UnionMinutes.
-    private static int UnionMinutes(List<(DateTime Start, DateTime End)> intervals)
-    {
-        var merged = MergeIntervals(intervals);
-        var total = TimeSpan.Zero;
-        foreach (var (s, e) in merged)
-            total += e - s;
-        return (int)Math.Ceiling(total.TotalMinutes);
-    }
-
-    // Объединение перекрывающихся/смежных интервалов: возвращает список (start, end) без
-    // пересечений, в порядке start. Та же логика, что FeatureTimeline.MergeIntervals.
-    private static List<(DateTime start, DateTime end)> MergeIntervals(List<(DateTime Start, DateTime End)> intervals)
-    {
-        var sorted = intervals.OrderBy(iv => iv.Start).ToList();
-        var result = new List<(DateTime start, DateTime end)>();
-        foreach (var (start, end) in sorted)
-        {
-            if (result.Count > 0 && start <= result[^1].end)
-            {
-                var cs = result[^1].start;
-                var ce = result[^1].end;
-                result[^1] = (start: cs, end: end > ce ? end : ce);
-            }
-            else
-            {
-                result.Add((start: start, end: end));
-            }
-        }
-        return result;
-    }
-
-    // Длительность [from, to] в минутах (округление вверх до минуты; 0 при to ≤ from).
-    private static int Minutes(DateTime from, DateTime to) =>
-        to <= from ? 0 : (int)Math.Ceiling((to - from).TotalMinutes);
+    // (Объединение/минуты/обрезка — в общем FeatureTimeMath, дедуп с FeatureTimeline, минор 8.)
 }

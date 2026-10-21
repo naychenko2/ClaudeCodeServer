@@ -74,18 +74,21 @@ public sealed record FeatureStats(
 //
 // Режим approx (Б5a): по данным задач, без журнала.
 //   • work — интервалы по задачам этапов [ClaudeStartedAt, CompletedAt ?? now];
-//   • notWorking — промежутки между work (в approx «ожидание/простой/ошибка» не различаются,
-//     поэтому Waiting*/Idle*/Error* = null); ночная пауза > 2 ч — в notWorking;
+//   • notWorking — ВСЕ промежутки между work (в approx «ожидание/простой/ошибка» не различаются,
+//     поэтому Waiting*/Idle*/Error* = null; порога «ночной паузы» нет — любой разрыв, в т.ч.
+//     > 2 ч, — notWorking, минор 9: обещание отдельного порога убрано, решение зафиксировано);
 //   • current — по тревоге фичи (waiting/stopped/merge_pending).
 // Параллельные задачи склеиваются в один сегмент на (track, stage).
 //
 // Режим journal (Б5b): полный журнал (StartsWithCreated && !Truncated) → точные интервалы:
-//   • work — по turn (startedAt..endedAt) и по периодам started…(stopped | done | now);
+//   • work — по turn (startedAt..endedAt) и по периодам started…(stopped | done | now),
+//     разрезанным на waiting-интервалы (work не включает минуты ожидания, major 1);
 //   • waiting — waiting…(waiting_cleared | now) + device_wait…(device_wait_cleared | now)
 //     (ожидание устройства — как waiting; см. комментарий в BuildJournal);
 //   • error — turn.outcome=error (startedAt..endedAt) + stopped (точка);
 //   • idle — остаток (не work/waiting/error). Sweep-line: перекрытия решаются приоритетом
-//     error > work > waiting. Заполняются Waiting*/Idle*/Error* (в approx — null).
+//     error > waiting > work (work исключает waiting/error; инвариант work+waiting+error+idle
+//     = elapsed, итоги из сегментов, major 2). Заполняются Waiting*/Idle*/Error* (в approx — null).
 // Режим «≈» — если журнала нет, он не начинается с created, либо Truncated (фичи до журнала
 // целиком approx, гибрида нет).
 public sealed record FeatureTimeline(
@@ -103,8 +106,10 @@ public sealed record FeatureTimeline(
     TimelineTotals Totals)
 {
     // Потолок сегментов: при превышении — склейка по возрастающему порогу.
-    // public static (не const) — чтобы тест мог снять потолок (мутация) и проверить склейку.
-    public static int MaxSegments = 500;
+    // internal (не public) — не посторонняя публичная точка настройки (минор 8); тестам —
+    // внутренний хук (setter): мутация снимает потолок и проверяет склейку.
+    internal const int DefaultMaxSegments = 500;
+    internal static int MaxSegments { get; set; } = DefaultMaxSegments;
 
     public static FeatureTimeline Build(FeatureRun run, FeatureJournalReadResult? journal, DateTime now)
     {
@@ -141,7 +146,7 @@ public sealed record FeatureTimeline(
             var start = t.ClaudeStartedAt.Value;
             var end = t.CompletedAt ?? now;
             if (end < start) end = start;
-            var stage = RoleToStage(t.Role);
+            var stage = FeatureTimeMath.RoleToStage(t.Role);
             var track = stage == "review" ? "review" : "main";
             work.Add(new WorkInterval(start, end, stage, track, t.Id));
         }
@@ -150,9 +155,10 @@ public sealed record FeatureTimeline(
         var segments = BuildSegments(work, from, to);
 
         // Итоги.
-        var elapsed = Minutes(from, to);
-        var workWall = UnionMinutes(work, from, to);
-        var agentsSum = work.Sum(w => Minutes(w.Start, w.End));
+        var elapsed = FeatureTimeMath.Minutes(from, to);
+        var workWall = FeatureTimeMath.UnionMinutes(
+            work.Select(w => (start: w.Start, end: w.End)).ToList(), from, to);
+        var agentsSum = work.Sum(w => FeatureTimeMath.Minutes(w.Start, w.End));
         var notWorking = Math.Max(0, elapsed - workWall);
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
@@ -172,23 +178,33 @@ public sealed record FeatureTimeline(
 
     // ─── Точный режим по журналу (Б5b) ───────────────────────────────────────────────────────
 
-    // Интервал журнала: [Start, End] (обрезается к [from, to] при склейке), вид, приоритет.
-    private sealed record JournalInterval(DateTime Start, DateTime End, string Kind, int Priority);
+    // Интервал журнала: [Start, End] (обрезается к [from, to] при склейке), вид, приоритет,
+    // подпись (Stage/TaskId — по задаче хода; минор 7: в журнальном режиме сегменты несут подписи
+    // этапов, а не пустые Stage=""/TaskId=null). internal — для теста эквивалентности sweep.
+    internal sealed record JournalInterval(
+        DateTime Start, DateTime End, string Kind, int Priority, string Stage = "", string? TaskId = null);
 
-    // Приоритеты видов при перекрытии (sweep-line): error > work > waiting; idle — остаток.
+    // Приоритеты видов при перекрытии (sweep-line): error > waiting > work; idle — остаток.
+    // waiting/error ВЫШЕ work: период started…(stopped|done|now) перекрывает ожидание, и ход с
+    // outcome=error даёт и work, и error на том же диапазоне — в пересечении выигрывает более
+    // «конкретный» вид, чтобы work не включал минуты ожидания/ошибки (контракт: work исключает
+    // waiting и error; инвариант work + waiting + error + idle = elapsed).
     private const int PriorityError = 3;
-    private const int PriorityWork = 2;
-    private const int PriorityWaiting = 1;
+    private const int PriorityWaiting = 2;
+    private const int PriorityWork = 1;
 
     // Точный режим: события журнала → интервалы work/waiting/error → sweep-line → сегменты
-    // (work/waiting/error/idle) + итоги (waiting/idle/error, count, longest). Чистая функция от
-    // (run, journal, now): run даёт taskId→stage (подпись work), journal — события, now — «сейчас».
+    // (work/waiting/error/idle) + итоги. Чистая функция от (run, journal, now): run даёт
+    // taskId→stage (подписи сегментов), journal — события, now — «сейчас».
+    //
+    // Контракт итогов (Б5b, major 1+2): work исключает waiting и error; инвариант
+    // work + waiting + error + idle = elapsed. Итоги считаются ИЗ СЕГМЕНТОВ sweep-line (до
+    // склейки по потолку): каждый отрезок [from, to] получает ровно один вид, поэтому сумма
+    // видов = elapsed по построению, а не «work-объединение, из которого вычитать error второй
+    // раз» (двойной счёт ошибки, который ломал сходимость пирога с графиком).
     private static (List<TimelineSegment> Segments, TimelineTotals Totals) BuildJournal(
         FeatureRun run, FeatureJournalReadResult journal, DateTime from, DateTime to, DateTime now)
     {
-        // run — для AllTasks (стадии/задачи фичи); journal — события; now — «сейчас».
-        _ = run;
-
         // Индексы событий по taskId (для пар «начало → конец»): stopped, status→Done,
         // waiting_cleared, device_wait_cleared — каждый в порядке At.
         var stoppedByTask = GroupByTask(journal.Entries, "stopped");
@@ -199,72 +215,104 @@ public sealed record FeatureTimeline(
         var waitingClearedByTask = GroupByTask(journal.Entries, "waiting_cleared");
         var deviceWaitClearedByTask = GroupByTask(journal.Entries, "device_wait_cleared");
 
-        var intervals = new List<JournalInterval>();
+        // taskId → stage по задаче хода (минор 7): подписи этапов на графике. run даёт задачи
+        // фичи (роль → stage); taskId из журнала не в run → "" (без подписи). Track выводится
+        // из stage в sweep (review → review, иначе main).
+        var stageByTask = AllTasks(run)
+            .Where(t => t.Id is not null)
+            .GroupBy(t => t.Id!)
+            .ToDictionary(g => g.Key, g => FeatureTimeMath.RoleToStage(g.First().Role));
+        string LabelOf(string? taskId) =>
+            taskId is not null && stageByTask.TryGetValue(taskId, out var s) ? s : "";
+
+        // Промежуток 1: интервалы ожидания (waiting + device_wait) + счётчики. Собираем ДО work:
+        // started-период режем на них, чтобы work не включал минуты ожидания (major 1).
+        var waitingIntervals = new List<JournalInterval>();
         var waitingCount = 0;
         var longestWait = TimeSpan.Zero;
-        var errorCount = 0;
-
         foreach (var e in journal.Entries)
         {
-            switch (e.Kind)
+            // waiting: ожидание человека waiting…(waiting_cleared | now).
+            if (e.Kind == "waiting" && e.At > from)
             {
-                // work: ход (startedAt..endedAt); если ход завершился ошибкой — и error (счёт).
-                case "turn" when e.StartedAt is not null && e.EndedAt is not null:
-                    intervals.Add(new JournalInterval(e.StartedAt.Value, e.EndedAt.Value, "work", PriorityWork));
-                    if (e.Outcome == "error")
-                    {
-                        errorCount++;
-                        intervals.Add(new JournalInterval(e.StartedAt.Value, e.EndedAt.Value, "error", PriorityError));
-                    }
-                    break;
-
-                // work: период started…(stopped | done | now).
-                case "started" when e.StartedAt is not null:
-                    var end = FirstAfter(stoppedByTask, e.TaskId, e.StartedAt.Value)
-                        ?? FirstAfter(doneByTask, e.TaskId, e.StartedAt.Value)
-                        ?? now;
-                    intervals.Add(new JournalInterval(e.StartedAt.Value, end, "work", PriorityWork));
-                    break;
-
-                // error: остановка исполнителя — точка (0 мин, но в счёт).
-                case "stopped":
-                    errorCount++;
-                    intervals.Add(new JournalInterval(e.At, e.At, "error", PriorityError));
-                    break;
-
-                // waiting: ожидание человека waiting…(waiting_cleared | now).
-                case "waiting" when e.At > from:
-                    var wEnd = FirstAfter(waitingClearedByTask, e.TaskId, e.At) ?? now;
-                    waitingCount++;
-                    longestWait = Max(longestWait, wEnd - e.At);
-                    intervals.Add(new JournalInterval(e.At, wEnd, "waiting", PriorityWaiting));
-                    break;
-
-                // waiting: ожидание устройства device_wait…(device_wait_cleared | now).
-                // Пометка «устройство»: контракт TimelineSegment (Б5a) не имеет отдельного поля
-                // для под-вида ожидания, поэтому device_wait рисуется как обычный waiting
-                // (kind="waiting"); totals не дробят waiting по под-видам (WaitingMinutes — сумма
-                // обоих). Отдельный kind="device_wait" не введён, чтобы не ломать фронт-контракт.
-                case "device_wait" when e.At > from:
-                    var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
-                    waitingCount++;
-                    longestWait = Max(longestWait, dEnd - e.At);
-                    intervals.Add(new JournalInterval(e.At, dEnd, "waiting", PriorityWaiting));
-                    break;
+                var wEnd = FirstAfter(waitingClearedByTask, e.TaskId, e.At) ?? now;
+                waitingCount++;
+                longestWait = Max(longestWait, wEnd - e.At);
+                waitingIntervals.Add(new JournalInterval(e.At, wEnd, "waiting", PriorityWaiting, LabelOf(e.TaskId), e.TaskId));
+            }
+            // waiting: ожидание устройства device_wait…(device_wait_cleared | now). Контракт
+            // TimelineSegment (Б5a) не имеет отдельного под-вида ожидания, поэтому device_wait
+            // рисуется как обычный waiting (kind="waiting"); WaitingMinutes — сумма обоих.
+            else if (e.Kind == "device_wait" && e.At > from)
+            {
+                var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
+                waitingCount++;
+                longestWait = Max(longestWait, dEnd - e.At);
+                waitingIntervals.Add(new JournalInterval(e.At, dEnd, "waiting", PriorityWaiting, LabelOf(e.TaskId), e.TaskId));
             }
         }
 
-        // Sweep-line: все границы → отрезки; на каждом отрезке — вид по приоритету, иначе idle.
-        var segments = Sweep(intervals, from, to);
+        // Промежуток 2: work (ходы + started-периоды, резанные на ожидание) и error.
+        var workIntervals = new List<JournalInterval>();
+        var errorIntervals = new List<JournalInterval>();
+        var errorCount = 0;
+        foreach (var e in journal.Entries)
+        {
+            // work: ход (startedAt..endedAt); если ход завершился ошибкой — и error (счёт).
+            if (e.Kind == "turn" && e.StartedAt is not null && e.EndedAt is not null)
+            {
+                var stage = LabelOf(e.TaskId);
+                workIntervals.Add(new JournalInterval(e.StartedAt.Value, e.EndedAt.Value, "work", PriorityWork, stage, e.TaskId));
+                if (e.Outcome == "error")
+                {
+                    errorCount++;
+                    errorIntervals.Add(new JournalInterval(e.StartedAt.Value, e.EndedAt.Value, "error", PriorityError, stage, e.TaskId));
+                }
+            }
+            // work: период started…(stopped | done | now), разрезанный на waiting-интервалы.
+            else if (e.Kind == "started" && e.StartedAt is not null)
+            {
+                var end = FirstAfter(stoppedByTask, e.TaskId, e.StartedAt.Value)
+                    ?? FirstAfter(doneByTask, e.TaskId, e.StartedAt.Value)
+                    ?? now;
+                var stage = LabelOf(e.TaskId);
+                foreach (var (s, w) in CutByWaiting(e.StartedAt.Value, end, waitingIntervals))
+                    workIntervals.Add(new JournalInterval(s, w, "work", PriorityWork, stage, e.TaskId));
+            }
+            // error: остановка исполнителя — точка (0 мин, но в счёт).
+            else if (e.Kind == "stopped")
+            {
+                errorCount++;
+                errorIntervals.Add(new JournalInterval(e.At, e.At, "error", PriorityError, LabelOf(e.TaskId), e.TaskId));
+            }
+        }
 
-        // Итоги: work/waiting/error — объединение интервалов; idle — остаток; NotWorking =
-        // Elapsed − WorkWall (та же формула, что в approx).
-        var elapsed = Minutes(from, to);
-        var workWall = UnionMinutesRaw(intervals.Where(i => i.Kind == "work").Select(i => (i.Start, i.End)).ToList(), from, to);
-        var waitingMin = UnionMinutesRaw(intervals.Where(i => i.Kind == "waiting").Select(i => (i.Start, i.End)).ToList(), from, to);
-        var errorMin = UnionMinutesRaw(intervals.Where(i => i.Kind == "error").Select(i => (i.Start, i.End)).ToList(), from, to);
+        // Sweep-line: work + waiting + error → сегменты (вид по приоритету, иначе idle).
+        var all = new List<JournalInterval>(workIntervals.Count + waitingIntervals.Count + errorIntervals.Count);
+        all.AddRange(workIntervals);
+        all.AddRange(waitingIntervals);
+        all.AddRange(errorIntervals);
+        var segments = Sweep(all, from, to);
+
+        // Итоги — из сегментов sweep (до склейки по потолку): каждый отрезок [from, to] даёт ровно
+        // один вид, поэтому work + waiting + error + idle = elapsed по построению (major 2).
+        var elapsed = FeatureTimeMath.Minutes(from, to);
+        var workWall = 0;
+        var waitingMin = 0;
+        var errorMin = 0;
+        var idleMin = 0;
+        foreach (var s in segments)
+        {
+            var m = FeatureTimeMath.Minutes(s.From, s.To);
+            switch (s.Kind)
+            {
+                case "work": workWall += m; break;
+                case "waiting": waitingMin += m; break;
+                case "error": errorMin += m; break;
+                default: idleMin += m; break; // idle
+            }
+        }
         var notWorking = Math.Max(0, elapsed - workWall);
-        var idleMin = Math.Max(0, notWorking - waitingMin - errorMin);
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
             WorkWallMinutes: workWall,
@@ -278,6 +326,38 @@ public sealed record FeatureTimeline(
             ErrorMinutes: errorMin);
 
         return (segments, totals);
+    }
+
+    // Разрез [start, end] на waiting-интервалы: возвращает части [start, end], НЕ покрытые
+    // ожиданием (work не включает минуты ожидания, major 1). waiting — уже обрезанные к [from, to]
+    // интервалы ожидания; части, целиком внутри ожидания, отбрасываются (нулевая ширина).
+    private static List<(DateTime Start, DateTime End)> CutByWaiting(
+        DateTime start, DateTime end, List<JournalInterval> waiting)
+    {
+        // Пересекающие [start, end], обрезанные к нему (start/end — именованные).
+        var cuts = new List<(DateTime start, DateTime end)>();
+        foreach (var w in waiting)
+        {
+            if (w.End <= start || w.Start >= end) continue; // не пересекает
+            var s = w.Start < start ? start : w.Start;
+            var e = w.End > end ? end : w.End;
+            if (e > s) cuts.Add((s, e));
+        }
+        if (cuts.Count == 0) return new List<(DateTime, DateTime)> { (start, end) };
+
+        // Склеить перекрывающиеся (общий FeatureTimeMath.MergeIntervals) → зазоры = [start, end]
+        // минус склеенные: один проход O(k) (вместо наивного O(W·P) «режь все части каждым waiting»,
+        // который взрывал замер на 20k: 5000 started × 5000 waiting).
+        var merged = FeatureTimeMath.MergeIntervals(cuts);
+        var parts = new List<(DateTime, DateTime)>();
+        var cursor = start;
+        foreach (var (s, e) in merged)
+        {
+            if (s > cursor) parts.Add((cursor, s));
+            if (e > cursor) cursor = e;
+        }
+        if (cursor < end) parts.Add((cursor, end));
+        return parts;
     }
 
     // taskId → события заданного kind, в порядке At (для пар «начало → конец»).
@@ -296,32 +376,101 @@ public sealed record FeatureTimeline(
         return hit?.At;
     }
 
-    // Sweep-line: все границы (from, to + start/end интервалов, обрезанные к [from, to]) →
-    // отрезки; на каждом отрезке [s, e] — вид по приоритету покрывающих интервалов, иначе idle.
+    // Sweep-line (линейный, major 3): все границы (from, to + start/end интервалов, обрезанные к
+    // [from, to]) → отрезки; на каждом отрезке [s, e] — вид по приоритету АКТИВНЫХ интервалов
+    // (error > waiting > work), иначе idle. Активные по виду — счётчики (O(1) на границу:
+    // ++/-- при старте/конце), вид отрезка — по счётчикам; подпись — от представителя вида.
+    // Итого O(n log n) на сортировку границ + O(n) на проход (вместо O(n²) «скан на границу»).
+    //
+    // Интервал [a, b] активен на отрезке [p, next_p] ⇔ a ≤ p И b > p (b — граница, поэтому
+    // b ≥ next_p ⇔ b > p). Приоритет — по виду: выигрывает самый «конкретный» активный вид.
     // Track/stage: work — из taskId (стадия задачи), иначе main/""; taskId — у одиночного work.
-    private static List<TimelineSegment> Sweep(List<JournalInterval> intervals, DateTime from, DateTime to)
+    // internal — для теста эквивалентности (новый линейный sweep == старый O(n²) на случайных входах).
+    internal static List<TimelineSegment> Sweep(List<JournalInterval> intervals, DateTime from, DateTime to)
     {
+        // Границы: from, to + обрезанные start/end всех интервалов.
         var points = new SortedSet<DateTime> { from, to };
         foreach (var iv in intervals)
         {
-            points.Add(Clamp(iv.Start, from, to));
-            points.Add(Clamp(iv.End, from, to));
+            points.Add(FeatureTimeMath.Clamp(iv.Start, from, to));
+            points.Add(FeatureTimeMath.Clamp(iv.End, from, to));
         }
         var list = points.ToList();
+
+        // События на границах: на точке t — интервалы, кончащиеся в t (снять) и начинающиеся (добавить).
+        var endsAt = new Dictionary<DateTime, List<JournalInterval>>();
+        var startsAt = new Dictionary<DateTime, List<JournalInterval>>();
+        foreach (var iv in intervals)
+        {
+            var s = FeatureTimeMath.Clamp(iv.Start, from, to);
+            var e = FeatureTimeMath.Clamp(iv.End, from, to);
+            if (e <= s) continue; // нулевая/обратная ширина после обрезки — не покрывает
+            if (!startsAt.TryGetValue(s, out var st)) startsAt[s] = st = new List<JournalInterval>();
+            st.Add(iv);
+            if (!endsAt.TryGetValue(e, out var en)) endsAt[e] = en = new List<JournalInterval>();
+            en.Add(iv);
+        }
+
+        // Активные по виду: [work, waiting, error]. СЧЁТЧИКИ (O(1) на границу, major 3) +
+        // стек-представитель (последний активный интервал вида — подпись, минор 7) + ended
+        // (ленивое очищение вершины стека). KindIndex: work=0, waiting=1, error=2.
+        var active = new int[3];
+        var stack = new Stack<JournalInterval>[3];
+        var ended = new HashSet<JournalInterval>[3];
+        for (var k = 0; k < 3; k++) { stack[k] = new Stack<JournalInterval>(); ended[k] = new HashSet<JournalInterval>(); }
+        int KindIndex(string kind) => kind switch
+        {
+            "work" => 0,
+            "waiting" => 1,
+            "error" => 2,
+            _ => -1,
+        };
+
         var segments = new List<TimelineSegment>();
         for (var i = 0; i + 1 < list.Count; i++)
         {
             var s = list[i];
             var e = list[i + 1];
             if (e <= s) continue;
-            // Покрывающие [s, e] интервалы (start ≤ s и e ≤ end).
-            var covering = intervals.Where(iv => iv.Start <= s && e <= iv.End).ToList();
-            // Приоритет: error > work > waiting; без покрывающих — idle. taskId у work = null
-            // (склейка по времени, как в approx: sweep не знает, какой интервал «победил» по taskId).
-            var kind = covering.Count == 0
-                ? "idle"
-                : covering.OrderByDescending(iv => iv.Priority).First().Kind;
-            segments.Add(new TimelineSegment(s, e, kind, "main", "", null));
+
+            // На границе s: снимаем кончающиеся в s (b == s → b > s ложь → не активны),
+            // добавляем начинающиеся (a == s → активны).
+            if (endsAt.TryGetValue(s, out var ends))
+                foreach (var iv in ends)
+                {
+                    var k = KindIndex(iv.Kind);
+                    if (k < 0) continue;
+                    active[k]--;
+                    ended[k].Add(iv);
+                }
+            if (startsAt.TryGetValue(s, out var starts))
+                foreach (var iv in starts)
+                {
+                    var k = KindIndex(iv.Kind);
+                    if (k < 0) continue;
+                    active[k]++;
+                    stack[k].Push(iv);
+                }
+
+            // Вид отрезка: по счётчикам (error > waiting > work), иначе idle.
+            var kind = active[2] > 0 ? "error" : active[1] > 0 ? "waiting" : active[0] > 0 ? "work" : "idle";
+
+            // Подпись (Stage/TaskId/Track) — от представителя победившего вида (минор 7):
+            // вершина стека после ленивого очищения завершённых (амортизировано O(1)).
+            string stage = "";
+            string? taskId = null;
+            if (kind != "idle")
+            {
+                var k = KindIndex(kind);
+                while (stack[k].TryPeek(out var top) && ended[k].Contains(top)) stack[k].Pop();
+                if (stack[k].TryPeek(out var rep))
+                {
+                    stage = rep.Stage;
+                    taskId = rep.TaskId;
+                }
+            }
+            var track = stage == "review" ? "review" : "main";
+            segments.Add(new TimelineSegment(s, e, kind, track, stage, taskId));
         }
 
         // Порядок: по From, при равенстве — work > waiting > error > idle (детерминизм).
@@ -377,19 +526,6 @@ public sealed record FeatureTimeline(
         foreach (var t in run.Plan) yield return t;
     }
 
-    // Роль задачи → ключ стадии конвейера (та же таблица, что FeatureProjector.RoleToStage).
-    private static string RoleToStage(string? role) => role switch
-    {
-        TaskRoles.Cut or TaskRoles.Consult => "cut",
-        TaskRoles.Plan => "plan",
-        TaskRoles.Step or TaskRoles.Rework => "prod",
-        TaskRoles.Review => "review",
-        TaskRoles.Qa => "qa",
-        TaskRoles.Final => "final",
-        TaskRoles.Merge => "merge",
-        _ => "prod",
-    };
-
     // «Сейчас» из тревоги фичи: kind/Сince/TaskId. attention null → null.
     // attention.kind: stopped → stopped; wait → waiting; merge → merge_pending.
     private static TimelineCurrent? CurrentOf(FeatureRun run)
@@ -420,7 +556,7 @@ public sealed record FeatureTimeline(
             .ToList();
         foreach (var (track, stage, intervals) in byGroup)
         {
-            foreach (var (s, e) in MergeIntervals(intervals.Select(w => (start: w.Start, end: w.End)).ToList()))
+            foreach (var (s, e) in FeatureTimeMath.MergeIntervals(intervals.Select(w => (start: w.Start, end: w.End)).ToList()))
             {
                 // Одиночный (не склеенный) интервал несёт taskId; склеенный — null.
                 var single = intervals.Count == 1 ? intervals[0].TaskId : null;
@@ -429,7 +565,7 @@ public sealed record FeatureTimeline(
         }
 
         // 2) notWorking: промежутки между объединением ВСЕХ work-интервалов (на [from, to]).
-        var union = MergeIntervals(work.Select(w => (start: Clamp(w.Start, from, to), end: Clamp(w.End, from, to))).ToList());
+        var union = FeatureTimeMath.MergeIntervals(work.Select(w => (start: FeatureTimeMath.Clamp(w.Start, from, to), end: FeatureTimeMath.Clamp(w.End, from, to))).ToList());
         var cursor = from;
         foreach (var (s, e) in union)
         {
@@ -489,63 +625,7 @@ public sealed record FeatureTimeline(
         return list;
     }
 
-    // Объединение интервалов: вход/выход — именованные (start, end). Возвращает список
-    // (start, end) без пересечений, в порядке start.
-    private static List<(DateTime start, DateTime end)> MergeIntervals(List<(DateTime start, DateTime end)> intervals)
-    {
-        var sorted = intervals.OrderBy(iv => iv.start).ToList();
-        var result = new List<(DateTime start, DateTime end)>();
-        foreach (var (start, end) in sorted)
-        {
-            if (result.Count > 0 && start <= result[^1].end)
-            {
-                var cs = result[^1].start;
-                var ce = result[^1].end;
-                result[^1] = (start: cs, end: end > ce ? end : ce);
-            }
-            else
-            {
-                result.Add((start: start, end: end));
-            }
-        }
-        return result;
-    }
-
-    // Длительность [from, to] в минутах (округление вверх до минуты; 0 при to ≤ from).
-    private static int Minutes(DateTime from, DateTime to) =>
-        to <= from ? 0 : (int)Math.Ceiling((to - from).TotalMinutes);
-
-    // Объединение work-интервалов (обрезка к [from, to]) → минуты по часам стены.
-    private static int UnionMinutes(List<WorkInterval> work, DateTime from, DateTime to)
-    {
-        var union = MergeIntervals(work
-            .Select(w => (start: Clamp(w.Start, from, to), end: Clamp(w.End, from, to)))
-            .Where(iv => iv.end > iv.start)
-            .ToList());
-        var total = TimeSpan.Zero;
-        foreach (var (s, e) in union)
-            total += e - s;
-        return (int)Math.Ceiling(total.TotalMinutes);
-    }
-
-    // Объединение сырых интервалов (start, end) (обрезка к [from, to]) → минуты по часам стены.
-    // Для точного режима (Б5b): work/waiting/error-интервалы журнала.
-    private static int UnionMinutesRaw(List<(DateTime start, DateTime end)> intervals, DateTime from, DateTime to)
-    {
-        var union = MergeIntervals(intervals
-            .Select(iv => (start: Clamp(iv.start, from, to), end: Clamp(iv.end, from, to)))
-            .Where(iv => iv.end > iv.start)
-            .ToList());
-        var total = TimeSpan.Zero;
-        foreach (var (s, e) in union)
-            total += e - s;
-        return (int)Math.Ceiling(total.TotalMinutes);
-    }
-
-    // Обрезка t к [from, to].
-    private static DateTime Clamp(DateTime t, DateTime from, DateTime to) =>
-        t < from ? from : (t > to ? to : t);
-
     // Work-интервал одной задачи: [Start, End], стадия, трек, id задачи.
+    // (Объединение/минуты/обрезка — в общем FeatureTimeMath, дедуп с FeatureBreakdown, минор 8.)
     private sealed record WorkInterval(DateTime Start, DateTime End, string Stage, string Track, string TaskId);
 }

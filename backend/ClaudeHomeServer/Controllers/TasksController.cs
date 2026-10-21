@@ -118,10 +118,10 @@ public class TasksController(
     // фичи числится в `git worktree list` проекта (тот же предикат, что AttachWorktreeAsync).
     // null — подсистема Git выключена → мерж fail-closed (иначе исполнитель стартует в корне).
     GitService? git = null,
-    // Б4: резолв модели чата (слой Llm, Main его видит): слот «Авто» → модель (UserModelTierResolver,
-    // единственная точка разворачивания, инвариант CLAUDE.md). null — подсистема Llm выключена
-    // → «Авто» без разворота (честный null, не 500).
-    UserModelTierResolver? tiers = null,
+    // Б5b (минор 4): боевой резолвер модели исполнителя (ModelAssignmentResolver.ExecutorModel) —
+    // та же модель, что реально едет в чат (матрицы персоны, дефолт места «исполнитель» = Strong,
+    // явная модель персоны). null — подсистема Llm выключена → «Авто» без разворота (не 500).
+    ModelAssignmentResolver? assignments = null,
     // Б5b: журнал событий фичи (волна 3): точный режим stats.timeline (work/waiting/error/idle)
     // и модели breakdown из журнала. null — подсистема Tasks выключена (как features) →
     // stats.source=approx, не 500.
@@ -509,37 +509,48 @@ public class TasksController(
             .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model))
             .ToList();
 
-    // Б4: готовая функция модели чата (label/full) для проекции фичи. Резолв «Авто» — ТОЛЬКО
-    // UserModelTierResolver.ModelFor (инвариант CLAUDE.md, единственная точка); слот задачи —
-    // TaskItem.ModelTier → слот персоны (как TaskExecutionService.ResolveExecutorModel) → Medium.
-    // Явная модель (Session.Model) — её имя/метка. tiers null (Llm выключена) → null (без разворота).
-    // Функцию передаём в проектор: он в Main не лезет (инвариант изоляции вертикалей).
+    // Б4/Б5b: готовая функция модели чата (label/full) для проекции фичи. Явная модель
+    // (Session.Model) — её имя/метка. «Авто» — боевой резолвер ModelAssignmentResolver.ExecutorModel
+    // (минор 4): та же модель, что реально едет в чат (уровень задачи → матрицы персоны → дефолт
+    // места «исполнитель» = Strong → UserModelTierResolver.ModelFor, единственная точка, инвариант
+    // CLAUDE.md). assignments null (Llm выключена) → null (без разворота). Функцию передаём
+    // в проектор: он в Main не лезет (инвариант изоляции вертикалей).
     private Func<FeatureIndexSession, (string? Label, string? Full)>? ChatModelResolver()
     {
-        if (tiers is null) return null;
+        if (assignments is null) return null;
         return s =>
         {
             // Явная модель чата: имя + короткая метка.
             if (!string.IsNullOrWhiteSpace(s.Model))
                 return (ModelShortLabel(s.Model), ModelDisplayName(s.Model));
-            // «Авто»: слот задачи (task.ModelTier → persona.ModelTier → Medium) → ModelFor.
+            // «Авто»: боевой резолвер. tasks.GetById — общий словарь, поэтому проверяем владельца
+            // (fail-closed, минор 8): чужая задача → как без задачи (резолв по персоне/месту).
             var task = s.TaskId is not null ? tasks.GetById(s.TaskId) : null;
+            if (task is not null && task.OwnerId != UserId) task = null;
             var persona = task?.PersonaId is not null ? personas.Get(task.PersonaId, UserId) : null;
-            var tier = task?.ModelTier ?? persona?.ModelTier ?? ModelTier.Medium;
-            var model = tiers.ModelFor(tier, UserId);
-            var tierLabel = tier switch
+            string? model;
+            if (assignments is null)
             {
-                ModelTier.Strong => "сильная",
-                ModelTier.Weak => "слабая",
-                _ => "средняя",
-            };
-            var full = model is null ? "Авто" : $"Авто → {ModelDisplayName(model)} (слот «{tierLabel}»)";
+                model = null; // Llm выключена — без разворота
+            }
+            else if (task is not null)
+            {
+                model = assignments.ExecutorModel(task, persona, UserId);
+            }
+            else
+            {
+                // Задачи нет (или чужая): боевой фолбэк — модель персоны + дефолт места «исполнитель».
+                model = assignments.PersonaModel(persona, UserId,
+                    LocalActionCatalog.DefaultTierOf(LocalActionCatalog.TasksExecutor));
+            }
+            var full = model is null ? "Авто" : $"Авто → {ModelDisplayName(model)}";
             return ("Авто", full);
         };
     }
 
     // Полное имя модели для чипа: Claude → «Claude {Семейство}», иначе id модели как есть.
-    private static string? ModelDisplayName(string? model)
+    // internal — для сверки «Авто» с боевым резолвером (тест минора 4).
+    internal static string? ModelDisplayName(string? model)
     {
         if (string.IsNullOrWhiteSpace(model)) return null;
         if (ClaudeModelFamily.Resolve(model) is { } family)

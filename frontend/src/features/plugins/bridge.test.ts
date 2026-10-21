@@ -787,6 +787,54 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     expect((notice!.props as { title: string }).title).toBe('Нет права tasks:read');
   });
 
+  // Регрессия (задача 78b296d0): плашка «Нет права …» залипала после возврата права.
+  // Смена granted меняет frameKey (iframe пересоздан, панель переинициализирована), а
+  // deniedKey — state компонента — переживал смену набора прав.
+  it('смена набора прав (granted) сбрасывает плашку «Нет права …»', async () => {
+    const project = { id: 'p1' } as Project;
+    const host: Host = { i: 0, states: new Map(), refs: new Map(), cbs: new Map(), effects: new Map() };
+    let current: PluginInfo = plugin;
+    const render = () => {
+      host.i = 0;
+      rt.state.current = host;
+      try {
+        return PluginFrame({ project, plugin: current, panel });
+      } finally {
+        rt.state.current = null;
+      }
+    };
+    render();
+    await Promise.resolve();
+    render();
+    await Promise.resolve();
+    const iframeEl = findElement(render(), 'iframe');
+    const posted: unknown[] = [];
+    const panelWindow = { postMessage: (msg: unknown) => { posted.push(msg); } };
+    (iframeEl!.props.ref as { current: unknown }).current = { contentWindow: { frames: [panelWindow] } };
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+
+    m.call.mockImplementationOnce(async () => ({
+      ok: false,
+      error: { code: 'denied', message: 'Нет права: tasks:read' },
+    }));
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c9', op: 'tasks.list', args: {} });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(findElement(render(), Notice), 'плашка после отказа').not.toBeNull();
+
+    // Право выдано: другой набор granted → новый frameKey → плашки быть не должно
+    current = { ...plugin, granted: [...plugin.granted, 'tasks:read'] };
+    render(); // эффект по frameKey: bridge → waiting, deniedKey → null
+    await Promise.resolve();
+    // Новый фрейм шлёт ready → bridge снова alive. Без сброса deniedKey плашка
+    // всплыла бы здесь (она скрыта лишь пока bridge не alive).
+    const newFrame = findElement(render(), 'iframe');
+    (newFrame!.props.ref as { current: unknown }).current = { contentWindow: { frames: [panelWindow] } };
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+    await Promise.resolve();
+    expect(findElement(render(), Notice), 'плашка погасла после смены прав').toBeNull();
+  });
+
   it('resize: высота контента (порог 48, потолок 20000), rAF-очередь', async () => {
     const project = { id: 'p1' } as Project;
     const host: Host = { i: 0, states: new Map(), refs: new Map(), cbs: new Map(), effects: new Map() };

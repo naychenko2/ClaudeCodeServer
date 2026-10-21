@@ -256,6 +256,8 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
   useEffect(() => {
     initedRef.current = false;
     setBridge('waiting');
+    // Плашка «Нет права …» относится к прежнему набору прав: новый фрейм — чистый лист.
+    setDeniedKey(null);
   }, [frameKey]);
 
   // === Таймаут ready: 3 с после монтирования iframe → bridge_timeout ===

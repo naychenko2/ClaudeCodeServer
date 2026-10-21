@@ -78,10 +78,16 @@ public class SessionManagerTests : IDisposable
         TestSessionBroadcaster inner, List<ServerMessage> sentMessages, object sentLock)
         : ClaudeHomeServer.Services.Composition.ISessionBroadcaster
     {
-        public Task ToSession(string sessionId, Protocol.ServerMessage message)
+        // Гейт медленного клиента: пока он не завершён, рассылка в session-группу «висит»
+        // (как SignalR Group.SendAsync при полном буфере клиента). Запись в sentMessages
+        // идёт ПОСЛЕ гейта — в списке только реально доставленное.
+        public Func<Protocol.ServerMessage, Task>? Gate { get; set; }
+
+        public async Task ToSession(string sessionId, Protocol.ServerMessage message)
         {
+            if (Gate is { } gate) await gate(message);
             lock (sentLock) sentMessages.Add(message);
-            return inner.ToSession(sessionId, message);
+            await inner.ToSession(sessionId, message);
         }
 
         // Except-канал — тот же единый поток чтения (Sent<T>): ручной ввод теперь
@@ -11678,4 +11684,182 @@ public class SessionManagerTests : IDisposable
     // Задать «task → чат-источник» (и статус) для sweep/SetParent-тестов.
     private void SetSutTasks(params (string TaskId, string? SourceSessionId, TaskItemStatus Status)[] items)
         => _sut.SetTaskLookupForTests(new StubTasks(items));
+
+    // === Очередь сообщений сессии (SessionMessagePipeline) ===
+
+    private Session AddPipelineSession(bool executor = false)
+    {
+        var session = new Session { ProjectId = null, OwnerId = TestUserId, TaskId = executor ? "task-1" : null };
+        _sut.AddSessionForTest(session);
+        return session;
+    }
+
+    [Fact]
+    public async Task Pipeline_МедленныйКлиент_ОбработчикВозвращаетсяБыстро_ПорядокСохранён()
+    {
+        var session = AddPipelineSession();
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _broadcaster.Gate = _ => release.Task;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var feed = Task.Run(async () =>
+        {
+            await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("a"));
+            await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("b"));
+            await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("c"));
+        });
+        await feed.WaitAsync(TimeSpan.FromSeconds(5)); // при синхронной рассылке повисло бы на гейте
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1));
+        Sent<TextDeltaMessage>().Should().BeEmpty("клиент ещё не принял ни одного кадра");
+
+        release.SetResult();
+        await _sut.DrainPipelineAsync(session.Id);
+
+        Sent<TextDeltaMessage>().Select(m => m.Text).Should().Equal("a", "b", "c");
+    }
+
+    [Fact]
+    public async Task Pipeline_МедленныйНаблюдатель_ResultДоходитПоследним_ПослеВсехПредыдущих()
+    {
+        var session = AddPipelineSession(executor: true);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seen = new List<string>();
+        _sut.OnSessionMessage += async (_, msg) =>
+        {
+            await release.Task;
+            lock (seen) seen.Add(msg.GetType().Name);
+        };
+
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("x"))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new ToolUseMessage("t1", "Read", JsonDocument.Parse("{}").RootElement))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new ResultMessage("success", 1, 1, null, null))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        lock (seen) seen.Should().BeEmpty("наблюдатель ещё не отпущен");
+
+        release.SetResult();
+        await _sut.DrainPipelineAsync(session.Id);
+
+        lock (seen) seen.Should().Equal(nameof(TextDeltaMessage), nameof(ToolUseMessage), nameof(ResultMessage));
+    }
+
+    [Fact]
+    public async Task Pipeline_УдалениеСессии_ДренируетОчередьДоResult()
+    {
+        var session = AddPipelineSession(executor: true);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seen = new List<string>();
+        _sut.OnSessionMessage += async (_, msg) =>
+        {
+            await release.Task;
+            lock (seen) seen.Add(msg.GetType().Name);
+        };
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("x"));
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new ResultMessage("success", 1, 1, null, null));
+
+        var delete = _sut.DeleteAsync(session.Id);
+        await Task.WhenAny(delete, Task.Delay(300));
+        delete.IsCompleted.Should().BeFalse("удаление ждёт дренажа очереди, а наблюдатель ещё держит Result");
+
+        release.SetResult();
+        await delete.WaitAsync(TimeSpan.FromSeconds(5));
+
+        lock (seen) seen.Should().Equal(nameof(TextDeltaMessage), nameof(ResultMessage));
+    }
+
+    [Fact]
+    public async Task Pipeline_Переполнение_ДельтыСливаются_ToolUseИResultДоходятВПорядке()
+    {
+        var session = AddPipelineSession();
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _broadcaster.Gate = _ =>
+        {
+            started.TrySetResult();
+            return release.Task;
+        };
+
+        // Первая дельта повисает у «клиента», остальные заполняют очередь и сверх ёмкости сливаются
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("0"));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // Дельты не блокируют писателя: при полной очереди лишние сливаются. Потолок ожидания
+        // превращает «зависло на back-pressure» (слив сломан) в красный тест, а не в повисший прогон
+        await Task.Run(async () =>
+        {
+            for (var i = 1; i < 5000; i++)
+                await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage(i.ToString()));
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Редкие кадры не сливаются и писателя не блокируют: кладутся даже в «полную» очередь
+        await Task.Run(async () =>
+        {
+            await _sut.OnMessageQueuedAsync(session.Id, acc, new ToolUseMessage("t1", "Read", JsonDocument.Parse("{}").RootElement));
+            await _sut.OnMessageQueuedAsync(session.Id, acc, new ResultMessage("success", 1, 1, null, null));
+        }).WaitAsync(TimeSpan.FromSeconds(5));
+
+        release.SetResult();
+        await _sut.DrainPipelineAsync(session.Id);
+
+        var deltas = Sent<TextDeltaMessage>().Select(m => int.Parse(m.Text)).ToList();
+        deltas.Count.Should().BeLessThan(5000, "дельты сверх ёмкости очереди слиты");
+        deltas.Should().BeInAscendingOrder("порядок оставшихся дельт не нарушен");
+        var all = Sent<ServerMessage>();
+        var toolIdx = all.FindIndex(m => m is ToolUseMessage);
+        var resultIdx = all.FindIndex(m => m is ResultMessage);
+        toolIdx.Should().BeGreaterThan(-1, "ToolUse не теряется");
+        resultIdx.Should().BeGreaterThan(toolIdx, "Result дошёл после ToolUse");
+        all.FindLastIndex(m => m is TextDeltaMessage).Should().BeLessThan(toolIdx);
+    }
+
+    [Fact]
+    public async Task Pipeline_ОдинПотребитель_ПорядокНеЛомаетсяЗадержкойПервогоКадра()
+    {
+        var session = AddPipelineSession();
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var second = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _broadcaster.Gate = async msg =>
+        {
+            if (msg is TextDeltaMessage { Text: "1" }) await release.Task;
+            else second.TrySetResult();
+        };
+
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("1"));
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("2"));
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("3"));
+        // Второй потребитель (если бы он был) разобрал бы «2» не дожидаясь «1»
+        await Task.WhenAny(second.Task, Task.Delay(300));
+        release.SetResult();
+        await _sut.DrainPipelineAsync(session.Id);
+
+        Sent<TextDeltaMessage>().Select(m => m.Text).Should().Equal("1", "2", "3");
+    }
+
+    [Fact]
+    public async Task Pipeline_НаблюдательКладётКадрыВТуЖеСессию_ТупикаНет()
+    {
+        var session = AddPipelineSession(executor: true);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        const int Count = 2500;
+        _sut.OnSessionMessage += async (_, msg) =>
+        {
+            if (msg is not ResultMessage) return;
+            // Из потока потребителя кладём в очередь той же сессии больше ёмкости несливаемых кадров
+            for (var i = 0; i < Count; i++)
+                await _sut.OnMessageQueuedAsync(session.Id, acc, new ToolUseMessage("t" + i, "Read", JsonDocument.Parse("{}").RootElement));
+            finished.TrySetResult();
+        };
+
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new ResultMessage("success", 1, 1, null, null));
+
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await _sut.DrainPipelineAsync(session.Id).WaitAsync(TimeSpan.FromSeconds(10));
+        Sent<ToolUseMessage>().Should().HaveCount(Count, "несливаемые кадры не теряются");
+    }
 }

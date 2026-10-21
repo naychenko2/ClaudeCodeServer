@@ -483,6 +483,12 @@ builder.Services.AddSingleton<PersonaBindingsService>();
 // секций промпта из чужих вертикалей (CodeGraph → codegraph). Без шва вертикаль
 // CodeGraph тянула бы root Services напрямую — запрет архитектуры.
 builder.Services.AddSingleton<IPersonaServerToolGate>(sp => sp.GetRequiredService<PersonaBindingsService>());
+// QA-фикс L3: форвардер IPersonaPluginBindingPurger → PersonaBindingsService — каскад
+// Plugins (PluginInstallCascade) снимает Skill-привязки plugin:{id} персон владельца, не
+// ссылаясь на Main напрямую (ADR-014). Регистрация неусловная: шов нужен, только когда
+// подсистема Plugins включена, но адаптер stateless и дёшево живёт всегда (как IPersonaServerToolGate).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Plugins.IPersonaPluginBindingPurger,
+    ClaudeHomeServer.Services.Composition.PluginBindingPurgerAdapter>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftService>();
@@ -716,6 +722,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // Контекст чата для агента (ADR-023 §3.2): context_state / context_attach / context_detach; сессия — хвостом
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.TurnContextToolset>();
+// Плагины (ADR-031): тулсет — НЕусловно (Main), а не в PluginsSubsystem.Register: при
+// выключенной подсистеме сервер plugins обязан остаться в наборе (состав tools/list стабилен,
+// вызов — честный отказ). PluginDraftService — опциональная зависимость тулсета (null при
+// выключенной подсистеме); остальные зависимости (IMcpSessionAccessor/IProjectManager) — спина.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Plugins.Mcp.PluginsToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают
@@ -999,7 +1011,12 @@ builder.Services.AddSubsystems(builder.Configuration,
     // CLI «npx skills»). Регистрируется после Notes: порядок с Task/Notes не связан
     // (Skills — листовая, единственный шов `SessionManager → SkillsService` остаётся
     // до этапа 4 — расщепление SessionManager).
-    new ClaudeHomeServer.Services.Skills.SkillsSubsystem());
+    new ClaudeHomeServer.Services.Skills.SkillsSubsystem(),
+    // Plugins (ADR-031, шаг 1.2) — вертикаль плагинов владельца: хранилище
+    // (PluginStore) и IPluginDirSource (каталоги для --plugin-dir). Листовая:
+    // потребители (ClaudeSession, мост панели) берут IPluginDirSource/IPluginCapability
+    // опционально через Core-швы, порядок с остальными не связан.
+    new ClaudeHomeServer.Services.Plugins.PluginsSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error

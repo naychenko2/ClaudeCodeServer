@@ -20,8 +20,10 @@ import type { SubsystemManifest } from './registryCore';
 import { loadRemote, registerRemotes } from '@module-federation/runtime';
 import { api } from '../api';
 // Статические фичи (пока не MF-remote): side-effect-импорт регистрирует манифест
-// при загрузке реестра. «Локальные модели» — панель правого рельса, гейт — у фичи
+// при загрузке реестра. «Локальные модели» — панель правого рельса, гейт — у фичи;
+// «Плагины» — вклад в ленту чата (карточка черновика build-it-yourself)
 import '../../features/localModel/registry';
+import '../../features/plugins/registry';
 
 // ===== Загрузка subsystem-remotes через Module Federation =====
 

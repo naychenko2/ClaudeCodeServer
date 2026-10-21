@@ -129,6 +129,10 @@ public class SubsystemBoundaryTests
         // TestRuns — отдельная сборка (движок run_tests): без форс-загрузки сторож прошёл бы
         // по ней вакуумно — Main трогает её только из тулсета tests.
         _ = typeof(ClaudeHomeServer.Services.TestRuns.TestRunsSubsystem).Assembly;
+        // Plugins (ADR-031) — отдельная сборка: без форс-загрузки сторож прошёл бы
+        // по ней вакуумно (Main трогает её только через AddSubsystems, а тесты —
+        // только через юниты PluginStore).
+        _ = typeof(ClaudeHomeServer.Services.Plugins.PluginsSubsystem).Assembly;
     }
 
     /// <summary>Запись границы одной вертикали: имя (для отчёта), корневой namespace
@@ -1483,6 +1487,25 @@ public class SubsystemBoundaryTests
                     .ToArray(),
                 Array.Empty<string>()),
         },
+        // Plugins (ADR-031) — вертикаль плагинов владельца. Allow-list дефолтный (спинка +
+        // сама вертикаль): все внешние зависимости закрыты Core — IPluginDirSource/
+        // IPluginCapability (швы), PluginInstall/Project/ProjectCapabilities (Models),
+        // SafePath/JsonFileStore (примитивы), IPersonaSkillBindingLookup (шов) — всё
+        // в Core.dll, ловится IsCoreAssembly. Точечных допусков нет: вертикаль не
+        // ссылается ни на Notes, ни на Tasks (обработчики прав — через IPluginCapability).
+        new object[]
+        {
+            new VerticalBoundary(
+                "Plugins",
+                "ClaudeHomeServer.Services.Plugins",
+                SharedAllowedPrefixes
+                    .Concat(new[]
+                    {
+                        "ClaudeHomeServer.Services.Plugins",
+                    })
+                    .ToArray(),
+                Array.Empty<string>()),
+        },
         // TurnAutoResume — чистая функция отбора кандидатов на авто-возобновление ходов
         // (флаг turn-auto-resume). Микро-вертикаль без IAppSubsystem: одна статическая
         // функция + record результата. Зависимости — только Core (Models: Session, Project).
@@ -1847,6 +1870,13 @@ public class SubsystemBoundaryTests
         // (запрет символических ссылок в путях проекта). Перенесены из Services.ImageEditor.
         "ClaudeHomeServer.Services.Higgsfield",
         "ClaudeHomeServer.Services.Media",
+        // ADR-031 (шаг 1.1): швы плагинов — IPluginDirSource (каталоги для --plugin-dir)
+        // и IPluginCapability (обработчик права) + DTO PluginCallContext/PluginCapabilityResult/
+        // PluginCallError. Живут в Core, чтобы Llm (ClaudeSession) и вертикали-владельцы прав
+        // (Notes/Tasks) брали их без ProjectReference на вертикаль Plugins. Тот же namespace
+        // `ClaudeHomeServer.Services.Plugins` теперь разделяет Core (швы) и Plugins.dll
+        // (вертикаль) — осознанно, как у Skills (Core-швы + вертикаль).
+        "ClaudeHomeServer.Services.Plugins",
     ];
 
     /// <summary>

@@ -42,6 +42,7 @@ import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { autoNavigateToContinued } from '../lib/chatContinue';
 import { useWatchdogPresence } from '../lib/watchdogPresence';
+import { acceptDraftReplyByChat } from '../lib/draftReply';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -207,6 +208,25 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     };
     window.addEventListener('cc-open-chat', open);
     return () => window.removeEventListener('cc-open-chat', open);
+  }, []);
+
+  // «Править»/«Попросить агента исправить» из карточки черновика в ленте: готовая реплика
+  // → поле ввода ТОГО чата, в чьей ленте нарисована карточка (cc-compose-prefill), не
+  // отправляется сама. Событие несёт chatId карточки; принимаем, только если chatId = id
+  // активного чата. Проект не сравниваем: черновик может быть из проекта, а чат — вне
+  // проекта (сравнение проектов роняло реплику в чате вне проекта). Ref — чтобы handler
+  // видел свежий activeId без перерегистрации слушателя на каждом обновлении списка.
+  const activeIdRef = useRef<string | null>(null);
+  activeIdRef.current = activeId;
+  useEffect(() => {
+    const onDraftReply = (e: Event) => {
+      const { chatId, reply } = (e as CustomEvent<{ chatId?: unknown; reply?: string }>).detail ?? {};
+      if (!acceptDraftReplyByChat(chatId, activeIdRef.current, reply)) return;
+      sessionStorage.setItem('cc_pending_chat_prompt', reply!);
+      window.dispatchEvent(new Event('cc-compose-prefill'));
+    };
+    window.addEventListener('cc-draft-reply', onDraftReply);
+    return () => window.removeEventListener('cc-draft-reply', onDraftReply);
   }, []);
 
   const selectChat = (chat: Session) => {

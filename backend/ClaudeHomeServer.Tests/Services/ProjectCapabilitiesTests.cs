@@ -319,4 +319,25 @@ public class ProjectCapabilitiesTests
             .And.NotContain("агент обновляется");
         if (reason is not null) gate.Reason.Should().Contain(reason);
     }
+
+    // --- Плагины (ADR-031 §5.8): у локального проекта в MVP выключены, у серверного — нет ---
+
+    [Fact]
+    public void СерверныйПроект_ПлагиныДоступны()
+    {
+        var caps = ProjectCapabilities.For(Server(), null);
+
+        caps.Plugins.Available.Should().BeTrue();
+        caps.Plugins.Reason.Should().BeNull();
+    }
+
+    [Fact]
+    public void ЛокальныйПроект_ПлагиныВыключеныСЧитаемойПричиной()
+    {
+        var caps = ProjectCapabilities.For(Local(), Device(caps: [DeviceCapabilities.Exec, DeviceCapabilities.Files]));
+
+        caps.Plugins.Available.Should().BeFalse();
+        caps.Plugins.Reason.Should().Be(ProjectCapabilities.PluginsLocalOffReason);
+        caps.Plugins.Reason.Should().NotBeNullOrEmpty("причина читаемая для человека");
+    }
 }

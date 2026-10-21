@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
 import { ProjectFeature } from '../types';
@@ -30,6 +30,7 @@ import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFil
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
 import { useWatchdogPresence } from '../lib/watchdogPresence';
+import { acceptDraftReplyInWorkspace } from '../lib/draftReply';
 import { C, FONT } from '../lib/design';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
@@ -37,6 +38,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
+import { PluginFrame, useHasInstalledPlugins, useInstalledPlugins } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
@@ -128,6 +130,8 @@ const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
   // Пазл — та же метафора, что у панели «Навыки» в рельсе (PANEL_META.skills)
   skills: <Puzzle size={18} strokeWidth={2} />,
   tools: leftTabSvg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>),
+  // Панели плагинов: на мобиле рельсы нет, вкладка — единственный путь (как skills/tools)
+  plugins: <Plug size={18} strokeWidth={2} />,
 };
 
 function useWindowWidth() {
@@ -323,6 +327,14 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // достаточно не передавать `notes` в panels (см. блок ниже). Здесь же
   // подписка на стор подсистем нужна — она же читается гейтом.
   const notesEnabled = useSubsystem(SUBSYSTEMS.notes)
+  // Панели плагинов (ADR-031, гейт V5): слот появляется, только когда у проекта есть
+  // хотя бы один установленный плагин. M4: список грузим здесь (а не только в секции
+  // настроек) — иначе стор пуст до первого открытия настроек, и слот «не виден сразу».
+  // Гейт: флаг plugins-mvp + локальность (ProjectCapabilities.Plugins).
+  const pluginsMvp = useFeature(FLAGS.pluginsMvp)
+  const pluginsAvail = useProjectFeature(project, ProjectFeature.Plugins)
+  useInstalledPlugins(project.id, pluginsMvp && pluginsAvail)
+  const hasPlugins = useHasInstalledPlugins(project.id)
   // Панель «Заметки проекта» — вклад слота workspace-panel (ноль прямых импортов фичи).
   const notesPanel = useSlotItem<WorkspacePanelNotesCtx>('workspace-panel', 'project-notes')
   // Панели подсистем (слот workspace-panel-def, например «Персонажи» редактора картинок):
@@ -368,6 +380,29 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const handleSessionsListChanged = useCallback((list: Session[]) => setSessions(list), []);
   const availableSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
+  // «Попросить агента исправить» из настроек проекта (PluginsProjectSection → EditDialog) и из
+  // карточки черновика в ленте: готовая реплика кладётся в ПОЛЕ ВВОДА активного чата (префилл),
+  // а не отправляется (документация: «кладёт готовую просьбу в поле ввода, но не отправляет её
+  // за вас»). Префилл — тем же механизмом, что ChatsPage: cc_pending_chat_prompt +
+  // cc-compose-prefill (Composer.setText), а не setPendingMessage → ChatPanel.send (автосабмит).
+  //
+  // Два источника события: (1) карточка черновика в ленте — несёт chatId чата, в чьей ленте она
+  // нарисована; принимаем, только если chatId = активный чат этого воркспейса (activeSession) —
+  // проект НЕ сравниваем (черновик может быть из проекта, а чат — вне проекта). (2) настройки
+  // проекта — несут project; принимаем, если project = этот проект (прежний путь). Ref — чтобы
+  // handler видел свежий activeSession без перерегистрации слушателя.
+  useEffect(() => {
+    const onDraftReply = (e: Event) => {
+      const { chatId, project: p, reply } = (e as CustomEvent<{ chatId?: unknown; project?: { id?: string }; reply?: string }>).detail ?? {};
+      // Решение (MAJOR-3) — в чистой функции: приём по chatId (активный чат) или по проекту
+      // (настройки проекта). Реплика кладётся в поле ввода (префилл), а не отправляется.
+      if (!acceptDraftReplyInWorkspace(chatId, activeSessionRef.current?.id, reply, p?.id, project.id)) return;
+      sessionStorage.setItem('cc_pending_chat_prompt', reply!);
+      window.dispatchEvent(new Event('cc-compose-prefill'));
+    };
+    window.addEventListener('cc-draft-reply', onDraftReply);
+    return () => window.removeEventListener('cc-draft-reply', onDraftReply);
+  }, [project.id]);
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
   // Файл открыт из git-панели «Изменения» → FileViewer стартует на вкладке Diff
   const [openFileDiffMode, setOpenFileDiffMode] = useState(false);
@@ -476,6 +511,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
 
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
+  // «Открыть в «Плагинах»» (карточка черновика в ленте/настройках): существующий способ —
+  // раскрыть диалог настроек проекта, где секция плагинов (тот же приём, что onOpenPlugins у PluginFrame).
+  useEffect(() => {
+    const open = () => setEditProjectOpen(true);
+    window.addEventListener('cc-open-plugins', open);
+    return () => window.removeEventListener('cc-open-plugins', open);
+  }, []);
   // Сохранение секции настроек (тумблер рук, MCP, устройство) — и диалогу, и проекту, который
   // видят чаты: иначе они держат прежний объект до перезагрузки страницы
   const handleProjectUpdated = useCallback((updated: Project) => {
@@ -901,6 +943,8 @@ const windowWidth = useWindowWidth();
     // На мобиле рельсы панелей проекта нет, и ящик рельсы не работает — поэтому
     // Терминал/Сервисы доступны только через эту вкладку (на десктопе они панелями)
     { value: 'tools', label: 'Инструменты', icon: LEFT_TAB_ICONS.tools },
+    // Панели плагинов: на мобиле рельсы нет, вкладка — единственный путь (как skills/tools)
+    ...(hasPlugins ? [{ value: 'plugins' as const, label: 'Плагины', icon: LEFT_TAB_ICONS.plugins }] : []),
   ];
 
   // Если текущий таб внезапно пропал (capabilities обновились) — откатываемся на «Чаты»,
@@ -2041,6 +2085,8 @@ const windowWidth = useWindowWidth();
                   onRefreshServices={refreshServices} onStartService={startService}
                   onStopService={stopService} onSelectPreview={handleSelectPreview}
                   terminalBusy={terminalBusy} />
+              : leftTab === 'plugins'
+              ? <PluginFrame project={project} onOpenPlugins={() => setEditProjectOpen(true)} onClose={() => setLeftTab('sessions')} />
               : leftTab === 'knowledge'
               ? <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} />
               : (
@@ -2281,6 +2327,14 @@ const windowWidth = useWindowWidth();
             terminal: <DeviceAgentGate project={project}><TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} /></DeviceAgentGate>,
             preview: <DeviceAgentGate project={project}><PreviewPanelContent projectId={project.id} project={project} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} /></DeviceAgentGate>,
             video: <VideoPanel />,
+            // Панели плагинов (ADR-031, гейт V5): только когда есть установленные плагины
+            ...(hasPlugins ? {
+              pluginPanels: <PluginFrame
+                project={project}
+                onOpenPlugins={() => setEditProjectOpen(true)}
+                onClose={() => closePanelKey('pluginPanels')}
+              />
+            } : {}),
             ...(activeSession ? {
               chatContext: <ContextPanelHost session={activeSession} project={project}
                 onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,

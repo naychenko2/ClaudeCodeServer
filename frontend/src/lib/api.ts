@@ -588,6 +588,218 @@ export function setStoredToken(token: string) {
   else sessionStorage.setItem('cc_token', token);
 }
 
+// === Плагины владельца (ADR-031, вертикаль ClaudeHomeServer.Plugins) ===
+// DTO зеркалит PluginResponse.cs: значения секретов наружу НЕ едут — только имя
+// + признак «заполнен» (M7). id — {publisher}/{slug}; в URL — один сегмент publisher~slug
+// (бэк нормализует ~ → /), поэтому urlId кодирует разделитель.
+export interface PluginSecretView {
+  name: string;
+  set: boolean;
+  // Время последнего изменения (шаг 3.3): для бейджа «задан · {дата}». Значение не едет.
+  updatedAt?: string | null;
+}
+export interface PluginInfo {
+  id: string;
+  version: string;
+  sha256: string;
+  requested: string[];
+  granted: string[];
+  enabled: boolean;
+  source: string;
+  secrets: PluginSecretView[];
+  // Вклады пакета (contributes из манифеста): нужны, чтобы слот панели выбирал
+  // плагин, у которого панель объявлена, а не просто первый включённый.
+  // panels — {id, title, entry}; entry — путь панели относительно корня пакета
+  // (контракт GET /api/plugins/{id}/{ver}/assets/{entry}, ADR-031 §3.1).
+  contributes?: { panels?: PluginPanelView[] };
+}
+// Панель пакета (contributes.panels из манифеста, ADR-031 §2.1): id + title + entry.
+// entry — путь относительно **корня пакета** (например panel/index.html), тот же
+// контракт пути, что у GET /api/plugins/{id}/{ver}/assets/{entry} (catch-all {**path}).
+// slot в ответ списка не отдаётся (UI не использует) — см. CLAUDE.md вертикали, REST.
+export interface PluginPanelView {
+  id: string;
+  title: string;
+  entry: string;
+}
+// Тело POST /api/plugins/{id}/grant: выданные права (подмножество requested) + значения секретов
+// value: null — явное удаление секрета; не присланный (нет в списке) бэк не трогает («изменить», не «заменить»)
+export interface PluginGrantSecret {
+  name: string;
+  value: string | null;
+}
+export interface PluginPermissionsView {
+  requested: string[];
+  granted: string[];
+}
+
+// === Черновики build-it-yourself (ADR-031, шаги 4.3a/4.3b/4.3c, вертикаль Plugins) ===
+// DTO зеркалит PluginDraftService/PluginDraftDiff. Ключи camelCase — глобальная
+// JSON-политика MVC (типы без [JsonPropertyName] сериализуются дефолтом Web).
+// Значения секретов наружу не едут: только имя + признак «обязательный».
+
+// Сводка черновика для списка (GET /api/plugins/drafts): активные + отклонённые
+export interface PluginDraftSummary {
+  slug: string;
+  id: string;
+  version: string;
+  updatedAt: string;
+  // Число проблем последней проверки (валидатор пакета)
+  problems: number;
+  // Есть ли запись installed.json с тем же Id+Version
+  installedSameVersion: boolean;
+  // true — отклонён (в _rejected/{slug}); у активных false
+  rejected: boolean;
+  // Когда отклонённый исчезнет (rejectedAt + 30 дней); у активных null
+  expiresAt: string | null;
+}
+// Панель в предпросмотре (PluginDraftPanel)
+export interface PluginDraftPanelView {
+  id: string;
+  slot: string;
+  title: string;
+}
+// Секрет в предпросмотре (PluginDraftSecret): имя + признак «обязательный»
+// + задан ли у установленного плагина (QA-фикс R; отсутствие = старое поведение, false)
+export interface PluginDraftSecretView {
+  name: string;
+  required: boolean;
+  // Задан ли секрет у установленного плагина с тем же id (бэк QA-фикс R).
+  // Отсутствие (старый сервер) = false.
+  set?: boolean;
+}
+// Файл в предпросмотре (PluginDraftFile): путь, каталог/файл, размер
+export interface PluginDraftFileView {
+  path: string;
+  isDir: boolean;
+  size: number;
+}
+// Проблема валидатора (PluginDraftProblem)
+export interface PluginDraftProblemView {
+  code: string;
+  message: string;
+}
+// Предпросмотр черновика (GET /api/plugins/drafts/{slug}/preview)
+export interface PluginDraftPreview {
+  slug: string;
+  name: string;
+  version: string;
+  panels: PluginDraftPanelView[];
+  commands: string[];
+  skills: string[];
+  requestedPermissions: string[];
+  secrets: PluginDraftSecretView[];
+  files: PluginDraftFileView[];
+  validation: { isValid: boolean; problems: PluginDraftProblemView[] };
+  // Версия установленного плагина с тем же id (QA-фикс R); null/отсутствие = первая установка
+  installedVersion?: string | null;
+}
+// Строка diff (PluginDraftDiffLine): kind = ctx/del/add
+export interface PluginDraftDiffLine {
+  oldLine: number;
+  newLine: number;
+  kind: 'ctx' | 'del' | 'add';
+  text: string;
+}
+// Файл в diff (PluginDraftDiffFile): binary/truncated → содержимое подавлено
+export interface PluginDraftDiffFile {
+  path: string;
+  size: number;
+  binary: boolean;
+  truncated: boolean;
+  lines: PluginDraftDiffLine[] | null;
+}
+// Секрет в diff (PluginDraftDiffSecret)
+export interface PluginDraftDiffSecret {
+  name: string;
+  required: boolean;
+}
+// Разница манифеста (PluginDraftDiffManifest): права и секреты
+export interface PluginDraftDiffManifest {
+  permissionsAdded: string[];
+  permissionsRemoved: string[];
+  secretsAdded: PluginDraftDiffSecret[];
+  secretsRemoved: PluginDraftDiffSecret[];
+  secretsRequiredChanged: PluginDraftDiffSecret[];
+}
+// Сравнение черновика с установленной версией (GET /api/plugins/drafts/{slug}/diff)
+export interface PluginDraftDiff {
+  status: 'new' | 'updated';
+  slug: string;
+  id: string;
+  version: string;
+  installedVersion: string | null;
+  // Суммарный потолок diff (1000 строк) превышен
+  truncated: boolean;
+  added: PluginDraftDiffFile[];
+  removed: PluginDraftDiffFile[];
+  modified: PluginDraftDiffFile[];
+  // null, если статус "new"
+  manifest: PluginDraftDiffManifest | null;
+}
+// Ответ «Принять» (POST /api/plugins/drafts/{slug}/accept)
+export interface PluginDraftAcceptResult {
+  id: string;
+  version: string;
+  sha256: string;
+  source: string;
+  enabled: boolean;
+  requested: string[];
+  granted: string[];
+  // true + newPermissions — только если обновление добавило новые запрошенные права
+  consentRequired: boolean;
+  newPermissions: string[];
+  // Глеб MAJOR-1: права, которые переходят на новое содержимое при обновлении (пусто, если
+  // не обновление). consentRequired=true и когда newPermissions пуст, но у установленного
+  // плагина есть выданные — диалог показывает блок «уже выданные» и требует явного подтверждения.
+  // Старый сервер поле не отдаёт → undefined → фронт считает [] (не падать).
+  inheritedPermissions?: string[];
+  // Глеб MAJOR 4: признак обновления уже установленного плагина (true) vs первая установка
+  // (false). Старый сервер поле не отдаёт → undefined → фронт считает false (режим install).
+  isUpdate?: boolean;
+  // Версия, на которую плагин был установлен ДО этого accept (null при первой установке)
+  previousVersion?: string | null;
+  secrets: PluginSecretView[];
+}
+// Ответ «Отклонить» (POST /api/plugins/drafts/{slug}/reject)
+export interface PluginDraftRejectResult {
+  slug: string;
+  rejectedAt: string;
+  expiresAt: string;
+}
+// Ответ «Вернуть» (POST /api/plugins/drafts/{slug}/restore)
+export interface PluginDraftRestoreResult {
+  slug: string;
+  restored: boolean;
+}
+
+// id → сегмент URL: publisher/slug → publisher~slug (M1: один сегмент маршрута)
+function pluginUrlId(id: string): string {
+  return id.replace(/\//g, '~');
+}
+
+// entry панели из манифеста (contributes.panels[].entry) — НЕДОВЕРЕННЫЙ источник
+// (пакет собрал агент). Без проверки подстановка `.../assets/${entry}` позволяла
+// `../../../../api/plugins/drafts` увести запрос с Bearer пользователя на чужой маршрут
+// (обход allow-list `panel/**`). Принимаем только форму `panel/...`: первый сегмент
+// «panel», остальные — обычные имена (без «.», «..», пустых); в строке нет «\», «?»,
+// «#», «%», управляющих символов (C0/C1) и схемы (двоеточие в первом сегменте).
+// Каждый сегмент кодируем encodeURIComponent ПОСЛЕ проверки — иначе «..» переживёт
+// кодировку. null — entry невалиден (запрос не делаем, понятная ошибка в PluginFrame).
+export function panelEntryPath(entry: unknown): string | null {
+  if (typeof entry !== 'string') return null;
+  if (/[\\?#%]/.test(entry)) return null;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(entry)) return null;
+  const segs = entry.split('/');
+  if (segs.length < 2) return null;
+  if (segs[0] !== 'panel') return null;
+  if (/:/.test(segs[0])) return null;
+  for (const s of segs) {
+    if (s === '' || s === '.' || s === '..') return null;
+  }
+  return segs.map(s => encodeURIComponent(s)).join('/');
+}
+
 // Projects
 export const api = {
   auth: {
@@ -871,6 +1083,118 @@ export const api = {
       }),
     // Отзыв: запись остаётся надгробием, токен устройства умирает немедленно
     revoke: (id: string) => request<void>(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+
+  // Плагины владельца (ADR-031 §2.3, §4). Гейты бэка: подсистема выключена → 503,
+  // флаг plugins-mvp off → 403; install/grant/uninstall/тумблер — только пользовательский
+  // JWT (сервисный → 403). Секреты: значение не возвращается, только {name, set}.
+  plugins: {
+    // Список установленных (DTO без значений секретов)
+    list: () => request<PluginInfo[]>('/plugins'),
+    // Принять пакет по метке источника: draft:{slug} | upload:{id} | catalog:{ref}
+    install: (source: string) =>
+      request<PluginInfo>('/plugins/install', { method: 'POST', body: JSON.stringify({ source }) }),
+    // Выдать права (подмножество requested) и ввести значения секретов
+    grant: (id: string, permissions: string[], secrets: PluginGrantSecret[]) =>
+      request<PluginPermissionsView>(`/plugins/${pluginUrlId(id)}/grant`, {
+        method: 'POST', body: JSON.stringify({ permissions, secrets }),
+      }),
+    // Значение секрета (шаг 3.3, UI 3.4): PUT /secrets/{name}, значение в теле.
+    // Сервер вернул {name, set, updatedAt} — значение наружу не уходит.
+    setSecret: (id: string, name: string, value: string) =>
+      request<{ name: string; set: boolean; updatedAt: string }>(
+        `/plugins/${pluginUrlId(id)}/secrets/${encodeURIComponent(name)}`,
+        { method: 'PUT', body: JSON.stringify({ value }) },
+      ),
+    // Убрать значение секрета: DELETE /secrets/{name} → {name, set:false}
+    deleteSecret: (id: string, name: string) =>
+      request<{ name: string; set: boolean }>(
+        `/plugins/${pluginUrlId(id)}/secrets/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      ),
+    // Удалить пакет и запись (каскад)
+    uninstall: (id: string) =>
+      request<{ id: string; removed: boolean }>(`/plugins/${pluginUrlId(id)}/uninstall`, { method: 'POST' }),
+    // requested + granted для диалога согласия/редактирования
+    permissions: (id: string) =>
+      request<PluginPermissionsView>(`/plugins/${pluginUrlId(id)}/permissions`),
+    // Тумблер включения: выключенный не даёт --plugin-dir и не монтирует панели
+    setEnabled: (id: string, enabled: boolean) =>
+      request<{ id: string; enabled: boolean }>(`/plugins/${pluginUrlId(id)}/${enabled ? 'enable' : 'disable'}`, {
+        method: 'POST',
+      }),
+    // Вызов операции моста (ADR-031 §3.4). Тело HTTP-запроса — РОВНО {capability, args, projectId}
+    // (контракт бэкенда, PluginCallContractTests): capability — имя операции (внутренне в мосту
+    // это `op`, но в HTTP — capability), args — объект, projectId — проект слота (null — вне проекта).
+    // Лишних полей (op, context) сервер не принимает. Ответ — {ok, result?} | {ok:false, error:{code,
+    // message}}; коды error — ADR §3.4 (denied/not_found/invalid/unavailable/upstream/timeout/limit).
+    call: (id: string, body: { capability: string; args: Record<string, unknown>; projectId: string | null }) =>
+      request<{ ok: boolean; result?: unknown; error?: { code: string; message: string } }>(
+        `/plugins/${pluginUrlId(id)}/call`,
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    // HTML панели пакета (ADR-031 §3.1): хост забирает его по REST с user JWT
+    // (навигация iframe не несёт Authorization) и сам строит srcdoc. entry — путь
+    // панели из манифеста (contributes.panels[].entry, например panel/index.html);
+    // маршрут {**path} — catch-all, слэши entry остаются литеральными. entry —
+    // недоверенный (пакет собрал агент): валидируем form'ой panel/... (panelEntryPath)
+    // и кодируем сегменты, иначе «..»/«?»/«#» уведут запрос на чужой маршрут.
+    // Прямой fetch (не request()): ответ — текст, а не JSON, и request() упёрся бы
+    // в JSON.parse. 404 — у плагина нет панели (макет 3, «пусто»).
+    panelHtml: async (id: string, version: string, entry: string): Promise<string> => {
+      // entry из недоверенного манифеста: валидируем ДО запроса (иначе «..»/«?»/«#»
+      // уводят запрос на чужой маршрут). Невалидно — понятная ошибка, запрос не идёт.
+      const path = panelEntryPath(entry);
+      if (path === null) throw new Error('Панель плагина указана неверно');
+      const token = readStoredToken();
+      const res = await fetch(
+        `/api/plugins/${pluginUrlId(id)}/${encodeURIComponent(version)}/assets/${path}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error ?? res.statusText) as Error & { status?: number };
+        e.status = res.status;
+        throw e;
+      }
+      return res.text();
+    },
+
+    // === Черновики build-it-yourself (шаги 4.3a/4.3b/4.3c). Гейты бэка:
+    // подсистема выключена → 503, plugins-mvp/plugins-build-yourself off → 403,
+    // сервисный JWT → 403, чужой/несуществующий черновик → 404 ===
+    // Список черновиков владельца (активные + отклонённые)
+    draftsList: () => request<PluginDraftSummary[]>('/plugins/drafts'),
+    // Предпросмотр черновика: вклады, запрошенные права, секреты, файлы, результат проверки
+    draftPreview: (slug: string) =>
+      request<PluginDraftPreview>(`/plugins/drafts/${encodeURIComponent(slug)}/preview`),
+    // Сравнение черновика с последней установленной версией того же id (diff)
+    draftDiff: (slug: string) =>
+      request<PluginDraftDiff>(`/plugins/drafts/${encodeURIComponent(slug)}/diff`),
+    // Принять черновик: установка по метке draft:{slug}; права НЕ выдаёт
+    draftAccept: (slug: string) =>
+      request<PluginDraftAcceptResult>(`/plugins/drafts/${encodeURIComponent(slug)}/accept`, { method: 'POST' }),
+    // Отклонить черновик: перенос в _rejected/{slug}
+    draftReject: (slug: string) =>
+      request<PluginDraftRejectResult>(`/plugins/drafts/${encodeURIComponent(slug)}/reject`, { method: 'POST' }),
+    // Вернуть отклонённый черновик обратно в _drafts/{slug}
+    draftRestore: (slug: string) =>
+      request<PluginDraftRestoreResult>(`/plugins/drafts/${encodeURIComponent(slug)}/restore`, { method: 'POST' }),
+    // Панель черновика для предпросмотра (GET /api/plugins/drafts/{slug}/panel, шаг 4.3d):
+    // сырой HTML, как panelHtml (текст ответа)
+    draftPanel: async (slug: string): Promise<string> => {
+      const token = readStoredToken();
+      const res = await fetch(`/api/plugins/drafts/${encodeURIComponent(slug)}/panel`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error ?? res.statusText) as Error & { status?: number };
+        e.status = res.status;
+        throw e;
+      }
+      return res.text();
+    },
   },
 
   providers: {

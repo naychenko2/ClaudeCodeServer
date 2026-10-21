@@ -17,7 +17,7 @@
 import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic, Cpu,
+  TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic, Cpu, Plug,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
@@ -55,6 +55,9 @@ export const PANEL_KEYS = [
   // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
   // а в рельсе их не разглядеть.
   'video',
+  // Панели плагинов (ADR-031, флаг plugins-mvp): слот появляется, только когда у
+  // проекта есть хотя бы один установленный плагин (гейт V5 — в WorkspacePage).
+  'pluginPanels',
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
 ] as const;
@@ -132,6 +135,9 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
   preview:  { title: 'Сервисы',   Icon: AppWindow },
   video:    { title: 'Эфир',      Icon: MonitorPlay },
+  // Панели плагинов (ADR-031): слот в боковой колонке; появляется, только когда
+  // у проекта есть установленные плагины (гейт V5 — в WorkspacePage).
+  pluginPanels: { title: 'Панели плагинов', Icon: Plug },
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)
@@ -180,6 +186,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   // Справа, как «Сервисы»: слева живёт список чатов, а эфир рядом с ним отнимал бы
   // место у навигации — смотрят его сбоку от ленты, а не вместо неё
   video: 'right',
+  pluginPanels: 'right',
   preview: 'right',
   plan: 'right',
   agents: 'right',
@@ -200,7 +207,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
-  'plan', 'agents', 'context', 'toc', 'video', 'characters', 'localModel', 'voices', 'chatContext',
+  'plan', 'agents', 'context', 'toc', 'video', 'characters', 'localModel', 'voices', 'chatContext', 'pluginPanels',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];

@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.Notes;
@@ -93,5 +94,12 @@ public sealed class NotesSubsystem : IAppSubsystem
         // регистрирует собственный тулсет (раньше — в Program.cs Main).
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
             ClaudeHomeServer.Services.Mcp.Http.NotesToolset>();
+        // Обработчик права notes:read моста панели (ADR-031 §2.4, §3.4, шаг 3.5):
+        // операции notes.search / notes.read. Регистрирует сама вертикаль-владелец
+        // (направление Notes → Core ← Plugins, прямой ссылки на Plugins нет). Мост
+        // (Plugins) резолвит IEnumerable<IPluginCapability> и находит этот обработчик
+        // по домену «notes». Гейт подсистемы — структурный: при Subsystems:Notes:Enabled=false
+        // Register не зовётся, шва в DI нет, и notes:read → unavailable (503) у моста.
+        services.AddSingleton<IPluginCapability, NotesPluginCapability>();
     }
 }

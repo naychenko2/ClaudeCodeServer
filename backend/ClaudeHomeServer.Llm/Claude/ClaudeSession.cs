@@ -49,6 +49,14 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly string? _turnOwnerId;
     internal string? TurnOwnerId => _turnOwnerId;
 
+    // Каталоги плагинов владельца для --plugin-dir (ADR-031 §2.4/§2.5): шов IPluginDirSource
+    // (опциональная зависимость — null, если подсистема Plugins выключена) и проект чата для
+    // проверки локальности. Набор считается ТОЛЬКО от свойств сессии (владелец, персона, проект),
+    // не от хода: installed.json перечитывается на каждый ход, и установка/удаление/смена версии
+    // вступают в силу со следующего хода (процесс перезапускается, если сигнатура изменилась).
+    private readonly ClaudeHomeServer.Services.Plugins.IPluginDirSource? _pluginDirSource;
+    private readonly Models.Project? _pluginProject;
+
     // Модель для --model / set_model. Хранится семейство (opus/fable/sonnet/haiku), окно 1M
     // дописывает пул по плану подписки хода (ClaudeSubscriptionPool.LaunchModel): Max получает
     // opus[1m], Pro — opus с объявленным окном 200K, и CLI сожмёт контекст вовремя.
@@ -860,6 +868,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
     internal static bool IsVideoEditorAutoAllowed(VideoEditorMcpContext? context, string toolName) =>
         context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
+    // MCP-сервер plugins (ADR-031, шаг 4.1): null — подсистема plugins не загружена
+    private readonly PluginsMcpContext? _pluginsMcp;
+    private bool PluginsHttpOn() => _pluginsMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер «Контекст чата»: null — тулсета нет в реестре (ADR-023 §3.2)
     private readonly TurnContextMcpContext? _turnContextMcp;
     private bool TurnContextHttpOn() => _turnContextMcp is { UseHttp: true } && HttpMcpOnNow();
@@ -1044,6 +1055,8 @@ public class ClaudeSession : ILlmSessionAdapter
         _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
         _turnOwnerId = context.OwnerId ?? info.OwnerId;
+        _pluginDirSource = context.PluginDirSource;
+        _pluginProject = context.Project;
         _rootPath = context.RootPath;
         _mainRootPath = context.MainRootPath;
         _serverContent = context.ServerContent;
@@ -1079,6 +1092,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _imageEditorMcp = context.ImageEditorMcp;
         _audioEditorMcp = context.AudioEditorMcp;
         _videoEditorMcp = context.VideoEditorMcp;
+        _pluginsMcp = context.PluginsMcp;
         _turnContextMcp = context.TurnContextMcp;
         _localMediaMcp = context.LocalMediaMcp;
         _testsMcp = context.TestsMcp;
@@ -1167,6 +1181,8 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasAudioEditor = AudioEditorHttpOn();
         // Видео: как у звука — stdio-ветки нет
         var hasVideoEditor = VideoEditorHttpOn();
+        // Плагины build-it-yourself (ADR-031, шаг 4.1): stdio-ветки нет, сервер в любом чате владельца
+        var hasPlugins = PluginsHttpOn();
         var hasTurnContext = TurnContextHttpOn();
         // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
         var hasLocalMedia = LocalMediaHttpOn();
@@ -1272,6 +1288,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
             hasAudioEditor = hasAudioEditor && Keep(McpEndpoints.AudioEditorName);
             hasVideoEditor = hasVideoEditor && Keep(McpEndpoints.VideoEditorName);
+            hasPlugins = hasPlugins && Keep(McpEndpoints.PluginsName);
             hasTurnContext = hasTurnContext && Keep(McpEndpoints.TurnContextName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasTests = hasTests && Keep(McpEndpoints.TestsName);
@@ -1285,7 +1302,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasPlugins && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -2006,6 +2023,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав — свойство инстанса (VideoEditor:AgentLaunch), вариативен только транспорт
                 shapes[McpEndpoints.VideoEditorName] = "t:http";
+            }
+
+            if (hasPlugins)
+            {
+                // Плагины build-it-yourself (ADR-031, шаг 4.1): тулсет вертикали, http-ветка только;
+                // сессия — хвостом URL. Состав фиксирован (5 инструментов), ограничения — на вызове.
+                servers[McpEndpoints.PluginsName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_pluginsMcp!.ApiUrl, McpEndpoints.PluginsName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_pluginsMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (5 инструментов), вариативен только транспорт
+                shapes[McpEndpoints.PluginsName] = "t:http";
             }
 
             if (hasTurnContext)
@@ -3369,6 +3405,27 @@ public class ClaudeSession : ILlmSessionAdapter
             catch (InvalidOperationException ex)
             {
                 Console.Error.WriteLine($"[ClaudeSession] MCP-конфиг недоступен в песочнице, ход без него: {ex.Message}");
+            }
+        }
+
+        // Каталоги плагинов владельца (ADR-031 §2.4/§2.5): --plugin-dir на каждый включённый
+        // пакет. Набор считается ТОЛЬКО от свойств сессии (владелец, персона, проект), не от
+        // хода — installed.json перечитывается на каждый ход, и установка/удаление/смена версии
+        // вступают в силу со следующего хода (инвариант 4): аргумент стабилен, пока набор не
+        // изменился, и не мерцает в сигнатуре запуска. Путь — в среде исполнения: в песочнице
+        // data/plugins смонтирована в /plugins (ro), ToRuntime переводит; локально — identity.
+        // Локальный проект (ProjectCapabilities.Plugins = false, MVP) — GetPluginDirs отдаёт [],
+        // аргументов нет. _pluginDirSource null — подсистема Plugins выключена.
+        if (_pluginDirSource is not null && _turnOwnerId is { } pluginOwnerId)
+        {
+            var pluginDirs = _pluginDirSource.GetPluginDirs(pluginOwnerId, Info.PersonaId, _pluginProject);
+            foreach (var dir in pluginDirs)
+            {
+                try { args.AddRange(["--plugin-dir", _launcher.Paths.ToRuntime(dir)]); }
+                catch (InvalidOperationException ex)
+                {
+                    Console.Error.WriteLine($"[ClaudeSession] Каталог плагина недоступен в песочнице, ход без него: {ex.Message}");
+                }
             }
         }
 

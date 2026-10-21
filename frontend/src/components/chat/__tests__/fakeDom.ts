@@ -102,6 +102,8 @@ class FNode {
     walk(this);
     return out;
   }
+  // Элементные потомки (как DOM-children): centerOffset и др. итерируют root.children
+  get children(): FNode[] { return this.childNodes.filter(c => c.nodeType === 1); }
   getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }; }
 
   _link(child: FNode, at: number) {
@@ -177,12 +179,25 @@ export function installFakeDom() {
   if (installed) return;
   installed = true;
   const fdoc = new FDoc();
+  // Простая система событий window: addEventListener/removeEventListener/dispatchEvent
+  // работают как в реальном DOM (раньше были no-op — достаточно, чтобы не падало).
+  const winListeners: Record<string, Set<Function>> = {};
   const fwindow = {
     // window.event — react-dom читает его в отложенном колбэке scheduler; undefined не бросает
     event: undefined,
-    dispatchEvent: () => true,
+    dispatchEvent: (e: { type: string }) => {
+      winListeners[e.type]?.forEach(fn => fn(e));
+      return true;
+    },
     matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
     HTMLIFrameElement: class {},
+    // WaitingIndicator и др. таймеры зовут window.setTimeout/clearTimeout — глобалы node
+    setTimeout,
+    clearTimeout,
+    // PluginFrame и др. слушают window 'message' (postMessage моста); cc-draft-reply и
+    // другие CustomEvent-подписки тоже вешаются сюда.
+    addEventListener: (type: string, fn: Function) => { (winListeners[type] ??= new Set()).add(fn); },
+    removeEventListener: (type: string, fn: Function) => { winListeners[type]?.delete(fn); },
   };
   (globalThis as { window?: unknown }).window = fwindow;
   (globalThis as { document?: unknown }).document = fdoc;

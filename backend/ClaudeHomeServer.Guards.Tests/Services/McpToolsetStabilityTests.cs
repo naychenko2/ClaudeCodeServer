@@ -677,14 +677,18 @@ public class McpToolsetStabilityTests
         audioEditor.Should().NotBeNull("тулсет модуля «Звук» обязан попасть в проверку тел ToolsFor");
         var videoEditor = FindDirIn("ClaudeHomeServer.VideoEditor", "Mcp");
         videoEditor.Should().NotBeNull("тулсет модуля «Видео» обязан попасть в проверку тел ToolsFor");
+        var plugins = FindDirIn("ClaudeHomeServer.Plugins", "Mcp");
+        plugins.Should().NotBeNull("тулсет плагинов обязан попасть в проверку тел ToolsFor");
         var files = Directory.GetFiles(dir!.FullName, "*.cs")
             .Concat(Directory.GetFiles(imageEditor!.FullName, "*.cs"))
             .Concat(Directory.GetFiles(audioEditor!.FullName, "*.cs"))
             .Concat(Directory.GetFiles(videoEditor!.FullName, "*.cs"))
+            .Concat(Directory.GetFiles(plugins!.FullName, "*.cs"))
             .ToList();
         files.Should().Contain(f => Path.GetFileName(f) == "ImageEditorToolset.cs");
         files.Should().Contain(f => Path.GetFileName(f) == "AudioEditorToolset.cs");
         files.Should().Contain(f => Path.GetFileName(f) == "VideoEditorToolset.cs");
+        files.Should().Contain(f => Path.GetFileName(f) == "PluginsToolset.cs");
 
         var checkedAny = false;
         foreach (var file in files)

@@ -19,6 +19,7 @@ import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/G
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
+import { PluginsProjectSection } from '../../plugins/PluginsProjectSection';
 import { DeviceSection } from '../../desktop/DeviceSection';
 import { LocalHandsSection } from '../../localHands/LocalHandsSection';
 import { ProjectMapSection } from './ProjectMapSection';
@@ -568,6 +569,14 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       </div>
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
+      {/* Плагины (ADR-031): секция сама решает, рисовать ли список (серверный проект)
+          или info-плашку «для локальных проектов пока недоступны»; без флага plugins-mvp — null */}
+      <PluginsProjectSection
+        project={project}
+        onUpdated={onProjectUpdated}
+        // «Править»/«Попросить агента исправить»: закрыть настройки и положить реплику в композер
+        onEdit={reply => { onClose(); window.dispatchEvent(new CustomEvent('cc-draft-reply', { detail: { project, reply } })); }}
+      />
       {/* Секция привязки к устройству (ADR-016 §3.4). Внутри показ/скрытие деталей идёт через поле project.device (а не deviceId
           руками), иначе сторож G10 краснеет на каждом обращении */}
       <DeviceSection project={project} onUpdated={onProjectUpdated} />

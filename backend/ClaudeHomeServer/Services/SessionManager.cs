@@ -797,9 +797,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Composition.SubsystemStateStore? subsystemStates = null,
         // Опционально (в тестах без сфер не передаётся): справочник сфер для зоны персон; без него
         // персона сферы нигде не видна (fail-closed)
-        ISphereDirectory? spheres = null)
+        ISphereDirectory? spheres = null,
+        // Опционально (ADR-031, шаг 2.1): шов каталогов плагинов владельца для --plugin-dir.
+        // null — подсистема Plugins выключена (IPluginDirSource не в DI): ход идёт без --plugin-dir.
+        Plugins.IPluginDirSource? pluginDirSource = null)
     {
         _spheres = spheres;
+        _pluginDirSource = pluginDirSource;
         _deviceGate = deviceGate;
         _services = services;
         _subsystemStates = subsystemStates;
@@ -1199,6 +1203,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             VideoEditor.VideoEditorAgentTools.AutoAllowTools);
     }
 
+    // MCP-сервер plugins (ADR-031, шаг 4.1): любой чат владельца, тулсет в реестре (подсистема
+    // plugins загружена). Ограничения (флаг plugins-build-yourself, локальный проект) — на
+    // вызове, не в составе. От хода, фокуса и черновиков состав не зависит (McpToolsetStabilityTests).
+    internal PluginsMcpContext? BuildPluginsContext(string? ownerId, Session session)
+    {
+        if (ownerId is null) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.PluginsName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new PluginsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
     // MCP-сервер «Контекст чата» (ADR-023 §3.2) — любой чат владельца, тулсет в реестре, все три точки
     // сборки контекста. От хода и
     // содержимого контекста состав не зависит (McpToolsetStabilityTests).
@@ -1290,7 +1306,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null,
         LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null,
         AudioEditorMcpContext? audioEditor = null, VideoEditorMcpContext? videoEditor = null,
-        TurnContextMcpContext? turnContext = null, TestsMcpContext? tests = null) =>
+        TurnContextMcpContext? turnContext = null, TestsMcpContext? tests = null,
+        PluginsMcpContext? plugins = null) =>
         architecture is { UseHttp: true } || tests is { UseHttp: true }
         || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
@@ -1299,7 +1316,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         || watch is { UseHttp: true } || webSearch is { UseHttp: true }
         || higgsfield is { UseHttp: true } || imageEditor is { UseHttp: true }
         || localMedia is { UseHttp: true } || audioEditor is { UseHttp: true }
-        || videoEditor is { UseHttp: true }
+        || videoEditor is { UseHttp: true } || plugins is { UseHttp: true }
         || turnContext is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
@@ -3513,6 +3530,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     private readonly ISphereDirectory? _spheres;
+    // Шов каталогов плагинов владельца для --plugin-dir (ADR-031, шаг 2.1); null — подсистема
+    // Plugins выключена (опциональная зависимость, ход идёт без --plugin-dir).
+    private readonly Plugins.IPluginDirSource? _pluginDirSource;
 
     private ISphereDirectory SphereDir => _spheres ?? NoSphereDirectory.Instance;
 
@@ -4539,6 +4559,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var imageEditorMcp = BuildImageEditorContext(ownerId, session);
         var audioEditorMcp = BuildAudioEditorContext(ownerId, session);
         var videoEditorMcp = BuildVideoEditorContext(ownerId, session);
+        var pluginsMcp = BuildPluginsContext(ownerId, session);
         var turnContextMcp = BuildTurnContextContext(ownerId, session);
         var localMediaMcp = BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona);
         var testsMcp = BuildTestsContext(ownerId, session.ProjectId, persona.Persona);
@@ -4584,7 +4605,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                 workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp),
+                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp,
+                pluginsMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
@@ -4597,6 +4619,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ImageEditorMcp: imageEditorMcp,
             AudioEditorMcp: audioEditorMcp,
             VideoEditorMcp: videoEditorMcp,
+            PluginsMcp: pluginsMcp,
             TurnContextMcp: turnContextMcp,
             LocalMediaMcp: localMediaMcp,
             TestsMcp: testsMcp,
@@ -4607,7 +4630,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ServerContent: ServerContentFor(session.ProjectId),
             TranscriptOnServer: TranscriptOnServer(session),
             HandsEnabled: hands,
-            LlmGatewayApiUrl: LlmGatewayApiUrlFor(session, ownerId)));
+            LlmGatewayApiUrl: LlmGatewayApiUrlFor(session, ownerId),
+            // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект
+            // для проверки локальности (у локального проекта в MVP плагинов нет).
+            PluginDirSource: _pluginDirSource,
+            Project: session.ProjectId is { } pluginProjectId ? _projects.GetById(pluginProjectId) : null));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -6149,6 +6176,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var imageEditorMcp = BuildImageEditorContext(entry.Info.OwnerId, entry.Info);
             var audioEditorMcp = BuildAudioEditorContext(entry.Info.OwnerId, entry.Info);
             var videoEditorMcp = BuildVideoEditorContext(entry.Info.OwnerId, entry.Info);
+            var pluginsMcp = BuildPluginsContext(entry.Info.OwnerId, entry.Info);
             var turnContextMcp = BuildTurnContextContext(entry.Info.OwnerId, entry.Info);
             var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
@@ -6187,7 +6215,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, dify: difyMcp, watch: watchMcp, webSearch: webSearchMcp,
                     higgsfield: higgsfieldMcp, imageEditor: imageEditorMcp, audioEditor: audioEditorMcp, videoEditor: videoEditorMcp,
-                    turnContext: turnContextMcp),
+                    turnContext: turnContextMcp, plugins: pluginsMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
@@ -6196,10 +6224,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ImageEditorMcp: imageEditorMcp,
                 AudioEditorMcp: audioEditorMcp,
                 VideoEditorMcp: videoEditorMcp,
+                PluginsMcp: pluginsMcp,
                 TurnContextMcp: turnContextMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
                 MainRootPath: null,
-                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId));
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId),
+                // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально);
+                // чат вне проекта — локальности нет (все включённые пакеты владельца).
+                PluginDirSource: _pluginDirSource,
+                Project: null);
                 // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается
         }
         else
@@ -6220,6 +6253,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var imageEditorMcp = BuildImageEditorContext(project.OwnerId, entry.Info);
             var audioEditorMcp = BuildAudioEditorContext(project.OwnerId, entry.Info);
             var videoEditorMcp = BuildVideoEditorContext(project.OwnerId, entry.Info);
+            var pluginsMcp = BuildPluginsContext(project.OwnerId, entry.Info);
             var turnContextMcp = BuildTurnContextContext(project.OwnerId, entry.Info);
             var localMediaMcp = BuildLocalMediaContext(project.OwnerId, project.Id, persona.Persona);
             var testsMcp = BuildTestsContext(project.OwnerId, project.Id, persona.Persona);
@@ -6263,7 +6297,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp),
+                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp,
+                    pluginsMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ArchitectureMcp: architectureMcp,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
@@ -6274,6 +6309,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ImageEditorMcp: imageEditorMcp,
                 AudioEditorMcp: audioEditorMcp,
                 VideoEditorMcp: videoEditorMcp,
+                PluginsMcp: pluginsMcp,
                 TurnContextMcp: turnContextMcp,
                 LocalMediaMcp: localMediaMcp,
                 TestsMcp: testsMcp,
@@ -6283,7 +6319,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ServerContent: ProjectCapabilities.ServerContentEnabled(project),
                 TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project),
                 HandsEnabled: hands,
-                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, project.OwnerId));
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, project.OwnerId),
+                // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект
+                // для проверки локальности (у локального проекта в MVP плагинов нет).
+                PluginDirSource: _pluginDirSource,
+                Project: project);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

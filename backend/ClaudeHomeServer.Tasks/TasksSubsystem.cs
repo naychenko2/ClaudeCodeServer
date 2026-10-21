@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services.Tasks;
@@ -69,5 +70,12 @@ public sealed class TasksSubsystem : IAppSubsystem
         // Program.cs рядом с `PersonaAutomationRunnerAdapter`, потому что адаптер
         // живёт в Main (обёртка над `PersonaAutomationService`).
         services.AddGatedHostedService<TaskSchedulerService>(config);
+        // Обработчик права tasks:read моста панели (ADR-031 §2.4, §3.4, шаг 3.5):
+        // операция tasks.list. Регистрирует сама вертикаль-владелец (направление
+        // Tasks → Core ← Plugins, прямой ссылки на Plugins нет). Мост (Plugins)
+        // резолвит IEnumerable<IPluginCapability> и находит этот обработчик по
+        // домену «tasks». Гейт подсистемы — структурный: при Subsystems:Tasks:Enabled=false
+        // Register не зовётся, шва в DI нет, и tasks:read → unavailable (503) у моста.
+        services.AddSingleton<IPluginCapability, TasksPluginCapability>();
     }
 }

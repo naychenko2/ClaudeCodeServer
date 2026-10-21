@@ -1,11 +1,18 @@
-// Вкладка «Хронология» (волна 3, Ф2a, макет features-overview-3-final §5).
+// Вкладка «Хронология» (волна 3, Ф2a/Ф2b, макет features-overview-3-final §5).
 //
-// Чистые функции (имя/состояние/границы/«≈»/точка/линия/задачи/минуты/статус/плашка) —
-// в node, без DOM. Рендер-тесты (fakeDom): порядок 7 этапов, раскрытие одного этапа,
-// исполнители (roleLabel + чип модели), «чата нет», пустые состояния, тач-цель 40 на 360.
+// Чистые функции (имя/состояние/границы/«≈»/точка/линия/задачи/минуты/статус/плашка;
+// Ф2b: вердикт витка, статус/тон/модель шага, пустое состояние витков) — в node, без DOM.
+// Рендер-тесты (fakeDom): порядок 7 этапов, раскрытие одного этапа, исполнители
+// (roleLabel + чип модели), «чата нет», пустые состояния, тач-цель 40 на 360;
+// Ф2b: шаги (шапка, «чат · задача»), раскрытие одного шага, витки (кто/вердикт/находки,
+// «чат · задача» ревью), пустые состояния («ещё не ревьюили», «нет исполнителя»,
+// «ревью идёт», «Шагов пока нет»), честная деградация без stepRef.
 //
 // Мутации (в отчёте): (1) переставить этапы в run.stages → «порядок этапов» краснеет;
-// (2) убрать «≈» из stageDurationLabel → «длительность ≈» краснеет.
+// (2) убрать «≈» из stageDurationLabel → «длительность ≈» краснеет;
+// (3) раскрытие двух шагов одновременно (Set вместо одного ключа) → «один шаг за раз» краснеет;
+// (4) убрать подпись вердикта из roundVerdictView → «виток: вердикт» краснеет;
+// (5) игнорировать reviewChatId (всегда рисовать «чат») → «виток без чата» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -14,10 +21,11 @@ import { FeatureTimelineTab } from './FeatureTimelineTab';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, minutesSince, executorStatus, stageStatusBadge,
+  roundVerdictView, stepStatusLabel, stepStatusTone, stepModel, roundsAreaLabel,
 } from './FeatureTimelineBits';
 import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
-import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureTask, StageKey } from '../../types/featureRun';
+import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureRound, FeatureTask, StageKey } from '../../types/featureRun';
 
 // === Мок персон (lib/personas): id → имя; аватар — инициалы (без image) ===
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
@@ -471,5 +479,282 @@ describe('FeatureTimelineTab: рендер', () => {
     const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-prod')!;
     const st = (header as unknown as { style: Record<string, string> }).style;
     expect(st.minHeight).toBe('40px');
+  });
+});
+
+// === Ф2b: чистые функции — шаги и витки ===
+
+// Хелперы данных Ф2b.
+function mkChain(over: Partial<FeatureStepChain> = {}): FeatureStepChain {
+  return {
+    stepRef: 'Ш1',
+    lane: 'back',
+    title: 'Модель шаблона',
+    personaId: 'p1',
+    taskIds: ['t-s1'],
+    outcome: 'accepted',
+    status: 'принят',
+    durationMinutes: 40,
+    source: null,
+    loops: 0,
+    rounds: [],
+    chatId: 'chat-s1',
+    ...over,
+  };
+}
+
+function mkRound(over: Partial<FeatureRound> = {}): FeatureRound {
+  return {
+    n: 1,
+    verdict: 'accepted',
+    reviewTaskId: 't-r1',
+    personaId: 'p2',
+    startedAt: null,
+    completedAt: null,
+    reason: null,
+    reviewChatId: 'chat-r1',
+    ...over,
+  };
+}
+
+describe('roundVerdictView', () => {
+  it('принят → success; принят с замечаниями → warning; вернул → warning; снят → muted; идёт → active', () => {
+    expect(roundVerdictView('accepted')).toEqual({ label: 'принят', tone: 'success' });
+    expect(roundVerdictView('accepted_with_remarks')).toEqual({ label: 'принят с замечаниями', tone: 'warning' });
+    expect(roundVerdictView('returned')).toEqual({ label: 'вернул', tone: 'warning' });
+    expect(roundVerdictView('withdrawn')).toEqual({ label: 'снят', tone: 'muted' });
+    expect(roundVerdictView('running')).toEqual({ label: 'идёт', tone: 'active' });
+  });
+});
+
+describe('stepStatusLabel', () => {
+  it('готовая строка бэка (chain.status) — как есть', () => {
+    expect(stepStatusLabel(mkChain({ status: 'ждёт ревью' }))).toBe('ждёт ревью');
+    expect(stepStatusLabel(mkChain({ status: 'снят с выкладки' }))).toBe('снят с выкладки');
+  });
+  it('status отсутствует (старый ответ) → фолбэк из outcome, без выдуманных подписей', () => {
+    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'pending' }))).toBe('ждёт ревью');
+    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'accepted' }))).toBe('принят');
+    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'running' }))).toBe('идёт');
+    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'returned' }))).toBe('закрыт без повторного ревью');
+    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'withdrawn' }))).toBe('снят с выкладки');
+  });
+});
+
+describe('stepStatusTone', () => {
+  it('accepted → success; running/returned → active; pending/withdrawn → muted', () => {
+    expect(stepStatusTone(mkChain({ outcome: 'accepted' }))).toBe('success');
+    expect(stepStatusTone(mkChain({ outcome: 'running' }))).toBe('active');
+    expect(stepStatusTone(mkChain({ outcome: 'returned' }))).toBe('active');
+    expect(stepStatusTone(mkChain({ outcome: 'pending' }))).toBe('muted');
+    expect(stepStatusTone(mkChain({ outcome: 'withdrawn' }))).toBe('muted');
+  });
+});
+
+describe('stepModel', () => {
+  it('модель — у исполнителя стадии с тем же stepRef (задача-шаг приоритетнее доработки); нет совпадения → null', () => {
+    const execs = [
+      mkExec({ stepRef: 'Ш1', taskRole: 'rework', modelLabel: 'Sonnet', modelFull: 'Sonnet 4.5' }),
+      mkExec({ stepRef: 'Ш1', taskRole: 'step', modelLabel: 'Opus', modelFull: 'Opus 4.5' }),
+      mkExec({ stepRef: 'Ш2', taskRole: 'step', modelLabel: 'Qwen', modelFull: null }),
+    ];
+    expect(stepModel(execs, 'Ш1')).toEqual({ label: 'Opus', full: 'Opus 4.5' });
+    expect(stepModel(execs, 'Ш2')).toEqual({ label: 'Qwen', full: null });
+    expect(stepModel(execs, 'Ш3')).toBeNull();
+    expect(stepModel(execs, '')).toBeNull();
+  });
+});
+
+describe('roundsAreaLabel', () => {
+  it('витков нет: есть исполнитель → «ещё не ревьюили»; нет исполнителя → «нет исполнителя»', () => {
+    expect(roundsAreaLabel(mkChain({ personaId: 'p1' }))).toBe('ещё не ревьюили');
+    expect(roundsAreaLabel(mkChain({ personaId: null }))).toBe('нет исполнителя');
+  });
+  it('последний виток идёт → «ревью идёт»; витки закрыты → null (строки рендерятся)', () => {
+    expect(roundsAreaLabel(mkChain({ rounds: [mkRound({ verdict: 'running' })] }))).toBe('ревью идёт');
+    expect(roundsAreaLabel(mkChain({ rounds: [mkRound({ verdict: 'accepted' })] }))).toBeNull();
+    expect(roundsAreaLabel(mkChain({ rounds: [mkRound({ n: 1, verdict: 'returned' }), mkRound({ n: 2, verdict: 'running' })] }))).toBe('ревью идёт');
+  });
+});
+
+// === Ф2b: рендер — шаги и витки ===
+
+describe('FeatureTimelineTab: Ф2b — шаги и витки', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    personaMap.set('p2', 'Глеб');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // === 1. Строка шага: код, название, исполнитель, roleLabel, статус, «чат · задача» ===
+  it('шаг: код stepRef, название, исполнитель, roleLabel «Ш1 · бэк», статус, пара «чат · задача»', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain()] }));
+    const row = findNodeByAttr(c, 'data-testid', 'feature-step-Ш1');
+    expect(row, 'строка шага Ш1').not.toBeNull();
+    const t = textNodes(row!).join('');
+    expect(t).toContain('Ш1');
+    expect(t).toContain('Модель шаблона');
+    expect(t).toContain('Денис');
+    expect(t).toContain('Ш1 · бэк');
+    expect(t).toContain('принят');
+    // «чат · задача» шага: чат (chatId есть) + задача (taskIds[0]).
+    const pair = findNodeByAttr(row!, 'data-testid', 'nav-target-pair');
+    expect(pair, 'пара «чат · задача» шага').not.toBeNull();
+    expect(textNodes(pair!).join('')).toContain('чат');
+    expect(textNodes(pair!).join('')).toContain('задача');
+  });
+
+  // === 2. Чип модели шага: из исполнителя стадии с тем же stepRef ===
+  it('чип модели шага — из исполнителя стадии с тем же stepRef', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain()] }));
+    // fullStages: prod-исполнитель stepRef 'Ш1', modelLabel 'Opus' → чип на строке шага.
+    const row = findNodeByAttr(c, 'data-testid', 'feature-step-Ш1')!;
+    const chip = findNodeByAttr(row, 'data-testid', 'timeline-model-chip');
+    expect(chip, 'чип модели на строке шага').not.toBeNull();
+    expect(textNodes(chip!).join('')).toBe('Opus');
+  });
+
+  it('шаг без совпадения по stepRef → чипа модели нет (честная деградация)', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ stepRef: 'Ш9', title: 'Шаг девять' })] }));
+    const row = findNodeByAttr(c, 'data-testid', 'feature-step-Ш9')!;
+    expect(findNodeByAttr(row, 'data-testid', 'timeline-model-chip'), 'чипа нет').toBeNull();
+  });
+
+  // === 3. Раскрытие: один шаг за раз ===
+  it('один шаг раскрыт за раз: клик по второму схлопывает первый; повторный клик — схлопывает', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [
+      mkChain(),
+      mkChain({ stepRef: 'Ш2', title: 'Шаг два', taskIds: ['t-s2'], chatId: 'chat-s2' }),
+    ] }));
+    // Сначала ни один шаг не раскрыт.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш1'), 'витков Ш1 нет').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш2'), 'витков Ш2 нет').toBeNull();
+    // Раскрываем Ш1.
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш1'), 'Ш1 раскрыт').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш2'), 'Ш2 ещё закрыт').toBeNull();
+    // Раскрываем Ш2: Ш1 схлопывается, Ш2 раскрывается (один за раз).
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш2')!)!.onClick as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш2'), 'Ш2 раскрыт').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш1'), 'Ш1 схлопнут').toBeNull();
+    // aria-expanded: Ш2 — true, Ш1 — false.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш2')!.getAttribute('aria-expanded')).toBe('true');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!.getAttribute('aria-expanded')).toBe('false');
+    // Повторный клик по Ш2 — схлопывает (все закрыты).
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш2')!)!.onClick as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш2'), 'Ш2 схлопнут').toBeNull();
+  });
+
+  // === 4. Виток: номер, кто, вердикт, находки, «чат · задача» ревью ===
+  it('виток: «виток 1», ревьюер, вердикт «принят», находки (reason), «чат · задача» ревью', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
+      mkRound({ n: 1, verdict: 'accepted', personaId: 'p2', reason: 'нет проверки прав' }),
+    ] })] }));
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
+    const round = findNodeByAttr(c, 'data-testid', 'feature-round-1');
+    expect(round, 'строка витка 1').not.toBeNull();
+    const t = textNodes(round!).join('');
+    expect(t).toContain('виток 1');
+    expect(t).toContain('Глеб');
+    expect(t).toContain('принят');
+    expect(t).toContain('нет проверки прав');
+    // «чат · задача» ревью этого витка.
+    const pair = findNodeByAttr(round!, 'data-testid', 'nav-target-pair');
+    expect(pair, 'пара «чат · задача» витка').not.toBeNull();
+    expect(textNodes(pair!).join('')).toContain('чат');
+    expect(textNodes(pair!).join('')).toContain('задача');
+  });
+
+  it('виток: вердикты «вернул» (warning) и «принят с замечаниями» — подписи по-русски', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
+      mkRound({ n: 1, verdict: 'returned', reason: 'сырой hex' }),
+      mkRound({ n: 2, verdict: 'accepted_with_remarks' }),
+    ] })] }));
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
+    const r1 = findNodeByAttr(c, 'data-testid', 'feature-round-1')!;
+    expect(textNodes(r1).join('')).toContain('вернул');
+    const r2 = findNodeByAttr(c, 'data-testid', 'feature-round-2')!;
+    expect(textNodes(r2).join('')).toContain('принят с замечаниями');
+  });
+
+  // Мутация (5): игнорировать reviewChatId (всегда рисовать «чат») → кнопка «чат»
+  // появляется у витка без чата → краснеет.
+  it('виток без чата (reviewChatId = null): кнопки «чат» нет, «чата нет», задача есть', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
+      mkRound({ n: 1, verdict: 'running', reviewChatId: null }),
+    ] })] }));
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
+    const round = findNodeByAttr(c, 'data-testid', 'feature-round-1')!;
+    const pair = findNodeByAttr(round, 'data-testid', 'nav-target-pair')!;
+    expect(findNodeByAttr(pair, 'data-testid', 'nav-target-chat'), 'кнопки «чат» нет').toBeNull();
+    expect(textNodes(pair).join('')).toContain('чата нет');
+    expect(findNodeByAttr(pair, 'data-testid', 'nav-target-task'), 'кнопка «задача» есть').not.toBeNull();
+  });
+
+  // === 5. Пустые состояния ===
+  it('шагов нет (stepChains пуст) → «Шагов пока нет»', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [] }));
+    const empty = findNodeByAttr(c, 'data-testid', 'feature-steps-empty');
+    expect(empty, 'пустое состояние «Шагов пока нет»').not.toBeNull();
+    expect(textNodes(empty!).join('')).toContain('Шагов пока нет');
+  });
+
+  it('stepChains нет в данных (старая фича) → «Шагов пока нет» (честная деградация)', () => {
+    const c = renderTab(mkRun(fullStages()));
+    const empty = findNodeByAttr(c, 'data-testid', 'feature-steps-empty');
+    expect(empty, 'пустое состояние «Шагов пока нет»').not.toBeNull();
+  });
+
+  it('шаг без исполнителя и без витков → «нет исполнителя»', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ stepRef: 'Ш1', personaId: null })] }));
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
+    const empty = findNodeByAttr(c, 'data-testid', 'feature-step-rounds-empty');
+    expect(empty, '«нет исполнителя»').not.toBeNull();
+    expect(textNodes(empty!).join('')).toBe('нет исполнителя');
+  });
+
+  it('шаг с исполнителем, витков нет → «ещё не ревьюили»', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ stepRef: 'Ш1', personaId: 'p1' })] }));
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
+    const empty = findNodeByAttr(c, 'data-testid', 'feature-step-rounds-empty');
+    expect(empty, '«ещё не ревьюили»').not.toBeNull();
+    expect(textNodes(empty!).join('')).toBe('ещё не ревьюили');
+  });
+
+  it('последний виток идёт → «ревью идёт»', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
+      mkRound({ n: 1, verdict: 'returned' }),
+      mkRound({ n: 2, verdict: 'running' }),
+    ] })] }));
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
+    const running = findNodeByAttr(c, 'data-testid', 'feature-step-review-running');
+    expect(running, '«ревью идёт»').not.toBeNull();
+    expect(textNodes(running!).join('')).toBe('ревью идёт');
+  });
+
+  // === 6. Честная деградация: старый шаг без stepRef ===
+  it('шаг без stepRef (старая фича): кода нет, название и «чат · задача» — как есть', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ stepRef: '', title: 'Старый шаг' })] }));
+    const row = findNodeByAttr(c, 'data-testid', 'feature-step-no-ref');
+    expect(row, 'строка шага без stepRef').not.toBeNull();
+    const t = textNodes(row!).join('');
+    expect(t).toContain('Старый шаг');
+    // Код-чип не нарисован (нет stepRef — не выдумываем).
+    expect(findNodeByAttr(row!, 'data-testid', 'feature-step-code'), 'кода нет').toBeNull();
+  });
+
+  // === 7. 360: тач-цель шага ≥ 44 ===
+  it('на 360 кнопка-шаг — minHeight 44', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain()] }), true);
+    const header = findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!;
+    const st = (header as unknown as { style: Record<string, string> }).style;
+    expect(st.minHeight).toBe('44px');
   });
 });

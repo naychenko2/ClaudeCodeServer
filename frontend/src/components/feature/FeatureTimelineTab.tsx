@@ -6,8 +6,9 @@ import { Tooltip } from '../ui/Tooltip';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, stageStatusBadge, ExecutorRow,
+  StepRow, stepModel,
 } from './FeatureTimelineBits';
-import type { FeatureRun, FeatureStage, StageKey } from '../../types/featureRun';
+import type { FeatureRun, FeatureStage, FeatureStepChain, StageKey } from '../../types/featureRun';
 
 // Вкладка «Хронология» (волна 3, Ф2a, макет features-overview-3-final §5): поясняющая
 // строка + вертикальный список 7 этапов в порядке жизненного цикла (cut → plan → prod →
@@ -37,11 +38,16 @@ function TimelineNote() {
 }
 
 // Строка этапа: точка + линия + заголовок (имя · состояние · «≈») + границы + (раскрыто)
-// карточка с исполнителями и плашкой состояния. Клик по заголовку — раскрыть/схлопнуть.
-function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, isMobile = false }: {
+// карточка с исполнителями и плашкой состояния; у «Производство» — ещё и шаги (Ф2b).
+// Клик по заголовку — раскрыть/схлопнуть.
+function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId,
+  chains, showSteps = false, expandedStep = null, onToggleStep, isMobile = false }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
-  now: number; featureId: string; isMobile?: boolean;
+  now: number; featureId: string;
+  chains?: FeatureStepChain[]; showSteps?: boolean;
+  expandedStep?: string | null; onToggleStep?: (ref: string) => void;
+  isMobile?: boolean;
 }) {
   const status = stageStatusLabel(stage);
   const bounds = stageBoundsLabel(stage);
@@ -147,6 +153,39 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
               Исполнителей нет
             </div>
           )}
+          {/* Ф2b: шаги и витки — только у «Производство» */}
+          {showSteps && (
+            <div
+              data-testid="timeline-steps"
+              style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 8, paddingTop: 8 }}
+            >
+              {(chains && chains.length > 0) ? (
+                chains.map(chain => {
+                  const ref = chain.stepRef || chain.title;
+                  return (
+                    <StepRow
+                      key={ref}
+                      chain={chain}
+                      model={stepModel(stage.executors, chain.stepRef)}
+                      expanded={expandedStep === ref}
+                      onToggle={() => onToggleStep?.(ref)}
+                      featureId={featureId}
+                      isMobile={isMobile}
+                    />
+                  );
+                })
+              ) : (
+                <div data-testid="feature-steps-empty" style={{ fontFamily: FONT.sans }}>
+                  <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, padding: '4px 0' }}>
+                    Шагов пока нет
+                  </div>
+                  <div style={{ fontSize: FS.sm, color: C.textMuted }}>
+                    Появятся, когда Егор составит план.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -155,8 +194,10 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
 
 // Вкладка «Хронология»: поясняющая строка + список 7 этапов. `now` — фиксированный
 // момент (Date.now на рендер) для минут «идёт/ждёт/стоит»; стабильен в пределах кадра.
+// Ф2b: у «Производство» — шаги (run.stepChains) и их витки; один шаг раскрыт за раз.
 export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun; isMobile?: boolean }) {
   const stages = run.stages ?? [];
+  const chains = run.stepChains ?? [];
   const taskMap = useMemo(() => buildTaskMap(run), [run]);
   const now = useMemo(() => Date.now(), []);
 
@@ -169,6 +210,10 @@ export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun;
   // Один раскрытый этап за раз; null — все схлопнуты.
   const [expanded, setExpanded] = useState<StageKey | null>(currentKey);
   const toggle = (key: StageKey) => setExpanded(cur => (cur === key ? null : key));
+
+  // Ф2b: один раскрытый шаг за раз (ключ = stepRef || title); null — все схлопнуты.
+  const [expandedStep, setExpandedStep] = useState<string | null>(null);
+  const toggleStep = (ref: string) => setExpandedStep(cur => (cur === ref ? null : ref));
 
   return (
     <div data-testid="feature-timeline-tab" style={{ fontFamily: FONT.sans }}>
@@ -183,6 +228,10 @@ export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun;
           taskMap={taskMap}
           now={now}
           featureId={run.featureId}
+          chains={stage.key === 'prod' ? chains : undefined}
+          showSteps={stage.key === 'prod'}
+          expandedStep={stage.key === 'prod' ? expandedStep : null}
+          onToggleStep={stage.key === 'prod' ? toggleStep : undefined}
           isMobile={isMobile}
         />
       ))}

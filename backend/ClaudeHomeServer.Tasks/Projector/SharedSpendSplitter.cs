@@ -6,11 +6,17 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 
 // ─── Б9c: деление расхода ОБЩЕГО (оркестраторского) чата поровну между активными фичами ──────
 //
-// «Общий чат» — чат с kind key/curator/orchestrator, входящий в ДВЕ И БОЛЕЕ фичи владельца
-// (решение Андрея 20.10: его расход не приписывается каждой фиче целиком — двойной счёт,
-// critical ревью Глеба в Б9b; вместо этого делится поровну между фичами, активными на момент
-// хода). Доля помечена как оценка: `method` = journal (по полному журналу) | approx (по
-// интервалам задач).
+// «Общий чат» — чат, входящий в ДВЕ И БОЛЕЕ фичи владельца (решение Андрея 20.10: его расход
+// не приписывается каждой фиче целиком — двойной счёт, critical ревью Глеба в Б9b; вместо
+// этого делится поровну между фичами, активными на момент хода). Доля помечена как оценка:
+// `method` = journal (по полному журналу) | approx (по интервалам задач).
+//
+// Правило деления (фиксация, шаг 4): метод наибольшего остатка. Для каждого хода и каждого
+// поля токенов: активные фичи упорядочиваются по FeatureId (Ordinal), base = x / N,
+// r = x % N; фича с индексом i получает base + (i < r ? 1 : 0). Сумма долей = x РОВНО
+// (точное равенство, не «≈»). Деньги делятся в decimal без округления; проверка сохранения
+// — с допуском 1e-9. DAILY-строки (IsDaily) делятся между фичами, активными в любой момент
+// суток [d, d+1); метод такого чата принудительно approx.
 
 // (FeatureActivityInterval и FeatureActivity — в FeatureActivity.cs, единый модуль активности.)
 
@@ -18,13 +24,6 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // + интервалы активности ВСЕХ фич, в которые чат входит (знаменатель деления) + id текущей фичи
 // + метод оценки. Выход — доля текущей фичи (FeatureSpendShared) + признак ненадёжной цены её
 // доли + модели без цены в доле (для costPartial/hiddenCostModels итога, те же правила, что Б9b).
-//
-// Правило деления: каждый ход общего чата делится ПОРОВНУ (1/N) между N фичами, активными на
-// его момент; ход без активных фич не распределяется (остаётся «нигде»). Доля фичи = сумма
-// (ход / N) по ходам, на которые фича активна. Токены клампаются в ≥ 0 (как в итоге Б9b) и
-// делятся в decimal (без потери); деньги — только с надёжной ценой (единая точка правды
-// SpendCostReliability: читатель SpendFeatureReader выставляет FeatureSpendRecord.UnreliableCost
-// при сборке записи, этот же флаг читает итог расхода — вторая точка правды не заводится).
 public static class SharedSpendSplitter
 {
     // Доля фичи в расходе общего чата.
@@ -40,38 +39,41 @@ public static class SharedSpendSplitter
         string featureId,
         string method)
     {
-        // Индекс featureId → интервалы: быстрая проверка «активна ли текущая фича на моменте».
+        // Индекс featureId → интервалы.
         var byId = new Dictionary<string, IReadOnlyList<FeatureActivityInterval>>(StringComparer.Ordinal);
         foreach (var a in activities)
             byId[a.FeatureId] = a.Intervals;
 
         long input = 0, output = 0, cacheRead = 0, cacheCreation = 0;
-        double cost = 0;
+        decimal cost = 0;
         int turns = 0;
         var hidden = new HashSet<string>(StringComparer.Ordinal);
         bool costPartial = false;
 
         foreach (var rec in sharedTurns)
         {
-            // Знаменатель: число фич, активных на момент хода. 0 — ход не распределяется.
-            var active = CountActive(activities, rec.Timestamp);
-            if (active == 0) continue;
+            // Дневная строка: активна, если фича активна в ЛЮБОЙ момент суток [d, d+1).
+            // Метод принудительно approx (агрегат не несёт точного времени).
+            var (activeIds, isDaily) = ActiveFeatures(activities, byId, rec);
+            if (activeIds.Count == 0) continue;
+            if (isDaily) method = "approx";
 
-            // Текущая фича активна на моменте? Нет — её доля 0 (ход делится остальными).
-            if (!IsFeatureActive(byId, featureId, rec.Timestamp)) continue;
+            // Текущая фича в списке активных? Нет — её доля 0.
+            var idx = activeIds.IndexOf(featureId);
+            if (idx < 0) continue;
 
-            // Доля = ход / active. Токены: decimal (без потери), кламп ≥ 0, округление до long.
-            input += DivRound(Math.Max(0, rec.InputTokens), active);
-            output += DivRound(Math.Max(0, rec.OutputTokens), active);
-            cacheRead += DivRound(Math.Max(0, rec.CacheReadTokens), active);
-            cacheCreation += DivRound(Math.Max(0, rec.CacheCreationTokens), active);
+            var n = activeIds.Count;
 
-            // Цена: только с надёжной ценой (та же логика, что SpendFeatureReader.ComputeTotals):
-            // free → надёжный 0; ненадёжная модель или запись без цены (не free) → стоимость не в
-            // сумму, модель в hidden, costPartial.
-            var reliable = !rec.UnreliableCost && (rec.Source == SpendSources.Free || rec.CostUsd is not null);
-            if (reliable)
-                cost += (rec.Source == SpendSources.Free ? 0 : (rec.CostUsd ?? 0)) / active;
+            // Наибольший остаток: base + (idx < r ? 1 : 0). Кламп ≥ 0.
+            input += LargestRemainder(Math.Max(0, rec.InputTokens), n, idx);
+            output += LargestRemainder(Math.Max(0, rec.OutputTokens), n, idx);
+            cacheRead += LargestRemainder(Math.Max(0, rec.CacheReadTokens), n, idx);
+            cacheCreation += LargestRemainder(Math.Max(0, rec.CacheCreationTokens), n, idx);
+
+            // Цена: ReliableCostOf (единая точка правды, доработка Б9c шаг 1).
+            var reliableCost = SpendCostReliability.ReliableCostOf(rec);
+            if (reliableCost is not null)
+                cost += (decimal)(reliableCost.Value / n);
             else
             {
                 costPartial = true;
@@ -82,22 +84,50 @@ public static class SharedSpendSplitter
         }
 
         return (
-            new FeatureSpendShared(input, output, cacheRead, cacheCreation, cost, turns, method),
+            new FeatureSpendShared(input, output, cacheRead, cacheCreation, (double)cost, turns, method),
             costPartial,
             hidden.OrderBy(m => m, StringComparer.Ordinal).ToList());
     }
 
-    // Число фич, активных на момент t: у которых есть интервал, покрывающий t (half-open).
-    private static int CountActive(IReadOnlyList<FeatureActivity> activities, DateTime t)
+    // Активные фичи на момент записи: для detail — по Timestamp (точка), для daily — по
+    // пересечению [d, d+1) с интервалами. Возвращает (отсортированный список id, isDaily).
+    private static (List<string> Ids, bool IsDaily) ActiveFeatures(
+        IReadOnlyList<FeatureActivity> activities,
+        Dictionary<string, IReadOnlyList<FeatureActivityInterval>> byId,
+        FeatureSpendRecord rec)
     {
-        var count = 0;
+        var isDaily = rec.IsDaily;
+        var dayStart = rec.Timestamp;
+        var dayEnd = dayStart.AddDays(1);
+        var ids = new List<string>();
         foreach (var a in activities)
-            if (IsFeatureActive(a.Intervals, t)) count++;
-        return count;
+        {
+            if (isDaily)
+            {
+                // Пересечение [d, d+1) с любым интервалом фичи.
+                if (IntervalsIntersectDay(a.Intervals, dayStart, dayEnd))
+                    ids.Add(a.FeatureId);
+            }
+            else
+            {
+                if (IsFeatureActive(a.Intervals, rec.Timestamp))
+                    ids.Add(a.FeatureId);
+            }
+        }
+        ids.Sort(StringComparer.Ordinal);
+        return (ids, isDaily);
     }
 
-    // Фича активна на момент t: t внутри любого её интервала [From, To) (включительно с From,
-    // исключая To — фиксация правила, см. FeatureActivityInterval).
+    // Пересечение любого интервала фичи с [dayStart, dayEnd): true, если есть перекрытие.
+    private static bool IntervalsIntersectDay(
+        IReadOnlyList<FeatureActivityInterval> intervals, DateTime dayStart, DateTime dayEnd)
+    {
+        foreach (var iv in intervals)
+            if (iv.From < dayEnd && iv.To > dayStart) return true;
+        return false;
+    }
+
+    // Фича активна на момент t: t внутри любого её интервала [From, To).
     private static bool IsFeatureActive(IReadOnlyList<FeatureActivityInterval> intervals, DateTime t)
     {
         foreach (var iv in intervals)
@@ -105,17 +135,14 @@ public static class SharedSpendSplitter
         return false;
     }
 
-    private static bool IsFeatureActive(
-        Dictionary<string, IReadOnlyList<FeatureActivityInterval>> byId, string featureId, DateTime t)
-        => byId.TryGetValue(featureId, out var intervals) && IsFeatureActive(intervals, t);
-
-    // Деление long на int: decimal (без потери), округление до ближайшего (MidpointRounding.ToEven,
-    // детерминированно). Правило остатка (фиксация): доля = round(ход / N); сумма долей по фичам
-    // = сумма хода ДО округления (decimal точен), после округления расхождение ≤ 0.5 на фичу·ход.
-    private static long DivRound(long value, int divisor)
+    // Метод наибольшего остатка: x делится на n частей; часть с индексом idx получает
+    // base + (idx < r ? 1 : 0), где base = x/n, r = x%n. Сумма по всем idx = x РОВНО.
+    private static long LargestRemainder(long value, int n, int idx)
     {
-        if (divisor <= 1) return value;
-        return (long)Math.Round((decimal)value / divisor, MidpointRounding.ToEven);
+        if (n <= 1) return value;
+        var q = value / n;
+        var r = value % n;
+        return q + (idx < r ? 1 : 0);
     }
 
     // ─── Интервалы активности фичи (делегирование в FeatureActivity) ───────────────────────────

@@ -113,7 +113,8 @@ public sealed record FeatureSpendShared(
     long CacheReadTokens,
     long CacheCreationTokens,
     double CostUsd,
-    // Число ходов, вошедших в долю.
+    // Число ходов общего чата, в которых у фичи была доля. По фичам это поле НЕ сохраняется
+    // и НЕ суммируется (каждая фича считает свою долю независимо; сумма Turns по фичам > ходов).
     int Turns,
     // Метод оценки: journal (по полному журналу) | approx (по интервалам задач).
     string Method);

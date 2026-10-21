@@ -219,9 +219,10 @@ public class SharedSpendSplitterTests
         (shareA.OutputTokens + shareB.OutputTokens).Should().Be(30);
     }
 
-    // Деление с остатком: 100 / 3 = 33.33… → 33 (round, ToEven). Правило остатка зафиксировано.
+    // Деление с остатком (наибольший остаток): 100 / 3 → base=33, r=1; A (idx 0) получает 34.
+    // Сумма по A+B+C = 34+33+33 = 100 РОВНО.
     [Fact]
-    public void Split_ДелениеСОстатком_Округление()
+    public void Split_ДелениеСОстатком_НаибольшийОстаток()
     {
         var turns = new List<FeatureSpendRecord> { Turn(T0, input: 100) };
         var activities = new List<FeatureActivity>
@@ -233,12 +234,13 @@ public class SharedSpendSplitterTests
 
         var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
 
-        share.InputTokens.Should().Be(33, "100/3 = 33.33 → 33 (round ToEven)");
+        share.InputTokens.Should().Be(34, "100/3: base=33, r=1, A(idx 0) получает 33+1=34");
     }
 
-    // Деление без остатка: 101 / 2 = 50.5 → 50 (banker's rounding, ToEven → чётное).
+    // Деление (наибольший остаток): 101 / 2 → base=50, r=1; A (idx 0) получает 51.
+    // Сумма A+B = 51+50 = 101 РОВНО.
     [Fact]
-    public void Split_ДелениеБезОстатка_Точно()
+    public void Split_Деление_НаибольшийОстаток_ТочноеРавенство()
     {
         var turns = new List<FeatureSpendRecord> { Turn(T0, input: 101) };
         var activities = new List<FeatureActivity>
@@ -249,7 +251,7 @@ public class SharedSpendSplitterTests
 
         var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
 
-        share.InputTokens.Should().Be(50, "101/2 = 50.5 → 50 (banker's rounding)");
+        share.InputTokens.Should().Be(51, "101/2: base=50, r=1, A(idx 0) получает 50+1=51");
     }
 
     // ── Надёжность цены (единая точка правды SpendCostReliability) ───────────────────────────

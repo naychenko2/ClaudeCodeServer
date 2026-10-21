@@ -97,4 +97,7 @@ public sealed class FeatureSpendRecord
     // используют ОДИН и тот же признак — не «CostUsd is null» в разрезе против имени модели
     // в итоге (ревью Глеба, major: две точки правды давали разные цифры по одной записи).
     public bool UnreliableCost { get; init; }
+    // Дневная строка (агрегат суток, Timestamp = 00:00): делится между фичами, активными
+    // в любой момент этих суток (пересечение [d, d+1) с интервалами), метод принудительно approx.
+    public bool IsDaily { get; init; }
 }

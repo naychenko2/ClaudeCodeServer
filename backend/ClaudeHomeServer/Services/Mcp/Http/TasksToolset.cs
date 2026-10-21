@@ -123,21 +123,22 @@ public sealed class TasksToolset(
                 var all = tasks.GetByOwner(context.OwnerId).AsEnumerable();
                 // Фильтры — повтор REST GetAll (строковое сравнение корректно для ISO-дат)
                 all = ApplyFilters(all, arguments);
+                all = ApplyDoneWindow(all, arguments);
                 // projectId явно указан — точечный запрос по одному (доступному) проекту
                 var explicitProject = StringArg(arguments, "projectId");
                 if (explicitProject.Length > 0)
                 {
                     var denied = ReadDenied(projectId, allowed, explicitProject);
                     if (denied is not null) return Deny(denied);
-                    return Json(all.Where(t => t.ProjectId == explicitProject).Select(Brief).ToList());
+                    return BriefList(all.Where(t => t.ProjectId == explicitProject));
                 }
                 if (StringArg(arguments, "scope") == "all")
-                    return Json(all.Where(t => InScope(projectId, allowed, t)).Select(Brief).ToList());
+                    return BriefList(all.Where(t => InScope(projectId, allowed, t)));
                 // scope=context (дефолт): проект чата, либо личные задачи владельца
                 var data = projectId is not null
                     ? all.Where(t => t.ProjectId == projectId)
                     : all.Where(t => t.ProjectId is null);
-                return Json(data.Select(Brief).ToList());
+                return BriefList(data);
             }
 
             case "tasks_search":
@@ -805,6 +806,55 @@ public sealed class TasksToolset(
         return source;
     }
 
+    // Окно закрытых по умолчанию: две недели — горизонт, в котором агенты реально сверяются с
+    // недавно закрытым (отчёты, ревью); замер 22.10: без окна tasks_list отдавал 6,2 МБ при 6237
+    // закрытых из 6968 задач.
+    internal const int DefaultDoneDays = 14;
+
+    // Потолок выдачи tasks_list после всех фильтров (≈ 100 КБ ответа вместо мегабайт).
+    internal const int ListLimit = 300;
+
+    // Окно закрытых: действует, только если нет ни status, ни from/to; doneDays его переопределяет
+    // (0 — без закрытых, all — все закрытые). Граница полуоткрытая: CompletedAt >= now - N дней.
+    private static IEnumerable<TaskItem> ApplyDoneWindow(IEnumerable<TaskItem> source, JsonObject arguments)
+    {
+        // Модель может прислать и число, и строку
+        var raw = arguments["doneDays"] is JsonValue dv && dv.TryGetValue<int>(out var di) ? di.ToString() : StringArg(arguments, "doneDays");
+        int? days;
+        if (raw.Length > 0)
+        {
+            if (raw.Equals("all", StringComparison.OrdinalIgnoreCase)) return source;
+            days = int.TryParse(raw, out var n) && n >= 0 ? n : DefaultDoneDays;
+        }
+        else if (StringArg(arguments, "status").Length > 0
+                 || StringArg(arguments, "from").Length > 0 || StringArg(arguments, "to").Length > 0)
+            return source;
+        else
+            days = DefaultDoneDays;
+
+        var border = DateTime.UtcNow.AddDays(-days.Value);
+        return source.Where(t => t.Status != TaskItemStatus.Done
+            || (days.Value > 0 && t.CompletedAt is { } c && c >= border));
+    }
+
+    // Краткий список с потолком: при обрезке первым элементом идёт {id: null, note} — массив
+    // остаётся массивом, потребители не ломаются (обёртка {note, tasks} сломала бы прямой разбор).
+    private static McpToolCallResult BriefList(IEnumerable<TaskItem> source)
+    {
+        var all = source.ToList();
+        if (all.Count <= ListLimit) return Json(all.Select(Brief).ToList());
+        var result = new List<object>(ListLimit + 1)
+        {
+            new
+            {
+                id = (string?)null,
+                note = $"показано {ListLimit} из {all.Count}; сузь фильтр (status, from/to, doneDays) или ищи через tasks_search",
+            },
+        };
+        result.AddRange(all.Take(ListLimit).Select(Brief));
+        return Json(result);
+    }
+
     // Компактное представление задачи для списков — как у stdio-ветки
     private static object Brief(TaskItem t) => new
     {
@@ -977,7 +1027,9 @@ public sealed class TasksToolset(
             new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() });
 
         yield return Tool("tasks_list",
-            $"Список задач. {context} scope=all — все задачи пользователя по всем проектам и личные.",
+            $"Список задач. {context} scope=all — все задачи пользователя по всем проектам и личные. " +
+            $"Без status и from/to отдаются открытые и закрытые за последние {DefaultDoneDays} дней (doneDays переопределяет окно); " +
+            $"не больше {ListLimit} записей, при обрезке первым элементом идёт note. Старое — status=done, doneDays=all или tasks_search.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -1010,6 +1062,11 @@ public sealed class TasksToolset(
                     {
                         ["type"] = "string",
                         ["description"] = "Срок до даты включительно, YYYY-MM-DD (задачи без срока не попадают)",
+                    },
+                    ["doneDays"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = $"Окно закрытых задач по дате закрытия: число дней (0 — без закрытых) или all — все закрытые; по умолчанию {DefaultDoneDays}. Не действует при status и from/to",
                     },
                     ["scope"] = new JsonObject
                     {

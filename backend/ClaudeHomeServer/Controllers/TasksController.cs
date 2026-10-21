@@ -280,9 +280,15 @@ public class TasksController(
         [FromQuery] string? q = null, [FromQuery] string? status = null,
         [FromQuery] string? priority = null, [FromQuery] string? assignee = null,
         [FromQuery] string? projectId = null, [FromQuery] bool personal = false,
-        [FromQuery] string? personaId = null)
+        [FromQuery] string? personaId = null, [FromQuery] int? doneDays = null)
     {
         var result = tasks.GetByOwner(UserId).AsEnumerable();
+        // doneDays задан — закрытые только за N дней по CompletedAt (границу включаем); не задан — все
+        if (doneDays is { } dd)
+        {
+            var border = DateTime.UtcNow.AddDays(-Math.Max(dd, 0));
+            result = result.Where(t => t.Status != TaskItemStatus.Done || (dd > 0 && t.CompletedAt is { } c && c >= border));
+        }
         // Строковое сравнение корректно для ISO-дат YYYY-MM-DD
         if (from is not null)
             result = result.Where(t => t.DueDate is not null && string.Compare(t.DueDate, from, StringComparison.Ordinal) >= 0);

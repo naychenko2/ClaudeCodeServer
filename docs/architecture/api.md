@@ -45,7 +45,7 @@ PUT                 /api/feature-flags/{key}          { enabled } → { values{}
 GET                 /api/subsystem-modules            → { items[{ id, remoteUrl, exposedModule }] }  (MF-remote подсистем; remoteUrl с ?v={хеш remoteEntry.js на диске} — меняется с каждой сборкой модуля, сам remoteEntry.js отдаётся no-cache, /{имя}-remote/assets/** — immutable)
 GET                 /api/modules                      → { items[] }  (внешние YARP-модули; remoteEntry с ?v= — хеш файла из нашей статики, иначе версия манифеста)
 PUT                 /api/auth/timezone                { timeZone }  (IANA-зона устройства — для напоминаний)
-GET                 /api/tasks                        ?from=&to=&q=&status=&priority=&assignee=&projectId=&personal=&personaId=  (все задачи владельца с фильтрами; personaId — поручения персоне)
+GET                 /api/tasks                        ?from=&to=&q=&status=&priority=&assignee=&projectId=&personal=&personaId=&doneDays=  (все задачи владельца с фильтрами; personaId — поручения персоне; doneDays=N — закрытые только за N дней по CompletedAt, 0 — без закрытых, не задан — все)
 POST                /api/tasks/{id}/execute           → Task  (запуск Claude-исполнителя; personaId у задачи → от лица персоны)
 GET                 /api/push/vapid-public-key        → { publicKey }
 POST                /api/push/subscribe|unsubscribe   { endpoint, p256dh?, auth? }  (web-push подписки устройств)

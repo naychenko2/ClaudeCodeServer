@@ -10,6 +10,8 @@ import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { featureStatusTag, featureDisplayState, STAGE_NAME } from '../../lib/chatGroups';
 import { featureTaskTotal } from './featurePageBody';
+import { showToast } from '../../lib/toast';
+import { FeatureMergeDialog } from './FeatureMergeDialog';
 import { CenterViewShell } from '../CenterViewShell';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import type { FeatureGlyph as GlyphKind } from '../chat/feature/FeatureGlyphs';
@@ -186,6 +188,56 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
   // перехватываем, если печатают в поле/редакторе или уже открыт диалог/меню.
   const goBack = () => { onBack(target); clearBackNav(); };
 
+  // === Мерж (Ф6): общая модалка подтверждения → POST /merge ===
+  // Состояния: pending (запрос в полёте, кнопка «Запускаю…» заблокирована),
+  // успех (тост + state → merging через перезапрос), 409 (state → merging, без
+  // красной ошибки — идемпотентность), прочий сбой (сообщение сервера + «Повторить»).
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergePending, setMergePending] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  // Синхронный гард от двойного клика: state батчится (два клика в одном тике оба
+  // видят pending=false), ref — нет. Сбрасывается, когда запрос завершился.
+  const mergeInFlight = useRef(false);
+
+  const openMergeDialog = () => {
+    setMergeError(null);
+    setMergeOpen(true);
+  };
+
+  const closeMergeDialog = () => {
+    setMergeOpen(false);
+    setMergePending(false);
+    setMergeError(null);
+    mergeInFlight.current = false;
+  };
+
+  const confirmMerge = async () => {
+    if (mergeInFlight.current) return;
+    mergeInFlight.current = true;
+    setMergePending(true);
+    setMergeError(null);
+    try {
+      await api.tasks.mergeFeature(featureId);
+      // Успех: тост + state → merging (перезапрос страницы).
+      showToast('Задача мержа создана', 'Марк начал мерж');
+      refetchFeaturePage(featureId);
+      closeMergeDialog();
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      if (err.status === 409) {
+        // «Мерж уже идёт» (идемпотентность): обновить состояние, красной ошибки нет.
+        refetchFeaturePage(featureId);
+        closeMergeDialog();
+      } else {
+        // Прочий сбой: сообщение сервера + «Повторить» (диалог остаётся открыт).
+        // Гард сбрасываем — повторный клик («Повторить») должен пройтись.
+        mergeInFlight.current = false;
+        setMergeError(err.message || 'Сервер не ответил');
+        setMergePending(false);
+      }
+    }
+  };
+
   // run для тела: null вне ok (loading/error/…) — мета строится по индексу.
   const run: FeatureRun | null = page.status === 'ok' ? page.page.run : null;
 
@@ -245,7 +297,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
     body = (
       <>
         <FeaturePageHeader run={okRun} feature={feature} isMobile={isMobile} tag={tag} />
-        <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} />
+        <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} />
         <FeaturePageTabs
           value={tab}
           onChange={setFeaturePageTab}
@@ -296,7 +348,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
       }
       trailing={
         // Тег (1280) · главное действие (1280) · ⋯ (макет §1/§11).
-        <FeaturePageToolbar run={run} feature={feature} isMobile={isMobile} tag={tag} />
+        <FeaturePageToolbar run={run} feature={feature} isMobile={isMobile} tag={tag} onMerge={openMergeDialog} />
       }
       rootRef={rootRef}
       rootTestId="feature-page"
@@ -304,10 +356,23 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
       // (FeatureCenter), корень height:100% по умолчанию.
       rootStyle={isMobile ? { flex: 1, overflow: 'hidden', height: 'auto' } : undefined}
     >
-      {/* Тело: прокрутка, поля 16 16 20 (макет §5.4; 16 сверху — как у файла, Майя m2). */}
-      <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: '16px 16px 20px' }}>
-        {body}
-      </div>
+      <>
+        {/* Тело: прокрутка, поля 16 16 20 (макет §5.4; 16 сверху — как у файла, Майя m2). */}
+        <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: '16px 16px 20px' }}>
+          {body}
+        </div>
+        {/* Модалка подтверждения мержа (Ф6): портал, рендерится при mergeOpen. */}
+        {mergeOpen && (
+          <FeatureMergeDialog
+            title={title}
+            branch={feature?.branch ?? null}
+            pending={mergePending}
+            error={mergeError}
+            onCancel={closeMergeDialog}
+            onConfirm={confirmMerge}
+          />
+        )}
+      </>
     </CenterViewShell>
   );
 }

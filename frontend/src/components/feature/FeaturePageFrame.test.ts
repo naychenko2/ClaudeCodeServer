@@ -18,10 +18,10 @@ import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
-import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes } from '../chat/__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex, FeaturePage as FeaturePageData } from '../../types/featureIndex';
 import type { FeatureRun, FeatureState, FeatureAttention } from '../../types/featureRun';
-import type { Session } from '../../types';
+import type { Session, Task } from '../../types';
 
 // ── Управляемые данные ──────────────────────────────────────────────────────────
 const mockIndex = vi.hoisted(() => ({
@@ -41,6 +41,14 @@ const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>()
 const mockOpenChat = vi.hoisted(() => ({ calls: [] as string[] }));
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
 const mockToast = vi.hoisted(() => ({ calls: [] as [string, string][] }));
+// Мерж (Ф6): calls — журнал (двойной клик → 1), pending — запрос в полёте,
+// error — 409/сбой (status + message), result — задача мержа.
+const mockMerge = vi.hoisted(() => ({
+  calls: [] as string[],
+  pending: false,
+  error: null as (Error & { status?: number }) | null,
+  result: null as import('../../types').Task | null,
+}));
 
 vi.mock('../../lib/api', () => ({
   api: {
@@ -52,6 +60,12 @@ vi.mock('../../lib/api', () => ({
         if (mockGetFeature.pending) return new Promise<FeaturePageData>(() => {});
         if (mockGetFeature.error) return Promise.reject(mockGetFeature.error);
         return Promise.resolve(mockGetFeature.result!);
+      },
+      mergeFeature: (fid: string) => {
+        mockMerge.calls.push(fid);
+        if (mockMerge.pending) return new Promise<import('../../types').Task>(() => {});
+        if (mockMerge.error) return Promise.reject(mockMerge.error);
+        return Promise.resolve(mockMerge.result!);
       },
     },
   },
@@ -207,6 +221,10 @@ beforeEach(() => {
   mockOpenChat.calls = [];
   mockOpenTask.calls = [];
   mockToast.calls = [];
+  mockMerge.calls = [];
+  mockMerge.pending = false;
+  mockMerge.error = null;
+  mockMerge.result = null;
   indexTest.setIndex('p1', mockIndex as FeaturesIndex);
 });
 afterEach(() => {
@@ -368,7 +386,7 @@ describe('Тревога (макет §2)', () => {
     expect(textNodes(main!).join('')).toContain('Чат Кира');
   });
 
-  it('merge: тон info, «Мерж» (заглушка Ф6 → тост), пара «чат · задача»', async () => {
+  it('merge_pending: тон info, «Мерж…» (Ф6: кнопка → общая модалка), пара «чат · задача»', async () => {
     mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
     const c = render({});
     await settle();
@@ -377,7 +395,7 @@ describe('Тревога (макет §2)', () => {
     expect((alarm as unknown as { getAttribute: (a: string) => string | null }).getAttribute('data-tone')).toBe('info');
     const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
     expect(main).not.toBeNull();
-    expect(textNodes(main!).join('')).toContain('Мерж');
+    expect(textNodes(main!).join('')).toContain('Мерж…');
     // Пара «чат · задача» в блоке.
     expect(textNodes(alarm!).join('')).toContain('чат');
     expect(textNodes(alarm!).join('')).toContain('задача');
@@ -436,12 +454,200 @@ describe('Тревога (макет §2)', () => {
 
 // ═══ 4. Чистая функция: главное действие ══════════════════════════════════════
 describe('featurePrimaryAction', () => {
-  it('wait → «Ответить {имя}» (chat), stopped → «Чат {имя}» (chat), merge → «Мерж»', () => {
+  it('wait → «Ответить {имя}» (chat), stopped → «Чат {имя}» (chat), merge → «Мерж…»', () => {
     const a = (kind: FeatureAttention['kind']): FeatureAttention =>
       ({ kind, taskId: 't1', since: null, reason: null, personaId: 'p1', linkedSessionId: 'c1' });
     expect(featurePrimaryAction(a('wait'), 'Кира')?.label).toBe('Ответить Кира');
     expect(featurePrimaryAction(a('stopped'), 'Кира')?.label).toBe('Чат Кира');
-    expect(featurePrimaryAction(a('merge'), 'Кира')?.label).toBe('Мерж');
+    expect(featurePrimaryAction(a('merge'), 'Кира')?.label).toBe('Мерж…');
     expect(featurePrimaryAction(null)).toBeNull();
+  });
+});
+
+// ═══ 5. Ф6: действие «Мерж…» — гейты, диалог, POST /merge, 409/500, 360 ═══════
+//
+// «Мерж…» — только state=merge_pending; merging/merged/closed/running — нет (только
+// пара «чат · задача»). Клик → общая модалка (портал в body) → «Мерж» → POST /merge.
+// Двойной клик → 1 запрос (ref-гард); «Запускаю…» disabled; 409 — без красной ошибки
+// (состояние обновляется); 500 — сообщение + «Повторить»; «Отмена» — без запроса;
+// 360 — шторка.
+
+// Первый <button> в поддереве.
+function firstButton(n: AnyNode): AnyNode | null {
+  if (n.nodeType === 1 && n.nodeName === 'BUTTON') return n;
+  for (const c of n.childNodes) {
+    const hit = firstButton(c);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// <button> в поддереве с ТОЧНЫМ текстом (trim).
+function buttonByText(n: AnyNode, text: string): AnyNode | null {
+  let hit: AnyNode | null = null;
+  const walk = (x: AnyNode) => {
+    if (hit) return;
+    if (x.nodeType === 1 && x.nodeName === 'BUTTON' && textNodes(x).join('').trim() === text) { hit = x; return; }
+    for (const c of x.childNodes) walk(c);
+  };
+  walk(n);
+  return hit;
+}
+
+// document.body как AnyNode (порталы модалки).
+function bodyNode(): AnyNode {
+  return (globalThis as { document: { body: unknown } }).document.body as unknown as AnyNode;
+}
+
+// Открыть диалог: клик по «Мерж…» (главное действие, 1280).
+async function openMergeDialog(c: AnyNode) {
+  const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
+  expect(main, 'нет главного действия «Мерж…» (merge_pending, 1280)').not.toBeNull();
+  const openBtn = firstButton(main as never)!;
+  await act(async () => { (reactProps(openBtn)!.onClick as (e: unknown) => void)({}); });
+}
+
+describe('Ф6: «Мерж…» на странице фичи', () => {
+  // ── Гейты: «Мерж…» только merge_pending ─────────────────────────────────────────
+  it('merge_pending → «Мерж…» есть; merging/merged/closed/running → нет', async () => {
+    const cases: [FeatureState, FeatureAttention | null, boolean][] = [
+      ['merge_pending', attention('merge'), true],
+      // merging: attention merge (пара «чат · задача»), но «Мерж…» — нет (state-гейт).
+      ['merging', attention('merge'), false],
+      ['merged', null, false],
+      ['closed', null, false],
+      ['running', null, false],
+    ];
+    for (const [state, att, expectMerge] of cases) {
+      mockGetFeature.result = pageData({ state, attention: att });
+      const c = render({});
+      await settle();
+      const all = textNodes(c).join('');
+      // «Мерж…» (с многоточием) — только merge_pending.
+      expect(all.includes('Мерж…'), `state=${state}: «Мерж…» должен быть ${expectMerge ? 'есть' : 'нет'}`).toBe(expectMerge);
+    }
+  });
+
+  // ── Подтверждение → POST /merge один раз (двойной клик) ─────────────────────────
+  it('«Мерж…» → диалог → «Мерж» → POST /merge (1 вызов) + тост', async () => {
+    mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
+    mockMerge.result = { id: 'merge-1', title: 'Мерж · Моя фича', status: 'inProgress', description: '', priority: 'medium' } as Task;
+    const c = render({});
+    await settle();
+    await openMergeDialog(c);
+    const confirm = buttonByText(bodyNode(), 'Мерж');
+    expect(confirm, 'нет кнопки «Мерж» в диалоге').not.toBeNull();
+    await act(async () => { (reactProps(confirm!)!.onClick as (e: unknown) => void)({}); });
+    await settle();
+    expect(mockMerge.calls, 'POST /merge не вызван').toHaveLength(1);
+    expect(mockToast.calls.some(([t]) => t === 'Задача мержа создана'), 'нет тоста об успехе').toBe(true);
+  });
+
+  it('двойной клик по «Мерж» → POST 1 раз (ref-гард, state батчится)', async () => {
+    mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
+    mockMerge.pending = true; // запрос в полёте (не разрешается)
+    const c = render({});
+    await settle();
+    await openMergeDialog(c);
+    const confirm = buttonByText(bodyNode(), 'Мерж')!;
+    // ДВА клика в ОДНОМ act (один тик): setState батчится, ref-гард — синхронный.
+    await act(async () => {
+      (reactProps(confirm)!.onClick as (e: unknown) => void)({});
+      (reactProps(confirm)!.onClick as (e: unknown) => void)({});
+    });
+    expect(mockMerge.calls, 'двойной клик → >1 запроса (нет ref-гарда)').toHaveLength(1);
+  });
+
+  it('после «Мерж»: «Запускаю…» disabled (запрос в полёте)', async () => {
+    mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
+    mockMerge.pending = true;
+    const c = render({});
+    await settle();
+    await openMergeDialog(c);
+    const confirm = buttonByText(bodyNode(), 'Мерж')!;
+    await act(async () => { (reactProps(confirm)!.onClick as (e: unknown) => void)({}); });
+    // Кнопка стала «Запускаю…» и заблокирована.
+    const launching = buttonByText(bodyNode(), 'Запускаю…');
+    expect(launching, 'нет «Запускаю…» после подтверждения').not.toBeNull();
+    expect(reactProps(launching!)!.disabled, '«Запускаю…» не disabled').toBe(true);
+  });
+
+  // ── 409: без красной ошибки, состояние обновляется (диалог закрывается) ──────────
+  it('409 «мерж уже идёт»: диалог закрывается, красной ошибки нет, POST 1 раз', async () => {
+    mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
+    mockMerge.error = { name: 'HttpError', status: 409, message: 'Мерж уже идёт' } as Error & { status?: number };
+    const c = render({});
+    await settle();
+    await openMergeDialog(c);
+    const confirm = buttonByText(bodyNode(), 'Мерж')!;
+    await act(async () => { (reactProps(confirm)!.onClick as (e: unknown) => void)({}); });
+    await settle();
+    expect(mockMerge.calls).toHaveLength(1);
+    // Красной ошибки (feature-merge-error) нет; диалог закрыт (кнопки «Мерж»/«Отмена» исчезли).
+    expect(buttonByText(bodyNode(), 'Запускаю…'), '409: «Запускаю…» должен исчезнуть (диалог закрыт)').toBeNull();
+    const all = textNodes(bodyNode()).join('');
+    expect(all.includes('Мерж'), '409: диалог не закрылся (кнопка «Мерж» на месте)').toBe(false);
+  });
+
+  // ── 500: сообщение сервера + «Повторить» (диалог остаётся) ──────────────────────
+  it('500: сообщение сервера + «Повторить» (диалог открыт)', async () => {
+    mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
+    mockMerge.error = { name: 'HttpError', status: 500, message: 'Worktree фичи не найден на диске' } as Error & { status?: number };
+    const c = render({});
+    await settle();
+    await openMergeDialog(c);
+    const confirm = buttonByText(bodyNode(), 'Мерж')!;
+    await act(async () => { (reactProps(confirm)!.onClick as (e: unknown) => void)({}); });
+    await settle();
+    const all = textNodes(bodyNode()).join('');
+    expect(all, 'нет сообщения сервера (500)').toContain('Worktree фичи не найден на диске');
+    expect(buttonByText(bodyNode(), 'Повторить'), 'нет «Повторить» (500)').not.toBeNull();
+  });
+
+  // ── «Отмена»: без запроса, диалог закрывается ─────────────────────────────────────
+  it('«Отмена» → диалог закрывается, POST /merge не шлётся', async () => {
+    mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
+    const c = render({});
+    await settle();
+    await openMergeDialog(c);
+    const cancel = buttonByText(bodyNode(), 'Отмена');
+    expect(cancel, 'нет «Отмена» в диалоге').not.toBeNull();
+    await act(async () => { (reactProps(cancel!)!.onClick as (e: unknown) => void)({}); });
+    await settle();
+    expect(mockMerge.calls, '«Отмена» послал POST /merge').toHaveLength(0);
+    // Диалог закрыт: «Мерж»/«Отмена» исчезли.
+    expect(buttonByText(bodyNode(), 'Отмена'), '«Отмена» на месте (диалог не закрыт)').toBeNull();
+  });
+
+  // ── 360: «Мерж…» в блоке тревоги, диалог — шторка ────────────────────────────────
+  it('360: «Мерж…» в блоке тревоги; диалог — шторка (cc-sheet-card)', async () => {
+    mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
+    const c = render({ isMobile: true });
+    // useIsMobileModal читает window.matchMedia (fakeDom по умолчанию matches:false) —
+    // для шторки переопределяем в matches:true (после installFakeDom, до рендера модалки).
+    (globalThis as { window: Record<string, unknown> }).window.matchMedia =
+      () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} });
+    await settle();
+    // На 360 главное действие — в блоке тревоги (не в шапке).
+    const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm')!;
+    const openBtn = firstButton(alarm as never);
+    expect(openBtn, 'нет «Мерж…» в блоке тревоги (360)').not.toBeNull();
+    expect(textNodes(openBtn!).join('').trim()).toBe('Мерж…');
+    // Клик → диалог (шторка).
+    await act(async () => { (reactProps(openBtn!)!.onClick as (e: unknown) => void)({}); });
+    // Шторка (cc-sheet-card) на месте; карточки (cc-modal-card) нет.
+    const body = bodyNode();
+    const has = (cls: string) => {
+      let hit = false;
+      const walk = (x: AnyNode) => {
+        if (hit) return;
+        if (x.nodeType === 1 && (x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('class')?.includes(cls)) { hit = true; return; }
+        for (const ch of x.childNodes) walk(ch);
+      };
+      walk(body);
+      return hit;
+    };
+    expect(has('cc-sheet-card'), '360: нет шторки (cc-sheet-card)').toBe(true);
+    expect(has('cc-modal-card'), '360: карточка вместо шторки').toBe(false);
   });
 });

@@ -97,9 +97,9 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
 
 // === Главное действие (макет §1/§2/§11) ===
 //
-// wait → «Ответить {имя}» (в чат), stopped → «Чат {имя}» (в чат), merge → «Мерж»
-// (действие Ф6, пока заглушка с тем же видом). Имени нет (персона не резолвится) —
-// нейтральная подпись. Тревоги нет → null.
+// wait → «Ответить {имя}» (в чат), stopped → «Чат {имя}» (в чат), merge → «Мерж…»
+// (действие Ф6: кнопка открывает общую модалку подтверждения, POST /merge).
+// Имени нет (персона не резолвится) — нейтральная подпись. Тревоги нет → null.
 export interface FeaturePrimaryAction {
   kind: 'chat' | 'merge';
   label: string;
@@ -109,7 +109,7 @@ export interface FeaturePrimaryAction {
 
 export function featurePrimaryAction(a: FeatureAttention | null | undefined, personaName?: string | null): FeaturePrimaryAction | null {
   if (!a) return null;
-  if (a.kind === 'merge') return { kind: 'merge', label: 'Мерж', chatId: a.linkedSessionId ?? null };
+  if (a.kind === 'merge') return { kind: 'merge', label: 'Мерж…', chatId: a.linkedSessionId ?? null };
   const name = personaName ?? null;
   if (a.kind === 'stopped') {
     return { kind: 'chat', label: name ? `Чат ${name}` : 'Открыть чат', chatId: a.linkedSessionId ?? null };
@@ -231,9 +231,11 @@ export interface FeaturePageToolbarProps {
   feature: FeatureIndexFeature | null;
   isMobile: boolean;
   tag: FeatureRunTag | null;
+  // «Мерж…»: открыть общую модалку подтверждения (Ф6); undefined — без действия.
+  onMerge?: () => void;
 }
 
-export function FeaturePageToolbar({ run, feature, isMobile, tag }: FeaturePageToolbarProps) {
+export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge }: FeaturePageToolbarProps) {
   const branch = feature?.branch ?? null;
   const keyChat = feature?.keySessionId ?? null;
   const epic = run?.epic ?? null;
@@ -247,19 +249,22 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag }: FeaturePageT
     showToast('Ветка скопирована', branch);
   };
 
-  // Главное действие: wait/stopped → в чат исполнителя; merge → заглушка Ф6 (тост);
-  // не начата → «Открыть ключевой чат» (ghost, макет §1).
+  // Главное действие: wait/stopped → в чат исполнителя; merge → «Мерж…» (Ф6: общая
+  // модалка, POST /merge); не начата → «Открыть ключевой чат» (ghost, макет §1).
   const attention = run?.attention ?? null;
   const primary = featurePrimaryAction(attention, attentionPersonaName(attention));
   const notStarted = run?.state === 'not_started';
-  const showPrimary = !isMobile && (primary != null || (notStarted && keyChat != null));
+  // «Мерж…» — только когда state === 'merge_pending'; никогда при merging/merged/closed.
+  const mergePending = run?.state === 'merge_pending';
+  const effectivePrimary = (primary?.kind === 'merge' && !mergePending) ? null : primary;
+  const showPrimary = !isMobile && (effectivePrimary != null || (notStarted && keyChat != null));
   const onPrimary = () => {
-    if (primary?.kind === 'chat' && primary.chatId) {
-      void openChatById(primary.chatId);
+    if (effectivePrimary?.kind === 'chat' && effectivePrimary.chatId) {
+      void openChatById(effectivePrimary.chatId);
       return;
     }
-    if (primary?.kind === 'merge') {
-      showToast('Мерж', 'Действие готовится — Ф6');
+    if (effectivePrimary?.kind === 'merge') {
+      onMerge?.();
       return;
     }
     if (notStarted && keyChat) void openChatById(keyChat);
@@ -299,10 +304,10 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag }: FeaturePageT
         <span data-testid="feature-page-main-action" style={{ display: 'inline-flex', flexShrink: 0 }}>
           <Button
             size="sm"
-            variant={primary ? 'primary' : 'ghost'}
+            variant={effectivePrimary ? 'primary' : 'ghost'}
             onClick={onPrimary}
           >
-            {primary ? primary.label : 'Открыть ключевой чат'}
+            {effectivePrimary ? effectivePrimary.label : 'Открыть ключевой чат'}
           </Button>
         </span>
       )}
@@ -330,9 +335,11 @@ export interface FeaturePageAlertProps {
   run: FeatureRun | null;
   feature: FeatureIndexFeature | null;
   isMobile: boolean;
+  // «Мерж…»: открыть общую модалку подтверждения (Ф6); undefined — без действия.
+  onMerge?: () => void;
 }
 
-export function FeaturePageAlert({ run, feature, isMobile }: FeaturePageAlertProps) {
+export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePageAlertProps) {
   const a = run?.attention ?? null;
   const notStarted = run?.state === 'not_started';
   if (!a && !notStarted) return null;
@@ -371,9 +378,13 @@ export function FeaturePageAlert({ run, feature, isMobile }: FeaturePageAlertPro
   }
 
   // Действия: главное (360) + «чат» (только merge) + «задача».
+  // «Мерж…» — только когда state === 'merge_pending'; при merging/merged/closed —
+  // только пара «чат · задача» (кнопки нет).
   const primary = featurePrimaryAction(a, name);
+  const mergePending = run?.state === 'merge_pending';
+  const effectivePrimary = (primary?.kind === 'merge' && !mergePending) ? null : primary;
   const acts: ReactNode[] = [];
-  if (isMobile && primary) {
+  if (isMobile && effectivePrimary) {
     acts.push(
       <Button
         key="primary"
@@ -381,11 +392,11 @@ export function FeaturePageAlert({ run, feature, isMobile }: FeaturePageAlertPro
         variant="primary"
         style={{ background: C.bgWhite, minHeight: 40 }}
         onClick={() => {
-          if (primary.kind === 'chat' && primary.chatId) void openChatById(primary.chatId);
-          else if (primary.kind === 'merge') showToast('Мерж', 'Действие готовится — Ф6');
+          if (effectivePrimary.kind === 'chat' && effectivePrimary.chatId) void openChatById(effectivePrimary.chatId);
+          else if (effectivePrimary.kind === 'merge') onMerge?.();
         }}
       >
-        {primary.label}
+        {effectivePrimary.label}
       </Button>,
     );
   }

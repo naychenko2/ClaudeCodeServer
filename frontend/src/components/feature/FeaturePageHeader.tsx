@@ -411,6 +411,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
       <NavTargetButton
         key="chat"
         kind="chat"
+        chatId={a.linkedSessionId}
         label="чат"
         isMobile={isMobile}
         title="Открыть чат. Страница фичи скроется, вернётся по плашке."
@@ -426,6 +427,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
       <NavTargetButton
         key="task"
         kind="task"
+        taskId={a.taskId}
         label="задача"
         isMobile={isMobile}
         title="Открыть задачу. Страница фичи скроется, вернётся по плашке."
@@ -458,6 +460,8 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
     <div
       data-testid="feature-page-alarm"
       data-tone={tone}
+      role="status"
+      aria-live="polite"
       style={{
         display: 'flex', gap: 9, alignItems: 'flex-start',
         marginTop: 10, padding: '10px 12px', borderRadius: R.lg,

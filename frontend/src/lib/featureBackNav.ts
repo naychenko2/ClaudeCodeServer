@@ -20,8 +20,12 @@ export interface BackNavTarget {
 }
 
 export interface BackNav {
-  // Исходный чат (id), из которого перешли.
+  // Исходный id (чат или фича), из которого перешли.
   from: string;
+  // Дискриминатор: 'chat' — from = id чата (recordBackNav); 'feature' — from = id фичи
+  // (recordFeatureReturn). Ф9b читает этот указатель: без дискриминатора id фичи
+  // неотличим от id чата (ревью фронта 1, minor 6).
+  fromKind: 'chat' | 'feature';
   // Куда перешли (чат или страница фичи).
   to: BackNavTarget;
 }
@@ -47,7 +51,7 @@ function subscribe(fn: () => void): () => void {
 export function recordBackNav(from: string, to: string | BackNavTarget): void {
   const target = normalizeBackTarget(to);
   if (!from || !target.id || (target.kind === 'chat' && target.id === from)) return;
-  _back = { from, to: target };
+  _back = { from, fromKind: 'chat', to: target };
   emit();
 }
 
@@ -60,10 +64,10 @@ export function clearBackNav(): void {
 // записывает, что из страницы фичи `featureId` открыли чат/задачу `to`. Чип
 // «вернуться на страницу фичи» (Ф9b) читает это и предлагает возврат. Использует
 // тот же указатель _back, что и «← назад» (chat → chat/feature) — один переход
-// за раз; `from` здесь — id фичи (не чата), `to.kind` — 'chat' | 'task'.
+// за раз; `from` здесь — id фичи (не чата), `fromKind` = 'feature', `to.kind` — 'chat' | 'task'.
 export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }): void {
   if (!featureId || !to.id) return;
-  _back = { from: featureId, to: { kind: to.kind, id: to.id } };
+  _back = { from: featureId, fromKind: 'feature', to: { kind: to.kind, id: to.id } };
   emit();
 }
 

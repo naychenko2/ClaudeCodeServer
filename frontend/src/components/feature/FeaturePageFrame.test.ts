@@ -589,6 +589,33 @@ describe('Ф6: «Мерж…» на странице фичи', () => {
     expect(all.includes('Мерж'), '409: диалог не закрылся (кнопка «Мерж» на месте)').toBe(false);
   });
 
+  // ── refetchFeaturePage: после успеха и 409 страница перезапрашивается (minor 4) ──
+  it('успех мержа → refetchFeaturePage (getFeature 2-й раз)', async () => {
+    mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
+    mockMerge.result = { id: 'merge-1', title: 'Мерж · Моя фича', status: 'inProgress', description: '', priority: 'medium' } as Task;
+    const c = render({});
+    await settle();
+    expect(mockGetFeature.calls, 'первичный запрос').toHaveLength(1);
+    await openMergeDialog(c);
+    const confirm = buttonByText(bodyNode(), 'Мерж')!;
+    await act(async () => { (reactProps(confirm)!.onClick as (e: unknown) => void)({}); });
+    await settle();
+    expect(mockGetFeature.calls, 'refetch после успеха (2-й запрос)').toHaveLength(2);
+  });
+
+  it('409 → refetchFeaturePage (getFeature 2-й раз)', async () => {
+    mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });
+    mockMerge.error = { name: 'HttpError', status: 409, message: 'Мерж уже идёт' } as Error & { status?: number };
+    const c = render({});
+    await settle();
+    expect(mockGetFeature.calls, 'первичный запрос').toHaveLength(1);
+    await openMergeDialog(c);
+    const confirm = buttonByText(bodyNode(), 'Мерж')!;
+    await act(async () => { (reactProps(confirm)!.onClick as (e: unknown) => void)({}); });
+    await settle();
+    expect(mockGetFeature.calls, 'refetch после 409 (2-й запрос)').toHaveLength(2);
+  });
+
   // ── 500: сообщение сервера + «Повторить» (диалог остаётся) ──────────────────────
   it('500: сообщение сервера + «Повторить» (диалог открыт)', async () => {
     mockGetFeature.result = pageData({ state: 'merge_pending', attention: attention('merge') });

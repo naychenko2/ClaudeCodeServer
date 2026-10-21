@@ -177,19 +177,27 @@ export function stageStatusBadge(stage: FeatureStage, taskMap: Map<string, Featu
 
 // Чип модели (макет §5/§7): mono 10, «Opus»/«Sonnet»/«Qwen»/«Авто»; «Авто» раскрывается —
 // подсказка с полной моделью (modelFull). Подсказка — по наведению, фокусу и тапу (Tooltip).
+// Доступность (ревью фронта 1, minor 3): tabIndex=0 + role="button" — чип фокусируется
+// с клавиатуры, подсказка показывается по фокусу (не только по тапу на 360).
 export function ModelChip({ label, full, isMobile = false }: { label: string; full?: string | null; isMobile?: boolean }) {
   const [tapped, setTapped] = useState(false);
+  const [focused, setFocused] = useState(false);
   const tip = full ? (label === 'Авто' ? `Модель: ${full}` : full) : null;
   const chip = (
     <span
       data-testid="timeline-model-chip"
+      role="button"
+      tabIndex={0}
       onClick={isMobile ? () => setTapped(v => !v) : undefined}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
       style={{
         fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700,
         color: C.textSecondary, background: C.bgSelected,
         borderRadius: R.sm, padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0,
         minHeight: isMobile ? 40 : undefined,
         display: 'inline-flex', alignItems: 'center',
+        cursor: 'default',
       }}
     >
       {label}
@@ -197,7 +205,7 @@ export function ModelChip({ label, full, isMobile = false }: { label: string; fu
   );
   if (!tip) return chip;
   return (
-    <Tooltip content={tip} focused={tapped}>
+    <Tooltip content={tip} focused={tapped || focused}>
       {chip}
     </Tooltip>
   );
@@ -299,6 +307,7 @@ export function ExecutorRow({ x, task, now, featureId, isMobile = false }: {
           chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
           showNoChat
           taskId={x.taskId}
+          taskClosed={x.status === 'done' || task?.status === 'done'}
           onOpenTask={openTask}
           taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
           isMobile={isMobile}

@@ -134,12 +134,12 @@ describe('FeatureGroupHeader: тона', () => {
     expect(html.includes('border-left-color:var(--c-info)')).toBe(true);
   });
 
-  it('ждёт вас · мерж (merge): кромка info, статус «ждёт вас · мерж»', () => {
+  it('ждёт согласия на мерж (merge, attention): кромка info, статус «ждёт согласия на мерж»', () => {
     const f = feat({ bucket: 'attention', attention: attention('merge') });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('wait');
     expect(st.alarm).toBe('wait');
-    expect(st.status).toBe('ждёт вас · мерж');
+    expect(st.status).toBe('ждёт согласия на мерж');
     expect(renderHeader(f).includes('border-left-width:3px')).toBe(true);
     expect(renderHeader(f).includes('border-left-color:var(--c-info)')).toBe(true);
   });
@@ -179,12 +179,12 @@ describe('FeatureGroupHeader: тона', () => {
 // Мутация «тон по attention.kind вместо state» красит: f без attention, но с state=merge_pending.
 
 describe('FeatureGroupHeader: state (merge_pending / merging)', () => {
-  it('merge_pending → wait, кромка info, статус «ждёт вас»; тег «К мержу»', () => {
+  it('merge_pending → wait, кромка info, статус «ждёт согласия на мерж»; тег «К мержу»', () => {
     const f = feat({ bucket: 'attention', state: 'merge_pending', attention: null });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('wait');
     expect(st.alarm).toBe('wait');
-    expect(st.status).toBe('ждёт вас');
+    expect(st.status).toBe('ждёт согласия на мерж');
     expect(featureStatusTag(f)).toEqual({ label: 'К мержу', tone: 'merge' });
     expect(featureQuickAction(f)).toBe('К мержу');
   });
@@ -207,10 +207,10 @@ describe('FeatureGroupHeader: state (merge_pending / merging)', () => {
     expect(featureQuickAction(f)).toBe('Ответить');
   });
 
-  it('запасной путь: state нет, attention.kind=merge → «ждёт вас · мерж» (старый признак)', () => {
+  it('запасной путь: state нет, attention.kind=merge → «ждёт согласия на мерж» (старый признак)', () => {
     const f = feat({ bucket: 'attention', attention: attention('merge') });
     const st = featureDisplayState(f);
-    expect(st.status).toBe('ждёт вас · мерж');
+    expect(st.status).toBe('ждёт согласия на мерж');
   });
 });
 

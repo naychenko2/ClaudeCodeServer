@@ -128,10 +128,10 @@ describe('featureBannerModel: тон, статус, счётчик, роль, к
     expect(m.status).toBe('ждёт вас');
   });
 
-  it('к мержу (merge): тон wait, статус «ждёт вас · мерж»', () => {
+  it('к мержу (merge): тон wait, статус «ждёт согласия на мерж»', () => {
     const m = featureBannerModel(feat({ bucket: 'attention', attention: attention('merge') }), link(), 'chat-exec');
     expect(m.tone).toBe('wait');
-    expect(m.status).toBe('ждёт вас · мерж');
+    expect(m.status).toBe('ждёт согласия на мерж');
   });
 
   it('упала (stopped): тон stop, статус «стоит»', () => {
@@ -319,11 +319,11 @@ describe('FeatureBanner: рендер (SSR)', () => {
     expect(html).toContain('var(--c-danger-bg)');
   });
 
-  it('к мержу: тон wait (C.infoBg), статус «ждёт вас · мерж»', () => {
+  it('к мержу: тон wait (C.infoBg), статус «ждёт согласия на мерж»', () => {
     seedIndex(feat({ bucket: 'attention', attention: attention('merge') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="wait"');
-    expect(html).toContain('ждёт вас · мерж');
+    expect(html).toContain('ждёт согласия на мерж');
   });
 
   it('смержена: серая (C.bgInset), статус «смержена <дата>», глиф done', () => {

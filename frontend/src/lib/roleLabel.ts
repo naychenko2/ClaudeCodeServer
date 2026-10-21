@@ -3,10 +3,10 @@
 // подписывает, отдаёт сырые поля; фронт строит подпись. Без догадок: словарь по роли,
 // для step — «{stepRef} · {бэк|фронт}» (линия нормализуется, как в laneOfChain).
 
-// Нормализация линии: зеркалит laneOfChain (components/chat/feature/PipelineFlow.tsx):
+// Нормализация линии (ревью фронта 1, minor 9: единая точка, не дублируем в PipelineFlow):
 // back/бэк → «бэк», front/фронт → «фронт», прочее/пусто → '' (без второй части).
-// Держим в синхроне с laneOfChain — при правке одного правим и другой.
-function laneWord(lane: string | null): string {
+// Экспортируем: PipelineFlow.laneOfChain деривится отсюда.
+export function laneWord(lane: string | null): string {
   const l = (lane ?? '').trim().toLowerCase();
   if (l === 'back' || l === 'backend' || l === 'бэк' || l === 'бэкенд') return 'бэк';
   if (l === 'front' || l === 'frontend' || l === 'фронт' || l === 'фронтенд') return 'фронт';

@@ -43,10 +43,13 @@ export interface NavTargetButtonProps {
   taskClosed?: boolean;
 }
 
-// Есть ли цель: id != null. undefined (вызывающий не передал) трактуем как «есть»,
-// чтобы не ломать вызовы, где состояние управляет сам вызывающий (if-гварды).
+// Есть ли цель: null — «цели нет» (явно: «чата нет» / нет кнопки задачи);
+// undefined — вызывающий не передал (в NavTargetPair отфильтровано до вызова;
+// standalone-вызов с undefined — «не передали» → не рисовать, minor 7).
+// На практике standalone-кнопки всегда через NavTargetPair, который рендерит
+// NavTargetButton только когда id != null, поэтому undefined здесь недостижим.
 function hasTarget(id: string | null | undefined): boolean {
-  return id !== null;
+  return id != null; // null → нет цели; undefined → «не передали» (не рисовать)
 }
 
 // Кнопка-цель. Возвращает null, когда цели нет (task); «чата нет» — для chat.
@@ -96,6 +99,9 @@ export function NavTargetButton({
     color: isChat ? C.accent : (hover ? C.textHeading : C.textSecondary),
     cursor: 'pointer',
   };
+  // На 360 в плотных строках — только иконка (макет §9а, minor 8): подпись в aria-label,
+  // видимый текст не рисуем (иначе «чат»/«задача» не влезает в 40×40).
+  const showText = !isMobile;
   return (
     <button
       type="button"
@@ -110,8 +116,8 @@ export function NavTargetButton({
       style={style}
     >
       <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-      {labelText}
-      {marked && (
+      {showText && labelText}
+      {showText && marked && (
         <span style={{ color: C.textMuted, fontWeight: 500 }}>{mark}</span>
       )}
     </button>

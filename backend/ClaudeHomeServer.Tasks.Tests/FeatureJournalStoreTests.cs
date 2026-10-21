@@ -399,33 +399,6 @@ public class FeatureJournalStoreTests
         finally { Directory.Delete(dir, true); }
     }
 
-    // ─── SweepEmptyOwners: каталог владельца без задач подметается ─────────────────
-
-    [Fact]
-    public void SweepEmptyOwners_УдаляетКаталогВладельцаБезЗадач()
-    {
-        var dir = MakeTempDir();
-        try
-        {
-            var store = new FeatureJournalStore(dir);
-            // Два владельца: ownerA (без задач), ownerB (с задачей).
-            store.Append("ownerA", "featA", MakeEntry("created", taskId: "t1"));
-            store.Append("ownerB", "featB", MakeEntry("created", taskId: "t2"));
-
-            var dirA = Path.Combine(dir, "ownerA");
-            var dirB = Path.Combine(dir, "ownerB");
-            Directory.Exists(dirA).Should().BeTrue();
-            Directory.Exists(dirB).Should().BeTrue();
-
-            // ownerA без задач → каталог удаляется; ownerB с задачей → остаётся.
-            store.SweepEmptyOwners(ownerId => ownerId == "ownerB");
-
-            Directory.Exists(dirA).Should().BeFalse("каталог владельца без задач подметён");
-            Directory.Exists(dirB).Should().BeTrue("каталог владельца с задачей не тронут");
-        }
-        finally { Directory.Delete(dir, true); }
-    }
-
     // --- Параллельный append ---
 
     [Fact]

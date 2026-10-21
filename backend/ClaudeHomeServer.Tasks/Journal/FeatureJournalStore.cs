@@ -276,7 +276,14 @@ public sealed class FeatureJournalStore
             if (!IsValidId(ownerId) || !IsValidId(featureId)) return;
 
             var path = GetPath(ownerId, featureId);
-            if (File.Exists(path)) File.Delete(path);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                // Счётчик строк сбрасываем вместе с файлом: иначе после удаления и
+                // повторного создания фичи с тем же id потолок (turn пропускается)
+                // считался бы от устаревшего значения.
+                _lineCounts.TryRemove($"{ownerId}/{featureId}", out _);
+            }
         }
         catch (Exception ex)
         {
@@ -285,8 +292,14 @@ public sealed class FeatureJournalStore
     }
 
     /// <summary>
-    /// Подмести файлы журнала без живого эпика. Вызывается при старте (Б8b).
-    /// <paramref name="featureExists"/> — проверка, жив ли эпик с данным id.
+    /// Подмести файлы журнала без живого эпика. <paramref name="featureExists"/> — проверка,
+    /// жив ли эпик с данным id.
+    ///
+    /// Инструмент, НЕ вызываемый из продакшена при старте (Б8-доработка-2): автоматическое
+    /// подметание при старте было опасно — при испорченном/частично загруженном tasks.json
+    /// оно сносило журналы владельцев, чьи задачи не поднялись (тотальная потеря истории).
+    /// Вызывать можно ТОЛЬКО при подтверждённой ПОЛНОЙ загрузке задач (флаг полноты в
+    /// JsonFileStore.Load пока неведён).
     /// </summary>
     public void SweepOrphans(string ownerId, Func<string, bool> featureExists)
     {
@@ -302,7 +315,11 @@ public sealed class FeatureJournalStore
                 var featureId = Path.GetFileNameWithoutExtension(file);
                 if (!featureExists(featureId))
                 {
-                    try { File.Delete(file); }
+                    try
+                    {
+                        File.Delete(file);
+                        _lineCounts.TryRemove($"{ownerId}/{featureId}", out _);
+                    }
                     catch { /* файл занят — оставим, подберём на следующем круге */ }
                 }
             }
@@ -310,33 +327,6 @@ public sealed class FeatureJournalStore
         catch (Exception ex)
         {
             _log?.LogWarning(ex, "FeatureJournalStore: SweepOrphans {Owner}", ownerId);
-        }
-    }
-
-    /// <summary>
-    /// Подметает каталоги владельцев, у которых нет живых задач (fail-safe: вызывающий
-    /// сам решает, «без задач» — это факт или неполная загрузка, и передаёт это в
-    /// <paramref name="ownerHasTasks"/>). Каталог владельца с задачами не трогается.
-    /// </summary>
-    public void SweepEmptyOwners(Func<string, bool> ownerHasTasks)
-    {
-        try
-        {
-            if (!Directory.Exists(_dir)) return;
-            foreach (var ownerDir in Directory.GetDirectories(_dir))
-            {
-                var ownerId = Path.GetFileName(ownerDir);
-                // Кривой каталог (не проходит белый список id) — не наш, не трогаем.
-                if (!IsValidId(ownerId)) continue;
-                if (ownerHasTasks(ownerId)) continue;
-                // Владелец без задач: удаляем весь его каталог (все файлы журнала).
-                try { Directory.Delete(ownerDir, recursive: true); }
-                catch { /* файлы заняты — оставим, подберём на следующем круге */ }
-            }
-        }
-        catch (Exception ex)
-        {
-            _log?.LogWarning(ex, "FeatureJournalStore: SweepEmptyOwners");
         }
     }
 

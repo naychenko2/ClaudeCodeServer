@@ -503,6 +503,9 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
             srcDoc={srcdoc}
             sandbox="allow-scripts"
             title={`Панель плагина ${name}`}
+            // cc-plugin-frame: CSS (index.css) глушит pointer-events, пока панель
+            // тащат (body[data-panel-drag]) — иначе iframe глотает drag-события хоста
+            className="cc-plugin-frame"
             style={{
               width: '100%',
               height: height ?? '100%',

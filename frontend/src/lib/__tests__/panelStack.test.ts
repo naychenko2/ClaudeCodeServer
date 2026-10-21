@@ -844,7 +844,7 @@ describe('revealPanel — внешний запрос показать пане�
 
 describe('railSequence — канонический порядок кнопок для фолбэка', () => {
   it('группы идут подряд: проектные, инструменты, контекст', () => {
-    const seq = railSequence([]);
+    const seq = railSequence(emptyZones());
     expect(seq.indexOf('files')).toBeLessThan(seq.indexOf('terminal'));
     expect(seq.indexOf('terminal')).toBeLessThan(seq.indexOf('plan'));
     expect(seq.indexOf('plan')).toBeLessThan(seq.indexOf('toc'));
@@ -852,10 +852,21 @@ describe('railSequence — канонический порядок кнопок 
 
   it('внутри группы действует пользовательский порядок', () => {
     const z = reorderRail(emptyZones(), PROJECT_GROUP, 'tasks', 'files');
-    const seq = railSequence(z.railOrder);
+    const seq = railSequence(z);
     expect(seq.indexOf('tasks')).toBeLessThan(seq.indexOf('files'));
     // граница групп при этом на месте: перестановка не выносит ключ из своей группы
     expect(seq.indexOf('tasks')).toBeLessThan(seq.indexOf('terminal'));
+  });
+
+  it('plugin:* в последовательности: открытая панель плагина получает ранг в первой группе (R-Gleb, minor 4)', () => {
+    const K = 'plugin:acme/x:main';
+    const z = zones([['chats']], [['files', K]]);
+    const seq = railSequence(z);
+    // ранг есть (не «самая нижняя»): индекс >= 0
+    expect(seq.indexOf(K)).toBeGreaterThanOrEqual(0);
+    // и она стоит в первой группе: ПОСЛЕ проектных ключей, ПЕРЕД инструментами
+    expect(seq.indexOf(K)).toBeGreaterThan(seq.indexOf('files'));
+    expect(seq.indexOf(K)).toBeLessThan(seq.indexOf('terminal'));
   });
 });
 
@@ -1068,7 +1079,7 @@ describe('ключи плагинов (S3)', () => {
   const K = 'plugin:acme/x:main';
   const K2 = 'plugin:acme/y:side';
   const K3 = 'plugin:other/z:main';
-  const TOO_LONG = `plugin:acme/x:${'x'.repeat(70)}`;
+  const TOO_LONG = `plugin:acme/x:${'x'.repeat(200)}`;
 
   it('конструктор и предикат: валидный ключ проходит, битые отбрасываются', () => {
     expect(pluginPanelKey('acme/x', 'main')).toBe(K);

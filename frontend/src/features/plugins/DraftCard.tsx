@@ -24,6 +24,9 @@ import {
   type DraftContribution,
 } from './draftModel';
 import { buildInitMessage, buildPanelSrcdoc, validateFrameMessage, panelWindowOf, MAX_PANEL_FILE_BYTES, clampContentHeight, PANEL_MAX_HEIGHT, PANEL_MAX_HEIGHT_MOBILE } from './bridge';
+// Токены текущей темы хоста (S8): как в установленной панели (PluginFrame) —
+// предпросмотр черновика тоже sandbox-iframe, и палитру доставляет хост.
+import { readHostTokens } from './panelTokens';
 import type {
   PluginDraftDiff, PluginDraftDiffFile, PluginDraftDiffLine, PluginDraftPreview, PluginDraftSummary,
 } from '../../lib/api';
@@ -200,7 +203,9 @@ function PanelPreview({ slug }: { slug: string }) {
   const tooBig = html != null && new TextEncoder().encode(html).length > MAX_PANEL_FILE_BYTES;
   // theme — тема первого кадра (ADR-031 §3.3); здесь смена темы и так перемонтирует
   // (frameKey включает theme), поэтому тема идёт напрямую, без замыкания.
-  const srcdoc = html != null && !tooBig ? buildPanelSrcdoc(html, theme) : null;
+  // Токены текущей темы (S8) — как в установленной панели: без них --cc-fg не задан,
+  // и в тёмной теме текст был дефолтным (чёрным) на тёмной подложке.
+  const srcdoc = html != null && !tooBig ? buildPanelSrcdoc(html, theme, readHostTokens()) : null;
   const frameKey = `${slug}#${rev}#${theme}`;
 
   // Мост: ready → init (granted: [] — предпросмотр без прав), resize → высота.
@@ -219,6 +224,9 @@ function PanelPreview({ slug }: { slug: string }) {
           theme,
           locale: typeof navigator !== 'undefined' ? navigator.language : '',
           granted: [],
+          // Токены текущей темы (S8): как в установленной панели, чтобы предпросмотр
+          // перекрасился при смене темы без вспышки (first-paint уже в srcdoc).
+          tokens: readHostTokens(),
         });
         panelWindow?.postMessage(init, '*');
       } else if (msg.type === 'resize') {

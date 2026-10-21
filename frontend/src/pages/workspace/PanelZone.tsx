@@ -243,7 +243,7 @@ export function PanelZone({
   // tabletPanels — это очередь вытеснения (FIFO, третья панель выбивает самую
   // старую), и пересортировав её, мы закрывали бы не ту панель.
   const sortByRail = (keys: PanelKey[]): PanelKey[] => {
-    const seq = railSequence(zones.railOrder);
+    const seq = railSequence(zones);
     const rank = (k: PanelKey) => { const i = seq.indexOf(k); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
     return [...keys].sort((a, b) => rank(a) - rank(b));
   };

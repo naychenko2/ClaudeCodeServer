@@ -33,45 +33,11 @@ export const KIT_CLASSES = [
   '.cc-card', '.cc-badge', '.cc-empty', '.cc-notice', '.cc-skeleton',
 ] as const;
 
-// --cc-* → --c-* хоста: та же карта, что CC_TOKEN_MAP (PluginFrame.tsx, S8).
-// Копия, а не импорт: код панелей рельсы (S5/S7) задачей не трогаем, а карта
-// мала и стабильна — палитра кита есть палитра хоста. Экспортирована, чтобы
-// юнит проверял её состав (R-Design-2: новые токены поверхностей/состояний).
-export const CC_TOKEN_MAP: Record<string, string> = {
-  '--cc-bg':            '--c-bg-card',
-  '--cc-fg':            '--c-text-primary',
-  '--cc-fg-muted':      '--c-text-muted',
-  '--cc-accent':        '--c-accent',
-  '--cc-accent-fg':     '--c-on-accent',
-  '--cc-accent-soft':   '--c-accent-soft',
-  '--cc-border':        '--c-border',
-  '--cc-bg-inset':      '--c-bg-inset',
-  '--cc-bg-panel':      '--c-bg-panel',
-  '--cc-bg-selected':   '--c-bg-selected',
-  '--cc-surface':       '--c-bg-white',
-  '--cc-success':       '--c-success',
-  '--cc-warning':       '--c-warning',
-  '--cc-danger':        '--c-danger',
-  '--cc-info':          '--c-info',
-  '--cc-success-text':  '--c-success-text',
-  '--cc-warning-text':  '--c-warning-text',
-  '--cc-danger-text':   '--c-danger-text',
-  '--cc-danger-border': '--c-danger-border',
-};
-
-// Чтец токенов текущей темы: getComputedStyle(<html>) несёт активную тему
-// (data-theme проставляет themeMode.ts) — как readHostTokens в PluginFrame.tsx.
-// В node (без CSS) getComputedStyle заглушен — {} (токены не критичны для логики).
-function readKitTokens(): Record<string, string> {
-  if (typeof document === 'undefined' || typeof getComputedStyle !== 'function') return {};
-  const cs = getComputedStyle(document.documentElement);
-  const tokens: Record<string, string> = {};
-  for (const cc of Object.keys(CC_TOKEN_MAP)) {
-    const v = cs.getPropertyValue(CC_TOKEN_MAP[cc]).trim();
-    if (v) tokens[cc] = v;
-  }
-  return tokens;
-}
+// --cc-* → --c-* хоста: карта токенов (S8) — ОДИН источник на PluginFrame,
+// PluginKitSection и DraftCard (R-Gleb, minor 2: раньше здесь была копия, разъезжавшаяся
+// молча). Реэкспорт, чтобы юнит (R-Design-2) продолжал проверять её состав.
+export { CC_TOKEN_MAP } from '../features/plugins/panelTokens';
+import { readHostTokens } from '../features/plugins/panelTokens';
 
 // Содержимое <style>: вшитый шрифт (S10) + девять классов (S9) + токены текущей
 // темы. В живой панели те же три части лежат в srcdoc (bridge.ts: shimCss +
@@ -132,7 +98,7 @@ export function PluginKitSection() {
   // Перерендер при смене темы: токены перечитываются из computed --c-* хоста,
   // кит перекрашивается без перезагрузки — как живая панель (S8).
   useThemeMode();
-  const tokens = readKitTokens();
+  const tokens = readHostTokens();
 
   return (
     <Island>

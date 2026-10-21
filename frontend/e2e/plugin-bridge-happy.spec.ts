@@ -11,6 +11,11 @@
 import { test, expect } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+// R-Gleb, minor 8: harness живого PluginFrame бандлится в IIFE через Vite (React +
+// PluginFrame + зависимости внутри), затем инжектится в страницу.
+import { build as viteBuild } from 'vite';
+import reactPlugin from '@vitejs/plugin-react';
 
 // Те же файлы, что встраивает buildPanelSrcdoc (frontend/src/features/plugins/panelSrcdoc.ts).
 // cwd — корень frontend/ (отсюда запускается playwright), public/ — рядом.
@@ -444,4 +449,98 @@ test('S10: латиница — вшитым шрифтом, кириллица 
   // 1. Сети за шрифтом нет: ни одного запроса наружу за шрифтом.
   const fontReqs = requests.filter(isFontRequest);
   expect(fontReqs, 'запросов наружу за шрифтом нет: ' + JSON.stringify(fontReqs)).toHaveLength(0);
+});
+
+// === R-Gleb, minor 8: живой PluginFrame — смена версии и прав → init в новый фрейм ===
+//
+// Тесты выше (S7) проверяли рукописный фейковый хост, а не живой PluginFrame — из-за
+// этого класс дефектов major 1 (смена прав → init не уходит в новый фрейм) не ловился:
+// фейковый хост шлёт init на КАЖДЫ ready, а живой PluginFrame держит initedRef/bridge,
+// который по смене frameKey сбрасывался только эффектом забора html (deps без granted).
+// Здесь — РЕАЛЬНЫЙ PluginFrame (React, мост bridge.ts): harness бандлится в IIFE (Vite)
+// и монтируется в страницу; панель по init постит version/granted в top. Меняем
+// version/granted (frameKey → remount) и проверяем, что НОВЫЙ фрейм получил init.
+//
+// Мутация: убрать useEffect на [frameKey] из PluginFrame (сброс initedRef/bridge) →
+// после смены прав ready нового фрейма отсекается, init не уходит → тест красный.
+
+const harnessPath = fileURLToPath(new URL('./plugin-frame-harness.tsx', import.meta.url));
+const harnessOutDir = path.join(process.cwd(), '.pf-harness-out');
+
+test('R-Gleb minor 8: живой PluginFrame — смена версии и прав → init в новый фрейм', async ({ page }) => {
+  // Бандл harness'а в самодостаточный IIFE: React + ReactDOM + PluginFrame + зависимости.
+  const result = await viteBuild({
+    root: process.cwd(),
+    configFile: false,
+    plugins: [reactPlugin()],
+    // process — Node-глобал, в браузере нет: часть зависимостей (signalr и др.)
+    // на неё ссылается. define подставляет объект, чтобы IIFE не падал на process.env.
+    define: { __BUILD_SHA__: '""', __BUILD_AT__: '""', 'process.env': '{}', process: '{ env: {} }' },
+    logLevel: 'warn',
+    resolve: {
+      alias: { 'aihome_shell/kit': fileURLToPath(new URL('../src/lib/shell-kit/index.ts', import.meta.url)) },
+    },
+    build: {
+      lib: { entry: harnessPath, formats: ['iife'], name: 'PfHarness' },
+      outDir: harnessOutDir,
+      emptyOutDir: true,
+    },
+  });
+  // Vite build() возвращает [{output, bindingOutputs}]: IIFE-бандл (имя — по package.json,
+  // frontend.iife.js) + скопированный public/. Берём единственный .iife.js.
+  const ro = (Array.isArray(result) ? result[0] : result) as { output?: { fileName: string; type?: string }[] };
+  const chunk = (ro?.output ?? []).find(o => /\.iife\.js$/.test(o.fileName));
+  expect(chunk, 'harness собран в IIFE').toBeDefined();
+  const bundlePath = path.join(harnessOutDir, (chunk as { fileName: string }).fileName);
+
+  try {
+    // Десктопный viewport: useIsMobile → false (мобильная ветка перемонтирует весь
+    // PluginFrame и замаскировала бы дефект — мы проверяем именно десктопный путь).
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.setContent(
+      '<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div></body></html>',
+      { waitUntil: 'load' },
+    );
+    // process — Node-глобал, в браузере нет: часть зависимостей (signalr) на неё
+    // ссылается. Выставляем ДО запуска бандла (define в Rolldown pre-bundled deps не
+    // подменяет), иначе IIFE падает на «process is not defined».
+    await page.evaluate(() => { (window as unknown as { process: unknown }).process = { env: {} }; });
+    await page.addScriptTag({ path: bundlePath });
+
+    // Первый init: панель (v1.0.0, granted []) получила init от живого PluginFrame.
+    await page.waitForFunction(
+      () => {
+        const pf = (window as unknown as { __pf?: { inits: { version: string; granted: string[] }[] } }).__pf;
+        return !!pf && pf.inits.length >= 1;
+      },
+      { timeout: 15_000 },
+    );
+
+    // Смена версии → frameKey → remount → НОВЫЙ фрейм получает init с версией 2.0.0.
+    await page.evaluate(() => (window as unknown as { __pf: { setVersion: (v: string) => void } }).__pf.setVersion('2.0.0'));
+    await page.waitForFunction(
+      () => {
+        const pf = (window as unknown as { __pf?: { inits: { version: string }[] } }).__pf;
+        return !!pf && pf.inits.some(i => i.version === '2.0.0');
+      },
+      { timeout: 15_000 },
+    );
+
+    // Смена прав → frameKey → remount → init с granted ['notes:read'].
+    await page.evaluate(() => (window as unknown as { __pf: { setGranted: (g: string[]) => void } }).__pf.setGranted(['notes:read']));
+    await page.waitForFunction(
+      () => {
+        const pf = (window as unknown as { __pf?: { inits: { granted: string[] }[] } }).__pf;
+        return !!pf && pf.inits.some(i => (i.granted || []).includes('notes:read'));
+      },
+      { timeout: 15_000 },
+    );
+
+    const inits = await page.evaluate(() => (window as unknown as { __pf: { inits: { version: string; granted: string[] }[] } }).__pf.inits);
+    expect(inits.some(i => i.version === '1.0.0'), 'первый init — v1.0.0').toBe(true);
+    expect(inits.some(i => i.version === '2.0.0'), 'смена версии → init v2.0.0 в новый фрейм').toBe(true);
+    expect(inits.some(i => (i.granted || []).includes('notes:read')), 'смена прав → init с granted в новый фрейм').toBe(true);
+  } finally {
+    fs.rmSync(harnessOutDir, { recursive: true, force: true });
+  }
 });

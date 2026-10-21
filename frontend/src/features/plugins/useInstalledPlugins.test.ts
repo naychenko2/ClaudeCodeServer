@@ -48,6 +48,7 @@ const { installFakeDom, mount, uninstallFakeDom } = await import(
   '../../components/chat/__tests__/fakeDom'
 );
 const { useInstalledPlugins } = await import('./useInstalledPlugins');
+const { _resetInstalledPluginsStoreForTest } = await import('./installedPluginsStore');
 
 // === Фиксированные плагины ===
 const P1: PluginInfo = {
@@ -79,6 +80,7 @@ async function renderProbe(enabled = true) {
 }
 
 beforeEach(() => {
+  _resetInstalledPluginsStoreForTest();
   m.list.mockReset();
   store.forgetPlugin.mockClear();
   subs.message.length = 0;

@@ -14,7 +14,7 @@
 // Стор параметризован неймспейсом (createPanelZones): воркспейс и раздел «Чаты»
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
 import { useCallback, useSyncExternalStore } from 'react';
-import { RAIL_GROUPS, keyAllowed, migrateLegacyKey, panelHome, type PanelKey, type Zone } from './panelCatalog';
+import { RAIL_GROUPS, isPluginPanelKey, keyAllowed, migrateLegacyKey, panelHome, type PanelKey, type Zone } from './panelCatalog';
 
 // Реестр панелей (ключи, мета, домашние зоны) — соседний panelCatalog.ts.
 // Здесь только раскладка: что где лежит и какого размера.
@@ -604,8 +604,14 @@ export function sortRail(order: readonly PanelKey[], keys: readonly PanelKey[]):
 // колонке считается по относительному рангу панелей (placeByRail) — на нём выпавшие
 // ключи не сказываются. Полный список при этом строже: у ключа, которого в столбце
 // нет, ранга не было бы вовсе, и панель считалась бы самой нижней.
-export function railSequence(railOrder: readonly PanelKey[]): PanelKey[] {
-  return RAIL_GROUPS.flatMap(g => sortRail(railOrder, g));
+//
+// plugin:* — динамические ключи: RAIL_GROUPS статичен, поэтому открытые plugin:*
+// добираем к ПЕРВОЙ группе (как зона, PanelZone.tsx:127) — иначе фолбэк внешнего
+// показа ставил бы панель плагина в конец колонки (R-Gleb, minor 4).
+export function railSequence(zones: PanelZones): PanelKey[] {
+  const pluginKeys = openKeysOf(zones).filter(isPluginPanelKey);
+  return RAIL_GROUPS.map((g, i) => (i === 0 ? [...g, ...pluginKeys] : g))
+    .flatMap(g => sortRail(zones.railOrder, g));
 }
 
 // Перестановка кнопки внутри своей группы: moved встаёт ПЕРЕД before (null — в
@@ -859,7 +865,7 @@ export function isZoneCollapsed(z: ZoneState): boolean {
 export function revealPanel(zones: PanelZones, k: PanelKey): { zones: PanelZones; wasOpen: boolean } {
   if (zoneOf(zones, k)) return { zones, wasOpen: true };
   const home = homeOf(zones, k);
-  return { zones: openPanelIn(zones, home, k, COL_CAP, railSequence(zones.railOrder)), wasOpen: false };
+  return { zones: openPanelIn(zones, home, k, COL_CAP, railSequence(zones)), wasOpen: false };
 }
 
 // ---------- миграция со старых раздельных ключей ----------

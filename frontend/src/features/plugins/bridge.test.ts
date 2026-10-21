@@ -797,6 +797,7 @@ describe('контролы кита (S9: .cc-* по дизайн-системе,
       const sel = m[1].trim();
       if (!sel || sel.startsWith('@')) continue;
       if (/^[\d.]+%(\s*,\s*[\d.]+%)*$/.test(sel)) continue; // 0%/50%/100% keyframes
+      if (sel === 'from' || sel === 'to') continue; // from/to keyframes (cc-cc-spin: to)
       out.push(sel);
     }
     return out;

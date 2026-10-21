@@ -22,7 +22,7 @@
 | `ccsPlugin.call(op, args)` | Вызов операции хоста. Возвращает `Promise`: данные на успех, `{code, message}` на сбой |
 | `ccsPlugin.resize(height)` | Высота контента панели (px); шим шлёт её сам, вручную звать не нужно |
 | `ccsPlugin.on(type, cb)` | Подписка на `init` / `theme` / `context`; возвращает функцию отписки |
-| `ccsPlugin.state` | Текущий снимок `{plugin, slot, context, theme, locale, granted}` — читать можно в любой момент, не только из `on()` |
+| `ccsPlugin.state` | Текущий снимок `{plugin, slot, context, theme, locale, granted, tokens}` — читать можно в любой момент, не только из `on()`. `tokens` — значения `--cc-*` текущей темы (S8): панель применяет их, сама палитру не знает |
 
 Шим дополнительно диспатчит DOM-события `ccs:init` / `ccs:theme` / `ccs:context` на `window`
 (detail — те же данные): панель, которая не использует `on()`, может слушать их через
@@ -32,9 +32,9 @@
 
 | type | Поля | Смысл |
 |---|---|---|
-| `init` | `plugin: {id, version}`, `slot`, `context`, `theme`, `locale`, `granted` | Ответ на `ready`: кто вы, в каком слоте, какие права |
+| `init` | `plugin: {id, version}`, `slot`, `context`, `theme`, `locale`, `granted`, `tokens` | Ответ на `ready`: кто вы, в каком слоте, какие права; `tokens` — `--cc-*` текущей темы (по умолчанию `{}`: first-paint уже в srcdoc) |
 | `result` | `id`, `ok: true, data` или `ok: false, error: {code, message}` | Итог `call` с тем же `id` |
-| `theme` | `theme` | Смена темы без перемонтирования |
+| `theme` | `theme`, `tokens` | Смена темы без перемонтирования; `tokens` — `--cc-*` НОВОЙ темы (шим обновляет `<style id="cc-tokens">`, панель перекрашивается) |
 | `context` | `context` | Смена контекста слота (например, другой проект) |
 
 `granted` — информационная копия выданных прав, чтобы панель прятала недоступное. **Источник

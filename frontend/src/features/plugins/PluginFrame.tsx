@@ -15,50 +15,12 @@ import {
   bridgeErrorText, clampContentHeight, PANEL_CONTENT_MAX_HEIGHT, deniedKeyOf, panelWindowOf, validateFrameMessage,
   type BridgeErrorCode, type FrameMessage, type HostMessage,
 } from './bridge';
-import type { PanelTokens } from './panelSrcdoc';
+// Токены панели из темы хоста (S8): карта CC_TOKEN_MAP и чтец readHostTokens —
+// в общем модуле panelTokens.ts (единый источник на PluginFrame, PluginKitSection
+// и DraftCard). Панель — sandbox-iframe без allow-same-origin: хост читает свои
+// computed --c-* (текущая тема) и мапит в --cc-* панели.
+import { readHostTokens } from './panelTokens';
 import { humanizeId, panelDisplayName } from './panelNaming';
-
-// === Токены панели из темы хоста (S8) ===
-// Панель — sandbox-iframe без allow-same-origin: --c-* хоста до неё не доходят.
-// Поэтому хост читает СВОИ computed --c-* (текущая тема) и мапит в --cc-* панели.
-// Единственный источник правды по палитре — тема хоста (lib/theme.css, обе темы);
-// в панели нет ручной копии. Каждый --cc-* ниже есть в теме хоста (критерий S8.3).
-const CC_TOKEN_MAP: Record<string, string> = {
-  '--cc-bg':            '--c-bg-card',
-  '--cc-fg':            '--c-text-primary',
-  '--cc-fg-muted':      '--c-text-muted',
-  '--cc-accent':        '--c-accent',
-  '--cc-accent-fg':     '--c-on-accent',
-  '--cc-accent-soft':   '--c-accent-soft',
-  '--cc-border':        '--c-border',
-  '--cc-bg-inset':      '--c-bg-inset',
-  '--cc-bg-panel':      '--c-bg-panel',
-  '--cc-bg-selected':   '--c-bg-selected',
-  '--cc-surface':       '--c-bg-white',
-  '--cc-success':       '--c-success',
-  '--cc-warning':       '--c-warning',
-  '--cc-danger':        '--c-danger',
-  '--cc-info':          '--c-info',
-  '--cc-success-text':  '--c-success-text',
-  '--cc-warning-text':  '--c-warning-text',
-  '--cc-danger-text':   '--c-danger-text',
-  '--cc-danger-border': '--c-danger-border',
-};
-
-// Чтец токенов текущей темы: getComputedStyle(<html>) несёт активную тему
-// (data-theme проставляет themeMode.ts), поэтому getPropertyValue('--c-*') даёт
-// значение именно текущей темы. В node-тесте (без CSS) document/getComputedStyle
-// заглушены — возвращаем {} (токены не критичны для логики моста).
-function readHostTokens(): PanelTokens {
-  if (typeof document === 'undefined' || typeof getComputedStyle !== 'function') return {};
-  const cs = getComputedStyle(document.documentElement);
-  const tokens: PanelTokens = {};
-  for (const cc of Object.keys(CC_TOKEN_MAP)) {
-    const v = cs.getPropertyValue(CC_TOKEN_MAP[cc]).trim();
-    if (v) tokens[cc] = v;
-  }
-  return tokens;
-}
 
 // === Панель плагина (S5): одна панель = одна карточка ===
 // Десктоп: карточка — обычная панель рельса (PanelZone рисует её через PanelShell),
@@ -283,6 +245,19 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
   // «Перезагрузить» и смена панели (плагин+панель) — да (reloadKey / targetKey).
   const frameKey = pluginFrameKey(plugin, panel, reloadKey);
 
+  // === Сброс состояния моста по frameKey (R-Gleb, major 1) ===
+  // Сменился ключ (версия/права/перезагрузка) → React пересоздал <iframe>, и НОВЫЙ
+  // фрейм шлёт ready. Но bridge/initedRef сбрасывал ТОЛЬКО эффект забора html (в deps
+  // которого granted НЕТ): при смене ПРАВ (версия/entry те же) он не перезапускался →
+  // bridge оставался 'alive', initedRef — true, и ready нового фрейма отсекался на
+  // «s.bridge !== 'waiting' || initedRef» (обработчик ниже): init не уходил, и панель
+  // жила без plugin/slot/context/granted до ручного «Перезагрузить». Сбрасываем здесь:
+  // ready нового фрейма пройдёт, init уйдёт с новым набором прав.
+  useEffect(() => {
+    initedRef.current = false;
+    setBridge('waiting');
+  }, [frameKey]);
+
   // === Таймаут ready: 3 с после монтирования iframe → bridge_timeout ===
   useEffect(() => {
     if (fetch.kind !== 'html' || bridge !== 'waiting') return;
@@ -437,7 +412,9 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
           <Menu onClose={() => setMenuOpen(false)} align="right" top={-2}>
             <MenuItem label="Права…" onClick={() => { setMenuOpen(false); setConsent(toConsentData(plugin)); }} />
             {onOpenPlugins && <MenuItem label="Открыть в «Плагинах»" onClick={() => { setMenuOpen(false); onOpenPlugins(); }} />}
-            {(onOpenPlugins || onClose) && <MenuSep />}
+            // Разделитель — только перед «Скрыть панель» (onClose, мобила): на
+            // десктопе onClose не передаётся, и сепаратор висял бы в конце меню
+            {onClose && <MenuSep />}
             {onClose && <MenuItem label="Скрыть панель" onClick={() => { setMenuOpen(false); onClose(); }} />}
           </Menu>
         )}

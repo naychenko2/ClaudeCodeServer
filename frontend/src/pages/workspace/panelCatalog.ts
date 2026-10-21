@@ -105,8 +105,10 @@ export interface RailBadgeInfo {
   hint?: RailHint;
 }
 
-// Иконка и заголовок панели — общие для обеих зон.
-export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
+// Иконка и заголовок панели — общие для обеих зон. pluginPanels исключён (R-Gleb,
+// minor 7): слот упразднён (S5), это маркер семейства, а не реальная панель — меты
+// у него нет (реальные карточки рисуются по динамическим ключам plugin:*).
+export const PANEL_META: Record<Exclude<PanelKey, 'pluginPanels'>, { title: string; Icon: LucideIcon }> = {
   chats:    { title: 'Чаты',      Icon: MessageCircle },
   files:    { title: 'Файлы',     Icon: FolderTree },
   // «Документы» рядом с «Файлами»: обе про содержимое репозитория, но Файлы — дерево
@@ -147,10 +149,8 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
   preview:  { title: 'Сервисы',   Icon: AppWindow },
   video:    { title: 'Эфир',      Icon: MonitorPlay },
-  // Маркер семейства плагинов (S5): панелью не является (упразднён), мета живёт
-  // только для полноты Record<PanelKey, …> — реальные карточки рисуются по
-  // динамическим ключам plugin:* из реестра setPluginPanelMeta.
-  pluginPanels: { title: 'Панели плагинов', Icon: Plug },
+  // pluginPanels (S5) исключён из меты: маркер семейства, не реальная панель
+  // (R-Gleb, minor 7) — реальные карточки рисуются по динамическим ключам plugin:*.
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)
@@ -301,9 +301,11 @@ export const RAIL_GROUPS: readonly (readonly PanelKey[])[] = [
 // исключает ':' и '/' (разделители) и пробелы; ограничение длины защищает
 // формат хранилища от мусора.
 const PLUGIN_KEY_RE = /^plugin:[A-Za-z0-9@._-]+\/[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$/;
-// Ключ — короткие идентификаторы (npm-имя пакета + id панели); длиннее — мусор
-// в раскладке
-const PLUGIN_KEY_MAX_LEN = 64;
+// Ключ — идентификаторы (npm-имя пакета {publisher}/{slug} + id панели). Потолок
+// 200, а не 64 (R-Gleb, minor 3): у длинного id (scoped-пакет + длинный slug) ключ
+// превышал 64 и карточка МОЛЧА не переживала перезапуск (isPluginPanelKey → false →
+// sanitizeLayout отбрасывал). 200 — запас на реальные длинные id; длиннее — мусор.
+const PLUGIN_KEY_MAX_LEN = 200;
 
 // Предикат ключа плагина: принимается по СИНТАКСИСУ, а не по списку установленных
 // плагинов — стор читает localStorage при импорте модуля, а список (асинхронный
@@ -341,6 +343,9 @@ export function setPluginPanelMeta(meta: Record<PluginPanelKey, { title: string;
 // плагинов. Для ключа плагина без меты — undefined: ключ принят по синтаксису,
 // а мета известна только после GET списка плагинов.
 export function panelMeta(k: PanelKey): { title: string; Icon: LucideIcon } | undefined {
+  // pluginPanels — маркер семейства (S5), не реальная панель: меты у него нет
+  // (R-Gleb, minor 7) — реальные карточки читают meta по своим ключам plugin:*.
+  if (k === 'pluginPanels') return undefined;
   return isPluginPanelKey(k) ? pluginPanelMeta.get(k) : PANEL_META[k];
 }
 

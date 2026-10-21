@@ -12,7 +12,7 @@
 // Окружение node: fakeDom даёт document.body (setAttribute/getAttribute).
 
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { installFakeDom, mount, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
 import { endPanelDrag, startPanelDrag, usePanelDragState } from './panelDrag';
 import { usePanelDnd } from './zoneGestures';
@@ -62,6 +62,37 @@ describe('zoneGestures: dragend раньше отложенного startPanelDr
 
     expect(document.body.getAttribute('data-panel-drag')).toBeNull();
     expect(state!.from).toBeNull();
+    vi.unstubAllGlobals();
+  });
+});
+
+// Демонтаж источника во время drag'а (R-Gleb, minor 6): dragstart откладывает
+// startPanelDrag на rAF, и если зона-источник демонтируется до dragend, атрибут
+// data-panel-drag остаётся на body — iframe панелей остаются без pointer-events.
+// Cleanup в usePanelDnd снимает его, только если drag начался в этой зоне (fromZone).
+//
+// Мутация: убрать useEffect-cleanup из usePanelDnd → атрибут не снимается, тест красный.
+describe('zoneGestures: демонтаж источника во время перетаскивания (R-Gleb, minor 6)', () => {
+  it('демонтаж зоны-источника снимает data-panel-drag', () => {
+    const frames: Array<() => void> = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => { frames.push(cb); return frames.length; });
+    let props: ReturnType<ReturnType<typeof usePanelDnd>['dragSourceProps']> | null = null;
+    function Probe() {
+      const dnd = usePanelDnd({ zone: 'left', enabled: true, onSwap: () => {} });
+      props = dnd.dragSourceProps('tasks');
+      return createElement('div');
+    }
+    const { root } = mount(createElement(Probe));
+
+    const dt = { effectAllowed: '', setData: () => {} };
+    // dragstart → rAF-кадр: startPanelDrag ставит data-panel-drag
+    (props!.onDragStart as (e: unknown) => void)({ dataTransfer: dt, currentTarget: null });
+    frames.splice(0).forEach(cb => cb());
+    expect(document.body.getAttribute('data-panel-drag')).toBe('1');
+
+    // Демонтаж зоны-источника до dragend → cleanup снимает атрибут
+    act(() => { root.unmount(); });
+    expect(document.body.getAttribute('data-panel-drag')).toBeNull();
     vi.unstubAllGlobals();
   });
 });

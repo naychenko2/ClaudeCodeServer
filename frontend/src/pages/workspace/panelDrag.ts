@@ -112,6 +112,15 @@ export function endPanelDrag() {
   emit();
 }
 
+// Конец drag'а, если источник — именно ЭТА зона (R-Gleb, minor 6). Нужен демонтажу
+// источника во время drag'а: dragstart откладывает startPanelDrag на rAF, и если
+// источник (зона или её панель) демонтируется до dragend, атрибут data-panel-drag
+// остаётся на body — iframe панелей остаются без pointer-events. Проверяем fromZone,
+// чтобы демонтаж ЧУЖОЙ зоны (не источника) не снёс чужой drag.
+export function endPanelDragIfFrom(zone: Zone) {
+  if (_state.fromZone === zone) endPanelDrag();
+}
+
 export function usePanelDragState(): PanelDragState {
   return useSyncExternalStore(subscribe, () => _state);
 }

@@ -149,6 +149,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                 now={now}
                 featureId={featureId}
                 featureTitle={featureTitle}
+                marks={marks}
                 isMobile={isMobile}
               />
             ))

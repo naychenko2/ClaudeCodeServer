@@ -15,6 +15,7 @@ import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 import { FeatureRunView, statusLineFor } from './FeatureRunView';
 import { TurnPlanPill } from '../TurnPlanPill';
 import { __test } from '../../../lib/featureRuns';
+import { __test as backNav } from '../../../lib/featureBackNav';
 import { installFakeDom, mount, reactProps, uninstallFakeDom, findNodeByAttr } from '../__tests__/fakeDom';
 
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя (PersonaAvatar/имена исполнителей).
@@ -44,8 +45,13 @@ const { toastMock } = vi.hoisted(() => ({ toastMock: { calls: [] as string[] } }
 vi.mock('../../../lib/toast', () => ({
   showToast: (title: string) => { toastMock.calls.push(title); },
 }));
+// openChat (lib/openChat) — no-op: в node-окружении api.chats.get уходит в сеть;
+// для теста точки возврата (major 1) достаточно, что openChatById не роняет.
+vi.mock('../../../lib/openChat', () => ({
+  openChatById: async (_id: string) => true,
+}));
 
-beforeEach(() => { personaMap.clear(); mobileFlag.value = false; toastMock.calls.length = 0; });
+beforeEach(() => { personaMap.clear(); mobileFlag.value = false; toastMock.calls.length = 0; backNav.reset(); });
 
 // Задача-заглушка (подмножество TaskItem, как несёт GET /api/tasks/features).
 function task(over: Partial<FeatureTask> = {}): FeatureTask {
@@ -299,6 +305,30 @@ describe('FeatureRunView — рендер', () => {
 
   it('M7: useIsMobile не рвёт SSR-рендер', () => {
     expect(() => render(run({ state: 'running' }))).not.toThrow();
+  });
+});
+
+// major 1: переход в чат из попапа/панели пишет точку возврата «← к фиче {название}»
+// (БЕЗ вкладки — showTab=false); возврат ведёт на последнюю использованную вкладку.
+describe('FeatureRunView: точка возврата из попапа/панели (major 1)', () => {
+  it('клик «чат» исполнителя → точка возврата с названием фичи, БЕЗ вкладки', () => {
+    const stages: FeatureStage[] = [
+      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: null, taskId: 'x', taskRole: null, stepRef: null, lane: null, status: 'running', chatId: 'chat-target', chatArchived: false, modelLabel: null, modelFull: null }] },
+    ];
+    installFakeDom();
+    const { root, container } = mount(createElement(FeatureRunView, { run: run({ state: 'running', stages }) }));
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
+    expect(btn, 'кнопка чата исполнителя').not.toBeNull();
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    // Точка возврата: featureId, название фичи, showTab=false (без вкладки).
+    const info = backNav.featureBackNavFrom('chat-target');
+    expect(info, 'точки возврата нет').not.toBeNull();
+    expect(info!.featureId).toBe('epic-1');
+    expect(info!.title).toBe('Пульт куратора');
+    expect(info!.showTab, 'из попапа/панели — БЕЗ вкладки').toBe(false);
+    root.unmount();
+    uninstallFakeDom();
   });
 });
 

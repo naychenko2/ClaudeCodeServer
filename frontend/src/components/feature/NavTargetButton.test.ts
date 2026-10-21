@@ -106,6 +106,19 @@ describe('NavTargetButton: состояния', () => {
     expect((btn as unknown as { style: Record<string, string> }).style.border).toContain('dashed');
   });
 
+  // minor 2: подпись и пометка НЕ сливаются — пробел в текстовом узле:
+  // «чат в архиве» / «задача закрыта» (раньше «чатв архиве»/«задачазакрыта»).
+  it('видимый текст: «чат в архиве» (пробел, не «чатв архиве»)', () => {
+    const { container } = renderChat({ chatId: 'c1', chatArchived: true });
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat')!;
+    expect(textNodes(btn).join(''), 'пробел между подписью и пометкой').toBe('чат в архиве');
+  });
+  it('видимый текст: «задача закрыта» (пробел, не «задачазакрыта»)', () => {
+    const { container } = renderTask({ taskId: 't1', taskClosed: true });
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-task')!;
+    expect(textNodes(btn).join(''), 'пробел между подписью и пометкой').toBe('задача закрыта');
+  });
+
   // Ф9b: пометка слышна скринридеру ВСЕГДА — и когда вызывающий передал свой title
   // (на страницах фичи title передан везде), и на 360, где видимой подписи нет.
   it('aria-label несёт пометку при заданном title: «в архиве» / «задача закрыта»', () => {

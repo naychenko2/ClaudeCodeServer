@@ -144,7 +144,8 @@ function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null, marks 
       <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
         <NavTargetPair
           chatId={chat.id}
-          chatArchived={chat.archived}
+          // minor 3: ОДИН источник «в архиве» — marks.chatArchived (unified), не chat.archived.
+          chatArchived={marks.chatArchived(chat.id)}
           onOpenChat={openChat}
           chatTitle={chat.archived
             ? 'Чат в архиве — откроется для чтения. Страница фичи скроется, вернётся по плашке.'

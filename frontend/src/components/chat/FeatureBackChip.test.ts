@@ -17,8 +17,10 @@ import { __test as backNav } from '../../lib/featureBackNav';
 import { __test as pageStore, setFeaturePageTab, type FeaturePageTab } from '../../lib/featurePage';
 
 // Ожидаемые подписи — литералы (не из словаря кода), иначе подмена словаря не краснела бы.
+// minor 1: ЕДИНЫЙ словарь FEATURE_TAB_LABEL — чип и полоса не разъезжаются, «Планы и макеты»
+// (короткого «Планы» в чипе больше нет).
 const CHIP_TEXT: Record<FeaturePageTab, string> = {
-  timeline: 'Хронология', plans: 'Планы', chats: 'Чаты', tasks: 'Задачи', events: 'События', stats: 'Статистика',
+  timeline: 'Хронология', plans: 'Планы и макеты', chats: 'Чаты', tasks: 'Задачи', events: 'События', stats: 'Статистика',
 };
 const TABS = Object.keys(CHIP_TEXT) as FeaturePageTab[];
 
@@ -108,4 +110,50 @@ describe('FeatureBackChip: возврат на ту же вкладку', () => 
       expect(ev!.detail).toEqual({ featureId: 'f1', fromChat: false });
     });
   }
+});
+
+// major 1: из попапа/панели/шторки (showTab=false) — чип БЕЗ вкладки, но возврат
+// ведёт на последнюю использованную вкладку.
+describe('FeatureBackChip: без вкладки (попап/панель/шторка, major 1)', () => {
+  it('showTab=false → чип «к фиче «Моя фича»» БЕЗ вкладки; aria-label тоже без вкладки', () => {
+    setFeaturePageTab('chats');
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича', undefined, false);
+    const c = render('c1');
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-back-chip')!;
+    expect(chip, 'чипа нет').not.toBeNull();
+    expect(textNodes(chip).join(''), 'видимый текст без вкладки').toBe('к фиче «Моя фича»');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-back-tab'), 'вкладка в чипе').toBeNull();
+    const btn = findNodeByAttr(c, 'role', 'button')!;
+    expect(btn.getAttribute('aria-label'), 'aria-label без вкладки').toBe('К фиче «Моя фича»');
+  });
+});
+
+// minor 4: длинное название — обрезка с многоточием; полное название в title/aria-label.
+describe('FeatureBackChip: обрезка (minor 4)', () => {
+  it('title несёт полное название (фича + вкладка) — для длинного названия', () => {
+    setFeaturePageTab('chats');
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Очень длинное название фичи для обрезки');
+    const c = render('c1');
+    const btn = findNodeByAttr(c, 'role', 'button')!;
+    expect(btn.getAttribute('title')).toBe('К фиче «Очень длинное название фичи для обрезки», вкладка «Чаты»');
+  });
+});
+
+// minor 5: один указатель — повторный переход из другой вкладки стирает возврат у
+// прежнего чата (в новом чате чип с новой вкладкой, в прежнем чипа нет).
+describe('FeatureBackChip: один указатель (minor 5)', () => {
+  it('повторный переход из другой вкладки стирает возврат у прежнего чата', () => {
+    setFeaturePageTab('chats');
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    setFeaturePageTab('stats');
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c2' }, 'Моя фича');
+    // Чат c1: чипа нет (указатель переписан на c2).
+    const c1 = render('c1');
+    expect(findNodeByAttr(c1, 'data-testid', 'feature-back-chip'), 'чип у c1 (должен исчезнуть)').toBeNull();
+    // Чат c2: чип с новой вкладкой («Статистика»).
+    const c2 = render('c2');
+    const chip = findNodeByAttr(c2, 'data-testid', 'feature-back-chip');
+    expect(chip, 'чип у c2').not.toBeNull();
+    expect(textNodes(chip!).join(''), 'вкладка c2').toContain('· Статистика');
+  });
 });

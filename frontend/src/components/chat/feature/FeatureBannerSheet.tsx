@@ -8,6 +8,7 @@ import { NavTargetButton } from '../../feature/NavTargetButton';
 import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../../lib/featureNavMarks';
 import { openChatById } from '../../../lib/openChat';
 import { openTaskInSection } from '../../../lib/tasks';
+import { recordFeatureReturn } from '../../../lib/featureBackNav';
 import { Modal } from '../../ui';
 import { Tooltip } from '../../ui/Tooltip';
 import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
@@ -113,7 +114,9 @@ function ModelChip({ label, full }: { label: string; full: string | null }) {
 }
 
 // Строка исполнителя: roleLabel + чип модели (подсказка по тапу) + NavTargetButton (чат · задача).
-function ExecutorRow({ x, isMobile, projectId, marks = EMPTY_NAV_MARKS }: { x: FeatureStageExecutor; isMobile: boolean; projectId: string | null; marks?: NavMarks }) {
+// major 2: переход в чат исполнителя пишет точку возврата «← к фиче {название}» (БЕЗ вкладки —
+// шторка «где мы» не вкладка страницы); возврат ведёт на последнюю использованную вкладку.
+function ExecutorRow({ x, isMobile, projectId, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS }: { x: FeatureStageExecutor; isMobile: boolean; projectId: string | null; featureId: string; featureTitle?: string | null; marks?: NavMarks }) {
   const role = roleLabel(x.taskRole, x.stepRef, x.lane);
   const model = x.modelLabel;
   return (
@@ -135,9 +138,14 @@ function ExecutorRow({ x, isMobile, projectId, marks = EMPTY_NAV_MARKS }: { x: F
         <NavTargetButton
           kind="chat"
           chatId={x.chatId}
-          chatArchived={x.chatArchived}
+          // minor 3: ОДИН источник «в архиве» — marks.chatArchived (unified), не x.chatArchived.
+          chatArchived={marks.chatArchived(x.chatId)}
           isMobile={isMobile}
-          onOpen={() => { if (x.chatId) void openChatById(x.chatId); }}
+          onOpen={() => {
+            if (!x.chatId) return;
+            recordFeatureReturn(featureId, { kind: 'chat', id: x.chatId }, featureTitle, undefined, false);
+            void openChatById(x.chatId);
+          }}
         />
         <NavTargetButton
           kind="task"
@@ -255,7 +263,7 @@ function SheetBody({ run, runs, selected, onSelect, isMobile, projectId }: {
           </div>
           {current.executors.length > 0 ? (
             current.executors.map((x, i) => (
-              <ExecutorRow key={`${x.taskId}-${i}`} x={x} isMobile={isMobile} projectId={projectId} marks={marks} />
+              <ExecutorRow key={`${x.taskId}-${i}`} x={x} isMobile={isMobile} projectId={projectId} featureId={run.featureId} featureTitle={run.epic?.title ?? null} marks={marks} />
             ))
           ) : (
             <div style={{ fontSize: FS.sm, color: C.textMuted }}>Исполнителей нет</div>

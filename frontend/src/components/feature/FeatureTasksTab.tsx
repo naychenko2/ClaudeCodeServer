@@ -219,7 +219,10 @@ function TaskRow({ task, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS
           chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
           showNoChat
           taskId={task.id}
-          taskClosed={statusKey === 'd' || marks.taskClosed(task.id)}
+          // major 3: ОДИН источник «закрыта» — статус реальной задачи (task.status === 'done'),
+          // не `marks.taskClosed` (тот же факт из агрегата — дубль; мутация снятия дубля
+          // не краснила — проводка была мертва).
+          taskClosed={task.status === 'done'}
           onOpenTask={openTask}
           taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
           isMobile={isMobile}

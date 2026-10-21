@@ -35,6 +35,10 @@ export interface BackNav {
   // Вкладка страницы фичи, с которой ушли (fromKind='feature'): чип возврата показывает её
   // название («← к фиче · Чаты»), а возврат открывает ту же вкладку (Ф9b).
   fromTab?: FeaturePageTab;
+  // Показывать ли вкладку в чипе возврата (Ф9b, major 1): false — переход из попапа/
+  // панели/шторки (не из вкладки страницы): чип «← к фиче», вкладки нет, но возврат
+  // ведёт на последнюю использованную вкладку (fromTab). true (дефолт) — из вкладки.
+  showTab?: boolean;
 }
 
 // Старая строка в хранилище (id чата) читается как переход в чат; объект — как есть.
@@ -74,11 +78,21 @@ export function clearBackNav(): void {
 // за раз; `from` здесь — id фичи (не чата), `fromKind` = 'feature', `to.kind` — 'chat' | 'task'.
 // Вкладка берётся из стора страницы в момент перехода (tab — только для тестов/явного
 // указания): вызывающим вкладкам её передавать не нужно.
-export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }, title?: string | null, tab?: FeaturePageTab): void {
+//
+// ОСОЗНАННОЕ ПОВЕДЕНИЕ (minor 5, ревью Ф9b): указатель _back — ЕДИНСТВЕННЫЙ (один
+// переход за раз). Повторный переход из ДРУГОЙ вкладки/попапа/шторки ПЕРЕЗАПИСЫВАЕТ
+// его: у НОВОГО чата чип возврата (с новой вкладкой/без), у ПРЕЖНЕГО чата чипа больше
+// нет (to.id сменился). Это не баг, а «один возврат за раз» — как и у «← назад».
+//
+// `showTab` (major 1): false — переход из попапа/панели/шторки (не из вкладки): чип
+// «← к фиче {название}» БЕЗ вкладки, но возврат ведёт на последнюю использованную
+// вкладку (fromTab из стора). true (дефолт) — из вкладки: чип с названием вкладки.
+export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }, title?: string | null, tab?: FeaturePageTab, showTab?: boolean): void {
   if (!featureId || !to.id) return;
   _back = {
     from: featureId, fromKind: 'feature', to: { kind: to.kind, id: to.id },
     fromTitle: title ?? null, fromTab: tab ?? getFeaturePageTab(),
+    showTab: showTab ?? true,
   };
   emit();
 }
@@ -104,7 +118,7 @@ export function useBackNavFrom(sessionId: string | null): string | null {
 // с fromKind='feature') и текущий чат — цель перехода (to.kind='chat', to.id=sessionId).
 // Возвращает id и название исходной фичи; null — перехода из фичи не было. Отличается от
 // backNavFrom (он — chat→chat): здесь дискриминатор fromKind='feature' обязателен.
-export interface FeatureBackNavInfo { featureId: string; title: string | null; tab: FeaturePageTab }
+export interface FeatureBackNavInfo { featureId: string; title: string | null; tab: FeaturePageTab; showTab: boolean }
 // Снимок кэшируем по ссылке на запись _back: useSyncExternalStore требует стабильного
 // значения между вызовами, иначе новый объект на каждый getSnapshot зациклит рендер.
 let _infoSrc: BackNav | null = null;
@@ -113,7 +127,7 @@ export function featureBackNavFrom(sessionId: string | null): FeatureBackNavInfo
   if (!sessionId || !_back || _back.fromKind !== 'feature' || _back.to.kind !== 'chat' || _back.to.id !== sessionId) return null;
   if (_infoSrc !== _back) {
     _infoSrc = _back;
-    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'timeline' };
+    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'timeline', showTab: _back.showTab ?? true };
   }
   return _info;
 }

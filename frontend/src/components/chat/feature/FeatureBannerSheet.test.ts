@@ -16,6 +16,7 @@ import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeatureBannerSheet, executorLines, focusablesIn } from './FeatureBannerSheet';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../__tests__/fakeDom';
+import { __test as backNav } from '../../../lib/featureBackNav';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureTask, StageKey, StageState, StageTone } from '../../../types/featureRun';
 
 // signalr: onMessage/onPreviewMessage — no-op (иначе getConnection() строит соединение '/hubs/session').
@@ -28,6 +29,11 @@ vi.mock('../../../lib/personas', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/personas')>();
   return { ...orig, ensurePersonasLoaded: async () => {}, getPersonaById: () => undefined };
 });
+// openChat (lib/openChat) — no-op: в node-окружении api.chats.get уходит в сеть;
+// для теста точки возврата (major 2) достаточно, что openChatById не роняет.
+vi.mock('../../../lib/openChat', () => ({
+  openChatById: async (_id: string) => true,
+}));
 
 // === Фикстуры ===
 
@@ -125,7 +131,7 @@ describe('focusablesIn: tabindex', () => {
 // === 2: рендер (mount, fakeDom) ===
 
 describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {
-  beforeEach(() => installFakeDom());
+  beforeEach(() => { installFakeDom(); backNav.reset(); });
   afterEach(() => uninstallFakeDom());
 
   it('7 этапов (data-testid feature-sheet-stage-*), исполнители активного этапа, название фичи', async () => {
@@ -431,6 +437,26 @@ describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
     const all = textNodes(container).join(' ');
     expect(all, '«Исполнителей нет» не показано').toContain('Исполнителей нет');
+    root.unmount();
+  });
+
+  // major 2: переход в чат исполнителя из шторки «где мы» пишет точку возврата
+  // «← к фиче {название}» (БЕЗ вкладки — showTab=false); возврат ведёт на страницу фичи.
+  it('клик «чат» исполнителя → точка возврата с названием фичи, БЕЗ вкладки', async () => {
+    const run = mkRun('f1', 'Тестовая фича');
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs: [run], isMobile: false, onClose: () => {},
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
+    expect(btn, 'кнопка чата исполнителя в шторке').not.toBeNull();
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    // Точка возврата: featureId, название фичи, showTab=false (без вкладки).
+    const info = backNav.featureBackNavFrom('chat-exec');
+    expect(info, 'точки возврата нет').not.toBeNull();
+    expect(info!.featureId).toBe('f1');
+    expect(info!.title).toBe('Тестовая фича');
+    expect(info!.showTab, 'из шторки — БЕЗ вкладки').toBe(false);
     root.unmount();
   });
 });

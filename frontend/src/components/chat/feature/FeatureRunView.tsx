@@ -6,6 +6,7 @@ import { useCanHover } from '../../../lib/pointer';
 import { Button, Tooltip } from '../../ui';
 import { openTaskInSection } from '../../../lib/tasks';
 import { openChatById } from '../../../lib/openChat';
+import { recordFeatureReturn } from '../../../lib/featureBackNav';
 import { api } from '../../../lib/api';
 import { getPersonaById, usePersonasVersion, ensurePersonasLoaded } from '../../../lib/personas';
 import { showToast } from '../../../lib/toast';
@@ -459,7 +460,8 @@ function ExecutorRow({ ex, isMobile, marks = EMPTY_NAV_MARKS, onOpenChat, onOpen
       </div>
       <NavTargetPair
         chatId={ex.chatId}
-        chatArchived={ex.chatArchived}
+        // minor 3: ОДИН источник «в архиве» — marks.chatArchived (unified), не ex.chatArchived.
+        chatArchived={marks.chatArchived(ex.chatId)}
         taskId={ex.taskId}
         taskClosed={marks.taskClosed(ex.taskId)}
         showNoChat={false}
@@ -700,7 +702,13 @@ export function FeatureRunView({
   const marks = buildNavMarks(run);
 
   // Навигация: переход в чат/задачу; onClose — закрыть попап (R2 major 3).
-  const openChat = (chatId: string) => { void openChatById(chatId); onClose?.(); };
+  // major 1: точка возврата «← к фиче {название}» — БЕЗ вкладки (из попапа/панели, не из
+  // вкладки страницы); возврат ведёт на последнюю использованную вкладку (механизм Ф-pl-b).
+  const openChat = (chatId: string) => {
+    recordFeatureReturn(run.featureId, { kind: 'chat', id: chatId }, run.epic?.title ?? null, undefined, false);
+    void openChatById(chatId);
+    onClose?.();
+  };
   const openTask = (taskId: string) => { openTaskInSection({ id: taskId }); onClose?.(); };
 
   // === Мерж (Ф6): общая модалка подтверждения → POST /merge ===

@@ -134,8 +134,11 @@ export type FeaturePageTab = 'timeline' | 'plans' | 'chats' | 'tasks' | 'events'
 const DEFAULT_TAB: FeaturePageTab = 'timeline';
 let _tab: FeaturePageTab = DEFAULT_TAB;
 
-// Названия вкладок: ОДИН словарь для полосы вкладок (FeaturePageTabs) и для чипа возврата
-// «← к фиче · {вкладка}» в шапке чата (Ф9b) — названия не разъезжаются.
+// Названия вкладок: ОДИН словарь (minor 1, ревью Ф9b) — единый источник для полосы
+// вкладок (FeaturePageTabs) И для чипа возврата «← к фиче · {вкладка}» в шапке чата (Ф9b):
+// названия не разъезжаются (раньше у чипа был отдельный короткий словарь, «Планы»).
+// Вкладка «Планы и макеты» в чипе недостижима (из неё перехода в чат нет — только в задачу,
+// а чип рисуется на chat-переходе), но запись НЕ мёртвая: её использует полоса вкладок.
 export const FEATURE_TAB_LABEL: Record<FeaturePageTab, string> = {
   timeline: 'Хронология',
   plans: 'Планы и макеты',
@@ -143,11 +146,6 @@ export const FEATURE_TAB_LABEL: Record<FeaturePageTab, string> = {
   tasks: 'Задачи',
   events: 'События',
   stats: 'Статистика',
-};
-// Короткое имя для чипа возврата (узкая шапка чата): «Планы и макеты» → «Планы».
-export const FEATURE_TAB_CHIP_LABEL: Record<FeaturePageTab, string> = {
-  ...FEATURE_TAB_LABEL,
-  plans: 'Планы',
 };
 
 // Текущая вкладка без подписки: recordFeatureReturn запоминает её в момент перехода.

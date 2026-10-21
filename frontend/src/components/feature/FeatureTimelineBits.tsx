@@ -329,8 +329,8 @@ export function ExecutorAvatar({ personaId }: { personaId: string | null }) {
 // chatId == null → «чата нет» (без мёртвой ссылки); чат в архиве → «· архив».
 // Навигация (Ф9a): чат — openChatById, задача — openTaskInSection; точка возврата
 // «страница фичи → чат/задача» — recordFeatureReturn (чип возврата — Ф9b).
-export function ExecutorRow({ x, task, now, featureId, featureTitle = null, isMobile = false }: {
-  x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; featureTitle?: string | null; isMobile?: boolean;
+export function ExecutorRow({ x, task, now, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false }: {
+  x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
 }) {
   const persona = x.personaId ? getPersonaById(x.personaId) : undefined;
   // Персона в данных, но не найдена (недоступна) — нейтральное «персона недоступна»,
@@ -396,7 +396,8 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, isMo
       <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
         <NavTargetPair
           chatId={x.chatId}
-          chatArchived={x.chatArchived}
+          // minor 3: ОДИН источник «в архиве» — marks.chatArchived (unified), не x.chatArchived.
+          chatArchived={marks.chatArchived(x.chatId)}
           onOpenChat={openChat}
           chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
           showNoChat
@@ -617,10 +618,12 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, featureTi
         chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
         showNoChat
         taskId={chain.taskIds[0] ?? null}
-        // «Закрыта» — ОДИН источник с ExecutorRow: задача шага done (status === 'done'),
-        // не outcome === 'accepted' (другое поле бэка: «принят» — вердикт ревью, не
-        // статус задачи). «Идёт»/«ждёт ревью»/«вернул» — задача ещё открыта.
-        taskClosed={task?.status === 'done' || marks.taskClosed(chain.taskIds[0])}
+        // «Закрыта» — ОДИН источник (major 3, ревью Ф9b): статус задачи шага
+        // (task?.status === 'done'), не `marks.taskClosed` (тот же факт из агрегата — дубль;
+        // мутация снятия дубля не краснила — проводка была мертва) и не outcome === 'accepted'
+        // (другое поле бэка: «принят» — вердикт ревью, не статус задачи). «Идёт»/«ждёт
+        // ревью»/«вернул» — задача ещё открыта.
+        taskClosed={task?.status === 'done'}
         onOpenTask={openTask}
         taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
         isMobile={isMobile}

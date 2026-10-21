@@ -119,8 +119,10 @@ export function NavTargetButton({
     >
       <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
       {showText && labelText}
+      {/* minor 2: пробел в текстовом узле (внутри span, перед пометкой) — иначе подпись и
+          пометка сливались: «чатв архиве»/«задачазакрыта». */}
       {showText && marked && (
-        <span style={{ color: C.textMuted, fontWeight: 500 }}>{mark}</span>
+        <span style={{ color: C.textMuted, fontWeight: 500 }}> {mark}</span>
       )}
     </button>
   );

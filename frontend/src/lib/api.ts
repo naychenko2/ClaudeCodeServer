@@ -1367,7 +1367,12 @@ export const api = {
     summary: (recent = 10) => request<HomeSummaryResponse>(`/home/summary?recent=${recent}`),
   },
   board: {
-    agents: () => request<{ items: BoardItem[] }>('/board/agents'),
+    // live: true — ответ крупный (замер часа работы: ~0,86 МБ), а доска читается
+    // на каждый чих статуса. В офлайн-кэш IndexedDB такая частота писала 258 МБ за
+    // час, и подставленный прошлый ответ выдавал бы доску «кто сейчас работает» за
+    // текущую — ровно тот класс вранья, из-за которого live: живёт у статуса
+    // выкатки и питания.
+    agents: () => request<{ items: BoardItem[] }>('/board/agents', { live: true }),
     interrupt: (sessionId: string) =>
       request<void>(`/board/agents/${sessionId}/interrupt`, { method: 'POST' }),
     allowPermission: (sessionId: string, requestId: string) =>

@@ -20,6 +20,7 @@ using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
@@ -2234,35 +2235,37 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // Честная мутация: убрать умолчание `= null` у параметра spend в конструкторе → контейнер
     // не строит контроллер (обязательный параметр не зарегистрирован) → падает именно этот тест.
     //
-    // Гейт выключен ПЕРЕМЕННОЙ ОКРУЖЕНИЯ, а не ExtraConfig: гейт динамического модуля (Spend)
-    // читается в ModuleLoader.LoadAll ДО builder.Build(), а фабрика ExtraConfig (in-memory)
-    // применяется позже (на Build) — проба: ExtraConfig даёт gate=false в собранном конфиге,
-    // но шов всё равно зарегистрирован. Переменная окружения — в базовом конфиге с момента
-    // создания builder, поэтому видна на LoadAll.
+    // Гейт выключается `UseSetting` (аналог SpendDisabledTests), а НЕ процессной переменной
+    // окружения: `UseSetting` едет в хост-конфигурацию → командная строка → CreateBuilder(args)
+    // → успевает к ModuleLoader'у (гейт читается в LoadAll ДО builder.Build()); процессная env
+    // была глобальна на процесс — при parallelizeTestCollections хосты в ДРУГИХ коллекциях,
+    // поднятые в это окно, видели выключенный Spend (SpendDisabledTests ждёт включённый,
+    // ImageEditSpendVisibilityTests требует SpendStore в сервисах) — окно реально, ревью Глеба.
+    private sealed class SpendOffFactory : TestWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.UseSetting("Subsystems:spend:Enabled", "false");
+        }
+    }
+
     [Fact]
     public async Task GetFeature_SpendВыключен_DI_СпандNull()
     {
-        Environment.SetEnvironmentVariable("Subsystems__spend__Enabled", "false");
-        try
-        {
-            using var offFactory = new TestWebApplicationFactory();
-            using var client = offFactory.CreateAuthenticatedClient();
+        using var offFactory = new SpendOffFactory();
+        using var client = offFactory.CreateAuthenticatedClient();
 
-            var response = await client.PostAsJsonAsync("/api/tasks", new { title = "эпик-sp-di", role = "feature" });
-            response.StatusCode.Should().Be(HttpStatusCode.OK);
-            var epicId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var response = await client.PostAsJsonAsync("/api/tasks", new { title = "эпик-sp-di", role = "feature" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var epicId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
 
-            var feature = await client.GetAsync($"/api/tasks/features/{epicId}");
-            feature.StatusCode.Should().Be(HttpStatusCode.OK, "Spend выключен → 200, не 500");
-            var stats = (await feature.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("stats");
+        var feature = await client.GetAsync($"/api/tasks/features/{epicId}");
+        feature.StatusCode.Should().Be(HttpStatusCode.OK, "Spend выключен → 200, не 500");
+        var stats = (await feature.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("stats");
 
-            var spendAbsent = !stats.TryGetProperty("spend", out var spend) || spend.ValueKind == JsonValueKind.Null;
-            spendAbsent.Should().BeTrue("Spend выключен (шов не в DI) → stats.spend = null");
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("Subsystems__spend__Enabled", null);
-        }
+        var spendAbsent = !stats.TryGetProperty("spend", out var spend) || spend.ValueKind == JsonValueKind.Null;
+        spendAbsent.Should().BeTrue("Spend выключен (шов не в DI) → stats.spend = null");
     }
 
     // Запись расхода задачи фичи (надёжная цена) → токены (вход/выход) + costUsd в stats.spend.
@@ -2406,6 +2409,57 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         spend.GetProperty("from").GetString().Should().Be(
             DateTime.UtcNow.ToString("yyyy-MM-dd"),
             "from = самая ранняя дата записи в срезе");
+    }
+
+    // Сквозной тест «итог = разрез» (ревью Глеба, major): записи расхода → один ответ
+    // GET features/{id} → stats.spend (итог) и stats.breakdown (разрез) СОГЛАСНЫ по признаку
+    // «цена ненадёжна». Слои связаны через шов: запись проходит SpendFeatureReader (ставит
+    // UnreliableCost единой точкой правды) → Slice → FeatureBreakdown.Build. Разрез по РОЛЯМ:
+    // все записи одной задачи (TaskId=stepId) маппятся в группу роли step, и признак «ненадёжно»
+    // в группе (costUsd=null) обязан совпадать с итогом (costPartial=true, hiddenCostModels).
+    // Мутации, краснящие именно этот тест:
+    //   • «флаг UnreliableCost не выставляется» → deepseek-chat (цена 2.0) снова в сумму:
+    //     итог costUsd=2.0, hidden теряет deepseek-chat → assertion costUsd=0 краснеет;
+    //   • «запись без цены → 0 в итоге» (откат фикса ComputeTotals) → gpt-4o не в hiddenCostModels,
+    //     а в разрезе costUsd=null → множества расходятся (BeEquivalentTo краснеет).
+    [Fact]
+    public async Task GetFeature_Spend_ИтогИРазрез_СогласныПоПризнакуНенадёжности()
+    {
+        var (epicId, stepId, _) = await MakeFeature("sp-agree");
+        // Три записи одной задачи (stepId): (1) ненадёжная модель (deepseek, цена 2.0),
+        // (2) обычная модель БЕЗ цены (gpt-4o, CostUsd=null), (3) free-модель (glm-local, цена 5.0).
+        var (_, reader) = SpendStoreWith(
+            SpendRecord(OwnerId, stepId, null, "deepseek-chat", 100, 50, 2.0),
+            SpendRecord(OwnerId, stepId, null, "gpt-4o", 100, 50, null),
+            SpendRecord(OwnerId, stepId, null, "glm-local:8b", 100, 50, 5.0, source: "free"));
+
+        var stats = GetFeatureStats(reader, epicId);
+        var spend = stats.GetProperty("spend");
+        var roles = stats.GetProperty("breakdown").GetProperty("roles");
+
+        // Итог: в сумму входит только free-модель (надёжный 0); deepseek (ненадёжная) и
+        // gpt-4o (без цены) — не в сумму, costPartial=true, обе в hiddenCostModels.
+        spend.GetProperty("costUsd").GetDouble().Should().Be(0,
+            "в сумму — только free-модель (надёжный 0); ненадёжная и без цены — нет");
+        spend.GetProperty("costPartial").GetBoolean().Should().BeTrue(
+            "есть запись с ненадёжной/отсутствующей ценой");
+        spend.GetProperty("hiddenCostModels").EnumerateArray().Select(e => e.GetString())
+            .Should().BeEquivalentTo(new[] { "deepseek-chat", "gpt-4o" },
+            "модели, чья цена не в итоге: ненадёжная (deepseek) и без цены (gpt-4o)");
+
+        // Разрез (роли): все три записи одной задачи → группа роли step. Признак «ненадёжно»
+        // совпадает с итогом: есть ненадёжная/без-цены запись → costUsd=null (не 0, не 2.0).
+        var stepRole = roles.EnumerateArray().Single(r => r.GetProperty("key").GetString() == "step");
+        stepRole.GetProperty("costUsd").ValueKind.Should().Be(JsonValueKind.Null,
+            "группа роли содержит запись без надёжной цены → costUsd=null (как итог: costPartial=true)");
+        // Токены группы на месте (вход+выход трёх записей): признак «нет данных» не путать с «ненадёжно».
+        stepRole.GetProperty("tokens").GetInt64().Should().Be(450, "3 записи × (100+50)");
+
+        // Сквозное равенство: costUsd=null в разрезе ⇔ costPartial=true в итоге (по признаку).
+        var breakdownHasUnreliable = roles.EnumerateArray()
+            .Any(r => r.GetProperty("costUsd").ValueKind == JsonValueKind.Null);
+        breakdownHasUnreliable.Should().Be(spend.GetProperty("costPartial").GetBoolean(),
+            "итог (costPartial) и разрез (costUsd=null) согласны по признаку ненадёжной цены");
     }
 
     // ─── Stub-запускатель: Start бросает → GitService.WorktreeListAsync бросает (сбой git, п.53) ─

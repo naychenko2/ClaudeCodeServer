@@ -20,6 +20,9 @@ public interface ISpendFeatureReader
 {
     // Итог расхода фичи: токены (вход+выход крупно, кэш отдельно — решение Андрея 20.10)
     // и стоимость в USD. `from` — граница «с какого момента» (null — весь журнал).
+    // Мёртвая поверхность шва (ревью Глеба, minor): прод-код (TasksController) ходит через
+    // Slice (один проход), Totals/Records держим для Б9c (Records — деление расхода общего
+    // оркестраторского чата) и для тестов слоёв.
     FeatureSpendTotals Totals(string ownerId, IReadOnlyCollection<string> taskIds,
         IReadOnlyCollection<string> sessionIds, DateTime? from);
 

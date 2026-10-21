@@ -76,6 +76,27 @@ public class SpendFeatureReaderTests : IDisposable
         Assert.Empty(totals.HiddenCostModels);
     }
 
+    // Минор Б9b (ревью Глеба): приоритет «free ВЫШЕ ненадёжно» тестом не был защищён.
+    // Free-модель с «glm» в имени — надёжный 0, а НЕ ненадёжная модель: costPartial=false,
+    // hidden пуст, costUsd=0. Мутация «убрать ранний if (source == Free) return false»
+    // (SpendCostReliability.IsUnreliable) → IsUnreliable("glm-local:8b", free) = true
+    // (glm в имени) → costPartial=true, hidden=["glm-local:8b"] → тест краснеет.
+    [Fact]
+    public void Totals_FreeМодельСГlmВимени_НадёжныйНуль_НеНенадёжная()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+        // Локальная модель (Source=free) с «glm» в имени; сырая запись несёт цену (CLI отчитал).
+        store.Record(Rec(ts, model: "glm-local:8b", source: SpendSources.Free, cost: 5.0));
+
+        var totals = NewReader(store).Totals("u1", [], ["s1"], null);
+
+        // free выше «ненадёжно»: надёжный 0, не ненадёжная модель.
+        Assert.Equal(0, totals.CostUsd);
+        Assert.False(totals.CostPartial);
+        Assert.Empty(totals.HiddenCostModels);
+    }
+
     [Fact]
     public void Totals_НенадёжнаяЦена_ТокеныВСумму_СтоимостьНеВходит_МодельВHidden()
     {

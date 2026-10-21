@@ -186,7 +186,9 @@ public sealed record FeatureBreakdown(
                     // (tuple — value type: TryGetValue отдаёт копию, сам словарь не мутируется).
                     if (!spend.TryGetValue(key, out var a))
                         a = (0, 0, false);
-                    a = (a.Tokens + r.InputTokens + r.OutputTokens,
+                    // Минор Б9b: кламп отрицательных токенов и в разрезе (как в итоге,
+                    // SpendFeatureReader): сбой CLI с отрицательным числом не тянет группу в минус.
+                    a = (a.Tokens + Math.Max(0, r.InputTokens) + Math.Max(0, r.OutputTokens),
                         a.Cost + (r.Source == SpendSources.Free ? 0 : (r.CostUsd ?? 0)),
                         a.HasUnreliable || r.UnreliableCost
                             || (r.Source != SpendSources.Free && r.CostUsd is null));

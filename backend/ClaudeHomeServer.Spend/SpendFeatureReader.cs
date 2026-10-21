@@ -100,11 +100,14 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
             totals.CacheReadTokens += Math.Max(0, r.CacheReadTokens);
             totals.CacheCreationTokens += Math.Max(0, r.CacheCreationTokens);
 
-            if (r.UnreliableCost)
+            // «Цена ненадёжна» — два случая: (1) модель в списке `Spend:UnreliableCostModels`
+            // (флаг UnreliableCost, единая точка правды SpendCostReliability), (2) запись БЕЗ
+            // цены (CLI не отчитал, Source != free). В обоих: токены в сумму, стоимость — нет,
+            // CostPartial, модель в hidden. Иначе запись без цены давала бы в итоге 0
+            // (CostUsd ?? 0), а в разрезе (FeatureBreakdown) null — два разных утверждения
+            // о цене в одном ответе (ревью Глеба, major).
+            if (r.UnreliableCost || (r.Source != SpendSources.Free && r.CostUsd is null))
             {
-                // Токены уже в сумме выше, стоимость — нет: модель в список, CostPartial.
-                // Флаг — единая точка правды (SpendCostReliability): free (надёжный 0) проверен
-                // выше «ненадёжно», поэтому free-модель с «glm» в имени сюда не попадает.
                 if (r.Model is not null) hidden.Add(r.Model);
                 totals.CostPartial = true;
             }

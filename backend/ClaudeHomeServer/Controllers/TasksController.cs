@@ -650,12 +650,14 @@ public class TasksController(
             .Where(id => id is not null)
             .Select(id => id!)
             .ToHashSet(StringComparer.Ordinal);
-        // Ключевой чат: сессия с TaskId == epic.Id из снимка сессий владельца (fail-closed:
-        // удалённый/чужой чат в снимке не живёт → ключевого чата нет, и его расход в срез не
-        // входит). Прежняя версия брала run.Epic.LinkedSessionId, а тот ВСЕГДА был в sessionIds
-        // (эпик входит в allFeatureTasks) → ветка «!sessionIds.Contains» была мёртвой,
-        // ChatFeatureIds не вызывался никогда, и общий чат (ключевой у фичи A, оркестраторский
-        // у B) входил в срез КАЖДОЙ фичи → двойной счёт (ревью Глеба, critical).
+        // Ключевой чат: сессия с TaskId == epic.Id из снимка сессий владельца. Fail-closed —
+        // ТОЛЬКО для ключевого чата (ревью Глеба, minor): он берётся из снимка, поэтому
+        // удалённый/чужой чат в нём не живёт → ключевого чата нет, и его расход в срез не входит.
+        // (sessionIds из LinkedSessionId задач снимком НЕ проверяются — запись по удалённому чату
+        // входит в срез; осознанно, см. отчёт.) Прежняя версия брала run.Epic.LinkedSessionId, а
+        // тот ВСЕГДА был в sessionIds (эпик входит в allFeatureTasks) → ветка «!sessionIds.Contains»
+        // была мёртвой, ChatFeatureIds не вызывался никогда, и общий чат (ключевой у фичи A,
+        // оркестраторский у B) входил в срез КАЖДОЙ фичи → двойной счёт (ревью Глеба, critical).
         var keyChatId = snapshot.FirstOrDefault(s => s.TaskId == run.Epic.Id)?.Id;
         if (keyChatId is not null)
         {

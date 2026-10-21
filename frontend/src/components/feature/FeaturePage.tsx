@@ -24,6 +24,7 @@ import { FeaturePlansTab, plansTabCount } from './FeaturePlansTab';
 import { FeatureChatsTab } from './FeatureChatsTab';
 import { FeatureTasksTab } from './FeatureTasksTab';
 import { FeatureEventsTab } from './FeatureEventsTab';
+import { FeatureStatsTab } from './FeatureStatsTab';
 import {
   FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
   featureRunStatusTag, toRunTag, type FeatureRunTag,
@@ -109,19 +110,6 @@ function MiniSummaryStub({ onOpenStats }: { onOpenStats: () => void }) {
       >
         Статистика ›
       </Button>
-    </div>
-  );
-}
-
-// «Скоро» — заглушка вкладок, которые наполняют следующие шаги (Ф2–Ф7):
-// тот же каркас (белое тело, поля страницы), одна строка.
-function ComingSoon() {
-  return (
-    <div
-      data-testid="feature-page-tab-stub"
-      style={{ padding: `${SP.xl}px 0`, textAlign: 'center', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}
-    >
-      Скоро
     </div>
   );
 }
@@ -336,7 +324,8 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
           ) : tab === 'events' ? (
             <FeatureEventsTab events={page.page.events} eventsTotal={page.page.eventsTotal} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} isMobile={isMobile} />
           ) : (
-            <ComingSoon />
+            // «Статистика» (Ф7a): лента времени из stats (features/{id}); null — пустое состояние.
+            <FeatureStatsTab stats={page.page.stats ?? null} isMobile={isMobile} />
           )}
         </div>
       </>

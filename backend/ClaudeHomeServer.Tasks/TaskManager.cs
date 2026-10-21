@@ -391,6 +391,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             StepRef = Trimmed(req.StepRef),
             Lane = Trimmed(req.Lane),
             ReviewOf = req.ReviewOf,
+            PlanSteps = req.PlanSteps,
             AwaitingHumanSince = req.AwaitingHumanSince,
             AwaitingHumanReason = Trimmed(req.AwaitingHumanReason),
             Verification = req.Verification,
@@ -424,10 +425,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // review-признак резолвится вызывающей стороной (BoardColumnHelper.IsReview).
         DefectRules.EnsureNotClosedAtCreate(task, targetColumn);
         DefectRules.EnsureReproOnReview(task, targetColumn);
-        // Фича: fail-closed валидация featureId/role/verdict/reviewOf (до вставки в словарь,
-        // чтобы при отказе состояние менеджера не изменилось)
+        // Фича: fail-closed валидация featureId/role/verdict/reviewOf/planSteps (до вставки в
+        // словарь, чтобы при отказе состояние менеджера не изменилось). При создании связь
+        // доработки с ревью (enforceReworkReviewOf) проверяется всегда.
         ValidateFeatureFields(task.FeatureId, task.Role, task.Verification?.Verdict,
-            task.ReviewOf, task.PersonaId, ownerId);
+            task.ReviewOf, task.PersonaId, ownerId,
+            planSteps: task.PlanSteps, enforceReworkReviewOf: true);
         _tasks[task.Id] = task;
         // created: эпик фичи — первая запись её журнала (журнал точный, только если
         // начинается с created; дочерние задачи фичи created не пишут).
@@ -470,11 +473,15 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // состояние — то, что окажется на задаче после операции: Create передаёт только что
     // заполненную task, Update — слияние req и текущего состояния. ownerId — владелец задачи;
     // по нему сверяются ВСЕ ссылки (эпик и reviewOf), иначе чужой владелец читал бы разметку.
-    // Бросает InvalidOperationException с внятным текстом — вызывающая сторона превращает в 400.
-    // Тихо отбрасывать неверное значение нельзя: агент не узнает, что разметка не легла.
+    // planSteps — эффективный список шагов плана (только у role=plan); enforceReworkReviewOf —
+    // проверять ли обязательную связь доработки с ревью (Create — всегда, Update — только если
+    // поле reviewOf меняют). Бросает InvalidOperationException с внятным текстом — вызывающая
+    // сторона превращает в 400. Тихо отбрасывать неверное значение нельзя: агент не узнает,
+    // что разметка не легла.
     private void ValidateFeatureFields(
         string? featureId, string? role, string? verdict,
-        List<string>? reviewOf, string? personaId, string ownerId)
+        List<string>? reviewOf, string? personaId, string ownerId,
+        List<PlannedStep>? planSteps = null, bool enforceReworkReviewOf = false)
     {
         // role — только из списка TaskRoles
         if (role is not null && !TaskRoles.All.Contains(role))
@@ -522,6 +529,52 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                     throw new InvalidOperationException($"reviewOf: задача «{refId}» принадлежит другому владельцу.");
                 if (target.FeatureId != featureId)
                     throw new InvalidOperationException($"reviewOf: задача «{refId}» из другой фичи.");
+            }
+        }
+
+        // PlanSteps: допустимы ТОЛЬКО у role=plan (у прочих ролей — 400); у плана — лимиты
+        // числа шагов, длины stepRef/title и уникальность stepRef (разрез §2, честный прогресс).
+        if (planSteps is not null)
+        {
+            if (role != TaskRoles.Plan)
+                throw new InvalidOperationException(
+                    "PlanSteps допустимы только у задачи-плана (role=plan).");
+            if (planSteps.Count > PlannedStep.MaxSteps)
+                throw new InvalidOperationException(
+                    $"Слишком много шагов плана: {planSteps.Count} (лимит {PlannedStep.MaxSteps}).");
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var step in planSteps)
+            {
+                if (string.IsNullOrWhiteSpace(step.StepRef))
+                    throw new InvalidOperationException("Код шага плана (stepRef) не может быть пустым.");
+                if (step.StepRef.Length > PlannedStep.MaxStepRefLength)
+                    throw new InvalidOperationException(
+                        $"Код шага плана «{step.StepRef}» длиннее {PlannedStep.MaxStepRefLength} символов.");
+                if (step.Title.Length > PlannedStep.MaxTitleLength)
+                    throw new InvalidOperationException(
+                        $"Название шага плана «{step.StepRef}» длиннее {PlannedStep.MaxTitleLength} символов.");
+                if (!seen.Add(step.StepRef))
+                    throw new InvalidOperationException($"Дублируется код шага плана «{step.StepRef}».");
+            }
+        }
+
+        // Rework: обязательная связь с ревью/проверкой/финалом той же фичи (fail-closed, §1).
+        // Create — всегда; Update — только если поле reviewOf меняют (старые доработки без
+        // reviewOf можно править, не трогая связь, и можно привязывать). Цикл reviewOf выше
+        // уже проверил существование/владельца/фичу каждой ссылки — здесь только роль цели.
+        if (enforceReworkReviewOf && role == TaskRoles.Rework)
+        {
+            if (reviewOf is null || reviewOf.Count == 0)
+                throw new InvalidOperationException(
+                    "Доработка (role=rework) обязана ссылаться на ревью/проверку/финал (reviewOf) той же фичи.");
+            foreach (var refId in reviewOf)
+            {
+                var target = GetById(refId);
+                if (target is not null
+                    && target.Role is not (TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final))
+                    throw new InvalidOperationException(
+                        $"Доработка (role=rework) ссылается на задачу «{refId}» с ролью «{target.Role}» — "
+                        + "ожидался review/qa/final той же фичи.");
             }
         }
     }
@@ -657,7 +710,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var effVerdict = (req.Verification ?? task.Verification)?.Verdict;
         var effReviewOf = req.ReviewOf is null ? task.ReviewOf : req.ReviewOf;
         var effPersonaId = req.PersonaId is null ? task.PersonaId : (req.PersonaId == "" ? null : req.PersonaId);
-        ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "");
+        var effPlanSteps = req.PlanSteps is null ? task.PlanSteps : req.PlanSteps;
+        // Связь доработки с ревью (enforceReworkReviewOf) проверяем только если поле reviewOf
+        // меняют: старые доработки без reviewOf можно править, не трогая связь, и можно привязывать.
+        ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "",
+            planSteps: effPlanSteps, enforceReworkReviewOf: req.ReviewOf is not null);
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
@@ -725,6 +782,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.StepRef is not null) task.StepRef = Trimmed(req.StepRef);
         if (req.Lane is not null) task.Lane = Trimmed(req.Lane);
         if (req.ReviewOf is not null) task.ReviewOf = req.ReviewOf;
+        if (req.PlanSteps is not null) task.PlanSteps = req.PlanSteps;
         if (req.AwaitingHumanSince is not null) task.AwaitingHumanSince = req.AwaitingHumanSince;
         if (req.AwaitingHumanReason is not null) task.AwaitingHumanReason = Trimmed(req.AwaitingHumanReason);
 
@@ -1276,6 +1334,8 @@ public record CreateTaskRequest(
     string? Lane = null,
     // Id задач, которые оценивает это ревью/проверка/финал; null — не задано
     List<string>? ReviewOf = null,
+    // Структурный список шагов плана (только у role=plan); null — не задано
+    List<PlannedStep>? PlanSteps = null,
     // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика
     DateTime? AwaitingHumanSince = null,
     string? AwaitingHumanReason = null,
@@ -1343,6 +1403,8 @@ public record UpdateTaskRequest(
     string? Lane = null,
     // Id задач, которые оценивает это ревью/проверка/финал; null = не менять, список = задать целиком
     List<string>? ReviewOf = null,
+    // Структурный список шагов плана (только у role=plan); null = не менять, список = задать целиком
+    List<PlannedStep>? PlanSteps = null,
     // «Ждёт вас»: null = не менять, значение = задать
     DateTime? AwaitingHumanSince = null,
     string? AwaitingHumanReason = null);

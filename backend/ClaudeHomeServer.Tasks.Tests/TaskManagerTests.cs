@@ -1053,9 +1053,15 @@ public class TaskManagerTests : IDisposable
     public void Create_ПривязаннаяРольСFeatureId_Принята()
     {
         var epic = CreateEpic("u");
+        // rework требует reviewOf (fail-closed, §1): создаём ревью той же фичи, на которое
+        // доработка будет ссылаться; прочие роли reviewOf не требуют (null).
+        var review = _sut.Create(null, "u", new CreateTaskRequest("t",
+            FeatureId: epic.Id, Role: TaskRoles.Review));
         foreach (var role in BoundRoles)
         {
-            var task = _sut.Create(null, "u", new CreateTaskRequest("t", FeatureId: epic.Id, Role: role));
+            List<string>? reviewOf = role == TaskRoles.Rework ? [review.Id] : null;
+            var task = _sut.Create(null, "u", new CreateTaskRequest("t",
+                FeatureId: epic.Id, Role: role, ReviewOf: reviewOf));
             task.FeatureId.Should().Be(epic.Id);
             task.Role.Should().Be(role);
         }
@@ -1195,5 +1201,246 @@ public class TaskManagerTests : IDisposable
 
         updated.FeatureId.Should().Be(epic.Id, "featureId не пересчитывается при Update");
         updated.Role.Should().Be(TaskRoles.Step, "role тоже не меняется");
+    }
+
+    // ─── PlanSteps: структурный список шагов плана (честный прогресс фичи) ─────────
+    // PlanSteps — только у role=plan; stepRef непуст/уникален, лимиты числа шагов и длины.
+    // null = не менять, список = задать целиком (как у reviewOf).
+
+    [Fact]
+    public void Create_PlanStepsУНеПлана_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "шаг" }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*только у задачи-плана*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsУПлана_Принята()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "бэк-шаг", Lane = "бэк" },
+                new PlannedStep { StepRef = "F1", Title = "фронт-шаг", Lane = "фронт" },
+            ]));
+
+        plan.PlanSteps.Should().HaveCount(2);
+        plan.PlanSteps![0].StepRef.Should().Be("B1");
+        plan.PlanSteps[0].Title.Should().Be("бэк-шаг");
+        plan.PlanSteps[0].Lane.Should().Be("бэк");
+        plan.PlanSteps[1].StepRef.Should().Be("F1");
+        plan.PlanSteps[1].Lane.Should().Be("фронт");
+    }
+
+    [Fact]
+    public void Create_PlanStepsДубльStepRef_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "а" },
+                new PlannedStep { StepRef = "B1", Title = "б" },
+            ]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Дублируется код шага*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsСлишкомМного_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var steps = Enumerable.Range(0, PlannedStep.MaxSteps + 1)
+            .Select(i => new PlannedStep { StepRef = $"S{i}", Title = "t" }).ToList();
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan, PlanSteps: steps));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Слишком много шагов*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsДлинныйStepRef_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = new string('x', PlannedStep.MaxStepRefLength + 1), Title = "t" }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage($"*длиннее {PlannedStep.MaxStepRefLength}*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsДлинныйTitle_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = new string('x', PlannedStep.MaxTitleLength + 1) }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage($"*длиннее {PlannedStep.MaxTitleLength}*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsПустойStepRef_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "", Title = "t" }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*stepRef) не может быть пустым*");
+    }
+
+    [Fact]
+    public void Update_PlanStepsNullНеМеняет_СписокЗадаёт()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "а" }]));
+
+        // null = не менять: список остаётся
+        var unchanged = _sut.Update(plan.Id, new UpdateTaskRequest(Title: "переименовали"))!;
+        unchanged.PlanSteps.Should().HaveCount(1);
+        unchanged.PlanSteps![0].StepRef.Should().Be("B1");
+
+        // список = задать целиком
+        var set = _sut.Update(plan.Id, new UpdateTaskRequest(
+            PlanSteps: [new PlannedStep { StepRef = "F1", Title = "б", Lane = "фронт" }]))!;
+        set.PlanSteps.Should().HaveCount(1);
+        set.PlanSteps![0].StepRef.Should().Be("F1");
+        set.PlanSteps[0].Title.Should().Be("б");
+        set.PlanSteps[0].Lane.Should().Be("фронт");
+    }
+
+    [Fact]
+    public void Персистентность_PlanSteps_ПереживаетСохранениеИЧтение()
+    {
+        var epic = _sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "бэк", Lane = "бэк" },
+                new PlannedStep { StepRef = "F1", Title = "фронт", Lane = "фронт" },
+            ]));
+        _sut.Flush();
+
+        var reloaded = new TaskManager(BuildConfig(_dir)).GetById(plan.Id)!;
+
+        reloaded.PlanSteps.Should().HaveCount(2);
+        reloaded.PlanSteps![0].StepRef.Should().Be("B1");
+        reloaded.PlanSteps[0].Title.Should().Be("бэк");
+        reloaded.PlanSteps[0].Lane.Should().Be("бэк");
+        reloaded.PlanSteps[1].StepRef.Should().Be("F1");
+        reloaded.PlanSteps[1].Lane.Should().Be("фронт");
+    }
+
+    [Fact]
+    public void Персистентность_СтараяЗадачаБезPlanSteps_ЧитаетсяСNull()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("старая"));
+        _sut.Flush();
+
+        var reloaded = new TaskManager(BuildConfig(_dir)).GetById(task.Id)!;
+        reloaded.PlanSteps.Should().BeNull();
+    }
+
+    // ─── Rework ⇒ reviewOf: обязательная связь доработки с review/qa/final той же фичи ──
+    // Fail-closed: при создании — всегда; при update — только если поле reviewOf меняют
+    // (старые доработки без reviewOf можно править, не трогая связь, и можно привязывать).
+
+    [Fact]
+    public void Create_ReworkБезReviewOf_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epic.Id, Role: TaskRoles.Rework));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*reviewOf*");
+    }
+
+    [Fact]
+    public void Create_ReworkСReviewOfНаReviewТойЖеФичи_Принята()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [step.Id]));
+
+        var rework = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epic.Id, Role: TaskRoles.Rework, ReviewOf: [review.Id]));
+
+        rework.ReviewOf.Should().BeEquivalentTo([review.Id]);
+    }
+
+    [Fact]
+    public void Create_ReworkСReviewOfНаStep_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epic.Id, Role: TaskRoles.Rework, ReviewOf: [step.Id]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*review/qa/final*");
+    }
+
+    [Fact]
+    public void Create_ReworkСReviewOfДругойФичи_Отказ()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        var reviewB = _sut.Create(null, "u", new CreateTaskRequest("ревью B",
+            FeatureId: epicB.Id, Role: TaskRoles.Review));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epicA.Id, Role: TaskRoles.Rework, ReviewOf: [reviewB.Id]));
+
+        // reviewOf из другой фичи — 400 (общая проверка reviewOf, не только роль цели)
+        act.Should().Throw<InvalidOperationException>().WithMessage("*из другой фичи*");
+    }
+
+    [Fact]
+    public void Update_ReworkБезИзмененияReviewOf_Ок()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [step.Id]));
+        var rework = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epic.Id, Role: TaskRoles.Rework, ReviewOf: [review.Id]));
+
+        // Правим только заголовок, reviewOf не трогаем — 400 быть не должно
+        var updated = _sut.Update(rework.Id, new UpdateTaskRequest(Title: "доработка v2"))!;
+        updated.ReviewOf.Should().BeEquivalentTo([review.Id]);
+    }
+
+    [Fact]
+    public void Update_ReworkСПривязкойReviewOf_Ок()
+    {
+        var epic = CreateEpic("u");
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review));
+        // Старая доработка без reviewOf: создаём как step (role не требует связи) и меняем
+        // роль на rework, не трогая reviewOf — имитация задачи, заведённой до правила.
+        var orphan = _sut.Create(null, "u", new CreateTaskRequest("сирота",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+        orphan.Role = TaskRoles.Rework;
+
+        // Привязываем reviewOf — связь валидна, 400 быть не должно
+        var linked = _sut.Update(orphan.Id, new UpdateTaskRequest(ReviewOf: [review.Id]))!;
+        linked.Role.Should().Be(TaskRoles.Rework);
+        linked.ReviewOf.Should().BeEquivalentTo([review.Id]);
     }
 }

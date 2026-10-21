@@ -411,13 +411,28 @@ const LANE_SCHEMA = {
 const REVIEW_OF_SCHEMA = {
   type: 'array',
   items: { type: 'string' },
-  description: 'Id задач, которые оценивает это ревью/проверка/финал',
+  description: 'Id задач, которые оценивает это ревью/проверка/финал; у role=rework — обязательная связь с review/qa/final той же фичи',
+};
+
+// Структурный список шагов плана (честный прогресс фичи): массив {stepRef, title, lane}.
+// Допустим только у role=plan; stepRef непуст и уникален, лимиты — в TaskManager.
+const PLAN_STEPS_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      stepRef: { type: 'string', description: 'Код шага (уникален, непуст)' },
+      title: { type: 'string', description: 'Название шага' },
+      lane: { type: 'string', description: 'Линия (бэк/фронт)' },
+    },
+  },
+  description: 'Структурный список шагов плана: планировщик (role=plan) заполняет знаменатель «сколько всего»; stepRef непуст и уникален',
 };
 
 // Ссылки через свойства объектов в inputSchema линтер TS на .js не всегда видит —
 // явное использование убирает ложные ворнинги «declared but never read».
 void KIND_SCHEMA; void REPRO_SCHEMA; void VERIFICATION_SCHEMA; void OUTCOME_SCHEMA;
-void FEATURE_ID_SCHEMA; void ROLE_SCHEMA; void STEP_REF_SCHEMA; void LANE_SCHEMA; void REVIEW_OF_SCHEMA;
+void FEATURE_ID_SCHEMA; void ROLE_SCHEMA; void STEP_REF_SCHEMA; void LANE_SCHEMA; void REVIEW_OF_SCHEMA; void PLAN_STEPS_SCHEMA;
 
 // Справочник сервера (поле instructions ответа initialize): клиент кладёт его в контекст один
 // раз на сервер, тогда как повторённый в схемах текст оплачивается в каждой из них — правило
@@ -450,6 +465,11 @@ const INSTRUCTIONS = [
   '',
   'ОЧИСТКА в tasks_update: "" в dueDate/dueTime убирает срок, -1 в reminderMinutes — снимает',
   '  напоминание, -1 в executionExpiresAfterMinutes — делает чат бессрочным.',
+  '',
+  'ПЛАН (planSteps): задача role=plan заполняет planSteps — структурный список шагов',
+  '  [{stepRef, title, lane}]; stepRef непуст и уникален. Markdown плана — проза, знаменатель',
+  '  «сколько всего» берётся из planSteps. Доработка (role=rework) ОБЯЗАНА ссылаться на',
+  '  review/qa/final той же фичи через reviewOf — иначе 400 (связь обязательна при создании).',
 ].join('\n');
 
 const TOOLS = [
@@ -525,6 +545,7 @@ const TOOLS = [
         stepRef: STEP_REF_SCHEMA,
         lane: LANE_SCHEMA,
         reviewOf: REVIEW_OF_SCHEMA,
+        planSteps: PLAN_STEPS_SCHEMA,
         projectId: { type: 'string', description: 'Проект задачи, если не текущий (см. tasks_list_projects; нужен полный доступ)' },
       },
     },
@@ -563,6 +584,7 @@ const TOOLS = [
         stepRef: STEP_REF_SCHEMA,
         lane: LANE_SCHEMA,
         reviewOf: REVIEW_OF_SCHEMA,
+        planSteps: PLAN_STEPS_SCHEMA,
         verification: VERIFICATION_SCHEMA,
         outcome: OUTCOME_SCHEMA,
         projectId: { type: 'string', description: 'Перенести в другой проект (см. tasks_list_projects) или "" — сделать личной' },

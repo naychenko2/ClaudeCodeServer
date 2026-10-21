@@ -129,6 +129,11 @@ public class TaskItem
     public string? Lane { get; set; }
     // Id задач, которые оценивает это ревью/проверка/финал. Пусто/у final,qa — вся фича.
     public List<string>? ReviewOf { get; set; }
+    // Структурный список шагов плана (честный прогресс фичи, разрез Александра §2): знаменатель
+    // «сколько всего» берётся из PlanSteps задач role=plan, а не из markdown-плана. Аддитивное
+    // nullable-поле: допустимо ТОЛЬКО у role=plan (валидация — TaskManager), у прочих ролей и в
+    // старых задачах — null. BackupSchema.Version не растёт (прецедент ReviewOf).
+    public List<PlannedStep>? PlanSteps { get; set; }
     // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика.
     public DateTime? AwaitingHumanSince { get; set; }
     public string? AwaitingHumanReason { get; set; }
@@ -170,6 +175,23 @@ public class TaskSubtask
     public string Id { get; init; } = Guid.NewGuid().ToString();
     public string Title { get; set; } = "";
     public bool IsDone { get; set; }
+}
+
+// Шаг плана (TaskItem.PlanSteps): код шага (StepRef), его название (Title) и линия (Lane).
+// StepRef — ключ шага (тот же, что у step/rework): непуст и уникален внутри задачи.
+// Title — человекочитаемое название шага; Lane — линия (бэк/фронт), как у шагов.
+// Лимиты — константы (единая точка для валидации в TaskManager и для тестов).
+public class PlannedStep
+{
+    // Потолок числа шагов плана на задачу: план — не таблица на тысячу строк.
+    public const int MaxSteps = 200;
+    // Максимальная длина кода шага (StepRef) и названия (Title).
+    public const int MaxStepRefLength = 40;
+    public const int MaxTitleLength = 200;
+
+    public string StepRef { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string? Lane { get; set; }
 }
 
 public enum TaskItemStatus { Todo, InProgress, Done }

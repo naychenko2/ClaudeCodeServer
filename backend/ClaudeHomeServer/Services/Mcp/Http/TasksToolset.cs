@@ -259,6 +259,7 @@ public sealed class TasksToolset(
                     StepRef: OptionalArg(arguments, "stepRef"),
                     Lane: OptionalArg(arguments, "lane"),
                     ReviewOf: LabelsArg(arguments, "reviewOf"),
+                    PlanSteps: PlanStepsArg(arguments),
                     ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId));
                 TaskItem created;
                 try
@@ -375,7 +376,8 @@ public sealed class TasksToolset(
                     Role: arguments.ContainsKey("role") ? StringArg(arguments, "role") : null,
                     StepRef: arguments.ContainsKey("stepRef") ? StringArg(arguments, "stepRef") : null,
                     Lane: arguments.ContainsKey("lane") ? StringArg(arguments, "lane") : null,
-                    ReviewOf: arguments.ContainsKey("reviewOf") ? LabelsArg(arguments, "reviewOf") : null);
+                    ReviewOf: arguments.ContainsKey("reviewOf") ? LabelsArg(arguments, "reviewOf") : null,
+                    PlanSteps: arguments.ContainsKey("planSteps") ? PlanStepsArg(arguments) : null);
                 TaskItem updated;
                 try
                 {
@@ -895,6 +897,25 @@ public sealed class TasksToolset(
             : arr.Where(t => t is JsonValue v && v.TryGetValue<string>(out _))
                 .Select(t => t!.GetValue<string>()).ToList();
 
+    // Структурный список шагов плана: null — ключа нет (не менять), массив = задать целиком
+    // (даже пустой = очистить). Элемент — объект {stepRef, title, lane}; не-объекты отбрасывают.
+    private static List<PlannedStep>? PlanStepsArg(JsonObject arguments)
+    {
+        if (arguments["planSteps"] is not JsonArray arr) return null;
+        var result = new List<PlannedStep>();
+        foreach (var node in arr)
+        {
+            if (node is not JsonObject obj) continue;
+            result.Add(new PlannedStep
+            {
+                StepRef = StringArg(obj, "stepRef"),
+                Title = StringArg(obj, "title"),
+                Lane = OptionalArg(obj, "lane"),
+            });
+        }
+        return result;
+    }
+
     private static List<CreateSubtaskRequest>? SubtasksArg(JsonObject arguments) =>
         arguments["subtasks"] is JsonArray arr && arr.Count > 0
             ? arr.Select(t => new CreateSubtaskRequest(t?.GetValue<string>() ?? "")).ToList()
@@ -1100,6 +1121,7 @@ public sealed class TasksToolset(
                     ["stepRef"] = StepRefSchema(),
                     ["lane"] = LaneSchema(),
                     ["reviewOf"] = ReviewOfSchema(),
+                    ["planSteps"] = PlanStepsSchema(),
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
@@ -1166,6 +1188,7 @@ public sealed class TasksToolset(
                     ["stepRef"] = StepRefSchema(),
                     ["lane"] = LaneSchema(),
                     ["reviewOf"] = ReviewOfSchema(),
+                    ["planSteps"] = PlanStepsSchema(),
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject
@@ -1463,7 +1486,25 @@ public sealed class TasksToolset(
     {
         ["type"] = "array",
         ["items"] = new JsonObject { ["type"] = "string" },
-        ["description"] = "Id задач, которые оценивает это ревью/проверка/финал",
+        ["description"] = "Id задач, которые оценивает это ревью/проверка/финал; у role=rework — обязательная связь с review/qa/final той же фичи",
+    };
+
+    // Структурный список шагов плана (честный прогресс фичи): массив {stepRef, title, lane}.
+    // Допустим только у role=plan; stepRef непуст и уникален, лимиты — в TaskManager.
+    private static JsonObject PlanStepsSchema() => new()
+    {
+        ["type"] = "array",
+        ["items"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["stepRef"] = new JsonObject { ["type"] = "string", ["description"] = "Код шага (уникален, непуст)" },
+                ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Название шага" },
+                ["lane"] = new JsonObject { ["type"] = "string", ["description"] = "Линия (бэк/фронт)" },
+            },
+        },
+        ["description"] = "Структурный список шагов плана: планировщик (role=plan) заполняет знаменатель «сколько всего»; stepRef непуст и уникален",
     };
 
     private static McpToolSchema Tool(string name, string description, JsonObject schema) =>

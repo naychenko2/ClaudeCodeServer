@@ -44,6 +44,15 @@ public class SharedSpendSplitterTests
     private static FeatureActivity Active(string id, DateTime from, DateTime to) =>
         new(id, new List<FeatureActivityInterval> { new(from, to) });
 
+    // Обёртка деления БЕЗ карты составов чатов: записи Turn-хелпера не несут SessionId,
+    // поэтому фильтр по M[rec.SessionId] не срабатывает (знаменатель = активные). Для
+    // сценариев с составом чата (проба c1/c2) — прямой SharedSpendSplitter.Split.
+    private static (FeatureSpendShared Share, bool CostPartial, List<string> HiddenModels) Split(
+        IReadOnlyList<FeatureSpendRecord> turns, IReadOnlyList<FeatureActivity> activities,
+        string featureId, string method)
+        => SharedSpendSplitter.Split(turns, activities,
+            new Dictionary<string, HashSet<string>>(StringComparer.Ordinal), featureId, method);
+
     // ── Деление поровну ──────────────────────────────────────────────────────────────────────
 
     // 2 активные фичи → по 1/2 (100 → 50).
@@ -57,7 +66,7 @@ public class SharedSpendSplitterTests
             Active("B", T0.AddHours(-1), T0.AddHours(1)),
         };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         share.InputTokens.Should().Be(50);
         share.OutputTokens.Should().Be(20);
@@ -78,7 +87,7 @@ public class SharedSpendSplitterTests
             Active("B", T0.AddHours(-3), T0.AddHours(-2)),
         };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         share.InputTokens.Should().Be(0);
         share.Turns.Should().Be(0, "ход без активных фич не распределяется");
@@ -95,7 +104,7 @@ public class SharedSpendSplitterTests
             Active("B", T0.AddHours(-3), T0.AddHours(-2)), // B не активна на T0
         };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         share.InputTokens.Should().Be(100);
         share.CostUsd.Should().Be(3.0);
@@ -114,7 +123,7 @@ public class SharedSpendSplitterTests
             Active("C", T0.AddHours(-3), T0.AddHours(-2)), // не активна
         };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         share.InputTokens.Should().Be(50, "знаменатель = 2 активные, не 3");
     }
@@ -132,7 +141,7 @@ public class SharedSpendSplitterTests
             Active("B", T0, T0.AddHours(1)),
         };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         share.InputTokens.Should().Be(50, "ход ровно на From входит (включительно с начала)");
     }
@@ -148,7 +157,7 @@ public class SharedSpendSplitterTests
             Active("B", T0.AddHours(-1), T0.AddHours(1)),
         };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         share.InputTokens.Should().Be(0, "ход ровно на To не входит (half-open, исключая конец)");
         share.Turns.Should().Be(0);
@@ -160,7 +169,7 @@ public class SharedSpendSplitterTests
     [Fact]
     public void Split_ПустойВход_Ноль()
     {
-        var (share, costPartial, hidden) = SharedSpendSplitter.Split(
+        var (share, costPartial, hidden) = Split(
             new List<FeatureSpendRecord>(),
             new List<FeatureActivity> { Active("A", T0, T0.AddHours(1)) },
             "A", "approx");
@@ -178,7 +187,7 @@ public class SharedSpendSplitterTests
         var turns = new List<FeatureSpendRecord> { Turn(T0, input: -100, output: 0) };
         var activities = new List<FeatureActivity> { Active("A", T0.AddHours(-1), T0.AddHours(1)) };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         share.InputTokens.Should().Be(0, "отрицательные токены клампаются в 0");
     }
@@ -195,7 +204,7 @@ public class SharedSpendSplitterTests
             Active("C", T0.AddHours(-1), T0.AddHours(1)),
         };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         // 1.0 / 3 = 0.333…; double хранит 0.3333… (не 0.33, не 0).
         share.CostUsd.Should().BeApproximately(1.0 / 3.0, 1e-9);
@@ -212,8 +221,8 @@ public class SharedSpendSplitterTests
             Active("B", T0.AddHours(-1), T0.AddHours(1)),
         };
 
-        var (shareA, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
-        var (shareB, _, _) = SharedSpendSplitter.Split(turns, activities, "B", "approx");
+        var (shareA, _, _) = Split(turns, activities, "A", "approx");
+        var (shareB, _, _) = Split(turns, activities, "B", "approx");
 
         (shareA.InputTokens + shareB.InputTokens).Should().Be(100, "сумма долей = сумме хода");
         (shareA.OutputTokens + shareB.OutputTokens).Should().Be(30);
@@ -232,7 +241,7 @@ public class SharedSpendSplitterTests
             Active("C", T0.AddHours(-1), T0.AddHours(1)),
         };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         share.InputTokens.Should().Be(34, "100/3: base=33, r=1, A(idx 0) получает 33+1=34");
     }
@@ -249,7 +258,7 @@ public class SharedSpendSplitterTests
             Active("B", T0.AddHours(-1), T0.AddHours(1)),
         };
 
-        var (share, _, _) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, _, _) = Split(turns, activities, "A", "approx");
 
         share.InputTokens.Should().Be(51, "101/2: base=50, r=1, A(idx 0) получает 50+1=51");
     }
@@ -267,7 +276,7 @@ public class SharedSpendSplitterTests
             Active("B", T0.AddHours(-1), T0.AddHours(1)),
         };
 
-        var (share, costPartial, hidden) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, costPartial, hidden) = Split(turns, activities, "A", "approx");
 
         share.CostUsd.Should().Be(1.0);
         costPartial.Should().BeFalse();
@@ -281,7 +290,7 @@ public class SharedSpendSplitterTests
         var turns = new List<FeatureSpendRecord> { Turn(T0, cost: 5.0, source: SpendSources.Free) };
         var activities = new List<FeatureActivity> { Active("A", T0.AddHours(-1), T0.AddHours(1)) };
 
-        var (share, costPartial, hidden) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, costPartial, hidden) = Split(turns, activities, "A", "approx");
 
         share.CostUsd.Should().Be(0, "free → честный 0 (даже если сырая цена 5)");
         costPartial.Should().BeFalse();
@@ -295,7 +304,7 @@ public class SharedSpendSplitterTests
         var turns = new List<FeatureSpendRecord> { Turn(T0, cost: 2.0, unreliable: true, model: "deepseek-chat") };
         var activities = new List<FeatureActivity> { Active("A", T0.AddHours(-1), T0.AddHours(1)) };
 
-        var (share, costPartial, hidden) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, costPartial, hidden) = Split(turns, activities, "A", "approx");
 
         share.CostUsd.Should().Be(0, "ненадёжная цена не в долю");
         costPartial.Should().BeTrue();
@@ -309,7 +318,7 @@ public class SharedSpendSplitterTests
         var turns = new List<FeatureSpendRecord> { Turn(T0, cost: null, model: "gpt-4o") };
         var activities = new List<FeatureActivity> { Active("A", T0.AddHours(-1), T0.AddHours(1)) };
 
-        var (share, costPartial, hidden) = SharedSpendSplitter.Split(turns, activities, "A", "approx");
+        var (share, costPartial, hidden) = Split(turns, activities, "A", "approx");
 
         share.CostUsd.Should().Be(0);
         costPartial.Should().BeTrue();
@@ -573,9 +582,83 @@ public class SharedSpendSplitterTests
         var turn = Turn(T0.AddHours(-2.5), input: 100);
         var a = Active("A", start, done);
         var b = new FeatureActivity("B", intervals);
-        var (shareA, _, _) = SharedSpendSplitter.Split([turn], [a, b], "A", "approx");
-        var (shareB, _, _) = SharedSpendSplitter.Split([turn], [a, b], "B", "approx");
+        var (shareA, _, _) = Split([turn], [a, b], "A", "approx");
+        var (shareB, _, _) = Split([turn], [a, b], "B", "approx");
         shareA.InputTokens.Should().Be(100);
         shareB.InputTokens.Should().Be(0);
+    }
+
+    // ── Б9c-3: знаменатель = состав ЧАТА записи (проба Александра, дефект major) ─────────────
+
+    // Проба Александра: c1 = {F,G}, c2 = {F,H}, ход в c1 на 90 токенов, активны все три фичи.
+    // Знаменатель записи = M[c1] = {F,G} (НЕ объединение {F,G,H}): F и G делят 90 поровну
+    // (по 45), H (не в c1, а в c2) — 0. Сумма долей = 90 РОВНО. Мутация М10 (знаменатель =
+    // объединение участниц запроса = {F,G,H}) даёт F=30, G=30, H=30 → доли неверны, тест краснеет.
+    [Fact]
+    public void Split_ПробаАлександра_РазныйСоставЧатов_СуммаРовно()
+    {
+        // Запись в c1 на 90 токенов (SessionId = c1).
+        var rec = new FeatureSpendRecord
+        {
+            Timestamp = T0,
+            SessionId = "c1",
+            InputTokens = 90,
+            Source = SpendSources.ChatTurn,
+        };
+        // Все три фичи активны на T0.
+        var activities = new List<FeatureActivity>
+        {
+            Active("F", T0.AddHours(-1), T0.AddHours(1)),
+            Active("G", T0.AddHours(-1), T0.AddHours(1)),
+            Active("H", T0.AddHours(-1), T0.AddHours(1)),
+        };
+        // Составы общих чатов: c1 = {F,G}, c2 = {F,H}.
+        var chatParticipants = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal)
+        {
+            ["c1"] = new HashSet<string>(StringComparer.Ordinal) { "F", "G" },
+            ["c2"] = new HashSet<string>(StringComparer.Ordinal) { "F", "H" },
+        };
+
+        var (shareF, _, _) = SharedSpendSplitter.Split([rec], activities, chatParticipants, "F", "approx");
+        var (shareG, _, _) = SharedSpendSplitter.Split([rec], activities, chatParticipants, "G", "approx");
+        var (shareH, _, _) = SharedSpendSplitter.Split([rec], activities, chatParticipants, "H", "approx");
+
+        // Знаменатель = M[c1] = {F,G}: F и G делят 90 поровну (по 45), H (не в c1) — 0.
+        shareF.InputTokens.Should().Be(45, "F ∈ M[c1]: 90/2 = 45");
+        shareG.InputTokens.Should().Be(45, "G ∈ M[c1]: 90/2 = 45");
+        shareH.InputTokens.Should().Be(0, "H ∉ M[c1] (H в c2) → доля 0");
+        // Сохранение: сумма долей = расходу чата (90) РОВНО.
+        (shareF.InputTokens + shareG.InputTokens + shareH.InputTokens).Should().Be(90,
+            "сумма долей = расходу чата (не 75, как при знаменателе-объединении)");
+    }
+
+    // Дневная строка без активных ⇒ method=approx (п.5: дневная строка понижает метку
+    // ДО проверки активных; SharedSpendSplitter.cs:58-59 раньше нарушало это).
+    [Fact]
+    public void Split_ДневнаяСтрокаБезАктивных_Approx()
+    {
+        // Дневная строка (IsDaily) в c1; ни одна фича не активна в [d, d+1) (интервалы до дня).
+        var rec = new FeatureSpendRecord
+        {
+            Timestamp = T0,
+            SessionId = "c1",
+            InputTokens = 100,
+            IsDaily = true,
+            Source = SpendSources.ChatTurn,
+        };
+        var activities = new List<FeatureActivity>
+        {
+            Active("F", T0.AddDays(-1), T0.AddHours(-2)),
+            Active("G", T0.AddDays(-1), T0.AddHours(-2)),
+        };
+        var chatParticipants = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal)
+        {
+            ["c1"] = new HashSet<string>(StringComparer.Ordinal) { "F", "G" },
+        };
+
+        var (share, _, _) = SharedSpendSplitter.Split([rec], activities, chatParticipants, "F", "journal");
+
+        // Метод принудительно approx (дневная строка), хотя никто не активен и доля 0.
+        share.Method.Should().Be("approx", "дневная строка понижает метку ДО проверки активных (п.5)");
     }
 }

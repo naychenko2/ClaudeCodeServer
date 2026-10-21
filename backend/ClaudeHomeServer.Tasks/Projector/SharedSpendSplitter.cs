@@ -27,15 +27,20 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 public static class SharedSpendSplitter
 {
     // Доля фичи в расходе общего чата.
-    //   sharedTurns — записи расхода по ходам общего чата (время, токены, цена, источник,
+    //   sharedTurns    — записи расхода по ходам ОБЩИХ чатов (время, токены, цена, источник,
     //     признак ненадёжной цены — уже выставлен читателем);
-    //   activities  — интервалы активности ВСЕХ фич, в которые чат входит (знаменатель);
-    //   featureId   — фича, долю которой считаем;
-    //   method      — "journal" | "approx" (метод оценки активности; задаёт вызывающий).
+    //   activities     — интервалы активности ВСЕХ участниц (объединение составов общих чатов);
+    //   chatParticipants — карта chatId → M[c] (состав каждого общего чата: множество фич, в
+    //     которые чат входит; строит FeatureChatMembership.Build). Знаменатель записи = M[rec.SessionId],
+    //     НЕ объединение всех участниц (дефект: c1={F,G}, c2={F,H} → ход в c1 делится на 2, не 3);
+    //   featureId      — фича, долю которой считаем;
+    //   method         — "journal" | "approx" (метод оценки; задаёт вызывающий: journal, только
+    //     если ВСЕ общие чаты фичи journal — см. комментарий у FeatureSpendShared.Method).
     // Возвращает (доля, признак ненадёжной цены доли, модели без цены в доле).
     public static (FeatureSpendShared Share, bool CostPartial, List<string> HiddenModels) Split(
         IReadOnlyList<FeatureSpendRecord> sharedTurns,
         IReadOnlyList<FeatureActivity> activities,
+        IReadOnlyDictionary<string, HashSet<string>> chatParticipants,
         string featureId,
         string method)
     {
@@ -53,10 +58,13 @@ public static class SharedSpendSplitter
         foreach (var rec in sharedTurns)
         {
             // Дневная строка: активна, если фича активна в ЛЮБОЙ момент суток [d, d+1).
-            // Метод принудительно approx (агрегат не несёт точного времени).
-            var (activeIds, isDaily) = ActiveFeatures(activities, byId, rec);
-            if (activeIds.Count == 0) continue;
+            // Активные = пересечение (активных среди ВСЕХ activities) и M[rec.SessionId]:
+            // знаменатель — состав ЧАТА записи, не объединение всех участниц (дефект Б9c-3).
+            var (activeIds, isDaily) = ActiveFeatures(activities, byId, rec, chatParticipants);
+            // Дневная строка понижает метку ДО проверки активных (п.5: независимо от того,
+            // был ли кто-то активен; SharedSpendSplitter.cs:58-59 раньше нарушало это).
             if (isDaily) method = "approx";
+            if (activeIds.Count == 0) continue;
 
             // Текущая фича в списке активных? Нет — её доля 0.
             var idx = activeIds.IndexOf(featureId);
@@ -90,11 +98,14 @@ public static class SharedSpendSplitter
     }
 
     // Активные фичи на момент записи: для detail — по Timestamp (точка), для daily — по
-    // пересечению [d, d+1) с интервалами. Возвращает (отсортированный список id, isDaily).
+    // пересечению [d, d+1) с интервалами. Затем — пересечение с составом чата записи
+    // M[rec.SessionId]: знаменатель = состав ЧАТА, не объединение всех участниц.
+    // Возвращает (отсортированный список id, isDaily).
     private static (List<string> Ids, bool IsDaily) ActiveFeatures(
         IReadOnlyList<FeatureActivity> activities,
         Dictionary<string, IReadOnlyList<FeatureActivityInterval>> byId,
-        FeatureSpendRecord rec)
+        FeatureSpendRecord rec,
+        IReadOnlyDictionary<string, HashSet<string>> chatParticipants)
     {
         var isDaily = rec.IsDaily;
         var dayStart = rec.Timestamp;
@@ -114,6 +125,11 @@ public static class SharedSpendSplitter
                     ids.Add(a.FeatureId);
             }
         }
+        // Пересечение с составом чата записи (M[rec.SessionId]): фича, не входящая в этот чат,
+        // в знаменатель не попадает (дефект: c1={F,G}, c2={F,H} → ход в c1 делится на 2, не 3).
+        // rec.SessionId null / не в карте → без фильтра (запись не из общих чатов — не ожидается).
+        if (rec.SessionId is not null && chatParticipants.TryGetValue(rec.SessionId, out var members))
+            ids.RemoveAll(id => !members.Contains(id));
         ids.Sort(StringComparer.Ordinal);
         return (ids, isDaily);
     }

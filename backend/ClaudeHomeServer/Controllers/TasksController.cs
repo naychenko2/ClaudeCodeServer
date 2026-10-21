@@ -685,38 +685,38 @@ public class TasksController(
         var sharedHidden = new List<string>();
         if (spendTotals is not null && sharedChatIds.Count > 0)
         {
-            // Шаг 5: один проход. (1) Участницы = объединение M[c] по общим чатам фичи.
+            // (1) Карта chatId → M[c] (состав каждого общего чата фичи) — знаменатель записи.
+            //     M[c] = membership[c]: множество фич, в которые чат входит (FeatureChatMembership).
+            var chatParticipants = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var chatId in sharedChatIds)
+                chatParticipants[chatId] = membership[chatId];
+
+            // (2) Чтение журнала фичи (кэш на запрос — отдельный шаг, perf): Read по id.
+            //     journal null (подсистема выключена) → null, не 500.
+            FeatureJournalReadResult? ReadJournal(string fid) => journal?.Read(UserId, fid);
+            // Журнал фичи полный: StartsWithCreated && !Truncated (единый предикат, как в п.4).
+            bool JournalComplete(string fid) =>
+                ReadJournal(fid) is { StartsWithCreated: true, Truncated: false };
+
+            // (3) Участницы = объединение M[c] по общим чатам фичи (для интервалов и minCreated).
             var participants = new HashSet<string>(StringComparer.Ordinal);
             foreach (var chatId in sharedChatIds)
                 foreach (var fid in membership[chatId])
                     participants.Add(fid);
 
-            // (2) Метод: journal, только если журналы ВСЕХ участниц полные (StartsWithCreated &&
-            // !Truncated); иначе approx для всех (гибрида нет — знаменатель одним способом).
-            var method = "approx";
-            if (journal is not null)
-            {
-                method = "journal";
-                foreach (var fid in participants)
-                {
-                    var jr = journal.Read(UserId, fid);
-                    if (jr is not { StartsWithCreated: true, Truncated: false })
-                    { method = "approx"; break; }
-                }
-            }
-
-            // (3) ОДИН проход по участницам (решение Александра, п.8: один ProjectFull на
-            // участницу): ProjectFull даёт и интервалы (approx), и Epic.CreatedAt — для
-            // границы окна (from) и для clipFrom journal-интервалов (знаменатели режимов
-            // однородны: оба режима обрезаются по epic.CreatedAt, минор 3). journal.Read —
-            // только в journal-режиме (интервалы из журнала).
+            // (4) ОДИН проход по участницам (решение Александра, п.8: один ProjectFull на
+            // участницу): ProjectFull даёт и интервалы, и Epic.CreatedAt — для границы окна (from)
+            // и для clipFrom journal-интервалов (знаменатели режимов однородны: оба обрезаются по
+            // epic.CreatedAt, минор 3). Режим интервалов — journal, только если журналы ВСЕХ
+            // участниц полные (интервалы берём из журнала везде, где он полный).
+            var allParticipantsComplete = participants.All(JournalComplete);
             var activities = new List<FeatureActivity>();
             var minCreated = DateTime.MaxValue;
             foreach (var fid in participants)
             {
                 var p = features!.ProjectFull(fid, UserId, snapshot, resolver);
-                var intervals = method == "journal"
-                    ? SharedSpendSplitter.JournalActivity(journal!.Read(UserId, fid), now, p?.Epic.CreatedAt)
+                var intervals = allParticipantsComplete
+                    ? SharedSpendSplitter.JournalActivity(ReadJournal(fid)!, now, p?.Epic.CreatedAt)
                     : SharedSpendSplitter.ApproxActivity(p, now);
                 activities.Add(new FeatureActivity(fid, intervals));
                 if (p is not null && p.Epic.CreatedAt < minCreated)
@@ -724,12 +724,24 @@ public class TasksController(
             }
             if (minCreated == DateTime.MaxValue) minCreated = run.Epic.CreatedAt;
 
-            // (4) Записи ВСЕХ общих чатов — ОДИН Records (from = min CreatedAt участниц).
+            // (5) Записи ВСЕХ общих чатов — ОДИН Records (from = min CreatedAt участниц).
             var sharedRecords = spend!.Records(UserId, [], sharedChatIds, [], from: minCreated);
 
-            // (5) Деление: один Split на все записи (группировка по SessionId внутри).
+            // (6) Метод каждого общего чата: journal, если (a) журналы ВСЕХ M[c] полные И
+            //     (b) среди записей чата в окне нет дневных строк; иначе approx. Дневная строка
+            //     понижает метку независимо от активных (п.5). Итог фичи: journal, только если
+            //     ВСЕ её общие чаты journal (смысл метки — комментарий у FeatureSpendShared.Method).
+            var method = "journal";
+            foreach (var (chatId, m) in chatParticipants)
+            {
+                var complete = m.All(JournalComplete);
+                var hasDaily = sharedRecords.Any(r => r.SessionId == chatId && r.IsDaily);
+                if (!(complete && !hasDaily)) { method = "approx"; break; }
+            }
+
+            // (7) Деление: знаменатель = M[rec.SessionId] (состав чата), не объединение участниц.
             var (share, shareCostPartial, shareHidden) =
-                SharedSpendSplitter.Split(sharedRecords, activities, run.Epic.Id, method);
+                SharedSpendSplitter.Split(sharedRecords, activities, chatParticipants, run.Epic.Id, method);
             sharedCostPartial |= shareCostPartial;
             sharedHidden.AddRange(shareHidden);
             if (share.Turns > 0 || share.InputTokens > 0 || share.OutputTokens > 0

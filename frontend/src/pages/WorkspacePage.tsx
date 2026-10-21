@@ -792,9 +792,11 @@ const windowWidth = useWindowWidth();
     reader: reader.state.open,
     persona: !!selectedPersonaId || personaCreating,
     teamCenter: teamCenterOpen,
-    // Доска: ВИДИМОЕ состояние (showProjectBoard), а не сырой projectBoard: на мобиле
-    // доска занимает центр только в режиме «Задачи» (MAJOR-2), на десктопе — всегда.
-    board: showProjectBoard,
+    // Доска: ВИДИМОЕ состояние на ОБЕИХ раскладках. Мобила: только в режиме «Задачи»
+    // (showProjectBoard, MAJOR-2). Десктоп: доска рисуется по projectBoard (DesktopWorkspace)
+    // независимо от вкладки слева — панель «Задачи» открывает панельный стор, не трогая
+    // leftTab, поэтому showProjectBoard (требует tasksMode) на десктопе была всегда false (M2).
+    board: isMobile ? showProjectBoard : (projectBoard && !selectedTask),
     preview: !!ccActivePreview,
     // Терминал — в центре только на мобиле (leftTab 'tools'); на десктопе он в правой
     // рельсе и центр не занимает. Превью (ccActivePreview) — в центре на обеих раскладках.
@@ -887,9 +889,14 @@ const windowWidth = useWindowWidth();
     setOpenFeatureId(null);
     clearBackNav();
     const view = isMobile ? 'chat' : 'sidebar';
+    // Автоскрытие убирает ТОЛЬКО сегмент feature: адрес нового окна (file/task/commit/doc/
+    // board…) берём из текущего снимка, а не затираем null (m2: navReplace писал
+    // file:null/task:null, и перезагрузка теряла только что открытое окно).
+    const nav = getNav();
     navReplace({
-      screen: 'project', project, view, file: null, task: null,
-      chatId: activeSessionId ?? undefined, feature: null,
+      screen: 'project', project, view,
+      file: nav?.file ?? null, task: nav?.task ?? null, board: nav?.board,
+      chatId: nav?.chatId ?? activeSessionId ?? undefined, feature: null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на
     // «окно позже страницы»; project/mobileView/activeSessionId в замыкании — текущие,
@@ -1278,6 +1285,12 @@ const windowWidth = useWindowWidth();
   // replaceNav — перезаписать текущую запись истории вместо новой: её уже положил переход
   // в проект с chatId (openProject из диплинка), вторая запись сломала бы «назад»
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean, replaceNav?: boolean) => {
+    // Стартовый автовыбор первого чата (activeSession ещё null: холодный вход/диплинк)
+    // страницу НЕ закрывает: она только что открыта по диплинку (M1, регрессия c3ae97728 —
+    // вызов closeFeaturePage вынесли из-под if (!autoSelect) ради MAJOR-3, и стартовый
+    // автовыбор SessionList её закрывал). Автовыбор ПОСЛЕ ухода из чата (архивация/
+    // удаление активного, activeSession ≠ null) — закрывает (MAJOR-3).
+    const coldAutoSelect = !!autoSelect && activeSession == null;
     setActiveSession(session);
     setPendingMessage(firstMessage);
     // Открытый чат — прочитанный. Отмечаем и при autoSelect (восстановление чата
@@ -1289,7 +1302,9 @@ const windowWidth = useWindowWidth();
     // базовый режим, otherCenterOpen его не покрывает, поэтому единая точка closeFeaturePage.
     // Вне if (!autoSelect) (MAJOR-3): leaveActiveChat (архивация активного чата) зовёт
     // с autoSelect=true, и без этого страница осталась бы поверх нового соседнего чата.
-    closeFeaturePage();
+    // Исключение — холодный старт (coldAutoSelect): диплинк открыл страницу, и первый
+    // чат выбирается под ней, а не вместо неё.
+    if (!coldAutoSelect) closeFeaturePage();
     if (!autoSelect) {
       // Файл, открытый В СПЛИТЕ, смену чата переживает: там чат и файл стоят рядом
       // двумя островами и друг другу не мешают — закрывать нечего. Так же ведёт себя

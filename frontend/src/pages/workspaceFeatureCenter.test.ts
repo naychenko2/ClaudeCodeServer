@@ -47,6 +47,15 @@ const { store, sstore } = vi.hoisted(() => {
     key: () => null,
     get length() { return sstore.size; },
   } as Storage;
+  // Раскладка панельного стора воркспейса (cc_ws_zones) читается при ИМПОРТЕ модуля
+  // (module-level singleton). Дефолт [['chats']] не рендерит TasksPanel, а M2-тест
+  // (доска на десктопе) открывает доску кнопкой «Доска» в TasksPanel — поэтому панель
+  // «Задачи» открыта в раскладке с первого кадра. beforeEach store.clear() не влияет:
+  // стор уже прочитал состояние при импорте, дальше живёт в памяти.
+  store.set('cc_ws_zones', JSON.stringify({
+    left: { layout: [['chats'], ['tasks']] },
+    right: { layout: [] },
+  }));
   return { store, sstore };
 });
 
@@ -203,6 +212,12 @@ vi.mock('../components/SessionList', async () => {
 vi.mock('../features/tasks/board/TaskBoard', async () => {
   const { createElement } = await import('react');
   return { TaskBoard: () => createElement('div', { 'data-testid': 'task-board-stub' }) };
+});
+// ── BoardToolbar: тулбар доски в сайдбаре (select группировки) не живёт в fake-DOM —
+//     заглушка. Рендерится в TasksPanel при boardMode=true (M2, десктоп: клик «Доска»). ──
+vi.mock('../features/tasks/board/BoardToolbar', async () => {
+  const { createElement } = await import('react');
+  return { BoardToolbar: () => createElement('div', { 'data-testid': 'board-toolbar-stub' }) };
 });
 
 // ── ProjectPersonasPanel (сайдбар): onShowTeam → handleShowTeam (setTeamCenterOpen(true),
@@ -1122,6 +1137,96 @@ describe('WorkspacePage: центр — страница фичи соседом
       'соседний чат не в DOM после выбора (MAJOR-3)').not.toBeNull();
   });
 
+  // (M1, регрессия c3ae97728) Холодный диплинк #/project/{pid}/feature/{fid}: страница
+  // открывается, а СТАРТОВЫЙ автовыбор первого чата (activeSession ещё null) её НЕ закрывает.
+  // До фикса closeFeaturePage был вне if (!autoSelect) (ради MAJOR-3), и стартовый
+  // автовыбор SessionList закрывал только что открытую по диплинку страницу: виден первый
+  // чат, адрес остаётся /feature/, после перезагрузки страница открывается. Разведение:
+  // coldAutoSelect = autoSelect && activeSession==null (холодный старт) не закрывает;
+  // leaveActiveChat (activeSession ≠ null) закрывает (MAJOR-3, тест выше).
+  // Мутация (снова closeFeaturePage на стартовом автовыборе) красит оба теста.
+  const runColdDeepLink = async (mobile: boolean) => {
+    const win = globalThis as any;
+    if (!mobile) win.window.innerWidth = 1280;
+    // Холодный вход: активного чата ещё нет (wsState.activeSession = null).
+    wsState.activeSession = null;
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Страница открыта по диплинку (до автовыбора).
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не открыта по диплинку (M1)').not.toBeNull();
+    // Стартовый автовыбор первого чата (SessionList: onSelect(live[0], undefined, true)).
+    expect(sessionListMock.onSelect, 'onSelect (handleSelectSession) не зафиксирован (M1)').toBeTruthy();
+    act(() => { (sessionListMock.onSelect as (s: Session, first?: string, autoSelect?: boolean) => void)(session, undefined, true); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // КЛЮЧЕВОЕ (M1): страница НЕ закрыта стартовым автовыбором — «Закрыть» на месте.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи закрыта стартовым автовыбором (M1, регрессия)').not.toBeNull();
+    // Адрес сохраняет /feature/ (стартовый автовыбор не пишет nav при autoSelect).
+    expect(win.window.location.hash, 'адрес потерял /feature/ после стартового автовыбора (M1)')
+      .toContain('/feature/');
+    // Чат выбран и в DOM (под страницей).
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'чат не в DOM после стартового автовыбора (M1)').not.toBeNull();
+  };
+  it('M1: холодный диплинк (мобила 360) — страница открыта, адрес /feature/', () => runColdDeepLink(true));
+  it('M1: холодный диплинк (десктоп 1280) — страница открыта, адрес /feature/', () => runColdDeepLink(false));
+
+  // (M2, десктоп) Доска задач на десктопе закрывает открытую страницу. Корень: доска на
+  // десктопе рисуется по projectBoard (DesktopWorkspace) независимо от вкладки слева, а панель
+  // «Задачи» открывает панельный стор, НЕ трогая leftTab — поэтому старый признак
+  // showProjectBoard (требует tasksMode = leftTab==='tasks') на десктопе был всегда false,
+  // и страница не уступала доске. Фикс: board = isMobile ? showProjectBoard : (projectBoard &&
+  // !selectedTask) — видимое состояние на обеих раскладках. Мутация (board: showProjectBoard)
+  // красит: на десктопе leftTab='sessions' → showProjectBoard=false → страница остаётся.
+  // Кнопка «Доска» — в TasksPanel (раскладка cc_ws_zones включает 'tasks', см. hoisted-блок).
+  const findBoardButton = (container: any): any => {
+    // IconSegmented (шапка) — title="Доска"; PillViewSwitcher (без шапки) — текст «Доска».
+    const byTitle = findNodeByAttr(container, 'title', 'Доска');
+    if (byTitle) return byTitle;
+    let hit: any = null;
+    const walk = (x: any) => {
+      if (hit) return;
+      if (x.nodeType === 1 && String(x.nodeName).toUpperCase() === 'BUTTON' && textNodes(x).join('').includes('Доска')) { hit = x; return; }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(container);
+    return hit;
+  };
+  it('M2: доска (десктоп 1280) при открытой странице — страница уходит, адрес без /feature/', async () => {
+    const win = globalThis as any;
+    win.window.innerWidth = 1280;
+    // Вкладка слева НЕ «Задачи»: на десктопе панель «Задачи» открывается стором, leftTab не
+    // меняется. Старый признак (showProjectBoard требует tasksMode) здесь false — мутация красит.
+    wsState.leftTab = 'sessions';
+    recordHistory();
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не открыта (M2, десктоп)').not.toBeNull();
+    // Кнопка «Доска» в TasksPanel → handleProjectBoard(true) → projectBoard=true.
+    const boardBtn = findBoardButton(container);
+    expect(boardBtn, 'кнопка «Доска» не найдена в TasksPanel (M2, десктоп)').not.toBeNull();
+    act(() => { (reactProps(boardBtn) as any).onClick(); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Страница закрыта (доска заняла центр), адрес без /feature/.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница фичи не уступила доске (M2, десктоп)').toBeNull();
+    expect(win.window.location.hash, 'адрес содержит /feature/ после доски (M2, десктоп)')
+      .not.toContain('/feature/');
+  });
+
   // (7) Параметризованный: каждое окно центра — одно «верхнее» (единый источник otherCenterOpen).
   // Побеждает ПОСЛЕДНЕЕ открытое:
   //   · окно ДО страницы (file/task, beforeMount) → явное открытие страницы рисует её ПОВЕРХ (M2);
@@ -1473,6 +1578,35 @@ describe('WorkspacePage: центр — страница фичи соседом
     // Закрыли задачу → страница НЕ возвращается (openFeatureId=null, а не «скрыта гейтом»).
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
       'страница «воскресла» после закрытия задачи (M1: openFeatureId не сброшен)').toBeNull();
+  });
+
+  // m2 (minor): автоскрытие стирает адрес НОВОГО окна. Страница → задача: адрес ДОЛЖЕН
+  // содержать задачу (#/project/{id}/task/{task}), а не схлопнуться на #/project/{id}/chat/{chat}.
+  // Старый код: navReplace в эффекте автоскрытия писал file:null, task:null → адрес терял окно,
+  // перезагрузка открывала чат, а не задачу. Мутация: вернуть task:null в navReplace → краснеет.
+  it('m2: страница → задача — адрес содержит задачу (не /chat/), перезагрузка её открывает', async () => {
+    recordHistory();
+    (globalThis as any).window.location.hash = '';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Страница открыта (адрес /feature/).
+    await openFeature(container);
+    expect((globalThis as any).window.location.hash, 'адрес без /feature/ до окна (m2)').toContain('/feature/');
+    // Задача открывается ПОСЛЕ страницы → автоскрытие.
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1');
+    act(() => { (globalThis as any).window.dispatchEvent(new Event('cc-pending-task')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Страница закрыта, адрес содержит ЗАДАЧУ (m2: не затёрт на /chat/).
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница не закрыта при открытии задачи (m2)').toBeNull();
+    const hash = (globalThis as any).window.location.hash;
+    expect(hash, `адрес не содержит задачу после перехода (m2, адрес=${hash})`)
+      .toContain('/task/task1');
   });
 });
 

@@ -240,3 +240,64 @@ export function deniedKeyOf(message: string): string | null {
   const key = message.slice(i + prefix.length).trim();
   return key || null;
 }
+
+// === Разбор отказов (R-Gleb, миноры 3–6): единый источник для handleCall ===
+//
+// Обе ветки PluginFrame.handleCall (2xx-тело и тело ошибки) идут через эти
+// хелперы: разбор {code, message} и ключ плашки написаны в одном месте,
+// ветки не расходятся.
+
+// Структурированный отказ в теле ответа: {ok:false, error:{code, message}}.
+// Сервер (PluginBridgeController.Call) на сбое всегда отдаёт не-2xx, поэтому
+// тело приходит прикреплённым к ошибке (e.body); 2xx с ok:false для этого
+// эндпоинта недостижим (минор 4) — но разбор один и тот же.
+// null — тело не структурированный отказ (error строкой, или code/message
+// не строки).
+export function parseCallError(body: unknown): { code: string; message: string } | null {
+  const err = (body as { error?: unknown } | null | undefined)?.error;
+  if (err === null || typeof err !== 'object') return null;
+  const e = err as { code?: unknown; message?: unknown };
+  if (typeof e.code !== 'string' || typeof e.message !== 'string') return null;
+  return { code: e.code, message: e.message };
+}
+
+// Отказ по праву → ключ права для плашки «Нет права {key}».
+// null — не отказ по праву (или формат не совпал, см. deniedKeyOf).
+export function deniedKeyOfError(err: { code: string; message: string } | null): string | null {
+  if (!err || err.code !== 'denied') return null;
+  return deniedKeyOf(err.message);
+}
+
+// HTTP-статус → код моста: обратное отображение маппинга PluginBridgeController.Call
+// (ADR-031 §3.4: denied→403, not_found→404, invalid→400, unavailable→503,
+// timeout→504, limit→429, upstream→502). Гейты отдают error строкой (кода в
+// теле нет), поэтому единственный источник кода — статус (минор 5); 409
+// («плагин выключен») — ближайший код 'unavailable'. Неизвестный статус → null
+// (вызывающий решает — 'upstream').
+export function callErrorCodeOfStatus(status: number | null | undefined): string | null {
+  switch (status) {
+    case 400: return 'invalid';
+    case 403: return 'denied';
+    case 404: return 'not_found';
+    case 409: return 'unavailable';
+    case 429: return 'limit';
+    case 502: return 'upstream';
+    case 503: return 'unavailable';
+    case 504: return 'timeout';
+    default: return null;
+  }
+}
+
+// Фолбэк-текст, когда тело НЕ структурированный отказ (минор 2): первая строка
+// из body.error.message / body.error.code / собственного сообщения ошибки.
+// offline.ts строит Error из err.error тела: если это объект без строкового
+// message, e.message = '[object Object]' — брать его вслепую нельзя.
+export function fallbackErrorText(body: unknown, e: unknown): string {
+  const err = (body as { error?: unknown } | null | undefined)?.error;
+  if (err !== null && typeof err === 'object') {
+    const o = err as { message?: unknown; code?: unknown };
+    if (typeof o.message === 'string' && o.message !== '') return o.message;
+    if (typeof o.code === 'string' && o.code !== '') return o.code;
+  }
+  return e instanceof Error ? e.message : 'Сервер не ответил';
+}

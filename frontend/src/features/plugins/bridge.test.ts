@@ -125,7 +125,8 @@ const {
   PANEL_CSP, PANEL_MIN_HEIGHT,
   PANEL_CONTENT_MAX_HEIGHT, MAX_PANEL_FILE_BYTES, panelWindowOf,
   validateFrameMessage, buildPanelSrcdoc, buildInitMessage, buildResultMessage,
-  buildThemeMessage, clampContentHeight, deniedKeyOf, bridgeErrorText,
+  buildThemeMessage, callErrorCodeOfStatus, clampContentHeight, deniedKeyOf,
+  deniedKeyOfError, fallbackErrorText, parseCallError, bridgeErrorText,
 } = await import('./bridge');
 const { PluginFrame } = await import('./PluginFrame');
 // Плашка «Нет права …» (Notice) — проверяем её наличие в дереве после отказа по праву
@@ -545,6 +546,56 @@ describe('deniedKeyOf (отказ по праву)', () => {
   });
 });
 
+// Разбор отказов (R-Gleb, минор 3): единый источник для обеих веток handleCall.
+// Тестируем сам разбор (не только компонент): при правке хелпера ветки не расходятся.
+describe('parseCallError / deniedKeyOfError / callErrorCodeOfStatus / fallbackErrorText (разбор отказов)', () => {
+  it('parseCallError: структурированный отказ {code, message} — разобран', () => {
+    expect(parseCallError({ ok: false, error: { code: 'denied', message: 'Нет права: notes:read' } }))
+      .toEqual({ code: 'denied', message: 'Нет права: notes:read' });
+  });
+
+  it('parseCallError: строковый error (гейт) — null', () => {
+    expect(parseCallError({ error: 'Сервисный JWT: call — только пользовательский токен' })).toBeNull();
+  });
+
+  it('parseCallError: объект без строкового message — null (берёт фолбэк)', () => {
+    expect(parseCallError({ ok: false, error: { code: 'denied' } })).toBeNull();
+  });
+
+  it('parseCallError: тела нет / успех — null', () => {
+    expect(parseCallError(undefined)).toBeNull();
+    expect(parseCallError(null)).toBeNull();
+    expect(parseCallError({ ok: true, result: {} })).toBeNull();
+  });
+
+  it('deniedKeyOfError: denied → ключ; другой код и null → null', () => {
+    expect(deniedKeyOfError({ code: 'denied', message: 'Нет права: notes:read' })).toBe('notes:read');
+    expect(deniedKeyOfError({ code: 'not_found', message: 'x' })).toBeNull();
+    expect(deniedKeyOfError(null)).toBeNull();
+  });
+
+  it('callErrorCodeOfStatus: обратное отображение маппинга контроллера (код → статус, ADR-031 §3.4)', () => {
+    expect(callErrorCodeOfStatus(400)).toBe('invalid');
+    expect(callErrorCodeOfStatus(403)).toBe('denied');
+    expect(callErrorCodeOfStatus(404)).toBe('not_found');
+    expect(callErrorCodeOfStatus(409)).toBe('unavailable');
+    expect(callErrorCodeOfStatus(429)).toBe('limit');
+    expect(callErrorCodeOfStatus(502)).toBe('upstream');
+    expect(callErrorCodeOfStatus(503)).toBe('unavailable');
+    expect(callErrorCodeOfStatus(504)).toBe('timeout');
+    expect(callErrorCodeOfStatus(200)).toBeNull();
+    expect(callErrorCodeOfStatus(undefined)).toBeNull();
+  });
+
+  it('fallbackErrorText: message → code → e.message → «Сервер не ответил»', () => {
+    expect(fallbackErrorText({ error: { code: 'denied', message: 'm' } }, new Error('x'))).toBe('m');
+    expect(fallbackErrorText({ error: { code: 'denied' } }, new Error('[object Object]'))).toBe('denied');
+    expect(fallbackErrorText({ error: 'гейт' }, new Error('гейт'))).toBe('гейт');
+    expect(fallbackErrorText(undefined, new Error('net'))).toBe('net');
+    expect(fallbackErrorText(undefined, 'не ошибка')).toBe('Сервер не ответил');
+  });
+});
+
 describe('bridgeErrorText (макет 3, «ОШИБКА МОСТА»)', () => {
   it('текст для каждого кода', () => {
     expect(bridgeErrorText('bridge_timeout')).toBe('Мост не получил ответа за 3 с.');
@@ -686,45 +737,10 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     expect(result.data).toEqual({ hello: 'world' });
   });
 
-  it('отказ по праву (denied) — result с кодом и плашка «Нет права {key}»', async () => {
-    const project = { id: 'p1' } as Project;
-    const host: Host = { i: 0, states: new Map(), refs: new Map(), cbs: new Map(), effects: new Map() };
-    const render = () => {
-      host.i = 0;
-      rt.state.current = host;
-      try {
-        return PluginFrame({ project, plugin, panel });
-      } finally {
-        rt.state.current = null;
-      }
-    };
-    render();
-    await Promise.resolve();
-    render();
-    await Promise.resolve();
-    const tree = render();
-    const iframeEl = findElement(tree, 'iframe');
-    expect(iframeEl).not.toBeNull();
-    const posted: unknown[] = [];
-    const panelWindow = { postMessage: (msg: unknown) => { posted.push(msg); } };
-    const fakeFrame = { contentWindow: { frames: [panelWindow] } };
-    (iframeEl!.props.ref as { current: unknown }).current = fakeFrame;
-
-    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
-
-    m.call.mockImplementationOnce(async () => ({
-      ok: false,
-      error: { code: 'denied', message: 'Нет права: notes:read' },
-    }));
-    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c2', op: 'notes.read', args: {} });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const result = posted.find(p => (p as { type?: string }).type === 'result') as Record<string, unknown>;
-    expect(result.id).toBe('c2');
-    expect(result.ok).toBe(false);
-    expect((result.error as { code: string }).code).toBe('denied');
-  });
+  // Тест «denied → result с кодом» через 2xx-тело {ok:false, error} удалён
+  // (R-Gleb, минор 4): сервер на сбое всегда отдаёт не-2xx, поэтому api.plugins.call
+  // бросает, и ветка res.ok===false недостижима. Покрытие — в тесте ниже
+  // (403 со структурированным отказом), он шире: тот же result + плашка.
 
   // Регрессия (задача 8335891a): сервер отдаёт 403 со структурированным отказом.
   // Общий request() (offline.ts) строит Error из объекта err.error → message =
@@ -813,10 +829,12 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     (iframeEl!.props.ref as { current: unknown }).current = { contentWindow: { frames: [panelWindow] } };
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
 
-    m.call.mockImplementationOnce(async () => ({
-      ok: false,
-      error: { code: 'denied', message: 'Нет права: tasks:read' },
-    }));
+    // Не-2xx (403) со структурированным отказом: request() бросает, тело — в e.body
+    // (ветка res.ok===false удалена, R-Gleb минор 4 — см. комментарий выше).
+    const err = new Error('[object Object]') as Error & { status?: number; body?: unknown };
+    err.status = 403;
+    err.body = { ok: false, error: { code: 'denied', message: 'Нет права: tasks:read' } };
+    m.call.mockImplementationOnce(async () => { throw err; });
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c9', op: 'tasks.list', args: {} });
     await Promise.resolve();
     await Promise.resolve();
@@ -833,6 +851,143 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
     await Promise.resolve();
     expect(findElement(render(), Notice), 'плашка погасла после смены прав').toBeNull();
+  });
+
+  // === R-Gleb, миноры 1–2, 5–6: ответ call доходит до панели ===
+  //
+  // Общий setup: фрейм смонтирован, ready получен (bridge alive), окно панели —
+  // шпион postMessage. grant(perm) — выдать право: новый frameKey → эффект
+  // сбрасывает состояние моста и плашку, новый фрейм шлёт ready.
+  async function setupAliveFrame() {
+    const project = { id: 'p1' } as Project;
+    const host: Host = { i: 0, states: new Map(), refs: new Map(), cbs: new Map(), effects: new Map() };
+    let current: PluginInfo = plugin;
+    const render = () => {
+      host.i = 0;
+      rt.state.current = host;
+      try {
+        return PluginFrame({ project, plugin: current, panel });
+      } finally {
+        rt.state.current = null;
+      }
+    };
+    render();
+    await Promise.resolve();
+    render();
+    await Promise.resolve();
+    const iframeEl = findElement(render(), 'iframe');
+    expect(iframeEl, 'iframe в дереве после загрузки html').not.toBeNull();
+    const posted: unknown[] = [];
+    const panelWindow = { postMessage: (msg: unknown) => { posted.push(msg); } };
+    (iframeEl!.props.ref as { current: unknown }).current = { contentWindow: { frames: [panelWindow] } };
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+    await Promise.resolve();
+    return {
+      host, posted, panelWindow, render,
+      grant: async (perm: string) => {
+        current = { ...current, granted: [...current.granted, perm] };
+        render();
+        await Promise.resolve();
+        const newFrame = findElement(render(), 'iframe');
+        (newFrame!.props.ref as { current: unknown }).current = { contentWindow: { frames: [panelWindow] } };
+        fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
+        await Promise.resolve();
+      },
+    };
+  }
+
+  // Регрессия (R-Gleb, минор 1): поздний 403 старого фрейма не должен ставить
+  // плашку «Нет права» на НОВОМ фрейме. Право отозвано → панель зовёт операцию →
+  // 403 в полёте → право выдано (frameKey сменился, эффект сбросил deniedKey) →
+  // только теперь 403 пришёл. Без фикса плашка залипает на фрейме, где право действует.
+  it('поздний 403 старого фрейма не ставит плашку на новом фрейме (гонка)', async () => {
+    const { posted, panelWindow, render, grant } = await setupAliveFrame();
+
+    // Вызов в полёте: промис ещё не разрешён
+    let rejectCall: ((e: unknown) => void) | undefined;
+    m.call.mockImplementationOnce(() => new Promise((resolve, reject) => { rejectCall = reject; }));
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c1', op: 'tasks.read', args: {} });
+    await Promise.resolve();
+    expect(m.call, 'вызов дошёл до API').toHaveBeenCalledTimes(1);
+
+    // Право выдано: фрейм пересоздан, плашка сброшена эффектом
+    await grant('tasks:read');
+
+    // Теперь приходит 403 (вызов стартовал на старом фрейме)
+    const err = new Error('[object Object]') as Error & { status?: number; body?: unknown };
+    err.status = 403;
+    err.body = { ok: false, error: { code: 'denied', message: 'Нет права: tasks:read' } };
+    rejectCall!(err);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Result ушёл (адресуется по id), но плашки нет: право действует
+    const result = posted.find(p => (p as { type?: string }).type === 'result') as Record<string, unknown>;
+    expect(result, 'result дошёл до панели').toBeDefined();
+    expect(result.id).toBe('c1');
+    expect(findElement(render(), Notice), 'плашки на новом фрейме нет').toBeNull();
+  });
+
+  // Регрессия (R-Gleb, минор 2): тело без строкового message ({error:{code:'denied'}}):
+  // offline.ts строит Error из объекта err.error → e.message = '[object Object]'.
+  // Fallback строит текст из body.error.message ?? body.error.code ?? e.message.
+  it('тело без строкового message → текст не [object Object]', async () => {
+    const { posted, panelWindow, render } = await setupAliveFrame();
+    const err = new Error('[object Object]') as Error & { status?: number; body?: unknown };
+    err.status = 403;
+    err.body = { ok: false, error: { code: 'denied' } };
+    m.call.mockImplementationOnce(async () => { throw err; });
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c2', op: 'tasks.read', args: {} });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const result = posted.find(p => (p as { type?: string }).type === 'result') as Record<string, unknown>;
+    const rerr = result.error as { code: string; message: string };
+    expect(rerr.message, 'текст не [object Object]').not.toBe('[object Object]');
+    expect(rerr.message).toBe('denied');
+    expect(findElement(render(), Notice), 'плашки нет (структурированная ветка не сработала)').toBeNull();
+  });
+
+  // Гейты (R-Gleb, минор 5): error в теле — строка (403/409/503) — код берётся
+  // из HTTP-статуса (обратное отображение маппинга контроллера), текст — гейта;
+  // плашки «Нет права» нет (право не причина).
+  it('гейт 403 (строковый error) → код из статуса, текст гейта, без плашки', async () => {
+    const { posted, panelWindow, render } = await setupAliveFrame();
+    const gateMsg = 'Сервисный JWT: call — только пользовательский токен';
+    const err = new Error(gateMsg) as Error & { status?: number; body?: unknown };
+    err.status = 403;
+    err.body = { error: gateMsg };
+    m.call.mockImplementationOnce(async () => { throw err; });
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c3', op: 'tasks.read', args: {} });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const result = posted.find(p => (p as { type?: string }).type === 'result') as Record<string, unknown>;
+    const rerr = result.error as { code: string; message: string };
+    expect(rerr.code, 'код гейта не потерян (не upstream)').toBe('denied');
+    expect(rerr.message).toBe(gateMsg);
+    expect(findElement(render(), Notice), 'плашки нет: право не причина').toBeNull();
+  });
+
+  // Покрытие (R-Gleb, минор 6): структурированный отказ с кодом ≠ denied
+  // (not_found → 404): код и сообщение доходят до панели без превращения в
+  // upstream, плашки «Нет права» нет.
+  it('404 not_found: код и сообщение доходят до панели, без плашки', async () => {
+    const { posted, panelWindow, render } = await setupAliveFrame();
+    const err = new Error('Not Found') as Error & { status?: number; body?: unknown };
+    err.status = 404;
+    err.body = { ok: false, error: { code: 'not_found', message: 'Операция tasks.read не найдена' } };
+    m.call.mockImplementationOnce(async () => { throw err; });
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'call', id: 'c4', op: 'tasks.read', args: {} });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const result = posted.find(p => (p as { type?: string }).type === 'result') as Record<string, unknown>;
+    const rerr = result.error as { code: string; message: string };
+    expect(rerr.code, 'код не превращён в upstream').toBe('not_found');
+    expect(rerr.message).toBe('Операция tasks.read не найдена');
+    expect(findElement(render(), Notice), 'плашки нет при отказе не по праву').toBeNull();
   });
 
   it('resize: высота контента (порог 48, потолок 20000), rAF-очередь', async () => {

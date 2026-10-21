@@ -12,7 +12,8 @@ import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import {
   BRIDGE_VERSION, READY_TIMEOUT_MS, MAX_PANEL_FILE_BYTES,
   buildInitMessage, buildPanelSrcdoc, buildResultMessage, buildThemeMessage,
-  bridgeErrorText, clampContentHeight, PANEL_CONTENT_MAX_HEIGHT, deniedKeyOf, panelWindowOf, validateFrameMessage,
+  bridgeErrorText, callErrorCodeOfStatus, clampContentHeight, deniedKeyOfError,
+  fallbackErrorText, PANEL_CONTENT_MAX_HEIGHT, parseCallError, panelWindowOf, validateFrameMessage,
   type BridgeErrorCode, type FrameMessage, type HostMessage,
 } from './bridge';
 // Токены панели из темы хоста (S8): карта CC_TOKEN_MAP и чтец readHostTokens —
@@ -142,9 +143,14 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
   // на каждое сообщение. rAF — в браузере, setTimeout 16мс — в node-тесте (без rAF).
   const pendingHeightRef = useRef<number | null>(null);
   const rafPendingRef = useRef(false);
+  // Ключ iframe: пересборка srcdoc (тема) НЕ перемонтирует (key не меняется),
+  // «Перезагрузить» и смена панели (плагин+панель) — да (reloadKey / targetKey).
+  // Считается ДО stateRef: handleCall сверяет текущий ключ с ключом на момент
+  // старта вызова (R-Gleb, минор 1: поздний ответ не должен трогать новый фрейм).
+  const frameKey = pluginFrameKey(plugin, panel, reloadKey);
   // Актуальные значения для message-обработчика без пересоздания подписки
-  const stateRef = useRef({ theme, project, isMobile, plugin: null as PluginInfo | null, bridge, reloadKey });
-  stateRef.current = { theme, project, isMobile, plugin, bridge, reloadKey };
+  const stateRef = useRef({ theme, project, isMobile, plugin: null as PluginInfo | null, bridge, reloadKey, frameKey });
+  stateRef.current = { theme, project, isMobile, plugin, bridge, reloadKey, frameKey };
 
   // Применить накопленную высоту контента (не чаще раза за кадр).
   const applyPendingHeight = useCallback(() => {
@@ -241,10 +247,6 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
     // eslint-disable-next-line react-hooks/exhaustive-deps -- theme намерено вне deps
   }, [fetch]);
 
-  // Ключ iframe: пересборка srcdoc (тема) НЕ перемонтирует (key не меняется),
-  // «Перезагрузить» и смена панели (плагин+панель) — да (reloadKey / targetKey).
-  const frameKey = pluginFrameKey(plugin, panel, reloadKey);
-
   // === Сброс состояния моста по frameKey (R-Gleb, major 1) ===
   // Сменился ключ (версия/права/перезагрузка) → React пересоздал <iframe>, и НОВЫЙ
   // фрейм шлёт ready. Но bridge/initedRef сбрасывал ТОЛЬКО эффект забора html (в deps
@@ -275,6 +277,10 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
     const s = stateRef.current;
     const p = s.plugin;
     if (!p) return;
+    // Фрейм, на котором стартовал вызов (R-Gleb, минор 1): поздний ответ (403
+    // в полёте) не должен ставить плашку «Нет права» на НОВОМ фрейме — фрейм
+    // мог пересоздаться, пока вызов летел (право в это время выдали).
+    const startFrameKey = s.frameKey;
     // Потолки (ADR-031 §3.4): число вызовов в полёте и размер args
     if (inflightRef.current >= MAX_INFLIGHT_CALLS) {
       postToFrame(buildResultMessage(msg.id, false, { code: 'limit', message: 'Слишком много одновременных вызовов' }));
@@ -295,21 +301,15 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
       // Тело HTTP-запроса: {capability, args, projectId} (контракт бэкенда, PluginCallContractTests).
       // `op` — внутреннее имя поля моста (FrameMessage.call.op); в HTTP оно уходит как `capability`.
       // projectId — проект слота (null — вне проекта); context/op в тело не попадают.
+      // Сервер на сбое всегда отдаёт не-2xx (denied → 403, not_found → 404, …,
+      // PluginBridgeController.Call) → request() бросает; 2xx — всегда {ok:true, result}.
+      // Ветка res.ok===false для этого эндпоинта недостижима (R-Gleb, минор 4).
       const res = await api.plugins.call(p.id, {
         capability: msg.op,
         args,
         projectId: s.project.id ?? null,
       });
-      if (res.ok) {
-        postToFrame(buildResultMessage(msg.id, true, res.result));
-      } else {
-        postToFrame(buildResultMessage(msg.id, false, res.error ?? { code: 'upstream', message: 'Сервер не ответил' }));
-        // Отказ по праву — плашка «Нет права {key}» поверх контента (не ломает панель)
-        if (res.error?.code === 'denied') {
-          const key = deniedKeyOf(res.error.message);
-          if (key) setDeniedKey(key);
-        }
-      }
+      postToFrame(buildResultMessage(msg.id, true, res.result));
     } catch (e) {
       // Тело HTTP-ошибки: offline.ts прикрепляет разобранный JSON к ошибке (e.body).
       // Если сервер вернул структурированный отказ {ok:false, error:{code, message}},
@@ -317,23 +317,22 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
       // а не превратиться в '[object Object]' (общий request() строит Error из объекта
       // err.error, и message теряет структуру). Точечная правка здесь, не в request():
       // offline.ts общий на весь продукт, ломать его нельзя.
-      const body = (e as { body?: unknown })?.body as
-        | { error?: { code?: string; message?: string } }
-        | undefined;
-      const errObj = body?.error;
-      if (errObj && typeof errObj.code === 'string' && typeof errObj.message === 'string') {
-        postToFrame(buildResultMessage(msg.id, false, { code: errObj.code, message: errObj.message }));
-        // Отказ по праву — плашка «Нет права {key}» поверх контента (не ломает панель)
-        if (errObj.code === 'denied') {
-          const key = deniedKeyOf(errObj.message);
-          if (key) setDeniedKey(key);
-        }
+      const body = (e as { body?: unknown })?.body;
+      const err = parseCallError(body);
+      if (err) {
+        postToFrame(buildResultMessage(msg.id, false, err));
+        // Отказ по праву — плашка «Нет права {key}» поверх контента (не ломает панель);
+        // только если фрейм не сменился, пока вызов летел (R-Gleb, минор 1).
+        const key = deniedKeyOfError(err);
+        if (key && stateRef.current.frameKey === startFrameKey) setDeniedKey(key);
         return;
       }
-      // Сам запрос к серверу не дошёл (сеть/гейт) — для панели это upstream
+      // Запрос не дошёл (сеть/офлайн) или тело — строка (гейты контроллера:
+      // 403/409/503, error без кода): код берём из HTTP-статуса (R-Gleb, минор 5),
+      // текст — первая строка из тела, а не e.message вслепую (R-Gleb, минор 2).
       postToFrame(buildResultMessage(msg.id, false, {
-        code: 'upstream',
-        message: e instanceof Error ? e.message : 'Сервер не ответил',
+        code: callErrorCodeOfStatus((e as { status?: number })?.status) ?? 'upstream',
+        message: fallbackErrorText(body, e),
       }));
     } finally {
       inflightRef.current--;

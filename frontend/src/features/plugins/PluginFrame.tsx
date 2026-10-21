@@ -16,6 +16,41 @@ import {
   bridgeErrorText, clampContentHeight, PANEL_CONTENT_MAX_HEIGHT, deniedKeyOf, panelWindowOf, validateFrameMessage,
   type BridgeErrorCode, type FrameMessage, type HostMessage,
 } from './bridge';
+import type { PanelTokens } from './panelSrcdoc';
+
+// === Токены панели из темы хоста (S8) ===
+// Панель — sandbox-iframe без allow-same-origin: --c-* хоста до неё не доходят.
+// Поэтому хост читает СВОИ computed --c-* (текущая тема) и мапит в --cc-* панели.
+// Единственный источник правды по палитре — тема хоста (lib/theme.css, обе темы);
+// в панели нет ручной копии. Каждый --cc-* ниже есть в теме хоста (критерий S8.3).
+const CC_TOKEN_MAP: Record<string, string> = {
+  '--cc-bg':        '--c-bg-card',
+  '--cc-fg':        '--c-text-primary',
+  '--cc-fg-muted':  '--c-text-muted',
+  '--cc-accent':    '--c-accent',
+  '--cc-accent-fg': '--c-on-accent',
+  '--cc-border':    '--c-border',
+  '--cc-bg-inset':  '--c-bg-inset',
+  '--cc-success':   '--c-success',
+  '--cc-warning':   '--c-warning',
+  '--cc-danger':    '--c-danger',
+  '--cc-info':      '--c-info',
+};
+
+// Чтец токенов текущей темы: getComputedStyle(<html>) несёт активную тему
+// (data-theme проставляет themeMode.ts), поэтому getPropertyValue('--c-*') даёт
+// значение именно текущей темы. В node-тесте (без CSS) document/getComputedStyle
+// заглушены — возвращаем {} (токены не критичны для логики моста).
+function readHostTokens(): PanelTokens {
+  if (typeof document === 'undefined' || typeof getComputedStyle !== 'function') return {};
+  const cs = getComputedStyle(document.documentElement);
+  const tokens: PanelTokens = {};
+  for (const cc of Object.keys(CC_TOKEN_MAP)) {
+    const v = cs.getPropertyValue(CC_TOKEN_MAP[cc]).trim();
+    if (v) tokens[cc] = v;
+  }
+  return tokens;
+}
 
 // === Панель плагина (S5): одна панель = одна карточка ===
 // Десктоп: карточка — обычная панель рельса (PanelZone рисует её через PanelShell),
@@ -250,7 +285,9 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
     // Размер — в БАЙТАХ (TextEncoder), не в символах: 100 000 русских символов
     // ≈ 200 КиБ байт, но .length = 100 000 (символы) — потолок 256 КиБ не срабатывал.
     if (new TextEncoder().encode(fetch.html).length > MAX_PANEL_FILE_BYTES) return null;
-    return buildPanelSrcdoc(fetch.html, theme);
+    // Токены текущей темы — first-paint (без вспышки): тема намерено вне deps,
+    // поэтому srcdoc (и токены) пересобираются только при смене панели, не при смене темы.
+    return buildPanelSrcdoc(fetch.html, theme, readHostTokens());
     // eslint-disable-next-line react-hooks/exhaustive-deps -- theme намерено вне deps
   }, [fetch]);
 
@@ -338,6 +375,8 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
             theme: s.theme,
             locale: typeof navigator !== 'undefined' ? navigator.language : '',
             granted: s.plugin.granted,
+            // Токены текущей темы: панель применяет их (applyTokens), сама палитру не знает
+            tokens: readHostTokens(),
           }));
         }
         setBridge('alive');
@@ -363,8 +402,11 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
   }, [frameKey, postToFrame, logEvent, handleCall]);
 
   // === Смена темы: сообщением, без перемонтирования (ADR-031 §3.3) ===
+  // Токены НОВОЙ темы: шим обновляет <style id="cc-tokens">, панель перекрашивается
+  // без перезагрузки. readHostTokens() здесь читает уже НОВУЮ тему (data-theme
+  // обновлён themeMode.ts до emit, а эффект идёт после re-render).
   useEffect(() => {
-    if (bridge === 'alive') postToFrame(buildThemeMessage(theme));
+    if (bridge === 'alive') postToFrame(buildThemeMessage(theme, readHostTokens()));
   }, [theme, bridge, postToFrame]);
 
   // «Перезагрузить»: заново забрать html и перемонтировать iframe

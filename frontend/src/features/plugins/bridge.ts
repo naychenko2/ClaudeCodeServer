@@ -14,7 +14,7 @@
 // buildPanelSrcdoc (panelSrcdoc.ts) встраивает его сам; bridge.ts подставляет ?raw.
 import shimJs from '../../../public/plugin-kit/plugin-kit.js?raw';
 import shimCss from '../../../public/plugin-kit/theme.css?raw';
-import { buildPanelSrcdoc as buildPanelSrcdocRaw, PANEL_CSP as _PANEL_CSP } from './panelSrcdoc';
+import { buildPanelSrcdoc as buildPanelSrcdocRaw, PANEL_CSP as _PANEL_CSP, type PanelTokens } from './panelSrcdoc';
 
 // === Протокол ===
 
@@ -129,10 +129,12 @@ export type HostMessage =
       source: 'ccs-host'; v: 1; type: 'init';
       plugin: PluginRef; slot: string; context: SlotContext;
       theme: BridgeTheme; locale: string; granted: string[];
+      // Токены текущей темы хоста (--cc-*): панель применяет их, сама палитру не знает
+      tokens: PanelTokens;
     }
   | { source: 'ccs-host'; v: 1; type: 'result'; id: string; ok: true; data: unknown }
   | { source: 'ccs-host'; v: 1; type: 'result'; id: string; ok: false; error: { code: string; message: string } }
-  | { source: 'ccs-host'; v: 1; type: 'theme'; theme: BridgeTheme }
+  | { source: 'ccs-host'; v: 1; type: 'theme'; theme: BridgeTheme; tokens: PanelTokens }
   | { source: 'ccs-host'; v: 1; type: 'context'; context: SlotContext };
 
 // Ответ на ready: всё, что панель вправе знать (ADR-031 §3.3). granted —
@@ -144,6 +146,8 @@ export function buildInitMessage(args: {
   theme: BridgeTheme;
   locale: string;
   granted: string[];
+  // Токены текущей темы хоста; по умолчанию {} (first-paint уже в srcdoc)
+  tokens?: PanelTokens;
 }): HostMessage {
   return {
     source: 'ccs-host', v: 1, type: 'init',
@@ -153,6 +157,7 @@ export function buildInitMessage(args: {
     theme: args.theme,
     locale: args.locale,
     granted: args.granted,
+    tokens: args.tokens ?? {},
   };
 }
 
@@ -168,9 +173,11 @@ export function buildResultMessage(
   return { source: 'ccs-host', v: 1, type: 'result', id, ok: false, error: dataOrError as { code: string; message: string } };
 }
 
-// Смена темы без перемонтирования (ADR-031 §3.3).
-export function buildThemeMessage(theme: BridgeTheme): HostMessage {
-  return { source: 'ccs-host', v: 1, type: 'theme', theme };
+// Смена темы без перемонтирования (ADR-031 §3.3). tokens — значения --cc-*
+// НОВОЙ темы: шим обновляет <style id="cc-tokens">, панель перекрашивается
+// без перезагрузки фрейма.
+export function buildThemeMessage(theme: BridgeTheme, tokens: PanelTokens = {}): HostMessage {
+  return { source: 'ccs-host', v: 1, type: 'theme', theme, tokens };
 }
 
 // Смена контекста слота (например, другой проект).
@@ -190,8 +197,10 @@ export const MAX_PANEL_FILE_BYTES = 256 * 1024;
 // предпросмотра черновика (DraftCard) — одна функция, одна PANEL_CSP. Тело — в
 // panelSrcdoc.ts (без ?raw); здесь — обёртка, подставляющая ?raw-импорты шима.
 // theme — тема в первом кадре (ADR-031 §3.3): data-cc-theme на ВНУТРЕННЕМ <html>.
-export function buildPanelSrcdoc(panelHtml: string, theme: BridgeTheme = 'light'): string {
-  return buildPanelSrcdocRaw(panelHtml, theme, shimJs, shimCss);
+// tokens — значения --cc-* текущей темы: инжектятся в <style id="cc-tokens">
+// (first-paint без вспышки); шим обновляет их по сообщению theme.
+export function buildPanelSrcdoc(panelHtml: string, theme: BridgeTheme = 'light', tokens: PanelTokens = {}): string {
+  return buildPanelSrcdocRaw(panelHtml, theme, shimJs, shimCss, tokens);
 }
 
 // === Высота ===

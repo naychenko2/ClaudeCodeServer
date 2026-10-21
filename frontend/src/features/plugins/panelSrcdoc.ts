@@ -11,6 +11,24 @@ export const PANEL_CSP =
   "img-src data: blob:; connect-src 'none'; form-action 'none'; " +
   "base-uri 'none'; frame-src 'none'";
 
+// Токены панели: имя CSS-переменной (--cc-*) → значение. Единственный источник
+// правды — тема хоста: хост читает свои --c-* (текущая тема) и доставляет их
+// панели. Панель сама палитру не знает (sandbox-iframe без allow-same-origin,
+// --c-* хоста до неё не доходят) — значения приходят только от хоста.
+export type PanelTokens = Record<string, string>;
+
+// <style> с токенами панели. Хост инжектит его в srcdoc (first-paint: до init
+// панель уже в цвете текущей темы, без вспышки) и обновляет сообщением theme
+// (шим переписывает textContent, id="cc-tokens" — шим находит его по id).
+// Пустой набор — строка '' (style не инжектится: структурный CSS theme.css
+// без hex остаётся, но --cc-* не заданы — панель в дефолтных цветах браузера).
+export function buildTokensStyle(tokens: PanelTokens): string {
+  const names = Object.keys(tokens);
+  if (names.length === 0) return '';
+  const rules = names.map(n => '  ' + n + ': ' + tokens[n] + ';').join('\n');
+  return ':root {\n' + rules + '\n}';
+}
+
 // Экранирование значения атрибута srcdoc (ADR-031 §3.6): & → &amp;, " → &quot;,
 // и больше ничего. < и > не экранируются: внутри двойнокавычного атрибута они
 // значение не закрывают, а HTML панели идёт «как есть» (без разбора).
@@ -47,12 +65,17 @@ export function buildPanelSrcdoc(
   theme: 'light' | 'dark' = 'light',
   shimJs: string = '',
   shimCss: string = '',
+  tokens: PanelTokens = {},
 ): string {
   const themeAttr = theme === 'dark' ? ' data-cc-theme="dark"' : '';
+  // Токены текущей темы — отдельным <style id="cc-tokens">: first-paint без вспышки,
+  // а шим (plugin-kit.js) обновляет его textContent по сообщению theme (без перезагрузки).
+  const tokensStyle = buildTokensStyle(tokens);
   const inner =
     '<!doctype html><html' + themeAttr + '><head>' +
     '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
     '<style>' + shimCss + '</style>' +
+    (tokensStyle ? '<style id="cc-tokens">' + tokensStyle + '</style>' : '') +
     '<script>' + shimJs + '</script>' +
     '</head><body>' + panelHtml + '</body></html>';
   return (

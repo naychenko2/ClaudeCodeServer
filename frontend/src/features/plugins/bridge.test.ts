@@ -75,6 +75,9 @@ vi.mock('react', async (importOriginal) => {
     host.effects.set(idx, { deps, cleanup: effect() });
   },
   useSyncExternalStore: (_s: unknown, get: () => unknown) => get(),
+  // useContext — реальный требует React-dispatcher (mini-runner его не ставит);
+  // useHasPanelHeader → useContext(PanelHeaderSlotContext).hasHeader. false = свой Island.
+  useContext: () => ({ hasHeader: false }),
   };
 });
 
@@ -123,6 +126,8 @@ const {
   buildThemeMessage, clampContentHeight, deniedKeyOf, bridgeErrorText,
 } = await import('./bridge');
 const { PluginFrame } = await import('./PluginFrame');
+// Токены панели (S8): buildTokensStyle генерирует <style> с --cc-* из значений хоста.
+const { buildTokensStyle } = await import('./panelSrcdoc');
 // Круговой разбор (ADR-031 §3.6): DOMParser только в тесте — парсит ВНЕШНИЙ документ
 // и проверяет инварианты (1 iframe, 0 script снаружи, meta CSP первым, srcdoc === внутренний).
 const { DOMParser } = await import('linkedom');
@@ -393,7 +398,7 @@ describe('шим plugin-kit: адресат моста (панель → хос�
 });
 
 describe('сообщения хоста', () => {
-  it('init несёт plugin/slot/context/theme/locale/granted', () => {
+  it('init несёт plugin/slot/context/theme/locale/granted (+ tokens по умолчанию {})', () => {
     expect(buildInitMessage({
       plugin: { id: 'a/b', version: '1.0.0' },
       slot: 'sidebar',
@@ -409,6 +414,7 @@ describe('сообщения хоста', () => {
       theme: 'light',
       locale: 'ru-RU',
       granted: ['notes:read'],
+      tokens: {},
     });
   });
 
@@ -418,8 +424,92 @@ describe('сообщения хоста', () => {
       .toEqual({ source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'denied', message: 'Нет права: notes:read' } });
   });
 
-  it('theme — смена темы без перемонтирования', () => {
-    expect(buildThemeMessage('dark')).toEqual({ source: 'ccs-host', v: 1, type: 'theme', theme: 'dark' });
+  it('theme — смена темы без перемонтирования (tokens {} по умолчанию)', () => {
+    expect(buildThemeMessage('dark')).toEqual({ source: 'ccs-host', v: 1, type: 'theme', theme: 'dark', tokens: {} });
+  });
+});
+
+// === Токены панели (S8): из темы хоста, а не ручная копия палитры ===
+// Критерий: панель получает значения --cc-* от хоста (инъекция <style id="cc-tokens">
+// в srcdoc + tokens в init/theme), а не из статического файла. Мутации:
+//  • убрать tokens из buildThemeMessage → «theme несёт tokens» краснеет;
+//  • убрать #cc-tokens из buildPanelSrcdoc → «srcdoc инжектит #cc-tokens» краснеет;
+//  • сломать applyTokens в шиме → «шим обновляет #cc-tokens» краснеет.
+describe('токены панели (S8: из темы хоста, не ручная копия)', () => {
+  const T = { '--cc-bg': '#FBF8F2', '--cc-fg': '#39332B', '--cc-accent': '#D97757' };
+
+  it('buildTokensStyle: :root { --cc-*: значение } из токенов; пустой набор — ""', () => {
+    expect(buildTokensStyle(T)).toBe(':root {\n  --cc-bg: #FBF8F2;\n  --cc-fg: #39332B;\n  --cc-accent: #D97757;\n}');
+    expect(buildTokensStyle({})).toBe('');
+  });
+
+  it('srcdoc инжектит <style id="cc-tokens"> с токенами (first-paint, без вспышки)', () => {
+    const outer = buildPanelSrcdoc('<body>x</body>', 'light', T);
+    // Во внешнем документе кавычки srcdoc экранированы (&quot;), поэтому ищем экранированную форму
+    expect(outer).toContain('id=&quot;cc-tokens&quot;');
+    expect(outer).toContain('--cc-bg: #FBF8F2');
+    // Без токенов — style не инжектится (структурный CSS theme.css без hex остаётся).
+    // Ищем экранированную id=&quot;cc-tokens&quot; (не просто cc-tokens: шим несёт
+    // getElementById('cc-tokens') в JS, и то есть в srcdoc всегда).
+    const bare = buildPanelSrcdoc('<body>x</body>');
+    expect(bare).not.toContain('id=&quot;cc-tokens&quot;');
+  });
+
+  it('init несёт tokens хоста (панель применяет их, сама палитру не знает)', () => {
+    const msg = buildInitMessage({
+      plugin: { id: 'a/b', version: '1.0.0' },
+      slot: 'sidebar',
+      context: { projectId: 'p1' },
+      theme: 'light',
+      locale: 'ru-RU',
+      granted: [],
+      tokens: T,
+    });
+    expect(msg).toMatchObject({ type: 'init', theme: 'light', tokens: T });
+  });
+
+  it('theme несёт tokens НОВОЙ темы (шим обновляет #cc-tokens, без перезагрузки)', () => {
+    const dark = { '--cc-bg': '#2E2A25', '--cc-fg': '#EDE6DB', '--cc-accent': '#E38A6A' };
+    expect(buildThemeMessage('dark', dark)).toEqual({ source: 'ccs-host', v: 1, type: 'theme', theme: 'dark', tokens: dark });
+  });
+
+  // Шим (plugin-kit.js) в фейковом окне: theme-сообщение → applyTokens переписывает
+  // <style id="cc-tokens">. Панель перекрашивается БЕЗ перезагрузки фрейма.
+  // Глобальные window/document затираем и ВОССТАНАВЛИВАЕМ (иначе последующие
+  // PluginFrame-тесты в этом файле увидят фейк без matchMedia).
+  it('шим applyTokens: theme-сообщение обновляет <style id="cc-tokens">', () => {
+    const origWindow = (globalThis as any).window;
+    const origDoc = (globalThis as any).document;
+    try {
+      const style = { textContent: '' };
+      const doc = {
+        documentElement: { setAttribute: () => {}, removeAttribute: () => {} },
+        getElementById: (id: string) => (id === 'cc-tokens' ? style : null),
+        body: { scrollHeight: 100 },
+        readyState: 'complete',
+      };
+      const win: any = Object.assign(new EventTarget(), { ccsPlugin: undefined, top: null, parent: null, postMessage: () => {} });
+      win.top = win; win.parent = win;
+      (globalThis as any).window = win;
+      (globalThis as any).document = doc;
+
+      // Выполняем шим: он вешает message-обработчик и шлёт ready
+      new Function('window', 'document', 'CustomEvent', 'ResizeObserver', shimJs)(win, doc, (globalThis as any).CustomEvent, (globalThis as any).ResizeObserver);
+      expect(win.ccsPlugin, 'шим установил window.ccsPlugin').toBeDefined();
+
+      // Хост шлёт theme с токенами новой темы (source = окно хоста = window.top)
+      const msg = { source: 'ccs-host', v: 1, type: 'theme', theme: 'dark', tokens: { '--cc-bg': '#2E2A25', '--cc-fg': '#EDE6DB' } };
+      const e = new Event('message');
+      Object.assign(e, { source: win, origin: 'null', data: msg });
+      win.dispatchEvent(e);
+
+      // Шим переписал #cc-tokens: панель перекрасится без перезагрузки
+      expect(style.textContent).toContain('--cc-bg: #2E2A25');
+      expect(style.textContent).toContain('--cc-fg: #EDE6DB');
+    } finally {
+      (globalThis as any).window = origWindow;
+      (globalThis as any).document = origDoc;
+    }
   });
 });
 
@@ -503,6 +593,9 @@ const plugin: PluginInfo = {
   // панель объявлена: мост тестирует именно панель, и слот её выбирает по contributes.panels
   contributes: { panels: [{ id: 'notes-panel', slot: 'sidebar', title: 'Notes Panel' }] },
 };
+// Конкретная панель (S5: PluginFrame принимает (plugin, panel) — одна панель = одна карточка).
+// entry — любой: mock panelHtml игнорирует аргументы.
+const panel: import('../../lib/api').PluginPanelView = { id: 'notes-panel', title: 'Notes Panel', entry: 'panel/index.html' };
 
 describe('PluginFrame: мост v1 (мини-раннер)', () => {
   beforeEach(() => {
@@ -521,23 +614,20 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
       host.i = 0;
       rt.state.current = host;
       try {
-        return PluginFrame({ project });
+        return PluginFrame({ project, plugin, panel });
       } finally {
         rt.state.current = null;
       }
     };
 
-    // 1-й render: список плагинов запрашен (useInstalledPlugins)
+    // 1-й render: plugin/panel — пропом (S5), панель запрашена (panelHtml) сразу
     render();
     await Promise.resolve();
-    expect(m.list).toHaveBeenCalledTimes(1);
+    const [phId, phVer] = m.panelHtml.mock.calls[0];
+    expect(phId).toBe('acme/notes-panel');
+    expect(phVer).toBe('1.0.0');
 
-    // 2-й render: список получен, панель запрашена (panelHtml)
-    render();
-    await Promise.resolve();
-    expect(m.panelHtml).toHaveBeenCalledWith('acme/notes-panel', '1.0.0');
-
-    // 3-й render: html на месте, iframe смонтирован, мост ждёт ready
+    // 2-й render: html на месте, iframe смонтирован, мост ждёт ready
     const tree3 = render();
     const iframeEl = findElement(tree3, 'iframe');
     expect(iframeEl, 'iframe в дереве после загрузки html').not.toBeNull();
@@ -592,7 +682,7 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
       host.i = 0;
       rt.state.current = host;
       try {
-        return PluginFrame({ project });
+        return PluginFrame({ project, plugin, panel });
       } finally {
         rt.state.current = null;
       }
@@ -632,7 +722,7 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
       host.i = 0;
       rt.state.current = host;
       try {
-        return PluginFrame({ project });
+        return PluginFrame({ project, plugin, panel });
       } finally {
         rt.state.current = null;
       }

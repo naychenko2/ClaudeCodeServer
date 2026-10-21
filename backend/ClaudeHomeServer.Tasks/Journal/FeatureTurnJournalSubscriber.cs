@@ -69,10 +69,11 @@ public sealed class FeatureTurnJournalSubscriber : IHostedService
 
     // Остановка хоста: завершаем очередь (ReadAllAsync дописывает остаток и выходит) и
     // дожидаемся фонового потребителя — принятые записи дойдут до диска, цикл не живёт
-    // до конца процесса (previously no-op).
+    // до конца процесса. TryComplete (не Complete): повторный StopAsync (двойная остановка
+    // хоста) идемпотентен и не бросает ChannelClosedException.
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _queue.Writer.Complete();
+        _queue.Writer.TryComplete();
         if (_consumeLoop is not null)
         {
             try { await _consumeLoop; }
@@ -134,7 +135,16 @@ public sealed class FeatureTurnJournalSubscriber : IHostedService
             {
                 _inFlight++;
             }
-            _queue.Writer.TryWrite(new QueuedWrite(task.OwnerId ?? "", featureId, entry));
+            // TryWrite false — очередь уже завершена (StopAsync): потребитель запись не
+            // прочитает, поэтому уменьшаем счётчик сами, иначе WaitForDrainAsync зависнет
+            // на «в работе» (запись не дойдёт до потребителя).
+            if (!_queue.Writer.TryWrite(new QueuedWrite(task.OwnerId ?? "", featureId, entry)))
+            {
+                lock (_drainGate)
+                {
+                    _inFlight--;
+                }
+            }
         }
         catch (Exception ex)
         {

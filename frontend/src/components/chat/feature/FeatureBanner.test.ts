@@ -715,4 +715,51 @@ describe('FeatureBanner: клик по точке → переход (mount)', (
     expect(taskBtn, 'taskId не доехал до NavTargetButton (нет кнопки задачи)').not.toBeNull();
     root.unmount();
   });
+
+  // Минор: initialSel — тест через БАННЕР (порядок entries ≠ порядок runs), не на шторке.
+  // Индекс: [f2, f1] (f2 ПЕРВОЙ в строке); runs (API): [f1, f2]. Баннер открывает idx=0 →
+  // шторка обязана показать f2 (по порядку индекса), а НЕ f1 (по порядку runs).
+  it('initialSel через баннер: порядок entries ≠ порядок runs → шторка показывает f2 (idx=0)', async () => {
+    // Индекс: f2 первой (порядок строки), f1 второй.
+    const f2 = feat('running', { featureId: 'f2', title: 'Вторая фича', keySessionId: 'chat-key2' });
+    const f1 = feat('running', { keySessionId: 'chat-key' });
+    const index: FeaturesIndex = {
+      features: [f2, f1],
+      chats: { 'chat-exec': [
+        { featureId: 'f2', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+        { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+      ] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+
+    // Runs (API) — в ДРУГОМ порядке: f1 первая, f2 вторая.
+    const mkRun = (id: string, title: string): FeatureRun => ({
+      featureId: id,
+      state: 'running',
+      epic: { id, title } as unknown as import('../../../types/featureRun').FeatureTask,
+      steps: [], reviews: [], qa: [], final: null, merge: null,
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      progress: 0, ready: false,
+      stages: [],
+    });
+    mockRuns.length = 0;
+    mockRuns.push(mkRun('f1', 'Первая фича'), mkRun('f2', 'Вторая фича'));
+
+    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: false }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    // «Где мы» → шторка.
+    const where = findNodeByAttr(container, 'data-testid', 'feature-where');
+    expect(where, 'нет «где мы»').not.toBeNull();
+    act(() => { (reactProps(where!)!.onClick as () => void)(); });
+
+    // Панель открыта; выбрана f2 (idx=0 по индексу), а НЕ f1 (idx=0 по runs).
+    const panel = findNodeByAttr(container, 'data-testid', 'feature-sheet-panel');
+    expect(panel, 'шторка (панель) не открылась').not.toBeNull();
+    // aria-label панели = заголовок ВЫБРАННОЙ фичи: f2, не f1.
+    expect(panel!.getAttribute('aria-label'), 'выбрана f1 (порядок runs), а не f2 (порядок индекса)').toBe('Вторая фича');
+    root.unmount();
+  });
 });

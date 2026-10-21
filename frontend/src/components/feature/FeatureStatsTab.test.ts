@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureStatsTab } from './FeatureStatsTab';
 import {
   formatDuration, formatClock, formatDateTime, kindLabel, kindBackground,
-  buildTimelineModel, nowFraction, PAUSE_BREAK_MIN,
+  buildTimelineModel, nowFraction, nowCompressedFraction, PAUSE_BREAK_MIN,
 } from './FeatureStatsBits';
 import {
   formatTokens, formatUsd, sharePercent, roleGroupLabel, modelGroupLabel, personaGroupLabel,
@@ -221,6 +221,102 @@ describe('buildTimelineModel', () => {
     const m = buildTimelineModel(tl, 'approx', false, true);
     expect(m.hasData).toBe(false);
   });
+
+  // Правило from: ось начинается с tl.from (НЕ с первого сегмента); пауза ДО первого блока
+  // считается от tl.from до первого сегмента (сжимается, если > 2 ч). Мутация «from = первый
+  // сегмент» красит: ось и первый break смещаются.
+  it('правило from: ось = tl.from; пауза до первого блока — от tl.from (сжимается)', () => {
+    const tl = mkTimeline({
+      from: '2026-10-19T10:00:00Z',
+      segments: [seg('2026-10-19T17:20:00Z', '2026-10-19T17:55:00Z', 'work', 'cut', { taskId: 't-cut' })],
+    });
+    const m = buildTimelineModel(tl, 'approx', false, false);
+    // Ось — от tl.from (10:00), не от первого сегмента (17:20).
+    expect(m.axis.from).toBe('2026-10-19T10:00:00Z');
+    // Пауза 10:00 → 17:20 = 440 мин > 120 → первый блок — сжатый break от tl.from.
+    expect(m.blocks[0]!.type).toBe('break');
+    const brk = m.blocks[0]!;
+    if (brk.type === 'break') {
+      expect(brk.from).toBe('2026-10-19T10:00:00Z');
+      expect(brk.minutes).toBe(440);
+    }
+  });
+});
+
+// === Мажор 1: паузы ДЛИННЕЕ 2 ч ВНУТРИ одного этапа ===
+// Старая группировка (last.key === s.stage) склеивала два куска одного этапа с ночной
+// паузой в ОДИН блок, и пауза пропала (pushBreak считал разрывы только МЕЖДУ блоками).
+describe('buildTimelineModel: пауза внутри этапа', () => {
+  it('пауза 3,5 ч внутри prod → блок рвётся: prod, break, prod', () => {
+    const tl = mkTimeline({
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T14:30:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', 'work', 'prod'),
+        seg('2026-10-20T14:00:00Z', '2026-10-20T14:30:00Z', 'work', 'prod'),
+      ],
+    });
+    const m = buildTimelineModel(tl, 'approx', false, false);
+    expect(m.blocks.map(b => b.type)).toEqual(['stage', 'break', 'stage']);
+    // Оба stage-блока — prod.
+    const stages = m.blocks.filter(b => b.type === 'stage');
+    expect(stages.length).toBe(2);
+    for (const s of stages) expect(s.type === 'stage' && s.key).toBe('prod');
+    // Разрыв: 10:30 → 14:00 = 210 мин.
+    const brk = m.blocks.find(b => b.type === 'break')!;
+    expect(brk.minutes).toBe(210);
+  });
+
+  it('два разрыва подряд: prod, break, prod, break, prod', () => {
+    const tl = mkTimeline({
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T18:30:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', 'work', 'prod'),
+        seg('2026-10-20T14:00:00Z', '2026-10-20T14:30:00Z', 'work', 'prod'),
+        seg('2026-10-20T18:00:00Z', '2026-10-20T18:30:00Z', 'work', 'prod'),
+      ],
+    });
+    const m = buildTimelineModel(tl, 'approx', false, false);
+    expect(m.blocks.map(b => b.type)).toEqual(['stage', 'break', 'stage', 'break', 'stage']);
+  });
+
+  it('ровно 120 мин — НЕ разрыв (порог строго > 120): блок не рвётся', () => {
+    const tl = mkTimeline({
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T13:00:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', 'work', 'prod'),
+        seg('2026-10-20T12:30:00Z', '2026-10-20T13:00:00Z', 'work', 'prod'),
+      ],
+    });
+    const m = buildTimelineModel(tl, 'approx', false, false);
+    expect(m.blocks.map(b => b.type)).toEqual(['stage']);
+    const b = m.blocks[0]!;
+    if (b.type === 'stage') expect(b.minutes).toBe(60);
+  });
+});
+
+// === Мажор 2: дорожка ревью не отнимает у основной ленты ===
+describe('buildTimelineModel: дорожка ревью', () => {
+  it('60 мин main + 40 мин review → minutes блока = 60 (main), reviewMinutes = 40', () => {
+    const tl = mkTimeline({
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T11:00:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T11:00:00Z', 'work', 'prod'),
+        seg('2026-10-20T10:20:00Z', '2026-10-20T11:00:00Z', 'work', 'prod', { track: 'review' }),
+      ],
+    });
+    const m = buildTimelineModel(tl, 'approx', false, false);
+    const b = m.blocks[0]!;
+    if (b.type !== 'stage') throw new Error('ожидал stage-блок');
+    // Основная лента ∝ 60 (main), ревью — отдельная дорожка (40), не в ширине.
+    expect(b.minutes).toBe(60);
+    expect(b.reviewMinutes).toBe(40);
+    expect(b.segments.length).toBe(1);        // только main-сегмент в ленте
+    expect(b.reviewSegments.length).toBe(1); // review — в дорожке
+  });
 });
 
 describe('nowFraction', () => {
@@ -230,6 +326,44 @@ describe('nowFraction', () => {
     const mid = nowFraction('2026-10-19T17:20:00Z', '2026-10-20T12:30:00Z', '2026-10-20T12:15:00Z');
     expect(mid).toBeGreaterThan(0.5);
     expect(mid).toBeLessThan(1);
+  });
+});
+
+// === Мажор 3: «сейчас» — на НАРИСОВАННОЙ (сжатой) шкале, а не по календарю ===
+describe('nowCompressedFraction: «сейчас» на сжатой шкале', () => {
+  // prod 10:00–11:00 (60) → разрыв 11:00–20:00 (9 ч, сжат) → prod 20:00–20:30 (30).
+  // Веса: stage=60, break=40, stage=30; total=130.
+  function mkModel() {
+    const tl = mkTimeline({
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T20:30:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T11:00:00Z', 'work', 'prod'),
+        seg('2026-10-20T20:00:00Z', '2026-10-20T20:30:00Z', 'work', 'prod'),
+      ],
+    });
+    return buildTimelineModel(tl, 'approx', false, false);
+  }
+
+  it('«сейчас» внутри блока → позиция по сжатой шкале (≠ календарной)', () => {
+    const m = mkModel();
+    // 20:15 — внутри второго prod-блока [20:00, 20:30].
+    const frac = nowCompressedFraction(m.blocks, '2026-10-20T20:15:00Z');
+    expect(frac).not.toBeNull();
+    // Сжатая: (60 + 40 + 30·0.5)/130 = 115/130 ≈ 0.8846.
+    expect(frac!).toBeCloseTo(115 / 130, 5);
+    // Календарная: (20:15−10:00)/(20:30−10:00) = 615/630 ≈ 0.976 — ДРУГАЯ (иначе тест пуст).
+    const cal = nowFraction('2026-10-20T10:00:00Z', '2026-10-20T20:30:00Z', '2026-10-20T20:15:00Z');
+    expect(frac!).not.toBeCloseTo(cal, 3);
+  });
+
+  it('«сейчас» в разрыве → на разрыве (центр сжатого блока)', () => {
+    const m = mkModel();
+    // 15:00 — внутри разрыва [11:00, 20:00].
+    const frac = nowCompressedFraction(m.blocks, '2026-10-20T15:00:00Z');
+    expect(frac).not.toBeNull();
+    // (60 + 40/2)/130 = 80/130 ≈ 0.615.
+    expect(frac!).toBeCloseTo(80 / 130, 5);
   });
 });
 
@@ -254,7 +388,8 @@ describe('FeatureStatsTab: рендер', () => {
   });
 
   // === 1. Сегменты по видам (макет: work/waiting/idle/error/notWorking) ===
-  it('сегменты: каждый вид — своя data-testid и цвет-токен', () => {
+  // data-testid сегментов уникален (индекс блока+сегмента), а ВИД — в data-kind.
+  it('сегменты: каждый вид — свой data-kind и цвет-токен', () => {
     const stats = mkStats();
     // Добавим сегменты всех видов (один этап, чтобы не плодить блоки).
     stats.timeline.segments = [
@@ -266,7 +401,7 @@ describe('FeatureStatsTab: рендер', () => {
     ];
     const c = renderTab(stats);
     for (const kind of ['work', 'waiting', 'idle', 'error', 'notWorking'] as const) {
-      const node = findNodeByAttr(c, 'data-testid', `stats-seg-${kind}`);
+      const node = findNodeByAttr(c, 'data-kind', kind);
       expect(node, `сегмент ${kind}`).not.toBeNull();
     }
   });
@@ -278,7 +413,7 @@ describe('FeatureStatsTab: рендер', () => {
       seg('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', 'waiting', 'prod'),
     ];
     const c = renderTab(stats);
-    const node = findNodeByAttr(c, 'data-testid', 'stats-seg-waiting')!;
+    const node = findNodeByAttr(c, 'data-kind', 'waiting')!;
     const aria = node.getAttribute('aria-label') ?? '';
     expect(aria, 'aria-label несёт вид «ждёт вас»').toContain('ждёт вас');
   });
@@ -299,6 +434,34 @@ describe('FeatureStatsTab: рендер', () => {
     expect(textNodes(brk!).join('')).toContain('разрыв · 15 ч 35 мин');
   });
 
+  // === 3b. «Сейчас» — на нарисованной (сжатой) шкале (мажор 3) ===
+  it('«сейчас»: отметка stats-now-marker рисуется (мутация «не рисуется» красит)', () => {
+    const c = renderTab(mkStats());
+    const marker = findNodeByAttr(c, 'data-testid', 'stats-now-marker');
+    expect(marker, 'отметка «сейчас» на ленте').not.toBeNull();
+  });
+
+  it('«сейчас»: позиция — по СЖАТОЙ шкале (left ≠ календарной доле)', () => {
+    // prod 10:00–11:00 (60) → разрыв 11:00–20:00 → prod 20:00–20:30 (30); current.since=20:15.
+    // Веса: 60 + 40 + 30 = 130. 20:15 внутри второго блока: (60+40+30·0.5)/130 = 115/130.
+    const stats = mkStats();
+    stats.timeline = {
+      ...stats.timeline,
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T20:30:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T11:00:00Z', 'work', 'prod'),
+        seg('2026-10-20T20:00:00Z', '2026-10-20T20:30:00Z', 'work', 'prod'),
+      ],
+      current: { kind: 'waiting', since: '2026-10-20T20:15:00Z', taskId: null },
+    };
+    const c = renderTab(stats);
+    const marker = findNodeByAttr(c, 'data-testid', 'stats-now-marker')!;
+    const left = (marker as unknown as { style: Record<string, string> }).style?.left ?? '';
+    // Сжатая позиция 115/130 ≈ 88.5% (календарная была бы 615/630 ≈ 97.6%).
+    expect(left, 'left по сжатой шкале').toBe('88.5%');
+  });
+
   // === 4. Клик → цель перехода (этап в «Хронологии») ===
   it('клик по линейке/сегменту → focusFeatureStage(key) (якорь этапа)', () => {
     const c = renderTab(mkStats());
@@ -316,6 +479,19 @@ describe('FeatureStatsTab: рендер', () => {
     const ruler = findNodeByAttr(c, 'data-testid', 'stats-ruler-cut')!;
     act(() => { (reactProps(ruler)!.onClick as () => void)(); });
     expect(__test.stageFocus()!.key).toBe('cut');
+  });
+
+  // === 4b. Клик по СЕГМЕНТУ ленты (мажор 8) — раньше покрывался только клик по линейке ===
+  it('клик по сегменту → focusFeatureStage(этап сегмента) (не «zzz»)', () => {
+    const c = renderTab(mkStats());
+    // Первый сегмент первого блока (cut, work, taskId=t-cut).
+    const seg = findNodeByAttr(c, 'data-testid', 'stats-seg-0-0');
+    expect(seg, 'сегмент первого блока').not.toBeNull();
+    act(() => { (reactProps(seg!)!.onClick as () => void)(); });
+    // Якорь — на этапе, к которому принадлежит сегмент (cut). Мутация openStage('zzz') → red.
+    const focus = __test.stageFocus();
+    expect(focus, 'якорь после клика по сегменту').not.toBeNull();
+    expect(focus!.key).toBe('cut');
   });
 
   // === 5. Значки точности: source=approx → «≈» + «по задачам (≈)» ===
@@ -535,10 +711,13 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
   it('«Всего прошло» + «Работа»: значения из totals (журнал)', () => {
     const c = renderTab(mkFullStats());
     const all = textNodes(c).join('');
-    // elapsedMinutes=900 → «15 ч»; workWallMinutes=300 → «5 ч»; agentsSum=520 → «8 ч 40 мин».
     expect(all).toContain('Всего прошло');
-    expect(all).toContain('15 ч');
     expect(all).toContain('Работа');
+    // «Всего прошло»: значение карточки — по data-testid (stats-card-0), НЕ toContain по всему
+    // тексту (там «15 ч» ловилось ещё и подписью разрыва «15 ч 35 мин»).
+    const card0 = findNodeByAttr(c, 'data-testid', 'stats-card-0')!;
+    expect(textNodes(card0).join(''), 'значение «Всего прошло» = 15 ч (900 мин)').toContain('15 ч');
+    // «Работа»: 300 мин → «5 ч»; «агенты в сумме ≈ 8 ч 40 мин» (520).
     expect(all).toContain('5 ч');
     expect(all).toContain('агенты в сумме ≈ 8 ч 40 мин');
   });
@@ -615,6 +794,16 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
     expect(all).toContain('640 тыс.'); // токены крупно
   });
 
+  // Минор: минуты группы в разрезе (formatDuration(g.minutes)) — раньше без теста (мутация зелёная).
+  it('разрезы: минуты группы показываются (p-kira 200 мин → «3 ч 20 мин»)', () => {
+    const c = renderTab(mkFullStats());
+    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
+    const all = textNodes(bd).join('');
+    // p-kira: minutes=200 → «3 ч 20 мин»; p-denis: minutes=125 → «2 ч 05 мин».
+    expect(all, 'минуты p-kira').toContain('3 ч 20 мин');
+    expect(all, 'минуты p-denis').toContain('2 ч 05 мин');
+  });
+
   it('мутация: ось «модели» — modelFull → читаемое имя (Opus, не raw id)', () => {
     const c = renderTab(mkFullStats());
     const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
@@ -656,14 +845,18 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
   it('разрезы: costUsd=null у группы → цены нет; чаты раскрываются с «чат»', () => {
     const c = renderTab(mkFullStats());
     const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
-    // Раскрываю первую группу (p-kira, costUsd=12.5) — клик по строке.
-    const group = findNodeByAttr(bd, 'data-testid', 'stats-break-group')!;
-    // Кнопка-строка — первый button внутри группы.
-    const firstBtn = findFirstButton(group as never);
-    expect(firstBtn, 'кнопка-строка группы').not.toBeNull();
-    act(() => { (reactProps(firstBtn as never)!.onClick as () => void)(); });
-    // Раскрыто: список чатов + кнопка «чат».
-    const chats = findNodeByAttr(bd, 'data-testid', 'stats-break-chats');
+    // Группы (personas): [p-kira (costUsd=12.5), p-denis (costUsd=null)].
+    const groups = findAllByAttr(bd, 'data-testid', 'stats-break-group');
+    expect(groups.length, 'две группы').toBe(2);
+    // Открываю группу с costUsd=null (p-denis, вторая) — клик по строке.
+    const denisBtn = findFirstButton(groups[1] as never);
+    expect(denisBtn, 'кнопка-строка группы p-denis').not.toBeNull();
+    act(() => { (reactProps(denisBtn as never)!.onClick as () => void)(); });
+    // costUsd=null → на строке группы НЕТ цены (stats-break-cost). Мутация «показывать цену
+    // при null» добавит stats-break-cost → тест краснеет.
+    expect(findNodeByAttr(groups[1], 'data-testid', 'stats-break-cost'), 'цены нет при costUsd=null').toBeNull();
+    // Чаты раскрываются: строка чата + кнопка «чат».
+    const chats = findNodeByAttr(groups[1], 'data-testid', 'stats-break-chats');
     expect(chats, 'список чатов группы').not.toBeNull();
     expect(findNodeByAttr(chats!, 'data-testid', 'stats-break-chat'), 'строка чата').not.toBeNull();
     expect(findNodeByAttr(chats!, 'data-testid', 'stats-break-chat-open'), 'кнопка «чат»').not.toBeNull();
@@ -720,6 +913,18 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
     expect(findNodeByAttr(c, 'data-testid', 'stats-spend'), 'нет блока расхода').toBeNull();
   });
 
+  // Минор: правило «данные с …» — только если расход НЕРО (иначе у пустой фичи это дата эпика).
+  it('расход нулевой (0 токенов, $0) → строки «данные с …» нет', () => {
+    const s = mkFullStats();
+    s.spend = {
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
+      costUsd: 0, costPartial: false, hiddenCostModels: [],
+      from: '2026-10-19T17:20:00Z', shared: null,
+    };
+    const c = renderTab(s);
+    expect(findNodeByAttr(c, 'data-testid', 'stats-spend-from'), '«данные с …» нет при нулевом расходе').toBeNull();
+  });
+
   // Мутация: кэш НЕ в крупную цифру (крупная = вход+выход, кэш отдельной строкой).
   it('мутация: крупная цифра = вход+выход (1,2М), кэш не смешан в неё', () => {
     const c = renderTab(mkFullStats());
@@ -744,6 +949,16 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
     const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
     expect(textNodes(shared).join('')).toContain('оценка, по задакам ≈');
   });
+
+  // === Мажор 5: подпись метода shared — из spend.shared.method, НЕ из stats.source ===
+  it('source=journal + shared.method=approx → «оценка, по задачам ≈» (метод ≠ source)', () => {
+    const s = mkFullStats({ source: 'journal' }); // source=journal
+    s.spend = { ...s.spend!, shared: { ...s.spend!.shared!, method: 'approx' } }; // method=approx
+    const c = renderTab(s);
+    const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
+    // Если бы подпись бралась из source (journal) → было бы «по журналу»; из method (approx) → «по задачам ≈».
+    expect(textNodes(shared).join(''), 'метод shared — из spend.shared.method').toContain('оценка, по задакам ≈');
+  });
 });
 
 // Первый <button> внутри узла (кнопка-строка группы разреза). nodeName в fakeDom — в верхнем.
@@ -754,4 +969,15 @@ function findFirstButton(n: FNodeLike2): FNodeLike2 | null {
     if (r) return r;
   }
   return null;
+}
+
+// Все узлы с атрибутом attr=value в поддереве (findNodeByAttr даёт только первый).
+function findAllByAttr(n: FNodeLike2, attr: string, value: string): FNodeLike2[] {
+  const out: FNodeLike2[] = [];
+  const walk = (x: FNodeLike2) => {
+    if (x.nodeType === 1 && (x.attributes?.[attr] ?? null) === value) out.push(x);
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk(n);
+  return out;
 }

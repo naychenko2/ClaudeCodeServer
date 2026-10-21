@@ -200,3 +200,26 @@ describe('useInstalledPlugins: сборка мусора по диффу жив�
     expect(probe?.plugins).toEqual([P1, P2]);
   });
 });
+
+describe('useInstalledPlugins: возврат в проект (R-Финал)', () => {
+  it('ушёл из проекта → вернулся: список перечитывается (плагин, установленный, пока проект был закрыт, виден)', async () => {
+    // Первый GET: один плагин. Пока проект закрыт, в чате вне проекта принимают
+    // черновик — появляется P2. Возврат в проект обязан послать НОВЫЙ GET: иначе
+    // список остался бы старым ([P1]) до F5.
+    m.list.mockResolvedValueOnce([P1]).mockResolvedValue([P1, P2]);
+
+    // Открыли проект: первичный GET
+    const first = await renderProbe();
+    expect(m.list).toHaveBeenCalledTimes(1);
+    expect(probe?.plugins).toEqual([P1]);
+
+    // Ушли из проекта: страница размонтировалась, проект «заснул» (active=0)
+    act(() => { first.root.unmount(); });
+
+    // Вернулись в проект: повторный mount шлёт новый GET
+    await renderProbe();
+    expect(m.list).toHaveBeenCalledTimes(2);
+    // Список актуален: P2 на месте
+    expect(probe?.plugins).toEqual([P1, P2]);
+  });
+});

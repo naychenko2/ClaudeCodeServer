@@ -14,7 +14,7 @@ import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import {
   BRIDGE_VERSION, READY_TIMEOUT_MS, MAX_PANEL_FILE_BYTES,
   buildInitMessage, buildPanelSrcdoc, buildResultMessage, buildThemeMessage,
-  bridgeErrorText, clampContentHeight, deniedKeyOf, panelWindowOf, validateFrameMessage,
+  bridgeErrorText, clampContentHeight, PANEL_CONTENT_MAX_HEIGHT, deniedKeyOf, panelWindowOf, validateFrameMessage,
   type BridgeErrorCode, type FrameMessage, type HostMessage,
 } from './bridge';
 
@@ -358,6 +358,11 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
         // страховочный потолок 20 000), применяя не чаще раза за кадр; последнее
         // значение побеждает. Прокручивает обёртка фрейма (overflow:auto ниже).
         pendingHeightRef.current = clampContentHeight(msg.height);
+        // Упёрлись в потолок — хвост контента отрезан: одна строка в журнал моста
+        // («Подробнее»), чтобы автор панели увидел потерю, а не искал её молча.
+        if (msg.height > PANEL_CONTENT_MAX_HEIGHT) {
+          logEvent(`× высота панели ${Math.round(msg.height)} px обрезана до ${PANEL_CONTENT_MAX_HEIGHT} px`);
+        }
         scheduleHeight();
       }
     };
@@ -497,10 +502,13 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     }
     if (showIframe) {
       return (
-        // overflow:auto: фрейм растянут под контент (высота из resize, может быть выше
-        // карточки), внутренний документ не прокручивается (html{overflow:hidden});
-        // прокрутка — у обёртки (единственный скролл панели, «Прокрутка — у хоста»).
-        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'auto' }}>
+        // Внешний div держит оверлеи (скелет, плашка отказа) — они не уезжают при
+        // прокрутке. Скролл-контейнер ВНУТРИ него: фрейм растянут под контент (высота
+        // из resize, может быть выше карточки), внутренний документ не скроллится
+        // (html{overflow:hidden}), поэтому колесо уходит сюда — в документ хоста, где
+        // действует наш стиль полос прокрутки (index.css).
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
           <iframe
             ref={iframeRef}
             key={frameKey}
@@ -512,14 +520,12 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
             className="cc-plugin-frame"
             style={{
               width: '100%',
-              // minHeight:100% — короткая панель заполняет карточку (M6); height = высота
-              // контента (может быть выше карточки) → фрейм растёт, обёртка скроллится.
               height: height ?? '100%',
-              minHeight: '100%',
               border: 'none', display: 'block',
               background: 'transparent',
             }}
           />
+          </div>
           {/* Скелет до первого сообщения моста (ready); iframe уже смонтирован,
               шим внутри живёт и шлёт ready — оверлей лишь закрывает контент */}
           {bridge === 'waiting' && (

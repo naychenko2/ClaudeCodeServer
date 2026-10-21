@@ -650,11 +650,11 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
 
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
 
-    // Обёртка фрейма — единственный скролл панели (R-A, critical 1): без overflow:auto
+    // Обёртка фрейма — единственный скролл панели (R-A, critical 1): без overflowY:auto
     // фрейм выше карточки (resize) недостижим. Мутация «убрать overflow» красит тест.
-    const wrap = findByStyle(tree, st => st.position === 'relative' && st.flex === 1);
-    expect(wrap, 'обёртка фрейма найдена').not.toBeNull();
-    expect((wrap!.props.style as Record<string, unknown>).overflow).toBe('auto');
+    const wrap = findByStyle(tree, st => st.overflowY === 'auto');
+    expect(wrap, 'скролл-контейнер фрейма найден').not.toBeNull();
+    expect((wrap!.props.style as Record<string, unknown>).overflowY).toBe('auto');
 
     // 2000 → 2000 (высота контента ставится фрейму как есть)
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 2000 });
@@ -665,6 +665,9 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 30000 });
     el = findElement(render(), 'iframe');
     expect((el!.props.style as Record<string, unknown>).height).toBe(PANEL_CONTENT_MAX_HEIGHT);
+    // Упёрлись в потолок — в журнале моста строка про обрезку (иначе хвост теряется молча)
+    const logLines = [...host.states.values()].filter(Array.isArray).flat() as unknown[];
+    expect(logLines.some(l => typeof l === 'string' && l.includes('обрезана')), 'строка про обрезку в журнале').toBe(true);
 
     // 10 → 48 (порог снизу PANEL_MIN_HEIGHT)
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 10 });

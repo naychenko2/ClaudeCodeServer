@@ -9,7 +9,7 @@
  * API:
  *   ccsPlugin.ready()             — шим загрузился (сам шлёт его при загрузке)
  *   ccsPlugin.call(op, args)     — Promise: данные на успех, {code, message} на сбой
- *   ccsPlugin.resize(height)     — высота панели (px); хост ставит её фрейму
+ *   ccsPlugin.resize(height)     — желаемая высота панели (px)
  *   ccsPlugin.on(type, cb)       — 'init' | 'theme' | 'context'; возвращает отписку
  *   ccsPlugin.state              — текущее {plugin, slot, context, theme, locale, granted}
  *
@@ -122,7 +122,7 @@
         send({ type: 'call', id: id, op: op, args: args || {} });
       });
     },
-    // Высота панели (px): хост ставит её фрейму (ADR-031 §3.3); шим сам шлёт высоту контента.
+    // Желаемая высота панели (px); хост зажимает её в пределы слота.
     resize: function (height) {
       if (typeof height === 'number' && isFinite(height) && height >= 0)
         send({ type: 'resize', height: height });
@@ -143,8 +143,8 @@
   };
 
   // Авто-высота: хосту не видно DOM фрейма (sandbox), единственный канал — postMessage.
-  // ResizeObserver шлёт высоту body при каждом изменении; хост ставит её фрейму
-  // (порог 48, потолок 20 000). Меряем body (реальная высота контента), а не documentElement: его
+  // ResizeObserver шлёт высоту body при каждом изменении; хост зажимает её в пределы
+  // слота. Меряем body (реальная высота контента), а не documentElement: его
   // scrollHeight не бывает меньше высоты iframe, и мелкая панель не смогла бы ужаться.
   // Шим живёт в <head> — observer вешаем, когда body существует (DOMContentLoaded).
   function reportHeight() {

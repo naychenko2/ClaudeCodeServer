@@ -13,7 +13,7 @@
 // Пустые: нет чатов → «У фичи пока нет чатов»; чата нет в снимке → «чата нет» (неактивна).
 // Счётчик вкладки — число НЕархивных чатов (считает FeaturePage.tsx, макет §4).
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -22,6 +22,7 @@ import { roleLabel } from '../../lib/roleLabel';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { ModelChip, ExecutorAvatar } from './FeatureTimelineBits';
 import { NavTargetPair } from './NavTargetButton';
 import { Button } from '../ui/Button';
@@ -71,12 +72,13 @@ const KEY_TIP = 'Ключевой чат — здесь куратор ведё�
 // пара «чат · задача». Ключевой — фон accentLight; архивный — имя приглушено.
 // Навигация: чат — openChatById (chat.id), задача — openTaskInSection (taskId);
 // точка возврата «страница фичи → чат/задача» — recordFeatureReturn (Ф9b).
-function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null }: {
+function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS }: {
   chat: FeatureChatLink;
   isKey: boolean;
   isMobile: boolean;
   featureId: string;
   featureTitle?: string | null;
+  marks?: NavMarks;
 }) {
   const [hover, setHover] = useState(false);
   const persona = chat.personaId ? getPersonaById(chat.personaId) : undefined;
@@ -149,6 +151,7 @@ function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null }: {
             : 'Открыть чат. Страница фичи скроется, вернётся по плашке.'}
           showNoChat
           taskId={chat.taskId}
+          taskClosed={marks.taskClosed(chat.taskId)}
           onOpenTask={openTask}
           taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
           isMobile={isMobile}
@@ -160,12 +163,13 @@ function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null }: {
 
 // Раздел «Архивные · N» (макет §9а, .archb): свёрнутые архивные чаты; раскрытие по
 // клику/клавиатуре (aria-expanded), шеврон поворачивается. N = число архивных.
-function ArchivedSection({ chats, keySessionId, isMobile, featureId, featureTitle = null }: {
+function ArchivedSection({ chats, keySessionId, isMobile, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS }: {
   chats: FeatureChatLink[];
   keySessionId: string | null;
   isMobile: boolean;
   featureId: string;
   featureTitle?: string | null;
+  marks?: NavMarks;
 }) {
   const [open, setOpen] = useState(false);
   const sorted = sortFeatureChats(chats, keySessionId);
@@ -196,7 +200,7 @@ function ArchivedSection({ chats, keySessionId, isMobile, featureId, featureTitl
       {open && (
         <div data-testid="chats-archived-body" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, marginTop: SP.xxs }}>
           {sorted.map(c => (
-            <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} />
+            <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} marks={marks} />
           ))}
         </div>
       )}
@@ -211,10 +215,13 @@ export interface FeatureChatsTabProps {
   keySessionId?: string | null;
   // Id фичи (навигация: точка возврата).
   featureId: string;
+  // Пометки (страница даёт свои; без пропа — из run + chats самой страницы данных).
+  marks?: NavMarks;
   isMobile?: boolean;
 }
 
-export function FeatureChatsTab({ page, keySessionId = null, featureId, isMobile = false }: FeatureChatsTabProps) {
+export function FeatureChatsTab({ page, keySessionId = null, featureId, marks: marksProp, isMobile = false }: FeatureChatsTabProps) {
+  const marks = useMemo(() => marksProp ?? buildNavMarks(page.run, page.chats), [marksProp, page]);
   const all = page.chats ?? [];
   const live = sortFeatureChats(all.filter(c => !c.archived), keySessionId);
   const archived = all.filter(c => c.archived);
@@ -233,10 +240,10 @@ export function FeatureChatsTab({ page, keySessionId = null, featureId, isMobile
   return (
     <div data-testid="chats" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
       {live.map(c => (
-        <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} />
+        <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} marks={marks} />
       ))}
       {archived.length > 0 && (
-        <ArchivedSection chats={archived} keySessionId={keySessionId} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} />
+        <ArchivedSection chats={archived} keySessionId={keySessionId} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} marks={marks} />
       )}
     </div>
   );

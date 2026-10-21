@@ -21,6 +21,7 @@ import { splitMockups, isCurrentOfGroup } from '../../lib/mockupVersions';
 import { RoleGlyph } from './FeaturePlanReader';
 import { FeaturePlanReader } from './FeaturePlanReader';
 import { Button } from '../ui/Button';
+import { buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { MockupCard, MockupListSection, MockupDeviceNotice } from './FeatureMockups';
 import type { FeaturePage } from '../../types/featureIndex';
 import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
@@ -36,6 +37,8 @@ export interface FeaturePlansTabProps {
   onOpenFile?: (path: string) => void;
   // Открыть задачу (автор → «задача»).
   onOpenTask?: (taskId: string) => void;
+  // Пометки «задача закрыта» (страница даёт свои; без пропа — из run страницы данных).
+  marks?: NavMarks;
   // «Открыть ключевой чат» (общее пустое).
   onOpenKeyChat?: () => void;
 }
@@ -94,7 +97,8 @@ function GroupHeader({ label, count, isMobile }: { label: string; count: number;
   );
 }
 
-export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat }: FeaturePlansTabProps) {
+export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat, marks: marksProp }: FeaturePlansTabProps) {
+  const marks = useMemo(() => marksProp ?? buildNavMarks(page.run, page.chats), [marksProp, page]);
   // Документы: порядок cut → plan → consult (макет). Дедуп планов (решение Андрея):
   // переписанный план — показываем ПОСЛЕДНИЙ по createdAt; разрезы и консультации — все.
   const plans = useMemo(() => {
@@ -152,9 +156,9 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
             Все документы
           </Button>
           {selectedPlan
-            ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} />
+            ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} marks={marks} />
             : selectedMockup
-              ? <MockupCard mockup={selectedMockup} plans={plans} onOpenFile={onOpenFile} isMobile replaced={selectedMockupReplaced} />
+              ? <MockupCard mockup={selectedMockup} plans={plans} onOpenFile={onOpenFile} isMobile replaced={selectedMockupReplaced} marks={marks} />
               : null}
         </div>
       );
@@ -207,9 +211,9 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
       </div>
       <div data-testid="plans-detail" style={{ flex: 1, minWidth: 0 }}>
         {selectedPlan
-          ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile={false} onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} />
+          ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile={false} onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} marks={marks} />
           : selectedMockup
-            ? <MockupCard mockup={selectedMockup} plans={plans} onOpenFile={onOpenFile} isMobile={false} replaced={selectedMockupReplaced} />
+            ? <MockupCard mockup={selectedMockup} plans={plans} onOpenFile={onOpenFile} isMobile={false} replaced={selectedMockupReplaced} marks={marks} />
             : (
               <div data-testid="plans-detail-empty" style={{ padding: `${SP.xl}px 0`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}>
                 Выберите документ или макет

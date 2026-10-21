@@ -16,6 +16,7 @@ import { C, R, FS, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Button } from '../ui/Button';
 import { NavTargetButton } from './NavTargetButton';
+import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { openTaskInSection } from '../../lib/tasks';
 import { getPersonaById } from '../../lib/personas';
 import { dateOnly } from '../chat/feature/featureTime';
@@ -253,9 +254,11 @@ export interface MockupCardProps {
   isMobile?: boolean;
   // Версия из «Прошлых версий», не текущая в группе → чип «заменён».
   replaced?: boolean;
+  // Пометка «задача закрыта» для задачи макета (из данных страницы).
+  marks?: NavMarks;
 }
 
-export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replaced = false }: MockupCardProps) {
+export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replaced = false, marks = EMPTY_NAV_MARKS }: MockupCardProps) {
   const main = mainHtmlFile(mockup);
   const nMaster = notInMaster(mockup);
   const persona = mockup.authorPersonaId ? getPersonaById(mockup.authorPersonaId) : undefined;
@@ -289,6 +292,7 @@ export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replac
             <NavTargetButton
               kind="task"
               taskId={taskId}
+              taskClosed={marks.taskClosed(taskId)}
               onOpen={() => openTaskInSection({ id: taskId })}
               title="Открыть задачу макета"
               isMobile={isMobile}

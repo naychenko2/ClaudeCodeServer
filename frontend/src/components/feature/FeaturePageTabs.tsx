@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { C } from '../../lib/design';
 import { Tabs, type TabItem } from '../ui/Tabs';
-import type { FeaturePageTab } from '../../lib/featurePage';
+import { FEATURE_TAB_LABEL, type FeaturePageTab } from '../../lib/featurePage';
 
 // Вкладки страницы фичи (волна 3, Ф1): «Хронология» (по умолчанию) · «Планы и
 // макеты» · «Чаты» · «Задачи» · «События» · «Статистика». Кит ui/Tabs (size md,
@@ -46,16 +46,16 @@ export function FeaturePageTabs({ value, onChange, isMobile, plansCount, chatsCo
   }, [value, isMobile]);
 
   const items: TabItem<FeaturePageTab>[] = [
-    { value: 'timeline', label: 'Хронология' },
-    { value: 'plans', label: 'Планы и макеты', count: plansCount != null && plansCount > 0 ? plansCount : undefined },
+    { value: 'timeline', label: FEATURE_TAB_LABEL.timeline },
+    { value: 'plans', label: FEATURE_TAB_LABEL.plans, count: plansCount != null && plansCount > 0 ? plansCount : undefined },
     {
-      value: 'chats', label: 'Чаты',
+      value: 'chats', label: FEATURE_TAB_LABEL.chats,
       count: chatsCount != null && chatsCount > 0 ? chatsCount : undefined,
       dot: waitingDot || undefined,
     },
-    { value: 'tasks', label: 'Задачи', count: tasksCount != null && tasksCount > 0 ? tasksCount : undefined },
-    { value: 'events', label: 'События', count: eventsCount != null && eventsCount > 0 ? eventsCount : undefined },
-    { value: 'stats', label: 'Статистика' },
+    { value: 'tasks', label: FEATURE_TAB_LABEL.tasks, count: tasksCount != null && tasksCount > 0 ? tasksCount : undefined },
+    { value: 'events', label: FEATURE_TAB_LABEL.events, count: eventsCount != null && eventsCount > 0 ? eventsCount : undefined },
+    { value: 'stats', label: FEATURE_TAB_LABEL.stats },
   ];
 
   return (

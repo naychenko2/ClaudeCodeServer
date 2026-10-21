@@ -20,9 +20,10 @@ import { usePersonas } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { formatDuration } from './FeatureStatsBits';
-import { NavTargetPair } from './NavTargetButton';
+import { NavTargetPair, NavTargetButton } from './NavTargetButton';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { EMPTY_NAV_MARKS, type FeatureNavCtx } from '../../lib/featureNavMarks';
 import { SegmentedControl } from '../ui/Segmented';
-import { Button } from '../ui/Button';
 import { EmptyState } from '../ui/EmptyState';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import type { Persona } from '../../types';
@@ -178,7 +179,8 @@ export function TotalsCards({ totals, source, isMobile = false }: {
 
 // === 2. «Дольше всех сейчас» (stats.longestNow) ===
 // null → блока нет. Исполнитель/шаг · минуты · доля · токены · «чат · задача».
-export function LongestNow({ ln, isMobile = false }: { ln: FeatureLongestNow; isMobile?: boolean }) {
+export function LongestNow({ ln, nav, isMobile = false }: { ln: FeatureLongestNow; nav?: FeatureNavCtx; isMobile?: boolean }) {
+  const marks = nav?.marks ?? EMPTY_NAV_MARKS;
   const personas = usePersonas();
   const persona = ln.personaId ? personas.find(p => p.id === ln.personaId) : undefined;
   const name = persona?.name ?? (ln.personaId ? 'персона недоступна' : '—');
@@ -208,9 +210,18 @@ export function LongestNow({ ln, isMobile = false }: { ln: FeatureLongestNow; is
       </div>
       <NavTargetPair
         chatId={ln.chatId}
-        onOpenChat={() => { if (ln.chatId) void openChatById(ln.chatId); }}
+        chatArchived={marks.chatArchived(ln.chatId)}
+        onOpenChat={() => {
+          if (!ln.chatId) return;
+          if (nav?.featureId) recordFeatureReturn(nav.featureId, { kind: 'chat', id: ln.chatId }, nav.featureTitle);
+          void openChatById(ln.chatId);
+        }}
         taskId={ln.taskId}
-        onOpenTask={() => { openTaskInSection({ id: ln.taskId }); }}
+        taskClosed={marks.taskClosed(ln.taskId)}
+        onOpenTask={() => {
+          if (nav?.featureId) recordFeatureReturn(nav.featureId, { kind: 'task', id: ln.taskId }, nav.featureTitle);
+          openTaskInSection({ id: ln.taskId });
+        }}
         isMobile={isMobile}
       />
     </div>
@@ -222,8 +233,8 @@ export function LongestNow({ ln, isMobile = false }: { ln: FeatureLongestNow; is
 // чаты (раскрытие). Ключи переводятся: personaId → имя, modelFull → имя модели, role → roleLabel.
 type Axis = 'personas' | 'models' | 'roles';
 
-export function Breakdown({ breakdown, costPartial, isMobile = false }: {
-  breakdown: FeatureBreakdown; costPartial: boolean; isMobile?: boolean;
+export function Breakdown({ breakdown, costPartial, nav, isMobile = false }: {
+  breakdown: FeatureBreakdown; costPartial: boolean; nav?: FeatureNavCtx; isMobile?: boolean;
 }) {
   const personas = usePersonas();
   useModels(); // реактивность: догрузка каталога моделей меняет подписи
@@ -354,7 +365,7 @@ export function Breakdown({ breakdown, costPartial, isMobile = false }: {
                     {g.chatIds.length === 0 ? (
                       <div style={{ fontSize: FS.xxs, color: C.textMuted, fontFamily: FONT.sans }}>Чатов нет.</div>
                     ) : g.chatIds.map(cid => (
-                      <ChatRow key={cid} chatId={cid} isMobile={isMobile} />
+                      <ChatRow key={cid} chatId={cid} nav={nav} isMobile={isMobile} />
                     ))}
                   </div>
                 )}
@@ -367,25 +378,28 @@ export function Breakdown({ breakdown, costPartial, isMobile = false }: {
   );
 }
 
-// Строка чата в раскрытом разрезе: id (коротко) + кнопка «чат» (openChatById).
-function ChatRow({ chatId, isMobile = false }: { chatId: string; isMobile?: boolean }) {
+// Строка чата в раскрытом разрезе: id (коротко) + переход «чат» (NavTargetButton: «в архиве»
+// из данных страницы; точка возврата → чип «← к фиче · Статистика» в шапке чата).
+function ChatRow({ chatId, nav, isMobile = false }: { chatId: string; nav?: FeatureNavCtx; isMobile?: boolean }) {
   const short = chatId.length > 12 ? `${chatId.slice(0, 8)}…` : chatId;
+  const marks = nav?.marks ?? EMPTY_NAV_MARKS;
   return (
     <div
       data-testid="stats-break-chat"
       style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.xs, color: C.textSecondary, fontFamily: FONT.mono }}
     >
       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{short}</span>
-      <Button
-        variant="ghost"
-        size="xs"
-        dataTestId="stats-break-chat-open"
-        ariaLabel={`Открыть чат ${short}`}
-        onClick={() => { void openChatById(chatId); }}
-        style={{ minHeight: isMobile ? 40 : undefined }}
-      >
-        чат
-      </Button>
+      <NavTargetButton
+        kind="chat"
+        chatId={chatId}
+        chatArchived={marks.chatArchived(chatId)}
+        title={`Открыть чат ${short}`}
+        isMobile={isMobile}
+        onOpen={() => {
+          if (nav?.featureId) recordFeatureReturn(nav.featureId, { kind: 'chat', id: chatId }, nav.featureTitle);
+          void openChatById(chatId);
+        }}
+      />
     </div>
   );
 }

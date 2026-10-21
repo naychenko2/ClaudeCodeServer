@@ -22,6 +22,7 @@ import { dateOnly, hhmm } from '../chat/feature/featureTime';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import {
   expandFeaturePageEvents, collapseFeaturePageEvents,
   useFeaturePageEventsExpanded, useFeaturePageExpandError,
@@ -131,8 +132,8 @@ export function groupEventsByDay(events: FeatureEvent[], now: number): EventDay[
 
 // Строка события (макет .ev): время (mono, muted) · аватар 16 · имя (жирно) ·
 // формулировка · «чат · задача». Тон: wait (info) / error (danger) / merge (accent).
-function EventRow({ e, index, featureId, featureTitle = null, isMobile = false }: {
-  e: FeatureEvent; index: number; featureId: string; featureTitle?: string | null; isMobile?: boolean;
+function EventRow({ e, index, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false }: {
+  e: FeatureEvent; index: number; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
 }) {
   const persona = e.personaId ? getPersonaById(e.personaId) : undefined;
   // Персона в данных, но не найдена (недоступна) — нейтральное «персона недоступна»,
@@ -195,10 +196,12 @@ function EventRow({ e, index, featureId, featureTitle = null, isMobile = false }
         <span style={{ display: 'inline-flex', gap: SP.xs, marginLeft: 'auto' }}>
           <NavTargetPair
             chatId={e.sessionId ?? null}
+            chatArchived={marks.chatArchived(e.sessionId)}
             onOpenChat={openChat}
             chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
             showNoChat={false}
             taskId={e.taskId || null}
+            taskClosed={marks.taskClosed(e.taskId)}
             onOpenTask={openTask}
             taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
             isMobile={isMobile}
@@ -233,10 +236,13 @@ export interface FeatureEventsTabProps {
   featureId: string;
   // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
   featureTitle?: string | null;
+  // Пометки «в архиве»/«задача закрыта» из данных страницы (buildNavMarks); у ленты событий
+  // своего агрегата нет — без пропа пометок нет.
+  marks?: NavMarks;
   isMobile?: boolean;
 }
 
-export function FeatureEventsTab({ events, eventsTotal, featureId, featureTitle = null, isMobile = false }: FeatureEventsTabProps) {
+export function FeatureEventsTab({ events, eventsTotal, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false }: FeatureEventsTabProps) {
   // Раскрытие (все события, не только 8) и локальная ошибка догрузки — из стора страницы
   // (не локальный useState): переживают уход на другую вкладку и возврат (м.3), а
   // догруженная лента не перезапрашивается при повторном раскрытии (м.2).
@@ -274,6 +280,7 @@ export function FeatureEventsTab({ events, eventsTotal, featureId, featureTitle 
               index={shownIndex.get(e)!}
               featureId={featureId}
               featureTitle={featureTitle}
+              marks={marks}
               isMobile={isMobile}
             />
           ))}

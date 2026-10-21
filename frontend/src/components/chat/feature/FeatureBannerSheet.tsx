@@ -5,6 +5,7 @@ import { roleLabel } from '../../../lib/roleLabel';
 import { STAGE_NAME } from '../../../lib/chatGroups';
 import { useCanHover } from '../../../lib/pointer';
 import { NavTargetButton } from '../../feature/NavTargetButton';
+import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../../lib/featureNavMarks';
 import { openChatById } from '../../../lib/openChat';
 import { openTaskInSection } from '../../../lib/tasks';
 import { Modal } from '../../ui';
@@ -112,7 +113,7 @@ function ModelChip({ label, full }: { label: string; full: string | null }) {
 }
 
 // Строка исполнителя: roleLabel + чип модели (подсказка по тапу) + NavTargetButton (чат · задача).
-function ExecutorRow({ x, isMobile, projectId }: { x: FeatureStageExecutor; isMobile: boolean; projectId: string | null }) {
+function ExecutorRow({ x, isMobile, projectId, marks = EMPTY_NAV_MARKS }: { x: FeatureStageExecutor; isMobile: boolean; projectId: string | null; marks?: NavMarks }) {
   const role = roleLabel(x.taskRole, x.stepRef, x.lane);
   const model = x.modelLabel;
   return (
@@ -141,6 +142,7 @@ function ExecutorRow({ x, isMobile, projectId }: { x: FeatureStageExecutor; isMo
         <NavTargetButton
           kind="task"
           taskId={x.taskId}
+          taskClosed={marks.taskClosed(x.taskId)}
           isMobile={isMobile}
           onOpen={() => { openTaskInSection({ id: x.taskId, projectId: projectId ?? undefined }); }}
         />
@@ -198,6 +200,8 @@ function SheetBody({ run, runs, selected, onSelect, isMobile, projectId }: {
 }) {
   const stages = run.stages ?? [];
   const current = activeStage(run);
+  // Пометки «задача закрыта» — из задач агрегата (чат уже несёт x.chatArchived).
+  const marks = buildNavMarks(run);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
       {runs.length > 1 && (
@@ -251,7 +255,7 @@ function SheetBody({ run, runs, selected, onSelect, isMobile, projectId }: {
           </div>
           {current.executors.length > 0 ? (
             current.executors.map((x, i) => (
-              <ExecutorRow key={`${x.taskId}-${i}`} x={x} isMobile={isMobile} projectId={projectId} />
+              <ExecutorRow key={`${x.taskId}-${i}`} x={x} isMobile={isMobile} projectId={projectId} marks={marks} />
             ))
           ) : (
             <div style={{ fontSize: FS.sm, color: C.textMuted }}>Исполнителей нет</div>

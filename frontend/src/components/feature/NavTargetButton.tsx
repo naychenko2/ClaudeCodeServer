@@ -12,7 +12,7 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 //
 // Состояния (единая точка правды — этот компонент):
 //   chat:  chatId == null  → «чата нет» (неактивный текст, НЕ кнопка);
-//          chatArchived    → пунктирная рамка + «· архив» (переход возможен, чат
+//          chatArchived    → пунктирная рамка + «в архиве» (переход возможен, чат
 //                            открывается для чтения с полосой «Чат в архиве…»).
 //   task:  taskId == null  → кнопки задачи нет;
 //          taskClosed       → пунктирная рамка + «закрыта» (клик ведёт, пометка вторичная).
@@ -35,7 +35,7 @@ export interface NavTargetButtonProps {
   // === Состояния ===
   // chat: null → «чата нет» (неактивный текст, не кнопка); undefined/строка — есть.
   chatId?: string | null;
-  // chat: чат в архиве → пунктирная рамка + «· архив».
+  // chat: чат в архиве → пунктирная рамка + «в архиве».
   chatArchived?: boolean;
   // task: null → кнопки задачи нет; undefined/строка — есть.
   taskId?: string | null;
@@ -80,13 +80,15 @@ export function NavTargetButton({
     return null;
   }
 
-  // Пометка вторичного состояния: архивный чат → «· архив»; закрытая задача → «закрыта».
+  // Пометка вторичного состояния: архивный чат → «в архиве»; закрытая задача → «задача закрыта» (подпись «задача» + «закрыта»).
   // Пунктирная рамка (макет: «у цели пунктирная рамка»).
   const marked = isChat ? !!chatArchived : !!taskClosed;
-  const mark = isChat ? '· архив' : 'закрыта';
+  const mark = isChat ? 'в архиве' : 'закрыта';
   const labelText = label ?? (isChat ? 'чат' : 'задача');
-  // aria-label: подпись + (пометка) — скринридер слышит состояние.
-  const aria = title ?? (isChat ? `Открыть чат${marked ? ' (в архиве)' : ''}` : `Открыть задачу${marked ? ' (закрыта)' : ''}`);
+  // aria-label: подсказка (или подпись по умолчанию) + пометка — скринридер слышит
+  // состояние и тогда, когда вызывающий передал свой title (на 360 видимого текста нет).
+  const base = title ?? (isChat ? 'Открыть чат' : 'Открыть задачу');
+  const aria = marked ? `${base} (${isChat ? 'чат в архиве' : 'задача закрыта'})` : base;
 
   const style: CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
@@ -128,14 +130,14 @@ export function NavTargetButton({
 //
 // Участник (исполнитель этапа, шаг, виток, событие, тревога) — пара: чат и задача
 // рядом, у каждого своя цель. Слоты:
-//   chat:  chatId != null → кнопка (архив → «· архив»); chatId == null → «чата нет»
+//   chat:  chatId != null → кнопка (архив → «в архиве»); chatId == null → «чата нет»
 //          (текст, не кнопка) — если showNoChat; иначе слот пуст.
 //   task:  taskId != null → кнопка (закрыта → «закрыта»); taskId == null → нет кнопки.
 // Навигацию (openChatById / openTaskInSection) и точку возврата задаёт вызывающий.
 export interface NavTargetPairProps {
   // Чат участника; null — «чата нет» (или пустой слот, если showNoChat=false).
   chatId?: string | null;
-  // Чат в архиве → пометка «· архив».
+  // Чат в архиве → пометка «в архиве».
   chatArchived?: boolean;
   // Переход в чат (openChatById).
   onOpenChat?: () => void;

@@ -37,8 +37,8 @@ import { C, FONT, FS, R, SP, SHADOW, TB, CHAT_MAX_W, MODAL_W, GROUP_COLORS } fro
 import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
-import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip, BackButton } from '../ui';
-import { useFeatureBackNav } from '../../lib/featureBackNav';
+import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip } from '../ui';
+import { FeatureBackChip } from './FeatureBackChip';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
@@ -1567,23 +1567,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // кнопка возврата на страницу фичи (на ту же вкладку: стор страницы её держит).
   // Клик — cc-open-feature (fromChat=false: крошка страницы фичи ведёт в список, не в чат).
   // useFeatureBackNav — useSyncExternalStore: вызов неусловный, порядок хуков стабилен.
-  const featureBack = useFeatureBackNav(session.id);
-  const featureBackEl = featureBack ? (
-    <BackButton
-      iconSize={ICON_SIZE.sm}
-      style={{ minHeight: isCompact ? 40 : undefined }}
-      ariaLabel={`К фиче${featureBack.title ? ` «${featureBack.title}»` : ''}`}
-      onClick={() => {
-        window.dispatchEvent(new CustomEvent('cc-open-feature', {
-          detail: { featureId: featureBack.featureId, fromChat: false },
-        }));
-      }}
-    >
-      <span style={{ fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, whiteSpace: 'nowrap' }}>
-        к фиче{featureBack.title ? ` «${featureBack.title}»` : ''}
-      </span>
-    </BackButton>
-  ) : null;
+  const featureBackEl = <FeatureBackChip sessionId={session.id} isCompact={isCompact} />;
   // Бейдж последней запущенной механики команды (только на десктопе)
   // Видимость пилюль (индикаторов) — тем же глазиком, что и кнопки действий, но
   // только в ОБЫЧНОЙ шапке: на стене пилюль нет вовсе. По умолчанию показаны все —

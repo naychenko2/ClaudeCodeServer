@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
 import { useFeatureStageFocus, clearFeatureStageFocus } from '../../lib/featurePage';
+import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
@@ -42,12 +43,13 @@ function TimelineNote() {
 // карточка с исполнителями и плашкой состояния; у «Производство» — ещё и шаги (Ф2b).
 // Клик по заголовку — раскрыть/схлопнуть.
 function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, featureTitle = null,
-  chains, showSteps = false, expandedStep = null, onToggleStep, isMobile = false }: {
+  chains, showSteps = false, expandedStep = null, onToggleStep, marks = EMPTY_NAV_MARKS, isMobile = false }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
   now: number; featureId: string; featureTitle?: string | null;
   chains?: FeatureStepChain[]; showSteps?: boolean;
   expandedStep?: string | null; onToggleStep?: (ref: string) => void;
+  marks?: NavMarks;
   isMobile?: boolean;
 }) {
   const status = stageStatusLabel(stage);
@@ -174,6 +176,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                       featureId={featureId}
                       featureTitle={featureTitle}
                       task={chain.taskIds[0] ? taskMap.get(chain.taskIds[0]) : undefined}
+                      marks={marks}
                       isMobile={isMobile}
                     />
                   );
@@ -199,10 +202,13 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
 // Вкладка «Хронология»: поясняющая строка + список 7 этапов. `now` — фиксированный
 // момент (Date.now на рендер) для минут «идёт/ждёт/стоит»; стабильен в пределах кадра.
 // Ф2b: у «Производство» — шаги (run.stepChains) и их витки; один шаг раскрыт за раз.
-export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun; isMobile?: boolean }) {
+export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: { run: FeatureRun; marks?: NavMarks; isMobile?: boolean }) {
   const stages = run.stages ?? [];
   const chains = run.stepChains ?? [];
   const taskMap = useMemo(() => buildTaskMap(run), [run]);
+  // Пометки «в архиве»/«задача закрыта»: страница даёт полные (с чатами), без пропа —
+  // из самого агрегата (исполнители стадий + задачи).
+  const marks = useMemo(() => marksProp ?? buildNavMarks(run), [marksProp, run]);
   const now = useMemo(() => Date.now(), []);
   // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
   const featureTitle = run.epic?.title ?? null;
@@ -257,6 +263,7 @@ export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun;
           showSteps={stage.key === 'prod'}
           expandedStep={stage.key === 'prod' ? expandedStep : null}
           onToggleStep={stage.key === 'prod' ? toggleStep : undefined}
+          marks={marks}
           isMobile={isMobile}
         />
       ))}

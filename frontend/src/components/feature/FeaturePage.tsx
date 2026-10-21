@@ -4,6 +4,7 @@ import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab } from '../../lib/featurePage';
+import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
@@ -268,10 +269,13 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
     // ok: run есть (page.page.run) — локальная переменная без null.
     const okRun = page.page.run;
     const chatsCount = (page.page.chats ?? []).filter(c => !c.archived).length;
+    // Пометки «в архиве»/«задача закрыта» — из данных страницы (задачи run + чаты): одни
+    // на все вкладки, шапку и тревогу.
+    const marks = buildNavMarks(okRun, page.page.chats);
     body = (
       <>
         <FeaturePageHeader run={okRun} feature={feature} isMobile={isMobile} tag={tag} />
-        <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} />
+        <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} marks={marks} />
         <FeaturePageTabs
           value={tab}
           onChange={setFeaturePageTab}
@@ -291,19 +295,19 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
           {tab === 'timeline' ? (
             <>
               <FeatureMiniSummary stats={page.page.stats ?? null} onOpenStats={() => setFeaturePageTab('stats')} isMobile={isMobile} />
-              <FeatureTimelineTab run={okRun} isMobile={isMobile} />
+              <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} />
             </>
           ) : tab === 'plans' ? (
-            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} />
+            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} />
           ) : tab === 'chats' ? (
-            <FeatureChatsTab page={page.page} keySessionId={keyChat} featureId={featureId} isMobile={isMobile} />
+            <FeatureChatsTab page={page.page} keySessionId={keyChat} featureId={featureId} marks={marks} isMobile={isMobile} />
           ) : tab === 'tasks' ? (
-            <FeatureTasksTab run={okRun} featureId={featureId} isMobile={isMobile} />
+            <FeatureTasksTab run={okRun} featureId={featureId} marks={marks} isMobile={isMobile} />
           ) : tab === 'events' ? (
-            <FeatureEventsTab events={page.page.events} eventsTotal={page.page.eventsTotal} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} isMobile={isMobile} />
+            <FeatureEventsTab events={page.page.events} eventsTotal={page.page.eventsTotal} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} marks={marks} isMobile={isMobile} />
           ) : (
             // «Статистика» (Ф7a): лента времени из stats (features/{id}); null — пустое состояние.
-            <FeatureStatsTab stats={page.page.stats ?? null} isMobile={isMobile} />
+            <FeatureStatsTab stats={page.page.stats ?? null} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} marks={marks} isMobile={isMobile} />
           )}
         </div>
       </>

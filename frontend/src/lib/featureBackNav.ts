@@ -12,6 +12,7 @@
 // Фронт ничего не сортирует и не считает: порядок и роль исходного чата даёт индекс фич.
 
 import { useSyncExternalStore } from 'react';
+import { getFeaturePageTab, type FeaturePageTab } from './featurePage';
 
 // Куда перешли: в чат (id чата), на страницу фичи (id фичи) или в задачу (id задачи).
 export interface BackNavTarget {
@@ -31,6 +32,9 @@ export interface BackNav {
   // Название исходной фичи (fromKind='feature'): для «← к фиче {название}» в шапке чата
   // (Ф-pl-b). null — вызывающий не передал (шапка покажет «← к фиче» без имени).
   fromTitle?: string | null;
+  // Вкладка страницы фичи, с которой ушли (fromKind='feature'): чип возврата показывает её
+  // название («← к фиче · Чаты»), а возврат открывает ту же вкладку (Ф9b).
+  fromTab?: FeaturePageTab;
 }
 
 // Старая строка в хранилище (id чата) читается как переход в чат; объект — как есть.
@@ -68,9 +72,14 @@ export function clearBackNav(): void {
 // «вернуться на страницу фичи» (Ф9b) читает это и предлагает возврат. Использует
 // тот же указатель _back, что и «← назад» (chat → chat/feature) — один переход
 // за раз; `from` здесь — id фичи (не чата), `fromKind` = 'feature', `to.kind` — 'chat' | 'task'.
-export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }, title?: string | null): void {
+// Вкладка берётся из стора страницы в момент перехода (tab — только для тестов/явного
+// указания): вызывающим вкладкам её передавать не нужно.
+export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }, title?: string | null, tab?: FeaturePageTab): void {
   if (!featureId || !to.id) return;
-  _back = { from: featureId, fromKind: 'feature', to: { kind: to.kind, id: to.id }, fromTitle: title ?? null };
+  _back = {
+    from: featureId, fromKind: 'feature', to: { kind: to.kind, id: to.id },
+    fromTitle: title ?? null, fromTab: tab ?? getFeaturePageTab(),
+  };
   emit();
 }
 
@@ -95,13 +104,22 @@ export function useBackNavFrom(sessionId: string | null): string | null {
 // с fromKind='feature') и текущий чат — цель перехода (to.kind='chat', to.id=sessionId).
 // Возвращает id и название исходной фичи; null — перехода из фичи не было. Отличается от
 // backNavFrom (он — chat→chat): здесь дискриминатор fromKind='feature' обязателен.
-export function featureBackNavFrom(sessionId: string | null): { featureId: string; title: string | null } | null {
+export interface FeatureBackNavInfo { featureId: string; title: string | null; tab: FeaturePageTab }
+// Снимок кэшируем по ссылке на запись _back: useSyncExternalStore требует стабильного
+// значения между вызовами, иначе новый объект на каждый getSnapshot зациклит рендер.
+let _infoSrc: BackNav | null = null;
+let _info: FeatureBackNavInfo | null = null;
+export function featureBackNavFrom(sessionId: string | null): FeatureBackNavInfo | null {
   if (!sessionId || !_back || _back.fromKind !== 'feature' || _back.to.kind !== 'chat' || _back.to.id !== sessionId) return null;
-  return { featureId: _back.from, title: _back.fromTitle ?? null };
+  if (_infoSrc !== _back) {
+    _infoSrc = _back;
+    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'timeline' };
+  }
+  return _info;
 }
 
 // Хук: «← к фиче {название}» для шапки чата (null, пока перехода из фичи не было).
-export function useFeatureBackNav(sessionId: string | null): { featureId: string; title: string | null } | null {
+export function useFeatureBackNav(sessionId: string | null): FeatureBackNavInfo | null {
   return useSyncExternalStore(subscribe, () => featureBackNavFrom(sessionId), () => featureBackNavFrom(sessionId));
 }
 

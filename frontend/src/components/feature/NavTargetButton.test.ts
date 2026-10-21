@@ -1,7 +1,7 @@
 // NavTargetButton / NavTargetPair (волна 3, Ф9a, макет features-overview-3-final §9а,
 // «Навигация в один клик»). Один компонент, два режима (chat/task) + пара «чат · задача».
 //
-// Состояния: chatId==null → «чата нет» (текст, не кнопка); chatArchived → «· архив»;
+// Состояния: chatId==null → «чата нет» (текст, не кнопка); chatArchived → «в архиве»;
 // taskId==null → нет кнопки задачи; taskClosed → «закрыта». Навигацию задаёт вызывающий
 // (onOpen) — переиспользует openChatById/openTaskInSection. На 360 тач-цель ≥ 40.
 //
@@ -98,12 +98,34 @@ describe('NavTargetButton: состояния', () => {
     expect(findNodeByAttr(container, 'data-testid', 'nav-target-chat'), 'кнопка при chatId==null (должна быть «чата нет»)').toBeNull();
   });
 
-  it('chatArchived → пометка «· архив» (пунктирная рамка, клик ведёт)', () => {
+  it('chatArchived → пометка «в архиве» (пунктирная рамка, клик ведёт)', () => {
     const { container } = renderChat({ chatId: 'c1', chatArchived: true });
     const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat')!;
-    expect(textNodes(btn).join('')).toContain('· архив');
+    expect(textNodes(btn).join('')).toContain('в архиве');
     // Пунктирная рамка (макет: «у цели пунктирная рамка»).
     expect((btn as unknown as { style: Record<string, string> }).style.border).toContain('dashed');
+  });
+
+  // Ф9b: пометка слышна скринридеру ВСЕГДА — и когда вызывающий передал свой title
+  // (на страницах фичи title передан везде), и на 360, где видимой подписи нет.
+  it('aria-label несёт пометку при заданном title: «в архиве» / «задача закрыта»', () => {
+    const chat = renderChat({ chatId: 'c1', chatArchived: true, title: 'Открыть чат. Страница фичи скроется.' });
+    const cb = findNodeByAttr(chat.container, 'data-testid', 'nav-target-chat')!;
+    expect((cb as unknown as { attributes: Record<string, string> }).attributes['aria-label'])
+      .toBe('Открыть чат. Страница фичи скроется. (чат в архиве)');
+    const task = renderTask({ taskId: 't1', taskClosed: true, title: 'Открыть задачу' });
+    const tb = findNodeByAttr(task.container, 'data-testid', 'nav-target-task')!;
+    expect((tb as unknown as { attributes: Record<string, string> }).attributes['aria-label']).toBe('Открыть задачу (задача закрыта)');
+  });
+
+  it('без пометок aria-label — чистая подсказка; на 360 пометка только в aria (текста нет)', () => {
+    const plain = renderChat({ chatId: 'c1', title: 'Открыть чат' });
+    const pb = findNodeByAttr(plain.container, 'data-testid', 'nav-target-chat')!;
+    expect((pb as unknown as { attributes: Record<string, string> }).attributes['aria-label']).toBe('Открыть чат');
+    const mob = renderChat({ chatId: 'c1', chatArchived: true, isMobile: true });
+    const mb = findNodeByAttr(mob.container, 'data-testid', 'nav-target-chat')!;
+    expect(textNodes(mb).join('')).toBe('');
+    expect((mb as unknown as { attributes: Record<string, string> }).attributes['aria-label']).toBe('Открыть чат (чат в архиве)');
   });
 
   it('taskId == null → кнопки задачи нет (null)', () => {
@@ -147,10 +169,10 @@ describe('NavTargetPair', () => {
     expect(findNodeByAttr(container, 'data-testid', 'nav-target-task'), 'кнопка задачи при taskId==null').toBeNull();
   });
 
-  it('архивный чат в паре → «· архив»', () => {
+  it('архивный чат в паре → «в архиве»', () => {
     const { container } = renderPair({ chatId: 'c1', chatArchived: true, taskId: 't1' });
     const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat')!;
-    expect(textNodes(btn).join('')).toContain('· архив');
+    expect(textNodes(btn).join('')).toContain('в архиве');
   });
 });
 

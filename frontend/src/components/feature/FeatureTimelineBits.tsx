@@ -10,6 +10,7 @@ import { dateOnly, hhmm } from '../chat/feature/featureTime';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { Tooltip } from '../ui/Tooltip';
 import { openChatById } from '../../lib/openChat';
+import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { NavTargetPair } from './NavTargetButton';
@@ -417,8 +418,8 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, isMo
 // Строка витка (макет §5): «виток N» · ревью (кто, вердикт, находки, если есть в данных) ·
 // пара «чат · задача» ревью (NavTargetPair: чат = reviewChatId, задача = reviewTaskId).
 // Вердикт-чип красится по исходу; находки — Verification.Notes (reason), перенос по словам.
-export function RoundRow({ round, featureId, featureTitle = null, isMobile = false }: {
-  round: FeatureRound; featureId: string; featureTitle?: string | null; isMobile?: boolean;
+export function RoundRow({ round, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false }: {
+  round: FeatureRound; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
 }) {
   const persona = round.personaId ? getPersonaById(round.personaId) : undefined;
   // Персона недоступна (id в данных, но не найдена) — нейтральное «персона недоступна»,
@@ -475,10 +476,12 @@ export function RoundRow({ round, featureId, featureTitle = null, isMobile = fal
       <span style={{ display: 'inline-flex', gap: SP.xs }}>
         <NavTargetPair
           chatId={round.reviewChatId}
+          chatArchived={marks.chatArchived(round.reviewChatId)}
           onOpenChat={openChat}
           chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
           showNoChat
           taskId={round.reviewTaskId ?? null}
+          taskClosed={marks.taskClosed(round.reviewTaskId)}
           onOpenTask={openTask}
           taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
           isMobile={isMobile}
@@ -493,7 +496,7 @@ export function RoundRow({ round, featureId, featureTitle = null, isMobile = fal
 // витков (RoundRow) + строка «итого». Один шаг раскрыт за раз (состояние — у родителя).
 // Честная деградация: без stepRef кода нет; без исполнителя — «нет исполнителя»;
 // без чата — «чата нет» (NavTargetPair); без модели — чипа нет.
-export function StepRow({ chain, model, expanded, onToggle, featureId, featureTitle = null, task, isMobile = false }: {
+export function StepRow({ chain, model, expanded, onToggle, featureId, featureTitle = null, task, marks = EMPTY_NAV_MARKS, isMobile = false }: {
   chain: FeatureStepChain;
   model: { label: string; full?: string | null } | null;
   expanded: boolean;
@@ -503,6 +506,8 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, featureTi
   // Задача шага (первая в цепочке): для пометки «закрыта» (один источник с
   // ExecutorRow: status === 'done', не outcome === 'accepted' — разные поля бэка).
   task?: import('../../types/featureRun').FeatureTask;
+  // Пометки «в архиве»/«задача закрыта» из данных страницы (buildNavMarks).
+  marks?: NavMarks;
   isMobile?: boolean;
 }) {
   const persona = chain.personaId ? getPersonaById(chain.personaId) : undefined;
@@ -607,6 +612,7 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, featureTi
           задача = задача-шаг (первая задача цепочки) */}
       <NavTargetPair
         chatId={chain.chatId}
+        chatArchived={marks.chatArchived(chain.chatId)}
         onOpenChat={openChat}
         chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
         showNoChat
@@ -614,7 +620,7 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, featureTi
         // «Закрыта» — ОДИН источник с ExecutorRow: задача шага done (status === 'done'),
         // не outcome === 'accepted' (другое поле бэка: «принят» — вердикт ревью, не
         // статус задачи). «Идёт»/«ждёт ревью»/«вернул» — задача ещё открыта.
-        taskClosed={task?.status === 'done'}
+        taskClosed={task?.status === 'done' || marks.taskClosed(chain.taskIds[0])}
         onOpenTask={openTask}
         taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
         isMobile={isMobile}
@@ -644,7 +650,7 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, featureTi
                 </div>
               )}
               {chain.rounds.map(r => (
-                <RoundRow key={`${chain.stepRef}-${r.n}`} round={r} featureId={featureId} featureTitle={featureTitle} isMobile={isMobile} />
+                <RoundRow key={`${chain.stepRef}-${r.n}`} round={r} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} />
               ))}
               <div
                 data-testid="feature-step-total"

@@ -15,6 +15,7 @@ import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import { featureRunStatusTag, StatusTag, featurePrimaryAction, type FeaturePrimaryAction } from '../../feature/FeaturePageHeader';
 import { FeatureMergeDialog } from '../../feature/FeatureMergeDialog';
 import { NavTargetButton, NavTargetPair } from '../../feature/NavTargetButton';
+import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../../lib/featureNavMarks';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureState, FeatureAttention } from '../../../types/featureRun';
 import { FeatureGlyph, type FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 
@@ -312,8 +313,9 @@ const STATUS_STYLE: Record<StatusTone, { bg: string; border?: string; strong: st
   success: { bg: C.successBg, strong: C.successText },
 };
 
-function StatusLine({ line, isMobile, onOpenChat, onOpenTask, onMerge }: {
+function StatusLine({ line, isMobile, marks = EMPTY_NAV_MARKS, onOpenChat, onOpenTask, onMerge }: {
   line: StatusLine;
+  marks?: NavMarks;
   isMobile: boolean;
   onOpenChat: (chatId: string) => void;
   onOpenTask: (taskId: string) => void;
@@ -357,6 +359,7 @@ function StatusLine({ line, isMobile, onOpenChat, onOpenTask, onMerge }: {
             <NavTargetButton
               kind="task"
               taskId={line.action.taskId}
+              taskClosed={marks.taskClosed(line.action.taskId)}
               isMobile={isMobile}
               onOpen={() => onOpenTask(line.action!.taskId!)}
             />
@@ -364,7 +367,9 @@ function StatusLine({ line, isMobile, onOpenChat, onOpenTask, onMerge }: {
           {(line.action.kind === 'pair' || line.action.showPair) && (
             <NavTargetPair
               chatId={line.action.chatId}
+              chatArchived={marks.chatArchived(line.action.chatId)}
               taskId={line.action.taskId}
+              taskClosed={marks.taskClosed(line.action.taskId)}
               showNoChat={false}
               isMobile={isMobile}
               onOpenChat={() => { if (line.action!.chatId) onOpenChat(line.action!.chatId!); }}
@@ -412,8 +417,9 @@ function ModelChip({ label, full, isMobile }: { label: string | null; full: stri
 }
 
 // === Исполнитель этапа: аватар (+чип модели) · имя · роль · статус · «чат · задача» ===
-function ExecutorRow({ ex, isMobile, onOpenChat, onOpenTask }: {
+function ExecutorRow({ ex, isMobile, marks = EMPTY_NAV_MARKS, onOpenChat, onOpenTask }: {
   ex: FeatureStageExecutor;
+  marks?: NavMarks;
   isMobile: boolean;
   onOpenChat: (chatId: string) => void;
   onOpenTask: (taskId: string) => void;
@@ -455,6 +461,7 @@ function ExecutorRow({ ex, isMobile, onOpenChat, onOpenTask }: {
         chatId={ex.chatId}
         chatArchived={ex.chatArchived}
         taskId={ex.taskId}
+        taskClosed={marks.taskClosed(ex.taskId)}
         showNoChat={false}
         isMobile={isMobile}
         onOpenChat={() => { if (ex.chatId) onOpenChat(ex.chatId); }}
@@ -560,8 +567,9 @@ function StageRow({ stage, open, isMobile, onToggle }: {
 }
 
 // === Этапы: 7 строк, раскрыт один (по умолчанию текущий/первый кликабельный) ===
-function Stages({ run, isMobile, onOpenChat, onOpenTask }: {
+function Stages({ run, isMobile, marks, onOpenChat, onOpenTask }: {
   run: FeatureRun;
+  marks: NavMarks;
   isMobile: boolean;
   onOpenChat: (chatId: string) => void;
   onOpenTask: (taskId: string) => void;
@@ -592,7 +600,7 @@ function Stages({ run, isMobile, onOpenChat, onOpenTask }: {
               <div style={{ margin: '0 0 4px 25px', paddingLeft: 8, borderLeft: `1px solid ${C.divider}`, display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {stage.executors.length > 0
                   ? stage.executors.map((ex, i) => (
-                    <ExecutorRow key={`${ex.taskId}-${i}`} ex={ex} isMobile={isMobile} onOpenChat={onOpenChat} onOpenTask={onOpenTask} />
+                    <ExecutorRow key={`${ex.taskId}-${i}`} ex={ex} isMobile={isMobile} marks={marks} onOpenChat={onOpenChat} onOpenTask={onOpenTask} />
                   ))
                   : <span style={{ fontSize: FS.sm, color: C.textMuted, padding: '4px 0 6px' }}>Исполнителей нет</span>}
               </div>
@@ -688,6 +696,8 @@ export function FeatureRunView({
   const isMobile = useIsMobile();
   usePersonasVersion();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
+  // Пометки «в архиве»/«задача закрыта» — из агрегата (задачи и исполнители стадий).
+  const marks = buildNavMarks(run);
 
   // Навигация: переход в чат/задачу; onClose — закрыть попап (R2 major 3).
   const openChat = (chatId: string) => { void openChatById(chatId); onClose?.(); };
@@ -735,11 +745,12 @@ export function FeatureRunView({
           <StatusLine
             line={statusLineFor(run, Date.now())}
             isMobile={isMobile}
+            marks={marks}
             onOpenChat={openChat}
             onOpenTask={openTask}
             onMerge={openMergeDialog}
           />
-          <Stages run={run} isMobile={isMobile} onOpenChat={openChat} onOpenTask={openTask} />
+          <Stages run={run} isMobile={isMobile} marks={marks} onOpenChat={openChat} onOpenTask={openTask} />
           {onOpenPage && <Footer isMobile={isMobile} onOpenPage={onOpenPage} />}
         </>
       )}

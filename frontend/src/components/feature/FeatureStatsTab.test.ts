@@ -859,7 +859,7 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
     const chats = findNodeByAttr(groups[1], 'data-testid', 'stats-break-chats');
     expect(chats, 'список чатов группы').not.toBeNull();
     expect(findNodeByAttr(chats!, 'data-testid', 'stats-break-chat'), 'строка чата').not.toBeNull();
-    expect(findNodeByAttr(chats!, 'data-testid', 'stats-break-chat-open'), 'кнопка «чат»').not.toBeNull();
+    expect(findNodeByAttr(chats!, 'data-testid', 'nav-target-chat'), 'кнопка «чат»').not.toBeNull();
   });
 
   it('зонд: пустые breakdown (все оси) → «Пока нечего разрезать»', () => {

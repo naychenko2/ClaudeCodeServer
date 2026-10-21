@@ -3,6 +3,8 @@ import { setFeaturePageTab, focusFeatureStage } from '../../lib/featurePage';
 import { openTaskInSection } from '../../lib/tasks';
 import { EmptyState } from '../ui/EmptyState';
 import { NavTargetButton } from './NavTargetButton';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { EMPTY_NAV_MARKS, type NavMarks, type FeatureNavCtx } from '../../lib/featureNavMarks';
 import {
   buildTimelineModel, formatClock, formatDateTime, formatDuration,
   kindLabel, kindBackground, kindTextColor, nowCompressedFraction, blockWeight,
@@ -23,6 +25,13 @@ import type { FeatureStats } from '../../types/featureStats';
 export interface FeatureStatsTabProps {
   // Статистика фичи (features/{id} → stats); null — бэк ещё не посчитал (старые данные).
   stats: FeatureStats | null;
+  // Фича и её название — для точки возврата («← к фиче · Статистика»); без featureId
+  // переходы работают, но чипа возврата нет.
+  featureId?: string | null;
+  featureTitle?: string | null;
+  // Пометки «в архиве»/«задача закрыта» (buildNavMarks страницы); у статистики своих
+  // агрегатов нет — без пропа пометок нет.
+  marks?: NavMarks;
   // Тач-цели ≥ 40 на 360.
   isMobile?: boolean;
 }
@@ -239,7 +248,8 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
 }
 
 // «Задача» по taskId сегмента/этапа: NavTargetButton (открывает задачу в «Задачах»).
-function TaskButtons({ model, isMobile }: { model: TimelineModel; isMobile: boolean }) {
+function TaskButtons({ model, nav, isMobile }: { model: TimelineModel; nav?: FeatureNavCtx; isMobile: boolean }) {
+  const marks = nav?.marks ?? EMPTY_NAV_MARKS;
   // Собираем уникальные taskId по этапам (из сегментов) — по одному «задача» на этап.
   const byStage = new Map<string, string | null>();
   for (const b of model.blocks) {
@@ -257,7 +267,16 @@ function TaskButtons({ model, isMobile }: { model: TimelineModel; isMobile: bool
       {[...byStage.entries()].map(([stage, taskId]) => (
         <span key={stage} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: FS.xs, color: C.textMuted }}>
           {stageLabelShort(stage)}
-          <NavTargetButton kind="task" taskId={taskId} isMobile={isMobile} onOpen={() => openTaskInSection({ id: taskId! })} />
+          <NavTargetButton
+            kind="task"
+            taskId={taskId}
+            taskClosed={marks.taskClosed(taskId)}
+            isMobile={isMobile}
+            onOpen={() => {
+              if (nav?.featureId && taskId) recordFeatureReturn(nav.featureId, { kind: 'task', id: taskId }, nav.featureTitle);
+              openTaskInSection({ id: taskId! });
+            }}
+          />
         </span>
       ))}
     </div>
@@ -273,7 +292,8 @@ function stageLabelShort(key: string): string {
   return names[key] ?? key;
 }
 
-export function FeatureStatsTab({ stats, isMobile = false }: FeatureStatsTabProps) {
+export function FeatureStatsTab({ stats, featureId = null, featureTitle = null, marks, isMobile = false }: FeatureStatsTabProps) {
+  const nav: FeatureNavCtx = { featureId, featureTitle, marks };
   // Пустое состояние: stats нет (старые данные) — причина, а не нули.
   if (!stats) {
     return (
@@ -310,11 +330,11 @@ export function FeatureStatsTab({ stats, isMobile = false }: FeatureStatsTabProp
     <div data-testid="feature-stats-tab" style={{ fontFamily: FONT.sans }}>
       <AccuracyBadges source={stats.source} truncated={stats.truncated} />
       <Timeline model={model} isMobile={isMobile} />
-      <TaskButtons model={model} isMobile={isMobile} />
+      <TaskButtons model={model} nav={nav} isMobile={isMobile} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, marginTop: SP.lg }}>
         <TotalsCards totals={stats.timeline.totals} source={stats.source} isMobile={isMobile} />
-        {stats.longestNow && <LongestNow ln={stats.longestNow} isMobile={isMobile} />}
-        <Breakdown breakdown={stats.breakdown} costPartial={costPartial} isMobile={isMobile} />
+        {stats.longestNow && <LongestNow ln={stats.longestNow} nav={nav} isMobile={isMobile} />}
+        <Breakdown breakdown={stats.breakdown} costPartial={costPartial} nav={nav} isMobile={isMobile} />
         {stats.spend && <Spend spend={stats.spend} />}
       </div>
     </div>

@@ -85,6 +85,7 @@ const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>()
 vi.mock('../../lib/personas', () => ({
   getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
   usePersonasVersion: () => 0,
+  usePersonas: () => [],
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
 vi.mock('../../lib/signalr', async (importOriginal) => {
@@ -92,6 +93,12 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
 });
 vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
+vi.mock('../../lib/openChat', () => ({ openChatById: async () => true }));
+// Модели: вкладка «Статистика» (Breakdown) читает каталог — в тесте он пуст.
+vi.mock('../../lib/models', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/models')>();
+  return { ...orig, useModels: () => [], modelLabel: (v: string | null | undefined) => v ?? '' };
+});
 
 // Фиксированное «сейчас» для стабильных подписей возраста/тревоги.
 const NOW = new Date('2026-10-19T12:00:00Z').getTime();
@@ -294,6 +301,123 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(findNodeByAttr(c, 'aria-label', 'Ещё'), 'меню ⋯ (волна 3) — триггер на месте').not.toBeNull();
     // Строки чатов/шагов/событий фичи — нет. («Мерж»-стадия конвейера — легитимна, не проверяем по тексту.)
     expect(findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key'), 'строка чата на месте (as a file: убрана)').toBeNull();
+  });
+
+  // === 2б'. Ф9b: пометки и вкладка возврата — СКВОЗНО через страницу (проводка marks) ===
+  // Данные настоящие: t-open (открыта, чат c-live), t-done (done, чат c-arch в архиве).
+  // Мутации: FeaturePage не передаёт marks во вкладку → пометки пропадают; recordFeatureReturn
+  // не запоминает вкладку → fromTab != вкладке клика.
+  describe('Ф9b: пометки переходов и вкладка возврата через страницу', () => {
+    const navFlags = (c: ReturnType<typeof render>, rowPrefix: string) => {
+      const rows: AnyNode[] = [];
+      const walk = (x: AnyNode) => {
+        const id = (x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('data-testid') ?? '';
+        if (id.startsWith(rowPrefix)) { rows.push(x); return; }
+        for (const ch of x.childNodes) walk(ch);
+      };
+      walk(c as unknown as AnyNode);
+      return rows.map(r => {
+        const chat = findNodeByAttr(r as never, 'data-testid', 'nav-target-chat');
+        const task = findNodeByAttr(r as never, 'data-testid', 'nav-target-task');
+        return {
+          chatArchived: !!chat && (chat.getAttribute('aria-label') ?? '').includes('(чат в архиве)'),
+          taskClosed: !!task && (task.getAttribute('aria-label') ?? '').includes('(задача закрыта)'),
+        };
+      });
+    };
+    const withData = () => {
+      mockGetFeature.result = pageData({
+        run: {
+          featureId: 'f1', epic: { id: 'f1', title: 'Моя фича' },
+          steps: [
+            { id: 't-open', title: 'Открытая', status: 'inProgress', role: 'step', linkedSessionId: 'c-live' },
+            { id: 't-done', title: 'Закрытая', status: 'done', role: 'step', linkedSessionId: 'c-arch' },
+          ],
+          reviews: [], qa: [], final: null, merge: null,
+          verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+          progress: 0, ready: false,
+        } as never,
+        chats: [
+          { id: 'c-live', kind: 'executor', taskId: 't-open', archived: false, personaId: null, taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
+          { id: 'c-arch', kind: 'executor', taskId: 't-done', archived: true, personaId: null, taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
+        ],
+        events: [
+          // Лента — at desc (как отдаёт бэк): сначала поздняя.
+          { at: '2026-10-19T11:00:00Z', kind: 'accepted', taskId: 't-done', role: null, stepRef: null, personaId: null, sessionId: 'c-arch', round: null, reason: null },
+          { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't-open', role: null, stepRef: null, personaId: null, sessionId: 'c-live', round: null, reason: null },
+        ] as never,
+        eventsTotal: 2,
+        stats: {
+          source: 'journal', truncated: false,
+          timeline: {
+            from: '2026-10-19T09:00:00Z', to: '2026-10-19T12:00:00Z', stages: [],
+            segments: [{ from: '2026-10-19T09:00:00Z', to: '2026-10-19T10:00:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-done' }],
+            current: null,
+            totals: { elapsedMinutes: 0, workWallMinutes: 0, agentsSumMinutes: 0, notWorkingMinutes: 0, waitingMinutes: null, idleMinutes: null, waitingCount: null, longestWaitMinutes: null, errorCount: null, errorMinutes: null },
+          },
+          breakdown: { personas: [], models: [], roles: [] },
+          longestNow: { taskId: 't-done', chatId: 'c-arch', personaId: null, stepRef: null, minutes: 5, tokens: null, share: null },
+          spend: null,
+        } as never,
+      });
+    };
+
+    it('вкладка «События»: страница передаёт marks — чат c-arch «в архиве», задача t-done «закрыта»', async () => {
+      withData();
+      const c = render({});
+      await settle();
+      act(() => { setFeaturePageTab('events'); });
+      expect(navFlags(c, 'event-row-')).toEqual([
+        { chatArchived: true, taskClosed: true },   // accepted · t-done · c-arch (лента at desc)
+        { chatArchived: false, taskClosed: false }, // started · t-open · c-live
+      ]);
+    });
+
+    it('вкладка «Статистика»: «Дольше всех» помечен по данным страницы', async () => {
+      withData();
+      const c = render({});
+      await settle();
+      act(() => { setFeaturePageTab('stats'); });
+      expect(navFlags(c, 'stats-longest')).toEqual([{ chatArchived: true, taskClosed: true }]);
+    });
+
+    it('вкладка «Задачи»: закрытая и архивная строки помечены', async () => {
+      withData();
+      const c = render({});
+      await settle();
+      act(() => { setFeaturePageTab('tasks'); });
+      expect(navFlags(c, 'task-row-t-done')).toEqual([{ chatArchived: true, taskClosed: true }]);
+      expect(navFlags(c, 'task-row-t-open')).toEqual([{ chatArchived: false, taskClosed: false }]);
+    });
+
+    // Вкладка запоминается при реальном клике из вкладки: чип в чате покажет её название.
+    for (const [tab, rowPrefix, label, btnId] of [
+      ['events', 'event-row-', 'События', 'nav-target-chat'],
+      ['tasks', 'task-row-t-done', 'Задачи', 'nav-target-chat'],
+      ['stats', 'stats-longest', 'Статистика', 'nav-target-chat'],
+      // «Статистика»: кнопки задач под лентой времени (TaskButtons) — отдельный путь записи.
+      ['stats', 'stats-tasks', 'Статистика', 'nav-target-task'],
+    ] as const) {
+      it(`клик по «${btnId === 'nav-target-chat' ? 'чат' : 'задача'}» на вкладке «${label}» (${rowPrefix}) → точка возврата помнит вкладку «${tab}»`, async () => {
+        withData();
+        const c = render({});
+        await settle();
+        act(() => { setFeaturePageTab(tab); });
+        const rows: AnyNode[] = [];
+        const walk = (x: AnyNode) => {
+          const id = (x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('data-testid') ?? '';
+          if (id.startsWith(rowPrefix)) { rows.push(x); return; }
+          for (const ch of x.childNodes) walk(ch);
+        };
+        walk(c as unknown as AnyNode);
+        const btn = findNodeByAttr(rows[0] as never, 'data-testid', btnId)!;
+        await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+        const back = backNavTest.getBackNav();
+        expect(back?.fromKind).toBe('feature');
+        expect(back?.fromTab, `вкладка перехода (${label})`).toBe(tab);
+        expect(back?.fromTitle).toBe('Моя фича');
+      });
+    }
   });
 
   // === 2в. Переключение вкладок Чаты/Задачи/События → свои компоненты (мутация: ComingSoon → red) ===

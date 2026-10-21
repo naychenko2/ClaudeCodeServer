@@ -11,6 +11,7 @@ import { getPersonaById } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { showToast } from '../../lib/toast';
 import type { FeatureRun, FeatureState, FeatureAttention } from '../../types/featureRun';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
@@ -344,10 +345,14 @@ export interface FeaturePageAlertProps {
   isMobile: boolean;
   // «Мерж…»: открыть общую модалку подтверждения (Ф6); undefined — без действия.
   onMerge?: () => void;
+  // Пометки «в архиве»/«задача закрыта» (страница даёт полные, с чатами); без пропа —
+  // из самого агрегата.
+  marks?: NavMarks;
 }
 
-export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePageAlertProps) {
+export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marksProp }: FeaturePageAlertProps) {
   const a = run?.attention ?? null;
+  const marks = marksProp ?? buildNavMarks(run);
   const notStarted = run?.state === 'not_started';
   if (!a && !notStarted) return null;
 
@@ -420,6 +425,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
         key="chat"
         kind="chat"
         chatId={a.linkedSessionId}
+        chatArchived={marks.chatArchived(a.linkedSessionId)}
         label="чат"
         isMobile={isMobile}
         title="Открыть чат. Страница фичи скроется, вернётся по плашке."
@@ -436,6 +442,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
         key="task"
         kind="task"
         taskId={a.taskId}
+        taskClosed={marks.taskClosed(a.taskId)}
         label="задача"
         isMobile={isMobile}
         title="Открыть задачу. Страница фичи скроется, вернётся по плашке."

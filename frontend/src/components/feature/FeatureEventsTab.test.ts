@@ -68,6 +68,7 @@ const mockState = vi.hoisted(() => {
 vi.mock('../../lib/featurePage', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
+    getFeaturePageTab: () => 'events' as const,
     expandFeaturePageEvents: mockState.expand,
     collapseFeaturePageEvents: mockState.collapse,
     useFeaturePageEventsExpanded: () =>

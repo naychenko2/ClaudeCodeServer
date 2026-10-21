@@ -22,6 +22,7 @@ import { MarkdownContent } from '../chat/MarkdownContent';
 import { getPersonaById } from '../../lib/personas';
 import { openTaskInSection } from '../../lib/tasks';
 import { NavTargetButton, NavTargetPair } from './NavTargetButton';
+import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { hhmm, dateOnly } from '../chat/feature/featureTime';
 import { api } from '../../lib/api';
 import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
@@ -89,9 +90,11 @@ export interface FeaturePlanReaderProps {
   onOpenMockup?: (path: string) => void;
   // Открыть задачу документа (автор → «задача»).
   onOpenTask?: (taskId: string) => void;
+  // Пометка «задача закрыта» для задачи документа (из данных страницы).
+  marks?: NavMarks;
 }
 
-export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMockup, onOpenTask }: FeaturePlanReaderProps) {
+export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMockup, onOpenTask, marks = EMPTY_NAV_MARKS }: FeaturePlanReaderProps) {
   const [state, setState] = useState<TextState>(() => _textCache.get(textCacheKey(plan)) ?? { status: 'loading' });
   const [reload, setReload] = useState(0);
   // «Содержание · N» — раскрыто на 1280, свёрнуто на 360.
@@ -171,6 +174,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
             <NavTargetButton
               kind="task"
               taskId={plan.taskId}
+              taskClosed={marks.taskClosed(plan.taskId)}
               onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
               title="Открыть задачу документа"
               isMobile={isMobile}
@@ -256,6 +260,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
               chatId={null}
               showNoChat={false}
               taskId={plan.taskId}
+              taskClosed={marks.taskClosed(plan.taskId)}
               onOpenTask={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
               taskTitle="Открыть задачу документа"
               isMobile={isMobile}
@@ -280,6 +285,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
             <NavTargetButton
               kind="task"
               taskId={plan.taskId}
+              taskClosed={marks.taskClosed(plan.taskId)}
               onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
               title="Открыть задачу документа"
               isMobile={isMobile}

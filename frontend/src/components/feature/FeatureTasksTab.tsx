@@ -19,6 +19,7 @@ import { roleLabel } from '../../lib/roleLabel';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { ExecutorAvatar } from './FeatureTimelineBits';
 import { NavTargetPair } from './NavTargetButton';
 import { Button } from '../ui/Button';
@@ -141,8 +142,8 @@ function TaskStatusTag({ status, isMobile = false }: { status: TaskStatusKey; is
 // Строка задачи (макет §9а, .srow): аватар · название · роль (roleLabel) · статус ·
 // пара «чат · задача». Клик по строке — в задачу; «чат» — в чат исполнителя.
 // Честная деградация: без исполнителя — нейтральный аватар; без чата — «чата нет».
-function TaskRow({ task, featureId, featureTitle = null, isMobile = false }: {
-  task: FeatureTask; featureId: string; featureTitle?: string | null; isMobile?: boolean;
+function TaskRow({ task, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false }: {
+  task: FeatureTask; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
 }) {
   const [hover, setHover] = useState(false);
   const role = roleLabel(task.role ?? null, task.stepRef ?? null, task.lane ?? null);
@@ -213,11 +214,12 @@ function TaskRow({ task, featureId, featureTitle = null, isMobile = false }: {
       <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs, flexShrink: 0 }}>
         <NavTargetPair
           chatId={task.linkedSessionId ?? null}
+          chatArchived={marks.chatArchived(task.linkedSessionId)}
           onOpenChat={openChat}
           chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
           showNoChat
           taskId={task.id}
-          taskClosed={statusKey === 'd'}
+          taskClosed={statusKey === 'd' || marks.taskClosed(task.id)}
           onOpenTask={openTask}
           taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
           isMobile={isMobile}
@@ -253,10 +255,13 @@ export interface FeatureTasksTabProps {
   run: FeatureRun;
   // Id фичи (навигация: точка возврата).
   featureId: string;
+  // Пометки (страница даёт с чатами; без пропа — из агрегата: задачи закрыты, чаты — по стадиям).
+  marks?: NavMarks;
   isMobile?: boolean;
 }
 
-export function FeatureTasksTab({ run, featureId, isMobile = false }: FeatureTasksTabProps) {
+export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = false }: FeatureTasksTabProps) {
+  const marks = useMemo(() => marksProp ?? buildNavMarks(run), [marksProp, run]);
   const all = useMemo(() => allFeatureTasks(run), [run]);
   // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
   const featureTitle = run.epic?.title ?? null;
@@ -316,7 +321,7 @@ export function FeatureTasksTab({ run, featureId, isMobile = false }: FeatureTas
           </div>
         ) : (
           shown.map(t => (
-            <TaskRow key={t.id} task={t} featureId={featureId} featureTitle={featureTitle} isMobile={isMobile} />
+            <TaskRow key={t.id} task={t} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} />
           ))
         )}
       </div>

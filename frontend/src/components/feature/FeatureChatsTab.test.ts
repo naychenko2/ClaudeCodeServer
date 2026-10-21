@@ -219,8 +219,8 @@ describe('«Архивные · N» (макет §9а)', () => {
   });
 });
 
-// ═══ 3а. Разделение live/archived + пометка «· архив» (макет §9а) ═══════════════
-describe('Разделение live/archived + «· архив»', () => {
+// ═══ 3а. Разделение live/archived + пометка «в архиве» (макет §9а) ═══════════════
+describe('Разделение live/archived + «в архиве»', () => {
   it('live — в основном списке, archived — только в свёрнутом разделе (мутация: не разделять → red)', () => {
     const live = chat({ id: 'live', kind: 'curator', personaId: 'p-kira' });
     const arch = chat({ id: 'arch', kind: 'executor', archived: true, personaId: 'p-denis' });
@@ -234,19 +234,19 @@ describe('Разделение live/archived + «· архив»', () => {
     expect(findNodeByAttr(container, 'data-testid', 'chats-archived-toggle')).not.toBeNull();
   });
 
-  it('архивный чат → пометка «· архив» на кнопке «чат» (мутация: убрать chatArchived → red)', async () => {
+  it('архивный чат → пометка «в архиве» на кнопке «чат» (мутация: убрать chatArchived → red)', async () => {
     const c = chat({ id: 'arch', kind: 'executor', archived: true, personaId: 'p-denis' });
     const container = render({ page: pageWith([c]) });
     // Архивный чат — в свёрнутом разделе: раскрываем, чтобы увидеть кнопку «чат».
     const toggle = findNodeByAttr(container, 'data-testid', 'chats-archived-toggle')!;
     await act(async () => { (reactProps(toggle)!.onClick as () => void)(); });
     const chatBtn = findNodeByAttr(container, 'data-testid', 'nav-target-chat')!;
-    expect(textNodes(chatBtn).join('')).toContain('· архив');
+    expect(textNodes(chatBtn).join('')).toContain('в архиве');
     // Живой (не архивный) чат — без пометки.
     const live = chat({ id: 'live', kind: 'curator', personaId: 'p-kira' });
     const c2 = render({ page: pageWith([live]) });
     const liveBtn = findNodeByAttr(c2, 'data-testid', 'nav-target-chat')!;
-    expect(textNodes(liveBtn).join('')).not.toContain('· архив');
+    expect(textNodes(liveBtn).join('')).not.toContain('в архиве');
   });
 });
 

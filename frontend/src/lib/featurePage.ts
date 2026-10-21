@@ -134,6 +134,27 @@ export type FeaturePageTab = 'timeline' | 'plans' | 'chats' | 'tasks' | 'events'
 const DEFAULT_TAB: FeaturePageTab = 'timeline';
 let _tab: FeaturePageTab = DEFAULT_TAB;
 
+// Названия вкладок: ОДИН словарь для полосы вкладок (FeaturePageTabs) и для чипа возврата
+// «← к фиче · {вкладка}» в шапке чата (Ф9b) — названия не разъезжаются.
+export const FEATURE_TAB_LABEL: Record<FeaturePageTab, string> = {
+  timeline: 'Хронология',
+  plans: 'Планы и макеты',
+  chats: 'Чаты',
+  tasks: 'Задачи',
+  events: 'События',
+  stats: 'Статистика',
+};
+// Короткое имя для чипа возврата (узкая шапка чата): «Планы и макеты» → «Планы».
+export const FEATURE_TAB_CHIP_LABEL: Record<FeaturePageTab, string> = {
+  ...FEATURE_TAB_LABEL,
+  plans: 'Планы',
+};
+
+// Текущая вкладка без подписки: recordFeatureReturn запоминает её в момент перехода.
+export function getFeaturePageTab(): FeaturePageTab {
+  return _tab;
+}
+
 // Установить вкладку (no-op при том же значении — лишний emit не плодим).
 export function setFeaturePageTab(t: FeaturePageTab) {
   if (_tab === t) return;

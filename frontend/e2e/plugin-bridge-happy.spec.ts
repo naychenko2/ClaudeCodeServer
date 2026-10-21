@@ -16,11 +16,15 @@ import * as path from 'node:path';
 // cwd — корень frontend/ (отсюда запускается playwright), public/ — рядом.
 const KIT = path.join(process.cwd(), 'public', 'plugin-kit');
 const shimJs = fs.readFileSync(path.join(KIT, 'plugin-kit.js'), 'utf8');
-const shimCss = fs.readFileSync(path.join(KIT, 'theme.css'), 'utf8');
+// shimCss = theme.css + font.css (S10: вшитый шрифт data:-URI). font.css — @font-face
+// латиницы Hanken Grotesk; без него панель рисовала бы латиницу системным фолбэком.
+const shimCss =
+  fs.readFileSync(path.join(KIT, 'theme.css'), 'utf8') + '\n' +
+  fs.readFileSync(path.join(KIT, 'font.css'), 'utf8');
 
 // buildPanelSrcdoc — из panelSrcdoc.ts (БЕЗ ?raw): CSP и экранирование — только там.
 // bridge.ts подставляет ?raw-импорты; e2e передаёт файлы через fs.readFileSync.
-import { buildPanelSrcdoc } from '../src/features/plugins/panelSrcdoc';
+import { buildPanelSrcdoc, PANEL_CSP } from '../src/features/plugins/panelSrcdoc';
 
 // Экранирование srcdoc для outer iframe (та же логика, что escapeSrcdoc в panelSrcdoc.ts):
 // & → &amp;, " → &quot; (для вставки shell в атрибут srcdoc outer iframe).
@@ -345,4 +349,99 @@ test('S7: plugins_changed → перечитывание списка → фре
   });
   expect(h.remounts, 'фрейм пересоздан один раз (ключ изменился)').toBe(1);
   expect(h.listReads, 'список перечитан (по событию и при init), не из кэша').toBeGreaterThanOrEqual(2);
+});
+
+// === S10: вшитый шрифт панели (data:-URI) и CSP под него ===
+//
+// Корень: панель — sandbox-iframe с CSP default-src 'none'; системный @import Google Fonts
+// (как у хоста, index.css) в неё не доезжает. Поэтому латиница Hanken Grotesk вшита
+// data:-URI (font.css кита), а CSP разрешает font-src data:. Кириллических глифов в
+// бесплатном Hanken Grotesk нет (cmap, S10a) — кириллица падает на системный фолбэк
+// (паритет с хостом, а не регресс).
+//
+// Мутации, красящие этот тест:
+//  • убрать/переименовать @font-face из font.css → FontFace 'Hanken Grotesk' не загружен (embeddedLoaded=false) — краснеет;
+//  • убрать font-src data: из PANEL_CSP → data:-URI шрифт блокируется CSP, FontFace не загрузится + CSP-ошибка в консоли — краснеет;
+//  • заменить data:-URI на url(https://fonts.googleapis.com/…) → запрос наружу за шрифтом — «сети за шрифтом нет» краснеет.
+
+const s10PanelHtml =
+  '<p id="latin">Hello</p>' +
+  '<p id="cyr">Привет</p>' +
+  '<script>window.__s10 = true;</script>';
+
+function s10HostHtml(): string {
+  const shell = buildPanelSrcdoc(s10PanelHtml, 'light', shimJs, shimCss);
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
+    '<iframe id="outer" style="width:900px;height:400px;border:0" srcdoc="' + esc(shell) + '"></iframe>' +
+    '</body></html>'
+  );
+}
+
+// Запрос «наружу за шрифтом»: .woff2/.woff/.ttf/.otf или CDN Google Fonts.
+// data:-URI запросом не является — его в списке быть не должно.
+const isFontRequest = (u: string) =>
+  /\.(woff2?|ttf|otf|eot)(\?|$)/i.test(u) || /fonts\.(googleapis|gstatic)\.com/i.test(u);
+
+test('S10: латиница — вшитым шрифтом, кириллица — системный фолбэк, ошибок CSP нет, сети за шрифтом нет', async ({ page }) => {
+  // Структурно: srcdoc несёт И @font-face data:-URI, И font-src data: в CSP — иначе
+  // CSP вырезала бы шрифт. Это главный риск шага, проверяем по строке srcdoc.
+  const shell = buildPanelSrcdoc(s10PanelHtml, 'light', shimJs, shimCss);
+  expect(shell, 'srcdoc несёт @font-face data:-URI').toContain('data:font/woff2;base64,');
+  expect(PANEL_CSP, 'CSP разрешает font-src data:').toContain('font-src data:');
+
+  // Консоль и сеть: CSP-ошибка про шрифт и запрос наружу — оба риска шага.
+  const consoleMsgs: string[] = [];
+  const requests: string[] = [];
+  page.on('console', (m) => consoleMsgs.push(m.text()));
+  page.on('request', (r) => requests.push(r.url()));
+
+  await page.setContent(s10HostHtml(), { waitUntil: 'load' });
+
+  // Ждём, пока @font-face панели применится (data:-URI — быстро, но fonts.ready
+  // гарантирует, что check() надёжен). Ищем фрейм по маркеру __s10.
+  const panelFont = await (async () => {
+    for (let i = 0; i < 200; i++) {
+      for (const f of page.frames()) {
+        try {
+          const r = await f.evaluate(async () => {
+            if (!(window as unknown as { __s10?: boolean }).__s10) return null;
+            const d = document as unknown as { fonts: FontFaceSet };
+            await d.fonts.ready;
+            const ff = getComputedStyle(document.body).fontFamily;
+            // Надёжный признак: @font-face 'Hanken Grotesk' (data:-URI) загружен (status loaded).
+            // document.fonts.check ненадёжен (OS/2-биты дают true вне cmap) — не используем.
+            const embeddedLoaded = Array.from(d.fonts).some(
+              (f) => f.family === 'Hanken Grotesk' && f.status === 'loaded',
+            );
+            return {
+              fontFamily: ff,
+              // Вшитый Hanken Grotesk — только латиница (cmap, S10a); кириллица падает
+              // на системный фолбэк. «Фолбэк» проверяем по цепочке font-family.
+              hasSystemFallback: /-apple-system|BlinkMacSystemFont|Segoe UI|sans-serif/.test(ff),
+              embeddedLoaded,
+            };
+          });
+          if (r) return r;
+        } catch { /* фрейм недоступен */ }
+      }
+      await page.waitForTimeout(50);
+    }
+    return null;
+  })();
+
+  expect(panelFont, 'фрейм панели найден').not.toBeNull();
+  // 1. font-family панели несёт вшитое имя.
+  expect(panelFont!.fontFamily, 'font-family содержит вшитое имя').toContain('Hanken Grotesk');
+  // 1. Вшитый @font-face 'Hanken Grotesk' (data:-URI) загружен — панель рисует латиницу им.
+  expect(panelFont!.embeddedLoaded, 'вшитый @font-face Hanken Grotesk загружен (data:-URI)').toBe(true);
+  // 3. Кириллицы в вшитом шрифте нет (cmap, S10a) — она падает на системный фолбэк, не квадраты.
+  //    Гарантирует цепочка font-family: после 'Hanken Grotesk' идёт системный шрифт.
+  expect(panelFont!.hasSystemFallback, 'font-family несёт системный фолбэк (кириллица не квадратами)').toBe(true);
+  // 2. В консоли панели нет CSP-ошибки про шрифт.
+  const cspFontErr = consoleMsgs.filter((t) => /content security policy|ERR_BLOCKED_BY_CSP/i.test(t));
+  expect(cspFontErr, 'ошибок CSP про шрифт нет: ' + JSON.stringify(cspFontErr)).toHaveLength(0);
+  // 1. Сети за шрифтом нет: ни одного запроса наружу за шрифтом.
+  const fontReqs = requests.filter(isFontRequest);
+  expect(fontReqs, 'запросов наружу за шрифтом нет: ' + JSON.stringify(fontReqs)).toHaveLength(0);
 });

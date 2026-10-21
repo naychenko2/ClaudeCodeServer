@@ -135,11 +135,12 @@ const { buildTokensStyle } = await import('./panelSrcdoc');
 const { DOMParser } = await import('linkedom');
 // Шим plugin-kit: тот же файл, что встраивает buildPanelSrcdoc (?raw — строкой).
 const shimJs = (await import('../../../public/plugin-kit/plugin-kit.js?raw')).default as string;
-// shimCss = структурный theme.css + контролы controls.css (S9): та же конкатенация,
-// что в bridge.ts, — чтобы expectedInner совпал с фактическим srcdoc.
+// shimCss = структурный theme.css + вшитый шрифт font.css (S10) + контролы controls.css
+// (S9): та же конкатенация, что в bridge.ts, — чтобы expectedInner совпал с фактическим srcdoc.
 const shimCssBase = (await import('../../../public/plugin-kit/theme.css?raw')).default as string;
+const shimFont = (await import('../../../public/plugin-kit/font.css?raw')).default as string;
 const shimControls = (await import('../../../public/plugin-kit/controls.css?raw')).default as string;
-const shimCss = shimCssBase + '\n' + shimControls;
+const shimCss = shimCssBase + '\n' + shimFont + '\n' + shimControls;
 type PluginInfo = import('../../lib/api').PluginInfo;
 type Project = import('../../types').Project;
 
@@ -441,6 +442,7 @@ describe('сообщения хоста', () => {
 //  • убрать tokens из buildThemeMessage → «theme несёт tokens» краснеет;
 //  • убрать #cc-tokens из buildPanelSrcdoc → «srcdoc инжектит #cc-tokens» краснеет;
 //  • сломать applyTokens в шиме → «шим обновляет #cc-tokens» краснеет.
+/* eslint-disable design/no-raw-color -- фикстуры S8: hex — сами значения токенов темы, а не цвет UI */
 describe('токены панели (S8: из темы хоста, не ручная копия)', () => {
   const T = { '--cc-bg': '#FBF8F2', '--cc-fg': '#39332B', '--cc-accent': '#D97757' };
 
@@ -518,6 +520,7 @@ describe('токены панели (S8: из темы хоста, не ручн
     }
   });
 });
+/* eslint-enable design/no-raw-color */
 
 // Высота КОНТЕНТА установленной панели (S1): resize = высота контента,
 // хост ставит её фрейму. Порог снизу 48, страховочный потолок 4000 (не «размер слота» 800).

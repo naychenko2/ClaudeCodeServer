@@ -3,12 +3,14 @@
 // CSP и экранирование — только здесь (единая точка).
 
 // CSP srcdoc (ADR-031 §3.1): внешних ресурсов нет, inline-скрипты/стили работают,
-// сеть из кадра закрыта — весь выход наружу только мостом. Единая константа: стоит
-// и в meta оболочки, и в meta панели (§3.6) — оболочка держит навигацию (frame-src 'none'),
-// base-uri 'none' закрывает <base>.
+// сеть из кадра закрыта — весь выход наружу только мостом. font-src data: (S10)
+// разрешает вшитый шрифт панели (data:-URI, font.css кита) — без него default-src
+// 'none' вырезал бы @font-face и в консоли панели была бы ошибка CSP. Единая
+// константа: стоит и в meta оболочки, и в meta панели (§3.6) — оболочка держит
+// навигацию (frame-src 'none'), base-uri 'none' закрывает <base>.
 export const PANEL_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-  "img-src data: blob:; connect-src 'none'; form-action 'none'; " +
+  "img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; " +
   "base-uri 'none'; frame-src 'none'";
 
 // Токены панели: имя CSS-переменной (--cc-*) → значение. Единственный источник

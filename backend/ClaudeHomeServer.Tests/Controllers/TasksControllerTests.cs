@@ -10,6 +10,7 @@ using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Spheres;
@@ -142,7 +143,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // git — явный: реальный (из DI) / null (подсистема Git выключена → 503) / stub (сбой WorktreeListAsync).
     // HttpContext/User подставляем вручную (прямая сборка — без HTTP): claim Sub = OwnerId,
     // иначе UserId (User.FindFirstValue(Sub)) бросает ArgumentNullException.
-    private TasksController BuildController(GitService? git)
+    // Б-mk-b: catalog — подменяемый каталог макетов (null — Docs выключена; заглушка — считает
+    // вызовы, чтобы проверить, что для локального проекта Docs не дёргается).
+    private TasksController BuildController(GitService? git, MockupCatalog? catalog = null)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -156,7 +159,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             spheres: _factory.Services.GetRequiredService<ISphereDirectory>(),
             noteSync: null,
             features: _factory.Services.GetRequiredService<FeatureProjector>(),
-            git: git);
+            git: git,
+            catalog: catalog);
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, OwnerId)], "test");
         controller.ControllerContext = new ControllerContext
         {
@@ -176,6 +180,33 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // GitService со stub-запускателем: Start бросает → WorktreeListAsync бросает (сбой git, п.53).
     private static GitService ThrowingGit() => new(new ThrowingLauncherFactory());
+
+    // Б-mk-b: подменяемый каталог макетов, считающий вызовы Find (G10: локальный проект
+    // Docs не дёргает). Возвращает пустой список — результат не важен, важен факт вызова.
+    private sealed class CountingMockupCatalog : MockupCatalog
+    {
+        public int FindCalls;
+        public CountingMockupCatalog() : base(new DocsIndexService()) { }
+        public override IReadOnlyList<MockupEntry> Find(string rootPath, string featureId,
+            IReadOnlyCollection<string> linkedPaths)
+        {
+            FindCalls++;
+            return [];
+        }
+    }
+
+    // Б-mk-b: каталог, возвращающий фиксированный макет (для taskId/authorPersonaId
+    // по linkedFiles).
+    private sealed class FixedMockupCatalog : MockupCatalog
+    {
+        private readonly MockupEntry _entry;
+        public FixedMockupCatalog(MockupEntry entry) : base(new DocsIndexService())
+        {
+            _entry = entry;
+        }
+        public override IReadOnlyList<MockupEntry> Find(string rootPath, string featureId,
+            IReadOnlyCollection<string> linkedPaths) => [_entry];
+    }
 
     // Индекс: GET /api/tasks/features/index?projectId=… → JsonElement.
     private async Task<JsonElement> GetIndexAsync(string? projectId = null)
@@ -879,6 +910,115 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // journal = null → source=approx (не 500).
         json.GetProperty("stats").GetProperty("source").GetString().Should().Be("approx");
         json.GetProperty("stats").GetProperty("truncated").GetBoolean().Should().BeFalse();
+    }
+
+    // ─── Б-mk-b: макеты фичи (mockups[] + mockupsUnavailable) в GET features/{id} ───────────
+
+    // Сериализация IActionResult.GetFeature в camelCase-JSON (как wire): для прямых сборок
+    // контроллера (без HTTP). Enum-конвертер — для status/source у mockups (camelCase-строки).
+    private static JsonElement FeatureJson(Microsoft.AspNetCore.Mvc.OkObjectResult result) =>
+        JsonSerializer.SerializeToElement(result.Value!, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        });
+
+    // Чужой проект: эпик (владелец A) ссылается на проект другого владельца → mockups: [].
+    // Файлы чужого проекта не трогаем: GetByOwner не найдёт проект → [] (не device, не 500).
+    [Fact]
+    public async Task GetFeature_Mockups_ЧужойПроект_Пусто()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        // Проект второго владельца: эпик (владелец A) ссылается на него.
+        var dir = Path.Combine(_factory.TempDir, "mk_foreign_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var foreign = Projects.Create("mk-foreign-" + Guid.NewGuid().ToString("N")[..6],
+            dir, SecondOwnerId, "seconduser");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = foreign.Id;
+
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("mockups").GetArrayLength().Should().Be(0, "чужой проект → []");
+        body.GetProperty("mockupsUnavailable").GetString().Should().NotBe("device", "не локальный проект");
+    }
+
+    // Локальный проект (файлы на устройстве) → mockups: [] + mockupsUnavailable: "device",
+    // и каталог Docs НЕ вызывался (G10: диск сервера не читаем). Подменный каталог считает вызовы.
+    [Fact]
+    public async Task GetFeature_Mockups_ЛокальныйПроект_Device_КаталогНеВызывался()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        // Локальный проект (DeviceId задан) владельца.
+        var dir = Path.Combine(_factory.TempDir, "mk_local_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var local = Projects.CreateLocal("mk-local-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "device-mk");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = local.Id;
+
+        var counting = new CountingMockupCatalog();
+        var controller = BuildController(git: null, catalog: counting);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
+
+        var json = FeatureJson(result);
+        json.GetProperty("mockups").GetArrayLength().Should().Be(0, "локальный проект → []");
+        json.GetProperty("mockupsUnavailable").GetString().Should().Be("device");
+        counting.FindCalls.Should().Be(0, "Docs не вызывался для локального проекта (G10)");
+    }
+
+    // Docs выключена (каталог null) → 200 и mockups: [] (без флага, не 500).
+    [Fact]
+    public async Task GetFeature_Mockups_DocsВыключена_200_Пусто()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        // Серверный проект владельца (не локальный): Docs выключена → catalog = null.
+        var dir = Path.Combine(_factory.TempDir, "mk_docs_off_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = Projects.Create("mk-docs-off-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
+
+        var controller = BuildController(git: null, catalog: null); // Docs выключена
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
+
+        var json = FeatureJson(result);
+        json.GetProperty("mockups").GetArrayLength().Should().Be(0, "Docs выключена → []");
+        json.GetProperty("mockupsUnavailable").GetString().Should().NotBe("device", "не локальный проект");
+    }
+
+    // taskId/authorPersonaId проставлены по linkedFiles: первая (по CreatedAt) задача фичи,
+    // в linkedFiles которой есть path макета. Каталог — заглушка, возвращающая макет.
+    [Fact]
+    public async Task GetFeature_Mockups_TaskId_ПоLinkedFiles()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        // Шаг с linkedFiles, указывающим на макет (путь из каталога). PersonaId ставим
+        // напрямую в сторе (мимо валидации персоны в Create — персона-фикстура не существует).
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            linkedFiles = new[] { "docs/mockups/mine.html" },
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!.PersonaId = "persona-mk";
+        var dir = Path.Combine(_factory.TempDir, "mk_attr_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = Projects.Create("mk-attr-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
+
+        var catalog = new FixedMockupCatalog(new MockupEntry(
+            Path: "docs/mockups/mine.html", Title: "Макет", Status: null,
+            Files: [new MockupFile("docs/mockups/mine.html", true)],
+            Source: MockupSource.LinkedFiles, ModifiedAt: null));
+        var controller = BuildController(git: null, catalog: catalog);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("taskId").GetString().Should().Be(stepId, "taskId — по задаче, в linkedFiles которой path");
+        mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-mk");
     }
 
     // ─── REST POST /api/tasks/features/{featureId}/merge: мерж фичи ─────────────────────────

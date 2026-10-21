@@ -8,6 +8,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
@@ -124,7 +125,10 @@ public class TasksController(
     // Б5b: журнал событий фичи (волна 3): точный режим stats.timeline (work/waiting/error/idle)
     // и модели breakdown из журнала. null — подсистема Tasks выключена (как features) →
     // stats.source=approx, не 500.
-    FeatureJournalStore? journal = null) : ControllerBase
+    FeatureJournalStore? journal = null,
+    // Б-mk-b: каталог макетов фичи (Docs): null — подсистема Docs выключена → mockups: []
+    // (без флага, не 500). Склейка в GetFeature, не в FeatureProjector (ADR-031 «Макеты фичи»).
+    MockupCatalog? catalog = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -628,8 +632,99 @@ public class TasksController(
             Timeline: FeatureTimeline.Build(run, journalResult, now),
             Breakdown: breakdown,
             LongestNow: longestNow);
-        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats });
+        // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
+        // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
+        var (mockups, mockupsUnavailable) = BuildMockups(run, catalog);
+        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
+            mockups, mockupsUnavailable });
     }
+
+    // Б-mk-b: склейка макетов фичи (ADR-031 «Макеты фичи»). Порядок (fail-closed, сторож G10):
+    //   1. эпик → его проект: только если принадлежит текущему владельцу (GetByOwner);
+    //      чужой/нет → mockups: [] (файлы чужого проекта не трогаем);
+    //   2. локальный проект (ProjectCapabilities.FilesOnServer=false) → [] + "device"
+    //      ДО любого вызова Docs (файлы на устройстве, диск сервера не читаем);
+    //   3. Docs: catalog?.Find (null — подсистема Docs выключена → [] без флага, не 500).
+    // TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
+    // которой есть path макета или любой из его files; иначе null. Сортировка: ModifiedAt
+    // убыв., null в конце (детерминизм — путь).
+    private (IReadOnlyList<MockupEntry> Mockups, string? Unavailable) BuildMockups(FeatureRun run, MockupCatalog? catalog)
+    {
+        // 1. Проект эпика: только если он принадлежит текущему владельцу (GetByOwner, fail-closed).
+        var project = run.Epic.ProjectId is { } pid
+            ? projects.GetByOwner(UserId).FirstOrDefault(p => p.Id == pid)
+            : null;
+        if (project is null) return ([], null);
+
+        // 2. Локальный проект (файлы на устройстве) → [] + "device" ДО Docs (G10).
+        if (!ProjectCapabilities.FilesOnServer(project))
+            return ([], "device");
+
+        // 3. Docs: catalog?.Find (null — Docs выключена → [] без флага). linkedPaths — linkedFiles
+        //    всех задач ПОЛНОГО run (эпик + шаги + ревью + qa + финал + мерж + разрез + план).
+        var linkedPaths = AllLinkedFiles(run);
+        var found = catalog?.Find(project.RootPath, run.FeatureId, linkedPaths) ?? [];
+
+        // 4. TaskId/AuthorPersonaId — по первой (по CreatedAt) задаче, в linkedFiles которой есть
+        //    path макета или любой из его files; иначе null.
+        var attributed = found
+            .Select(e =>
+            {
+                var owner = OwnerTask(run, e);
+                return e with { TaskId = owner?.Id, AuthorPersonaId = owner?.PersonaId };
+            })
+            .ToList();
+
+        // 5. Сортировка: ModifiedAt убыв., null в конце; детерминизм — путь.
+        attributed = attributed
+            .OrderBy(e => e.ModifiedAt is null)
+            .ThenByDescending(e => e.ModifiedAt ?? DateTime.MinValue)
+            .ThenBy(e => e.Path)
+            .ToList();
+
+        return (attributed, null);
+    }
+
+    // linkedFiles всех задач ПОЛНОГО run: эпик + шаги + ревью + qa + финал + мерж + разрез + план.
+    private static List<string> AllLinkedFiles(FeatureRun run)
+    {
+        var all = new List<TaskItem> { run.Epic };
+        all.AddRange(run.Steps);
+        all.AddRange(run.Reviews);
+        all.AddRange(run.Qa);
+        if (run.Final is not null) all.Add(run.Final);
+        if (run.Merge is not null) all.Add(run.Merge);
+        all.AddRange(run.Cut);
+        all.AddRange(run.Plan);
+        return all.SelectMany(t => t.LinkedFiles).ToList();
+    }
+
+    // Первая (по CreatedAt) задача фичи, в linkedFiles которой есть path макета или любой из его
+    // files; иначе null. Пути нормализуем (регистр/разделители): linkedFiles в сторе может
+    // отличаться от пути каталога регистром или обратным слэшем.
+    private static TaskItem? OwnerTask(FeatureRun run, MockupEntry entry)
+    {
+        var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Path };
+        foreach (var f in entry.Files) targets.Add(f.Path);
+        var tasks = new List<TaskItem> { run.Epic };
+        tasks.AddRange(run.Steps);
+        tasks.AddRange(run.Reviews);
+        tasks.AddRange(run.Qa);
+        if (run.Final is not null) tasks.Add(run.Final);
+        if (run.Merge is not null) tasks.Add(run.Merge);
+        tasks.AddRange(run.Cut);
+        tasks.AddRange(run.Plan);
+        return tasks
+            .Where(t => t.LinkedFiles.Any(p => targets.Contains(NormalizeLinkedPath(p))))
+            .OrderBy(t => t.CreatedAt)
+            .FirstOrDefault();
+    }
+
+    // Нормализация пути linkedFiles для сравнения с путями каталога: прямые слэши, без
+    // ведущего «/», регистр в нижний (Windows-диск регистронезависим, Linux — нет, но
+    // сравнение делаем нечувствительным, чтобы не терять совпадение).
+    private static string NormalizeLinkedPath(string? p) =>
+        (p ?? "").Replace('\\', '/').TrimStart('/').ToLowerInvariant();
 
     // ?eventsLimit= : не задан (null) → 100; строка «0» или «all» → все (int.MaxValue) — «0»
     // читается как «без лимита», а не как числовой ноль (отдельного числового 0 на wire нет:

@@ -13,7 +13,9 @@ namespace ClaudeHomeServer.Services.Docs;
 //
 // Зависимостей от других вертикалей нет: только DocsIndexService и DocProperties (та же
 // вертикаль) и спина (SafePath, модели Core). Регистрация — тем же путём, что DocsIndexService.
-public sealed class MockupCatalog(DocsIndexService docs)
+// Не sealed + virtual Find: тест Main подменяет каталог заглушкой, что считает вызовы
+// (проверка, что для локального проекта Docs не дёргается — сторож G10).
+public class MockupCatalog(DocsIndexService docs)
 {
     // Фиксированная область: docs/mockups + markdown. Отдельный слот кеша DocsIndexService —
     // он ключуется корнем + областью, поэтому не мешает и не дёргает область проекта.
@@ -22,7 +24,7 @@ public sealed class MockupCatalog(DocsIndexService docs)
     // Префикс, под который обязаны лежать все файлы макета (и шапки, и linkedFiles)
     private const string MockupsPrefix = "docs/mockups/";
 
-    public IReadOnlyList<MockupEntry> Find(string rootPath, string featureId,
+    public virtual IReadOnlyList<MockupEntry> Find(string rootPath, string featureId,
         IReadOnlyCollection<string> linkedPaths)
     {
         var corpus = docs.GetCorpus(rootPath, MockupsScope);

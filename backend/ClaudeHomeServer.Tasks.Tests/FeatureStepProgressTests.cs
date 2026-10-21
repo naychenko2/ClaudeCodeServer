@@ -356,6 +356,24 @@ public class FeatureStepProgressTests
         (row.StepsAccepted, row.StepsTotal).Should().Be((0, 3));
     }
 
+    // Индекс отдаёт то же, что страница фичи: снятые шаги и доработки без привязки (вне знаменателя).
+    [Fact]
+    public void ИндексРядок_НесётСнятыеИДоработкиБезПривязки_РавноСоСтраницей()
+    {
+        var epic = Feature();
+        var tasks = new[] { epic, Step("s1", "Ш1", 1), Step("s2", "Ш2", 2),
+            Verdict("r", TaskRoles.Review, TaskVerdicts.Withdrawn, 6, "s2"),
+            Rework("w1", "Нет-такого", 8), Rework("w2", null, 9) };
+        var run = FeatureProjector.Build(epic, tasks, T0.AddDays(1));
+
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+
+        run.StepProgress.Withdrawn.Should().BeGreaterThan(0);
+        run.StepProgress.UnlinkedReworks.Should().BeGreaterThan(0);
+        row.StepsWithdrawn.Should().Be(run.StepProgress.Withdrawn);
+        row.UnlinkedReworks.Should().Be(run.StepProgress.UnlinkedReworks);
+    }
+
     [Fact]
     public void StepsOpen_УMergedИClosed_ПринятоМеньшеТотала()
     {

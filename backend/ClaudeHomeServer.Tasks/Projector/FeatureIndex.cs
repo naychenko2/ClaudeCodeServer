@@ -104,7 +104,11 @@ public sealed record FeatureIndexRow(
     int StepsReview,
     int StepsWork,
     int StepsNotCreated,
-    string PlanState);
+    string PlanState,
+    // Вне знаменателя (как в FeatureStepProgress): шаги, снятые ревью с выкладки, и доработки без
+    // привязки к шагу — индекс отдаёт те же числа, что страница фичи.
+    int StepsWithdrawn,
+    int UnlinkedReworks);
 
 // Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
 // нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя

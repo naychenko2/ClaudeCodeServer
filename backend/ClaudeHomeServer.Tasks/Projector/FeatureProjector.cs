@@ -1418,7 +1418,9 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.StepProgress.Review,
             run.StepProgress.Work,
             run.StepProgress.NotCreated,
-            run.StepProgress.PlanState);
+            run.StepProgress.PlanState,
+            run.StepProgress.Withdrawn,
+            run.StepProgress.UnlinkedReworks);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки

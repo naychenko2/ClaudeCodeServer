@@ -1,7 +1,7 @@
 // Список задач проекта в левой панели воркспейса.
 // Подвкладки «Список» (группировка по статусу) и «По дате» (готовые скрыты).
 
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronRight, ListTodo, Plus, SearchX } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Project, Task, TaskStatus } from '../../types';
@@ -50,6 +50,21 @@ type GroupTab = 'status' | 'date';
 type PanelTab = GroupTab | 'board';
 
 interface Group { key: string; label: string; dot?: string; tasks: Task[] }
+
+// Окно группы «Готово»: завершённых в проекте тысячи, рисуем порциями
+export const DONE_PAGE_SIZE = 50;
+
+// Строка списка: стабильный onClick (через id/ссылку задачи) + memo — при task_changed
+// перерисовывается только строка изменившейся задачи, остальные отсекает memo
+const TaskRow = memo(function TaskRow({ task, selected, compact, onSelect }: {
+  task: Task;
+  selected: boolean;
+  compact: boolean;
+  onSelect: (task: Task) => void;
+}) {
+  const onClick = useCallback(() => onSelect(task), [onSelect, task]);
+  return <TaskCard task={task} selected={selected} onClick={onClick} compact={compact} />;
+});
 
 const STATUS_GROUP_ORDER: TaskStatus[] = ['inProgress', 'todo', 'done'];
 
@@ -139,7 +154,26 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
     [tasks, filters, boardMode],
   );
 
-  const groups = groupTab === 'status' ? groupByStatus(filteredTasks) : groupByDate(filteredTasks);
+  const groups = useMemo(
+    () => groupTab === 'status' ? groupByStatus(filteredTasks) : groupByDate(filteredTasks),
+    [groupTab, filteredTasks],
+  );
+
+  // Окно группы «Готово» — только на отрисовку; фильтры и счётчики считаются по всем задачам
+  const [doneLimit, setDoneLimit] = useState(DONE_PAGE_SIZE);
+  // Смена фильтров/проекта начинает список заново: окно «Готово» сбрасывается к первой
+  // странице (сброс состояния при смене входа — прямо в рендере, без эффекта)
+  const [doneWindowKey, setDoneWindowKey] = useState({ filters, projectId: project.id });
+  if (doneWindowKey.filters !== filters || doneWindowKey.projectId !== project.id) {
+    setDoneWindowKey({ filters, projectId: project.id });
+    setDoneLimit(DONE_PAGE_SIZE);
+  }
+
+  // Стабильный обработчик выбора: актуальный onSelect читаем из ref, чтобы смена
+  // функции у родителя не ломала memo строк
+  const onSelectRef = useRef(onSelect);
+  useLayoutEffect(() => { onSelectRef.current = onSelect; });
+  const handleSelect = useCallback((t: Task) => onSelectRef.current(t), []);
 
   return (
     // flex:1 + minHeight:0 — шапка (переключатель и кнопка) закреплена, скроллится только список:
@@ -293,15 +327,20 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
                   <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted }}>{group.tasks.length}</span>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {group.tasks.map(task => (
-                    <TaskCard
+                  {(group.key === 'done' && groupTab === 'status' ? group.tasks.slice(0, doneLimit) : group.tasks).map(task => (
+                    <TaskRow
                       key={task.id}
                       task={task}
                       selected={task.id === selectedTaskId}
-                      onClick={() => onSelect(task)}
+                      onSelect={handleSelect}
                       compact={!isMobile}
                     />
                   ))}
+                  {group.key === 'done' && groupTab === 'status' && group.tasks.length > doneLimit && (
+                    <Button variant="secondary" size="sm" fullWidth onClick={() => setDoneLimit(n => n + DONE_PAGE_SIZE)}>
+                      Показать ещё {Math.min(DONE_PAGE_SIZE, group.tasks.length - doneLimit)}
+                    </Button>
+                  )}
                 </div>
               </div>
             ))}

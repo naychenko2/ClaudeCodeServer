@@ -4,7 +4,7 @@
 // стора задач (реальные, без виртуальных повторов). Тулбар: инлайн (хаб/мобайл) или
 // в сайдбаре (десктоп-проект, тогда inlineToolbar=false — тулбар рендерит WorkspacePage).
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext, DragOverlay, MouseSensor, TouchSensor, useSensor, useSensors,
   closestCorners, type DragEndEvent, type DragStartEvent,
@@ -29,6 +29,11 @@ import { BoardToolbar, useDefectsOnly } from './BoardToolbar';
 // Геометрия доски: гэп между колонками и зазор справа под бегунок 6px (см. скролл-контейнер
 // ниже). Колонка живёт в диапазоне [COL_MIN, COL_MAX] — конкретная ширина считается от
 // фактической ширины контейнера, см. colMin.
+// Опции сенсоров — константы модуля: новый объект на каждый рендер пересоздаёт активаторы
+// dnd-kit, меняет его внутренний контекст и перерисовывает все карточки (memo не спасает)
+const MOUSE_SENSOR_OPTIONS = { activationConstraint: DRAG_MOUSE_ACTIVATION };
+const TOUCH_SENSOR_OPTIONS = { activationConstraint: DRAG_TOUCH_ACTIVATION };
+
 const BOARD_GAP = 14;
 const BOARD_PAD_RIGHT = 12;
 const COL_MIN = 200;
@@ -83,9 +88,16 @@ export function TaskBoard({
   useEffect(() => { if (isProjectBoard && groupBy === 'project') setGroupBy('none'); }, [isProjectBoard, groupBy]);
 
   const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: DRAG_MOUSE_ACTIVATION }),
-    useSensor(TouchSensor, { activationConstraint: DRAG_TOUCH_ACTIVATION }),
+    useSensor(MouseSensor, MOUSE_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
   );
+
+  // Стабильный onOpen для BoardCard: вызывающие (WorkspacePage, CalendarPage) передают
+  // новую стрелку на каждый рендер, и без обёртки memo карточек не срабатывал бы никогда.
+  // Актуальный onOpenTask читаем из ref, который обновляется в layout-эффекте.
+  const onOpenRef = useRef(onOpenTask);
+  useLayoutEffect(() => { onOpenRef.current = onOpenTask; });
+  const handleOpen = useCallback((t: Task) => onOpenRef.current(t), []);
 
   const projectNameOf = (t: Task) => (t.projectId ? projectsById.get(t.projectId)?.name : undefined);
   // Имя устройства локального проекта — для плашки «ждёт устройство» на карточке
@@ -165,6 +177,11 @@ export function TaskBoard({
 
     const sourceLaneKey = cellByCard.get(active.id as string)?.laneKey;
     const destCards = (cellCards.get(`${destLaneKey}::${destColId}`) ?? []).filter(c => c.id !== active.id);
+    // Индекс считается по ПОЛНОМУ списку ячейки, а не по видимому окну SortableContext
+    // (колонка «Готово» показывает первые 50). Бросок на видимую карточку встаёт точно
+    // перед ней. Бросок на саму ячейку (пустое место) — в конец полного списка: в окне
+    // «Готово» такая карточка может оказаться за пределами видимых и появится после
+    // «Показать ещё» — это осознанное поведение, порядок на сервере остаётся честным.
     let idx = overCardId ? destCards.findIndex(c => c.id === overCardId) : destCards.length;
     if (idx < 0) idx = destCards.length;
     const order = computeOrder(destCards[idx - 1]?.order, destCards[idx]?.order);
@@ -305,9 +322,10 @@ export function TaskBoard({
                   key={`${lane.key}::${col.id}`}
                   cellId={`${lane.key}::${col.id}`}
                   cards={cellCards.get(`${lane.key}::${col.id}`) ?? []}
+                  windowSize={col.category === 'done' ? 50 : undefined}
                   projectNameOf={projectNameOf}
                   deviceNameOf={deviceNameOf}
-                  onOpen={onOpenTask}
+                  onOpen={handleOpen}
                   onQuickAdd={grouped ? undefined : title => void createTask(quickAddProjectId, { title, status: col.category, columnId: isProjectBoard ? col.id : undefined })}
                   minEmptyHeight={minEmptyHeight}
                 />

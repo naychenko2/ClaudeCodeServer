@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import type { AuthState } from '../types';
 import { api } from '../lib/api';
-import { OfflineError } from '../lib/offline';
+import { OfflineError, invalidateTokenCache } from '../lib/offline';
 import { C, R, FONT, SHADOW } from '../lib/design';
 import { IconField, Toggle, Button, PageCanvas } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
@@ -63,6 +63,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
         localStorage.removeItem('cc_role');
         localStorage.removeItem('cc_user_id');
       }
+      invalidateTokenCache();
       onConnect({
         serverUrl, token: result.token, username: result.username,
         displayName: result.displayName ?? undefined, role, id: userId,

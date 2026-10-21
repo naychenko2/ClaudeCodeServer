@@ -22,7 +22,7 @@ import { AiLauncher } from './components/ai/AiLauncher'
 import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { resetAiAwaiting } from './lib/ai/awaiting'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
-import { initConnectivity } from './lib/offline'
+import { initConnectivity, invalidateTokenCache } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
 import { LoadingScreen } from './components/ui/LoadingScreen'
 import { recordRecentProject } from './lib/pinnedProjects'
@@ -552,6 +552,7 @@ export default function App() {
       sessionStorage.removeItem('cc_token')
       sessionStorage.removeItem('cc_role')
       sessionStorage.removeItem('cc_user_id')
+      invalidateTokenCache()
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       clearMe()
       resetWallOwner()
@@ -1255,6 +1256,7 @@ export default function App() {
     sessionStorage.removeItem('cc_token')
     sessionStorage.removeItem('cc_role')
     sessionStorage.removeItem('cc_user_id')
+    invalidateTokenCache()
     idbClear() // чистим кэш при смене аккаунта/сервера
     clearMe()
     resetWallOwner()

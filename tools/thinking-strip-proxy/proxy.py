@@ -374,6 +374,11 @@ JUNK_RUN = int(os.environ.get("JUNK_RUN", "40"))                # одинако
 JUNK_RUN_WORD = int(os.environ.get("JUNK_RUN_WORD", "12"))            # одинаковых слов с буквами подряд
 JUNK_CHAR_RUN = int(os.environ.get("JUNK_CHAR_RUN", "48"))            # пробег одного символа в слове
 JUNK_PERIOD_REPEATS = int(os.environ.get("JUNK_PERIOD_REPEATS", "12"))  # повторов узора 2–4 символа
+# 2026-10-21: четвёртый признак — цепочка одинаковых чисел. Ход Киры 23:09 (контекст ~60K): после
+# «до-1:», «ре-1 в этапе», «вместе-1 вместе» размышление ушло в 2743 строки «-1» до среза бюджета.
+# Числа из цепочек исключены ради таблиц и матриц («0 0 0» × 300), петля их тоже не видит («1» без
+# букв). Поэтому у чисел свой порог JUNK_RUN_NUM — выше любой честной строки нулей в прозе.
+JUNK_RUN_NUM = int(os.environ.get("JUNK_RUN_NUM", "500"))             # одинаковых чисел подряд
 
 # Тело запроса, на котором сработал предохранитель петли или мусора (2026-10-17). Причину
 # срывов (порча состояния после prefix cache, DFlash2 или сама модель) по транскриптам не
@@ -1670,13 +1675,14 @@ class ДетекторМусора:
     Слова режутся так же, как у детектора петли: дельты рвут слова где угодно, код внутри
     ```-заборов не считается (длинные токены там легальны). «Слова» без букв и цифр в долю не
     идут, зато `run` одинаковых токенов подряд — второй признак мусора: вырождение в «- - - -»
-    (порог `run`) или в одно слово «like like like…» (порог `run_word`, числа не в счёт).
-    Третий признак — узор внутри слова (узор_мусора): проверяется и на недописанном хвосте,
-    иначе пробег из тысяч символов без пробела ждал бы конца блока.
+    (порог `run`), в одно слово «like like like…» (порог `run_word`) или в одно число
+    «-1 -1 -1…» (порог `run_num`, выше строк таблиц). Третий признак — узор внутри слова
+    (узор_мусора): проверяется и на недописанном хвосте, иначе пробег из тысяч символов без
+    пробела ждал бы конца блока.
     """
 
     def __init__(self, window=None, ratio=None, min_words=None, run=None, run_word=None,
-                 char_run=None, repeats=None):
+                 char_run=None, repeats=None, run_num=None):
         self.window = window or JUNK_WINDOW
         self.ratio = JUNK_RATIO if ratio is None else ratio
         self.min_words = JUNK_MIN_WORDS if min_words is None else min_words
@@ -1684,6 +1690,7 @@ class ДетекторМусора:
         self.run_word = run_word or JUNK_RUN_WORD
         self.char_run = char_run or JUNK_CHAR_RUN
         self.repeats = repeats or JUNK_PERIOD_REPEATS
+        self.run_num = run_num or JUNK_RUN_NUM
         self.окно = deque(maxlen=self.window)  # True — мусорное слово
         self.мусорных = 0
         self.всего = 0
@@ -1735,17 +1742,17 @@ class ДетекторМусора:
         if not без_букв and self._узор(w):
             return True
         # Одинаковый токен подряд: «слово» без букв и цифр как есть, слово с буквами — без
-        # регистра и краевой пунктуации («like like like…», 18.10). Числа («0 0 0») — не в счёт.
+        # регистра и краевой пунктуации («like like like…», 18.10). Числа («0 0 0») — с порогом
+        # run_num: таблицы и матрицы короче, вырождение «-1» × 2743 (21.10) — нет.
         ключ = w if без_букв else w.strip(_JUNK_TRIM).lower()
-        if без_букв or any(ch.isalpha() for ch in ключ):
-            self.подряд = self.подряд + 1 if ключ == self.пустое else 1
-            self.пустое = ключ
-            if self.подряд >= (self.run if без_букв else self.run_word):
-                self.причина = f"цепочка {self.подряд}× {ключ!r}"
-                self.сработал = True
-                return True
-        else:
-            self.пустое, self.подряд = None, 0
+        self.подряд = self.подряд + 1 if ключ == self.пустое else 1
+        self.пустое = ключ
+        порог = (self.run if без_букв else self.run_word if any(ch.isalpha() for ch in ключ)
+                 else self.run_num)
+        if self.подряд >= порог:
+            self.причина = f"цепочка {self.подряд}× {ключ!r}"
+            self.сработал = True
+            return True
         if без_букв:
             return False
         мусор = мусорное_слово(w)

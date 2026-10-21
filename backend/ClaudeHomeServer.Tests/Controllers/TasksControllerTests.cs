@@ -2847,4 +2847,60 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         public string ToHost(string runtimePath) => runtimePath;
     }
 
+    // ─── Б9c, шаг 6: главный сторож «сохранение расхода» ───────────────────────────────────────
+
+    // Сохранение расхода (решение Александра, п.1): на наборе «2 фичи, общий key-чат, запись
+    // в форме прода (TaskId = session.TaskId)» сумма долей по фичам = исходным токенам РОВНО
+    // (наибольший остаток, точное равенство). Деньги — с допуском 1e-9.
+    //
+    // Сценарий: фичи A и B; общий чат S (key-чат A, orchestrator-чат B через дочернюю задачу).
+    // Запись расхода на S: TaskId = epicA.Id (форма прода: запись несёт TaskId эпика A).
+    // Без правила «исключение главнее task-оси» запись попадала бы в прямой срез A (по TaskId)
+    // И в долю (по SessionId) → двойной счёт. С исключением: запись только в долю, делится A+B.
+    [Fact]
+    public async Task GetFeature_СохранениеРасхода_ОбщийЧат_ТочноеРавенство()
+    {
+        // Фича A: эпик + шаг; key-чат S привязан к шагу A (LinkedSessionId).
+        var (epicA, stepA, chatS) = await MakeFeature("cons-A");
+        // Фича B: эпик + шаг; B «запускает» исполнителя из чата S (orchestrator-ось).
+        var epicB = await CreateTaskAsync(new { title = "эпик-cons-B", role = "feature" });
+        var epicBId = epicB.GetProperty("id").GetString()!;
+        var stepB = await CreateTaskAsync(new
+        {
+            title = "шаг-cons-B",
+            featureId = epicBId,
+            role = "step",
+            executorLaunchedBySessionId = chatS,
+        });
+
+        // Запись расхода в форме ПРОДА: TaskId = epicA.Id (key-чат A несёт TaskId эпика),
+        // SessionId = chatS (общий чат). Токены: 100 input, 50 output, цена 1.0.
+        var (store, reader) = SpendStoreWith(
+            SpendRecord(OwnerId, epicA, chatS, "claude-opus-4", 100, 50, 1.0));
+
+        // Stats фичи A: shared-доля A.
+        var statsA = GetFeatureStats(reader, epicA);
+        var spendA = statsA.GetProperty("spend");
+        var sharedA = spendA.GetProperty("shared");
+
+        // Stats фичи B: shared-доля B.
+        var statsB = GetFeatureStats(reader, epicBId);
+        var spendB = statsB.GetProperty("spend");
+        var sharedB = spendB.GetProperty("shared");
+
+        // Точное равенство: сумма долей A + B = исходным токенам (100 input, 50 output).
+        var aIn = sharedA.GetProperty("inputTokens").GetInt64();
+        var bIn = sharedB.GetProperty("inputTokens").GetInt64();
+        (aIn + bIn).Should().Be(100, "сохранение input: A+B = 100");
+
+        var aOut = sharedA.GetProperty("outputTokens").GetInt64();
+        var bOut = sharedB.GetProperty("outputTokens").GetInt64();
+        (aOut + bOut).Should().Be(50, "сохранение output: A+B = 50");
+
+        // Деньги: допуск 1e-9 (decimal → double на выходе).
+        var aCost = sharedA.GetProperty("costUsd").GetDouble();
+        var bCost = sharedB.GetProperty("costUsd").GetDouble();
+        (aCost + bCost).Should().BeApproximately(1.0, 1e-9, "сохранение cost: A+B ≈ 1.0");
+    }
+
 }

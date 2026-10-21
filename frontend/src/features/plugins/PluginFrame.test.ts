@@ -57,7 +57,7 @@ vi.mock('../../lib/api', async (importOriginal) => {
 });
 
 const { api } = await import('../../lib/api');
-const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
+const { installFakeDom, mount, textNodes, findNodeByAttr, reactProps, uninstallFakeDom } = await import(
   '../../components/chat/__tests__/fakeDom'
 );
 const { PluginFrame, pluginFrameKey } = await import('./PluginFrame');
@@ -212,5 +212,26 @@ describe('PluginFrame: смена версии пересоздаёт iframe', (
     const iframe2 = findIframe(container);
     expect(iframe2, 'iframe смонтирован после обновления').not.toBeNull();
     expect(iframe2, 'фрейм пересоздан: прежний узел заменён новым').not.toBe(iframe1);
+  });
+});
+
+// R-Финал: в разметке меню «⋯» не должно быть мусорного текста. Раньше комментарий
+// «// …» стоял ВНУТРИ JSX <Menu>, и React выводил его как обычный текст (сборка и lint
+// это не ловили). Теперь — {/* … */}. Открываем меню и проверяем, что в его тексте нет
+// слов комментария, а есть только ожидаемый пункт.
+describe('PluginFrame: меню «⋯» без мусорного текста (R-Финал)', () => {
+  it('открытое меню не содержит текста комментария (только «Права…»)', async () => {
+    const { container, text } = await renderFrame(P_WITH_PANEL, PANEL_1);
+
+    // Открываем меню: кнопка «Меню панели»
+    const btn = findNodeByAttr(container, 'aria-label', 'Меню панели');
+    expect(btn, 'кнопка «Меню панели» найдена').not.toBeNull();
+    act(() => { (reactProps(btn!) as { onClick?: () => void }).onClick?.(); });
+
+    // В меню только «Права…» (onOpenPlugins/onClose в этом тесте не заданы)
+    expect(text()).toContain('Права…');
+    // Слова комментария-мусора в тексте меню не осталось
+    expect(text()).not.toContain('сепаратор');
+    expect(text()).not.toContain('Разделитель');
   });
 });

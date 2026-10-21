@@ -432,8 +432,8 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
           <Menu onClose={() => setMenuOpen(false)} align="right" top={-2}>
             <MenuItem label="Права…" onClick={() => { setMenuOpen(false); setConsent(toConsentData(plugin)); }} />
             {onOpenPlugins && <MenuItem label="Открыть в «Плагинах»" onClick={() => { setMenuOpen(false); onOpenPlugins(); }} />}
-            // Разделитель — только перед «Скрыть панель» (onClose, мобила): на
-            // десктопе onClose не передаётся, и сепаратор висял бы в конце меню
+            {/* Разделитель — только перед «Скрыть панель» (onClose, мобила): на
+                десктопе onClose не передаётся, и сепаратор висял бы в конце меню */}
             {onClose && <MenuSep />}
             {onClose && <MenuItem label="Скрыть панель" onClick={() => { setMenuOpen(false); onClose(); }} />}
           </Menu>

@@ -391,7 +391,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             StepRef = Trimmed(req.StepRef),
             Lane = Trimmed(req.Lane),
             ReviewOf = req.ReviewOf,
-            PlanSteps = NormalizePlanSteps(req.PlanSteps),
+            PlanSteps = NormalizePlanStepsForRole(NormalizePlanSteps(req.PlanSteps), Trimmed(req.Role)),
             AwaitingHumanSince = req.AwaitingHumanSince,
             AwaitingHumanReason = Trimmed(req.AwaitingHumanReason),
             Verification = req.Verification,
@@ -471,8 +471,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
 
     // Нормализация списка шагов плана (миноры 5+6): КОПИЯ (входной список не мутируем —
     // вызывающий мог удержать ссылку) + трим StepRef/Title. Trim: «Б1» и « Б1» — один код, не
-    // дубль. Регистр — OrdinalIgnoreCase в проверке дубля (ValidateFeatureFields): «B1»/«b1»
-    // — один шаг; Ordinal (не culture) — детерминизм и скорость, регистр кириллицы учитывается.
+    // дубль. Дубль stepRef — OrdinalIgnoreCase (после трима) в ValidateFeatureFields: «B1»/«b1»
+    // и «Б1»/«б1» — один шаг; Ordinal (не culture) — детерминизм и скорость.
     // null в StepRef/Title оставляем null (не «»): валидатор их ловит (пустой stepRef, null
     // title → 400, а не NRE). null — «не задано» (не менять); пустой список — «снять список».
     private static List<PlannedStep>? NormalizePlanSteps(List<PlannedStep>? steps)
@@ -491,6 +491,13 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         }
         return copy;
     }
+
+    // Инвариант «PlanSteps только у role=plan»: пустой список у НЕ-плана — артефакт (снят/не
+    // задан), нормализуем в null, чтобы не держать пустой список там, где его не ждём (без
+    // исключений). У плана пустой список — легитимный «снять список» (тест
+    // Update_ПланСЯвнымПустымСписком), оставляем не-null.
+    private static List<PlannedStep>? NormalizePlanStepsForRole(List<PlannedStep>? steps, string? role) =>
+        steps is { Count: 0 } && role != TaskRoles.Plan ? null : steps;
 
     // Валидация полей фичи (fail-closed, режим «Исполнение фичи»). Проверяет ЭФФЕКТИВНОЕ
     // состояние — то, что окажется на задаче после операции: Create передаёт только что
@@ -571,8 +578,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             if (planSteps.Count > PlannedStep.MaxSteps)
                 throw new InvalidOperationException(
                     $"Слишком много шагов плана: {planSteps.Count} (лимит {PlannedStep.MaxSteps}).");
-            // Дубль stepRef — OrdinalIgnoreCase (минор 5): «B1»/«b1» — один шаг. Ordinal (не
-            // culture) — детерминизм; трим уже сделан в NormalizePlanSteps, поэтому « Б1»==«Б1».
+            // Дубль stepRef — OrdinalIgnoreCase (после трима, минор 5): «B1»/«b1» и «Б1»/«б1» —
+            // один шаг; Ordinal (не culture) — детерминизм и скорость.
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var step in planSteps)
             {
@@ -753,6 +760,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // считаем null, иначе валидатор видел бы «planSteps ≠ null + role ≠ plan» → ложный 400.
         if (task.Role == TaskRoles.Plan && effRole != TaskRoles.Plan)
             effPlanSteps = null;
+        // Смена роли плана на не-план И явный НЕПУСТОЙ planSteps в одном запросе — несовместимы:
+        // перевод очищает список (выше), поэтому присланный список исчезнет молча (тихая потеря;
+        // регресс: до дельты этот ход давал 400 «PlanSteps только у плана»). Отказываем внятным 400:
+        // сначала переведите задачу, потом задайте список, либо снимите список пустым []. Пустой []
+        // со сменой роли — допустим (снимает), поэтому проверка — только на непустой.
+        if (task.Role == TaskRoles.Plan && effRole != TaskRoles.Plan
+            && req.PlanSteps is not null && req.PlanSteps.Count > 0)
+            throw new InvalidOperationException(
+                "Смена роли на не-план и задание planSteps в одном запросе несовместимы: "
+                + "сначала переведите задачу, потом задайте список, либо снимите список пустым массивом.");
         // Связь доработки с ревью (enforceReworkReviewOf) проверяем, когда: (а) меняют поле
         // reviewOf, или (б) эффективная роль ТОЛЬКО СЕЙЧАС стала rework (задача раньше не была
         // rework) — иначе агент создаёт step и tasks_update {role:"rework"} обходит гейт (major 1
@@ -831,11 +848,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.StepRef is not null) task.StepRef = Trimmed(req.StepRef);
         if (req.Lane is not null) task.Lane = Trimmed(req.Lane);
         if (req.ReviewOf is not null) task.ReviewOf = req.ReviewOf;
-        // effPlanSteps уже нормализован (копия + трим) — храним его, не пере-нормализуем
-        if (req.PlanSteps is not null) task.PlanSteps = effPlanSteps;
+        // effPlanSteps уже нормализован (копия + трим) — храним его, не пере-нормализуем;
+        // пустой список у не-плана нормализуем в null (инвариант «PlanSteps только у role=plan»).
+        if (req.PlanSteps is not null) task.PlanSteps = NormalizePlanStepsForRole(effPlanSteps, effRole);
         // Тупик роли (major 3): перевод плана на не-план очищает список шагов — иначе план с
         // planSteps нельзя было бы перевести в step/rework (валидатор: «PlanSteps только у плана»).
-        // Снятие списка явным [] при сохранении роли plan — выше (req.PlanSteps = [] → null).
+        // Снятие списка явным [] при сохранении роли plan — выше: остаётся пустым списком (не null).
         if (roleBefore == TaskRoles.Plan && effRole != TaskRoles.Plan)
             task.PlanSteps = null;
         if (req.AwaitingHumanSince is not null) task.AwaitingHumanSince = req.AwaitingHumanSince;

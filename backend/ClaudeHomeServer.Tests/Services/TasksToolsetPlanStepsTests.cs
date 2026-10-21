@@ -139,4 +139,40 @@ public class TasksToolsetPlanStepsTests : IClassFixture<TestWebApplicationFactor
         var created = JsonSerializer.Deserialize<JsonElement>(text);
         created.GetProperty("planSteps").EnumerateArray().Count(_ => true).Should().Be(2);
     }
+
+    // ─── Major 1 (регресс): смена роли плана на не-план + явный НЕПУСТОЙ planSteps ───────
+    // tasks_update {role:"step", planSteps:[...]} → isError (до дельты isError=false + тихая
+    // потеря списка). Пустой [] со сменой роли — допустим (снимает).
+    [Fact]
+    public async Task Update_ПланНаStep_СЯвнымСписком_IsError()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+
+        // Эпик — источник featureId (step без эпика — «висяк», fail-closed)
+        var (epicText, _) = await CallToolAsync(sessionId, "tasks_create",
+            new { title = "эпик", role = "feature" });
+        var epicId = JsonSerializer.Deserialize<JsonElement>(epicText).GetProperty("id").GetString()!;
+
+        // План с planSteps (привязан к эпика)
+        var (planText, planIsError) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "план",
+            projectId,
+            featureId = epicId,
+            role = "plan",
+            planSteps = new[] { new { stepRef = "B1", title = "бэк" } },
+        });
+        planIsError.Should().BeFalse($"план создан: {planText}");
+        var planId = JsonSerializer.Deserialize<JsonElement>(planText).GetProperty("id").GetString()!;
+
+        // план → step + явный непустой planSteps: отказ, а не тихая потеря списка
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_update", new
+        {
+            id = planId,
+            role = "step",
+            planSteps = new[] { new { stepRef = "B2", title = "новый шаг" } },
+        });
+        isError.Should().BeTrue(
+            $"смена роли на не-план + непустой planSteps — отказ, а не тихая потеря: {text}");
+    }
 }

@@ -1526,4 +1526,51 @@ public class TaskManagerTests : IDisposable
         cleared.Role.Should().Be(TaskRoles.Plan);
         cleared.PlanSteps.Should().BeEmpty();
     }
+
+    // ─── Major 1 (регресс): смена роли плана на не-план + явный НЕПУСТОЙ planSteps ───────
+    // До дельты этот ход давал 400; дельта убрала отказ, и присланный список исчезал молча
+    // (200, planSteps=null). Теперь — внятный 400: сначала переведите, потом задайте список,
+    // либо снимите список пустым [].
+    [Fact]
+    public void Update_ПланНаStep_СЯвнымСписком_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "бэк" }]));
+
+        // план → step + явный непустой planSteps: несовместимо — 400, список не теряется молча
+        var act = () => _sut.Update(plan.Id, new UpdateTaskRequest(
+            Role: TaskRoles.Step,
+            PlanSteps: [new PlannedStep { StepRef = "B2", Title = "новый шаг" }]));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Смена роли на не-план*");
+    }
+
+    // ─── Минор: пустой PlanSteps=[] у не-плана нормализуется в null ───────────────────────
+    // Инвариант «PlanSteps только у role=plan» без исключений: пустой список у не-плана —
+    // артефакт (снят/не задан), храним null, а не пустой список.
+    [Fact]
+    public void Create_ПустойPlanStepsУНеПлана_НормализуетсяВNull()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step,
+            PlanSteps: []));
+
+        step.PlanSteps.Should().BeNull("пустой список у не-плана — null, а не []");
+    }
+
+    [Fact]
+    public void Update_НеПланСЯвнымПустымСписком_НормализуетсяВNull()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+
+        // не-план + явный [] (роль не меняется) — список снимается в null, не остаётся []
+        var updated = _sut.Update(step.Id, new UpdateTaskRequest(PlanSteps: []))!;
+        updated.PlanSteps.Should().BeNull("пустой список у не-плана — null, а не []");
+    }
 }

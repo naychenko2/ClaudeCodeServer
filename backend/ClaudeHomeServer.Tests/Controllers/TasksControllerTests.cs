@@ -2751,6 +2751,39 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             "null-title в planSteps — 400, а не 500 (NRE)");
     }
 
+    // ─── Major 1 (регресс): смена роли плана на не-план + явный НЕПУСТОЙ planSteps ───────
+    // PUT {role:"step", planSteps:[...]} — 400, состояние не изменилось (до дельты 200 + тихая
+    // потеря списка). Пустой [] со сменой роли — допустим (снимает).
+    [Fact]
+    public async Task Update_ПланНаStep_СЯвнымСписком_ЧерезJson_Дает400()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var plan = await CreateTaskAsync(new
+        {
+            title = "план",
+            featureId = epicId,
+            role = "plan",
+            planSteps = new[] { new { stepRef = "B1", title = "бэк" } },
+        });
+        var planId = plan.GetProperty("id").GetString();
+
+        // план → step + явный непустой planSteps: 400, а не 200 с тихой потерей списка
+        var response = await _client.PutAsJsonAsync($"/api/tasks/{planId}", new
+        {
+            role = "step",
+            planSteps = new[] { new { stepRef = "B2", title = "новый шаг" } },
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "смена роли на не-план + непустой planSteps — 400, а не 200 с тихой потерей");
+
+        // состояние не изменилось: роль осталась plan, список — исходный (1 шаг)
+        var get = await _client.GetAsync($"/api/tasks/{planId}");
+        var body = await get.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("role").GetString().Should().Be("plan");
+        body.GetProperty("planSteps").EnumerateArray().Count(_ => true).Should().Be(1);
+    }
+
     // ─── Stub-запускатель: Start бросает → GitService.WorktreeListAsync бросает (сбой git, п.53) ─
 
     private sealed class ThrowingLauncherFactory : ILauncherFactory
@@ -2779,4 +2812,5 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         public string ToRuntime(string hostPath) => hostPath;
         public string ToHost(string runtimePath) => runtimePath;
     }
+
 }

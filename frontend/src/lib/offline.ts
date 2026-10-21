@@ -60,6 +60,39 @@ export function readStoredToken(): string | null {
   return trimmed;
 }
 
+// --- Кэшированный токен (для частых вызовов, напр. avatarUrl) ---
+// readStoredToken читает localStorage/sessionStorage на каждый вызов; при тысячах
+// аватаров в панели «Задачи» это сотни чтений storage на перерисовку. Кэшируем
+// значение в памяти модуля и сбрасываем при смене токена (storage / cc-unauthorized /
+// явный вызов invalidateTokenCache при логине/логауте/смене пароля).
+let _cachedToken: string | null | undefined = undefined; // undefined = ещё не читали
+let _tokenCacheWired = false;
+
+function wireTokenCache(): void {
+  if (_tokenCacheWired || typeof window === 'undefined') return;
+  _tokenCacheWired = true;
+  // Другая вкладка сменила токен (logout/login в соседней вкладке)
+  window.addEventListener('storage', e => {
+    if (e.key === 'cc_token' || e.key === null) _cachedToken = undefined;
+  });
+  // Токен отозван сервером (401) — сбрасываем кэш
+  window.addEventListener('cc-unauthorized', () => { _cachedToken = undefined; });
+}
+
+export function cachedToken(): string | null {
+  if (_cachedToken === undefined) {
+    wireTokenCache();
+    _cachedToken = readStoredToken();
+  }
+  return _cachedToken;
+}
+
+// Явный сброс кэша: вызывать после setItem/removeItem('cc_token', …) в этой вкладке
+// (LoginPage, App logout, смена пароля) — storage-событие в той же вкладке не срабатывает.
+export function invalidateTokenCache(): void {
+  _cachedToken = undefined;
+}
+
 // --- Состояние связи ---
 
 let _online = typeof navigator !== 'undefined' ? navigator.onLine : true;

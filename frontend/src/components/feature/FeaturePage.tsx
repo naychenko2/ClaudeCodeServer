@@ -22,6 +22,8 @@ import { Button } from '../ui/Button';
 import { FeatureTimelineTab } from './FeatureTimelineTab';
 import { FeaturePlansTab, plansTabCount } from './FeaturePlansTab';
 import { FeatureChatsTab } from './FeatureChatsTab';
+import { FeatureTasksTab } from './FeatureTasksTab';
+import { FeatureEventsTab } from './FeatureEventsTab';
 import {
   FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
   featureRunStatusTag, toRunTag, type FeatureRunTag,
@@ -326,6 +328,10 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
             <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} />
           ) : tab === 'chats' ? (
             <FeatureChatsTab page={page.page} keySessionId={keyChat} featureId={featureId} isMobile={isMobile} />
+          ) : tab === 'tasks' ? (
+            <FeatureTasksTab run={okRun} featureId={featureId} isMobile={isMobile} />
+          ) : tab === 'events' ? (
+            <FeatureEventsTab events={page.page.events} eventsTotal={page.page.eventsTotal} featureId={featureId} isMobile={isMobile} />
           ) : (
             <ComingSoon />
           )}

@@ -812,11 +812,11 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         runPlan.GetProperty("resultMarkdown").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
-    // Б5a: stats (график времени, режим approx) в ответе GET features/{id}: source=approx,
-    // timeline с from/to/stages/segments/totals. Индекс (features/index) и список
-    // (features?sessionId=) stats НЕ несут (лёгкий путь) — поле отсутствует.
-    // Мутация «stats не в ответе» → поле отсутствует (краснеет); «stats в индексе» →
-    // поле в строке индекса (краснеет).
+    // Б5a/Б5b: stats (график времени) в ответе GET features/{id}: timeline с from/to/stages/
+    // segments/totals. Б5b: журнал фичи пишется TaskManager'ом (created) → полный → source=journal
+    // (точный режим). Индекс (features/index) и список (features?sessionId=) stats НЕ несут
+    // (лёгкий путь) — поле отсутствует. Мутация «stats не в ответе» → поле отсутствует
+    // (краснеет); «stats в индексе» → поле в строке индекса (краснеет).
     [Fact]
     public async Task GetFeature_Stats_Страница_ИндексИСписокБез()
     {
@@ -825,11 +825,11 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var epicId = epic.GetProperty("id").GetString();
         await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
 
-        // Страница: stats на месте, source=approx, timeline с from/to/totals.
+        // Страница: stats на месте, source=journal (журнал полный: created), timeline с from/to/totals.
         var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
             .Content.ReadFromJsonAsync<JsonElement>();
         var stats = page.GetProperty("stats");
-        stats.GetProperty("source").GetString().Should().Be("approx");
+        stats.GetProperty("source").GetString().Should().Be("journal");
         stats.GetProperty("truncated").GetBoolean().Should().BeFalse();
         var timeline = stats.GetProperty("timeline");
         timeline.TryGetProperty("from", out _).Should().BeTrue("timeline.from");
@@ -857,6 +857,28 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var listRun = list.EnumerateArray()
             .Single(f => f.GetProperty("featureId").GetString() == epicId);
         listRun.TryGetProperty("stats", out _).Should().BeFalse("список stats не несёт");
+    }
+
+    // Б5b: журнал выключен (зависимость FeatureJournalStore = null, подсистема журнала off) →
+    // stats.source=approx, НЕ 500 (null-ссылка). Прямая сборка: features (FeatureProjector) на
+    // месте, journal = null (BuildController не передаёт journal → дефолт null).
+    [Fact]
+    public async Task GetFeature_ЖурналаНет_ApproxБез500()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+
+        var controller = BuildController(git: null); // journal = null (дефолт)
+        var result = controller.GetFeature(epicId, null); // GetFeature — синхронный (IActionResult)
+
+        result.Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>();
+        var body = (result as Microsoft.AspNetCore.Mvc.OkObjectResult)!.Value!;
+        // CamelCase — как wire-формат приложения (SystemTextJson): FeatureStats.Source → source.
+        var json = JsonSerializer.SerializeToElement(body,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        // journal = null → source=approx (не 500).
+        json.GetProperty("stats").GetProperty("source").GetString().Should().Be("approx");
+        json.GetProperty("stats").GetProperty("truncated").GetBoolean().Should().BeFalse();
     }
 
     // ─── REST POST /api/tasks/features/{featureId}/merge: мерж фичи ─────────────────────────

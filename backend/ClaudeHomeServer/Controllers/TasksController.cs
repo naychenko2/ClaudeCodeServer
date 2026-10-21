@@ -13,6 +13,7 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -119,7 +120,11 @@ public class TasksController(
     // Б4: резолв модели чата (слой Llm, Main его видит): слот «Авто» → модель (UserModelTierResolver,
     // единственная точка разворачивания, инвариант CLAUDE.md). null — подсистема Llm выключена
     // → «Авто» без разворота (честный null, не 500).
-    UserModelTierResolver? tiers = null) : ControllerBase
+    UserModelTierResolver? tiers = null,
+    // Б5b: журнал событий фичи (волна 3): точный режим stats.timeline (work/waiting/error/idle)
+    // и модели breakdown из журнала. null — подсистема Tasks выключена (как features) →
+    // stats.source=approx, не 500.
+    FeatureJournalStore? journal = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -602,18 +607,25 @@ public class TasksController(
         allFeatureTasks.AddRange(run.Cut);
         allFeatureTasks.AddRange(run.Plan);
         var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
-        // Б5a: stats — график времени фичи (режим approx, по задачам) по ПОЛНОМУ run (до SlimRun:
-        // интервалы work из ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён
-        // для ответа). Индекс/список stats НЕ несут (лёгкий путь) — только страница фичи.
+        // Б5a/Б5b: stats — график времени фичи по ПОЛНОМУ run (до SlimRun: интервалы work из
+        // ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён для ответа).
+        // Индекс/список stats НЕ несут (лёгкий путь) — только страница фичи: чтение журнала
+        // (FeatureJournalStore.Read) — ТОЛЬКО здесь, не в индексе/списке.
+        // Б5b: журнал фичи (опционально — null, если подсистема Tasks выключена): полный
+        // (StartsWithCreated && !Truncated) → timeline в точном режиме (work/waiting/error/idle)
+        // и модели breakdown из журнала; иначе approx (по задачам). Выключенный журнал →
+        // source=approx, не 500 (Read сам не бросает: fail-closed на кривой id/отсутствие файла).
+        var journalResult = journal?.Read(UserId, featureId);
+        var journalComplete = journalResult is { StartsWithCreated: true, Truncated: false };
         // Б6: breakdown (разрезы по персонам/моделям/ролям) + longestNow («дольше всех сейчас») —
-        // тоже по ПОЛНОМУ run, на том же снимке владельца (fail-closed) и now. Журнал пока null
-        // (Б5b подключит): модель тогда из снимка через resolver (резолв «Авто» — готовая функция Б4).
+        // тоже по ПОЛНОМУ run, на том же снимке владельца (fail-closed) и now. Журнал полный →
+        // модели из журнала (turn.model), иначе из снимка через resolver (резолв «Авто» — Б4).
         var now = DateTime.UtcNow;
-        var (breakdown, longestNow) = FeatureBreakdown.Build(run, null, snapshot, resolver, now);
+        var (breakdown, longestNow) = FeatureBreakdown.Build(run, journalResult, snapshot, resolver, now);
         var stats = new FeatureStats(
-            Source: "approx",
-            Truncated: false,
-            Timeline: FeatureTimeline.Build(run, null, now),
+            Source: journalComplete ? "journal" : "approx",
+            Truncated: journalResult?.Truncated ?? false,
+            Timeline: FeatureTimeline.Build(run, journalResult, now),
             Breakdown: breakdown,
             LongestNow: longestNow);
         return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats });

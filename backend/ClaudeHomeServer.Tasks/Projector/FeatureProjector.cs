@@ -1375,36 +1375,43 @@ public sealed class FeatureProjector(TaskManager tasks)
             if (t.FeatureId is not null && t.ExecutorLaunchedBySessionId is not null)
                 AddToSet(orchestratorBySession, t.ExecutorLaunchedBySessionId, t.FeatureId);
 
-        // Область: сессии проекта (или все, если projectId не задан).
-        var inScope = projectId is null
+        // Область: сессии проекта (или все, если projectId не задан). Материализуем (List):
+        // FeatureChatMembership.Build ожидает IReadOnlyCollection, а .Where даёт IEnumerable.
+        var inScope = (projectId is null
             ? sessions
-            : sessions.Where(s => s.ProjectId == projectId);
+            : sessions.Where(s => s.ProjectId == projectId)).ToList();
 
         // sessionId → featureId → (сила, вид, role, stepRef, lane); на пару «чат × фича» —
         // сильнейший вид (Add держит минимум по Strength).
         var map = new Dictionary<string,
             Dictionary<string, (int Strength, string Kind, string? Role, string? StepRef, string? Lane)>>();
 
-        foreach (var s in inScope)
+        // Доработка Б9c: правило «чат → фичи» (executor ∪ curator ∪ orchestrator) — единая
+        // точка правды FeatureChatMembership (не две копии: здесь и в ChatFeatureIds). Вид
+        // (executor/curator/orchestrator) для отображения определяется по осям; Add держит
+        // сильнейший (curator > orchestrator > executor).
+        var membership = FeatureChatMembership.Build(owner, inScope);
+        var sessionById = inScope.ToDictionary(s => s.Id);
+        foreach (var (chatId, features) in membership)
         {
-            // executor: Session.TaskId → задача с FeatureId == F (или сама эпик F).
-            if (s.TaskId is not null && byId.TryGetValue(s.TaskId, out var task))
+            var s = sessionById.TryGetValue(chatId, out var sess) ? sess : null;
+            foreach (var featureId in features)
             {
-                var featureId = task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
-                if (featureId is not null)
-                    Add(map, s.Id, featureId, KindStrength("executor"), "executor",
-                        task.Role, task.StepRef, task.Lane);
+                // executor: Session.TaskId → задача с FeatureId == F (или сама эпик F).
+                if (s is not null && s.TaskId is not null && byId.TryGetValue(s.TaskId, out var task))
+                {
+                    var fid = task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
+                    if (fid == featureId)
+                        Add(map, chatId, featureId, KindStrength("executor"), "executor",
+                            task.Role, task.StepRef, task.Lane);
+                }
+                // curator: epic.SourceSessionId == чат.
+                if (curatorBySession.TryGetValue(chatId, out var curators) && curators.Contains(featureId))
+                    Add(map, chatId, featureId, KindStrength("curator"), "curator", null, null, null);
+                // orchestrator: эпик/дочерняя задача запускала исполнителя из этого чата.
+                if (orchestratorBySession.TryGetValue(chatId, out var orchestrators) && orchestrators.Contains(featureId))
+                    Add(map, chatId, featureId, KindStrength("orchestrator"), "orchestrator", null, null, null);
             }
-
-            // curator: epic.SourceSessionId == чат.
-            if (curatorBySession.TryGetValue(s.Id, out var curators))
-                foreach (var f in curators)
-                    Add(map, s.Id, f, KindStrength("curator"), "curator", null, null, null);
-
-            // orchestrator: эпик/дочерняя задача запускала исполнителя из этого чата.
-            if (orchestratorBySession.TryGetValue(s.Id, out var orchestrators))
-                foreach (var f in orchestrators)
-                    Add(map, s.Id, f, KindStrength("orchestrator"), "orchestrator", null, null, null);
         }
 
         // Строки-заготовки фич (Features). Область фич: эпик в проекте ИЛИ хотя бы один чат
@@ -1535,31 +1542,15 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Фичи, в которые входит чат (те же правила членства, что BuildIndexCore: executor/curator/
     // orchestrator). Для ключевого чата фичи: |set| == 1 и set == {эта фича} → чат исключителен
     // (его расход целиком фичи, Б9b); иначе общий (деление — Б9c). internal — для золотых тестов.
+    // Доработка Б9c: правило вынесено в FeatureChatMembership (единая точка правды) — здесь
+    // только lookup по чату, чтобы правило не жило в двух копиях.
     internal static HashSet<string> ChatFeatureIds(string chatId, IReadOnlyList<TaskItem> owner,
         IReadOnlyCollection<FeatureIndexSession> sessions)
     {
         var result = new HashSet<string>(StringComparer.Ordinal);
         if (string.IsNullOrEmpty(chatId)) return result;
-        var byId = owner.ToDictionary(t => t.Id);
-        var epics = owner.Where(t => t.Role == TaskRoles.Feature).ToList();
-
-        // executor: сессия чата → TaskId → задача → её фича (эпик — сама фича).
-        var taskId = sessions.FirstOrDefault(s => s.Id == chatId)?.TaskId;
-        if (taskId is not null && byId.TryGetValue(taskId, out var t))
-        {
-            var fid = t.FeatureId ?? (t.Role == TaskRoles.Feature ? t.Id : null);
-            if (fid is not null) result.Add(fid);
-        }
-        // curator: epic.SourceSessionId == чат.
-        foreach (var epic in epics)
-            if (epic.SourceSessionId == chatId) result.Add(epic.Id);
-        // orchestrator: epic.ExecutorLaunchedBySessionId == чат ИЛИ ExecutorLaunchedBySessionId
-        // дочерней задачи фичи == чат.
-        foreach (var epic in epics)
-            if (epic.ExecutorLaunchedBySessionId == chatId) result.Add(epic.Id);
-        foreach (var task in owner)
-            if (task.FeatureId is not null && task.ExecutorLaunchedBySessionId == chatId) result.Add(task.FeatureId);
-
+        if (FeatureChatMembership.Build(owner, sessions).TryGetValue(chatId, out var features))
+            result.UnionWith(features);
         return result;
     }
 

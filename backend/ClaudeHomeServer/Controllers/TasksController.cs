@@ -637,74 +637,56 @@ public class TasksController(
         // тоже по ПОЛНОМУ run, на том же снимке владельца (fail-closed) и now. Журнал полный →
         // модели из журнала (turn.model), иначе из снимка через resolver (резолв «Авто» — Б4).
         var now = DateTime.UtcNow;
-        // Б9b: расход фичи (stats.spend). Атрибуция: задачи фичи (id) + их сессии (LinkedSessionId)
-        // + ключевой чат, если он состоит ТОЛЬКО в этой фиче (общий чат — делится в Б9c).
-        // Шов опционален: null (Spend выключен) → spend = null, не 500.
+        // Б9b/Б9c: расход фичи (stats.spend). Атрибуция (единое правило членства,
+        // FeatureChatMembership — доработка Б9c): задачи фичи (id) + сессии (LinkedSessionId) +
+        // чаты, состоящие ТОЛЬКО в этой фиче (M[c] = {F}); ОБЩИЕ чаты (M[c] ⊇ {F}, |M[c]| ≥ 2)
+        // вычитаются из прямого среза (exclude) и делятся поровну (shared). Шов опционален:
+        // null (Spend выключен) → spend = null, не 500.
         var taskIds = allFeatureTasks
             .Select(t => t.Id)
             .Where(id => id is not null)
             .Select(id => id!)
             .ToHashSet(StringComparer.Ordinal);
+        var F = run.Epic.Id;
+        var owner = tasks.GetByOwner(UserId).ToList();
+        // Единое правило «чат → фичи» (executor ∪ curator ∪ orchestrator), без фильтра по проекту.
+        var membership = FeatureChatMembership.Build(owner, snapshot);
+        // Общие чаты фичи: входят в 2+ фичи (F ∈ M[c], |M[c]| ≥ 2). Исключение главнее обеих осей.
+        var sharedChatIds = membership
+            .Where(kv => kv.Value.Contains(F) && kv.Value.Count >= 2)
+            .Select(kv => kv.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        // sessionIds: LinkedSessionId задач + чаты, состоящие ТОЛЬКО в этой фиче (M[c] = {F}),
+        // минус общие (они — в долю, не в прямой срез).
         var sessionIds = allFeatureTasks
             .Select(t => t.LinkedSessionId)
             .Where(id => id is not null)
             .Select(id => id!)
             .ToHashSet(StringComparer.Ordinal);
-        // Ключевой чат: сессия с TaskId == epic.Id из снимка сессий владельца. Fail-closed —
-        // ТОЛЬКО для ключевого чата (ревью Глеба, minor): он берётся из снимка, поэтому
-        // удалённый/чужой чат в нём не живёт → ключевого чата нет, и его расход в срез не входит.
-        // (sessionIds из LinkedSessionId задач снимком НЕ проверяются — запись по удалённому чату
-        // входит в срез; осознанно, см. отчёт.) Прежняя версия брала run.Epic.LinkedSessionId, а
-        // тот ВСЕГДА был в sessionIds (эпик входит в allFeatureTasks) → ветка «!sessionIds.Contains»
-        // была мёртвой, ChatFeatureIds не вызывался никогда, и общий чат (ключевой у фичи A,
-        // оркестраторский у B) входил в срез КАЖДОЙ фичи → двойной счёт (ревью Глеба, critical).
-        var keyChatId = snapshot.FirstOrDefault(s => s.TaskId == run.Epic.Id)?.Id;
-        if (keyChatId is not null)
-        {
-            // Ключевой чат исключается из среза и добавляется обратно только если состоит ровно
-            // в одной фиче (общий чат, 2+ фич, делится поровну в Б9c).
-            sessionIds.Remove(keyChatId);
-            var owner = tasks.GetByOwner(UserId).ToList();
-            var chatFeatures = FeatureProjector.ChatFeatureIds(keyChatId, owner, snapshot);
-            if (chatFeatures.Count == 1 && chatFeatures.Contains(run.Epic.Id))
-                sessionIds.Add(keyChatId);
-        }
+        foreach (var (chatId, feats) in membership)
+            if (feats.Count == 1 && feats.Contains(F))
+                sessionIds.Add(chatId);
+        sessionIds.ExceptWith(sharedChatIds);
         // Один проход (Slice): итог и записи из одного набора — без окна рассогласования между
         // двумя отдельными сканами стора (минор доработки Б9b). spend null (Spend выключен) →
         // оба null, как раньше (spend?.Totals / spend?.Records).
         FeatureSpendTotals? spendTotals = null;
         IReadOnlyList<FeatureSpendRecord>? spendRecords = null;
         if (spend is not null)
-            (spendTotals, spendRecords) = spend.Slice(UserId, taskIds, sessionIds, [], from: run.Epic.CreatedAt);
+            (spendTotals, spendRecords) = spend.Slice(UserId, taskIds, sessionIds, sharedChatIds, from: run.Epic.CreatedAt);
 
-        // Б9c: доля ОБЩИХ (оркестраторских) чатов фичи. «Общий чат» — epic-level чат (kind
-        // key/curator/orchestrator), входящий в 2+ фичи владельца: key-чат (сессия с TaskId ==
-        // epic.Id; Б9b исключает его из среза, если общий), curator (epic.SourceSessionId) и
-        // orchestrator (epic.ExecutorLaunchedBySessionId) — если в снимке. Их расход делится
-        // ПОРОВНУ (1/N) между фичами, активными на момент хода (state ∈ {running, waiting, merging}).
-        // Доля текущей фичи → stats.spend.shared + ВКЛЮЧЕНА в итоги. Нет общих чатов (все
-        // epic-level чаты в 1 фиче) или Spend выключен (spendTotals null) → shared: null.
+        // Б9c: доля ОБЩИХ (оркестраторских) чатов фичи. «Общий чат» — чат, входящий в 2+ фичи
+        // владельца (единое правило FeatureChatMembership: executor ∪ curator ∪ orchestrator
+        // эпика и дочерних задач). Их расход делится ПОРОВНУ (1/N) между фичами, активными на
+        // момент хода (state ∈ {running, waiting, merging}). Доля текущей фичи → stats.spend.shared
+        // + ВКЛЮЧЕНА в итоги. Нет общих чатов или Spend выключен (spendTotals null) → shared: null.
         FeatureSpendShared? shared = null;
         bool sharedCostPartial = false;
         var sharedHidden = new List<string>();
         if (spendTotals is not null)
         {
-            // Epic-level чаты фичи, которые есть в снимке владельца (fail-closed: чужой/удалённый
-            // чат в снимке не живёт). Дедуп: key-чат может совпадать с curator/orchestrator.
-            var sharedChatIds = new List<string>();
-            if (keyChatId is not null) sharedChatIds.Add(keyChatId);
-            if (run.Epic.SourceSessionId is not null && snapshot.Any(s => s.Id == run.Epic.SourceSessionId))
-                sharedChatIds.Add(run.Epic.SourceSessionId);
-            if (run.Epic.ExecutorLaunchedBySessionId is not null
-                && snapshot.Any(s => s.Id == run.Epic.ExecutorLaunchedBySessionId))
-                sharedChatIds.Add(run.Epic.ExecutorLaunchedBySessionId);
-            sharedChatIds = sharedChatIds.Distinct(StringComparer.Ordinal).ToList();
-
-            // Общие: чат входит в 2+ фичи (ChatFeatureIds — те же правила членства, что Б9b).
-            var owner = tasks.GetByOwner(UserId).ToList();
             var sharedChats = sharedChatIds
-                .Select(chatId => (ChatId: chatId, Features: FeatureProjector.ChatFeatureIds(chatId, owner, snapshot)))
-                .Where(kv => kv.Features.Count >= 2)
+                .Select(chatId => (ChatId: chatId, Features: membership[chatId]))
                 .ToList();
 
             if (sharedChats.Count > 0)

@@ -602,7 +602,11 @@ public class TasksController(
         allFeatureTasks.AddRange(run.Cut);
         allFeatureTasks.AddRange(run.Plan);
         var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
-        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans });
+        // Б5a: stats — график времени фичи (режим approx, по задачам) по ПОЛНОМУ run (до SlimRun:
+        // интервалы work из ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён
+        // для ответа). Индекс/список stats НЕ несут (лёгкий путь) — только страница фичи.
+        var stats = new FeatureStats("approx", false, FeatureTimeline.Build(run, null, DateTime.UtcNow));
+        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats });
     }
 
     // ?eventsLimit= : не задан (null) → 100; строка «0» или «all» → все (int.MaxValue) — «0»

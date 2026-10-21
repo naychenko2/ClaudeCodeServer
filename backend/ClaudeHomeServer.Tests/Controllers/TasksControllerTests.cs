@@ -812,6 +812,46 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         runPlan.GetProperty("resultMarkdown").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // Б5a: stats (график времени, режим approx) в ответе GET features/{id}: source=approx,
+    // timeline с from/to/stages/segments/totals. Индекс (features/index) и список
+    // (features?sessionId=) stats НЕ несут (лёгкий путь) — поле отсутствует.
+    // Мутация «stats не в ответе» → поле отсутствует (краснеет); «stats в индексе» →
+    // поле в строке индекса (краснеет).
+    [Fact]
+    public async Task GetFeature_Stats_Страница_ИндексИСписокБез()
+    {
+        var sessionId = "sess-stats-test-1";
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
+        var epicId = epic.GetProperty("id").GetString();
+        await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
+
+        // Страница: stats на месте, source=approx, timeline с from/to/totals.
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var stats = page.GetProperty("stats");
+        stats.GetProperty("source").GetString().Should().Be("approx");
+        stats.GetProperty("truncated").GetBoolean().Should().BeFalse();
+        var timeline = stats.GetProperty("timeline");
+        timeline.TryGetProperty("from", out _).Should().BeTrue("timeline.from");
+        timeline.TryGetProperty("to", out _).Should().BeTrue("timeline.to");
+        timeline.TryGetProperty("stages", out _).Should().BeTrue("timeline.stages");
+        timeline.TryGetProperty("segments", out _).Should().BeTrue("timeline.segments");
+        timeline.TryGetProperty("totals", out _).Should().BeTrue("timeline.totals");
+
+        // Индекс: строка фичи stats НЕ несёт (лёгкий путь).
+        var index = await GetIndexAsync();
+        var row = index.GetProperty("features").EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        row.TryGetProperty("stats", out _).Should().BeFalse("индекс stats не несёт");
+
+        // Список: run stats НЕ несёт.
+        var list = await (await _client.GetAsync($"/api/tasks/features?sessionId={sessionId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var listRun = list.EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        listRun.TryGetProperty("stats", out _).Should().BeFalse("список stats не несёт");
+    }
+
     // ─── REST POST /api/tasks/features/{featureId}/merge: мерж фичи ─────────────────────────
 
     // 503: подсистема Tasks выключена (FeatureProjector не зарегистрирован) — прямой сборкой контроллера.

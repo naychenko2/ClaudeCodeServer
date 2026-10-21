@@ -465,4 +465,117 @@ public class SharedSpendSplitterTests
         intervals.Should().ContainSingle()
             .Which.Should().Be(new FeatureActivityInterval(w, cleared));
     }
+    // Approx: остановленная задача (ExecutorStoppedAt) активна только до остановки, не до now
+    // (решение Александра, п.3; мутация М3 — не учитывать ExecutorStoppedAt).
+    [Fact]
+    public void ApproxActivity_ОстановленнаяЗадача_ДоОстановки_НеДоNow()
+    {
+        var start = T0.AddHours(-3);
+        var stopped = T0.AddHours(-2);
+        var run = new FeatureRun
+        {
+            Epic = new TaskItem
+            {
+                Id = "epic",
+                Role = TaskRoles.Feature,
+                CreatedAt = start.AddMinutes(-10),
+                ClaudeStartedAt = start,
+                CompletedAt = null,
+                ExecutorStoppedAt = stopped,
+            },
+        };
+
+        var intervals = SharedSpendSplitter.ApproxActivity(run, T0);
+
+        intervals.Should().ContainSingle()
+            .Which.Should().Be(new FeatureActivityInterval(start, stopped),
+                "остановленная задача перестаёт быть активной в момент остановки");
+    }
+
+    // Approx: ожидание человека ДОЧЕРНЕЙ задачи фичи (не эпика) тоже активность
+    // (мутация М9 — ожидание только у эпика).
+    [Fact]
+    public void ApproxActivity_ОжиданиеДочернейЗадачи_Интервал()
+    {
+        var since = T0.AddHours(-1);
+        var run = new FeatureRun
+        {
+            Epic = new TaskItem
+            {
+                Id = "epic",
+                Role = TaskRoles.Feature,
+                CreatedAt = since.AddMinutes(-10),
+            },
+            Steps = new List<TaskItem>
+            {
+                new() { Id = "step", Role = TaskRoles.Step, FeatureId = "epic", AwaitingHumanSince = since },
+            },
+        };
+
+        var intervals = SharedSpendSplitter.ApproxActivity(run, T0);
+
+        intervals.Should().ContainSingle()
+            .Which.Should().Be(new FeatureActivityInterval(since, T0));
+    }
+
+    // Journal с clipFrom: интервал, начавшийся ДО создания фичи, обрезается по CreatedAt
+    // (минор 3: знаменатели режимов однородны, как у approx).
+    [Fact]
+    public void JournalActivity_ClipFrom_ОбрезаетНачалоДоСоздания()
+    {
+        var start = T0.AddHours(-3);
+        var created = T0.AddHours(-2);
+        var done = T0.AddHours(-1);
+        var journal = new FeatureJournalReadResult
+        {
+            Entries = new List<FeatureJournalEntry>
+            {
+                new() { Kind = "created", At = start.AddMinutes(-10), TaskId = "t1" },
+                new() { Kind = "started", At = start, TaskId = "t1" },
+                new() { Kind = "status", At = done, TaskId = "t1", From = "InProgress", To = "Done" },
+            },
+            StartsWithCreated = true,
+            Truncated = false,
+        };
+
+        var intervals = SharedSpendSplitter.JournalActivity(journal, T0, created);
+
+        intervals.Should().ContainSingle()
+            .Which.Should().Be(new FeatureActivityInterval(created, done));
+    }
+    // Approx: клип по epic.CreatedAt — активность не начинается до создания фичи. Это и есть
+    // граница окна (М5): ход ДО создания участницы ей не достаётся, потому что она неактивна
+    // (отдельный from=epic.CreatedAt избыточен и ненаблюдаем: клип уже делает фичу неактивной).
+    [Fact]
+    public void ApproxActivity_Клип_ПоCreatedAt_НеАктивнаДоСоздания()
+    {
+        var start = T0.AddHours(-3);
+        var created = T0.AddHours(-2);
+        var done = T0.AddHours(-1);
+        var run = new FeatureRun
+        {
+            Epic = new TaskItem
+            {
+                Id = "epic",
+                Role = TaskRoles.Feature,
+                CreatedAt = created,
+                ClaudeStartedAt = start,
+                CompletedAt = done,
+            },
+        };
+
+        var intervals = SharedSpendSplitter.ApproxActivity(run, T0);
+
+        intervals.Should().ContainSingle()
+            .Which.Should().Be(new FeatureActivityInterval(created, done));
+
+        // Следствие для деления: ход ДО создания B (start..created) достаётся только активной A.
+        var turn = Turn(T0.AddHours(-2.5), input: 100);
+        var a = Active("A", start, done);
+        var b = new FeatureActivity("B", intervals);
+        var (shareA, _, _) = SharedSpendSplitter.Split([turn], [a, b], "A", "approx");
+        var (shareB, _, _) = SharedSpendSplitter.Split([turn], [a, b], "B", "approx");
+        shareA.InputTokens.Should().Be(100);
+        shareB.InputTokens.Should().Be(0);
+    }
 }

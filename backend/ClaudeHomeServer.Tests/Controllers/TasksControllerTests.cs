@@ -3004,6 +3004,13 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         AssertShared(statsC, 50, 25, 0.5);
         // Сохранение: сумма долей (400) + неактивный ход r3 (100) = ВСЕМУ расходу (500).
         (200 + 150 + 50 + 100).Should().Be(500, "доли + неактивный ход = всему расходу");
+        // Нет двойного счёта: все 5 записей лежат в ОБЩИХ чатах (S, E) → в прямом срезе фич
+        // их быть не должно (исключение главнее оси taskIds, в проде запись несёт TaskId).
+        // Итог spend.* ВКЛЮЧАЕТ долю → при пустом прямом срезе итог == доле.
+        foreach (var st in new[] { statsA, statsB, statsC })
+            st.GetProperty("spend").GetProperty("inputTokens").GetInt64()
+                .Should().Be(st.GetProperty("spend").GetProperty("shared").GetProperty("inputTokens").GetInt64(),
+                    "расход общих чатов идёт только в долю, не в прямой срез (итог == доле)");
 
         // ── Сценарий (b): журнал B (соседки) удалён → method=approx (у всех) ──
         journal.Delete(OwnerId, epicBId);
@@ -3021,6 +3028,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         AssertShared(statsA2, 150, 75, 1.5);
         AssertShared(statsB2, 100, 50, 1.0);
         AssertShared(statsC2, 50, 25, 0.5);
+        foreach (var st in new[] { statsA2, statsB2, statsC2 })
+            st.GetProperty("spend").GetProperty("inputTokens").GetInt64()
+                .Should().Be(st.GetProperty("spend").GetProperty("shared").GetProperty("inputTokens").GetInt64());
     }
 
     // CreatedAt — init-only: ставим через рефлексию (тест: фича «создана» в прошлом).

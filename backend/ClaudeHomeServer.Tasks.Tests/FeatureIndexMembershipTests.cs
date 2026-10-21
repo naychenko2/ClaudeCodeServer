@@ -280,6 +280,28 @@ public class FeatureIndexMembershipTests
         FeatureChatMembership.Build(owner, withOther).Should().ContainKey("sOther");
     }
 
+    // ── М2: чат, запустивший исполнителя дочерней задачи фичи, состоит в фиче (orchestrator) ──
+
+    // Чат c2 — ExecutorLaunchedBySessionId дочерней задачи (step) фичи epic1 → c2 ∈ M[epic1]
+    // (orchestrator-ось по ДОЧЕРНЕЙ задаче, не только по эпику). Мутация (orchestrator только
+    // по эпику, не по дочерним) → c2 не в фиче, тест краснеет.
+    [Fact]
+    public void Членство_ОркестраторДочернейЗадачи_ЧатВФиче()
+    {
+        var owner = new List<TaskItem>
+        {
+            Epic("epic1"),
+            Child("step1", "epic1", executorLaunchedBy: "c2"), // c2 запустил исполнителя step1
+        };
+        var sessions = new[] { Session("c2") };
+
+        var map = FeatureChatMembership.Build(owner, sessions);
+
+        map.Should().ContainKey("c2",
+            "чат, запустивший исполнителя дочерней задачи, в фиче (orchestrator по дочерней)");
+        map["c2"].Should().BeEquivalentTo(new[] { "epic1" });
+    }
+
     // ── Мутация: O(E×T) — owner сканируется константное число раз, а не на каждый эпик ──────
 
     // Ядро индекса (BuildIndexCore) перечисливает список задач владельца константное число раз

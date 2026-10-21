@@ -2902,7 +2902,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // Членство: S = {A, B} (S — key-чат A (executor) + orchestrator-чат B), E = {B, C}
     // (E — executor-чат B + orchestrator-чат C через дочернюю задачу, проба F).
     //
-    // Активность: (a) все журналы полные → method=journal; (b) журнал B удалён → method=approx.
+    // Метод: (a) все журналы полные, НО в чате есть дневная строка → method=approx (дневная
+    // строка понижает метку, п.5), (b) журнал B удалён → method=approx (неполный журнал).
     // Журнал A/B несёт pastDay-период + now-период; approx (ClaudeStartedAt) — только now →
     // дневная строка делится в journal (A+B активны на pastDay), но НЕ в approx (journal ≠ approx).
     [Fact]
@@ -3043,6 +3044,218 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         foreach (var st in new[] { statsA2, statsB2, statsC2 })
             st.GetProperty("spend").GetProperty("inputTokens").GetInt64()
                 .Should().Be(st.GetProperty("spend").GetProperty("shared").GetProperty("inputTokens").GetInt64());
+    }
+
+    // ─── Б9c-3, сторож (i): общий чат с ТРЁМЯ участницами, ход 100, все активны (М6) ──────────
+
+    // S = {A, B, C} (A — executor, B и C — orchestrator), ход 100 токенов, все активны.
+    // Знаменатель = 3: наибольший остаток 100/3 = 34+33+33 = 100 РОВНО (input), 50/3 = 17+17+16.
+    // Мутация М6 (знаменатель ≠ 3, напр. деление на 2) → сумма долей ≠ 100, тест краснеет.
+    [Fact]
+    public async Task GetFeature_Сторож_ТриУчастницы_100Токенов_ВсеАктивны()
+    {
+        var now = DateTime.UtcNow;
+        var t1 = now.AddHours(-1);
+
+        // Три фичи, все в общем чате S: A — executor (сессия S → stepA), B и C — orchestrator.
+        var (epicAId, stepAId, chatS) = await MakeFeature("g3-A");
+        var epicB = await CreateTaskAsync(new { title = "эпик-g3-B", role = "feature" });
+        var epicBId = epicB.GetProperty("id").GetString()!;
+        var stepB = await CreateTaskAsync(new { title = "шаг-g3-B", featureId = epicBId, role = "step" });
+        var stepBId = stepB.GetProperty("id").GetString()!;
+        var epicC = await CreateTaskAsync(new { title = "эпик-g3-C", role = "feature" });
+        var epicCId = epicC.GetProperty("id").GetString()!;
+        var stepC = await CreateTaskAsync(new { title = "шаг-g3-C", featureId = epicCId, role = "step" });
+        var stepCId = stepC.GetProperty("id").GetString()!;
+
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+        tasks.GetById(stepBId)!.ExecutorLaunchedBySessionId = chatS; // S = {A, B, C}
+        tasks.GetById(stepCId)!.ExecutorLaunchedBySessionId = chatS;
+        // Все три «созданы» до хода (иначе окно from=minCreated отрезало бы запись) и активны на t1.
+        SetCreatedAt(tasks.GetById(epicAId)!, t1.AddHours(-1));
+        SetCreatedAt(tasks.GetById(epicBId)!, t1.AddHours(-1));
+        SetCreatedAt(tasks.GetById(epicCId)!, t1.AddHours(-1));
+        tasks.GetById(stepAId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepAId)!.CompletedAt = t1.AddMinutes(10);
+        tasks.GetById(stepBId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepBId)!.CompletedAt = t1.AddMinutes(10);
+        tasks.GetById(stepCId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepCId)!.CompletedAt = t1.AddMinutes(10);
+
+        // Ход в S на 100 токенов (все три активны).
+        var (store, reader) = SpendStoreWith(
+            ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1));
+
+        var statsA = GetFeatureStats(reader, epicAId);
+        var statsB = GetFeatureStats(reader, epicBId);
+        var statsC = GetFeatureStats(reader, epicCId);
+
+        // Наибольший остаток 100/3: сумма 34+33+33=100 (input), 17+17+16=50 (output).
+        // Индивидуальные значения зависят от порядка id (GUID, idx) → проверяем сумму и диапазон.
+        long inA = SharedInput(statsA), inB = SharedInput(statsB), inC = SharedInput(statsC);
+        (inA + inB + inC).Should().Be(100, "сумма долей input = расходу чата (100), знаменатель = 3");
+        inA.Should().BeOneOf(33, 34);
+        inB.Should().BeOneOf(33, 34);
+        inC.Should().BeOneOf(33, 34);
+        long outA = SharedOutput(statsA), outB = SharedOutput(statsB), outC = SharedOutput(statsC);
+        (outA + outB + outC).Should().Be(50, "сумма долей output = расходу чата (50)");
+    }
+
+    // Доля shared: input/output токены (вспомогательное для сторожей с неопределённым idx).
+    private static long SharedInput(JsonElement stats) =>
+        stats.GetProperty("spend").GetProperty("shared").GetProperty("inputTokens").GetInt64();
+    private static long SharedOutput(JsonElement stats) =>
+        stats.GetProperty("spend").GetProperty("shared").GetProperty("outputTokens").GetInt64();
+
+    // ─── Б9c-3, сторож (ii): два общих чата с РАЗНЫМ составом, ход при активной третьей (М10) ──
+
+    // c1 = {F, G}, c2 = {F, H}; ход в c1 на 90 токенов, активны все три. Знаменатель = M[c1]
+    // = {F, G} (НЕ объединение {F, G, H}): F и G делят 90 поровну (по 45), H (не в c1) — 0.
+    // Мутация М10 (знаменатель = объединение участниц запроса = {F, G, H}) → F=30, G=30, H=30,
+    // доли неверны (F должен 45, не 30) → тест краснеет.
+    [Fact]
+    public async Task GetFeature_Сторож_РазныйСоставЧатов_ТретьяАктивна()
+    {
+        var now = DateTime.UtcNow;
+        var t1 = now.AddHours(-1);
+
+        // F: executor-чат c1 (сессия c1 → stepF).
+        var (epicFId, stepFId, c1) = await MakeFeature("g10-F");
+        // G: orchestrator-чат = c1 → c1 = {F, G}.
+        var epicG = await CreateTaskAsync(new { title = "эпик-g10-G", role = "feature" });
+        var epicGId = epicG.GetProperty("id").GetString()!;
+        var stepG = await CreateTaskAsync(new { title = "шаг-g10-G", featureId = epicGId, role = "step" });
+        var stepGId = stepG.GetProperty("id").GetString()!;
+        // H: executor-чат c2 (сессия c2 → stepH); F — orchestrator c2 → c2 = {F, H}.
+        var epicH = await CreateTaskAsync(new { title = "эпик-g10-H", role = "feature" });
+        var epicHId = epicH.GetProperty("id").GetString()!;
+        var stepH = await CreateTaskAsync(new { title = "шаг-g10-H", featureId = epicHId, role = "step" });
+        var stepHId = stepH.GetProperty("id").GetString()!;
+        var c2 = await CreatePersonalChatAsync(OwnerId, stepHId);
+        await _client.PutAsJsonAsync($"/api/tasks/{stepHId}", new { linkedSessionId = c2 });
+
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+        tasks.GetById(stepGId)!.ExecutorLaunchedBySessionId = c1;   // c1 = {F, G}
+        tasks.GetById(epicFId)!.ExecutorLaunchedBySessionId = c2;   // c2 = {F, H}
+        // Все три «созданы» до хода (иначе окно from=minCreated отрезало бы запись) и активны на t1.
+        SetCreatedAt(tasks.GetById(epicFId)!, t1.AddHours(-1));
+        SetCreatedAt(tasks.GetById(epicGId)!, t1.AddHours(-1));
+        SetCreatedAt(tasks.GetById(epicHId)!, t1.AddHours(-1));
+        tasks.GetById(stepFId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepFId)!.CompletedAt = t1.AddMinutes(10);
+        tasks.GetById(stepGId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepGId)!.CompletedAt = t1.AddMinutes(10);
+        tasks.GetById(stepHId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepHId)!.CompletedAt = t1.AddMinutes(10);
+
+        // Ход в c1 на 90 токенов (F, G, H активны); output 44 — делим на 2 поровну (22/22).
+        var (store, reader) = SpendStoreWith(
+            ProdRecord(OwnerId, c1, stepFId, "claude-opus-4", 90, 44, 1.0, t1));
+
+        var statsF = GetFeatureStats(reader, epicFId);
+        var statsG = GetFeatureStats(reader, epicGId);
+        var statsH = GetFeatureStats(reader, epicHId);
+
+        // Знаменатель = M[c1] = {F, G}: F и G по 45 (input), по 22 (output), H (не в c1) — 0.
+        AssertShared(statsF, 45, 22, 0.5);
+        AssertShared(statsG, 45, 22, 0.5);
+        var hShared = statsH.GetProperty("spend").GetProperty("shared");
+        (hShared.ValueKind == JsonValueKind.Null ? 0 : hShared.GetProperty("inputTokens").GetInt64())
+            .Should().Be(0, "H не в c1 → доля 0 (знаменатель = состав c1, не объединение)");
+        (45 + 45 + 0).Should().Be(90, "сумма долей = расходу c1 (90)");
+    }
+
+    // ─── Б9c-3, сторож (iii): B создана ПОСЛЕ хода, ход целиком у A (ход до создания) ──────────
+
+    // S = {A, B}; ход в S ДО создания B (B.CreatedAt > ход). Клип по epic.CreatedAt делает B
+    // неактивной на момент хода → ход целиком у A (100, не 50), B — 0. Мутация (B активна до
+    // создания) → A=50, B=50, тест краснеет.
+    [Fact]
+    public async Task GetFeature_Сторож_ХодДоСозданияB_ЦеликомУA()
+    {
+        var now = DateTime.UtcNow;
+        var t1 = now.AddHours(-2);      // ход
+        var bCreated = t1.AddHours(1);  // B создана ПОСЛЕ хода
+
+        // A: executor-чат S (сессия S → stepA). B: orchestrator-чат = S → S = {A, B}.
+        var (epicAId, stepAId, chatS) = await MakeFeature("g3-A");
+        var epicB = await CreateTaskAsync(new { title = "эпик-g3-B", role = "feature" });
+        var epicBId = epicB.GetProperty("id").GetString()!;
+        var stepB = await CreateTaskAsync(new { title = "шаг-g3-B", featureId = epicBId, role = "step" });
+        var stepBId = stepB.GetProperty("id").GetString()!;
+
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+        tasks.GetById(stepBId)!.ExecutorLaunchedBySessionId = chatS;
+        // A «создана» до хода и активна на t1; B «создана» на bCreated (после хода) → на t1
+        // неактивна (клип по CreatedAt) → ход целиком у A.
+        SetCreatedAt(tasks.GetById(epicAId)!, t1.AddHours(-1));
+        tasks.GetById(stepAId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepAId)!.CompletedAt = t1.AddMinutes(10);
+        tasks.GetById(stepBId)!.ClaudeStartedAt = bCreated;
+        tasks.GetById(stepBId)!.CompletedAt = bCreated.AddHours(1);
+        SetCreatedAt(tasks.GetById(epicBId)!, bCreated);
+
+        // Ход в S на 100 токенов ДО создания B.
+        var (store, reader) = SpendStoreWith(
+            ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1));
+
+        var statsA = GetFeatureStats(reader, epicAId);
+        var statsB = GetFeatureStats(reader, epicBId);
+
+        // Ход до создания B: A активна, B нет (клип) → ход целиком у A (100), B — 0.
+        AssertShared(statsA, 100, 50, 1.0);
+        var bShared = statsB.GetProperty("spend").GetProperty("shared");
+        (bShared.ValueKind == JsonValueKind.Null ? 0 : bShared.GetProperty("inputTokens").GetInt64())
+            .Should().Be(0, "B создана после хода → её доля 0 (клип по CreatedAt)");
+    }
+
+    // ─── Б9c-3, сторож: без дневной строки и с полными журналами → method=journal ─────────────
+
+    // S = {A, B}; все журналы полные, дневных строк НЕТ → method=journal (не approx).
+    // Мутация (дневная строка не понижает метку / журнал не полный) → method=approx, тест краснеет.
+    [Fact]
+    public async Task GetFeature_Сторож_БезДневнойСтроки_МетодJournal()
+    {
+        var now = DateTime.UtcNow;
+        var t1 = now.AddHours(-1);
+
+        var (epicAId, stepAId, chatS) = await MakeFeature("gj-A");
+        var epicB = await CreateTaskAsync(new { title = "эпик-gj-B", role = "feature" });
+        var epicBId = epicB.GetProperty("id").GetString()!;
+        var stepB = await CreateTaskAsync(new { title = "шаг-gj-B", featureId = epicBId, role = "step" });
+        var stepBId = stepB.GetProperty("id").GetString()!;
+
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+        tasks.GetById(stepBId)!.ExecutorLaunchedBySessionId = chatS; // S = {A, B}
+        // Обе «созданы» до хода (иначе окно from=minCreated отрезало бы запись) и активны на t1.
+        SetCreatedAt(tasks.GetById(epicAId)!, t1.AddHours(-1));
+        SetCreatedAt(tasks.GetById(epicBId)!, t1.AddHours(-1));
+        tasks.GetById(stepAId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepAId)!.CompletedAt = t1.AddMinutes(10);
+        tasks.GetById(stepBId)!.ClaudeStartedAt = t1.AddMinutes(-10);
+        tasks.GetById(stepBId)!.CompletedAt = t1.AddMinutes(10);
+
+        // Полные журналы A и B (created → started → stopped), без дневных строк.
+        var journalDir = Path.Combine(_factory.TempDir, "journal_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(journalDir);
+        var journal = new FeatureJournalStore(journalDir);
+        AppendJournal(journal, OwnerId, epicAId,
+            ("created", t1.AddMinutes(-20), epicAId),
+            ("started", t1.AddMinutes(-10), stepAId),
+            ("stopped", t1.AddMinutes(10), stepAId));
+        AppendJournal(journal, OwnerId, epicBId,
+            ("created", t1.AddMinutes(-20), epicBId),
+            ("started", t1.AddMinutes(-10), stepBId),
+            ("stopped", t1.AddMinutes(10), stepBId));
+
+        // Ход в S (без дневных строк).
+        var (store, reader) = SpendStoreWith(
+            ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1));
+
+        var statsA = GetFeatureStats(reader, epicAId, journal);
+
+        statsA.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
+            .Should().Be("journal", "все журналы полные и нет дневных строк → method=journal");
     }
 
     // CreatedAt — init-only: ставим через рефлексию (тест: фича «создана» в прошлом).

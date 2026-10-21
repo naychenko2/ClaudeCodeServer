@@ -17,6 +17,8 @@ public class TaskSchedulerService(
     ITaskNotificationDispatcher notif,
     ILogger<TaskSchedulerService> log) : BackgroundService
 {
+    // Подписчик ходов фичи (Б8c) больше НЕ побочный эффект этого hosted-сервиса: он
+    // регистрируется явным AddGatedHostedService в TasksSubsystem.Register (Tasks, не Main).
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
     // Автозапуск только для сроков, наступивших недавно: защита от лавины сессий
     // по старым просроченным задачам при включении флага или долгом простое сервера

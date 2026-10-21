@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Plugins;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services.Tasks;
@@ -66,6 +67,15 @@ public sealed class TasksSubsystem : IAppSubsystem
         // Агрегат фичи (режим «Исполнение фичи»): чистая проекция TaskItem'ов в FeatureRun.
         // Зависимость только на TaskManager (тот же singleton, что выше) — нового шва нет.
         services.AddSingleton<FeatureProjector>();
+        // Журнал событий фичи (волна 3, Б8a): append-only JSONL, источник точной статистики.
+        // Зависимость только на IConfiguration (DataPath) — новых швов нет.
+        services.AddSingleton<FeatureJournalStore>();
+        // Журнал ходов фичи (волна 3, Б8c): подписчик TurnCompleted пишет строку kind=turn
+        // для ходов сессий, привязанных к задаче фичи. IHostedService (Tasks, не Main —
+        // граница подсистем держится): явная регистрация, НЕ побочный эффект TaskSchedulerService
+        // (тот был хрупкой связью: убрали параметр — журнал ходов молча пуст). Запись диска —
+        // в фоне (очередь), не на потоке завершения хода.
+        services.AddGatedHostedService<FeatureTurnJournalSubscriber>(config, "tasks");
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в
         // Program.cs рядом с `PersonaAutomationRunnerAdapter`, потому что адаптер
         // живёт в Main (обёртка над `PersonaAutomationService`).

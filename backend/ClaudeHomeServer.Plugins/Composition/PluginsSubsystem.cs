@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.Composition;
+using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
@@ -85,6 +86,15 @@ public sealed class PluginsSubsystem : IAppSubsystem
         // data/plugins/{owner}/_drafts, шлёт владельцу событие plugin_draft_changed (дебаунс 300 мс).
         // Hosted-сервис: подсистема выключена → Register не вызывается → наблюдатель не стартует,
         // приложение поднимается (отключаемость по ADR-014).
-        services.AddHostedService<PluginDraftWatcher>();
+        //
+        // Выключатель Plugins:DraftWatcher:Enabled (QA-фикс U, дефолт true): false — наблюдатель
+        // не регистрируется вовсе (нет hosted-сервиса, нет inotify-экземпляра). Тестовый хост
+        // (appsettings.Testing.json) выключает его по умолчанию: иначе его inotify искажал
+        // процессные замеры FileWatcherSubscriptionTests. Чтение — через единую точку (класс
+        // опций), не инлайновым GetValue.
+        var draftWatcher = config.GetSection(PluginDraftWatcherOptions.Section)
+            .Get<PluginDraftWatcherOptions>() ?? new PluginDraftWatcherOptions();
+        if (draftWatcher.Enabled)
+            services.AddHostedService<PluginDraftWatcher>();
     }
 }

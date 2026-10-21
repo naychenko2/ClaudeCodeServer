@@ -295,6 +295,39 @@ describe('buildTimelineModel: пауза внутри этапа', () => {
     const b = m.blocks[0]!;
     if (b.type === 'stage') expect(b.minutes).toBe(60);
   });
+
+  // === Хвостовой break: пауза ПОСЛЕ последнего блока (pushBreak(last.to, to0)) ===
+  it('пауза в конце ленты (после последнего блока) → хвостовой break', () => {
+    const tl = mkTimeline({
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T18:00:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', 'work', 'prod'),
+      ],
+    });
+    const m = buildTimelineModel(tl, 'approx', false, false);
+    // prod заканчивается в 10:30; to = 18:00 → пауза 450 мин > 120 → хвостовой break.
+    const last = m.blocks[m.blocks.length - 1]!;
+    expect(last.type, 'хвостовой break').toBe('break');
+    if (last.type === 'break') expect(last.minutes).toBe(450);
+  });
+
+  // === Граница > 120 для СМЕНЫ этапа: пауза ровно 120 МЕЖДУ разными этапами → НЕ break ===
+  // Мутация «>=» → break на ровно 120 → red.
+  it('граница: пауза ровно 120 мин между этапами → НЕ break (строго > 120; мутация >= красит)', () => {
+    const tl = mkTimeline({
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T13:00:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', 'work', 'cut'),
+        seg('2026-10-20T12:30:00Z', '2026-10-20T13:00:00Z', 'work', 'plan'),
+      ],
+    });
+    const m = buildTimelineModel(tl, 'approx', false, false);
+    // cut (10:00–10:30) → plan (12:30–13:00): пауза ровно 120 мин.
+    // Разные этапы → два блока; пауза 120 НЕ > 120 → break нет.
+    expect(m.blocks.map(b => b.type), 'ровно 120 → без break').toEqual(['stage', 'stage']);
+  });
 });
 
 // === Мажор 2: дорожка ревью не отнимает у основной ленты ===
@@ -425,6 +458,19 @@ describe('FeatureStatsTab: рендер', () => {
     expect(textNodes(legend).join('')).toContain('ревью');
   });
 
+  // === 2b. Дорожка ревью в РЕНДЕРЕ: полоса = доля ревью в этапе (review/(main+review) от блока) ===
+  // Мутация «убрать stats-review-track» → track=null → red.
+  it('дорожка ревью: полоса stats-review-track = доля ревью в этапе (не абсолютные минуты)', () => {
+    const c = renderTab(mkStats());
+    const track = findNodeByAttr(c, 'data-testid', 'stats-review-track');
+    expect(track, 'дорожка ревью рисуется').not.toBeNull();
+    // prod: main 55 + review 40 → доля 40/95 ≈ 42.1% (от ширины блока, ∝ main-минутам).
+    const bar = track!.childNodes.find(n => n.nodeType === 1) as unknown as { style?: Record<string, string> } | undefined;
+    expect(bar, 'полоса ревью').toBeDefined();
+    const w = parseFloat(bar!.style!.width);
+    expect(w, 'ширина = доля ревью в этапе (40/95)').toBeCloseTo((40 / 95) * 100, 2);
+  });
+
   // === 3. Сжатие паузы > 2 ч: число и подпись ===
   it('сжатие: разрыв 15 ч 35 мин → блок «разрыв · 15 ч 35 мин» (число + подпись)', () => {
     const c = renderTab(mkStats());
@@ -432,6 +478,28 @@ describe('FeatureStatsTab: рендер', () => {
     const brk = findNodeByAttr(c, 'data-testid', 'stats-seg-break');
     expect(brk, 'сжатый разрыв').not.toBeNull();
     expect(textNodes(brk!).join('')).toContain('разрыв · 15 ч 35 мин');
+  });
+
+  // === 3c. Легенда «⫽ — длинная пауза сжата» — ТОЛЬКО когда разрывы реально есть ===
+  // Мутация «всегда» (легенда без условия hasBreak) → red.
+  it('легенда «⫽ — длинная пауза сжата» — только когда есть разрывы (мутация «всегда» красит)', () => {
+    // С разрывами (mkStats: 15 ч 35 мин) → легенда есть.
+    const c1 = renderTab(mkStats());
+    expect(findNodeByAttr(c1, 'data-testid', 'stats-legend-break'), 'с разрывами — легенда есть').not.toBeNull();
+    // Без разрывов (сегменты подряд, паузы < 2 ч) → легенды нет.
+    const noBreak = mkStats();
+    noBreak.timeline = {
+      ...noBreak.timeline,
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T11:00:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', 'work', 'prod'),
+        seg('2026-10-20T10:35:00Z', '2026-10-20T11:00:00Z', 'work', 'prod'),
+      ],
+      current: null,
+    };
+    const c2 = renderTab(noBreak);
+    expect(findNodeByAttr(c2, 'data-testid', 'stats-legend-break'), 'без разрывов — легенды нет').toBeNull();
   });
 
   // === 3b. «Сейчас» — на нарисованной (сжатой) шкале (мажор 3) ===
@@ -462,10 +530,36 @@ describe('FeatureStatsTab: рендер', () => {
     expect(left, 'left по сжатой шкале').toBe('88.5%');
   });
 
+  // Мажор (доработка-2): на 360 маркер «сейчас» позиционируется по НАРИСОВАННОЙ ленте (640),
+  // а не по скроллпорту (360): содержащий блок маркера = flex-строка (minWidth 640), не обёртка.
+  // Мутация «position:relative обратно на обёртку» → содержащий блок = обёртка (без minWidth 640) → red.
+  it('«сейчас» (360): содержащий блок маркера = нарисованная лента (minWidth 640), не скроллпорт', () => {
+    const stats = mkStats();
+    stats.timeline = {
+      ...stats.timeline,
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T20:30:00Z',
+      segments: [
+        seg('2026-10-20T10:00:00Z', '2026-10-20T11:00:00Z', 'work', 'prod'),
+        seg('2026-10-20T20:00:00Z', '2026-10-20T20:30:00Z', 'work', 'prod'),
+      ],
+      current: { kind: 'waiting', since: '2026-10-20T20:15:00Z', taskId: null },
+    };
+    const c = renderTab(stats, true); // мобильный расклад
+    const marker = findNodeByAttr(c, 'data-testid', 'stats-now-marker')!;
+    // Содержащий блок = ближайший позиционированный предок маркера (absolute → nearest position:relative).
+    type Dom = { parentNode: Dom | null; style: Record<string, string> };
+    let pos: Dom | null = (marker as unknown as Dom).parentNode as Dom | null;
+    while (pos && pos.style?.position !== 'relative') pos = pos.parentNode;
+    expect(pos, 'содержащий блок маркера').not.toBeNull();
+    // Это flex-строка ленты (minWidth 640), а НЕ обёртка-скроллпорт (360).
+    expect(pos!.style.minWidth, 'содержащий = нарисованная лента 640').toBe('640px');
+  });
+
   // === 4. Клик → цель перехода (этап в «Хронологии») ===
   it('клик по линейке/сегменту → focusFeatureStage(key) (якорь этапа)', () => {
     const c = renderTab(mkStats());
-    const ruler = findNodeByAttr(c, 'data-testid', 'stats-ruler-prod')!;
+    const ruler = findNodeByAttr(c, 'data-testid', 'stats-ruler-prod-3')!;
     act(() => { (reactProps(ruler)!.onClick as () => void)(); });
     // Якорь этапа выставлен на prod (тот же приём, что плашка/панель: setFeaturePageTab + focusFeatureStage).
     const focus = __test.stageFocus();
@@ -476,7 +570,7 @@ describe('FeatureStatsTab: рендер', () => {
   // Мутация (3): подменить цель клика (focusFeatureStage('') вместо key) → якорь пуст.
   it('мутация: цель клика = key (не пустая строка)', () => {
     const c = renderTab(mkStats());
-    const ruler = findNodeByAttr(c, 'data-testid', 'stats-ruler-cut')!;
+    const ruler = findNodeByAttr(c, 'data-testid', 'stats-ruler-cut-0')!;
     act(() => { (reactProps(ruler)!.onClick as () => void)(); });
     expect(__test.stageFocus()!.key).toBe('cut');
   });
@@ -572,9 +666,20 @@ describe('FeatureStatsTab: рендер', () => {
   // === 9. 360: тач-цель линейки ≥ 40 ===
   it('на 360 кнопка-этап (линейка) — minHeight 40', () => {
     const c = renderTab(mkStats(), true);
-    const ruler = findNodeByAttr(c, 'data-testid', 'stats-ruler-prod')!;
+    const ruler = findNodeByAttr(c, 'data-testid', 'stats-ruler-prod-3')!;
     const st = (ruler as unknown as { style: Record<string, string> }).style;
     expect(st.minHeight).toBe('40px');
+  });
+
+  // === 9b. 360: тач-цель СЕГМЕНТА ленты = 40 (высота строки сегментов) ===
+  // Мутация «высота 26» (не 40) → red.
+  it('на 360 тач-цель сегмента = 40 (высота строки сегментов; мутация «26» красит)', () => {
+    const c = renderTab(mkStats(), true);
+    const seg = findNodeByAttr(c, 'data-testid', 'stats-seg-0-0')!;
+    // Родитель сегмента — строка сегментов (height 40 на 360).
+    const row = (seg as unknown as { parentNode: { style: Record<string, string> } | null }).parentNode;
+    expect(row, 'строка сегментов').not.toBeNull();
+    expect(row!.style.height, 'высота строки сегментов на 360 = 40').toBe('40px');
   });
 });
 
@@ -908,6 +1013,13 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
     expect(all).toContain('оценка, по журналу');
   });
 
+  // === Item 11: shared — «150 тыс. токенов» (число = токены, не часы) ===
+  it('shared: «в т. ч. доля общих чатов ≈ 150 тыс. токенов» (число = токены, не часы)', () => {
+    const c = renderTab(mkFullStats());
+    const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
+    expect(textNodes(shared).join(''), 'shared несёт «токенов» после числа').toContain('150 тыс. токенов');
+  });
+
   it('spend=null → блока нет (без ошибки)', () => {
     const c = renderTab(mkFullStats({ spend: null }));
     expect(findNodeByAttr(c, 'data-testid', 'stats-spend'), 'нет блока расхода').toBeNull();
@@ -958,6 +1070,39 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
     const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
     // Если бы подпись бралась из source (journal) → было бы «по журналу»; из method (approx) → «по задачам ≈».
     expect(textNodes(shared).join(''), 'метод shared — из spend.shared.method').toContain('оценка, по задакам ≈');
+  });
+
+  // === «Не работали»: значение = totals.notWorkingMinutes (600 → «10 ч»; мутация «0» красит) ===
+  it('«Не работали»: значение = totals.notWorkingMinutes (600 → «10 ч», не «0 мин»)', () => {
+    const c = renderTab(mkFullStats());
+    const card = findNodeByAttr(c, 'data-testid', 'stats-card-2')!;
+    const t = textNodes(card).join('');
+    expect(t, 'карточка «Не работали»').toContain('Не работали');
+    expect(t, 'значение 10 ч (600 мин), не «0 мин»').toContain('10 ч');
+  });
+
+  // === «время · токены»: при «токены» полоса и доля группы меняются (мутация «метрика игнорируется» красит) ===
+  it('«время · токены»: при «токены» полоса и доля группы меняются (метрика не игнорируется)', () => {
+    const c = renderTab(mkFullStats());
+    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
+    // p-denis = 2-я группа (personas: [p-kira, p-denis]).
+    let groups = findAllByAttr(bd, 'data-testid', 'stats-break-group');
+    const denis = groups[1]!;
+    const shareBefore = textNodes(findNodeByAttr(denis, 'data-testid', 'stats-break-share')!).join('');
+    const barBefore = (findNodeByAttr(denis, 'data-testid', 'stats-break-bar') as unknown as { style: Record<string, string> }).style.width ?? '';
+    // Переключаю метрику на «токены».
+    const btn = findNodeByText(bd as never, 'токены');
+    expect(btn, 'кнопка метрики «токены»').not.toBeNull();
+    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+    groups = findAllByAttr(bd, 'data-testid', 'stats-break-group');
+    const denis2 = groups[1]!;
+    const shareAfter = textNodes(findNodeByAttr(denis2, 'data-testid', 'stats-break-share')!).join('');
+    const barAfter = (findNodeByAttr(denis2, 'data-testid', 'stats-break-bar') as unknown as { style: Record<string, string> }).style.width ?? '';
+    // p-denis: время (125/325=38%, полоса 125/200=62.5%) → токены (300000/940000=32%, полоса 300000/640000=46.875%).
+    expect(shareBefore, 'доля p-denis (время)').toBe('38 %');
+    expect(shareAfter, 'доля p-denis (токены) — изменилась').toBe('32 %');
+    expect(barBefore, 'полоса p-denis (время)').toBe('62.5%');
+    expect(barAfter, 'полоса p-denis (токены) — изменилась').toBe('46.875%');
   });
 });
 

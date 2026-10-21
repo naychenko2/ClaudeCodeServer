@@ -90,9 +90,9 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
         data-testid="stats-timeline-scroll"
         style={{ overflowX: isMobile ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch' }}
       >
-        {/* position:relative — чтобы отметка «сейчас» легла на НАРИСОВАННУЮ ленту (сжатая шкала). */}
-        <div style={{ position: 'relative' }}>
-          <div style={{ display: 'flex', gap: 2, minWidth: isMobile ? 640 : undefined, alignItems: 'stretch' }}>
+        {/* position:relative на самой flex-строке: отметка «сейчас» — её потомок, едет
+            вместе с прокруткой и лежит на НАРИСОВАННОЙ (640) ленте, а не на скроллпорте (360). */}
+        <div style={{ display: 'flex', gap: 2, minWidth: isMobile ? 640 : undefined, alignItems: 'stretch', position: 'relative' }}>
           {blocks.map((b, i) => {
             const w = blockWeight(b);
             // Ревью: отдельная тонкая дорожка; ширина ∝ минутам ревью (доля от времени блока) —
@@ -106,7 +106,7 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
                 {b.type === 'stage' ? (
                   <button
                     type="button"
-                    data-testid={`stats-ruler-${b.key}`}
+                    data-testid={`stats-ruler-${b.key}-${i}`}
                     onClick={() => openStage(b.key)}
                     aria-label={`${b.label}: открыть этап в «Хронологии»`}
                     style={{
@@ -169,8 +169,9 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
                     </div>
                   )}
                 </div>
-                {/* Дорожка ревью: тонкая полоса, ширина ∝ минутам ревью (ревью — вместе с
-                    производством, но не отнимает у основной ленты). */}
+                {/* Дорожка ревью: тонкая полоса, ширина = ДОЛЯ ревью в этапе (review/(main+review)
+                    от ширины блока; блок ∝ main-минутам). В абсолютном масштабе полоса НЕ ∝
+                    минутам ревью — это «доля ревью в этапе», а не абсолютное время ревью. */}
                 {b.type === 'stage' && reviewMin > 0 && (
                   <div data-testid="stats-review-track" style={{ height: 4, marginTop: 2, display: 'flex' }}>
                     <div style={{ width: `${reviewPct}%`, height: '100%', borderRadius: R.max, background: C.warning }} />
@@ -179,7 +180,6 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
               </div>
             );
           })}
-          </div>
           {/* Отметка «сейчас» — на нарисованной (сжатой) шкале: вертикальная линия в точке
               current.since (внутри блока — по его моменту; в разрыве — на разрыве). */}
           {nowFrac != null && current && (

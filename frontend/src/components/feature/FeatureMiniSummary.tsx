@@ -42,7 +42,7 @@ function MiniTimeline({ stats }: { stats: FeatureStats }) {
               key={`brk-${i}`}
               style={{
                 flex: w, minWidth: 0,
-                background: 'repeating-linear-gradient(90deg, var(--c-bg-selected) 0 3px, transparent 3px 6px)',
+                background: `repeating-linear-gradient(90deg, ${C.bgSelected} 0 3px, transparent 3px 6px)`,
               }}
             />
           );

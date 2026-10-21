@@ -337,9 +337,9 @@ export function Breakdown({ breakdown, costPartial, nav, isMobile = false }: {
                   </span>
                   {/* Доля: полоса (∝ максимуму группы по метрике) + процент (∝ сумме по метрике). */}
                   <span aria-hidden style={{ flex: 1, minWidth: 24, height: 6, borderRadius: R.max, background: C.progressTrack, overflow: 'hidden', display: 'inline-block' }}>
-                    <span style={{ display: 'block', height: '100%', width: `${Math.max(2, (valueOf(g) / maxVal) * 100)}%`, background: C.accent, borderRadius: R.max }} />
+                    <span data-testid="stats-break-bar" style={{ display: 'block', height: '100%', width: `${Math.max(2, (valueOf(g) / maxVal) * 100)}%`, background: C.accent, borderRadius: R.max }} />
                   </span>
-                  <span style={{ fontSize: FS.xs, color: C.textSecondary, fontFamily: FONT.mono, flexShrink: 0 }}>
+                  <span data-testid="stats-break-share" style={{ fontSize: FS.xs, color: C.textSecondary, fontFamily: FONT.mono, flexShrink: 0 }}>
                     {Math.round(share * 100)} %
                   </span>
                   {/* Токены «вход+выход» — крупно; null — нет данных (не показываем). */}
@@ -465,7 +465,7 @@ export function Spend({ spend }: {
       {/* Доля общих чатов (уже включена в итоги) — оценка. */}
       {spend.shared && (
         <div data-testid="stats-spend-shared" style={{ fontSize: FS.xxs, color: C.textSecondary, fontFamily: FONT.sans }}>
-          в т. ч. доля общих чатов ≈ {formatTokens(spend.shared.inputTokens + spend.shared.outputTokens)} (оценка, по {spend.shared.method === 'journal' ? 'журналу' : 'задакам ≈'})
+          в т. ч. доля общих чатов ≈ {formatTokens(spend.shared.inputTokens + spend.shared.outputTokens)} токенов (оценка, по {spend.shared.method === 'journal' ? 'журналу' : 'задакам ≈'})
         </div>
       )}
     </div>

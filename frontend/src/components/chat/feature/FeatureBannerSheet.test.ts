@@ -102,6 +102,26 @@ describe('executorLines: подписи исполнителей (roleLabel + м
   });
 });
 
+// === focusablesIn: tabindex=-2 — явно НЕ фокусируемый (даже BUTTON) ===
+describe('focusablesIn: tabindex', () => {
+  it('BUTTON (tabindex=0) — фокусируем; BUTTON tabindex=-2 — нет (мутация «-2 игнорируется» красит)', () => {
+    installFakeDom();
+    const doc = (globalThis as { document: { createElement: (t: string) => any } }).document;
+    const root = doc.createElement('div');
+    const normal = doc.createElement('button');
+    normal.setAttribute('tabindex', '0');
+    const hidden = doc.createElement('button');
+    hidden.setAttribute('tabindex', '-2');
+    root.appendChild(normal);
+    root.appendChild(hidden);
+    const focusables = focusablesIn(root as never);
+    // Нормальный button — в списке; tabindex=-2 — нет (явно скрыт от табуляции).
+    expect(focusables).toContain(normal);
+    expect(focusables).not.toContain(hidden);
+    uninstallFakeDom();
+  });
+});
+
 // === 2: рендер (mount, fakeDom) ===
 
 describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {

@@ -8,6 +8,7 @@ import {
   kindLabel, kindBackground, kindTextColor, nowFraction,
   type TimelineModel, type TimelineBlock, type TimelineSegment,
 } from './FeatureStatsBits';
+import { TotalsCards, LongestNow, Breakdown, Spend } from './FeatureStatsBlocks';
 import type { FeatureStats } from '../../types/featureStats';
 
 // Вкладка «Статистика» (волна 3, Ф7a, макет features-overview-3-final §«Статистика»).
@@ -291,11 +292,21 @@ export function FeatureStatsTab({ stats, isMobile = false }: FeatureStatsTabProp
     );
   }
 
+  // БЛОКИ 2–3 (Ф7b): карточки итогов, «дольше всех», разрезы, расход.
+  // Данные ТОЛЬКО из stats; null-поля → блока/строки нет (не выдумываем).
+  const costPartial = stats.spend?.costPartial ?? false;
+
   return (
     <div data-testid="feature-stats-tab" style={{ fontFamily: FONT.sans }}>
       <AccuracyBadges source={stats.source} truncated={stats.truncated} />
       <Timeline model={model} isMobile={isMobile} />
       <TaskButtons model={model} isMobile={isMobile} />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, marginTop: SP.lg }}>
+        <TotalsCards totals={stats.timeline.totals} source={stats.source} isMobile={isMobile} />
+        {stats.longestNow && <LongestNow ln={stats.longestNow} isMobile={isMobile} />}
+        <Breakdown breakdown={stats.breakdown} costPartial={costPartial} isMobile={isMobile} />
+        {stats.spend && <Spend spend={stats.spend} source={stats.source} />}
+      </div>
     </div>
   );
 }

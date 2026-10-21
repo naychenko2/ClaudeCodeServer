@@ -19,10 +19,13 @@ import {
   formatDuration, formatClock, formatDateTime, kindLabel, kindBackground,
   buildTimelineModel, nowFraction, PAUSE_BREAK_MIN,
 } from './FeatureStatsBits';
+import {
+  formatTokens, formatUsd, sharePercent, roleGroupLabel, modelGroupLabel, personaGroupLabel,
+} from './FeatureStatsBlocks';
 import { clearFeatureStageFocus, __test } from '../../lib/featurePage';
 import { openTaskInSection } from '../../lib/tasks';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
-import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
+import type { FeatureStats, FeatureTimeline, FeatureBreakdown, FeatureLongestNow, FeatureSpend } from '../../types/featureStats';
 
 // === Мок навигации (задача) ===
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
@@ -34,6 +37,36 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/signalr')>();
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
 });
+// === Мок персон/моделей/чатов (блоки 2–3: «дольше всех», разрезы, расход) ===
+const mockPersonas = vi.hoisted(() => [
+  { id: 'p-kira', name: 'Кира', role: 'Frontend' },
+  { id: 'p-denis', name: 'Денис', role: 'Backend' },
+]);
+const mockModelLabel = vi.hoisted(() => (v: string | null | undefined): string => {
+  if (v === 'claude-opus-4-8') return 'Opus';
+  if (v === 'Qwen') return 'Qwen';
+  return v ?? '';
+});
+const mockOpenChat = vi.hoisted(() => ({ calls: [] as string[] }));
+vi.mock('../../lib/personas', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/personas')>();
+  return {
+    ...orig,
+    usePersonas: () => mockPersonas,
+    getPersonaById: (id: string) => mockPersonas.find(p => p.id === id),
+  };
+});
+vi.mock('../../lib/models', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/models')>();
+  return {
+    ...orig,
+    useModels: () => [],
+    modelLabel: mockModelLabel,
+  };
+});
+vi.mock('../../lib/openChat', () => ({
+  openChatById: (id: string) => { mockOpenChat.calls.push(id); return Promise.resolve(true); },
+}));
 
 // === Хелперы данных ===
 
@@ -368,3 +401,357 @@ describe('FeatureStatsTab: рендер', () => {
     expect(st.minHeight).toBe('40px');
   });
 });
+
+// === Чистые функции: форматирование и переводы (блоки 2–3, Ф7b) ===
+
+describe('formatTokens', () => {
+  it('0 / <1000 / тыс. / М / null', () => {
+    expect(formatTokens(0)).toBe('0');
+    expect(formatTokens(999)).toBe('999');
+    expect(formatTokens(1000)).toBe('1 тыс.');
+    expect(formatTokens(640000)).toBe('640 тыс.');
+    expect(formatTokens(1200000)).toBe('1,2М');
+    expect(formatTokens(null)).toBe('');
+  });
+});
+
+describe('formatUsd', () => {
+  it('0 / дробная / null', () => {
+    expect(formatUsd(0)).toBe('$0,00');
+    expect(formatUsd(0.42)).toBe('$0,42');
+    expect(formatUsd(15.6)).toBe('$15,60');
+    expect(formatUsd(null)).toBe('');
+  });
+});
+
+describe('sharePercent', () => {
+  it('0..1 → %; null → пусто', () => {
+    expect(sharePercent(0)).toBe('0 %');
+    expect(sharePercent(0.31)).toBe('31 %');
+    expect(sharePercent(1)).toBe('100 %');
+    expect(sharePercent(null)).toBe('');
+  });
+});
+
+describe('roleGroupLabel', () => {
+  it('сырой taskRole → русская подпись (roleLabel); step без stepRef → «шаг»', () => {
+    expect(roleGroupLabel('review')).toBe('ревью');
+    expect(roleGroupLabel('qa')).toBe('проверка');
+    expect(roleGroupLabel('final')).toBe('финал');
+    expect(roleGroupLabel('merge')).toBe('мерж');
+    expect(roleGroupLabel('cut')).toBe('разрез');
+    expect(roleGroupLabel('plan')).toBe('план');
+    expect(roleGroupLabel('rework')).toBe('доработка');
+    expect(roleGroupLabel('consult')).toBe('консультация');
+    // 'step' без stepRef/lane → roleLabel пуст → «шаг» (не сырой 'step').
+    expect(roleGroupLabel('step')).toBe('шаг');
+    // неизвестный → как есть.
+    expect(roleGroupLabel('weird')).toBe('weird');
+  });
+});
+
+describe('modelGroupLabel', () => {
+  it('modelFull → читаемое имя (modelLabel); незнакомый → как есть', () => {
+    expect(modelGroupLabel('claude-opus-4-8')).toBe('Opus');
+    expect(modelGroupLabel('Qwen')).toBe('Qwen');
+    expect(modelGroupLabel('unknown-model')).toBe('unknown-model');
+  });
+});
+
+describe('personaGroupLabel', () => {
+  it('personaId → имя; недоступна → «персона недоступна» (не UUID)', () => {
+    expect(personaGroupLabel('p-kira', mockPersonas)).toBe('Кира');
+    expect(personaGroupLabel('p-denis', mockPersonas)).toBe('Денис');
+    expect(personaGroupLabel('unknown-id', mockPersonas)).toBe('персона недоступна');
+  });
+});
+
+// === Рендер-тесты: блоки 2–3 (Ф7b) ===
+
+// Полный stats для блоков 2–3: журнал (все карточки), longestNow, разрезы по трём осям, расход с shared.
+function mkFullStats(over: Partial<FeatureStats> = {}): FeatureStats {
+  return {
+    source: 'journal',
+    truncated: false,
+    timeline: mkTimeline({
+      totals: {
+        elapsedMinutes: 900, workWallMinutes: 300, agentsSumMinutes: 520, notWorkingMinutes: 600,
+        waitingMinutes: 120, idleMinutes: 200, waitingCount: 3, longestWaitMinutes: 60,
+        errorCount: 2, errorMinutes: 80,
+      },
+    }),
+    breakdown: {
+      personas: [
+        { key: 'p-kira', minutes: 200, tokens: 640000, costUsd: 12.5, chatIds: ['c1', 'c2'] },
+        { key: 'p-denis', minutes: 125, tokens: 300000, costUsd: null, chatIds: ['c3'] },
+      ],
+      models: [
+        { key: 'claude-opus-4-8', minutes: 150, tokens: 500000, costUsd: 10, chatIds: ['c1'] },
+        { key: 'Qwen', minutes: 100, tokens: 200000, costUsd: 0, chatIds: ['c2'] },
+      ],
+      roles: [
+        { key: 'step', minutes: 300, tokens: 800000, costUsd: 15, chatIds: ['c1', 'c3'] },
+        { key: 'review', minutes: 100, tokens: 100000, costUsd: 5, chatIds: ['c2'] },
+      ],
+    },
+    longestNow: {
+      taskId: 't-longest', chatId: 'c1', personaId: 'p-kira', stepRef: 'Ш3',
+      minutes: 70, tokens: 640000, share: 0.31,
+    },
+    spend: {
+      inputTokens: 1000000, outputTokens: 200000, cacheReadTokens: 500000, cacheCreationTokens: 100000,
+      costUsd: 15.6, costPartial: true, hiddenCostModels: ['Qwen'],
+      from: '2026-10-19T17:20:00Z',
+      shared: { inputTokens: 100000, outputTokens: 50000, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 1.2, turns: 5, method: 'journal' },
+    },
+    ...over,
+  };
+}
+
+// Найти узел по его точному текстовому содержимому (для кнопок SegmentedControl без data-testid).
+type FNodeLike2 = { nodeType: number; nodeName: string; childNodes: FNodeLike2[]; attributes?: Record<string, string> };
+function findNodeByText(container: FNodeLike2, text: string): FNodeLike2 | null {
+  const stack: FNodeLike2[] = [container];
+  while (stack.length) {
+    const n = stack.pop()!;
+    if (textNodes(n as never).join('').trim() === text) return n;
+    for (const ch of n.childNodes) stack.push(ch);
+  }
+  return null;
+}
+
+describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
+  beforeEach(() => {
+    mockOpenTask.calls = [];
+    mockOpenChat.calls = [];
+    clearFeatureStageFocus();
+  });
+  afterEach(() => {
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // === Карточки итогов ===
+  it('«Всего прошло» + «Работа»: значения из totals (журнал)', () => {
+    const c = renderTab(mkFullStats());
+    const all = textNodes(c).join('');
+    // elapsedMinutes=900 → «15 ч»; workWallMinutes=300 → «5 ч»; agentsSum=520 → «8 ч 40 мин».
+    expect(all).toContain('Всего прошло');
+    expect(all).toContain('15 ч');
+    expect(all).toContain('Работа');
+    expect(all).toContain('5 ч');
+    expect(all).toContain('агенты в сумме ≈ 8 ч 40 мин');
+  });
+
+  it('journal: «Ожидание»/«Простой»/«Ошибки» — только если не null', () => {
+    const c = renderTab(mkFullStats());
+    const all = textNodes(c).join('');
+    expect(all).toContain('Ожидание');
+    expect(all).toContain('Простой');
+    expect(all).toContain('Ошибки');
+  });
+
+  // Мутация: null у waitingMinutes → карточки «Ожидание» нет (не «0 мин»).
+  it('мутация: null у waitingMinutes → карточки «Ожидание» нет', () => {
+    const s = mkFullStats();
+    s.timeline.totals.waitingMinutes = null;
+    const c = renderTab(s);
+    const all = textNodes(c).join('');
+    expect(all).not.toContain('Ожидание');
+  });
+
+  it('approx: «Всего прошло» (точно) + «Работа ≈»; без «Ожидание»/«Простой»/«Ошибки»', () => {
+    const s = mkFullStats({ source: 'approx' });
+    // В approx прошлые ожидания/простой/ошибки не считаются → null.
+    s.timeline.totals.waitingMinutes = null;
+    s.timeline.totals.idleMinutes = null;
+    s.timeline.totals.errorMinutes = null;
+    const c = renderTab(s);
+    const all = textNodes(c).join('');
+    expect(all).toContain('Всего прошло');
+    expect(all).toContain('≈ 5 ч'); // работа ≈
+    expect(all).not.toContain('Ожидание');
+    expect(all).not.toContain('Простой');
+    expect(all).not.toContain('Ошибки');
+  });
+
+  // === «Дольше всех» ===
+  it('longestNow: персона · шаг · минуты · доля · токены', () => {
+    const c = renderTab(mkFullStats());
+    const node = findNodeByAttr(c, 'data-testid', 'stats-longest');
+    expect(node, 'блок «дольше всех»').not.toBeNull();
+    const all = textNodes(node!).join('');
+    expect(all).toContain('Дольше всех сейчас');
+    expect(all).toContain('Кира'); // имя персоны (не UUID)
+    expect(all).toContain('шаг Ш3');
+    expect(all).toContain('1 ч 10 мин'); // 70 мин
+    expect(all).toContain('31 % фичи'); // share
+    expect(all).toContain('640 тыс. токенов'); // tokens
+  });
+
+  it('longestNow=null → блока нет', () => {
+    const c = renderTab(mkFullStats({ longestNow: null }));
+    expect(findNodeByAttr(c, 'data-testid', 'stats-longest'), 'нет блока').toBeNull();
+  });
+
+  // Мутация: personaId недоступна → «персона недоступна» (не UUID).
+  it('мутация: longestNow с неизвестным personaId → «персона недоступна»', () => {
+    const s = mkFullStats();
+    s.longestNow = { ...s.longestNow!, personaId: 'unknown-persona' };
+    const c = renderTab(s);
+    const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-longest')!).join('');
+    expect(all).toContain('персона недоступна');
+  });
+
+  // === Разрезы ===
+  it('разрезы: заголовок + ось «персоны» (имена, не UUID) + токены', () => {
+    const c = renderTab(mkFullStats());
+    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown');
+    expect(bd, 'блок разрезов').not.toBeNull();
+    const all = textNodes(bd!).join('');
+    expect(all).toContain('Кто и на чём работал');
+    expect(all).toContain('Кира');
+    expect(all).toContain('Денис');
+    expect(all).toContain('640 тыс.'); // токены крупно
+  });
+
+  it('мутация: ось «модели» — modelFull → читаемое имя (Opus, не raw id)', () => {
+    const c = renderTab(mkFullStats());
+    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
+    // Переключаю ось на «модели».
+    const btn = findNodeByText(bd as never, 'модели');
+    expect(btn, 'кнопка оси «модели»').not.toBeNull();
+    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+    const all = textNodes(bd).join('');
+    expect(all, 'модель claude-opus-4-8 → «Opus»').toContain('Opus');
+    expect(all, 'не сырой id модели').not.toContain('claude-opus-4-8');
+  });
+
+  it('мутация: ось «роли» — taskRole → roleLabel (русские подписи, не сырой key)', () => {
+    const c = renderTab(mkFullStats());
+    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
+    const btn = findNodeByText(bd as never, 'роли');
+    expect(btn, 'кнопка оси «роли»').not.toBeNull();
+    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+    const all = textNodes(bd).join('');
+    // 'step' → «шаг», 'review' → «ревью» (не сырые 'step'/'review').
+    expect(all, '«шаг» для step').toContain('шаг');
+    expect(all, '«ревью» для review').toContain('ревью');
+  });
+
+  it('мутация: costPartial → пометка «цена по части моделей недоступна»', () => {
+    const c = renderTab(mkFullStats()); // spend.costPartial = true
+    const node = findNodeByAttr(c, 'data-testid', 'stats-breakdown-cost-partial');
+    expect(node, 'пометка costPartial').not.toBeNull();
+    expect(textNodes(node!).join('')).toContain('цена по части моделей недоступна');
+  });
+
+  it('мутация: costPartial=false → пометки нет', () => {
+    const s = mkFullStats();
+    s.spend = { ...s.spend!, costPartial: false, hiddenCostModels: [] };
+    const c = renderTab(s);
+    expect(findNodeByAttr(c, 'data-testid', 'stats-breakdown-cost-partial'), 'без пометки').toBeNull();
+  });
+
+  it('разрезы: costUsd=null у группы → цены нет; чаты раскрываются с «чат»', () => {
+    const c = renderTab(mkFullStats());
+    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
+    // Раскрываю первую группу (p-kira, costUsd=12.5) — клик по строке.
+    const group = findNodeByAttr(bd, 'data-testid', 'stats-break-group')!;
+    // Кнопка-строка — первый button внутри группы.
+    const firstBtn = findFirstButton(group as never);
+    expect(firstBtn, 'кнопка-строка группы').not.toBeNull();
+    act(() => { (reactProps(firstBtn as never)!.onClick as () => void)(); });
+    // Раскрыто: список чатов + кнопка «чат».
+    const chats = findNodeByAttr(bd, 'data-testid', 'stats-break-chats');
+    expect(chats, 'список чатов группы').not.toBeNull();
+    expect(findNodeByAttr(chats!, 'data-testid', 'stats-break-chat'), 'строка чата').not.toBeNull();
+    expect(findNodeByAttr(chats!, 'data-testid', 'stats-break-chat-open'), 'кнопка «чат»').not.toBeNull();
+  });
+
+  it('зонд: пустые breakdown (все оси) → «Пока нечего разрезать»', () => {
+    const s = mkFullStats();
+    s.breakdown = { personas: [], models: [], roles: [] };
+    const c = renderTab(s);
+    const all = textNodes(c).join('');
+    expect(all).toContain('Пока нечего разрезать');
+  });
+
+  it('зонд: 1000 групп + длинные названия — рендер не падает', () => {
+    const s = mkFullStats();
+    const big: FeatureBreakdown = {
+      personas: Array.from({ length: 1000 }, (_, i) => ({
+        key: `p-${i}`, minutes: 10, tokens: null, costUsd: null, chatIds: [],
+      })),
+      models: [], roles: [],
+    };
+    s.breakdown = big;
+    const c = renderTab(s);
+    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown');
+    expect(bd, 'блок разрезов рендерится').not.toBeNull();
+  });
+
+  // === Расход ===
+  it('spend: токены (вход+выход) крупно · кэш мелко · цена · from · shared', () => {
+    const c = renderTab(mkFullStats());
+    const sp = findNodeByAttr(c, 'data-testid', 'stats-spend');
+    expect(sp, 'блок расхода').not.toBeNull();
+    const all = textNodes(sp!).join('');
+    // input 1 000 000 + output 200 000 = 1 200 000 → «1,2М».
+    expect(all).toContain('1,2М');
+    expect(all).toContain('токенов (вход + выход)');
+    // Кэш (мелко, отдельной строкой): чтение 500 000 → «500 тыс.», создание 100 000 → «100 тыс.».
+    expect(all).toContain('кэш:');
+    expect(all).toContain('500 тыс. чтение');
+    expect(all).toContain('100 тыс. создание');
+    // Цена 15.6 → «$15,60» + пометка costPartial (hiddenCostModels).
+    expect(all).toContain('$15,60');
+    expect(all).toContain('часть моделей без цены: Qwen');
+    // from (расход ненулевой → показываем).
+    expect(all).toContain('данные с');
+    // shared: 100 000 + 50 000 = 150 000 → «150 тыс.» + «оценка, по журналу».
+    expect(all).toContain('доля общих чатов');
+    expect(all).toContain('150 тыс.');
+    expect(all).toContain('оценка, по журналу');
+  });
+
+  it('spend=null → блока нет (без ошибки)', () => {
+    const c = renderTab(mkFullStats({ spend: null }));
+    expect(findNodeByAttr(c, 'data-testid', 'stats-spend'), 'нет блока расхода').toBeNull();
+  });
+
+  // Мутация: кэш НЕ в крупную цифру (крупная = вход+выход, кэш отдельной строкой).
+  it('мутация: крупная цифра = вход+выход (1,2М), кэш не смешан в неё', () => {
+    const c = renderTab(mkFullStats());
+    const sp = findNodeByAttr(c, 'data-testid', 'stats-spend')!;
+    const big = findNodeByAttr(sp, 'data-testid', 'stats-spend-tokens')!;
+    // Крупная цифра ровно вход+выход (1 200 000 → «1,2М»), кэш (600 тыс.) в неё не входит.
+    expect(textNodes(big).join('')).toBe('1,2М');
+  });
+
+  // Мутация: shared помечен «оценка» (не просто число).
+  it('мутация: shared помечен «оценка, по …»', () => {
+    const c = renderTab(mkFullStats());
+    const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
+    const t = textNodes(shared).join('');
+    expect(t).toContain('оценка, по');
+  });
+
+  it('мутация: approx → shared «оценка, по задачам ≈»', () => {
+    const s = mkFullStats({ source: 'approx' });
+    s.spend = { ...s.spend!, shared: { ...s.spend!.shared!, method: 'approx' } };
+    const c = renderTab(s);
+    const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
+    expect(textNodes(shared).join('')).toContain('оценка, по задакам ≈');
+  });
+});
+
+// Первый <button> внутри узла (кнопка-строка группы разреза). nodeName в fakeDom — в верхнем.
+function findFirstButton(n: FNodeLike2): FNodeLike2 | null {
+  if (n.nodeType === 1 && n.nodeName.toLowerCase() === 'button') return n;
+  for (const ch of n.childNodes) {
+    const r = findFirstButton(ch);
+    if (r) return r;
+  }
+  return null;
+}

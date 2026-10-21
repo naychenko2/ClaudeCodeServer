@@ -2462,6 +2462,228 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             "итог (costPartial) и разрез (costUsd=null) согласны по признаку ненадёжной цены");
     }
 
+    // ─── Б9c: доля общего (оркестраторского) чата — деление поровну между активными ─────────
+
+    // Общий чат C (ключевой у A + оркестраторский у B) + обе фичи активны (идущие задачи) →
+    // расход C делится 50/50: у каждой shared = половина, ИТОГ включает долю (срез C исключён,
+    // доля добавлена сверху). Мутации: делить на ВСЕ фичи чата (не активные) / включить C в срез
+    // целиком (двойной счёт) / игнорировать активность — краснеют.
+    [Fact]
+    public async Task GetFeature_Spend_ОбщийЧат_ДвеАктивные_Половина()
+    {
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+        // Фича A: эпик + ключевой чат C (сессия с TaskId = id эпика A) + идущая задача.
+        var epicA = await CreateTaskAsync(new { title = "эпик-b9c-A", role = "feature" });
+        var epicAId = epicA.GetProperty("id").GetString()!;
+        var chatC = await CreatePersonalChatAsync(OwnerId, epicAId);
+        await _client.PutAsJsonAsync($"/api/tasks/{epicAId}", new { linkedSessionId = chatC });
+        var stepA = await CreateTaskAsync(new { title = "шаг-b9c-A", featureId = epicAId, role = "step" });
+        var stepAId = stepA.GetProperty("id").GetString()!;
+        // Идущая задача A: интервал [now-2h, now+1h] (CompletedAt=now+1h) → ход (now) строго внутри.
+        // CompletedAt в будущем (нереалистично, но нужно: from=epic.CreatedAt≈now, запись при now,
+        // интервал должен покрывать now — иначе запись режется фильтром from или границей half-open).
+        tasks.GetById(stepAId)!.ClaudeStartedAt = DateTime.UtcNow.AddHours(-2);
+        tasks.GetById(stepAId)!.CompletedAt = DateTime.UtcNow.AddHours(1);
+
+        // Фича B: эпик, оркестраторский чат = тот же C + идущая задача.
+        var epicB = await CreateTaskAsync(new { title = "эпик-b9c-B", role = "feature" });
+        var epicBId = epicB.GetProperty("id").GetString()!;
+        await _client.PutAsJsonAsync($"/api/tasks/{epicBId}", new { executorLaunchedBySessionId = chatC });
+        var stepB = await CreateTaskAsync(new { title = "шаг-b9c-B", featureId = epicBId, role = "step" });
+        var stepBId = stepB.GetProperty("id").GetString()!;
+        tasks.GetById(stepBId)!.ClaudeStartedAt = DateTime.UtcNow.AddHours(-2);
+        tasks.GetById(stepBId)!.CompletedAt = DateTime.UtcNow.AddHours(1);
+
+        // Запись расхода общего чата C: 100 входных токенов, цена 2.0 (надёжная), ход в now
+        // (после epic.CreatedAt, чтобы прошла фильтр from; внутри интервалов [now-2h, now+1h]).
+        var rec = new SpendRecord
+        {
+            OwnerId = OwnerId,
+            SessionId = chatC,
+            Model = "claude-opus-4",
+            InputTokens = 100,
+            OutputTokens = 50,
+            CostUsd = 2.0,
+            Source = SpendSources.ChatTurn,
+            Timestamp = DateTime.UtcNow,
+        };
+        var (_, reader) = SpendStoreWith(rec);
+
+        // Срез A: общий чат C исключён из среза (0 токенов), доля A = 1/2 (A и B активны) = 50.
+        var spendA = GetFeatureStats(reader, epicAId).GetProperty("spend");
+        spendA.GetProperty("shared").GetProperty("inputTokens").GetInt64().Should().Be(50,
+            "общий чат делится поровну: A и B активны → 1/2");
+        spendA.GetProperty("shared").GetProperty("method").GetString().Should().Be("approx",
+            "метод оценки: approx (журнала нет в BuildController)");
+        // Итог A включает долю: срез (0, C исключён) + доля (50) = 50.
+        spendA.GetProperty("inputTokens").GetInt64().Should().Be(50, "итог включает долю общего чата");
+
+        // Срез B: симметрично, доля B = 50.
+        var spendB = GetFeatureStats(reader, epicBId).GetProperty("spend");
+        spendB.GetProperty("shared").GetProperty("inputTokens").GetInt64().Should().Be(50);
+        spendB.GetProperty("inputTokens").GetInt64().Should().Be(50);
+    }
+
+    // Общий чат C, но только A активна (B не идёт) → A получает ЦЕЛИКОМ (1/1), не 1/2.
+    // Мутация «делить на число ВСЕХ фич чата (2) вместо активных (1)» → 50 ≠ 100, краснеет.
+    [Fact]
+    public async Task GetFeature_Spend_ОбщийЧат_ОднаАктивная_Целиком()
+    {
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+        // Фича A: эпик + ключевой чат C + идущая задача (A активна).
+        var epicA = await CreateTaskAsync(new { title = "эпик-b9c-1a-A", role = "feature" });
+        var epicAId = epicA.GetProperty("id").GetString()!;
+        var chatC = await CreatePersonalChatAsync(OwnerId, epicAId);
+        await _client.PutAsJsonAsync($"/api/tasks/{epicAId}", new { linkedSessionId = chatC });
+        var stepA = await CreateTaskAsync(new { title = "шаг-b9c-1a-A", featureId = epicAId, role = "step" });
+        var stepAId = stepA.GetProperty("id").GetString()!;
+        // Идущая задача A: интервал [now-2h, now+1h] → ход (now) внутри (A активна).
+        tasks.GetById(stepAId)!.ClaudeStartedAt = DateTime.UtcNow.AddHours(-2);
+        tasks.GetById(stepAId)!.CompletedAt = DateTime.UtcNow.AddHours(1);
+
+        // Фича B: эпик, оркестраторский чат = C, НО задач нет (B не активна).
+        var epicB = await CreateTaskAsync(new { title = "эпик-b9c-1a-B", role = "feature" });
+        var epicBId = epicB.GetProperty("id").GetString()!;
+        await _client.PutAsJsonAsync($"/api/tasks/{epicBId}", new { executorLaunchedBySessionId = chatC });
+
+        var rec = new SpendRecord
+        {
+            OwnerId = OwnerId,
+            SessionId = chatC,
+            Model = "claude-opus-4",
+            InputTokens = 100,
+            CostUsd = 2.0,
+            Source = SpendSources.ChatTurn,
+            Timestamp = DateTime.UtcNow,
+        };
+        var (_, reader) = SpendStoreWith(rec);
+
+        // A активна, B нет → знаменатель = 1 → A получает целиком (100), не 50.
+        var spendA = GetFeatureStats(reader, epicAId).GetProperty("spend");
+        spendA.GetProperty("shared").GetProperty("inputTokens").GetInt64().Should().Be(100,
+            "только A активна → доля = 1/1 = целиком (знаменатель = активные, не все фичи чата)");
+        spendA.GetProperty("inputTokens").GetInt64().Should().Be(100);
+
+        // B не активна → её доля 0 → shared: null (вклада в расход фичи нет); итог B без доли.
+        var spendB = GetFeatureStats(reader, epicBId).GetProperty("spend");
+        spendB.GetProperty("shared").ValueKind.Should().Be(JsonValueKind.Null,
+            "B не активна на момент хода → её доля 0 → shared: null");
+        spendB.GetProperty("inputTokens").GetInt64().Should().Be(0, "B не активна → итог без доли");
+    }
+
+    // Фича БЕЗ общих чатов (ключевой чат исключителен: 1 фича) → shared: null (Б9b-поведение).
+    [Fact]
+    public async Task GetFeature_Spend_БезОбщихЧатов_SharedNull()
+    {
+        var (epicId, stepId, _) = await MakeFeature("b9c-noshare");
+        // Запись расхода задачи фичи (надёжная цена) → расход есть, но общих чатов нет.
+        var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "claude-opus-4", 100, 50, 1.5));
+
+        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+
+        spend.ValueKind.Should().NotBe(JsonValueKind.Null, "расход фичи есть");
+        spend.GetProperty("shared").ValueKind.Should().Be(JsonValueKind.Null,
+            "ключевой чат в 1 фиче (исключителен) → общих чатов нет → shared: null");
+    }
+
+    // Spend выключен E2E через DI (UseSetting, как в Б9b) → stats.spend = null → shared: null.
+    // Честная мутация: та же, что в GetFeature_SpendВыключен_DI_СпандNull (умолчание spend=null).
+    [Fact]
+    public async Task GetFeature_Spend_ОбщийЧат_SpendВыключен_SharedNull_DI()
+    {
+        using var offFactory = new SpendOffFactory();
+        using var client = offFactory.CreateAuthenticatedClient();
+
+        var response = await client.PostAsJsonAsync("/api/tasks", new { title = "эпик-b9c-spoff", role = "feature" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var epicId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var feature = await client.GetAsync($"/api/tasks/features/{epicId}");
+        feature.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stats = (await feature.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("stats");
+
+        var spendAbsent = !stats.TryGetProperty("spend", out var spend) || spend.ValueKind == JsonValueKind.Null;
+        spendAbsent.Should().BeTrue("Spend выключен (шов не в DI) → stats.spend = null → shared: null");
+    }
+
+    // ─── Б9c п.4: цена запроса GET features/{id} (10k записей, 20 фич) ─────────────────────
+    //
+    // Б9c проецирует ВСЕ фичи владельца: для общего чата считает активность КАЖДОЙ фичи в нём
+    // (знаменатель деления) → цена запроса растёт с числом фич. Замер (кэш не вводим без него):
+    //   COLD  — построение SpendStore (file I/O + десериализация 10k записей), разовое при старте;
+    //   WARM  — GET features/{id} (spend в памяти), N итераций — цена на запрос в steady-state.
+    // Условия: 10k записей расхода, 20 фич, общий чат, состоящий во ВСЕХ 20 (максимальный
+    // знаменатель Б9c). Числа пишутся в вывод (console.log артефакта).
+    [Fact]
+    public async Task Benchmark_GetFeature_10kЗаписей_20Фич()
+    {
+        const int totalRecords = 10_000;
+        const int featureCount = 20;
+        const int warmIters = 10;
+
+        // 20 фич (эпик + шаг); общий чат C: ключевой (executor) у эпика 0 + оркестраторский у
+        // эпиков 1..19 → C состоит во ВСЕХ 20 (максимальный знаменатель Б9c).
+        var epicIds = new List<string>();
+        var stepIds = new List<string>();
+        var epic0 = await CreateTaskAsync(new { title = "эпик-bench-0", role = "feature" });
+        var epic0Id = epic0.GetProperty("id").GetString()!;
+        epicIds.Add(epic0Id);
+        var step0 = await CreateTaskAsync(new { title = "шаг-bench-0", featureId = epic0Id, role = "step" });
+        stepIds.Add(step0.GetProperty("id").GetString()!);
+        // Ключевой чат C: сессия с TaskId = id эпика 0 (executor-путь ChatFeatureIds).
+        var chatC = await CreatePersonalChatAsync(OwnerId, epic0Id);
+        await _client.PutAsJsonAsync($"/api/tasks/{epic0Id}", new { linkedSessionId = chatC });
+        for (var i = 1; i < featureCount; i++)
+        {
+            var epic = await CreateTaskAsync(new { title = $"эпик-bench-{i}", role = "feature" });
+            var epicId = epic.GetProperty("id").GetString()!;
+            epicIds.Add(epicId);
+            var step = await CreateTaskAsync(new { title = $"шаг-bench-{i}", featureId = epicId, role = "step" });
+            stepIds.Add(step.GetProperty("id").GetString()!);
+            // Оркестраторский чат = тот же C.
+            await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { executorLaunchedBySessionId = chatC });
+        }
+
+        // 10k записей расхода: 500 на каждую фичу (taskId = шаг), даты равномерно по 30 дням.
+        var dir = Path.Combine(_factory.TempDir, "bench_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var seedStore = new SpendStore(dir, 30);
+        var swWrite = Stopwatch.StartNew();
+        for (var n = 0; n < totalRecords; n++)
+        {
+            seedStore.Record(new SpendRecord
+            {
+                OwnerId = OwnerId,
+                TaskId = stepIds[n % featureCount],
+                Model = "claude-opus-4",
+                InputTokens = 1000,
+                OutputTokens = 500,
+                CostUsd = 0.05,
+                Source = SpendSources.ChatTurn,
+                Timestamp = DateTime.UtcNow.AddDays(-(n % 30)),
+            });
+        }
+        swWrite.Stop();
+
+        // COLD: построение НОВОГО SpendStore на той же папке (file I/O + десериализация 10k).
+        var swCold = Stopwatch.StartNew();
+        var coldStore = new SpendStore(dir, 30);
+        swCold.Stop();
+
+        // WARM: GET features/{id} (spend в памяти), N итераций — цена на запрос в steady-state.
+        var reader = new SpendFeatureReader(coldStore);
+        var swWarm = Stopwatch.StartNew();
+        for (var i = 0; i < warmIters; i++)
+            GetFeatureStats(reader, epicIds[0]);
+        swWarm.Stop();
+
+        Console.WriteLine($"[B9c bench] записей={totalRecords}, фич={featureCount}, общий чат в {featureCount} фичах");
+        Console.WriteLine($"[B9c bench] запись 10k: {swWrite.ElapsedMilliseconds} мс");
+        Console.WriteLine($"[B9c bench] COLD (построение SpendStore, 10k записей): {swCold.ElapsedMilliseconds} мс");
+        Console.WriteLine($"[B9c bench] WARM (GET features/{{id}} × {warmIters}): {swWarm.ElapsedMilliseconds} мс, " +
+            $"на запрос {swWarm.Elapsed.TotalMilliseconds / warmIters:F1} мс");
+    }
+
     // ─── Major 2: NRE вместо 400 на кривом planSteps (настоящий JSON → REST) ──────────
     // Личный эндпоинт POST /api/tasks парсит тело вручную (TaskCreateJson.Options, case-insensitive):
     // planSteps:[null] и {"title":null} раньше давали NullReferenceException → 500; теперь 400.

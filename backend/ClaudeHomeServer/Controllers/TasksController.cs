@@ -662,7 +662,7 @@ public class TasksController(
         if (keyChatId is not null)
         {
             // Ключевой чат исключается из среза и добавляется обратно только если состоит ровно
-            // в одной фиче (общий чат делится в Б9c).
+            // в одной фиче (общий чат, 2+ фич, делится поровну в Б9c).
             sessionIds.Remove(keyChatId);
             var owner = tasks.GetByOwner(UserId).ToList();
             var chatFeatures = FeatureProjector.ChatFeatureIds(keyChatId, owner, snapshot);
@@ -676,19 +676,99 @@ public class TasksController(
         IReadOnlyList<FeatureSpendRecord>? spendRecords = null;
         if (spend is not null)
             (spendTotals, spendRecords) = spend.Slice(UserId, taskIds, sessionIds, from: run.Epic.CreatedAt);
-        // FeatureSpendTotals → FeatureSpend (camelCase в JSON). Shared = null в Б9b (Б9c).
+
+        // Б9c: доля ОБЩИХ (оркестраторских) чатов фичи. «Общий чат» — epic-level чат (kind
+        // key/curator/orchestrator), входящий в 2+ фичи владельца: key-чат (сессия с TaskId ==
+        // epic.Id; Б9b исключает его из среза, если общий), curator (epic.SourceSessionId) и
+        // orchestrator (epic.ExecutorLaunchedBySessionId) — если в снимке. Их расход делится
+        // ПОРОВНУ (1/N) между фичами, активными на момент хода (state ∈ {running, waiting, merging}).
+        // Доля текущей фичи → stats.spend.shared + ВКЛЮЧЕНА в итоги. Нет общих чатов (все
+        // epic-level чаты в 1 фиче) или Spend выключен (spendTotals null) → shared: null.
+        FeatureSpendShared? shared = null;
+        bool sharedCostPartial = false;
+        var sharedHidden = new List<string>();
+        if (spendTotals is not null)
+        {
+            // Epic-level чаты фичи, которые есть в снимке владельца (fail-closed: чужой/удалённый
+            // чат в снимке не живёт). Дедуп: key-чат может совпадать с curator/orchestrator.
+            var sharedChatIds = new List<string>();
+            if (keyChatId is not null) sharedChatIds.Add(keyChatId);
+            if (run.Epic.SourceSessionId is not null && snapshot.Any(s => s.Id == run.Epic.SourceSessionId))
+                sharedChatIds.Add(run.Epic.SourceSessionId);
+            if (run.Epic.ExecutorLaunchedBySessionId is not null
+                && snapshot.Any(s => s.Id == run.Epic.ExecutorLaunchedBySessionId))
+                sharedChatIds.Add(run.Epic.ExecutorLaunchedBySessionId);
+            sharedChatIds = sharedChatIds.Distinct(StringComparer.Ordinal).ToList();
+
+            // Общие: чат входит в 2+ фичи (ChatFeatureIds — те же правила членства, что Б9b).
+            var owner = tasks.GetByOwner(UserId).ToList();
+            var sharedChats = sharedChatIds
+                .Select(chatId => (ChatId: chatId, Features: FeatureProjector.ChatFeatureIds(chatId, owner, snapshot)))
+                .Where(kv => kv.Features.Count >= 2)
+                .ToList();
+
+            if (sharedChats.Count > 0)
+            {
+                // Метод оценки: journal, если журнал текущей фичи полный, иначе approx (риск 5
+                // плана: прошлые ожидания в approx неизвестны → доля может уйти другим фичам).
+                var method = journalComplete ? "journal" : "approx";
+                long totIn = 0, totOut = 0, totCr = 0, totCc = 0;
+                double totCost = 0;
+                int totTurns = 0;
+                foreach (var (chatId, feats) in sharedChats)
+                {
+                    // Записи расхода этого общего чата: только чат (taskIds пуст), от создания фичи.
+                    var sharedRecords = spend!.Records(UserId, [], [chatId], from: run.Epic.CreatedAt);
+                    if (sharedRecords.Count == 0) continue;
+                    // Интервалы активности ВСЕХ фич, в которые чат входит (знаменатель деления):
+                    // journal — по полному журналу фичи; approx — по интервалам её задач.
+                    var activities = new List<FeatureActivity>();
+                    foreach (var fid in feats)
+                    {
+                        var intervals = method == "journal"
+                            ? SharedSpendSplitter.JournalActivity(
+                                journal?.Read(UserId, fid) ?? new FeatureJournalReadResult(), now)
+                            : SharedSpendSplitter.ApproxActivity(
+                                features!.ProjectFull(fid, UserId, snapshot, resolver), now);
+                        activities.Add(new FeatureActivity(fid, intervals));
+                    }
+                    var (share, shareCostPartial, shareHidden) =
+                        SharedSpendSplitter.Split(sharedRecords, activities, run.Epic.Id, method);
+                    totIn += share.InputTokens;
+                    totOut += share.OutputTokens;
+                    totCr += share.CacheReadTokens;
+                    totCc += share.CacheCreationTokens;
+                    totCost += share.CostUsd;
+                    totTurns += share.Turns;
+                    sharedCostPartial |= shareCostPartial;
+                    sharedHidden.AddRange(shareHidden);
+                }
+                // Доля есть, только если хоть что-то распределили (иначе shared: null).
+                if (totTurns > 0 || totIn > 0 || totOut > 0 || totCr > 0 || totCc > 0 || totCost > 0)
+                    shared = new FeatureSpendShared(totIn, totOut, totCr, totCc, totCost, totTurns, method);
+            }
+        }
+        sharedHidden = sharedHidden.Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal).ToList();
+
+        // FeatureSpendTotals + доля общего чата → FeatureSpend (camelCase в JSON). Итоги
+        // (токены/цена/costPartial/hiddenCostModels) ВКЛЮЧАЮТ долю: токены и цена складываются,
+        // costPartial/hiddenCostModels — объединяются (та же логика надёжности цены, что в срезе).
+        var allHidden = spendTotals is null
+            ? sharedHidden
+            : spendTotals.HiddenCostModels.Concat(sharedHidden)
+                .Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal).ToList();
         FeatureSpend? featureSpend = spendTotals is null ? null : new FeatureSpend(
-            InputTokens: spendTotals.InputTokens,
-            OutputTokens: spendTotals.OutputTokens,
-            CacheReadTokens: spendTotals.CacheReadTokens,
-            CacheCreationTokens: spendTotals.CacheCreationTokens,
-            CostUsd: spendTotals.CostUsd,
-            CostPartial: spendTotals.CostPartial,
-            HiddenCostModels: spendTotals.HiddenCostModels,
+            InputTokens: spendTotals.InputTokens + (shared?.InputTokens ?? 0),
+            OutputTokens: spendTotals.OutputTokens + (shared?.OutputTokens ?? 0),
+            CacheReadTokens: spendTotals.CacheReadTokens + (shared?.CacheReadTokens ?? 0),
+            CacheCreationTokens: spendTotals.CacheCreationTokens + (shared?.CacheCreationTokens ?? 0),
+            CostUsd: spendTotals.CostUsd + (shared?.CostUsd ?? 0),
+            CostPartial: spendTotals.CostPartial || sharedCostPartial,
+            HiddenCostModels: allHidden,
             // from — контракт string (не null, TS featureStats.ts): срез пуст (записей нет) →
             // дата начала фичи (создание эпика), не null (решение по минору Б9b: не правим TS-тип).
             From: (spendTotals.From ?? DateOnly.FromDateTime(run.Epic.CreatedAt)).ToString("yyyy-MM-dd"),
-            Shared: null);
+            Shared: shared);
         var (breakdown, longestNow) = FeatureBreakdown.Build(run, journalResult, snapshot, resolver, now, spendRecords);
         var stats = new FeatureStats(
             Source: journalComplete ? "journal" : "approx",

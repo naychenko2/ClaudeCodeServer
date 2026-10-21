@@ -317,17 +317,19 @@ public class SharedSpendSplitterTests
     // ── Интервалы активности: approx / journal ────────────────────────────────────────────────
 
     // Approx: задача [start, done] → интервал активности; ход внутри → активна.
+    // done < now: завершённая задача — интервал до done (не до now).
     [Fact]
     public void ApproxActivity_Задача_ИнтервалПокрывает()
     {
-        var start = T0.AddHours(-1);
-        var done = T0.AddHours(1);
+        var start = T0.AddHours(-2);
+        var done = T0.AddHours(-1); // до now
         var run = new FeatureRun
         {
             Epic = new TaskItem
             {
                 Id = "epic",
                 Role = TaskRoles.Feature,
+                CreatedAt = start.AddMinutes(-10), // до старта: clip не режет
                 ClaudeStartedAt = start,
                 CompletedAt = done,
             },
@@ -350,6 +352,7 @@ public class SharedSpendSplitterTests
             {
                 Id = "epic",
                 Role = TaskRoles.Feature,
+                CreatedAt = start.AddMinutes(-10),
                 ClaudeStartedAt = start,
                 CompletedAt = null,
             },
@@ -372,6 +375,7 @@ public class SharedSpendSplitterTests
             {
                 Id = "epic",
                 Role = TaskRoles.Feature,
+                CreatedAt = since.AddMinutes(-10),
                 AwaitingHumanSince = since,
             },
         };

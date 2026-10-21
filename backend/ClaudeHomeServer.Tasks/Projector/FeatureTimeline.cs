@@ -189,14 +189,14 @@ public sealed record FeatureTimeline(
             return new FeatureTimeline(from, to, stages, journalSegments, current, journalTotals);
         }
 
-        // approx (Б5a): work — по задачам [ClaudeStartedAt, CompletedAt ?? now].
+        // approx (Б5a): work — по задачам [ClaudeStartedAt, min(CompletedAt, ExecutorStoppedAt, now)).
+        // Конец — FeatureActivityBuilder.WorkEnd (единый модуль активности, шаг 3): остановка учитывается.
         var work = new List<WorkInterval>();
         foreach (var t in AllTasks(run))
         {
             if (t.ClaudeStartedAt is null) continue;
             var start = t.ClaudeStartedAt.Value;
-            var end = t.CompletedAt ?? now;
-            if (end < start) end = start;
+            var end = FeatureActivityBuilder.WorkEnd(t, now);
             var stage = FeatureTimeMath.RoleToStage(t.Role);
             var track = stage == "review" ? "review" : "main";
             work.Add(new WorkInterval(start, end, stage, track, t.Id));

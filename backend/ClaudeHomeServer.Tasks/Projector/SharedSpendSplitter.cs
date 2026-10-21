@@ -12,14 +12,7 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // хода). Доля помечена как оценка: `method` = journal (по полному журналу) | approx (по
 // интервалам задач).
 
-// Интервал активности фичи: [From, To) (UTC) — период, когда фича была активна
-// (state ∈ {running, waiting, merging}). Граница (фиксация правила, тест SharedSpendSplitter):
-// включительно с начала, исключая конец (half-open) — ход ровно на From входит, ровно на To —
-// нет. Half-open исключает двойной счёт на стыке двух смежных интервалов.
-public sealed record FeatureActivityInterval(DateTime From, DateTime To);
-
-// Активность фичи: её id + интервалы активности. Чистая структура входа SharedSpendSplitter.
-public sealed record FeatureActivity(string FeatureId, IReadOnlyList<FeatureActivityInterval> Intervals);
+// (FeatureActivityInterval и FeatureActivity — в FeatureActivity.cs, единый модуль активности.)
 
 // Чистая функция (без IO): вход — записи расхода по ходам ОБЩЕГО чата (SpendFeatureReader.Records)
 // + интервалы активности ВСЕХ фич, в которые чат входит (знаменатель деления) + id текущей фичи
@@ -125,107 +118,14 @@ public static class SharedSpendSplitter
         return (long)Math.Round((decimal)value / divisor, MidpointRounding.ToEven);
     }
 
-    // ─── Интервалы активности фичи ─────────────────────────────────────────────────────────────
+    // ─── Интервалы активности фичи (делегирование в FeatureActivity) ───────────────────────────
 
-    // Approx-режим (без журнала): «активна» = state ∈ {running, waiting, merging} ≈ по задачам:
-    //   running/merging — интервалы задач фичи [ClaudeStartedAt, CompletedAt ?? now] (merge-задача
-    //     — одна из них, её интервал тот же);
-    //   waiting — только ТЕКУЩЕЕ ожидание [AwaitingHumanSince, now] (прошлые ожидания в approx
-    //     неизвестны — риск 5 плана: доля может уйти другим фичам, помечено method=approx).
-    // run null (фича не найдена: чужая/удалённая) → интервалов нет (фича не активна).
+    // Approx-режим: делегирует в FeatureActivityBuilder.Approx (единый модуль активности, шаг 3).
+    // run null → нет интервалов.
     public static IReadOnlyList<FeatureActivityInterval> ApproxActivity(FeatureRun? run, DateTime now)
-    {
-        if (run is null) return [];
-        var intervals = new List<FeatureActivityInterval>();
-        foreach (var t in AllTasks(run))
-        {
-            if (t is null || t.ClaudeStartedAt is null) continue;
-            var start = t.ClaudeStartedAt.Value;
-            var end = t.CompletedAt ?? now;
-            if (end < start) end = start;
-            intervals.Add(new FeatureActivityInterval(start, end));
-        }
-        if (run.Epic is not null && run.Epic.AwaitingHumanSince is not null)
-        {
-            var start = run.Epic.AwaitingHumanSince.Value;
-            var end = now;
-            if (end < start) end = start;
-            intervals.Add(new FeatureActivityInterval(start, end));
-        }
-        return intervals;
-    }
+        => FeatureActivityBuilder.Approx(run, now);
 
-    // Journal-режим (полный журнал): «активна» = state ∈ {running, waiting, merging} по событиям:
-    //   running/merging — work-периоды: started → (stopped | status→Done | now) (merge-задача —
-    //     та же задача, её started..end здесь);
-    //   waiting — waiting → (waiting_cleared | now) + device_wait → (device_wait_cleared | now)
-    //     (ожидание устройства — как waiting, как в FeatureTimeline.BuildJournal).
+    // Journal-режим: делегирует в FeatureActivityBuilder.Journal (единый модуль активности, шаг 3).
     public static IReadOnlyList<FeatureActivityInterval> JournalActivity(FeatureJournalReadResult journal, DateTime now)
-    {
-        var intervals = new List<FeatureActivityInterval>();
-
-        // running/merging: started → (stopped | status→Done | now).
-        foreach (var started in journal.Entries.Where(e => e.Kind == "started").OrderBy(e => e.At))
-        {
-            var end = EndOf(journal, started.TaskId, started.At, now);
-            if (end < started.At) end = started.At;
-            intervals.Add(new FeatureActivityInterval(started.At, end));
-        }
-        // waiting: waiting → (waiting_cleared | now).
-        foreach (var w in journal.Entries.Where(e => e.Kind == "waiting").OrderBy(e => e.At))
-        {
-            var end = FirstAfter(journal, w.TaskId, w.At, "waiting_cleared", now);
-            if (end < w.At) end = w.At;
-            intervals.Add(new FeatureActivityInterval(w.At, end));
-        }
-        // device_wait: device_wait → (device_wait_cleared | now) (ожидание устройства = waiting).
-        foreach (var w in journal.Entries.Where(e => e.Kind == "device_wait").OrderBy(e => e.At))
-        {
-            var end = FirstAfter(journal, w.TaskId, w.At, "device_wait_cleared", now);
-            if (end < w.At) end = w.At;
-            intervals.Add(new FeatureActivityInterval(w.At, end));
-        }
-        return intervals;
-    }
-
-    // Конец work-периода задачи: первый (stopped | status→Done) после `from`, иначе now.
-    private static DateTime EndOf(FeatureJournalReadResult journal, string? taskId, DateTime from, DateTime now)
-    {
-        var end = now;
-        foreach (var e in journal.Entries)
-        {
-            if (e.TaskId != taskId || e.At < from) continue;
-            if (e.Kind == "stopped" || (e.Kind == "status" && e.To == "Done"))
-            {
-                if (e.At < end) end = e.At;
-            }
-        }
-        return end;
-    }
-
-    // Первый событие вида `endKind` (для задачи) после `from`, иначе now.
-    private static DateTime FirstAfter(FeatureJournalReadResult journal, string? taskId, DateTime from,
-        string endKind, DateTime now)
-    {
-        var end = now;
-        foreach (var e in journal.Entries)
-        {
-            if (e.TaskId != taskId || e.Kind != endKind || e.At < from) continue;
-            if (e.At < end) end = e.At;
-        }
-        return end;
-    }
-
-    // Все задачи фичи: эпик + дочерние (шаги/ревью/проверки/финал/мерж/cut+consult/plan).
-    private static IEnumerable<TaskItem> AllTasks(FeatureRun run)
-    {
-        yield return run.Epic;
-        foreach (var t in run.Steps) yield return t;
-        foreach (var t in run.Reviews) yield return t;
-        foreach (var t in run.Qa) yield return t;
-        if (run.Final is not null) yield return run.Final;
-        if (run.Merge is not null) yield return run.Merge;
-        foreach (var t in run.Cut) yield return t;
-        foreach (var t in run.Plan) yield return t;
-    }
+        => FeatureActivityBuilder.Journal(journal, now);
 }

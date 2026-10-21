@@ -106,13 +106,13 @@ public sealed record FeatureBreakdown(
         // Все задачи фичи (эпик + дочерние) — та же выборка, что FeatureTimeline.AllTasks.
         var tasks = AllTasks(run).ToList();
 
-        // Work-интервал задачи: [ClaudeStartedAt, CompletedAt ?? now]; null — не стартовала.
+        // Work-интервал задачи: [ClaudeStartedAt, min(CompletedAt, ExecutorStoppedAt, now));
+        // null — не стартовала. Конец — FeatureActivityBuilder.WorkEnd (единый модуль активности, шаг 3).
         (DateTime Start, DateTime End)? WorkInterval(TaskItem t)
         {
             if (t.ClaudeStartedAt is null) return null;
             var start = t.ClaudeStartedAt.Value;
-            var end = t.CompletedAt ?? now;
-            if (end < start) end = start;
+            var end = FeatureActivityBuilder.WorkEnd(t, now);
             return (start, end);
         }
 

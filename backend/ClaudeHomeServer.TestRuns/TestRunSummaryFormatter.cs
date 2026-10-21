@@ -48,6 +48,7 @@ public static class TestRunSummaryFormatter
         var trailer = r.ArtifactsPath is { } path ? $"\n\nАртефакты прогона: {path}/ ({ArtifactsNote(r)})." : "";
         var text = new Budget(maxBytes - Bytes(trailer));
         text.Add(Head(r, ceilingSeconds));
+        if (r.Timings is { } timings) text.Add("\n" + TimingsLine(timings, r.Phase));
 
         if (r.BuildErrors.Count > 0)
         {
@@ -91,6 +92,17 @@ public static class TestRunSummaryFormatter
 
         if (NeedsTail(r)) AddTail(text, r.Tail);
         return Clamp(text.ToString() + trailer, maxBytes);
+    }
+
+    // «сборка 12.3 с · подсчёт 3.1 с · тесты 1.0 с»: цена вызова по фазам; пропуск — с причиной
+    internal static string TimingsLine(PhaseTimings t, TestRunPhase reached)
+    {
+        static string Part(string name, TimeSpan? time, string? skipped) => skipped is null
+            ? $"{name} {FormatElapsed(time ?? TimeSpan.Zero)}"
+            : $"{name} {FormatElapsed(TimeSpan.Zero)} (пропущен{(name == "сборка" ? "а" : "")}: {skipped})";
+        // Сборка упала — подсчёта и тестов не было, их нули были бы враньём
+        if (reached == TestRunPhase.Build) return Part("сборка", t.Build, t.BuildSkipped);
+        return $"{Part("сборка", t.Build, t.BuildSkipped)} · {Part("подсчёт", t.List, t.ListSkipped)} · тесты {FormatElapsed(t.Test)}";
     }
 
     // Что лежит в папке артефактов: упоминаем только то, что там правда есть (на ошибке

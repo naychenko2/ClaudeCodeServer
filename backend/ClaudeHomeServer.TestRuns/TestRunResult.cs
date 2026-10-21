@@ -56,6 +56,9 @@ public sealed record TestRunResult(string? Refusal, int? ExitCode, bool Cancelle
     // Фаза, на которой прогон кончился (или оборвался)
     public TestRunPhase Phase { get; init; } = TestRunPhase.Test;
 
+    // Цена вызова по фазам (только dotnet); null — прогон не дошёл до конвейера
+    public PhaseTimings? Timings { get; init; }
+
     // Первые ошибки сборки (фаза Build с ненулевым кодом)
     public IReadOnlyList<string> BuildErrors { get; init; } = [];
 
@@ -80,4 +83,15 @@ public sealed record TestRunResult(string? Refusal, int? ExitCode, bool Cancelle
     public string? ArtifactsPath { get; init; }
 
     public static TestRunResult Refused(string reason) => new(reason, null, false, false, TimeSpan.Zero, []);
+}
+
+// Сколько заняли фазы dotnet-прогона и почему пропущены. null у времени — фаза не шла;
+// Skipped — причина пропуска («дерево не менялось», «no_build», «задан filter»)
+public sealed class PhaseTimings
+{
+    public TimeSpan? Build { get; set; }
+    public string? BuildSkipped { get; set; }
+    public TimeSpan? List { get; set; }
+    public string? ListSkipped { get; set; }
+    public TimeSpan Test { get; set; }
 }

@@ -378,8 +378,10 @@ public class FeatureBreakdownTests
     // ── Б9b: токены/стоимость групп и LongestNow из записей расхода ─────────────────────────
 
     // Запись расхода (шов ISpendFeatureReader): токены (вход/выход), стоимость, источник.
+    // unreliable — признак «цена от CLI ненадёжна» (модель в списке UnreliableCostModels):
+    // его выставляет читатель (SpendFeatureReader) единой точкой правды (SpendCostReliability).
     private static FeatureSpendRecord Spend(string? personaId, string? taskId, string? model,
-        long input, long output, double? cost, string source = "chat-turn") => new()
+        long input, long output, double? cost, string source = "chat-turn", bool unreliable = false) => new()
     {
         PersonaId = personaId,
         TaskId = taskId,
@@ -388,6 +390,7 @@ public class FeatureBreakdownTests
         OutputTokens = output,
         CostUsd = cost,
         Source = source,
+        UnreliableCost = unreliable,
     };
 
     // Группа персоны: токены (вход+выход) и стоимость (надёжная цена) из записей расхода.
@@ -430,6 +433,29 @@ public class FeatureBreakdownTests
         var p1 = bd.Personas.Single(g => g.Key == "p1");
         p1.Tokens.Should().Be(150);
         p1.CostUsd.Should().BeNull("ненадёжная цена → стоимость группы null, не 0");
+    }
+
+    // Единая точка правды (ревью Глеба, major): модель из списка UnreliableCostModels, у которой
+    // CLI отчитал НАДЁЖНО ВЫГЛЯДЯЩУЮ цену (deepseek cost=2.0), → стоимость группы null, не 2.0.
+    // Прежний разрез определял «ненадёжно» по `CostUsd is null` → 2.0 шло в сумму, а итог
+    // расхода (SpendFeatureReader, по имени модели) давал 0 — две цифры по одной записи.
+    // Мутация «разрез снова по CostUsd is null» → costUsd = 2.0 ≠ null → краснеет.
+    [Fact]
+    public void Build_Группа_НенадёжнаяМодельСЦеной_СтоимостьNull()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        // deepseek-chat (в списке ненадёжных) + цена 2.0 от CLI → признак UnreliableCost.
+        var records = new[] { Spend("p1", "s1", "deepseek-chat", 100, 50, 2.0, unreliable: true) };
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, Sessions(), null, now, records);
+
+        var p1 = bd.Personas.Single(g => g.Key == "p1");
+        p1.Tokens.Should().Be(150, "токены ненадёжной модели в сумме");
+        p1.CostUsd.Should().BeNull("ненадёжная модель → стоимость группы null, не 2.0 (как в итоге расхода)");
     }
 
     // Локальная модель (Source=free) → стоимость честно 0 (не null).
@@ -505,5 +531,33 @@ public class FeatureBreakdownTests
         longest.Should().NotBeNull();
         longest!.Tokens.Should().BeNull("записей расхода нет → null, не 0");
         longest.Share.Should().BeNull();
+    }
+
+    // Минор Б9b (документированное правило): запись ключевого (оркестраторского) чата БЕЗ
+    // TaskId/PersonaId/Model не резолвится ни в одну ось → входит в ИТОГ расхода (срез по
+    // чату), но не в этот разрез. Сумма разрезов < итога — осознанно, не баг.
+    // Мутация «класть безключевую запись в группу null/«прочее»» → сумма разрезов = 200 ≠ 150.
+    [Fact]
+    public void Build_ЗаписьБезКлючей_ВИтогНоНеВРазрез()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        // Нормальная запись (p1/s1, 150 токенов) + запись ключевого чата без ключей (50 токенов).
+        var records = new[]
+        {
+            Spend("p1", "s1", "claude-opus-4", 100, 50, 1.0),
+            Spend(null, null, null, 30, 20, 0.5),
+        };
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, Sessions(), null, now, records);
+
+        // Группа p1 — только нормальная запись (150), безключевая не добавлена.
+        var p1 = bd.Personas.Single(g => g.Key == "p1");
+        p1.Tokens.Should().Be(150, "безключевая запись не в разрезе персон");
+        // Сумма ВСЕХ групп персон = 150 (не 200): безключевая запись ни в одной группе.
+        bd.Personas.Sum(g => g.Tokens ?? 0).Should().Be(150);
     }
 }

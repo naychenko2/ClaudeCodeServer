@@ -35,12 +35,10 @@ namespace ClaudeHomeServer.Services.Spend;
 // полные, неполных строк нет; `From` помечает, с какой даты в срезе есть данные.
 public sealed class SpendFeatureReader : ISpendFeatureReader
 {
-    // Встроенный дефолт предиката «цена ненадёжна»: модели, названные в решении
-    // Андрея (20.10). Конфиг `Spend:UnreliableCostModels` заменяет его.
-    internal static readonly string[] DefaultUnreliableModels = ["deepseek", "glm"];
-
     private readonly SpendStore _store;
     // Подстроки имён моделей, в нижнем регистре: предикат — регистронезависимый Contains.
+    // Дефолт (deepseek, glm) — в Core (SpendCostReliability.DefaultUnreliableModels), единая
+    // точка правды с разрезом фичи (FeatureBreakdown).
     private readonly string[] _unreliableModels;
 
     // DI-конструктор (SpendStore + IConfiguration). Второй конструктор (store, string[]?) —
@@ -54,7 +52,7 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
     internal SpendFeatureReader(SpendStore store, string[]? unreliableModels = null)
     {
         _store = store;
-        _unreliableModels = (unreliableModels ?? DefaultUnreliableModels)
+        _unreliableModels = (unreliableModels ?? SpendCostReliability.DefaultUnreliableModels)
             .Select(m => m.Trim().ToLowerInvariant())
             .Where(m => m.Length > 0)
             .ToArray();
@@ -63,26 +61,50 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
     private static string[] ResolveUnreliableModels(IConfiguration config)
     {
         var fromConfig = config.GetSection("Spend:UnreliableCostModels").Get<string[]>() ?? [];
-        return fromConfig.Length > 0 ? fromConfig : DefaultUnreliableModels;
+        return fromConfig.Length > 0 ? fromConfig : SpendCostReliability.DefaultUnreliableModels;
     }
 
     public FeatureSpendTotals Totals(string ownerId, IReadOnlyCollection<string> taskIds,
-        IReadOnlyCollection<string> sessionIds, DateTime? from)
+        IReadOnlyCollection<string> sessionIds, DateTime? from) =>
+        ComputeTotals(Matched(ownerId, taskIds, sessionIds, from));
+
+    public IReadOnlyList<FeatureSpendRecord> Records(string ownerId, IReadOnlyCollection<string> taskIds,
+        IReadOnlyCollection<string> sessionIds, DateTime? from) =>
+        [.. Matched(ownerId, taskIds, sessionIds, from).OrderBy(r => r.Timestamp).ToList()];
+
+    // Срез одним проходом (минор доработки Б9b): один Matched → и итог, и записи из одного
+    // набора — без окна рассогласования между двумя отдельными сканами стора.
+    public (FeatureSpendTotals Totals, IReadOnlyList<FeatureSpendRecord> Records) Slice(
+        string ownerId, IReadOnlyCollection<string> taskIds, IReadOnlyCollection<string> sessionIds,
+        DateTime? from)
+    {
+        var records = Matched(ownerId, taskIds, sessionIds, from).OrderBy(r => r.Timestamp).ToList();
+        return (ComputeTotals(records), records);
+    }
+
+    // Итог по набору записей среза: токены (вход/выход/кэш), стоимость (надёжная),
+    // признак ненадёжной цены (единая точка правды SpendCostReliability), From (ранняя дата).
+    private static FeatureSpendTotals ComputeTotals(IEnumerable<FeatureSpendRecord> records)
     {
         var totals = new FeatureSpendTotals { HiddenCostModels = [] };
         var hidden = new HashSet<string>(StringComparer.Ordinal);
         DateOnly? earliest = null;
 
-        foreach (var r in Matched(ownerId, taskIds, sessionIds, from))
+        foreach (var r in records)
         {
-            totals.InputTokens += r.InputTokens;
-            totals.OutputTokens += r.OutputTokens;
-            totals.CacheReadTokens += r.CacheReadTokens;
-            totals.CacheCreationTokens += r.CacheCreationTokens;
+            // Минор Б9b: отрицательные/нулевые токены не дают отрицательных сумм — вклад
+            // каждой записи кламится в ≥ 0 (сырая запись с отрицательным числом — сбой CLI,
+            // не повод тянуть весь итог в минус).
+            totals.InputTokens += Math.Max(0, r.InputTokens);
+            totals.OutputTokens += Math.Max(0, r.OutputTokens);
+            totals.CacheReadTokens += Math.Max(0, r.CacheReadTokens);
+            totals.CacheCreationTokens += Math.Max(0, r.CacheCreationTokens);
 
-            if (IsUnreliable(r.Model))
+            if (r.UnreliableCost)
             {
                 // Токены уже в сумме выше, стоимость — нет: модель в список, CostPartial.
+                // Флаг — единая точка правды (SpendCostReliability): free (надёжный 0) проверен
+                // выше «ненадёжно», поэтому free-модель с «glm» в имени сюда не попадает.
                 if (r.Model is not null) hidden.Add(r.Model);
                 totals.CostPartial = true;
             }
@@ -100,10 +122,6 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         totals.HiddenCostModels = [.. hidden.OrderBy(m => m, StringComparer.Ordinal)];
         return totals;
     }
-
-    public IReadOnlyList<FeatureSpendRecord> Records(string ownerId, IReadOnlyCollection<string> taskIds,
-        IReadOnlyCollection<string> sessionIds, DateTime? from) =>
-        [.. Matched(ownerId, taskIds, sessionIds, from).OrderBy(r => r.Timestamp).ToList()];
 
     // Записи среза: дневные агрегаты (строка = день, Timestamp = начало дня) +
     // детальные ходы (точное время). День, уже свёрнутый в агрегаты, в деталях
@@ -146,11 +164,9 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         && ((taskId is not null && tasks.Contains(taskId))
           || (sessionId is not null && sessions.Contains(sessionId)));
 
-    // «Цена ненадёжна»: имя модели содержит одну из подстрок (регистронезависимо).
-    private bool IsUnreliable(string? model) =>
-        model is not null && _unreliableModels.Any(p => model.Contains(p, StringComparison.OrdinalIgnoreCase));
-
-    private static FeatureSpendRecord ToRecord(SpendRecord r, DateTime timestamp) => new()
+    // Запись среза: признак «цена ненадёжна» выставляется единой точкой правды
+    // (SpendCostReliability, список из конфига/дефолта) — его же читает разрез фичи.
+    private FeatureSpendRecord ToRecord(SpendRecord r, DateTime timestamp) => new()
     {
         Timestamp = timestamp,
         SessionId = r.SessionId,
@@ -163,9 +179,10 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         CacheCreationTokens = r.CacheCreationTokens,
         CostUsd = r.CostUsd,
         Source = r.Source,
+        UnreliableCost = SpendCostReliability.IsUnreliable(r.Model, r.Source, _unreliableModels),
     };
 
-    private static FeatureSpendRecord ToRecord(DailySpendRow d, DateTime timestamp) => new()
+    private FeatureSpendRecord ToRecord(DailySpendRow d, DateTime timestamp) => new()
     {
         Timestamp = timestamp,
         SessionId = d.SessionId,
@@ -178,5 +195,6 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         CacheCreationTokens = d.CacheCreationTokens,
         CostUsd = d.CostUsd,
         Source = d.Source,
+        UnreliableCost = SpendCostReliability.IsUnreliable(d.Model, d.Source, _unreliableModels),
     };
 }

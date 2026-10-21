@@ -147,6 +147,9 @@ public sealed record FeatureBreakdown(
 
         // Группировка по ключу: key → (work-интервалы, chatIds) + токены/стоимость из записей
         // расхода того же ключа. key null/пусто → задача/запись в этот разрез не входит.
+        // ДОКУМЕНТИРОВАННОЕ ПРАВИЛО (минор Б9b): запись ключевого (оркестраторского) чата без
+        // TaskId/PersonaId/Model не резолвится ни в одну ось → входит в ИТОГ расхода (срез по
+        // чату), но не в этот разрез. Сумма разрезов может быть < итога — осознанно, не баг.
         // ChatIds — id чата задачи, только если в снимке владельца (fail-closed).
         // Токены = вход+выход записей; стоимость = сумма надёжных цен (free → 0), null — если есть
         // запись без надёжной цены (ненадёжная) или записей расхода для группы нет вовсе (нет данных).
@@ -168,6 +171,10 @@ public sealed record FeatureBreakdown(
 
             // Агрегат записей расхода по тому же ключу: токены (вход+выход), стоимость (надёжная),
             // признак ненадёжной записи. Ключ записи null/пусто → запись в этот разрез не входит.
+            // «Цена ненадёжна» — ОДИН признак (SpendCostReliability, флаг UnreliableCost на записи):
+            // та же модель в списке `Spend:UnreliableCostModels`, что в итоге расхода (SpendFeatureReader)
+            // — иначе разрез спорил бы с итогом (deepseek cost=2.0: итог 0, разрез 2.0, ревью Глеба).
+            // Плюс «нет данных о цене» (Source != free, CostUsd = null) — консервативный null группы.
             var spend = new Dictionary<string, (long Tokens, double Cost, bool HasUnreliable)>();
             if (records is not null)
             {
@@ -181,7 +188,8 @@ public sealed record FeatureBreakdown(
                         a = (0, 0, false);
                     a = (a.Tokens + r.InputTokens + r.OutputTokens,
                         a.Cost + (r.Source == SpendSources.Free ? 0 : (r.CostUsd ?? 0)),
-                        a.HasUnreliable || (r.Source != SpendSources.Free && r.CostUsd is null));
+                        a.HasUnreliable || r.UnreliableCost
+                            || (r.Source != SpendSources.Free && r.CostUsd is null));
                     spend[key] = a;
                 }
             }
@@ -232,6 +240,16 @@ public sealed record FeatureBreakdown(
         // (AwaitingHumanSince) или остановленная (ExecutorStoppedAt), статусом InProgress, но
         // реально не работает — в «дольше всех сейчас» не попадает.
         var totalTokens = records is null ? 0L : records.Sum(r => r.InputTokens + r.OutputTokens);
+        // Токены по TaskId одним предпроходом (минор Б9b: раньше O(задачи×записи) —
+        // на каждую идущую задачу скан ВСЕХ записей; теперь словарь, O(записи+задачи)).
+        var tokensByTask = new Dictionary<string, (long Tokens, bool Has)>();
+        if (records is not null)
+            foreach (var r in records)
+                if (r.TaskId is not null)
+                {
+                    var acc = tokensByTask.TryGetValue(r.TaskId, out var a) ? a : ((Tokens: 0L, Has: false));
+                    tokensByTask[r.TaskId] = (acc.Tokens + r.InputTokens + r.OutputTokens, true);
+                }
         FeatureLongestNow? longest = null;
         DateTime? longestStart = null;
         foreach (var t in tasks)
@@ -241,17 +259,13 @@ public sealed record FeatureBreakdown(
             if (longestStart is null || t.ClaudeStartedAt.Value < longestStart.Value)
             {
                 longestStart = t.ClaudeStartedAt;
-                // Токены задачи: вход+выход записей, чей TaskId == id задачи.
+                // Токены задачи: вход+выход записей, чей TaskId == id задачи (из словаря).
                 long taskTokens = 0;
                 var hasTaskRecords = false;
-                if (records is not null)
+                if (t.Id is not null && tokensByTask.TryGetValue(t.Id, out var acc))
                 {
-                    foreach (var r in records)
-                        if (r.TaskId == t.Id)
-                        {
-                            taskTokens += r.InputTokens + r.OutputTokens;
-                            hasTaskRecords = true;
-                        }
+                    taskTokens = acc.Tokens;
+                    hasTaskRecords = acc.Has;
                 }
                 longest = new FeatureLongestNow(
                     TaskId: t.Id,

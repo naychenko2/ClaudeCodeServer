@@ -28,6 +28,13 @@ public interface ISpendFeatureReader
     // делится поровну между активными фичами, и деление делается по этим записям.
     IReadOnlyList<FeatureSpendRecord> Records(string ownerId, IReadOnlyCollection<string> taskIds,
         IReadOnlyCollection<string> sessionIds, DateTime? from);
+
+    // Срез одним проходом: итог + записи из ОДНОГО набора записей (доработка Б9b, минор):
+    // два отдельных вызова Totals/Records — два скана стора, и запись, попавшая между ними,
+    // попадала в разрез, но не в итог (окно рассогласования). Возвращает (итог, записи).
+    (FeatureSpendTotals Totals, IReadOnlyList<FeatureSpendRecord> Records) Slice(
+        string ownerId, IReadOnlyCollection<string> taskIds, IReadOnlyCollection<string> sessionIds,
+        DateTime? from);
 }
 
 // Итог расхода фичи. `From` — самая ранняя дата, с которой в срезе есть данные
@@ -42,6 +49,9 @@ public sealed class FeatureSpendTotals
     public long CacheCreationTokens { get; set; }
     // Сумма стоимости записей с НАДЁЖНОЙ ценой: локальные модели (Source == free)
     // дают 0, модели с ненадёжной ценой (HiddenCostModels) в сумму не входят.
+    // double (IEEE 754), НЕ decimal: минор Б9b — бэкенд не округляет молча на границе,
+    // округление до отображаемой точности делает фронт (featureStats.ts); разрез
+    // (FeatureBreakdown) при конверсии в decimal не округляет, а переносит как есть.
     public double CostUsd { get; set; }
     // По меньшей мере одна запись имела ненадёжную цену: её стоимость не в
     // CostUsd, а модель перечислена в HiddenCostModels.
@@ -69,4 +79,10 @@ public sealed class FeatureSpendRecord
     public long CacheCreationTokens { get; init; }
     public double? CostUsd { get; init; }
     public string Source { get; init; } = "";
+    // Цена от CLI ненадёжна (модель в списке `Spend:UnreliableCostModels`): токены в сумму,
+    // стоимость — нет. Единая точка правды (SpendCostReliability): читатель (SpendFeatureReader)
+    // выставляет флаг при сборке записи, и итог расхода с разрезом фичи (FeatureBreakdown)
+    // используют ОДИН и тот же признак — не «CostUsd is null» в разрезе против имени модели
+    // в итоге (ревью Глеба, major: две точки правды давали разные цифры по одной записи).
+    public bool UnreliableCost { get; init; }
 }

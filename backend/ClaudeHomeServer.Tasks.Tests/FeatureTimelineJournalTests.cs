@@ -266,6 +266,39 @@ public class FeatureTimelineJournalTests
             && s.To == now);
     }
 
+    // ── 3b. Дефект 8d9b5718: LongestWait обрезается по `to` (закрытая фича) ────────────────
+
+    // Фича закрыта в 08:30 (epic Done, CompletedAt=08:30 → to=08:30), now=20:00.
+    // Ожидание 08:00 БЕЗ waiting_cleared: интервал sweep'ом режется к [from, to] → [08:00, 08:30]
+    // = 30 мин. LongestWait обязан обрезаться тем же `to` (30), а не тянуться до now (720):
+    // иначе Waiting=30, LongestWait=720 — «самое длинное ожидание» длиннее всего окна фичи.
+    // Мутация «убрать обрезку по to» (LongestWait = wEnd − e.At, wEnd=now) → 720 ≠ 30 → краснеет.
+    [Fact]
+    public void Build_ЗакрытаяФича_LongestWaitОбрезанПоTo()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var closedAt = new DateTime(2026, 10, 1, 8, 30, 0);
+        var epic = Epic("epic");
+        epic.Status = TaskItemStatus.Done;
+        epic.CompletedAt = closedAt;
+        var s1 = Child("s1", "epic");
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("waiting", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "s1"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        // Границы: 08:00 → 08:30 (закрыто) = 30 мин, не до now.
+        tl.To.Should().Be(closedAt);
+        tl.Totals.ElapsedMinutes.Should().Be(30);
+        // Ожидание [08:00, 08:30] = 30 мин (обрезано по to).
+        tl.Totals.WaitingMinutes.Should().Be(30);
+        tl.Totals.WaitingCount.Should().Be(1);
+        // Самое длинное ожидание = 30 (обрезано по to), НЕ 720 (до now).
+        tl.Totals.LongestWaitMinutes.Should().Be(30);
+    }
+
     // ── 4. Ожидание устройства (device_wait…device_wait_cleared) → как waiting ───────────────
 
     // Журнал: created + device_wait 10:00 → device_wait_cleared 11:00 (60 мин). Без work

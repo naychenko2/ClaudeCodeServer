@@ -236,4 +236,22 @@ public class SpendFeatureReaderTests : IDisposable
         Assert.Null(r1.TaskId);
         Assert.Equal("deepseek-chat", r1.Model);
     }
+
+    // --- минор Б9b: отрицательные/нулевые токены не дают отрицательных сумм ---
+
+    [Fact]
+    public void Totals_ОтрицательныеТокены_КлампВНоль_СуммаНеВМинус()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+        // Запись с отрицательным входом/выходом (сбой CLI) и одна нормальная.
+        store.Record(Rec(ts, input: -50, output: -10));
+        store.Record(Rec(ts, input: 10, output: 5));
+
+        var totals = NewReader(store).Totals("u1", ["t1"], ["s1"], null);
+
+        // Отрицательный вклад кламится в 0: итог = только нормальная запись (10+5), не в минус.
+        Assert.Equal(10, totals.InputTokens);
+        Assert.Equal(5, totals.OutputTokens);
+    }
 }

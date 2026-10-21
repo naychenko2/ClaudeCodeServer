@@ -2226,6 +2226,45 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         spendAbsent.Should().BeTrue("Spend выключен → stats.spend = null, не 500");
     }
 
+    // Spend выключен E2E через DI (ревью Глеба, major): подсистема выключена гейтом
+    // (Subsystems:spend:Enabled=false) → шов ISpendFeatureReader НЕ зарегистрирован в контейнере,
+    // и контроллер строится КОНТЕЙНЕРОМ (не руками, как BuildController выше): GET feature →
+    // 200 и stats.spend = null. Ручная передача null проверку не заменяет: она проверяет ветку
+    // `spend is null`, но не то, что контейнер умеет построить контроллер без шова.
+    // Честная мутация: убрать умолчание `= null` у параметра spend в конструкторе → контейнер
+    // не строит контроллер (обязательный параметр не зарегистрирован) → падает именно этот тест.
+    //
+    // Гейт выключен ПЕРЕМЕННОЙ ОКРУЖЕНИЯ, а не ExtraConfig: гейт динамического модуля (Spend)
+    // читается в ModuleLoader.LoadAll ДО builder.Build(), а фабрика ExtraConfig (in-memory)
+    // применяется позже (на Build) — проба: ExtraConfig даёт gate=false в собранном конфиге,
+    // но шов всё равно зарегистрирован. Переменная окружения — в базовом конфиге с момента
+    // создания builder, поэтому видна на LoadAll.
+    [Fact]
+    public async Task GetFeature_SpendВыключен_DI_СпандNull()
+    {
+        Environment.SetEnvironmentVariable("Subsystems__spend__Enabled", "false");
+        try
+        {
+            using var offFactory = new TestWebApplicationFactory();
+            using var client = offFactory.CreateAuthenticatedClient();
+
+            var response = await client.PostAsJsonAsync("/api/tasks", new { title = "эпик-sp-di", role = "feature" });
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            var epicId = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+            var feature = await client.GetAsync($"/api/tasks/features/{epicId}");
+            feature.StatusCode.Should().Be(HttpStatusCode.OK, "Spend выключен → 200, не 500");
+            var stats = (await feature.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("stats");
+
+            var spendAbsent = !stats.TryGetProperty("spend", out var spend) || spend.ValueKind == JsonValueKind.Null;
+            spendAbsent.Should().BeTrue("Spend выключен (шов не в DI) → stats.spend = null");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("Subsystems__spend__Enabled", null);
+        }
+    }
+
     // Запись расхода задачи фичи (надёжная цена) → токены (вход/выход) + costUsd в stats.spend.
     [Fact]
     public async Task GetFeature_Spend_ЗаписьЗадачи_ТокеныИЦена()
@@ -2289,15 +2328,17 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         spend.GetProperty("costUsd").GetDouble().Should().Be(0);
     }
 
-    // Ключевой чат фичи (чат эпика, LinkedSessionId) входит в срез: запись расхода без taskId,
-    // но с sessionId = чат эпика → атрибутируется фиче (чат исключителен: только эта фича).
+    // Ключевой чат фичи (сессия с TaskId = id эпика) входит в срез: запись расхода без taskId,
+    // но с sessionId = ключевой чат → атрибутируется фиче (чат исключителен: только эта фича).
+    // Мутация «ключевой чат всегда в срезе (мёртвая ветка исключительности)» → краснеет
+    // GetFeature_Spend_ЧатВДвухФичах_НеВходит (100 ≠ 0).
     [Fact]
     public async Task GetFeature_Spend_КлючевойЧат_Входит()
     {
         var epic = await CreateTaskAsync(new { title = "эпик-sp-key", role = "feature" });
         var epicId = epic.GetProperty("id").GetString()!;
-        // Ключевой чат = чат эпика (LinkedSessionId эпика).
-        var keyChat = await CreatePersonalChatAsync(OwnerId);
+        // Ключевой чат = сессия с TaskId = id эпика (чат исполнения эпика); к эпику и привязан.
+        var keyChat = await CreatePersonalChatAsync(OwnerId, epicId);
         await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { linkedSessionId = keyChat });
 
         // Запись расхода: без taskId, но sessionId = ключевой чат фичи.
@@ -2306,7 +2347,39 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
 
         spend.GetProperty("inputTokens").GetInt64().Should().Be(100,
-            "ключевой чат (чат эпика) входит в срез → запись расхода учитывается");
+            "ключевой чат (сессия с TaskId = id эпика) входит в срез → запись расхода учитывается");
+    }
+
+    // Чат в ДВУХ фичах (ключевой у A + оркестраторский у B) не входит в срез НИКОНЕГО
+    // (общий чат делится в Б9c): без правила исключительности расход общего чата приписывался
+    // каждой фиче (двойной счёт, critical ревью Глеба). Мутация «вернуть мёртвую ветку»
+    // (ключевой чат = LinkedSessionId эпика, всегда в sessionIds) → краснеет (100 ≠ 0).
+    [Fact]
+    public async Task GetFeature_Spend_ЧатВДвухФичах_НеВходит()
+    {
+        // Фича A: эпик + ключевой чат C (сессия с TaskId = id эпика A, к эпику A привязан).
+        var epicA = await CreateTaskAsync(new { title = "эпик-sp-2f-A", role = "feature" });
+        var epicAId = epicA.GetProperty("id").GetString()!;
+        var chatC = await CreatePersonalChatAsync(OwnerId, epicAId);
+        await _client.PutAsJsonAsync($"/api/tasks/{epicAId}", new { linkedSessionId = chatC });
+
+        // Фича B: эпик, у которого оркестраторский чат = тот же чат C.
+        var epicB = await CreateTaskAsync(new { title = "эпик-sp-2f-B", role = "feature" });
+        var epicBId = epicB.GetProperty("id").GetString()!;
+        await _client.PutAsJsonAsync($"/api/tasks/{epicBId}", new { executorLaunchedBySessionId = chatC });
+
+        // Запись расхода: без taskId, sessionId = общий чат C.
+        var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, null, chatC, "claude-opus-4", 100, 50, 1.5));
+
+        // Срез A: ключевой чат не исключителен (входит ещё в B) → запись не входит.
+        var spendA = GetFeatureStats(reader, epicAId).GetProperty("spend");
+        spendA.GetProperty("inputTokens").GetInt64().Should().Be(0,
+            "чат в двух фичах не входит в срез A (двойного счёта нет)");
+
+        // Срез B: чат C — не ключевой чат B (TaskId = id эпика A) и не сессия задачи B → тоже нет.
+        var spendB = GetFeatureStats(reader, epicBId).GetProperty("spend");
+        spendB.GetProperty("inputTokens").GetInt64().Should().Be(0,
+            "чат C не сессия задачи B и не её ключевой чат → не входит в срез B");
     }
 
     // `from` (с какой даты есть данные) отдаётся: = самая ранняя дата записи в срезе (yyyy-MM-dd).

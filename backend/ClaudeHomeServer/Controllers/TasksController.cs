@@ -650,18 +650,30 @@ public class TasksController(
             .Where(id => id is not null)
             .Select(id => id!)
             .ToHashSet(StringComparer.Ordinal);
-        // Ключевой чат (чат эпика): входит в срез, только если исключителен (входит лишь в эту
-        // фичу по правилам членства). Чат, уже являющийся сессией задачи фичи, в срезе и так.
-        var keyChatId = run.Epic.LinkedSessionId;
-        if (keyChatId is not null && !sessionIds.Contains(keyChatId))
+        // Ключевой чат: сессия с TaskId == epic.Id из снимка сессий владельца (fail-closed:
+        // удалённый/чужой чат в снимке не живёт → ключевого чата нет, и его расход в срез не
+        // входит). Прежняя версия брала run.Epic.LinkedSessionId, а тот ВСЕГДА был в sessionIds
+        // (эпик входит в allFeatureTasks) → ветка «!sessionIds.Contains» была мёртвой,
+        // ChatFeatureIds не вызывался никогда, и общий чат (ключевой у фичи A, оркестраторский
+        // у B) входил в срез КАЖДОЙ фичи → двойной счёт (ревью Глеба, critical).
+        var keyChatId = snapshot.FirstOrDefault(s => s.TaskId == run.Epic.Id)?.Id;
+        if (keyChatId is not null)
         {
+            // Ключевой чат исключается из среза и добавляется обратно только если состоит ровно
+            // в одной фиче (общий чат делится в Б9c).
+            sessionIds.Remove(keyChatId);
             var owner = tasks.GetByOwner(UserId).ToList();
             var chatFeatures = FeatureProjector.ChatFeatureIds(keyChatId, owner, snapshot);
             if (chatFeatures.Count == 1 && chatFeatures.Contains(run.Epic.Id))
                 sessionIds.Add(keyChatId);
         }
-        var spendTotals = spend?.Totals(UserId, taskIds, sessionIds, from: run.Epic.CreatedAt);
-        var spendRecords = spend?.Records(UserId, taskIds, sessionIds, from: run.Epic.CreatedAt);
+        // Один проход (Slice): итог и записи из одного набора — без окна рассогласования между
+        // двумя отдельными сканами стора (минор доработки Б9b). spend null (Spend выключен) →
+        // оба null, как раньше (spend?.Totals / spend?.Records).
+        FeatureSpendTotals? spendTotals = null;
+        IReadOnlyList<FeatureSpendRecord>? spendRecords = null;
+        if (spend is not null)
+            (spendTotals, spendRecords) = spend.Slice(UserId, taskIds, sessionIds, from: run.Epic.CreatedAt);
         // FeatureSpendTotals → FeatureSpend (camelCase в JSON). Shared = null в Б9b (Б9c).
         FeatureSpend? featureSpend = spendTotals is null ? null : new FeatureSpend(
             InputTokens: spendTotals.InputTokens,
@@ -671,7 +683,9 @@ public class TasksController(
             CostUsd: spendTotals.CostUsd,
             CostPartial: spendTotals.CostPartial,
             HiddenCostModels: spendTotals.HiddenCostModels,
-            From: spendTotals.From?.ToString("yyyy-MM-dd"),
+            // from — контракт string (не null, TS featureStats.ts): срез пуст (записей нет) →
+            // дата начала фичи (создание эпика), не null (решение по минору Б9b: не правим TS-тип).
+            From: (spendTotals.From ?? DateOnly.FromDateTime(run.Epic.CreatedAt)).ToString("yyyy-MM-dd"),
             Shared: null);
         var (breakdown, longestNow) = FeatureBreakdown.Build(run, journalResult, snapshot, resolver, now, spendRecords);
         var stats = new FeatureStats(

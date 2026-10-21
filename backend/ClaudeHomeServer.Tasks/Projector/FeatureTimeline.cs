@@ -294,7 +294,11 @@ public sealed record FeatureTimeline(
             {
                 var wEnd = FirstAfter(waitingClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;
-                longestWait = Max(longestWait, wEnd - e.At);
+                // Обрезка по `to` (дефект 8d9b5718): незакрытое ожидание фичи, закрытой ДО now,
+                // тянется до now, а не до закрытия — интервалы sweep'ом режутся к [from, to],
+                // поэтому и самое длинное ожидание обрезаем тем же `to` (иначе: закрыта 08:30,
+                // waiting 08:00 без cleared, now=20:00 → Waiting=30, LongestWait=720).
+                longestWait = Max(longestWait, (wEnd <= to ? wEnd : to) - e.At);
                 waitingIntervals.Add(new JournalInterval(e.At, wEnd, "waiting", PriorityWaiting, LabelOf(e.TaskId), e.TaskId));
             }
             // waiting: ожидание устройства device_wait…(device_wait_cleared | now). Контракт
@@ -304,7 +308,7 @@ public sealed record FeatureTimeline(
             {
                 var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;
-                longestWait = Max(longestWait, dEnd - e.At);
+                longestWait = Max(longestWait, (dEnd <= to ? dEnd : to) - e.At);
                 waitingIntervals.Add(new JournalInterval(e.At, dEnd, "waiting", PriorityWaiting, LabelOf(e.TaskId), e.TaskId));
             }
         }

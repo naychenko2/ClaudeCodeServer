@@ -76,10 +76,12 @@ function whereText(f: FeatureIndexFeature): string {
   const nowIds = (f.nowPersonaIds && f.nowPersonaIds.length > 0)
     ? f.nowPersonaIds
     : (f.now0?.personaId ? [f.now0.personaId] : []);
+  // merging: имя из attention.personaId недостижимо (при state=merging тревоги нет,
+  // FeatureProjector.cs:1663) — подпись остаётся «Мерж · идёт» без имени; имя потребует
+  // поля merge.personaId в строке индекса (бэк-шаг).
   const p = statusPhrase(f.state, stage, {
     running: uniquePersonaNames(nowIds),
     stopped: f.attention?.personaId ? (getPersonaById(f.attention.personaId)?.name ?? '') : '',
-    merging: f.attention?.personaId ? (getPersonaById(f.attention.personaId)?.name ?? '') : '',
   });
   return `${p.bold}${p.post}`;
 }

@@ -14,7 +14,7 @@
 
 import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FeatureBannerSheet, executorLines } from './FeatureBannerSheet';
+import { FeatureBannerSheet, executorLines, focusablesIn } from './FeatureBannerSheet';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../__tests__/fakeDom';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureTask, StageKey, StageState, StageTone } from '../../../types/featureRun';
 
@@ -310,15 +310,42 @@ describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {
     root.unmount();
   });
 
+  // Зонд: проводка initialSel={idx} баннер→шторка, где порядок entries (order)
+  // ОТЛИЧАЕТСЯ от порядка runs (API). Мутация: убрать order → runs в API-порядке →
+  // initialSel=0 покажет f1 (не f2) → red.
+  it('зонд: order ≠ порядок runs → initialSel=0 открывает фичу из order (не первую из runs)', async () => {
+    // runs из API: [f1, f2]; order из индекса: ['f2', 'f1'] (f2 первая в строке).
+    const runs = [mkRun('f1', 'F1 из API'), mkRun('f2', 'F2 из API')];
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs, isMobile: false, onClose: () => {},
+      order: ['f2', 'f1'], // индекс: f2 на первом месте
+      initialSel: 0,       // баннер показывает f2 (idx=0 в entries)
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    // Панель должна показать f2 (первая в order), а не f1 (первая в runs).
+    const panel = findNodeByAttr(container, 'data-testid', 'feature-sheet-panel');
+    expect(panel, 'нет панели').not.toBeNull();
+    const text = textNodes(panel!).join(' ');
+    expect(text, 'ожидается «F2 из API» (первая в order), не «F1 из API»').toContain('F2 из API');
+    root.unmount();
+  });
+
   // Минор 5: focus trap на МОБИЛЕ (Modal/bottom-sheet): ловушка на оверлее (cc-overlay),
   // фокус внутрь при открытии, Tab/Shift+Tab по кругу. fakeDom: keydown → handlers.
   // На мобиле Modal рисует портал (createPortal → document.body); в fakeDom портал
   // рендерится в document.body, а не в container — поэтому ищем по document.
-  it('Минор 5: focus trap на мобиле — keydown-обработчик зарегистрирован (ловушка активна)', async () => {
+  // Мутация «снять useFocusTrap»: фокус не уйдёт внутрь → activeElement ≠ closeBtn → red.
+  it('Минор 5: focus trap на мобиле — фокус внутрь, Tab/Shift+Tab по кругу', async () => {
     const doc = (globalThis as { document: any }).document;
+    // Захват keydown-обработчиков (Esc Modal + trap) — патч addEventListener на время mount.
     const keydownHandlers: Function[] = [];
     const origAdd = doc.addEventListener;
     doc.addEventListener = (t: string, f: unknown) => { if (t === 'keydown') keydownHandlers.push(f); return origAdd.call(doc, t, f); };
+    // focus() → activeElement (иначе no-op: не видно, куда ушёл фокус).
+    const proto = Object.getPrototypeOf(doc.createElement('div'));
+    const origFocus = proto.focus;
+    proto.focus = function (this: any) { doc.activeElement = this; };
 
     const { root } = mount(createElement(FeatureBannerSheet, {
       runs: [mkRun('f1', 'Моя фича')], isMobile: true, onClose: () => {},
@@ -326,9 +353,36 @@ describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
     doc.addEventListener = origAdd;
 
-    // Ловушка (useFocusTrap) регистрирует keydown-обработчик на document —
-    // без него Tab/Shift+Tab не циклируются. Мутация: убрать useFocusTrap → 0 handlers → red.
-    expect(keydownHandlers.length, 'keydown-обработчик ловушки не зарегистрирован (mobile)').toBeGreaterThanOrEqual(1);
+    // Крестик Modal (первый фокусируемый в оверлее) — в document.body (портал).
+    const closeBtn = findNodeByAttr(doc.body, 'data-testid', 'feature-sheet-close')
+      ?? findNodeByAttr(doc.body, 'aria-label', 'Закрыть');
+    expect(closeBtn, 'крестик Modal (портал) не найден').not.toBeNull();
+
+    // При открытии: фокус на ПЕРВОМ фокусируемом (крестик Modal).
+    expect(doc.activeElement, 'фокус не ушёл внутрь Modal при открытии (mobile)').toBe(closeBtn);
+
+    // Tab с ПОСЛЕДНЕГО → на ПЕРВЫЙ (крестик). Ставим activeElement на «последний»
+    // (любой фокусируемый после крестика) и проверяем цикл.
+    // В fakeDom у Modal есть только крестик + контент; если фокусируемых > 1 —
+    // Tab с последнего → первый. Если только один (крестик) — Tab → на него же.
+    const allFocusable = focusablesIn(doc.body);
+    if (allFocusable.length > 1) {
+      const last = allFocusable[allFocusable.length - 1] as HTMLElement;
+      doc.activeElement = last;
+      act(() => { for (const h of keydownHandlers) h({ key: 'Tab', shiftKey: false, preventDefault: () => {} }); });
+      expect(doc.activeElement, 'Tab с последнего не привёл на первый (mobile)').toBe(closeBtn);
+
+      doc.activeElement = closeBtn;
+      act(() => { for (const h of keydownHandlers) h({ key: 'Tab', shiftKey: true, preventDefault: () => {} }); });
+      expect(doc.activeElement, 'Shift+Tab с первого не привёл на последний (mobile)').toBe(last);
+    } else {
+      // Один фокусируемый (крестик): Tab → на него же (цикл из одного).
+      doc.activeElement = closeBtn;
+      act(() => { for (const h of keydownHandlers) h({ key: 'Tab', shiftKey: false, preventDefault: () => {} }); });
+      expect(doc.activeElement, 'Tab с единственного не остался на нём (mobile)').toBe(closeBtn);
+    }
+
+    proto.focus = origFocus;
     root.unmount();
   });
 

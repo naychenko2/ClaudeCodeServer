@@ -277,9 +277,9 @@ function SheetBody({ run, runs, selected, onSelect, isMobile, projectId }: {
 // оверлее, и ловушка должна его включать.
 type AnyNode = Node & { nodeType: number; parentNode: Node | null };
 
-// Фокусируемые элементы внутри корня: BUTTON/A/INPUT/SELECT/TEXTAREA + [tabindex>=0];
-// disabled не считается.
-function focusablesIn(root: Element): Element[] {
+// Фокусируемые элементы внутри корня: BUTTON/A/INPUT/SELECT/TEXTAREA + [tabindex>=-1];
+// disabled не считается. tabindex="-2" (и любые < -1) — НЕ фокусируемы.
+export function focusablesIn(root: Element): Element[] {
   const out: Element[] = [];
   const FOCUSABLE = new Set(['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA']);
   const walk = (n: Node) => {
@@ -288,7 +288,8 @@ function focusablesIn(root: Element): Element[] {
     const tag = el.tagName ? el.tagName.toUpperCase() : '';
     const tab = el.getAttribute ? el.getAttribute('tabindex') : null;
     const disabled = el.getAttribute ? el.getAttribute('disabled') != null : false;
-    if (!disabled && (FOCUSABLE.has(tag) || (tab != null && tab !== '-1'))) out.push(el);
+    const tabOk = tab != null && parseInt(tab, 10) >= -1;
+    if (!disabled && (FOCUSABLE.has(tag) || tabOk)) out.push(el);
     for (const c of el.childNodes) walk(c);
   };
   walk(root);

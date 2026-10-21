@@ -20,6 +20,7 @@ import { createElement, act } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureBanner, featureBannerRow } from './FeatureBanner';
+import { CHAT_MAX_W } from '../../../lib/design';
 import { __test } from '../../../lib/featuresIndex';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../__tests__/fakeDom';
@@ -176,13 +177,11 @@ describe('featureBannerRow: «где мы», действие, тон, роль'
     expect(featureBannerRow(f, link(), 'chat-exec').action.label).toBe('Чат Денис');
   });
 
-  // Минор 1: merging с персоной → «Мерж · идёт · {имя}» (имя из attention.personaId,
-  // как в пилюле: statusPhrase('merging', …, { merging: name })).
-  it('merging с персоной: «Мерж · идёт · {имя}» (имя из attention.personaId)', () => {
-    mockPersonas.length = 0;
-    mockPersonas.push({ id: 'p-denis', name: 'Денис' });
-    const f = feat('merging', { attention: attention('merge', { personaId: 'p-denis' }) });
-    expect(featureBannerRow(f, link(), 'chat-exec').where).toBe('Мерж · идёт · Денис');
+  // merging: подпись «Мерж · идёт» БЕЗ имени (attention.personaId недостижимо при
+  // state=merging, FeatureProjector.cs:1663; имя потребует merge.personaId в индексе).
+  it('merging: «Мерж · идёт» без имени (attention.personaId недостижимо)', () => {
+    const f = feat('merging');
+    expect(featureBannerRow(f, link(), 'chat-exec').where).toBe('Мерж · идёт');
   });
 
   it('роль: исполнитель step → «Ш2 · бэк»; lane «back» (англ.) нормализуется в «бэк»', () => {
@@ -329,6 +328,37 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(html).toContain('· ещё 1');
   });
 
+  // Зонд: чат с ТРЁМЯ фичами → «· ещё 2».
+  it('зонд: чат с тремя фичами → «· ещё 2»', () => {
+    const f1 = feat('running', { keySessionId: 'chat-key' });
+    const f2 = feat('running', { featureId: 'f2', title: 'Вторая', keySessionId: 'chat-key2' });
+    const f3 = feat('running', { featureId: 'f3', title: 'Третья', keySessionId: 'chat-key3' });
+    const index: FeaturesIndex = {
+      features: [f1, f2, f3],
+      chats: { 'chat-exec': [
+        { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
+        { featureId: 'f2', kind: 'curator', taskRole: null, stepRef: null, lane: null },
+        { featureId: 'f3', kind: 'curator', taskRole: null, stepRef: null, lane: null },
+      ] },
+    };
+    __test.setIndex('p1', index);
+    const html = renderBanner('chat-exec', 'p1');
+    expect(html).toContain('data-testid="feature-more"');
+    expect(html).toContain('· ещё 2');
+  });
+
+  // Зонд: архивный чат — баннер рисуется (архив не скрывает фичу).
+  it('зонд: архивный чат — баннер рисуется (архив не скрывает)', () => {
+    const f = feat('running', { keySessionId: 'chat-arch', keyArchived: true });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-arch': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
+    };
+    __test.setIndex('p1', index);
+    const html = renderBanner('chat-arch', 'p1');
+    expect(html).toContain('data-testid="feature-banner"');
+  });
+
   it('чип «ключевой»: font-weight 700 + accent/accentLight (макет .role.key)', () => {
     seedIndex(feat('running', { keySessionId: 'chat-key' }), link({ kind: 'orchestrator', stepRef: null, lane: null }), 'chat-key', 'p1');
     const html = renderBanner('chat-key', 'p1');
@@ -352,17 +382,29 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
   });
 
   // M1 (геометрия): контент обёртки = CHAT_MAX_W (950) = колонка.
-  // Вычисление: border-box → content = maxWidth − 2×padding = 982 − 32 = 950.
+  // Читает ФАКТИЧЕСКИЕ стили смонтированной обёртки (max-width, padding, box-sizing)
+  // и проверяет: border-box → content = maxWidth − 2×padding = CHAT_MAX_W.
   // Мутация +32 → +0 (maxWidth = 950): content = 950 − 32 = 918 ≠ 950 → red.
-  // Мутация margin auto → 0: не ловится этим тестом (ловится style-тестом выше).
-  it('M1: геометрия — контент обёртки = CHAT_MAX_W (950) = колонка чата', () => {
-    // CHAT_MAX_W = 950 (design.ts), padding = 16×2 = 32.
-    // Обёртка: maxWidth = 950 + 32 = 982, border-box → content = 982 − 32 = 950.
-    const CHAT_MAX_W = 950;
-    const padding = 16;
-    const maxWidth = CHAT_MAX_W + 2 * padding;
-    const contentWidth = maxWidth - 2 * padding; // border-box: content = maxW − 2×padding
-    expect(contentWidth, 'контент обёртки ≠ колонке').toBe(CHAT_MAX_W);
+  // Мутация снять boxSizing:'border-box': content = 982 ≠ 950 → red.
+  it('M1: геометрия — контент обёртки = CHAT_MAX_W (border-box: maxWidth − 2×padding)', () => {
+    seedIndex(feat('running'), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const m = html.match(/<div data-testid="feature-banner-wrap" style="([^"]*)"/);
+    expect(m, 'обёртка feature-banner-wrap с style').not.toBeNull();
+    const style = m![1];
+    // box-sizing: border-box — обязательное условие расчёта.
+    expect(style, 'box-sizing: border-box').toContain('box-sizing:border-box');
+    // max-width: 982px (CHAT_MAX_W + 2×16).
+    const mwMatch = style.match(/max-width:(\d+)px/);
+    expect(mwMatch, 'max-width в style').not.toBeNull();
+    const maxWidth = parseInt(mwMatch![1], 10);
+    // padding: 0 16px → 16px по горизонтали.
+    const padMatch = style.match(/padding:0 (\d+)px/);
+    expect(padMatch, 'padding в style').not.toBeNull();
+    const pad = parseInt(padMatch![1], 10);
+    // border-box: content = maxWidth − 2×padding = CHAT_MAX_W.
+    const contentWidth = maxWidth - 2 * pad;
+    expect(contentWidth, `контент ${contentWidth} ≠ CHAT_MAX_W ${CHAT_MAX_W}`).toBe(CHAT_MAX_W);
   });
 
   // Минор 1: aria-hidden на контейнере точек — только когда кликабельных точек НЕТ

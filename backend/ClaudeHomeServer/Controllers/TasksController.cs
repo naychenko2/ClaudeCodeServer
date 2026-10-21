@@ -691,9 +691,22 @@ public class TasksController(
             foreach (var chatId in sharedChatIds)
                 chatParticipants[chatId] = membership[chatId];
 
-            // (2) Чтение журнала фичи (кэш на запрос — отдельный шаг, perf): Read по id.
-            //     journal null (подсистема выключена) → null, не 500.
-            FeatureJournalReadResult? ReadJournal(string fid) => journal?.Read(UserId, fid);
+            // (2) Кэш журнала на запрос (решение Александра, п.в): featureId → FeatureJournalReadResult?,
+            //     Read один раз на фичу, включая текущую (journalResult уже прочитан выше) —
+            //     глобального кэша нет. journal null (подсистема выключена) → null, не 500.
+            var journalCache = new Dictionary<string, FeatureJournalReadResult?>(StringComparer.Ordinal)
+            {
+                [run.Epic.Id] = journalResult,
+            };
+            FeatureJournalReadResult? ReadJournal(string fid)
+            {
+                if (!journalCache.TryGetValue(fid, out var jr))
+                {
+                    jr = journal?.Read(UserId, fid);
+                    journalCache[fid] = jr;
+                }
+                return jr;
+            }
             // Журнал фичи полный: StartsWithCreated && !Truncated (единый предикат, как в п.4).
             bool JournalComplete(string fid) =>
                 ReadJournal(fid) is { StartsWithCreated: true, Truncated: false };

@@ -308,6 +308,32 @@ public class FeatureJournalTransitionsTests : IDisposable
         File.Exists(pathB).Should().BeTrue("эпик в другом проекте не сносится");
     }
 
+    // ─── DeleteByProject: шаг удаляемого проекта при эпике в другом проекте (Проба7) ──
+    // Эпик живёт в proj-B, его шаг — в proj-A. DeleteByProject("proj-A") сносит шаг, но
+    // НЕ эпик (тот в proj-B) → файл журнала эпика остаётся. Код корректен (Проба7), нужен тест.
+
+    [Fact]
+    public void DeleteByProject_ШагУдаляемогоПроекта_ЭпикВДругом_ЖурналЭпикаЖив()
+    {
+        // Эпик в proj-B.
+        var epic = _sut.Create("proj-B", "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        // Шаг той же фичи — в proj-A (другой проект).
+        var step = _sut.Create("proj-A", "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+        var now = DateTime.UtcNow;
+        _sut.MarkClaudeStarted(step.Id, "sess-1", now);
+
+        var path = Path.Combine(_dir, "feature-journal", "u", $"{epic.Id}.jsonl");
+        File.Exists(path).Should().BeTrue();
+
+        // Удаляем proj-A: шаг (в proj-A) сносится, эпик (в proj-B) — нет.
+        _sut.DeleteByProject("proj-A");
+
+        _sut.GetById(step.Id).Should().BeNull("шаг удалённого проекта снесён");
+        _sut.GetById(epic.Id).Should().NotBeNull("эпик в другом проекте жив");
+        File.Exists(path).Should().BeTrue("журнал эпика в другом проекте не сносится");
+    }
+
     // ─── Снятие ожидания: старт исполнителя и переход в Done пишут waiting_cleared ───
     // Мутация «убрать ClearAwaitingHuman в одной из трёх точек» краснит соответствующий тест.
 
@@ -343,6 +369,31 @@ public class FeatureJournalTransitionsTests : IDisposable
             "переход в Done снимает ожидание");
     }
 
+    // ─── Посторонняя правка человека НЕ снимает ожидание (Проба1) ────────────────────
+    // «Ответ человека» ≠ «любая правка»: переименование/приоритет/колонка — не ответ,
+    // ожидание «ждёт вас» от них не гаснет. Мутация «вернуть ветку any-Update снимает»
+    // красит этот тест.
+
+    [Fact]
+    public void Ожидание_ПосторонняяПравкаЧеловека_НеСнимает()
+    {
+        var (epic, step) = CreateFeatureAndStep();
+        var now = DateTime.UtcNow;
+        // Ожидание человека (Update ставит AwaitingHumanSince → waiting).
+        _sut.Update(step.Id, new UpdateTaskRequest(AwaitingHumanSince: now, AwaitingHumanReason: "merge"));
+
+        // Посторонние правки человеком (не агент): переименование, приоритет, колонка.
+        _sut.Update(step.Id, new UpdateTaskRequest(Title: "переименовано"));
+        _sut.Update(step.Id, new UpdateTaskRequest(Priority: TaskItemPriority.High));
+        _sut.Update(step.Id, new UpdateTaskRequest(ColumnId: ""));
+
+        // Ожидание на месте: поле не снято, waiting_cleared в журнале нет.
+        _sut.GetById(step.Id)!.AwaitingHumanSince.Should().NotBeNull(
+            "посторонняя правка человека не снимает ожидание");
+        _journal.Read("u", epic.Id).Entries.Should().NotContain(e => e.Kind == "waiting_cleared",
+            "посторонняя правка не пишет waiting_cleared");
+    }
+
     // ─── device_wait / device_wait_cleared ─────────────────────────────────────────
 
     [Fact]
@@ -362,32 +413,83 @@ public class FeatureJournalTransitionsTests : IDisposable
         result.Entries.Single(e => e.Kind == "device_wait").Reason.Should().Be("device offline");
     }
 
-    // ─── SweepOrphans при старте ───────────────────────────────────────────────
+    // ─── Старт НЕ подметает журналы (Б8-доработка-2, critical) ───────────────────────
+    // Автоматическое подметание при старте было опасно: при испорченном/частично
+    // загруженном tasks.json (JsonFileStore переносит/пропускает записи) старт сносил
+    // каталоги журнала владельцев, чьи задачи не поднялись — тотальная потеря истории.
+    // Теперь при старте подметания нет: каталоги целы во всех трёх сценариях.
+    // Мутация «вернуть вызов подметания в конструктор» красит все три теста.
 
     [Fact]
-    public void SweepOrphans_ПриСтарте_ПодметаетФайлБезЖивогоЭпика()
+    public void Старт_ИспорченныйTasksJson_ЖурналВладельцаЦел()
     {
         const string owner = "u";
-        // Живая задача владельца — чтобы SweepOrphans прошёл по этому владельцу
-        // (метод итерирует владельцев из _tasks; без живой задачи владельца нет).
-        var live = _sut.Create(null, owner, new CreateTaskRequest("живая"));
-        // Сирота: файл журнала фичи, эпик которой уже не в tasks.
-        const string orphanFeature = "orphan-feature";
-        _journal.Append(owner, orphanFeature, new FeatureJournalEntry
-        {
-            At = DateTime.UtcNow, Kind = "created", TaskId = orphanFeature,
-        });
-        var path = Path.Combine(_dir, "feature-journal", owner, $"{orphanFeature}.jsonl");
+        var epic = _sut.Create(null, owner, new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        var path = Path.Combine(_dir, "feature-journal", owner, $"{epic.Id}.jsonl");
         File.Exists(path).Should().BeTrue();
-
-        // Персистим tasks (живая задача), чтобы новый менеджер загрузил владельца.
         _sut.Flush();
 
-        // Новый менеджер: видит живую задачу (владелец "u"), SweepOrphans подметает сироту.
+        // tasks.json = не-JSON (ни массив, ни объект): Load переносит файл в .corrupt-*.bak,
+        // список null → новый менеджер поднимает 0 задач, но журнал владельца не подметает.
+        File.WriteAllText(Path.Combine(_dir, "tasks.json"), "{ не валидный json");
+
         var reloaded = new TaskManager(BuildConfig(_dir), journal: _journal);
         reloaded.Dispose();
 
-        File.Exists(path).Should().BeFalse("SweepOrphans подмёл сироту при старте");
-        reloaded.GetById(live.Id).Should().NotBeNull("живая задача не затронута");
+        File.Exists(path).Should().BeTrue("испорченный tasks.json не сносит журнал владельца");
+    }
+
+    [Fact]
+    public void Старт_ЧастичнаяЗагрузка_ЖурналВладельцаЦел()
+    {
+        const string owner = "u";
+        const string other = "x";
+        // Владелец owner: эпик (его задача будет БИТОЙ в tasks.json → не поднимется).
+        var epic = _sut.Create(null, owner, new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        // Другой владелец: живая задача (чтобы список после частичной загрузки был non-null).
+        var live = _sut.Create(null, other, new CreateTaskRequest("живая"));
+        var path = Path.Combine(_dir, "feature-journal", owner, $"{epic.Id}.jsonl");
+        File.Exists(path).Should().BeTrue();
+        _sut.Flush();
+
+        // tasks.json = JSON-массив, где запись владельца owner битая (не TaskItem), а запись
+        // other валидная: TryLoadPerItem поднимает only other (non-null), owner не поднялся.
+        var json = File.ReadAllText(Path.Combine(_dir, "tasks.json"));
+        // Бьём первую запись (эпик owner): заменяем её id на битое значение.
+        var corrupted = json.Replace($"\"Id\":\"{epic.Id}\"", "\"Id\":42");
+        File.WriteAllText(Path.Combine(_dir, "tasks.json"), corrupted);
+
+        var reloaded = new TaskManager(BuildConfig(_dir), journal: _journal);
+        reloaded.Dispose();
+
+        // Задача owner не поднялась (битая), но его журнал цел.
+        reloaded.GetById(epic.Id).Should().BeNull("битая запись владельца не поднялась");
+        reloaded.GetById(live.Id).Should().NotBeNull("валидная запись другого владельца поднялась");
+        File.Exists(path).Should().BeTrue("частичная загрузка не сносит журнал владельца");
+    }
+
+    [Fact]
+    public void Старт_ПустойВладелец_ЖурналЦел()
+    {
+        const string owner = "u";
+        // Эпик владельца + журнал, затем задача владельца удалена → владелец «без задач»,
+        // но каталог журнала на месте.
+        var epic = _sut.Create(null, owner, new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        var path = Path.Combine(_dir, "feature-journal", owner, $"{epic.Id}.jsonl");
+        File.Exists(path).Should().BeTrue();
+        _sut.Delete(epic.Id);
+        // Delete эпика сносит и файл журнала (каскад) — восстанавливаем файл напрямую,
+        // чтобы сценарий был «владелец без задач, но каталог журнала существует».
+        _journal.Append(owner, epic.Id, new FeatureJournalEntry
+        {
+            At = DateTime.UtcNow, Kind = "created", TaskId = epic.Id,
+        });
+        _sut.Flush();
+
+        var reloaded = new TaskManager(BuildConfig(_dir), journal: _journal);
+        reloaded.Dispose();
+
+        // Владелец без задач, но каталог/файл журнала цел (подметания при старте нет).
+        File.Exists(path).Should().BeTrue("пустой владелец не сносит журнал при старте");
     }
 }

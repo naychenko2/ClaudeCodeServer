@@ -223,6 +223,67 @@ public class FeatureJournalTurnsTests : IDisposable
                 "после старта хоста подписчик на шине: ход записан в журнал");
     }
 
+    // ─── Реальная регистрация: TasksSubsystem.Register (не ручной AddSingleton) ───────
+    // Подписчик создаётся штатным путём (AddGatedHostedService) и пишет ход. Мутация
+    // «убрать регистрацию подписчика из TasksSubsystem.Register» красит: контейнер
+    // больше не даёт FeatureTurnJournalSubscriber.
+
+    [Fact]
+    public async Task TasksSubsystem_Register_ПодписчикСоздан_ИПишетХод()
+    {
+        var services = new ServiceCollection();
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_dir, "projects.json"),
+                // Гейт AddGatedHostedService: в Testing hosted регистрируется только с этим флагом.
+                ["Testing:EnableHostedServices"] = "true",
+            })
+            .Build();
+        services.AddSingleton<IConfiguration>(config);
+        // Main-зависимость (в проде — Program.cs): шина ходов.
+        services.AddSingleton<ITurnEventBus, TurnEventBus>();
+        // Штатная регистрация подсистемы: TaskManager, FeatureJournalStore,
+        // FeatureTurnJournalSubscriber (AddGatedHostedService), TaskSchedulerService.
+        new TasksSubsystem().Register(services, config);
+
+        // Доказательство регистрации (ядро теста): AddGatedHostedService<FeatureTurnJournalSubscriber>
+        // оставляет в контейнере дескриптор IHostedService → FeatureTurnJournalSubscriber.
+        // AddHostedService<T> НЕ регистрирует конкретный тип (только IHostedService), поэтому
+        // GetRequiredService<FeatureTurnJournalSubscriber>() сам по себе не работает.
+        // Уберут строку AddGatedHostedService из Register — дескриптора нет → тест краснеет.
+        services.Should().Contain(s =>
+            s.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService)
+            && s.ImplementationType == typeof(FeatureTurnJournalSubscriber),
+            "Register регистрирует подписчик через AddGatedHostedService");
+
+        var sp = services.BuildServiceProvider();
+
+        // Зависимые сервисы — из РЕАЛЬНОГО контейнера (Register их зарегистрировал).
+        var tasks = sp.GetRequiredService<TaskManager>();
+        var journal = sp.GetRequiredService<FeatureJournalStore>();
+        // Собственная шина (не контейнерная): подписчик подписывается на неё, и мы публикуем в неё.
+        var bus = new TurnEventBus();
+        // Подписчик собираем из DI-зависимостей (как все остальные тесты этого файла):
+        // доказательство, что он РЕГИСТРИРОВАН штатным путём, — дескрипторная проверка выше.
+        var subscriber = new FeatureTurnJournalSubscriber(tasks, journal, bus);
+
+        var epic = tasks.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        var step = tasks.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+        var now = DateTime.UtcNow;
+        tasks.MarkClaudeStarted(step.Id, "sess-1", now);
+
+        await bus.PublishAsync(new TurnCompleted(
+            new TurnContext("sess-1", "u", 1, 0), "success", null, Passport("sess-1", now)));
+
+        await subscriber.WaitForDrainAsync();
+
+        journal.Read("u", epic.Id).Entries
+            .Should().Contain(e => e.Kind == "turn",
+                "реальная регистрация TasksSubsystem.Register: подписчик на шине, ход записан");
+    }
+
     // Logger, который бросает в Log: заставляет сбой хранилища вырваться из его try/catch.
     private sealed class ThrowingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
     {

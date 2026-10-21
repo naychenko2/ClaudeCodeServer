@@ -20,6 +20,10 @@ namespace ClaudeHomeServer.Services.Tasks.Journal;
 // - Сбой не роняет подписчика/шину: Notification-шина сама гасит исключения подписчиков,
 //   страховка try/catch держит ещё и наш собственный код (GetBySession, сборка записи).
 //
+// Контракт для Б5 (timeline): TurnCompleted публикует ТОЛЬКО CLI-адаптер. Ходы локальной
+// модели (ILocalLlmClient мимо CLI) и устройства в журнал НЕ попадают → timeline по таким
+// ходам приблизителен (их нет в журнале, и интервалы считаются только по ходам CLI).
+//
 // Создание: IHostedService (Tasks, не Main — граница подсистем держится), регистрация
 // явная в TasksSubsystem.Register (AddGatedHostedService) — НЕ побочный эффект создания
 // TaskSchedulerService (тот был хрупкой связью: убрали параметр — журнал ходов молча пуст).
@@ -41,6 +45,9 @@ public sealed class FeatureTurnJournalSubscriber : IHostedService
     private readonly object _drainGate = new();
     private int _inFlight;
     private TaskCompletionSource? _drained;
+    // Задача фонового потребителя: StopAsync дожидается её, чтобы очередь дописалась
+    // до диска при остановке хоста (ApplicationStopping), а не жила до конца процесса.
+    private Task? _consumeLoop;
 
     private sealed record QueuedWrite(string OwnerId, string FeatureId, FeatureJournalEntry Entry);
 
@@ -54,13 +61,24 @@ public sealed class FeatureTurnJournalSubscriber : IHostedService
         // и к первому завершённому ходу подписчик уже на шине.
         bus.OnNotification<TurnCompleted>(HandleTurnCompleted, "Tasks.FeatureTurnJournal");
         // Фоновый потребитель: один поток, порядок записей = порядок enqueue.
-        _ = Task.Run(ConsumeLoopAsync);
+        _consumeLoop = Task.Run(ConsumeLoopAsync);
     }
 
-    // IHostedService: гарантированное создание при старте хоста. StartAsync/StopAsync —
-    // no-op: подписка на шину и очередь уже развёрнуты в конструкторе.
+    // IHostedService: создание при старте хоста (подписка + очередь развёрнуты в конструкторе).
     public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    // Остановка хоста: завершаем очередь (ReadAllAsync дописывает остаток и выходит) и
+    // дожидаемся фонового потребителя — принятые записи дойдут до диска, цикл не живёт
+    // до конца процесса (previously no-op).
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _queue.Writer.Complete();
+        if (_consumeLoop is not null)
+        {
+            try { await _consumeLoop; }
+            catch { /* сбой потребителя уже залогирован внутри цикла */ }
+        }
+    }
 
     // Дождаться, пока все принятые записи дойдут до диска (тесты). Возвращает Task,
     // завершающийся, когда очередь пуста и текущая запись сделана.

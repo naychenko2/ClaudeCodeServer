@@ -62,10 +62,6 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     private bool _dirty;
     private bool _timerArmed;
     private bool _disposed;
-    // Fail-safe для SweepOrphanJournals: true, если файл задач отсутствовал (свежий старт)
-    // ИЛИ успешно прочитан; false, если файл был, но не распарсился — тогда _tasks неполный
-    // и «владелец без задач» может значить «задачи не загрузились», каталоги не трогаем.
-    private bool _loadOk = true;
     private readonly IProjectEventLogService? _events;
     private readonly ITaskNotificationDispatcher? _notif;
     // Узкий шов чтения персоны по id (Core): Tasks нужно только имя для лога
@@ -105,7 +101,6 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (_saveDebounce > TimeSpan.Zero)
             _saveTimer = new Timer(_ => OnSaveTimer(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         Load();
-        SweepOrphanJournals();
         // Раньше здесь конструктор ставил СТАТИЧЕСКИЕ резолверы Session (ParentSessionId/TaskDone).
         // Снят: вычисляемые «связи» сессии теперь считает SessionTaskLinks (Core) поверх
         // ITaskLookup (адаптер в Program.cs), и спин-модель Session больше не зависит от
@@ -295,44 +290,6 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         catch (Exception ex)
         {
             _log?.LogWarning(ex, "Журнал фичи: не удалось удалить {Feature}", featureId);
-        }
-    }
-
-    // Сироты при старте: файл журнала, у которого эпик уже удалён, подметается.
-    // Для каждого владельца — проверка, жив ли эпик с данным id. Плюс — владельцы без
-    // задач: каталог владельца, у которого ни одной задачи, подметается целиком.
-    private void SweepOrphanJournals()
-    {
-        if (_journal is null) return;
-        var owners = _tasks.Values
-            .Where(t => t.OwnerId is not null)
-            .Select(t => t.OwnerId!)
-            .Distinct(StringComparer.Ordinal);
-        foreach (var ownerId in owners)
-        {
-            try
-            {
-                _journal.SweepOrphans(ownerId, featureId =>
-                    _tasks.TryGetValue(featureId, out var epic) && epic.Role == TaskRoles.Feature);
-            }
-            catch (Exception ex)
-            {
-                _log?.LogWarning(ex, "Журнал фичи: SweepOrphans для {Owner}", ownerId);
-            }
-        }
-        // Владельцы без задач. Fail-safe: если загрузка задач не удалась (_loadOk=false),
-        // каталоги не трогаем — _tasks неполный, «без задач» может значить «не загрузились».
-        if (_loadOk)
-        {
-            try
-            {
-                _journal.SweepEmptyOwners(ownerId =>
-                    _tasks.Values.Any(t => t.OwnerId == ownerId));
-            }
-            catch (Exception ex)
-            {
-                _log?.LogWarning(ex, "Журнал фичи: SweepEmptyOwners");
-            }
         }
     }
 
@@ -770,16 +727,6 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.ReviewOf is not null) task.ReviewOf = req.ReviewOf;
         if (req.AwaitingHumanSince is not null) task.AwaitingHumanSince = req.AwaitingHumanSince;
         if (req.AwaitingHumanReason is not null) task.AwaitingHumanReason = Trimmed(req.AwaitingHumanReason);
-        // Ответ человека: задача была в ожидании (AwaitingHumanSince) и человек (не агент)
-        // обновил её, НЕ пере-ставая ожидание (req.AwaitingHumanSince == null) → ожидание
-        // снято (waiting_cleared). Агентский ход (isAgentCall) ответом не считается: он
-        // продолжает работу, а не отвечает человеку. Переход в Done и старт исполнителя
-        // снимают ожидание отдельно (см. выше и MarkClaudeStarted).
-        if (!isAgentCall && before.AwaitingHumanSince is not null && req.AwaitingHumanSince is null)
-        {
-            task.AwaitingHumanSince = null;
-            task.AwaitingHumanReason = null;
-        }
 
         // Завершение/переоткрытие: фиксируем дату+время перехода в Done.
         // Первый переход в Done → CompletedAt = сейчас; уход из Done → сброс.
@@ -787,9 +734,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         {
             task.CompletedAt = DateTime.UtcNow;
             // Переход в Done — ожидание человека снято (waiting_cleared в журнале):
-            // закрытая задача больше не «ждёт вас».
-            task.AwaitingHumanSince = null;
-            task.AwaitingHumanReason = null;
+            // закрытая задача больше не «ждёт вас». Через публичный ClearAwaitingHuman
+            // (боевой вызов, не мёртвый метод); before выравниваем, чтобы финальный
+            // WriteJournalTransitions не дублировал waiting_cleared.
+            ClearAwaitingHuman(id);
+            before.AwaitingHumanSince = null;
+            before.AwaitingHumanReason = null;
         }
         else if (task.Status != TaskItemStatus.Done) task.CompletedAt = null;
         // Вердикт и исход дефекта — устаревшая проверка после переоткрытия (образец — CompletedAt)
@@ -925,9 +875,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         task.DeviceWaitSince = null;
         task.DeviceWaitReason = null;
         // Исполнитель снова запущен — ожидание человека снято (waiting_cleared в журнале):
-        // человек починил/перезапустил, задача больше не «ждёт вас».
-        task.AwaitingHumanSince = null;
-        task.AwaitingHumanReason = null;
+        // человек починил/перезапустил, задача больше не «ждёт вас». Через публичный
+        // ClearAwaitingHuman (боевой вызов, не мёртвый метод); before выравниваем, чтобы
+        // финальный WriteJournalTransitions не дублировал waiting_cleared.
+        ClearAwaitingHuman(id);
+        before.AwaitingHumanSince = null;
+        before.AwaitingHumanReason = null;
         if (task.Status == TaskItemStatus.Todo) task.Status = TaskItemStatus.InProgress;
         task.UpdatedAt = DateTime.UtcNow;
         // Журнал фичи: started (ClaudeStartedAt) + stop_cleared (ExecutorStoppedAt снят)
@@ -1034,9 +987,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return task;
     }
 
-    // Снятие ожидания человека (аналог ClearExecutorStopped): в Update AwaitingHumanSince/
-    // Reason — null = «без изменения», явного пути клира там нет; здесь — отдельный сброс.
-    // Журнал: waiting_cleared (момент мутации, не значение снятого поля).
+    // Снятие ожидания человека (аналог ClearExecutorStopped): единственная точка клира
+    // AwaitingHumanSince/Reason. В Update null = «без изменения», явного клира там нет;
+    // боевые вызовы — старт исполнителя (MarkClaudeStarted) и переход в Done (Update),
+    // плюс внешний продюсер «ответ человека», когда появится. Журнал: waiting_cleared
+    // (момент мутации, не значение снятого поля).
     public TaskItem? ClearAwaitingHuman(string id)
     {
         var task = _tasks.GetValueOrDefault(id);
@@ -1150,9 +1105,6 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // первая же запись перепишет файл компактно.
         var list = JsonFileStore.Load<List<TaskItem>>(_storePath,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-        // Fail-safe: файл был, но не распарсился → _tasks неполный (loadOk=false).
-        // Файла не было (свежий старт) → loadOk=true, подметать безопасно.
-        _loadOk = !File.Exists(_storePath) || list is not null;
         if (list is null) return;
         foreach (var t in list)
             _tasks[t.Id] = t;

@@ -100,7 +100,7 @@ public sealed record FeatureIndexRow(
     // пустой список — фича не идёт.
     List<string> NowPersonaIds,
     // Честный прогресс (Б-pr2): шаги на ревью / в работе / не заведены (план есть, задачи нет)
-    // и состояние плана: none | unstructured | structured. StepsAccepted/StepsTotal — тоже оттуда.
+    // и состояние плана: pending | partial | cut | done. StepsAccepted/StepsTotal — тоже оттуда.
     int StepsReview,
     int StepsWork,
     int StepsNotCreated,

@@ -21,6 +21,10 @@ internal static class FeatureStepAccounting
     private const string Work = "work";
     private const string Withdrawn = "withdrawn";
     private const string NotCreated = "notCreated";
+    private const string PlanPending = "pending";
+    private const string PlanPartial = "partial";
+    private const string PlanCut = "cut";
+    private const string PlanDone = "done";
 
     // Ключ шага: stepRef, а без него — id задачи (каждая старая задача-шаг без stepRef — отдельный
     // шаг, а не общая цепочка «»).
@@ -47,7 +51,9 @@ internal static class FeatureStepAccounting
                 if (ps is null || string.IsNullOrWhiteSpace(ps.StepRef)) continue;
                 if (planned.TryAdd(ps.StepRef, ps)) plannedOrder.Add(ps.StepRef);
             }
-        string planState = plan.Count == 0 ? "none" : planned.Count > 0 ? "structured" : "unstructured";
+        // Строки — фронтовый контракт (featureProgress.ts): pending — плана нет, partial — план без
+        // planSteps, cut — план разобран на шаги; done выводится ниже, когда принято всё.
+        string planState = plan.Count == 0 ? PlanPending : planned.Count > 0 ? PlanCut : PlanPartial;
 
         // ─── Шаги и доработки ───────────────────────────────────────────────────────────────
         var stepTasks = steps.Where(t => t.Role == TaskRoles.Step).ToList();
@@ -221,10 +227,13 @@ internal static class FeatureStepAccounting
         int review = bucketByKey.Values.Count(b => b == Review);
         int work = bucketByKey.Values.Count(b => b == Work);
         int notCreated = notCreatedKeys.Count;
+        int total = accepted + review + work + notCreated;
+        // done — план разобран и все его шаги приняты (known-знаменатель, пустой фичи не бывает).
+        if (planState == PlanCut && total > 0 && accepted == total) planState = PlanDone;
         var progress = new FeatureStepProgress
         {
             PlanState = planState,
-            Total = accepted + review + work + notCreated,
+            Total = total,
             Accepted = accepted,
             Review = review,
             Work = work,

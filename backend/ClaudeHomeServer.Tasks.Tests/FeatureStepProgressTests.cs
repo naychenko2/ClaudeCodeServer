@@ -92,7 +92,7 @@ public class FeatureStepProgressTests
 
         run.StepProgress.Should().BeEquivalentTo(new
         {
-            PlanState = "none", Total = 1, Accepted = 0, Review = 1, Work = 0, NotCreated = 0,
+            PlanState = "pending", Total = 1, Accepted = 0, Review = 1, Work = 0, NotCreated = 0,
             Withdrawn = 0, UnlinkedReworks = 0,
         });
         var lane = run.Lanes.Single();
@@ -211,7 +211,7 @@ public class FeatureStepProgressTests
         var run = Run(Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "front"), ("Ш3", "front")), Step("s", "Ш1", 1));
 
         var p = run.StepProgress;
-        p.PlanState.Should().Be("structured");
+        p.PlanState.Should().Be("cut");
         p.Total.Should().Be(3);
         p.NotCreated.Should().Be(2);
         p.Review.Should().Be(1);
@@ -241,10 +241,25 @@ public class FeatureStepProgressTests
     }
 
     [Fact]
-    public void ПланБезСписка_Unstructured_ПланаНет_None()
+    public void ПланРазобранИВсеШагиПринятые_Done_ИначеCut()
     {
-        Run(Feature(), Plan("p", 0), Step("s", "Ш1", 1)).StepProgress.PlanState.Should().Be("unstructured");
-        Run(Feature(), Step("s", "Ш1", 1)).StepProgress.PlanState.Should().Be("none");
+        var accepted = Run(Feature(), Plan("p", 0, ("Ш1", "back")), Step("s", "Ш1", 1),
+            Verdict("r", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s"));
+        accepted.StepProgress.PlanState.Should().Be("done");
+
+        var notAll = Run(Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "back")), Step("s", "Ш1", 1),
+            Verdict("r", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s"));
+        notAll.StepProgress.PlanState.Should().Be("cut", "Ш2 не заведён — не всё принято");
+
+        var noPlan = Run(Feature(), Step("s", "Ш1", 1), Verdict("r", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s"));
+        noPlan.StepProgress.PlanState.Should().Be("pending", "плана нет — done не выводим");
+    }
+
+    [Fact]
+    public void ПланБезСписка_Partial_ПланаНет_Pending()
+    {
+        Run(Feature(), Plan("p", 0), Step("s", "Ш1", 1)).StepProgress.PlanState.Should().Be("partial");
+        Run(Feature(), Step("s", "Ш1", 1)).StepProgress.PlanState.Should().Be("pending");
     }
 
     [Fact]
@@ -337,7 +352,7 @@ public class FeatureStepProgressTests
 
         var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
 
-        (row.StepsReview, row.StepsWork, row.StepsNotCreated, row.PlanState).Should().Be((1, 1, 1, "structured"));
+        (row.StepsReview, row.StepsWork, row.StepsNotCreated, row.PlanState).Should().Be((1, 1, 1, "cut"));
         (row.StepsAccepted, row.StepsTotal).Should().Be((0, 3));
     }
 

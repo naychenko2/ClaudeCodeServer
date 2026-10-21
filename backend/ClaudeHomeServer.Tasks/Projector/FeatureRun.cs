@@ -353,9 +353,10 @@ public sealed class FeatureLane
 // ни stepRef, ни reviewOf; новую цепочку не заводят).
 public sealed class FeatureStepProgress
 {
-    // none — задач role=plan нет; unstructured — план есть, но planSteps пуст (знаменатель =
-    // только заведённые шаги); structured — planSteps есть хотя бы у одной задачи-плана.
-    public string PlanState { get; init; } = "none";
+    // pending — задач role=plan нет; partial — план есть, но planSteps пуст (знаменатель = только
+    // заведённые шаги); cut — planSteps есть хотя бы у одной задачи-плана; done — cut и все
+    // шаги приняты.
+    public string PlanState { get; init; } = "pending";
     public int Total { get; init; }
     public int Accepted { get; init; }
     public int Review { get; init; }

@@ -163,6 +163,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             TasksMcp: null,
             MemoryMcp: new MemoryMcpContext("http://memory.invalid", () => "tok", "persona-1"),
             Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            SystemPromptViaFile: false,
             Events: bus);
 
         var session = new ClaudeSession(info, context);
@@ -264,6 +265,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             TasksMcp: null,
             MemoryMcp: new MemoryMcpContext("http://memory.invalid", () => "tok", "persona-1"),
             Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            SystemPromptViaFile: false,
             Events: bus);
 
         var session = new ClaudeSession(info, context, providers: new LlmProviderRegistry(config));
@@ -337,6 +339,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             TasksMcp: null,
             MemoryMcp: new MemoryMcpContext("http://memory.invalid", () => "tok", "persona-1"),
             Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            SystemPromptViaFile: false,
             PersonaProvider: () => new Persona { Id = "persona-1", Name = "Тестовая Персона", LightContext = lightContext },
             Events: bus);
 
@@ -754,6 +757,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             PermissionRules: null,
             TasksMcp: null,
             Launcher: new CapturingLauncher(clis, argsCaptured),
+            SystemPromptViaFile: false,
             Events: bus);
         if (tweak is not null) context = tweak(context);
 

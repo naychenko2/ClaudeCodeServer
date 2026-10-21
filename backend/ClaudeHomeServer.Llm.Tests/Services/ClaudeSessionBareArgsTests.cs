@@ -412,8 +412,12 @@ public class ClaudeSessionBareArgsTests : IDisposable
     private sealed class ThrowingMapper : IPathMapper
     {
         public static readonly ThrowingMapper Instance = new();
+        // Per-run файлы хода (claude-mcp/agents/prompt-*) лежат в temp хоста и мапятся всегда —
+        // бросаем только для остальных путей, как настоящий маппер.
         public string ToRuntime(string hostPath) =>
-            throw new InvalidOperationException($"Путь недоступен в песочнице (test): {hostPath}");
+            Path.GetFileName(hostPath).StartsWith("claude-", StringComparison.Ordinal)
+                ? hostPath
+                : throw new InvalidOperationException($"Путь недоступен в песочнице (test): {hostPath}");
         public string ToHost(string runtimePath) => runtimePath;
         public bool CanMap(string hostPath) => true;
     }

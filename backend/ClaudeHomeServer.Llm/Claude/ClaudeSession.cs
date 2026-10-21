@@ -356,6 +356,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Per-run файл --agents (состав сабагентов-персон): та же жизнь, что у MCP-конфига —
         // нужен только на старте процесса, на same-process-ходах не перечитывается
         public string? TurnAgentsPath { get; init; }
+        // Per-run файл --append-system-prompt-file (текст системного промпта хода): та же жизнь
+        public string? TurnPromptPath { get; init; }
         // Ход шлюза LLM этого процесса (серверный ход провайдера, ADR-016 §2): отзывается
         // финализацией прогона. null — процесс ходит в провайдера напрямую.
         public string? GatewayTurnId { get; init; }
@@ -769,6 +771,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // (собирать части умеет спина — Core: SystemPromptComposer)
     private readonly string _builtInSystemPrompt;
     private readonly string? _mcpConfigPath;
+    // Системный промпт хода едет файлом (--append-system-prompt-file), а не аргументом:
+    // Llm:SystemPromptViaFile, дефолт true; false — прежний путь аргументом
+    private readonly bool _systemPromptViaFile;
     // Ключ HTTP MCP-сервера fal-ai (Fal:McpApiKey) — сервер инжектится в конфиг хода
     // из appsettings, а не хардкодится в .mcp.json (секрет вне git); пусто — без fal-ai
     private readonly string? _falMcpApiKey;
@@ -1064,6 +1069,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _serverContentRoot = context.ContentRootPath;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
+        _systemPromptViaFile = context.SystemPromptViaFile;
         _falMcpApiKey = falMcpApiKey;
         _glifMcpToken = glifMcpToken;
         _rawSystemPrompt = context.RawSystemPrompt;
@@ -4328,7 +4334,8 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         };
         var budget = TurnPromptAssembler.ApplyBudget(
-            sections, agentPrompt, args, safeEstimate);
+            sections, agentPrompt, args, safeEstimate,
+            promptFileLimit: _systemPromptViaFile ? TurnPromptAssembler.PromptFileLimit : null);
         var combinedPrompt = budget.CombinedPrompt;
         truncatedSections = budget.TruncatedSections;
         // Срезку применяем к самому списку секций: снимок промпта строится из него, и
@@ -4355,12 +4362,23 @@ public class ClaudeSession : ILlmSessionAdapter
             // обработает и сформирует [Win32:206]-префикс в Details ErrorMessage.
             // Лимит в сообщении — CmdlineLimit: именно он перейдён, порог срезки
             // (BudgetThreshold) отказом не является.
+            // Файловый режим отказывает по потолку файла, если командная строка в порядке
+            if (_systemPromptViaFile && budget.TotalCmdlineChars < TurnPromptAssembler.CmdlineLimit)
+                throw new PromptOverflowException(budget.PromptChars,
+                    TurnPromptAssembler.PromptFileLimit, promptFile: true);
             throw new PromptOverflowException(budget.TotalCmdlineChars,
                 TurnPromptAssembler.CmdlineLimit);
         }
 
+        string? turnPromptPath = null;
         if (!string.IsNullOrWhiteSpace(combinedPrompt))
-            args.AddRange(["--append-system-prompt", combinedPrompt]);
+        {
+            if (_systemPromptViaFile)
+                turnPromptPath = PrepareTurnPromptFile(
+                    combinedPrompt, _launcher.HostTempDir, _launcher.Paths.ToRuntime, args);
+            else
+                args.AddRange(["--append-system-prompt", combinedPrompt]);
+        }
 
         // Сообщение хода: с картинками content — массив блоков (text + image base64), иначе строка
         var imageBlocks = BuildImageBlocks(imagePaths);
@@ -4440,6 +4458,14 @@ public class ClaudeSession : ILlmSessionAdapter
                     catch (Exception ex)
                     {
                         Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл --agents same-process хода {turnAgentsPath}: {ex.Message}");
+                    }
+                // Файл системного промпта: та же логика (DiedEmpty-ветка не трогает —
+                // ретрай стартует новый процесс с теми же args, файл уберёт его финализация)
+                if (turnPromptPath != null)
+                    try { File.Delete(turnPromptPath); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл промпта same-process хода {turnPromptPath}: {ex.Message}");
                     }
                 return;
             }
@@ -4530,7 +4556,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, TurnPromptPath = turnPromptPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
             // Смерть процесса — по событию ОС (см. HandleProcessExitedAsync): EnableRaisingEvents=true
             // выставлен в spec. Подписка обязательна: закрытие stdout ненадёжно как сигнал гибели
             // (дочерние node-процессы MCP держат pipe — P27), и без Exited обрыв хода зависает
@@ -4618,6 +4644,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 catch { /* temp-каталог приберёт ОС */ }
             if (turnAgentsPath != null)
                 try { File.Delete(turnAgentsPath); }
+                catch { /* temp-каталог приберёт ОС */ }
+            if (turnPromptPath != null)
+                try { File.Delete(turnPromptPath); }
                 catch { /* temp-каталог приберёт ОС */ }
             await _onMessage(new ExitedMessage(turnSeq));
             throw;
@@ -4876,6 +4905,13 @@ public class ClaudeSession : ILlmSessionAdapter
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл --agents {run.TurnAgentsPath}: {ex.Message}");
+            }
+
+        if (run.TurnPromptPath != null)
+            try { File.Delete(run.TurnPromptPath); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл промпта {run.TurnPromptPath}: {ex.Message}");
             }
 
         // Процесс мёртв, но Workflow-агенты — независимые процессы и не обязаны погибнуть
@@ -5388,7 +5424,7 @@ public class ClaudeSession : ILlmSessionAdapter
         for (var i = 0; i < args.Count; i++)
         {
             result.Add(args[i]);
-            if (args[i] == "--append-system-prompt" && i + 1 < args.Count)
+            if (args[i] is "--append-system-prompt" or "--append-system-prompt-file" && i + 1 < args.Count)
             {
                 result.Add("<секции промпта выше>");
                 i++;
@@ -5434,6 +5470,24 @@ public class ClaudeSession : ILlmSessionAdapter
         File.WriteAllText(path, agentsJson);
         args.AddRange(["--agents", toRuntime(path)]);
         return (path, TurnAgentsFingerprint(agentsJson));
+    }
+
+    // Имя per-run файла системного промпта: claude-prompt-{Guid}.md. Guid на каждую сборку по
+    // тем же причинам, что у --agents (гонка финализации убитого прогона с новым стартом).
+    internal static string BuildTurnPromptFileName() => $"claude-prompt-{Guid.NewGuid():N}.md";
+
+    // Проводка файла системного промпта: пишет combined в hostTempDir (UTF-8 без BOM), дописывает
+    // в args пару «--append-system-prompt-file <путь среды>» и возвращает хостовый путь для
+    // уборки. В сигнатуру запуска ничего не идёт: промпт и раньше в ней не участвовал (его
+    // нестабильные секции меняются каждый ход и не должны перезапускать процесс), а путь
+    // уникален и исключается как путь --agents. internal для поведенческого теста.
+    internal static string PrepareTurnPromptFile(
+        string combinedPrompt, string hostTempDir, Func<string, string> toRuntime, List<string> args)
+    {
+        var path = Path.Combine(hostTempDir, BuildTurnPromptFileName());
+        File.WriteAllText(path, combinedPrompt, new System.Text.UTF8Encoding(false));
+        args.AddRange([TurnPromptAssembler.AppendSystemPromptFileFlag, toRuntime(path)]);
+        return path;
     }
 
     // Сигнатура окружения прогона — жёсткая часть запуска процесса. Совпала у следующего
@@ -5705,7 +5759,7 @@ public class ClaudeSession : ILlmSessionAdapter
         {
             // --agents исключён, как --mcp-config: путь уникален на каждую сборку (Guid) и
             // не должен мерцать в сигнатуре; смена состава сабагентов ловится fingerprint'ом.
-            if (args[i] is "--resume" or "--mcp-config" or "--append-system-prompt" or "--agents") { i++; continue; }
+            if (args[i] is "--resume" or "--mcp-config" or "--append-system-prompt" or "--append-system-prompt-file" or "--agents") { i++; continue; }
             sb.Append(args[i]).Append('\u0001');
         }
         sb.Append("mcp=").Append(mcpServerKeys).Append('\u0001');

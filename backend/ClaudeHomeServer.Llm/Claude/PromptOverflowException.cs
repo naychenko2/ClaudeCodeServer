@@ -22,10 +22,13 @@ public sealed class PromptOverflowException : Win32Exception
     public int TotalCmdlineChars { get; }
     public int Budget { get; }
 
-    public PromptOverflowException(int totalCmdlineChars, int budget)
+    public PromptOverflowException(int totalCmdlineChars, int budget, bool promptFile = false)
         : base(206, // ERROR_FILENAME_EXCED_RANGE — нижние 16 бит HRESULT, .NET сам развернёт в 0x800700CE
-            $"Промпт хода превысил лимит командной строки даже после срезки нестабильных секций: " +
-            $"{totalCmdlineChars} символов при бюджете {budget} (лимит Windows 32 767).")
+            promptFile
+                ? $"Промпт хода превысил потолок файла системного промпта даже после срезки нестабильных секций: " +
+                  $"{totalCmdlineChars} символов при потолке {budget}."
+                : $"Промпт хода превысил лимит командной строки даже после срезки нестабильных секций: " +
+                  $"{totalCmdlineChars} символов при бюджете {budget} (лимит Windows 32 767).")
     {
         TotalCmdlineChars = totalCmdlineChars;
         Budget = budget;

@@ -419,6 +419,30 @@ vLLM сверяет `prompt + max_tokens ≤ max_model_len` ДО генерац�
 успевает и ход падает мгновенным HTTP 400. Инцидент 2026-09-15: промпт 122881
 + резерв 8192 = 131073 > 131072 → отказ вместо сжатия контекста.
 
+## Системный промпт файлом, а не аргументом (`Llm:SystemPromptViaFile`)
+
+Собранный промпт хода уходит в CLI файлом `--append-system-prompt-file` (CLI ≥ 2.1.306), а не
+аргументом `--append-system-prompt`: лимит командной строки (32 767 символов — потолок Windows,
+применяемый и на Linux) больше не зависит от размера промпта. Поводом стал инцидент 21.10: три
+хода персоны упали на 32 814 символах при бюджете 32 767.
+
+- Файл `claude-prompt-{Guid:N}.md` пишется в `_launcher.HostTempDir` (UTF-8 без BOM), путь в args —
+  через `_launcher.Paths.ToRuntime`, как у `--mcp-config` и `--agents`: у container-владельцев
+  файл виден по тому же монтированию temp, нового bind-mount нет. Проводка —
+  `ClaudeSession.PrepareTurnPromptFile`; удаляет файл финализация прогона (`CliRun.TurnPromptPath`),
+  на same-process ходе — ветка штатного завершения; `DiedEmpty`-ветка файл не трогает. Осиротевшие
+  после крэша добивает уборщик temp в `Program.cs` (старше 6 часов).
+- Содержимое, порядок секций и снимки `prompt-snapshots` те же, что при передаче аргументом. В
+  сигнатуру запуска промпт не входит ни в одном режиме (его нестабильные секции меняются каждый
+  ход): флаг и путь исключены из `BuildLaunchSignature`, как `--agents`.
+- Бюджет (`TurnPromptAssembler.ApplyBudget(promptFileLimit:)`): командную строку считаем только
+  с короткой парой «флаг + путь» (`BudgetThreshold` 30 000 сохранён), текст — отдельным мягким
+  потолком `PromptFileLimit` = 200 000 символов (на порядок выше нынешних ≈33 тыс., ≈55 тыс.
+  токенов — сторож бесконечного роста). Превышение режется тем же `TruncationOrder`, затем
+  `PromptOverflowException` (`promptFile: true`).
+- Откат: `Llm:SystemPromptViaFile=false` — прежний путь аргументом (единственное место чтения —
+  `SessionManager.SystemPromptViaFile`, в `LlmSessionContext`).
+
 ## `RecallInTurnText`: нестабильные секции хвостом хода
 
 Ручка `LlmProviderConfig.RecallInTurnText`

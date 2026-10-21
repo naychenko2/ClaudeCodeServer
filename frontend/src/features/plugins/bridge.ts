@@ -209,6 +209,19 @@ export function clampPanelHeight(h: number, mobile = false): number {
   return Math.min(max, Math.max(PANEL_MIN_HEIGHT, Math.round(h)));
 }
 
+// Потолок высоты КОНТЕНТА (px): страховочный, не «размер слота». Установленная
+// панель (PluginFrame) растёт под контент: resize = высота контента, хост ставит её
+// фрейму (порог снизу PANEL_MIN_HEIGHT, этот потолок — от аномально длинных панелей).
+// Карточка ленты (DraftCard) остаётся на PANEL_MAX_HEIGHT (800).
+export const PANEL_CONTENT_MAX_HEIGHT = 20_000;
+
+// Кламп высоты контента (resize) установленной панели: порог снизу, страховочный
+// потолок. В отличие от clampPanelHeight (потолок слота 800/560) — без mobile-ветки:
+// контент на мобиле тоже растёт, прокрутку держит обёртка карточки.
+export function clampContentHeight(h: number): number {
+  return Math.min(PANEL_CONTENT_MAX_HEIGHT, Math.max(PANEL_MIN_HEIGHT, Math.round(h)));
+}
+
 // === Отказ по праву ===
 
 // Ключ права из ошибки `denied`: сервер шлёт «Нет права: {key}»

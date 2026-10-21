@@ -33,6 +33,15 @@ function escapeSrcdoc(s: string): string {
 //
 // shimJs/shimCss — содержимое plugin-kit.js / theme.css (bridge.ts подставляет
 // ?raw-импорты; e2e передаёт файлы через fs.readFileSync).
+//
+// Оболочка — ВНЕШНИЙ документ: html/body на 100% без полей и прокрутки, внутренний
+// <iframe srcdoc> растянут на 100%×100% (display:block, border:0). Без этих стилей
+// внутренний iframe жил в дефолтных 300×150: контент панели не растягивался и
+// прокручивался сам. CSP не меняем: style-src 'unsafe-inline' уже в PANEL_CSP.
+const SHELL_STYLE =
+  'html,body{margin:0;height:100%;overflow:hidden}' +
+  ' iframe{display:block;border:0;width:100%;height:100%}';
+
 export function buildPanelSrcdoc(
   panelHtml: string,
   theme: 'light' | 'dark' = 'light',
@@ -49,6 +58,7 @@ export function buildPanelSrcdoc(
   return (
     '<!doctype html><html><head>' +
     '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
+    '<style>' + SHELL_STYLE + '</style>' +
     '</head><body>' +
     '<iframe sandbox="allow-scripts" srcdoc="' + escapeSrcdoc(inner) + '"></iframe>' +
     '</body></html>'

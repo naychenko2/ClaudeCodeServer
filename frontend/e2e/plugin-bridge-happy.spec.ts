@@ -123,3 +123,72 @@ test('мост: ready → init → call → result → resize (реальная 
   expect(panel!.gotResult, 'панель получила result').toBe(true);
   expect(panel!.resultData, 'result несёт данные').toEqual({ hello: 'world' });
 });
+
+// === S1: высота по контенту, без внутренней прокрутки ===
+//
+// Корень дефекта: внутренний <iframe> оболочки жил в дефолтных 300×150 — контент панели
+// не растягивался и прокручивался сам (плюс кламп 48–800 и overflow:auto вокруг фрейма).
+// Фикс: оболочка (html,body 100%, iframe 100%×100%) + html{overflow:hidden} внутри +
+// хост ставит фрейму высоту контента.
+//
+// Мерим ВНУТРЕННИЙ документ (scrollHeight == clientHeight), а не внешний фрейм:
+// существующий тест мерил внешний, и дефект проходил. Мутация «убрать стиль оболочки»
+// красит: внутренний iframe снова 300×150 → scrollHeight (2000) > clientHeight (150).
+
+// Панель с контентом 2000px: шим auto-resize (ResizeObserver на body) пошлёт resize(2000).
+const tallPanelHtml =
+  '<div style="height:2000px"></div>' +
+  '<script>window.__tall = true;</script>';
+
+function tallHostHtml(): string {
+  const shell = buildPanelSrcdoc(tallPanelHtml, 'light', shimJs, shimCss);
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
+    '<iframe id="outer" style="width:900px;height:400px;border:0" srcdoc="' + esc(shell) + '"></iframe>' +
+    '<script>' +
+    'window.__host = { resizes: [] };' +
+    'window.addEventListener("message", function (e) {' +
+    '  var outer = document.getElementById("outer");' +
+    '  var d = e.data;' +
+    '  if (!d || d.source !== "ccs-plugin" || d.v !== 1) return;' +
+    '  if (d.type === "resize") {' +
+    '    window.__host.resizes.push(d.height);' +
+    '    outer.style.height = d.height + "px";' +
+    '  }' +
+    '});' +
+    '</script>' +
+    '</body></html>'
+  );
+}
+
+test('S1: внутренний документ 2000px без собственной прокрутки (scrollHeight == clientHeight)', async ({ page }) => {
+  await page.setContent(tallHostHtml(), { waitUntil: 'load' });
+
+  // Ждём, пока хост применит высоту контента: resize(2000) → outer 2000px.
+  await page.waitForFunction(
+    () => {
+      const outer = document.getElementById('outer') as HTMLIFrameElement | null;
+      return !!outer && outer.style.height === '2000px';
+    },
+    { timeout: 10_000 },
+  );
+
+  // ВНУТРЕННИЙ документ (не внешний фрейм): documentElement.scrollHeight == clientHeight.
+  const dims = await (async () => {
+    for (const f of page.frames()) {
+      try {
+        const r = await f.evaluate(() => ({
+          scrollHeight: document.documentElement.scrollHeight,
+          clientHeight: document.documentElement.clientHeight,
+          isTall: !!(window as unknown as { __tall?: boolean }).__tall,
+        }));
+        if (r.isTall) return r;
+      } catch { /* фрейм недоступен */ }
+    }
+    return null;
+  })();
+  expect(dims, 'внутренний фрейм панели найден').not.toBeNull();
+  // Контент 2000px, фрейм растянут под него: внутренней прокрутки нет.
+  expect(dims!.scrollHeight, 'scrollHeight внутреннего документа').toBe(dims!.clientHeight);
+  expect(dims!.clientHeight, 'внутренний документ растянут на 2000px').toBe(2000);
+});

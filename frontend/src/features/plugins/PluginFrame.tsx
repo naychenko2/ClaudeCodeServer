@@ -14,7 +14,7 @@ import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import {
   BRIDGE_VERSION, READY_TIMEOUT_MS, MAX_PANEL_FILE_BYTES,
   buildInitMessage, buildPanelSrcdoc, buildResultMessage, buildThemeMessage,
-  bridgeErrorText, clampPanelHeight, deniedKeyOf, panelWindowOf, validateFrameMessage,
+  bridgeErrorText, clampContentHeight, deniedKeyOf, panelWindowOf, validateFrameMessage,
   type BridgeErrorCode, type FrameMessage, type HostMessage,
 } from './bridge';
 
@@ -160,9 +160,33 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   const initedRef = useRef(false);
   // Вызовы в полёте: потолок MAX_INFLIGHT_CALLS (лишний — result `limit`)
   const inflightRef = useRef(0);
+  // Высота контента: resize → pending, применяем не чаще раза за кадр (rAF). Панель
+  // шлёт resize часто (при каждом изменении контента); без rAF setHeight дёргался бы
+  // на каждое сообщение. rAF — в браузере, setTimeout 16мс — в node-тесте (без rAF).
+  const pendingHeightRef = useRef<number | null>(null);
+  const rafPendingRef = useRef(false);
   // Актуальные значения для message-обработчика без пересоздания подписки
   const stateRef = useRef({ theme, project, isMobile, panelPlugin: null as PluginInfo | null, bridge, reloadKey });
   stateRef.current = { theme, project, isMobile, panelPlugin: panelPlugin, bridge, reloadKey };
+
+  // Применить накопленную высоту контента (не чаще раза за кадр).
+  const applyPendingHeight = useCallback(() => {
+    rafPendingRef.current = false;
+    if (pendingHeightRef.current != null) {
+      setHeight(pendingHeightRef.current);
+      pendingHeightRef.current = null;
+    }
+  }, []);
+  // Запланировать применение: пока rAF в полёте — новые resize только обновляют pending.
+  const scheduleHeight = useCallback(() => {
+    if (rafPendingRef.current) return;
+    rafPendingRef.current = true;
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => applyPendingHeight());
+    } else {
+      setTimeout(applyPendingHeight, 16);
+    }
+  }, [applyPendingHeight]);
 
   const name = panelPlugin ? humanizeId(panelPlugin.id) : '';
 
@@ -327,7 +351,11 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
       } else if (msg.type === 'call') {
         void handleCall(msg);
       } else if (msg.type === 'resize') {
-        setHeight(clampPanelHeight(msg.height, s.isMobile));
+        // resize = высота контента (ADR-031 §3.5): хост ставит её фрейму (порог 48,
+        // страховочный потолок 20 000), применяя не чаще раза за кадр. Ручной
+        // ccsPlugin.resize(h) — тот же канал; последнее значение побеждает.
+        pendingHeightRef.current = clampContentHeight(msg.height);
+        scheduleHeight();
       }
     };
     window.addEventListener('message', onMessage);
@@ -466,7 +494,9 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     }
     if (showIframe) {
       return (
-        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'auto' }}>
+        // overflow:auto убран: фрейм растянут под контент (высота из resize), внутренний
+        // документ не прокручивается (html{overflow:hidden}); прокрутка — у обёртки карточки.
+        <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
           <iframe
             ref={iframeRef}
             key={frameKey}

@@ -91,6 +91,9 @@ vi.stubGlobal('window', Object.assign(new EventTarget(), {
   innerHeight: 900,
   matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
   navigator: { language: 'ru-RU' },
+  // rAF-очередь высоты контента: в тесте применяем синхронно (cb сразу), чтобы
+  // resize → setHeight было видно без ожидания кадра. В браузере — настоящий rAF.
+  requestAnimationFrame: (cb: () => void) => { cb(); return 0; },
 }));
 
 // Транспорт: список/панель/call — поддельные, но с настоящими сигнатурами.
@@ -115,9 +118,9 @@ vi.mock('../../lib/api', () => ({
 // Динамический импорт ПОСЛЕ стабов: модули читают window/document при загрузке.
 const {
   PANEL_CSP, PANEL_MAX_HEIGHT, PANEL_MAX_HEIGHT_MOBILE, PANEL_MIN_HEIGHT,
-  MAX_PANEL_FILE_BYTES, panelWindowOf,
+  PANEL_CONTENT_MAX_HEIGHT, MAX_PANEL_FILE_BYTES, panelWindowOf,
   validateFrameMessage, buildPanelSrcdoc, buildInitMessage, buildResultMessage,
-  buildThemeMessage, clampPanelHeight, deniedKeyOf, bridgeErrorText,
+  buildThemeMessage, clampPanelHeight, clampContentHeight, deniedKeyOf, bridgeErrorText,
 } = await import('./bridge');
 const { PluginFrame } = await import('./PluginFrame');
 // Круговой разбор (ADR-031 §3.6): DOMParser только в тесте — парсит ВНЕШНИЙ документ
@@ -429,6 +432,16 @@ describe('clampPanelHeight (потолок слота)', () => {
   });
 });
 
+// Высота КОНТЕНТА установленной панели (S1): resize = высота контента, хост ставит её
+// фрейму. Порог снизу 48, страховочный потолок 20000 (не «размер слота» 800).
+describe('clampContentHeight (высота контента, S1)', () => {
+  it('2000 → 2000; 30000 → 20000 (потолок); 10 → 48 (порог)', () => {
+    expect(clampContentHeight(2000)).toBe(2000);
+    expect(clampContentHeight(30000)).toBe(PANEL_CONTENT_MAX_HEIGHT);
+    expect(clampContentHeight(10)).toBe(PANEL_MIN_HEIGHT);
+  });
+});
+
 describe('deniedKeyOf (отказ по праву)', () => {
   it('вытаскивает ключ права из «Нет права: {key}»', () => {
     expect(deniedKeyOf('Нет права: notes:read')).toBe('notes:read');
@@ -606,7 +619,7 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     expect((result.error as { code: string }).code).toBe('denied');
   });
 
-  it('resize клампится в пределы слота', async () => {
+  it('resize: высота контента (порог 48, потолок 20000), rAF-очередь', async () => {
     const project = { id: 'p1' } as Project;
     const host: Host = { i: 0, states: new Map(), refs: new Map(), cbs: new Map(), effects: new Map() };
     const render = () => {
@@ -630,12 +643,20 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     (iframeEl!.props.ref as { current: unknown }).current = fakeFrame;
 
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
-    // Высота 5000 → потолок 800 (десктоп)
-    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 5000 });
 
-    // Перерисовка: iframe получает клампнутую высоту
-    const tree2 = render();
-    const iframeEl2 = findElement(tree2, 'iframe');
-    expect((iframeEl2!.props.style as Record<string, unknown>).height).toBe(PANEL_MAX_HEIGHT);
+    // 2000 → 2000 (в пределах: высота контента ставится фрейму как есть)
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 2000 });
+    let el = findElement(render(), 'iframe');
+    expect((el!.props.style as Record<string, unknown>).height).toBe(2000);
+
+    // 30000 → 20000 (страховочный потолок PANEL_CONTENT_MAX_HEIGHT)
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 30000 });
+    el = findElement(render(), 'iframe');
+    expect((el!.props.style as Record<string, unknown>).height).toBe(PANEL_CONTENT_MAX_HEIGHT);
+
+    // 10 → 48 (порог снизу PANEL_MIN_HEIGHT)
+    fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 10 });
+    el = findElement(render(), 'iframe');
+    expect((el!.props.style as Record<string, unknown>).height).toBe(PANEL_MIN_HEIGHT);
   });
 });

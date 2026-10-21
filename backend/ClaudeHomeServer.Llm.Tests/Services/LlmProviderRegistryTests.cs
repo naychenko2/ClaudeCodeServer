@@ -1036,7 +1036,7 @@ public class LlmProviderRegistryTests
     // Сторож на РЕАЛЬНЫЙ appsettings.json: поле читается из конфига, тесты выше проверяют
     // только проводку — без этого DefaultEffort можно молча потерять, и M3.1 вернётся на high
     [Fact]
-    public void Конфиг_M31_DefaultEffortMedium_УM3Нет()
+    public void Конфиг_M31_DefaultEffortLow_УM3Нет()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         string? path = null;
@@ -1051,7 +1051,7 @@ public class LlmProviderRegistryTests
             .AddJsonFile(path!).Build()
             .GetSection("LlmProviders:minimax:Models").GetChildren()
             .ToDictionary(m => m["Id"]!, m => m["DefaultEffort"]);
-        models["MiniMax-M3.1-Flash[1m]"].Should().Be("medium");
+        models["MiniMax-M3.1-Flash[1m]"].Should().Be("low");
         models["MiniMax-M3[1m]"].Should().BeNull();
     }
 

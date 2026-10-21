@@ -123,7 +123,7 @@ function ChatRow({ chat, isKey, isMobile, featureId }: {
       {role && (
         <span
           data-testid="chat-role"
-          style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, background: C.bgSelected, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap', flexShrink: 0 }}
+          style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, background: C.bgSelected, borderRadius: R.sm, padding: `0 ${SP.xs}px`, whiteSpace: 'nowrap', flexShrink: 0 }}
         >
           {role}
         </span>
@@ -133,7 +133,7 @@ function ChatRow({ chat, isKey, isMobile, featureId }: {
         <span
           data-testid="chat-key"
           title={KEY_TIP}
-          style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.accent, background: C.accentLight, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap', flexShrink: 0 }}
+          style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.accent, background: C.accentLight, borderRadius: R.sm, padding: `0 ${SP.xs}px`, whiteSpace: 'nowrap', flexShrink: 0 }}
         >
           ключевой
         </span>

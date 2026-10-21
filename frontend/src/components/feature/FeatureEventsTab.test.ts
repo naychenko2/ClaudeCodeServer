@@ -43,9 +43,39 @@ const mockOpenChat = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { mockOpenChat.calls.push(id); return true; } }));
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
 vi.mock('../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
-// «Показать все» догружает ленту через стор (eventsLimit=all): шпион на expandFeaturePageEvents.
-const { mockExpand } = vi.hoisted(() => ({ mockExpand: vi.fn() }));
-vi.mock('../../lib/featurePage', () => ({ expandFeaturePageEvents: mockExpand }));
+// «Показать все»/«Свернуть» — через стор (eventsLimit=all, раскрытие, локальная ошибка).
+// mockState.expand/collapse — шпионы; useFeaturePageEventsExpanded/ExpandError —
+// useSyncExternalStore на управляемом состоянии (emit → ререндер).
+const mockState = vi.hoisted(() => {
+  const expand = vi.fn();
+  const collapse = vi.fn();
+  let expanded = false;
+  let expandError = false;
+  const listeners = new Set<() => void>();
+  const emit = () => listeners.forEach(l => l());
+  expand.mockImplementation(() => { expanded = true; emit(); });
+  collapse.mockImplementation(() => { expanded = false; emit(); });
+  return {
+    expand, collapse,
+    setExpanded: (v: boolean) => { expanded = v; emit(); },
+    setExpandError: (v: boolean) => { expandError = v; emit(); },
+    subscribe: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; },
+    getExpanded: () => expanded,
+    getExpandError: () => expandError,
+    reset: () => { expanded = false; expandError = false; },
+  };
+});
+vi.mock('../../lib/featurePage', async () => {
+  const React = await vi.importActual<typeof import('react')>('react');
+  return {
+    expandFeaturePageEvents: mockState.expand,
+    collapseFeaturePageEvents: mockState.collapse,
+    useFeaturePageEventsExpanded: () =>
+      React.useSyncExternalStore(mockState.subscribe, mockState.getExpanded, mockState.getExpanded),
+    useFeaturePageExpandError: () =>
+      React.useSyncExternalStore(mockState.subscribe, mockState.getExpandError, mockState.getExpandError),
+  };
+});
 
 // ── Хелперы данных ──────────────────────────────────────────────────────────────
 function ev(over: Partial<FeatureEvent> = {}): FeatureEvent {
@@ -92,7 +122,9 @@ beforeEach(() => {
   personaMap.set('p-mark', 'Марк');
   mockOpenChat.calls = [];
   mockOpenTask.calls = [];
-  mockExpand.mockClear();
+  mockState.expand.mockClear();
+  mockState.collapse.mockClear();
+  mockState.reset();
   backNavTest.reset();
 });
 afterEach(() => {
@@ -281,8 +313,28 @@ describe('«Показать все» (макет: порог 8)', () => {
     const onClick = reactProps(showAll)!.onClick as () => void;
     await act(async () => { onClick(); });
     // Догрузка всей ленты — ровно один раз, по id фичи.
-    expect(mockExpand).toHaveBeenCalledTimes(1);
-    expect(mockExpand).toHaveBeenCalledWith('f1');
+    expect(mockState.expand).toHaveBeenCalledTimes(1);
+    expect(mockState.expand).toHaveBeenCalledWith('f1');
+  });
+
+  // м.1: догрузка (eventsLimit=all) упала — страница НЕ роняется (данные загружены),
+  // на ленте локальная ошибка «Не удалось догрузить · Повторить». Мутация (в отчёте):
+  // убрать локальную ошибку (всегда «Показать все») → «events-expand-error» не найдётся → red.
+  it('догрузка упала → локальная ошибка «Не удалось догрузить · Повторить» (страница не роняется)', async () => {
+    const events: FeatureEvent[] = [];
+    for (let i = 9; i >= 0; i--) events.push(ev({ kind: 'started', taskId: `t${i}` }));
+    mockState.setExpandError(true); // догрузка (eventsLimit=all) упала
+    const container = render({ events, eventsTotal: 1000 });
+    // Локальная ошибка на ленте (вместо «Показать все»).
+    const err = findNodeByAttr(container, 'data-testid', 'events-expand-error');
+    expect(err, 'локальная ошибка догрузки').not.toBeNull();
+    expect(textNodes(err!).join('')).toContain('Не удалось догрузить');
+    // «Повторить» → повторная догрузка (expandFeaturePageEvents).
+    const retry = findNodeByAttr(container, 'data-testid', 'events-expand-retry')!;
+    const onClick = reactProps(retry)!.onClick as () => void;
+    await act(async () => { onClick(); });
+    expect(mockState.expand).toHaveBeenCalledTimes(1);
+    expect(mockState.expand).toHaveBeenCalledWith('f1');
   });
 });
 

@@ -1652,8 +1652,9 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         // 1. merged: merge-задача Done.
         if (merge is not null && merge.Status == TaskItemStatus.Done) return FeatureStates.Merged;
-        // 2. closed: эпик Done, мержа нет (merged уже отфильтрован выше).
-        if (epic.Status == TaskItemStatus.Done) return FeatureStates.Closed;
+        // 2. closed: эпик Done, мержа нет (merged уже отфильтрован выше),
+        //    И нет активной работы (running/stopped/waiting) — иначе фича ещё «живёт».
+        if (epic.Status == TaskItemStatus.Done && nowCount == 0 && !hasStopped && !hasExplicitWait) return FeatureStates.Closed;
         // 3. stopped: есть остановленная задача (как тревога kind=stopped).
         if (hasStopped) return FeatureStates.Stopped;
         // 4. waiting: явное ожидание человека (как тревога kind=wait, КРОМЕ «мерж»).

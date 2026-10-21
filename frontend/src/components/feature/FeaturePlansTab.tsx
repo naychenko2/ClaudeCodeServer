@@ -20,6 +20,7 @@ import { dateOnly, hhmm } from '../chat/feature/featureTime';
 import { splitMockups, isCurrentOfGroup } from '../../lib/mockupVersions';
 import { RoleGlyph } from './FeaturePlanReader';
 import { FeaturePlanReader } from './FeaturePlanReader';
+import { Button } from '../ui/Button';
 import { MockupCard, MockupListSection, MockupDeviceNotice } from './FeatureMockups';
 import type { FeaturePage } from '../../types/featureIndex';
 import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
@@ -140,18 +141,16 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
     if (selectedPlan || selectedMockup) {
       return (
         <div data-testid="plans-mobile-detail" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
-          <button
-            type="button"
-            data-testid="plans-back-to-list"
+          <Button
+            variant="ghost"
+            size="sm"
+            dataTestId="plans-back-to-list"
+            leftIcon={<ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
             onClick={() => setSelected(null)}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
-              height: 44, padding: '0 8px', border: 'none', background: 'transparent',
-              cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary,
-            }}
+            style={{ alignSelf: 'flex-start', height: 44, color: C.textSecondary, border: 'none' }}
           >
-            <ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> Все документы
-          </button>
+            Все документы
+          </Button>
           {selectedPlan
             ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} />
             : selectedMockup
@@ -230,19 +229,15 @@ function NoDocuments({ hasKeyChat, onOpenKeyChat, isMobile }: { hasKeyChat: bool
         Документов и макетов пока нет
       </span>
       {hasKeyChat && (
-        <button
-          type="button"
-          data-testid="plans-open-key-chat"
+        <Button
+          variant="ghost"
+          size="sm"
+          dataTestId="plans-open-key-chat"
           onClick={onOpenKeyChat}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            height: isMobile ? 44 : 32, padding: '0 12px',
-            border: `1px solid ${C.border}`, background: C.bgWhite, borderRadius: R.lg,
-            cursor: 'pointer', fontFamily: FONT.sans, fontSize: FS.sm, color: C.accent,
-          }}
+          style={{ color: C.accent, background: C.bgWhite, height: isMobile ? 44 : 32 }}
         >
           Открыть ключевой чат
-        </button>
+        </Button>
       )}
     </div>
   );

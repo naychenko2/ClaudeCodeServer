@@ -14,15 +14,18 @@
 // Данные — ТОЛЬКО из `features/{id}` → `events[]` + `eventsTotal`; бэк не меняем.
 // Формулировка строится на фронте из `kind` + `stepRef`/`role` (бэк не подписывает).
 
-import { useMemo, useState } from 'react';
-import { C, FS, SP, FONT } from '../../lib/design';
+import { useMemo } from 'react';
+import { C, R, FS, SP, FONT } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
 import { roleLabel } from '../../lib/roleLabel';
 import { dateOnly, hhmm } from '../chat/feature/featureTime';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
-import { expandFeaturePageEvents } from '../../lib/featurePage';
+import {
+  expandFeaturePageEvents, collapseFeaturePageEvents,
+  useFeaturePageEventsExpanded, useFeaturePageExpandError,
+} from '../../lib/featurePage';
 import { ExecutorAvatar } from './FeatureTimelineBits';
 import { NavTargetPair } from './NavTargetButton';
 import { Button } from '../ui/Button';
@@ -232,7 +235,11 @@ export interface FeatureEventsTabProps {
 }
 
 export function FeatureEventsTab({ events, eventsTotal, featureId, isMobile = false }: FeatureEventsTabProps) {
-  const [expanded, setExpanded] = useState(false);
+  // Раскрытие (все события, не только 8) и локальная ошибка догрузки — из стора страницы
+  // (не локальный useState): переживают уход на другую вкладку и возврат (м.3), а
+  // догруженная лента не перезапрашивается при повторном раскрытии (м.2).
+  const expanded = useFeaturePageEventsExpanded();
+  const expandError = useFeaturePageExpandError();
   // «Сейчас» — фиксированный момент (Date.now на рендер) для подписей «Сегодня/Вчера»;
   // стабильен в пределах кадра (как now в FeatureTimelineTab).
   const now = useMemo(() => Date.now(), []);
@@ -269,18 +276,34 @@ export function FeatureEventsTab({ events, eventsTotal, featureId, isMobile = fa
           ))}
         </div>
       ))}
-      {hasMore && (
+      {hasMore && expandError && (
+        // Догрузка (eventsLimit=all) упала: страница не роняется (данные загружены),
+        // на ленте — локальная ошибка с «Повторить» (м.1).
+        <div data-testid="events-expand-error" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.sm, padding: `${SP.xs}px ${SP.sm}px`, background: C.dangerBg, borderRadius: R.md, border: `1px solid ${C.dangerBorder}` }}>
+          <span style={{ fontSize: FS.sm, color: C.dangerText, flex: 1 }}>Не удалось догрузить все события</span>
+          <Button
+            variant="ghost"
+            size="xs"
+            dataTestId="events-expand-retry"
+            onClick={() => expandFeaturePageEvents(featureId)}
+            style={{ background: C.bgWhite, minHeight: isMobile ? 40 : 32 }}
+          >
+            Повторить
+          </Button>
+        </div>
+      )}
+      {hasMore && !expandError && (
         <Button
           variant="ghost"
           size="xs"
           fullWidth
           dataTestId="events-show-all"
           onClick={() => {
-            setExpanded(v => !v);
             // «Показать все» — ДОГРУЗИТЬ всю ленту (eventsLimit=all): бэк режет её
             // до 100, а eventsTotal — общее число до обрезки. Без догрузки раскрытие
-            // показало бы только 100 из 1000. При сворачивании дозагрузка не нужна.
-            if (!expanded) expandFeaturePageEvents(featureId);
+            // показало бы только 100 из 1000. «Свернуть» — только UI (без запроса).
+            if (expanded) collapseFeaturePageEvents(featureId);
+            else expandFeaturePageEvents(featureId);
           }}
           style={{ marginTop: SP.sm, background: C.bgSelected, minHeight: isMobile ? 40 : 32 }}
         >

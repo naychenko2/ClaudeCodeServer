@@ -170,6 +170,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId,
                       expanded={expandedStep === ref}
                       onToggle={() => onToggleStep?.(ref)}
                       featureId={featureId}
+                      task={chain.taskIds[0] ? taskMap.get(chain.taskIds[0]) : undefined}
                       isMobile={isMobile}
                     />
                   );

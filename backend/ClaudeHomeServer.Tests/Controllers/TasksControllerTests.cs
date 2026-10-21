@@ -1634,8 +1634,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // Снимок ПЕРЕД гейтом (верхний гард) видел Todo; внутри гейта (после await gate.WaitAsync) задача
     // уже Done → 409. Тест утверждает ТОЧНЫЙ текст «Фича смержена во время мержа» (отличен от верхнего
     // гарда «Фича уже смержена»): так он различает, какая ветка сработала, и не зеленеет вакуумно.
-    // Воспроизведение: гейт заранее удержан (reflection), фоновая задача переворачивает merge в Done
-    // и отпускает гейт; верхний гард (до гейта) уже отработал на Todo. Мутация: снять
+    // Воспроизведение: гейт заранее удержан (reflection); детектор ждёт, пока MergeFeature упрётся
+    // в гейт (m_asyncHead non-null — детерминированно, не слепые 50 мс), флип тогда переворачивает
+    // merge в Done и отпускает гейт; верхний гард (до гейта) уже отработал на Todo. Мутация: снять
     // `if (existing.Status == Done) return Conflict` → 200 вместо 409 → тест краснеет.
     [Fact]
     public async Task MergeFeature_Гонка_MergeDoneВнутриГейта_409()
@@ -1657,12 +1658,48 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             var gate = new SemaphoreSlim(0, 1);
             MergeGatesDict()[epicId] = gate;
 
-            // Фоновая задача: после верхнего гарда (до гейта) переворачивает merge в Done и отпускает гейт.
+            // Фоновая задача: ждёт, пока MergeFeature реально упрётся в гейт (поставит себя в очередь
+            // ожидающих SemaphoreSlim), а не слепые 50 мс (флак e0fa7066: на загруженной машине снимок
+            // line 918 мог опоздать за 50 мс, и верхний гард видел уже Done → «Фича уже смержена»).
+            // Затем переворачивает merge в Done и отпускает гейт: внутри гейта re-snapshot видит Done →
+            // 409 «Фича смержена во время мержа».
+            // Зависание (5d098a07): раньше 5с-таймаут флипа срабатывал раньше, чем медленный git
+            // MergeFeature дошёл до гейта, флип умирал не отпустив гейт, а gate.WaitAsync() (без
+            // таймаута, TasksController.cs:968) висел вечно. Теперь: ожидание — через TCS с таймаутом
+            // 30с, а gate.Release() — в finally (отпуск гарантирован даже по таймауту/сбою).
+            var gateEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var flip = Task.Run(async () =>
             {
-                await Task.Delay(50);
-                tasks.Update(merge.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
-                gate.Release();
+                try
+                {
+                    await gateEntered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                    tasks.Update(merge.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            });
+            // Детектор: MergeFeature вызвал gate.WaitAsync() → поставил себя в очередь асинхронных
+            // ожидающих (m_asyncHead non-null) → сигналим флипу TCS-ом. m_asyncHead — единственный
+            // надёжный сигнал: WaitAsync НЕ virtual (подклассить нельзя), а m_waitCount он НЕ трогает
+            // (проверено: WaitAsync заполняет m_asyncHead, m_waitCount остаётся 0). Сам флип от поля
+            // не зависит — ждёт TCS. Таймаут 30с — страховка.
+            var asyncHeadField = typeof(SemaphoreSlim).GetField(
+                "m_asyncHead", BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var detector = Task.Run(async () =>
+            {
+                try
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    while (asyncHeadField.GetValue(gate) is null)
+                        await Task.Delay(1, cts.Token);
+                    gateEntered.TrySetResult(true);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Таймаут детектора — страховка; флип всё равно отпустит гейт по своему таймауту.
+                }
             });
 
             var result = await BuildController(RealGit()).MergeFeature(epicId);

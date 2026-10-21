@@ -363,8 +363,8 @@ export function ExecutorRow({ x, task, now, featureId, isMobile = false }: {
     <div
       data-testid="timeline-executor"
       style={{
-        display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-        padding: '3px 0', fontFamily: FONT.sans,
+        display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+        padding: `${SP.xxs}px 0`, fontFamily: FONT.sans,
       }}
     >
       <ExecutorAvatar personaId={x.personaId} />
@@ -374,7 +374,7 @@ export function ExecutorRow({ x, task, now, featureId, isMobile = false }: {
           data-testid="timeline-executor-role"
           style={{
             fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
-            background: C.bgSelected, borderRadius: R.sm, padding: '0 5px',
+            background: C.bgSelected, borderRadius: R.sm, padding: `0 ${SP.xs}px`,
             whiteSpace: 'nowrap', flexShrink: 0,
           }}
         >
@@ -392,7 +392,7 @@ export function ExecutorRow({ x, task, now, featureId, isMobile = false }: {
           {time}
         </span>
       )}
-      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
+      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
         <NavTargetPair
           chatId={x.chatId}
           chatArchived={x.chatArchived}
@@ -454,13 +454,13 @@ export function RoundRow({ round, featureId, isMobile = false }: {
       <span data-testid="feature-round-n" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
         виток {round.n}
       </span>
-      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
+      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: SP.sm, flexWrap: 'wrap', minWidth: 0 }}>
         {name && (
           <span data-testid="feature-round-who" style={{ color: C.textPrimary, whiteSpace: 'nowrap' }}>{name}</span>
         )}
         <span
           data-testid="feature-round-verdict"
-          style={{ ...vStyle, fontSize: FS.xxs, fontWeight: 700, padding: '0 5px', borderRadius: R.sm, whiteSpace: 'nowrap', lineHeight: '15px' }}
+          style={{ ...vStyle, fontSize: FS.xxs, fontWeight: 700, padding: `0 ${SP.xs}px`, borderRadius: R.sm, whiteSpace: 'nowrap', lineHeight: '15px' }}
         >
           {verdict.label}
         </span>
@@ -470,7 +470,7 @@ export function RoundRow({ round, featureId, isMobile = false }: {
           </span>
         )}
       </span>
-      <span style={{ display: 'inline-flex', gap: 4 }}>
+      <span style={{ display: 'inline-flex', gap: SP.xs }}>
         <NavTargetPair
           chatId={round.reviewChatId}
           onOpenChat={openChat}
@@ -491,12 +491,15 @@ export function RoundRow({ round, featureId, isMobile = false }: {
 // витков (RoundRow) + строка «итого». Один шаг раскрыт за раз (состояние — у родителя).
 // Честная деградация: без stepRef кода нет; без исполнителя — «нет исполнителя»;
 // без чата — «чата нет» (NavTargetPair); без модели — чипа нет.
-export function StepRow({ chain, model, expanded, onToggle, featureId, isMobile = false }: {
+export function StepRow({ chain, model, expanded, onToggle, featureId, task, isMobile = false }: {
   chain: FeatureStepChain;
   model: { label: string; full?: string | null } | null;
   expanded: boolean;
   onToggle: () => void;
   featureId: string;
+  // Задача шага (первая в цепочке): для пометки «закрыта» (один источник с
+  // ExecutorRow: status === 'done', не outcome === 'accepted' — разные поля бэка).
+  task?: import('../../types/featureRun').FeatureTask;
   isMobile?: boolean;
 }) {
   const persona = chain.personaId ? getPersonaById(chain.personaId) : undefined;
@@ -537,8 +540,8 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, isMobile 
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 4,
-          margin: '0 -10px', padding: '0 10px',
+          display: 'flex', alignItems: 'center', gap: SP.xs,
+          margin: `0 -${SP.md}px`, padding: `0 ${SP.md}px`,
           background: hover ? C.bgSelected : 'transparent',
           borderRadius: R.md,
         }}
@@ -550,9 +553,9 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, isMobile 
         aria-label={`${chain.stepRef ? chain.stepRef + ' ' : ''}${chain.title}: ${expanded ? 'свернуть' : 'раскрыть'} витки`}
         data-testid={`feature-step-header-${chain.stepRef || 'no-ref'}`}
         style={{
-          display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0,
+          display: 'flex', alignItems: 'center', gap: SP.sm, flex: 1, minWidth: 0,
           background: 'transparent', border: 'none', cursor: 'pointer',
-          padding: '6px 8px', borderRadius: R.md, minHeight: isMobile ? 44 : 36,
+          padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.md, minHeight: isMobile ? 44 : 36,
           fontFamily: FONT.sans, fontSize: FS.sm, color: C.textPrimary, textAlign: 'left',
         }}
       >
@@ -605,10 +608,10 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, isMobile 
         chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
         showNoChat
         taskId={chain.taskIds[0] ?? null}
-        // Задача-шаг «закрыта» только когда шаг завершён (исход accepted = готово,
-        // как status=done в «Задачах»): «идёт»/«ждёт ревью»/«вернул» — ещё открыта.
-        // Раньше `!== 'running'` помечал «ждёт ревью» (pending) закрытой — нечестно.
-        taskClosed={chain.outcome === 'accepted'}
+        // «Закрыта» — ОДИН источник с ExecutorRow: задача шага done (status === 'done'),
+        // не outcome === 'accepted' (другое поле бэка: «принят» — вердикт ревью, не
+        // статус задачи). «Идёт»/«ждёт ревью»/«вернул» — задача ещё открыта.
+        taskClosed={task?.status === 'done'}
         onOpenTask={openTask}
         taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
         isMobile={isMobile}
@@ -618,12 +621,12 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, isMobile 
       {expanded && (
         <div
           data-testid={`feature-step-tours-${chain.stepRef || 'no-ref'}`}
-          style={{ margin: '2px 0 6px 26px', borderLeft: `1px solid ${C.divider}`, paddingLeft: 10 }}
+          style={{ margin: `${SP.xxs}px 0 ${SP.sm}px ${SP.xl}px`, borderLeft: `1px solid ${C.divider}`, paddingLeft: SP.md }}
         >
           {chain.rounds.length === 0 ? (
             <div
               data-testid="feature-step-rounds-empty"
-              style={{ fontSize: FS.sm, color: C.textMuted, padding: '4px 0', fontFamily: FONT.sans }}
+              style={{ fontSize: FS.sm, color: C.textMuted, padding: `${SP.xs}px 0`, fontFamily: FONT.sans }}
             >
               {areaLabel}
             </div>
@@ -632,7 +635,7 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, isMobile 
               {areaLabel && (
                 <div
                   data-testid="feature-step-review-running"
-                  style={{ fontSize: FS.xs, fontWeight: 600, color: C.info, padding: '4px 0', fontFamily: FONT.sans }}
+                  style={{ fontSize: FS.xs, fontWeight: 600, color: C.info, padding: `${SP.xs}px 0`, fontFamily: FONT.sans }}
                 >
                   {areaLabel}
                 </div>
@@ -642,7 +645,7 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, isMobile 
               ))}
               <div
                 data-testid="feature-step-total"
-                style={{ display: 'grid', gridTemplateColumns: '54px minmax(0, 1fr)', gap: 8, alignItems: 'baseline', padding: '4px 0', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary }}
+                style={{ display: 'grid', gridTemplateColumns: '54px minmax(0, 1fr)', gap: SP.sm, alignItems: 'baseline', padding: `${SP.xs}px 0`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary }}
               >
                 <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>итого</span>
                 <span style={{ minWidth: 0 }}>

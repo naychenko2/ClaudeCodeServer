@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
-import { C, R, FS, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab } from '../../lib/featurePage';
 import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -101,16 +101,14 @@ function MiniSummaryStub({ onOpenStats }: { onOpenStats: () => void }) {
       }}
     >
       <span style={{ fontSize: FS.sm, color: C.textMuted }}>Сводка по времени — скоро</span>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         onClick={onOpenStats}
-        style={{
-          border: 'none', background: 'transparent', cursor: 'pointer', padding: '2px 4px',
-          fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600, color: C.accent,
-        }}
+        style={{ color: C.accent, border: 'none', padding: `${SP.xxs}px ${SP.xs}px`, fontSize: FS.xs }}
       >
         Статистика ›
-      </button>
+      </Button>
     </div>
   );
 }

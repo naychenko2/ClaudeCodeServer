@@ -50,6 +50,14 @@ let _fid: string | null = null;
 // Лимит ленты событий (GET features/{fid}?eventsLimit=…): undefined → дефолт бэка
 // (100), 'all' → вся лента (после «Показать все»). Сбрасывается при смене fid.
 let _eventsLimit: string | undefined = undefined;
+// Лента «События» раскрыта (показаны все события, не только 8): UI-состояние вкладки.
+// Живёт в сторе (уровень модуля, не в компоненте): переживает уход на другую вкладку
+// и возврат (локальный useState сбрасывался при перемонтировании вкладки).
+let _eventsExpanded = false;
+// Локальная ошибка догрузки: догрузка всей ленты (eventsLimit=all) упала, но страница
+// остаётся с уже загруженными событиями (не роняется в error); на ленте —
+// «не удалось догрузить · Повторить». Сбрасывается успешной догрузой/перезапросом/сменой fid.
+let _expandError = false;
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
 
@@ -71,28 +79,34 @@ function setState(s: FeaturePageState) {
 
 // Первичный/live-запрос страницы. `initial` — первичный (страница открыта):
 // сначала loading, чтобы скелет показался; live — не сбрасывает в loading (старые
-// данные держим до прихода новых). Ответ: 200 → ok, 404 → notFound, 503 → disabled,
-// прочее → error.
-function fetchPage(fid: string, initial: boolean, signal?: AbortSignal) {
-  if (initial) setState({ status: 'loading' });
+// данные держим до прихода новых). `expand` — догрузка всей ленты (eventsLimit=all):
+// при сбое страница НЕ роняется в error (данные уже загружены), а получает локальную
+// ошибку на ленте (_expandError). Ответ: 200 → ok, 404 → notFound, 503 → disabled,
+// прочее → error (или локальная ошибка при догрузке).
+function fetchPage(fid: string, initial: boolean, signal?: AbortSignal, expand = false) {
+  if (initial) { setState({ status: 'loading' }); _expandError = false; }
   void api.tasks.getFeature(fid, _eventsLimit, signal)
-    .then(page => { if (_fid === fid) setState({ status: 'ok', page }); })
+    .then(page => { if (_fid === fid) { _expandError = false; setState({ status: 'ok', page }); } })
     .catch((e: Error & { status?: number }) => {
       if (_fid !== fid) return; // страница сменилась/закрыта — поздний ответ не затирает
       if (e.name === 'AbortError') return; // запрос отменён (fid сменился) — не сбой, а отмена
       if (e.status === 404) setState({ status: 'notFound' });
       else if (e.status === 503) setState({ status: 'disabled' });
+      else if (expand) { _expandError = true; emit(); } // догрузка упала: страница с данными, локальная ошибка
       else setState({ status: 'error' });
     });
 }
 
 // Открытие/смена страницы: fid. Эффект хука зовёт её, тесты — напрямую.
-// Смена fid (открыли другую фичу / закрыли) — вкладка и лимит ленты сбрасываются
-// к дефолту (лента снова с дефолтным лимитом бэка, не «all» предыдущей фичи).
+// Смена fid (открыли другую фичу / закрыли) — вкладка, лимит ленты, раскрытие и
+// локальная ошибка догрузки сбрасываются к дефолту (лента снова с дефолтным лимитом
+// бэка, не «all»/раскрытая предыдущей фичи).
 function setPage(fid: string | null) {
   if (fid !== _fid) {
     _tab = DEFAULT_TAB;
     _eventsLimit = undefined;
+    _eventsExpanded = false;
+    _expandError = false;
   }
   _fid = fid;
 }
@@ -171,11 +185,33 @@ export function refetchFeaturePage(fid: string) {
 // раскрытия лимит остаётся 'all' — live-перезапросы тоже тянут всю ленту (иначе
 // лента «схлопнулась бы» обратно к 100 на следующем task_changed). Не сбрасывает в
 // loading (initial=false): старые данные держим до прихода новых, без мигания.
-// Действует, только пока страница открыта (_fid === fid).
+// Кэш (м.2): лента уже догружена (лимит 'all') — повторное раскрытие без запроса
+// (не плодим лишний GET всей ленты). Действует, только пока страница открыта.
 export function expandFeaturePageEvents(fid: string) {
   if (_fid !== fid) return;
+  if (_eventsLimit === 'all') return; // уже догружено — раскрытие без запроса
   _eventsLimit = 'all';
-  fetchPage(fid, false);
+  _eventsExpanded = true;
+  _expandError = false; // повторная догрузка: локальная ошибка сбрасывается
+  emit();
+  fetchPage(fid, false, undefined, true);
+}
+
+// «Свернуть» (вкладка «События»): обратно к 8 последним. Данные (лента) не меняются —
+// меняется только видимое раскрытие (UI-состояние в сторе, переживает смену вкладки).
+export function collapseFeaturePageEvents(fid: string) {
+  if (_fid !== fid || !_eventsExpanded) return;
+  _eventsExpanded = false;
+  emit();
+}
+
+// Хуки UI-состояния вкладки «События» (тот же стор, что и данные): раскрытие ленты
+// (показаны все события, не только 8) и локальная ошибка догрузки.
+export function useFeaturePageEventsExpanded(): boolean {
+  return useSyncExternalStore(subscribe, () => _eventsExpanded, () => _eventsExpanded);
+}
+export function useFeaturePageExpandError(): boolean {
+  return useSyncExternalStore(subscribe, () => _expandError, () => _expandError);
 }
 
 // Хук: данные страницы фичи.
@@ -218,6 +254,8 @@ export const __test = {
     _pending = null;
     _tab = DEFAULT_TAB;
     _eventsLimit = undefined;
+    _eventsExpanded = false;
+    _expandError = false;
     _listeners.clear();
     _realtimeWired = false;
   },
@@ -234,4 +272,10 @@ export const __test = {
   // Текущий лимит ленты (undefined → дефолт бэка, 'all' → вся лента).
   eventsLimit: () => _eventsLimit,
   expandFeaturePageEvents,
+  collapseFeaturePageEvents,
+  // Раскрытие ленты (все события, не только 8) и локальная ошибка догрузки.
+  eventsExpanded: () => _eventsExpanded,
+  setEventsExpanded: (v: boolean) => { _eventsExpanded = v; },
+  expandError: () => _expandError,
+  setExpandError: (v: boolean) => { _expandError = v; },
 };

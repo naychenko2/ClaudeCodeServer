@@ -14,7 +14,7 @@ import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { showToast } from '../../lib/toast';
 import type { FeatureRun, FeatureState, FeatureAttention } from '../../types/featureRun';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
-import { featureTaskTotal } from './featurePageBody';
+import { taskCounters } from './featurePageBody';
 import { NavTargetButton } from './NavTargetButton';
 
 // === Тег статуса (макет §3) ===
@@ -172,7 +172,10 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
     }
   }
 
-  const total = run ? featureTaskTotal(feature, run) : (feature?.taskCount ?? 0);
+  // «N задач» — ОДИН источник со строками вкладки «Задачи»: taskCounters(run).total
+  // (честное число из run, не taskCount из индекса — индекс может расходиться с run).
+  // run=null (loading) — фолбэк на taskCount из индекса.
+  const total = run ? taskCounters(run).total : (feature?.taskCount ?? 0);
   const tasks = total > 0 ? `${total} ${pluralTasks(total)}` : 'задач нет';
 
   const branchBtn = branch && (

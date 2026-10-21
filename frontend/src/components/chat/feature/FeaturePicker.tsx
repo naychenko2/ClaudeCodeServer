@@ -49,11 +49,11 @@ function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
-// Один чип фичи: глиф состояния + имя (многоточие, title = полное название) + точка `●` (runs[0]).
-function FeatureChip({ run, on, isPill, isMobile, inMenu, onPick }: {
+// Один чип фичи: глиф состояния + имя (многоточие, title = полное название).
+// F-pop-a: точка `●` «эту фичу показывает пилюля» убрана (порядок фич — с бэка).
+function FeatureChip({ run, on, isMobile, inMenu, onPick }: {
   run: FeatureRun;
   on: boolean;
-  isPill: boolean;
   isMobile: boolean;
   inMenu: boolean;
   onPick: () => void;
@@ -83,7 +83,7 @@ function FeatureChip({ run, on, isPill, isMobile, inMenu, onPick }: {
         color: on ? C.textHeading : C.textSecondary,
         borderRadius: R.md, padding: '2px 8px',
         // M-1: у <button> браузер не наследует font-family → без inherit чипы были Arial
-        // среди Hanken Grotesk; ● унаследует сам.
+        // среди Hanken Grotesk.
         fontFamily: 'inherit',
         minHeight: isMobile ? 40 : 26, fontSize: FS.sm,
         cursor: 'pointer', fontWeight: on ? 600 : 400,
@@ -94,12 +94,6 @@ function FeatureChip({ run, on, isPill, isMobile, inMenu, onPick }: {
       <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
         {run.epic?.title}
       </span>
-      {isPill && (
-        <span
-          title="Эту фичу показывает пилюля"
-          style={{ fontSize: FS.xxs, fontWeight: 700, color: C.accent, flexShrink: 0 }}
-        >●</span>
-      )}
     </button>
   );
 }
@@ -138,7 +132,6 @@ export function FeaturePicker({ runs, selected, onSelect, isMobile = false, inMe
             key={run.featureId}
             run={run}
             on={i === selected}
-            isPill={i === 0}
             isMobile={isMobile}
             inMenu={inMenu}
             onPick={() => onSelect(i)}

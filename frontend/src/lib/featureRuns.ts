@@ -43,6 +43,23 @@ let _runsBySession = new Map<string, FeatureRun[]>();
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
 
+// F-pop-a: состояния запроса по sessionId — загрузка (скелет) и ошибка («Повторить»).
+// Отдельные Map (не в FeatureRun[]): срез runs — стабильная ссылка, а loading/error
+// меняются при каждом fetch. Сбой live-перезапроса НЕ затирает ошибку первичной загрузки.
+let _loadingBySession = new Map<string, boolean>();
+let _errorBySession = new Map<string, string | null>();
+
+function setLoading(sessionId: string, loading: boolean) {
+  _loadingBySession = new Map(_loadingBySession);
+  _loadingBySession.set(sessionId, loading);
+  emit();
+}
+function setError(sessionId: string, error: string | null) {
+  _errorBySession = new Map(_errorBySession);
+  _errorBySession.set(sessionId, error);
+  emit();
+}
+
 // M2: «активные» сессии — у них смонтирован useFeatureRuns(enabled=true). Для них
 // task_changed перезапрашивает агрегат; чужие (неактивные) не трогаем.
 const _active = new Set<string>();
@@ -250,6 +267,24 @@ export function useFeatureRunsSnapshot(sessionId: string | null): FeatureRun[] {
   );
 }
 
+// F-pop-a: загрузка фич чата (true — запрос в полёте, срез ещё EMPTY).
+function loadingFor(sessionId: string | null): boolean {
+  if (!sessionId) return false;
+  return _loadingBySession.get(sessionId) ?? false;
+}
+export function useFeatureRunsLoading(sessionId: string | null): boolean {
+  return useSyncExternalStore(subscribeRuns, () => loadingFor(sessionId), () => loadingFor(sessionId));
+}
+
+// F-pop-a: ошибка запроса фич (текст причины); null — ошибки нет.
+function errorFor(sessionId: string | null): string | null {
+  if (!sessionId) return null;
+  return _errorBySession.get(sessionId) ?? null;
+}
+export function useFeatureRunsError(sessionId: string | null): string | null {
+  return useSyncExternalStore(subscribeRuns, () => errorFor(sessionId), () => errorFor(sessionId));
+}
+
 // M2: дебаунс ~500 мс на сессию + троттлинг: не чаще одного запроса на сессию за
 // MIN_FETCH_GAP_MS. Пока идут исполнители, task_changed летят непрерывно, и запрос по 400+ КБ
 // уходил десятки раз в минуту (HAR прода: 24 за 1,5 мин) — теперь серия событий схлопывается
@@ -335,15 +370,28 @@ export function useFeatureRuns(sessionId: string | null, enabled: boolean): Feat
     }
     _active.add(sessionId);
     let cancelled = false;
+    // F-pop-a: загрузка — до ответа; ошибка — текст причины (сбой live-перезапроса не
+    // затирает: он не сбрасывает error, только не ставит новую).
+    setLoading(sessionId, true);
     void fetchRuns(sessionId)
-      .then(list => { if (!cancelled) setRuns(sessionId, list); })
-      .catch(() => { if (!cancelled) setRuns(sessionId, EMPTY); });
+      .then(list => { if (cancelled) return; setLoading(sessionId, false); setError(sessionId, null); setRuns(sessionId, list); })
+      .catch((e: unknown) => { if (cancelled) return; setLoading(sessionId, false); setError(sessionId, e instanceof Error ? e.message : 'Сервер не ответил'); setRuns(sessionId, EMPTY); });
     return () => {
       cancelled = true;
       _active.delete(sessionId);
     };
   }, [sessionId, enabled]);
   return runs;
+}
+
+// F-pop-a: «Повторить» — явный перезапрос фич чата (обходит троттлинг live-режима:
+// это deliberate-действие пользователя). Загрузка до ответа, ошибка — текст причины.
+export function refetchFeatureRuns(sessionId: string) {
+  if (!sessionId) return;
+  setLoading(sessionId, true);
+  void fetchRuns(sessionId)
+    .then(list => { setLoading(sessionId, false); setError(sessionId, null); setRuns(sessionId, list); })
+    .catch((e: unknown) => { setLoading(sessionId, false); setError(sessionId, e instanceof Error ? e.message : 'Сервер не ответил'); setRuns(sessionId, EMPTY); });
 }
 
 // Тестовые швы (не публичное API): сброс стора + прямой доступ к внутреннему состоянию.
@@ -357,6 +405,8 @@ export const __test = {
     _planCardBySession = new Map();
     _pillMenuBySession = new Map();
     _pillMenuSeq = 0;
+    _loadingBySession = new Map();
+    _errorBySession = new Map();
     _active.clear();
     _pending.forEach(t => clearTimeout(t));
     _pending.clear();
@@ -383,4 +433,9 @@ export const __test = {
   planCardFor,
   openPillMenu,
   pillMenuFor,
+  // F-pop-a: прямой доступ к срезам загрузки/ошибки.
+  setLoading,
+  setError,
+  loadingFor,
+  errorFor,
 };

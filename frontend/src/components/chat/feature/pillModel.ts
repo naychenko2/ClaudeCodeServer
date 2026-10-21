@@ -6,10 +6,11 @@ import type { FeatureRun } from '../../../types/featureRun';
 // runs[0] — главная) строит МОДЕЛЬ пилюли. Компонент (TurnPlanPill) «глупый»: только
 // рисует модель. Вся логика 5 состояний макета v1/v2 — здесь.
 //
-//   run       — идёт: `фича · 8/9 ↺3 · Производство · Денис`
-//   wait      — ждёт вас: ромб, `ждёт вас · {reason}` (C.info, 600)
+//   run       — идёт: `фича · 8/9 ↺3 · Производство · Денис`; merging → `мерж · идёт`;
+//               not_started/idle → `Не начата`
+//   wait      — ждёт вас: ромб, `ждёт вас · {reason}` (C.info, 600); merge_pending → `ждёт согласия`
 //   stopped   — исполнитель упал: квадрат, `стоит · {имя}` (C.dangerText, 600)
-//   closed    — закрыта одна фича: `фича · 9/9 ↺3 · Фича смержена`
+//   closed    — merged → `смержена`, closed (без мержа) → `закрыта`
 //   allClosed — все закрыты (N>1): `фичи · N · все закрыты` (без счётчика шагов, без +N)
 //
 // Приоритет: stopped → wait → closed → run. «Стоит» — ТОЛЬКО для упавшего исполнителя.
@@ -135,19 +136,22 @@ export function buildPillModel(runs: FeatureRun[]): PillModel | null {
   const more = allClosed ? 0 : runs.length - 1;
   const word = allClosed ? 'фичи' : 'фича';
 
-  // Текст состояния.
+  // Текст состояния (F-pop-a: тексты по утверждённому макету).
   let text: string;
   if (allClosed) text = `${runs.length} · все закрыты`;
   else if (state === 'wait') {
-    // merge_pending → «Мерж ждёт согласия»; прочий wait → «ждёт вас · {reason}».
-    text = run.state === 'merge_pending' ? 'Мерж ждёт согласия' : `ждёт вас · ${waitReason(run)}`;
+    // merge_pending → «ждёт согласия»; прочий wait → «ждёт вас · {reason}».
+    text = run.state === 'merge_pending' ? 'ждёт согласия' : `ждёт вас · ${waitReason(run)}`;
   } else if (state === 'stopped') {
     const name = stoppedName(run);
     text = name ? `стоит · ${name}` : 'стоит';
-  } else if (state === 'closed') text = 'Фича смержена';
-  else {
-    // merging → «Мерж идёт» (нейтрально, не «ждёт вас»); иначе стадия · исполнители.
-    if (run.state === 'merging') text = 'Мерж идёт';
+  } else if (state === 'closed') {
+    // merged → «смержена», closed (без мержа) → «закрыта».
+    text = run.state === 'merged' ? 'смержена' : 'закрыта';
+  } else {
+    // run: merging → «мерж · идёт»; not_started/idle → «Не начата»; иначе стадия · исполнители.
+    if (run.state === 'merging') text = 'мерж · идёт';
+    else if (run.state === 'not_started' || run.state === 'idle') text = 'Не начата';
     else {
       const names = namesFor(run);
       text = names ? `${stageFor(run)} · ${names}` : stageFor(run);

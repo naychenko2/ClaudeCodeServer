@@ -1,364 +1,715 @@
-import { useEffect, useState } from 'react';
-import { C, FONT, R, FS, SP, TB } from '../../../lib/design';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowRight, ChevronRight, GitBranch } from 'lucide-react';
+import { C, FONT, R, FS, SP, SHADOW, TB } from '../../../lib/design';
 import { useIsMobile } from '../../../lib/breakpoints';
-import { Button, ConfirmDialog } from '../../ui';
+import { Button, Tooltip } from '../../ui';
 import { openTaskInSection } from '../../../lib/tasks';
 import { openChatById } from '../../../lib/openChat';
-import { prefillComposer } from '../../../lib/ai/startChat';
 import { api } from '../../../lib/api';
 import { getPersonaById, usePersonasVersion, ensurePersonasLoaded } from '../../../lib/personas';
 import { showToast } from '../../../lib/toast';
-import { stripStepRefPrefix, stepDisplayName } from '../../../lib/stepRef';
+import { roleLabel } from '../../../lib/roleLabel';
+import { STAGE_NAME, formatDuration } from '../../../lib/chatGroups';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
-import type { FeatureRun, FeatureNow, FeatureAttention, FeatureSummary, FeatureTask } from '../../../types/featureRun';
-import { PipelineFlow } from './PipelineFlow';
-import { FeatureGlyph } from './FeatureGlyphs';
-import { Rounds } from './Rounds';
-import { dateTimeLabel } from './featureTime';
+import { featureRunStatusTag, StatusTag, featurePrimaryAction } from '../../feature/FeaturePageHeader';
+import { FeatureMergeDialog } from '../../feature/FeatureMergeDialog';
+import { NavTargetPair } from '../../feature/NavTargetButton';
+import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureState } from '../../../types/featureRun';
+import { FeatureGlyph, type FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 
-// Карточка фичи в режиме «Исполнение фичи»: сводка по агрегату `FeatureRun`.
+// Тело режима «Исполнение фичи» по утверждённому макету (turn-plan-feature-popup-1):
+// компактная карточка фичи — шапка (глиф · название mono · тег статуса) + мета
+// (ветка · роль этого чата) + строка состояния (9 состояний + загрузка + ошибка,
+// с главным действием) + 7 этапов (раскрываются по одному, исполнители) + подвал
+// «Открыть страницу фичи →».
 //
-// Источник данных — БЭК (REST GET /api/tasks/features): `epic`/`steps`/`reviews`/
-// `qa`/`final`/`merge` — задачи трекера, сгруппированные проектором по роли;
-// `now`/`attention`/`summary`/`closed`/`stepsAccepted`/`stepsTotal` — готовые поля
-// (бэк считает, фронт только показывает). Компонент «глупый»: арифметики конвейера
-// здесь нет, только раскладка, действия куратора и состояния.
+// Ушло из тела (на страницу фичи): счётчик, «Сейчас» (NowCard), полный PipelineFlow,
+// легенда, «Попросить Марка», «Итог финала», «Перезапустить».
 //
-// Состав сверху вниз (зазор 10):
-//   1. шапка — имя фичи + ветка (mono) + прогресс;
-//   2. плашка-тревога — «ждёт вас» (мерж/явное) или «исполнитель упал», с действиями;
-//   3. итог — «Фича смержена» (только у закрытой, из `summary`);
-//   4. «Сейчас» — карточка на каждую InProgress-задачу (у закрытой нет);
-//   5. «Конвейер» — PipelineFlow (его переделывает Ф5);
-//   6. пустое состояние (шагов 0) или легенда (когда шаги есть).
+// Данные — только из СПИСКА `GET features?sessionId=` (FeatureRun): run.state,
+// attention, stages[].executors[], epic (название/ветка). `chatTaskId` — задача
+// текущего чата (Session.TaskId): по ней выводится роль чата в мете.
 
-// Подпись секции (как CellLabel): 10 px, 700, uppercase, letter-spacing .06em, C.textMuted.
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted, margin: '2px 0 -4px' }}>
-      {children}
-    </div>
-  );
-}
-
-// Тик раз в минуту: «идёт N мин» / «ждёт N мин» не застывают, пока открыта карточка.
-function useMinuteTick(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 60000);
-    return () => clearInterval(t);
-  }, []);
-  return now;
-}
-
-// Минуты от ISO-момента до now (0, если момент в будущем/не задан).
-function minutesSince(iso: string | null | undefined, now: number): number | null {
-  if (!iso) return null;
-  return Math.max(0, Math.floor((now - new Date(iso).getTime()) / 60000));
-}
-
-// «идёт 25 мин» / «идёт 2 ч 10 мин»; null — старт не задан.
-function elapsedLabel(since: string | null | undefined, now: number): string | null {
-  const min = minutesSince(since, now);
-  if (min == null) return null;
-  if (min < 1) return 'идёт';
-  if (min < 60) return `идёт ${min} мин`;
-  const h = Math.floor(min / 60);
-  const rest = min % 60;
-  return rest ? `идёт ${h} ч ${rest} мин` : `идёт ${h} ч`;
-}
-
-// Длительность итога: «6 ч 10 мин» / «45 мин».
-function durationLabel(min: number): string {
-  if (min < 60) return `${min} мин`;
-  const h = Math.floor(min / 60);
-  const rest = min % 60;
-  return rest ? `${h} ч ${rest} мин` : `${h} ч`;
-}
-
-// «Ждёт вас …» (плашка wait): 0/нет since → без числа, >0 → «N мин»; без висящего пробела (Майя M9).
-function waitPhrase(mins: number | null): string {
-  if (mins == null || mins < 1) return 'Ждёт вас.';
-  return `Ждёт вас ${mins} мин.`;
-}
-
-// «Исполнитель упал …» (плашка stopped): нет since → без числа, 0 → «только что», >0 → «N мин назад» (Майя M9).
-function stoppedPhrase(mins: number | null): string {
-  if (mins == null) return 'Исполнитель упал.';
-  if (mins < 1) return 'Исполнитель упал только что.';
-  return `Исполнитель упал ${mins} мин назад.`;
-}
-
-// Строка плашки «упал»: «{Имя} · {stepRef} {название} — {reason}» (Майя M8).
-// Пустые части не дают «Денис — . Отчёта нет.»: имя и шаг склеиваются « · », reason — « — {…}»,
-// только когда он есть; step не найден по att.taskId → его часть опускается.
-function stoppedLine(name: string, step: FeatureTask | undefined, reason: string): string {
-  const stepPart = step
-    ? `${(step.stepRef ?? '').trim()} ${stripStepRefPrefix(step.title, step.stepRef)}`.trim()
-    : '';
-  const who = [name, stepPart].filter(Boolean).join(' · ');
-  const reasonPart = reason ? ` — ${reason}` : '';
-  return (who + reasonPart).trim();
-}
-
-// Русские формы: задача/задачи/задач, шаг/шага/шагов.
-function plural(n: number, one: string, few: string, many: string): string {
-  const n10 = n % 10, n100 = n % 100;
-  if (n10 === 1 && n100 !== 11) return one;
-  if (n10 >= 2 && n10 <= 4 && (n100 < 10 || n100 >= 20)) return few;
-  return many;
-}
-
-// Итог смерженной фичи: «15.10 21:09 · 6 ч 10 мин · 14 задач · 9 шагов · ↺3».
-function summaryLine(s: FeatureSummary): string {
-  const parts: string[] = [];
-  if (s.mergedAt) {
-    // mergedAt приходит UTC-ISO; макет v2 считает по МСК (местный пояс) — dateTimeLabel
-    // (featureTime) форматирует локальными геттерами, не getUTC*.
-    const dt = dateTimeLabel(s.mergedAt);
-    if (dt) parts.push(dt);
+// === Глиф шапки по состоянию фичи ===
+// not_started/idle → «нет» (absent), running/merging → run, waiting/merge_pending → wait
+// (ромб), stopped → stopped (квадрат), merged → done (галочка), closed → closed (круг с чертой).
+function headerGlyph(state: FeatureState): GlyphKind {
+  switch (state) {
+    case 'not_started':
+    case 'idle': return 'absent';
+    case 'waiting':
+    case 'merge_pending': return 'wait';
+    case 'stopped': return 'stopped';
+    case 'merged': return 'done';
+    case 'closed': return 'closed';
+    // running, merging → run.
+    default: return 'run';
   }
-  parts.push(durationLabel(s.durationMinutes));
-  parts.push(`${s.tasks} ${plural(s.tasks, 'задача', 'задачи', 'задач')}`);
-  parts.push(`${s.steps} ${plural(s.steps, 'шаг', 'шага', 'шагов')}`);
+}
+
+// === Строка состояния (чистая функция — тестируется без DOM) ===
+//
+// Тон: «сейчас» (идёт/мерж идёт) → bgCard/borderLight; info (ждёт вас/ждёт согласия)
+// → infoBg; danger (стоит) → dangerBg; нейтральный (не начата/закрыта) → bgSelected;
+// success (смержена) → successBg. Главное действие — по таблице макета.
+export type StatusTone = 'now' | 'info' | 'danger' | 'neutral' | 'success';
+export interface StatusAction {
+  kind: 'chat' | 'merge' | 'pair';
+  // chat: «Ответить {имя}» / «Чат {имя}»; merge: «Мерж…»; pair: «чат · задача».
+  label: string;
+  chatId: string | null;
+  taskId: string | null;
+  // merge_pending: рядом с «Мерж…» — пара «чат · задача» финала.
+  showPair?: boolean;
+}
+export interface StatusLine {
+  tone: StatusTone;
+  headline: string;
+  why: string | null;
+  action: StatusAction | null;
+}
+
+// Имя активной стадии (для «{этап} · идёт/ждёт/стоит»); null — нет активной.
+function activeStageName(run: FeatureRun): string | null {
+  const stage = (run.stages ?? []).find(s => s.state === 'active');
+  return stage ? STAGE_NAME[stage.key] : null;
+}
+
+// Имя персоны по id (null — не резолвится).
+function personaName(id: string | null | undefined): string | null {
+  if (!id) return null;
+  return getPersonaById(id)?.name ?? null;
+}
+
+// Имена идущих (из now[], уникальные, «Кира, Денис»); '' — никто.
+function runningNames(run: FeatureRun): string {
+  const names: string[] = [];
+  for (const n of run.now ?? []) {
+    const name = personaName(n.personaId);
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names.join(', ');
+}
+
+// Время строки: attention.since (ждёт/стоит) → «N мин»; active.runningSince (идёт/мерж)
+// → «N мин»; merged/closed → duration из summary; null — без числа.
+function statusMinutes(run: FeatureRun, now: number): number | null {
+  const att = run.attention;
+  if (att?.since) {
+    const m = Math.max(0, Math.floor((now - new Date(att.since).getTime()) / 60000));
+    if (m > 0) return m;
+  }
+  const active = (run.stages ?? []).find(s => s.state === 'active');
+  if (active?.runningSince) {
+    const m = Math.max(0, Math.floor((now - new Date(active.runningSince).getTime()) / 60000));
+    if (m > 0) return m;
+  }
+  if (run.state === 'merged' || run.state === 'closed') {
+    const d = run.summary?.durationMinutes;
+    if (d != null && d > 0) return d;
+  }
+  return null;
+}
+
+// Дата-время (dd.mm hh:mm) для «Смержена …»/«Закрыта …»; null — нет.
+function mergedDateTime(run: FeatureRun): string | null {
+  const iso = run.summary?.mergedAt;
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return null;
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${dd}.${mm} ${hh}:${mi}`;
+}
+
+// Итог смерженной: «{длительность} · {N} задач · {M} шагов · ↺K».
+function mergedSummary(run: FeatureRun): string {
+  const s = run.summary;
+  if (!s) return '';
+  const parts: string[] = [];
+  if (s.durationMinutes > 0) parts.push(`Шла ${formatDuration(s.durationMinutes)}`);
+  parts.push(`${s.tasks} ${pluralTasks(s.tasks)}`);
+  parts.push(`${s.steps} ${pluralSteps(s.steps)}`);
   if (s.loops > 0) parts.push(`↺${s.loops}`);
   return parts.join(' · ');
 }
-
-// Итог закрытой фичи: фон C.successBg, глиф «готово» 18, «Фича смержена» + строка из summary.
-function SummaryBlock({ summary }: { summary: FeatureSummary }) {
-  return (
-    <div style={{ background: C.successBg, borderRadius: R.lg, padding: '8px 10px', display: 'flex', gap: 8, alignItems: 'center' }}>
-      <FeatureGlyph kind="done" size={18} />
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: FS.base, fontWeight: 700, color: C.successText }}>Фича смержена</div>
-        {/* Перенос разрешён (без nowrap/ellipsis): на 360px хвост «↺3» не обрезается (Майя M6). */}
-        <div style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'anywhere' }}>
-          {summaryLine(summary)}
-        </div>
-      </div>
-    </div>
-  );
+function pluralTasks(n: number): string {
+  const d = n % 10, h = n % 100;
+  if (d === 1 && h !== 11) return 'задача';
+  if (d >= 2 && d <= 4 && (h < 10 || h >= 20)) return 'задачи';
+  return 'задач';
+}
+function pluralSteps(n: number): string {
+  const d = n % 10, h = n % 100;
+  if (d === 1 && h !== 11) return 'шаг';
+  if (d >= 2 && d <= 4 && (h < 10 || h >= 20)) return 'шага';
+  return 'шагов';
 }
 
-// «Сейчас»: карточка на одну InProgress-задачу. Аватар 22, строка 1 — кто · какой шаг,
-// строка 2 — заголовок задачи, справа — «идёт N мин» (тик раз в минуту).
-function NowCard({ item }: { item: FeatureNow }) {
-  usePersonasVersion(); // реактивность: имя/аватар появятся, когда персона загрузится
-  useEffect(() => { void ensurePersonasLoaded(); }, []);
-  const now = useMinuteTick();
-  const persona = item.personaId ? getPersonaById(item.personaId) : undefined;
-  const line1 = [persona?.name, item.stepRef].filter(Boolean).join(' · ');
-  // n-4/r-2: вторая строка — заголовок задачи (общий хелпер stepDisplayName): ведущий
-  // «{stepRef}:» отрезается (номер уже в строке 1); пустое название или название = номеру
-  // шага дублируют строку 1 — строку 2 не рисуем (не «Ш8 Ш8»).
-  const line2 = stepDisplayName(item.title, item.stepRef);
-  const elapsed = elapsedLabel(item.startedAt, now);
-  return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm, background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '8px 10px' }}>
-      {persona && <PersonaAvatar persona={persona} size={22} />}
-      <div style={{ flex: 1, minWidth: 0 }}>
-        {/* line1 (имя + stepRef) пуст — строку 1 не рисуем, пустую подпись не оставляем (Глеб). */}
-        {line1 && (
-          <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line1}</div>
-        )}
-        {/* n-4: название = номер шага (или пусто) — строку 2 не рисуем, чтобы не было «Ш8 Ш8». */}
-        {line2 != null && (
-          <div style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{line2}</div>
-        )}
-      </div>
-      {elapsed && (
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>{elapsed}</span>
-      )}
-    </div>
-  );
-}
+// Строка состояния по run.state (единая точка правды — 9 состояний + загрузка/ошибка).
+export function statusLineFor(run: FeatureRun, now: number): StatusLine {
+  const stage = activeStageName(run);
+  const mins = statusMinutes(run, now);
+  const time = mins != null ? ` · ${formatDuration(mins)}` : '';
+  const att = run.attention;
 
-// Плашка-тревога: «ждёт вас» (мерж/явное) или «исполнитель упал» — с действиями.
-// Фон/цвет/глиф по тону (wait → info + ромб, stopped → danger + квадрат), R.md, padding 8/10.
-function AttentionPlaque({ att, run, isMobile }: { att: FeatureAttention; run: FeatureRun; isMobile: boolean }) {
-  const now = useMinuteTick();
-  const [confirmRestart, setConfirmRestart] = useState(false);
-  const [restarting, setRestarting] = useState(false);
-  // M-5: кнопки sm (minHeight 32); на мобиле minHeight 40 (TB.iconHitMobile) — тач-цель.
-  const size: 'xs' | 'sm' = isMobile ? 'sm' : 'xs';
-  const btnStyle = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
-  const mins = minutesSince(att.since, now);
-
-  // Мерж: att.kind='merge' (новое, бэк Б1b — тревога есть только пока merge-задачи нет,
-  // т.е. state=merge_pending) ИЛИ att.kind='wait' && reason='мерж' (старый признак, запасной
-  // путь для данных без kind='merge'). У идущего мержа (state=merging) тревоги нет.
-  const isMerge = att.kind === 'merge' || (att.kind === 'wait' && att.reason === 'мерж');
-  if (att.kind === 'wait' || att.kind === 'merge') {
-    return (
-      <div role="status" style={{ background: C.infoBg, color: C.info, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.base }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-          <span style={{ marginTop: 2, flexShrink: 0 }}><FeatureGlyph kind="wait" size={14} /></span>
-          <span>
-            <b>{waitPhrase(mins)}</b>{' '}
-            {isMerge ? 'Все шаги приняты, мержа ещё нет. Отдать фичу Марку на мерж?' : att.reason}
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {isMerge ? (
-            <>
-              {/* «Попросить Марка» — затравка в композере оркестратора; саму задачу Марку не создаёт. */}
-              <Button size={size} variant="secondary" style={btnStyle} onClick={() => prefillComposer(mergePrefill(run))}>
-                Попросить Марка
-              </Button>
-              {/* У мержа att.taskId — это финал: «Итог финала» открывает его; без taskId кнопки нет (Майя M4). */}
-              {att.taskId && (
-                <Button size={size} variant="ghost" style={btnStyle} onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
-                  Итог финала
-                </Button>
-              )}
-            </>
-          ) : (
-            // Явное ожидание (reason ≠ «мерж»): одна кнопка «Открыть задачу»; без taskId кнопок нет (Майя M4).
-            att.taskId && (
-              <Button size={size} variant="secondary" style={btnStyle} onClick={() => { if (att.taskId) openTaskInSection({ id: att.taskId }); }}>
-                Открыть задачу
-              </Button>
-            )
-          )}
-        </div>
-      </div>
-    );
+  switch (run.state) {
+    case 'not_started':
+    case 'idle':
+      return {
+        tone: 'neutral',
+        headline: 'Не начата.',
+        why: 'Разрез ещё не запускался — шаги появятся после него.',
+        action: null,
+      };
+    case 'running': {
+      const names = runningNames(run);
+      return {
+        tone: 'now',
+        headline: `${stage ?? 'Разрез'} · идёт${time}.`,
+        why: names ? `Работают ${names}.` : null,
+        action: null,
+      };
+    }
+    case 'waiting': {
+      const name = personaName(att?.personaId);
+      const primary = featurePrimaryAction(att, name);
+      return {
+        tone: 'info',
+        headline: `${stage ?? 'Разрез'} · ждёт вас${time}.`,
+        why: att?.reason ?? null,
+        action: primary ? { kind: 'chat', label: primary.label, chatId: primary.chatId, taskId: null } : null,
+      };
+    }
+    case 'stopped': {
+      const name = personaName(att?.personaId);
+      const primary = featurePrimaryAction(att, name);
+      return {
+        tone: 'danger',
+        headline: `${stage ?? 'Разрез'} · стоит${time}.`,
+        why: att?.reason ? `${name ? name + ' — ' : ''}${att.reason}` : null,
+        action: primary ? { kind: 'chat', label: primary.label, chatId: primary.chatId, taskId: null } : null,
+      };
+    }
+    case 'merge_pending': {
+      // «Мерж…» (модалка) + рядом пара «чат · задача» финала.
+      const final = run.final;
+      return {
+        tone: 'info',
+        headline: `Мерж ждёт согласия${time}.`,
+        why: 'Все шаги приняты, финальное ревью пройдено.',
+        action: { kind: 'merge', label: 'Мерж…', chatId: final?.linkedSessionId ?? null, taskId: final?.id ?? null, showPair: true },
+      };
+    }
+    case 'merging': {
+      const merge = run.merge;
+      const name = personaName(merge?.personaId);
+      return {
+        tone: 'now',
+        headline: `Мерж идёт${time}.`,
+        why: name ? `${name} сливает ветку в master.` : 'Сливаем ветку в master.',
+        action: { kind: 'pair', label: 'мерж', chatId: merge?.linkedSessionId ?? null, taskId: merge?.id ?? null },
+      };
+    }
+    case 'merged': {
+      const dt = mergedDateTime(run);
+      return {
+        tone: 'success',
+        headline: `Смержена${dt ? ' ' + dt : ''}.`,
+        why: mergedSummary(run) || null,
+        action: null,
+      };
+    }
+    case 'closed': {
+      const dt = mergedDateTime(run);
+      return {
+        tone: 'neutral',
+        headline: `Закрыта без мержа${dt ? ' ' + dt : ''}.`,
+        why: 'Ветка не слита; задачи остались в трекере.',
+        action: { kind: 'pair', label: 'эпик', chatId: null, taskId: run.epic?.id ?? null },
+      };
+    }
+    // default: state не пришёл (старые данные/кеш) — нейтральная «Не начата».
+    default: {
+      return { tone: 'neutral', headline: 'Не начата.', why: null, action: null };
+    }
   }
+}
 
-  // stopped: исполнитель упал — «Перезапустить» (ConfirmDialog → api.tasks.execute) +
-  // «Чат исполнителя» (ghost → openChatById); без linkedSessionId вторая кнопка не рендерится.
-  const persona = att.personaId ? getPersonaById(att.personaId) : undefined;
-  const name = persona?.name ?? '';
-  const reason = (att.reason ?? '').trim();
-  // Шаг упавшей задачи: att.taskId → run.steps → stepRef + title; не найден → его часть опускается (Майя M8).
-  const step = att.taskId ? (run.steps ?? []).find(t => t.id === att.taskId) : undefined;
+// === Шапка: глиф · название mono · тег статуса ===
+function Header({ run }: { run: FeatureRun }) {
+  // run.state — всегда отдаёт бэк; ?? 'not_started' — защита от старых данных (state нет).
+  const tag = featureRunStatusTag(run.state ?? 'not_started', activeStageName(run));
+  const title = run.epic?.title ?? '';
   return (
-    <div role="status" style={{ background: C.dangerBg, color: C.dangerText, borderRadius: R.md, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: SP.sm, fontSize: FS.base }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-        <span style={{ marginTop: 2, flexShrink: 0 }}><FeatureGlyph kind="stopped" size={14} /></span>
-        <span>
-          <b>{stoppedPhrase(mins)}</b>{' '}
-          {stoppedLine(name, step, reason)}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+      <FeatureGlyph kind={headerGlyph(run.state)} size={14} />
+      <span
+        title={title}
+        style={{
+          flex: 1, minWidth: 0, fontFamily: FONT.mono, fontSize: FS.base, fontWeight: 700,
+          color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}
+      >
+        {title}
+      </span>
+      <StatusTag tag={tag} testId="feature-run-status" />
+    </div>
+  );
+}
+
+// === Мета: ветка (mono) · роль этого чата ===
+// Роль — задача chatTaskId (Session.TaskId) среди executors[] фичи; нет — только ветка.
+function Meta({ run, chatTaskId, isMobile }: { run: FeatureRun; chatTaskId?: string | null; isMobile: boolean }) {
+  const branch = run.epic?.worktreeBranch ?? null;
+  // Роль чата: исполнитель, чья taskId === chatTaskId, среди всех стадий.
+  let role: string | null = null;
+  if (chatTaskId) {
+    for (const stage of run.stages ?? []) {
+      const ex = stage.executors.find(e => e.taskId === chatTaskId);
+      if (ex) { role = roleLabel(ex.taskRole, ex.stepRef, ex.lane) || null; break; }
+    }
+  }
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: '4px 12px', flexWrap: 'wrap',
+      fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
+      minHeight: isMobile ? TB.iconHitMobile : undefined,
+    }}>
+      {branch && (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
+          <GitBranch size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+          {branch}
+        </span>
+      )}
+      {role && <span>этот чат — {role}</span>}
+    </div>
+  );
+}
+
+// === Строка состояния (тон панели А) + главное действие ===
+const STATUS_STYLE: Record<StatusTone, { bg: string; border?: string; strong: string }> = {
+  now:     { bg: C.bgCard, border: C.borderLight, strong: C.textHeading },
+  info:    { bg: C.infoBg, strong: C.textHeading },
+  danger:  { bg: C.dangerBg, strong: C.dangerText },
+  neutral: { bg: C.bgSelected, strong: C.textHeading },
+  success: { bg: C.successBg, strong: C.successText },
+};
+
+function StatusLine({ line, isMobile, onOpenChat, onOpenTask, onMerge }: {
+  line: StatusLine;
+  isMobile: boolean;
+  onOpenChat: (chatId: string) => void;
+  onOpenTask: (taskId: string) => void;
+  onMerge: () => void;
+}) {
+  const s = STATUS_STYLE[line.tone];
+  const btnStyle = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
+  return (
+    <div
+      data-testid="feature-run-status"
+      role="status"
+      style={{
+        background: s.bg, borderRadius: R.lg, padding: '8px 10px',
+        border: s.border ? `1px solid ${s.border}` : 'none',
+        display: 'flex', flexDirection: 'column', gap: SP.xs, fontSize: FS.sm, color: C.textPrimary,
+        fontFamily: FONT.sans,
+      }}
+    >
+      <div style={{ display: 'flex', gap: SP.xs, alignItems: 'flex-start' }}>
+        <span style={{ marginTop: 2, flexShrink: 0 }}>
+          <FeatureGlyph kind={line.tone === 'danger' ? 'stopped' : line.tone === 'info' ? 'wait' : line.tone === 'success' ? 'done' : 'run'} size={14} />
+        </span>
+        <span style={{ minWidth: 0 }}>
+          <b style={{ color: s.strong, fontWeight: 700 }}>{line.headline}</b>{' '}
+          {line.why && <span style={{ color: C.textSecondary }}>{line.why}</span>}
         </span>
       </div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <Button size={size} variant="secondary" style={btnStyle} loading={restarting} onClick={() => setConfirmRestart(true)}>
-          Перезапустить
-        </Button>
-        {att.linkedSessionId && (
-          <Button size={size} variant="ghost" style={btnStyle} onClick={() => { if (att.linkedSessionId) void openChatById(att.linkedSessionId); }}>
-            Чат исполнителя
-          </Button>
-        )}
-      </div>
-      {confirmRestart && (
-        <ConfirmDialog
-          title="Перезапустить исполнителя?"
-          subtitle="Задача уйдёт на исполнение заново."
-          confirmLabel="Перезапустить"
-          confirmVariant="secondary"
-          onConfirm={async () => {
-            if (!att.taskId) { setConfirmRestart(false); return; }
-            setRestarting(true);
-            try {
-              await api.tasks.execute(att.taskId);
-            } catch {
-              // Тихий сбой: показать штатный тост, а не глотать (Майя M10, Глеб).
-              showToast('Не удалось перезапустить исполнителя', 'Попробуйте ещё раз.', 'error');
-            }
-            setRestarting(false);
-            setConfirmRestart(false);
-          }}
-          onCancel={() => setConfirmRestart(false)}
-        />
+      {line.action && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {line.action.kind === 'merge' && (
+            <Button size="xs" variant="primary" style={btnStyle} onClick={onMerge}>Мерж…</Button>
+          )}
+          {line.action.kind === 'chat' && line.action.chatId && (
+            <Button size="xs" variant="primary" style={btnStyle} onClick={() => onOpenChat(line.action!.chatId!)}>
+              {line.action.label}
+              <ArrowRight size={13} strokeWidth={2} />
+            </Button>
+          )}
+          {(line.action.kind === 'pair' || line.action.showPair) && (
+            <NavTargetPair
+              chatId={line.action.chatId}
+              taskId={line.action.taskId}
+              showNoChat={false}
+              isMobile={isMobile}
+              onOpenChat={() => { if (line.action!.chatId) onOpenChat(line.action!.chatId!); }}
+              onOpenTask={() => { if (line.action!.taskId) onOpenTask(line.action!.taskId!); }}
+            />
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-// Затравка для «Попросить Марка»: мерж фичи — задача Марку (оркестратор сам её создаст).
-function mergePrefill(run: FeatureRun): string {
-  // п.32: epic nullable-терпимо — без эпика название/ветка пустые.
-  const epic = run.epic;
-  const branch = epic?.worktreeBranch ? ` (ветка ${epic.worktreeBranch})` : '';
-  return `Сделай мерж фичи «${epic?.title ?? ''}»${branch}. Все шаги приняты, ревью пройдено — отдавай в master.`;
+// === Чип модели на аватаре (mono, navInk) + подсказка с полной моделью ===
+function ModelChip({ label, full }: { label: string | null; full: string | null }) {
+  if (!label) return null;
+  const tip = full && full !== label ? `Модель чата: ${full}` : `Модель чата: ${label}`;
+  return (
+    <Tooltip content={tip}>
+      <span style={{
+        position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: -2,
+        fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700, lineHeight: '14px',
+        padding: '0 4px', borderRadius: R.sm, background: C.navInk, color: C.onNavInk,
+        boxShadow: `0 0 0 1.5px ${C.bgWhite}`, whiteSpace: 'nowrap',
+      }}>
+        {label}
+      </span>
+    </Tooltip>
+  );
 }
 
-// Пустое состояние (шагов 0): «План появится, когда {исполнитель разреза} закончит разрез».
-function EmptyState({ run }: { run: FeatureRun }) {
+// === Исполнитель этапа: аватар (+чип модели) · имя · роль · статус · «чат · задача» ===
+function ExecutorRow({ ex, isMobile, onOpenChat, onOpenTask }: {
+  ex: FeatureStageExecutor;
+  isMobile: boolean;
+  onOpenChat: (chatId: string) => void;
+  onOpenTask: (taskId: string) => void;
+}) {
   usePersonasVersion();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
-  const cutPersona = run.cut?.[0]?.personaId ? getPersonaById(run.cut[0].personaId) : undefined;
-  const who = cutPersona?.name;
+  const persona = ex.personaId ? getPersonaById(ex.personaId) : undefined;
+  const name = persona?.name ?? 'Исполнитель';
+  const role = roleLabel(ex.taskRole, ex.stepRef, ex.lane);
+  // Статус исполнителя: running → «идёт», waiting → «ждёт вас», stopped → «стоит», done → «готово», pending → «впереди».
+  const statusWord = ex.status === 'running' ? 'идёт'
+    : ex.status === 'waiting' ? 'ждёт вас'
+    : ex.status === 'stopped' ? 'стоит'
+    : ex.status === 'pending' ? 'впереди'
+    : 'готово';
+  const statusColor = ex.status === 'waiting' ? C.info : ex.status === 'stopped' ? C.dangerText : C.textMuted;
   return (
-    <div style={{ background: C.bgCard, border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '10px 12px', fontSize: FS.sm, color: C.textSecondary }}>
-      Шагов пока нет. План появится, когда {who ? `${who} закончит разрез` : 'закончится разрез'} — тогда здесь будут шаги по линиям.
-    </div>
-  );
-}
-
-// Легенда (когда шаги есть): кольца исходов витков (Rounds без подписи) + глиф «нет в трекере».
-function Legend() {
-  const sample = (verdict: 'returned' | 'accepted_with_remarks' | 'accepted') => (
-    <Rounds caption={false} rounds={[{ n: 1, verdict, reviewChatId: null }]} />
-  );
-  const item = (node: React.ReactNode, label: string) => (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
-      {node}
-      <span>{label}</span>
-    </span>
-  );
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '4px 12px', flexWrap: 'wrap', fontSize: FS.xs, color: C.textMuted }}>
-      {item(sample('returned'), 'вернул')}
-      {item(sample('accepted_with_remarks'), 'принял с правками')}
-      {item(sample('accepted'), 'принял')}
-      {item(<FeatureGlyph kind="absent" size={14} />, 'нет в трекере')}
-    </div>
-  );
-}
-
-// Главная карточка фичи.
-export function FeatureRunView({ run }: { run: FeatureRun }) {
-  const isMobile = useIsMobile();
-  const hasSteps = (run.steps?.length ?? 0) > 0;
-
-  return (
-    // M-2: собственный padding убран — поля задаёт поверхность (меню: headerPad/bodyPad);
-    // остаётся только вертикальный зазор 10 между блоками.
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {/* Шапка: имя + ветка (M-3: счётчик acc/tot · ↺N — в FeatureModeBody, % из шапки убран) */}
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-        {/* п.32: epic nullable-терпимо — без эпика имя/ветка пустые */}
-        <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>{run.epic?.title}</span>
-        {run.epic?.worktreeBranch && (
-          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflowWrap: 'anywhere' }}>{run.epic.worktreeBranch}</span>
-        )}
+    <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minHeight: isMobile ? TB.iconHitMobile : 36, padding: '2px 0' }}>
+      <span style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
+        {persona && <PersonaAvatar persona={persona} size={24} />}
+        <ModelChip label={ex.modelLabel} full={ex.modelFull} />
+      </span>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+          {role && !isMobile && (
+            <span style={{
+              fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700, flexShrink: 0,
+              background: C.bgSelected, color: C.textSecondary, borderRadius: R.sm, padding: '0 5px', lineHeight: '15px',
+            }}>{role}</span>
+          )}
+        </span>
+        <span style={{ fontSize: FS.xs, color: statusColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {statusWord}
+        </span>
       </div>
+      <NavTargetPair
+        chatId={ex.chatId}
+        chatArchived={ex.chatArchived}
+        taskId={ex.taskId}
+        showNoChat={false}
+        isMobile={isMobile}
+        onOpenChat={() => { if (ex.chatId) onOpenChat(ex.chatId); }}
+        onOpenTask={() => onOpenTask(ex.taskId)}
+      />
+    </div>
+  );
+}
 
-      {/* Плашка-тревога: ждёт вас / исполнитель упал (с действиями) */}
-      {run.attention && <AttentionPlaque att={run.attention} run={run} isMobile={isMobile} />}
+// === Точка этапа (как на «Хронологии»): done/active(+tone)/pending/absent ===
+function stageDotStyle(stage: FeatureStage): { bg: string; ring?: string; inset?: string } {
+  if (stage.state === 'done') return { bg: C.success };
+  if (stage.state === 'active') {
+    if (stage.tone === 'wait') return { bg: C.info, ring: C.infoBg };
+    if (stage.tone === 'stopped') return { bg: C.danger, ring: C.dangerBg };
+    if (stage.tone === 'loop') return { bg: C.bgWhite, inset: C.textHeading };
+    return { bg: C.textHeading, ring: C.bgSelected }; // run
+  }
+  if (stage.state === 'pending') return { bg: C.bgWhite, inset: C.progressTrack };
+  return { bg: C.bgWhite, inset: C.dashed }; // absent
+}
 
-      {/* Итог смерженной фичи (только у закрытой) */}
-      {run.closed && run.summary && <SummaryBlock summary={run.summary} />}
+function StageDot({ stage }: { stage: FeatureStage }) {
+  const d = stageDotStyle(stage);
+  const style: React.CSSProperties = {
+    width: 14, height: 14, borderRadius: 14, flexShrink: 0, position: 'relative', zIndex: 1,
+    background: d.bg,
+    ...(d.ring ? { boxShadow: `0 0 0 3px ${d.ring}` } : {}),
+    ...(d.inset ? { boxShadow: `inset 0 0 0 2px ${d.inset}` } : {}),
+  };
+  return <span style={style} />;
+}
 
-      {/* «Сейчас»: по карточке на каждую InProgress-задачу; у закрытой фичи нет */}
-      {run.now && run.now.length > 0 && !run.closed && (
-        <>
-          <SectionLabel>Сейчас</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-            {run.now.map(n => <NowCard key={n.taskId} item={n} />)}
+// Слово состояния этапа (справа): пройден/идёт/ждёт вас/стоит/по шагам/впереди/не было.
+function stageWord(stage: FeatureStage): { word: string; color: string } {
+  if (stage.state === 'done') return { word: 'пройден', color: C.textMuted };
+  if (stage.state === 'active') {
+    if (stage.tone === 'wait') return { word: 'ждёт вас', color: C.info };
+    if (stage.tone === 'stopped') return { word: 'стоит', color: C.dangerText };
+    if (stage.tone === 'loop') return { word: 'по шагам', color: C.textHeading };
+    return { word: 'идёт', color: C.textHeading };
+  }
+  if (stage.state === 'pending') return { word: 'впереди', color: C.textMuted };
+  return { word: 'не было', color: C.textMuted };
+}
+
+// === Строка этапа (32 px, на 360 — 44): точка · название · слово+время · шеврон ===
+function StageRow({ stage, open, isMobile, onToggle }: {
+  stage: FeatureStage;
+  open: boolean;
+  isMobile: boolean;
+  onToggle: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const clickable = stage.state !== 'pending' && stage.state !== 'absent';
+  const { word, color } = stageWord(stage);
+  const time = stage.state === 'active' && stage.runningSince
+    ? (() => { const m = Math.max(0, Math.round((Date.now() - new Date(stage.runningSince!).getTime()) / 60000)); return m > 0 ? formatDuration(m) : null; })()
+    : null;
+  const inner = (
+    <>
+      <StageDot stage={stage} />
+      <span style={{
+        flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 600,
+        color: clickable ? C.textHeading : C.textMuted,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{STAGE_NAME[stage.key]}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>
+        <span style={{ fontWeight: 600, color }}>{word}</span>
+        {time && <span style={{ fontFamily: FONT.mono }}>{time}</span>}
+        {clickable && (
+          <ChevronRight size={12} strokeWidth={2} style={{ color: C.textMuted, transform: open ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }} />
+        )}
+      </span>
+    </>
+  );
+  const baseStyle: React.CSSProperties = {
+    display: 'grid', gridTemplateColumns: '16px 1fr auto', gap: 9, alignItems: 'center',
+    width: '100%', minHeight: isMobile ? TB.iconHitMobile : 32, padding: '4px 6px 4px 0',
+    borderRadius: R.md, border: 'none', textAlign: 'left', fontFamily: 'inherit',
+    background: open ? C.bgCard : (hovered ? C.bgSelected : 'transparent'),
+    cursor: clickable ? 'pointer' : 'default',
+    boxShadow: focused && clickable ? SHADOW.focus : 'none',
+  };
+  if (!clickable) {
+    return <div aria-label={`${STAGE_NAME[stage.key]}: ${word}`} style={baseStyle}>{inner}</div>;
+  }
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={onToggle}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={baseStyle}
+    >
+      {inner}
+    </button>
+  );
+}
+
+// === Этапы: 7 строк, раскрыт один (по умолчанию текущий/первый кликабельный) ===
+function Stages({ run, isMobile, onOpenChat, onOpenTask }: {
+  run: FeatureRun;
+  isMobile: boolean;
+  onOpenChat: (chatId: string) => void;
+  onOpenTask: (taskId: string) => void;
+}) {
+  const stages = run.stages ?? [];
+  // По умолчанию раскрыт текущий (active); нет активного — первый кликабельный (done); иначе 0.
+  const [openKey, setOpenKey] = useState<string | null>(() => {
+    const active = stages.find(s => s.state === 'active');
+    if (active) return active.key;
+    const done = stages.find(s => s.state === 'done');
+    if (done) return done.key;
+    return stages.length > 0 ? stages[0].key : null;
+  });
+  if (stages.length === 0) return null;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {stages.map(stage => {
+        const open = openKey === stage.key;
+        return (
+          <div key={stage.key}>
+            <StageRow
+              stage={stage}
+              open={open}
+              isMobile={isMobile}
+              onToggle={() => setOpenKey(open ? null : stage.key)}
+            />
+            {open && (
+              <div style={{ margin: '0 0 4px 25px', paddingLeft: 8, borderLeft: `1px solid ${C.divider}`, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {stage.executors.length > 0
+                  ? stage.executors.map((ex, i) => (
+                    <ExecutorRow key={`${ex.taskId}-${i}`} ex={ex} isMobile={isMobile} onOpenChat={onOpenChat} onOpenTask={onOpenTask} />
+                  ))
+                  : <span style={{ fontSize: FS.sm, color: C.textMuted, padding: '4px 0 6px' }}>Исполнителей нет</span>}
+              </div>
+            )}
           </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// === Загрузка: скелет (заголовок, строка, 7 этапов) ===
+function LoadingSkeleton() {
+  const bar = (w: string, h: number) => (
+    <div style={{ width: w, height: h, background: C.bgSelected, borderRadius: R.sm }} />
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+      {bar('60%', 14)}
+      {bar('40%', 12)}
+      {bar('100%', 44)}
+      {[0, 1, 2, 3, 4, 5, 6].map(() => bar('100%', 18))}
+    </div>
+  );
+}
+
+// === Ошибка: «Не удалось загрузить фичу.» + «Повторить» ===
+function ErrorBlock({ error, isMobile, onRetry }: { error: string | null; isMobile: boolean; onRetry: () => void }) {
+  return (
+    <div
+      role="alert"
+      style={{
+        background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: R.lg,
+        padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: SP.sm,
+        fontSize: FS.sm, color: C.textPrimary, fontFamily: FONT.sans,
+      }}
+    >
+      <span><b style={{ color: C.dangerText }}>Не удалось загрузить фичу.</b>{' '}{error ?? 'Сервер не ответил.'}</span>
+      <Button size="xs" variant="secondary" style={isMobile ? { minHeight: TB.iconHitMobile } : undefined} onClick={onRetry}>
+        Повторить
+      </Button>
+    </div>
+  );
+}
+
+// === Подвал: «Открыть страницу фичи →» (ведёт на «Хронологию») ===
+function Footer({ isMobile, onOpenPage }: { isMobile: boolean; onOpenPage: () => void }) {
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onOpenPage}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      title="Открыть страницу фичи"
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5,
+        width: '100%', minHeight: isMobile ? TB.iconHitMobile : undefined,
+        padding: '8px 13px', border: 'none', borderTop: `1px solid ${C.divider}`,
+        background: 'transparent', cursor: 'pointer',
+        fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
+        boxShadow: focused ? SHADOW.focus : 'none',
+      }}
+    >
+      Открыть страницу фичи
+      <span style={{ display: 'flex', transform: hovered ? 'translateX(3px)' : 'none', transition: 'transform 0.15s' }}>
+        <ArrowRight size={13} strokeWidth={2} />
+      </span>
+    </button>
+  );
+}
+
+// === Карточка фичи (тело режима «Исполнение фичи») ===
+//
+// `chatTaskId` — задача текущего чата (Session.TaskId): по ней роль в мете.
+// `loading`/`error` — состояния запроса (из стора featureRuns). `onOpenPage` — подвал.
+export function FeatureRunView({
+  run, chatTaskId, loading, error, onOpenPage, onRetry,
+}: {
+  run: FeatureRun;
+  chatTaskId?: string | null;
+  loading?: boolean;
+  error?: string | null;
+  onOpenPage?: () => void;
+  onRetry?: () => void;
+}) {
+  const isMobile = useIsMobile();
+  usePersonasVersion();
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
+
+  // Навигация: переход в чат/задачу (вызывающий закрывает попап).
+  const openChat = (chatId: string) => { void openChatById(chatId); };
+  const openTask = (taskId: string) => { openTaskInSection({ id: taskId }); };
+
+  // === Мерж (Ф6): общая модалка подтверждения → POST /merge ===
+  // pending (кнопка «Запускаю…» заблокирована), успех (тост, диалог закрывается),
+  // 409 (идемпотентность, без красной ошибки), прочий сбой (сообщение + «Повторить»).
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergePending, setMergePending] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const mergeInFlight = useRef(false);
+  const openMergeDialog = () => { setMergeError(null); setMergeOpen(true); };
+  const closeMergeDialog = () => { setMergeOpen(false); setMergePending(false); setMergeError(null); mergeInFlight.current = false; };
+  const confirmMerge = async () => {
+    if (mergeInFlight.current) return;
+    mergeInFlight.current = true;
+    setMergePending(true);
+    setMergeError(null);
+    try {
+      await api.tasks.mergeFeature(run.featureId);
+      showToast('Задача мержа создана', 'Марк начал мерж');
+      closeMergeDialog();
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      if (err.status === 409) closeMergeDialog();
+      else {
+        mergeInFlight.current = false;
+        setMergeError(err.message || 'Сервер не ответил');
+        setMergePending(false);
+      }
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {loading ? (
+        <LoadingSkeleton />
+      ) : error ? (
+        <ErrorBlock error={error} isMobile={isMobile} onRetry={onRetry ?? (() => {})} />
+      ) : (
+        <>
+          <Header run={run} />
+          <Meta run={run} chatTaskId={chatTaskId} isMobile={isMobile} />
+          <StatusLine
+            line={statusLineFor(run, Date.now())}
+            isMobile={isMobile}
+            onOpenChat={openChat}
+            onOpenTask={openTask}
+            onMerge={openMergeDialog}
+          />
+          <Stages run={run} isMobile={isMobile} onOpenChat={openChat} onOpenTask={openTask} />
+          {onOpenPage && <Footer isMobile={isMobile} onOpenPage={onOpenPage} />}
         </>
       )}
-
-      {/* Конвейер: вертикальная диаграмма (PipelineFlow; его переделывает Ф5) */}
-      <SectionLabel>Конвейер</SectionLabel>
-      <PipelineFlow run={run} />
-
-      {/* Пустое состояние (шагов 0) или легенда (когда шаги есть) */}
-      {hasSteps ? <Legend /> : <EmptyState run={run} />}
+      {mergeOpen && (
+        <FeatureMergeDialog
+          title={run.epic?.title ?? ''}
+          branch={run.epic?.worktreeBranch ?? null}
+          pending={mergePending}
+          error={mergeError}
+          onCancel={closeMergeDialog}
+          onConfirm={() => { void confirmMerge(); }}
+        />
+      )}
     </div>
   );
 }

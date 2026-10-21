@@ -123,6 +123,15 @@ describe('buildPillModel: идёт (run)', () => {
     })])!;
     expect(m.loopsHot).toBe(false);
   });
+
+  it('F-pop-a: not_started / idle → «Не начата» (без стадии и имён)', () => {
+    const a = buildPillModel([run({ state: 'not_started', stepsAccepted: 0, stepsTotal: 0 })])!;
+    expect(a.state).toBe('run');
+    expect(a.text).toBe('Не начата');
+    const b = buildPillModel([run({ state: 'idle', stepsAccepted: 0, stepsTotal: 0 })])!;
+    expect(b.state).toBe('run');
+    expect(b.text).toBe('Не начата');
+  });
 });
 
 // ── wait: ждёт вас ───────────────────────────────────────────────────────────
@@ -166,7 +175,7 @@ describe('buildPillModel: ждёт вас (wait)', () => {
 // второй тест краснеет (текст станет стадией, не «Мерж идёт»).
 
 describe('buildPillModel: state (merge_pending / merging)', () => {
-  it('merge_pending → wait, «Мерж ждёт согласия», ромб, C.info 600, aria «фича ждёт вас»', () => {
+  it('merge_pending → wait, «ждёт согласия», ромб, C.info 600, aria «фича ждёт вас»', () => {
     const m = buildPillModel([run({
       state: 'merge_pending',
       stepsAccepted: 9, stepsTotal: 9,
@@ -176,13 +185,13 @@ describe('buildPillModel: state (merge_pending / merging)', () => {
     expect(m.state).toBe('wait');
     expect(m.icon).toBe('diamond');
     expect(m.iconColor).toBe(C.info);
-    expect(m.text).toBe('Мерж ждёт согласия');
+    expect(m.text).toBe('ждёт согласия');
     expect(m.textColor).toBe(C.info);
     expect(m.textWeight).toBe(600);
     expect(m.ariaExtra).toBe('фича ждёт вас');
   });
 
-  it('merging → run (нейтрально, НЕ «ждёт вас»), «Мерж идёт», route, C.accent 400, без aria', () => {
+  it('merging → run (нейтрально, НЕ «ждёт вас»), «мерж · идёт», route, C.accent 400, без aria', () => {
     const m = buildPillModel([run({
       state: 'merging',
       stepsAccepted: 9, stepsTotal: 9,
@@ -192,7 +201,7 @@ describe('buildPillModel: state (merge_pending / merging)', () => {
     expect(m.state).toBe('run');
     expect(m.icon).toBe('route');
     expect(m.iconColor).toBe(C.accent);
-    expect(m.text).toBe('Мерж идёт');
+    expect(m.text).toBe('мерж · идёт');
     expect(m.textColor).toBeNull();
     expect(m.textWeight).toBe(400);
     expect(m.ariaExtra).toBeNull();
@@ -261,15 +270,25 @@ describe('buildPillModel: исполнитель упал (stopped)', () => {
 // ── closed: закрыта одна фича ─────────────────────────────────────────────────
 
 describe('buildPillModel: закрыта одна фича (closed)', () => {
-  it('«Фича смержена», Route C.textMuted, счётчик 9/9', () => {
+  it('merged → «смержена», Route C.textMuted, счётчик 9/9', () => {
     const m = buildPillModel([run({
       verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 3, withdrawn: 0, loops: 3 },
-      stepsAccepted: 9, stepsTotal: 9, closed: true,
+      stepsAccepted: 9, stepsTotal: 9, state: 'merged',
     })])!;
     expect(m.state).toBe('closed');
     expect(m.word).toBe('фича');
     expect(m.counter).toBe('9/9');
-    expect(m.text).toBe('Фича смержена');
+    expect(m.text).toBe('смержена');
+    expect(m.icon).toBe('route');
+    expect(m.iconColor).toBe(C.textMuted);
+  });
+
+  it('closed (без мержа) → «закрыта», Route C.textMuted', () => {
+    const m = buildPillModel([run({
+      stepsAccepted: 9, stepsTotal: 9, state: 'closed',
+    })])!;
+    expect(m.state).toBe('closed');
+    expect(m.text).toBe('закрыта');
     expect(m.icon).toBe('route');
     expect(m.iconColor).toBe(C.textMuted);
   });
@@ -294,10 +313,10 @@ describe('buildPillModel: все закрыты (N>1)', () => {
     expect(m.iconColor).toBe(C.textMuted); // приглушённый Route (как у closed)
   });
 
-  it('N=1 закрыта → НЕ allClosed (closed, «Фича смержена»)', () => {
+  it('N=1 закрыта → НЕ allClosed (closed, «закрыта»)', () => {
     const m = buildPillModel([run({ stepsAccepted: 9, stepsTotal: 9, closed: true })])!;
     expect(m.state).toBe('closed');
-    expect(m.text).toBe('Фича смержена');
+    expect(m.text).toBe('закрыта');
   });
 
   it('не все закрыты (одна идёт) → run, +N = N-1', () => {
@@ -397,13 +416,13 @@ describe('TurnPlanPill: «все закрыты» — без счётчика п
     expect(html).not.toContain('↺'); // возвратов в «все закрыты» нет
   });
 
-  it('контроль: одна закрытая фича — счётчик шагов 9/9 и «Фича смержена»', () => {
+  it('контроль: одна закрытая фича — счётчик шагов 9/9 и «закрыта»', () => {
     __test.reset();
     const r = run({ stepsAccepted: 9, stepsTotal: 9, closed: true });
     __test.setRuns('s1', [r]);
     const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: planTodos(), runs: [r], sessionId: 's1' }));
     expect(html).toContain('9/9');
-    expect(html).toContain('Фича смержена');
+    expect(html).toContain('закрыта');
     expect(html).not.toContain('1/3');
   });
 

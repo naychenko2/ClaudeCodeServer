@@ -1,5 +1,6 @@
 // Выбор фичи (FeaturePicker): только при ≥ 2 фичах; секция «Фичи чата · N»;
-// role="radiogroup"/"radio"; точка `●` (C.accent) — у фичи, которую показывает пилюля (runs[0]).
+// role="radiogroup"/"radio". F-pop-a: точка `●` «эту фичу показывает пилюля» убрана
+// (порядок фич — с бэка).
 // Рендер — renderToStaticMarkup (паттерн соседних тестов; окружение node, useState — initial).
 
 import { createElement } from 'react';
@@ -40,11 +41,11 @@ describe('FeaturePicker', () => {
     expect(html).toContain('role="radio"');
   });
 
-  it('точка ● — у runs[0] (её показывает пилюля), с title «Эту фичу показывает пилюля»', () => {
+  it('F-pop-a: точки ● «эту фичу показывает пилюля» больше нет (порядок — с бэка)', () => {
     const html = render([run('a', 'Фича A'), run('b', 'Фича B')], 0);
-    // ● (U+25CF) присутствует ровно один раз — у runs[0].
-    expect((html.match(/●/g) ?? []).length).toBe(1);
-    expect(html).toContain('Эту фичу показывает пилюля');
+    // ● (U+25CF) отсутствует; и title-подсказки тоже.
+    expect(html.match(/●/g) ?? []).toHaveLength(0);
+    expect(html).not.toContain('Эту фичу показывает пилюля');
   });
 
   it('выбранный чип: aria-checked=true, рамка accentMuted, 600', () => {

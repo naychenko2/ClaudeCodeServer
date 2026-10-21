@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab } from '../../lib/featurePage';
 import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -25,6 +25,7 @@ import { FeatureChatsTab } from './FeatureChatsTab';
 import { FeatureTasksTab } from './FeatureTasksTab';
 import { FeatureEventsTab } from './FeatureEventsTab';
 import { FeatureStatsTab } from './FeatureStatsTab';
+import { FeatureMiniSummary } from './FeatureMiniSummary';
 import {
   FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
   featureRunStatusTag, toRunTag, type FeatureRunTag,
@@ -89,30 +90,7 @@ function activeStageName(run: FeatureRun): string | null {
   return stage ? STAGE_NAME[stage.key] : null;
 }
 
-// Мини-сводка времени — ЗАГЛУШКА (наполнит Ф8): карточка по каркасу макета
-// (bgCard, рамка borderLight, R.lg) со ссылкой «Статистика ›» во вкладку.
-function MiniSummaryStub({ onOpenStats }: { onOpenStats: () => void }) {
-  return (
-    <div
-      data-testid="feature-page-mini-summary"
-      style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm,
-        background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
-        padding: `${SP.sm}px ${SP.sm}px`, marginBottom: SP.md, fontFamily: FONT.sans,
-      }}
-    >
-      <span style={{ fontSize: FS.sm, color: C.textMuted }}>Сводка по времени — скоро</span>
-      <Button
-        variant="ghost"
-        size="xs"
-        onClick={onOpenStats}
-        style={{ color: C.accent, border: 'none', padding: `${SP.xxs}px ${SP.xs}px`, fontSize: FS.xs }}
-      >
-        Статистика ›
-      </Button>
-    </div>
-  );
-}
+// (Мини-сводка — FeatureMiniSummary, Ф8.)
 
 // Страница фичи (волна 3, Ф1 — каркас). Оболочка — «как файл» (CenterViewShell):
 // Toolbar-шапка (закрытие, глиф, название, тег/действие/⋯), Esc, возврат к месту
@@ -312,7 +290,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
         <div data-testid="feature-page-body" style={{ marginTop: SP.md }}>
           {tab === 'timeline' ? (
             <>
-              <MiniSummaryStub onOpenStats={() => setFeaturePageTab('stats')} />
+              <FeatureMiniSummary stats={page.page.stats ?? null} onOpenStats={() => setFeaturePageTab('stats')} isMobile={isMobile} />
               <FeatureTimelineTab run={okRun} isMobile={isMobile} />
             </>
           ) : tab === 'plans' ? (

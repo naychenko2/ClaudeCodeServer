@@ -1,5 +1,6 @@
 import js from '@eslint/js'
 import globals from 'globals'
+import react from 'eslint-plugin-react'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
@@ -140,6 +141,7 @@ export default defineConfig([
       reactHooks.configs.flat.recommended,
       reactRefresh.configs.vite,
     ],
+    plugins: { react },
     languageOptions: {
       globals: globals.browser,
     },
@@ -185,6 +187,9 @@ export default defineConfig([
       // инференс компилятора — рискованная переделка тяжёлых обработчиков без выигрыша.
       // Если компилятор подключим — правило вернуть и разобрать места по-настоящему.
       'react-hooks/preserve-manual-memoization': 'off',
+      // Итерация 2 (пункт 5): закрывает класс дефекта «мусорный текст комментария в JSX»
+      // (блокер 1 финального ревью плагинов). // ... в JSX — text node, а не комментарий.
+      'react/jsx-no-comment-textnodes': 'error',
     },
   },
   ...designSystem,

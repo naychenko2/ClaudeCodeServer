@@ -1,4 +1,6 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
@@ -26,14 +28,18 @@ public class PluginUninstall
     // ограничения частоты, иначе словарь singleton'а рос бы на каждый удалённый плагин.
     // Опциональная: без прокси (например, в старых тестах) очистка просто не происходит.
     private readonly PluginNetProxy? _netProxy;
+    // Итерация 2: рассыльщик для единого plugins_changed после каскада. DI авто-инъектит
+    // (Main); в тестах/выключенной подсистеме — null.
+    private readonly ISessionBroadcaster? _broadcaster;
 
     public PluginUninstall(PluginStore store, PluginSecretsStore secrets, IPluginInstallCascade cascade,
-        PluginNetProxy? netProxy = null)
+        PluginNetProxy? netProxy = null, ISessionBroadcaster? broadcaster = null)
     {
         _store = store;
         _secrets = secrets;
         _cascade = cascade;
         _netProxy = netProxy;
+        _broadcaster = broadcaster;
     }
 
     // Удалить установку плагина <paramref name="id"/> владельца <paramref name="ownerId"/>.
@@ -69,11 +75,13 @@ public class PluginUninstall
         _cascade.OnUninstalled(ownerId, id);
 
         // 4) Запись installed.json — «коммит»: с ней уходят выданные права (granted).
+        //    Итерация 2: fireEvent: false — каскад схлопывает в одно событие (шаг 8).
         records.Remove(record);
-        _store.SaveInstalled(ownerId, records);
+        _store.SaveInstalled(ownerId, records, fireEvent: false);
 
         // 5) Секреты (M7): значения — из per-owner архива plugin-secrets.json.
-        _secrets.RemovePlugin(ownerId, id);
+        //    Итерация 2: fireEvent: false — см. шаг 4.
+        _secrets.RemovePlugin(ownerId, id, fireEvent: false);
 
         // 6) Окно ограничения частоты (rework 12, minor 8): после удачного каскада —
         //     словарь singleton'а прокси не растёт бесконечно (ключ на каждый плагин).
@@ -81,6 +89,11 @@ public class PluginUninstall
 
         // 7) Кэш манифестов (rework 12, minor 4): плагин удалён — освободить его записи (по (owner, id)).
         PluginManifestCache.Invalidate(ownerId, id);
+
+        // 8) Итерация 2: единое plugins_changed после всего каскада (вместо двух:
+        //    от SaveInstalled и от RemovePlugin). Клиент делает один GET, не два.
+        if (_broadcaster is { } b)
+            _ = b.ToOwner(ownerId, new PluginsChangedMessage());
 
         return true;
     }

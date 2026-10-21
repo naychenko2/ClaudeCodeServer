@@ -154,6 +154,8 @@ interface Props {
   // страница рисуется соседом (FeatureCenter). Исполнитель «← назад» — от WorkspacePage.
   openFeatureId: string | null;
   onFeatureBack: (t: import('../../components/feature/FeaturePage').FeaturePageBackTarget) => void;
+  // Итерация 2: мета панелей плагинов (заголовок + иконка) — пропсом в PanelZone.
+  pluginPanelMeta?: Record<import('./panelCatalog').PluginPanelKey, { title: string; Icon: import('lucide-react').LucideIcon }>;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -481,6 +483,7 @@ export function DesktopWorkspace(p: Props) {
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}
+        pluginPanelMeta={p.pluginPanelMeta}
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
           // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
@@ -663,6 +666,7 @@ export function DesktopWorkspace(p: Props) {
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}
         centerFileOpen={!!p.openFile}
+        pluginPanelMeta={p.pluginPanelMeta}
       />
     </div>
   );

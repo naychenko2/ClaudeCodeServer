@@ -35,10 +35,20 @@ vi.mock('../../lib/api', () => ({
   api: { plugins: { list: () => m.list() } },
 }));
 
-// Стор раскладки: forgetPlugin (S7) — шпион
-const store = vi.hoisted(() => ({ forgetPlugin: vi.fn() }));
+// Стор раскладки: forgetPlugin (S7) + zones (итерация 2: orphan-ключи) — шпион
+const store = vi.hoisted(() => ({
+  forgetPlugin: vi.fn(),
+  zones: {
+    left: { layout: [], stash: [] },
+    right: { layout: [], stash: [] },
+    weights: {},
+    home: {},
+    tucked: [],
+    railOrder: [],
+  },
+}));
 vi.mock('../../pages/workspace/panelStackState', () => ({
-  wsPanels: { use: () => ({ forgetPlugin: store.forgetPlugin }) },
+  wsPanels: { use: () => store },
 }));
 
 // Стор «установленные плагины» (pluginStore) — шпион

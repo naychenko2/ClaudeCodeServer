@@ -70,7 +70,8 @@ public sealed class PluginsSubsystem : IAppSubsystem
             sp.GetRequiredService<PluginStore>(),
             sp.GetRequiredService<PluginSecretsStore>(),
             sp.GetRequiredService<IPluginInstallCascade>(),
-            sp.GetRequiredService<PluginNetProxy>()));
+            sp.GetRequiredService<PluginNetProxy>(),
+            sp.GetService<ISessionBroadcaster>()));
         // Каскад «внешних» ссылок (привязки персон, слоты). QA-фикс L3: реальный адаптер —
         // снимает Skill-привязки plugin:{id} персон владельца (ADR-031 §4). Слоты панелей
         // приходят с UI-шагом 2.x; до них каскад чистит только привязки.

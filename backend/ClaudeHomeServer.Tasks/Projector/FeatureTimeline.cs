@@ -65,7 +65,7 @@ public sealed record TimelineTotals(
     int? ErrorMinutes);
 
 // Статистика фичи (GET features/{id}, поле stats): источник (approx/journal), признак
-// обрезки, график, разрезы («кто и на чём работал») и «дольше всех сейчас».
+// обрезки, график, разрезы («кто и на чём работали»), «дольше всех сейчас» и расход.
 public sealed record FeatureStats(
     // approx | journal.
     string Source,
@@ -75,7 +75,48 @@ public sealed record FeatureStats(
     // Разрезы времени по персонам/моделям/ролям (Б6); null — не заполнено (индекс/список).
     FeatureBreakdown? Breakdown = null,
     // «Дольше всех сейчас» (Б6); null — ничего не идёт или не заполнено.
-    FeatureLongestNow? LongestNow = null);
+    FeatureLongestNow? LongestNow = null,
+    // Расход фичи (Б9b); null — подсистема Spend выключена (шов ISpendFeatureReader не
+    // зарегистрирован → расход «≈», не 500; решение Андрея 20.10).
+    FeatureSpend? Spend = null);
+
+// Расход фичи (GET features/{id}, stats.spend; Б9b): токены (вход/выход/кэш) + стоимость.
+// Атрибуция (шов ISpendFeatureReader): записи, чья задача — задача фичи, ИЛИ чей чат — чат
+// задачи фичи, ИЛИ ключевой чат, если он состоит только в этой фиче (общий чат — Б9c).
+//   costUsd — только записи с НАДЁЖНОЙ ценой: локальные модели (Source=free) дают 0,
+//     модели с ненадёжной ценой CLI (DeepSeek/GLM/…) — токены в сумму, стоимость нет;
+//   costPartial/hiddenCostModels — пометка «часть моделей без цены» (costPartial=true,
+//     модели в hiddenCostModels);
+//   from — с какой даты в срезе есть данные (null — записей нет);
+//   shared — доля общих (оркестраторских) чатов (Б9c); в Б9b всегда null.
+public sealed record FeatureSpend(
+    long InputTokens,
+    long OutputTokens,
+    long CacheReadTokens,
+    long CacheCreationTokens,
+    // Сумма стоимости записей с надёжной ценой (free → 0); 0, если надёжных записей нет.
+    double CostUsd,
+    // По меньшей мере одна запись имела ненадёжную цену (её стоимость не в CostUsd).
+    bool CostPartial,
+    // Модели, чья стоимость не вошла в итог (цена от CLI ненадёжна).
+    List<string> HiddenCostModels,
+    // С какой даты в срезе есть данные; null — записей нет.
+    string? From,
+    // Доля общих чатов (Б9c); в Б9b всегда null.
+    FeatureSpendShared? Shared = null);
+
+// Доля общих (оркестраторских) чатов (Б9c): токены/стоимость/число ходов + метод оценки.
+// В Б9b поле FeatureSpend.Shared всегда null (деление придёт отдельным шагом).
+public sealed record FeatureSpendShared(
+    long InputTokens,
+    long OutputTokens,
+    long CacheReadTokens,
+    long CacheCreationTokens,
+    double CostUsd,
+    // Число ходов, вошедших в долю.
+    int Turns,
+    // Метод оценки: journal (по полному журналу) | approx (по интервалам задач).
+    string Method);
 
 // ─── График времени фичи ─────────────────────────────────────────────────────────────────────
 
@@ -168,7 +209,12 @@ public sealed record FeatureTimeline(
         var elapsed = FeatureTimeMath.Minutes(from, to);
         var workWall = FeatureTimeMath.UnionMinutes(
             work.Select(w => (start: w.Start, end: w.End)).ToList(), from, to);
-        var agentsSum = work.Sum(w => FeatureTimeMath.Minutes(w.Start, w.End));
+        // AgentsSum — «агентные» минуты: сумма work-интервалов (параллельные складываются), НЕ
+        // объединение (то было бы workWall). ОДНО правило округления с journal (хвост Б5b):
+        // суммируем сырые TimeSpan, затем один CeilMinutes — две задачи по 30 с дают 1 мин в
+        // обоих режимах (прежнее per-task ceil давало 2 в approx против 1 в journal).
+        var agentsSpan = work.Aggregate(TimeSpan.Zero, (acc, w) => acc + (w.End - w.Start));
+        var agentsSum = FeatureTimeMath.CeilMinutes(agentsSpan);
         var notWorking = Math.Max(0, elapsed - workWall);
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
@@ -244,7 +290,7 @@ public sealed record FeatureTimeline(
         foreach (var e in journal.Entries)
         {
             // waiting: ожидание человека waiting…(waiting_cleared | now).
-            if (e.Kind == "waiting" && e.At > from)
+            if (e.Kind == "waiting" && e.At >= from)
             {
                 var wEnd = FirstAfter(waitingClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;
@@ -254,7 +300,7 @@ public sealed record FeatureTimeline(
             // waiting: ожидание устройства device_wait…(device_wait_cleared | now). Контракт
             // TimelineSegment (Б5a) не имеет отдельного под-вида ожидания, поэтому device_wait
             // рисуется как обычный waiting (kind="waiting"); WaitingMinutes — сумма обоих.
-            else if (e.Kind == "device_wait" && e.At > from)
+            else if (e.Kind == "device_wait" && e.At >= from)
             {
                 var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;

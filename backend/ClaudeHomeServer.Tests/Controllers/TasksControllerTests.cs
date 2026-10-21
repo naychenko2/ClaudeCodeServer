@@ -15,6 +15,7 @@ using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spheres;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tests.Helpers;
@@ -146,7 +147,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // иначе UserId (User.FindFirstValue(Sub)) бросает ArgumentNullException.
     // Б-mk-b: catalog — подменяемый каталог макетов (null — Docs выключена; заглушка — считает
     // вызовы, чтобы проверить, что для локального проекта Docs не дёргается).
-    private TasksController BuildController(GitService? git, MockupCatalog? catalog = null)
+    private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
+        ISpendFeatureReader? spend = null)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -161,7 +163,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             noteSync: null,
             features: _factory.Services.GetRequiredService<FeatureProjector>(),
             git: git,
-            catalog: catalog);
+            catalog: catalog,
+            spend: spend);
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, OwnerId)], "test");
         controller.ControllerContext = new ControllerContext
         {
@@ -2159,6 +2162,177 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         featureIds.Should().Contain(epicA.GetProperty("id").GetString());
         featureIds.Should().NotContain(epicB.GetProperty("id").GetString(),
             "эпик B (проект B) вне области projectId=A");
+    }
+
+    // ─── Б9b: расход фичи (stats.spend) ─────────────────────────────────────────────────────
+
+    // SpendStore в изолированной папке + шов SpendFeatureReader с заданными записями.
+    private (SpendStore Store, SpendFeatureReader Reader) SpendStoreWith(params SpendRecord[] records)
+    {
+        var dir = Path.Combine(_factory.TempDir, "spend_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var store = new SpendStore(dir, 30);
+        foreach (var r in records) store.Record(r);
+        return (store, new SpendFeatureReader(store));
+    }
+
+    // Запись расхода (SpendRecord, Core): владелец, задача/чат, модель, токены, цена, источник.
+    private static SpendRecord SpendRecord(string ownerId, string? taskId, string? sessionId, string model,
+        long input, long output, double? cost, string source = "chat-turn") => new()
+    {
+        OwnerId = ownerId,
+        TaskId = taskId,
+        SessionId = sessionId,
+        Model = model,
+        InputTokens = input,
+        OutputTokens = output,
+        CostUsd = cost,
+        Source = source,
+        Timestamp = DateTime.UtcNow,
+    };
+
+    // Страница фичи через BuildController (spend — шов) → stats.
+    private JsonElement GetFeatureStats(ISpendFeatureReader? spend, string epicId)
+    {
+        var controller = BuildController(null, null, spend);
+        var result = (ObjectResult)controller.GetFeature(epicId)!;
+        // CamelCase — как wire-формат приложения (SystemTextJson): FeatureStats.Spend → spend.
+        return JsonSerializer.SerializeToElement(result.Value!,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
+            .GetProperty("stats");
+    }
+
+    // Эпик + шаг + личный чат шага (linkedSessionId) — базовая фича для расхода.
+    private async Task<(string EpicId, string StepId, string ChatId)> MakeFeature(string tag)
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-" + tag, role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var step = await CreateTaskAsync(new { title = "шаг-" + tag, featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString()!;
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        await _client.PutAsJsonAsync($"/api/tasks/{stepId}", new { linkedSessionId = chatId });
+        return (epicId, stepId, chatId);
+    }
+
+    // Spend выключен (шов null) → 200 и stats.spend = null (не 500).
+    [Fact]
+    public async Task GetFeature_SpendВыключен_SpendNull()
+    {
+        var (epicId, _, _) = await MakeFeature("sp-off");
+
+        var stats = GetFeatureStats(null, epicId);
+
+        var spendAbsent = !stats.TryGetProperty("spend", out var spend) || spend.ValueKind == JsonValueKind.Null;
+        spendAbsent.Should().BeTrue("Spend выключен → stats.spend = null, не 500");
+    }
+
+    // Запись расхода задачи фичи (надёжная цена) → токены (вход/выход) + costUsd в stats.spend.
+    [Fact]
+    public async Task GetFeature_Spend_ЗаписьЗадачи_ТокеныИЦена()
+    {
+        var (epicId, stepId, _) = await MakeFeature("sp-cost");
+        var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "claude-opus-4", 100, 50, 1.5));
+
+        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+
+        spend.ValueKind.Should().NotBe(JsonValueKind.Null);
+        spend.GetProperty("inputTokens").GetInt64().Should().Be(100);
+        spend.GetProperty("outputTokens").GetInt64().Should().Be(50);
+        spend.GetProperty("costUsd").GetDouble().Should().Be(1.5);
+        spend.GetProperty("costPartial").GetBoolean().Should().BeFalse();
+        spend.GetProperty("hiddenCostModels").GetArrayLength().Should().Be(0);
+    }
+
+    // Ненадёжная модель (DeepSeek, встроенный дефолт): токены в сумму, стоимость нет,
+    // costPartial=true, hiddenCostModels содержит модель.
+    [Fact]
+    public async Task GetFeature_Spend_НенадёжнаяМодель_ТокеныБезЦены()
+    {
+        var (epicId, stepId, _) = await MakeFeature("sp-deepseek");
+        var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "deepseek-chat", 100, 50, 2.0));
+
+        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+
+        spend.GetProperty("inputTokens").GetInt64().Should().Be(100, "токены ненадёжной модели в сумме");
+        spend.GetProperty("costUsd").GetDouble().Should().Be(0, "стоимость ненадёжной модели не в сумме");
+        spend.GetProperty("costPartial").GetBoolean().Should().BeTrue();
+        spend.GetProperty("hiddenCostModels").EnumerateArray()
+            .Select(e => e.GetString()).Should().Contain("deepseek-chat");
+    }
+
+    // Локальная модель (Source=free) → стоимость честно 0 (не null, не «ненадёжная»).
+    [Fact]
+    public async Task GetFeature_Spend_FreeМодель_СтоимостьНуль()
+    {
+        var (epicId, stepId, _) = await MakeFeature("sp-free");
+        var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "llama-3", 100, 50, 0, source: "free"));
+
+        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+
+        spend.GetProperty("inputTokens").GetInt64().Should().Be(100);
+        spend.GetProperty("costUsd").GetDouble().Should().Be(0, "free → честный 0");
+        spend.GetProperty("costPartial").GetBoolean().Should().BeFalse();
+    }
+
+    // Чужой владелец: запись с тем же taskId, но OwnerId другого юзера → не входит (фильтр владельца).
+    [Fact]
+    public async Task GetFeature_Spend_ЧужойВладелец_НеВходит()
+    {
+        var (epicId, stepId, _) = await MakeFeature("sp-foreign");
+        // Запись с taskId фичи, но владелец = SecondOwner → фильтр OwnerId == owner отсекает.
+        var (_, reader) = SpendStoreWith(SpendRecord(SecondOwnerId, stepId, null, "claude-opus-4", 100, 50, 1.5));
+
+        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+
+        spend.GetProperty("inputTokens").GetInt64().Should().Be(0,
+            "чужая запись (OwnerId=SecondOwner) не входит в расход фичи");
+        spend.GetProperty("costUsd").GetDouble().Should().Be(0);
+    }
+
+    // Ключевой чат фичи (чат эпика, LinkedSessionId) входит в срез: запись расхода без taskId,
+    // но с sessionId = чат эпика → атрибутируется фиче (чат исключителен: только эта фича).
+    [Fact]
+    public async Task GetFeature_Spend_КлючевойЧат_Входит()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-sp-key", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        // Ключевой чат = чат эпика (LinkedSessionId эпика).
+        var keyChat = await CreatePersonalChatAsync(OwnerId);
+        await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { linkedSessionId = keyChat });
+
+        // Запись расхода: без taskId, но sessionId = ключевой чат фичи.
+        var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, null, keyChat, "claude-opus-4", 100, 50, 1.5));
+
+        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+
+        spend.GetProperty("inputTokens").GetInt64().Should().Be(100,
+            "ключевой чат (чат эпика) входит в срез → запись расхода учитывается");
+    }
+
+    // `from` (с какой даты есть данные) отдаётся: = самая ранняя дата записи в срезе (yyyy-MM-dd).
+    [Fact]
+    public async Task GetFeature_Spend_From_Отдаётся()
+    {
+        var (epicId, stepId, _) = await MakeFeature("sp-from");
+        // Запись расхода сегодня (после создания эпика, чтобы прошла фильтр from) → from = её дата.
+        var rec = new SpendRecord
+        {
+            OwnerId = OwnerId,
+            TaskId = stepId,
+            Model = "claude-opus-4",
+            InputTokens = 100,
+            OutputTokens = 50,
+            CostUsd = 1.5,
+            Source = "chat-turn",
+            Timestamp = DateTime.UtcNow,
+        };
+        var (_, reader) = SpendStoreWith(rec);
+
+        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+
+        spend.GetProperty("from").GetString().Should().Be(
+            DateTime.UtcNow.ToString("yyyy-MM-dd"),
+            "from = самая ранняя дата записи в срезе");
     }
 
     // ─── Stub-запускатель: Start бросает → GitService.WorktreeListAsync бросает (сбой git, п.53) ─

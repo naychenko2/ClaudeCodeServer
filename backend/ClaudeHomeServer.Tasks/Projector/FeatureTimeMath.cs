@@ -57,8 +57,9 @@ internal static class FeatureTimeMath
 
     // Метод наибольшего остатка (largest remainder): раздать `elapsed` целых минут по видам,
     // чтобы сумма была РОВНО `elapsed` при любом раскладе. Базис — floor(span) каждого вида;
-    // дефицит `elapsed − сумма floor` (0 или 1: сырые span-ы плиткой покрывают [from, to],
-    // поэтому их сумма = to − from, а elapsed = ceil(этого)) раздаётся видам с наибольшей
+    // дефицит `elapsed − сумма floor` (0..4: сырые span-ы плиткой покрывают [from, to],
+    // поэтому их сумма = to − from, а elapsed = ceil(этого); дефицит = ceil(суммы дробных
+    // частей), а сумма дробных частей < 4 (четыре вида) → 0..4) раздаётся видам с наибольшей
     // дробной частью (tie — по индексу, детерминизм). Каждый вид ≈ своему span, но сумма не
     // «уплывает» выше elapsed, как при независимых ceil (проба: ход 30 с + ожидание 20 с +
     // ошибка 10 с в окне 2 мин → независимые ceil дали 1+1+1+0 = 3 ≠ 2; здесь work=1,
@@ -76,7 +77,7 @@ internal static class FeatureTimeMath
             fracs[i] = spans[i].TotalMinutes - floors[i];
         }
         var sumFloors = floors[0] + floors[1] + floors[2] + floors[3];
-        var deficit = elapsed - sumFloors; // 0 или 1 (см. комментарий)
+        var deficit = elapsed - sumFloors; // 0..4 (см. комментарий выше)
         // Индексы по убыванию дробной части; при равенстве — по индексу (детерминизм).
         var order = Enumerable.Range(0, 4)
             .OrderByDescending(i => fracs[i])

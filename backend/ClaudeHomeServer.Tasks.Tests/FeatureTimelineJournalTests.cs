@@ -920,6 +920,61 @@ public class FeatureTimelineJournalTests
             "вид склеенного — доминанта по времени (waiting 10 мин), не «от левого» (work)");
     }
 
+    // ── Хвост Б5b (а): AgentsSum — ОДНО правило округления (journal) ─────────────────────────
+
+    // Две задачи по 30 с: AgentsSum = сумма started-периодов (60 с) + ОДИН CeilMinutes = 1 мин.
+    // То же число, что в approx (FeatureTimelineTests.Build_Approx_AgentsSum_…): правило
+    // округления выровнено — per-task ceil дал бы 2 в обоих режимах.
+    [Fact]
+    public void Build_Journal_AgentsSum_ОдноОкругление_ДвеТридцатьСекунд()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        // Две последовательные задачи, каждая ровно 30 с (started…done).
+        var s1 = Child("s1", "epic", startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 10, 0, 30));
+        var s2 = Child("s2", "epic", startedAt: new DateTime(2026, 10, 1, 10, 1, 0),
+            completedAt: new DateTime(2026, 10, 1, 10, 1, 30));
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("started", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
+                startedAt: new DateTime(2026, 10, 1, 10, 0, 0)),
+            Entry("status", new DateTime(2026, 10, 1, 10, 0, 30), taskId: "s1", to: "Done"),
+            Entry("started", new DateTime(2026, 10, 1, 10, 1, 0), taskId: "s2",
+                startedAt: new DateTime(2026, 10, 1, 10, 1, 0)),
+            Entry("status", new DateTime(2026, 10, 1, 10, 1, 30), taskId: "s2", to: "Done"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1, s2), journal, now);
+
+        // Сумма started-периодов 60 с → один CeilMinutes = 1 мин (per-task ceil дал бы 2).
+        tl.Totals.AgentsSumMinutes.Should().Be(1, "сумма 60 с → ceil = 1, не 2 (per-task)");
+    }
+
+    // ── Дефект 2c5e5d87: ожидание ровно в `from` не отбрасывается ─────────────────────────────
+
+    // waiting-событие с At == from (момент создания эпика): прежнее `e.At > from` отбрасывало его
+    // (08:00 > 08:00 = false) → WaitingMinutes = 0. После фикса `e.At >= from` → ожидание
+    // [08:00, 09:00] = 60 мин. Мутация «вернуть >» → 0 ≠ 60 → краснеет.
+    [Fact]
+    public void Build_Journal_ОжиданиеРовноВFrom_НеОтбрасывается()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic"); // CreatedAt = 08:00 = from
+        var s1 = Child("s1", "epic");
+
+        // created 08:00 (= from); waiting 08:00 (ровно в from) → waiting_cleared 09:00.
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("waiting", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "s1"),
+            Entry("waiting_cleared", new DateTime(2026, 10, 1, 9, 0, 0), taskId: "s1"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.Totals.WaitingMinutes.Should().Be(60,
+            "ожидание ровно в from (08:00) входит, не отбрасывается (прежнее > давало 0)");
+    }
+
     // ── Хелпер: сегменты заданного вида ───────────────────────────────────────────────────────
 
     private static List<TimelineSegment> Kinds(FeatureTimeline tl, string kind) =>

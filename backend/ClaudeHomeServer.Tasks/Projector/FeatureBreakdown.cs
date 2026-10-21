@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks.Journal;
 
 namespace ClaudeHomeServer.Services.Tasks.Projector;
@@ -13,9 +14,10 @@ public sealed record FeatureBreakdownGroup(
     // Работа (минуты): объединение work-интервалов [ClaudeStartedAt, CompletedAt ?? now]
     // задач группы — параллельные задачи одной группы не складываются (как в Б2/Б5a).
     int Minutes,
-    // Токены группы; null до Б9 (учёт расхода).
+    // Токены группы (вход+выход записей расхода); null — записей расхода для группы нет.
     long? Tokens,
-    // Деньги (USD); null до Б9.
+    // Деньги (USD): сумма надёжных цен (free → 0); null — есть запись без надёжной цены или
+    // записей расхода для группы нет.
     decimal? CostUsd,
     // Id чатов группы: только из снимка сессий владельца (fail-closed: чужой/удалённый чат
     // не попадает).
@@ -34,9 +36,9 @@ public sealed record FeatureLongestNow(
     string? StepRef,
     // Сколько идёт (минуты): now − ClaudeStartedAt.
     int Minutes,
-    // Токены; null до Б9.
+    // Токены задачи (вход+выход записей расхода); null — записей расхода для задачи нет.
     long? Tokens,
-    // Доля в фиче (0..1); null до Б9.
+    // Доля токенов задачи в суммарных токенах среза (0..1); null — записей расхода нет.
     double? Share);
 
 // ─── Разрезы времени фичи ─────────────────────────────────────────────────────────────────────
@@ -72,7 +74,11 @@ public sealed record FeatureBreakdown(
         FeatureJournalReadResult? journal,
         IReadOnlyCollection<FeatureIndexSession> sessions,
         Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver,
-        DateTime now)
+        DateTime now,
+        // Записи расхода фичи (шов ISpendFeatureReader, Б9b): токены/стоимость групп и
+        // LongestNow. null/пусто — расхода нет (подсистема Spend выключена) → токены/стоимость
+        // групп и LongestNow = null (нет данных, не 0).
+        IReadOnlyList<FeatureSpendRecord>? records = null)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(sessions);
@@ -139,9 +145,13 @@ public sealed record FeatureBreakdown(
             return modelResolver(synthetic).Full;
         }
 
-        // Группировка по ключу: key → (work-интервалы, chatIds). key null/пусто → задача в этот
-        // разрез не входит. ChatIds — id чата задачи, только если в снимке владельца (fail-closed).
-        List<FeatureBreakdownGroup> GroupBy(Func<TaskItem, string?> keyOf)
+        // Группировка по ключу: key → (work-интервалы, chatIds) + токены/стоимость из записей
+        // расхода того же ключа. key null/пусто → задача/запись в этот разрез не входит.
+        // ChatIds — id чата задачи, только если в снимке владельца (fail-closed).
+        // Токены = вход+выход записей; стоимость = сумма надёжных цен (free → 0), null — если есть
+        // запись без надёжной цены (ненадёжная) или записей расхода для группы нет вовсе (нет данных).
+        List<FeatureBreakdownGroup> GroupBy(Func<TaskItem, string?> keyOf,
+            Func<FeatureSpendRecord, string?> keyOfRecord)
         {
             var groups = new Dictionary<string, (List<(DateTime Start, DateTime End)> Intervals, List<string> ChatIds)>();
             foreach (var t in tasks)
@@ -156,14 +166,43 @@ public sealed record FeatureBreakdown(
                     g.ChatIds.Add(t.LinkedSessionId);
             }
 
+            // Агрегат записей расхода по тому же ключу: токены (вход+выход), стоимость (надёжная),
+            // признак ненадёжной записи. Ключ записи null/пусто → запись в этот разрез не входит.
+            var spend = new Dictionary<string, (long Tokens, double Cost, bool HasUnreliable)>();
+            if (records is not null)
+            {
+                foreach (var r in records)
+                {
+                    var key = keyOfRecord(r);
+                    if (string.IsNullOrWhiteSpace(key)) continue;
+                    // a — локальная копия; после обновления ОБЯЗАТЕЛЬНО пишем обратно в словарь
+                    // (tuple — value type: TryGetValue отдаёт копию, сам словарь не мутируется).
+                    if (!spend.TryGetValue(key, out var a))
+                        a = (0, 0, false);
+                    a = (a.Tokens + r.InputTokens + r.OutputTokens,
+                        a.Cost + (r.Source == SpendSources.Free ? 0 : (r.CostUsd ?? 0)),
+                        a.HasUnreliable || (r.Source != SpendSources.Free && r.CostUsd is null));
+                    spend[key] = a;
+                }
+            }
+
             var result = new List<FeatureBreakdownGroup>(groups.Count);
             foreach (var (key, (intervals, chatIds)) in groups)
             {
+                // Токены/стоимость: null — записей расхода для группы нет (нет данных); иначе
+                // токены = сумма, стоимость = null, если есть ненадёжная запись, иначе сумма цен.
+                long? tokens = null;
+                decimal? cost = null;
+                if (spend.TryGetValue(key, out var a))
+                {
+                    tokens = a.Tokens;
+                    cost = a.HasUnreliable ? null : (decimal)a.Cost;
+                }
                 result.Add(new FeatureBreakdownGroup(
                     Key: key,
                     Minutes: FeatureTimeMath.UnionMinutes(intervals),
-                    Tokens: null, // до Б9
-                    CostUsd: null, // до Б9
+                    Tokens: tokens,
+                    CostUsd: cost,
                     ChatIds: chatIds.Distinct().OrderBy(c => c).ToList()));
             }
             // Сортировка по Minutes убыв; при равенстве — по Key (детерминизм).
@@ -175,17 +214,24 @@ public sealed record FeatureBreakdown(
             return result;
         }
 
+        // Ключ записи расхода по оси «роли»: TaskId записи → Role задачи (та же ось, что t.Role).
+        var roleByTask = tasks.Where(t => t.Id is not null).ToDictionary(t => t.Id!, t => t.Role);
+        string? RoleOfRecord(FeatureSpendRecord r) =>
+            r.TaskId is not null && roleByTask.TryGetValue(r.TaskId, out var role) ? role : null;
+
         var breakdown = new FeatureBreakdown(
-            Personas: GroupBy(t => t.PersonaId),
-            Models: GroupBy(ModelKey),
-            Roles: GroupBy(t => t.Role));
+            Personas: GroupBy(t => t.PersonaId, r => r.PersonaId),
+            Models: GroupBy(ModelKey, r => UnifiedModelKey(r.Model)),
+            Roles: GroupBy(t => t.Role, RoleOfRecord));
 
         // «Дольше всех сейчас»: самая долгая сейчас идущая задача (ClaudeStartedAt, без
         // CompletedAt). Minutes = now − ClaudeStartedAt. ChatId — fail-closed (только из снимка).
-        // Tokens/Share = null до Б9. Ничего не идёт → null.
+        // Tokens/Share — из записей расхода (Б9b): токены задачи (вход+выход) и её доля в
+        // суммарных токенах среза; null — записей расхода нет (нет данных). Ничего не идёт → null.
         // Минор 5: «идущая» = InProgress БЕЗ waiting/stopped: задача, ждущая человека
         // (AwaitingHumanSince) или остановленная (ExecutorStoppedAt), статусом InProgress, но
         // реально не работает — в «дольше всех сейчас» не попадает.
+        var totalTokens = records is null ? 0L : records.Sum(r => r.InputTokens + r.OutputTokens);
         FeatureLongestNow? longest = null;
         DateTime? longestStart = null;
         foreach (var t in tasks)
@@ -195,14 +241,26 @@ public sealed record FeatureBreakdown(
             if (longestStart is null || t.ClaudeStartedAt.Value < longestStart.Value)
             {
                 longestStart = t.ClaudeStartedAt;
+                // Токены задачи: вход+выход записей, чей TaskId == id задачи.
+                long taskTokens = 0;
+                var hasTaskRecords = false;
+                if (records is not null)
+                {
+                    foreach (var r in records)
+                        if (r.TaskId == t.Id)
+                        {
+                            taskTokens += r.InputTokens + r.OutputTokens;
+                            hasTaskRecords = true;
+                        }
+                }
                 longest = new FeatureLongestNow(
                     TaskId: t.Id,
                     ChatId: LiveSession(t.LinkedSessionId)?.Id,
                     PersonaId: t.PersonaId,
                     StepRef: t.StepRef,
                     Minutes: FeatureTimeMath.Minutes(t.ClaudeStartedAt.Value, now),
-                    Tokens: null, // до Б9
-                    Share: null); // до Б9
+                    Tokens: hasTaskRecords ? taskTokens : null,
+                    Share: totalTokens > 0 && hasTaskRecords ? (double)taskTokens / totalTokens : null);
             }
         }
 

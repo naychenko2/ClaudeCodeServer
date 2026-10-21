@@ -43,11 +43,15 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
     // Подстроки имён моделей, в нижнем регистре: предикат — регистронезависимый Contains.
     private readonly string[] _unreliableModels;
 
+    // DI-конструктор (SpendStore + IConfiguration). Второй конструктор (store, string[]?) —
+    // тестовый (прямая подача списка моделей) и `internal`: DI видит только этот public
+    // (иначе два 2-аргументных конструктора — ambiguous, когда шов ISpendFeatureReader реально
+    // активируется — TasksController, Б9b). Тестовые сборки видят internal через InternalsVisibleTo.
     public SpendFeatureReader(SpendStore store, IConfiguration config)
         : this(store, ResolveUnreliableModels(config)) { }
 
     // Прямой конструктор для тестов: стор и список моделей с ненадёжной ценой.
-    public SpendFeatureReader(SpendStore store, string[]? unreliableModels = null)
+    internal SpendFeatureReader(SpendStore store, string[]? unreliableModels = null)
     {
         _store = store;
         _unreliableModels = (unreliableModels ?? DefaultUnreliableModels)

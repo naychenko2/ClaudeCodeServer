@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 
@@ -372,5 +373,137 @@ public class FeatureBreakdownTests
         // Фильтр по снимку: только "own". Мутация «без фильтра» дала бы ["foreign","own"].
         var p1 = bd.Personas.Single(g => g.Key == "p1");
         p1.ChatIds.Should().Equal("own");
+    }
+
+    // ── Б9b: токены/стоимость групп и LongestNow из записей расхода ─────────────────────────
+
+    // Запись расхода (шов ISpendFeatureReader): токены (вход/выход), стоимость, источник.
+    private static FeatureSpendRecord Spend(string? personaId, string? taskId, string? model,
+        long input, long output, double? cost, string source = "chat-turn") => new()
+    {
+        PersonaId = personaId,
+        TaskId = taskId,
+        Model = model,
+        InputTokens = input,
+        OutputTokens = output,
+        CostUsd = cost,
+        Source = source,
+    };
+
+    // Группа персоны: токены (вход+выход) и стоимость (надёжная цена) из записей расхода.
+    [Fact]
+    public void Build_Группа_ТокеныИСтоимость_ИзЗаписей()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var records = new[]
+        {
+            Spend("p1", "s1", "claude-opus-4", 100, 50, 1.5),
+            Spend("p1", "s1", "claude-opus-4", 200, 100, 2.0),
+        };
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, Sessions(), null, now, records);
+
+        var p1 = bd.Personas.Single(g => g.Key == "p1");
+        p1.Tokens.Should().Be(450, "сумма (вход+выход) двух записей: (100+50)+(200+100)");
+        p1.CostUsd.Should().Be(3.5m, "сумма надёжных цен 1.5+2.0");
+    }
+
+    // Запись без надёжной цены (Source != free, CostUsd = null) → стоимость группы null,
+    // токены на месте. Мутация «считать стоимость 0» → CostUsd = 0 ≠ null → краснеет.
+    [Fact]
+    public void Build_Группа_НенадёжнаяЦена_СтоимостьNull()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        // Source=chat-turn (не free) + CostUsd=null → ненадёжная цена.
+        var records = new[] { Spend("p1", "s1", "deepseek-chat", 100, 50, null) };
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, Sessions(), null, now, records);
+
+        var p1 = bd.Personas.Single(g => g.Key == "p1");
+        p1.Tokens.Should().Be(150);
+        p1.CostUsd.Should().BeNull("ненадёжная цена → стоимость группы null, не 0");
+    }
+
+    // Локальная модель (Source=free) → стоимость честно 0 (не null).
+    [Fact]
+    public void Build_Группа_FreeМодель_СтоимостьНуль()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var records = new[] { Spend("p1", "s1", "llama-3", 100, 50, 0, source: "free") };
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, Sessions(), null, now, records);
+
+        var p1 = bd.Personas.Single(g => g.Key == "p1");
+        p1.Tokens.Should().Be(150);
+        p1.CostUsd.Should().Be(0m, "free → честный 0, не null");
+    }
+
+    // Ось «роли»: запись расхода (TaskId → Role задачи) даёт группе роли токены/стоимость.
+    [Fact]
+    public void Build_ГруппаРолей_ТокеныИСтоимость()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1", role: TaskRoles.Step,
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var records = new[] { Spend("p1", "s1", "claude-opus-4", 100, 50, 1.0) };
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, s1), null, Sessions(), null, now, records);
+
+        var step = bd.Roles.Single(g => g.Key == TaskRoles.Step);
+        step.Tokens.Should().Be(150);
+        step.CostUsd.Should().Be(1.0m);
+    }
+
+    // LongestNow: токены задачи (вход+выход записей TaskId) и доля в суммарных токенах среза.
+    [Fact]
+    public void Build_LongestNow_ТокеныИДоля()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        // s1: идёт (старт 10:00, без CompletedAt) → LongestNow.
+        var s1 = Child("s1", "epic", personaId: "p1", chatId: "c1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0));
+
+        // Две записи: s1 (150 токенов) + s2 (50 токенов) → total = 200; доля s1 = 150/200 = 0.75.
+        var records = new[]
+        {
+            Spend("p1", "s1", "claude-opus-4", 100, 50, 1.0),
+            Spend("p2", "s2", "claude-opus-4", 30, 20, 0.5),
+        };
+        var (_, longest) = FeatureBreakdown.Build(Run(epic, s1), null, Sessions(("c1", "s1", null)), null, now, records);
+
+        longest.Should().NotBeNull();
+        longest!.Tokens.Should().Be(150, "вход+выход записей задачи s1");
+        longest.Share.Should().Be(0.75, "150 / (150+50) = 0.75");
+    }
+
+    // LongestNow без записей расхода → токены/доля null (нет данных, не 0).
+    [Fact]
+    public void Build_LongestNow_БезЗаписей_ТокеныNull()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", personaId: "p1", chatId: "c1",
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0));
+
+        var (_, longest) = FeatureBreakdown.Build(Run(epic, s1), null, Sessions(("c1", "s1", null)), null, now);
+
+        longest.Should().NotBeNull();
+        longest!.Tokens.Should().BeNull("записей расхода нет → null, не 0");
+        longest.Share.Should().BeNull();
     }
 }

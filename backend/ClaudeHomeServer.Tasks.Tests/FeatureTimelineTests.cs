@@ -276,6 +276,30 @@ public class FeatureTimelineTests
         tl.Totals.ErrorMinutes.Should().BeNull();
     }
 
+    // ── 7b. Хвост Б5b (а): AgentsSum — ОДНО правило округления (approx) ───────────────────────
+
+    // Две задачи по 30 с: AgentsSum = сумма сырых TimeSpan (60 с) + ОДИН CeilMinutes = 1 мин.
+    // Прежнее per-task ceil (каждый интервал отдельно) давало 1+1 = 2 — тест краснеет без фикса.
+    // Правило выровнено с journal (там тот же «сумма + один ceil»): два режима дают одно число.
+    [Fact]
+    public void Build_Approx_AgentsSum_ОдноОкругление_ДвеТридцатьСекунд()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        // Две последовательные задачи, каждая ровно 30 с.
+        var s1 = Child("s1", "epic", status: TaskItemStatus.Done,
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 10, 0, 30));
+        var s2 = Child("s2", "epic", status: TaskItemStatus.Done,
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 30),
+            completedAt: new DateTime(2026, 10, 1, 10, 1, 0));
+
+        var tl = Timeline(Run(epic, s1, s2), now);
+
+        // Сумма 60 с → один CeilMinutes = 1 мин (per-task ceil дал бы 2).
+        tl.Totals.AgentsSumMinutes.Should().Be(1, "сумма 60 с → ceil = 1, не 2 (per-task)");
+    }
+
     // ── 8. Мутация: WorkWallMinutes = сумма → краснеет ───────────────────────────────────────
 
     // Две пересекающиеся задачи: если WorkWall считать суммой (480), а не объединением (360),

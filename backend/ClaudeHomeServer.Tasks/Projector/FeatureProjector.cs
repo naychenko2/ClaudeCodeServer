@@ -1534,6 +1534,37 @@ public sealed class FeatureProjector(TaskManager tasks)
         set.Add(value);
     }
 
+    // Фичи, в которые входит чат (те же правила членства, что BuildIndexCore: executor/curator/
+    // orchestrator). Для ключевого чата фичи: |set| == 1 и set == {эта фича} → чат исключителен
+    // (его расход целиком фичи, Б9b); иначе общий (деление — Б9c). internal — для золотых тестов.
+    internal static HashSet<string> ChatFeatureIds(string chatId, IReadOnlyList<TaskItem> owner,
+        IReadOnlyCollection<FeatureIndexSession> sessions)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(chatId)) return result;
+        var byId = owner.ToDictionary(t => t.Id);
+        var epics = owner.Where(t => t.Role == TaskRoles.Feature).ToList();
+
+        // executor: сессия чата → TaskId → задача → её фича (эпик — сама фича).
+        var taskId = sessions.FirstOrDefault(s => s.Id == chatId)?.TaskId;
+        if (taskId is not null && byId.TryGetValue(taskId, out var t))
+        {
+            var fid = t.FeatureId ?? (t.Role == TaskRoles.Feature ? t.Id : null);
+            if (fid is not null) result.Add(fid);
+        }
+        // curator: epic.SourceSessionId == чат.
+        foreach (var epic in epics)
+            if (epic.SourceSessionId == chatId) result.Add(epic.Id);
+        // orchestrator: epic.ExecutorLaunchedBySessionId == чат ИЛИ ExecutorLaunchedBySessionId
+        // дочерней задачи фичи == чат.
+        foreach (var epic in epics)
+            if (epic.ExecutorLaunchedBySessionId == chatId) result.Add(epic.Id);
+        foreach (var task in owner)
+            if (task.FeatureId is not null && task.ExecutorLaunchedBySessionId == chatId) result.Add(task.FeatureId);
+
+        return result;
+    }
+
     // ─── Б2: строка фичи (контракт «Контракт индекса фич — утверждён») ─────────────────────
     // Значения bucket/rail/chips/attention/now0/summary/lastActivityAt/loops/steps* берутся
     // из FeatureRun (тон выводится из Attention, MAJOR-1) — проектор не пересчитывает.

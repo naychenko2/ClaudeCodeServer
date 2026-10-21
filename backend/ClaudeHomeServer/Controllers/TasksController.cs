@@ -12,6 +12,7 @@ using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Journal;
@@ -128,7 +129,11 @@ public class TasksController(
     FeatureJournalStore? journal = null,
     // Б-mk-b: каталог макетов фичи (Docs): null — подсистема Docs выключена → mockups: []
     // (без флага, не 500). Склейка в GetFeature, не в FeatureProjector (ADR-031 «Макеты фичи»).
-    MockupCatalog? catalog = null) : ControllerBase
+    MockupCatalog? catalog = null,
+    // Б9b: шов расхода фичи (Core, ISpendFeatureReader): null — подсистема Spend выключена
+    // (гейт Subsystems:spend:Enabled) → stats.spend = null, не 500 (решение Андрея 20.10).
+    // Вертикаль Tasks Spend не видит напрямую — только через этот шов (SubsystemBoundaryTests).
+    ISpendFeatureReader? spend = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -632,13 +637,50 @@ public class TasksController(
         // тоже по ПОЛНОМУ run, на том же снимке владельца (fail-closed) и now. Журнал полный →
         // модели из журнала (turn.model), иначе из снимка через resolver (резолв «Авто» — Б4).
         var now = DateTime.UtcNow;
-        var (breakdown, longestNow) = FeatureBreakdown.Build(run, journalResult, snapshot, resolver, now);
+        // Б9b: расход фичи (stats.spend). Атрибуция: задачи фичи (id) + их сессии (LinkedSessionId)
+        // + ключевой чат, если он состоит ТОЛЬКО в этой фиче (общий чат — делится в Б9c).
+        // Шов опционален: null (Spend выключен) → spend = null, не 500.
+        var taskIds = allFeatureTasks
+            .Select(t => t.Id)
+            .Where(id => id is not null)
+            .Select(id => id!)
+            .ToHashSet(StringComparer.Ordinal);
+        var sessionIds = allFeatureTasks
+            .Select(t => t.LinkedSessionId)
+            .Where(id => id is not null)
+            .Select(id => id!)
+            .ToHashSet(StringComparer.Ordinal);
+        // Ключевой чат (чат эпика): входит в срез, только если исключителен (входит лишь в эту
+        // фичу по правилам членства). Чат, уже являющийся сессией задачи фичи, в срезе и так.
+        var keyChatId = run.Epic.LinkedSessionId;
+        if (keyChatId is not null && !sessionIds.Contains(keyChatId))
+        {
+            var owner = tasks.GetByOwner(UserId).ToList();
+            var chatFeatures = FeatureProjector.ChatFeatureIds(keyChatId, owner, snapshot);
+            if (chatFeatures.Count == 1 && chatFeatures.Contains(run.Epic.Id))
+                sessionIds.Add(keyChatId);
+        }
+        var spendTotals = spend?.Totals(UserId, taskIds, sessionIds, from: run.Epic.CreatedAt);
+        var spendRecords = spend?.Records(UserId, taskIds, sessionIds, from: run.Epic.CreatedAt);
+        // FeatureSpendTotals → FeatureSpend (camelCase в JSON). Shared = null в Б9b (Б9c).
+        FeatureSpend? featureSpend = spendTotals is null ? null : new FeatureSpend(
+            InputTokens: spendTotals.InputTokens,
+            OutputTokens: spendTotals.OutputTokens,
+            CacheReadTokens: spendTotals.CacheReadTokens,
+            CacheCreationTokens: spendTotals.CacheCreationTokens,
+            CostUsd: spendTotals.CostUsd,
+            CostPartial: spendTotals.CostPartial,
+            HiddenCostModels: spendTotals.HiddenCostModels,
+            From: spendTotals.From?.ToString("yyyy-MM-dd"),
+            Shared: null);
+        var (breakdown, longestNow) = FeatureBreakdown.Build(run, journalResult, snapshot, resolver, now, spendRecords);
         var stats = new FeatureStats(
             Source: journalComplete ? "journal" : "approx",
             Truncated: journalResult?.Truncated ?? false,
             Timeline: FeatureTimeline.Build(run, journalResult, now),
             Breakdown: breakdown,
-            LongestNow: longestNow);
+            LongestNow: longestNow,
+            Spend: featureSpend);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = BuildMockups(run, catalog);

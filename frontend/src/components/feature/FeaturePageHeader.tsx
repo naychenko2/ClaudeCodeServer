@@ -10,6 +10,7 @@ import { formatDuration, type FeatureStatusTag } from '../../lib/chatGroups';
 import { getPersonaById } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { showToast } from '../../lib/toast';
 import type { FeatureRun, FeatureState, FeatureAttention } from '../../types/featureRun';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
@@ -383,6 +384,8 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
   const primary = featurePrimaryAction(a, name);
   const mergePending = run?.state === 'merge_pending';
   const effectivePrimary = (primary?.kind === 'merge' && !mergePending) ? null : primary;
+  // Id фичи для точки возврата «страница фичи → чат/задача» (Ф9b).
+  const fid = run?.featureId ?? feature?.featureId ?? '';
   const acts: ReactNode[] = [];
   if (isMobile && effectivePrimary) {
     acts.push(
@@ -392,7 +395,10 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
         variant="primary"
         style={{ background: C.bgWhite, minHeight: 40 }}
         onClick={() => {
-          if (effectivePrimary.kind === 'chat' && effectivePrimary.chatId) void openChatById(effectivePrimary.chatId);
+          if (effectivePrimary.kind === 'chat' && effectivePrimary.chatId) {
+            recordFeatureReturn(fid, { kind: 'chat', id: effectivePrimary.chatId });
+            void openChatById(effectivePrimary.chatId);
+          }
           else if (effectivePrimary.kind === 'merge') onMerge?.();
         }}
       >
@@ -408,7 +414,10 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
         label="чат"
         isMobile={isMobile}
         title="Открыть чат. Страница фичи скроется, вернётся по плашке."
-        onOpen={() => { void openChatById(a.linkedSessionId!); }}
+        onOpen={() => {
+          recordFeatureReturn(fid, { kind: 'chat', id: a.linkedSessionId! });
+          void openChatById(a.linkedSessionId!);
+        }}
       />,
     );
   }
@@ -420,7 +429,10 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
         label="задача"
         isMobile={isMobile}
         title="Открыть задачу. Страница фичи скроется, вернётся по плашке."
-        onOpen={() => openTaskInSection({ id: a.taskId!, projectId: run?.epic?.projectId ?? undefined })}
+        onOpen={() => {
+          recordFeatureReturn(fid, { kind: 'task', id: a.taskId! });
+          openTaskInSection({ id: a.taskId!, projectId: run?.epic?.projectId ?? undefined });
+        }}
       />,
     );
   }

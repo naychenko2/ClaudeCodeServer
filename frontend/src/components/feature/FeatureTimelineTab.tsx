@@ -38,10 +38,10 @@ function TimelineNote() {
 
 // Строка этапа: точка + линия + заголовок (имя · состояние · «≈») + границы + (раскрыто)
 // карточка с исполнителями и плашкой состояния. Клик по заголовку — раскрыть/схлопнуть.
-function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, isMobile = false }: {
+function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, isMobile = false }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
-  now: number; isMobile?: boolean;
+  now: number; featureId: string; isMobile?: boolean;
 }) {
   const status = stageStatusLabel(stage);
   const bounds = stageBoundsLabel(stage);
@@ -138,6 +138,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, isMobile = 
                 x={x}
                 task={x.taskId ? taskMap.get(x.taskId) : undefined}
                 now={now}
+                featureId={featureId}
                 isMobile={isMobile}
               />
             ))
@@ -181,6 +182,7 @@ export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun;
           onToggle={() => toggle(stage.key)}
           taskMap={taskMap}
           now={now}
+          featureId={run.featureId}
           isMobile={isMobile}
         />
       ))}

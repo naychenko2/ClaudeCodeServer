@@ -406,7 +406,7 @@ describe('FeatureTimelineTab: рендер', () => {
     // prod: исполнитель без chatId.
     stages[2]!.executors = [mkExec({ personaId: 'p1', taskId: 't2', taskRole: 'step', stepRef: 'Ш2', lane: 'front', status: 'done', chatId: null })];
     const c = renderTab(mkRun(stages));
-    const noChat = findNodeByAttr(c, 'data-testid', 'timeline-executor-no-chat');
+    const noChat = findNodeByAttr(c, 'data-testid', 'nav-target-no-chat');
     expect(noChat).not.toBeNull();
     expect(textNodes(noChat!).join('')).toBe('чата нет');
   });

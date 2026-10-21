@@ -13,9 +13,9 @@
 
 import { useSyncExternalStore } from 'react';
 
-// Куда перешли: в чат (id чата) или на страницу фичи (id фичи).
+// Куда перешли: в чат (id чата), на страницу фичи (id фичи) или в задачу (id задачи).
 export interface BackNavTarget {
-  kind: 'chat' | 'feature';
+  kind: 'chat' | 'feature' | 'task';
   id: string;
 }
 
@@ -56,6 +56,17 @@ export function clearBackNav(): void {
   if (_back) { _back = null; emit(); }
 }
 
+// Точка возврата «страница фичи → чат/задача» (Ф9a, «Навигация в один клик»):
+// записывает, что из страницы фичи `featureId` открыли чат/задачу `to`. Чип
+// «вернуться на страницу фичи» (Ф9b) читает это и предлагает возврат. Использует
+// тот же указатель _back, что и «← назад» (chat → chat/feature) — один переход
+// за раз; `from` здесь — id фичи (не чата), `to.kind` — 'chat' | 'task'.
+export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }): void {
+  if (!featureId || !to.id) return;
+  _back = { from: featureId, to: { kind: to.kind, id: to.id } };
+  emit();
+}
+
 // Сырой указатель (для эффекта «сброс при обычном открытии» в FeatureBanner).
 export function getBackNav(): BackNav | null {
   return _back;
@@ -77,6 +88,7 @@ export function useBackNavFrom(sessionId: string | null): string | null {
 export const __test = {
   reset() { _back = null; _listeners.clear(); },
   recordBackNav,
+  recordFeatureReturn,
   clearBackNav,
   getBackNav,
   backNavFrom,

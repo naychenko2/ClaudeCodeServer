@@ -7,7 +7,10 @@ import { getPersonaById } from '../../lib/personas';
 import { dateOnly, hhmm } from '../chat/feature/featureTime';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { Tooltip } from '../ui/Tooltip';
-import { NavTargetButton } from './NavTargetButton';
+import { openChatById } from '../../lib/openChat';
+import { openTaskInSection } from '../../lib/tasks';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { NavTargetPair } from './NavTargetButton';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureTask, StageKey } from '../../types/featureRun';
 
 // Подкомпоненты вкладки «Хронология» (волна 3, Ф2a, макет features-overview-3-final §5):
@@ -222,10 +225,12 @@ function ExecutorAvatar({ personaId }: { personaId: string | null }) {
 }
 
 // Строка исполнителя (макет §5): аватар 18 · имя 12 · роль (roleLabel) · чип модели ·
-// статус (идёт/ждёт вас/стоит/готово) · время · пара «чат · задача» (NavTargetButton).
-// chatId == null → «чата нет» (без мёртвой ссылки). Навигацию наполнит Ф9a.
-export function ExecutorRow({ x, task, now, isMobile = false }: {
-  x: FeatureStageExecutor; task?: FeatureTask; now: number; isMobile?: boolean;
+// статус (идёт/ждёт вас/стоит/готово) · время · пара «чат · задача» (NavTargetPair).
+// chatId == null → «чата нет» (без мёртвой ссылки); чат в архиве → «· архив».
+// Навигация (Ф9a): чат — openChatById, задача — openTaskInSection; точка возврата
+// «страница фичи → чат/задача» — recordFeatureReturn (чип возврата — Ф9b).
+export function ExecutorRow({ x, task, now, featureId, isMobile = false }: {
+  x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; isMobile?: boolean;
 }) {
   const persona = x.personaId ? getPersonaById(x.personaId) : undefined;
   const name = persona?.name ?? (x.personaId ? x.personaId : '—');
@@ -238,6 +243,20 @@ export function ExecutorRow({ x, task, now, isMobile = false }: {
     st.tone === 'danger' ? C.dangerText :
     st.tone === 'success' ? C.successText :
     C.textMuted;
+
+  // Переход в чат исполнителя: openChatById (тот же путь, что плашка FeatureBanner)
+  // + точка возврата на страницу фичи (Ф9b).
+  const openChat = () => {
+    if (!x.chatId) return;
+    recordFeatureReturn(featureId, { kind: 'chat', id: x.chatId });
+    void openChatById(x.chatId);
+  };
+  // Переход в задачу исполнителя: openTaskInSection (как из карточки «Шаг N фичи»)
+  // + точка возврата.
+  const openTask = () => {
+    recordFeatureReturn(featureId, { kind: 'task', id: x.taskId });
+    openTaskInSection({ id: x.taskId, projectId: task?.projectId ?? undefined });
+  };
 
   return (
     <div
@@ -273,14 +292,17 @@ export function ExecutorRow({ x, task, now, isMobile = false }: {
         </span>
       )}
       <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
-        {x.chatId ? (
-          <NavTargetButton kind="chat" label="чат" title="Открыть чат" onOpen={() => {}} isMobile={isMobile} />
-        ) : (
-          <span data-testid="timeline-executor-no-chat" style={{ fontSize: FS.xs, color: C.textMuted, alignSelf: 'center' }}>
-            чата нет
-          </span>
-        )}
-        <NavTargetButton kind="task" label="задача" title="Открыть задачу" onOpen={() => {}} isMobile={isMobile} />
+        <NavTargetPair
+          chatId={x.chatId}
+          chatArchived={x.chatArchived}
+          onOpenChat={openChat}
+          chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
+          showNoChat
+          taskId={x.taskId}
+          onOpenTask={openTask}
+          taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
+          isMobile={isMobile}
+        />
       </span>
     </div>
   );

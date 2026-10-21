@@ -76,7 +76,9 @@
 - `StepsAccepted`, `StepsTotal` — счётчик шагов: принятые (`Done`) / все (из `StepChains`).
 - `LastActivityAt` — последняя активность: максимум по `CompletedAt`/`ClaudeStartedAt` задач фичи
   (время мержа — это `CompletedAt` merge-задачи, уже учтено).
-- `Closed` — закрыта: merge-задача `Done` или эпик `Done`.
+- `Closed` — закрыта: `State` = `merged` или `closed`, где `merged ⇔ merge Done ∧ (финал принят ∨ эпик Done)`,
+  `closed ⇔ эпик Done ∧ ¬merged`. Частичный мерж (merge `Done`, финал не принят, эпик открыт) фичу
+  НЕ закрывает (инцидент 21.10) — это задача без роли `merge`-гарда, а не «смержена».
 - `Summary` — итог смерженной фичи: только у закрытой, иначе `null` (`MergedAt`,
   `DurationMinutes`, `Tasks`, `Steps`, `Loops`).
 

@@ -175,4 +175,93 @@ public class MockupCatalogTests : IDisposable
 
         result.Should().ContainSingle().Which.Path.Should().Be("docs/mockups/x.html");
     }
+
+    // ─── guid: полный, не по подстроке ─────────────────────────────────────────
+
+    // guid другой фичи, начинающийся с нашего (общий префикс): сравнение полного guid,
+    // не по подстроке. Мутация Equals→StartsWith в FeatureMatches красит этот тест.
+    [Fact]
+    public void Фича_GuidСОбщимПрефиксом_НеСовпадает()
+    {
+        var longerGuid = MyFeature + "9"; // 37 символов: наш guid + лишний
+        Write($"# Чужая\n\n**Фича:** {longerGuid}\n**Файлы:** a.html\n",
+            "docs", "mockups", "other.md");
+        Write("<html></html>", "docs", "mockups", "a.html");
+
+        _catalog.Find(_root, MyFeature, []).Should().BeEmpty(
+            "guid другой фичи с общим префиксом не совпадает (полное сравнение)");
+    }
+
+    // ─── linkedFiles: «..» и симлинк → запись не создаётся вовсе ─────────────────────
+
+    // docs/mockups/../../secret.html → secret.html (вне области) — запись не создаётся
+    // (ни exists, ни path). Мутация «префикс по сырой строке» (без нормализации «..») красит.
+    [Fact]
+    public void LinkedFiles_ТочкиТочки_Нормализация_ВнеMockups_НетЗаписи()
+    {
+        Write("<html></html>", "secret.html");
+        Write("<html></html>", "docs", "mockups", "good.html");
+
+        var result = _catalog.Find(_root, MyFeature,
+            ["docs/mockups/../../secret.html", "docs/mockups/good.html"]);
+
+        result.Should().ContainSingle()
+            .Which.Path.Should().Be("docs/mockups/good.html");
+    }
+
+    // docs/mockups/../../../etc/passwd.html → etc/passwd.html (выше корня → null) — записи нет.
+    [Fact]
+    public void LinkedFiles_ВышеКорня_НетЗаписи()
+    {
+        Write("<html></html>", "etc", "passwd.html");
+
+        _catalog.Find(_root, MyFeature, ["docs/mockups/../../../etc/passwd.html"])
+            .Should().BeEmpty("выход выше корня проекта → null, записи нет");
+    }
+
+    // Симлинк docs/mockups/link.html → файл вне проекта: exists/mtime цели не утекают,
+    // записи нет. Платформонезависимый: пропускаем, если символические ссылки недоступны.
+    [Fact]
+    public void LinkedFiles_СимлинкВнеОбласти_НетЗаписи()
+    {
+        if (!SupportsSymlinks()) return;
+        var outside = Path.Combine(Path.GetTempPath(), "mk_sym_" + Guid.NewGuid().ToString("N") + ".html");
+        File.WriteAllText(outside, "<html>вне проекта</html>");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(_root, "docs", "mockups"));
+            File.CreateSymbolicLink(Path.Combine(_root, "docs", "mockups", "link.html"), outside);
+
+            _catalog.Find(_root, MyFeature, ["docs/mockups/link.html"])
+                .Should().BeEmpty("симлинк на цель вне docs/mockups/ → записи нет");
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
+    }
+
+    // Символические ссылки доступны (File.CreateSymbolicLink не бросает)?
+    private static bool SupportsSymlinks()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mk_symtest_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var target = Path.Combine(dir, "t.txt");
+            File.WriteAllText(target, "x");
+            var link = Path.Combine(dir, "l.txt");
+            File.CreateSymbolicLink(link, target);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); }
+            catch { /* уборка теста */ }
+        }
+    }
 }

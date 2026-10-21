@@ -194,11 +194,13 @@ Html не разбираем вовсе: прототип идёт в «Файл
 2. локальный проект (`ProjectCapabilities.FilesOnServer=false`) → `mockups: []` +
    `mockupsUnavailable: "device"` **до любого вызова Docs** (файлы на устройстве, диск сервера не читаем);
 3. Docs: `catalog?.Find(project.RootPath, featureId, linkedPaths)`; `catalog=null`
-   (Docs выключена) → `mockups: []` без флага, не 500.
+   (каталога нет в DI — Docs регистрируется безусловно, тумблера нет; ветка защитная,
+   жива в тестах) → `mockups: []` без флага, не 500.
 
-`linkedPaths` — `linkedFiles` всех задач полного run. `taskId`/`authorPersonaId` записи — по
-первой (по `CreatedAt`) задаче фичи, в `linkedFiles` которой есть path макета или любой из его
-`files`; иначе null. Сортировка `mockups` по `modifiedAt` убыв., null в конце.
+`linkedPaths` — `linkedFiles` всех задач полного run, только из проекта эпика (резолв идёт
+от `RootPath` проекта эпика). `taskId`/`authorPersonaId` записи — по первой (по `CreatedAt`)
+задаче фичи, в `linkedFiles` которой есть path макета или любой из его `files`; иначе null.
+Сортировка `mockups` по `modifiedAt` убыв., null в конце.
 
 ### Фиксированная область, master-only, `exists`
 

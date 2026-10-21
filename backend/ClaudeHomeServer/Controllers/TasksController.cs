@@ -644,7 +644,8 @@ public class TasksController(
     //      чужой/нет → mockups: [] (файлы чужого проекта не трогаем);
     //   2. локальный проект (ProjectCapabilities.FilesOnServer=false) → [] + "device"
     //      ДО любого вызова Docs (файлы на устройстве, диск сервера не читаем);
-    //   3. Docs: catalog?.Find (null — подсистема Docs выключена → [] без флага, не 500).
+    //   3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
+    //      Docs регистрируется безусловно, тумблера нет — ветка защитная, жива в тестах).
     // TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
     // которой есть path макета или любой из его files; иначе null. Сортировка: ModifiedAt
     // убыв., null в конце (детерминизм — путь).
@@ -660,8 +661,9 @@ public class TasksController(
         if (!ProjectCapabilities.FilesOnServer(project))
             return ([], "device");
 
-        // 3. Docs: catalog?.Find (null — Docs выключена → [] без флага). linkedPaths — linkedFiles
-        //    всех задач ПОЛНОГО run (эпик + шаги + ревью + qa + финал + мерж + разрез + план).
+        // 3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага). linkedPaths —
+        //    linkedFiles всех задач ПОЛНОГО run (эпик + шаги + ревью + qa + финал + мерж +
+        //    разрез + план), только из проекта эпика (см. AllLinkedFiles).
         var linkedPaths = AllLinkedFiles(run);
         var found = catalog?.Find(project.RootPath, run.FeatureId, linkedPaths) ?? [];
 
@@ -685,8 +687,10 @@ public class TasksController(
         return (attributed, null);
     }
 
-    // linkedFiles всех задач ПОЛНОГО run: эпик + шаги + ревью + qa + финал + мерж + разрез + план.
-    private static List<string> AllLinkedFiles(FeatureRun run)
+    // Все задачи ПОЛНОГО run в одном списке: эпик + шаги + ревью + qa + финал + мерж +
+    // разрез + план. Единый хелпер (не две копии): новая роль в run не должна молча отстать
+    // в одном из мест (автор макета / linkedFiles) — обе точки берут список отсюда.
+    private static List<TaskItem> AllRunTasks(FeatureRun run)
     {
         var all = new List<TaskItem> { run.Epic };
         all.AddRange(run.Steps);
@@ -696,7 +700,19 @@ public class TasksController(
         if (run.Merge is not null) all.Add(run.Merge);
         all.AddRange(run.Cut);
         all.AddRange(run.Plan);
-        return all.SelectMany(t => t.LinkedFiles).ToList();
+        return all;
+    }
+
+    // linkedFiles всех задач ПОЛНОГО run. Резолв идёт от RootPath проекта эпика, поэтому
+    // берём linkedFiles только из задач того же проекта (иначе файл чужого проекта дал бы
+    // exists:false-шум в списке макетов); эпик без проекта → фильтр не действует.
+    private static List<string> AllLinkedFiles(FeatureRun run)
+    {
+        var epicProject = run.Epic.ProjectId;
+        return AllRunTasks(run)
+            .Where(t => t.ProjectId == epicProject)
+            .SelectMany(t => t.LinkedFiles)
+            .ToList();
     }
 
     // Первая (по CreatedAt) задача фичи, в linkedFiles которой есть path макета или любой из его
@@ -706,15 +722,7 @@ public class TasksController(
     {
         var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Path };
         foreach (var f in entry.Files) targets.Add(f.Path);
-        var tasks = new List<TaskItem> { run.Epic };
-        tasks.AddRange(run.Steps);
-        tasks.AddRange(run.Reviews);
-        tasks.AddRange(run.Qa);
-        if (run.Final is not null) tasks.Add(run.Final);
-        if (run.Merge is not null) tasks.Add(run.Merge);
-        tasks.AddRange(run.Cut);
-        tasks.AddRange(run.Plan);
-        return tasks
+        return AllRunTasks(run)
             .Where(t => t.LinkedFiles.Any(p => targets.Contains(NormalizeLinkedPath(p))))
             .OrderBy(t => t.CreatedAt)
             .FirstOrDefault();

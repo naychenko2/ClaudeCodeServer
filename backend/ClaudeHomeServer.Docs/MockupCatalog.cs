@@ -60,18 +60,20 @@ public class MockupCatalog(DocsIndexService docs)
         }
 
         // Запасной путь: linkedFiles задач фичи. Только .html под docs/mockups/;
-        // уже покрытые шапкой пропускаются; несуществующий на диске — «не в master»
+        // уже покрытые шапкой пропускаются; несуществующий на диске — «не в master».
+        // Симлинк на цель ВНЕ docs/mockups/ → записи нет вовсе (exists/mtime цели не утекают).
         foreach (var linked in DistinctLinkedHtml(linkedPaths))
         {
             if (covered.Contains(linked)) continue;
-            var exists = FileExists(rootPath, linked);
+            var info = ResolveOnDiskInfo(rootPath, linked);
+            if (info.EscapesArea) continue;
             entries.Add(new MockupEntry(
                 Path: linked,
                 Title: Path.GetFileNameWithoutExtension(linked),
                 Status: null,
-                Files: [new MockupFile(linked, exists)],
+                Files: [new MockupFile(linked, info.Mtime is not null)],
                 Source: MockupSource.LinkedFiles,
-                ModifiedAt: exists ? FileMtime(rootPath, linked) : null));
+                ModifiedAt: info.Mtime));
         }
 
         return entries;
@@ -156,16 +158,25 @@ public class MockupCatalog(DocsIndexService docs)
     // ---------- linkedFiles ----------
 
     // linkedFiles → только .html под docs/mockups/ (записки .md и -tokens.md макетом не
-    // становятся), дубли схлопнуты, порядок появления сохранён
+    // становятся), дубли схлопнуты, порядок появления сохранён.
+    //
+    // Нормализация «..» (тем же приёмом, что ParseFiles → DocsIndexService.ResolveRelative):
+    // docs/mockups/../../x.html → x.html (вне области) — путь отбрасывается, иначе наружу
+    // ушёл бы путь с «..» (SafePath.Join защищает корень проекта, но не область mockups);
+    // выход выше корня → null. Префикс проверяем ПОСЛЕ нормализации. Регистр схлопнут в
+    // канонический нижний: на Linux «DOCS/MOCKUPS/…» — другой (несуществующий) каталог,
+    // а не шум exists=false в списке.
     private static IEnumerable<string> DistinctLinkedHtml(IReadOnlyCollection<string> linkedPaths)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in linkedPaths)
         {
-            var norm = (p ?? "").Replace('\\', '/').TrimStart('/');
+            if (p is null) continue;
+            var norm = DocsIndexService.ResolveRelative("", p);
+            if (norm is null) continue;
             if (!norm.StartsWith(MockupsPrefix, StringComparison.OrdinalIgnoreCase)) continue;
             if (!norm.EndsWith(".html", StringComparison.OrdinalIgnoreCase)) continue;
-            if (seen.Add(norm)) yield return norm;
+            if (seen.Add(norm)) yield return norm.ToLowerInvariant();
         }
     }
 
@@ -174,16 +185,53 @@ public class MockupCatalog(DocsIndexService docs)
     // SafePath.Join + File.Exists: цель приходит из шапки/linkedFiles, «../../etc» обязан
     // отказать, а не проверить чужой файл. html в корпус Docs не попадает (нет в TypeGroups),
     // поэтому живость проверяется по диску, а не через корпус.
-    private static bool FileExists(string rootPath, string relativePath)
+    //
+    // Mtime — null, когда файла нет на диске («не в master»). EscapesArea — когда файл под
+    // docs/mockups/ — симлинк, чья реальная цель лежит ВНЕ docs/mockups/ проекта
+    // (docs/mockups/link.html → /tmp/x.html): File.Exists/FileInfo следуют ссылке, поэтому
+    // exists/mtime цели утекали бы в ответ — такую запись отбрасываем вовсе.
+    private readonly record struct DiskInfo(DateTime? Mtime, bool EscapesArea);
+
+    private static DiskInfo ResolveOnDiskInfo(string rootPath, string relativePath)
     {
         var full = JoinSafe(rootPath, relativePath);
-        return full is not null && File.Exists(full);
+        if (full is null || !File.Exists(full)) return new DiskInfo(null, false);
+
+        // Реальный путь (после разрешения ссылок) обязан лежать внутри docs/mockups/ проекта.
+        var real = ResolveRealPath(full);
+        if (real is null) return new DiskInfo(null, false);
+        var mockupsRoot = JoinSafe(rootPath, MockupsPrefix);
+        if (mockupsRoot is null || !IsUnder(mockupsRoot, real))
+            return new DiskInfo(null, true);   // симлинк на цель вне области → записи нет
+
+        return new DiskInfo(new FileInfo(full).LastWriteTimeUtc, false);
     }
 
-    private static DateTime? FileMtime(string rootPath, string relativePath)
+    // Реальный путь файла: симлинк разрешается до конечной цели (включая цепочки), обычный
+    // файл — его GetFullPath. null — цель не разрешается (битая/циклическая ссылка).
+    private static string? ResolveRealPath(string full)
     {
-        var full = JoinSafe(rootPath, relativePath);
-        return full is null ? null : new FileInfo(full).LastWriteTimeUtc;
+        try
+        {
+            var info = new FileInfo(full);
+            // ResolveLinkTarget → FileSystemInfo? (не string): цель как путь через FullName.
+            var target = info.ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+            if (target is null) return Path.GetFullPath(full);
+            // Цель может быть относительной — резолвим от папки, где лежит ссылка.
+            return Path.GetFullPath(Path.Combine(Path.GetDirectoryName(full)!, target));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // real лежит внутри dir (dir — без хвостового разделителя; real == dir тоже «внутри»).
+    private static bool IsUnder(string dir, string real)
+    {
+        var d = dir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return real.Equals(d, StringComparison.OrdinalIgnoreCase)
+            || real.StartsWith(d + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
     // null — путь вывел за пределы проекта (SafePath.Join бросил) либо битый разделитель

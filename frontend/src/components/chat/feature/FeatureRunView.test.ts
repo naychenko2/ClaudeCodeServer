@@ -15,7 +15,7 @@ import type { TodoItem } from '../../../hooks/useSessionArtifacts';
 import { FeatureRunView, statusLineFor } from './FeatureRunView';
 import { TurnPlanPill } from '../TurnPlanPill';
 import { __test } from '../../../lib/featureRuns';
-import { installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
+import { installFakeDom, mount, reactProps, uninstallFakeDom, findNodeByAttr } from '../__tests__/fakeDom';
 
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя (PersonaAvatar/имена исполнителей).
 // ensurePersonasLoaded/usePersonasVersion — no-op: в node-окружении они тянут signalr/localStorage.
@@ -243,6 +243,27 @@ describe('FeatureRunView — рендер', () => {
     const html = render(run({ state: 'running', stages }));
     expect(html).toContain('Qwen');
     expect(html).toMatch(/aria-label="Модель чата: Qwen3\.8-27B"/);
+  });
+
+  // R2 minor 3: тап по чипу модели раскрывает подсказку (onClick → setTapped → Tooltip focused).
+  it('тап по чипу модели раскрывает подсказку (onClick)', () => {
+    installFakeDom();
+    const stages: FeatureStage[] = [
+      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: null, taskId: 'x', taskRole: null, stepRef: null, lane: null, status: 'running', chatId: null, chatArchived: false, modelLabel: 'Qwen', modelFull: 'Qwen3.8-27B' }] },
+    ];
+    const { root, container } = mount(createElement(FeatureRunView, { run: run({ state: 'running', stages }) }));
+    // Чип модели — кнопка с aria-label.
+    const chip = findNodeByAttr(container, 'aria-label', 'Модель чата: Qwen3.8-27B');
+    expect(chip, 'чип модели не найден').not.toBeNull();
+    // До тапа: подсказки нет (role="tooltip" отсутствует в body-портале).
+    const body = (globalThis as { document: { body: Parameters<typeof findNodeByAttr>[0] } }).document.body;
+    expect(findNodeByAttr(body, 'role', 'tooltip'), 'tooltip до тапа').toBeNull();
+    // Тап: onClick переключает tapped → Tooltip focused → плашка появляется в body-портале.
+    act(() => { (reactProps(chip!)!.onClick as () => void)(); });
+    expect(findNodeByAttr(body, 'role', 'tooltip'), 'tooltip после тапа').not.toBeNull();
+    root.unmount();
+    uninstallFakeDom();
   });
 
   it('подвал «Открыть страницу фичи» — только когда есть onOpenPage', () => {

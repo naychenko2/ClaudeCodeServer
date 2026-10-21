@@ -6,7 +6,7 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Button } from '../ui/Button';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
-import { formatDuration, type FeatureStatusTag } from '../../lib/chatGroups';
+import { formatDuration, MERGE_PENDING_STATUS, type FeatureStatusTag } from '../../lib/chatGroups';
 import { getPersonaById } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
@@ -45,7 +45,7 @@ export function featureRunStatusTag(state: FeatureState, stageName?: string | nu
     case 'stopped':
       return { label: 'стоит', tone: 'stop' };
     case 'merge_pending':
-      return { label: 'ждёт согласия на мерж', tone: 'merge', dot: true };
+      return { label: MERGE_PENDING_STATUS, tone: 'merge', dot: true };
     case 'merging':
       return { label: 'мерж · идёт', tone: 'run' };
     case 'merged':

@@ -296,7 +296,7 @@ export function groupByFeatures(
 // === Заголовок группы фичи (макет features-overview.html, .fgh) ===
 
 // Имя стадии конвейера по ключу — для статуса «{этап} · доработка/идёт».
-// Порядок и названия — те же, что в PipelineFlow/FeatureRail (STAGE_NAME).
+// Порядок и названия — те же, что в FeatureRail (STAGE_NAME).
 // Экспортируется: страница фичи (волна 3) строит тег «идёт · {этап}» по run.state
 // и активной стадии — имя стадии берётся отсюда, не дублируется.
 export const STAGE_NAME: Record<FeatureRailKey, string> = {

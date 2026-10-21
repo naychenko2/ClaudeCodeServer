@@ -409,14 +409,20 @@ describe('FeatureTimelineTab: рендер', () => {
     const noChat = findNodeByAttr(c, 'data-testid', 'nav-target-no-chat');
     expect(noChat).not.toBeNull();
     expect(textNodes(noChat!).join('')).toBe('чата нет');
+    // R1 major: taskClosed={x.status === 'done'} → кнопка задачи показывает «закрыта».
+    const taskBtn = findNodeByAttr(c, 'data-testid', 'nav-target-task');
+    expect(taskBtn, 'кнопка задачи при taskId != null').not.toBeNull();
+    expect(textNodes(taskBtn!).join('')).toContain('закрыта');
   });
 
   it('исполнитель с чатом → кнопка «чат» (NavTargetButton)', () => {
     const c = renderTab(mkRun(fullStages()));
-    // prod-исполнитель с chatId → кнопка «чат».
-    const all = textNodes(c).join('');
-    expect(all).toContain('чат');
-    expect(all).toContain('задача');
+    // prod-исполнитель с chatId → кнопка «чат» в конкретной строке (не подстрока по всему дереву).
+    const pair = findNodeByAttr(c, 'data-testid', 'nav-target-pair');
+    expect(pair, 'NavTargetPair не найден').not.toBeNull();
+    const pairText = textNodes(pair!).join('');
+    expect(pairText).toContain('чат');
+    expect(pairText).toContain('задача');
   });
 
   // === 6. Пустые состояния ===

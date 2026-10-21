@@ -279,7 +279,7 @@ export interface FeatureSummary {
 // `final`/`merge` — задачи трекера, сгруппированные проектором по роли;
 // `verdicts`/`progress`/`ready` вычисляет бэк, фронт только показывает.
 // Старые поля (epic/steps/reviews/qa/final/merge/verdicts/progress/ready) пока
-// использует `PipelineFlow` (его переделает Ф5) — не удалять.
+// использует `FeatureRunView` (страница фичи) — не удалять.
 // Новые поля (cut/plan/stages/stepChains/now/attention/returnsBySource/lanes/
 // stepsAccepted/stepsTotal/lastActivityAt/closed/summary) — аддитивные и
 // nullable-терпимые: опциональны, UI обязан пережить их отсутствие (старые данные).

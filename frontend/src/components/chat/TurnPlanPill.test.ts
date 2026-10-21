@@ -14,13 +14,18 @@ import { TurnPlanPill, pillMenuWidths, pillMenuFullWidth } from './TurnPlanPill'
 import { __test, openPillMenu, setTurnPlanMode } from '../../lib/featureRuns';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { FeatureNow, FeatureRun, FeatureStage, FeatureTask } from '../../types/featureRun';
-import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from './__tests__/fakeDom';
+import { findNodeByAttr, installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } from './__tests__/fakeDom';
 
 // Стор персон (lib/personas) — мок (hoisted-карта id→имя): для имён в тексте пилюли.
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
 vi.mock('../../lib/personas', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/personas')>();
-  return { ...orig, getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined) };
+  return {
+    ...orig,
+    getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
+    ensurePersonasLoaded: () => {},
+    usePersonasVersion: () => 0,
+  };
 });
 
 const zeroRect = { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 };
@@ -80,6 +85,41 @@ describe('TurnPlanPill: F9 (сигнал «открыть меню»)', () => {
     const { root } = mountPill('sess-A');
     act(() => { openPillMenu('sess-B'); });
     expect(bodyHasMenu(), 'сигнал чата B меню чата A не открыл').toBe(false);
+    root.unmount();
+  });
+});
+
+// R2 minor 4: проводка chatTaskId (ChatPanel → TurnPlanPill → FeatureModeBody → FeatureRunView → Meta).
+// Мутация: chatTaskId={null} в ChatPanel.tsx → роль «этот чат — …» исчезает из меты.
+describe('TurnPlanPill: проводка chatTaskId → мета «этот чат — …»', () => {
+  it('chatTaskId совпадает с taskId исполнителя → мета показывает роль', () => {
+    const stages: FeatureStage[] = [
+      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: null, taskId: 'task-front', taskRole: 'step', stepRef: 'Ш2', lane: 'front', status: 'running', chatId: null, chatArchived: false, modelLabel: null, modelFull: null }] },
+    ];
+    const r: FeatureRun = {
+      featureId: 'epic-1',
+      epic: task({ id: 'epic-1', title: 'Пульт куратора', worktreeBranch: 'feat/curator' }),
+      steps: [], reviews: [], qa: [], final: null, merge: null,
+      state: 'running',
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      progress: 0, ready: false,
+      stages,
+    } as FeatureRun;
+    __test.reset();
+    __test.setRuns('s-chatid', [r]);
+    setTurnPlanMode('s-chatid', 'feature');
+    const { root, container } = mount(createElement(TurnPlanPill, {
+      todos: [], runs: [r], sessionId: 's-chatid', chatTaskId: 'task-front',
+    }));
+    // Открываем меню (клик по пилюле).
+    const btn = findNodeByAttr(container, 'aria-label', 'Показать исполнение фичи');
+    expect(btn, 'кнопка-пилюля фичи').not.toBeNull();
+    act(() => (reactProps(btn!)!.onClick as (e: unknown) => void)({ currentTarget: { getBoundingClientRect: () => zeroRect } }));
+    // Мета в теле (body-портал меню): «этот чат — Ш2 · фронт».
+    const body = (globalThis as { document: { body: Parameters<typeof findNodeByAttr>[0] } }).document.body;
+    const allText = textNodes(body).join('');
+    expect(allText, 'мета «этот чат — Ш2 · фронт»').toContain('этот чат — Ш2 · фронт');
     root.unmount();
   });
 });

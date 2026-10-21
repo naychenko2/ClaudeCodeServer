@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeatureRun, FeatureTask, FeatureStage, FeatureStageExecutor, FeatureAttention } from '../../../types/featureRun';
 import { FeatureModeBody } from './FeatureModeBody';
 import { __test } from '../../../lib/featureRuns';
-import { installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
+import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
 
 // useIsMobile — управляемый флаг (SSR по умолчанию false).
 const { mobileFlag } = vi.hoisted(() => ({ mobileFlag: { value: false } }));
@@ -222,6 +222,31 @@ describe('попап: переход закрывает попап', () => {
     expect(btn, 'кнопка «Чат Денис» не найдена').not.toBeNull();
     act(() => { (reactProps(btn!)!.onClick as () => void)(); });
     expect(navMock.openChat).toContain('sess-d');
+    expect(onCloseCalls.n, 'onClose не вызван — попап не закрылся').toBe(1);
+    root.unmount();
+    uninstallFakeDom();
+  });
+
+  // R2 minor 5: переход в ЗАДАЧУ (не только в чат) тоже закрывает попап.
+  it('клик по «задача» (исполнитель) вызывает openTaskInSection и закрывает попап (onClose)', () => {
+    installFakeDom();
+    personaMap.set('denis', 'Денис');
+    const stages: FeatureStage[] = [
+      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: 'denis', taskId: 'task-1', taskRole: 'step', stepRef: 'Ш1', lane: 'back', status: 'running', chatId: 'c1', chatArchived: false, modelLabel: null, modelFull: null }] },
+    ];
+    __test.setRuns('s-task', [run({ state: 'running', stages })]);
+    const onCloseCalls = { n: 0 };
+    const { root, container } = mount(createElement(FeatureModeBody, {
+      sessionId: 's-task', todos: [], runs: [run({ state: 'running', stages })],
+      isMobile: false, variant: 'pill',
+      onClose: () => { onCloseCalls.n++; },
+    }));
+    // Кнопка «задача» в строке исполнителя.
+    const taskBtn = findNodeByAttr(container, 'data-testid', 'nav-target-task');
+    expect(taskBtn, 'кнопка «задача» не найдена').not.toBeNull();
+    act(() => { (reactProps(taskBtn!)!.onClick as () => void)(); });
+    expect(navMock.openTask, 'openTaskInSection не вызван').toContain('task-1');
     expect(onCloseCalls.n, 'onClose не вызван — попап не закрылся').toBe(1);
     root.unmount();
     uninstallFakeDom();

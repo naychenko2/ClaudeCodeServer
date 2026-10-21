@@ -132,14 +132,14 @@ describe('buildPillModel: 9 состояний (макет S[state].pill)', () =
     expect(m.post).toBe('');
   });
 
-  it('merge_pending → «фича · Мерж · ждёт согласия», тон wait, aria «фича ждёт вас»', () => {
+  it('merge_pending → «фича · Мерж · ждёт согласия», тон wait, aria «ждёт согласия на мерж»', () => {
     const m = buildPillModel([run({ state: 'merge_pending' })], false, null)!;
     expect(m.state).toBe('merge_pending');
     expect(m.tone).toBe('wait');
     expect(m.pre).toBe('фича · ');
     expect(m.bold).toBe('Мерж');
     expect(m.post).toBe(' · ждёт согласия');
-    expect(m.ariaExtra).toBe('фича ждёт вас');
+    expect(m.ariaExtra).toBe('ждёт согласия на мерж');
   });
 
   it('merging → «фича · Мерж · идёт · {имя}», нейтральный', () => {

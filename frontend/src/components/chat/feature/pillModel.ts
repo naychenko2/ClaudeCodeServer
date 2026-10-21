@@ -1,5 +1,5 @@
 import { getPersonaById } from '../../../lib/personas';
-import { STAGE_NAME } from '../../../lib/chatGroups';
+import { STAGE_NAME, MERGE_PENDING_STATUS } from '../../../lib/chatGroups';
 import type { FeatureRun, FeatureState } from '../../../types/featureRun';
 
 // Тон пилюли (макет turn-plan-feature-popup-1, S[state].pill[0]):
@@ -97,7 +97,7 @@ export function buildPillModel(runs: FeatureRun[], loading: boolean, error: stri
       return {
         state: 'merge_pending', tone: 'wait',
         pre: 'фича · ', bold: 'Мерж', post: ' · ждёт согласия',
-        ariaExtra: 'фича ждёт вас',
+        ariaExtra: MERGE_PENDING_STATUS,
       };
     case 'merging': {
       const name = mergingName(run);

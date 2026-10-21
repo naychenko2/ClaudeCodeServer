@@ -1,7 +1,7 @@
 import { C, R, SP } from '../../../lib/design';
 import type { FeatureRailSegment } from '../../../types/featureIndex';
 
-// Мини-рельса фичи: PipelineFlow, «положенный набок» (макет features-overview.html,
+// Мини-рельса фичи: конвейер, «положенный набок» (макет features-overview.html,
 // .mr; proposal §«Общее для всех вариантов: плашка фичи»). 7 сегментов по массиву
 // rail[] индекса — бэк считает состояния (state/tone), фронт только раскладывает:
 //   done    — пройден        → C.success
@@ -23,7 +23,7 @@ const SEG_H = 5;
 const SEG_W = 8;
 const SEG_ACTIVE_W = 15;
 
-// Имя этапа по ключу (порядок и названия — те же, что в PipelineFlow, STAGES).
+// Имя этапа по ключу (порядок и названия — те же, что в STAGE_NAME, chatGroups.ts).
 const STAGE_NAME: Record<FeatureRailSegment['key'], string> = {
   cut: 'Разрез',
   plan: 'План',

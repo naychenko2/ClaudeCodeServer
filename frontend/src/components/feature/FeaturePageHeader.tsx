@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { GitBranch, ListChecks, MessageCircle } from 'lucide-react';
-import { C, R, FS, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Button } from '../ui/Button';
@@ -82,9 +82,9 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
     <span
       data-testid={testId}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
         fontSize: FS.xs, fontWeight: 600, fontFamily: FONT.sans, lineHeight: '16px',
-        padding: '1px 7px', borderRadius: R.sm, whiteSpace: 'nowrap',
+        padding: `${SP.xxs}px ${SP.xs}px`, borderRadius: R.sm, whiteSpace: 'nowrap',
         ...TAG_STYLE[tag.tone],
       }}
     >
@@ -174,9 +174,12 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
 
   // «N задач» — ОДИН источник со строками вкладки «Задачи»: taskCounters(run).total
   // (честное число из run, не taskCount из индекса — индекс может расходиться с run).
-  // run=null (loading) — фолбэк на taskCount из индекса.
-  const total = run ? taskCounters(run).total : (feature?.taskCount ?? 0);
-  const tasks = total > 0 ? `${total} ${pluralTasks(total)}` : 'задач нет';
+  // run=null (loading) — прочерк: число из индекса (taskCount) показало бы значение,
+  // которое изменится, когда run придёт.
+  const total = run ? taskCounters(run).total : null;
+  const tasks = total != null
+    ? (total > 0 ? `${total} ${pluralTasks(total)}` : 'задач нет')
+    : '—';
 
   const branchBtn = branch && (
     <button
@@ -188,8 +191,8 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
       onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4, flex: '0 1 auto', minWidth: 0,
-        height: isMobile ? 40 : 18, padding: '0 4px', margin: isMobile ? 0 : '-2px -4px',
+        display: 'inline-flex', alignItems: 'center', gap: SP.xs, flex: '0 1 auto', minWidth: 0,
+        height: isMobile ? 40 : 18, padding: `0 ${SP.xs}px`, margin: isMobile ? 0 : `-${SP.xxs}px -${SP.xs}px`,
         border: 'none', borderRadius: R.sm, background: 'transparent', cursor: 'pointer',
         fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
       }}
@@ -204,7 +207,7 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
       data-testid="feature-page-meta"
       style={{
         display: 'flex', flexWrap: 'wrap', alignItems: 'center',
-        gap: '4px 12px', fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
+        gap: `${SP.xs}px ${SP.md}px`, fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
       }}
     >
       {isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
@@ -215,8 +218,8 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
   );
 }
 
-// Склонение «задача/задачи/задач».
-function pluralTasks(n: number): string {
+// Склонение «задача/задачи/задач» (экспортируется для теста).
+export function pluralTasks(n: number): string {
   const d = n % 10, h = n % 100;
   if (d === 1 && h !== 11) return 'задача';
   if (d >= 2 && d <= 4 && (h < 10 || h >= 20)) return 'задачи';
@@ -468,13 +471,13 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
       role="status"
       aria-live="polite"
       style={{
-        display: 'flex', gap: 9, alignItems: 'flex-start',
-        marginTop: 10, padding: '10px 12px', borderRadius: R.lg,
+        display: 'flex', gap: SP.sm, alignItems: 'flex-start',
+        marginTop: SP.md, padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg,
         background: bg, fontSize: FS.base, fontFamily: FONT.sans, color: C.textPrimary,
         ...(tone === 'neutral' ? { border: `1px solid ${C.borderLight}` } : {}),
       }}
     >
-      <span style={{ paddingTop: 2, display: 'inline-flex', flexShrink: 0 }}>
+      <span style={{ paddingTop: SP.xxs, display: 'inline-flex', flexShrink: 0 }}>
         <FeatureGlyph kind={glyphKind} size={14} />
       </span>
       <div style={{ minWidth: 0 }}>
@@ -483,7 +486,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
           {reason && <span> {reason}</span>}
         </div>
         {acts.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>{acts}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: SP.sm }}>{acts}</div>
         )}
       </div>
     </div>

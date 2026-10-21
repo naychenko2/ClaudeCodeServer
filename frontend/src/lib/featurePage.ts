@@ -66,6 +66,11 @@ let _stageFocusSeq = 0;
 // остаётся с уже загруженными событиями (не роняется в error); на ленте —
 // «не удалось догрузить · Повторить». Сбрасывается успешной догрузой/перезапросом/сменой fid.
 let _expandError = false;
+// Флаг УСПЕШНОЙ догрузки всей ленты (eventsLimit=all): true, когда лента уже полностью
+// загружена (ответ пришёл), а не только «запрошено». Разводит «запрошено» (_eventsLimit='all',
+// ставится ДО запроса) и «загружено»: повторное «Показать все»/«Повторить» по уже
+// загруженной ленте — без нового GET (м.2, повтор после ошибки). Сбрасывается в setPage/reset.
+let _eventsLoaded = false;
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
 
@@ -94,7 +99,7 @@ function setState(s: FeaturePageState) {
 function fetchPage(fid: string, initial: boolean, signal?: AbortSignal, expand = false) {
   if (initial) { setState({ status: 'loading' }); _expandError = false; }
   void api.tasks.getFeature(fid, _eventsLimit, signal)
-    .then(page => { if (_fid === fid) { _expandError = false; setState({ status: 'ok', page }); } })
+    .then(page => { if (_fid === fid) { _expandError = false; if (expand) _eventsLoaded = true; setState({ status: 'ok', page }); } })
     .catch((e: Error & { status?: number }) => {
       if (_fid !== fid) return; // страница сменилась/закрыта — поздний ответ не затирает
       if (e.name === 'AbortError') return; // запрос отменён (fid сменился) — не сбой, а отмена
@@ -114,6 +119,7 @@ function setPage(fid: string | null) {
     _tab = DEFAULT_TAB;
     _eventsLimit = undefined;
     _eventsExpanded = false;
+    _eventsLoaded = false;
     _expandError = false;
   }
   _fid = fid;
@@ -211,14 +217,23 @@ export function refetchFeaturePage(fid: string) {
 // раскрытия лимит остаётся 'all' — live-перезапросы тоже тянут всю ленту (иначе
 // лента «схлопнулась бы» обратно к 100 на следующем task_changed). Не сбрасывает в
 // loading (initial=false): старые данные держим до прихода новых, без мигания.
-// Кэш (м.2): лента уже догружена (лимит 'all') — повторное раскрытие без запроса
-// (не плодим лишний GET всей ленты). Действует, только пока страница открыта.
+// Кэш (м.2): лента уже догружена (УСПЕШНО, _eventsLoaded) — повторное раскрытие/повтор
+// без запроса (не плодим лишний GET всей ленты). «Запрошено» (_eventsLimit='all', ставится
+// ДО запроса) ≠ «загружено»: после упавшей догрузки _eventsLoaded=false → «Повторить»
+// уходит в новый GET. Действует, только пока страница открыта.
 export function expandFeaturePageEvents(fid: string) {
   if (_fid !== fid) return;
-  if (_eventsLimit === 'all') return; // уже догружено — раскрытие без запроса
+  if (_eventsLoaded) {
+    // Уже догружено: повторное раскрытие/повтор — только UI (раскрыть + снять локальную
+    // ошибку), без нового GET.
+    _eventsExpanded = true;
+    _expandError = false;
+    emit();
+    return;
+  }
   _eventsLimit = 'all';
   _eventsExpanded = true;
-  _expandError = false; // повторная догрузка: локальная ошибка сбрасывается
+  _expandError = false;
   emit();
   fetchPage(fid, false, undefined, true);
 }
@@ -281,6 +296,7 @@ export const __test = {
     _tab = DEFAULT_TAB;
     _eventsLimit = undefined;
     _eventsExpanded = false;
+    _eventsLoaded = false;
     _expandError = false;
     _stageFocus = null;
     _stageFocusSeq = 0;
@@ -301,6 +317,8 @@ export const __test = {
   fetchPage,
   // Текущий лимит ленты (undefined → дефолт бэка, 'all' → вся лента).
   eventsLimit: () => _eventsLimit,
+  // Успешно догружена ли вся лента (true → повторное раскрытие/повтор без GET).
+  eventsLoaded: () => _eventsLoaded,
   expandFeaturePageEvents,
   collapseFeaturePageEvents,
   // Раскрытие ленты (все события, не только 8) и локальная ошибка догрузки.

@@ -66,7 +66,7 @@ function PlanRow({ plan, selected, isMobile, onSelect }: {
       }}
     >
       <RoleGlyph role={plan.role} />
-      <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
         {/* Заголовок — до двух строк (макет): line-clamp 2, строка растёт (minHeight). */}
         <span style={{ fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {plan.title}
@@ -76,7 +76,7 @@ function PlanRow({ plan, selected, isMobile, onSelect }: {
         </span>
       </div>
       {!plan.hasText && (
-        <span data-testid="plan-row-no-text" style={{ fontFamily: FONT.sans, fontSize: 10, color: C.textMuted, border: '1px dashed ' + C.dashed, borderRadius: R.sm, padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0, marginTop: 2 }}>
+        <span data-testid="plan-row-no-text" style={{ fontFamily: FONT.sans, fontSize: 10, color: C.textMuted, border: '1px dashed ' + C.dashed, borderRadius: R.sm, padding: `0 ${SP.xs}px`, whiteSpace: 'nowrap', flexShrink: 0, marginTop: SP.xxs }}>
           без текста
         </span>
       )}
@@ -224,7 +224,7 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
 function NoDocuments({ hasKeyChat, onOpenKeyChat, isMobile }: { hasKeyChat: boolean; onOpenKeyChat?: () => void; isMobile: boolean }) {
   return (
     <div data-testid="plans-all-empty" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.md, padding: `${SP.xl}px 0`, textAlign: 'center' }}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary }}>
         <MessageCircle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         Документов и макетов пока нет
       </span>

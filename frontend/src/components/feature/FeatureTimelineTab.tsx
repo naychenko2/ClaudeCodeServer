@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
 import { useFeatureStageFocus } from '../../lib/featurePage';
-import { C, R, FS, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
 import {
@@ -23,13 +23,13 @@ function TimelineNote() {
     <div
       data-testid="timeline-note"
       style={{
-        display: 'flex', gap: 8, alignItems: 'flex-start',
+        display: 'flex', gap: SP.sm, alignItems: 'flex-start',
         background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.md,
-        padding: '6px 10px', marginBottom: 14, fontFamily: FONT.sans,
+        padding: `${SP.xs}px ${SP.sm}px`, marginBottom: SP.md, fontFamily: FONT.sans,
         fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45,
       }}
     >
-      <Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: 1 }} />
+      <Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: SP.xxs }} />
       <span>
         Порядок этапов, их состояние и кто работал — точные. Длительность со знаком «≈» — по
         задачам этапа. Ревью идёт по шагам, поэтому пересекается с производством.
@@ -63,9 +63,9 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
     C.textMuted;
 
   return (
-    <div data-testid={`timeline-stage-${stage.key}`} style={{ position: 'relative', paddingLeft: 28, paddingBottom: 16 }}>
+    <div data-testid={`timeline-stage-${stage.key}`} style={{ position: 'relative', paddingLeft: SP.xl, paddingBottom: SP.lg }}>
       {/* Точка этапа (14) */}
-      <span style={{ ...stageDotStyle(stage), position: 'absolute', left: 2, top: 6 }} />
+      <span style={{ ...stageDotStyle(stage), position: 'absolute', left: SP.xxs, top: SP.xs }} />
       {/* Линия к следующему этапу */}
       {line && <span style={line} />}
       {/* Заголовок: имя · состояние · «≈» (кликабельный) */}
@@ -75,9 +75,9 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
         aria-expanded={expanded}
         data-testid={`timeline-stage-header-${stage.key}`}
         style={{
-          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
           background: 'transparent', border: 'none', cursor: 'pointer',
-          padding: '4px 0', minHeight: isMobile ? 40 : 26,
+          padding: `${SP.xs}px 0`, minHeight: isMobile ? 40 : 26,
           fontFamily: FONT.sans, width: '100%', textAlign: 'left',
         }}
       >
@@ -98,7 +98,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
               style={{
                 marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs,
                 color: C.textSecondary, whiteSpace: 'nowrap',
-                padding: '2px 4px', borderRadius: R.sm, cursor: 'help',
+                padding: `${SP.xxs}px ${SP.xs}px`, borderRadius: R.sm, cursor: 'help',
                 minHeight: isMobile ? 40 : undefined, display: 'inline-flex', alignItems: 'center',
               }}
             >
@@ -109,7 +109,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
       </button>
       {/* Границы: «dd.mm · ЧЧ:ММ – ЧЧ:ММ» / «с dd.mm · ЧЧ:ММ» */}
       {bounds && (
-        <div data-testid="timeline-stage-bounds" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, marginTop: 1 }}>
+        <div data-testid="timeline-stage-bounds" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, marginTop: SP.xxs }}>
           {bounds}
         </div>
       )}
@@ -120,16 +120,16 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
           style={{
             background: C.bgCard,
             border: `1px solid ${badge?.tone === 'danger' ? C.dangerBorder : badge?.tone === 'info' ? C.info : C.borderLight}`,
-            borderRadius: R.lg, padding: '8px 10px 10px', marginTop: 6,
+            borderRadius: R.lg, padding: `${SP.sm}px ${SP.sm}px ${SP.sm}px`, marginTop: SP.xs,
           }}
         >
           {badge && (
             <div
               data-testid="timeline-stage-badge"
               style={{
-                display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
                 background: badge.tone === 'info' ? C.infoBg : C.dangerBg,
-                borderRadius: R.md, padding: '6px 10px', marginBottom: 6,
+                borderRadius: R.md, padding: `${SP.xs}px ${SP.sm}px`, marginBottom: SP.xs,
                 fontFamily: FONT.sans, fontSize: FS.sm,
               }}
             >
@@ -159,7 +159,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
           {showSteps && (
             <div
               data-testid="timeline-steps"
-              style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 8, paddingTop: 8 }}
+              style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: SP.sm, paddingTop: SP.sm }}
             >
               {(chains && chains.length > 0) ? (
                 chains.map(chain => {
@@ -180,7 +180,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                 })
               ) : (
                 <div data-testid="feature-steps-empty" style={{ fontFamily: FONT.sans }}>
-                  <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, padding: '4px 0' }}>
+                  <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, padding: `${SP.xs}px 0` }}>
                     Шагов пока нет
                   </div>
                   <div style={{ fontSize: FS.sm, color: C.textMuted }}>

@@ -57,7 +57,7 @@ export interface FeaturePageProps {
 const SKELETON_WIDTHS = [70, 92, 84, 60, 88, 76];
 function LoadingSkeleton() {
   return (
-    <div data-testid="feature-page-skeleton" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div data-testid="feature-page-skeleton" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       {SKELETON_WIDTHS.map((w, i) => (
         <div
           key={i}
@@ -65,7 +65,7 @@ function LoadingSkeleton() {
           style={{ height: 14, width: `${w}%`, background: C.bgSelected, borderRadius: R.sm }}
         />
       ))}
-      <div className="cc-feature-page-skeleton" style={{ height: 120, marginTop: 6, background: C.bgSelected, borderRadius: R.sm }} />
+      <div className="cc-feature-page-skeleton" style={{ height: 120, marginTop: SP.xs, background: C.bgSelected, borderRadius: R.sm }} />
     </div>
   );
 }
@@ -95,9 +95,9 @@ function MiniSummaryStub({ onOpenStats }: { onOpenStats: () => void }) {
     <div
       data-testid="feature-page-mini-summary"
       style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm,
         background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
-        padding: '8px 10px', marginBottom: 12, fontFamily: FONT.sans,
+        padding: `${SP.sm}px ${SP.sm}px`, marginBottom: SP.md, fontFamily: FONT.sans,
       }}
     >
       <span style={{ fontSize: FS.sm, color: C.textMuted }}>Сводка по времени — скоро</span>
@@ -119,7 +119,7 @@ function ComingSoon() {
   return (
     <div
       data-testid="feature-page-tab-stub"
-      style={{ padding: '24px 0', textAlign: 'center', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}
+      style={{ padding: `${SP.xl}px 0`, textAlign: 'center', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}
     >
       Скоро
     </div>
@@ -321,7 +321,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
           eventsCount={page.page.events.length}
           waitingDot={okRun.attention?.kind === 'wait'}
         />
-        <div data-testid="feature-page-body" style={{ marginTop: 14 }}>
+        <div data-testid="feature-page-body" style={{ marginTop: SP.md }}>
           {tab === 'timeline' ? (
             <>
               <MiniSummaryStub onOpenStats={() => setFeaturePageTab('stats')} />
@@ -379,8 +379,8 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
       rootStyle={isMobile ? { flex: 1, overflow: 'hidden', height: 'auto' } : undefined}
     >
       <>
-        {/* Тело: прокрутка, поля 16 16 20 (макет §5.4; 16 сверху — как у файла, Майя m2). */}
-        <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: '16px 16px 20px' }}>
+        {/* Тело: прокрутка, поля 16 16 24 (макет §5.4; 16 сверху — как у файла, Майя m2). */}
+        <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: `${SP.lg}px ${SP.lg}px ${SP.xl}px` }}>
           {body}
         </div>
         {/* Модалка подтверждения мержа (Ф6): портал, рендерится при mergeOpen. */}

@@ -400,7 +400,9 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, isMo
           chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
           showNoChat
           taskId={x.taskId}
-          taskClosed={x.status === 'done' || task?.status === 'done'}
+          // «Закрыта» — ОДИН источник с StepRow: статус ЗАДАЧИ (task.status === 'done'),
+          // не статус исполнителя (x.status) — разные поля бэка.
+          taskClosed={task?.status === 'done'}
           onOpenTask={openTask}
           taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
           isMobile={isMobile}
@@ -575,7 +577,7 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, featureTi
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {chain.title}
         </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
           <ExecutorAvatar personaId={chain.personaId ?? null} />
           {name && (
             <span data-testid="feature-step-executor" style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
@@ -585,7 +587,7 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, featureTi
           {role && (
             <span
               data-testid="feature-step-role"
-              style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, background: C.bgSelected, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap' }}
+              style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, background: C.bgSelected, borderRadius: R.sm, padding: `0 ${SP.xs}px`, whiteSpace: 'nowrap' }}
             >
               {role}
             </span>
@@ -594,7 +596,7 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, featureTi
           {statusLabel && (
             <span
               data-testid="feature-step-status"
-              style={{ ...statusStyle, fontSize: FS.xs, fontWeight: 600, padding: '0 6px', borderRadius: R.sm, whiteSpace: 'nowrap', lineHeight: '16px' }}
+              style={{ ...statusStyle, fontSize: FS.xs, fontWeight: 600, padding: `0 ${SP.xs}px`, borderRadius: R.sm, whiteSpace: 'nowrap', lineHeight: '16px' }}
             >
               {statusLabel}
             </span>

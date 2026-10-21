@@ -15,7 +15,7 @@ import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { featureTaskTotal, taskCounters } from './featurePageBody';
+import { pluralTasks } from './FeaturePageHeader';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -36,11 +36,15 @@ const mockIndex = vi.hoisted(() => ({
 const mockChats = vi.hoisted(() => new Map<string, Session>());
 // Управляемый ответ api.tasks.getFeature: pending (загрузка) / error (статус) / result (ok).
 // calls — журнал вызовов (fid + eventsLimit) для проверки «Показать все».
+// perCall — ПОСЛЕДОВАТЕЛЬНЫЕ ответы (по одному на вызов, в порядке вызовов): сценарий
+// «догрузка упала → повтор» (call 1 = initial ok, call 2 = expand 500, call 3 = retry ok).
+// Пусто — статичный result/error (как раньше).
 const mockGetFeature = vi.hoisted(() => ({
   pending: false,
   result: null as FeaturePageData | null,
   error: null as (Error & { status?: number }) | null,
   calls: [] as { fid: string; eventsLimit?: string }[],
+  perCall: [] as ({ result?: FeaturePageData; error?: Error & { status?: number } })[],
 }));
 // Управляемый ответ api.tasks.mergeFeature: calls — журнал (двойной клик → 1 вызов),
 // pending (запрос в полёте → кнопка заблокирована), error (409/сбой, body.error — причина),
@@ -60,6 +64,9 @@ vi.mock('../../lib/api', () => ({
       getFeature: (fid: string, eventsLimit?: string) => {
         mockGetFeature.calls.push({ fid, eventsLimit });
         if (mockGetFeature.pending) return new Promise<FeaturePageData>(() => {});
+        const next = mockGetFeature.perCall.shift();
+        if (next?.error) return Promise.reject(next.error);
+        if (next?.result) return Promise.resolve(next.result);
         if (mockGetFeature.error) return Promise.reject(mockGetFeature.error);
         return Promise.resolve(mockGetFeature.result!);
       },
@@ -174,6 +181,19 @@ function findTab(c: ReturnType<typeof render>, label: string): AnyNode | null {
   return hit;
 }
 
+// Число строк событий в ПОКАЗАННОЙ ленте (data-testid="event-row-…"): 8 — свёрнуто,
+// все (10) — раскрыто. findNodeByAttr даёт только первый узел, поэтому обход дерева.
+function countEventRows(c: ReturnType<typeof render>): number {
+  let n = 0;
+  const walk = (x: AnyNode) => {
+    const id = (x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('data-testid') ?? '';
+    if (id.startsWith('event-row-')) { n++; return; }
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk(c as unknown as AnyNode);
+  return n;
+}
+
 // Дождаться разрешения fetch (fake timers + microtasks) → финальное состояние страницы.
 // advanceTimersByTime(2000): прогоняет debounce 1,5 с и microtasks, но НЕ interval 60 с
 // (useMinuteTick в PipelineFlow — иначе 10000 ререндеров = infinite loop).
@@ -202,6 +222,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     mockGetFeature.result = pageData();
     mockGetFeature.error = null;
     mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
     mockMergeFeature.pending = false;
     mockMergeFeature.result = null;
     mockMergeFeature.error = null;
@@ -521,9 +542,12 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(lastCall!.eventsLimit, 'догрузка = eventsLimit=all').toBe('all');
   });
 
-  // м.2: повторное раскрытие после сворачивания — без доп. GET (кэш _eventsLimit='all').
-  // Мутация (в отчёте): убрать `if (_eventsLimit === 'all') return` → 3-й GET → red.
-  it('м.2: «Свернуть» → «Показать все» повторно — без доп. запроса (кэш)', async () => {
+  // м.2: повторное раскрытие после сворачивания — лента раскрывается (все строки) БЕЗ
+  // доп. GET (кэш УСПЕШНОЙ догрузки, _eventsLoaded). Мутации (в отчёте):
+  //   (a) вернуть гард `if (_eventsLimit === 'all') return` (выход ДО `_eventsExpanded=true`)
+  //       → лента остаётся свёрнутой (8 строк) → «все 10» краснеет;
+  //   (b) убрать `_eventsExpanded = true` из ветки «уже загружено» → то же (8 строк) → red.
+  it('м.2: «Свернуть» → «Показать все» повторно — лента раскрыта (все строки), без доп. GET', async () => {
     const events: import('../../types/featureIndex').FeatureEvent[] = [];
     for (let i = 0; i < 10; i++) {
       events.push({ at: `2026-10-19T${String(10 + i).padStart(2, '0')}:00:00Z`, kind: 'started', taskId: `t${i}`, personaId: null, sessionId: null, round: null, reason: null });
@@ -533,14 +557,20 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     await settle();
     act(() => { setFeaturePageTab('events'); });
     const showAll = findNodeByAttr(c, 'data-testid', 'events-show-all')!;
-    // 1-й раз: догрузка (GET #2, eventsLimit=all).
+    // Свёрнуто: 8 последних (порог «Показать все» = 8).
+    expect(countEventRows(c), 'свёрнутая лента = 8').toBe(8);
+    // 1-й раз: догрузка (GET #2, eventsLimit=all) → лента раскрыта (все 10).
     act(() => { (reactProps(showAll)!.onClick as () => void)(); });
     await settle();
-    // «Свернуть» → «Показать все» (повторно): кэш — без нового GET.
+    expect(countEventRows(c), 'после «Показать все» — все 10').toBe(10);
+    // «Свернуть» → 8; «Показать все» (повторно) → кэш: все 10 БЕЗ нового GET.
     act(() => { (reactProps(showAll)!.onClick as () => void)(); });
     await settle();
+    expect(countEventRows(c), 'после «Свернуть» — 8').toBe(8);
     act(() => { (reactProps(showAll)!.onClick as () => void)(); });
     await settle();
+    // Повторное раскрытие: ВСЕ 10 строк видны (не 8) — мутация (a)/(b) красит.
+    expect(countEventRows(c), 'повторное «Показать все» — все 10 (не 8)').toBe(10);
     // GET: #1 (initial) + #2 (expand) = 2; повторный expand — без #3.
     expect(mockGetFeature.calls.length, 'повторное раскрытие без доп. GET (кэш)').toBe(2);
   });
@@ -564,6 +594,67 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     act(() => { setFeaturePageTab('events'); });
     const btn = findNodeByAttr(c, 'data-testid', 'events-show-all')!;
     expect(textNodes(btn).join(''), 'раскрытие переживает смену вкладки').toContain('Свернуть');
+  });
+
+  // Сценарий на живом сторе (не мок вкладки): упавшая догрузка → страница жива, вкладки
+  // на месте, локальная ошибка «Не удалось догрузить» → клик «Повторить» → ВТОРОЙ запрос
+  // с eventsLimit='all' → лента раскрылась, ошибки нет. perCall: call1=initial ok,
+  // call2=expand 500, call3=retry ok. Мутации (в отчёте):
+  //   (a) вернуть гард `if (_eventsLimit === 'all') return` → «Повторить» не уходит в GET
+  //       (calls=2, не 3) → red;
+  //   (b) убрать очистку ошибки (не сбрасывать _expandError успешной догрузкой) →
+  //       «events-expand-error» остаётся → red.
+  it('сценарий: догрузка упала → «Повторить» → 2-й запрос eventsLimit=all → лента раскрыта, ошибки нет', async () => {
+    const events: import('../../types/featureIndex').FeatureEvent[] = [];
+    for (let i = 0; i < 10; i++) {
+      events.push({ at: `2026-10-19T${String(10 + i).padStart(2, '0')}:00:00Z`, kind: 'started', taskId: `t${i}`, personaId: null, sessionId: null, round: null, reason: null });
+    }
+    const full = pageData({ events, eventsTotal: 1000 });
+    mockGetFeature.perCall = [
+      { result: full },                                        // call 1: initial load (ok)
+      { error: { name: 'HttpError', status: 500 } as Error & { status?: number } }, // call 2: expand (500)
+      { result: full },                                        // call 3: retry (ok)
+    ];
+    const c = render({});
+    await settle();
+    act(() => { setFeaturePageTab('events'); });
+    const showAll = findNodeByAttr(c, 'data-testid', 'events-show-all')!;
+    // Клик «Показать все» → догрузка (call 2) → 500 → локальная ошибка (страница не роняется).
+    act(() => { (reactProps(showAll)!.onClick as () => void)(); });
+    await settle();
+    // Страница жива, вкладки на месте, локальная ошибка «Не удалось догрузить».
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница жива после упавшей догрузки').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tabs'), 'вкладки на месте').not.toBeNull();
+    const err = findNodeByAttr(c, 'data-testid', 'events-expand-error');
+    expect(err, 'локальная ошибка догрузки').not.toBeNull();
+    expect(textNodes(err!).join('')).toContain('Не удалось догрузить');
+    // Клик «Повторить» → call 3 (eventsLimit=all) → успех → лента раскрыта, ошибки нет.
+    const retry = findNodeByAttr(c, 'data-testid', 'events-expand-retry')!;
+    act(() => { (reactProps(retry)!.onClick as () => void)(); });
+    await settle();
+    // Второй запрос — с eventsLimit='all' (call 3).
+    const lastCall = mockGetFeature.calls[mockGetFeature.calls.length - 1];
+    expect(lastCall.eventsLimit, 'повтор = eventsLimit=all').toBe('all');
+    // Лента раскрыта (все 10) и локальной ошибки нет.
+    expect(countEventRows(c), 'после повтора лента раскрыта (все 10)').toBe(10);
+    expect(findNodeByAttr(c, 'data-testid', 'events-expand-error'), 'ошибка снята после повтора').toBeNull();
+  });
+
+  // Минор 1 (уровень страницы): метка «Показать все · 1000» = eventsTotal (общее до
+  // обрезки), НЕ events.length (загружено). Мутация (в отчёте): FeaturePage.tsx
+  // `eventsTotal={page.page.events.length}` → метка «Показать все · 10» → red.
+  it('минор 1: метка «Показать все · 1000» = eventsTotal (не events.length)', async () => {
+    const events: import('../../types/featureIndex').FeatureEvent[] = [];
+    for (let i = 0; i < 10; i++) {
+      events.push({ at: `2026-10-19T${String(10 + i).padStart(2, '0')}:00:00Z`, kind: 'started', taskId: `t${i}`, personaId: null, sessionId: null, round: null, reason: null });
+    }
+    mockGetFeature.result = pageData({ events, eventsTotal: 1000 });
+    const c = render({});
+    await settle();
+    act(() => { setFeaturePageTab('events'); });
+    const showAll = findNodeByAttr(c, 'data-testid', 'events-show-all')!;
+    // events.length=10, eventsTotal=1000: метка — ОБЩЕЕ число (1000), не длина ленты (10).
+    expect(textNodes(showAll).join(''), 'метка «Показать все · 1000»').toBe('Показать все · 1000');
   });
 
 
@@ -606,19 +697,6 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
 
 
 
-});
-
-// === п.64: featureTaskTotal — ОДИН фолбэк (индекс → иначе сумма по шагам) ===
-// Чистая функция: taskCount из индекса имеет приоритет; фичи нет в индексе (null) —
-// фолбэк на taskCounters(run).total. Мутация (в отчёте): фолбэк на 0 → тест краснеет.
-describe('п.64: featureTaskTotal (один фолбэк)', () => {
-  const run = pageData().run;
-  it('индекс (taskCount) имеет приоритет над суммой по шагам', () => {
-    expect(featureTaskTotal(feat({ taskCount: 7 }), run)).toBe(7);
-  });
-  it('фичи нет в индексе (null) — фолбэк на taskCounters(run).total', () => {
-    expect(featureTaskTotal(null, run)).toBe(taskCounters(run).total);
-  });
 });
 
 
@@ -690,5 +768,17 @@ describe('Esc: useEscapeClose (общий хук, CenterViewShell)', () => {
     act(() => { root.unmount(); });
     esc(win);
     expect(onBack, 'слушатель Esc не снят при размонтировании (stale listener)').not.toHaveBeenCalled();
+  });
+});
+
+// Минор 5: склонение «задача/задачи/задач» (FeaturePageHeader.pluralTasks).
+// Мутация (в отчёте): сломать любое правило (11→задача, 21→задачи) → red.
+describe('pluralTasks: склонение «задача/задачи/задач»', () => {
+  it('1 задача / 2 задачи / 5 задач / 11 задач / 21 задача', () => {
+    expect(pluralTasks(1)).toBe('задача');
+    expect(pluralTasks(2)).toBe('задачи');
+    expect(pluralTasks(5)).toBe('задач');
+    expect(pluralTasks(11)).toBe('задач');
+    expect(pluralTasks(21)).toBe('задача');
   });
 });

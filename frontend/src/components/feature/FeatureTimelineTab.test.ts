@@ -416,13 +416,14 @@ describe('FeatureTimelineTab: рендер', () => {
 
   it('исполнитель без чата (chatId == null) → «чата нет» (без мёртвой ссылки)', () => {
     const stages = fullStages();
-    // prod: исполнитель без chatId.
+    // prod: исполнитель без chatId; задача t2 в run со статусом done.
     stages[2]!.executors = [mkExec({ personaId: 'p1', taskId: 't2', taskRole: 'step', stepRef: 'Ш2', lane: 'front', status: 'done', chatId: null })];
-    const c = renderTab(mkRun(stages));
+    const c = renderTab(mkRun(stages, { steps: [{ id: 't2', title: 'Шаг 2', status: 'done' }] }));
     const noChat = findNodeByAttr(c, 'data-testid', 'nav-target-no-chat');
     expect(noChat).not.toBeNull();
     expect(textNodes(noChat!).join('')).toBe('чата нет');
-    // R1 major: taskClosed={x.status === 'done'} → кнопка задачи показывает «закрыта».
+    // R1 major: taskClosed={task?.status === 'done'} (один источник: статус задачи) →
+    // кнопка задачи показывает «закрыта».
     const taskBtn = findNodeByAttr(c, 'data-testid', 'nav-target-task');
     expect(taskBtn, 'кнопка задачи при taskId != null').not.toBeNull();
     expect(textNodes(taskBtn!).join('')).toContain('закрыта');

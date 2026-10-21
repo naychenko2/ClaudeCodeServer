@@ -47,6 +47,8 @@ public static class ServerMetrics
         "reason",      // ошибки Dify-синхронизации: 401, 404, 429, timeout, other
         "dataset_type",// тип датасета Dify: notes | persona | team | dossiers | project
         "healability", // healable | unhealable — сопоставим ли error-документ с записью стора
+        "observer",    // имя типа наблюдателя сообщений сессии (≈10 значений, берутся из кода)
+        "session_kind",// human | executor — чат человека или чат-исполнитель задачи
     };
 
     private static readonly Meter _meter = new(MeterName, MeterVersion);
@@ -60,6 +62,16 @@ public static class ServerMetrics
         "ccs.llm.duration",
         unit: "ms",
         description: "Длительность хода LLM (ms)");
+
+    public static readonly Histogram<double> SessionQueueWait = _meter.CreateHistogram<double>(
+        "ccs.session.queue_wait",
+        unit: "ms",
+        description: "Ожидание сообщения чата в очереди сессии до рассылки (ms)");
+
+    public static readonly Histogram<double> SessionObserverDuration = _meter.CreateHistogram<double>(
+        "ccs.session.observer_duration",
+        unit: "ms",
+        description: "Время обработки сообщения чата наблюдателем (ms)");
 
     /// <summary>
     /// Явные границы бакетов для <see cref="LlmDuration"/> (мс). Регистрируются как View
@@ -173,6 +185,16 @@ public static class ServerMetrics
             new KeyValuePair<string, object?>("outcome", outcome),
             new KeyValuePair<string, object?>("execution", execution));
     }
+
+    /// <summary>Время ожидания сообщения в очереди сессии: <paramref name="sessionKind"/> — human | executor.</summary>
+    public static void RecordSessionQueueWait(double waitMs, string sessionKind) =>
+        SessionQueueWait.Record(waitMs, new KeyValuePair<string, object?>("session_kind", sessionKind));
+
+    /// <summary>Время наблюдателя: <paramref name="observer"/> — имя типа обработчика (значения из кода, не из данных).</summary>
+    public static void RecordSessionObserverDuration(double durationMs, string observer, string sessionKind) =>
+        SessionObserverDuration.Record(durationMs,
+            new KeyValuePair<string, object?>("observer", observer),
+            new KeyValuePair<string, object?>("session_kind", sessionKind));
 
     public static void RecordLlmError(string provider, string errorType, string execution = "local")
     {

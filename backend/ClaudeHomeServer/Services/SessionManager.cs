@@ -1,7 +1,9 @@
 ﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.ChatSubjects;
@@ -21,6 +23,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private class SessionEntry
     {
         public required Session Info;
+        // Очередь рассылки и наблюдателей сессии (создаётся лениво первым сообщением хода)
+        public SessionMessagePipeline? Pipeline;
         public ILlmSessionAdapter? Process;
         public TurnAccumulator? Accumulator;
         // Кэш последних workflow_progress для replay при подключении нового клиента
@@ -4575,7 +4579,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var difyMcp = BuildDifyContext(ownerId);
         var hands = HandsFor(session.ProjectId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
-            msg => OnMessageAsync(session.Id, accumulator, msg, runId),
+            msg => OnMessageQueuedAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, ProjectManager.BuiltInSystemPrompt, permissionRules,
 
             ContentRootPath: AppContext.BaseDirectory,
@@ -4793,10 +4797,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var runId = Interlocked.Increment(ref _runSeq);
         entry.RunId = runId;
         var acc = entry.Accumulator!;
-        await OnMessageAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true, Action: PersonaZone.ChangeCompanionAction), runId);
-        await OnMessageAsync(sessionId, acc, new ResultMessage(
+        await OnMessageQueuedAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true, Action: PersonaZone.ChangeCompanionAction), runId);
+        await OnMessageQueuedAsync(sessionId, acc, new ResultMessage(
             Subtype: "error", DurationMs: 0, NumTurns: 0, Usage: null, TotalCostUsd: null), runId);
-        await OnMessageAsync(sessionId, acc, new ExitedMessage(), runId);
+        await OnMessageQueuedAsync(sessionId, acc, new ExitedMessage(), runId);
     }
 
     // Непосредственный запуск хода в процесс (гейты очереди уже пройдены либо не требуются).
@@ -5232,7 +5236,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         // Provider не заполняем (дефолт claude): фронт модель из каталога не знает и
         // деградирует в Claude-облик — бейдж не ломается, фронт не трогаем.
-        await OnMessageAsync(sessionId, acc, new SessionStartedMessage(
+        await OnMessageQueuedAsync(sessionId, acc, new SessionStartedMessage(
             entry.Info.ClaudeSessionId ?? sessionId, IsResume: false,
             Model: _router!.LocalModel, Mode: entry.Info.Mode.ToString().ToLowerInvariant()), runId);
 
@@ -5259,7 +5263,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 onDelta: async chunk =>
                 {
                     streamed += chunk.Length;
-                    await OnMessageAsync(sessionId, acc, new TextDeltaMessage(chunk), runId);
+                    await OnMessageQueuedAsync(sessionId, acc, new TextDeltaMessage(chunk), runId);
                 },
                 ct: cts.Token);
         }
@@ -5270,7 +5274,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
         catch (Exception ex)
         {
-            await OnMessageAsync(sessionId, acc, new ErrorMessage($"Локальная модель: {ex.Message}"), runId);
+            await OnMessageQueuedAsync(sessionId, acc, new ErrorMessage($"Локальная модель: {ex.Message}"), runId);
         }
         finally
         {
@@ -5283,8 +5287,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Обычный путь: текст уже ушёл кусками из onDelta. Целиком шлём только если
             // поток не дал ничего (не-потоковый ответ, сбой до первого куска)
             if (streamed == 0)
-                await OnMessageAsync(sessionId, acc, new TextDeltaMessage(answer), runId);
-            await OnMessageAsync(sessionId, acc, new ResultMessage(
+                await OnMessageQueuedAsync(sessionId, acc, new TextDeltaMessage(answer), runId);
+            await OnMessageQueuedAsync(sessionId, acc, new ResultMessage(
                 Subtype: "success", DurationMs: sw.ElapsedMilliseconds, NumTurns: 1,
                 Usage: turn.Usage, TotalCostUsd: 0), runId);
         }
@@ -5293,11 +5297,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Пустой ответ/сбой HTTP — честная ошибка без фолбэка на CLI
             // (ErrorMessage исключения уже ушёл выше — второй не дублируем).
             if (turn is not null)
-                await OnMessageAsync(sessionId, acc,
+                await OnMessageQueuedAsync(sessionId, acc,
                     new ErrorMessage("Локальная модель не ответила"), runId);
         }
 
-        await OnMessageAsync(sessionId, acc, new ExitedMessage(), runId);
+        await OnMessageQueuedAsync(sessionId, acc, new ExitedMessage(), runId);
     }
 
 
@@ -6186,7 +6190,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var notificationsMcp = BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId, persona.Persona);
             var difyMcp = BuildDifyContext(entry.Info.OwnerId);
             context = new LlmSessionContext(rootPath,
-                msg => OnMessageAsync(sessionId, accumulator, msg, runId),
+                msg => OnMessageQueuedAsync(sessionId, accumulator, msg, runId),
                 RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
                 PermissionRules: null,
                 ContentRootPath: AppContext.BaseDirectory,
@@ -6269,7 +6273,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var difyMcp = BuildDifyContext(project.OwnerId);
             var hands = HandsFor(project.Id);
             context = new LlmSessionContext(rootPath,
-                msg => OnMessageAsync(sessionId, accumulator, msg, runId),
+                msg => OnMessageQueuedAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
                 ProjectManager.BuiltInSystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
@@ -9395,6 +9399,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.Accumulator?.MarkDeleted();
         if (entry.Process is not null)
             await entry.Process.DisposeAsync();
+        // Дренаж очереди сессии до конца: ResultMessage последнего хода обязан дойти до всех
+        // наблюдателей (иначе TaskExecutionService не закроет задачу исполнителя)
+        if (entry.Pipeline is { } pipeline)
+            await pipeline.CompleteAsync(TimeSpan.FromSeconds(30));
+
         // Дочищаем историю на диске — иначе data/sessions/{id} копится мусором
         if (entry.Info.ClaudeSessionId is string csid)
         {
@@ -9589,6 +9598,24 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // internal (InternalsVisibleTo): тесты гоняют сообщения (в т.ч. ResultMessage) через
     // обработчик, чтобы проверить побочные эффекты (сброс RestartResumeAttempts, статус).
     internal async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
+    {
+        await OnMessageQueuedAsync(sessionId, acc, msg, runId);
+        // Тестовый шов сохраняет прежнюю семантику «вернулся — рассылка и наблюдатели отработали»;
+        // боевые вызывающие идут в OnMessageQueuedAsync и очередь не ждут
+        await DrainPipelineAsync(sessionId);
+    }
+
+    // Дожидается разбора всего, что легло в очередь сессии (тесты и точки, которым нужны
+    // отработавшие наблюдатели)
+    internal Task DrainPipelineAsync(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) && entry.Pipeline is { } pipeline
+            ? pipeline.DrainAsync() : Task.CompletedTask;
+
+    // Боевой вход обработчика сообщений адаптера. Всё, что меняет состояние сессии (снимок в
+    // аккумулятор, статус, гейты прогона, запуск очереди и цикла), выполняется здесь же и по
+    // порядку; рассылка в SignalR и обход наблюдателей уходят в очередь сессии
+    // (SessionMessagePipeline), чтобы медленный клиент или наблюдатель не держал read-loop CLI.
+    internal async Task OnMessageQueuedAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
     {
         _sessions.TryGetValue(sessionId, out var entry);
         // Волна 6: живая трансляция хода штаба фильтрует маркеры протокола (см. кейс ниже) —
@@ -9815,7 +9842,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // трогаем — ApplyStatusAsync двигал бы UpdatedAt, а по нему идут сортировка,
                 // секции дерева и непрочитанность. Рассылка — в session + project/user-группы
                 case BgAgentsPresenceMessage m:
-                    await BroadcastSessionMessageAsync(sessionId, m);
+                    if (entry is not null)
+                        await EnqueueWorkAsync(entry, () => BroadcastSessionMessageAsync(sessionId, m));
+                    else
+                        await BroadcastSessionMessageAsync(sessionId, m);
                     break;
                 case FileChangedMessage m:
                     acc.OnFileChanged(m.Path, m.Added, m.Removed, m.External);
@@ -10018,7 +10048,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     entry.LastTurnEndedAt = newStatus == SessionStatus.Active ? DateTimeOffset.UtcNow : null;
                 // exited — та же доводка, что у sweep: содержимое хода пришло раньше
                 // (result/сообщения), а обрыв без result его не добавляет
-                await ApplyStatusAsync(sessionId, entry, newStatus.Value,
+                // Состояние и SaveSessions — здесь же; рассылка смены статуса уходит в очередь
+                // (раньше await на SignalR держал read-loop), порядок «статус → сообщение» сохранён
+                await ApplyStatusQueuedAsync(sessionId, entry, newStatus.Value,
                     touchUpdatedAt: msg is not ExitedMessage);
             }
 
@@ -10058,7 +10090,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // TeamTurnLock через реентрантность lock()). Здесь — только осушение буфера.
                 }
                 if (!string.IsNullOrEmpty(catchUpDelta))
-                    await BroadcastAsync(sessionId, new TextDeltaMessage(catchUpDelta));
+                {
+                    // Догоняющая дельта — единственная порция придержанного текста: слить её нельзя
+                    var catchUp = new TextDeltaMessage(catchUpDelta);
+                    await EnqueueWorkAsync(entry, () => BroadcastAsync(sessionId, catchUp));
+                }
             }
 
             // При поднятом _stopping план штабу не кладём: разбор хода (HandleTeamTurnEndAsync)
@@ -10203,23 +10239,71 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             }
         }
 
-        if (sendBroadcast) await BroadcastAsync(sessionId, msg);
-        // Карточка в ленте — старт MCP-вызова, обогнавший её рассылку, уходит следом
-        if (msg is ToolUseMessage announced && acc.OnToolAnnounced(announced.Id) is { } earlyStart)
-            await BroadcastAsync(sessionId, new ToolStartedMessage(announced.Id, earlyStart));
+        // Карточка в ленте — старт MCP-вызова, обогнавший её рассылку, уходит следом.
+        // Вычисляется здесь, синхронно: аккумулятор принадлежит порядку чтения stdout
+        ToolStartedMessage? earlyStarted = msg is ToolUseMessage announced
+            && acc.OnToolAnnounced(announced.Id) is { } earlyStart
+            ? new ToolStartedMessage(announced.Id, earlyStart) : null;
 
-        if (entry is not null && OnSessionMessage is { } observers)
+        if (entry is null)
         {
-            // Multicast Func<> await-ит только Task ПОСЛЕДНЕГО подписчика — ждём всех явно,
-            // иначе исключения и незавершённая работа не-последних наблюдателей теряются
-            foreach (var observer in observers.GetInvocationList().Cast<Func<Session, ServerMessage, Task>>())
+            // Записи сессии нет (удалена) — наблюдателей у кадра не было и раньше
+            if (sendBroadcast) await BroadcastAsync(sessionId, msg);
+            if (earlyStarted is not null) await BroadcastAsync(sessionId, earlyStarted);
+            return;
+        }
+
+        // Дальше рассылку и наблюдателей ведёт потребитель очереди сессии, read-loop свободен
+        var broadcastMsg = sendBroadcast;
+        await GetPipeline(entry).EnqueueAsync(new PipelineItem(
+            async () =>
             {
-                try { await observer(entry.Info, msg); }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[SessionManager] Ошибка наблюдателя сессии ({sessionId}): {ex.Message}");
-                }
+                if (broadcastMsg) await BroadcastAsync(sessionId, msg);
+                if (earlyStarted is not null) await BroadcastAsync(sessionId, earlyStarted);
+            },
+            msg, entry.Info,
+            Droppable: SessionMessagePipeline.IsDroppable(msg),
+            EnqueuedAt: Stopwatch.GetTimestamp()));
+    }
+
+    private SessionMessagePipeline GetPipeline(SessionEntry entry) =>
+        LazyInitializer.EnsureInitialized(ref entry.Pipeline,
+            () => new SessionMessagePipeline(item => ProcessPipelineItemAsync(entry, item)));
+
+    // Работа без сообщения для наблюдателей (догоняющая дельта, presence, смена статуса)
+    private ValueTask EnqueueWorkAsync(SessionEntry entry, Func<Task> work) =>
+        GetPipeline(entry).EnqueueAsync(new PipelineItem(work, null, null, false, Stopwatch.GetTimestamp()));
+
+    // Единственный потребитель очереди сессии: рассылка, затем наблюдатели по порядку
+    private async Task ProcessPipelineItemAsync(SessionEntry entry, PipelineItem item)
+    {
+        var sessionId = entry.Info.Id;
+        var kind = entry.Info.TaskId is null ? "human" : "executor";
+        ServerMetrics.RecordSessionQueueWait(Stopwatch.GetElapsedTime(item.EnqueuedAt).TotalMilliseconds, kind);
+
+        if (item.Work is { } work)
+        {
+            try { await work(); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Ошибка рассылки сообщения сессии ({sessionId}): {ex.Message}");
             }
+        }
+
+        if (item.Msg is null || item.Info is null || OnSessionMessage is not { } observers) return;
+        // Multicast Func<> await-ит только Task ПОСЛЕДНЕГО подписчика — ждём всех явно,
+        // иначе исключения и незавершённая работа не-последних наблюдателей теряются
+        foreach (var observer in observers.GetInvocationList().Cast<Func<Session, ServerMessage, Task>>())
+        {
+            var started = Stopwatch.GetTimestamp();
+            try { await observer(item.Info, item.Msg); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Ошибка наблюдателя сессии ({sessionId}): {ex.Message}");
+            }
+            ServerMetrics.RecordSessionObserverDuration(
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                observer.Target?.GetType().Name ?? observer.Method.DeclaringType?.Name ?? "unknown", kind);
         }
     }
 
@@ -10451,6 +10535,20 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         SaveSessions();
         await BroadcastStatusChangeAsync(sessionId, entry.Info,
             status, entry.Info.LastMessage, entry.Info.MessageCount);
+    }
+
+    // То же, что ApplyStatusAsync, но рассылка смены статуса идёт через очередь сессии:
+    // состояние и запись sessions.json остаются синхронными, read-loop не ждёт SignalR
+    private async Task ApplyStatusQueuedAsync(string sessionId, SessionEntry entry, SessionStatus status,
+        bool touchUpdatedAt = true)
+    {
+        entry.Info.Status = status;
+        if (touchUpdatedAt && !entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        var lastMessage = entry.Info.LastMessage;
+        var messageCount = entry.Info.MessageCount;
+        await EnqueueWorkAsync(entry,
+            () => BroadcastStatusChangeAsync(sessionId, entry.Info, status, lastMessage, messageCount));
     }
 
     // Текст последней реплики ассистента текущего хода (сообщения после baseline) —

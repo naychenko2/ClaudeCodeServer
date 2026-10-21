@@ -2073,7 +2073,7 @@ const windowWidth = useWindowWidth();
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
               с десктопом — FeatureCenter (не копипаста). */}
-          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack}>
+          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack} onOpenFile={handleOpenFileFromTree}>
             {leftTab === 'tools'
               ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
               : personasMode

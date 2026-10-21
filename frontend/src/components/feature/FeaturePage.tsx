@@ -19,6 +19,7 @@ import { Notice } from '../ui/Notice';
 import { EmptyState } from '../ui/EmptyState';
 import { Button } from '../ui/Button';
 import { FeatureTimelineTab } from './FeatureTimelineTab';
+import { FeaturePlansTab, plansTabCount } from './FeaturePlansTab';
 import {
   FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
   featureRunStatusTag, toRunTag, type FeatureRunTag,
@@ -42,6 +43,8 @@ export interface FeaturePageProps {
   isMobile?: boolean;
   // Исполнитель закрытия: закрывает страницу и ведёт в target.
   onBack: (target: FeaturePageBackTarget) => void;
+  // Открыть файл проекта (существующий просмотр; «Открыть макет» в «Планы и макеты»).
+  onOpenFile?: (path: string) => void;
 }
 
 // Скелет загрузки (макет §5.7): 6 полос 14 px разной ширины (bgSelected, R 6, gap 10,
@@ -130,7 +133,7 @@ function ComingSoon() {
 // Тег статуса — единая точка правды run.state (9 состояний, макет §3); старые данные
 // (state нет) — фолбэк на тег индекса. Выбранная вкладка — в сторе страницы
 // (useFeaturePageTab): переживает скрытие/возврат, не живёт в DOM.
-export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: FeaturePageProps) {
+export function FeaturePage({ featureId, projectId, isMobile = false, onBack, onOpenFile }: FeaturePageProps) {
   // Данные страницы (run + events) — из стора; здесь для фолбэка заголовка и 404/503.
   const page = useFeaturePage(featureId);
   const featuresOn = useFeature(FLAGS.featuresOverview);
@@ -302,6 +305,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
           value={tab}
           onChange={setFeaturePageTab}
           isMobile={isMobile}
+          plansCount={plansTabCount(page.page)}
           chatsCount={chatsCount}
           tasksCount={featureTaskTotal(feature, okRun)}
           eventsCount={page.page.eventsTotal}
@@ -313,6 +317,8 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
               <MiniSummaryStub onOpenStats={() => setFeaturePageTab('stats')} />
               <FeatureTimelineTab run={okRun} isMobile={isMobile} />
             </>
+          ) : tab === 'plans' ? (
+            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} />
           ) : (
             <ComingSoon />
           )}

@@ -12,7 +12,7 @@ import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 // Общий паттерн мобильной и десктопной раскладки: одна реализация, не копипаста.
 // `children` — контент центра (в мобильной ветке — тернарник чат/задача/персона,
 // в десктопе — весь набор центральных режимов DesktopWorkspace).
-export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, children }: {
+export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, onOpenFile, children }: {
   // Страница открыта (featureId ≠ null).
   open: boolean;
   // Id эпика открытой страницы; null — страница закрыта.
@@ -22,6 +22,8 @@ export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, ch
   isMobile: boolean;
   // Исполнитель «← назад»: закрывает страницу и ведёт в target.
   onBack: (t: FeaturePageBackTarget) => void;
+  // Открыть файл проекта (существующий просмотр; «Открыть макет» в «Планы и макеты»).
+  onOpenFile?: (path: string) => void;
   // Контент центра.
   children: ReactNode;
 }) {
@@ -29,7 +31,7 @@ export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, ch
   // (R14, рамка, тень, зазор centerGap — ровно как centerIsland у файла), на мобиле —
   // без острова (как и файл). Чат под страницей остаётся в DOM (display:none, не unmount).
   const page = (
-    <FeaturePage featureId={featureId!} projectId={projectId} isMobile={isMobile} onBack={onBack} />
+    <FeaturePage featureId={featureId!} projectId={projectId} isMobile={isMobile} onBack={onBack} onOpenFile={onOpenFile} />
   );
   return (
     <>

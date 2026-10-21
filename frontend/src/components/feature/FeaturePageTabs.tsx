@@ -27,6 +27,7 @@ export interface FeaturePageTabsProps {
   onChange: (t: FeaturePageTab) => void;
   isMobile: boolean;
   // Счётчики; 0/null — без счётчика (макет: нулевые не рисуются).
+  plansCount?: number | null;
   chatsCount?: number | null;
   tasksCount?: number | null;
   eventsCount?: number | null;
@@ -34,7 +35,7 @@ export interface FeaturePageTabsProps {
   waitingDot?: boolean;
 }
 
-export function FeaturePageTabs({ value, onChange, isMobile, chatsCount, tasksCount, eventsCount, waitingDot }: FeaturePageTabsProps) {
+export function FeaturePageTabs({ value, onChange, isMobile, plansCount, chatsCount, tasksCount, eventsCount, waitingDot }: FeaturePageTabsProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // На 360: активная вкладка в видимости (макет §4).
@@ -46,7 +47,7 @@ export function FeaturePageTabs({ value, onChange, isMobile, chatsCount, tasksCo
 
   const items: TabItem<FeaturePageTab>[] = [
     { value: 'timeline', label: 'Хронология' },
-    { value: 'plans', label: 'Планы и макеты' },
+    { value: 'plans', label: 'Планы и макеты', count: plansCount != null && plansCount > 0 ? plansCount : undefined },
     {
       value: 'chats', label: 'Чаты',
       count: chatsCount != null && chatsCount > 0 ? chatsCount : undefined,

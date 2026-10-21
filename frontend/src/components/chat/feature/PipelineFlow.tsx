@@ -7,6 +7,7 @@ import { getPersonaById, usePersonasVersion } from '../../../lib/personas';
 import { openTaskInSection } from '../../../lib/tasks';
 import { useFeatureStepFocus } from '../../../lib/featureRuns';
 import { stepDisplayName } from '../../../lib/stepRef';
+import { laneWord } from '../../../lib/roleLabel';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
 import { ChatSessionContext } from '../contexts';
 import { FeatureGlyph } from './FeatureGlyphs';
@@ -237,11 +238,12 @@ export function toggleExpanded(prev: StageKey | null, key: StageKey): StageKey |
 
 // Нормализация линии шага (из FeatureStepChain.lane): back | front | other.
 // lane в данных бывает 'back'/'front' (англ.) или 'бэк'/'фронт' (рус.) — нормализуем;
-// прочие линии (тест, дизайн) — в «прочее».
+// прочие линии (тест, дизайн) — в «прочее». Нормализация — из roleLabel.laneWord
+// (ревью фронта 1, minor 9: одна точка, не дублируем).
 export function laneOfChain(lane?: string | null): 'back' | 'front' | 'other' {
-  const l = (lane ?? '').trim().toLowerCase();
-  if (l === 'back' || l === 'backend' || l === 'бэк' || l === 'бэкенд') return 'back';
-  if (l === 'front' || l === 'frontend' || l === 'фронт' || l === 'фронтенд') return 'front';
+  const w = laneWord(lane ?? null);
+  if (w === 'бэк') return 'back';
+  if (w === 'фронт') return 'front';
   return 'other';
 }
 

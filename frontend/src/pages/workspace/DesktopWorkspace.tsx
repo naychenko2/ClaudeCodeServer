@@ -479,7 +479,7 @@ export function DesktopWorkspace(p: Props) {
           Страница фичи (Ф2.3/C1) — СОСЕД центра: при открытой (openFeatureId) весь центр
           прячется display:none (не размонтируется), страница рисуется рядом. FeatureCenter —
           общий паттерн с мобильной веткой. */}
-      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack}>
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />

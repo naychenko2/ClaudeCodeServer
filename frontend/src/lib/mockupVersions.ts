@@ -67,6 +67,15 @@ export function currentVersion(versions: (number | 'final' | null)[]): number | 
   return Math.max(...nums);
 }
 
+// Текущая ли версия макета в его группе (по корню имени): версия == текущая версия группы.
+// Единое правило «живой/прошлый»: им пользуются и splitMockups, и UI (чип «заменён»).
+export function isCurrentOfGroup(m: FeatureMockup, all: FeatureMockup[]): boolean {
+  const { root, version } = parseMockupVersion(m.path);
+  const group = all.filter(x => parseMockupVersion(x.path).root === root);
+  const current = currentVersion(group.map(x => parseMockupVersion(x.path).version));
+  return version === current;
+}
+
 // Главный файл для «Открыть макет»: первый `files[]` с `.html` и `exists`.
 // null — открыть нечего (все html «не в master» или html нет) → кнопка disabled.
 export function mainHtmlFile(m: FeatureMockup): string | null {
@@ -116,11 +125,9 @@ export function splitMockups(mockups: FeatureMockup[]): MockupSplit {
   const live: FeatureMockup[] = [];
   const past: FeatureMockup[] = [];
   for (const items of groups.values()) {
-    const current = currentVersion(items.map(m => parseMockupVersion(m.path).version));
     for (const m of items) {
-      const isCurrent = parseMockupVersion(m.path).version === current;
-      // Живой = текущая версия группы И не отклонён.
-      if (isCurrent && m.status !== 'rejected') live.push(m);
+      // Живой = текущая версия группы (единое правило isCurrentOfGroup) И не отклонён.
+      if (isCurrentOfGroup(m, mockups) && m.status !== 'rejected') live.push(m);
       else past.push(m);
     }
   }

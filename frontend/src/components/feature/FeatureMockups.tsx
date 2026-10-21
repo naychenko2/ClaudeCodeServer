@@ -19,11 +19,28 @@ import { NavTargetButton } from './NavTargetButton';
 import { openTaskInSection } from '../../lib/tasks';
 import { getPersonaById } from '../../lib/personas';
 import { dateOnly } from '../chat/feature/featureTime';
-import { MOCKUP_STATUS_LABEL, MOCKUP_STATUS_STYLE, mainHtmlFile, versionCounts, parseMockupVersion, currentVersion } from '../../lib/mockupVersions';
+import { MOCKUP_STATUS_LABEL, MOCKUP_STATUS_STYLE, mainHtmlFile, versionCounts, isCurrentOfGroup } from '../../lib/mockupVersions';
 import type { FeatureMockup, FeatureMockupStatus, FeaturePlan } from '../../types/featurePlans';
 
 // Статус-чип макета (R.sm, FS.xs полужирный; цвета — макет §состояния).
-export function MockupStatusChip({ status, isMobile = false }: { status: FeatureMockupStatus | null; isMobile?: boolean }) {
+// replaced — версия из «Прошлых версий», не текущая в группе: чип «заменён»
+// (C.bgSelected/C.textMuted) вместо статуса из шапки записки (макет §состояния).
+export function MockupStatusChip({ status, isMobile = false, replaced = false }: { status: FeatureMockupStatus | null; isMobile?: boolean; replaced?: boolean }) {
+  if (replaced) {
+    return (
+      <span
+        data-testid="mockup-status-chip"
+        style={{
+          display: 'inline-flex', alignItems: 'center',
+          height: isMobile ? 24 : 18, padding: '0 6px', borderRadius: R.sm,
+          background: C.bgSelected, color: C.textMuted,
+          fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0,
+        }}
+      >
+        заменён
+      </span>
+    );
+  }
   if (!status) return null;
   const s = MOCKUP_STATUS_STYLE[status];
   return (
@@ -131,7 +148,8 @@ export function MockupListSection({ mockups, selectedPath, onSelect, isMobile = 
                 <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ transform: pastOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
               </button>
               {pastOpen && past.map(m => (
-                <MockupRow key={m.path} m={m} versions={counts.get(m.path) ?? 1} dimmed selected={selectedPath === m.path} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
+                // «заменён» — версия не текущая в группе; текущая, но отклонённая — «отклонён» (свой статус).
+                <MockupRow key={m.path} m={m} versions={counts.get(m.path) ?? 1} dimmed replaced={!isCurrentOfGroup(m, mockups)} selected={selectedPath === m.path} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
               ))}
             </div>
           )}
@@ -139,14 +157,6 @@ export function MockupListSection({ mockups, selectedPath, onSelect, isMobile = 
       )}
     </div>
   );
-}
-
-// Текущий ли макет в своей группе (live, не past): его версия == текущая версия группы.
-function isCurrentOfGroup(m: FeatureMockup, all: FeatureMockup[]): boolean {
-  const { root, version } = parseMockupVersion(m.path);
-  const group = all.filter(x => parseMockupVersion(x.path).root === root);
-  const current = currentVersion(group.map(x => parseMockupVersion(x.path).version));
-  return version === current;
 }
 
 // mockupsUnavailable='device' — локальный проект: записки docs/mockups/ на устройстве,
@@ -158,7 +168,7 @@ export function MockupDeviceNotice({ isMobile = false }: { isMobile?: boolean })
         <span style={{ fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: C.textMuted }}>Макеты</span>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>—</span>
       </div>
-      <div style={{ border: `1px dashed ${C.dashed}`, borderRadius: 8, padding: `${isMobile ? SP.md : SP.sm}px ${SP.md}px`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>
+      <div style={{ border: `1px dashed ${C.dashed}`, borderRadius: R.md, padding: `${isMobile ? SP.md : SP.sm}px ${SP.md}px`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>
         Макеты локального проекта видны только на устройстве. Записки docs/mockups/ лежат на вашем устройстве, и страница фичи их не видит.
       </div>
     </div>
@@ -181,7 +191,7 @@ function EmptyRow({ text, isMobile }: { text: string; isMobile: boolean }) {
     <div
       data-testid="mockup-empty"
       style={{
-        border: `1px dashed ${C.dashed}`, borderRadius: 8, padding: `${isMobile ? SP.md : SP.sm}px ${SP.md}px`,
+        border: `1px dashed ${C.dashed}`, borderRadius: R.md, padding: `${isMobile ? SP.md : SP.sm}px ${SP.md}px`,
         fontFamily: FONT.sans, fontSize: FS.sm, color: C.textHeading, lineHeight: 1.45,
       }}
     >
@@ -191,8 +201,8 @@ function EmptyRow({ text, isMobile }: { text: string; isMobile: boolean }) {
 }
 
 // Строка макета в списке: заглушка · название · «дата · N версий» · статус-чип · «не в master».
-function MockupRow({ m, versions, selected, dimmed, isMobile, onSelect }: {
-  m: FeatureMockup; versions: number; selected?: boolean; dimmed?: boolean; isMobile: boolean; onSelect: () => void;
+function MockupRow({ m, versions, selected, dimmed, replaced, isMobile, onSelect }: {
+  m: FeatureMockup; versions: number; selected?: boolean; dimmed?: boolean; replaced?: boolean; isMobile: boolean; onSelect: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const date = m.modifiedAt ? dateOnly(m.modifiedAt) : null;
@@ -216,14 +226,14 @@ function MockupRow({ m, versions, selected, dimmed, isMobile, onSelect }: {
     >
       <MockupThumb />
       <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: dimmed ? C.textSecondary : C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: dimmed ? C.textSecondary : C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {m.title}
         </span>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {date ? `${date} · ` : ''}{versions} {versions === 1 ? 'версия' : 'версий'}
         </span>
       </div>
-      <MockupStatusChip status={m.status} isMobile={isMobile} />
+      <MockupStatusChip status={m.status} isMobile={isMobile} replaced={replaced} />
       {nMaster && (
         <span data-testid="mockup-not-in-master" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap', flexShrink: 0 }}>
           не в master
@@ -241,9 +251,11 @@ export interface MockupCardProps {
   // Открыть файл проекта (существующий просмотр, HTML в песочнице).
   onOpenFile?: (path: string) => void;
   isMobile?: boolean;
+  // Версия из «Прошлых версий», не текущая в группе → чип «заменён».
+  replaced?: boolean;
 }
 
-export function MockupCard({ mockup, plans, onOpenFile, isMobile = false }: MockupCardProps) {
+export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replaced = false }: MockupCardProps) {
   const main = mainHtmlFile(mockup);
   const nMaster = notInMaster(mockup);
   const persona = mockup.authorPersonaId ? getPersonaById(mockup.authorPersonaId) : undefined;
@@ -264,7 +276,7 @@ export function MockupCard({ mockup, plans, onOpenFile, isMobile = false }: Mock
           <span data-testid="mockup-card-label" style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, background: C.bgSelected, borderRadius: R.sm, padding: '0 6px' }}>
             макет
           </span>
-          <MockupStatusChip status={mockup.status} isMobile={isMobile} />
+          <MockupStatusChip status={mockup.status} isMobile={isMobile} replaced={replaced} />
         </div>
         <h1 data-testid="mockup-card-title" style={{ fontFamily: FONT.serif, fontSize: isMobile ? 18 : 20, fontWeight: 700, color: C.textHeading, letterSpacing: '-0.01em', margin: 0, lineHeight: 1.25 }}>
           {mockup.title}
@@ -320,6 +332,13 @@ export function MockupCard({ mockup, plans, onOpenFile, isMobile = false }: Mock
           </div>
         )}
       </div>
+
+      {/* «Не в master»: плашка C.infoBg (макет) — честная причина, почему макет не в master. */}
+      {nMaster && (
+        <div data-testid="mockup-not-in-master-plate" style={{ background: C.infoBg, border: `1px solid ${C.borderLight}`, borderRadius: R.md, padding: `${SP.sm}px ${SP.md}px`, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>
+          Ещё не влит в master. Макет лежит только в ветке фичи; появится после мержа, до этого его видно в чате Майи.
+        </div>
+      )}
 
       {/* «Файлы»: чипы (записка + файлы шапки). */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>

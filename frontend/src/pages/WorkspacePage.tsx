@@ -1813,7 +1813,10 @@ const windowWidth = useWindowWidth();
     setGitStagePath(null);
     setFileFullscreen(false);
     if (isMobile) setMobileView('sidebar');
-    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: selectedTaskId ?? null });
+    // feature: openFeatureId — файл, открытый СО СТРАНИЦЫ ФИЧИ, при закрытии возвращает
+    // адрес к сегменту фичи (иначе navReplace схлопнул бы его и «назад» вёл мимо).
+    // Вне страницы фичи openFeatureId=null — поведение не меняется.
+    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: selectedTaskId ?? null, feature: openFeatureId ?? null });
   };
   const backFromTask = () => {
     setSelectedTaskId(null);

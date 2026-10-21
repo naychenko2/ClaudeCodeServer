@@ -13,7 +13,7 @@
 // Длинный документ (6 и больше `##`): «Содержание · N» — на 1280 раскрыто, на 360 свёрнуто
 // (свёртка/развёртка «Свернуть все / Развернуть все» — шаг Ф-plans-b, не здесь).
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, FileText, RotateCw, Scissors, MessageCircle, ChevronDown, type LucideIcon } from 'lucide-react';
 import { C, R, FS, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -21,7 +21,7 @@ import { Button } from '../ui/Button';
 import { MarkdownContent } from '../chat/MarkdownContent';
 import { getPersonaById } from '../../lib/personas';
 import { openTaskInSection } from '../../lib/tasks';
-import { NavTargetButton } from './NavTargetButton';
+import { NavTargetButton, NavTargetPair } from './NavTargetButton';
 import { hhmm, dateOnly } from '../chat/feature/featureTime';
 import { api } from '../../lib/api';
 import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
@@ -39,13 +39,16 @@ export const PLAN_ROLE_STYLE: Record<FeaturePlan['role'], { bg: string; fg: stri
   consult: { bg: C.bgSelected, fg: C.textSecondary, Icon: MessageCircle },
 };
 
-// Кэш текста документа на время жизни страницы: taskId → состояние. Модульный —
-// переживает перемонтирование (лента/страница перерисовываются на каждом обновлении).
+// Кэш текста документа на время жизни страницы: (taskId, completedAt) → состояние.
+// Модульный — переживает перемонтирование (лента/страница перерисовываются на каждом
+// обновлении). Ключ включает completedAt: перезаписанный план (task обновлён) меняет
+// completedAt → старый текст не показывается, идёт повторный запрос.
 type TextState =
   | { status: 'loading' }
   | { status: 'error' }
   | { status: 'ok'; text: string };
 const _textCache = new Map<string, TextState>();
+const textCacheKey = (p: FeaturePlan) => `${p.taskId}|${p.completedAt ?? ''}`;
 
 // `##`-заголовки markdown (для «Содержание · N»). Только уровень 2, без `###`.
 function extractH2(text: string): string[] {
@@ -89,33 +92,46 @@ export interface FeaturePlanReaderProps {
 }
 
 export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMockup, onOpenTask }: FeaturePlanReaderProps) {
-  const [state, setState] = useState<TextState>(() => _textCache.get(plan.taskId) ?? { status: 'loading' });
+  const [state, setState] = useState<TextState>(() => _textCache.get(textCacheKey(plan)) ?? { status: 'loading' });
   const [reload, setReload] = useState(0);
   // «Содержание · N» — раскрыто на 1280, свёрнуто на 360.
   const [tocOpen, setTocOpen] = useState(!isMobile);
+  // Корень тела — для скролла к `##`-секции по пункту «Содержание» (под липкие вкладки).
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Пункт «Содержание» → докрутить соответствующую `##`-секцию (макет).
+  const scrollToH2 = (i: number) => {
+    const root = bodyRef.current;
+    if (!root) return;
+    const target = root.querySelectorAll('h2')[i] as HTMLElement | undefined;
+    if (!target) return;
+    // Компенсация липкой шапки/вкладок: секция встаёт под ними, а не под верх.
+    target.style.scrollMarginTop = '72px';
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   // Текст по клику: GET /api/tasks/{id} → resultMarkdown. Кэш на время жизни страницы.
   useEffect(() => {
     if (!plan.hasText) return; // «Текста пока нет» — запрос не идёт
+    const key = textCacheKey(plan);
     // Повтор (reload > 0): сбросить кэш (в т.ч. ошибку), чтобы тянуть заново.
-    if (reload > 0) _textCache.delete(plan.taskId);
-    const cached = _textCache.get(plan.taskId);
+    if (reload > 0) _textCache.delete(key);
+    const cached = _textCache.get(key);
     if (cached && cached.status !== 'loading') { setState(cached); return; }
     setState({ status: 'loading' });
     let cancelled = false;
     void api.tasks.get(plan.taskId)
       .then(t => {
         const s: TextState = { status: 'ok', text: t.resultMarkdown ?? '' };
-        _textCache.set(plan.taskId, s);
+        _textCache.set(key, s);
         if (!cancelled) setState(s);
       })
       .catch(() => {
         const s: TextState = { status: 'error' };
-        _textCache.set(plan.taskId, s);
+        _textCache.set(key, s);
         if (!cancelled) setState(s);
       });
     return () => { cancelled = true; };
-  }, [plan.taskId, plan.hasText, reload]);
+  }, [plan.taskId, plan.completedAt, plan.hasText, reload]);
 
   const persona = plan.authorPersonaId ? getPersonaById(plan.authorPersonaId) : undefined;
   const authorName = persona?.name ?? (plan.authorPersonaId ? plan.authorPersonaId : null);
@@ -210,7 +226,21 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
           {tocOpen && (
             <ol style={{ margin: 0, padding: `${SP.xs}px ${SP.md}px ${SP.sm}px`, listStyle: 'none', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: `${SP.xs}px ${SP.md}px` }}>
               {h2.map((t, i) => (
-                <li key={i} style={{ fontSize: FS.sm, color: C.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t}</li>
+                <li key={i}>
+                  <button
+                    type="button"
+                    data-testid="plan-reader-toc-item"
+                    onClick={() => scrollToH2(i)}
+                    title={t}
+                    style={{
+                      width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer',
+                      padding: 0, fontFamily: FONT.sans, fontSize: FS.sm, color: C.accent,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {t}
+                  </button>
+                </li>
               ))}
             </ol>
           )}
@@ -219,8 +249,18 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
 
       {/* Тело: состояния */}
       {!plan.hasText ? (
-        <div data-testid="plan-reader-no-text" style={{ fontSize: FS.sm, color: C.textMuted, padding: `${SP.md}px 0` }}>
-          Текста пока нет
+        <div data-testid="plan-reader-no-text" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, padding: `${SP.md}px 0` }}>
+          <span style={{ fontSize: FS.sm, color: C.textMuted }}>Текста пока нет</span>
+          {plan.taskId && (
+            <NavTargetPair
+              chatId={null}
+              showNoChat={false}
+              taskId={plan.taskId}
+              onOpenTask={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
+              taskTitle="Открыть задачу документа"
+              isMobile={isMobile}
+            />
+          )}
         </div>
       ) : state.status === 'loading' ? (
         <div data-testid="plan-reader-loading" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: `${SP.md}px 0` }}>
@@ -236,11 +276,26 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
           <Button size="xs" variant="ghost" onClick={() => setReload(n => n + 1)}>
             <RotateCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> Повторить
           </Button>
+          {plan.taskId && (
+            <NavTargetButton
+              kind="task"
+              taskId={plan.taskId}
+              onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
+              title="Открыть задачу документа"
+              isMobile={isMobile}
+            />
+          )}
         </div>
       ) : (
-        <div data-testid="plan-reader-body" style={{ fontSize: 13.5, lineHeight: 1.6, color: C.textPrimary }}>
-          <MarkdownContent text={state.text} />
-        </div>
+        <>
+          <div ref={bodyRef} data-testid="plan-reader-body" style={{ fontSize: FS.base, lineHeight: 1.6, color: C.textPrimary }}>
+            <MarkdownContent text={state.text} />
+          </div>
+          {/* Подвал: текст — итог задачи, здесь только чтение (макет). */}
+          <div data-testid="plan-reader-footer" style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: SP.md, paddingTop: SP.sm, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>
+            Текст — итог задачи. Здесь только чтение; правка — в задаче.
+          </div>
+        </>
       )}
     </div>
   );

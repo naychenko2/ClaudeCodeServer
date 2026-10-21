@@ -17,15 +17,12 @@ import { C, R, FS, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { getPersonaById } from '../../lib/personas';
 import { dateOnly, hhmm } from '../chat/feature/featureTime';
-import { splitMockups } from '../../lib/mockupVersions';
+import { splitMockups, isCurrentOfGroup } from '../../lib/mockupVersions';
 import { RoleGlyph } from './FeaturePlanReader';
 import { FeaturePlanReader } from './FeaturePlanReader';
 import { MockupCard, MockupListSection, MockupDeviceNotice } from './FeatureMockups';
 import type { FeaturePage } from '../../types/featureIndex';
-import type { FeaturePlan, FeaturePlanRole, FeatureMockup } from '../../types/featurePlans';
-
-// Порядок документов: cut → plan → consult (макет).
-const ROLE_ORDER: Record<FeaturePlanRole, number> = { cut: 0, plan: 1, consult: 2 };
+import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
 
 // Выбран в детали: документ (plan) или макет (mockup).
 type Selection = { kind: 'plan'; id: string } | { kind: 'mockup'; path: string } | null;
@@ -62,14 +59,15 @@ function PlanRow({ plan, selected, isMobile, onSelect }: {
       title={plan.title}
       style={{
         display: 'flex', alignItems: 'flex-start', gap: SP.sm,
-        height: isMobile ? 56 : 44, padding: `0 ${SP.sm}px`,
+        minHeight: isMobile ? 56 : 44, padding: `0 ${SP.sm}px`,
         background: selected ? C.accentLight : (hover ? C.bgSelected : 'transparent'),
         borderRadius: R.md, cursor: 'pointer',
       }}
     >
       <RoleGlyph role={plan.role} />
       <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {/* Заголовок — до двух строк (макет): line-clamp 2, строка растёт (minHeight). */}
+        <span style={{ fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {plan.title}
         </span>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -96,20 +94,38 @@ function GroupHeader({ label, count, isMobile }: { label: string; count: number;
 }
 
 export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat }: FeaturePlansTabProps) {
-  // Документы: порядок cut → plan → consult (стабильный внутри роли).
+  // Документы: порядок cut → plan → consult (макет). Дедуп планов (решение Андрея):
+  // переписанный план — показываем ПОСЛЕДНИЙ по createdAt; разрезы и консультации — все.
   const plans = useMemo(() => {
-    const list = [...(page.plans ?? [])];
-    list.sort((a, b) => ROLE_ORDER[a.role] - ROLE_ORDER[b.role]);
-    return list;
+    const all = page.plans ?? [];
+    const byRole = (role: FeaturePlan['role']) => all.filter(p => p.role === role);
+    // Последний план по createdAt: сортируем по возрастанию и берём хвост.
+    const planTasks = [...byRole('plan')].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const latestPlan = planTasks.length > 0 ? planTasks[planTasks.length - 1] : null;
+    return [
+      ...byRole('cut'),
+      ...(latestPlan ? [latestPlan] : []),
+      ...byRole('consult'),
+    ];
   }, [page.plans]);
   const mockups: FeatureMockup[] = page.mockups ?? [];
   const device = page.mockupsUnavailable === 'device';
 
-  const [selected, setSelected] = useState<Selection>(null);
+  const [selected, setSelected] = useState<Selection>(() => {
+    // 1280: первый документ открыт по умолчанию (макет); на 360 — список.
+    if (isMobile) return null;
+    return plans.length > 0 ? { kind: 'plan', id: plans[0].taskId } : null;
+  });
   const selectedPlan = selected?.kind === 'plan' ? plans.find(p => p.taskId === selected.id) ?? null : null;
   const selectedMockup = selected?.kind === 'mockup' ? mockups.find(m => m.path === selected.path) ?? null : null;
+  // Выбранный макет — прошлая версия (не текущая в группе) → чип «заменён» в карточке.
+  const selectedMockupReplaced = selectedMockup ? !isCurrentOfGroup(selectedMockup, mockups) : false;
 
   const hasAnything = plans.length > 0 || mockups.length > 0;
+  // «Документов и макетов пока нет» — только когда пусто И макеты не «на устройстве»:
+  // при mockupsUnavailable='device' макеты ЕСТЬ (на устройстве), пустота бы врала —
+  // показываем честную причину (MockupDeviceNotice) независимо от наличия планов.
+  const showNoDocuments = !hasAnything && !device;
 
   // === 360: одна колонка (список ИЛИ экран документа/макета) ===
   if (isMobile) {
@@ -131,7 +147,7 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
           {selectedPlan
             ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} />
             : selectedMockup
-              ? <MockupCard mockup={selectedMockup} plans={plans} onOpenFile={onOpenFile} isMobile />
+              ? <MockupCard mockup={selectedMockup} plans={plans} onOpenFile={onOpenFile} isMobile replaced={selectedMockupReplaced} />
               : null}
         </div>
       );
@@ -139,14 +155,14 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
     // Список во всю ширину.
     return (
       <div data-testid="plans-list" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
-        {!hasAnything ? (
+        {showNoDocuments ? (
           <NoDocuments hasKeyChat={!!onOpenKeyChat} onOpenKeyChat={onOpenKeyChat} isMobile />
         ) : (
           <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
               <GroupHeader label="Документы" count={plans.length} isMobile />
               {plans.length === 0
-                ? <div data-testid="plans-empty-docs" style={{ border: `1px dashed ${C.dashed}`, borderRadius: 8, padding: `${SP.md}px ${SP.md}px`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textHeading }}>Планов пока нет…</div>
+                ? <div data-testid="plans-empty-docs" style={{ border: `1px dashed ${C.dashed}`, borderRadius: R.md, padding: `${SP.md}px ${SP.md}px`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textHeading }}>Планов пока нет…</div>
                 : plans.map(p => (
                   <PlanRow key={p.taskId} plan={p} selected={false} isMobile onSelect={() => setSelected({ kind: 'plan', id: p.taskId })} />
                 ))}
@@ -164,14 +180,14 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
   return (
     <div data-testid="plans-desktop" style={{ display: 'flex', gap: SP.lg, alignItems: 'flex-start' }}>
       <div data-testid="plans-list" style={{ width: 240, flexShrink: 0, position: 'sticky', top: 8, display: 'flex', flexDirection: 'column', gap: SP.md, maxHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
-        {!hasAnything ? (
+        {showNoDocuments ? (
           <NoDocuments hasKeyChat={!!onOpenKeyChat} onOpenKeyChat={onOpenKeyChat} isMobile={false} />
         ) : (
           <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
               <GroupHeader label="Документы" count={plans.length} isMobile={false} />
               {plans.length === 0
-                ? <div data-testid="plans-empty-docs" style={{ border: `1px dashed ${C.dashed}`, borderRadius: 8, padding: `${SP.sm}px ${SP.md}px`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textHeading }}>Планов пока нет…</div>
+                ? <div data-testid="plans-empty-docs" style={{ border: `1px dashed ${C.dashed}`, borderRadius: R.md, padding: `${SP.sm}px ${SP.md}px`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textHeading }}>Планов пока нет…</div>
                 : plans.map(p => (
                   <PlanRow key={p.taskId} plan={p} selected={selected?.kind === 'plan' && selected.id === p.taskId} isMobile={false} onSelect={() => setSelected({ kind: 'plan', id: p.taskId })} />
                 ))}
@@ -186,7 +202,7 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
         {selectedPlan
           ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile={false} onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} />
           : selectedMockup
-            ? <MockupCard mockup={selectedMockup} plans={plans} onOpenFile={onOpenFile} isMobile={false} />
+            ? <MockupCard mockup={selectedMockup} plans={plans} onOpenFile={onOpenFile} isMobile={false} replaced={selectedMockupReplaced} />
             : (
               <div data-testid="plans-detail-empty" style={{ padding: `${SP.xl}px 0`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}>
                 Выберите документ или макет

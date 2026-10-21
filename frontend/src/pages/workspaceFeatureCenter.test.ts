@@ -402,8 +402,9 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(src, 'popstate не выставляет openFeatureId').toContain('setOpenFeatureId(s.feature ?? null)');
     // Обёртка центра (FeatureCenter) прячет ChatPanel display:none (не размонтирует) при
     // открытой странице: общий паттерн мобильной и десктопной раскладки.
+    // centerHidden = open && !yielded: страница открыта и не уступила файл → центр скрыт.
     const centerSrc = readFileSync(new URL('../components/feature/FeatureCenter.tsx', import.meta.url), 'utf8');
-    expect(centerSrc, 'центр не прячет ChatPanel display:none').toContain("display: open ? 'none' : 'flex'");
+    expect(centerSrc, 'центр не прячет ChatPanel display:none').toContain("display: centerHidden ? 'none' : 'flex'");
   });
 
   it('диплинк #/project/p1/feature/f1: страница открывается при первом монтировании (чат в DOM, «Закрыть»)', async () => {

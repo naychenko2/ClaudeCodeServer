@@ -9,6 +9,7 @@ import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { featureStatusTag, featureDisplayState, STAGE_NAME } from '../../lib/chatGroups';
+import { openChatById } from '../../lib/openChat';
 import { featureTaskTotal } from './featurePageBody';
 import { showToast } from '../../lib/toast';
 import { FeatureMergeDialog } from './FeatureMergeDialog';
@@ -139,6 +140,9 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const index = useFeaturesIndex(projectId, featuresOn);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
+  // «Открыть ключевой чат» (общее пустое «Планы и макеты»): тот же переход, что в шапке.
+  const keyChat = feature?.keySessionId ?? null;
+  const onOpenKeyChat = keyChat ? () => { void openChatById(keyChat); } : undefined;
   // Корень «просмотра» — для правила «скрытый центр не перехватывает Esc» (useEscapeClose):
   // если страница скрыта (display:none → offsetParent=null), Esc её не закрывает. Как у файла.
   const rootRef = useRef<HTMLDivElement>(null);
@@ -318,7 +322,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
               <FeatureTimelineTab run={okRun} isMobile={isMobile} />
             </>
           ) : tab === 'plans' ? (
-            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} />
+            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} />
           ) : (
             <ComingSoon />
           )}

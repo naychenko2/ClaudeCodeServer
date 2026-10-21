@@ -64,18 +64,29 @@ function pageData(over: Partial<FeaturePage> = {}): FeaturePage {
   };
 }
 
-// Клик по data-testid: вызываем onClick из reactProps.
+// Клик по data-testid: вызываем onClick из reactProps, в act() (иначе React
+// ругается: обновление состояния вне act).
 function click(container: FNode, testId: string): void {
   const node = findNodeByAttr(container, 'data-testid', testId);
   expect(node, `node ${testId}`).not.toBeNull();
   const props = reactProps(node!);
   expect(props?.onClick, `onClick on ${testId}`).toBeTruthy();
-  (props!.onClick as () => void)();
+  act(() => { (props!.onClick as () => void)(); });
 }
 
 // Дождаться flush'а microtasks (fetch текста: resolve/reject + setState).
 async function flush() {
   await act(async () => { await new Promise(r => setTimeout(r, 10)); });
+}
+
+// Собрать текст всех узлов с данным data-testid (в порядке DOM).
+function collectText(container: FNode, testId: string): string[] {
+  const out: string[] = [];
+  (function walk(n: FNode): void {
+    if (n.nodeType === 1 && n.getAttribute('data-testid') === testId) out.push(textNodes(n).join(''));
+    for (const c of n.childNodes) walk(c);
+  })(container);
+  return out;
 }
 
 describe('FeaturePlansTab', () => {
@@ -154,7 +165,7 @@ describe('FeaturePlansTab', () => {
     // «Открыть макет» disabled (нет существующего html) → клик не вызывает onOpenFile.
     const btn = findNodeByAttr(container as FNode, 'data-testid', 'mockup-open-area');
     expect(btn).not.toBeNull();
-    (reactProps(btn!)!.onClick as () => void)();
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
     await flush();
     expect(onOpenFile).not.toHaveBeenCalled();
   });
@@ -171,7 +182,7 @@ describe('FeaturePlansTab', () => {
     const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, onOpenFile }));
     click(container as FNode, 'mockup-row');
     await flush();
-    (reactProps(findNodeByAttr(container as FNode, 'data-testid', 'mockup-open-area')!)!.onClick as () => void)();
+    act(() => { (reactProps(findNodeByAttr(container as FNode, 'data-testid', 'mockup-open-area')!)!.onClick as () => void)(); });
     await flush();
     expect(onOpenFile).toHaveBeenCalledWith('docs/mockups/x.html');
   });
@@ -183,6 +194,49 @@ describe('FeaturePlansTab', () => {
     const device = findNodeByAttr(container as FNode, 'data-testid', 'mockup-device');
     expect(device).not.toBeNull();
     expect(textNodes(device!).join('')).toContain('на устройстве');
+  });
+
+  // === 6a. Дедуп планов (major 2): из двух планов — только последний по createdAt ===
+  it('дедуп планов: из двух планов — только последний по createdAt', () => {
+    const page = pageData({
+      plans: [
+        plan({ taskId: 'p-old', role: 'plan', title: 'Старый план', createdAt: '2026-10-01T00:00:00Z' }),
+        plan({ taskId: 'p-new', role: 'plan', title: 'Новый план', createdAt: '2026-10-20T00:00:00Z' }),
+      ],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    const rows = collectText(container, 'plan-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toContain('Новый план');
+    expect(rows[0]).not.toContain('Старый план');
+  });
+
+  // === 6b. «Заменён» (major 3): прошлая версия — чип «заменён», не статус из шапки ===
+  it('прошлая версия → чип «заменён» (не статус из шапки)', async () => {
+    const page = pageData({
+      mockups: [
+        mockup({ path: 'docs/mockups/foo-1.html', title: 'foo 1', status: 'approved' }),
+        mockup({ path: 'docs/mockups/foo-2.html', title: 'foo 2', status: 'approved' }),
+      ],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    // Раскрыть «Прошлые версии» — там прошлая версия foo-1.
+    click(container as FNode, 'mockup-past-toggle');
+    await flush();
+    const chips = collectText(container, 'mockup-status-chip');
+    // foo-2 (текущая) → «утверждён»; foo-1 (прошлая) → «заменён».
+    expect(chips).toContain('утверждён');
+    expect(chips).toContain('заменён');
+  });
+
+  // === 6c. device без планов (major 4): плашка, а не «нет ничего» ===
+  it('device без планов → плашка «на устройстве», не «нет ничего»', () => {
+    const page = pageData({ plans: [], mockups: [], mockupsUnavailable: 'device' });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    const device = findNodeByAttr(container as FNode, 'data-testid', 'mockup-device');
+    expect(device, 'плашка «на устройстве» показана').not.toBeNull();
+    const allEmpty = findNodeByAttr(container as FNode, 'data-testid', 'plans-all-empty');
+    expect(allEmpty, '«нет ничего» не показано').toBeNull();
   });
 
   // === 7. Счётчик вкладки: документы + живые макеты ===
@@ -235,7 +289,7 @@ describe('FeaturePlansTab', () => {
     })(container as FNode);
     expect(btn).not.toBeNull();
     const before = mockTaskGet.calls.length;
-    (reactProps(btn!)!.onClick as () => void)();
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
     await flush();
     // Повторный запрос ушёл.
     expect(mockTaskGet.calls.length).toBeGreaterThan(before);

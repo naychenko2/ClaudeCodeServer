@@ -478,8 +478,11 @@ export function DesktopWorkspace(p: Props) {
       {/* === Центр: коммит → задача → персона → доска → файл/ридер (split/fullscreen) → чат ===
           Страница фичи (Ф2.3/C1) — СОСЕД центра: при открытой (openFeatureId) весь центр
           прячется display:none (не размонтируется), страница рисуется рядом. FeatureCenter —
-          общий паттерн с мобильной веткой. */}
-      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree}>
+          общий паттерн с мобильной веткой.
+          Уступка: файл, открытый со страницы фичи («Открыть макет»), должен быть ВИДИМ —
+          иначе FileViewer лежит в скрытом центре и клик без эффекта. Страница остаётся
+          смонтированной (display:none): закрыл файл — вернулась с прежним состоянием. */}
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree} yielded={!!p.openFile}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />

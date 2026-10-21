@@ -1,15 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, MoreHorizontal, Plug, RefreshCw, ShieldAlert, X } from 'lucide-react';
+import { AlertTriangle, MoreHorizontal, RefreshCw, ShieldAlert, X } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Island, IslandHeader } from '../../components/ui/Island';
-import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from '../../components/ui';
+import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { getEffectiveTheme, subscribeThemeMode } from '../../lib/themeMode';
 import { useProjectFeature } from '../../lib/projectCapabilities';
 import { ProjectFeature, type Project } from '../../types';
 import { api, type PluginInfo, type PluginPanelView } from '../../lib/api';
-import { useInstalledPlugins } from './useInstalledPlugins';
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import {
   BRIDGE_VERSION, READY_TIMEOUT_MS, MAX_PANEL_FILE_BYTES,
@@ -18,17 +17,19 @@ import {
   type BridgeErrorCode, type FrameMessage, type HostMessage,
 } from './bridge';
 
-// === Слот панели плагина в sidebar (экран 3 макетов, ADR-031 §3, флаг plugins-mvp) ===
-// Остров «Панели плагинов» в боковой колонке. Тело — sandbox-iframe
-// (sandbox="allow-scripts" БЕЗ allow-same-origin) по мосту v1: хост забирает
-// panel/index.html по REST (user JWT), вставляет CSP и шим plugin-kit в srcdoc.
-// JWT и стор хоста во фрейм не передаются — панель видит только init/result/theme/
-// context и отвечает ready/call/resize (ADR-031, инвариант 1).
+// === Панель плагина (S5): одна панель = одна карточка ===
+// Десктоп: карточка — обычная панель рельса (PanelZone рисует её через PanelShell),
+// поэтому PluginFrame НЕ рисует свой Island/IslandHeader — шапка карточки и кнопка
+// «Скрыть панель» принадлежат PanelShell, а контролы (перезагрузка, «Права…»)
+// телепортируются в шапку через PanelHeaderSlot.
+// Мобила: вкладки-панелей нет, вкладка «Плагины» одна — PluginFrame сам рисует
+// Island + шапку и переключатель, какую панель плагина показать (useHasPanelHeader
+// = false → свой Island, как и раньше).
 //
-// Гейт V5: слота нет, пока нет ни одного установленного плагина (WorkspacePage).
-// Панель берём у ПЕРВОГО установленного и ВКЛЮЧЕННОГО плагина: выключенный
-// не монтирует панели (бэк отвечает 409), панелей у плагина может не быть (404) —
-// тогда пустое состояние.
+// Тело — sandbox-iframe (sandbox="allow-scripts" БЕЗ allow-same-origin) по мосту v1:
+// хост забирает panel/index.html по REST (user JWT), вставляет CSP и шим plugin-kit
+// в srcdoc. JWT и стор хоста во фрейм не передаются — панель видит только
+// init/result/theme/context и отвечает ready/call/resize (ADR-031, инвариант 1).
 
 // Человекочитаемое имя из id пакета {publisher}/{slug} (та же логика, что в
 // PluginsProjectSection: slug → слова с большой буквы).
@@ -55,13 +56,8 @@ function toConsentData(info: PluginInfo): PluginConsentData {
   };
 }
 
-// Панель, которую показывает слот: плагин + конкретная панель (её entry). У плагина
-// может быть несколько панелей — переключатель выбирает панель, а не только плагин.
-type PanelTarget = { plugin: PluginInfo; panel: PluginPanelView };
-// Ключ панели: id плагина + id панели (id панели уникален в пределах пакета)
-const targetKey = (t: PanelTarget) => `${t.plugin.id}::${t.panel.id}`;
-
-// Мини-плитка 20×20 с инициалами (шапка острова, макет экран 3).
+// Мини-плитка 20×20 с инициалами (шапка острова, макет экран 3) — только в
+// мобильном режиме, где PluginFrame рисует свой Island.
 function MiniTile({ name }: { name: string }) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   const initials = parts.length === 0 ? '?'
@@ -108,21 +104,28 @@ type BridgeState = 'waiting' | 'alive' | BridgeErrorCode;
 const MAX_INFLIGHT_CALLS = 8;
 const MAX_ARGS_BYTES = 64 * 1024;
 
-export function PluginFrame({ project, onOpenPlugins, onClose }: {
+export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: {
   project: Project;
+  // Конкретный плагин и его конкретная панель: одна панель = одна карточка (S5).
+  // На мобиле (свой Island) панель выбирает переключатель; на десктопе карточка
+  // уже одна панель, и переключатель не нужен.
+  plugin: PluginInfo;
+  panel: PluginPanelView;
   // «Открыть в «Плагинах»» — настройки проекта (секция плагинов)
   onOpenPlugins?: () => void;
-  // «Скрыть панель» — закрыть панельную зону
+  // «Скрыть панель» — закрыть панельную зону (на десктопе дублирует крестик PanelShell)
   onClose?: () => void;
 }) {
   const isMobile = useIsMobile();
   const pluginsAvail = useProjectFeature(project, ProjectFeature.Plugins);
-  const { plugins, loading } = useInstalledPlugins(project.id, pluginsAvail);
+  // Есть ли над панелью шапка (десктоп — PanelShell, мобила — свой Island).
+  // useHasPanelHeader: true → контролы в PanelHeaderSlot, false → свой Island.
+  const inShell = useHasPanelHeader();
   // Эффективная тема хоста: в init и в theme-сообщениях (без перемонтирования)
   const theme = useSyncExternalStore(subscribeThemeMode, getEffectiveTheme, getEffectiveTheme);
 
   const [menuOpen, setMenuOpen] = useState(false);
-  const [fetch, setFetch] = useState<FetchState>({ kind: 'absent' });
+  const [fetch, setFetch] = useState<FetchState>({ kind: 'fetching' });
   const [bridge, setBridge] = useState<BridgeState>('waiting');
   const [height, setHeight] = useState<number | null>(null);
   const [deniedKey, setDeniedKey] = useState<string | null>(null);
@@ -131,29 +134,9 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   const [consent, setConsent] = useState<PluginConsentData | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  // Панели — у включённых плагинов, у которых панель ОБЪЯВЛЕНА (contributes.panels):
-  // включённый без панели не даёт «панелей нет», если у другого включённого панель есть.
-  // Выключенный не монтирует панели (бэк — 409). Плоский список (плагин, панель):
-  // у плагина может быть несколько панелей — переключатель выбирает панель, не плагин.
-  const panelTargets = useMemo<PanelTarget[]>(() => {
-    const out: PanelTarget[] = [];
-    for (const p of plugins) {
-      if (!p.enabled) continue;
-      for (const panel of p.contributes?.panels ?? []) out.push({ plugin: p, panel });
-    }
-    return out;
-  }, [plugins]);
-  // Выбранная панель (переключатель, когда панелей несколько); null → первая
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [switcherOpen, setSwitcherOpen] = useState(false);
-  const activeTarget = useMemo<PanelTarget | null>(
-    () => panelTargets.find(t => targetKey(t) === selectedKey) ?? panelTargets[0] ?? null,
-    [panelTargets, selectedKey],
-  );
-  // Плагин активной панели (id/version/granted) и сама панель (entry для panelHtml)
-  const panelPlugin = activeTarget?.plugin ?? null;
-  const activePanel = activeTarget?.panel ?? null;
-  const activeKey = activeTarget ? targetKey(activeTarget) : null;
+  const name = humanizeId(plugin.id);
+  // Заголовок панели: из манифеста, иначе — имя плагина
+  const panelTitle = panel.title || name;
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // init отправлен в текущем монтировании (повторный ready игнорируется, ADR §3.3)
@@ -166,8 +149,8 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   const pendingHeightRef = useRef<number | null>(null);
   const rafPendingRef = useRef(false);
   // Актуальные значения для message-обработчика без пересоздания подписки
-  const stateRef = useRef({ theme, project, isMobile, panelPlugin: null as PluginInfo | null, bridge, reloadKey });
-  stateRef.current = { theme, project, isMobile, panelPlugin: panelPlugin, bridge, reloadKey };
+  const stateRef = useRef({ theme, project, isMobile, plugin: null as PluginInfo | null, bridge, reloadKey });
+  stateRef.current = { theme, project, isMobile, plugin, bridge, reloadKey };
 
   // Применить накопленную высоту контента (не чаще раза за кадр).
   const applyPendingHeight = useCallback(() => {
@@ -188,8 +171,6 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     }
   }, [applyPendingHeight]);
 
-  const name = panelPlugin ? humanizeId(panelPlugin.id) : '';
-
   // Журнал моста (макет, «Подробнее»): последние 20 событий, человекочитаемо
   const logEvent = useCallback((line: string) => {
     setLog(l => [...l.slice(-19), line]);
@@ -206,7 +187,7 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   }, [logEvent]);
 
   // === Забор HTML панели (REST, user JWT) + сброс состояния моста ===
-  // entry — из манифеста выбранной панели (contributes.panels[].entry); маршрут
+  // entry — из манифеста панели (contributes.panels[].entry); маршрут
   // {**path} — catch-all, слэши entry остаются литеральными.
   useEffect(() => {
     let cancelled = false;
@@ -219,16 +200,16 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     setHeight(null);
     setDeniedKey(null);
     setLog([]);
-    if (!activeTarget || !activePanel) {
+    if (!plugin || !panel) {
       setFetch({ kind: 'absent' });
       return;
     }
     setFetch({ kind: 'fetching' });
-    api.plugins.panelHtml(activeTarget.plugin.id, activeTarget.plugin.version, activePanel.entry)
+    api.plugins.panelHtml(plugin.id, plugin.version, panel.entry)
       .then(html => {
         if (cancelled) return;
         setFetch({ kind: 'html', html });
-        logEvent(`← ${activePanel.entry} загружен`);
+        logEvent(`← ${panel.entry} загружен`);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -242,11 +223,11 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
         }
       });
     return () => { cancelled = true; };
-    // deps — примитивы (id/version/entry), а не объект activeTarget: useMemo не
+    // deps — примитивы (id/version/entry), а не объект plugin/panel: useMemo не
     // кэширует в мини-раннере тестов, и объект был бы новой ссылкой каждый render →
     // эффект зря сбрасывал fetch. В реальном React useMemo стабильна, но строки
     // корректны и там (перезапуск только при смене панели/версии/entry).
-  }, [activeTarget?.plugin.id, activeTarget?.plugin.version, activeTarget?.panel.entry, reloadKey, logEvent]);
+  }, [plugin?.id, plugin?.version, panel?.entry, reloadKey, logEvent]);
 
   // srcdoc: оболочка (CSP + iframe) + внутренний документ (CSP + шим + html панели).
   // Пересобирается при смене панели/версии, но НЕ при смене темы: тема доходит
@@ -265,7 +246,8 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
 
   // Ключ iframe: пересборка srcdoc (тема) НЕ перемонтирует (key не меняется),
   // «Перезагрузить» и смена панели (плагин+панель) — да (reloadKey / targetKey).
-  const frameKey = `${activeTarget ? targetKey(activeTarget) : 'none'}#${reloadKey}`;
+  const targetKey = `${plugin.id}::${panel.id}`;
+  const frameKey = `${targetKey}#${reloadKey}`;
 
   // === Таймаут ready: 3 с после монтирования iframe → bridge_timeout ===
   useEffect(() => {
@@ -280,8 +262,8 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   // === call: POST /api/plugins/{id}/call (user JWT), ответ — result с тем же id ===
   const handleCall = useCallback(async (msg: Extract<FrameMessage, { type: 'call' }>) => {
     const s = stateRef.current;
-    const plugin = s.panelPlugin;
-    if (!plugin) return;
+    const p = s.plugin;
+    if (!p) return;
     // Потолки (ADR-031 §3.4): число вызовов в полёте и размер args
     if (inflightRef.current >= MAX_INFLIGHT_CALLS) {
       postToFrame(buildResultMessage(msg.id, false, { code: 'limit', message: 'Слишком много одновременных вызовов' }));
@@ -302,7 +284,7 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
       // Тело HTTP-запроса: {capability, args, projectId} (контракт бэкенда, PluginCallContractTests).
       // `op` — внутреннее имя поля моста (FrameMessage.call.op); в HTTP оно уходит как `capability`.
       // projectId — проект слота (null — вне проекта); context/op в тело не попадают.
-      const res = await api.plugins.call(plugin.id, {
+      const res = await api.plugins.call(p.id, {
         capability: msg.op,
         args,
         projectId: s.project.id ?? null,
@@ -339,14 +321,14 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
       if (msg.type === 'ready') {
         if (s.bridge !== 'waiting' || initedRef.current) return; // повторный ready
         initedRef.current = true;
-        if (s.panelPlugin) {
+        if (s.plugin) {
           postToFrame(buildInitMessage({
-            plugin: { id: s.panelPlugin.id, version: s.panelPlugin.version },
+            plugin: { id: s.plugin.id, version: s.plugin.version },
             slot: 'sidebar',
             context: { projectId: s.project.id },
             theme: s.theme,
             locale: typeof navigator !== 'undefined' ? navigator.language : '',
-            granted: s.panelPlugin.granted,
+            granted: s.plugin.granted,
           }));
         }
         setBridge('alive');
@@ -381,14 +363,12 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
 
   // Выдать/изменить права (диалог согласия в режиме «изменить»)
   const submitConsent = async (permissions: string[], secrets: { name: string; value: string }[]) => {
-    if (!panelPlugin) return;
-    await api.plugins.grant(panelPlugin.id, permissions, secrets);
+    await api.plugins.grant(plugin.id, permissions, secrets);
     setConsent(null);
   };
 
-  // === Гейты: без плагинов слота нет вовсе (V5) ===
+  // === Гейты: без фичи плагинов слота нет вовсе (V5) ===
   if (!pluginsAvail) return null;
-  if (!loading && plugins.length === 0) return null;
 
   // === Шапка: плитка + имя + (reload | точка) + ⋯ ===
   const isBridgeError = bridge === 'bridge_timeout' || bridge === 'bridge_bad_message' || bridge === 'bridge_version';
@@ -396,29 +376,11 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
   // шлёт ready, и только host отвечает init. Скелет до ready — оверлеем поверх.
   const showIframe = fetch.kind === 'html' && srcdoc !== null;
 
-  const headerActions = (
+  // Контролы шапки: перезагрузка + меню «Права…»/«Открыть в «Плагинах»».
+  // На десктопе — порталом в PanelShell (PanelHeaderSlot), на мобиле — прямо в
+  // шапке своего Island. «Скрыть панель» — у PanelShell (десктоп) или onClose (мобила).
+  const headerControls = (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      {/* Переключатель панели: когда панелей несколько (в т.ч. у одного плагина) —
-          выбор, какую показывать; label — название панели, hint — плагин для различения */}
-      {panelTargets.length > 1 && (
-        <div style={{ position: 'relative' }}>
-          <IconButton size="xs" tone="muted" ariaLabel="Выбрать панель" onClick={() => setSwitcherOpen(o => !o)}>
-            <Plug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
-          {switcherOpen && (
-            <Menu onClose={() => setSwitcherOpen(false)} align="right" top={-2}>
-              {panelTargets.map(t => (
-                <MenuItem
-                  key={targetKey(t)}
-                  label={t.panel.title || humanizeId(t.plugin.id)}
-                  hint={activeKey === targetKey(t) ? `показывается · ${humanizeId(t.plugin.id)}` : humanizeId(t.plugin.id)}
-                  onClick={() => { setSelectedKey(targetKey(t)); setSwitcherOpen(false); }}
-                />
-              ))}
-            </Menu>
-          )}
-        </div>
-      )}
       {isBridgeError && (
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: C.danger, flexShrink: 0 }} />
       )}
@@ -433,9 +395,9 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
         </IconButton>
         {menuOpen && (
           <Menu onClose={() => setMenuOpen(false)} align="right" top={-2}>
-            <MenuItem label="Права…" onClick={() => { setMenuOpen(false); if (panelPlugin) setConsent(toConsentData(panelPlugin)); }} />
+            <MenuItem label="Права…" onClick={() => { setMenuOpen(false); setConsent(toConsentData(plugin)); }} />
             {onOpenPlugins && <MenuItem label="Открыть в «Плагинах»" onClick={() => { setMenuOpen(false); onOpenPlugins(); }} />}
-            {(panelPlugin || onOpenPlugins) && <MenuSep />}
+            {(onOpenPlugins || onClose) && <MenuSep />}
             {onClose && <MenuItem label="Скрыть панель" onClick={() => { setMenuOpen(false); onClose(); }} />}
           </Menu>
         )}
@@ -445,17 +407,14 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
 
   // Тело по состояниям макета (экран 3)
   const body = (() => {
-    if (loading) {
-      return <LoadingSkeleton />;
-    }
     if (fetch.kind === 'noPanel') {
       return (
         <div style={{
           border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: SP.lg,
           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm, textAlign: 'center',
         }}>
-          <div style={{ fontWeight: 600, fontSize: FS.base, color: C.textHeading }}>Здесь будут панели плагинов</div>
-          <div style={{ fontSize: FS.sm, color: C.textMuted }}>У установленных плагинов панелей нет.</div>
+          <div style={{ fontWeight: 600, fontSize: FS.base, color: C.textHeading }}>Панель не найдена</div>
+          <div style={{ fontSize: FS.sm, color: C.textMuted }}>У плагина «{name}» панель «{panel.id}» не найдена (404).</div>
           {onOpenPlugins && (
             <Button variant="dashed" size="sm" onClick={onOpenPlugins}>Открыть «Плагины»</Button>
           )}
@@ -549,7 +508,7 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
             >
               Панель вызвала операцию, право на которую не выдано.{' '}
               <button
-                onClick={() => { if (panelPlugin) setConsent(toConsentData(panelPlugin)); }}
+                onClick={() => setConsent(toConsentData(plugin))}
                 style={{
                   background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                   color: 'inherit', textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit',
@@ -562,14 +521,14 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
         </div>
       );
     }
-    // absent: плагины есть, но ни один не включён — как «панелей нет»
+    // absent: панель не найдена или не объявлена
     return (
       <div style={{
         border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: SP.lg,
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm, textAlign: 'center',
       }}>
-        <div style={{ fontWeight: 600, fontSize: FS.base, color: C.textHeading }}>Здесь будут панели плагинов</div>
-        <div style={{ fontSize: FS.sm, color: C.textMuted }}>У установленных плагинов панелей нет.</div>
+        <div style={{ fontWeight: 600, fontSize: FS.base, color: C.textHeading }}>Панель не найдена</div>
+        <div style={{ fontSize: FS.sm, color: C.textMuted }}>У плагина «{name}» панель «{panel.id}» не объявлена.</div>
         {onOpenPlugins && (
           <Button variant="dashed" size="sm" onClick={onOpenPlugins}>Открыть «Плагины»</Button>
         )}
@@ -577,12 +536,72 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     );
   })();
 
+  // === Десктоп: в PanelShell — только тело + контролы порталом в шапку ===
+  if (inShell) {
+    return (
+      <>
+        <PanelHeaderSlot>
+          {headerControls}
+        </PanelHeaderSlot>
+        <div style={{
+          flex: 1, minHeight: 0, overflow: 'auto',
+          background: C.bgCard, padding: SP.md,
+          display: 'flex', flexDirection: 'column', gap: SP.sm,
+        }}>
+          {body}
+        </div>
+        {/* Футер: права + версия (макет, экран 3; на мобиле скрыт) */}
+        {!isMobile && (
+          <div style={{
+            flexShrink: 0, padding: '6px 12px',
+            background: C.bgInset, borderTop: `1px solid ${C.borderLight}`,
+            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {`Права: ${plugin.granted.length > 0 ? plugin.granted.join(', ') : 'не выданы'} · v${plugin.version}`}
+          </div>
+        )}
+        {/* Журнал моста («Подробнее»): последние сообщения, моно */}
+        {logOpen && (
+          <Modal
+            width={440}
+            title="Журнал моста"
+            onClose={() => setLogOpen(false)}
+            footer={
+              <Button variant="ghost" size="md" fullWidth onClick={() => setLogOpen(false)}>Закрыть</Button>
+            }
+          >
+            <div style={{
+              fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+              display: 'flex', flexDirection: 'column', gap: 2,
+              maxHeight: 320, overflow: 'auto',
+            }}>
+              {log.length === 0
+                ? <div style={{ color: C.textMuted }}>Событий пока нет</div>
+                : log.map((line, i) => <div key={i}>{line}</div>)}
+            </div>
+          </Modal>
+        )}
+        {/* Диалог «Права…» (режим «изменить») */}
+        {consent && (
+          <ConsentDialog
+            data={consent}
+            mode="modify"
+            onClose={() => setConsent(null)}
+            onSubmit={submitConsent}
+          />
+        )}
+      </>
+    );
+  }
+
+  // === Мобила: свой Island + шапка (переключатель панели + контролы) ===
   return (
     <Island>
       <IslandHeader
-        icon={panelPlugin ? <MiniTile name={name} /> : <Plug size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.textMuted }} />}
-        title={panelPlugin ? name : 'Панели плагинов'}
-        actions={headerActions}
+        icon={<MiniTile name={name} />}
+        title={panelTitle}
+        actions={headerControls}
       />
 
       <div style={{
@@ -593,17 +612,15 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
         {body}
       </div>
 
-      {/* Футер: права + версия (макет, экран 3; на мобиле скрыт) */}
-      {!isMobile && panelPlugin && (
-        <div style={{
-          flexShrink: 0, padding: '6px 12px',
-          background: C.bgInset, borderTop: `1px solid ${C.borderLight}`,
-          fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>
-          {`Права: ${panelPlugin.granted.length > 0 ? panelPlugin.granted.join(', ') : 'не выданы'} · v${panelPlugin.version}`}
-        </div>
-      )}
+      {/* Футер: права + версия (макет, экран 3) */}
+      <div style={{
+        flexShrink: 0, padding: '6px 12px',
+        background: C.bgInset, borderTop: `1px solid ${C.borderLight}`,
+        fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {`Права: ${plugin.granted.length > 0 ? plugin.granted.join(', ') : 'не выданы'} · v${plugin.version}`}
+      </div>
 
       {/* Журнал моста («Подробнее»): последние сообщения, моно */}
       {logOpen && (

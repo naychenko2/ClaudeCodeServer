@@ -1090,6 +1090,16 @@ describe('ключи плагинов (S3)', () => {
     expect(isPanelKey('files')).toBe(true);
   });
 
+  // S5: у каждой панели плагина — своя карточка. Две панели ОДНОГО плагина дают
+  // два разных ключа (иначе была бы одна карточка с двумя фреймами, а не две).
+  it('две панели одного плагина — два разных ключа (две карточки)', () => {
+    const a = pluginPanelKey('acme/x', 'panel-a');
+    const b = pluginPanelKey('acme/x', 'panel-b');
+    expect(a).not.toBe(b);
+    expect(isPluginPanelKey(a)).toBe(true);
+    expect(isPluginPanelKey(b)).toBe(true);
+  });
+
   it('sanitizeZones сохраняет ключ в layout, home, weights, railOrder и tucked', () => {
     const z = sanitizeZones({
       left: { layout: [['chats']] },
@@ -1193,12 +1203,14 @@ describe('ключи плагинов (S3)', () => {
 
   // Регрессия: формат хранилища не меняется — старая раскладка (все статические
   // ключи, включая pluginPanels, плюс упразднённые имена) читается ровно как
-  // раньше. Отличий от прежнего результата нет: pluginPanels по-прежнему
-  // статический ключ (упразднение — S5), упразднённые имена переводятся,
-  // синтаксически валидный ключ плагина добавляется (его раньше отбрасывали).
+  // раньше, кроме двух S5-изменений: pluginPanels теперь упразднён (выпадает из
+  // раскладки, migrateLegacyKey → null) и синтаксически валидный ключ плагина
+  // добавляется (его раньше отбрасывали). Упразднённые имена переводятся.
   describe('регрессия: старая раскладка читается как раньше', () => {
     const ALL_STATIC = PANEL_KEYS as readonly string[];
     const LEGACY = ['personas', 'tools', 'images', 'sound', 'videoEditor'];
+    // S5: pluginPanels упразднён — из правой части раскладки он выпадает
+    const staticRight = ALL_STATIC.slice(10).filter(k => k !== 'pluginPanels');
 
     const raw = () => ({
       left: { layout: [ALL_STATIC.slice(0, 10)] },
@@ -1224,8 +1236,8 @@ describe('ключи плагинов (S3)', () => {
         right: { ...now.right, layout: strippedLayout, colFlex: normalizeColFlex(strippedLayout.length, now.right.colFlex) },
       };
       expect(stripped).toEqual(prev);
-      // ключ плагина на месте, рядом со статическими
-      expect(now.right.layout).toEqual([ALL_STATIC.slice(10), [K]]);
+      // ключ плагина на месте, рядом со статическими; pluginPanels выпал (S5)
+      expect(now.right.layout).toEqual([staticRight, [K]]);
     });
 
     it('старый плоский формат (legacyOpen) читается, упразднённые имена переводятся', () => {

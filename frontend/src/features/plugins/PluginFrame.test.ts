@@ -1,17 +1,18 @@
-// Слот панели плагина (макет экран 3, ADR-031): панель берётся у плагина, у которого
-// панель ОБЪЯВЛЕНА (contributes.panels в данных списка), а не просто у первого включённого:
-//  • включённый без панели первым + включённый с панелью вторым → показывается второй;
-//  • два с панелями → переключатель в шапке острова;
-//  • ни одного с панелью → «пусто» (панелей нет).
+// Панель плагина (S5): PluginFrame принимает КОНКРЕТНЫЙ (plugin, panel) — одна панель
+// = одна карточка. Выбор, ЧЬЮ панелью пользоваться, и переключатель — выше (WorkspacePage
+// строит pluginPanelTargets, мобила — PluginPanelsSwitcher). Здесь проверяем сам фрейм:
+//  • panelHtml вызывается с id/версией плагина и entry ПАНЕЛИ из манифеста (не хардкод);
+//  • 404 → «Панель не найдена»;
+//  • html получен → iframe смонтирован.
 //
 // Окружение node: минимальный фейк-DOM (createRoot + act, паттерн fakeDom).
-// Бэковая зависимость: PluginResponse (список) пока не отдаёт contributes — тест строится
-// на моке данных списка, где contributes.panels присутствует.
+// useHasPanelHeader не мокаем: без PanelShell (тест монтирует фрейм голо) → false →
+// фрейм рисует СВОЙ Island (мобильный режим), что и проверяем.
 
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import type { Project } from '../../types';
-import type { PluginInfo } from '../../lib/api';
+import type { PluginInfo, PluginPanelView } from '../../lib/api';
 
 // useIsMobile — false (десктоп); прочие экспорты модуля — оригинал
 vi.mock('../../lib/breakpoints', async (importOriginal) => {
@@ -70,26 +71,19 @@ const PROJECT: Project = {
   updatedAt: '2026-01-01T00:00:00Z',
 };
 
-const P_NO_PANEL: PluginInfo = {
-  id: 'local-1/no-panel', version: '1.0.0', sha256: 'a',
-  requested: [], granted: [], enabled: true, source: 'upload:no-panel', secrets: [],
-};
 const P_WITH_PANEL: PluginInfo = {
   id: 'local-1/with-panel', version: '1.0.0', sha256: 'b',
   requested: [], granted: [], enabled: true, source: 'upload:with-panel', secrets: [],
   contributes: { panels: [{ id: 'p1', title: 'Panel', entry: 'panel/index.html' }] },
 };
-const P_WITH_PANEL_2: PluginInfo = {
-  id: 'local-1/with-panel-2', version: '1.0.0', sha256: 'c',
-  requested: [], granted: [], enabled: true, source: 'upload:with-panel-2', secrets: [],
-  contributes: { panels: [{ id: 'p2', title: 'Panel 2', entry: 'panel/index.html' }] },
-};
-// Панель с НЕ-стандартным entry: panelHtml обязан запросить именно assets/panel/main.html
+const PANEL_1: PluginPanelView = { id: 'p1', title: 'Panel', entry: 'panel/index.html' };
+// Панель с НЕ-стандартным entry: panelHtml обязан запросить именно panel/main.html
 const P_WITH_PANEL_MAIN: PluginInfo = {
   id: 'local-1/with-panel-main', version: '1.0.0', sha256: 'd',
   requested: [], granted: [], enabled: true, source: 'upload:with-panel-main', secrets: [],
   contributes: { panels: [{ id: 'p3', title: 'Main', entry: 'panel/main.html' }] },
 };
+const PANEL_MAIN: PluginPanelView = { id: 'p3', title: 'Main', entry: 'panel/main.html' };
 
 // === Хелперы (типы нод fakeDom не экспортируются — через сигнатуру textNodes) ===
 type FNode = Parameters<typeof textNodes>[0];
@@ -104,40 +98,10 @@ function textOf(n: FNode): string {
   return out;
 }
 
-// Кнопка/элемент с onClick, чей ПОЛНЫЙ текст равен label
-function findButton(container: FNode, label: string): { onClick: () => void } | null {
-  let hit: { onClick: () => void } | null = null;
-  const walk = (x: FNode) => {
-    if (hit) return;
-    if (x.nodeType === 1) {
-      const p = Object.keys(x).find(k => k.startsWith('__reactProps$'));
-      if (p) {
-        const props = (x as unknown as Record<string, unknown>)[p] as Record<string, unknown> | undefined;
-        if (props?.onClick && textOf(x) === label) hit = { onClick: props.onClick as () => void };
-      }
-    }
-    for (const c of x.childNodes) walk(c);
-  };
-  walk(container);
-  return hit;
-}
-
-// Элемент по aria-label (для IconButton-триггеров без текстовой подписи)
-function findByAriaLabel(container: FNode, label: string): FNode | null {
-  let hit: FNode | null = null;
-  const walk = (x: FNode) => {
-    if (hit) return;
-    if (x.nodeType === 1 && x.getAttribute('aria-label') === label) { hit = x; return; }
-    for (const c of x.childNodes) walk(c);
-  };
-  walk(container);
-  return hit;
-}
-
-// Монтирует остров и даёт асинхронной загрузке списка (и забору панели) дойти
-async function renderFrame() {
+// Монтирует фрейм с конкретным (plugin, panel) и даёт асинхронной заборе панели дойти
+async function renderFrame(plugin: PluginInfo, panel: PluginPanelView) {
   installFakeDom();
-  const { container } = mount(createElement(PluginFrame, { project: PROJECT }));
+  const { container } = mount(createElement(PluginFrame, { project: PROJECT, plugin, panel }));
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
   return { container, text: () => textNodes(container).join(' ') };
 }
@@ -151,45 +115,31 @@ beforeEach(() => {
 
 afterAll(() => { uninstallFakeDom(); });
 
-describe('PluginFrame: выбор плагина с панелью', () => {
-  it('включённый без панели первым + с панелью вторым → панель второго (panelHtml по id второго)', async () => {
-    vi.mocked(api.plugins.list).mockResolvedValue([P_NO_PANEL, P_WITH_PANEL]);
-
-    const { text } = await renderFrame();
-    // панель забрана у плагина С панелью (второго), а не у первого без панели
-    expect(vi.mocked(api.plugins.panelHtml).mock.calls[0]?.[0]).toBe('local-1/with-panel');
-    // остров не в «пустом» состоянии
-    expect(text()).not.toContain('У установленных плагинов панелей нет');
-  });
-
-  it('два включённых с панелями → переключатель в шапке', async () => {
-    vi.mocked(api.plugins.list).mockResolvedValue([P_WITH_PANEL, P_WITH_PANEL_2]);
-
-    const { container } = await renderFrame();
-    // триггер переключателя (aria-label) на месте
-    expect(findByAriaLabel(container, 'Выбрать панель'), 'переключатель не найден').not.toBeNull();
+describe('PluginFrame: фрейм конкретной панели', () => {
+  it('panelHtml вызывается с id/версией плагина и entry панели из манифеста', async () => {
+    await renderFrame(P_WITH_PANEL, PANEL_1);
+    const call = vi.mocked(api.plugins.panelHtml).mock.calls[0];
+    expect(call, 'panelHtml не вызван').toBeDefined();
+    // [id, version, entry]
+    expect(call?.[0]).toBe('local-1/with-panel');
+    expect(call?.[1]).toBe('1.0.0');
+    expect(call?.[2]).toBe('panel/index.html');
   });
 
   // entry из манифеста (не panel/index.html) → panelHtml получает именно её (3-й аргумент).
   // Мутация «вернуть хардкод panel/index.html» → 3-й аргумент снова panel/index.html → красный.
   it('entry=panel/main.html → panelHtml вызывается с entry=panel/main.html', async () => {
-    vi.mocked(api.plugins.list).mockResolvedValue([P_WITH_PANEL_MAIN]);
-
-    await renderFrame();
+    await renderFrame(P_WITH_PANEL_MAIN, PANEL_MAIN);
     const call = vi.mocked(api.plugins.panelHtml).mock.calls[0];
     expect(call, 'panelHtml не вызван').toBeDefined();
-    // [id, version, entry]
     expect(call?.[0]).toBe('local-1/with-panel-main');
     expect(call?.[1]).toBe('1.0.0');
     expect(call?.[2]).toBe('panel/main.html');
   });
 
-  it('ни одного включённого с панелью → «пусто» (панелей нет)', async () => {
-    vi.mocked(api.plugins.list).mockResolvedValue([P_NO_PANEL]);
-
-    const { text } = await renderFrame();
-    expect(text()).toContain('У установленных плагинов панелей нет');
-    // панель не забрана ни у кого
-    expect(vi.mocked(api.plugins.panelHtml).mock.calls.length).toBe(0);
+  it('404 → «Панель не найдена» (iframe не смонтирован)', async () => {
+    vi.mocked(api.plugins.panelHtml).mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
+    const { text } = await renderFrame(P_WITH_PANEL, PANEL_1);
+    expect(text()).toContain('Панель не найдена');
   });
 });

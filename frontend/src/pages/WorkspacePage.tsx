@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, type LucideIcon } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
 import { ProjectFeature } from '../types';
@@ -12,14 +12,14 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying } from '../lib/videoStage';
-import { keyAllowed, WORKSPACE_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { keyAllowed, pluginPanelKey, setPluginPanelMeta, WORKSPACE_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
 import { hasPendingOpen, subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
-import { api } from '../lib/api';
+import { api, type PluginInfo, type PluginPanelView } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem, type RevealPanelDetail } from '../lib/subsystems/registry';
@@ -38,7 +38,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
-import { PluginFrame, useHasInstalledPlugins, useInstalledPlugins } from '../features/plugins';
+import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
@@ -333,8 +333,49 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Гейт: флаг plugins-mvp + локальность (ProjectCapabilities.Plugins).
   const pluginsMvp = useFeature(FLAGS.pluginsMvp)
   const pluginsAvail = useProjectFeature(project, ProjectFeature.Plugins)
-  useInstalledPlugins(project.id, pluginsMvp && pluginsAvail)
+  const { plugins: installedPlugins } = useInstalledPlugins(project.id, pluginsMvp && pluginsAvail)
   const hasPlugins = useHasInstalledPlugins(project.id)
+  // S5: у каждой панели плагина — своя карточка в рельсе. Плоский список (плагин,
+  // панель) у ВКЛЮЧЕННЫХ плагинов с ОБЪЯВЛЕННЫМИ панелями: из него строим мету
+  // (реестр setPluginPanelMeta), карточки (panels) и мобильный переключатель.
+  // Выключенный не монтирует панели (бэк — 409), панель может не быть (404).
+  const pluginPanelTargets = useMemo(() => {
+    const out: { plugin: PluginInfo; panel: PluginPanelView }[] = [];
+    for (const p of installedPlugins) {
+      if (!p.enabled) continue;
+      for (const panel of p.contributes?.panels ?? []) out.push({ plugin: p, panel });
+    }
+    return out;
+  }, [installedPlugins]);
+  // Мета карточек: заголовок — из манифеста панели (иначе slug плагина), иконка — Plug.
+  // Заполняем в useMemo (а не в эффекте): WorkspacePage рендерится ПЕРЕД PanelZone,
+  // поэтому реестр свеж, когда PanelZone читает panelMetaResolved (иначе fallback).
+  useMemo(() => {
+    const meta: Record<string, { title: string; Icon: LucideIcon }> = {};
+    for (const t of pluginPanelTargets) {
+      const slug = t.plugin.id.split('/').pop() ?? t.plugin.id;
+      meta[pluginPanelKey(t.plugin.id, t.panel.id)] = { title: t.panel.title || slug, Icon: Plug };
+    }
+    setPluginPanelMeta(meta as Record<import('./workspace/panelCatalog').PluginPanelKey, { title: string; Icon: LucideIcon }>);
+  }, [pluginPanelTargets]);
+  // Карточки панелей плагинов для десктопного panels: ключ plugin:{...} → PluginFrame.
+  // На мобиле (вкладка «Плагины») их не строим — там PluginPanelsSwitcher.
+  const pluginPanelEntries = useMemo(() => {
+    const out: Record<string, ReactNode> = {};
+    for (const t of pluginPanelTargets) {
+      const k = pluginPanelKey(t.plugin.id, t.panel.id);
+      out[k] = (
+        <PluginFrame
+          key={k}
+          project={project}
+          plugin={t.plugin}
+          panel={t.panel}
+          onOpenPlugins={() => setEditProjectOpen(true)}
+        />
+      );
+    }
+    return out;
+  }, [project, pluginPanelTargets]);
   // Панель «Заметки проекта» — вклад слота workspace-panel (ноль прямых импортов фичи).
   const notesPanel = useSlotItem<WorkspacePanelNotesCtx>('workspace-panel', 'project-notes')
   // Панели подсистем (слот workspace-panel-def, например «Персонажи» редактора картинок):
@@ -2086,7 +2127,10 @@ const windowWidth = useWindowWidth();
                   onStopService={stopService} onSelectPreview={handleSelectPreview}
                   terminalBusy={terminalBusy} />
               : leftTab === 'plugins'
-              ? <PluginFrame project={project} onOpenPlugins={() => setEditProjectOpen(true)} onClose={() => setLeftTab('sessions')} />
+              // M4/S5: одна вкладка «Плагины», внутри — переключатель, какую панель плагина
+              // показать (на мобиле вкладка на каждую панель — каша). На десктопе у каждой
+              // панели плагина своя карточка в рельсе (pluginPanelEntries).
+              ? <PluginPanelsSwitcher project={project} plugins={installedPlugins} onOpenPlugins={() => setEditProjectOpen(true)} onClose={() => setLeftTab('sessions')} />
               : leftTab === 'knowledge'
               ? <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} />
               : (
@@ -2327,14 +2371,10 @@ const windowWidth = useWindowWidth();
             terminal: <DeviceAgentGate project={project}><TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} /></DeviceAgentGate>,
             preview: <DeviceAgentGate project={project}><PreviewPanelContent projectId={project.id} project={project} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} /></DeviceAgentGate>,
             video: <VideoPanel />,
-            // Панели плагинов (ADR-031, гейт V5): только когда есть установленные плагины
-            ...(hasPlugins ? {
-              pluginPanels: <PluginFrame
-                project={project}
-                onOpenPlugins={() => setEditProjectOpen(true)}
-                onClose={() => closePanelKey('pluginPanels')}
-              />
-            } : {}),
+            // S5: у каждой панели плагина — СВОЯ карточка (ключ plugin:{...}), а не один
+            // общий слот pluginPanels. Карточки строятся в pluginPanelTargets (выше):
+            // пустой список плагинов — ни одной карточки (гейт V5: нет плагинов — нет панелей).
+            ...(pluginPanelEntries as Partial<Record<PanelKey, ReactNode>>),
             ...(activeSession ? {
               chatContext: <ContextPanelHost session={activeSession} project={project}
                 onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,

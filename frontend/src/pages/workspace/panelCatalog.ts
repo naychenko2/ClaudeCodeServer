@@ -55,8 +55,11 @@ export const PANEL_KEYS = [
   // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
   // а в рельсе их не разглядеть.
   'video',
-  // Панели плагинов (ADR-031, флаг plugins-mvp): слот появляется, только когда у
-  // проекта есть хотя бы один установленный плагин (гейт V5 — в WorkspacePage).
+  // Маркер семейства плагинов (ADR-031, S5): сам по себе панелью больше не
+  // является (упразднён, см. LEGACY_KEY_ALIASES) — у каждой панели плагина своя
+  // динамическая карточка plugin:*. Живёт в реестре, чтобы WORKSPACE_KEYS мог
+  // разрешить всё семейство plugin:* одним маркером (keyAllowed), а не перечислять
+  // каждый ключ.
   'pluginPanels',
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
@@ -144,8 +147,9 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
   preview:  { title: 'Сервисы',   Icon: AppWindow },
   video:    { title: 'Эфир',      Icon: MonitorPlay },
-  // Панели плагинов (ADR-031): слот в боковой колонке; появляется, только когда
-  // у проекта есть установленные плагины (гейт V5 — в WorkspacePage).
+  // Маркер семейства плагинов (S5): панелью не является (упразднён), мета живёт
+  // только для полноты Record<PanelKey, …> — реальные карточки рисуются по
+  // динамическим ключам plugin:* из реестра setPluginPanelMeta.
   pluginPanels: { title: 'Панели плагинов', Icon: Plug },
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
@@ -195,6 +199,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   // Справа, как «Сервисы»: слева живёт список чатов, а эфир рядом с ним отнимал бы
   // место у навигации — смотрят его сбоку от ленты, а не вместо неё
   video: 'right',
+  // Маркер семейства (S5): не панель, 'right' — домашняя зона реальных plugin:*
   pluginPanels: 'right',
   preview: 'right',
   plan: 'right',
@@ -382,16 +387,22 @@ export function keyAllowed(k: PanelKey, allowed: readonly PanelKey[]): boolean {
 // заменил док проектов второй левой рельсой (features/projects/ProjectRail).
 // Панели генерации «Картинки», «Звук» и «Видео» упразднены (ADR-023): в сохранённых раскладках их место
 // занимает «Контекст»; повтор в одной раскладке снимает санитайз (дубли), поэтому три ключа дают одну панель.
-const LEGACY_KEY_ALIASES: Record<string, PanelKey> = {
+const LEGACY_KEY_ALIASES: Record<string, PanelKey | null> = {
   personas: 'team',
   images: 'chatContext',
   sound: 'chatContext',
   videoEditor: 'chatContext',
+  // S5: единый слот pluginPanels упразднён — у каждой панели плагина теперь своя
+  // карточка (ключ plugin:*). Старая раскладка не переносится (null): карточки
+  // встают на своё место по правилам рельса, историческое место не восстанавливаем.
+  pluginPanels: null,
 };
 
 // Ключ старой раскладки → ключ реестра (null — панель упразднена).
+// Явный `null` в таблице (не «отсутствует») — упразднение: старый слот не
+// переносится, а его панели встают на своё место по правилам рельса.
 export function migrateLegacyKey(v: unknown): PanelKey | null {
   if (typeof v !== 'string') return null;
-  const aliased = LEGACY_KEY_ALIASES[v] ?? v;
-  return isPanelKey(aliased) ? aliased : null;
+  if (v in LEGACY_KEY_ALIASES) return LEGACY_KEY_ALIASES[v];
+  return isPanelKey(v) ? v : null;
 }

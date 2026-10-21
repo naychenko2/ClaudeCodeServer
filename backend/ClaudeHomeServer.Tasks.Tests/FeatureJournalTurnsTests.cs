@@ -284,6 +284,41 @@ public class FeatureJournalTurnsTests : IDisposable
                 "реальная регистрация TasksSubsystem.Register: подписчик на шине, ход записан");
     }
 
+    // ─── StopAsync идемпотентен (TryComplete, не Complete) ─────────────────────────────
+
+    // Повторный StopAsync (двойная остановка хоста) не бросает: Complete() неидемпотентен
+    // (бросает ChannelClosedException), TryComplete — идемпотентен. Мутация «вернуть
+    // Complete()» красит этот тест.
+    [Fact]
+    public async Task ДвойнойStopAsync_НеБросает()
+    {
+        await _subscriber.StopAsync(CancellationToken.None);
+        var ex = await Record.ExceptionAsync(() => _subscriber.StopAsync(CancellationToken.None));
+        ex.Should().BeNull("повторный StopAsync идемпотентен (TryComplete)");
+    }
+
+    // ─── Запись после стопа не вешает drain ───────────────────────────────────────────────
+
+    // Ход, поданный после StopAsync: TryWrite вернёт false (очередь завершена). Без дренажа
+    // счётчика «в работе» WaitForDrainAsync зависнет (счётчик увеличен, а потребитель запись
+    // не прочитает). Мутация «не уменьшать _inFlight при TryWrite false» красит этот тест.
+    [Fact]
+    public async Task ЗаписьПослеСтопа_НеВешаетDrain()
+    {
+        await _subscriber.StopAsync(CancellationToken.None);
+        var (epic, step) = CreateFeatureAndStep();
+        var now = DateTime.UtcNow;
+        _tasks.MarkClaudeStarted(step.Id, "sess-1", now);
+        await _bus.PublishAsync(new TurnCompleted(
+            new TurnContext("sess-1", "u", 1, 0), "success", null, Passport("sess-1", now)));
+
+        // Drain завершается (не висит): счётчик «в работе» схлопнут, очередь пуста.
+        // Task.Delay — только страховка от зависания; сам drain схлопывается мгновенно.
+        var drain = _subscriber.WaitForDrainAsync();
+        var done = await Task.WhenAny(drain, Task.Delay(TimeSpan.FromSeconds(5)));
+        done.Should().BeSameAs(drain, "WaitForDrainAsync завершился (не завис на записи после стопа)");
+    }
+
     // Logger, который бросает в Log: заставляет сбой хранилища вырваться из его try/catch.
     private sealed class ThrowingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
     {

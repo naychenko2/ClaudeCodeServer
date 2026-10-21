@@ -13,6 +13,8 @@
 // «чужой origin» краснеет; убираем проверку v → тест «неверная версия» краснеет.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // --- Мини-раннер React-хуков (до импортов: vi.mock/vi.hoisted поднимаются выше) ---
 type Host = {
@@ -133,7 +135,11 @@ const { buildTokensStyle } = await import('./panelSrcdoc');
 const { DOMParser } = await import('linkedom');
 // Шим plugin-kit: тот же файл, что встраивает buildPanelSrcdoc (?raw — строкой).
 const shimJs = (await import('../../../public/plugin-kit/plugin-kit.js?raw')).default as string;
-const shimCss = (await import('../../../public/plugin-kit/theme.css?raw')).default as string;
+// shimCss = структурный theme.css + контролы controls.css (S9): та же конкатенация,
+// что в bridge.ts, — чтобы expectedInner совпал с фактическим srcdoc.
+const shimCssBase = (await import('../../../public/plugin-kit/theme.css?raw')).default as string;
+const shimControls = (await import('../../../public/plugin-kit/controls.css?raw')).default as string;
+const shimCss = shimCssBase + '\n' + shimControls;
 type PluginInfo = import('../../lib/api').PluginInfo;
 type Project = import('../../types').Project;
 
@@ -764,5 +770,50 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     el = findElement(render(), 'iframe');
     expect((el!.props.style as Record<string, unknown>).height).toBe(PANEL_MIN_HEIGHT);
 
+  });
+});
+
+// === Готовые контролы (S9): классы .cc-* по дизайн-системой, опт-ин, без hex ===
+// Критерий: девять базовых классов есть; голые button/input/ul НЕ стилизуются
+// (каждый селектор — .cc-*); сырого hex нет (цвета — токенами --cc-*). Мутации:
+//  • убрать .cc-input из controls.css → «девять классов» краснеет;
+//  • добавить голый селектор `button {` → «опт-ин» краснеет;
+//  • вписать #fff в controls.css → «без hex» краснеет.
+// Файл читаем через fs (не ?raw): в vitest-окружении ?raw для .css даёт пустую
+// строку (см. round-trip-тесты), а e2e уже читает файлы шима через fs.
+describe('контролы кита (S9: .cc-* по дизайн-системе, опт-ин, без hex)', () => {
+  const controlsCss = readFileSync(fileURLToPath(new URL('../../../public/plugin-kit/controls.css', import.meta.url)), 'utf8');
+  // Селекторы файла: текст до '{' (без at-rules @media/@keyframes и без %-селекторов
+  // keyframes). Голый элемент (button/input/ul) не должен попасть — иначе опт-ин сломан.
+  function selectorsOf(css: string): string[] {
+    const noComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const out: string[] = [];
+    const re = /([^{}]+)\{/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(noComments))) {
+      const sel = m[1].trim();
+      if (!sel || sel.startsWith('@')) continue;
+      if (/^[\d.]+%(\s*,\s*[\d.]+%)*$/.test(sel)) continue; // 0%/50%/100% keyframes
+      out.push(sel);
+    }
+    return out;
+  }
+
+  it('все девять базовых классов есть', () => {
+    for (const c of ['.cc-btn', '.cc-input', '.cc-list', '.cc-list-item', '.cc-card', '.cc-badge', '.cc-empty', '.cc-notice', '.cc-skeleton']) {
+      expect(controlsCss, c).toContain(c + ' {');
+    }
+  });
+
+  it('опт-ин: каждый селектор — .cc-* (голый button/input/ul не стилизуется)', () => {
+    const sels = selectorsOf(controlsCss);
+    expect(sels.length, 'в файле есть правила').toBeGreaterThan(0);
+    for (const s of sels) {
+      expect(s, 'селектор обязан начинаться с .cc-').toMatch(/^\.cc-/);
+    }
+  });
+
+  it('нет сырого hex: цвета — токенами --cc-* (альфа — color-mix от токена)', () => {
+    expect(controlsCss, 'hex в controls.css').not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
   });
 });

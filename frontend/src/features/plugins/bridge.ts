@@ -13,7 +13,11 @@
 // файл одновременно доступен как статика (PWA precache), но в srcdoc нужен текстом.
 // buildPanelSrcdoc (panelSrcdoc.ts) встраивает его сам; bridge.ts подставляет ?raw.
 import shimJs from '../../../public/plugin-kit/plugin-kit.js?raw';
-import shimCss from '../../../public/plugin-kit/theme.css?raw';
+import shimCssBase from '../../../public/plugin-kit/theme.css?raw';
+// Готовые контролы (S9): после структурного theme.css, чтобы правила по классам .cc-*
+// не перебивали базовую структуру. Один <style> в srcdoc: структура + контролы.
+import shimControls from '../../../public/plugin-kit/controls.css?raw';
+const shimCss = shimCssBase + '\n' + shimControls;
 import { buildPanelSrcdoc as buildPanelSrcdocRaw, PANEL_CSP as _PANEL_CSP, type PanelTokens } from './panelSrcdoc';
 
 // === Протокол ===

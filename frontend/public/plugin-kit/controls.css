@@ -1,0 +1,202 @@
+/* plugin-kit: готовые контролы панели под дизайн-систему хоста (S9).
+ *
+ * Классы опт-ин: стилизуются ТОЛЬКО элементы, явно помеченные .cc-*. Голые
+ * button/input/ul не трогаются — старый плагин, рисующий контролы сам, не ломается.
+ *
+ * Цвета — только токенами --cc-*, которые хост доставляет в <style id="cc-tokens">
+ * (текущая тема, обе темы; панель палитру сама не знает, см. S8). Сырого hex и
+ * rgba() здесь нет: альфа — через color-mix() от токена. Размеры — из шкал
+ * FS/SP/R дизайн-системы (13/12/11/14, 8/12/16/4, 8/10/12). Фокус — outline
+ * (в тёмной теме --cc-accent виден на любом фоне).
+ *
+ * Токены, доступные панели (CC_TOKEN_MAP, PluginFrame.tsx):
+ *   --cc-bg, --cc-fg, --cc-fg-muted, --cc-accent, --cc-accent-fg,
+ *   --cc-border, --cc-bg-inset, --cc-success, --cc-warning, --cc-danger, --cc-info
+ */
+
+/* === Кнопка === */
+.cc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;                 /* SP.xs */
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 13px;          /* FS.base */
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  border: 1px solid transparent;
+  border-radius: 10px;       /* R.lg */
+  padding: 8px 12px;         /* SP.sm SP.md */
+  background: var(--cc-bg-inset);
+  color: var(--cc-fg);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.cc-btn:hover { background: var(--cc-border); }
+.cc-btn:focus-visible { outline: 2px solid var(--cc-accent); outline-offset: 2px; }
+.cc-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* основной: accent-заливка, текст --cc-accent-fg */
+.cc-btn--primary {
+  background: var(--cc-accent);
+  color: var(--cc-accent-fg);
+  border-color: transparent;
+}
+.cc-btn--primary:hover { background: color-mix(in srgb, var(--cc-accent) 88%, black); }
+
+/* призрак: прозрачный фон, рамка */
+.cc-btn--ghost {
+  background: transparent;
+  color: var(--cc-fg);
+  border-color: var(--cc-border);
+}
+.cc-btn--ghost:hover { background: var(--cc-bg-inset); }
+
+/* опасный: danger-заливка */
+.cc-btn--danger {
+  background: var(--cc-danger);
+  color: var(--cc-accent-fg);
+  border-color: transparent;
+}
+.cc-btn--danger:hover { background: color-mix(in srgb, var(--cc-danger) 88%, black); }
+
+/* малый: компактнее */
+.cc-btn--sm {
+  font-size: 12px;          /* FS.sm */
+  padding: 4px 8px;         /* SP.xs SP.sm */
+  border-radius: 8px;       /* R.md */
+}
+
+/* === Поле ввода === */
+.cc-input {
+  box-sizing: border-box;
+  width: 100%;
+  font-family: inherit;
+  font-size: 14px;          /* FS.md */
+  color: var(--cc-fg);
+  background: var(--cc-bg);
+  border: 1px solid var(--cc-border);
+  border-radius: 12px;       /* R.xl */
+  padding: 10px 13px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.cc-input::placeholder { color: var(--cc-fg-muted); }
+.cc-input:focus {
+  border-color: var(--cc-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cc-accent) 16%, transparent);
+}
+.cc-input:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* === Список === */
+.cc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.cc-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;                 /* SP.sm */
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 13px;          /* FS.base */
+  color: var(--cc-fg);
+  padding: 8px 12px;         /* SP.sm SP.md */
+  border-radius: 10px;       /* R.lg */
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.cc-list-item:hover { background: var(--cc-bg-inset); }
+.cc-list-item:focus-visible { outline: 2px solid var(--cc-accent); outline-offset: -2px; }
+.cc-list-item.is-active { background: var(--cc-bg-inset); }
+
+/* === Карточка-контейнер === */
+.cc-card {
+  box-sizing: border-box;
+  background: var(--cc-bg);
+  border: 1px solid var(--cc-border);
+  border-radius: 12px;       /* R.xl */
+  padding: 12px 16px;        /* SP.md SP.lg */
+}
+
+/* === Метка-бейдж === */
+.cc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;                 /* SP.xs */
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 11px;          /* FS.xs */
+  font-weight: 600;
+  line-height: 1.4;
+  padding: 2px 8px;         /* SP.xxs SP.sm */
+  border-radius: 999px;      /* R.max: pill */
+  background: var(--cc-bg-inset);
+  color: var(--cc-fg-muted);
+  border: none;
+}
+/* тона: цвет текста — токен статуса, фон — его 14%-ная альфа (color-mix, без hex) */
+.cc-badge--success { color: var(--cc-success); background: color-mix(in srgb, var(--cc-success) 14%, transparent); }
+.cc-badge--warning { color: var(--cc-warning); background: color-mix(in srgb, var(--cc-warning) 14%, transparent); }
+.cc-badge--danger  { color: var(--cc-danger);  background: color-mix(in srgb, var(--cc-danger) 14%, transparent); }
+.cc-badge--info    { color: var(--cc-info);    background: color-mix(in srgb, var(--cc-info) 14%, transparent); }
+
+/* === Пустое состояние === */
+.cc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;                 /* SP.xs */
+  padding: 24px 16px;       /* SP.xl SP.lg */
+}
+.cc-empty__title {
+  font-family: inherit;
+  font-size: 16px;          /* FS.lg */
+  font-weight: 600;
+  color: var(--cc-fg);
+}
+.cc-empty__text {
+  font-family: inherit;
+  font-size: 13px;          /* FS.base */
+  color: var(--cc-fg-muted);
+  line-height: 1.5;
+}
+
+/* === Уведомление === */
+.cc-notice {
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 13px;          /* FS.base */
+  line-height: 1.45;
+  color: var(--cc-fg);
+  background: var(--cc-bg-inset);
+  border: 1px solid var(--cc-border);
+  border-radius: 8px;       /* R.md */
+  padding: 8px 12px;         /* SP.sm SP.md */
+}
+/* тона: рамка — токен статуса, фон — его 14%-ная альфа */
+.cc-notice--success { border-color: var(--cc-success); background: color-mix(in srgb, var(--cc-success) 14%, transparent); }
+.cc-notice--warning { border-color: var(--cc-warning); background: color-mix(in srgb, var(--cc-warning) 14%, transparent); }
+.cc-notice--danger  { border-color: var(--cc-danger);  background: color-mix(in srgb, var(--cc-danger) 14%, transparent); }
+.cc-notice--info    { border-color: var(--cc-info);    background: color-mix(in srgb, var(--cc-info) 14%, transparent); }
+
+/* === Скелетон-заглушка === */
+.cc-skeleton {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  height: 12px;             /* SP.md: толщина полосы */
+  border-radius: 8px;       /* R.md */
+  background: var(--cc-bg-inset);
+  animation: cc-skeleton-pulse 1.2s ease-in-out infinite;
+}
+@keyframes cc-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-skeleton { animation: none; }
+}

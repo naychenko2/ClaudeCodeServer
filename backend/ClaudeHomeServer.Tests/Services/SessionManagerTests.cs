@@ -11795,17 +11795,14 @@ public class SessionManagerTests : IDisposable
                 await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage(i.ToString()));
         }).WaitAsync(TimeSpan.FromSeconds(5));
 
-        // Редкие кадры не сливаются: писатель ждёт место в очереди
-        var tail = Task.Run(async () =>
+        // Редкие кадры не сливаются и писателя не блокируют: кладутся даже в «полную» очередь
+        await Task.Run(async () =>
         {
             await _sut.OnMessageQueuedAsync(session.Id, acc, new ToolUseMessage("t1", "Read", JsonDocument.Parse("{}").RootElement));
             await _sut.OnMessageQueuedAsync(session.Id, acc, new ResultMessage("success", 1, 1, null, null));
-        });
-        await Task.WhenAny(tail, Task.Delay(300));
-        tail.IsCompleted.Should().BeFalse("очередь полна, ToolUse ждёт место (back-pressure)");
+        }).WaitAsync(TimeSpan.FromSeconds(5));
 
         release.SetResult();
-        await tail.WaitAsync(TimeSpan.FromSeconds(10));
         await _sut.DrainPipelineAsync(session.Id);
 
         var deltas = Sent<TextDeltaMessage>().Select(m => int.Parse(m.Text)).ToList();
@@ -11841,5 +11838,28 @@ public class SessionManagerTests : IDisposable
         await _sut.DrainPipelineAsync(session.Id);
 
         Sent<TextDeltaMessage>().Select(m => m.Text).Should().Equal("1", "2", "3");
+    }
+
+    [Fact]
+    public async Task Pipeline_НаблюдательКладётКадрыВТуЖеСессию_ТупикаНет()
+    {
+        var session = AddPipelineSession(executor: true);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        const int Count = 2500;
+        _sut.OnSessionMessage += async (_, msg) =>
+        {
+            if (msg is not ResultMessage) return;
+            // Из потока потребителя кладём в очередь той же сессии больше ёмкости несливаемых кадров
+            for (var i = 0; i < Count; i++)
+                await _sut.OnMessageQueuedAsync(session.Id, acc, new ToolUseMessage("t" + i, "Read", JsonDocument.Parse("{}").RootElement));
+            finished.TrySetResult();
+        };
+
+        await _sut.OnMessageQueuedAsync(session.Id, acc, new ResultMessage("success", 1, 1, null, null));
+
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await _sut.DrainPipelineAsync(session.Id).WaitAsync(TimeSpan.FromSeconds(10));
+        Sent<ToolUseMessage>().Should().HaveCount(Count, "несливаемые кадры не теряются");
     }
 }

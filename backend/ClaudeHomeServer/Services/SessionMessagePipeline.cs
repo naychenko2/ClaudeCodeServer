@@ -16,18 +16,23 @@ internal readonly record struct PipelineItem(
     long EnqueuedAt,
     TaskCompletionSource? Barrier = null);
 
-// Ограниченная очередь одной сессии между чтением stdout CLI и рассылкой/наблюдателями.
+// Очередь одной сессии между чтением stdout CLI и рассылкой/наблюдателями.
 // Раньше read-loop адаптера ждал всю цепочку (SignalR Group.SendAsync медленного клиента,
 // затем каждый наблюдатель по очереди), пока CLI стоял на записи в полный пайп — MCP-вызовы
 // агента ждали десятки секунд (замер 21.10). Теперь обработчик сообщения кладёт кадр сюда и
 // сразу возвращается; ОДИН потребитель на сессию разбирает очередь строго по порядку — порядок
 // событий в ленте и у наблюдателей сохраняется.
 //
-// Переполнение: при полной очереди не кладутся (сливаются) только кадры-дельты — TextDelta,
-// ThinkingDelta и ToolInputDelta (см. IsDroppable). Всё остальное — ToolUse, ToolStarted,
-// ToolResult, Result, Error, Exited, PermissionRequest, AskQuestion, PlanReview, Hands*,
-// SessionStarted, статусы и пр. — НИКОГДА не теряется: писатель ждёт место в очереди
-// (back-pressure допустим, эти кадры редкие).
+// Канал неограниченный намеренно: наблюдатель на Result (TaskExecutionService) может из потока
+// потребителя синхронно положить кадр в очередь ТОЙ ЖЕ сессии (ошибка старта хода,
+// ReplyRejected, локальный ход). При ограниченной очереди с ожиданием места это тупик:
+// WriteAsync ждёт потребителя, а потребитель ждёт WriteAsync — сессия встаёт навсегда.
+//
+// Память ограничена счётчиком: при длине очереди >= ёмкости не кладутся (сливаются) только
+// кадры-дельты — TextDelta, ThinkingDelta и ToolInputDelta (см. IsDroppable). Всё остальное —
+// ToolUse, ToolStarted, ToolResult, Result, Error, Exited, PermissionRequest, AskQuestion,
+// PlanReview, Hands*, SessionStarted, статусы и пр. — НИКОГДА не теряется и кладётся всегда;
+// такие кадры редкие, поэтому рост очереди за счёт них не опасен.
 //
 // Закрытие: на ExitedMessage очередь НЕ закрывается (сессия живёт между ходами); её закрывает
 // CompleteAsync при удалении записи сессии — с дренажем до конца, чтобы ResultMessage дошёл
@@ -42,14 +47,17 @@ internal sealed class SessionMessagePipeline
     private readonly Channel<PipelineItem> _channel;
     private readonly Func<PipelineItem, Task> _process;
     private readonly Task _consumer;
+    private readonly int _capacity;
     private int _dropped;
+    // Длина очереди: Reader.Count у канала с SingleReader не поддерживается
+    private int _pending;
 
     public SessionMessagePipeline(Func<PipelineItem, Task> process, int capacity = DefaultCapacity)
     {
         _process = process;
-        _channel = Channel.CreateBounded<PipelineItem>(new BoundedChannelOptions(capacity)
+        _capacity = capacity;
+        _channel = Channel.CreateUnbounded<PipelineItem>(new UnboundedChannelOptions
         {
-            FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
             SingleWriter = false,
             AllowSynchronousContinuations = false,
@@ -68,19 +76,20 @@ internal sealed class SessionMessagePipeline
 
     public ValueTask EnqueueAsync(PipelineItem item)
     {
-        if (item.Droppable)
+        if (item.Droppable && Volatile.Read(ref _pending) >= _capacity)
         {
-            if (!_channel.Writer.TryWrite(item)) Interlocked.Increment(ref _dropped);
+            Interlocked.Increment(ref _dropped);
             return ValueTask.CompletedTask;
         }
-        return WriteCriticalAsync(item);
-    }
-
-    private async ValueTask WriteCriticalAsync(PipelineItem item)
-    {
-        try { await _channel.Writer.WriteAsync(item); }
-        // Очередь закрыта удалением сессии — кадру умирающего процесса некому служить
-        catch (ChannelClosedException) { item.Barrier?.TrySetResult(); }
+        // TryWrite на неограниченном канале отказывает только после закрытия (удаление сессии) —
+        // кадру умирающего процесса некому служить
+        Interlocked.Increment(ref _pending);
+        if (!_channel.Writer.TryWrite(item))
+        {
+            Interlocked.Decrement(ref _pending);
+            item.Barrier?.TrySetResult();
+        }
+        return ValueTask.CompletedTask;
     }
 
     // Дожидается, пока будет разобрано всё, что легло в очередь до вызова
@@ -107,6 +116,7 @@ internal sealed class SessionMessagePipeline
     {
         await foreach (var item in _channel.Reader.ReadAllAsync())
         {
+            Interlocked.Decrement(ref _pending);
             if (item.Barrier is { } barrier)
             {
                 barrier.TrySetResult();

@@ -13,8 +13,15 @@
 // файл одновременно доступен как статика (PWA precache), но в srcdoc нужен текстом.
 // buildPanelSrcdoc (panelSrcdoc.ts) встраивает его сам; bridge.ts подставляет ?raw.
 import shimJs from '../../../public/plugin-kit/plugin-kit.js?raw';
-import shimCss from '../../../public/plugin-kit/theme.css?raw';
-import { buildPanelSrcdoc as buildPanelSrcdocRaw, PANEL_CSP as _PANEL_CSP } from './panelSrcdoc';
+import shimCssBase from '../../../public/plugin-kit/theme.css?raw';
+// Вшитый шрифт (S10): @font-face с data:-URI латиницы Hanken Grotesk. Порядок
+// @font-face в <style> не важен — держим рядом с темой, к которой шрифт относится.
+import shimFont from '../../../public/plugin-kit/font.css?raw';
+// Готовые контролы (S9): после структурного theme.css, чтобы правила по классам .cc-*
+// не перебивали базовую структуру. Один <style> в srcdoc: структура + шрифт + контролы.
+import shimControls from '../../../public/plugin-kit/controls.css?raw';
+const shimCss = shimCssBase + '\n' + shimFont + '\n' + shimControls;
+import { buildPanelSrcdoc as buildPanelSrcdocRaw, PANEL_CSP as _PANEL_CSP, type PanelTokens } from './panelSrcdoc';
 
 // === Протокол ===
 
@@ -129,10 +136,12 @@ export type HostMessage =
       source: 'ccs-host'; v: 1; type: 'init';
       plugin: PluginRef; slot: string; context: SlotContext;
       theme: BridgeTheme; locale: string; granted: string[];
+      // Токены текущей темы хоста (--cc-*): панель применяет их, сама палитру не знает
+      tokens: PanelTokens;
     }
   | { source: 'ccs-host'; v: 1; type: 'result'; id: string; ok: true; data: unknown }
   | { source: 'ccs-host'; v: 1; type: 'result'; id: string; ok: false; error: { code: string; message: string } }
-  | { source: 'ccs-host'; v: 1; type: 'theme'; theme: BridgeTheme }
+  | { source: 'ccs-host'; v: 1; type: 'theme'; theme: BridgeTheme; tokens: PanelTokens }
   | { source: 'ccs-host'; v: 1; type: 'context'; context: SlotContext };
 
 // Ответ на ready: всё, что панель вправе знать (ADR-031 §3.3). granted —
@@ -144,6 +153,8 @@ export function buildInitMessage(args: {
   theme: BridgeTheme;
   locale: string;
   granted: string[];
+  // Токены текущей темы хоста; по умолчанию {} (first-paint уже в srcdoc)
+  tokens?: PanelTokens;
 }): HostMessage {
   return {
     source: 'ccs-host', v: 1, type: 'init',
@@ -153,6 +164,7 @@ export function buildInitMessage(args: {
     theme: args.theme,
     locale: args.locale,
     granted: args.granted,
+    tokens: args.tokens ?? {},
   };
 }
 
@@ -168,9 +180,11 @@ export function buildResultMessage(
   return { source: 'ccs-host', v: 1, type: 'result', id, ok: false, error: dataOrError as { code: string; message: string } };
 }
 
-// Смена темы без перемонтирования (ADR-031 §3.3).
-export function buildThemeMessage(theme: BridgeTheme): HostMessage {
-  return { source: 'ccs-host', v: 1, type: 'theme', theme };
+// Смена темы без перемонтирования (ADR-031 §3.3). tokens — значения --cc-*
+// НОВОЙ темы: шим обновляет <style id="cc-tokens">, панель перекрашивается
+// без перезагрузки фрейма.
+export function buildThemeMessage(theme: BridgeTheme, tokens: PanelTokens = {}): HostMessage {
+  return { source: 'ccs-host', v: 1, type: 'theme', theme, tokens };
 }
 
 // Смена контекста слота (например, другой проект).
@@ -190,23 +204,28 @@ export const MAX_PANEL_FILE_BYTES = 256 * 1024;
 // предпросмотра черновика (DraftCard) — одна функция, одна PANEL_CSP. Тело — в
 // panelSrcdoc.ts (без ?raw); здесь — обёртка, подставляющая ?raw-импорты шима.
 // theme — тема в первом кадре (ADR-031 §3.3): data-cc-theme на ВНУТРЕННЕМ <html>.
-export function buildPanelSrcdoc(panelHtml: string, theme: BridgeTheme = 'light'): string {
-  return buildPanelSrcdocRaw(panelHtml, theme, shimJs, shimCss);
+// tokens — значения --cc-* текущей темы: инжектятся в <style id="cc-tokens">
+// (first-paint без вспышки); шим обновляет их по сообщению theme.
+export function buildPanelSrcdoc(panelHtml: string, theme: BridgeTheme = 'light', tokens: PanelTokens = {}): string {
+  return buildPanelSrcdocRaw(panelHtml, theme, shimJs, shimCss, tokens);
 }
 
 // === Высота ===
 
-// Потолок высоты острова (px): панель не может вырасти выше слота, снизу —
-// скролл. Мобильный потолок ниже: панель на телефоне — на весь экран, но
-// под шапку и композер.
+// Окно предпросмотра черновика (DraftCard): выше окна контент прокручивается.
+// Установленная панель (PluginFrame) окном не ограничена — её высоту задаёт карточка.
 export const PANEL_MAX_HEIGHT = 800;
 export const PANEL_MAX_HEIGHT_MOBILE = 560;
 export const PANEL_MIN_HEIGHT = 48;
 
-// Кламп желаемой высоты (resize) в пределы слота.
-export function clampPanelHeight(h: number, mobile = false): number {
-  const max = mobile ? PANEL_MAX_HEIGHT_MOBILE : PANEL_MAX_HEIGHT;
-  return Math.min(max, Math.max(PANEL_MIN_HEIGHT, Math.round(h)));
+// Потолок высоты КОНТЕНТА (px): страховочный, не «размер слота». resize = высота
+// контента (ADR-031 §3.3, решение Александра, задача d7a6f751): хост ставит её фрейму,
+// порог снизу PANEL_MIN_HEIGHT; панель выше потолка обрезается (аномалия).
+export const PANEL_CONTENT_MAX_HEIGHT = 20_000;
+
+// Кламп высоты контента (resize): порог снизу, страховочный потолок.
+export function clampContentHeight(h: number): number {
+  return Math.min(PANEL_CONTENT_MAX_HEIGHT, Math.max(PANEL_MIN_HEIGHT, Math.round(h)));
 }
 
 // === Отказ по праву ===
@@ -220,4 +239,65 @@ export function deniedKeyOf(message: string): string | null {
   if (i < 0) return null;
   const key = message.slice(i + prefix.length).trim();
   return key || null;
+}
+
+// === Разбор отказов (R-Gleb, миноры 3–6): единый источник для handleCall ===
+//
+// Обе ветки PluginFrame.handleCall (2xx-тело и тело ошибки) идут через эти
+// хелперы: разбор {code, message} и ключ плашки написаны в одном месте,
+// ветки не расходятся.
+
+// Структурированный отказ в теле ответа: {ok:false, error:{code, message}}.
+// Сервер (PluginBridgeController.Call) на сбое всегда отдаёт не-2xx, поэтому
+// тело приходит прикреплённым к ошибке (e.body); 2xx с ok:false для этого
+// эндпоинта недостижим (минор 4) — но разбор один и тот же.
+// null — тело не структурированный отказ (error строкой, или code/message
+// не строки).
+export function parseCallError(body: unknown): { code: string; message: string } | null {
+  const err = (body as { error?: unknown } | null | undefined)?.error;
+  if (err === null || typeof err !== 'object') return null;
+  const e = err as { code?: unknown; message?: unknown };
+  if (typeof e.code !== 'string' || typeof e.message !== 'string') return null;
+  return { code: e.code, message: e.message };
+}
+
+// Отказ по праву → ключ права для плашки «Нет права {key}».
+// null — не отказ по праву (или формат не совпал, см. deniedKeyOf).
+export function deniedKeyOfError(err: { code: string; message: string } | null): string | null {
+  if (!err || err.code !== 'denied') return null;
+  return deniedKeyOf(err.message);
+}
+
+// HTTP-статус → код моста: обратное отображение маппинга PluginBridgeController.Call
+// (ADR-031 §3.4: denied→403, not_found→404, invalid→400, unavailable→503,
+// timeout→504, limit→429, upstream→502). Гейты отдают error строкой (кода в
+// теле нет), поэтому единственный источник кода — статус (минор 5); 409
+// («плагин выключен») — ближайший код 'unavailable'. Неизвестный статус → null
+// (вызывающий решает — 'upstream').
+export function callErrorCodeOfStatus(status: number | null | undefined): string | null {
+  switch (status) {
+    case 400: return 'invalid';
+    case 403: return 'denied';
+    case 404: return 'not_found';
+    case 409: return 'unavailable';
+    case 429: return 'limit';
+    case 502: return 'upstream';
+    case 503: return 'unavailable';
+    case 504: return 'timeout';
+    default: return null;
+  }
+}
+
+// Фолбэк-текст, когда тело НЕ структурированный отказ (минор 2): первая строка
+// из body.error.message / body.error.code / собственного сообщения ошибки.
+// offline.ts строит Error из err.error тела: если это объект без строкового
+// message, e.message = '[object Object]' — брать его вслепую нельзя.
+export function fallbackErrorText(body: unknown, e: unknown): string {
+  const err = (body as { error?: unknown } | null | undefined)?.error;
+  if (err !== null && typeof err === 'object') {
+    const o = err as { message?: unknown; code?: unknown };
+    if (typeof o.message === 'string' && o.message !== '') return o.message;
+    if (typeof o.code === 'string' && o.code !== '') return o.code;
+  }
+  return e instanceof Error ? e.message : 'Сервер не ответил';
 }

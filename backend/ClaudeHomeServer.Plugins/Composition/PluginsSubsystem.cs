@@ -33,6 +33,10 @@ public sealed class PluginsSubsystem : IAppSubsystem
     {
         // Singleton-ы без внутреннего порядка: PluginDirSource зависит от PluginStore,
         // DI порядок регистраций при резолве не учитывает.
+        // S6: оба стора принимают ISessionBroadcaster необязательным параметром конструктора —
+        // DI авто-инъектит его (Main), и каждая запись установки/секрета испускает владельцу
+        // plugins_changed (живое обновление панели). Выключенная подсистема → Register не
+        // вызывается → сторов нет → и брокастер не нужен (опциональный параметр = null).
         services.AddSingleton<PluginStore>();
         // Секреты плагинов (M7): per-owner архив plugin-secrets.json, отдельно от installed.json.
         services.AddSingleton<PluginSecretsStore>();

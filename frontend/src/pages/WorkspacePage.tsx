@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, type LucideIcon } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
 import { ProjectFeature } from '../types';
@@ -12,14 +12,14 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying, useVideoCenter } from '../lib/videoStage';
-import { isPanelKey, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { keyAllowed, pluginPanelKey, setPluginPanelMeta, WORKSPACE_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
 import { hasPendingOpen, subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
-import { api } from '../lib/api';
+import { api, type PluginInfo, type PluginPanelView } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem, type RevealPanelDetail } from '../lib/subsystems/registry';
@@ -38,7 +38,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
-import { PluginFrame, useHasInstalledPlugins, useInstalledPlugins } from '../features/plugins';
+import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins, panelDisplayName, pluginIconFor } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
@@ -122,14 +122,14 @@ const leftTabSvg = (children: React.ReactNode) => (
 const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
   sessions: leftTabSvg(<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />),
   files: leftTabSvg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />),
-  // Та же иконка, что у панели «Изменения» в рельсе (PANEL_META.changes): на мобиле
+  // Та же иконка, что у панели «Изменения» в рельсе (panelMeta): на мобиле
   // рельсы нет, и вкладка — единственный путь к git
   changes: <GitCompare size={18} strokeWidth={2} />,
   // База знаний проекта — иконка панели knowledge из того же реестра
   knowledge: <BookOpen size={18} strokeWidth={2} />,
   tasks: leftTabSvg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>),
   personas: leftTabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
-  // Пазл — та же метафора, что у панели «Навыки» в рельсе (PANEL_META.skills)
+  // Пазл — та же метафора, что у панели «Навыки» в рельсе (panelMeta)
   skills: <Puzzle size={18} strokeWidth={2} />,
   tools: leftTabSvg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>),
   // Панели плагинов: на мобиле рельсы нет, вкладка — единственный путь (как skills/tools)
@@ -335,8 +335,53 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Гейт: флаг plugins-mvp + локальность (ProjectCapabilities.Plugins).
   const pluginsMvp = useFeature(FLAGS.pluginsMvp)
   const pluginsAvail = useProjectFeature(project, ProjectFeature.Plugins)
-  useInstalledPlugins(project.id, pluginsMvp && pluginsAvail)
+  const { plugins: installedPlugins } = useInstalledPlugins(project.id, pluginsMvp && pluginsAvail)
   const hasPlugins = useHasInstalledPlugins(project.id)
+  // S5: у каждой панели плагина — своя карточка в рельсе. Плоский список (плагин,
+  // панель) у ВКЛЮЧЕННЫХ плагинов с ОБЪЯВЛЕННЫМИ панелями: из него строим мету
+  // (реестр setPluginPanelMeta), карточки (panels) и мобильный переключатель.
+  // Выключенный не монтирует панели (бэк — 409), панель может не быть (404).
+  const pluginPanelTargets = useMemo(() => {
+    const out: { plugin: PluginInfo; panel: PluginPanelView }[] = [];
+    for (const p of installedPlugins) {
+      if (!p.enabled) continue;
+      for (const panel of p.contributes?.panels ?? []) out.push({ plugin: p, panel });
+    }
+    return out;
+  }, [installedPlugins]);
+  // Мета карточек: заголовок — единый вывод (title из манифеста, иначе имя плагина),
+  // иконка — детерминированно из id плагина (манифест иконки не несёт) — разные
+  // плагины в рельсе различимы, а не все с одной Plug.
+  // Заполняем в useMemo (а не в эффекте): WorkspacePage рендерится ПЕРЕД PanelZone,
+  // поэтому реестр свеж, когда PanelZone читает panelMetaResolved (иначе fallback).
+  useMemo(() => {
+    const meta: Record<string, { title: string; Icon: LucideIcon }> = {};
+    for (const t of pluginPanelTargets) {
+      meta[pluginPanelKey(t.plugin.id, t.panel.id)] = {
+        title: panelDisplayName(t.plugin, t.panel),
+        Icon: pluginIconFor(t.plugin.id),
+      };
+    }
+    setPluginPanelMeta(meta as Record<import('./workspace/panelCatalog').PluginPanelKey, { title: string; Icon: LucideIcon }>);
+  }, [pluginPanelTargets]);
+  // Карточки панелей плагинов для десктопного panels: ключ plugin:{...} → PluginFrame.
+  // На мобиле (вкладка «Плагины») их не строим — там PluginPanelsSwitcher.
+  const pluginPanelEntries = useMemo(() => {
+    const out: Record<string, ReactNode> = {};
+    for (const t of pluginPanelTargets) {
+      const k = pluginPanelKey(t.plugin.id, t.panel.id);
+      out[k] = (
+        <PluginFrame
+          key={k}
+          project={project}
+          plugin={t.plugin}
+          panel={t.panel}
+          onOpenPlugins={() => setEditProjectOpen(true)}
+        />
+      );
+    }
+    return out;
+  }, [project, pluginPanelTargets]);
   // Панель «Заметки проекта» — вклад слота workspace-panel (ноль прямых импортов фичи).
   const notesPanel = useSlotItem<WorkspacePanelNotesCtx>('workspace-panel', 'project-notes')
   // Панели подсистем (слот workspace-panel-def, например «Персонажи» редактора картинок):
@@ -472,10 +517,10 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   useEffect(() => {
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
-      const key = d?.key;
-      if (!isPanelKey(key)) return;
+      const key = d?.key as PanelKey | undefined;
+      if (!key || !keyAllowed(key, WORKSPACE_KEYS)) return;
       const host = d?.follow ? followHost(wsOpenKeys.current, key) : null;
-      if (host && isPanelKey(host)) replacePanelKey(key, host);
+      if (host && keyAllowed(host as PanelKey, WORKSPACE_KEYS)) replacePanelKey(key, host as PanelKey);
       else revealPanelKey(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
@@ -2249,7 +2294,10 @@ const windowWidth = useWindowWidth();
                   onStopService={stopService} onSelectPreview={handleSelectPreview}
                   terminalBusy={terminalBusy} />
               : leftTab === 'plugins'
-              ? <PluginFrame project={project} onOpenPlugins={() => setEditProjectOpen(true)} onClose={() => setLeftTab('sessions')} />
+              // M4/S5: одна вкладка «Плагины», внутри — переключатель, какую панель плагина
+              // показать (на мобиле вкладка на каждую панель — каша). На десктопе у каждой
+              // панели плагина своя карточка в рельсе (pluginPanelEntries).
+              ? <PluginPanelsSwitcher project={project} plugins={installedPlugins} onOpenPlugins={() => setEditProjectOpen(true)} onClose={() => setLeftTab('sessions')} />
               : leftTab === 'knowledge'
               ? <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} />
               : (
@@ -2497,20 +2545,16 @@ const windowWidth = useWindowWidth();
             terminal: <DeviceAgentGate project={project}><TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} /></DeviceAgentGate>,
             preview: <DeviceAgentGate project={project}><PreviewPanelContent projectId={project.id} project={project} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} /></DeviceAgentGate>,
             video: <VideoPanel />,
-            // Панели плагинов (ADR-031, гейт V5): только когда есть установленные плагины
-            ...(hasPlugins ? {
-              pluginPanels: <PluginFrame
-                project={project}
-                onOpenPlugins={() => setEditProjectOpen(true)}
-                onClose={() => closePanelKey('pluginPanels')}
-              />
-            } : {}),
+            // S5: у каждой панели плагина — СВОЯ карточка (ключ plugin:{...}), а не один
+            // общий слот pluginPanels. Карточки строятся в pluginPanelTargets (выше):
+            // пустой список плагинов — ни одной карточки (гейт V5: нет плагинов — нет панелей).
+            ...(pluginPanelEntries as Partial<Record<PanelKey, ReactNode>>),
             ...(activeSession ? {
               chatContext: <ContextPanelHost session={activeSession} project={project}
                 onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,
             } : {}),
             ...Object.fromEntries(panelDefs.flatMap(d => (
-              d.name && isPanelKey(d.name) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
+              d.name && keyAllowed(d.name as PanelKey, WORKSPACE_KEYS) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
                 ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => { markGenPanelDismissed(activeSessionId, d.name!); closePanelKey(d.name as PanelKey); } })]]
                 : []
             ))),

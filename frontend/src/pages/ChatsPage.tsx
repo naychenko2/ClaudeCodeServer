@@ -29,7 +29,7 @@ import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels, openKeysOf } from './workspace/panelStackState';
 import { followHost } from '../lib/genPanelFollow';
-import { CHAT_KEYS, CHAT_RIGHT_KEYS, isPanelKey, type PanelKey } from './workspace/panelCatalog';
+import { CHAT_KEYS, CHAT_RIGHT_KEYS, keyAllowed, type PanelKey } from './workspace/panelCatalog';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
 import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
@@ -357,12 +357,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   useEffect(() => {
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
-      const key = d?.key;
-      if (!isPanelKey(key) || !chatRight.includes(key)) return;
+      const key = d?.key as PanelKey | undefined;
+      if (!key || !keyAllowed(key, chatRight)) return;
       if (isGenPanelKey(key)) setGenZoneFor(activeId);
       // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
       const host = d?.follow ? followHost(chatOpenKeys.current, key) : null;
-      if (host && isPanelKey(host)) replaceWith(key, host);
+      if (host && keyAllowed(host as PanelKey, chatRight)) replaceWith(key, host as PanelKey);
       else reveal(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
@@ -643,7 +643,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               onUserClose={k => markGenPanelDismissed(activeChat.id, k)}
               panels={{
                 ...Object.fromEntries(panelDefs.flatMap(d => (
-                  d.name && isPanelKey(d.name) && chatRight.includes(d.name) && d.render && d.name !== 'chatContext' && (d.action?.isAvailable?.(null) ?? true)
+                  d.name && keyAllowed(d.name as PanelKey, chatRight) && d.render && d.name !== 'chatContext' && (d.action?.isAvailable?.(null) ?? true)
                     ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => { markGenPanelDismissed(activeChat.id, d.name!); closePanelKey(d.name as PanelKey); } })]]
                     : []
                 ))),

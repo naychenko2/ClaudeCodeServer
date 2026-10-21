@@ -9,7 +9,7 @@
  * API:
  *   ccsPlugin.ready()             — шим загрузился (сам шлёт его при загрузке)
  *   ccsPlugin.call(op, args)     — Promise: данные на успех, {code, message} на сбой
- *   ccsPlugin.resize(height)     — желаемая высота панели (px)
+ *   ccsPlugin.resize(height)     — высота контента панели (px); шим шлёт её сам, вручную звать не нужно
  *   ccsPlugin.on(type, cb)       — 'init' | 'theme' | 'context'; возвращает отписку
  *   ccsPlugin.state              — текущее {plugin, slot, context, theme, locale, granted}
  *
@@ -31,7 +31,8 @@
     context: {},     // {projectId, objectId?}
     theme: 'light',  // 'light' | 'dark'
     locale: '',
-    granted: []      // копия выданных прав
+    granted: [],     // копия выданных прав
+    tokens: {}       // --cc-* текущей темы (хост доставляет, applyTokens применяет)
   };
 
   var pending = {};  // id вызова -> {resolve, reject}
@@ -56,6 +57,20 @@
     else el.removeAttribute('data-cc-theme');
   }
 
+  // Токены панели (--cc-*): хост доставляет значения ТЕКУЩЕЙ темы. Шим переписывает
+  // style-блок токенов (id cc-tokens, инжектится в srcdoc при сборке, first-paint
+  // без вспышки) — панель перекрашивается БЕЗ перезагрузки фрейма. Панель сама
+  // палитру не знает: sandbox-iframe без allow-same-origin, --c-* хоста не доходят.
+  function applyTokens(tokens) {
+    if (!tokens || typeof tokens !== 'object') return;
+    var style = document.getElementById('cc-tokens');
+    if (!style) return;
+    var names = Object.keys(tokens);
+    if (names.length === 0) { style.textContent = ''; return; }
+    var rules = names.map(function (n) { return '  ' + n + ': ' + tokens[n] + ';'; });
+    style.textContent = ':root {\n' + rules.join('\n') + '\n}';
+  }
+
   function snapshot() {
     return {
       plugin: state.plugin,
@@ -63,7 +78,8 @@
       context: state.context,
       theme: state.theme,
       locale: state.locale,
-      granted: state.granted.slice()
+      granted: state.granted.slice(),
+      tokens: state.tokens
     };
   }
 
@@ -88,15 +104,19 @@
       state.theme = d.theme === 'dark' ? 'dark' : 'light';
       state.locale = typeof d.locale === 'string' ? d.locale : '';
       state.granted = Array.isArray(d.granted) ? d.granted : [];
+      state.tokens = (d.tokens && typeof d.tokens === 'object') ? d.tokens : {};
       applyTheme();
+      applyTokens(state.tokens);
       if (!inited) {
         inited = true;
         notify('init', snapshot());
       }
     } else if (d.type === 'theme') {
       state.theme = d.theme === 'dark' ? 'dark' : 'light';
+      state.tokens = (d.tokens && typeof d.tokens === 'object') ? d.tokens : {};
       applyTheme();
-      notify('theme', { theme: state.theme });
+      applyTokens(state.tokens);
+      notify('theme', { theme: state.theme, tokens: state.tokens });
     } else if (d.type === 'context') {
       state.context = d.context || {};
       notify('context', { context: state.context });
@@ -122,7 +142,7 @@
         send({ type: 'call', id: id, op: op, args: args || {} });
       });
     },
-    // Желаемая высота панели (px); хост зажимает её в пределы слота.
+    // Высота контента панели (px); шим шлёт её сам, вручную звать не нужно.
     resize: function (height) {
       if (typeof height === 'number' && isFinite(height) && height >= 0)
         send({ type: 'resize', height: height });
@@ -143,8 +163,8 @@
   };
 
   // Авто-высота: хосту не видно DOM фрейма (sandbox), единственный канал — postMessage.
-  // ResizeObserver шлёт высоту body при каждом изменении; хост зажимает её в пределы
-  // слота. Меряем body (реальная высота контента), а не documentElement: его
+  // ResizeObserver шлёт высоту body при каждом изменении; хост ставит фрейму эту высоту
+  // (порог 48, потолок 20 000), прокрутка — у хоста. Меряем body (реальная высота контента), а не documentElement: его
   // scrollHeight не бывает меньше высоты iframe, и мелкая панель не смогла бы ужаться.
   // Шим живёт в <head> — observer вешаем, когда body существует (DOMContentLoaded).
   function reportHeight() {

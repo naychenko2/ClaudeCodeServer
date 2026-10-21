@@ -6,6 +6,8 @@ export type { PluginConsentData, PluginConsentSecret, PluginContribution } from 
 export { useInstalledPlugins } from './useInstalledPlugins';
 export { useHasInstalledPlugins } from './pluginStore';
 export { PluginFrame } from './PluginFrame';
+export { PluginPanelsSwitcher } from './PluginPanelsSwitcher';
+export { panelDisplayName, pluginIconFor, humanizeId } from './panelNaming';
 export {
   isNetPermission, netHostOf, secretNameOf, permissionLabel, NET_PERMISSION_WARNING,
 } from './permissionLabels';

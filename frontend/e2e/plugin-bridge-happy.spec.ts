@@ -11,16 +11,25 @@
 import { test, expect } from '@playwright/test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+// R-Gleb, minor 8: harness живого PluginFrame бандлится в IIFE через Vite (React +
+// PluginFrame + зависимости внутри), затем инжектится в страницу.
+import { build as viteBuild } from 'vite';
+import reactPlugin from '@vitejs/plugin-react';
 
 // Те же файлы, что встраивает buildPanelSrcdoc (frontend/src/features/plugins/panelSrcdoc.ts).
 // cwd — корень frontend/ (отсюда запускается playwright), public/ — рядом.
 const KIT = path.join(process.cwd(), 'public', 'plugin-kit');
 const shimJs = fs.readFileSync(path.join(KIT, 'plugin-kit.js'), 'utf8');
-const shimCss = fs.readFileSync(path.join(KIT, 'theme.css'), 'utf8');
+// shimCss = theme.css + font.css (S10: вшитый шрифт data:-URI). font.css — @font-face
+// латиницы Hanken Grotesk; без него панель рисовала бы латиницу системным фолбэком.
+const shimCss =
+  fs.readFileSync(path.join(KIT, 'theme.css'), 'utf8') + '\n' +
+  fs.readFileSync(path.join(KIT, 'font.css'), 'utf8');
 
 // buildPanelSrcdoc — из panelSrcdoc.ts (БЕЗ ?raw): CSP и экранирование — только там.
 // bridge.ts подставляет ?raw-импорты; e2e передаёт файлы через fs.readFileSync.
-import { buildPanelSrcdoc } from '../src/features/plugins/panelSrcdoc';
+import { buildPanelSrcdoc, PANEL_CSP } from '../src/features/plugins/panelSrcdoc';
 
 // Экранирование srcdoc для outer iframe (та же логика, что escapeSrcdoc в panelSrcdoc.ts):
 // & → &amp;, " → &quot; (для вставки shell в атрибут srcdoc outer iframe).
@@ -122,4 +131,416 @@ test('мост: ready → init → call → result → resize (реальная 
   expect(panel!.callErr, 'call не упал').toBeNull();
   expect(panel!.gotResult, 'панель получила result').toBe(true);
   expect(panel!.resultData, 'result несёт данные').toEqual({ hello: 'world' });
+});
+
+// === S1: высота по контенту, без внутренней прокрутки ===
+//
+// Корень дефекта: внутренний <iframe> оболочки жил в дефолтных 300×150 — контент панели
+// не растягивался и прокручивался сам (плюс кламп 48–800 и overflow:auto вокруг фрейма).
+// Фикс: оболочка (html,body 100%, iframe 100%×100%) + html{overflow:hidden} внутри +
+// хост ставит фрейму высоту контента.
+//
+// Мерим ВНУТРЕННИЙ документ (scrollHeight == clientHeight), а не внешний фрейм:
+// существующий тест мерил внешний, и дефект проходил. Мутация «убрать стиль оболочки»
+// красит: внутренний iframe снова 300×150 → scrollHeight (2000) > clientHeight (150).
+
+// Панель с контентом 2000px: шим auto-resize (ResizeObserver на body) пошлёт resize(2000).
+const tallPanelHtml =
+  '<div style="height:2000px"></div>' +
+  '<script>window.__tall = true;</script>';
+
+function tallHostHtml(): string {
+  const shell = buildPanelSrcdoc(tallPanelHtml, 'light', shimJs, shimCss);
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
+    '<iframe id="outer" style="width:900px;height:400px;border:0" srcdoc="' + esc(shell) + '"></iframe>' +
+    '<script>' +
+    'window.__host = { resizes: [] };' +
+    'window.addEventListener("message", function (e) {' +
+    '  var outer = document.getElementById("outer");' +
+    '  var d = e.data;' +
+    '  if (!d || d.source !== "ccs-plugin" || d.v !== 1) return;' +
+    '  if (d.type === "resize") {' +
+    '    window.__host.resizes.push(d.height);' +
+    '    outer.style.height = d.height + "px";' +
+    '  }' +
+    '});' +
+    '</script>' +
+    '</body></html>'
+  );
+}
+
+test('S1: внутренний документ 2000px без собственной прокрутки (scrollHeight == clientHeight)', async ({ page }) => {
+  await page.setContent(tallHostHtml(), { waitUntil: 'load' });
+
+  // Ждём, пока хост применит высоту контента: resize(2000) → outer 2000px.
+  await page.waitForFunction(
+    () => {
+      const outer = document.getElementById('outer') as HTMLIFrameElement | null;
+      return !!outer && outer.style.height === '2000px';
+    },
+    { timeout: 10_000 },
+  );
+
+  // ВНУТРЕННИЙ документ (не внешний фрейм): documentElement.scrollHeight == clientHeight.
+  const dims = await (async () => {
+    for (const f of page.frames()) {
+      try {
+        const r = await f.evaluate(() => ({
+          scrollHeight: document.documentElement.scrollHeight,
+          clientHeight: document.documentElement.clientHeight,
+          isTall: !!(window as unknown as { __tall?: boolean }).__tall,
+        }));
+        if (r.isTall) return r;
+      } catch { /* фрейм недоступен */ }
+    }
+    return null;
+  })();
+  expect(dims, 'внутренний фрейм панели найден').not.toBeNull();
+  // Контент 2000px, фрейм растянут под него: внутренней прокрутки нет.
+  expect(dims!.scrollHeight, 'scrollHeight внутреннего документа').toBe(dims!.clientHeight);
+  expect(dims!.clientHeight, 'внутренний документ растянут на 2000px').toBe(2000);
+});
+
+// === R-A, critical 1: прокрутка на уровне КАРТОЧКИ ===
+//
+// Кейс S1 выше мерит только геометрию внутреннего документа и был зелёным при дефекте:
+// фрейм 2000px внутри карточки 400px с overflow:hidden и без скролла у обёртки — низ
+// панели недостижим. Здесь структура приложения: карточка (overflow:hidden, 400px) →
+// обёртка PluginFrame (overflow:auto) → фрейм высотой из resize. Колесо над панелью
+// обязано прокрутить ОБЁРТКУ, а внутренний документ остаётся нескроллимым.
+// Мутация «убрать overflow:auto у обёртки» красит: scrollTop обёртки остаётся 0.
+function cardHostHtml(): string {
+  const shell = buildPanelSrcdoc(tallPanelHtml, 'light', shimJs, shimCss);
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0">' +
+    '<div id="card" style="width:900px;height:400px;overflow:hidden;display:flex;flex-direction:column">' +
+    '<div id="wrap" style="position:relative;flex:1;min-height:0;overflow:auto">' +
+    '<iframe id="outer" style="width:100%;min-height:100%;height:100%;border:0;display:block" srcdoc="' + esc(shell) + '"></iframe>' +
+    '</div></div>' +
+    '<script>' +
+    'window.addEventListener("message", function (e) {' +
+    '  var d = e.data;' +
+    '  if (!d || d.source !== "ccs-plugin" || d.v !== 1 || d.type !== "resize") return;' +
+    '  document.getElementById("outer").style.height = d.height + "px";' +
+    '});' +
+    '</script></body></html>'
+  );
+}
+
+test('R-A: колесо над панелью выше карточки прокручивает обёртку карточки', async ({ page }) => {
+  await page.setContent(cardHostHtml(), { waitUntil: 'load' });
+  await page.waitForFunction(
+    () => (document.getElementById('outer') as HTMLIFrameElement).style.height === '2000px',
+    { timeout: 10_000 },
+  );
+
+  await page.mouse.move(450, 200);
+  await page.mouse.wheel(0, 1500);
+  await page.waitForFunction(() => (document.getElementById('wrap') as HTMLElement).scrollTop > 0, { timeout: 5_000 });
+
+  const m = await page.evaluate(() => {
+    const wrap = document.getElementById('wrap') as HTMLElement;
+    return { wrapScroll: wrap.scrollTop, wrapScrollable: wrap.scrollHeight > wrap.clientHeight, pageScroll: window.scrollY };
+  });
+  expect(m.wrapScrollable, 'обёртка выше карточки — есть что прокручивать').toBe(true);
+  expect(m.wrapScroll, 'колесо прокрутило обёртку').toBeGreaterThan(0);
+  expect(m.pageScroll, 'страница не прокручивается').toBe(0);
+});
+
+// === S7: панель обновляется сама по plugins_changed (версия в ключе фрейма) ===
+//
+// Механизм один в один как в приложении: хост держит «список» (версию плагина),
+// ключ фрейма включает версию, и по событию plugins_changed хост ПЕРЕЧИТЫВАЕТ
+// список (не кэш) — сменилась версия → iframe пересоздаётся (в React это
+// remount по key), панель в новом фрейме получает init с НОВОЙ версией.
+// Мутация «не пересоздавать фрейм при смене версии» (тот же iframe) красит:
+// панель остаётся на старой версии и новый init не получает.
+const s7PanelHtml =
+  '<script>' +
+  'window.__s7 = { inits: [] };' +
+  'ccsPlugin.on("init", function (d) { window.__s7.inits.push(d.plugin.version); });' +
+  '</script><p>s7</p>';
+
+// JS-выражение, равное escShell, но без </script> в исходнике:
+// каждая </script> расщеплена на "</scr" + "ipt>" (HTML-парсер не видит
+// закрывающий тег, JS-движок склеивает).
+function buildEscShellExpr(escShell: string): string {
+  const parts = escShell.split(/<\/script>/i);
+  let expr = JSON.stringify(parts[0]);
+  for (let i = 1; i < parts.length; i++) {
+    expr += ' + "</scr" + "ipt>" + ' + JSON.stringify(parts[i]);
+  }
+  return expr;
+}
+
+function s7HostHtml(): string {
+  const shell = buildPanelSrcdoc(s7PanelHtml, 'light', shimJs, shimCss);
+  const escShell = esc(shell);
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
+    '<div id="frames">' +
+    '<iframe id="f" style="width:900px;height:400px;border:0" srcdoc="' + escShell + '"></iframe>' +
+    '</div>' +
+    '<button id="update">обновить</button>' +
+    '<script>' +
+    'window.__store = { version: "1.0.0" };' +
+    'window.__host = { remounts: 0, lastKey: null, listReads: 0, readyCount: 0, initVersions: [] };' +
+    'window.__escShell = ' + buildEscShellExpr(escShell) + ';' +
+    'function readList() { window.__host.listReads++; return { version: window.__store.version }; }' +
+    'function frameKey() { return "p1::p1#" + readList().version; }' +
+    'function mountFrame() {' +
+    '  var key = frameKey();' +
+    '  if (window.__host.lastKey === key) return;' +
+    '  window.__host.lastKey = key;' +
+    '  window.__host.remounts++;' +
+    '  var box = document.getElementById("frames");' +
+    '  box.innerHTML = \'<iframe id="f" style="width:900px;height:400px;border:0" srcdoc="\' + window.__escShell + \'"></iframe>\';' +
+    '}' +
+    'window.addEventListener("message", function (e) {' +
+    '  var d = e.data;' +
+    '  if (!d || d.source !== "ccs-plugin" || d.v !== 1 || d.type !== "ready") return;' +
+    '  if (e.origin !== "null") return;' +
+    '  window.__host.readyCount++;' +
+    '  var list = readList();' +
+    '  window.__host.initVersions.push(list.version);' +
+    '  var f = document.getElementById("frames").firstElementChild;' +
+    '  var pw = f && f.contentWindow ? f.contentWindow.frames[0] : null;' +
+    '  if (pw) pw.postMessage({ source: "ccs-host", v: 1, type: "init", plugin: { id: "p1", version: list.version }, slot: "sidebar", context: {}, theme: "light", locale: "ru-RU", granted: [] }, "*");' +
+    '});' +
+    'window.addEventListener("plugins_changed", function () {' +
+    '  var list = readList();' +
+    '  if (window.__host.lastKey !== "p1::p1#" + list.version) mountFrame();' +
+    '});' +
+    'document.getElementById("update").addEventListener("click", function () {' +
+    '  window.__store.version = "2.0.0";' +
+    '  window.dispatchEvent(new Event("plugins_changed"));' +
+    '});' +
+    'window.__host.lastKey = frameKey();' +
+    '</script>' +
+    '</body></html>'
+  );
+}
+
+test('S7: plugins_changed → перечитывание списка → фрейм пересоздан, панель видит новую версию', async ({ page }) => {
+  await page.setContent(s7HostHtml(), { waitUntil: 'load' });
+
+  // Первый init: панель (вложенный фрейм, cross-origin) послала ready,
+  // хост ответил init с версией 1.0.0. Проверяем по состоянию хоста
+  // (same-origin), не по окну панели (SecurityError на cross-origin).
+  // Первый init: ready получен, init с 1.0.0 отправлен.
+  // Polling через page.evaluate (waitForFunction в этом e2e не видит __host).
+  const waitState = async (pred: (h: any) => boolean, timeout = 10_000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const h = await page.evaluate(() => (window as any).__host);
+      if (h && pred(h)) return h;
+      await page.waitForTimeout(50);
+    }
+    throw new Error('timeout waiting for host state');
+  };
+  await waitState((h) => h.readyCount >= 1 && h.initVersions.length >= 1 && h.initVersions[0] === '1.0.0');
+
+  // «Сервер» обновил плагин до 2.0.0 и послал plugins_changed.
+  await page.click('#update');
+
+  // Хост перечитал список (по событию, а не по кэшу) и пересоздал фрейм:
+  // НОВАЯ панель послала ready, хост ответил init с версией 2.0.0.
+  await waitState((h) => h.readyCount >= 2 && h.initVersions.length >= 2 && h.initVersions[1] === '2.0.0');
+
+  const h = await page.evaluate(() => {
+    const host = (window as unknown as { __host: { remounts: number; listReads: number } }).__host;
+    return { ...host };
+  });
+  expect(h.remounts, 'фрейм пересоздан один раз (ключ изменился)').toBe(1);
+  expect(h.listReads, 'список перечитан (по событию и при init), не из кэша').toBeGreaterThanOrEqual(2);
+});
+
+// === S10: вшитый шрифт панели (data:-URI) и CSP под него ===
+//
+// Корень: панель — sandbox-iframe с CSP default-src 'none'; системный @import Google Fonts
+// (как у хоста, index.css) в неё не доезжает. Поэтому латиница Hanken Grotesk вшита
+// data:-URI (font.css кита), а CSP разрешает font-src data:. Кириллических глифов в
+// бесплатном Hanken Grotesk нет (cmap, S10a) — кириллица падает на системный фолбэк
+// (паритет с хостом, а не регресс).
+//
+// Мутации, красящие этот тест:
+//  • убрать/переименовать @font-face из font.css → FontFace 'Hanken Grotesk' не загружен (embeddedLoaded=false) — краснеет;
+//  • убрать font-src data: из PANEL_CSP → data:-URI шрифт блокируется CSP, FontFace не загрузится + CSP-ошибка в консоли — краснеет;
+//  • заменить data:-URI на url(https://fonts.googleapis.com/…) → запрос наружу за шрифтом — «сети за шрифтом нет» краснеет.
+
+const s10PanelHtml =
+  '<p id="latin">Hello</p>' +
+  '<p id="cyr">Привет</p>' +
+  '<script>window.__s10 = true;</script>';
+
+function s10HostHtml(): string {
+  const shell = buildPanelSrcdoc(s10PanelHtml, 'light', shimJs, shimCss);
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
+    '<iframe id="outer" style="width:900px;height:400px;border:0" srcdoc="' + esc(shell) + '"></iframe>' +
+    '</body></html>'
+  );
+}
+
+// Запрос «наружу за шрифтом»: .woff2/.woff/.ttf/.otf или CDN Google Fonts.
+// data:-URI запросом не является — его в списке быть не должно.
+const isFontRequest = (u: string) =>
+  /\.(woff2?|ttf|otf|eot)(\?|$)/i.test(u) || /fonts\.(googleapis|gstatic)\.com/i.test(u);
+
+test('S10: латиница — вшитым шрифтом, кириллица — системный фолбэк, ошибок CSP нет, сети за шрифтом нет', async ({ page }) => {
+  // Структурно: srcdoc несёт И @font-face data:-URI, И font-src data: в CSP — иначе
+  // CSP вырезала бы шрифт. Это главный риск шага, проверяем по строке srcdoc.
+  const shell = buildPanelSrcdoc(s10PanelHtml, 'light', shimJs, shimCss);
+  expect(shell, 'srcdoc несёт @font-face data:-URI').toContain('data:font/woff2;base64,');
+  expect(PANEL_CSP, 'CSP разрешает font-src data:').toContain('font-src data:');
+
+  // Консоль и сеть: CSP-ошибка про шрифт и запрос наружу — оба риска шага.
+  const consoleMsgs: string[] = [];
+  const requests: string[] = [];
+  page.on('console', (m) => consoleMsgs.push(m.text()));
+  page.on('request', (r) => requests.push(r.url()));
+
+  await page.setContent(s10HostHtml(), { waitUntil: 'load' });
+
+  // Ждём, пока @font-face панели применится (data:-URI — быстро, но fonts.ready
+  // гарантирует, что check() надёжен). Ищем фрейм по маркеру __s10.
+  const panelFont = await (async () => {
+    for (let i = 0; i < 200; i++) {
+      for (const f of page.frames()) {
+        try {
+          const r = await f.evaluate(async () => {
+            if (!(window as unknown as { __s10?: boolean }).__s10) return null;
+            const d = document as unknown as { fonts: FontFaceSet };
+            await d.fonts.ready;
+            const ff = getComputedStyle(document.body).fontFamily;
+            // Надёжный признак: @font-face 'Hanken Grotesk' (data:-URI) загружен (status loaded).
+            // document.fonts.check ненадёжен (OS/2-биты дают true вне cmap) — не используем.
+            const embeddedLoaded = Array.from(d.fonts).some(
+              (f) => f.family === 'Hanken Grotesk' && f.status === 'loaded',
+            );
+            return {
+              fontFamily: ff,
+              // Вшитый Hanken Grotesk — только латиница (cmap, S10a); кириллица падает
+              // на системный фолбэк. «Фолбэк» проверяем по цепочке font-family.
+              hasSystemFallback: /-apple-system|BlinkMacSystemFont|Segoe UI|sans-serif/.test(ff),
+              embeddedLoaded,
+            };
+          });
+          if (r) return r;
+        } catch { /* фрейм недоступен */ }
+      }
+      await page.waitForTimeout(50);
+    }
+    return null;
+  })();
+
+  expect(panelFont, 'фрейм панели найден').not.toBeNull();
+  // 1. font-family панели несёт вшитое имя.
+  expect(panelFont!.fontFamily, 'font-family содержит вшитое имя').toContain('Hanken Grotesk');
+  // 1. Вшитый @font-face 'Hanken Grotesk' (data:-URI) загружен — панель рисует латиницу им.
+  expect(panelFont!.embeddedLoaded, 'вшитый @font-face Hanken Grotesk загружен (data:-URI)').toBe(true);
+  // 3. Кириллицы в вшитом шрифте нет (cmap, S10a) — она падает на системный фолбэк, не квадраты.
+  //    Гарантирует цепочка font-family: после 'Hanken Grotesk' идёт системный шрифт.
+  expect(panelFont!.hasSystemFallback, 'font-family несёт системный фолбэк (кириллица не квадратами)').toBe(true);
+  // 2. В консоли панели нет CSP-ошибки про шрифт.
+  const cspFontErr = consoleMsgs.filter((t) => /content security policy|ERR_BLOCKED_BY_CSP/i.test(t));
+  expect(cspFontErr, 'ошибок CSP про шрифт нет: ' + JSON.stringify(cspFontErr)).toHaveLength(0);
+  // 1. Сети за шрифтом нет: ни одного запроса наружу за шрифтом.
+  const fontReqs = requests.filter(isFontRequest);
+  expect(fontReqs, 'запросов наружу за шрифтом нет: ' + JSON.stringify(fontReqs)).toHaveLength(0);
+});
+
+// === R-Gleb, minor 8: живой PluginFrame — смена версии и прав → init в новый фрейм ===
+//
+// Тесты выше (S7) проверяли рукописный фейковый хост, а не живой PluginFrame — из-за
+// этого класс дефектов major 1 (смена прав → init не уходит в новый фрейм) не ловился:
+// фейковый хост шлёт init на КАЖДЫ ready, а живой PluginFrame держит initedRef/bridge,
+// который по смене frameKey сбрасывался только эффектом забора html (deps без granted).
+// Здесь — РЕАЛЬНЫЙ PluginFrame (React, мост bridge.ts): harness бандлится в IIFE (Vite)
+// и монтируется в страницу; панель по init постит version/granted в top. Меняем
+// version/granted (frameKey → remount) и проверяем, что НОВЫЙ фрейм получил init.
+//
+// Мутация: убрать useEffect на [frameKey] из PluginFrame (сброс initedRef/bridge) →
+// после смены прав ready нового фрейма отсекается, init не уходит → тест красный.
+
+const harnessPath = fileURLToPath(new URL('./plugin-frame-harness.tsx', import.meta.url));
+const harnessOutDir = path.join(process.cwd(), '.pf-harness-out');
+
+test('R-Gleb minor 8: живой PluginFrame — смена версии и прав → init в новый фрейм', async ({ page }) => {
+  // Бандл harness'а в самодостаточный IIFE: React + ReactDOM + PluginFrame + зависимости.
+  const result = await viteBuild({
+    root: process.cwd(),
+    configFile: false,
+    plugins: [reactPlugin()],
+    // process — Node-глобал, в браузере нет: часть зависимостей (signalr и др.)
+    // на неё ссылается. define подставляет объект, чтобы IIFE не падал на process.env.
+    define: { __BUILD_SHA__: '""', __BUILD_AT__: '""', 'process.env': '{}', process: '{ env: {} }' },
+    logLevel: 'warn',
+    resolve: {
+      alias: { 'aihome_shell/kit': fileURLToPath(new URL('../src/lib/shell-kit/index.ts', import.meta.url)) },
+    },
+    build: {
+      lib: { entry: harnessPath, formats: ['iife'], name: 'PfHarness' },
+      outDir: harnessOutDir,
+      emptyOutDir: true,
+    },
+  });
+  // Vite build() возвращает [{output, bindingOutputs}]: IIFE-бандл (имя — по package.json,
+  // frontend.iife.js) + скопированный public/. Берём единственный .iife.js.
+  const ro = (Array.isArray(result) ? result[0] : result) as { output?: { fileName: string; type?: string }[] };
+  const chunk = (ro?.output ?? []).find(o => /\.iife\.js$/.test(o.fileName));
+  expect(chunk, 'harness собран в IIFE').toBeDefined();
+  const bundlePath = path.join(harnessOutDir, (chunk as { fileName: string }).fileName);
+
+  try {
+    // Десктопный viewport: useIsMobile → false (мобильная ветка перемонтирует весь
+    // PluginFrame и замаскировала бы дефект — мы проверяем именно десктопный путь).
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.setContent(
+      '<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div></body></html>',
+      { waitUntil: 'load' },
+    );
+    // process — Node-глобал, в браузере нет: часть зависимостей (signalr) на неё
+    // ссылается. Выставляем ДО запуска бандла (define в Rolldown pre-bundled deps не
+    // подменяет), иначе IIFE падает на «process is not defined».
+    await page.evaluate(() => { (window as unknown as { process: unknown }).process = { env: {} }; });
+    await page.addScriptTag({ path: bundlePath });
+
+    // Первый init: панель (v1.0.0, granted []) получила init от живого PluginFrame.
+    await page.waitForFunction(
+      () => {
+        const pf = (window as unknown as { __pf?: { inits: { version: string; granted: string[] }[] } }).__pf;
+        return !!pf && pf.inits.length >= 1;
+      },
+      { timeout: 15_000 },
+    );
+
+    // Смена версии → frameKey → remount → НОВЫЙ фрейм получает init с версией 2.0.0.
+    await page.evaluate(() => (window as unknown as { __pf: { setVersion: (v: string) => void } }).__pf.setVersion('2.0.0'));
+    await page.waitForFunction(
+      () => {
+        const pf = (window as unknown as { __pf?: { inits: { version: string }[] } }).__pf;
+        return !!pf && pf.inits.some(i => i.version === '2.0.0');
+      },
+      { timeout: 15_000 },
+    );
+
+    // Смена прав → frameKey → remount → init с granted ['notes:read'].
+    await page.evaluate(() => (window as unknown as { __pf: { setGranted: (g: string[]) => void } }).__pf.setGranted(['notes:read']));
+    await page.waitForFunction(
+      () => {
+        const pf = (window as unknown as { __pf?: { inits: { granted: string[] }[] } }).__pf;
+        return !!pf && pf.inits.some(i => (i.granted || []).includes('notes:read'));
+      },
+      { timeout: 15_000 },
+    );
+
+    const inits = await page.evaluate(() => (window as unknown as { __pf: { inits: { version: string; granted: string[] }[] } }).__pf.inits);
+    expect(inits.some(i => i.version === '1.0.0'), 'первый init — v1.0.0').toBe(true);
+    expect(inits.some(i => i.version === '2.0.0'), 'смена версии → init v2.0.0 в новый фрейм').toBe(true);
+    expect(inits.some(i => (i.granted || []).includes('notes:read')), 'смена прав → init с granted в новый фрейм').toBe(true);
+  } finally {
+    fs.rmSync(harnessOutDir, { recursive: true, force: true });
+  }
 });

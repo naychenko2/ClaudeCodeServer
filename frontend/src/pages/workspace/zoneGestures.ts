@@ -1,9 +1,9 @@
-import { useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent } from 'react';
 import { C, R, SHADOW } from '../../lib/design';
 import { startPointerDrag } from '../../lib/pointerDrag';
 import { COL_MIN, PANEL_MIN_H } from './panelStackState';
 import type { PanelKey, Zone } from './panelCatalog';
-import { clearPanelDragOver, endPanelDrag, markPanelMoved, setPanelDragOver, startPanelDrag, usePanelDragState } from './panelDrag';
+import { clearPanelDragOver, endPanelDrag, endPanelDragIfFrom, markPanelMoved, setPanelDragOver, startPanelDrag, usePanelDragState } from './panelDrag';
 
 // Механика зоны панелей, общая для левой и правой рельс: перетаскивание панелей,
 // ресайз ширины зоны и высот внутри колонки.
@@ -96,6 +96,17 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // подсветки, ни dropEffect (курсор сам покажет запрет).
   const incoming = from !== null && (accepts?.(from) ?? true) ? from : null;
 
+  // Токен drag'а: dragstart откладывает startPanelDrag на rAF, а dragend (отмена)
+  // может прийти РАНЬШЕ кадра. Счётчик делает порядок неважным: onDragEnd инкрементит
+  // токен (гасит отложенный старт), и rAF стартует drag'а только если токен не изменился.
+  const dragTokenRef = useRef(0);
+
+  // Демонтаж источника во время drag'а (R-Gleb, minor 6): dragstart откладывает
+  // startPanelDrag на rAF, и если зона-источник демонтируется до dragend, атрибут
+  // data-panel-drag остаётся на body — iframe панелей остаются без pointer-events.
+  // Cleanup снимает его, только если drag начался именно в этой зоне (fromZone).
+  useEffect(() => () => endPanelDragIfFrom(zone), [zone]);
+
   // Место под курсором принадлежит ЭТОЙ зоне и имеет такую метку
   const isOver = (tag: string) => over?.zone === zone && over.tag === tag;
 
@@ -139,9 +150,19 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
       // drag. Заметно это было только на иконках рельсы — карточку панели тащат
       // за шапку, а её DOM оверлей рельсы не трогает. Кадр задержки не виден:
       // человек в этот момент ещё только сдвигает курсор.
-      requestAnimationFrame(() => startPanelDrag(k, zone, opts?.tucked));
+      // Токен: dragend (отмена) может прийти РАНЬШЕ кадра — onDragEnd инкрементит
+      // токен, и rAF стартует drag'а только если токен не изменился (порядок не важен).
+      const token = ++dragTokenRef.current;
+      requestAnimationFrame(() => {
+        if (dragTokenRef.current === token) startPanelDrag(k, zone, opts?.tucked);
+      });
     },
-    onDragEnd: endPanelDrag,
+    onDragEnd: () => {
+      // Инкремент ГАСИТ отложенный startPanelDrag (dragend раньше rAF-кадра),
+      // затем обычный конец drag'а (снимает data-panel-drag и сбрасывает from).
+      dragTokenRef.current++;
+      endPanelDrag();
+    },
   });
 
   // Пропсы одной панели: подсветка источника/цели + обработчики дропа НА неё.

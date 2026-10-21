@@ -17,6 +17,7 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -148,8 +149,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // иначе UserId (User.FindFirstValue(Sub)) бросает ArgumentNullException.
     // Б-mk-b: catalog — подменяемый каталог макетов (null — Docs выключена; заглушка — считает
     // вызовы, чтобы проверить, что для локального проекта Docs не дёргается).
+    // journal — реальный FeatureJournalStore на временном каталоге (Б9c шаг 6: метод journal
+    // интеграционно достижим, а не только approx). null — подсистема журнала выключена.
     private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
-        ISpendFeatureReader? spend = null)
+        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -165,6 +168,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             features: _factory.Services.GetRequiredService<FeatureProjector>(),
             git: git,
             catalog: catalog,
+            journal: journal,
             spend: spend);
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, OwnerId)], "test");
         controller.ControllerContext = new ControllerContext
@@ -2286,10 +2290,11 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         Timestamp = DateTime.UtcNow,
     };
 
-    // Страница фичи через BuildController (spend — шов) → stats.
-    private JsonElement GetFeatureStats(ISpendFeatureReader? spend, string epicId)
+    // Страница фичи через BuildController (spend — шов, journal — реальный журнал) → stats.
+    private JsonElement GetFeatureStats(ISpendFeatureReader? spend, string epicId,
+        FeatureJournalStore? journal = null)
     {
-        var controller = BuildController(null, null, spend);
+        var controller = BuildController(null, null, spend, journal);
         var result = (ObjectResult)controller.GetFeature(epicId)!;
         // CamelCase — как wire-формат приложения (SystemTextJson): FeatureStats.Spend → spend.
         return JsonSerializer.SerializeToElement(result.Value!,
@@ -2739,6 +2744,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         }
 
         // 10k записей расхода: 500 на каждую фичу (taskId = шаг), даты равномерно по 30 дням.
+        // SessionId = chatC (общий чат, состоящий во ВСЕХ 20 фичах) — записи идут в форму
+        // ПРОДА (TaskId + SessionId общего чата) → путь Б9c (исключение из прямого среза +
+        // деление) реально измеряется, а не только прямой срез (минор 1: раньше SessionId не
+        // было → путь Б9c замером не покрывался).
         var dir = Path.Combine(_factory.TempDir, "bench_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var seedStore = new SpendStore(dir, 30);
@@ -2749,6 +2758,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             {
                 OwnerId = OwnerId,
                 TaskId = stepIds[n % featureCount],
+                SessionId = chatC,
                 Model = "claude-opus-4",
                 InputTokens = 1000,
                 OutputTokens = 500,
@@ -2872,58 +2882,188 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // ─── Б9c, шаг 6: главный сторож «сохранение расхода» ───────────────────────────────────────
 
-    // Сохранение расхода (решение Александра, п.1): на наборе «2 фичи, общий key-чат, запись
-    // в форме прода (TaskId = session.TaskId)» сумма долей по фичам = исходным токенам РОВНО
-    // (наибольший остаток, точное равенство). Деньги — с допуском 1e-9.
+    // Сохранение расхода (решение Александра, п.1): на наборе «3 фичи, общий key-чат, общий
+    // executor-чат, ход без активных, ход до создания B, дневная строка» сумма долей по фичам =
+    // расходу общих чатов РОВНО (наибольший остаток, точное равенство токенов; деньги — допуск
+    // 1e-9). Записи строго в форме ПРОДА (TaskId = session.TaskId, SessionId = чат).
     //
-    // Сценарий: фичи A и B; общий чат S (key-чат A, orchestrator-чат B через дочернюю задачу).
-    // Запись расхода на S: TaskId = epicA.Id (форма прода: запись несёт TaskId эпика A).
-    // Без правила «исключение главнее task-оси» запись попадала бы в прямой срез A (по TaskId)
-    // И в долю (по SessionId) → двойной счёт. С исключением: запись только в долю, делится A+B.
+    // Членство: S = {A, B} (S — key-чат A (executor) + orchestrator-чат B), E = {B, C}
+    // (E — executor-чат B + orchestrator-чат C через дочернюю задачу, проба F).
+    //
+    // Активность: (a) все журналы полные → method=journal; (b) журнал B удалён → method=approx.
+    // Журнал A/B несёт pastDay-период + now-период; approx (ClaudeStartedAt) — только now →
+    // дневная строка делится в journal (A+B активны на pastDay), но НЕ в approx (journal ≠ approx).
     [Fact]
     public async Task GetFeature_СохранениеРасхода_ОбщийЧат_ТочноеРавенство()
     {
-        // Фича A: эпик + шаг; key-чат S привязан к шагу A (LinkedSessionId).
-        var (epicA, stepA, chatS) = await MakeFeature("cons-A");
-        // Фича B: эпик + шаг; B «запускает» исполнителя из чата S (orchestrator-ось).
+        var now = DateTime.UtcNow;
+        var pastDay = now.Date.AddDays(-40);
+        // «now»-периоды активности — в ПРОШЛОМ (до now запроса): клип по epic.CreatedAt≈now
+        // иначе обрезал бы будущие окна. A: [now-2.75h, now-1.75h), B: [now-2.25h, now-1.25h),
+        // C: [now-1.8h, now-1h). Записи: r1=now-2h (A+B), r2=now-1.5h (B+C), r3=now-3h (никто),
+        // r4=now-2.5h (только A).
+        var aStart = now.AddHours(-2.75); var aEnd = now.AddHours(-1.75);
+        var bStart = now.AddHours(-2.25); var bEnd = now.AddHours(-1.25);
+        var cStart = now.AddHours(-1.8); var cEnd = now.AddHours(-1);
+        var t1 = now.AddHours(-2); var t2 = now.AddHours(-1.5); var t3 = now.AddHours(-3); var t4 = now.AddHours(-2.5);
+
+        // Фича A: эпик + шаг; key-чат S (executor: сессия S несёт TaskId=stepA).
+        var (epicAId, stepAId, chatS) = await MakeFeature("cons-A");
+        // Фича B: эпик + шаг; orchestrator-чат = S (stepB.ExecutorLaunchedBySessionId = S).
         var epicB = await CreateTaskAsync(new { title = "эпик-cons-B", role = "feature" });
         var epicBId = epicB.GetProperty("id").GetString()!;
         var stepB = await CreateTaskAsync(new
         {
-            title = "шаг-cons-B",
-            featureId = epicBId,
-            role = "step",
-            executorLaunchedBySessionId = chatS,
+            title = "шаг-cons-B", featureId = epicBId, role = "step",
         });
+        var stepBId = stepB.GetProperty("id").GetString()!;
+        // Общий executor-чат E: сессия E несёт TaskId=stepB (executor → B); привязан к stepB.
+        var chatE = await CreatePersonalChatAsync(OwnerId, stepBId);
+        await _client.PutAsJsonAsync($"/api/tasks/{stepBId}", new { linkedSessionId = chatE });
+        // Фича C: эпик + шаг; orchestrator-чат = E (stepC.ExecutorLaunchedBySessionId = E).
+        var epicC = await CreateTaskAsync(new { title = "эпик-cons-C", role = "feature" });
+        var epicCId = epicC.GetProperty("id").GetString()!;
+        var stepC = await CreateTaskAsync(new
+        {
+            title = "шаг-cons-C", featureId = epicCId, role = "step",
+        });
+        var stepCId = stepC.GetProperty("id").GetString()!;
 
-        // Запись расхода в форме ПРОДА: TaskId = epicA.Id (key-чат A несёт TaskId эпика),
-        // SessionId = chatS (общий чат). Токены: 100 input, 50 output, цена 1.0.
+        // Активность (approx): ClaudeStartedAt/CompletedAt — «now»-периоды (совпадают с
+        // now-периодами журнала → r1-r4 одинаковы в обоих режимах).
+        var tasks = _factory.Services.GetRequiredService<TaskManager>();
+        // Оркестраторские связи задаются прямо на задачах (POST create их не принимает).
+        tasks.GetById(stepBId)!.ExecutorLaunchedBySessionId = chatS;
+        tasks.GetById(stepCId)!.ExecutorLaunchedBySessionId = chatE;
+        tasks.GetById(stepAId)!.ClaudeStartedAt = aStart;
+        tasks.GetById(stepAId)!.CompletedAt = aEnd;
+        tasks.GetById(stepBId)!.ClaudeStartedAt = bStart;
+        tasks.GetById(stepBId)!.CompletedAt = bEnd;
+        tasks.GetById(stepCId)!.ClaudeStartedAt = cStart;
+        tasks.GetById(stepCId)!.CompletedAt = cEnd;
+        // Клип по epic.CreatedAt: A и B «созданы» на pastDay (иначе pastDay-периоды журнала
+        // обрезались бы); C «создана» на cStart (иначе её «now»-период обрезался бы клипом).
+        SetCreatedAt(tasks.GetById(epicAId)!, pastDay);
+        SetCreatedAt(tasks.GetById(epicBId)!, pastDay);
+        SetCreatedAt(tasks.GetById(epicCId)!, cStart);
+
+        // Журналы (реальный FeatureJournalStore на временном каталоге): A и B — pastDay-период +
+        // «now»-период; C — только «now»-период.
+        var journalDir = Path.Combine(_factory.TempDir, "journal_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(journalDir);
+        var journal = new FeatureJournalStore(journalDir);
+        AppendJournal(journal, OwnerId, epicAId,
+            ("created", pastDay.AddHours(9), epicAId),
+            ("started", pastDay.AddHours(10), stepAId),
+            ("stopped", pastDay.AddHours(11), stepAId),
+            ("started", aStart, stepAId),
+            ("stopped", aEnd, stepAId));
+        AppendJournal(journal, OwnerId, epicBId,
+            ("created", pastDay.AddHours(9), epicBId),
+            ("started", pastDay.AddHours(12), stepBId),
+            ("stopped", pastDay.AddHours(18), stepBId),
+            ("started", bStart, stepBId),
+            ("stopped", bEnd, stepBId));
+        AppendJournal(journal, OwnerId, epicCId,
+            ("created", cStart, epicCId),
+            ("started", cStart, stepCId),
+            ("stopped", cEnd, stepCId));
+
+        // Записи расхода в форме ПРОДА (TaskId = session.TaskId, SessionId = чат).
         var (store, reader) = SpendStoreWith(
-            SpendRecord(OwnerId, epicA, chatS, "claude-opus-4", 100, 50, 1.0));
+            // r1: на S, A+B активны (t1=now-2h) → делится A+B.
+            ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1),
+            // r2: на E, B+C активны (t2=now-1.5h) → делится B+C.
+            ProdRecord(OwnerId, chatE, stepBId, "claude-opus-4", 100, 50, 1.0, t2),
+            // r3: на S, НИКТО не активен (t3=now-3h) → доля 0 (зачисляется в «неактивно»).
+            ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t3),
+            // r4: на S, ДО старта B (t4=now-2.5h: A активна, B ещё нет) → A целиком (1/1).
+            ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t4),
+            // r5: дневная строка на S (pastDay) → делится между фичами, активными в любой
+            // момент pastDay (A и B по pastDay-периодам журнала).
+            ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, pastDay.AddHours(10).AddMinutes(30)));
+        // pastDay старше окна (30 дней) → свёрнут в дневной агрегат.
+        store.RollupOlderThan(store.WindowStart);
 
-        // Stats фичи A: shared-доля A.
-        var statsA = GetFeatureStats(reader, epicA);
-        var spendA = statsA.GetProperty("spend");
-        var sharedA = spendA.GetProperty("shared");
+        // ── Сценарий (a): все журналы полные → method=journal ──
+        var statsA = GetFeatureStats(reader, epicAId, journal);
+        var statsB = GetFeatureStats(reader, epicBId, journal);
+        var statsC = GetFeatureStats(reader, epicCId, journal);
 
-        // Stats фичи B: shared-доля B.
-        var statsB = GetFeatureStats(reader, epicBId);
-        var spendB = statsB.GetProperty("spend");
-        var sharedB = spendB.GetProperty("shared");
+        statsA.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
+            .Should().Be("approx",
+                "в наборе есть дневная строка → метод принудительно approx (п.5 решения Александра), " +
+                "хотя интервалы активности берутся из полных журналов");
 
-        // Точное равенство: сумма долей A + B = исходным токенам (100 input, 50 output).
-        var aIn = sharedA.GetProperty("inputTokens").GetInt64();
-        var bIn = sharedB.GetProperty("inputTokens").GetInt64();
-        (aIn + bIn).Should().Be(100, "сохранение input: A+B = 100");
+        // Точное равенство (токены — long):
+        //   A: r1(50) + r3(0) + r4(100) + r5(50) = 200 input, 100 output, 2.0 cost.
+        //   B: r1(50) + r3(0) + r4(0) + r5(50) + r2(50) = 150 input, 75 output, 1.5 cost.
+        //   C: r2(50) = 50 input, 25 output, 0.5 cost.
+        AssertShared(statsA, 200, 100, 2.0);
+        AssertShared(statsB, 150, 75, 1.5);
+        AssertShared(statsC, 50, 25, 0.5);
+        // Сохранение: сумма долей (400) + неактивный ход r3 (100) = ВСЕМУ расходу (500).
+        (200 + 150 + 50 + 100).Should().Be(500, "доли + неактивный ход = всему расходу");
 
-        var aOut = sharedA.GetProperty("outputTokens").GetInt64();
-        var bOut = sharedB.GetProperty("outputTokens").GetInt64();
-        (aOut + bOut).Should().Be(50, "сохранение output: A+B = 50");
+        // ── Сценарий (b): журнал B (соседки) удалён → method=approx (у всех) ──
+        journal.Delete(OwnerId, epicBId);
+        var statsA2 = GetFeatureStats(reader, epicAId, journal);
+        var statsB2 = GetFeatureStats(reader, epicBId, journal);
+        var statsC2 = GetFeatureStats(reader, epicCId, journal);
 
-        // Деньги: допуск 1e-9 (decimal → double на выходе).
-        var aCost = sharedA.GetProperty("costUsd").GetDouble();
-        var bCost = sharedB.GetProperty("costUsd").GetDouble();
-        (aCost + bCost).Should().BeApproximately(1.0, 1e-9, "сохранение cost: A+B ≈ 1.0");
+        statsA2.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
+            .Should().Be("approx", "журнала соседки B нет → method=approx");
+        // now-ходы (r1-r4) те же (approx-активность = now-периоды, совпадают с журналом);
+        // дневная строка r5 НЕ делится (approx: A/B не активны на pastDay) → journal ≠ approx.
+        //   A: r1(50) + r3(0) + r4(100) + r5(0) = 150 input, 75 output, 1.5 cost.
+        //   B: r1(50) + r3(0) + r4(0) + r5(0) + r2(50) = 100 input, 50 output, 1.0 cost.
+        //   C: r2(50) = 50 input, 25 output, 0.5 cost.
+        AssertShared(statsA2, 150, 75, 1.5);
+        AssertShared(statsB2, 100, 50, 1.0);
+        AssertShared(statsC2, 50, 25, 0.5);
     }
+
+    // CreatedAt — init-only: ставим через рефлексию (тест: фича «создана» в прошлом).
+    private static void SetCreatedAt(TaskItem task, DateTime createdAt) =>
+        typeof(TaskItem).GetProperty("CreatedAt")!.SetValue(task, createdAt);
+
+    // Журнал фичи: записи в хронологическом порядке (created → started/stopped → …).
+    private void AppendJournal(FeatureJournalStore journal, string ownerId, string featureId,
+        params (string Kind, DateTime At, string TaskId)[] entries)
+    {
+        foreach (var e in entries)
+            journal.Append(ownerId, featureId, new FeatureJournalEntry
+            {
+                At = e.At,
+                Kind = e.Kind,
+                TaskId = e.TaskId,
+            });
+    }
+
+    // Доля shared: input/output токены (точное равенство) + costUsd (допуск 1e-9).
+    private static void AssertShared(JsonElement stats, long expectedInput, long expectedOutput,
+        double expectedCost)
+    {
+        var shared = stats.GetProperty("spend").GetProperty("shared");
+        shared.GetProperty("inputTokens").GetInt64().Should().Be(expectedInput);
+        shared.GetProperty("outputTokens").GetInt64().Should().Be(expectedOutput);
+        shared.GetProperty("costUsd").GetDouble().Should().BeApproximately(expectedCost, 1e-9);
+    }
+
+    // Запись расхода в форме ПРОДА: TaskId = TaskId сессии (задача, к которой привязан чат),
+    // SessionId = id сессии. Так ходы общего/оркестраторского чата выглядят в проде.
+    private static SpendRecord ProdRecord(string ownerId, string sessionId, string taskId, string model,
+        long input, long output, double? cost, DateTime timestamp) => new()
+    {
+        OwnerId = ownerId,
+        TaskId = taskId,
+        SessionId = sessionId,
+        Model = model,
+        InputTokens = input,
+        OutputTokens = output,
+        CostUsd = cost,
+        Source = "chat-turn",
+        Timestamp = timestamp,
+    };
 
 }

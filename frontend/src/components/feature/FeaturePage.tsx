@@ -18,7 +18,7 @@ import type { FeatureGlyph as GlyphKind } from '../chat/feature/FeatureGlyphs';
 import { Notice } from '../ui/Notice';
 import { EmptyState } from '../ui/EmptyState';
 import { Button } from '../ui/Button';
-import { PipelineFlow } from '../chat/feature/PipelineFlow';
+import { FeatureTimelineTab } from './FeatureTimelineTab';
 import {
   FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
   featureRunStatusTag, toRunTag, type FeatureRunTag,
@@ -311,7 +311,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack }: 
           {tab === 'timeline' ? (
             <>
               <MiniSummaryStub onOpenStats={() => setFeaturePageTab('stats')} />
-              <PipelineFlow run={okRun} />
+              <FeatureTimelineTab run={okRun} isMobile={isMobile} />
             </>
           ) : (
             <ComingSoon />

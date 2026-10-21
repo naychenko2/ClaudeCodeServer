@@ -838,7 +838,14 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         timeline.TryGetProperty("segments", out _).Should().BeTrue("timeline.segments");
         timeline.TryGetProperty("totals", out _).Should().BeTrue("timeline.totals");
 
-        // Индекс: строка фичи stats НЕ несёт (лёгкий путь).
+        // Б6: stats.breakdown (разрезы по персонам/моделям/ролям) и stats.longestNow на странице.
+        var breakdown = stats.GetProperty("breakdown");
+        breakdown.TryGetProperty("personas", out _).Should().BeTrue("breakdown.personas");
+        breakdown.TryGetProperty("models", out _).Should().BeTrue("breakdown.models");
+        breakdown.TryGetProperty("roles", out _).Should().BeTrue("breakdown.roles");
+        stats.TryGetProperty("longestNow", out _).Should().BeTrue("stats.longestNow (null или объект)");
+
+        // Индекс: строка фичи stats НЕ несёт (лёгкий путь) → breakdown тоже не несёт.
         var index = await GetIndexAsync();
         var row = index.GetProperty("features").EnumerateArray()
             .Single(f => f.GetProperty("featureId").GetString() == epicId);

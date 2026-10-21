@@ -605,7 +605,17 @@ public class TasksController(
         // Б5a: stats — график времени фичи (режим approx, по задачам) по ПОЛНОМУ run (до SlimRun:
         // интервалы work из ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён
         // для ответа). Индекс/список stats НЕ несут (лёгкий путь) — только страница фичи.
-        var stats = new FeatureStats("approx", false, FeatureTimeline.Build(run, null, DateTime.UtcNow));
+        // Б6: breakdown (разрезы по персонам/моделям/ролям) + longestNow («дольше всех сейчас») —
+        // тоже по ПОЛНОМУ run, на том же снимке владельца (fail-closed) и now. Журнал пока null
+        // (Б5b подключит): модель тогда из снимка через resolver (резолв «Авто» — готовая функция Б4).
+        var now = DateTime.UtcNow;
+        var (breakdown, longestNow) = FeatureBreakdown.Build(run, null, snapshot, resolver, now);
+        var stats = new FeatureStats(
+            Source: "approx",
+            Truncated: false,
+            Timeline: FeatureTimeline.Build(run, null, now),
+            Breakdown: breakdown,
+            LongestNow: longestNow);
         return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats });
     }
 

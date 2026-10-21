@@ -55,13 +55,17 @@ public sealed record TimelineTotals(
     int? ErrorMinutes);
 
 // Статистика фичи (GET features/{id}, поле stats): источник (approx/journal), признак
-// обрезки, график. Breakdown/spend — позже (Б5b+).
+// обрезки, график, разрезы («кто и на чём работал») и «дольше всех сейчас».
 public sealed record FeatureStats(
     // approx | journal.
     string Source,
     // Обрезка (в approx — false: журнал не читается).
     bool Truncated,
-    FeatureTimeline Timeline);
+    FeatureTimeline Timeline,
+    // Разрезы времени по персонам/моделям/ролям (Б6); null — не заполнено (индекс/список).
+    FeatureBreakdown? Breakdown = null,
+    // «Дольше всех сейчас» (Б6); null — ничего не идёт или не заполнено.
+    FeatureLongestNow? LongestNow = null);
 
 // ─── График времени фичи ─────────────────────────────────────────────────────────────────────
 

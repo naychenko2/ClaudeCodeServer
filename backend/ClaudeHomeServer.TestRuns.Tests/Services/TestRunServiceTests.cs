@@ -808,4 +808,193 @@ public class TestRunServiceTests : IDisposable
         result.Cancelled.Should().Be(stop);
         result.TimedOut.Should().Be(!stop);
     }
+
+    // --- Отпечаток исходников: сборка пропускается, пока дерево не менялось ---
+
+    private void Source(string relative, string content = "class A {}", int mtimeShiftSeconds = 0)
+    {
+        var path = Path.Combine(_root, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, content);
+        File.SetLastWriteTimeUtc(path, new DateTime(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc).AddSeconds(mtimeShiftSeconds));
+    }
+
+    private static List<TestRunPhase> Phases(FakeLauncher launcher) => launcher.Specs.Select(PhaseOf).ToList();
+
+    private static async Task<TestRunResult> Run(TestRunService service, TestRunRequest request) =>
+        await service.RunDotnetAsync(request, null, CancellationToken.None).WaitAsync(Wait);
+
+    [Fact]
+    public async Task Отпечаток_ДваВызоваБезИзменений_ВтораяСборкаПропущена()
+    {
+        Source("src/A.cs");
+        var launcher = RealRun();
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+
+        await Run(service, Request());
+        var second = await Run(service, Request());
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(1, "второй вызов — холостая сборка, её пропускаем");
+        var text = service.FormatResult(second);
+        text.Should().MatchRegex(@"сборка 0[.,]0 с \(пропущена: дерево не менялось\)").And.Contain("подсчёт ").And.Contain("· тесты ");
+        text.Split('\n')[0].Should().StartWith("dotnet test:", "формат итога сверху не меняется");
+    }
+
+    [Fact]
+    public async Task Отпечаток_ПравкаCs_СборкаИдёт()
+    {
+        Source("src/A.cs");
+        var launcher = RealRun();
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+        await Run(service, Request());
+
+        Source("src/A.cs", "class A { int x; }", mtimeShiftSeconds: 10);
+        await Run(service, Request());
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Отпечаток_ПравкаCsproj_СборкаИдёт()
+    {
+        Source("src/App.csproj", "<Project/>");
+        var launcher = RealRun();
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+        await Run(service, Request());
+
+        Source("src/App.csproj", "<Project Sdk=\"X\"/>", mtimeShiftSeconds: 10);
+        await Run(service, Request());
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Отпечаток_ТолькоBinObjNodeModules_СборкаПропущена()
+    {
+        Source("src/A.cs");
+        var launcher = RealRun();
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+        await Run(service, Request());
+
+        Source("src/bin/Debug/App.deps.json", "{}");
+        Source("src/obj/project.assets.json", "{}");
+        Source("web/node_modules/x/package.json", "{}");
+        Source(".cc-attachments/test-runs/r1/report.json", "{}");
+        await Run(service, Request());
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(1, "артефакты сборки не считаются правкой");
+    }
+
+    [Fact]
+    public async Task Отпечаток_ПроваленнаяСборка_НеЗапоминается()
+    {
+        Source("src/A.cs");
+        var failing = true;
+        var launcher = new FakeLauncher(_processes, phase => phase switch
+        {
+            TestRunPhase.Build => failing ? new Script("build-error.txt", 1) : Ok(),
+            TestRunPhase.List => Ok("list-tests.txt"),
+            _ => new Script("console-normal.txt", 1),
+        });
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+        await Run(service, Request());
+
+        failing = false;
+        await Run(service, Request());
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(2, "после упавшей сборки отпечатка нет");
+    }
+
+    [Fact]
+    public async Task Отпечаток_ЯвныйNoBuild_ПропускБезПроверкиИСТочнойПометкой()
+    {
+        Source("src/A.cs");
+        var launcher = RealRun();
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+
+        var result = await Run(service, Request(noBuild: true));
+
+        Phases(launcher).Should().NotContain(TestRunPhase.Build);
+        service.FormatResult(result).Should().MatchRegex(@"сборка 0[.,]0 с \(пропущена: no_build\)");
+    }
+
+    [Fact]
+    public async Task Защита_СборкаПропущенаАТестНеНайден_ОдинПовторСоСборкой()
+    {
+        Source("src/A.cs");
+        var testCalls = 0;
+        var launcher = new FakeLauncher(_processes, phase => phase switch
+        {
+            TestRunPhase.Build => Ok(),
+            TestRunPhase.List => Ok("list-tests.txt"),
+            _ => ++testCalls == 2 ? new Script("no-test-available.txt", 1) : new Script("console-normal.txt", 1),
+        });
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+        await Run(service, Request());
+
+        var result = await Run(service, Request());
+
+        Phases(launcher).Should().Equal(
+            TestRunPhase.Build, TestRunPhase.List, TestRunPhase.Test,
+            TestRunPhase.List, TestRunPhase.Test, TestRunPhase.Build, TestRunPhase.Test);
+        result.Timings!.BuildSkipped.Should().BeNull("повтор прошёл со сборкой");
+        result.Timings.Build.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Защита_ПовторСоСборкой_НеЗацикливается()
+    {
+        Source("src/A.cs");
+        var launcher = new FakeLauncher(_processes, phase => phase switch
+        {
+            TestRunPhase.Build => Ok(),
+            TestRunPhase.List => Ok("list-tests.txt"),
+            _ => new Script("no-test-available.txt", 1),
+        });
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+        await Run(service, Request());
+
+        await Run(service, Request());
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(2,
+            "первая сборка и один повтор; а сборка со свежей сборкой повторно не повторяется");
+    }
+
+    [Fact]
+    public async Task Подсчёт_ПриФильтре_Пропущен()
+    {
+        Source("src/A.cs");
+        var launcher = RealRun();
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+
+        var result = await Run(service, Request(filter: "FullyQualifiedName~X"));
+
+        Phases(launcher).Should().Equal(TestRunPhase.Build, TestRunPhase.Test);
+        service.FormatResult(result).Should().MatchRegex(@"подсчёт 0[.,]0 с \(пропущен: задан filter\)");
+    }
+
+    [Fact]
+    public async Task Подсчёт_БезФильтра_Выполняется()
+    {
+        Source("src/A.cs");
+        var launcher = RealRun();
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+
+        var result = await Run(service, Request());
+
+        Phases(launcher).Should().Equal(TestRunPhase.Build, TestRunPhase.List, TestRunPhase.Test);
+        result.Timings!.ListSkipped.Should().BeNull();
+        service.FormatResult(result).Should().NotContain("(пропущен: задан filter)");
+    }
+
+    [Fact]
+    public async Task СтрокаЦены_ВторойСтрокойИтога_БезПропускаСоВременами()
+    {
+        Source("src/A.cs");
+        var service = Service(RealRun(), new BuildConcurrencyGate(1));
+
+        var text = service.FormatResult(await Run(service, Request()));
+
+        text.Split('\n')[1].Should().MatchRegex(@"^сборка \S+ с · подсчёт \S+ с · тесты \S+ с$");
+    }
 }

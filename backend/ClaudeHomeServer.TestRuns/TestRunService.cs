@@ -72,6 +72,8 @@ public sealed partial class TestRunService
     // Общий конвейер фаз: блокировка дерева, гейт, потолок, процесс фазы
     private readonly PhasePipeline _pipeline;
     private readonly TimeSpan _progressInterval;
+    // Отпечатки исходников последних успешных сборок (только память процесса)
+    private readonly BuildFingerprintStore _fingerprints = new();
     private readonly Func<Uri, CancellationToken, Task<bool>> _standProbe;
 
     public TestRunService(ILauncherFactory launchers, TestRunsOptions options)
@@ -459,36 +461,95 @@ public sealed partial class TestRunService
         RunState run, PhaseArtifacts artifacts, CancellationToken ct)
     {
         using var limit = Ceiling(ct);
-        var firstPhase = request.NoBuild ? TestRunPhase.List : TestRunPhase.Build;
+        var timings = new PhaseTimings();
+        TestRunResult Done(TestRunResult result) => result with { Timings = timings };
+
+        // Явный no_build — пропуск без проверки; иначе сверяем отпечаток исходников дерева с тем,
+        // что был при последней успешной сборке: совпал — сборка была бы холостой
+        var tree = Path.GetFullPath(request.WorkingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string? fingerprint = null;
+        var skipBuild = request.NoBuild;
+        if (request.NoBuild) timings.BuildSkipped = "no_build";
+        else
+        {
+            fingerprint = BuildFingerprint.Compute(tree);
+            if (_fingerprints.Matches(tree, request.Target, fingerprint))
+            {
+                skipBuild = true;
+                timings.BuildSkipped = "дерево не менялось";
+            }
+        }
+        // Подсчёт нужен ради процента всего прогона; при filter тестов единицы — лишний запуск хоста
+        var skipList = !string.IsNullOrWhiteSpace(request.Filter);
+        if (skipList) timings.ListSkipped = "задан filter";
+
+        var firstPhase = skipBuild ? (skipList ? TestRunPhase.Test : TestRunPhase.List) : TestRunPhase.Build;
         var (slot, queued) = await AcquireAsync(BuildSpec(firstPhase, request, "", run.Results), firstPhase, run,
             limit.Token, ct);
         if (queued is not null) return queued;
 
         using (slot)
         {
-            if (!request.NoBuild)
+            if (!skipBuild)
             {
-                run.Report(new TestRunProgress("build", "сборка"));
-                var build = await RunPhaseAsync(launcher, TestRunPhase.Build, request, run, limit.Token);
-                if (build.Aborted) return Aborted(run, build, TestRunPhase.Build, ct);
-                if (build.ExitCode != 0)
-                    return run.Result(build.ExitCode, TestRunPhase.Build) with
-                    {
-                        BuildErrors = VsTestConsoleParser.BuildErrors(run.BuildErrorCandidates()),
-                    };
+                var failed = await BuildAsync();
+                if (failed is not null) return failed;
             }
 
-            run.Report(new TestRunProgress("list", "подсчёт тестов"));
-            var list = await RunPhaseAsync(launcher, TestRunPhase.List, request, run, limit.Token);
-            if (list.Aborted) return Aborted(run, list, TestRunPhase.List, ct);
-            // Подсчёт не удался — прогон всё равно идёт, просто без процента
-            run.Total = list.ExitCode == 0 ? run.ListedCount : null;
+            if (!skipList)
+            {
+                run.Report(new TestRunProgress("list", "подсчёт тестов"));
+                var listWatch = Stopwatch.StartNew();
+                var list = await RunPhaseAsync(launcher, TestRunPhase.List, request, run, limit.Token);
+                timings.List = listWatch.Elapsed;
+                if (list.Aborted) return Done(Aborted(run, list, TestRunPhase.List, ct));
+                // Подсчёт не удался — прогон всё равно идёт, просто без процента
+                run.Total = list.ExitCode == 0 ? run.ListedCount : null;
+            }
 
-            run.StartTesting();
-            var test = await RunPhaseAsync(launcher, TestRunPhase.Test, request, run, limit.Token);
-            if (test.Aborted) return Aborted(run, test, TestRunPhase.Test, ct);
+            var test = await TestAsync();
+            // Сборку пропустили по отпечатку, а раннер её не нашёл или не загрузил — отпечаток соврал
+            // (файл вне перечня расширений, сборка удалена): один повтор со сборкой
+            if (!test.Aborted && test.ExitCode != 0 && timings.BuildSkipped == "дерево не менялось"
+                && run.TakeStaleBuildSignal())
+            {
+                _fingerprints.Forget(tree, request.Target);
+                fingerprint = BuildFingerprint.Compute(tree);
+                timings.BuildSkipped = null;
+                var failed = await BuildAsync();
+                if (failed is not null) return failed;
+                test = await TestAsync();
+            }
+            if (test.Aborted) return Done(Aborted(run, test, TestRunPhase.Test, ct));
             var (reports, oversized) = ReadTrxReports(request.WorkingDirectory, artifacts);
-            return run.Result(test.ExitCode, TestRunPhase.Test) with { Reports = reports, OversizedReports = oversized };
+            return Done(run.Result(test.ExitCode, TestRunPhase.Test) with { Reports = reports, OversizedReports = oversized });
+        }
+
+        // Сборка; не null — прогон на этом кончился (ошибка сборки или обрыв)
+        async Task<TestRunResult?> BuildAsync()
+        {
+            run.Report(new TestRunProgress("build", "сборка"));
+            var buildWatch = Stopwatch.StartNew();
+            var build = await RunPhaseAsync(launcher, TestRunPhase.Build, request, run, limit.Token);
+            timings.Build = buildWatch.Elapsed;
+            if (build.Aborted) return Done(Aborted(run, build, TestRunPhase.Build, ct));
+            if (build.ExitCode != 0)
+                return Done(run.Result(build.ExitCode, TestRunPhase.Build) with
+                {
+                    BuildErrors = VsTestConsoleParser.BuildErrors(run.BuildErrorCandidates()),
+                });
+            // Отпечаток снят ДО сборки: правка во время неё не должна сойти за собранную
+            _fingerprints.Remember(tree, request.Target, fingerprint!);
+            return null;
+        }
+
+        async Task<PhaseOutcome> TestAsync()
+        {
+            run.StartTesting();
+            var testWatch = Stopwatch.StartNew();
+            var outcome = await RunPhaseAsync(launcher, TestRunPhase.Test, request, run, limit.Token);
+            timings.Test += testWatch.Elapsed;
+            return outcome;
         }
     }
 
@@ -671,6 +732,10 @@ public sealed partial class TestRunService
     public string FormatResult(TestRunResult result) =>
         TestRunSummaryFormatter.Format(result, _options.MaxResultBytes, _options.CeilingSeconds);
 
+    // Строки vstest, по которым пропущенная по отпечатку сборка считается устаревшей
+    private static readonly string[] StaleBuildMarkers =
+        ["No test is available", "Could not find", "could not be loaded"];
+
     // Состояние одного прогона: хвост вывода, полный лог в файл, разбор строк фаз под вид
     // прогона и живой счётчик. Строки приходят из двух потоков сразу — всё под одним замком
     private sealed class RunState : IDisposable
@@ -687,6 +752,7 @@ public sealed partial class TestRunService
         // Playwright: исход по названию теста — повтор (retry) перезаписывает, а не добавляет
         private readonly Dictionary<string, TestLineOutcome> _byTitle = new(StringComparer.Ordinal);
         private readonly object _gate = new();
+        private bool _staleBuild;
         private int _listedFiles;
         private int _filesDone;
         private TestRunPhase _phase;
@@ -793,6 +859,8 @@ public sealed partial class TestRunService
                         _listCounter.Feed(line);
                         break;
                     case TestRunPhase.Test:
+                        if (_kind == TestRunKind.Dotnet && StaleBuildMarkers.Any(m => line.Contains(m, StringComparison.OrdinalIgnoreCase)))
+                            _staleBuild = true;
                         (counted, force) = _kind switch
                         {
                             TestRunKind.Vitest => OnVitestLine(parsed.VitestFile),
@@ -870,6 +938,17 @@ public sealed partial class TestRunService
             _lastLabel = label;
             var percent = TestRunSummaryFormatter.ProgressPercent(done, _total);
             return new TestRunProgress("running", label, percent, percent is null ? null : true);
+        }
+
+        // Признаки «сборки нет / тест не найден / не загрузился» в выводе фазы Test; читается один раз
+        public bool TakeStaleBuildSignal()
+        {
+            lock (_gate)
+            {
+                var seen = _staleBuild;
+                _staleBuild = false;
+                return seen;
+            }
         }
 
         public IEnumerable<string> BuildErrorCandidates()

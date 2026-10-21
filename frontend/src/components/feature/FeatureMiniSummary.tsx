@@ -7,6 +7,7 @@
 // «принято N из M» и «все готово» НЕ показываем (прогресс — отдельный шаг Ф-pr).
 
 import { C, R, FS, SP, FONT } from '../../lib/design';
+import { Button } from '../ui/Button';
 import { formatDuration, buildTimelineModel, kindBackground } from './FeatureStatsBits';
 import { formatTokens, formatUsd, AccuracyBadge } from './FeatureStatsBlocks';
 import type { FeatureStats } from '../../types/featureStats';
@@ -71,19 +72,16 @@ function SummaryRow({ stats }: { stats: FeatureStats }) {
   const closed = stats.timeline.current == null;
   const verb = closed ? 'шла' : 'идёт';
 
-  // «Ждёт вас» / «не работали»:
-  //   journal + waitingMinutes != null → «ждала вас N»;
-  //   current.kind === 'waiting' → «ждёт вас N» (текущее);
-  //   иначе → «не работали ≈ N».
+  // «Ждёт вас» / «не работали» — только из данных бэка (фронт не пересчитывает):
+  //   journal + waitingMinutes != null → «ждала вас N» (N = totals.waitingMinutes);
+  //   current.kind === 'waiting' → «ждёт вас» (длительность текущего ожидания — не поле
+  //     бэка: `current` несёт только `since`, без минут — число не вычисляем, минор);
+  //   иначе → «не работали ≈ N» (N = totals.notWorkingMinutes).
   let waitPart: string;
   if (stats.source === 'journal' && t.waitingMinutes != null) {
     waitPart = `ждала вас ${formatDuration(t.waitingMinutes)}`;
   } else if (stats.timeline.current?.kind === 'waiting') {
-    // Текущее ожидание: минуты от current.since до timeline.to.
-    const since = new Date(stats.timeline.current.since).getTime();
-    const to = new Date(stats.timeline.to).getTime();
-    const waitMin = Math.max(0, Math.round((to - since) / 60000));
-    waitPart = `ждёт вас ${formatDuration(waitMin)}`;
+    waitPart = 'ждёт вас';
   } else {
     waitPart = `не работали ${isApprox ? '≈ ' : ''}${formatDuration(t.notWorkingMinutes)}`;
   }
@@ -146,22 +144,21 @@ export function FeatureMiniSummary({ stats, onOpenStats, isMobile = false }: Fea
         <div style={{ flex: 1, minWidth: 0 }}>
           <SummaryRow stats={stats} />
         </div>
-        <button
-          type="button"
-          data-testid="mini-summary-go-stats"
+        {/* Кнопка-кит (не самодельный <button>): «Статистика ›» → вкладка «Статистика». */}
+        <Button
+          variant="ghost"
+          size="xs"
+          dataTestId="mini-summary-go-stats"
+          ariaLabel="Открыть вкладку «Статистика»"
           onClick={onOpenStats}
-          aria-label="Открыть вкладку «Статистика»"
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: 2,
-            background: 'transparent', border: 'none', cursor: 'pointer',
-            fontFamily: FONT.sans, fontSize: FS.xs, color: C.accent,
-            padding: `${isMobile ? SP.xs : SP.xxs}px ${SP.xs}px`,
+            background: 'transparent', border: 'none', color: C.accent,
+            fontSize: FS.xs, whiteSpace: 'nowrap', flexShrink: 0,
             minHeight: isMobile ? 40 : undefined,
-            whiteSpace: 'nowrap', flexShrink: 0,
           }}
         >
           Статистика ›
-        </button>
+        </Button>
       </div>
 
       {/* Значок точности + пояснительная строка. */}

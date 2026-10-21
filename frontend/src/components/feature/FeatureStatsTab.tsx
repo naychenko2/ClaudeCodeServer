@@ -5,8 +5,8 @@ import { EmptyState } from '../ui/EmptyState';
 import { NavTargetButton } from './NavTargetButton';
 import {
   buildTimelineModel, formatClock, formatDateTime, formatDuration,
-  kindLabel, kindBackground, kindTextColor, nowFraction,
-  type TimelineModel, type TimelineBlock, type TimelineSegment,
+  kindLabel, kindBackground, kindTextColor, nowCompressedFraction, blockWeight,
+  type TimelineModel, type TimelineSegment,
 } from './FeatureStatsBits';
 import { TotalsCards, LongestNow, Breakdown, Spend } from './FeatureStatsBlocks';
 import type { FeatureStats } from '../../types/featureStats';
@@ -25,13 +25,6 @@ export interface FeatureStatsTabProps {
   stats: FeatureStats | null;
   // Тач-цели ≥ 40 на 360.
   isMobile?: boolean;
-}
-
-// Вес блока на ленте (flex): этап — сумма минут его сегментов; разрыв — фиксированный
-// (сжатая пауза не в масштабе). Минимум, чтобы узкий блок не исчез.
-function blockWeight(b: TimelineBlock): number {
-  if (b.type === 'break') return 40; // фиксированная ширина сжатого разрыва
-  return Math.max(2, b.minutes);
 }
 
 // Подпись сегмента на ленте: длительность (короткая) — только если влезает.
@@ -74,8 +67,12 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
     focusFeatureStage(key);
   };
 
-  // «Сейчас» на оси: доля 0..1 по моменту current.since.
-  const nowFrac = current ? nowFraction(axis.from, axis.to, current.since) : null;
+  // «Сейчас» на НАРИСОВАННОЙ (сжатой) шкале ленты: доля 0..1 ширины по моменту
+  // current.since. По календарной шкале (nowFraction) отметка не совпала бы с лентой —
+  // лента сжимает длинные паузы, поэтому позиция считается по весам блоков.
+  const nowFrac = current ? nowCompressedFraction(blocks, current.since) : null;
+  // Есть ли сжатые разрывы (для легенды «⫽ — длинная пауза сжата»).
+  const hasBreak = blocks.some(b => b.type === 'break');
 
   return (
     <div data-testid="stats-timeline" style={{ fontFamily: FONT.sans }}>
@@ -84,11 +81,16 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
         data-testid="stats-timeline-scroll"
         style={{ overflowX: isMobile ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch' }}
       >
-        <div style={{ display: 'flex', gap: 2, minWidth: isMobile ? 640 : undefined, alignItems: 'stretch' }}>
+        {/* position:relative — чтобы отметка «сейчас» легла на НАРИСОВАННУЮ ленту (сжатая шкала). */}
+        <div style={{ position: 'relative' }}>
+          <div style={{ display: 'flex', gap: 2, minWidth: isMobile ? 640 : undefined, alignItems: 'stretch' }}>
           {blocks.map((b, i) => {
             const w = blockWeight(b);
-            // Ревью: тонкая дорожка под блоком, если блок имеет сегменты track=review.
+            // Ревью: отдельная тонкая дорожка; ширина ∝ минутам ревью (доля от времени блока) —
+            // ревью идёт вместе с производством, но не отнимает у основной ленты (макет).
             const reviewMin = b.type === 'stage' ? b.reviewMinutes : 0;
+            const totalMin = b.type === 'stage' ? b.minutes + b.reviewMinutes : 0;
+            const reviewPct = totalMin > 0 ? (reviewMin / totalMin) * 100 : 0;
             return (
               <div key={`${b.type}-${'key' in b ? b.key : i}`} style={{ flex: w, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
                 {/* Линейка: имя этапа (кнопка → «Хронология») / подпись разрыва. */}
@@ -120,14 +122,15 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
                     ⫽
                   </div>
                 )}
-                {/* Лента: сегменты (∝ минутам) / сжатый разрыв. */}
-                <div style={{ display: 'flex', gap: 1, height: isMobile ? 34 : 26, borderRadius: R.sm, overflow: 'hidden' }}>
+                {/* Лента: main-сегменты (∝ минутам) / сжатый разрыв. Тач-цель на 360 ≥ 40. */}
+                <div style={{ display: 'flex', gap: 1, height: isMobile ? 40 : 26, borderRadius: R.sm, overflow: 'hidden' }}>
                   {b.type === 'stage' ? (
                     b.segments.map((seg, j) => (
                       <button
                         key={j}
                         type="button"
-                        data-testid={`stats-seg-${seg.kind}`}
+                        data-testid={`stats-seg-${i}-${j}`}
+                        data-kind={seg.kind}
                         onClick={() => openStage(b.key)}
                         aria-label={`${b.label} · ${kindLabel(seg.kind)} · ${formatDateTime(seg.from)} · ${segLabel(seg)}`}
                         title={`${b.label} · ${kindLabel(seg.kind)} · ${formatDateTime(seg.from)} – ${formatClock(seg.to)} · ${segLabel(seg)}`}
@@ -148,7 +151,7 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
                       data-testid="stats-seg-break"
                       style={{
                         flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        background: 'repeating-linear-gradient(90deg, var(--c-bg-selected) 0 3px, transparent 3px 6px)',
+                        background: `repeating-linear-gradient(90deg, ${C.bgSelected} 0 3px, transparent 3px 6px)`,
                         color: C.textMuted, fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 400,
                         overflow: 'hidden', whiteSpace: 'nowrap',
                       }}
@@ -157,35 +160,37 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
                     </div>
                   )}
                 </div>
-                {/* Дорожка ревью: тонкая полоса под блоком (ревью идёт по шагам вместе с производством). */}
-                <div style={{ height: 4, marginTop: 2, borderRadius: R.max, background: reviewMin > 0 ? C.warning : 'transparent' }} />
+                {/* Дорожка ревью: тонкая полоса, ширина ∝ минутам ревью (ревью — вместе с
+                    производством, но не отнимает у основной ленты). */}
+                {b.type === 'stage' && reviewMin > 0 && (
+                  <div data-testid="stats-review-track" style={{ height: 4, marginTop: 2, display: 'flex' }}>
+                    <div style={{ width: `${reviewPct}%`, height: '100%', borderRadius: R.max, background: C.warning }} />
+                  </div>
+                )}
               </div>
             );
           })}
+          </div>
+          {/* Отметка «сейчас» — на нарисованной (сжатой) шкале: вертикальная линия в точке
+              current.since (внутри блока — по его моменту; в разрыве — на разрыве). */}
+          {nowFrac != null && current && (
+            <div
+              data-testid="stats-now-marker"
+              style={{
+                position: 'absolute', left: `${Math.round(nowFrac * 1000) / 10}%`, top: 0, bottom: 0,
+                width: 2, background: C.accent, borderRadius: R.max, pointerEvents: 'none',
+              }}
+            />
+          )}
         </div>
       </div>
 
-      {/* Ось времени: от создания до «сейчас»/закрытия + отметка «сейчас». */}
+      {/* Ось времени: от создания до «сейчас»/закрытия (отметка «сейчас» — на ленте, выше). */}
       <div
         data-testid="stats-axis"
         style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.xs, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}
       >
         <span>{formatDateTime(axis.from)} · создана</span>
-        {nowFrac != null && current && (
-          <span
-            data-testid="stats-now-marker"
-            style={{
-              flex: 1, position: 'relative', height: 2, background: C.divider,
-            }}
-          >
-            <span
-              style={{
-                position: 'absolute', left: `${Math.round(nowFrac * 100)}%`, top: -6,
-                width: 2, height: 14, background: C.accent, borderRadius: R.max,
-              }}
-            />
-          </span>
-        )}
         <span style={{ marginLeft: 'auto' }}>{axis.endLabel}</span>
       </div>
 
@@ -221,9 +226,13 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
             ревью
           </span>
         )}
-        <span data-testid="stats-legend-break" style={{ color: C.textMuted }}>
-          ⫽ — длинная пауза сжата, не в масштабе
-        </span>
+        {/* «⫽ — длинная пауза сжата» — только когда разрывы реально есть (иначе легенда
+            обещает то, чего на ленте нет). */}
+        {hasBreak && (
+          <span data-testid="stats-legend-break" style={{ color: C.textMuted }}>
+            ⫽ — длинная пауза сжата, не в масштабе
+          </span>
+        )}
       </div>
     </div>
   );
@@ -235,7 +244,8 @@ function TaskButtons({ model, isMobile }: { model: TimelineModel; isMobile: bool
   const byStage = new Map<string, string | null>();
   for (const b of model.blocks) {
     if (b.type !== 'stage') continue;
-    const tid = b.segments.find(s => s.taskId)?.taskId ?? null;
+    // taskId — из main-сегментов, иначе из дорожки ревью (оба несут задачу).
+    const tid = (b.segments.find(s => s.taskId) ?? b.reviewSegments.find(s => s.taskId))?.taskId ?? null;
     if (tid && !byStage.has(b.key)) byStage.set(b.key, tid);
   }
   if (byStage.size === 0) return null;
@@ -305,7 +315,7 @@ export function FeatureStatsTab({ stats, isMobile = false }: FeatureStatsTabProp
         <TotalsCards totals={stats.timeline.totals} source={stats.source} isMobile={isMobile} />
         {stats.longestNow && <LongestNow ln={stats.longestNow} isMobile={isMobile} />}
         <Breakdown breakdown={stats.breakdown} costPartial={costPartial} isMobile={isMobile} />
-        {stats.spend && <Spend spend={stats.spend} source={stats.source} />}
+        {stats.spend && <Spend spend={stats.spend} />}
       </div>
     </div>
   );

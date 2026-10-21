@@ -134,6 +134,12 @@ export function TotalsCards({ totals, source, isMobile = false }: {
     acc: source === 'approx' ? 'ap' : 'jr',
     hint: `агенты в сумме ≈ ${formatDuration(t.agentsSumMinutes)}`,
   });
+  // Не работали (макет: «не работали / простой» — ожидание и простой вместе) — ≈.
+  cards.push({
+    label: 'Не работали',
+    value: (source === 'approx' ? '≈ ' : '') + formatDuration(t.notWorkingMinutes),
+    acc: source === 'approx' ? 'ap' : 'jr',
+  });
   // Ожидание / Простой / Ошибки — только если не null (режим journal).
   if (t.waitingMinutes != null) cards.push({ label: 'Ожидание', value: formatDuration(t.waitingMinutes), acc: 'jr' });
   if (t.idleMinutes != null) cards.push({ label: 'Простой', value: formatDuration(t.idleMinutes), acc: 'jr' });
@@ -223,10 +229,16 @@ export function Breakdown({ breakdown, costPartial, isMobile = false }: {
   useModels(); // реактивность: догрузка каталога моделей меняет подписи
   const [axis, setAxis] = useState<Axis>('personas');
   const [openKey, setOpenKey] = useState<string | null>(null);
+  // «время · токены» (макет): метрика, по которой считается доля/полоса. Токены —
+  // только если учёт расхода есть (иначе у групп tokens=null).
+  const [metric, setMetric] = useState<'time' | 'tokens'>('time');
 
   const groups = breakdown[axis];
-  const totalMin = groups.reduce((a, g) => a + g.minutes, 0);
-  const maxMin = groups.length ? Math.max(...groups.map(g => g.minutes)) : 1;
+  const valueOf = (g: FeatureBreakdownGroup): number => metric === 'time' ? g.minutes : (g.tokens ?? 0);
+  const totalVal = groups.reduce((a, g) => a + valueOf(g), 0);
+  const maxVal = groups.length ? Math.max(...groups.map(g => valueOf(g))) : 1;
+  // Токены доступны? (хотя бы одна группа с tokens) — иначе опция «токены» приглушена.
+  const tokensAvailable = groups.some(g => g.tokens != null);
 
   const labelOf = (g: FeatureBreakdownGroup): string => {
     if (axis === 'personas') return personaGroupLabel(g.key, personas);
@@ -249,6 +261,16 @@ export function Breakdown({ breakdown, costPartial, isMobile = false }: {
           { value: 'roles', label: 'роли' },
         ]}
       />
+      {/* «время · токены» (макет): метрика доли/полосы; токены — приглушены без учёта расхода. */}
+      <SegmentedControl
+        value={metric}
+        onChange={setMetric}
+        touch={isMobile}
+        options={[
+          { value: 'time', label: 'время' },
+          { value: 'tokens', label: 'токены', muted: !tokensAvailable, title: !tokensAvailable ? 'токены недоступны без учёта расхода' : undefined },
+        ]}
+      />
       {costPartial && (
         <div data-testid="stats-breakdown-cost-partial" style={{ fontSize: FS.xxs, color: C.textMuted, fontFamily: FONT.sans }}>
           цена по части моделей недоступна
@@ -266,7 +288,8 @@ export function Breakdown({ breakdown, costPartial, isMobile = false }: {
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
           {groups.map(g => {
             const open = openKey === g.key;
-            const share = totalMin > 0 ? g.minutes / totalMin : 0;
+            // Доля/полоса — по выбранной метрике («время · токены»).
+            const share = totalVal > 0 ? valueOf(g) / totalVal : 0;
             const persona = isPersonaAxis && personas.find(p => p.id === g.key);
             return (
               <div
@@ -301,9 +324,9 @@ export function Breakdown({ breakdown, costPartial, isMobile = false }: {
                   <span style={{ fontSize: FS.xs, color: C.textSecondary, fontFamily: FONT.mono, flexShrink: 0 }}>
                     {formatDuration(g.minutes)}
                   </span>
-                  {/* Доля: полоса (∝ максимуму группы) + процент (∝ сумме). */}
+                  {/* Доля: полоса (∝ максимуму группы по метрике) + процент (∝ сумме по метрике). */}
                   <span aria-hidden style={{ flex: 1, minWidth: 24, height: 6, borderRadius: R.max, background: C.progressTrack, overflow: 'hidden', display: 'inline-block' }}>
-                    <span style={{ display: 'block', height: '100%', width: `${Math.max(2, (g.minutes / maxMin) * 100)}%`, background: C.accent, borderRadius: R.max }} />
+                    <span style={{ display: 'block', height: '100%', width: `${Math.max(2, (valueOf(g) / maxVal) * 100)}%`, background: C.accent, borderRadius: R.max }} />
                   </span>
                   <span style={{ fontSize: FS.xs, color: C.textSecondary, fontFamily: FONT.mono, flexShrink: 0 }}>
                     {Math.round(share * 100)} %
@@ -371,8 +394,10 @@ function ChatRow({ chatId, isMobile = false }: { chatId: string; isMobile?: bool
 // inputTokens+outputTokens крупно · кэш (read/creation) мелко отдельной строкой ·
 // costUsd с пометкой при costPartial · from («данные с …», только если расход ненулевой) ·
 // shared («в т. ч. доля общих чатов ≈ N (оценка, по …)»). spend === null → блока нет.
-export function Spend({ spend, source }: {
-  spend: FeatureSpend; source: FeatureStatsSource;
+// Метод оценки shared — из `spend.shared.method` (не из stats.source: расход и лента могут
+// считаться разными способами).
+export function Spend({ spend }: {
+  spend: FeatureSpend;
 }) {
   const main = spend.inputTokens + spend.outputTokens;
   const cache = spend.cacheReadTokens + spend.cacheCreationTokens;
@@ -426,7 +451,7 @@ export function Spend({ spend, source }: {
       {/* Доля общих чатов (уже включена в итоги) — оценка. */}
       {spend.shared && (
         <div data-testid="stats-spend-shared" style={{ fontSize: FS.xxs, color: C.textSecondary, fontFamily: FONT.sans }}>
-          в т. ч. доля общих чатов ≈ {formatTokens(spend.shared.inputTokens + spend.shared.outputTokens)} (оценка, по {source === 'journal' ? 'журналу' : 'задакам ≈'})
+          в т. ч. доля общих чатов ≈ {formatTokens(spend.shared.inputTokens + spend.shared.outputTokens)} (оценка, по {spend.shared.method === 'journal' ? 'журналу' : 'задакам ≈'})
         </div>
       )}
     </div>

@@ -8,6 +8,7 @@
 //     ширину с подписью «разрыв · N ч» (шкала честно помечена как сжатая, не в масштабе).
 // Никаких выдуманных данных: всё — из `from`/`to`/`segments`/`current`/`source`/`truncated`.
 
+import { C } from '../../lib/design';
 import type { FeatureTimeline } from '../../types/featureStats';
 import type { StageKey } from '../../types/featureRun';
 
@@ -27,8 +28,11 @@ export interface TimelineSegment {
 }
 
 // Блок ленты: этап (с сегментами) или сжатый разрыв.
+// `minutes` — только MAIN-трек (определяет ширину блока/ленты); ревью — отдельная
+// дорожка (`reviewSegments`/`reviewMinutes`) и не отнимает у основной ширины (макет:
+// «ревью идёт по шагам вместе с производством и не отнимает у него ширину»).
 export type TimelineBlock =
-  | { type: 'stage'; key: string; label: string; from: string; to: string; minutes: number; segments: TimelineSegment[]; reviewMinutes: number }
+  | { type: 'stage'; key: string; label: string; from: string; to: string; minutes: number; segments: TimelineSegment[]; reviewSegments: TimelineSegment[]; reviewMinutes: number }
   | { type: 'break'; from: string; to: string; minutes: number; label: string };
 
 // Итоговая модель ленты (что рисует вкладка).
@@ -98,13 +102,13 @@ export function kindLabel(kind: SegmentKind): string {
 // error=danger, notWorking=штриховка bgSelected/bgInset). Возвращает CSS-подложку.
 export function kindBackground(kind: SegmentKind): string {
   switch (kind) {
-    case 'work': return 'var(--c-accent)';
-    case 'waiting': return 'var(--c-info)';
-    case 'idle': return 'var(--c-progress-track)';
-    case 'error': return 'var(--c-danger)';
+    case 'work': return C.accent;
+    case 'waiting': return C.info;
+    case 'idle': return C.progressTrack;
+    case 'error': return C.danger;
     // notWorking — штриховка (ожидание и простой без журнала не разделить).
     case 'notWorking':
-      return 'repeating-linear-gradient(135deg, var(--c-bg-selected) 0 5px, var(--c-bg-inset) 5px 10px)';
+      return `repeating-linear-gradient(135deg, ${C.bgSelected} 0 5px, ${C.bgInset} 5px 10px)`;
   }
 }
 
@@ -114,10 +118,10 @@ export function kindTextColor(kind: SegmentKind): string {
     case 'work':
     case 'waiting':
     case 'error':
-      return 'var(--c-on-accent)';
+      return C.onAccent;
     case 'idle':
     case 'notWorking':
-      return 'var(--c-text-primary)';
+      return C.textPrimary;
   }
 }
 
@@ -163,20 +167,35 @@ function axisEndLabel(to: string, isClosed: boolean): string {
 export function buildTimelineModel(tl: FeatureTimeline, source: 'approx' | 'journal', truncated: boolean, closed: boolean): TimelineModel {
   const segs = [...(tl.segments ?? [])].sort((a, b) => new Date(a.from).getTime() - new Date(b.from).getTime());
 
-  // Группировка сегментов в блоки этапов: подряд идущие сегменты одного этапа — один блок.
+  // Группировка сегментов в блоки этапов. Сегмент склеивается с предыдущим блоком
+  // ТОЛЬКО если это тот же этап И пауза до него не длиннее порога: длинная пауза (> 2 ч)
+  // рвёт блок (иначе два куска одного этапа с ночной паузой между ними склеивались в один
+  // блок, и пауза пропала бы — pushBreak считает разрывы только МЕЖДУ блоками).
+  // Ревью-сегменты не складываются в `minutes` (ширину) — они в отдельной дорожке.
   const blocks: TimelineBlock[] = [];
   for (const s of segs) {
     const minutes = spanMinutes(s.from, s.to);
     const seg: TimelineSegment = { from: s.from, to: s.to, kind: s.kind, minutes, taskId: s.taskId ?? null };
     const last = blocks[blocks.length - 1];
-    if (last && last.type === 'stage' && last.key === s.stage) {
-      last.segments.push(seg);
-      last.minutes += minutes;
-      if (s.track === 'review') last.reviewMinutes += minutes;
+    const gap = last && last.type === 'stage' ? spanMinutes(last.to, s.from) : 0;
+    if (last && last.type === 'stage' && last.key === s.stage && gap <= PAUSE_BREAK_MIN) {
+      if (s.track === 'review') {
+        last.reviewSegments.push(seg);
+        last.reviewMinutes += minutes;
+      } else {
+        last.segments.push(seg);
+        last.minutes += minutes;
+      }
       if (new Date(s.to).getTime() > new Date(last.to).getTime()) last.to = s.to;
     } else {
-      const from = s.from;
-      blocks.push({ type: 'stage', key: s.stage, label: stageLabel(s.stage), from, to: s.to, minutes, segments: [seg], reviewMinutes: s.track === 'review' ? minutes : 0 });
+      const isReview = s.track === 'review';
+      blocks.push({
+        type: 'stage', key: s.stage, label: stageLabel(s.stage), from: s.from, to: s.to,
+        minutes: isReview ? 0 : minutes,
+        segments: isReview ? [] : [seg],
+        reviewSegments: isReview ? [seg] : [],
+        reviewMinutes: isReview ? minutes : 0,
+      });
     }
   }
 
@@ -187,7 +206,8 @@ export function buildTimelineModel(tl: FeatureTimeline, source: 'approx' | 'jour
   const to0 = tl.to;
   const pushBreak = (from: string, to: string) => {
     const minutes = spanMinutes(from, to);
-    if (minutes >= PAUSE_BREAK_MIN) {
+    // ДлинНЕЕ двух часов (строго >): ровно 120 мин — ещё не «ночь», разрыва нет.
+    if (minutes > PAUSE_BREAK_MIN) {
       out.push({ type: 'break', from, to, minutes, label: `разрыв · ${formatDuration(minutes)}` });
     }
   };
@@ -237,6 +257,41 @@ export function nowFraction(from: string, to: string, at: string): number {
   if (Number.isNaN(a) || Number.isNaN(b) || b === a) return 1;
   const f = (c - a) / (b - a);
   return Math.min(1, Math.max(0, f));
+}
+
+// Вес блока на ленте (flex): этап — минуты его MAIN-сегментов; сжатый разрыв — фиксированный
+// (пауза не в масштабе). Минимум, чтобы узкий блок не исчез.
+export function blockWeight(b: TimelineBlock): number {
+  if (b.type === 'break') return 40;
+  return Math.max(2, b.minutes);
+}
+
+// «Сейчас» на НАРИСОВАННОЙ (сжатой) шкале ленты: доля 0..1 ширины.
+// Лента сжимает длинные паузы (разрыв — фиксированная ширина), поэтому позиция по
+// календарной шкале (nowFraction) не совпадает с нарисованной. Здесь — по весам блоков:
+//   · `at` внутри блока этапа → внутри блока, пропорционально моменту в его [from, to];
+//   · `at` в разрыве → на разрыве (центр сжатого блока);
+//   · вне всех блоков (до первого/после последнего) → в ближайший край.
+// null — нет блоков или невалидный момент.
+export function nowCompressedFraction(blocks: TimelineBlock[], at: string): number | null {
+  const t = new Date(at).getTime();
+  if (Number.isNaN(t)) return null;
+  const total = blocks.reduce((a, b) => a + blockWeight(b), 0);
+  if (total <= 0) return null;
+  let acc = 0;
+  for (const b of blocks) {
+    const w = blockWeight(b);
+    const bFrom = new Date(b.from).getTime();
+    const bTo = new Date(b.to).getTime();
+    if (t >= bFrom && t <= bTo) {
+      if (b.type === 'break') return (acc + w / 2) / total;
+      const span = bTo - bFrom;
+      const frac = span > 0 ? (t - bFrom) / span : 0;
+      return (acc + w * Math.min(1, Math.max(0, frac))) / total;
+    }
+    acc += w;
+  }
+  return Math.min(1, Math.max(0, acc / total));
 }
 
 // Тип-помощник: ключ этапа как StageKey (для focusFeatureStage).

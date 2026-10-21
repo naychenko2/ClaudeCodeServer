@@ -287,9 +287,12 @@ export function focusablesIn(root: Element): Element[] {
     const el = n as Element;
     const tag = el.tagName ? el.tagName.toUpperCase() : '';
     const tab = el.getAttribute ? el.getAttribute('tabindex') : null;
+    const tabVal = tab != null ? parseInt(tab, 10) : null;
     const disabled = el.getAttribute ? el.getAttribute('disabled') != null : false;
-    const tabOk = tab != null && parseInt(tab, 10) >= -1;
-    if (!disabled && (FOCUSABLE.has(tag) || tabOk)) out.push(el);
+    // tabindex < -1 (напр. -2) — явно НЕ фокусируемый, даже если тег в FOCUSABLE.
+    const explicitlyNonFocusable = tabVal != null && tabVal < -1;
+    const focusable = FOCUSABLE.has(tag) || (tabVal != null && tabVal >= -1);
+    if (!disabled && !explicitlyNonFocusable && focusable) out.push(el);
     for (const c of el.childNodes) walk(c);
   };
   walk(root);

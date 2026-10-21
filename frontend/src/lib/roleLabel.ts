@@ -3,14 +3,24 @@
 // подписывает, отдаёт сырые поля; фронт строит подпись. Без догадок: словарь по роли,
 // для step — «{stepRef} · {бэк|фронт}» (линия нормализуется, как в laneOfChain).
 
-// Нормализация линии (ревью фронта 1, minor 9: единая точка, не дублируем в PipelineFlow):
+// Нормализация линии (ревью фронта 1, minor 9: единая точка, не дублируем):
 // back/бэк → «бэк», front/фронт → «фронт», прочее/пусто → '' (без второй части).
-// Экспортируем: PipelineFlow.laneOfChain деривится отсюда.
 export function laneWord(lane: string | null): string {
   const l = (lane ?? '').trim().toLowerCase();
   if (l === 'back' || l === 'backend' || l === 'бэк' || l === 'бэкенд') return 'бэк';
   if (l === 'front' || l === 'frontend' || l === 'фронт' || l === 'фронтенд') return 'фронт';
   return '';
+}
+
+// Нормализация линии шага (из FeatureStepChain.lane): back | front | other.
+// lane в данных бывает 'back'/'front' (англ.) или 'бэк'/'фронт' (рус.) — нормализуем;
+// прочие линии (тест, дизайн) — в «прочее». (Р2 major 7: вынесено из PipelineFlow —
+// единственный жилой потребитель — TaskCreatedView.)
+export function laneOfChain(lane?: string | null): 'back' | 'front' | 'other' {
+  const w = laneWord(lane ?? null);
+  if (w === 'бэк') return 'back';
+  if (w === 'фронт') return 'front';
+  return 'other';
 }
 
 // Подпись роли:

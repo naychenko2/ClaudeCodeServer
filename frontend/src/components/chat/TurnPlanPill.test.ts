@@ -207,7 +207,7 @@ describe('TurnPlanPill: режим фичи — загрузка/ошибка и
     __test.reset();
     __test.setRuns('s-load', []);
     __test.setLoading('s-load', true);
-    setTurnPlanMode('s-load', 'feature');
+    // R2 major 4: runs пуст, но загрузка → умолчание режима 'feature' (без ручного setTurnPlanMode).
     const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: [], runs: [], sessionId: 's-load' }));
     expect(html).toContain('фича · …');
   });
@@ -216,7 +216,7 @@ describe('TurnPlanPill: режим фичи — загрузка/ошибка и
     __test.reset();
     __test.setRuns('s-err', []);
     __test.setError('s-err', 'Сервер не ответил');
-    setTurnPlanMode('s-err', 'feature');
+    // R2 major 4: runs пуст, но ошибка → умолчание режима 'feature' (без ручного setTurnPlanMode).
     const html = renderToStaticMarkup(createElement(TurnPlanPill, { todos: [], runs: [], sessionId: 's-err' }));
     expect(html).toContain('фича · …');
   });

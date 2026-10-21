@@ -50,10 +50,12 @@ export function pillMenuFullWidth(isMobile: boolean, _featureMode: boolean): boo
   return isMobile;
 }
 
-export function TurnPlanPill({ todos, runs = [], sessionId }: {
+export function TurnPlanPill({ todos, runs = [], sessionId, chatTaskId }: {
   todos: TodoItem[];
   runs?: FeatureRun[];
   sessionId: string | null;
+  // Задача-владелец чата (Session.TaskId): по ней роль «этот чат — …» в мете попапа (R2 major 5).
+  chatTaskId?: string | null;
 }) {
   const isMobile = useIsMobile();
   const mode = useTurnPlanMode(sessionId);
@@ -176,6 +178,10 @@ export function TurnPlanPill({ todos, runs = [], sessionId }: {
               runs={runs}
               isMobile={isMobile}
               variant="pill"
+              // R2 major 5: роль «этот чат — …» в мете — по задаче-владельцу чата.
+              chatTaskId={chatTaskId}
+              // R2 major 3: переход (чат/задача) в теле закрывает попап.
+              onClose={() => setMenu(null)}
               // M-2: шапка padding-bottom 7 + (margin-bottom 5 даёт bodyPad-top 5); тело top 0 (макет .hd/.in).
               headerPad="9px 12px 7px"
               bodyPad="5px 12px 11px"

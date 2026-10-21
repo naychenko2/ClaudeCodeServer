@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, ChevronRight, GitBranch } from 'lucide-react';
 import { C, FONT, R, FS, SP, SHADOW, TB } from '../../../lib/design';
 import { useIsMobile } from '../../../lib/breakpoints';
+import { useCanHover } from '../../../lib/pointer';
 import { Button, Tooltip } from '../../ui';
 import { openTaskInSection } from '../../../lib/tasks';
 import { openChatById } from '../../../lib/openChat';
@@ -11,10 +12,10 @@ import { showToast } from '../../../lib/toast';
 import { roleLabel } from '../../../lib/roleLabel';
 import { STAGE_NAME, formatDuration } from '../../../lib/chatGroups';
 import { PersonaAvatar } from '../../../features/personas/PersonaAvatar';
-import { featureRunStatusTag, StatusTag, featurePrimaryAction } from '../../feature/FeaturePageHeader';
+import { featureRunStatusTag, StatusTag, featurePrimaryAction, type FeaturePrimaryAction } from '../../feature/FeaturePageHeader';
 import { FeatureMergeDialog } from '../../feature/FeatureMergeDialog';
-import { NavTargetPair } from '../../feature/NavTargetButton';
-import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureState } from '../../../types/featureRun';
+import { NavTargetButton, NavTargetPair } from '../../feature/NavTargetButton';
+import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureState, FeatureAttention } from '../../../types/featureRun';
 import { FeatureGlyph, type FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 
 // Тело режима «Исполнение фичи» по утверждённому макету (turn-plan-feature-popup-1):
@@ -148,6 +149,20 @@ function pluralSteps(n: number): string {
   return 'шагов';
 }
 
+// R2 major 2 + 7: главное действие строки состояния waiting/stopped.
+//   • att.kind==='merge' (защитный: бэк так не отдаёт — waiting ⇒ тревога wait,
+//     stopped ⇒ stopped) — действие «Мерж…» (модалка), а не чат с подписью «Мерж…»
+//     (major 7: подпись и переход должны совпадать);
+//   • иначе — чат («Ответить {имя}» / «Чат {имя}») + рядом кнопка «задача» по
+//     attention.taskId (major 2; макет: «Ответить Кире →» · «задача»).
+function waitingStoppedAction(primary: FeaturePrimaryAction | null, att: FeatureAttention | null | undefined): StatusAction | null {
+  if (!primary) return null;
+  if (primary.kind === 'merge') {
+    return { kind: 'merge', label: 'Мерж…', chatId: primary.chatId, taskId: att?.taskId ?? null };
+  }
+  return { kind: 'chat', label: primary.label, chatId: primary.chatId, taskId: att?.taskId ?? null };
+}
+
 // Строка состояния по run.state (единая точка правды — 9 состояний + загрузка/ошибка).
 export function statusLineFor(run: FeatureRun, now: number): StatusLine {
   const stage = activeStageName(run);
@@ -175,22 +190,20 @@ export function statusLineFor(run: FeatureRun, now: number): StatusLine {
     }
     case 'waiting': {
       const name = personaName(att?.personaId);
-      const primary = featurePrimaryAction(att, name);
       return {
         tone: 'info',
         headline: `${stage ?? 'Разрез'} · ждёт вас${time}.`,
         why: att?.reason ?? null,
-        action: primary ? { kind: 'chat', label: primary.label, chatId: primary.chatId, taskId: null } : null,
+        action: waitingStoppedAction(featurePrimaryAction(att, name), att),
       };
     }
     case 'stopped': {
       const name = personaName(att?.personaId);
-      const primary = featurePrimaryAction(att, name);
       return {
         tone: 'danger',
         headline: `${stage ?? 'Разрез'} · стоит${time}.`,
         why: att?.reason ? `${name ? name + ' — ' : ''}${att.reason}` : null,
-        action: primary ? { kind: 'chat', label: primary.label, chatId: primary.chatId, taskId: null } : null,
+        action: waitingStoppedAction(featurePrimaryAction(att, name), att),
       };
     }
     case 'merge_pending': {
@@ -255,7 +268,8 @@ function Header({ run }: { run: FeatureRun }) {
       >
         {title}
       </span>
-      <StatusTag tag={tag} testId="feature-run-status" />
+      {/* R2 minor 1: отдельный id (feature-run-status-tag) — строка состояния несёт feature-run-status-line. */}
+      <StatusTag tag={tag} testId="feature-run-status-tag" />
     </div>
   );
 }
@@ -309,7 +323,7 @@ function StatusLine({ line, isMobile, onOpenChat, onOpenTask, onMerge }: {
   const btnStyle = isMobile ? { minHeight: TB.iconHitMobile } : undefined;
   return (
     <div
-      data-testid="feature-run-status"
+      data-testid="feature-run-status-line"
       role="status"
       style={{
         background: s.bg, borderRadius: R.lg, padding: '8px 10px',
@@ -338,6 +352,15 @@ function StatusLine({ line, isMobile, onOpenChat, onOpenTask, onMerge }: {
               <ArrowRight size={13} strokeWidth={2} />
             </Button>
           )}
+          {/* R2 major 2: «задача» рядом с главным действием (waiting/stopped, по attention.taskId). */}
+          {line.action.kind === 'chat' && line.action.taskId && (
+            <NavTargetButton
+              kind="task"
+              taskId={line.action.taskId}
+              isMobile={isMobile}
+              onOpen={() => onOpenTask(line.action!.taskId!)}
+            />
+          )}
           {(line.action.kind === 'pair' || line.action.showPair) && (
             <NavTargetPair
               chatId={line.action.chatId}
@@ -354,20 +377,36 @@ function StatusLine({ line, isMobile, onOpenChat, onOpenTask, onMerge }: {
   );
 }
 
-// === Чип модели на аватаре (mono, navInk) + подсказка с полной моделью ===
-function ModelChip({ label, full }: { label: string | null; full: string | null }) {
+// === Чип модели (mono, navInk) + подсказка с полной моделью ===
+// R2 major 6: чип — КНОПКА: на тач-экране (нет hover) тап раскрывает/закрывает
+// подсказку (повторный тап закрывает, как в макете); hover/фокус сохраняются (Tooltip).
+// R2 minor 5: на 360 аватар скрыт — чип обычный inline-элемент (не на аватаре).
+function ModelChip({ label, full, isMobile }: { label: string | null; full: string | null; isMobile: boolean }) {
   if (!label) return null;
   const tip = full && full !== label ? `Модель чата: ${full}` : `Модель чата: ${label}`;
+  const canHover = useCanHover();
+  const [tapped, setTapped] = useState(false);
+  const overlay = !isMobile; // на аватаре (десктоп) — absolute; на 360 (аватар скрыт) — inline.
   return (
-    <Tooltip content={tip}>
-      <span style={{
-        position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: -2,
-        fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700, lineHeight: '14px',
-        padding: '0 4px', borderRadius: R.sm, background: C.navInk, color: C.onNavInk,
-        boxShadow: `0 0 0 1.5px ${C.bgWhite}`, whiteSpace: 'nowrap',
-      }}>
+    <Tooltip content={tip} focused={tapped}>
+      <button
+        type="button"
+        aria-label={tip}
+        onClick={() => setTapped(t => !t)}
+        // Десктоп: после клика чип сфокусирован — не «закрепляем» подсказку навсегда.
+        onMouseLeave={() => { if (canHover) setTapped(false); }}
+        style={{
+          ...(overlay
+            ? { position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: -2 }
+            : { position: 'relative' }),
+          border: 'none', cursor: 'pointer', flexShrink: 0,
+          fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700, lineHeight: '14px',
+          padding: '0 4px', borderRadius: R.sm, background: C.navInk, color: C.onNavInk,
+          boxShadow: `0 0 0 1.5px ${C.bgWhite}`, whiteSpace: 'nowrap',
+        }}
+      >
         {label}
-      </span>
+      </button>
     </Tooltip>
   );
 }
@@ -393,9 +432,10 @@ function ExecutorRow({ ex, isMobile, onOpenChat, onOpenTask }: {
   const statusColor = ex.status === 'waiting' ? C.info : ex.status === 'stopped' ? C.dangerText : C.textMuted;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minHeight: isMobile ? TB.iconHitMobile : 36, padding: '2px 0' }}>
-      <span style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
-        {persona && <PersonaAvatar persona={persona} size={24} />}
-        <ModelChip label={ex.modelLabel} full={ex.modelFull} />
+      <span style={{ position: 'relative', flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}>
+        {/* R2 minor 5: аватар скрыт на 360 (макет); чип модели остаётся (major 6 — по тапу). */}
+        {persona && !isMobile && <PersonaAvatar persona={persona} size={24} />}
+        <ModelChip label={ex.modelLabel} full={ex.modelFull} isMobile={isMobile} />
       </span>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
@@ -633,7 +673,7 @@ function Footer({ isMobile, onOpenPage }: { isMobile: boolean; onOpenPage: () =>
 // `chatTaskId` — задача текущего чата (Session.TaskId): по ней роль в мете.
 // `loading`/`error` — состояния запроса (из стора featureRuns). `onOpenPage` — подвал.
 export function FeatureRunView({
-  run, chatTaskId, loading, error, onOpenPage, onRetry,
+  run, chatTaskId, loading, error, onOpenPage, onRetry, onClose,
 }: {
   run: FeatureRun;
   chatTaskId?: string | null;
@@ -641,14 +681,17 @@ export function FeatureRunView({
   error?: string | null;
   onOpenPage?: () => void;
   onRetry?: () => void;
+  // R2 major 3: переход (чат/задача) закрывает попап — вызывающий (попап пилюли)
+  // передаёт onClose; в панели А (карточка, не попап) onClose не передан.
+  onClose?: () => void;
 }) {
   const isMobile = useIsMobile();
   usePersonasVersion();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
-  // Навигация: переход в чат/задачу (вызывающий закрывает попап).
-  const openChat = (chatId: string) => { void openChatById(chatId); };
-  const openTask = (taskId: string) => { openTaskInSection({ id: taskId }); };
+  // Навигация: переход в чат/задачу; onClose — закрыть попап (R2 major 3).
+  const openChat = (chatId: string) => { void openChatById(chatId); onClose?.(); };
+  const openTask = (taskId: string) => { openTaskInSection({ id: taskId }); onClose?.(); };
 
   // === Мерж (Ф6): общая модалка подтверждения → POST /merge ===
   // pending (кнопка «Запускаю…» заблокирована), успех (тост, диалог закрывается),

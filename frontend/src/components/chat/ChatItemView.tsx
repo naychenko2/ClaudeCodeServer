@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
+import { memo, useState, useCallback, useContext, useEffect, type ReactNode, type CSSProperties } from 'react';
 import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, MessageSquareShare, Camera, MonitorSmartphone } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
@@ -94,6 +94,11 @@ function TodoPlanView({ todos, isMobile, isCurrentPlan, ts }: {
   // 1. Живая + фичи: короткая строка (решение Андрея 20.10).
   if (isCurrentPlan && hasFeatures) {
     const progress = todos.length > 0 ? done / todos.length : 0;
+    // R2 minor 6: на 360 «сейчас: …» и «Подробнее» — на ВТОРОЙ строке (макет .fcp):
+    // full-width «перенос» (order 5) + order 6/7; на десктопе — одна строка (DOM-порядок).
+    const brk: CSSProperties = isMobile
+      ? { display: 'block', flexBasis: '100%', height: 0, order: 5 }
+      : { display: 'none' };
     return (
       <div style={{
         border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
@@ -114,6 +119,7 @@ function TodoPlanView({ todos, isMobile, isCurrentPlan, ts }: {
               fontSize: FS.sm, color: C.textMuted,
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               maxWidth: isMobile ? '100%' : 180,
+              ...(isMobile ? { order: 6, flex: '1 1 0' } : {}),
             }}>
               · сейчас: {inProgress.activeForm ?? inProgress.content}
             </span>
@@ -125,6 +131,7 @@ function TodoPlanView({ todos, isMobile, isCurrentPlan, ts }: {
           <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
             {done} из {todos.length}
           </span>
+          <span style={brk} />
           <button
             onClick={() => { if (sessionId) openPillMenu(sessionId); }}
             title="Подробнее"
@@ -133,6 +140,7 @@ function TodoPlanView({ todos, isMobile, isCurrentPlan, ts }: {
               border: 'none', background: 'transparent', cursor: 'pointer',
               fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
               padding: 0, minHeight: isMobile ? TB.iconHitMobile : undefined,
+              ...(isMobile ? { order: 7 } : {}),
             }}
           >
             Подробнее

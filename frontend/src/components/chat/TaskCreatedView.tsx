@@ -10,7 +10,7 @@ import { markdownToPlain } from '../../lib/markdownPlain';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { useIsMobile } from '../../lib/breakpoints';
 import { focusFeatureStep, openPillMenu } from '../../lib/featureRuns';
-import { laneOfChain } from './feature/PipelineFlow';
+import { laneOfChain } from '../../lib/roleLabel';
 import { Button } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolUseView } from './ToolUseView';

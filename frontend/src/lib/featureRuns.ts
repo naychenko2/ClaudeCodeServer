@@ -115,11 +115,16 @@ function snapshotFor(sessionId: string | null): FeatureRun[] {
 // F1: режим чата. Явный выбор (setTurnPlanMode) — в приоритете; иначе умолчание:
 // есть хотя бы одна фича у этого чата → feature, нет → plan (макет v1, решение 1).
 // Умолчание пересчитывается, когда меняется срез фич (setRuns → emit → re-snapshot).
+// F-pop-b (ревью фронта 2, major 4): умолчание учитывает ещё и загрузку/ошибку списка
+// фич — пока фичи в полёте или запрос упал, тело — скелет/«Повторить» (режим feature),
+// а не чек-лист плана. Иначе состояния «загрузка»/«ошибка» из макета недостижимы:
+// runs пуст → mode='plan', переключателя нет (hasFeatures=false) → переключиться нечем.
 function modeFor(sessionId: string | null): TurnPlanMode {
   if (!sessionId) return 'plan';
   const explicit = _modeBySession.get(sessionId);
   if (explicit) return explicit;
-  return snapshotFor(sessionId).length > 0 ? 'feature' : 'plan';
+  const has = snapshotFor(sessionId).length > 0 || loadingFor(sessionId) || errorFor(sessionId) != null;
+  return has ? 'feature' : 'plan';
 }
 
 export function getTurnPlanMode(sessionId: string | null): TurnPlanMode {

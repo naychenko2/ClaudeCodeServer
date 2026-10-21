@@ -15,7 +15,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeatureRun, FeatureTask, FeatureStage, FeatureStageExecutor, FeatureAttention } from '../../../types/featureRun';
 import { FeatureModeBody } from './FeatureModeBody';
-import { __test, setTurnPlanMode } from '../../../lib/featureRuns';
+import { __test } from '../../../lib/featureRuns';
 import { installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
 
 // useIsMobile — управляемый флаг (SSR по умолчанию false).
@@ -206,16 +206,23 @@ describe('попап: этапы', () => {
 
 // === Переход (чат/задача) закрывает попап ===
 describe('попап: переход закрывает попап', () => {
-  it('клик по «Чат {имя}» (stopped) вызывает openChatById', () => {
+  it('клик по «Чат {имя}» (stopped) вызывает openChatById и закрывает попап (onClose)', () => {
     installFakeDom();
     personaMap.set('denis', 'Денис');
     const att: FeatureAttention = { kind: 'stopped', reason: 'auth_failed', personaId: 'denis', linkedSessionId: 'sess-d' };
     __test.setRuns('s-nav', [run({ state: 'stopped', attention: att })]);
-    const { root, container } = mount(createElement(FeatureModeBody, { sessionId: 's-nav', todos: [], runs: [run({ state: 'stopped', attention: att })], isMobile: false, variant: 'pill' }));
+    // R2 major 3 + minor 3: onClose — шпиг; тест проверяет именно ЗАКРЫТИЕ (не только openChatById).
+    const onCloseCalls = { n: 0 };
+    const { root, container } = mount(createElement(FeatureModeBody, {
+      sessionId: 's-nav', todos: [], runs: [run({ state: 'stopped', attention: att })],
+      isMobile: false, variant: 'pill',
+      onClose: () => { onCloseCalls.n++; },
+    }));
     const btn = findButtonByText(container, 'Чат Денис', false);
     expect(btn, 'кнопка «Чат Денис» не найдена').not.toBeNull();
     act(() => { (reactProps(btn!)!.onClick as () => void)(); });
     expect(navMock.openChat).toContain('sess-d');
+    expect(onCloseCalls.n, 'onClose не вызван — попап не закрылся').toBe(1);
     root.unmount();
     uninstallFakeDom();
   });
@@ -226,7 +233,7 @@ describe('попап: загрузка / ошибка / повтор', () => {
   it('loading: скелет (без имени фичи)', () => {
     __test.setRuns('s-load', []);
     __test.setLoading('s-load', true);
-    setTurnPlanMode('s-load', 'feature'); // runs пуст → умолчание 'plan'; явно 'feature'
+    // R2 major 4: runs пуст, но загрузка → умолчание режима 'feature' (без ручного setTurnPlanMode).
     const html = renderToStaticMarkup(createElement(FeatureModeBody, { sessionId: 's-load', todos: [], runs: [], isMobile: false, variant: 'pill' }));
     expect(html).not.toContain('Пульт куратора');
     expect(html).toContain('bg-selected');
@@ -235,7 +242,7 @@ describe('попап: загрузка / ошибка / повтор', () => {
   it('error: «Не удалось загрузить фичу.» + «Повторить»', () => {
     __test.setRuns('s-err', []);
     __test.setError('s-err', 'Сервер не ответил');
-    setTurnPlanMode('s-err', 'feature');
+    // R2 major 4: runs пуст, но ошибка → умолчание режима 'feature' (без ручного setTurnPlanMode).
     const html = renderToStaticMarkup(createElement(FeatureModeBody, { sessionId: 's-err', todos: [], runs: [], isMobile: false, variant: 'pill' }));
     expect(html).toContain('Не удалось загрузить фичу.');
     expect(html).toContain('Повторить');

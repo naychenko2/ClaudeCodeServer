@@ -162,7 +162,9 @@ describe('FeatureRunView — рендер', () => {
     const html = render(run({ state: 'running' }));
     expect(html).toContain('Пульт куратора');
     expect(html).toContain('feat/curator-console');
-    expect(html).toContain('feature-run-status');
+    // R2 minor 1: разные id — тег шапки (feature-run-status-tag) и строка (feature-run-status-line).
+    expect(html).toContain('feature-run-status-tag');
+    expect(html).toContain('feature-run-status-line');
     expect(html).not.toMatch(/>100%</);
   });
 
@@ -179,6 +181,17 @@ describe('FeatureRunView — рендер', () => {
     expect(html).toContain('стоит');
     expect(html).toContain('Чат Денис');
     expect(html).not.toContain('Перезапустить');
+  });
+
+  // R2 major 2: в waiting/stopped рядом с главным действием (чат) — кнопка «задача»
+  // по attention.taskId (макет: «Ответить Кире →» · «задача»).
+  it('waiting/stopped: кнопка «задача» рядом с чатом (attention.taskId)', () => {
+    personaMap.set('denis', 'Денис');
+    const att: FeatureAttention = { kind: 'stopped', reason: 'auth_failed', personaId: 'denis', linkedSessionId: 'sess-d', taskId: 'task-d' };
+    const html = render(run({ state: 'stopped', attention: att }));
+    // Главный чат + рядом кнопка «задача» (nav-target-task).
+    expect(html).toContain('Чат Денис');
+    expect(html).toContain('nav-target-task');
   });
 
   it('merge_pending: «Мерж…» (кнопка) + пара «задача» финала', () => {
@@ -208,6 +221,28 @@ describe('FeatureRunView — рендер', () => {
     expect(html).toContain('Мерж');
     // «впереди» (pending) — слово на месте.
     expect(html).toContain('впереди');
+  });
+
+  // R2 major 5: роль «этот чат — {role}» — по chatTaskId (Session.TaskId) среди executors.
+  it('мета: роль чата «этот чат — {role}» по chatTaskId', () => {
+    const stages: FeatureStage[] = [
+      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: null, taskId: 'task-front', taskRole: 'step', stepRef: 'Ш2', lane: 'front', status: 'running', chatId: null, chatArchived: false, modelLabel: null, modelFull: null }] },
+    ];
+    const html = render(run({ state: 'running', stages }), { chatTaskId: 'task-front' });
+    expect(html).toContain('этот чат — Ш2 · фронт');
+  });
+
+  // R2 major 6: чип модели — КНОПКА (фокусируемый): тап раскрывает подсказку,
+  // aria-label несёт полную модель (на 360 полная модель доступна).
+  it('чип модели — кнопка, aria-label с полной моделью', () => {
+    const stages: FeatureStage[] = [
+      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: null, taskId: 'x', taskRole: null, stepRef: null, lane: null, status: 'running', chatId: null, chatArchived: false, modelLabel: 'Qwen', modelFull: 'Qwen3.8-27B' }] },
+    ];
+    const html = render(run({ state: 'running', stages }));
+    expect(html).toContain('Qwen');
+    expect(html).toMatch(/aria-label="Модель чата: Qwen3\.8-27B"/);
   });
 
   it('подвал «Открыть страницу фичи» — только когда есть onOpenPage', () => {

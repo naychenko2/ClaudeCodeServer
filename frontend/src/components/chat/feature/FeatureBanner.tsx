@@ -133,7 +133,9 @@ export function featureBannerModel(
   // архив без предупреждения (R3, минор 1).
   let button: BannerButton;
   if (isKey) {
-    button = { label: 'Конвейер', kind: 'pipeline' };
+    // R2 minor 8: «Конвейер» → «Исполнение»: тело (FeatureModeBody) после Ф-pop —
+    // компактная карточка фичи (шапка, строка состояния, этапы), а не конвейер с линиями.
+    button = { label: 'Исполнение', kind: 'pipeline' };
   } else if (feature.keySessionId != null) {
     button = { label: feature.keyArchived ? 'Ключевой чат (в архиве)' : 'Ключевой чат', kind: 'key' };
   } else {
@@ -235,10 +237,12 @@ function RoleChip({ label, isKey }: { label: string; isKey: boolean }) {
 // раскрытие внутри: max-height 430, overflow auto, SHADOW.card, фон bgWhite, рамка
 // borderLight, R.xl. Содержимое — FeatureModeBody (режим «Исполнение фичи» + легенда).
 // Вынесена в компонент: тест M2 рендерит её напрямую и проверяет max-height/overflow.
-export function PipelineCard({ run, sessionId, isMobile }: {
+export function PipelineCard({ run, sessionId, isMobile, chatTaskId }: {
   run: FeatureRun;
   sessionId: string;
   isMobile: boolean;
+  // Задача-владелец чата (Session.TaskId): роль «этот чат — …» в мете (R2 major 5).
+  chatTaskId?: string | null;
 }) {
   return (
     <div
@@ -259,7 +263,8 @@ export function PipelineCard({ run, sessionId, isMobile }: {
         todos={[]}
         runs={[run]}
         isMobile={isMobile}
-        variant="card"
+        variant="pipeline"
+        chatTaskId={chatTaskId}
         headerPad="0"
         bodyPad="0"
         headerBorder="none"
@@ -274,11 +279,13 @@ interface FeatureBannerProps {
   // Проект чата — область запроса индекса (null — чат вне проектов).
   projectId: string | null;
   isMobile?: boolean;
+  // Задача-владелец чата (Session.TaskId): роль «этот чат — …» в мете тела (R2 major 5).
+  chatTaskId?: string | null;
 }
 
 // Плашка фичи в слоте баннеров ChatPanel. Возвращает null, когда плашки нет
 // (флаги выключены или чат не принадлежит ни одной фиче).
-export function FeatureBanner({ sessionId, projectId, isMobile = false }: FeatureBannerProps) {
+export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTaskId }: FeatureBannerProps) {
   // Гейт: оба флага (режим «Исполнение фичи» + «Обзор фич»).
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   const featuresOverview = useFeature(FLAGS.featuresOverview);
@@ -585,7 +592,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false }: Featur
 
       {/* n1: «Конвейер ▾» (ключевой чат) — карточка .fsx РЯДОМ с плашкой (вне её div). */}
       {isKey && fxOpen && run && (
-        <PipelineCard run={run} sessionId={sessionId} isMobile={isMobile} />
+        <PipelineCard run={run} sessionId={sessionId} isMobile={isMobile} chatTaskId={chatTaskId} />
       )}
     </>
   );

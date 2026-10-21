@@ -82,10 +82,11 @@ describe('TodoPlanView: живая + фичи → короткая строка'
         ts: 1700000000000,
       })),
     );
-    // Есть: заголовок, прогресс, «Подробнее»
+    // Есть: заголовок, прогресс, «Подробнее» (R2 minor 4: видимая подпись, не title —
+    // >Подробнее< — текстовый узел; title="Подробнее" оканчивается кавычкой, не '<').
     expect(html).toContain('План хода');
     expect(html).toContain('1 из 3');
-    expect(html).toContain('Подробнее');
+    expect(html).toMatch(/>Подробнее</);
     // Нет: слов состояния фичи (ModeSwitcher/FeaturePicker/FeatureCardFooter)
     expect(html).not.toContain('Исполнение фичи');
     expect(html).not.toContain('Задачи фичи в трекере');
@@ -165,6 +166,21 @@ describe('TodoPlanView: прошлая → строка-снимок', () => {
     expect(html).toContain('1/3');
     expect(html).toContain('снимок');
     expect(html).toContain('aria-expanded="false"');
+  });
+
+  // R2 minor 9: время снимка «· HH:MM» (макет «· 16:12»). ts=1700000000000 → 22:13 в UTC
+  // (прогон под TZ=UTC); формат — toLocaleTimeString('ru-RU', {hour,minute}).
+  it('время снимка «· HH:MM» (22:13 в UTC)', () => {
+    runsFlag.value = [runFixture('feat-1')];
+    const html = renderToStaticMarkup(
+      wrap(createElement(TodoPlanViewForTest, {
+        todos: todos(),
+        isMobile: false,
+        isCurrentPlan: false,
+        ts: 1700000000000,
+      })),
+    );
+    expect(html).toContain('· 22:13');
   });
 
   it('клик раскрывает чек-лист (aria-expanded=true, появляются пункты)', () => {

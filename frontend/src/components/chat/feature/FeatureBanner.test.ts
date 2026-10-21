@@ -171,7 +171,8 @@ describe('featureBannerModel: тон, статус, счётчик, роль, к
 
   it('ключевой чат: кнопка «Конвейер ▾» (kind pipeline), не «Ключевой чат»', () => {
     const m = featureBannerModel(feat({ keySessionId: 'chat-key' }), link(), 'chat-key');
-    expect(m.button).toEqual({ label: 'Конвейер', kind: 'pipeline' });
+    // R2 minor 8: «Конвейер» → «Исполнение».
+    expect(m.button).toEqual({ label: 'Исполнение', kind: 'pipeline' });
   });
 
   it('не-ключевой чат с живым ключевым: кнопка «Ключевой чат» (kind key) — переход, не конвейер', () => {
@@ -397,7 +398,8 @@ describe('FeatureBanner: рендер (SSR)', () => {
     seedIndex(feat({ keySessionId: 'chat-key' }), link({ kind: 'orchestrator', stepRef: null, lane: null }), 'chat-key', 'p1');
     const html = renderBanner('chat-key', 'p1');
     expect(html).toContain('data-testid="feature-pipeline"');
-    expect(html).toContain('Конвейер');
+    // R2 minor 8: «Конвейер» → «Исполнение».
+    expect(html).toContain('Исполнение');
     expect(html).not.toContain('data-testid="feature-go"');
     expect(html).not.toContain('Ключевой чат');
   });

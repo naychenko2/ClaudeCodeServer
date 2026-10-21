@@ -52,7 +52,7 @@ function run(over: Partial<FeatureRun> = {}): FeatureRun {
 }
 
 // Рендер тела: счётчик шапки — в шапке (controls) на обеих поверхностях.
-function renderBody(runs: FeatureRun[], variant: 'pill' | 'card', sessionId: string): string {
+function renderBody(runs: FeatureRun[], variant: 'pill' | 'pipeline', sessionId: string): string {
   // Стор: срез фич → modeFor(sessionId)='feature'; выбор не задан → runs[0].
   __test.setRuns(sessionId, runs);
   return renderToStaticMarkup(
@@ -64,7 +64,7 @@ describe('FeatureModeBody — F-pop-a (счётчик убран, новая к�
   it('обе поверхности: счётчика «acc/tot · ↺N» в шапке нет', () => {
     const r = run({ stepsAccepted: 2, stepsTotal: 4, verdicts: { accepted: 2, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 1 } });
     const pill = renderBody([r], 'pill', 'sess-pill');
-    const card = renderBody([r], 'card', 'sess-card');
+    const card = renderBody([r], 'pipeline', 'sess-card');
     // Счётчик шагов «2/4 · ↺1» из шапки убран (на обеих поверхностях).
     expect(pill).not.toContain('2/4 · ↺1');
     expect(card).not.toContain('2/4 · ↺1');
@@ -76,10 +76,11 @@ describe('FeatureModeBody — F-pop-a (счётчик убран, новая к�
   it('обе поверхности: тег статуса и переключатель на месте', () => {
     const r = run({ state: 'running' });
     const pill = renderBody([r], 'pill', 'sess-pill2');
-    const card = renderBody([r], 'card', 'sess-card2');
-    // Тег статуса (StatusTag) — в шапке фичи (data-testid="feature-run-status").
-    expect(pill).toContain('feature-run-status');
-    expect(card).toContain('feature-run-status');
+    const card = renderBody([r], 'pipeline', 'sess-card2');
+    // Тег статуса (StatusTag) — в шапке фичи (R2 minor 1: отдельный id feature-run-status-tag;
+    // строка состояния несёт feature-run-status-line).
+    expect(pill).toContain('feature-run-status-tag');
+    expect(card).toContain('feature-run-status-tag');
     // Переключатель «План хода · Исполнение фичи» — в шапке.
     expect(pill).toContain('Исполнение фичи');
     expect(card).toContain('Исполнение фичи');
@@ -88,7 +89,7 @@ describe('FeatureModeBody — F-pop-a (счётчик убран, новая к�
   it('ноль шагов: счётчика «0/— · ↺N» в шапке нет', () => {
     const r = run({ stepsAccepted: 0, stepsTotal: 0, verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 2 } });
     const pill = renderBody([r], 'pill', 'sess-pill0');
-    const card = renderBody([r], 'card', 'sess-card0');
+    const card = renderBody([r], 'pipeline', 'sess-card0');
     expect(pill).not.toContain('0/— · ↺2');
     expect(card).not.toContain('0/— · ↺2');
   });

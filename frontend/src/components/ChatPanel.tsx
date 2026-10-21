@@ -2092,7 +2092,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       streaming={isWaiting && i === items.length - 1}
       isLastResult={i === lastResultIndex}
       planPill={!showWaiting && i === lastResultIndex && (taskTodos.length > 0 || featureRuns.length > 0)
-        ? <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} />
+        ? <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} chatTaskId={session.taskId ?? null} />
         : undefined}
       canRetryInterrupted={i === retryInterruptedIdx}
       hideAbortBanner={shouldHideAbortBanner(item, items[i + 1])}
@@ -2809,7 +2809,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       {/* Плашка фичи: чат принадлежит фиче (индекс фич) — где фича, её статус и
           куда вернуться в ключевой чат. Под двумя флагами (режим «Исполнение фичи»
           + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null). */}
-      <FeatureBanner sessionId={session.id} projectId={session.projectId ?? null} isMobile={!!isMobile} />
+      <FeatureBanner sessionId={session.id} projectId={session.projectId ?? null} isMobile={!!isMobile} chatTaskId={session.taskId ?? null} />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса
@@ -2950,7 +2950,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 индикатора не оставалось места даже под аватар и время. Половина — потолок,
                 а не ширина: на широкой колонке пилюля упирается в свой maxWidth раньше */}
             <div style={{ marginLeft: 'auto', minWidth: 0, maxWidth: '50%', display: 'flex' }}>
-              <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} />
+              <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} chatTaskId={session.taskId ?? null} />
             </div>
           </div>
         )}

@@ -107,7 +107,7 @@ function modelNonKey(): FeatureBannerModel {
 function modelKey(): FeatureBannerModel {
   return {
     tone: 'run', glyph: 'run', status: 'Производство · идёт', counter: '1/3 ↺1',
-    role: 'ключевой', isKey: true, button: { label: 'Конвейер', kind: 'pipeline' },
+    role: 'ключевой', isKey: true, button: { label: 'Исполнение', kind: 'pipeline' },
   };
 }
 

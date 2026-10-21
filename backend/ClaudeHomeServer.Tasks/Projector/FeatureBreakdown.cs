@@ -171,10 +171,11 @@ public sealed record FeatureBreakdown(
 
             // Агрегат записей расхода по тому же ключу: токены (вход+выход), стоимость (надёжная),
             // признак ненадёжной записи. Ключ записи null/пусто → запись в этот разрез не входит.
-            // «Цена ненадёжна» — ОДИН признак (SpendCostReliability, флаг UnreliableCost на записи):
-            // та же модель в списке `Spend:UnreliableCostModels`, что в итоге расхода (SpendFeatureReader)
-            // — иначе разрез спорил бы с итогом (deepseek cost=2.0: итог 0, разрез 2.0, ревью Глеба).
-            // Плюс «нет данных о цене» (Source != free, CostUsd = null) — консервативный null группы.
+            // Надёжная стоимость — единая точка правды (SpendCostReliability.ReliableCostOf,
+            // доработка Б9c): 0 — free, null — ненадёжно (флаг UnreliableCost / нет цены при
+            // Source != free / NaN или ∞). На неё же переходит итог расхода (SpendFeatureReader)
+            // и сплиттер (SharedSpendSplitter) — своих формул «цена надёжна» больше нет,
+            // иначе разрез спорил бы с итогом (deepseek cost=2.0: итог 0, разрез 2.0, ревью Глеба).
             var spend = new Dictionary<string, (long Tokens, double Cost, bool HasUnreliable)>();
             if (records is not null)
             {
@@ -188,10 +189,11 @@ public sealed record FeatureBreakdown(
                         a = (0, 0, false);
                     // Минор Б9b: кламп отрицательных токенов и в разрезе (как в итоге,
                     // SpendFeatureReader): сбой CLI с отрицательным числом не тянет группу в минус.
+                    // Надёжная стоимость: null → 0 в сумму + HasUnreliable (консервативный null группы).
+                    var cost = SpendCostReliability.ReliableCostOf(r);
                     a = (a.Tokens + Math.Max(0, r.InputTokens) + Math.Max(0, r.OutputTokens),
-                        a.Cost + (r.Source == SpendSources.Free ? 0 : (r.CostUsd ?? 0)),
-                        a.HasUnreliable || r.UnreliableCost
-                            || (r.Source != SpendSources.Free && r.CostUsd is null));
+                        a.Cost + (double)(cost ?? 0),
+                        a.HasUnreliable || cost is null);
                     spend[key] = a;
                 }
             }

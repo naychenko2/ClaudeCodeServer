@@ -33,4 +33,20 @@ public static class SpendCostReliability
             .ToArray();
         return models.Any(p => model.Contains(p, StringComparison.OrdinalIgnoreCase));
     }
+
+    // Надёжная стоимость ЗАПИСИ (decimal?) — единая точка правды для денег (доработка Б9c,
+    // решение Александра): на неё переходят итог расхода (ComputeTotals), разрез (FeatureBreakdown)
+    // и сплиттер (SharedSpendSplitter) — своих формул «цена надёжна» больше нет.
+    //   0m  — free (локальная модель): надёжный 0, даже если сырая запись несёт цену;
+    //   null — цена ненадёжна: (1) флаг UnreliableCost (модель в списке `Spend:UnreliableCostModels`),
+    //          (2) нет цены при Source != free (CLI не отчитал), (3) CostUsd не конечен (NaN или ∞);
+    //   иначе (decimal)CostUsd.
+    public static decimal? ReliableCostOf(FeatureSpendRecord r)
+    {
+        if (r.Source == SpendSources.Free) return 0m;
+        if (r.UnreliableCost) return null;
+        if (r.CostUsd is null) return null;
+        if (double.IsNaN(r.CostUsd.Value) || double.IsInfinity(r.CostUsd.Value)) return null;
+        return (decimal)r.CostUsd.Value;
+    }
 }

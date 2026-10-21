@@ -16,6 +16,13 @@ namespace ClaudeHomeServer.Services.Spend;
 // в `sessionIds` (ИЛИ, не И: ход оркестраторского чата задачи не имеет — его
 // ловит чат; задача, исполнявшаяся в чате вне списка, ловится задачей). Оба набора
 // пусты — срез пуст. Фильтр владельца (`OwnerId == ownerId`) — защита в глубину.
+//
+// `excludeSessionIds` (обязательный, без значения по умолчанию: каждый вызов обязан решить
+// явно) — ось исключения, ГЛАВНЕЕ обеих осей (решение Александра, доработка Б9c): запись
+// с `SessionId ∈ excludeSessionIds` не входит в срез, даже если её задача в `taskIds`
+// (в проде это реальность: запись общего чата несёт TaskId задачи фичи, а чат — общий).
+// Правило Match: `owner == ownerId && SessionId ∉ exclude && (TaskId ∈ taskIds || SessionId ∈
+// sessionIds)`. Распространяется и на дневные строки (`DailySpendRow.SessionId` есть).
 public interface ISpendFeatureReader
 {
     // Итог расхода фичи: токены (вход+выход крупно, кэш отдельно — решение Андрея 20.10)
@@ -24,20 +31,22 @@ public interface ISpendFeatureReader
     // Slice (один проход), Totals/Records держим для Б9c (Records — деление расхода общего
     // оркестраторского чата) и для тестов слоёв.
     FeatureSpendTotals Totals(string ownerId, IReadOnlyCollection<string> taskIds,
-        IReadOnlyCollection<string> sessionIds, DateTime? from);
+        IReadOnlyCollection<string> sessionIds, IReadOnlyCollection<string> excludeSessionIds,
+        DateTime? from);
 
     // Записи по ходам того же среза (время, чат, задача, персона, модель, токены,
     // стоимость, источник) — для шага Б9c: расход ОБЩЕГО оркестраторского чата
     // делится поровну между активными фичами, и деление делается по этим записям.
     IReadOnlyList<FeatureSpendRecord> Records(string ownerId, IReadOnlyCollection<string> taskIds,
-        IReadOnlyCollection<string> sessionIds, DateTime? from);
+        IReadOnlyCollection<string> sessionIds, IReadOnlyCollection<string> excludeSessionIds,
+        DateTime? from);
 
     // Срез одним проходом: итог + записи из ОДНОГО набора записей (доработка Б9b, минор):
     // два отдельных вызова Totals/Records — два скана стора, и запись, попавшая между ними,
     // попадала в разрез, но не в итог (окно рассогласования). Возвращает (итог, записи).
     (FeatureSpendTotals Totals, IReadOnlyList<FeatureSpendRecord> Records) Slice(
         string ownerId, IReadOnlyCollection<string> taskIds, IReadOnlyCollection<string> sessionIds,
-        DateTime? from);
+        IReadOnlyCollection<string> excludeSessionIds, DateTime? from);
 }
 
 // Итог расхода фичи. `From` — самая ранняя дата, с которой в срезе есть данные

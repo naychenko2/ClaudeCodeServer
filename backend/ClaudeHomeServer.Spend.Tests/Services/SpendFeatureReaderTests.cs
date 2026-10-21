@@ -54,7 +54,7 @@ public class SpendFeatureReaderTests : IDisposable
         store.Record(Rec(ts, owner: "u1"));
         store.Record(Rec(ts, owner: "u2"));
 
-        var totals = NewReader(store).Totals("u1", ["t1"], ["s1"], null);
+        var totals = NewReader(store).Totals("u1", ["t1"], ["s1"], [], null);
 
         // Только запись u1: 10+5+100+20 = 135; без фильтра владельца было бы 270.
         Assert.Equal(135, TotalTokens(totals));
@@ -69,7 +69,7 @@ public class SpendFeatureReaderTests : IDisposable
         var ts = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
         store.Record(Rec(ts, model: "qwen3:8b", source: SpendSources.Free, cost: 5.0));
 
-        var totals = NewReader(store).Totals("u1", [], ["s1"], null);
+        var totals = NewReader(store).Totals("u1", [], ["s1"], [], null);
 
         Assert.Equal(0, totals.CostUsd);
         Assert.False(totals.CostPartial);
@@ -89,7 +89,7 @@ public class SpendFeatureReaderTests : IDisposable
         // Локальная модель (Source=free) с «glm» в имени; сырая запись несёт цену (CLI отчитал).
         store.Record(Rec(ts, model: "glm-local:8b", source: SpendSources.Free, cost: 5.0));
 
-        var totals = NewReader(store).Totals("u1", [], ["s1"], null);
+        var totals = NewReader(store).Totals("u1", [], ["s1"], [], null);
 
         // free выше «ненадёжно»: надёжный 0, не ненадёжная модель.
         Assert.Equal(0, totals.CostUsd);
@@ -106,7 +106,7 @@ public class SpendFeatureReaderTests : IDisposable
         store.Record(Rec(ts, model: "glm-4.5", cost: 3.0));
         store.Record(Rec(ts, model: "claude-opus-4", cost: 1.0));
 
-        var totals = NewReader(store).Totals("u1", [], ["s1"], null);
+        var totals = NewReader(store).Totals("u1", [], ["s1"], [], null);
 
         // Все токены в сумме (3 × 135), в деньги — только надёжная запись (1.0).
         Assert.Equal(405, TotalTokens(totals));
@@ -132,7 +132,7 @@ public class SpendFeatureReaderTests : IDisposable
             .Build();
         var reader = new SpendFeatureReader(store, config);
 
-        var totals = reader.Totals("u1", [], ["s1"], null);
+        var totals = reader.Totals("u1", [], ["s1"], [], null);
 
         // Конфиг заменил дефолт: deepseek теперь «надёжен» (2.5 в сумму), kimi — нет.
         Assert.Equal(3.5, totals.CostUsd);
@@ -154,7 +154,7 @@ public class SpendFeatureReaderTests : IDisposable
         // Чужая фича: задача t9, чат s9.
         store.Record(Rec(ts, task: "t9", session: "s9"));
 
-        var totals = NewReader(store).Totals("u1", ["t1"], ["s0"], null);
+        var totals = NewReader(store).Totals("u1", ["t1"], ["s0"], [], null);
 
         // Ход t1 (по задаче) + ход s0 (по чату); чужая фича t9/s9 — нет.
         Assert.Equal(270, TotalTokens(totals));
@@ -167,7 +167,7 @@ public class SpendFeatureReaderTests : IDisposable
         var ts = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
         store.Record(Rec(ts));
 
-        var totals = NewReader(store).Totals("u1", [], [], null);
+        var totals = NewReader(store).Totals("u1", [], [], [], null);
 
         Assert.Equal(0, TotalTokens(totals));
         Assert.Null(totals.From);
@@ -185,7 +185,7 @@ public class SpendFeatureReaderTests : IDisposable
         store.Record(Rec(after));
 
         var from = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
-        var totals = NewReader(store).Totals("u1", [], ["s1"], from);
+        var totals = NewReader(store).Totals("u1", [], ["s1"], [], from);
 
         // Граница включительная: at + after, before — нет.
         Assert.Equal(270, TotalTokens(totals));
@@ -205,7 +205,7 @@ public class SpendFeatureReaderTests : IDisposable
         // День 2026-07-05 старше окна (30 дней) — свёрнут в дневной агрегат.
         store.RollupOlderThan(new DateOnly(2026, 9, 1));
 
-        var totals = NewReader(store).Totals("u1", [], ["s1"], null);
+        var totals = NewReader(store).Totals("u1", [], ["s1"], [], null);
 
         // Две записи (одна детальная, одна свёрнутая) = 270 токенов, без двойного счёта.
         Assert.Equal(270, TotalTokens(totals));
@@ -222,7 +222,7 @@ public class SpendFeatureReaderTests : IDisposable
 
         // from задан раньше, чем есть данные: From — не from, а дата первой записи.
         var from = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc);
-        var totals = NewReader(store).Totals("u1", [], ["s1"], from);
+        var totals = NewReader(store).Totals("u1", [], ["s1"], [], from);
 
         Assert.Equal(new DateOnly(2026, 10, 1), totals.From);
     }
@@ -237,7 +237,7 @@ public class SpendFeatureReaderTests : IDisposable
         store.Record(Rec(ts, task: "t1", session: "s1", persona: "p1", model: "claude-opus-4", cost: 1.0));
         store.Record(Rec(ts, task: null, session: "s0", persona: "p2", model: "deepseek-chat", cost: 2.0));
 
-        var records = NewReader(store).Records("u1", ["t1"], ["s0"], null);
+        var records = NewReader(store).Records("u1", ["t1"], ["s0"], [], null);
 
         // Оба хода в срезе (t1 по задаче, s0 по чату), порядок по времени.
         Assert.Equal(2, records.Count);
@@ -269,10 +269,95 @@ public class SpendFeatureReaderTests : IDisposable
         store.Record(Rec(ts, input: -50, output: -10));
         store.Record(Rec(ts, input: 10, output: 5));
 
-        var totals = NewReader(store).Totals("u1", ["t1"], ["s1"], null);
+        var totals = NewReader(store).Totals("u1", ["t1"], ["s1"], [], null);
 
         // Отрицательный вклад кламится в 0: итог = только нормальная запись (10+5), не в минус.
         Assert.Equal(10, totals.InputTokens);
         Assert.Equal(5, totals.OutputTokens);
+    }
+
+    // --- доработка Б9c, шаг 1: ось исключения (excludeSessionIds) + ReliableCostOf ---
+    //
+    // Правило Match: `owner == ownerId && SessionId ∉ exclude && (TaskId ∈ taskIds || SessionId ∈
+    // sessionIds)`. Исключение ГЛАВНЕЕ обеих осей: запись общего чата, несущая TaskId задачи
+    // фичи, не должна входить в срез (она уходит в долю). Мутация «убрать проверку exclude»
+    // краснит все тесты ниже.
+
+    // Запись с TaskId ∈ taskIds, но SessionId ∈ exclude → не в срез (исключение главнее task-оси).
+    [Fact]
+    public void Slice_ЗадачаВСрезе_НоЧатВExclude_НеПопадает()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+        // Запись: TaskId=t1 (в taskIds), SessionId=sX (в exclude) → исключение главнее task-оси.
+        store.Record(Rec(ts, task: "t1", session: "sX"));
+
+        var totals = NewReader(store).Totals("u1", ["t1"], [], ["sX"], null);
+
+        // Запись с TaskId в taskIds, но SessionId в exclude → не в срез (исключение главнее).
+        Assert.Equal(0, TotalTokens(totals));
+    }
+
+    // SessionId одновременно в sessionIds и в exclude → не в срез (исключение главнее session-оси).
+    [Fact]
+    public void Slice_ЧатВСрезеИВExclude_НеПопадает()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+        // Запись: SessionId=s1 (и в sessionIds, и в exclude), TaskId=null.
+        store.Record(Rec(ts, task: null, session: "s1"));
+
+        var totals = NewReader(store).Totals("u1", [], ["s1"], ["s1"], null);
+
+        // SessionId одновременно в sessionIds и exclude → не в срез.
+        Assert.Equal(0, TotalTokens(totals));
+    }
+
+    // То же для дневной строки: TaskId ∈ taskIds, SessionId ∈ exclude → не в срез.
+    [Fact]
+    public void Slice_ДневнаяСтрока_ЗадачаВСрезе_НоЧатВExclude_НеПопадает()
+    {
+        var store = NewStore();
+        var oldTs = new DateTime(2026, 7, 5, 12, 0, 0, DateTimeKind.Utc);
+        // Дневная строка: TaskId=t1 (в taskIds), SessionId=sX (в exclude) → исключение главнее.
+        store.Record(Rec(oldTs, task: "t1", session: "sX"));
+        // День 2026-07-05 старше окна (30 дней) — свёрнут в дневной агрегат (SessionId/TaskId сохраняются).
+        store.RollupOlderThan(new DateOnly(2026, 9, 1));
+
+        var totals = NewReader(store).Totals("u1", ["t1"], [], ["sX"], null);
+
+        // Дневная строка с TaskId в taskIds, но SessionId в exclude → не в срез.
+        Assert.Equal(0, TotalTokens(totals));
+    }
+
+    // NaN-цена (Source != free) → ReliableCostOf = null → costPartial, стоимость не в сумму.
+    [Fact]
+    public void Totals_NanЦена_CostPartial()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+        // Запись с NaN-ценой (Source=chat-turn) → ReliableCostOf = null (NaN не конечен).
+        store.Record(Rec(ts, model: "claude-opus-4", cost: double.NaN));
+
+        var totals = NewReader(store).Totals("u1", ["t1"], ["s1"], [], null);
+
+        Assert.True(totals.CostPartial, "NaN-цена → ненадёжно → costPartial");
+        // NaN-цена не в сумму.
+        Assert.Equal(0, totals.CostUsd);
+    }
+
+    // ∞-цена (Source != free) → ReliableCostOf = null → costPartial.
+    [Fact]
+    public void Totals_InfinityЦена_CostPartial()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(Rec(ts, model: "claude-opus-4", cost: double.PositiveInfinity));
+
+        var totals = NewReader(store).Totals("u1", ["t1"], ["s1"], [], null);
+
+        Assert.True(totals.CostPartial, "∞-цена → ненадёжно → costPartial");
+        // ∞-цена не в сумму.
+        Assert.Equal(0, totals.CostUsd);
     }
 }

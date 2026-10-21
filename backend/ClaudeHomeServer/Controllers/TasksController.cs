@@ -675,7 +675,7 @@ public class TasksController(
         FeatureSpendTotals? spendTotals = null;
         IReadOnlyList<FeatureSpendRecord>? spendRecords = null;
         if (spend is not null)
-            (spendTotals, spendRecords) = spend.Slice(UserId, taskIds, sessionIds, from: run.Epic.CreatedAt);
+            (spendTotals, spendRecords) = spend.Slice(UserId, taskIds, sessionIds, [], from: run.Epic.CreatedAt);
 
         // Б9c: доля ОБЩИХ (оркестраторских) чатов фичи. «Общий чат» — epic-level чат (kind
         // key/curator/orchestrator), входящий в 2+ фичи владельца: key-чат (сессия с TaskId ==
@@ -718,7 +718,7 @@ public class TasksController(
                 foreach (var (chatId, feats) in sharedChats)
                 {
                     // Записи расхода этого общего чата: только чат (taskIds пуст), от создания фичи.
-                    var sharedRecords = spend!.Records(UserId, [], [chatId], from: run.Epic.CreatedAt);
+                    var sharedRecords = spend!.Records(UserId, [], [chatId], [], from: run.Epic.CreatedAt);
                     if (sharedRecords.Count == 0) continue;
                     // Интервалы активности ВСЕХ фич, в которые чат входит (знаменатель деления):
                     // journal — по полному журналу фичи; approx — по интервалам её задач.

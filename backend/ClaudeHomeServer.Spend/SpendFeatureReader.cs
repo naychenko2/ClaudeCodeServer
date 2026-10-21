@@ -65,20 +65,22 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
     }
 
     public FeatureSpendTotals Totals(string ownerId, IReadOnlyCollection<string> taskIds,
-        IReadOnlyCollection<string> sessionIds, DateTime? from) =>
-        ComputeTotals(Matched(ownerId, taskIds, sessionIds, from));
+        IReadOnlyCollection<string> sessionIds, IReadOnlyCollection<string> excludeSessionIds,
+        DateTime? from) =>
+        ComputeTotals(Matched(ownerId, taskIds, sessionIds, excludeSessionIds, from));
 
     public IReadOnlyList<FeatureSpendRecord> Records(string ownerId, IReadOnlyCollection<string> taskIds,
-        IReadOnlyCollection<string> sessionIds, DateTime? from) =>
-        [.. Matched(ownerId, taskIds, sessionIds, from).OrderBy(r => r.Timestamp).ToList()];
+        IReadOnlyCollection<string> sessionIds, IReadOnlyCollection<string> excludeSessionIds,
+        DateTime? from) =>
+        [.. Matched(ownerId, taskIds, sessionIds, excludeSessionIds, from).OrderBy(r => r.Timestamp).ToList()];
 
     // Срез одним проходом (минор доработки Б9b): один Matched → и итог, и записи из одного
     // набора — без окна рассогласования между двумя отдельными сканами стора.
     public (FeatureSpendTotals Totals, IReadOnlyList<FeatureSpendRecord> Records) Slice(
         string ownerId, IReadOnlyCollection<string> taskIds, IReadOnlyCollection<string> sessionIds,
-        DateTime? from)
+        IReadOnlyCollection<string> excludeSessionIds, DateTime? from)
     {
-        var records = Matched(ownerId, taskIds, sessionIds, from).OrderBy(r => r.Timestamp).ToList();
+        var records = Matched(ownerId, taskIds, sessionIds, excludeSessionIds, from).OrderBy(r => r.Timestamp).ToList();
         return (ComputeTotals(records), records);
     }
 
@@ -100,21 +102,21 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
             totals.CacheReadTokens += Math.Max(0, r.CacheReadTokens);
             totals.CacheCreationTokens += Math.Max(0, r.CacheCreationTokens);
 
-            // «Цена ненадёжна» — два случая: (1) модель в списке `Spend:UnreliableCostModels`
-            // (флаг UnreliableCost, единая точка правды SpendCostReliability), (2) запись БЕЗ
-            // цены (CLI не отчитал, Source != free). В обоих: токены в сумму, стоимость — нет,
-            // CostPartial, модель в hidden. Иначе запись без цены давала бы в итоге 0
-            // (CostUsd ?? 0), а в разрезе (FeatureBreakdown) null — два разных утверждения
-            // о цене в одном ответе (ревью Глеба, major).
-            if (r.UnreliableCost || (r.Source != SpendSources.Free && r.CostUsd is null))
+            // Надёжная стоимость записи — единая точка правды (SpendCostReliability.ReliableCostOf):
+            // 0 — free (надёжный 0), null — ненадёжно (флаг UnreliableCost / нет цены при
+            // Source != free / NaN или ∞). В null: токены в сумму, стоимость — нет, CostPartial,
+            // модель в hidden. Иначе запись без цены давала бы в итоге 0 (CostUsd ?? 0), а в
+            // разрезе (FeatureBreakdown) null — два разных утверждения о цене в одном ответе
+            // (ревью Глеба, major).
+            var cost = SpendCostReliability.ReliableCostOf(r);
+            if (cost is null)
             {
                 if (r.Model is not null) hidden.Add(r.Model);
                 totals.CostPartial = true;
             }
             else
             {
-                // free — надёжно 0 (даже если сырая запись несёт цену), остальное — как есть.
-                totals.CostUsd += r.Source == SpendSources.Free ? 0 : (r.CostUsd ?? 0);
+                totals.CostUsd += (double)cost;
             }
 
             var date = DateOnly.FromDateTime(r.Timestamp);
@@ -130,10 +132,12 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
     // детальные ходы (точное время). День, уже свёрнутый в агрегаты, в деталях
     // пропускается — инвариант стора «день либо в деталях, либо в daily».
     private List<FeatureSpendRecord> Matched(string ownerId, IReadOnlyCollection<string> taskIds,
-        IReadOnlyCollection<string> sessionIds, DateTime? from)
+        IReadOnlyCollection<string> sessionIds, IReadOnlyCollection<string> excludeSessionIds,
+        DateTime? from)
     {
         var tasks = new HashSet<string>(taskIds ?? [], StringComparer.Ordinal);
         var sessions = new HashSet<string>(sessionIds ?? [], StringComparer.Ordinal);
+        var exclude = new HashSet<string>(excludeSessionIds ?? [], StringComparer.Ordinal);
         if (tasks.Count == 0 && sessions.Count == 0) return [];
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
@@ -143,14 +147,14 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         var dailyDates = new HashSet<string>(StringComparer.Ordinal);
         foreach (var d in _store.DailyBetween(windowFrom, today))
         {
-            if (!Match(d.OwnerId, d.TaskId, d.SessionId, ownerId, tasks, sessions)) continue;
+            if (!Match(d.OwnerId, d.TaskId, d.SessionId, ownerId, tasks, sessions, exclude)) continue;
             if (DateOnly.TryParse(d.Date, out var date)) dailyDates.Add(date.ToString("yyyy-MM-dd"));
             result.Add(ToRecord(d, date.ToDateTime(TimeOnly.MinValue)));
         }
         foreach (var r in _store.DetailsBetween(windowFrom, today))
         {
             if (from is not null && r.Timestamp < from) continue;
-            if (!Match(r.OwnerId, r.TaskId, r.SessionId, ownerId, tasks, sessions)) continue;
+            if (!Match(r.OwnerId, r.TaskId, r.SessionId, ownerId, tasks, sessions, exclude)) continue;
             // День уже в агрегатах — детали дня не считаем (нет двойного счёта).
             if (dailyDates.Contains(r.Date.ToString("yyyy-MM-dd"))) continue;
             result.Add(ToRecord(r, r.Timestamp));
@@ -158,12 +162,15 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         return result;
     }
 
-    // Запись в срезе: её задача — одна из задач фичи, ИЛИ её чат — один из чатов фичи.
+    // Запись в срезе: её задача — одна из задач фичи, ИЛИ её чат — один из чатов фичи;
+    // при этом её чат НЕ в `exclude` (исключение ГЛАВНЕЕ обеих осей: запись общего чата,
+    // несущая TaskId задачи фичи, не должна входить в срез по taskIds — она уходит в долю).
     // Пустой набор = «фильтра по этой оси нет», но если оба набора пусты — срез пуст
     // (у фичи без задач и чатов расхода нет).
     private static bool Match(string ownerId, string? taskId, string? sessionId, string owner,
-        HashSet<string> tasks, HashSet<string> sessions) =>
+        HashSet<string> tasks, HashSet<string> sessions, HashSet<string> exclude) =>
         ownerId == owner
+        && (sessionId is null || !exclude.Contains(sessionId))
         && ((taskId is not null && tasks.Contains(taskId))
           || (sessionId is not null && sessions.Contains(sessionId)));
 

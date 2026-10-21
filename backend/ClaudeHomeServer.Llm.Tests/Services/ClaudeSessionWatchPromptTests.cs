@@ -90,6 +90,7 @@ public class ClaudeSessionWatchPromptTests : IDisposable
             TasksMcp: null,
             WatchMcp: watch,
             Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            SystemPromptViaFile: false,
             HttpMcpEnabledProvider: httpEnabled);
         var session = new ClaudeSession(new Session(), context);
         await using var _ = session;

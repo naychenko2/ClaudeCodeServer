@@ -334,6 +334,9 @@ public sealed record LlmSessionContext(
     // Tool-ключ «browser» с дефолтом по роли (тестировщику включён). true — как раньше:
     // чат без персоны и все прочие пути ничего не теряют.
     bool BrowserEnabled = true,
+    // Системный промпт хода едет файлом --append-system-prompt-file, а не аргументом
+    // (Llm:SystemPromptViaFile, дефолт true; false — прежний путь аргументом).
+    bool SystemPromptViaFile = true,
     // Корень профиля claude CLI (CLAUDE_CONFIG_DIR) этого хода: оттуда берутся глобальный
     // CLAUDE.md и каталог скиллов для блока «слой CLI». Резолвится в SessionManager
     // (ConfigRootFor знает раскладку профилей и песочницы), сюда приходит готовым;

@@ -1324,6 +1324,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // как git/kb; чат без персоны получает браузер как раньше — ручную проверку страницы
     // человек делает из своего чата. Решение зависит только от персоны, поэтому постоянно
     // в рамках сессии (оно входит в сигнатуру прогона — см. ClaudeRuntimeSettings).
+    // Единственное место чтения Llm:SystemPromptViaFile (нет ключа = файл включён)
+    private bool SystemPromptViaFile =>
+        !bool.TryParse(_config["Llm:SystemPromptViaFile"], out var viaFile) || viaFile;
+
     private bool BrowserEnabled(string? ownerId, Persona? persona) =>
         persona is null || _bindings.SectionEnabled(ownerId, persona, "browser");
 
@@ -4598,6 +4602,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             CodeGraphMcp: codeGraphMcp,
             DifyMcp: difyMcp,
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
+            SystemPromptViaFile: SystemPromptViaFile,
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
             ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
             PersistSessions: SaveSessions,
@@ -6207,6 +6212,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 CodeGraphMcp: null,
                 DifyMcp: difyMcp,
                 BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
+                SystemPromptViaFile: SystemPromptViaFile,
                 CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona),
                 PersistSessions: SaveSessions,
@@ -6290,6 +6296,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 CodeGraphMcp: codeGraphMcp,
                 DifyMcp: difyMcp,
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
+                SystemPromptViaFile: SystemPromptViaFile,
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona),
                 PersistSessions: SaveSessions,

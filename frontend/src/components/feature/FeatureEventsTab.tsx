@@ -15,14 +15,17 @@
 // Формулировка строится на фронте из `kind` + `stepRef`/`role` (бэк не подписывает).
 
 import { useMemo, useState } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, FS, SP, FONT } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
+import { roleLabel } from '../../lib/roleLabel';
 import { dateOnly, hhmm } from '../chat/feature/featureTime';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { expandFeaturePageEvents } from '../../lib/featurePage';
 import { ExecutorAvatar } from './FeatureTimelineBits';
 import { NavTargetPair } from './NavTargetButton';
+import { Button } from '../ui/Button';
 import type { FeatureEvent } from '../../types/featureIndex';
 
 // Порог «Показать все» (макет: LIM=8). По умолчанию — 8 последних событий.
@@ -53,9 +56,12 @@ export function eventPhrase(e: FeatureEvent): string {
   const ref = e.stepRef ?? '';
   switch (e.kind) {
     case 'created':
-      // Эпик (role=feature/пусто) — «создание фичи»; иначе — по роли.
+      // Эпик (role=feature/пусто) — «создание фичи»; иначе — по роли. Роль —
+      // русским словом через roleLabel (не сырой step/rework); роль вне словаря
+      // (roleLabel → '') — нейтральное «создана задача» без сырого слова.
       if (!e.role || e.role === 'feature') return 'создание фичи';
-      return `создание: ${e.role}`;
+      const role = roleLabel(e.role, e.stepRef ?? null, null);
+      return role ? `создание: ${role}` : 'создана задача';
     case 'started':
       return ref ? `старт ${ref}` : 'старт';
     case 'completed':
@@ -122,11 +128,13 @@ export function groupEventsByDay(events: FeatureEvent[], now: number): EventDay[
 
 // Строка события (макет .ev): время (mono, muted) · аватар 16 · имя (жирно) ·
 // формулировка · «чат · задача». Тон: wait (info) / error (danger) / merge (accent).
-function EventRow({ e, featureId, isMobile = false }: {
-  e: FeatureEvent; featureId: string; isMobile?: boolean;
+function EventRow({ e, index, featureId, isMobile = false }: {
+  e: FeatureEvent; index: number; featureId: string; isMobile?: boolean;
 }) {
   const persona = e.personaId ? getPersonaById(e.personaId) : undefined;
-  const name = persona?.name ?? (e.personaId ? e.personaId : null);
+  // Персона в данных, но не найдена (недоступна) — нейтральное «персона недоступна»,
+  // не сырой UUID; без personaId — имени нет вовсе.
+  const name = persona?.name ?? (e.personaId ? 'персона недоступна' : null);
   const time = hhmm(e.at) ?? dateOnly(e.at) ?? '';
   const tone = eventTone(e);
 
@@ -152,20 +160,22 @@ function EventRow({ e, featureId, isMobile = false }: {
 
   return (
     <div
-      data-testid={`event-row-${e.kind}-${e.taskId}`}
+      // Уникальный testid: kind + taskId + глобальный индекс в показанной ленте
+      // (два события с одним kind/taskId — разные строки, findNodeByAttr не путает).
+      data-testid={`event-row-${e.kind}-${e.taskId}-${index}`}
       style={{
         display: 'grid', gridTemplateColumns: '48px 20px minmax(0, 1fr)',
-        columnGap: SP.sm, alignItems: 'start', padding: '5px 0',
+        columnGap: SP.sm, alignItems: 'start', padding: `${SP.xs}px 0`,
         fontSize: FS.sm, color: C.textSecondary,
       }}
     >
-      <span data-testid="event-time" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, paddingTop: 2, whiteSpace: 'nowrap' }}>
+      <span data-testid="event-time" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, paddingTop: SP.xxs, whiteSpace: 'nowrap' }}>
         {time}
       </span>
-      <span style={{ display: 'flex', justifyContent: 'center', paddingTop: 2 }}>
+      <span style={{ display: 'flex', justifyContent: 'center', paddingTop: SP.xxs }}>
         <ExecutorAvatar personaId={e.personaId ?? null} />
       </span>
-      <span style={{ minWidth: 0, display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+      <span style={{ minWidth: 0, display: 'flex', alignItems: 'baseline', gap: SP.sm, flexWrap: 'wrap' }}>
         {name && (
           <span data-testid="event-who" style={{ fontWeight: 600, color: nameColor, whiteSpace: 'nowrap' }}>
             {name}
@@ -179,7 +189,7 @@ function EventRow({ e, featureId, isMobile = false }: {
             {e.reason}
           </span>
         )}
-        <span style={{ display: 'inline-flex', gap: 4, marginLeft: 'auto' }}>
+        <span style={{ display: 'inline-flex', gap: SP.xs, marginLeft: 'auto' }}>
           <NavTargetPair
             chatId={e.sessionId ?? null}
             onOpenChat={openChat}
@@ -204,7 +214,7 @@ function DayHeader({ label }: { label: string }) {
       style={{
         fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700, color: C.textMuted,
         textTransform: 'uppercase', letterSpacing: '0.06em',
-        margin: '12px 0 4px',
+        margin: `${SP.md}px 0 ${SP.xs}px`,
       }}
     >
       {label}
@@ -230,7 +240,7 @@ export function FeatureEventsTab({ events, eventsTotal, featureId, isMobile = fa
   // Пустое: событий нет вовсе.
   if (events.length === 0) {
     return (
-      <div data-testid="events-empty" style={{ padding: '24px 0', textAlign: 'center', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}>
+      <div data-testid="events-empty" style={{ padding: `${SP.xl}px 0`, textAlign: 'center', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}>
         Событий пока нет
       </div>
     );
@@ -239,33 +249,43 @@ export function FeatureEventsTab({ events, eventsTotal, featureId, isMobile = fa
   const shown = expanded ? events : events.slice(0, EVENTS_COLLAPSED_LIMIT);
   const days = groupEventsByDay(shown, now);
   const hasMore = events.length > EVENTS_COLLAPSED_LIMIT;
+  // Глобальный индекс события в показанной ленте (для уникального data-testid).
+  const shownIndex = new Map<FeatureEvent, number>();
+  shown.forEach((e, i) => shownIndex.set(e, i));
 
   return (
     <div data-testid="events" style={{ display: 'flex', flexDirection: 'column', fontFamily: FONT.sans }}>
       {days.map((day, i) => (
         <div key={day.label + i}>
           <DayHeader label={day.label} />
-          {day.events.map((e, j) => (
-            <EventRow key={`${e.kind}-${e.taskId}-${j}`} e={e} featureId={featureId} isMobile={isMobile} />
+          {day.events.map(e => (
+            <EventRow
+              key={`${e.kind}-${e.taskId}-${shownIndex.get(e)}`}
+              e={e}
+              index={shownIndex.get(e)!}
+              featureId={featureId}
+              isMobile={isMobile}
+            />
           ))}
         </div>
       ))}
       {hasMore && (
-        <button
-          type="button"
-          data-testid="events-show-all"
-          onClick={() => setExpanded(v => !v)}
-          style={{
-            display: 'block', width: '100%', marginTop: SP.sm,
-            border: `1px solid ${C.border}`, background: C.bgSelected,
-            borderRadius: R.md, padding: `${SP.xs}px ${SP.sm}px`,
-            fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-            cursor: 'pointer', fontFamily: FONT.sans,
-            minHeight: isMobile ? 40 : 32,
+        <Button
+          variant="ghost"
+          size="xs"
+          fullWidth
+          dataTestId="events-show-all"
+          onClick={() => {
+            setExpanded(v => !v);
+            // «Показать все» — ДОГРУЗИТЬ всю ленту (eventsLimit=all): бэк режет её
+            // до 100, а eventsTotal — общее число до обрезки. Без догрузки раскрытие
+            // показало бы только 100 из 1000. При сворачивании дозагрузка не нужна.
+            if (!expanded) expandFeaturePageEvents(featureId);
           }}
+          style={{ marginTop: SP.sm, background: C.bgSelected, minHeight: isMobile ? 40 : 32 }}
         >
           {expanded ? 'Свернуть' : `Показать все · ${eventsTotal}`}
-        </button>
+        </Button>
       )}
     </div>
   );

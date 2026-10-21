@@ -46,6 +46,11 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
 });
 vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
+// Навигация: журнал целей перехода (chat → openChatById, task → openTaskInSection).
+const mockOpenChat = vi.hoisted(() => ({ calls: [] as string[] }));
+vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { mockOpenChat.calls.push(id); return true; } }));
+const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
+vi.mock('../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
 
 // === Фиксированное «сейчас» (стабильные минуты) ===
 const NOW = new Date('2026-10-20T12:00:00Z').getTime();
@@ -542,12 +547,21 @@ describe('stepStatusLabel', () => {
 });
 
 describe('stepStatusTone', () => {
-  it('accepted → success; running/returned → active; pending/withdrawn → muted', () => {
-    expect(stepStatusTone(mkChain({ outcome: 'accepted' }))).toBe('success');
-    expect(stepStatusTone(mkChain({ outcome: 'running' }))).toBe('active');
-    expect(stepStatusTone(mkChain({ outcome: 'returned' }))).toBe('active');
-    expect(stepStatusTone(mkChain({ outcome: 'pending' }))).toBe('muted');
-    expect(stepStatusTone(mkChain({ outcome: 'withdrawn' }))).toBe('muted');
+  it('status отсутствует (старый ответ) → тон из outcome: accepted→success; running/returned→active; pending/withdrawn→muted', () => {
+    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'accepted' }))).toBe('success');
+    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'running' }))).toBe('active');
+    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'returned' }))).toBe('active');
+    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'pending' }))).toBe('muted');
+    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'withdrawn' }))).toBe('muted');
+  });
+  // Один источник: когда бэк дал готовую строку (chain.status), тон — из НЕЁ, а не из
+  // outcome (раньше подпись из status, тон из outcome — могли расконсистентиться).
+  // Мутация (в отчёте): вернуть тон из outcome → «идёт» (status) + outcome=accepted →
+  // tone success вместо active → краснеет.
+  it('status есть → тон из status (не из outcome): «идёт»→active, «принят»→success', () => {
+    // status='идёт' (active), но outcome=accepted (было бы success) — тон берём из status.
+    expect(stepStatusTone(mkChain({ status: 'идёт', outcome: 'accepted' }))).toBe('active');
+    expect(stepStatusTone(mkChain({ status: 'принят', outcome: 'running' }))).toBe('success');
   });
 });
 
@@ -586,6 +600,8 @@ describe('FeatureTimelineTab: Ф2b — шаги и витки', () => {
     personaMap.clear();
     personaMap.set('p1', 'Денис');
     personaMap.set('p2', 'Глеб');
+    mockOpenChat.calls = [];
+    mockOpenTask.calls = [];
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -682,6 +698,41 @@ describe('FeatureTimelineTab: Ф2b — шаги и витки', () => {
     expect(textNodes(r1).join('')).toContain('вернул');
     const r2 = findNodeByAttr(c, 'data-testid', 'feature-round-2')!;
     expect(textNodes(r2).join('')).toContain('принят с замечаниями');
+  });
+
+  // === 4а. Цели перехода: шаг (chatId, taskIds[0]) и виток (reviewChatId, reviewTaskId) ===
+  // Мутация: подменить id (чат ← taskIds[0], задача ← chatId) → openChat/openTask
+  // получают чужой id → краснеет.
+  it('шаг: клик «чат» → openChatById(chain.chatId); клик «задача» → openTaskInSection(taskIds[0])', async () => {
+    const chain = mkChain({ chatId: 'chat-s1', taskIds: ['t-s1', 't-s1b'] });
+    const c = renderTab(mkRun(fullStages(), { stepChains: [chain] }));
+    const row = findNodeByAttr(c, 'data-testid', 'feature-step-Ш1')!;
+    const pair = findNodeByAttr(row, 'data-testid', 'nav-target-pair')!;
+    // «чат» → openChatById('chat-s1') (не taskIds[0]).
+    const chatBtn = findNodeByAttr(pair, 'data-testid', 'nav-target-chat')!;
+    await act(async () => { (reactProps(chatBtn)!.onClick as () => void)(); });
+    expect(mockOpenChat.calls, 'цель «чат» = chain.chatId').toEqual(['chat-s1']);
+    // «задача» → openTaskInSection({ id: 't-s1' }) (первая задача цепочки, не вторая).
+    const taskBtn = findNodeByAttr(pair, 'data-testid', 'nav-target-task')!;
+    await act(async () => { (reactProps(taskBtn)!.onClick as () => void)(); });
+    expect(mockOpenTask.calls, 'цель «задача» = taskIds[0]').toEqual([{ id: 't-s1' }]);
+  });
+
+  it('виток: клик «чат» → openChatById(reviewChatId); клик «задача» → openTaskInSection(reviewTaskId)', async () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
+      mkRound({ n: 1, verdict: 'accepted', reviewChatId: 'chat-r1', reviewTaskId: 't-r1' }),
+    ] })] }));
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
+    const round = findNodeByAttr(c, 'data-testid', 'feature-round-1')!;
+    const pair = findNodeByAttr(round, 'data-testid', 'nav-target-pair')!;
+    // «чат» → openChatById('chat-r1') (reviewChatId).
+    const chatBtn = findNodeByAttr(pair, 'data-testid', 'nav-target-chat')!;
+    await act(async () => { (reactProps(chatBtn)!.onClick as () => void)(); });
+    expect(mockOpenChat.calls, 'цель «чат» = reviewChatId').toEqual(['chat-r1']);
+    // «задача» → openTaskInSection({ id: 't-r1' }) (reviewTaskId).
+    const taskBtn = findNodeByAttr(pair, 'data-testid', 'nav-target-task')!;
+    await act(async () => { (reactProps(taskBtn)!.onClick as () => void)(); });
+    expect(mockOpenTask.calls, 'цель «задача» = reviewTaskId').toEqual([{ id: 't-r1' }]);
   });
 
   // Мутация (5): игнорировать reviewChatId (всегда рисовать «чат») → кнопка «чат»

@@ -21,6 +21,7 @@ import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { ExecutorAvatar } from './FeatureTimelineBits';
 import { NavTargetPair } from './NavTargetButton';
+import { Button } from '../ui/Button';
 import type { FeatureRun, FeatureTask } from '../../types/featureRun';
 
 // Порог «Показать все» (макет: LIM=8 у событий; тот же порог и у задач).
@@ -165,8 +166,8 @@ function TaskRow({ task, featureId, isMobile = false }: {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-        margin: '0 -8px', padding: '0 8px',
+        display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+        margin: `0 -${SP.sm}px`, padding: `0 ${SP.sm}px`,
         background: hover ? C.bgSelected : 'transparent',
         borderRadius: R.md,
         minHeight: isMobile ? 52 : 44,
@@ -181,7 +182,7 @@ function TaskRow({ task, featureId, isMobile = false }: {
         aria-label={`Открыть задачу «${task.title}»`}
         style={{
           flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-          background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 0',
+          background: 'transparent', border: 'none', cursor: 'pointer', padding: `${SP.xxs}px 0`,
           fontFamily: FONT.sans, textAlign: 'left',
         }}
       >
@@ -209,7 +210,7 @@ function TaskRow({ task, featureId, isMobile = false }: {
         )}
         <TaskStatusTag status={statusKey} isMobile={isMobile} />
       </button>
-      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4, flexShrink: 0 }}>
+      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs, flexShrink: 0 }}>
         <NavTargetPair
           chatId={task.linkedSessionId ?? null}
           onOpenChat={openChat}
@@ -269,7 +270,7 @@ export function FeatureTasksTab({ run, featureId, isMobile = false }: FeatureTas
   // Пустое: задач нет вовсе (фича создана, конвейер не запускался).
   if (all.length === 0) {
     return (
-      <div data-testid="tasks-empty" style={{ padding: '24px 0', textAlign: 'center', fontFamily: FONT.sans }}>
+      <div data-testid="tasks-empty" style={{ padding: `${SP.xl}px 0`, textAlign: 'center', fontFamily: FONT.sans }}>
         <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, marginBottom: SP.xs }}>Задач нет</div>
         <div style={{ fontSize: FS.sm, color: C.textMuted }}>Фича создана, но конвейер ещё не запускался.</div>
       </div>
@@ -283,30 +284,30 @@ export function FeatureTasksTab({ run, featureId, isMobile = false }: FeatureTas
         {chips.map(chip => {
           const active = filter === chip.key;
           return (
-            <button
+            <Button
               key={chip.key}
-              type="button"
-              data-testid={`tasks-filter-${chip.key}`}
-              aria-pressed={active}
+              variant="ghost"
+              size="xs"
+              dataTestId={`tasks-filter-${chip.key}`}
+              ariaPressed={active}
               onClick={() => setFilter(chip.key)}
               style={{
-                fontSize: FS.xs, fontWeight: 600, padding: '1px 8px', borderRadius: R.sm,
-                lineHeight: '18px', whiteSpace: 'nowrap', cursor: 'pointer',
+                padding: '1px 8px', borderRadius: R.sm, lineHeight: '18px',
+                fontSize: FS.xs, height: 'auto', whiteSpace: 'nowrap',
                 background: active ? C.accent : C.bgSelected,
                 color: active ? C.onAccent : C.textSecondary,
                 border: 'none',
                 minHeight: isMobile ? 40 : undefined,
-                display: 'inline-flex', alignItems: 'center',
               }}
             >
               {chip.label} {chip.count}
-            </button>
+            </Button>
           );
         })}
       </div>
 
       {/* Список: 8 последних (по времени) или все (раскрыто). */}
-      <div data-testid="tasks-list" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div data-testid="tasks-list" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
         {shown.length === 0 ? (
           <div data-testid="tasks-filter-empty" style={{ fontSize: FS.sm, color: C.textMuted, padding: SP.xs }}>
             Задач с этим статусом нет.
@@ -320,21 +321,22 @@ export function FeatureTasksTab({ run, featureId, isMobile = false }: FeatureTas
 
       {/* «Показать все» / «Свернуть» при длинном списке (порог 8). */}
       {sorted.length > TASKS_COLLAPSED_LIMIT && (
-        <button
-          type="button"
-          data-testid="tasks-show-all"
+        <Button
+          variant="ghost"
+          size="sm"
+          fullWidth
+          dataTestId="tasks-show-all"
           onClick={() => setExpanded(v => !v)}
           style={{
-            display: 'block', width: '100%', marginTop: SP.sm,
+            marginTop: SP.sm,
             border: `1px solid ${C.border}`, background: C.bgSelected,
             borderRadius: R.md, padding: `${SP.xs}px ${SP.sm}px`,
-            fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-            cursor: 'pointer', fontFamily: FONT.sans,
+            fontSize: FS.sm, color: C.textHeading,
             minHeight: isMobile ? 40 : 32,
           }}
         >
           {expanded ? 'Свернуть' : `Показать все · ${sorted.length}`}
-        </button>
+        </Button>
       )}
 
       <TasksNavNote />

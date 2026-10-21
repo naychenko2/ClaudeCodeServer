@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ChevronRight } from 'lucide-react';
-import { C, R, FS, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { STAGE_NAME } from '../../lib/chatGroups';
 import { roleLabel } from '../../lib/roleLabel';
@@ -195,29 +195,44 @@ export function roundVerdictView(verdict: FeatureRoundVerdict): RoundVerdictView
   }
 }
 
-// Статус шага: готовая строка бэка (chain.status) как есть; у старых ответов без status —
-// фолбэк из outcome (честная деградация, без выдуманных подписей).
-export function stepStatusLabel(chain: FeatureStepChain): string {
-  if (chain.status) return chain.status;
-  switch (chain.outcome) {
-    case 'accepted': return 'принят';
-    case 'running': return 'идёт';
-    case 'returned': return 'закрыт без повторного ревью';
-    case 'withdrawn': return 'снят с выкладки';
-    case 'pending': return 'ждёт ревью';
-    default: return '';
+// Тон по готовой строке статуса бэка (chain.status): одна строка — одна пара
+// (label, tone), чтобы подпись и цвет не расходились (раньше тон брался из outcome,
+// а подпись из status — два источника могли не совпасть).
+function toneFromStatus(status: string): 'success' | 'active' | 'muted' {
+  switch (status) {
+    case 'принят': return 'success';
+    case 'идёт':
+    case 'закрыт без повторного ревью': return 'active';
+    case 'ждёт ревью':
+    case 'снят с выкладки':
+    default: return 'muted';
   }
 }
 
-// Тон статуса шага (из outcome): accepted → success; running/returned → active;
-// pending/withdrawn → muted.
-export function stepStatusTone(chain: FeatureStepChain): 'success' | 'active' | 'muted' {
+// Статус шага — ОДИН источник: пара (label, tone). Если бэк дал готовую строку
+// (chain.status) — подпись и тон из неё; у старых ответов без status — фолбэк из
+// outcome (честная деградация, без выдуманных подписей). В обоих случаях label и tone
+// производятся вместе, поэтому не могут расконсистентиться.
+export function stepStatusView(chain: FeatureStepChain): { label: string; tone: 'success' | 'active' | 'muted' } {
+  if (chain.status) return { label: chain.status, tone: toneFromStatus(chain.status) };
   switch (chain.outcome) {
-    case 'accepted': return 'success';
-    case 'running':
-    case 'returned': return 'active';
-    default: return 'muted';
+    case 'accepted': return { label: 'принят', tone: 'success' };
+    case 'running': return { label: 'идёт', tone: 'active' };
+    case 'returned': return { label: 'закрыт без повторного ревью', tone: 'active' };
+    case 'withdrawn': return { label: 'снят с выкладки', tone: 'muted' };
+    case 'pending': return { label: 'ждёт ревью', tone: 'muted' };
+    default: return { label: '', tone: 'muted' };
   }
+}
+
+// Подпись статуса шага (обёртка stepStatusView: label).
+export function stepStatusLabel(chain: FeatureStepChain): string {
+  return stepStatusView(chain).label;
+}
+
+// Тон статуса шага (обёртка stepStatusView: tone).
+export function stepStatusTone(chain: FeatureStepChain): 'success' | 'active' | 'muted' {
+  return stepStatusView(chain).tone;
 }
 
 // Чип модели шага: исполнитель стадии с тем же stepRef (задача-шаг, не доработка);
@@ -252,12 +267,18 @@ export function ModelChip({ label, full, isMobile = false }: { label: string; fu
   const [tapped, setTapped] = useState(false);
   const [focused, setFocused] = useState(false);
   const tip = full ? (label === 'Авто' ? `Модель: ${full}` : full) : null;
+  // Активация: клик (десктоп и мобайл) + Enter/Space (role="button" обязана реагировать
+  // на клавиатуру, не только на фокус). Тап/нажатие переключает подсказку.
+  const activate = () => setTapped(v => !v);
   const chip = (
     <span
       data-testid="timeline-model-chip"
       role="button"
       tabIndex={0}
-      onClick={isMobile ? () => setTapped(v => !v) : undefined}
+      onClick={activate}
+      onKeyDown={e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(); }
+      }}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
       style={{
@@ -266,7 +287,7 @@ export function ModelChip({ label, full, isMobile = false }: { label: string; fu
         borderRadius: R.sm, padding: '0 4px', whiteSpace: 'nowrap', flexShrink: 0,
         minHeight: isMobile ? 40 : undefined,
         display: 'inline-flex', alignItems: 'center',
-        cursor: 'default',
+        cursor: 'pointer',
       }}
     >
       {label}
@@ -311,7 +332,9 @@ export function ExecutorRow({ x, task, now, featureId, isMobile = false }: {
   x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; isMobile?: boolean;
 }) {
   const persona = x.personaId ? getPersonaById(x.personaId) : undefined;
-  const name = persona?.name ?? (x.personaId ? x.personaId : '—');
+  // Персона в данных, но не найдена (недоступна) — нейтральное «персона недоступна»,
+  // не сырой UUID; без personaId — прочерк.
+  const name = persona?.name ?? (x.personaId ? 'персона недоступна' : '—');
   const role = roleLabel(x.taskRole, x.stepRef, x.lane);
   const st = executorStatus(x, task, now);
   const time = st.minutes != null ? `${st.minutes} мин` : null;
@@ -396,7 +419,9 @@ export function RoundRow({ round, featureId, isMobile = false }: {
   round: FeatureRound; featureId: string; isMobile?: boolean;
 }) {
   const persona = round.personaId ? getPersonaById(round.personaId) : undefined;
-  const name = persona?.name ?? (round.personaId ? round.personaId : null);
+  // Персона недоступна (id в данных, но не найдена) — нейтральное «персона недоступна»,
+  // не сырой UUID; без personaId — имени нет.
+  const name = persona?.name ?? (round.personaId ? 'персона недоступна' : null);
   const verdict = roundVerdictView(round.verdict);
   const vStyle: CSSProperties =
     verdict.tone === 'success' ? { background: C.successBg, color: C.successText } :
@@ -422,7 +447,7 @@ export function RoundRow({ round, featureId, isMobile = false }: {
       data-testid={`feature-round-${round.n}`}
       style={{
         display: 'grid', gridTemplateColumns: '54px minmax(0, 1fr) auto',
-        gap: 8, alignItems: 'baseline', padding: '4px 0',
+        gap: SP.sm, alignItems: 'baseline', padding: `${SP.xs}px 0`,
         fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary,
       }}
     >
@@ -475,10 +500,12 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, isMobile 
   isMobile?: boolean;
 }) {
   const persona = chain.personaId ? getPersonaById(chain.personaId) : undefined;
-  const name = persona?.name ?? (chain.personaId ? chain.personaId : null);
+  // Персона недоступна (id в данных, но не найдена) — нейтральное «персона недоступна»,
+  // не сырой UUID; без personaId — имени нет.
+  const name = persona?.name ?? (chain.personaId ? 'персона недоступна' : null);
   const role = roleLabel('step', chain.stepRef || null, chain.lane ?? null);
-  const statusLabel = stepStatusLabel(chain);
-  const tone = stepStatusTone(chain);
+  // Статус шага — ОДИН источник: label и tone из stepStatusView (не расходятся).
+  const { label: statusLabel, tone } = stepStatusView(chain);
   const duration = stageDurationLabel(chain.durationMinutes);
   const areaLabel = roundsAreaLabel(chain);
 
@@ -578,9 +605,10 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, isMobile 
         chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
         showNoChat
         taskId={chain.taskIds[0] ?? null}
-        // Задача-шаг закрыта во всех финальных исходах (принят/закрыт/снят/ждёт ревью);
-        // «идёт» — ещё открыта.
-        taskClosed={chain.outcome !== 'running'}
+        // Задача-шаг «закрыта» только когда шаг завершён (исход accepted = готово,
+        // как status=done в «Задачах»): «идёт»/«ждёт ревью»/«вернул» — ещё открыта.
+        // Раньше `!== 'running'` помечал «ждёт ревью» (pending) закрытой — нечестно.
+        taskClosed={chain.outcome === 'accepted'}
         onOpenTask={openTask}
         taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
         isMobile={isMobile}

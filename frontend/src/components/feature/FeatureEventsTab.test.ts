@@ -43,6 +43,9 @@ const mockOpenChat = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { mockOpenChat.calls.push(id); return true; } }));
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
 vi.mock('../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
+// «Показать все» догружает ленту через стор (eventsLimit=all): шпион на expandFeaturePageEvents.
+const { mockExpand } = vi.hoisted(() => ({ mockExpand: vi.fn() }));
+vi.mock('../../lib/featurePage', () => ({ expandFeaturePageEvents: mockExpand }));
 
 // ── Хелперы данных ──────────────────────────────────────────────────────────────
 function ev(over: Partial<FeatureEvent> = {}): FeatureEvent {
@@ -70,6 +73,17 @@ function unmountAll() {
   for (const r of roots) act(() => { r.unmount(); });
   roots.length = 0;
 }
+// Все узлы дерева с заданным data-атрибутом (findNodeByAttr даёт только первый).
+type FNode = Parameters<typeof findNodeByAttr>[0];
+function findAllByAttr(container: FNode, attr: string, value: string): FNode[] {
+  const out: FNode[] = [];
+  const walk = (x: FNode) => {
+    if (x.nodeType === 1 && x.getAttribute(attr) === value) { out.push(x); return; }
+    for (const c of x.childNodes) walk(c);
+  };
+  walk(container);
+  return out;
+}
 
 beforeEach(() => {
   personaMap.clear();
@@ -78,6 +92,7 @@ beforeEach(() => {
   personaMap.set('p-mark', 'Марк');
   mockOpenChat.calls = [];
   mockOpenTask.calls = [];
+  mockExpand.mockClear();
   backNavTest.reset();
 });
 afterEach(() => {
@@ -110,6 +125,18 @@ describe('Чистые функции (тон/формулировка/дни)',
     expect(eventPhrase(ev({ kind: 'closed' }))).toBe('фича закрыта');
     // Мутация (3): неизвестный kind → raw (не выдумываем).
     expect(eventPhrase(ev({ kind: 'weird_kind' }))).toBe('weird_kind');
+  });
+
+  it('eventPhrase «created»: роль через roleLabel (рус.), неизвестная роль → «создана задача»', () => {
+    // Мутация (2): роль в raw (step/rework) → «создание: step» (англ.) → red.
+    expect(eventPhrase(ev({ kind: 'created', role: 'step', stepRef: 'Ш2' }))).toBe('создание: Ш2');
+    expect(eventPhrase(ev({ kind: 'created', role: 'rework', stepRef: 'Ш3' }))).toBe('создание: доработка Ш3');
+    expect(eventPhrase(ev({ kind: 'created', role: 'review' }))).toBe('создание: ревью');
+    // Роль вне словаря (roleLabel → '') → нейтральное «создана задача», без сырого слова.
+    expect(eventPhrase(ev({ kind: 'created', role: 'weird_role' }))).toBe('создана задача');
+    // Эпик (role=feature/пусто) → «создание фичи».
+    expect(eventPhrase(ev({ kind: 'created', role: 'feature' }))).toBe('создание фичи');
+    expect(eventPhrase(ev({ kind: 'created', role: null }))).toBe('создание фичи');
   });
 
   it('groupEventsByDay: группировка по дням (порядок at desc, заголовки dd.mm)', () => {
@@ -213,8 +240,9 @@ describe('«Показать все» (макет: порог 8)', () => {
     const container = render({ events, eventsTotal: 10 });
 
     // По умолчанию: 8 (t9..t2), t1/t0 скрыты; кнопка «Показать все · 10».
-    expect(findNodeByAttr(container, 'data-testid', 'event-row-started-t9')).not.toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'event-row-started-t0')).toBeNull();
+    // testid строки = kind + taskId + индекс в показанной ленте (t9 — 0, t0 — 9).
+    expect(findNodeByAttr(container, 'data-testid', 'event-row-started-t9-0')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'event-row-started-t0-9')).toBeNull();
     const showAll = findNodeByAttr(container, 'data-testid', 'events-show-all');
     expect(showAll).not.toBeNull();
     expect(textNodes(showAll!).join('')).toContain('10');
@@ -222,7 +250,7 @@ describe('«Показать все» (макет: порог 8)', () => {
     // Клик → все 10.
     const onClick = reactProps(showAll!)!.onClick as () => void;
     await act(async () => { onClick(); });
-    expect(findNodeByAttr(container, 'data-testid', 'event-row-started-t0')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'event-row-started-t0-9')).not.toBeNull();
     expect(textNodes(showAll!).join('')).toContain('Свернуть');
   });
 
@@ -231,6 +259,54 @@ describe('«Показать все» (макет: порог 8)', () => {
     for (let i = 0; i < 5; i++) events.push(ev({ kind: 'started', taskId: `t${i}` }));
     const container = render({ events });
     expect(findNodeByAttr(container, 'data-testid', 'events-show-all')).toBeNull();
+  });
+
+  it('«Показать все · N» = eventsTotal (≠ events.length); мутация → events.length → red', () => {
+    // Загружено 10 (lenta), всего 1000 (eventsTotal): бэк режет до 100, «Показать все»
+    // обязан показывать ОБЩЕЕ число (1000), а не длину загруженной ленты (10).
+    const events: FeatureEvent[] = [];
+    for (let i = 9; i >= 0; i--) events.push(ev({ kind: 'started', taskId: `t${i}` }));
+    const container = render({ events, eventsTotal: 1000 });
+    const showAll = findNodeByAttr(container, 'data-testid', 'events-show-all')!;
+    // Точное: «Показать все · 1000» (eventsTotal), а не «Показать все · 10» (events.length).
+    // Мутация (eventsTotal → events.length) → «Показать все · 10» → red.
+    expect(textNodes(showAll).join('')).toBe('Показать все · 1000');
+  });
+
+  it('клик «Показать все» → expandFeaturePageEvents(featureId) (догрузка eventsLimit=all)', async () => {
+    const events: FeatureEvent[] = [];
+    for (let i = 9; i >= 0; i--) events.push(ev({ kind: 'started', taskId: `t${i}` }));
+    const container = render({ events, eventsTotal: 1000 });
+    const showAll = findNodeByAttr(container, 'data-testid', 'events-show-all')!;
+    const onClick = reactProps(showAll)!.onClick as () => void;
+    await act(async () => { onClick(); });
+    // Догрузка всей ленты — ровно один раз, по id фичи.
+    expect(mockExpand).toHaveBeenCalledTimes(1);
+    expect(mockExpand).toHaveBeenCalledWith('f1');
+  });
+});
+
+// ═══ 4а. Группировка по дням В РЕНДЕРЕ (макет: заголовки дней) ═════════════════
+describe('Группировка по дням в рендере', () => {
+  it('события двух дней → два заголовка-дня в DOM (Сегодня/Вчера)', () => {
+    // Фиксируем «сейчас» (20.10), чтобы подписи «Сегодня/Вчера» были детерминированны.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-20T12:00:00Z'));
+    try {
+      const events = [
+        ev({ at: '2026-10-20T10:00:00Z', kind: 'started', taskId: 'a' }),
+        ev({ at: '2026-10-20T09:00:00Z', kind: 'started', taskId: 'b' }),
+        ev({ at: '2026-10-19T18:00:00Z', kind: 'created', role: 'feature', taskId: 'c' }),
+      ];
+      const container = render({ events });
+      // Мутация: убрать группировку (groupEventsByDay → [все]) → 1 заголовок → red.
+      const days = findAllByAttr(container, 'data-testid', 'event-day');
+      expect(days.length).toBe(2);
+      expect(textNodes(days[0]).join('')).toBe('Сегодня, 20.10');
+      expect(textNodes(days[1]).join('')).toBe('Вчера, 19.10');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

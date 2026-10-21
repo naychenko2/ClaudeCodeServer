@@ -219,6 +219,37 @@ describe('«Архивные · N» (макет §9а)', () => {
   });
 });
 
+// ═══ 3а. Разделение live/archived + пометка «· архив» (макет §9а) ═══════════════
+describe('Разделение live/archived + «· архив»', () => {
+  it('live — в основном списке, archived — только в свёрнутом разделе (мутация: не разделять → red)', () => {
+    const live = chat({ id: 'live', kind: 'curator', personaId: 'p-kira' });
+    const arch = chat({ id: 'arch', kind: 'executor', archived: true, personaId: 'p-denis' });
+    const container = render({ page: pageWith([live, arch]) });
+    // Живой чат — в основном списке.
+    expect(findNodeByAttr(container, 'data-testid', 'chat-row-live')).not.toBeNull();
+    // Архивный чат — НЕ в основном списке: его строка появляется только после раскрытия
+    // раздела «Архивные» (свёрнут → строки нет в DOM).
+    expect(findNodeByAttr(container, 'data-testid', 'chat-row-arch')).toBeNull();
+    // Раздел «Архивные · 1» есть.
+    expect(findNodeByAttr(container, 'data-testid', 'chats-archived-toggle')).not.toBeNull();
+  });
+
+  it('архивный чат → пометка «· архив» на кнопке «чат» (мутация: убрать chatArchived → red)', async () => {
+    const c = chat({ id: 'arch', kind: 'executor', archived: true, personaId: 'p-denis' });
+    const container = render({ page: pageWith([c]) });
+    // Архивный чат — в свёрнутом разделе: раскрываем, чтобы увидеть кнопку «чат».
+    const toggle = findNodeByAttr(container, 'data-testid', 'chats-archived-toggle')!;
+    await act(async () => { (reactProps(toggle)!.onClick as () => void)(); });
+    const chatBtn = findNodeByAttr(container, 'data-testid', 'nav-target-chat')!;
+    expect(textNodes(chatBtn).join('')).toContain('· архив');
+    // Живой (не архивный) чат — без пометки.
+    const live = chat({ id: 'live', kind: 'curator', personaId: 'p-kira' });
+    const c2 = render({ page: pageWith([live]) });
+    const liveBtn = findNodeByAttr(c2, 'data-testid', 'nav-target-chat')!;
+    expect(textNodes(liveBtn).join('')).not.toContain('· архив');
+  });
+});
+
 // ═══ 4. Навигация: «чат · задача» (taskId) ════════════════════════════════════════
 describe('Навигация «чат · задача» (макет §9а)', () => {
   it('клик «задача» → openTaskInSection(taskId); клик «чат» → openChatById(chat.id)', async () => {

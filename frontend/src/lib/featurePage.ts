@@ -47,6 +47,9 @@ const LOADING: FeaturePageState = { status: 'loading' };
 let _state: FeaturePageState = LOADING;
 // Открытая страница (fid эпика); null — страница закрыта.
 let _fid: string | null = null;
+// Лимит ленты событий (GET features/{fid}?eventsLimit=…): undefined → дефолт бэка
+// (100), 'all' → вся лента (после «Показать все»). Сбрасывается при смене fid.
+let _eventsLimit: string | undefined = undefined;
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
 
@@ -72,7 +75,7 @@ function setState(s: FeaturePageState) {
 // прочее → error.
 function fetchPage(fid: string, initial: boolean, signal?: AbortSignal) {
   if (initial) setState({ status: 'loading' });
-  void api.tasks.getFeature(fid, undefined, signal)
+  void api.tasks.getFeature(fid, _eventsLimit, signal)
     .then(page => { if (_fid === fid) setState({ status: 'ok', page }); })
     .catch((e: Error & { status?: number }) => {
       if (_fid !== fid) return; // страница сменилась/закрыта — поздний ответ не затирает
@@ -84,9 +87,13 @@ function fetchPage(fid: string, initial: boolean, signal?: AbortSignal) {
 }
 
 // Открытие/смена страницы: fid. Эффект хука зовёт её, тесты — напрямую.
-// Смена fid (открыли другую фичу / закрыли) — вкладка сбрасывается к дефолту.
+// Смена fid (открыли другую фичу / закрыли) — вкладка и лимит ленты сбрасываются
+// к дефолту (лента снова с дефолтным лимитом бэка, не «all» предыдущей фичи).
 function setPage(fid: string | null) {
-  if (fid !== _fid) _tab = DEFAULT_TAB;
+  if (fid !== _fid) {
+    _tab = DEFAULT_TAB;
+    _eventsLimit = undefined;
+  }
   _fid = fid;
 }
 
@@ -158,6 +165,19 @@ export function refetchFeaturePage(fid: string) {
   fetchPage(fid, true);
 }
 
+// «Показать все» (вкладка «События»): догрузить ВСЮ ленту (eventsLimit=all). Бэк
+// по умолчанию режет ленту до 100 (eventsLimit), а eventsTotal — общее число до
+// обрезки; без догрузки «Показать все · 1000» раскрывало бы только 100. После
+// раскрытия лимит остаётся 'all' — live-перезапросы тоже тянут всю ленту (иначе
+// лента «схлопнулась бы» обратно к 100 на следующем task_changed). Не сбрасывает в
+// loading (initial=false): старые данные держим до прихода новых, без мигания.
+// Действует, только пока страница открыта (_fid === fid).
+export function expandFeaturePageEvents(fid: string) {
+  if (_fid !== fid) return;
+  _eventsLimit = 'all';
+  fetchPage(fid, false);
+}
+
 // Хук: данные страницы фичи.
 //   `fid` — id эпика; null — страница закрыта (сброс в loading, запрос не идёт).
 // Один первичный запрос на открытие/смену fid; live-перезапрос по task_changed (дебаунс).
@@ -197,6 +217,7 @@ export const __test = {
     _fid = null;
     _pending = null;
     _tab = DEFAULT_TAB;
+    _eventsLimit = undefined;
     _listeners.clear();
     _realtimeWired = false;
   },
@@ -210,4 +231,7 @@ export const __test = {
   pending: () => _pending !== null,
   scheduleRefresh,
   fetchPage,
+  // Текущий лимит ленты (undefined → дефолт бэка, 'all' → вся лента).
+  eventsLimit: () => _eventsLimit,
+  expandFeaturePageEvents,
 };

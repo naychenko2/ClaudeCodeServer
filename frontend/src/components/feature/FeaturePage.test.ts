@@ -17,7 +17,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 import { featureTaskTotal, taskCounters } from './featurePageBody';
-import { __test as pageTest } from '../../lib/featurePage';
+import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
@@ -161,6 +161,20 @@ function firstButton(n: AnyNode): AnyNode | null {
   return null;
 }
 
+// Кнопка вкладки (role="tab") по её подписи; null — нет. Счётчик — в тексте кнопки.
+function findTab(c: ReturnType<typeof render>, label: string): AnyNode | null {
+  let hit: AnyNode | null = null;
+  const walk = (x: AnyNode) => {
+    if (hit) return;
+    if (x.nodeType === 1 && (x as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'tab') {
+      if (textNodes(x as never).join('').includes(label)) { hit = x; return; }
+    }
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk(c as unknown as AnyNode);
+  return hit;
+}
+
 // Дождаться разрешения fetch (fake timers + microtasks) → финальное состояние страницы.
 // advanceTimersByTime(2000): прогоняет debounce 1,5 с и microtasks, но НЕ interval 60 с
 // (useMinuteTick в PipelineFlow — иначе 10000 ререндеров = infinite loop).
@@ -259,6 +273,83 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(findNodeByAttr(c, 'aria-label', 'Ещё'), 'меню ⋯ (волна 3) — триггер на месте').not.toBeNull();
     // Строки чатов/шагов/событий фичи — нет. («Мерж»-стадия конвейера — легитимна, не проверяем по тексту.)
     expect(findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key'), 'строка чата на месте (as a file: убрана)').toBeNull();
+  });
+
+  // === 2в. Переключение вкладок Чаты/Задачи/События → свои компоненты (мутация: ComingSoon → red) ===
+  it('переключение вкладок Чаты/Задачи/События показывает свои компоненты (мутация → ComingSoon → red)', async () => {
+    mockGetFeature.result = pageData({
+      run: {
+        featureId: 'f1',
+        epic: { id: 'f1', title: 'Моя фича' },
+        steps: [{ id: 's1', title: 'Шаг 1', status: 'inProgress' }],
+        reviews: [], qa: [], final: null, merge: null,
+        verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+        progress: 0, ready: false,
+      },
+      chats: [
+        { id: 'c1', kind: 'curator', taskId: null, archived: false, personaId: 'p-kira', taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
+      ],
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
+      ],
+      eventsTotal: 1,
+    });
+    const c = render({});
+    await settle();
+
+    // «Чаты» → FeatureChatsTab (data-testid="chats"), заглушка «Скоро» не рисуется.
+    act(() => { setFeaturePageTab('chats'); });
+    expect(findNodeByAttr(c, 'data-testid', 'chats'), 'вкладка «Чаты» → FeatureChatsTab').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«Чаты»: не ComingSoon').toBeNull();
+
+    // «Задачи» → FeatureTasksTab (data-testid="tasks").
+    act(() => { setFeaturePageTab('tasks'); });
+    expect(findNodeByAttr(c, 'data-testid', 'tasks'), 'вкладка «Задачи» → FeatureTasksTab').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«Задачи»: не ComingSoon').toBeNull();
+
+    // «События» → FeatureEventsTab (data-testid="events").
+    act(() => { setFeaturePageTab('events'); });
+    expect(findNodeByAttr(c, 'data-testid', 'events'), 'вкладка «События» → FeatureEventsTab').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«События»: не ComingSoon').toBeNull();
+  });
+
+  // === 2г. Счётчики вкладок = честные числа (мутация: обнулить → red) ===
+  it('счётчики вкладок Чаты/Задачи/События = честные числа (мутация: обнулить → red)', async () => {
+    mockGetFeature.result = pageData({
+      run: {
+        featureId: 'f1',
+        epic: { id: 'f1', title: 'Моя фича' },
+        steps: [{ id: 's1', title: 'Шаг 1', status: 'inProgress' }],
+        reviews: [], qa: [], final: null, merge: null,
+        verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+        progress: 0, ready: false,
+      },
+      chats: [
+        { id: 'c1', kind: 'curator', taskId: null, archived: false, personaId: 'p-kira', taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
+        { id: 'c2', kind: 'executor', taskId: null, archived: false, personaId: 'p-denis', taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
+      ],
+      events: [
+        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
+        { at: '2026-10-19T11:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
+        { at: '2026-10-19T12:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
+      ],
+      eventsTotal: 3,
+    });
+    const c = render({});
+    await settle();
+
+    // «Чаты» = 2 (только живые, не архивные).
+    const chatsTab = findTab(c, 'Чаты');
+    expect(chatsTab, 'вкладка «Чаты»').not.toBeNull();
+    expect(textNodes(chatsTab!).join(''), 'счётчик «Чаты» = 2').toContain('2');
+    // «Задачи» = 2 (эпик + шаг).
+    const tasksTab = findTab(c, 'Задачи');
+    expect(tasksTab, 'вкладка «Задачи»').not.toBeNull();
+    expect(textNodes(tasksTab!).join(''), 'счётчик «Задачи» = 2 (эпик + шаг)').toContain('2');
+    // «События» = 3 (events.length).
+    const eventsTab = findTab(c, 'События');
+    expect(eventsTab, 'вкладка «События»').not.toBeNull();
+    expect(textNodes(eventsTab!).join(''), 'счётчик «События» = 3').toContain('3');
   });
 
   it.skip('ok: ⋯ открывает меню «Скопировать ветку» (без «Закрыть без мержа» и «Открыть эпик в «Задачах»»)', async () => {

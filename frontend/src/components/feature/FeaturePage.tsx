@@ -10,7 +10,7 @@ import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { featureStatusTag, featureDisplayState, STAGE_NAME } from '../../lib/chatGroups';
 import { openChatById } from '../../lib/openChat';
-import { featureTaskTotal } from './featurePageBody';
+import { taskCounters } from './featurePageBody';
 import { showToast } from '../../lib/toast';
 import { FeatureMergeDialog } from './FeatureMergeDialog';
 import { CenterViewShell } from '../CenterViewShell';
@@ -314,8 +314,13 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
           isMobile={isMobile}
           plansCount={plansTabCount(page.page)}
           chatsCount={chatsCount}
-          tasksCount={featureTaskTotal(feature, okRun)}
-          eventsCount={page.page.eventsTotal}
+          // «Задачи N» — ОДИН источник со строками вкладки: число задач из run
+          // (taskCounters), не taskCount из индекса (индекс может расходиться с run).
+          tasksCount={taskCounters(okRun).total}
+          // «События N» — что реально загружено/доступно (events.length), не eventsTotal
+          // (общее до обрезки бэком): лента приходит по eventsLimit (100), eventsTotal —
+          // всего. «Показать все» догружает всю ленту, и счётчик становится честным.
+          eventsCount={page.page.events.length}
           waitingDot={okRun.attention?.kind === 'wait'}
         />
         <div data-testid="feature-page-body" style={{ marginTop: 14 }}>

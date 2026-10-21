@@ -15,7 +15,7 @@
 
 import { useState } from 'react';
 import { ChevronRight } from 'lucide-react';
-import { C, R, FS, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { getPersonaById } from '../../lib/personas';
 import { roleLabel } from '../../lib/roleLabel';
@@ -24,6 +24,7 @@ import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { ModelChip, ExecutorAvatar } from './FeatureTimelineBits';
 import { NavTargetPair } from './NavTargetButton';
+import { Button } from '../ui/Button';
 import type { FeaturePage } from '../../types/featureIndex';
 import type { FeatureChatLink, FeatureChatKind } from '../../types/featureChats';
 
@@ -78,7 +79,9 @@ function ChatRow({ chat, isKey, isMobile, featureId }: {
 }) {
   const [hover, setHover] = useState(false);
   const persona = chat.personaId ? getPersonaById(chat.personaId) : undefined;
-  const name = persona?.name ?? (chat.personaId ? chat.personaId : null);
+  // Персона недоступна (id в данных, но не найдена) — нейтральное «персона недоступна»,
+  // не сырой UUID; без personaId — имени нет.
+  const name = persona?.name ?? (chat.personaId ? 'персона недоступна' : null);
   const role = roleLabel(chat.taskRole, chat.stepRef, chat.lane);
 
   const openChat = () => {
@@ -97,8 +100,8 @@ function ChatRow({ chat, isKey, isMobile, featureId }: {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
-        margin: '0 -8px', padding: '0 8px',
+        display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+        margin: `0 -${SP.sm}px`, padding: `0 ${SP.sm}px`,
         background: isKey ? C.accentLight : (hover ? C.bgSelected : 'transparent'),
         borderRadius: R.md,
         minHeight: isMobile ? 52 : 44,
@@ -135,7 +138,7 @@ function ChatRow({ chat, isKey, isMobile, featureId }: {
           ключевой
         </span>
       )}
-      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
+      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>
         <NavTargetPair
           chatId={chat.id}
           chatArchived={chat.archived}
@@ -166,27 +169,30 @@ function ArchivedSection({ chats, keySessionId, isMobile, featureId }: {
   const sorted = sortFeatureChats(chats, keySessionId);
   return (
     <div data-testid="chats-archived">
-      <button
-        type="button"
-        data-testid="chats-archived-toggle"
-        aria-expanded={open}
+      <Button
+        variant="ghost"
+        size="sm"
+        fullWidth
+        dataTestId="chats-archived-toggle"
+        ariaExpanded={open}
         onClick={() => setOpen(v => !v)}
+        leftIcon={
+          <ChevronRight
+            size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden
+            style={{ flexShrink: 0, color: C.textMuted, transform: open ? 'rotate(90deg)' : undefined, transition: 'transform .15s' }}
+          />
+        }
         style={{
-          display: 'flex', alignItems: 'center', gap: 8, width: 'calc(100% + 16px)',
-          margin: '6px -8px 0', padding: '6px 8px',
-          border: 'none', background: 'transparent', cursor: 'pointer',
-          borderRadius: R.md, minHeight: isMobile ? 44 : 36,
-          fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary, textAlign: 'left',
+          border: 'none', background: 'transparent',
+          width: 'calc(100% + 16px)', margin: `${SP.xs}px -${SP.sm}px 0`,
+          justifyContent: 'flex-start', textAlign: 'left',
+          fontSize: FS.sm, minHeight: isMobile ? 44 : 36,
         }}
       >
-        <ChevronRight
-          size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden
-          style={{ flexShrink: 0, color: C.textMuted, transform: open ? 'rotate(90deg)' : undefined, transition: 'transform .15s' }}
-        />
         <span style={{ flex: 1 }}>Архивные · {chats.length}</span>
-      </button>
+      </Button>
       {open && (
-        <div data-testid="chats-archived-body" style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
+        <div data-testid="chats-archived-body" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, marginTop: SP.xxs }}>
           {sorted.map(c => (
             <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} />
           ))}
@@ -214,14 +220,14 @@ export function FeatureChatsTab({ page, keySessionId = null, featureId, isMobile
   // Пустое: нет чатов вовсе.
   if (all.length === 0) {
     return (
-      <div data-testid="chats-empty" style={{ padding: '24px 0', textAlign: 'center', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}>
+      <div data-testid="chats-empty" style={{ padding: `${SP.xl}px 0`, textAlign: 'center', fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted }}>
         У фичи пока нет чатов
       </div>
     );
   }
 
   return (
-    <div data-testid="chats" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div data-testid="chats" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
       {live.map(c => (
         <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} />
       ))}

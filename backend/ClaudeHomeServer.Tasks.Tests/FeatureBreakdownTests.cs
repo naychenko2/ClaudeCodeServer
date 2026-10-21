@@ -237,6 +237,40 @@ public class FeatureBreakdownTests
         longest.Should().BeNull();
     }
 
+    // ── 5c. (минор 6) LongestNow: ждущая/остановленная (InProgress) не попадают ───────────────
+
+    // Задача InProgress, но ждёт человека (AwaitingHumanSince) или остановлена (ExecutorStoppedAt) —
+    // статусом «идёт», но реально не работает → в «дольше всех сейчас» не попадает. Мутация «снять
+    // фильтр» (FeatureBreakdown.cs:194) → s2 (стартовала 08:00, раньше всех) стала бы LongestNow →
+    // тест (null) краснеет.
+    [Fact]
+    public void Build_LongestNow_ЖдущаяИОстановленная_НеПопадают()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        // s1: InProgress, ждёт человека (AwaitingHumanSince) → не «идёт».
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic", PersonaId = "p1", Role = TaskRoles.Step,
+            Status = TaskItemStatus.InProgress, CreatedAt = T0,
+            ClaudeStartedAt = new DateTime(2026, 10, 1, 9, 0, 0),
+            AwaitingHumanSince = new DateTime(2026, 10, 1, 15, 0, 0),
+        };
+        // s2: InProgress, остановлена (ExecutorStoppedAt) → не «идёт».
+        var s2 = new TaskItem
+        {
+            Id = "s2", FeatureId = "epic", PersonaId = "p2", Role = TaskRoles.Step,
+            Status = TaskItemStatus.InProgress, CreatedAt = T0,
+            ClaudeStartedAt = new DateTime(2026, 10, 1, 8, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 1, 16, 0, 0),
+        };
+
+        var (_, longest) = FeatureBreakdown.Build(Run(epic, s1, s2), null, Sessions(), null, now);
+
+        // Ни s1 (ждёт), ни s2 (остановлена) не «идут» → LongestNow = null.
+        longest.Should().BeNull();
+    }
+
     // ── 6. Сортировка групп по Minutes убыв ───────────────────────────────────────────────────
 
     // Три персоны с разным временем: группы отсортированы по Minutes убыв.

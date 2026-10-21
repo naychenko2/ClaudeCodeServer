@@ -515,7 +515,8 @@ public class TasksController(
     // места «исполнитель» = Strong → UserModelTierResolver.ModelFor, единственная точка, инвариант
     // CLAUDE.md). assignments null (Llm выключена) → null (без разворота). Функцию передаём
     // в проектор: он в Main не лезет (инвариант изоляции вертикалей).
-    private Func<FeatureIndexSession, (string? Label, string? Full)>? ChatModelResolver()
+    // internal — тестовый хук (минор 5): сверка owner-check задачи (чужая задача → «без задачи»).
+    internal Func<FeatureIndexSession, (string? Label, string? Full)>? ChatModelResolver()
     {
         if (assignments is null) return null;
         return s =>
@@ -524,25 +525,20 @@ public class TasksController(
             if (!string.IsNullOrWhiteSpace(s.Model))
                 return (ModelShortLabel(s.Model), ModelDisplayName(s.Model));
             // «Авто»: боевой резолвер. tasks.GetById — общий словарь, поэтому проверяем владельца
-            // (fail-closed, минор 8): чужая задача → как без задачи (резолв по персоне/месту).
+            // (fail-closed, минор 5): чужая задача → как без задачи (резолв по персоне/месту).
             var task = s.TaskId is not null ? tasks.GetById(s.TaskId) : null;
             if (task is not null && task.OwnerId != UserId) task = null;
             var persona = task?.PersonaId is not null ? personas.Get(task.PersonaId, UserId) : null;
-            string? model;
-            if (assignments is null)
-            {
-                model = null; // Llm выключена — без разворота
-            }
-            else if (task is not null)
-            {
-                model = assignments.ExecutorModel(task, persona, UserId);
-            }
-            else
-            {
-                // Задачи нет (или чужая): боевой фолбэк — модель персоны + дефолт места «исполнитель».
-                model = assignments.PersonaModel(persona, UserId,
+            // (минор 8) assignments здесь не null (null-случай — Llm выключена — обработан выше,
+            // функция не создаётся) → мёртвая проверка убрана.
+            string? model = task is not null
+                // Слот задачи: уровень задачи (постановщик) → PersonaModel (модель персоны → уровень).
+                ? assignments.ExecutorModel(task, persona, UserId)
+                // Задачи нет (или чужая): модель персоны; у персоны без явной модели/уровня
+                // подхватывается дефолт места «исполнитель» (Strong) — PersonaModel(placeDefaultTier:
+                // Strong). Персоны нет (null) → null: «Авто» без модели (в контексте фичи места нет).
+                : assignments.PersonaModel(persona, UserId,
                     LocalActionCatalog.DefaultTierOf(LocalActionCatalog.TasksExecutor));
-            }
             var full = model is null ? "Авто" : $"Авто → {ModelDisplayName(model)}";
             return ("Авто", full);
         };

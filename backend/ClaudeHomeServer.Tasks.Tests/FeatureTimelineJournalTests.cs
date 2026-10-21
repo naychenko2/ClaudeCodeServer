@@ -537,6 +537,151 @@ public class FeatureTimelineJournalTests
             $"sweep на 20k записей должен быть в сотнях мс, а не {sw.Elapsed.TotalMilliseconds:F0} мс");
     }
 
+    // ── 11. (а) 600 ходов + ожидание 60 мин (> 500 сегментов): итоги не обнуляются (major 1) ──
+
+    // 600 ходов по 1 мин (непрерывно) + 1 ожидание 60 мин = 601 сегмент > MaxSegments (500).
+    // До фикса (итоги по СКЛЕЕННЫМ, склейка схлопывала всю шкалу в один сегмент): WaitingMinutes=0,
+    // ErrorMinutes=0, IdleMinutes=0, WorkWall=660 (весь elapsed). После фикса: итоги из сегментов
+    // ДО склейки → WaitingMinutes=60, WorkWall=600, ожидание остаётся видимым 60-мин сегментом.
+    [Fact]
+    public void Build_600Ходов_Ожидание60Мин_ИтогиНеОбнуляются()
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddMinutes(660); // 08:00 → 19:00
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic");
+
+        var entries = new List<FeatureJournalEntry>();
+        entries.Add(Entry("created", t0, taskId: "epic"));
+        // 600 ходов по 1 мин, непрерывно: [t0+i, t0+i+1] для i=0..599.
+        for (var i = 0; i < 600; i++)
+        {
+            var at = t0.AddMinutes(i);
+            entries.Add(Entry("turn", at.AddMinutes(1), taskId: "s1",
+                startedAt: at, endedAt: at.AddMinutes(1), outcome: "finished"));
+        }
+        // 1 ожидание 60 мин в конце: [t0+600, t0+660].
+        var wStart = t0.AddMinutes(600);
+        entries.Add(Entry("waiting", wStart, taskId: "s1"));
+        entries.Add(Entry("waiting_cleared", wStart.AddMinutes(60), taskId: "s1"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), Journal(entries.ToArray()), now);
+
+        // Итоги (из сегментов ДО склейки): work=600, waiting=60, error=0, idle=0; elapsed=660.
+        tl.Totals.ElapsedMinutes.Should().Be(660);
+        tl.Totals.WorkWallMinutes.Should().Be(600);
+        tl.Totals.WaitingMinutes.Should().Be(60);
+        tl.Totals.ErrorMinutes.Should().Be(0);
+        tl.Totals.IdleMinutes.Should().Be(0);
+        // Инвариант: 600 + 60 + 0 + 0 = 660 = elapsed.
+        (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
+            + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
+
+        // Сегментов ≤ MaxSegments (500) после склейки.
+        tl.Segments.Count.Should().BeLessOrEqualTo(FeatureTimeline.DefaultMaxSegments);
+        // Ожидание 60 мин остаётся видимым сегментом нужного вида (не уничтожено склейкой).
+        Kinds(tl, "waiting").Should().Contain(s => (s.To - s.From) == TimeSpan.FromMinutes(60));
+    }
+
+    // ── 12. (б) Нецелые минуты: 2 хода по 30 с → инвариант work+waiting+error+idle = elapsed ──
+
+    // Проба Глеба: 2 хода по 30 с. До фикса (округление КАЖДОГО сегмента вверх): work=2 (2×ceil(0.5)),
+    // idle=2 (2×ceil(0.5)), elapsed=2, сумма видов=4 ≠ 2. После фикса (один ceil на суммарный TimeSpan
+    // вида, idle=остаток): work=ceil(1.0)=1, idle=2−1=1, сумма=2=elapsed. Мутация «округление по
+    // сегментам» → work=2, idle=0, сумма=2, но idle=0 ≠ 1 → краснеет.
+    [Fact]
+    public void Build_НецелыеМинуты_ДваХодаПо30С_Инвариант()
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddMinutes(2); // 08:00 → 08:02
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic");
+
+        // 2 хода по 30 с: [08:00,08:00:30] и [08:01,08:01:30]; между ними и после — по 30 с простоя.
+        var journal = Journal(
+            Entry("created", t0, taskId: "epic"),
+            Entry("turn", t0.AddMinutes(0.5), taskId: "s1",
+                startedAt: t0, endedAt: t0.AddMinutes(0.5), outcome: "finished"),
+            Entry("turn", t0.AddMinutes(1.5), taskId: "s1",
+                startedAt: t0.AddMinutes(1), endedAt: t0.AddMinutes(1.5), outcome: "finished"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.Totals.ElapsedMinutes.Should().Be(2);
+        // work = 2×30с = 1 мин (один ceil от суммарного TimeSpan вида, не сумма ceil по сегментам).
+        tl.Totals.WorkWallMinutes.Should().Be(1);
+        tl.Totals.WaitingMinutes.Should().Be(0);
+        tl.Totals.ErrorMinutes.Should().Be(0);
+        // idle = остаток от elapsed = 2 − 1 = 1 мин (не 2, как при округлении каждого сегмента).
+        tl.Totals.IdleMinutes.Should().Be(1);
+        // Инвариант: 1 + 0 + 0 + 1 = 2 = elapsed.
+        (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
+            + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
+    }
+
+    // ── 13. (в) Склейка не уничтожает короткое, но заметное ожидание при потолке ───────────────
+
+    // 1000 ходов по 1 мин (непрерывно) + 1 ожидание 10 мин = 1001 сегмент > MaxSegments (500).
+    // Склейка (MergeToCap) склеивает ближайшие пары (все разрывы 0, потеря 1 мин) слева направо;
+    // ожидание 10 мин (потеря пары с ним = min(1,10)=1, но оно правее) при 501 склейках с левого
+    // края НЕ затрагивается → остаётся видимым 10-мин сегментом. Мутация «склейка схлопывает всё
+    // подряд» (старый MergeByThreshold) → ожидание поглощается → краснеет.
+    [Fact]
+    public void Build_Склейка_НеУничтожаетЗаметноеОжидание()
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddMinutes(1010); // 08:00 → 24:50
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic");
+
+        var entries = new List<FeatureJournalEntry>();
+        entries.Add(Entry("created", t0, taskId: "epic"));
+        // 1000 ходов по 1 мин, непрерывно: [t0+i, t0+i+1] для i=0..999.
+        for (var i = 0; i < 1000; i++)
+        {
+            var at = t0.AddMinutes(i);
+            entries.Add(Entry("turn", at.AddMinutes(1), taskId: "s1",
+                startedAt: at, endedAt: at.AddMinutes(1), outcome: "finished"));
+        }
+        // 1 ожидание 10 мин в конце: [t0+1000, t0+1010].
+        var wStart = t0.AddMinutes(1000);
+        entries.Add(Entry("waiting", wStart, taskId: "s1"));
+        entries.Add(Entry("waiting_cleared", wStart.AddMinutes(10), taskId: "s1"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), Journal(entries.ToArray()), now);
+
+        tl.Totals.ElapsedMinutes.Should().Be(1010);
+        tl.Totals.WaitingMinutes.Should().Be(10);
+        tl.Segments.Count.Should().BeLessOrEqualTo(FeatureTimeline.DefaultMaxSegments);
+        // Ожидание 10 мин — видимый сегмент нужного вида (не поглощено склейкой).
+        Kinds(tl, "waiting").Should().Contain(s => (s.To - s.From) == TimeSpan.FromMinutes(10));
+    }
+
+    // ── 14. (минор 7) Stage/TaskId в журнальном режиме: сегмент несёт подписи этапа ───────────
+
+    // Мутация «подпись = ""» (Stage/TaskId всегда пустые) → тест краснеет. Ход с taskId задачи
+    // (role=step → prod) даёт work-сегмент со Stage="prod" и TaskId="s1" (не пустые).
+    [Fact]
+    public void Build_Журнал_СегментНесётStageИTaskId()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic"); // role=step → prod
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
+                startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        // work-сегмент хода [09:00,10:00]: Stage="prod" (role=step), TaskId="s1".
+        var work = Kinds(tl, "work").Single(s => s.From == new DateTime(2026, 10, 1, 9, 0, 0));
+        work.Stage.Should().Be("prod");
+        work.TaskId.Should().Be("s1");
+    }
+
     // ── Хелпер: сегменты заданного вида ───────────────────────────────────────────────────────
 
     private static List<TimelineSegment> Kinds(FeatureTimeline tl, string kind) =>

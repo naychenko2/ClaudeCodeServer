@@ -238,29 +238,21 @@ public class FeatureTimelineTests
     {
         var (run, now) = DenseRun();
         var tl = Timeline(run, now);
-        // После склейки по порогу сегментов ≤ 500.
-        tl.Segments.Count.Should().BeLessOrEqualTo(FeatureTimeline.MaxSegments);
+        // После склейки ближайших пар сегментов ≤ DefaultMaxSegments (500).
+        tl.Segments.Count.Should().BeLessOrEqualTo(FeatureTimeline.DefaultMaxSegments);
     }
 
-    // Мутация «снять потолок»: MaxSegments = int.MaxValue → склейка по порогу не срабатывает →
+    // Мутация «снять потолок»: maxSegments = int.MaxValue → склейка ближайших пар не срабатывает →
     // сегментов > 500. Доказывает, что именно потолок (не что-то другое) держит число ≤ 500:
-    // кейс 6a (с потолком) зелёный, а здесь (без потолка) > 500.
+    // кейс 6a (с потолком) зелёный, а здесь (без потолка) > 500. Параметр maxSegments — внутренний
+    // хук без глобального состояния (минор 9: мутабельный static убран).
     [Fact]
     public void Build_Мутация_СнятьПотолок_Более500()
     {
         var (run, now) = DenseRun();
-        var originalMax = FeatureTimeline.MaxSegments;
-        try
-        {
-            FeatureTimeline.MaxSegments = int.MaxValue;
-            var tl = Timeline(run, now);
-            tl.Segments.Count.Should().BeGreaterThan(500,
-                "без склейки по порогу сегментов больше 500 — потолок и есть ограничитель");
-        }
-        finally
-        {
-            FeatureTimeline.MaxSegments = originalMax;
-        }
+        var tl = FeatureTimeline.Build(run, null, now, maxSegments: int.MaxValue);
+        tl.Segments.Count.Should().BeGreaterThan(500,
+            "без склейки по потолку сегментов больше 500 — потолок и есть ограничитель");
     }
 
     // ── 7. approx: Waiting*/Idle*/Error* = null (повторно, на любой фиче) ───────────────────

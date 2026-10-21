@@ -105,13 +105,13 @@ public sealed record FeatureTimeline(
     // Итоги.
     TimelineTotals Totals)
 {
-    // Потолок сегментов: при превышении — склейка по возрастающему порогу.
-    // internal (не public) — не посторонняя публичная точка настройки (минор 8); тестам —
-    // внутренний хук (setter): мутация снимает потолок и проверяет склейку.
+    // Потолок сегментов: при превышении — склейка ближайших пар (MergeToCap).
+    // Константа (не мутабельный static, минор 9): нет гонки при параллельных классах xUnit;
+    // тестам — параметр maxSegments в Build (внутренний хук без глобального состояния).
     internal const int DefaultMaxSegments = 500;
-    internal static int MaxSegments { get; set; } = DefaultMaxSegments;
 
-    public static FeatureTimeline Build(FeatureRun run, FeatureJournalReadResult? journal, DateTime now)
+    public static FeatureTimeline Build(FeatureRun run, FeatureJournalReadResult? journal, DateTime now,
+        int maxSegments = DefaultMaxSegments)
     {
         ArgumentNullException.ThrowIfNull(run);
 
@@ -134,7 +134,7 @@ public sealed record FeatureTimeline(
 
         if (isJournal)
         {
-            var (journalSegments, journalTotals) = BuildJournal(run, journal!, from, to, now);
+            var (journalSegments, journalTotals) = BuildJournal(run, journal!, from, to, now, maxSegments);
             return new FeatureTimeline(from, to, stages, journalSegments, current, journalTotals);
         }
 
@@ -152,7 +152,7 @@ public sealed record FeatureTimeline(
         }
 
         // Сегменты: work (склейка по (track, stage)) + notWorking (промежутки), по времени.
-        var segments = BuildSegments(work, from, to);
+        var segments = BuildSegments(work, from, to, maxSegments);
 
         // Итоги.
         var elapsed = FeatureTimeMath.Minutes(from, to);
@@ -203,7 +203,8 @@ public sealed record FeatureTimeline(
     // видов = elapsed по построению, а не «work-объединение, из которого вычитать error второй
     // раз» (двойной счёт ошибки, который ломал сходимость пирога с графиком).
     private static (List<TimelineSegment> Segments, TimelineTotals Totals) BuildJournal(
-        FeatureRun run, FeatureJournalReadResult journal, DateTime from, DateTime to, DateTime now)
+        FeatureRun run, FeatureJournalReadResult journal, DateTime from, DateTime to, DateTime now,
+        int maxSegments)
     {
         // Индексы событий по taskId (для пар «начало → конец»): stopped, status→Done,
         // waiting_cleared, device_wait_cleared — каждый в порядке At.
@@ -269,15 +270,16 @@ public sealed record FeatureTimeline(
                     errorIntervals.Add(new JournalInterval(e.StartedAt.Value, e.EndedAt.Value, "error", PriorityError, stage, e.TaskId));
                 }
             }
-            // work: период started…(stopped | done | now), разрезанный на waiting-интервалы.
+            // work: период started…(stopped | done | now). Минор 4: НЕ режем на waiting-интервалы
+            // (CutByWaiting избыточен, O(started × waiting)): sweep-line сам решает перекрытие
+            // приоритетом waiting > work — минуты ожидания в work не входят (major 1).
             else if (e.Kind == "started" && e.StartedAt is not null)
             {
                 var end = FirstAfter(stoppedByTask, e.TaskId, e.StartedAt.Value)
                     ?? FirstAfter(doneByTask, e.TaskId, e.StartedAt.Value)
                     ?? now;
                 var stage = LabelOf(e.TaskId);
-                foreach (var (s, w) in CutByWaiting(e.StartedAt.Value, end, waitingIntervals))
-                    workIntervals.Add(new JournalInterval(s, w, "work", PriorityWork, stage, e.TaskId));
+                workIntervals.Add(new JournalInterval(e.StartedAt.Value, end, "work", PriorityWork, stage, e.TaskId));
             }
             // error: остановка исполнителя — точка (0 мин, но в счёт).
             else if (e.Kind == "stopped")
@@ -294,29 +296,47 @@ public sealed record FeatureTimeline(
         all.AddRange(errorIntervals);
         var segments = Sweep(all, from, to);
 
-        // Итоги — из сегментов sweep (до склейки по потолку): каждый отрезок [from, to] даёт ровно
-        // один вид, поэтому work + waiting + error + idle = elapsed по построению (major 2).
+        // (major 1) итоги — из сырых сегментов sweep; склейка по потолку — ниже, для графика.
+
+        // Итоги — из сегментов sweep ДО склейки по потолку (major 1): каждый отрезок [from, to]
+        // даёт ровно один вид. Минуты по виду — ОДИН ceil от суммарного TimeSpan вида (не сумма
+        // ceil по сегментам: она раздувала сумму видов выше elapsed, major 2). idle = остаток от
+        // elapsed (не отрицательный) — закрывает разницу округления и держит инвариант
+        // work + waiting + error + idle = elapsed.
         var elapsed = FeatureTimeMath.Minutes(from, to);
-        var workWall = 0;
-        var waitingMin = 0;
-        var errorMin = 0;
-        var idleMin = 0;
+        var workSpan = TimeSpan.Zero;
+        var waitingSpan = TimeSpan.Zero;
+        var errorSpan = TimeSpan.Zero;
+        var idleSpan = TimeSpan.Zero;
         foreach (var s in segments)
         {
-            var m = FeatureTimeMath.Minutes(s.From, s.To);
+            var span = s.To - s.From;
             switch (s.Kind)
             {
-                case "work": workWall += m; break;
-                case "waiting": waitingMin += m; break;
-                case "error": errorMin += m; break;
-                default: idleMin += m; break; // idle
+                case "work": workSpan += span; break;
+                case "waiting": waitingSpan += span; break;
+                case "error": errorSpan += span; break;
+                default: idleSpan += span; break; // idle
             }
         }
+        // AgentsSum — сумма сырых work-интервалов (параллельные ходы складываются), та же
+        // семантика, что в approx (минор 10); НЕ из sweep-сегментов (там параллельное уже
+        // объединено → было бы равно workWall).
+        var agentsSpan = workIntervals.Aggregate(TimeSpan.Zero, (acc, w) => acc + (w.End - w.Start));
+        var workWall = FeatureTimeMath.CeilMinutes(workSpan);
+        var waitingMin = FeatureTimeMath.CeilMinutes(waitingSpan);
+        var errorMin = FeatureTimeMath.CeilMinutes(errorSpan);
+        var agentsSum = FeatureTimeMath.CeilMinutes(agentsSpan);
+        // idle — остаток от elapsed (не отрицательный): сумма ceil по видам может превысить elapsed
+        // на нецелых минутах, остаток закрывает разницу (инвариант).
+        var idleMin = Math.Max(0, elapsed - workWall - waitingMin - errorMin);
         var notWorking = Math.Max(0, elapsed - workWall);
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
             WorkWallMinutes: workWall,
-            AgentsSumMinutes: workWall, // в journal нет «агентных» минут отдельно — = work wall
+            // AgentsSum = сумма work-интервалов (параллельные складываются) — та же семантика,
+            // что в approx (минор 10): в journal это сумма ходов/периодов, не объединение.
+            AgentsSumMinutes: agentsSum,
             NotWorkingMinutes: notWorking,
             WaitingMinutes: waitingMin,
             IdleMinutes: idleMin,
@@ -325,39 +345,11 @@ public sealed record FeatureTimeline(
             ErrorCount: errorCount,
             ErrorMinutes: errorMin);
 
-        return (segments, totals);
-    }
+        // Сегменты для графика: склейка по потолку ПОСЛЕ итогов (major 1): при > maxSegments —
+        // склеиваем ближайшие пары (MergeToCap), вид склеенного — доминирующий по времени.
+        var display = segments.Count > maxSegments ? MergeToCap(segments, from, to, maxSegments) : segments;
 
-    // Разрез [start, end] на waiting-интервалы: возвращает части [start, end], НЕ покрытые
-    // ожиданием (work не включает минуты ожидания, major 1). waiting — уже обрезанные к [from, to]
-    // интервалы ожидания; части, целиком внутри ожидания, отбрасываются (нулевая ширина).
-    private static List<(DateTime Start, DateTime End)> CutByWaiting(
-        DateTime start, DateTime end, List<JournalInterval> waiting)
-    {
-        // Пересекающие [start, end], обрезанные к нему (start/end — именованные).
-        var cuts = new List<(DateTime start, DateTime end)>();
-        foreach (var w in waiting)
-        {
-            if (w.End <= start || w.Start >= end) continue; // не пересекает
-            var s = w.Start < start ? start : w.Start;
-            var e = w.End > end ? end : w.End;
-            if (e > s) cuts.Add((s, e));
-        }
-        if (cuts.Count == 0) return new List<(DateTime, DateTime)> { (start, end) };
-
-        // Склеить перекрывающиеся (общий FeatureTimeMath.MergeIntervals) → зазоры = [start, end]
-        // минус склеенные: один проход O(k) (вместо наивного O(W·P) «режь все части каждым waiting»,
-        // который взрывал замер на 20k: 5000 started × 5000 waiting).
-        var merged = FeatureTimeMath.MergeIntervals(cuts);
-        var parts = new List<(DateTime, DateTime)>();
-        var cursor = start;
-        foreach (var (s, e) in merged)
-        {
-            if (s > cursor) parts.Add((cursor, s));
-            if (e > cursor) cursor = e;
-        }
-        if (cursor < end) parts.Add((cursor, end));
-        return parts;
+        return (display, totals);
     }
 
     // taskId → события заданного kind, в порядке At (для пар «начало → конец»).
@@ -481,10 +473,9 @@ public sealed record FeatureTimeline(
             return KindRank(a.Kind) - KindRank(b.Kind);
         });
 
-        // Потолок: при > MaxSegments — склейка по возрастающему порогу (как в approx).
-        if (segments.Count > MaxSegments)
-            segments = MergeByThreshold(segments, from, to);
-
+        // Сырой список (ДО склейки по потолку): итоги journal-режима считаются по нему,
+        // чтобы склейка (потолок MaxSegments) не схлопывала шкалу и не обнуляла виды (major 1).
+        // Склейку по потолку применяет вызывающий (BuildJournal/BuildSegments) ПОСЛЕ итогов.
         return segments;
     }
 
@@ -545,7 +536,8 @@ public sealed record FeatureTimeline(
     // Сегменты: work (склейка по (track, stage)) + notWorking (промежутки), в хронологическом
     // порядке. work-сегменты склеиваются внутри (track, stage); notWorking — промежутки между
     // объединением всех work-интервалов (на [from, to]).
-    private static List<TimelineSegment> BuildSegments(List<WorkInterval> work, DateTime from, DateTime to)
+    private static List<TimelineSegment> BuildSegments(List<WorkInterval> work, DateTime from, DateTime to,
+        int maxSegments)
     {
         var segments = new List<TimelineSegment>();
 
@@ -584,45 +576,82 @@ public sealed record FeatureTimeline(
             return a.Kind == "work" ? -1 : 1;
         });
 
-        // 4) потолок: при > MaxSegments — склейка по возрастающему порогу.
-        if (segments.Count > MaxSegments)
-            segments = MergeByThreshold(segments, from, to);
+        // 4) потолок: при > maxSegments — склейка ближайших пар (MergeToCap, major 1).
+        if (segments.Count > maxSegments)
+            segments = MergeToCap(segments, from, to, maxSegments);
 
         return segments;
     }
 
-    // Склейка по возрастающему порогу: пока сегментов > max — склеиваем СОСЕДНИЕ (по времени)
-    // сегменты с разрывом ≤ threshold; threshold растёт (1, 2, 4, … мин) до сходимости.
-    // Склеиваем по времени (не по стадии): work и notWorking чередуются, и только склейка
-    // по времени реально снижает число. Вид/трек/стадия результата — от предыдущего сегмента,
-    // taskId=null (склейка). Возвращает новый список (вход не мутируется).
-    private static List<TimelineSegment> MergeByThreshold(List<TimelineSegment> segments, DateTime from, DateTime to)
+    // Склейка до потолка MaxSegments (major 1): пока сегментов > max — склеиваем БЛИЖАЙШУЮ
+    // (по разрыву, при равном — по минимальной потере, при равенстве — самую раннюю) пару
+    // СОСЕДНИХ (по времени) сегментов. Старый MergeByThreshold склеивал «всё подряд до потолка»
+    // (порог 1→2→4… мин): сегменты непрерывны (разрыв 0), поэтому порог 1 мин схлопывал ВСЮ
+    // шкалу в один сегмент, вид — от первого, и итоги обнулялись. Здесь — ровно (count − max)
+    // склеек, каждая минимально искажающая: вид/трек/стадия склеенного — от ДОМИНАНТЫ по времени
+    // (не «от предыдущего»), taskId=null (склейка). Возвращает новый список (вход не мутируется).
+    // Min-куча (PriorityQueue) + двусвязный список: O(n log n) на heapify + O((count−max)·log n)
+    // на склейки — на 20k сегментов десятки мс (вместо O(n²) «скан всех пар» на каждом шаге).
+    private static List<TimelineSegment> MergeToCap(List<TimelineSegment> segments, DateTime from, DateTime to,
+        int maxSegments)
     {
-        var list = segments.ToList();
-        var threshold = TimeSpan.FromMinutes(1);
-        // Защита от бесконечного цикла: порог не превышает (to − from).
-        var maxThreshold = to - from;
-        while (list.Count > MaxSegments && threshold <= maxThreshold)
+        var n = segments.Count;
+        if (n <= maxSegments) return segments.ToList();
+
+        // Двусвязный список по позициям (без RemoveAt: dead[i] — позиция склеена в предыдущую).
+        var seg = segments.ToArray();
+        var next = new int[n];
+        var prev = new int[n];
+        var dead = new bool[n];
+        for (var i = 0; i < n; i++) { next[i] = i + 1 < n ? i + 1 : -1; prev[i] = i - 1; }
+
+        // Ключ пары (left, right=next[left]): (разрыв, потеря, left) — min-куча. Разрыв ≥ 0
+        // (сегменты отсортированы); потеря = время меньшего вида пары; left — детерминизм при равенстве.
+        // Кортеж: ValueTuple сам IComparable (по Gap → Loss → Left), PriorityQueue берёт его по умолчанию.
+        var pq = new PriorityQueue<int, (TimeSpan Gap, TimeSpan Loss, int Left)>();
+        void Push(int left)
         {
-            var merged = new List<TimelineSegment>(list.Count);
-            foreach (var s in list)
-            {
-                var prev = merged.Count > 0 ? merged[^1] : null;
-                if (prev is not null && s.From - prev.To <= threshold)
-                {
-                    // Склеить: расширяем конец предыдущего (вид/трек/стадия — от предыдущего).
-                    merged[^1] = new TimelineSegment(prev.From, s.To, prev.Kind, prev.Track, prev.Stage, null);
-                }
-                else
-                {
-                    merged.Add(s);
-                }
-            }
-            if (merged.Count == list.Count) break; // не сжалось — выход, иначе бесконечный цикл
-            list = merged;
-            threshold *= 2;
+            if (left < 0) return; // prev[0] = -1 (первый сегмент)
+            var right = next[left];
+            if (right < 0) return;
+            var gap = seg[right].From - seg[left].To;
+            var l = seg[left].To - seg[left].From;
+            var r = seg[right].To - seg[right].From;
+            pq.Enqueue(left, (gap, l <= r ? l : r, left));
         }
-        return list;
+        for (var i = 0; i + 1 < n; i++) Push(i);
+
+        var count = n;
+        while (count > maxSegments && pq.Count > 0)
+        {
+            var left = pq.Dequeue();
+            var right = next[left];
+            // Ленивое удаление: пара невалидна, если left мёртв или правого нет (сосед склеился;
+            // запись пересчитается Push'ом). Ключ в куче — только для порядка; повторная запись
+            // того же left с актуальным ключом идёт выше, поэтому порядок склеек остаётся «ближайшие
+            // пары» (детерминизм при равенстве — по left).
+            if (dead[left] || right < 0) continue;
+
+            // Склеить left и right: границы [left.From, right.To], вид/трек/стадия — от доминанты
+            // (по времени; при равенстве — левый, детерминизм), taskId=null (склейка).
+            var a = seg[left];
+            var b = seg[right];
+            var aSpan = a.To - a.From;
+            var bSpan = b.To - b.From;
+            var dom = aSpan >= bSpan ? a : b;
+            seg[left] = new TimelineSegment(a.From, b.To, dom.Kind, dom.Track, dom.Stage, null);
+            dead[right] = true;
+            next[left] = next[right];
+            if (next[right] >= 0) prev[next[right]] = left;
+            count--;
+            Push(prev[left]);
+            Push(left);
+        }
+
+        var result = new List<TimelineSegment>(count);
+        for (var i = 0; i < n; i++)
+            if (!dead[i]) result.Add(seg[i]);
+        return result;
     }
 
     // Work-интервал одной задачи: [Start, End], стадия, трек, id задачи.

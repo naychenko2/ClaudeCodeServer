@@ -49,6 +49,12 @@ internal static class FeatureTimeMath
     public static int Minutes(DateTime from, DateTime to) =>
         to <= from ? 0 : (int)Math.Ceiling((to - from).TotalMinutes);
 
+    // Целые минуты от суммарного TimeSpan (округление вверх; 0 при ≤ 0). Для итогов:
+    // один ceil на суммарное время вида, а не сумма ceil по сегментам (major 2: сумма
+    // округлений сегментов ≠ elapsed, т.к. elapsed округляется один раз от общего интервала).
+    public static int CeilMinutes(TimeSpan total) =>
+        total <= TimeSpan.Zero ? 0 : (int)Math.Ceiling(total.TotalMinutes);
+
     // Объединение интервалов (обрезка к [from, to], если задано) → минуты по часам стены
     // (округление вверх; 0 — нет интервалов). Параллельные интервалы не складываются.
     public static int UnionMinutes(

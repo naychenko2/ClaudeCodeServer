@@ -644,6 +644,108 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         exec.GetProperty("modelFull").GetString().Should().Be("Авто → Claude Opus");
     }
 
+    // Минор 8: «Авто» = боевой резолвер (ExecutorModel) — сверка по кейсам «слот задачи» и
+    // «дефолт места». Страница обязана показывать ровно то, что даёт боевой ModelAssignmentResolver
+    // (тот же DI-синглтон, что в TaskExecutionService): (а) уровень задачи → слот тира; (б) без
+    // уровня задачи → PersonaModel с дефолтом места «исполнитель» (Strong). Мутация: страница берёт
+    // свою цепочку/слот (не ExecutorModel) → расхождение с боевым резолвером → краснеет.
+    public static IEnumerable<object[]> АвтоСверкаCases()
+    {
+        // (scenario, taskTier): "strong" → «слот задачи»; null → «дефолт места» (уровня задачи нет).
+        yield return new object[] { "слот задачи", "strong" };
+        yield return new object[] { "дефолт места", null };
+    }
+
+    [Theory]
+    [MemberData(nameof(АвтоСверкаCases))]
+    public async Task GetFeature_Авто_СверкаСБоевымРезолвером_СлотЗадачиИДефолтМеста(string scenario, string? taskTier)
+    {
+        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        Users.SetModelTiers(user.Id, strong: "test-opus", medium: "test-sonnet", weak: null);
+
+        // Персона без явной модели (Model=null): боевой резолвер идёт по уровню (задачи/места).
+        var persona = Personas.Create(OwnerId, "персона-" + scenario, null, null, null,
+            null, null, PersonaScope.Global, null, null, null, false);
+
+        var epic = await CreateTaskAsync(new { title = "эпик-" + scenario, role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var step = await CreateTaskAsync(new { title = "шаг-" + scenario, featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString();
+        var mgr = _factory.Services.GetRequiredService<TaskManager>();
+        mgr.GetById(stepId)!.PersonaId = persona.Id;
+        if (taskTier is not null) mgr.GetById(stepId)!.ModelTier = Enum.Parse<ModelTier>(taskTier, ignoreCase: true);
+
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        Sessions.GetById(chatId)!.Model = null; // «Авто»
+        await _client.PutAsJsonAsync($"/api/tasks/{stepId}", new { linkedSessionId = chatId });
+
+        // Боевой резолвер (тот же DI-синглтон, что в TaskExecutionService): ожидаемая модель.
+        var resolver = _factory.Services.GetRequiredService<ModelAssignmentResolver>();
+        var task = mgr.GetById(stepId)!;
+        var expected = resolver.ExecutorModel(task, Personas.Get(persona.Id, OwnerId), OwnerId);
+        var expectedFull = expected is null ? "Авто" : $"Авто → {TasksController.ModelDisplayName(expected)}";
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var exec = page.GetProperty("run").GetProperty("stages").EnumerateArray()
+            .Single(s => s.GetProperty("key").GetString() == "prod")
+            .GetProperty("executors").EnumerateArray()
+            .Single(e => e.GetProperty("taskId").GetString() == stepId);
+        exec.GetProperty("modelFull").GetString().Should().Be(expectedFull,
+            $"«Авто» = боевой резолвер ({scenario}), не своя цепочка слота");
+    }
+
+    // Минор 5: owner-check задачи (fail-closed): чат, чья TaskId — чужая задача (не владельца),
+    // резолвится как «без задачи» (PersonaModel(null) = null → «Авто»), а не по слоту чужой задачи.
+    // Мутация «снять проверку владельца» → модель = слот strong (task.ModelTier=strong → "test-opus")
+    // → full = "Авто → test-opus" ≠ "Авто" → краснеет.
+    [Fact]
+    public async Task ChatModelResolver_ЧужаяЗадача_OwnerCheck_БезЗадачи()
+    {
+        var user = Users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        Users.SetModelTiers(user.Id, strong: "test-opus", medium: null, weak: null);
+
+        // Чужая задача (владелец = stranger) с modelTier=strong.
+        var strangerResp = await _stranger.PostAsJsonAsync("/api/tasks",
+            new { title = "чужая-задача", modelTier = "strong" });
+        strangerResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var strangerTask = await strangerResp.Content.ReadFromJsonAsync<JsonElement>();
+        var strangerTaskId = strangerTask.GetProperty("id").GetString()!;
+
+        // Чат владельца, чья TaskId = чужая задача; Model=null («Авто»).
+        var chatId = await CreatePersonalChatAsync(OwnerId, strangerTaskId);
+        Sessions.GetById(chatId)!.Model = null;
+
+        var controller = new TasksController(
+            tasks: _factory.Services.GetRequiredService<TaskManager>(),
+            broadcaster: _factory.Services.GetRequiredService<ISessionBroadcaster>(),
+            ai: _factory.Services.GetRequiredService<TaskAiService>(),
+            projects: _factory.Services.GetRequiredService<ProjectManager>(),
+            personas: _factory.Services.GetRequiredService<PersonaManager>(),
+            executor: _factory.Services.GetRequiredService<TaskExecutionService>(),
+            bindings: _factory.Services.GetRequiredService<PersonaBindingsService>(),
+            sessions: _factory.Services.GetRequiredService<SessionManager>(),
+            spheres: _factory.Services.GetRequiredService<ISphereDirectory>(),
+            noteSync: null,
+            features: _factory.Services.GetRequiredService<FeatureProjector>(),
+            git: null,
+            assignments: _factory.Services.GetRequiredService<ModelAssignmentResolver>(),
+            catalog: null);
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, OwnerId)], "test");
+        controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) },
+        };
+
+        var resolver = controller.ChatModelResolver()!;
+        var (label, full) = resolver(new FeatureIndexSession(chatId, strangerTaskId, null, false, null));
+
+        // Owner-check: чужая задача (OwnerId ≠ UserId) → «без задачи» → PersonaModel(null) = null
+        // → «Авто» (без модели), НЕ слот strong чужой задачи ("test-opus").
+        label.Should().Be("Авто");
+        full.Should().Be("Авто");
+    }
+
     // chats[]: чат задачи фичи — executor; чужой чат (TaskId не задача фичи) — не в списке.
     // Мутация: убрать фильтр по снимку владельца в BuildFeatureChats → чужой чат попадает → краснеет.
     [Fact]

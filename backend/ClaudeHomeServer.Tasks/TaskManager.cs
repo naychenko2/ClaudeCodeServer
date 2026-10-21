@@ -507,14 +507,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // planSteps — эффективный список шагов плана (только у role=plan); enforceReworkReviewOf —
     // проверять ли обязательную связь доработки с ревью (Create — всегда, Update — только если
     // поле reviewOf меняют). roleBefore — роль ДО операции (Create — null, Update — текущая
-    // роль задачи): гард role=merge срабатывает только при СМЕНЕ роли на merge. Бросает
-    // InvalidOperationException с внятным текстом — вызывающая сторона превращает в 400.
+    // роль задачи); featureIdBefore — фича ДО операции (Create — null, Update — текущая фича
+    // задачи): гард role=merge срабатывает при СМЕНЕ роли на merge ИЛИ при переносе merge-задачи
+    // в другую фичу. Бросает InvalidOperationException с внятным текстом — вызывающая сторона
+    // превращает в 400.
     // Тихо отбрасывать неверное значение нельзя: агент не узнает, что разметка не легла.
     private void ValidateFeatureFields(
         string? featureId, string? role, string? verdict,
         List<string>? reviewOf, string? personaId, string ownerId,
         List<PlannedStep>? planSteps = null, bool enforceReworkReviewOf = false,
-        string? roleBefore = null)
+        string? roleBefore = null, string? featureIdBefore = null)
     {
         // role — только из списка TaskRoles
         if (role is not null && !TaskRoles.All.Contains(role))
@@ -549,12 +551,18 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             if (epic.Role != TaskRoles.Feature)
                 throw new InvalidOperationException($"Это не эпик фичи: у задачи «{featureId}» роль ≠ feature.");
 
-            // role=merge (создание, либо update с СМЕНЕЙ роли на merge): фича обязана быть
-            // Ready — финал принят (тот же хелпер, что в проекторе). Частичный мерж/выкатка
-            // куска — без роли, с featureId эпика; «полный мерж без финала» человек оформляет
-            // закрытием эпика (правило закрытия даёт merged). Flag обхода не заводим.
-            // Update merge-задачи без смены роли (roleBefore == merge) — гард не срабатывает.
-            if (role == TaskRoles.Merge && (roleBefore is null || roleBefore != TaskRoles.Merge)
+            // role=merge: фича обязана быть Ready — финал принят (тот же хелпер, что в проекторе).
+            // Триггеры гарда: (а) задача СТАЛА merge (создание, либо update с сменой роли на merge);
+            // (б) merge-задачу ПЕРЕНЕСЛИ в другую фичу (featureId != featureIdBefore) — иначе
+            // перенос Done-merge в фичу с принятым финалом объявлял её смерженной без мержа
+            // (инцидент 21.10, другая дверь: roleBefore == merge обходил гард, см. Б-cl).
+            // Частичный мерж/выкатка куска — без роли, с featureId эпика; «полный мерж без финала»
+            // человек оформляет закрытием эпика (правило закрытия даёт merged). Flag обхода не заводим.
+            // Update merge-задачи без смены роли И фичи (roleBefore == merge, featureId == featureIdBefore)
+            // — гард молчит.
+            var becameMerge = roleBefore is null || roleBefore != TaskRoles.Merge;
+            var mergeMoved = roleBefore == TaskRoles.Merge && featureId != featureIdBefore;
+            if (role == TaskRoles.Merge && (becameMerge || mergeMoved)
                 && !FeatureProjector.IsFinalAccepted(FeatureFinal(featureId, ownerId)))
                 throw new InvalidOperationException(
                     "Фича ещё не готова к мержу: финал не принят. Кусок работы (частичный мерж, выкатка части) "
@@ -801,7 +809,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var enforceReworkReviewOf = req.ReviewOf is not null
             || (effRole == TaskRoles.Rework && task.Role != TaskRoles.Rework);
         ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "",
-            planSteps: effPlanSteps, enforceReworkReviewOf, roleBefore: task.Role);
+            planSteps: effPlanSteps, enforceReworkReviewOf, roleBefore: task.Role, featureIdBefore: task.FeatureId);
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;

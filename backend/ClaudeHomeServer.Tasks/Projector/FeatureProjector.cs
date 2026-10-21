@@ -570,8 +570,11 @@ public sealed class FeatureProjector(TaskManager tasks)
                 {
                     Add(t, verdict, t.CompletedAt.Value, Truncate(t.Verification!.Notes), RoundOf(t));
                 }
-                else if (t.Role == TaskRoles.Merge)
+                else if (t.Role == TaskRoles.Merge && run.State == FeatureStates.Merged)
                 {
+                    // «merged» — только когда фича реально смержена (State == merged). Частичный
+                    // мерж (merge Done, финал не принят, эпик открыт) — не «merged», а обычное
+                    // завершение задачи (else → completed): фича ещё открыта.
                     Add(t, "merged", t.CompletedAt.Value, null);
                 }
                 else if (t.Role == TaskRoles.Feature)

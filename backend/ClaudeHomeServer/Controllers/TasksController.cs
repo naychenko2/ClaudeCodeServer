@@ -962,16 +962,14 @@ public class TasksController(
             // Идемпотентность: merge-задача уже есть (свежий снимок — после gate).
             var freshRun = features.Project(featureId, UserId);
             var existing = freshRun?.Merge;
-            // Частичный мерж (инцидент 21.10): merge-задача Done, но фича НЕ смержена
-            // (State != merged) — для идемпотентности считается отсутствующей: создаём новую,
-            // не 409 (старая Done-задача остаётся в трекере как история частичного мержа).
-            bool existingIsPartialDone = existing is { Status: TaskItemStatus.Done }
-                && freshRun?.State != FeatureStates.Merged;
-            if (existing is not null && !existingIsPartialDone)
+            if (existing is not null)
             {
                 // п.2/п.73: merge-задача закрыта (Done) в окне между снимком и гейтом → 409: дубль
                 // не проходит (верхний гард смотрел на устаревший снимок). Текст отличен от верхнего
                 // гарда («Фича уже смержена»), чтобы тест гонки различал, какая ветка сработала.
+                // Частичный мерж (merge Done при State != merged) сюда не доходит: верхний гард
+                // «!run.Ready → Финал не принят» (921) отсекает его раньше (§7.8) — ветка «создать
+                // новую» была мёртвой и убрана, чтобы код не обещал несуществующую обработку.
                 if (existing.Status == TaskItemStatus.Done)
                     return Conflict(new { error = "Фича смержена во время мержа" });
                 // Открыта (todo/inProgress): если todo — запускаем исполнителя; возвращаем

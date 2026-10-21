@@ -389,6 +389,8 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
   const effectivePrimary = (primary?.kind === 'merge' && !mergePending) ? null : primary;
   // Id фичи для точки возврата «страница фичи → чат/задача» (Ф9b).
   const fid = run?.featureId ?? feature?.featureId ?? '';
+  // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
+  const featureTitle = run?.epic?.title ?? null;
   const acts: ReactNode[] = [];
   if (isMobile && effectivePrimary) {
     acts.push(
@@ -399,7 +401,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
         style={{ background: C.bgWhite, minHeight: 40 }}
         onClick={() => {
           if (effectivePrimary.kind === 'chat' && effectivePrimary.chatId) {
-            recordFeatureReturn(fid, { kind: 'chat', id: effectivePrimary.chatId });
+            recordFeatureReturn(fid, { kind: 'chat', id: effectivePrimary.chatId }, featureTitle);
             void openChatById(effectivePrimary.chatId);
           }
           else if (effectivePrimary.kind === 'merge') onMerge?.();
@@ -419,7 +421,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
         isMobile={isMobile}
         title="Открыть чат. Страница фичи скроется, вернётся по плашке."
         onOpen={() => {
-          recordFeatureReturn(fid, { kind: 'chat', id: a.linkedSessionId! });
+          recordFeatureReturn(fid, { kind: 'chat', id: a.linkedSessionId! }, featureTitle);
           void openChatById(a.linkedSessionId!);
         }}
       />,
@@ -435,7 +437,7 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge }: FeaturePag
         isMobile={isMobile}
         title="Открыть задачу. Страница фичи скроется, вернётся по плашке."
         onOpen={() => {
-          recordFeatureReturn(fid, { kind: 'task', id: a.taskId! });
+          recordFeatureReturn(fid, { kind: 'task', id: a.taskId! }, featureTitle);
           openTaskInSection({ id: a.taskId!, projectId: run?.epic?.projectId ?? undefined });
         }}
       />,

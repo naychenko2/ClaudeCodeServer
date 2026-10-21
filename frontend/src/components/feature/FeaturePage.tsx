@@ -334,7 +334,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
           ) : tab === 'tasks' ? (
             <FeatureTasksTab run={okRun} featureId={featureId} isMobile={isMobile} />
           ) : tab === 'events' ? (
-            <FeatureEventsTab events={page.page.events} eventsTotal={page.page.eventsTotal} featureId={featureId} isMobile={isMobile} />
+            <FeatureEventsTab events={page.page.events} eventsTotal={page.page.eventsTotal} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} isMobile={isMobile} />
           ) : (
             <ComingSoon />
           )}

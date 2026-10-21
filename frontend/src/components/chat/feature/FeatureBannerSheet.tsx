@@ -1,247 +1,349 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Route } from 'lucide-react';
-import { C, FONT, FS } from '../../../lib/design';
-import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
-import { Button, Modal } from '../../ui';
-import { api } from '../../../lib/api';
+import { useEffect, useState } from 'react';
+import { X } from 'lucide-react';
+import { C, R, FS, FONT, SP } from '../../../lib/design';
 import { roleLabel } from '../../../lib/roleLabel';
-import { listProjectSessions } from '../../../lib/sessionsList';
-import { FeatureGlyph } from './FeatureGlyphs';
-import { FeatureRunView } from './FeatureRunView';
-import type { FeatureBannerModel } from './FeatureBanner';
-import type { FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../../types/featureIndex';
-import type { FeatureRun } from '../../../types/featureRun';
-import type { Session } from '../../../types';
+import { STAGE_NAME } from '../../../lib/chatGroups';
+import { NavTargetButton } from '../../feature/NavTargetButton';
+import { openChatById } from '../../../lib/openChat';
+import { openTaskInSection } from '../../../lib/tasks';
+import { Modal } from '../../ui';
+import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
+import type { FeatureRun, FeatureStage, FeatureStageExecutor } from '../../../types/featureRun';
 
-// Шторка фичи (мобила, 360 px; макет features-overview.html, .sheet/.scrim, sheetStrip):
-// тап по плашке её открывает. Состав (в порядке макета):
-//   • шапка — глиф + название фичи + счётчик;
-//   • «Этот чат: {роль}» — роль этого чата в фиче;
-//   • кнопка «В ключевой чат фичи» (когда этот чат — не ключевой);
-//   • конвейер — карточка фичи (FeatureRunView: тревога, «Сейчас», 7 стадий, легенда);
-//   • «Чаты фичи · N» — чаты фичи из индекса (chats): имена — из списка собственных
-//     чатов, «чужие» (их в списке нет) не показываем.
+// Шторка фичи (волна 3, Ф-pl-b; макет feature-banner-1, «А · Строка» + раскрытие из «Г»):
+// тап по строке панели раскрывает РАЗВЁРНУТЫЙ СОСТАВ фичи. Состав (в порядке макета):
+//   • переключатель фич — если у чата несколько фич, в порядке Б-ord (первая — фича
+//     задачи этого чата; порядок даёт бэк, фронт не пересортировывает);
+//   • список 7 этапов со статусом и временем (границы + «≈ N мин»);
+//   • исполнители ТЕКУЩЕГО (active) этапа: roleLabel, чип модели, NavTargetButton (чат · задача).
 //
-// Шторка — это Modal: на мобиле он сам bottom-sheet (drag-handle, крестик, Escape,
-// тап по подложке) — штатный паттерн продукта (docs/design/guidelines.md: «модалки на
-// мобиле — шторкой»).
+// Данные — ТОЛЬКО из списка `features?sessionId=` (runs, как в попапе), без догрузки
+// `features/{id}`. Закрытие: Esc, тап вне, кнопка; фокус возвращается на строку.
 //
-// Имена чатов: индекс несёт только id сессий (chats: Record<sessionId, links[]>),
-// поэтому шторка запрашивает список чатов пользователя (сессии проекта, либо глобальные
-// чаты, если чат вне проекта) и показывает только найденные в нём. Запрос — один на
-// открытие; сбой не фатален (список пуст, остальная шторка жива).
+// Подача: на мобиле (<768) — bottom-sheet (Modal, штатный паттерн продукта); на
+// десктопе — раскрывающаяся панель под строкой (role=dialog, Esc, тап по подложке).
+// Доступность: aria-expanded на строке (задаёт плашка), role=dialog + aria-modal,
+// focus-trap на мобиле (Modal) и возврат фокуса на строку при закрытии.
 
-// Сила связи (контракт: key > curator > orchestrator > executor) — порядок списка
-// чатов. Ключевой чат сортируется отдельно, по id (keySessionId).
-const KIND_ORDER: Record<FeatureChatLink['kind'], number> = {
-  key: 0, curator: 1, orchestrator: 2, executor: 3,
-};
-// Роли задач в порядке конвейера (макет ROLE_ORDER):
-// cut < plan < step < rework < review < qa < final < merge.
-const TASK_ROLE_ORDER: Record<string, number> = {
-  cut: 0, plan: 1, step: 2, rework: 3, review: 4, qa: 5, final: 6, merge: 7,
-};
-
-// Ключ сортировки связи «чат × фича»: сила, затем (у executor) роль задачи.
-export function linkRank(link: FeatureChatLink): number {
-  const base = KIND_ORDER[link.kind] ?? 3;
-  if (link.kind === 'executor' && link.taskRole != null) {
-    return base * 10 + (TASK_ROLE_ORDER[link.taskRole] ?? 8);
+// Подпись состояния этапа (единая с вкладкой «Хронология»): done/active/pending/absent.
+function stageStatusText(s: FeatureStage): string {
+  switch (s.state) {
+    case 'done': return 'пройдено';
+    case 'active':
+      if (s.tone === 'wait') return 'ждёт вас';
+      if (s.tone === 'stopped') return 'стоит';
+      if (s.tone === 'loop') return 'доработка';
+      return 'идёт';
+    case 'pending': return 'впереди';
+    case 'absent': return 'нет задач';
+    default: return '';
   }
-  return base * 10;
 }
 
-// Чаты фичи из индекса: все пары (id, link), у которых link.featureId совпадает,
-// в порядке linkRank (ключевой чат сортирует вызывающий, по id).
-export function featureChatLinks(index: FeaturesIndex, featureId: string): { id: string; link: FeatureChatLink }[] {
-  const out: { id: string; link: FeatureChatLink }[] = [];
-  for (const [id, links] of Object.entries(index.chats)) {
-    for (const link of links) {
-      if (link.featureId === featureId) out.push({ id, link });
+// Время этапа: границы (dd.mm · ЧЧ:ММ – ЧЧ:ММ) + длительность «≈ N мин» (Б2).
+// null/0 — без времени (стадия ещё не шла).
+function stageTimeText(s: FeatureStage): string | null {
+  const parts: string[] = [];
+  if (s.firstStartedAt) {
+    const d = new Date(s.firstStartedAt);
+    if (!isNaN(d.getTime())) {
+      const dd = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const hh = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      parts.push(`с ${dd} · ${hh}`);
     }
   }
-  out.sort((a, b) => linkRank(a.link) - linkRank(b.link));
-  return out;
-}
-
-// Подпись роли строки чата: ОДНА функция roleLabel (сырые taskRole/stepRef/lane);
-// у step — «{stepRef} · {бэк|фронт}», у прочих ролей — слово роли. Без роли (null/
-// неизвестно) — фолбэк на вид связи (куратор/оркестратор/исполнитель), как раньше.
-export function chatRoleLabel(link: FeatureChatLink): string {
-  const byRole = roleLabel(link.taskRole, link.stepRef, link.lane);
-  if (byRole) return byRole;
-  switch (link.kind) {
-    case 'curator': return 'куратор';
-    case 'orchestrator': return 'оркестратор';
-    case 'executor': return 'исполнитель';
-    default: return 'ключевой';
+  if (s.lastCompletedAt) {
+    const d = new Date(s.lastCompletedAt);
+    if (!isNaN(d.getTime())) {
+      const hh = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+      parts.push(`до ${hh}`);
+    }
   }
+  if (s.approxMinutes > 0) parts.push(`≈ ${s.approxMinutes} мин`);
+  return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-// Чистое: строки «Чаты фичи» — id из индекса (featureChatLinks), имена — только из
-// списка собственных чатов пользователя (sessions); «чужие» (id не в sessions) не
-// показываем. Ключевой чат (feature.keySessionId) — первым, остальные — в порядке linkRank.
-// Чистая функция — тестируется без DOM (SSR-рендер шторки держит список в загрузке).
-export function sheetChatRows(
-  index: FeaturesIndex,
-  feature: FeatureIndexFeature,
-  sessions: Session[],
-): { session: Session; link: FeatureChatLink }[] {
-  const byId = new Map(sessions.map(s => [s.id, s]));
-  const rows: { session: Session; link: FeatureChatLink }[] = [];
-  for (const { id, link } of featureChatLinks(index, feature.featureId)) {
-    const session = byId.get(id);
-    if (session) rows.push({ session, link });
-  }
-  rows.sort((a, b) =>
-    (a.session.id === feature.keySessionId ? 0 : 1) - (b.session.id === feature.keySessionId ? 0 : 1));
-  return rows;
+// Чистая: исполнители ТЕКУЩЕГО (active) этапа; null — active-этапа нет (всё впереди/закрыто).
+function activeStage(run: FeatureRun): FeatureStage | null {
+  const stages = run.stages ?? [];
+  return stages.find(s => s.state === 'active') ?? null;
 }
 
-interface FeatureBannerSheetProps {
-  // Строка фичи из индекса (название, keySessionId, rail).
-  feature: FeatureIndexFeature;
-  // Модель плашки (глиф/статус/счётчик/роль/кнопка) — та же, что рисует плашка.
-  // «Этот чат: {role}» берёт model.role (роль текущего чата уже посчитана плашкой).
-  model: FeatureBannerModel;
-  // Проект чата (null — чат вне проектов): область запроса списка чатов.
-  projectId: string | null;
-  // Индекс фич (источник чатов фичи: chats[sessionId][]).
-  index: FeaturesIndex;
-  // Агрегат фичи (конвейер); null — ещё не загружен (конвейер не рисуется).
-  run: FeatureRun | null;
-  // Переход в ключевой чат (задаёт плашка: recordBackNav + openChatById).
-  onGoKey: () => void;
-  // Закрыть шторку (крестик/Escape/подложка Modal).
-  onClose: () => void;
+// Чистая: подписи исполнителей (roleLabel + модель) — для тестов без DOM.
+export function executorLines(stage: FeatureStage): { role: string; model: string | null }[] {
+  return (stage.executors ?? []).map(x => ({
+    role: roleLabel(x.taskRole, x.stepRef, x.lane) || (x.personaId ? 'исполнитель' : 'исполнитель'),
+    model: x.modelLabel ?? null,
+  }));
 }
 
-export function FeatureBannerSheet({ feature, model, projectId, index, run, onGoKey, onClose }: FeatureBannerSheetProps) {
-  // Список собственных чатов (для имён чатов фичи): сессии проекта либо
-  // глобальные чаты, если чат вне проекта. null — ещё грузится.
-  const [sessions, setSessions] = useState<Session[] | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    const p = projectId ? listProjectSessions(projectId, { maxAgeMs: 10_000 }) : api.chats.list();
-    void p
-      .then(list => { if (!cancelled) setSessions(list); })
-      .catch(() => { if (!cancelled) setSessions([]); });
-    return () => { cancelled = true; };
-  }, [projectId]);
-
-  // Чаты фичи: id из индекса, имена — только из списка пользователя («чужие» не
-  // показываем); ключевой чат первым, остальные — в порядке linkRank (sheetChatRows).
-  // null — список ещё грузится (useEffect-фетч не прошёл).
-  const chatRows = useMemo(
-    () => (sessions ? sheetChatRows(index, feature, sessions) : null),
-    [sessions, index, feature],
-  );
-
+// Строка исполнителя: roleLabel + чип модели (подсказка «Авто → …») + NavTargetButton (чат · задача).
+function ExecutorRow({ x, isMobile, projectId }: { x: FeatureStageExecutor; isMobile: boolean; projectId: string | null }) {
+  const role = roleLabel(x.taskRole, x.stepRef, x.lane);
+  const model = x.modelLabel;
   return (
-    <Modal onClose={onClose}>
-      {/* Шапка: глиф + название + счётчик (макет: первая строка .sheet .in) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-        <FeatureGlyph kind={model.glyph} size={14} />
+    <div
+      data-testid="feature-sheet-executor"
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.xs + 2, flexWrap: 'wrap',
+        padding: '6px 0', borderTop: `1px solid ${C.borderLight}`, minWidth: 0,
+      }}
+    >
+      <span
+        data-testid="feature-sheet-executor-role"
+        style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap' }}
+      >
+        {role || (x.personaId ? 'исполнитель' : '—')}
+      </span>
+      {model && (
         <span
-          title={feature.title}
+          data-testid="feature-sheet-executor-model"
+          title={x.modelFull ?? model}
           style={{
-            fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 700, color: C.textHeading,
-            flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+            background: C.bgSelected, borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap',
           }}
         >
-          {feature.title}
+          {model}
         </span>
-        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>
-          {model.counter}
-        </span>
-      </div>
+      )}
+      <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
+        <NavTargetButton
+          kind="chat"
+          chatId={x.chatId}
+          chatArchived={x.chatArchived}
+          isMobile={isMobile}
+          onOpen={() => { if (x.chatId) void openChatById(x.chatId); }}
+        />
+        <NavTargetButton
+          kind="task"
+          taskId={x.taskId}
+          isMobile={isMobile}
+          onOpen={() => { openTaskInSection({ id: x.taskId, projectId: projectId ?? undefined }); }}
+        />
+      </span>
+    </div>
+  );
+}
 
-      {/* Этот чат: роль в фиче (макет: «Этот чат: <role>») */}
-      <div
-        data-testid="feature-sheet-role"
-        style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FS.sm, color: C.textSecondary, minWidth: 0 }}
-      >
-        Этот чат:
-        <span style={{
-          fontFamily: FONT.mono, fontSize: FS.xs,
-          // n2: у ключевого вес 700 (макет .role.key) — совпадает с чипом плашки.
-          fontWeight: model.isKey ? 700 : 400,
-          color: model.isKey ? C.accent : C.textSecondary,
-          background: model.isKey ? C.accentLight : C.bgSelected,
-          borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap',
-        }}>
-          {model.role}
-        </span>
-      </div>
+// Переключатель фич (мультифича): одна строка на фичу, в порядке Б-ord (от бэка).
+// Первая — фича задачи этого чата (бэк ставит её первой). Клик — сменить выбранную фичу.
+function FeatureSwitcher({ runs, selected, onSelect, isMobile }: {
+  runs: FeatureRun[]; selected: number; onSelect: (i: number) => void; isMobile: boolean;
+}) {
+  return (
+    <div
+      data-testid="feature-sheet-switcher"
+      role="tablist"
+      aria-label="Фичи этого чата"
+      style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: SP.sm }}
+    >
+      {runs.map((r, i) => {
+        const title = r.epic?.title ?? r.featureId;
+        const on = i === selected;
+        return (
+          <button
+            key={r.featureId}
+            type="button"
+            role="tab"
+            aria-selected={on}
+            data-testid={`feature-sheet-feature-${i}`}
+            onClick={() => onSelect(i)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6, textAlign: 'left',
+              border: `1px solid ${on ? C.accent : C.borderLight}`,
+              background: on ? C.accentLight : C.bgWhite,
+              borderRadius: R.md, padding: isMobile ? '0 10px' : '6px 10px',
+              minHeight: isMobile ? 40 : undefined, cursor: 'pointer',
+              fontFamily: FONT.sans, fontSize: FS.sm,
+              color: on ? C.accent : C.textSecondary, fontWeight: on ? 700 : 500,
+              overflow: 'hidden',
+            }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>{title}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
-      {/* В ключевой чат фичи: только когда этот чат — не ключевой и живой ключевой есть.
-          Архивный ключевой (keyArchived) помечен в подписи — человек не попадает в
-          архив без предупреждения (R3, минор 1). */}
-      {!model.isKey && model.button.kind === 'key' && (
-        <Button
-          variant="primary"
-          size="md"
-          fullWidth
-          leftIcon={<Route size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-          onClick={onGoKey}
-        >
-          {feature.keyArchived ? 'В ключевой чат фичи (в архиве)' : 'В ключевой чат фичи'}
-        </Button>
+// Тело шторки: переключатель (если мультифича) + 7 этапов + исполнители текущего этапа.
+function SheetBody({ run, runs, selected, onSelect, isMobile, projectId }: {
+  run: FeatureRun; runs: FeatureRun[]; selected: number; onSelect: (i: number) => void;
+  isMobile: boolean; projectId: string | null;
+}) {
+  const stages = run.stages ?? [];
+  const current = activeStage(run);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
+      {runs.length > 1 && (
+        <FeatureSwitcher runs={runs} selected={selected} onSelect={onSelect} isMobile={isMobile} />
       )}
 
-      {/* Конвейер: карточка фичи (тревога, «Сейчас», 7 стадий, легенда) */}
-      {run && (
-        <div data-testid="feature-sheet-pipeline">
-          <FeatureRunView run={run} />
-        </div>
-      )}
-
-      {/* Чаты фичи: свои (из списка пользователя), «чужие» не показываем */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={{ fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: C.textMuted, margin: '2px 0 4px' }}>
-          Чаты фичи · {chatRows ? chatRows.length : feature.chatCount}
-        </div>
-        {chatRows == null ? (
-          <div style={{ fontSize: FS.sm, color: C.textMuted }}>Загружаем список…</div>
-        ) : chatRows.length === 0 ? (
-          <div style={{ fontSize: FS.sm, color: C.textMuted }}>Чатов пока нет</div>
-        ) : (
-          chatRows.map(({ session, link }) => {
-            const isKey = session.id === feature.keySessionId;
-            return (
-              <div
-                key={session.id}
-                data-testid="feature-sheet-chat"
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 8,
-                  borderRadius: 8, padding: '8px 10px',
-                  // m9: тач-цель строки ≥ 40 на 360 (макет .cc: minH 44)
-                  minHeight: 44,
-                  background: isKey ? C.bgSelected : 'transparent',
-                  minWidth: 0,
-                }}
-              >
-                <span
-                  title={session.name ?? undefined}
-                  style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: isKey ? 700 : 500, color: C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-                >
-                  {session.name ?? session.id}
-                </span>
+      {/* Список 7 этапов: имя · статус · время. */}
+      <div data-testid="feature-sheet-stages" style={{ display: 'flex', flexDirection: 'column' }}>
+        {stages.map(s => {
+          const time = stageTimeText(s);
+          const muted = s.state === 'pending' || s.state === 'absent';
+          return (
+            <div
+              key={s.key}
+              data-testid={`feature-sheet-stage-${s.key}`}
+              style={{
+                display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 0',
+                borderBottom: `1px solid ${C.borderLight}`, minWidth: 0,
+              }}
+            >
+              <span style={{
+                fontSize: FS.sm, fontWeight: muted ? 500 : 700,
+                color: muted ? C.textMuted : C.textHeading, whiteSpace: 'nowrap', flexShrink: 0,
+              }}>
+                {STAGE_NAME[s.key]}
+              </span>
+              <span style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                {stageStatusText(s)}
+              </span>
+              {time && (
                 <span style={{
-                  fontFamily: FONT.mono, fontSize: FS.xs, flexShrink: 0,
-                  // n2: у ключевого вес 700 (макет .role.key) — совпадает с чипом плашки.
-                  fontWeight: isKey ? 700 : 400,
-                  color: isKey ? C.accent : C.textSecondary,
-                  background: isKey ? C.accentLight : C.bgSelected,
-                  borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap',
+                  marginLeft: 'auto', fontFamily: FONT.mono, fontSize: FS.xs,
+                  color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0,
                 }}>
-                  {isKey ? 'ключевой' : chatRoleLabel(link)}
+                  {time}
                 </span>
-              </div>
-            );
-          })
-        )}
+              )}
+            </div>
+          );
+        })}
       </div>
+
+      {/* Исполнители ТЕКУЩЕГО (active) этапа: roleLabel + чип модели + (чат · задача). */}
+      {current && (
+        <div data-testid="feature-sheet-executors" style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={{
+            fontSize: FS.xxs, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase',
+            color: C.textMuted, margin: '2px 0 4px',
+          }}>
+            Сейчас · {STAGE_NAME[current.key]}
+          </div>
+          {current.executors.length > 0 ? (
+            current.executors.map((x, i) => (
+              <ExecutorRow key={`${x.taskId}-${i}`} x={x} isMobile={isMobile} projectId={projectId} />
+            ))
+          ) : (
+            <div style={{ fontSize: FS.sm, color: C.textMuted }}>Исполнителей нет</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Раскрывающаяся панель на десктопе: role=dialog, Esc, тап по подложке, возврат фокуса.
+// На мобиле подаёт Modal (bottom-sheet) — там Esc/подложка/крестик уже в Modal.
+export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarget, projectId }: {
+  runs: FeatureRun[];
+  isMobile?: boolean;
+  onClose: () => void;
+  // Элемент строки панели: на закрытие фокус возвращается на него.
+  focusTarget?: React.RefObject<HTMLElement | null>;
+  // Проект чата (область запроса; null — чат вне проектов).
+  projectId?: string | null;
+}) {
+  // Выбранная фича (индекс в runs, порядок Б-ord от бэка). Кламп, если фич стало меньше.
+  const [sel, setSel] = useState(0);
+  const idx = Math.min(sel, Math.max(0, runs.length - 1));
+  const run = runs[idx];
+
+  // Возврат фокуса на строку при закрытии (desktop: панель; mobile: Modal сам не возвращает).
+  const close = () => {
+    onClose();
+    const el = focusTarget?.current;
+    if (el && typeof el.focus === 'function') {
+      try { el.focus({ preventScroll: true }); } catch { el.focus(); }
+    }
+  };
+
+  // Esc (desktop): закрывает панель. На мобиле Esc обрабатывает Modal.
+  useEffect(() => {
+    if (isMobile) return;
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile, onClose]);
+
+  if (!run) return null;
+
+  const body = (
+    <SheetBody
+      run={run}
+      runs={runs}
+      selected={idx}
+      onSelect={setSel}
+      isMobile={isMobile}
+      projectId={projectId ?? null}
+    />
+  );
+
+  if (isMobile) {
+    // Bottom-sheet: Modal сам рисует drag-handle, крестик, Esc и подложку.
+    return (
+      <ModalLike onClose={close} title={run.epic?.title ?? run.featureId}>
+        {body}
+      </ModalLike>
+    );
+  }
+
+  // Desktop: раскрывающаяся панель под строкой. role=dialog + aria-modal; тап по подложке
+  // (fixed, inset 0) закрывает; Esc — в эффекте выше.
+  return (
+    <div style={{ position: 'relative' }}>
+      <div
+        data-testid="feature-sheet-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={run.epic?.title ?? 'Фича'}
+        style={{
+          position: 'relative', zIndex: 2,
+          background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+          padding: '10px 12px', marginTop: 6,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: SP.xs }}>
+          <span style={{ fontFamily: FONT.serif, fontSize: FS.md, fontWeight: 700, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {run.epic?.title ?? run.featureId}
+          </span>
+          <button
+            type="button"
+            data-testid="feature-sheet-close"
+            aria-label="Закрыть"
+            onClick={close}
+            style={{
+              border: 'none', background: 'transparent', cursor: 'pointer',
+              padding: 4, borderRadius: R.sm, color: C.textSecondary, flexShrink: 0,
+            }}
+          >
+            <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </button>
+        </div>
+        {body}
+      </div>
+      {/* Подложка: тап вне панели закрывает (zIndex 1 < 2 у панели). */}
+      <div
+        data-testid="feature-sheet-backdrop"
+        onPointerDown={(e) => { if (e.target === e.currentTarget) close(); }}
+        style={{ position: 'fixed', inset: 0, zIndex: 1, background: 'transparent' }}
+      />
+    </div>
+  );
+}
+
+// Тонкая обёртка над Modal (bottom-sheet на мобиле): передаёт заголовок и onClose.
+function ModalLike({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <Modal title={title} onClose={onClose}>
+      {children}
     </Modal>
   );
 }

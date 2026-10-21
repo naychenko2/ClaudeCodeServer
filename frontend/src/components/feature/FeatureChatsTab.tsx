@@ -71,11 +71,12 @@ const KEY_TIP = 'Ключевой чат — здесь куратор ведё�
 // пара «чат · задача». Ключевой — фон accentLight; архивный — имя приглушено.
 // Навигация: чат — openChatById (chat.id), задача — openTaskInSection (taskId);
 // точка возврата «страница фичи → чат/задача» — recordFeatureReturn (Ф9b).
-function ChatRow({ chat, isKey, isMobile, featureId }: {
+function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null }: {
   chat: FeatureChatLink;
   isKey: boolean;
   isMobile: boolean;
   featureId: string;
+  featureTitle?: string | null;
 }) {
   const [hover, setHover] = useState(false);
   const persona = chat.personaId ? getPersonaById(chat.personaId) : undefined;
@@ -85,12 +86,12 @@ function ChatRow({ chat, isKey, isMobile, featureId }: {
   const role = roleLabel(chat.taskRole, chat.stepRef, chat.lane);
 
   const openChat = () => {
-    recordFeatureReturn(featureId, { kind: 'chat', id: chat.id });
+    recordFeatureReturn(featureId, { kind: 'chat', id: chat.id }, featureTitle);
     void openChatById(chat.id);
   };
   const openTask = () => {
     if (!chat.taskId) return;
-    recordFeatureReturn(featureId, { kind: 'task', id: chat.taskId });
+    recordFeatureReturn(featureId, { kind: 'task', id: chat.taskId }, featureTitle);
     openTaskInSection({ id: chat.taskId });
   };
 
@@ -159,11 +160,12 @@ function ChatRow({ chat, isKey, isMobile, featureId }: {
 
 // Раздел «Архивные · N» (макет §9а, .archb): свёрнутые архивные чаты; раскрытие по
 // клику/клавиатуре (aria-expanded), шеврон поворачивается. N = число архивных.
-function ArchivedSection({ chats, keySessionId, isMobile, featureId }: {
+function ArchivedSection({ chats, keySessionId, isMobile, featureId, featureTitle = null }: {
   chats: FeatureChatLink[];
   keySessionId: string | null;
   isMobile: boolean;
   featureId: string;
+  featureTitle?: string | null;
 }) {
   const [open, setOpen] = useState(false);
   const sorted = sortFeatureChats(chats, keySessionId);
@@ -194,7 +196,7 @@ function ArchivedSection({ chats, keySessionId, isMobile, featureId }: {
       {open && (
         <div data-testid="chats-archived-body" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, marginTop: SP.xxs }}>
           {sorted.map(c => (
-            <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} />
+            <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} />
           ))}
         </div>
       )}
@@ -216,6 +218,8 @@ export function FeatureChatsTab({ page, keySessionId = null, featureId, isMobile
   const all = page.chats ?? [];
   const live = sortFeatureChats(all.filter(c => !c.archived), keySessionId);
   const archived = all.filter(c => c.archived);
+  // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
+  const featureTitle = page.run.epic?.title ?? null;
 
   // Пустое: нет чатов вовсе.
   if (all.length === 0) {
@@ -229,10 +233,10 @@ export function FeatureChatsTab({ page, keySessionId = null, featureId, isMobile
   return (
     <div data-testid="chats" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
       {live.map(c => (
-        <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} />
+        <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} />
       ))}
       {archived.length > 0 && (
-        <ArchivedSection chats={archived} keySessionId={keySessionId} isMobile={isMobile} featureId={featureId} />
+        <ArchivedSection chats={archived} keySessionId={keySessionId} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} />
       )}
     </div>
   );

@@ -141,8 +141,8 @@ function TaskStatusTag({ status, isMobile = false }: { status: TaskStatusKey; is
 // Строка задачи (макет §9а, .srow): аватар · название · роль (roleLabel) · статус ·
 // пара «чат · задача». Клик по строке — в задачу; «чат» — в чат исполнителя.
 // Честная деградация: без исполнителя — нейтральный аватар; без чата — «чата нет».
-function TaskRow({ task, featureId, isMobile = false }: {
-  task: FeatureTask; featureId: string; isMobile?: boolean;
+function TaskRow({ task, featureId, featureTitle = null, isMobile = false }: {
+  task: FeatureTask; featureId: string; featureTitle?: string | null; isMobile?: boolean;
 }) {
   const [hover, setHover] = useState(false);
   const role = roleLabel(task.role ?? null, task.stepRef ?? null, task.lane ?? null);
@@ -150,13 +150,13 @@ function TaskRow({ task, featureId, isMobile = false }: {
 
   // Переход в задачу: openTaskInSection (id + projectId) + точка возврата (Ф9b).
   const openTask = () => {
-    recordFeatureReturn(featureId, { kind: 'task', id: task.id });
+    recordFeatureReturn(featureId, { kind: 'task', id: task.id }, featureTitle);
     openTaskInSection({ id: task.id, projectId: task.projectId ?? undefined });
   };
   // Переход в чат исполнителя: openChatById(linkedSessionId) + точка возврата.
   const openChat = () => {
     if (!task.linkedSessionId) return;
-    recordFeatureReturn(featureId, { kind: 'chat', id: task.linkedSessionId });
+    recordFeatureReturn(featureId, { kind: 'chat', id: task.linkedSessionId }, featureTitle);
     void openChatById(task.linkedSessionId);
   };
 
@@ -258,6 +258,8 @@ export interface FeatureTasksTabProps {
 
 export function FeatureTasksTab({ run, featureId, isMobile = false }: FeatureTasksTabProps) {
   const all = useMemo(() => allFeatureTasks(run), [run]);
+  // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
+  const featureTitle = run.epic?.title ?? null;
   const [filter, setFilter] = useState<'all' | TaskStatusKey>('all');
   const [expanded, setExpanded] = useState(false);
 
@@ -314,7 +316,7 @@ export function FeatureTasksTab({ run, featureId, isMobile = false }: FeatureTas
           </div>
         ) : (
           shown.map(t => (
-            <TaskRow key={t.id} task={t} featureId={featureId} isMobile={isMobile} />
+            <TaskRow key={t.id} task={t} featureId={featureId} featureTitle={featureTitle} isMobile={isMobile} />
           ))
         )}
       </div>

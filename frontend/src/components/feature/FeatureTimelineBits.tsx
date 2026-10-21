@@ -328,8 +328,8 @@ export function ExecutorAvatar({ personaId }: { personaId: string | null }) {
 // chatId == null → «чата нет» (без мёртвой ссылки); чат в архиве → «· архив».
 // Навигация (Ф9a): чат — openChatById, задача — openTaskInSection; точка возврата
 // «страница фичи → чат/задача» — recordFeatureReturn (чип возврата — Ф9b).
-export function ExecutorRow({ x, task, now, featureId, isMobile = false }: {
-  x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; isMobile?: boolean;
+export function ExecutorRow({ x, task, now, featureId, featureTitle = null, isMobile = false }: {
+  x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; featureTitle?: string | null; isMobile?: boolean;
 }) {
   const persona = x.personaId ? getPersonaById(x.personaId) : undefined;
   // Персона в данных, но не найдена (недоступна) — нейтральное «персона недоступна»,
@@ -349,13 +349,13 @@ export function ExecutorRow({ x, task, now, featureId, isMobile = false }: {
   // + точка возврата на страницу фичи (Ф9b).
   const openChat = () => {
     if (!x.chatId) return;
-    recordFeatureReturn(featureId, { kind: 'chat', id: x.chatId });
+    recordFeatureReturn(featureId, { kind: 'chat', id: x.chatId }, featureTitle);
     void openChatById(x.chatId);
   };
   // Переход в задачу исполнителя: openTaskInSection (как из карточки «Шаг N фичи»)
   // + точка возврата.
   const openTask = () => {
-    recordFeatureReturn(featureId, { kind: 'task', id: x.taskId });
+    recordFeatureReturn(featureId, { kind: 'task', id: x.taskId }, featureTitle);
     openTaskInSection({ id: x.taskId, projectId: task?.projectId ?? undefined });
   };
 
@@ -415,8 +415,8 @@ export function ExecutorRow({ x, task, now, featureId, isMobile = false }: {
 // Строка витка (макет §5): «виток N» · ревью (кто, вердикт, находки, если есть в данных) ·
 // пара «чат · задача» ревью (NavTargetPair: чат = reviewChatId, задача = reviewTaskId).
 // Вердикт-чип красится по исходу; находки — Verification.Notes (reason), перенос по словам.
-export function RoundRow({ round, featureId, isMobile = false }: {
-  round: FeatureRound; featureId: string; isMobile?: boolean;
+export function RoundRow({ round, featureId, featureTitle = null, isMobile = false }: {
+  round: FeatureRound; featureId: string; featureTitle?: string | null; isMobile?: boolean;
 }) {
   const persona = round.personaId ? getPersonaById(round.personaId) : undefined;
   // Персона недоступна (id в данных, но не найдена) — нейтральное «персона недоступна»,
@@ -433,12 +433,12 @@ export function RoundRow({ round, featureId, isMobile = false }: {
   // + точка возврата на страницу фичи (Ф9b).
   const openChat = () => {
     if (!round.reviewChatId) return;
-    recordFeatureReturn(featureId, { kind: 'chat', id: round.reviewChatId });
+    recordFeatureReturn(featureId, { kind: 'chat', id: round.reviewChatId }, featureTitle);
     void openChatById(round.reviewChatId);
   };
   const openTask = () => {
     if (!round.reviewTaskId) return;
-    recordFeatureReturn(featureId, { kind: 'task', id: round.reviewTaskId });
+    recordFeatureReturn(featureId, { kind: 'task', id: round.reviewTaskId }, featureTitle);
     openTaskInSection({ id: round.reviewTaskId });
   };
 
@@ -491,12 +491,13 @@ export function RoundRow({ round, featureId, isMobile = false }: {
 // витков (RoundRow) + строка «итого». Один шаг раскрыт за раз (состояние — у родителя).
 // Честная деградация: без stepRef кода нет; без исполнителя — «нет исполнителя»;
 // без чата — «чата нет» (NavTargetPair); без модели — чипа нет.
-export function StepRow({ chain, model, expanded, onToggle, featureId, task, isMobile = false }: {
+export function StepRow({ chain, model, expanded, onToggle, featureId, featureTitle = null, task, isMobile = false }: {
   chain: FeatureStepChain;
   model: { label: string; full?: string | null } | null;
   expanded: boolean;
   onToggle: () => void;
   featureId: string;
+  featureTitle?: string | null;
   // Задача шага (первая в цепочке): для пометки «закрыта» (один источник с
   // ExecutorRow: status === 'done', не outcome === 'accepted' — разные поля бэка).
   task?: import('../../types/featureRun').FeatureTask;
@@ -521,13 +522,13 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, task, isM
   // цепочки (задача-шаг); те же пути, что у исполнителя, + точка возврата.
   const openChat = () => {
     if (!chain.chatId) return;
-    recordFeatureReturn(featureId, { kind: 'chat', id: chain.chatId });
+    recordFeatureReturn(featureId, { kind: 'chat', id: chain.chatId }, featureTitle);
     void openChatById(chain.chatId);
   };
   const openTask = () => {
     const taskId = chain.taskIds[0];
     if (!taskId) return;
-    recordFeatureReturn(featureId, { kind: 'task', id: taskId });
+    recordFeatureReturn(featureId, { kind: 'task', id: taskId }, featureTitle);
     openTaskInSection({ id: taskId });
   };
 
@@ -641,7 +642,7 @@ export function StepRow({ chain, model, expanded, onToggle, featureId, task, isM
                 </div>
               )}
               {chain.rounds.map(r => (
-                <RoundRow key={`${chain.stepRef}-${r.n}`} round={r} featureId={featureId} isMobile={isMobile} />
+                <RoundRow key={`${chain.stepRef}-${r.n}`} round={r} featureId={featureId} featureTitle={featureTitle} isMobile={isMobile} />
               ))}
               <div
                 data-testid="feature-step-total"

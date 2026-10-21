@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
+import { useFeatureStageFocus } from '../../lib/featurePage';
 import { C, R, FS, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
@@ -40,11 +41,11 @@ function TimelineNote() {
 // Строка этапа: точка + линия + заголовок (имя · состояние · «≈») + границы + (раскрыто)
 // карточка с исполнителями и плашкой состояния; у «Производство» — ещё и шаги (Ф2b).
 // Клик по заголовку — раскрыть/схлопнуть.
-function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId,
+function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, featureTitle = null,
   chains, showSteps = false, expandedStep = null, onToggleStep, isMobile = false }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
-  now: number; featureId: string;
+  now: number; featureId: string; featureTitle?: string | null;
   chains?: FeatureStepChain[]; showSteps?: boolean;
   expandedStep?: string | null; onToggleStep?: (ref: string) => void;
   isMobile?: boolean;
@@ -145,6 +146,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId,
                 task={x.taskId ? taskMap.get(x.taskId) : undefined}
                 now={now}
                 featureId={featureId}
+                featureTitle={featureTitle}
                 isMobile={isMobile}
               />
             ))
@@ -170,6 +172,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId,
                       expanded={expandedStep === ref}
                       onToggle={() => onToggleStep?.(ref)}
                       featureId={featureId}
+                      featureTitle={featureTitle}
                       task={chain.taskIds[0] ? taskMap.get(chain.taskIds[0]) : undefined}
                       isMobile={isMobile}
                     />
@@ -201,6 +204,8 @@ export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun;
   const chains = run.stepChains ?? [];
   const taskMap = useMemo(() => buildTaskMap(run), [run]);
   const now = useMemo(() => Date.now(), []);
+  // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
+  const featureTitle = run.epic?.title ?? null;
 
   // Текущий этап: первый active (в порядке жизненного цикла); его открыто по умолчанию.
   const currentKey = useMemo<StageKey | null>(() => {
@@ -216,6 +221,21 @@ export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun;
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   const toggleStep = (ref: string) => setExpandedStep(cur => (cur === ref ? null : ref));
 
+  // Якорь этапа (Ф-pl-b): клик по точке на плашке чата открыл страницу на «Хронологии» —
+  // раскрываем/прокручиваем на этот этап. One-shot по seq (тот же приём, что focusFeatureStep):
+  // применённый seq запоминаем — ререндер/повторное чтение не сбрасывают ручной выбор.
+  const stageFocus = useFeatureStageFocus();
+  const stageFocusSeq = useRef(0);
+  useEffect(() => {
+    if (!stageFocus || stageFocus.seq === stageFocusSeq.current) return;
+    stageFocusSeq.current = stageFocus.seq;
+    setExpanded(stageFocus.key as StageKey);
+    const el = document.querySelector(`[data-testid="timeline-stage-${stageFocus.key}"]`);
+    if (el && 'scrollIntoView' in el) {
+      (el as HTMLElement).scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [stageFocus]);
+
   return (
     <div data-testid="feature-timeline-tab" style={{ fontFamily: FONT.sans }}>
       <TimelineNote />
@@ -229,6 +249,7 @@ export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun;
           taskMap={taskMap}
           now={now}
           featureId={run.featureId}
+          featureTitle={featureTitle}
           chains={stage.key === 'prod' ? chains : undefined}
           showSteps={stage.key === 'prod'}
           expandedStep={stage.key === 'prod' ? expandedStep : null}

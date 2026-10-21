@@ -54,6 +54,14 @@ let _eventsLimit: string | undefined = undefined;
 // Живёт в сторе (уровень модуля, не в компоненте): переживает уход на другую вкладку
 // и возврат (локальный useState сбрасывался при перемонтировании вкладки).
 let _eventsExpanded = false;
+// Якорь этапа (волна 3, Ф-pl-b): клик по точке этапа на плашке чата открывает страницу
+// на вкладке «Хронология», ПРОКРУЧЕННОЙ/раскрытой на этом этапе. One-shot сигнал (seq) —
+// тот же приём, что focusFeatureStep в featureRuns.ts: повторный фокус на тот же этап
+// даёт новую ссылку → вкладка раскрывает его заново. Не сбрасывается в setPage: страница
+// монтируется ПОСЛЕ клика, и сброс в setPage стёр бы якорь до того, как вкладка прочитает.
+export interface FeatureStageFocus { key: string; seq: number }
+let _stageFocus: FeatureStageFocus | null = null;
+let _stageFocusSeq = 0;
 // Локальная ошибка догрузки: догрузка всей ленты (eventsLimit=all) упала, но страница
 // остаётся с уже загруженными событиями (не роняется в error); на ленте —
 // «не удалось догрузить · Повторить». Сбрасывается успешной догрузой/перезапросом/сменой fid.
@@ -133,6 +141,24 @@ export function useFeaturePageTab(): FeaturePageTab {
     subscribe,
     () => _tab,
     () => _tab,
+  );
+}
+
+// Якорь этапа (Ф-pl-b): поставить one-shot сигнал «раскрыть этап key на Хронологии».
+// `seq` — монотонный счётчик: повторный клик по тому же этапу всё равно даёт новую ссылку.
+export function focusFeatureStage(key: string) {
+  if (!key) return;
+  _stageFocusSeq += 1;
+  _stageFocus = { key, seq: _stageFocusSeq };
+  emit();
+}
+
+// Хук: текущий one-shot якорь этапа (null, пока сигнала не было).
+export function useFeatureStageFocus(): FeatureStageFocus | null {
+  return useSyncExternalStore(
+    subscribe,
+    () => _stageFocus,
+    () => _stageFocus,
   );
 }
 
@@ -256,9 +282,13 @@ export const __test = {
     _eventsLimit = undefined;
     _eventsExpanded = false;
     _expandError = false;
+    _stageFocus = null;
+    _stageFocusSeq = 0;
     _listeners.clear();
     _realtimeWired = false;
   },
+  focusFeatureStage,
+  stageFocus: () => _stageFocus,
   setState,
   state: () => _state,
   fid: () => _fid,

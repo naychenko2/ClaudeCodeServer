@@ -131,8 +131,8 @@ export function groupEventsByDay(events: FeatureEvent[], now: number): EventDay[
 
 // Строка события (макет .ev): время (mono, muted) · аватар 16 · имя (жирно) ·
 // формулировка · «чат · задача». Тон: wait (info) / error (danger) / merge (accent).
-function EventRow({ e, index, featureId, isMobile = false }: {
-  e: FeatureEvent; index: number; featureId: string; isMobile?: boolean;
+function EventRow({ e, index, featureId, featureTitle = null, isMobile = false }: {
+  e: FeatureEvent; index: number; featureId: string; featureTitle?: string | null; isMobile?: boolean;
 }) {
   const persona = e.personaId ? getPersonaById(e.personaId) : undefined;
   // Персона в данных, но не найдена (недоступна) — нейтральное «персона недоступна»,
@@ -151,13 +151,13 @@ function EventRow({ e, index, featureId, isMobile = false }: {
   // Переход в чат события: openChatById(sessionId) + точка возврата.
   const openChat = () => {
     if (!e.sessionId) return;
-    recordFeatureReturn(featureId, { kind: 'chat', id: e.sessionId });
+    recordFeatureReturn(featureId, { kind: 'chat', id: e.sessionId }, featureTitle);
     void openChatById(e.sessionId);
   };
   // Переход в задачу события: openTaskInSection(taskId) + точка возврата.
   const openTask = () => {
     if (!e.taskId) return;
-    recordFeatureReturn(featureId, { kind: 'task', id: e.taskId });
+    recordFeatureReturn(featureId, { kind: 'task', id: e.taskId }, featureTitle);
     openTaskInSection({ id: e.taskId });
   };
 
@@ -231,10 +231,12 @@ export interface FeatureEventsTabProps {
   eventsTotal: number;
   // Id фичи (навигация: точка возврата).
   featureId: string;
+  // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
+  featureTitle?: string | null;
   isMobile?: boolean;
 }
 
-export function FeatureEventsTab({ events, eventsTotal, featureId, isMobile = false }: FeatureEventsTabProps) {
+export function FeatureEventsTab({ events, eventsTotal, featureId, featureTitle = null, isMobile = false }: FeatureEventsTabProps) {
   // Раскрытие (все события, не только 8) и локальная ошибка догрузки — из стора страницы
   // (не локальный useState): переживают уход на другую вкладку и возврат (м.3), а
   // догруженная лента не перезапрашивается при повторном раскрытии (м.2).
@@ -271,6 +273,7 @@ export function FeatureEventsTab({ events, eventsTotal, featureId, isMobile = fa
               e={e}
               index={shownIndex.get(e)!}
               featureId={featureId}
+              featureTitle={featureTitle}
               isMobile={isMobile}
             />
           ))}

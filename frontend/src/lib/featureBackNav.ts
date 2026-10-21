@@ -28,6 +28,9 @@ export interface BackNav {
   fromKind: 'chat' | 'feature';
   // Куда перешли (чат или страница фичи).
   to: BackNavTarget;
+  // Название исходной фичи (fromKind='feature'): для «← к фиче {название}» в шапке чата
+  // (Ф-pl-b). null — вызывающий не передал (шапка покажет «← к фиче» без имени).
+  fromTitle?: string | null;
 }
 
 // Старая строка в хранилище (id чата) читается как переход в чат; объект — как есть.
@@ -65,9 +68,9 @@ export function clearBackNav(): void {
 // «вернуться на страницу фичи» (Ф9b) читает это и предлагает возврат. Использует
 // тот же указатель _back, что и «← назад» (chat → chat/feature) — один переход
 // за раз; `from` здесь — id фичи (не чата), `fromKind` = 'feature', `to.kind` — 'chat' | 'task'.
-export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }): void {
+export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'task'; id: string }, title?: string | null): void {
   if (!featureId || !to.id) return;
-  _back = { from: featureId, fromKind: 'feature', to: { kind: to.kind, id: to.id } };
+  _back = { from: featureId, fromKind: 'feature', to: { kind: to.kind, id: to.id }, fromTitle: title ?? null };
   emit();
 }
 
@@ -88,6 +91,20 @@ export function useBackNavFrom(sessionId: string | null): string | null {
   return useSyncExternalStore(subscribe, () => backNavFrom(sessionId), () => backNavFrom(sessionId));
 }
 
+// «← к фиче {название}» (Ф-pl-b): чат открыт переходом ИЗ страницы фичи (recordFeatureReturn
+// с fromKind='feature') и текущий чат — цель перехода (to.kind='chat', to.id=sessionId).
+// Возвращает id и название исходной фичи; null — перехода из фичи не было. Отличается от
+// backNavFrom (он — chat→chat): здесь дискриминатор fromKind='feature' обязателен.
+export function featureBackNavFrom(sessionId: string | null): { featureId: string; title: string | null } | null {
+  if (!sessionId || !_back || _back.fromKind !== 'feature' || _back.to.kind !== 'chat' || _back.to.id !== sessionId) return null;
+  return { featureId: _back.from, title: _back.fromTitle ?? null };
+}
+
+// Хук: «← к фиче {название}» для шапки чата (null, пока перехода из фичи не было).
+export function useFeatureBackNav(sessionId: string | null): { featureId: string; title: string | null } | null {
+  return useSyncExternalStore(subscribe, () => featureBackNavFrom(sessionId), () => featureBackNavFrom(sessionId));
+}
+
 // Тестовые швы (не публичное API).
 export const __test = {
   reset() { _back = null; _listeners.clear(); },
@@ -96,5 +113,6 @@ export const __test = {
   clearBackNav,
   getBackNav,
   backNavFrom,
+  featureBackNavFrom,
   normalizeBackTarget,
 };

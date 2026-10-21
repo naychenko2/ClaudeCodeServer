@@ -299,12 +299,14 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(html).toContain('font-weight:700;color:var(--c-accent);background:var(--c-accent-light)');
   });
 
-  it('центрирование по колонке чата: внешний div — max-width:950px (CHAT_MAX_W) + margin:0 auto (useChatGutter)', () => {
+  it('центрирование по колонке чата: обёртка — CSS-переменные useChatGutter (fallback 950px) + margin-left:auto', () => {
     seedIndex(feat('running'), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
-    // Внешняя обёртка баннера центрирует его по колонке чата (как лента): max-width CHAT_MAX_W + margin auto.
-    expect(html).toContain('max-width:950px');
-    expect(html).toContain('margin:0 auto');
+    // Обёртка (data-testid=feature-banner-wrap) читает ширину/сдвиг из CSS-переменных,
+    // которые ставит useChatGutter; в SSR (хук не идёт) виден только fallback 950px.
+    expect(html).toContain('data-testid="feature-banner-wrap"');
+    expect(html).toContain('max-width:var(--cc-chat-box-w, 950px)');
+    expect(html).toContain('margin-left:auto');
   });
 });
 
@@ -313,6 +315,9 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
 describe('FeatureBanner: клик по точке → переход (mount)', () => {
   beforeEach(() => {
     installFakeDom();
+    // useChatGutter (обёртка баннера) создаёт ResizeObserver — в node/fakeDom его нет:
+    // заглушка, иначе mount упал бы на `new ResizeObserver`.
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
     __test.reset();
     runsTest.reset();
     setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
@@ -380,6 +385,28 @@ describe('FeatureBanner: клик по точке → переход (mount)', (
     const onClick = reactProps(pending!)?.onClick as (() => void) | undefined;
     if (onClick) act(() => { onClick(); });
     expect(dispatched.some(d => d.type === 'cc-open-feature'), 'pending не должен диспатчить переход').toBe(false);
+    root.unmount();
+  });
+
+  it('ширина = колонка чата: useChatGutter ставит --cc-chat-box-w на обёртку (mode=center, десктоп)', async () => {
+    const f = feat('running', { keySessionId: 'chat-key' });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+
+    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: false }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    const wrap = findNodeByAttr(container, 'data-testid', 'feature-banner-wrap');
+    expect(wrap, 'нет обёртки feature-banner-wrap').not.toBeNull();
+    // useChatGutter (mode=center) пишет --cc-chat-box-w на обёртку. Мутация «убрать
+    // useChatGutter» → переменная не стоит → тест краснеет (SSR-тест выше её не видит).
+    const w = (wrap! as unknown as { style: Record<string, string> }).style['--cc-chat-box-w'];
+    expect(w, 'useChatGutter не поставил --cc-chat-box-w').toBeTruthy();
     root.unmount();
   });
 });

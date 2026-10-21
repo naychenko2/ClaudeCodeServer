@@ -1,7 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { C, R, FS, FONT, CHAT_MAX_W } from '../../../lib/design';
 import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useFeaturesIndex, featureOf } from '../../../lib/featuresIndex';
+import { useFeatureRuns } from '../../../lib/featureRuns';
+import { useChatGutter } from '../../../lib/chatGutter';
 import { openChatById } from '../../../lib/openChat';
 import { STAGE_NAME, MERGE_PENDING_STATUS } from '../../../lib/chatGroups';
 import { CHAT_ROLE_LABEL } from '../../../lib/featureChatRole';
@@ -327,11 +329,22 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   const featuresOverview = useFeature(FLAGS.featuresOverview);
   const enabled = featureMode && featuresOverview;
-  // Индекс фич проекта (реактивная подписка; один запрос на проект).
-  const index = useFeaturesIndex(projectId, enabled);
+  // Индекс фич проекта (реактивная подписка; один запрос на проект). Возвращаемое
+  // значение здесь не нужно (шторка берёт данные из runs) — но вызов хука обязателен:
+  // он грузит стор, из которого читает featureOf(sessionId) (строка + переключатель).
+  useFeaturesIndex(projectId, enabled);
+  // Агрегаты фич чата (GET features?sessionId=) — данные ШТОРКИ (Ф-pl-b): 7 этапов,
+  // исполнители, переключатель фич. Тот же источник, что у попапа, без догрузки features/{id}.
+  const runs = useFeatureRuns(sessionId, enabled);
+  // Ширина = колонка чата (CHAT_MAX_W + gutter + компенсация полосы) — та же обвязка,
+  // что у ленты и композера (useChatGutter). Ref — на обёртке (ниже).
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  useChatGutter(wrapRef, CHAT_MAX_W, isMobile ? 'off' : 'center');
+  // Элемент «где мы»: на него возвращается фокус при закрытии шторки (Ф-pl-b).
+  const whereRef = useRef<HTMLSpanElement | null>(null);
   // Мультифича: какая фича показана (индекс в featureOf, порядок — от бэка).
   const [selIdx, setSelIdx] = useState(0);
-  // Шторка (мобила): тап по «где мы» открывает; сбрасывается при смене чата.
+  // Шторка: тап по строке (мобила И десктоп) открывает; сбрасывается при смене чата.
   const [sheetOpen, setSheetOpen] = useState(false);
 
   // Фичи, к которым принадлежит чат; первая — сильнейшая связь (порядок — от бэка).
@@ -371,21 +384,25 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
     else openFeaturePage();
   };
 
-  // «Где мы»: на мобиле — тап открывает шторку (роль button, клавиатура Enter/Space).
+  // «Где мы»: тап открывает шторку (Ф-pl-b) — на мобиле bottom-sheet, на десктопе
+  // раскрывающуюся панель под строкой. Роль button, клавиатура Enter/Space, aria-expanded.
+  // whereRef — элемент, на который возвращается фокус при закрытии шторки.
   const whereNode = (
     <span
+      ref={whereRef}
       data-testid="feature-where"
-      onClick={isMobile ? () => setSheetOpen(true) : undefined}
-      role={isMobile ? 'button' : undefined}
-      tabIndex={isMobile ? 0 : undefined}
-      onKeyDown={isMobile ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSheetOpen(true); } } : undefined}
-      aria-label={isMobile ? `Фича «${feature.title}»: ${model.where}. Подробнее` : undefined}
+      onClick={() => setSheetOpen(true)}
+      role="button"
+      tabIndex={0}
+      aria-expanded={sheetOpen}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSheetOpen(true); } }}
+      aria-label={`Фича «${feature.title}»: ${model.where}. Подробнее`}
       style={{
         fontSize: FS.sm,
         color: model.whereTone === 'wait' ? C.info : model.whereTone === 'stop' ? C.dangerText : C.textHeading,
         fontWeight: model.whereTone === 'run' ? 400 : 600,
         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
-        cursor: isMobile ? 'pointer' : 'default',
+        cursor: 'pointer',
       }}
     >
       {model.where}
@@ -412,18 +429,6 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
       <RoleChip label={model.role} isKey={model.isKey} />
     </span>
   );
-
-  // Модель для шторки (FeatureBannerSheet): та же, что строит плашка.
-  const sheetModel: FeatureBannerModel = {
-    tone: model.tone,
-    glyph: model.glyph,
-    status: model.where,
-    statusTone: model.whereTone,
-    counter: '',
-    role: model.role,
-    isKey: model.isKey,
-    button: { label: model.action.label, kind: model.action.kind === 'page' || model.action.kind === 'open' ? 'feature' : 'key' },
-  };
 
   // Мобила (360 px, макет .va): строка переносится, название уходит (оно в шапке),
   // тач-цели ≥ 40; taп по «где мы» открывает шторку.
@@ -458,13 +463,11 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
         <div style={{ marginTop: 6 }}>{roleChip}</div>
         {sheetOpen && (
           <FeatureBannerSheet
-            feature={feature}
-            model={sheetModel}
-            projectId={projectId}
-            index={index}
-            run={null}
-            onGoKey={goKey}
+            runs={runs}
+            isMobile
             onClose={() => setSheetOpen(false)}
+            focusTarget={whereRef}
+            projectId={projectId}
           />
         )}
       </div>
@@ -472,7 +475,10 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
   } else {
     // Десктоп: ОДНА строка ≈36 px — точки · название · «где мы» · [· ещё N] · действие · роль.
     // Без переноса: nowrap + ellipsis у названия/«где мы», у точек/действия/чипа flex-shrink:0.
+    // Тап по строке раскрывает панель фичи ПОД строкой (Ф-pl-b) — раскрывающаяся панель,
+    // не bottom-sheet (тот паттерн — на мобиле).
     inner = (
+      <>
       <div
         role="region"
         aria-label="Фича этого чата"
@@ -510,14 +516,36 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
         {roleChip}
       </div>
     </div>
-  );
+      {sheetOpen && (
+        <FeatureBannerSheet
+          runs={runs}
+          onClose={() => setSheetOpen(false)}
+          focusTarget={whereRef}
+          projectId={projectId}
+        />
+      )}
+      </>
+    );
   }
 
   // Центрирование по колонке чата (CHAT_MAX_W) — та же обвязка, что у ленты сообщений
   // (useChatGutter): баннер самодостаточен, ChatPanel просто рендерит <FeatureBanner>.
+  // useChatGutter кладёт ширину/сдвиг в CSS-переменные (--cc-chat-box-w/-shift) — строка
+  // И шторка (FeatureBannerSheet) живут в той же колонке, что и лента сообщений.
   // На узком окне (< CHAT_MAX_W) maxWidth не режет — баннер во всю ширину с полями 16 px.
   return (
-    <div style={{ width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', padding: '0 16px', boxSizing: 'border-box' }}>
+    <div
+      ref={wrapRef}
+      data-testid="feature-banner-wrap"
+      style={{
+        width: '100%',
+        maxWidth: 'var(--cc-chat-box-w, 950px)',
+        marginRight: 'var(--cc-chat-box-shift, 0px)',
+        marginLeft: 'auto',
+        padding: '0 16px',
+        boxSizing: 'border-box',
+      }}
+    >
       {inner}
     </div>
   );

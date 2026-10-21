@@ -46,6 +46,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib
 import { FeatureCenter } from '../components/feature/FeatureCenter';
 import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
 import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
+import { focusFeatureStage } from '../lib/featurePage';
 import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
@@ -1616,11 +1617,14 @@ const windowWidth = useWindowWidth();
   // Показ страницы и запись истории — общие.
   useEffect(() => {
     const onOpenFeature = (e: Event) => {
-      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null; fromChat?: boolean }>).detail;
+      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null; fromChat?: boolean; stage?: string }>).detail;
       if (!d?.featureId) return;
       if (d.fromChat && d.fromChatId) recordBackNav(d.fromChatId, { kind: 'feature', id: d.featureId });
       else if (!d.fromChat) clearBackNav();
       setOpenFeatureId(d.featureId);
+      // Якорь этапа (Ф-pl-b): клик по точке на плашке чата открывает «Хронологию»,
+      // раскрытую/прокрученную на этом этапе. One-shot: вкладка прочитает и сбросит.
+      if (d.stage) focusFeatureStage(d.stage);
       // «Открыли» — в момент действия, даже повторное открытие той же фичи (seq, не вывод
       // из сравнения id): повторный «Фича →» возвращает страницу поверх ранее открытого файла.
       setFeatureOpenedAt(bumpOpenSeq());

@@ -17,6 +17,7 @@ import { WorkspacePage } from './WorkspacePage';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { __test as backNavTest, recordBackNav } from '../lib/featureBackNav';
 import { __test as indexTest } from '../lib/featuresIndex';
+import { setFeaturePageTab } from '../lib/featurePage';
 import type { FeatureIndexFeature, FeaturesIndex } from '../types/featureIndex';
 import type { Project, Session } from '../types';
 import {
@@ -49,13 +50,13 @@ const { store, sstore } = vi.hoisted(() => {
   return { store, sstore };
 });
 
-// ── workspaceState: activeSession задаётся из хранилища (инициализатор WorkspacePage) ──
-const wsState = vi.hoisted(() => ({ activeSession: null as unknown }));
+// ── workspaceState: activeSession и openFile задаются из хранилища (инициализатор WorkspacePage) ──
+const wsState = vi.hoisted(() => ({ activeSession: null as unknown, openFile: null as string | null }));
 vi.mock('../lib/workspaceState', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/workspaceState')>();
   return {
     ...orig,
-    loadWorkspaceState: () => ({ activeSession: wsState.activeSession }),
+    loadWorkspaceState: () => ({ activeSession: wsState.activeSession, openFile: wsState.openFile }),
     saveWorkspaceState: () => {},
     loadFileFullscreenPref: () => false, saveFileFullscreenPref: () => {},
     isLeftTab: (t: string) => ['sessions', 'changes', 'tasks', 'personas', 'skills', 'tools', 'knowledge'].includes(t),
@@ -190,11 +191,12 @@ vi.mock('../components/SessionList', async () => {
 });
 
 // ── useFeaturePage: состояние страницы (run.epic.title) — no-op api отдаёт null ──
+// page — mockData.featurePage (динамически): тесты «Планы и макеты» задают plans/mockups.
 vi.mock('../lib/featurePage', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/featurePage')>();
   return {
     ...orig,
-    useFeaturePage: () => ({ status: 'ok', page: { run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0 } }),
+    useFeaturePage: () => ({ status: 'ok', page: mockData.featurePage ?? { run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0 } }),
   };
 });
 
@@ -329,6 +331,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     mockData.featurePage = { run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0 };
     mockData.chat = session;
     wsState.activeSession = session;
+    wsState.openFile = null;
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -770,6 +773,100 @@ describe('WorkspacePage: центр — страница фичи соседом
     // Адрес — проект (без feature, без chat): список.
     expect(win.window.location.hash, 'адрес не #/project/p1 (m7b)').toBe('#/project/p1');
     void container;
+  });
+
+  // === Major (1) — сквозная защита на НАСТОЯЩЕЙ десктопной раскладке (DesktopWorkspace +
+  // FeatureCenter с реальными children, не заглушкой). Страница уступает центр ТОЛЬКО
+  // файлу, открытому СО СТРАНИЦЫ («Открыть макет»); «чужой» файл (из дерева) её не вытесняет.
+  // Мутация «yielded по факту openFile» (yielded={!!p.openFile}, исходный баг) краснеет в (а);
+  // мутация «yielded={false}» (буквальный возврат бага) краснеет в (б).
+
+  // Клик по узлу по data-testid (+ опц. title): reactProps.onClick в act().
+  function clickNode(container: any, testId: string, title?: string): void {
+    let node: any = null;
+    const walk = (x: any): void => {
+      if (node) return;
+      if (x.nodeType === 1 && x.getAttribute?.('data-testid') === testId && (title === undefined || x.getAttribute?.('title') === title)) { node = x; return; }
+      for (const c of x.childNodes ?? []) walk(c);
+    };
+    walk(container);
+    expect(node, `узел ${testId}${title ? ` (title=${title})` : ''} не найден`).not.toBeNull();
+    const props = reactProps(node);
+    expect(props?.onClick, `onClick у ${testId}`).toBeTruthy();
+    act(() => { (props!.onClick as () => void)(); });
+  }
+
+  // (а) файл уже открыт (из дерева) → «Фича →» → страница ВИДНА (центр скрыт), а не наоборот.
+  it('major(а): файл открыт (из дерева) → «Фича →» → страница видна, центр (файл) скрыт', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    // Файл открыт ДО страницы (из дерева): wsState.openFile задаёт инициализатор openFile.
+    wsState.openFile = 'docs/mockups/foo.html';
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Открываем страницу фичи из чата.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница фичи смонтирована.
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect(page, 'обёртка страницы фичи не смонтирована').not.toBeNull();
+    // КЛЮЧЕВОЕ (major а): страница ВИДНА (display:flex) — «чужой» файл её не вытеснил.
+    expect((page as any).style?.display, 'страница скрыта «чужим» (файл из дерева) (major а)').toBe('flex');
+    // Центр (файл) скрыт (display:none): страница показана поверх.
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл) не скрыт (major а)').toBe('none');
+  });
+
+  // (б) со страницы «Открыть макет» → файл ВИДИМ, страница СКРЫТА; закрыл файл → страница вернулась.
+  it('major(б): «Открыть макет» → файл виден, страница скрыта; закрыл файл → страница вернулась', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    // Страница фичи с макетом (existing html) + вкладка «Планы и макеты».
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Открываем страницу фичи.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Выбрать макет (строка) → карточка деталей.
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Клик «Открыть макет» → onOpenFile (onOpenFileFromFeature) → файл открыт.
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (major б): файл ВИДИМ (центр display:flex), страница СКРЫТА (display:none).
+    // Мутация «yielded={false}» (буквальный возврат исходного бага) краснеет: страница
+    // осталась бы видной (display:flex), а файл — в скрытом центре (display:none).
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл) не виден (major б)').toBe('flex');
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не скрыта (major б)').toBe('none');
   });
 });
 

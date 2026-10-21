@@ -226,6 +226,19 @@ export function DesktopWorkspace(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.isTablet, p.activeSession?.id]);
 
+  // Страница фичи уступает центр ТОЛЬКО файлу, открытому СО СТРАНИЦЫ («Открыть макет»):
+  // файл из дерева/задачи её не вытесняет — страница показывается поверх (центр скрыт),
+  // как до доработки. fileFromFeature — путь такого файла; сбрасывается при закрытии
+  // файла и при смене/закрытии страницы (иначе «свой» файл, переоткрытый из дерева,
+  // снова вытеснил бы страницу).
+  const [fileFromFeature, setFileFromFeature] = useState<string | null>(null);
+  const onOpenFileFromFeature = (path: string) => {
+    setFileFromFeature(path);
+    p.onOpenFileFromTree(path);
+  };
+  useEffect(() => { if (!p.openFile) setFileFromFeature(null); }, [p.openFile]);
+  useEffect(() => { if (!p.openFeatureId) setFileFromFeature(null); }, [p.openFeatureId]);
+
   // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
   const handleSplitDrag = (e: ReactPointerEvent) => {
     e.preventDefault();
@@ -479,10 +492,12 @@ export function DesktopWorkspace(p: Props) {
           Страница фичи (Ф2.3/C1) — СОСЕД центра: при открытой (openFeatureId) весь центр
           прячется display:none (не размонтируется), страница рисуется рядом. FeatureCenter —
           общий паттерн с мобильной веткой.
-          Уступка: файл, открытый со страницы фичи («Открыть макет»), должен быть ВИДИМ —
-          иначе FileViewer лежит в скрытом центре и клик без эффекта. Страница остаётся
-          смонтированной (display:none): закрыл файл — вернулась с прежним состоянием. */}
-      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree} yielded={!!p.openFile}>
+          Уступка: страница уступает центр ТОЛЬКО файлу, открытому СО СТРАНИЦЫ («Открыть
+          макет») — иначе FileViewer лежит в скрытом центре и клик без эффекта. Файл из
+          дерева/задачи страницу не вытесняет: она показывается поверх (центр скрыт).
+          Страница остаётся смонтированной (display:none): закрыл «свой» файл — вернулась
+          с прежним состоянием. */}
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} onOpenFile={onOpenFileFromFeature} yielded={fileFromFeature !== null && p.openFile === fileFromFeature}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />

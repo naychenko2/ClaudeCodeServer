@@ -89,6 +89,39 @@ function collectText(container: FNode, testId: string): string[] {
   return out;
 }
 
+// Текст статус-чипа В СТРОКЕ макета с заданным title (путь): привязывает чип к
+// конкретной версии, а не к «есть оба чипа» в списке. Строка не найдена → null.
+function chipTextInRow(container: FNode, rowTitle: string): string | null {
+  let row: FNode | null = null;
+  (function walk(n: FNode): void {
+    if (row) return;
+    if (n.nodeType === 1 && n.getAttribute('data-testid') === 'mockup-row' && n.getAttribute('title') === rowTitle) { row = n; return; }
+    for (const c of n.childNodes) walk(c);
+  })(container);
+  if (!row) return null;
+  let chipText: string | null = null;
+  (function walkChip(n: FNode): void {
+    if (chipText != null) return;
+    if (n.nodeType === 1 && n.getAttribute('data-testid') === 'mockup-status-chip') { chipText = textNodes(n).join(''); return; }
+    for (const c of n.childNodes) walkChip(c);
+  })(row);
+  return chipText;
+}
+
+// Клик по строке макета с заданным title (путь): ищет mockup-row и вызывает onClick.
+function clickRowByTitle(container: FNode, rowTitle: string): void {
+  let row: FNode | null = null;
+  (function walk(n: FNode): void {
+    if (row) return;
+    if (n.nodeType === 1 && n.getAttribute('data-testid') === 'mockup-row' && n.getAttribute('title') === rowTitle) { row = n; return; }
+    for (const c of n.childNodes) walk(c);
+  })(container);
+  expect(row, `строка макета ${rowTitle} не найдена`).not.toBeNull();
+  const props = reactProps(row!);
+  expect(props?.onClick, `onClick у строки ${rowTitle}`).toBeTruthy();
+  act(() => { (props!.onClick as () => void)(); });
+}
+
 describe('FeaturePlansTab', () => {
   beforeEach(() => {
     installFakeDom();
@@ -223,10 +256,39 @@ describe('FeaturePlansTab', () => {
     // Раскрыть «Прошлые версии» — там прошлая версия foo-1.
     click(container as FNode, 'mockup-past-toggle');
     await flush();
-    const chips = collectText(container, 'mockup-status-chip');
-    // foo-2 (текущая) → «утверждён»; foo-1 (прошлая) → «заменён».
-    expect(chips).toContain('утверждён');
-    expect(chips).toContain('заменён');
+    // Чип привязан к КОНКРЕТНОЙ версии: foo-1 (прошлая) → «заменён», foo-2 (текущая) → «утверждён».
+    // Мутация «чип не различает текущую/прошлую» (оба «утверждён» или оба «заменён») краснеет.
+    expect(chipTextInRow(container as FNode, 'docs/mockups/foo-1.html'), 'foo-1 (прошлая) не «заменён»').toBe('заменён');
+    expect(chipTextInRow(container as FNode, 'docs/mockups/foo-2.html'), 'foo-2 (текущая) не «утверждён»').toBe('утверждён');
+  });
+
+  // === 6d. «Заменён» в КАРТОЧКЕ (деталь): прошлая версия → чип «заменён» (не статус) ===
+  // Мутация selectedMockupReplaced=false (FeaturePlansTab) краснеет: карточка покажет
+  // статус из шапки («утверждён»), а не «заменён».
+  it('карточка деталей: прошлая версия → чип «заменён» (мутация selectedMockupReplaced=false краснеет)', async () => {
+    const page = pageData({
+      mockups: [
+        mockup({ path: 'docs/mockups/foo-1.html', title: 'foo 1', status: 'approved' }),
+        mockup({ path: 'docs/mockups/foo-2.html', title: 'foo 2', status: 'approved' }),
+      ],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    // Раскрыть «Прошлые версии» и выбрать прошлую версию foo-1 → карточка деталей.
+    click(container as FNode, 'mockup-past-toggle');
+    await flush();
+    clickRowByTitle(container as FNode, 'docs/mockups/foo-1.html');
+    await flush();
+    // Карточка деталей смонтирована.
+    const card = findNodeByAttr(container as FNode, 'data-testid', 'mockup-card');
+    expect(card, 'карточка макета (деталь) не смонтирована').not.toBeNull();
+    // Статус-чип В КАРТОЧКЕ — «заменён» (прошлая версия), не «утверждён» (статус из шапки).
+    const chip = (function findChipInCard(n: FNode): FNode | null {
+      if (n.nodeType === 1 && n.getAttribute('data-testid') === 'mockup-status-chip') return n;
+      for (const c of n.childNodes) { const r = findChipInCard(c); if (r) return r; }
+      return null;
+    })(card!);
+    expect(chip, 'статус-чип в карточке не найден').not.toBeNull();
+    expect(textNodes(chip!).join(''), 'чип в карточке не «заменён»').toBe('заменён');
   });
 
   // === 6c. device без планов (major 4): плашка, а не «нет ничего» ===
@@ -237,6 +299,25 @@ describe('FeaturePlansTab', () => {
     expect(device, 'плашка «на устройстве» показана').not.toBeNull();
     const allEmpty = findNodeByAttr(container as FNode, 'data-testid', 'plans-all-empty');
     expect(allEmpty, '«нет ничего» не показано').toBeNull();
+  });
+
+  // === 6e. Авто-выбор нового плана (minor 1): смена последнего плана → деталь не пустеет ===
+  // selected инициализируется один раз (ленивый useState): если данные обновились и дедуп
+  // сменил последний plan, selectedPlan=null → деталь пустела бы («Выберите документ»). Эффект
+  // авто-выбирает первый доступный план. Мутация «убрать эффект» (selected не обновляется)
+  // краснеет: деталь остаётся пустой.
+  it('авто-выбор: смена последнего плана после обновления → деталь выбирает новый план (не пустеет)', async () => {
+    const pageA = pageData({ plans: [plan({ taskId: 'a', title: 'План A' })] });
+    const { root, container } = mount(createElement(FeaturePlansTab, { page: pageA, isMobile: false }));
+    // Начальный выбор: единственный план A открыт (читалка), деталь не пуста.
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-detail-empty'), 'деталь пуста в начале').toBeNull();
+    // Обновление данных: план A заменён планом B (дедуп сменил последний plan).
+    const pageB = pageData({ plans: [plan({ taskId: 'b', title: 'План B' })] });
+    act(() => { root.render(createElement(FeaturePlansTab, { page: pageB, isMobile: false })); });
+    await flush();
+    // Деталь не пустеет: авто-выбран новый план B (читалка открыта, не «Выберите документ»).
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-detail-empty'), 'деталь пустая после смены плана (minor 1)').toBeNull();
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plan-reader'), 'читалка плана B не открыта (minor 1)').not.toBeNull();
   });
 
   // === 7. Счётчик вкладки: документы + живые макеты ===

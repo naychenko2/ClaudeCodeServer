@@ -11,7 +11,7 @@
 // Состояния: документов нет, макеты есть → «Планов пока нет…»; mockupsUnavailable='device'
 // → «Макеты локального проекта видны только на устройстве»; нет ничего → общее пустое.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, MessageCircle } from 'lucide-react';
 import { C, R, FS, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -120,6 +120,14 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
   const selectedMockup = selected?.kind === 'mockup' ? mockups.find(m => m.path === selected.path) ?? null : null;
   // Выбранный макет — прошлая версия (не текущая в группе) → чип «заменён» в карточке.
   const selectedMockupReplaced = selectedMockup ? !isCurrentOfGroup(selectedMockup, mockups) : false;
+  // Авто-выбор нового плана: если выбранный план исчез из списка (дедуп сменил последний
+  // план после обновления данных) — выбираем первый доступный, чтобы деталь не пустела
+  // («Выберите документ или макет»). Мок-выбор (selected.kind='mockup') не трогаем.
+  useEffect(() => {
+    if (selected?.kind === 'plan' && !selectedPlan && plans.length > 0) {
+      setSelected({ kind: 'plan', id: plans[0].taskId });
+    }
+  }, [selected, selectedPlan, plans]);
 
   const hasAnything = plans.length > 0 || mockups.length > 0;
   // «Документов и макетов пока нет» — только когда пусто И макеты не «на устройстве»:

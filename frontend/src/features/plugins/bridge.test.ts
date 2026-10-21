@@ -117,10 +117,10 @@ vi.mock('../../lib/api', () => ({
 
 // Динамический импорт ПОСЛЕ стабов: модули читают window/document при загрузке.
 const {
-  PANEL_CSP, PANEL_MAX_HEIGHT, PANEL_MAX_HEIGHT_MOBILE, PANEL_MIN_HEIGHT,
+  PANEL_CSP, PANEL_MIN_HEIGHT,
   PANEL_CONTENT_MAX_HEIGHT, MAX_PANEL_FILE_BYTES, panelWindowOf,
   validateFrameMessage, buildPanelSrcdoc, buildInitMessage, buildResultMessage,
-  buildThemeMessage, clampPanelHeight, clampContentHeight, deniedKeyOf, bridgeErrorText,
+  buildThemeMessage, clampContentHeight, deniedKeyOf, bridgeErrorText,
 } = await import('./bridge');
 const { PluginFrame } = await import('./PluginFrame');
 // Круговой разбор (ADR-031 §3.6): DOMParser только в тесте — парсит ВНЕШНИЙ документ
@@ -423,17 +423,8 @@ describe('сообщения хоста', () => {
   });
 });
 
-describe('clampPanelHeight (потолок слота)', () => {
-  it('в пределах — как есть; за потолком — потолок; под полом — пол', () => {
-    expect(clampPanelHeight(100)).toBe(100);
-    expect(clampPanelHeight(900)).toBe(PANEL_MAX_HEIGHT);
-    expect(clampPanelHeight(900, true)).toBe(PANEL_MAX_HEIGHT_MOBILE);
-    expect(clampPanelHeight(10)).toBe(PANEL_MIN_HEIGHT);
-  });
-});
-
-// Высота КОНТЕНТА установленной панели (S1): resize = высота контента, хост ставит её
-// фрейму. Порог снизу 48, страховочный потолок 20000 (не «размер слота» 800).
+// Высота КОНТЕНТА установленной панели (S1): resize = высота контента,
+// хост ставит её фрейму. Порог снизу 48, страховочный потолок 4000 (не «размер слота» 800).
 describe('clampContentHeight (высота контента, S1)', () => {
   it('2000 → 2000; 30000 → 20000 (потолок); 10 → 48 (порог)', () => {
     expect(clampContentHeight(2000)).toBe(2000);
@@ -472,6 +463,21 @@ function findElement(tree: unknown, type: string): { props: Record<string, unkno
   const list = Array.isArray(children) ? children : children !== undefined && children !== null ? [children] : [];
   for (const child of list) {
     const found = findElement(child, type);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Первый элемент дерева, чей style удовлетворяет предикату (обёртка фрейма и т.п.).
+function findByStyle(tree: unknown, pred: (st: Record<string, unknown>) => boolean): { props: Record<string, unknown> } | null {
+  if (tree === null || tree === undefined || typeof tree !== 'object') return null;
+  const el = tree as { props?: Record<string, unknown> };
+  const st = el.props?.style as Record<string, unknown> | undefined;
+  if (st && pred(st)) return { props: el.props! };
+  const children = el.props?.children;
+  const list = Array.isArray(children) ? children : children !== undefined && children !== null ? [children] : [];
+  for (const child of list) {
+    const found = findByStyle(child, pred);
     if (found) return found;
   }
   return null;
@@ -644,7 +650,13 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
 
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'ready' });
 
-    // 2000 → 2000 (в пределах: высота контента ставится фрейму как есть)
+    // Обёртка фрейма — единственный скролл панели (R-A, critical 1): без overflow:auto
+    // фрейм выше карточки (resize) недостижим. Мутация «убрать overflow» красит тест.
+    const wrap = findByStyle(tree, st => st.position === 'relative' && st.flex === 1);
+    expect(wrap, 'обёртка фрейма найдена').not.toBeNull();
+    expect((wrap!.props.style as Record<string, unknown>).overflow).toBe('auto');
+
+    // 2000 → 2000 (высота контента ставится фрейму как есть)
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 2000 });
     let el = findElement(render(), 'iframe');
     expect((el!.props.style as Record<string, unknown>).height).toBe(2000);
@@ -658,5 +670,6 @@ describe('PluginFrame: мост v1 (мини-раннер)', () => {
     fireMessage(panelWindow, 'null', { source: 'ccs-plugin', v: 1, type: 'resize', height: 10 });
     el = findElement(render(), 'iframe');
     expect((el!.props.style as Record<string, unknown>).height).toBe(PANEL_MIN_HEIGHT);
+
   });
 });

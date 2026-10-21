@@ -96,6 +96,11 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // подсветки, ни dropEffect (курсор сам покажет запрет).
   const incoming = from !== null && (accepts?.(from) ?? true) ? from : null;
 
+  // Токен drag'а: dragstart откладывает startPanelDrag на rAF, а dragend (отмена)
+  // может прийти РАНЬШЕ кадра. Счётчик делает порядок неважным: onDragEnd инкрементит
+  // токен (гасит отложенный старт), и rAF стартует drag'а только если токен не изменился.
+  const dragTokenRef = useRef(0);
+
   // Место под курсором принадлежит ЭТОЙ зоне и имеет такую метку
   const isOver = (tag: string) => over?.zone === zone && over.tag === tag;
 
@@ -139,9 +144,19 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
       // drag. Заметно это было только на иконках рельсы — карточку панели тащат
       // за шапку, а её DOM оверлей рельсы не трогает. Кадр задержки не виден:
       // человек в этот момент ещё только сдвигает курсор.
-      requestAnimationFrame(() => startPanelDrag(k, zone, opts?.tucked));
+      // Токен: dragend (отмена) может прийти РАНЬШЕ кадра — onDragEnd инкрементит
+      // токен, и rAF стартует drag'а только если токен не изменился (порядок не важен).
+      const token = ++dragTokenRef.current;
+      requestAnimationFrame(() => {
+        if (dragTokenRef.current === token) startPanelDrag(k, zone, opts?.tucked);
+      });
     },
-    onDragEnd: endPanelDrag,
+    onDragEnd: () => {
+      // Инкремент ГАСИТ отложенный startPanelDrag (dragend раньше rAF-кадра),
+      // затем обычный конец drag'а (снимает data-panel-drag и сбрасывает from).
+      dragTokenRef.current++;
+      endPanelDrag();
+    },
   });
 
   // Пропсы одной панели: подсветка источника/цели + обработчики дропа НА неё.

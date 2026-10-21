@@ -192,3 +192,49 @@ test('S1: внутренний документ 2000px без собственн
   expect(dims!.scrollHeight, 'scrollHeight внутреннего документа').toBe(dims!.clientHeight);
   expect(dims!.clientHeight, 'внутренний документ растянут на 2000px').toBe(2000);
 });
+
+// === R-A, critical 1: прокрутка на уровне КАРТОЧКИ ===
+//
+// Кейс S1 выше мерит только геометрию внутреннего документа и был зелёным при дефекте:
+// фрейм 2000px внутри карточки 400px с overflow:hidden и без скролла у обёртки — низ
+// панели недостижим. Здесь структура приложения: карточка (overflow:hidden, 400px) →
+// обёртка PluginFrame (overflow:auto) → фрейм высотой из resize. Колесо над панелью
+// обязано прокрутить ОБЁРТКУ, а внутренний документ остаётся нескроллимым.
+// Мутация «убрать overflow:auto у обёртки» красит: scrollTop обёртки остаётся 0.
+function cardHostHtml(): string {
+  const shell = buildPanelSrcdoc(tallPanelHtml, 'light', shimJs, shimCss);
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0">' +
+    '<div id="card" style="width:900px;height:400px;overflow:hidden;display:flex;flex-direction:column">' +
+    '<div id="wrap" style="position:relative;flex:1;min-height:0;overflow:auto">' +
+    '<iframe id="outer" style="width:100%;min-height:100%;height:100%;border:0;display:block" srcdoc="' + esc(shell) + '"></iframe>' +
+    '</div></div>' +
+    '<script>' +
+    'window.addEventListener("message", function (e) {' +
+    '  var d = e.data;' +
+    '  if (!d || d.source !== "ccs-plugin" || d.v !== 1 || d.type !== "resize") return;' +
+    '  document.getElementById("outer").style.height = d.height + "px";' +
+    '});' +
+    '</script></body></html>'
+  );
+}
+
+test('R-A: колесо над панелью выше карточки прокручивает обёртку карточки', async ({ page }) => {
+  await page.setContent(cardHostHtml(), { waitUntil: 'load' });
+  await page.waitForFunction(
+    () => (document.getElementById('outer') as HTMLIFrameElement).style.height === '2000px',
+    { timeout: 10_000 },
+  );
+
+  await page.mouse.move(450, 200);
+  await page.mouse.wheel(0, 1500);
+  await page.waitForFunction(() => (document.getElementById('wrap') as HTMLElement).scrollTop > 0, { timeout: 5_000 });
+
+  const m = await page.evaluate(() => {
+    const wrap = document.getElementById('wrap') as HTMLElement;
+    return { wrapScroll: wrap.scrollTop, wrapScrollable: wrap.scrollHeight > wrap.clientHeight, pageScroll: window.scrollY };
+  });
+  expect(m.wrapScrollable, 'обёртка выше карточки — есть что прокручивать').toBe(true);
+  expect(m.wrapScroll, 'колесо прокрутило обёртку').toBeGreaterThan(0);
+  expect(m.pageScroll, 'страница не прокручивается').toBe(0);
+});

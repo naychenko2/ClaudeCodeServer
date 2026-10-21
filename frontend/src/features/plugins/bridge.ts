@@ -196,28 +196,18 @@ export function buildPanelSrcdoc(panelHtml: string, theme: BridgeTheme = 'light'
 
 // === Высота ===
 
-// Потолок высоты острова (px): панель не может вырасти выше слота, снизу —
-// скролл. Мобильный потолок ниже: панель на телефоне — на весь экран, но
-// под шапку и композер.
+// Окно предпросмотра черновика (DraftCard): выше окна контент прокручивается.
+// Установленная панель (PluginFrame) окном не ограничена — её высоту задаёт карточка.
 export const PANEL_MAX_HEIGHT = 800;
 export const PANEL_MAX_HEIGHT_MOBILE = 560;
 export const PANEL_MIN_HEIGHT = 48;
 
-// Кламп желаемой высоты (resize) в пределы слота.
-export function clampPanelHeight(h: number, mobile = false): number {
-  const max = mobile ? PANEL_MAX_HEIGHT_MOBILE : PANEL_MAX_HEIGHT;
-  return Math.min(max, Math.max(PANEL_MIN_HEIGHT, Math.round(h)));
-}
-
-// Потолок высоты КОНТЕНТА (px): страховочный, не «размер слота». Установленная
-// панель (PluginFrame) растёт под контент: resize = высота контента, хост ставит её
-// фрейму (порог снизу PANEL_MIN_HEIGHT, этот потолок — от аномально длинных панелей).
-// Карточка ленты (DraftCard) остаётся на PANEL_MAX_HEIGHT (800).
+// Потолок высоты КОНТЕНТА (px): страховочный, не «размер слота». resize = высота
+// контента (ADR-031 §3.3, решение Александра, задача d7a6f751): хост ставит её фрейму,
+// порог снизу PANEL_MIN_HEIGHT; панель выше потолка обрезается (аномалия).
 export const PANEL_CONTENT_MAX_HEIGHT = 20_000;
 
-// Кламп высоты контента (resize) установленной панели: порог снизу, страховочный
-// потолок. В отличие от clampPanelHeight (потолок слота 800/560) — без mobile-ветки:
-// контент на мобиле тоже растёт, прокрутку держит обёртка карточки.
+// Кламп высоты контента (resize): порог снизу, страховочный потолок.
 export function clampContentHeight(h: number): number {
   return Math.min(PANEL_CONTENT_MAX_HEIGHT, Math.max(PANEL_MIN_HEIGHT, Math.round(h)));
 }

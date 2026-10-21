@@ -23,7 +23,7 @@ import {
   acceptDisabledReason, buildFixReply, diffFileLabel, draftContributions, isRejectedExpired, problemCount,
   type DraftContribution,
 } from './draftModel';
-import { buildInitMessage, buildPanelSrcdoc, validateFrameMessage, panelWindowOf, MAX_PANEL_FILE_BYTES } from './bridge';
+import { buildInitMessage, buildPanelSrcdoc, validateFrameMessage, panelWindowOf, MAX_PANEL_FILE_BYTES, clampContentHeight, PANEL_MAX_HEIGHT, PANEL_MAX_HEIGHT_MOBILE } from './bridge';
 import type {
   PluginDraftDiff, PluginDraftDiffFile, PluginDraftDiffLine, PluginDraftPreview, PluginDraftSummary,
 } from '../../lib/api';
@@ -172,6 +172,7 @@ function DiffFileBlock({ file }: { file: PluginDraftDiffFile }) {
 // plugin_draft_changed (агент правит черновик) и по кнопке «Перезагрузить».
 function PanelPreview({ slug }: { slug: string }) {
   const theme = useSyncExternalStore(subscribeThemeMode, getEffectiveTheme, getEffectiveTheme);
+  const isMobile = useIsMobile();
   const [rev, setRev] = useState(0);
   const [html, setHtml] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -221,7 +222,9 @@ function PanelPreview({ slug }: { slug: string }) {
         });
         panelWindow?.postMessage(init, '*');
       } else if (msg.type === 'resize') {
-        setHeight(Math.min(800, Math.max(48, Math.round(msg.height))));
+        // То же правило, что у установленной панели (PluginFrame): фрейм = высота
+        // контента, прокручивает обёртка (внутренний документ не скроллится).
+        setHeight(clampContentHeight(msg.height));
       }
     };
     window.addEventListener('message', onMsg);
@@ -244,6 +247,8 @@ function PanelPreview({ slug }: { slug: string }) {
           Перезагрузить
         </Button>
       </div>
+      {/* Окно предпросмотра (800 / 560 на мобиле): выше — прокрутка обёртки, как в слоте */}
+      <div style={{ maxHeight: isMobile ? PANEL_MAX_HEIGHT_MOBILE : PANEL_MAX_HEIGHT, overflow: 'auto' }}>
       {loading
         ? <div style={{ padding: SP.md, fontSize: FS.sm, color: C.textMuted }}>Загружаем панель…</div>
         : error
@@ -254,6 +259,7 @@ function PanelPreview({ slug }: { slug: string }) {
               ? <iframe key={frameKey} ref={frameRef} srcDoc={srcdoc} sandbox="allow-scripts" title="Предпросмотр панели черновика"
                   style={{ width: '100%', height, border: 'none', display: 'block', background: 'transparent' }} />
               : <div style={{ padding: SP.md, fontSize: FS.sm, color: C.textMuted }}>Панель не найдена</div>}
+      </div>
     </div>
   );
 }

@@ -212,6 +212,9 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     let cancelled = false;
     initedRef.current = false;
     inflightRef.current = 0;
+    // pendingHeightRef сбрасываем: отложенная высота ПРОШЛОЙ панели (rAF ещё в полёте)
+    // не должна прилететь в новый фрейм при смене панели/перезагрузке.
+    pendingHeightRef.current = null;
     setBridge('waiting');
     setHeight(null);
     setDeniedKey(null);
@@ -351,9 +354,9 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
       } else if (msg.type === 'call') {
         void handleCall(msg);
       } else if (msg.type === 'resize') {
-        // resize = высота контента (ADR-031 §3.5): хост ставит её фрейму (порог 48,
-        // страховочный потолок 20 000), применяя не чаще раза за кадр. Ручной
-        // ccsPlugin.resize(h) — тот же канал; последнее значение побеждает.
+        // resize = высота контента (ADR-031 §3.3): хост ставит её фрейму (порог 48,
+        // страховочный потолок 20 000), применяя не чаще раза за кадр; последнее
+        // значение побеждает. Прокручивает обёртка фрейма (overflow:auto ниже).
         pendingHeightRef.current = clampContentHeight(msg.height);
         scheduleHeight();
       }
@@ -494,9 +497,10 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
     }
     if (showIframe) {
       return (
-        // overflow:auto убран: фрейм растянут под контент (высота из resize), внутренний
-        // документ не прокручивается (html{overflow:hidden}); прокрутка — у обёртки карточки.
-        <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+        // overflow:auto: фрейм растянут под контент (высота из resize, может быть выше
+        // карточки), внутренний документ не прокручивается (html{overflow:hidden});
+        // прокрутка — у обёртки (единственный скролл панели, «Прокрутка — у хоста»).
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'auto' }}>
           <iframe
             ref={iframeRef}
             key={frameKey}
@@ -508,7 +512,10 @@ export function PluginFrame({ project, onOpenPlugins, onClose }: {
             className="cc-plugin-frame"
             style={{
               width: '100%',
+              // minHeight:100% — короткая панель заполняет карточку (M6); height = высота
+              // контента (может быть выше карточки) → фрейм растёт, обёртка скроллится.
               height: height ?? '100%',
+              minHeight: '100%',
               border: 'none', display: 'block',
               background: 'transparent',
             }}

@@ -2,16 +2,15 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { C, R, FS, FONT, CHAT_MAX_W } from '../../../lib/design';
 import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useFeaturesIndex, featureOf } from '../../../lib/featuresIndex';
-import { useFeatureRuns } from '../../../lib/featureRuns';
-import { useChatGutter } from '../../../lib/chatGutter';
+import { useFeatureRuns, useFeatureRunsLoading, useFeatureRunsError } from '../../../lib/featureRuns';
 import { openChatById } from '../../../lib/openChat';
-import { STAGE_NAME, MERGE_PENDING_STATUS } from '../../../lib/chatGroups';
+import { STAGE_NAME } from '../../../lib/chatGroups';
 import { CHAT_ROLE_LABEL } from '../../../lib/featureChatRole';
 import { roleLabel } from '../../../lib/roleLabel';
 import { getPersonaById } from '../../../lib/personas';
 import type { FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 import { FeatureBannerSheet } from './FeatureBannerSheet';
-import { dateOnly } from './featureTime';
+import { statusPhrase, uniquePersonaNames } from './pillModel';
 import type { FeatureIndexFeature, FeatureChatLink, FeatureRailKey, FeatureRailTone } from '../../../types/featureIndex';
 
 // Плашка фичи в чате — ОДНА КОМПАКТНАЯ СТРОКА (макет feature-banner-1, вариант «А · Строка»
@@ -60,57 +59,28 @@ interface BannerAction {
   kind: 'reply' | 'chat' | 'open' | 'page';
 }
 
-// Модель плашки (для шторки FeatureBannerSheet): глиф/статус/роль/кнопка. Шторка
-// импортирует этот тип — держим его стабильным (счётчик/«Конвейер» в строке не рисуем,
-// но в модели остаются: шторка показывает свой состав).
-export interface FeatureBannerModel {
-  tone: BannerTone;
-  glyph: GlyphKind;
-  status: string;
-  statusTone: 'wait' | 'stop' | 'run';
-  counter: string;
-  role: string;
-  isKey: boolean;
-  button: { label: string; kind: 'key' | 'feature' | 'pipeline' };
-}
-
 // Имя активной стадии (для «{этап} · …»); null — активной нет (всё впереди/закрыта).
 function activeStageName(f: FeatureIndexFeature): string | null {
   const stage = f.rail.find(s => s.state === 'active');
   return stage ? STAGE_NAME[stage.key] : null;
 }
 
-// «Где мы» — словами (макет where()): по state фичи и текущему этапу. Формулировки —
-// ОДИ В ОДИН с pillModel/попапом: «ждёт согласия на мерж», «ждёт вас», «стоит», «идёт».
-// Прогресс-состояния (waiting/stopped/running) получают префикс «{этап} · …»; терминальные
-// и особые (merged/closed/merge_pending/merging/not_started/idle) — своё слово без этапа
-// (у merge_pending/merging этап — сам мерж, префикс «Мерж ·» был бы тавтологией).
+// «Где мы» — словами, из ОДНОГО ИСТОЧНИКА с пилюлей (statusPhrase, pillModel.ts):
+//   running → «{этап} · {идущие}» (имена — nowPersonaIds индекса, фолбэк now0.personaId);
+//   waiting → «{этап} · ждёт вас»; stopped → «стоит · {имя}» (имя — из тревоги);
+//   merged → «смержена» (без даты, как в пилюле); merge_pending → «Мерж · ждёт согласия»;
+//   merging → «Мерж · идёт»; closed → «закрыта»; not_started/idle — своё слово.
 function whereText(f: FeatureIndexFeature): string {
   const stage = activeStageName(f);
-  switch (f.state) {
-    case 'merged': {
-      const d = dateOnly(f.summary?.mergedAt ?? null);
-      return d ? `Смержена ${d}` : 'Смержена';
-    }
-    case 'closed':
-      return 'Закрыта без мержа';
-    case 'merge_pending':
-      return MERGE_PENDING_STATUS; // «ждёт согласия на мерж»
-    case 'merging':
-      return 'Мерж · идёт';
-    case 'waiting':
-      return stage ? `${stage} · ждёт вас` : 'Ждёт вас';
-    case 'stopped':
-      return stage ? `${stage} · стоит` : 'Стоит';
-    case 'running':
-      return stage ? `${stage} · идёт` : 'Идёт';
-    case 'not_started':
-      return 'Не начата';
-    case 'idle':
-      return 'Простаивает';
-    default:
-      return stage ? `${stage} · идёт` : 'Идёт';
-  }
+  // «Идут»: уникальные id из индекса (nowPersonaIds; фолбэк — now0.personaId).
+  const nowIds = (f.nowPersonaIds && f.nowPersonaIds.length > 0)
+    ? f.nowPersonaIds
+    : (f.now0?.personaId ? [f.now0.personaId] : []);
+  const p = statusPhrase(f.state, stage, {
+    running: uniquePersonaNames(nowIds),
+    stopped: f.attention?.personaId ? (getPersonaById(f.attention.personaId)?.name ?? '') : '',
+  });
+  return `${p.bold}${p.post}`;
 }
 
 // Тон текста «где мы»: тревога (wait/stop) — цветная, иначе обычный.
@@ -180,7 +150,8 @@ export interface FeatureBannerRow {
   tone: BannerTone;
   glyph: GlyphKind;
   dots: StageDot[];
-  // «Где мы»: «{этап} · {состояние}» (формулировки pillModel/попапа) + « · {сколько}».
+  // «Где мы»: слова из statusPhrase (общий источник с пилюлей): «{этап} · {идущие}»,
+  // «{этап} · ждёт вас», «стоит · {имя}», «смержена» и т.д.
   where: string;
   whereTone: 'wait' | 'stop' | 'run';
   action: BannerAction;
@@ -320,11 +291,14 @@ interface FeatureBannerProps {
   isMobile?: boolean;
   // Задача-владелец чата (Session.TaskId) — для шторки (Ф-pl-b).
   chatTaskId?: string | null;
+  // Главное действие, когда ждут В ЭТОМ чате: фокус в композер (ChatPanel передаёт
+  // бамп focusSignal; без колбэка действие открывает страницу фичи).
+  onFocusComposer?: () => void;
 }
 
 // Плашка фичи в слоте баннеров ChatPanel. Возвращает null, когда строки нет
 // (флаги выключены или чат не принадлежит ни одной фиче).
-export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTaskId }: FeatureBannerProps) {
+export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTaskId, onFocusComposer }: FeatureBannerProps) {
   // Гейт: оба флага (режим «Исполнение фичи» + «Обзор фич»).
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   const featuresOverview = useFeature(FLAGS.featuresOverview);
@@ -336,10 +310,10 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
   // Агрегаты фич чата (GET features?sessionId=) — данные ШТОРКИ (Ф-pl-b): 7 этапов,
   // исполнители, переключатель фич. Тот же источник, что у попапа, без догрузки features/{id}.
   const runs = useFeatureRuns(sessionId, enabled);
-  // Ширина = колонка чата (CHAT_MAX_W + gutter + компенсация полосы) — та же обвязка,
-  // что у ленты и композера (useChatGutter). Ref — на обёртке (ниже).
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  useChatGutter(wrapRef, CHAT_MAX_W, isMobile ? 'off' : 'center');
+  // Состояния запроса шторки (F-pop-a): loading/error — шторка показывает их,
+  // а не молча не рисуется (минор: aria-expanded не виси в воздухе).
+  const runsLoading = useFeatureRunsLoading(sessionId);
+  const runsError = useFeatureRunsError(sessionId);
   // Элемент «где мы»: на него возвращается фокус при закрытии шторки (Ф-pl-b).
   const whereRef = useRef<HTMLSpanElement | null>(null);
   // Мультифича: какая фича показана (индекс в featureOf, порядок — от бэка).
@@ -372,17 +346,29 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
       detail: { featureId: feature.featureId, fromChatId: sessionId, fromChat: true, stage },
     }));
   };
-  // «Ключевой чат →» (когда этот чат — не ключевой и живой ключевой есть): переход в чат.
-  const goKey = () => {
-    if (!feature.keySessionId) return;
-    void openChatById(feature.keySessionId);
+  // Главное действие (M2; эталон — featurePrimaryAction/waitingStoppedAction): цель =
+  // ЧАТ ТРЕВОГИ (attention.sessionId в индексе; в run — linkedSessionId), не ключевой чат:
+  //   ждут В ЭТОМ чате → фокус в композер (ответ пишут здесь);
+  //   тревога в другом чате → переход в тот чат;
+  //   чата тревоги нет (null) → страница фичи.
+  // open/page (merge_pending/дефолт) — страница фичи.
+  const onAction = () => {
+    if (model.action.kind === 'reply' || model.action.kind === 'chat') {
+      const target = feature.attention?.sessionId ?? null;
+      if (target === sessionId) {
+        if (onFocusComposer) { onFocusComposer(); return; }
+        openFeaturePage();
+        return;
+      }
+      if (target) { void openChatById(target); return; }
+    }
+    openFeaturePage();
   };
 
-  // Действие: reply/chat → «Ключевой чат →» (goKey), open/page → страница фичи.
-  const onAction = () => {
-    if ((model.action.kind === 'reply' || model.action.kind === 'chat') && feature.keySessionId) goKey();
-    else openFeaturePage();
-  };
+  // Шторка реально нарисована (не только «открыта»): runs непусты ИЛИ идёт
+  // загрузка/ошибка (шторка показывает состояние). runs пуст и loading/error нет —
+  // шторка не рисуется → aria-expanded=false (минор: раньше «висел» в воздухе).
+  const sheetShown = sheetOpen && (runs.length > 0 || runsLoading || runsError != null);
 
   // «Где мы»: тап открывает шторку (Ф-pl-b) — на мобиле bottom-sheet, на десктопе
   // раскрывающуюся панель под строкой. Роль button, клавиатура Enter/Space, aria-expanded.
@@ -394,7 +380,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
       onClick={() => setSheetOpen(true)}
       role="button"
       tabIndex={0}
-      aria-expanded={sheetOpen}
+      aria-expanded={sheetShown}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSheetOpen(true); } }}
       aria-label={`Фича «${feature.title}»: ${model.where}. Подробнее`}
       style={{
@@ -409,11 +395,13 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
     </span>
   );
 
-  // Ряд точек (7): done/active кликабельны, pending/absent — нет.
+  // Ряд точек (7): done/active кликабельны, pending/absent — нет. aria-hidden — только
+  // когда кликабельных точек НЕТ (минор 1): интерактивные кнопки внутри aria-hidden
+  // скрыты от скринридера, но остаются фокусируемыми — нарушение ARIA.
   const dotsRow = (
     <span
       data-testid="feature-dots"
-      aria-hidden="true"
+      aria-hidden={model.dots.some(d => d.clickable) ? undefined : 'true'}
       style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}
     >
       {model.dots.map(dot => (
@@ -464,6 +452,9 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
         {sheetOpen && (
           <FeatureBannerSheet
             runs={runs}
+            loading={runsLoading}
+            error={runsError}
+            order={entries.map(e => e.feature.featureId)}
             isMobile
             onClose={() => setSheetOpen(false)}
             focusTarget={whereRef}
@@ -519,6 +510,9 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
       {sheetOpen && (
         <FeatureBannerSheet
           runs={runs}
+          loading={runsLoading}
+          error={runsError}
+          order={entries.map(e => e.feature.featureId)}
           onClose={() => setSheetOpen(false)}
           focusTarget={whereRef}
           projectId={projectId}
@@ -528,20 +522,17 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
     );
   }
 
-  // Центрирование по колонке чата (CHAT_MAX_W) — та же обвязка, что у ленты сообщений
-  // (useChatGutter): баннер самодостаточен, ChatPanel просто рендерит <FeatureBanner>.
-  // useChatGutter кладёт ширину/сдвиг в CSS-переменные (--cc-chat-box-w/-shift) — строка
-  // И шторка (FeatureBannerSheet) живут в той же колонке, что и лента сообщений.
-  // На узком окне (< CHAT_MAX_W) maxWidth не режет — баннер во всю ширину с полями 16 px.
+  // M1: ширина = колонка чата, как у композера (ChatPanel:3109): maxWidth CHAT_MAX_W +
+  // margin '0 auto' + поля 16 px. Старая обвязка (CSS-переменные useChatGutter +
+  // marginLeft:auto) прижимала панель к правому краю окна, а лента центрирована.
+  // На узком окне (< CHAT_MAX_W) maxWidth не режет — баннер во всю ширину с полями.
   return (
     <div
-      ref={wrapRef}
       data-testid="feature-banner-wrap"
       style={{
         width: '100%',
-        maxWidth: 'var(--cc-chat-box-w, 950px)',
-        marginRight: 'var(--cc-chat-box-shift, 0px)',
-        marginLeft: 'auto',
+        maxWidth: CHAT_MAX_W,
+        margin: '0 auto',
         padding: '0 16px',
         boxSizing: 'border-box',
       }}

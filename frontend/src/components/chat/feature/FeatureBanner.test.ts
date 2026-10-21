@@ -22,10 +22,10 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureBanner, featureBannerRow } from './FeatureBanner';
 import { __test } from '../../../lib/featuresIndex';
 import { setAllFlags } from '../../../lib/featureFlags';
-import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps } from '../__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../__tests__/fakeDom';
 import { __test as runsTest } from '../../../lib/featureRuns';
 import type { FeatureAttention, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../../types/featureIndex';
-import type { FeatureState } from '../../../types/featureRun';
+import type { FeatureRun, FeatureState } from '../../../types/featureRun';
 
 // m7: управляемый индекс фич — mock `api.tasks.featuresIndex` возвращает этот объект,
 // чтобы live-перезапрос (useFeaturesIndex) не затирал синхронный сид стора.
@@ -33,9 +33,15 @@ const mockIdx = vi.hoisted(() => ({
   features: [] as FeatureIndexFeature[],
   chats: {} as Record<string, FeatureChatLink[]>,
 }));
+// M3: управляемый ответ `features?sessionId=` — mock `api.tasks.getFeatures` возвращает
+// эти runs, чтобы шторка (через useFeatureRuns) получала НАСТОЯЩИЕ данные стора,
+// а не пустой список.
+const mockRuns = vi.hoisted(() => [] as FeatureRun[]);
 // Персоны: управляемый список для getPersonaById (имя исполнителя в «Ответить {имя}»).
 const mockPersonas = vi.hoisted(() => [] as { id: string; name: string }[]);
-// === Мок lib/api: featuresIndex → mockIdx ===
+// M2: openChatById — vi.fn, чтобы тест проверил ЦЕЛЬ главного действия (чат тревоги).
+const mockOpenChat = vi.hoisted(() => ({ openChatById: vi.fn(async () => true) }));
+// === Мок lib/api: featuresIndex → mockIdx, getFeatures → mockRuns ===
 vi.mock('../../../lib/api', () => ({
   api: {
     sessions: { list: async () => [] },
@@ -43,11 +49,13 @@ vi.mock('../../../lib/api', () => ({
     tasks: {
       execute: async () => {},
       featuresIndex: async () => mockIdx,
-      getFeatures: async () => [],
+      getFeatures: async () => mockRuns,
     },
     personas: { list: async () => [] },
   },
 }));
+// === Мок lib/openChat: openChatById → mockOpenChat.openChatById (M2) ===
+vi.mock('../../../lib/openChat', () => ({ openChatById: mockOpenChat.openChatById }));
 // === Мок signalr: onMessage/onPreviewMessage — no-op (иначе getConnection() строит
 // реальное соединение '/hubs/session', которое в node не резолвится) ===
 vi.mock('../../../lib/signalr', async (importOriginal) => {
@@ -108,15 +116,18 @@ function seedIndex(f: FeatureIndexFeature, l: FeatureChatLink, chatId: string, p
 
 describe('featureBannerRow: «где мы», действие, тон, роль', () => {
   // Таблица: state → (подпись, действие, тон). Активная стадия фикстуры — prod.
+  // Слова — из ОДНОГО ИСТОЧНИКА с пилюлей (statusPhrase, pillModel.ts): running —
+  // «{этап}» + (имена идущих, если есть); stopped — «стоит» + (имя); merged — «смержена»
+  // (без даты, как в пилюле); merge_pending — «Мерж · ждёт согласия».
   const cases: { state: FeatureState; where: string; action: string; kind: 'reply' | 'chat' | 'open' | 'page'; tone: 'run' | 'wait' | 'stop' | 'closed' }[] = [
     { state: 'not_started', where: 'Не начата', action: 'Открыть страницу фичи', kind: 'page', tone: 'run' },
-    { state: 'running', where: 'Производство · идёт', action: 'Открыть страницу фичи', kind: 'page', tone: 'run' },
+    { state: 'running', where: 'Производство', action: 'Открыть страницу фичи', kind: 'page', tone: 'run' },
     { state: 'waiting', where: 'Производство · ждёт вас', action: 'Ответить', kind: 'reply', tone: 'wait' },
-    { state: 'stopped', where: 'Производство · стоит', action: 'Чат', kind: 'chat', tone: 'stop' },
-    { state: 'merge_pending', where: 'ждёт согласия на мерж', action: 'Открыть', kind: 'open', tone: 'wait' },
+    { state: 'stopped', where: 'стоит', action: 'Чат', kind: 'chat', tone: 'stop' },
+    { state: 'merge_pending', where: 'Мерж · ждёт согласия', action: 'Открыть', kind: 'open', tone: 'wait' },
     { state: 'merging', where: 'Мерж · идёт', action: 'Открыть страницу фичи', kind: 'page', tone: 'run' },
-    { state: 'merged', where: 'Смержена', action: 'Открыть страницу фичи', kind: 'page', tone: 'closed' },
-    { state: 'closed', where: 'Закрыта без мержа', action: 'Открыть страницу фичи', kind: 'page', tone: 'closed' },
+    { state: 'merged', where: 'смержена', action: 'Открыть страницу фичи', kind: 'page', tone: 'closed' },
+    { state: 'closed', where: 'закрыта', action: 'Открыть страницу фичи', kind: 'page', tone: 'closed' },
     { state: 'idle', where: 'Простаивает', action: 'Открыть страницу фичи', kind: 'page', tone: 'run' },
   ];
 
@@ -128,11 +139,27 @@ describe('featureBannerRow: «где мы», действие, тон, роль'
     expect(m.tone).toBe(c.tone);
   });
 
-  it('merged с датой: «Смержена {дд.мм}» (локальным геттером от той же Date)', () => {
+  // merged — БЕЗ даты (как в пилюле; общий источник statusPhrase): «смержена».
+  it('merged: «смержена» (без даты, как в пилюле)', () => {
     const f = feat('merged', { summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } });
-    const d = new Date('2026-10-18T12:00:00Z');
-    const date = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
-    expect(featureBannerRow(f, link(), 'chat-exec').where).toBe(`Смержена ${date}`);
+    expect(featureBannerRow(f, link(), 'chat-exec').where).toBe('смержена');
+  });
+
+  // running с идущими: «{этап} · {имена}» (общий источник с пилюлей; имена — из
+  // nowPersonaIds индекса, уникальные, в порядке индекса).
+  it('running с идущими: «Производство · Кира, Денис» (имена из nowPersonaIds)', () => {
+    mockPersonas.length = 0;
+    mockPersonas.push({ id: 'p-kira', name: 'Кира' }, { id: 'p-denis', name: 'Денис' });
+    const f = feat('running', { nowPersonaIds: ['p-kira', 'p-denis'] });
+    expect(featureBannerRow(f, link(), 'chat-exec').where).toBe('Производство · Кира, Денис');
+  });
+
+  // stopped с персоной: «стоит · {имя}» (общий источник с пилюлей).
+  it('stopped с персоной: «стоит · Денис»', () => {
+    mockPersonas.length = 0;
+    mockPersonas.push({ id: 'p-denis', name: 'Денис' });
+    const f = feat('stopped', { attention: attention('stopped', { personaId: 'p-denis' }) });
+    expect(featureBannerRow(f, link(), 'chat-exec').where).toBe('стоит · Денис');
   });
 
   it('waiting с персоной: «Ответить {имя}» (имя — из стора персон)', () => {
@@ -188,12 +215,12 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     setAllFlags({});
   });
 
-  it('идёт: тон run, «Производство · идёт», действие «Открыть страницу фичи», роль «Ш2 · бэк»', () => {
+  it('идёт: тон run, «Производство» (без имён, если идущих нет), действие «Открыть страницу фичи», роль «Ш2 · бэк»', () => {
     seedIndex(feat('running'), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-testid="feature-banner"');
     expect(html).toContain('data-banner-tone="run"');
-    expect(html).toContain('Производство · идёт');
+    expect(html).toContain('Производство');
     expect(html).toContain('Открыть страницу фичи');
     expect(html).toContain('Ш2 · бэк');
   });
@@ -207,38 +234,38 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(html).toContain('Ответить');
   });
 
-  it('стоит: тон stop (C.dangerBg), «Производство · стоит», «Чат»', () => {
+  it('стоит: тон stop (C.dangerBg), «стоит» (без имени, если тревога без персоны), «Чат»', () => {
     seedIndex(feat('stopped', { attention: attention('stopped') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="stop"');
     expect(html).toContain('var(--c-danger-bg)');
-    expect(html).toContain('Производство · стоит');
+    expect(html).toContain('>стоит<');
     expect(html).toContain('Чат');
   });
 
-  it('к мержу: тон wait, «ждёт согласия на мерж», действие «Открыть» (НЕ «Мерж…»)', () => {
+  it('к мержу: тон wait, «Мерж · ждёт согласия», действие «Открыть» (НЕ «Мерж…»)', () => {
     seedIndex(feat('merge_pending', { attention: attention('merge') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="wait"');
-    expect(html).toContain('ждёт согласия на мерж');
+    expect(html).toContain('Мерж · ждёт согласия');
     expect(html).toContain('Открыть');
     // «Мерж…» — только в попапе и на странице, НЕ на панели (задача, п.2).
     expect(html).not.toContain('Мерж…');
   });
 
-  it('смержена: серая (C.bgInset), «Смержена {дата}»', () => {
+  it('смержена: серая (C.bgInset), «смержена» (без даты, как в пилюле)', () => {
     seedIndex(feat('merged', { summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="closed"');
     expect(html).toContain('var(--c-bg-inset)');
-    expect(html).toContain('Смержена ');
+    expect(html).toContain('>смержена<');
   });
 
-  it('закрыта без мержа: «Закрыта без мержа», тон closed', () => {
+  it('закрыта без мержа: «закрыта», тон closed', () => {
     seedIndex(feat('closed', { summary: null }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="closed"');
-    expect(html).toContain('Закрыта без мержа');
+    expect(html).toContain('>закрыта<');
   });
 
   it('не начата: «Не начата»; простаивает: «Простаивает»; merging: «Мерж · идёт»', () => {
@@ -299,14 +326,49 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(html).toContain('font-weight:700;color:var(--c-accent);background:var(--c-accent-light)');
   });
 
-  it('центрирование по колонке чата: обёртка — CSS-переменные useChatGutter (fallback 950px) + margin-left:auto', () => {
+  // M1: обёртка = колонка чата, как у композера (ChatPanel:3109): width 100% +
+  // maxWidth CHAT_MAX_W (950) + margin '0 auto' + поля 16 px. Точечно по style-атрибуту
+  // ИМЕННО обёртки (не toContain по всему HTML — старый тест попадал на кнопку действия):
+  // мутация обёртки margin '0 auto' → '0 0' красит.
+  it('M1: обёртка — колонка чата (max-width 950px + margin 0 auto + padding 0 16px), как композер', () => {
     seedIndex(feat('running'), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
-    // Обёртка (data-testid=feature-banner-wrap) читает ширину/сдвиг из CSS-переменных,
-    // которые ставит useChatGutter; в SSR (хук не идёт) виден только fallback 950px.
-    expect(html).toContain('data-testid="feature-banner-wrap"');
-    expect(html).toContain('max-width:var(--cc-chat-box-w, 950px)');
-    expect(html).toContain('margin-left:auto');
+    const m = html.match(/<div data-testid="feature-banner-wrap" style="([^"]*)"/);
+    expect(m, 'обёртка feature-banner-wrap с style').not.toBeNull();
+    const style = m![1];
+    expect(style).toContain('width:100%');
+    expect(style).toContain('max-width:950px');
+    expect(style).toContain('margin:0 auto');
+    expect(style).toContain('padding:0 16px');
+  });
+
+  // Минор 1: aria-hidden на контейнере точек — только когда кликабельных точек НЕТ
+  // (иначе интерактивные <button> внутри aria-hidden скрыты от скринридера, но
+  // фокусируемы — нарушение ARIA).
+  it('aria-hidden на точках: нет кликабельных (всё pending) → aria-hidden="true"; есть (done/active) → нет', () => {
+    // Всё впереди (not_started): ни done, ни active — кликабельных нет.
+    const allPending = feat('not_started', {
+      rail: [
+        { key: 'cut', state: 'pending', tone: null },
+        { key: 'plan', state: 'pending', tone: null },
+        { key: 'prod', state: 'pending', tone: null },
+        { key: 'review', state: 'pending', tone: null },
+        { key: 'qa', state: 'pending', tone: null },
+        { key: 'final', state: 'pending', tone: null },
+        { key: 'merge', state: 'pending', tone: null },
+      ],
+    });
+    seedIndex(allPending, link(), 'chat-exec', 'p1');
+    const html1 = renderBanner('chat-exec', 'p1');
+    const m1 = html1.match(/<span data-testid="feature-dots"([^>]*)>/);
+    expect(m1, 'контейнер точек').not.toBeNull();
+    expect(m1![1], 'без кликабельных точек aria-hidden="true" обязателен').toContain('aria-hidden="true"');
+    // Есть кликабельные (cut/plan done, prod active) — aria-hidden не ставим.
+    seedIndex(feat('running'), link(), 'chat-exec', 'p1');
+    const html2 = renderBanner('chat-exec', 'p1');
+    const m2 = html2.match(/<span data-testid="feature-dots"([^>]*)>/);
+    expect(m2, 'контейнер точек').not.toBeNull();
+    expect(m2![1], 'с кликабельными точками aria-hidden быть не должно').not.toContain('aria-hidden="true"');
   });
 });
 
@@ -388,7 +450,10 @@ describe('FeatureBanner: клик по точке → переход (mount)', (
     root.unmount();
   });
 
-  it('ширина = колонка чата: useChatGutter ставит --cc-chat-box-w на обёртку (mode=center, десктоп)', async () => {
+  // M1 (mount): обёртка — колонка чата (width 100% / max-width 950px / margin '0 auto' /
+  // padding '0 16px'), БЕЗ useChatGutter. Точечно по style-объекту обёртки: мутация
+  // margin '0 auto' → '0 0' красит (SSR-тест выше ловит ту же мутацию на строке HTML).
+  it('M1: обёртка — колонка чата (margin 0 auto, max-width 950px, padding 0 16px), без useChatGutter', async () => {
     const f = feat('running', { keySessionId: 'chat-key' });
     const index: FeaturesIndex = {
       features: [f],
@@ -403,10 +468,186 @@ describe('FeatureBanner: клик по точке → переход (mount)', (
 
     const wrap = findNodeByAttr(container, 'data-testid', 'feature-banner-wrap');
     expect(wrap, 'нет обёртки feature-banner-wrap').not.toBeNull();
-    // useChatGutter (mode=center) пишет --cc-chat-box-w на обёртку. Мутация «убрать
-    // useChatGutter» → переменная не стоит → тест краснеет (SSR-тест выше её не видит).
-    const w = (wrap! as unknown as { style: Record<string, string> }).style['--cc-chat-box-w'];
-    expect(w, 'useChatGutter не поставил --cc-chat-box-w').toBeTruthy();
+    const st = (wrap! as unknown as { style: Record<string, string> }).style;
+    expect(st['margin'], 'margin обёртки — 0 auto (как у композера)').toBe('0 auto');
+    expect(st['maxWidth'], 'max-width обёртки — 950px (CHAT_MAX_W)').toBe('950px');
+    expect(st['padding'], 'поля обёртки — 0 16px').toBe('0 16px');
+    expect(st['width']).toBe('100%');
+    root.unmount();
+  });
+
+  // M2: главное действие — цель = ЧАТ ТРЕВОГИ (attention.sessionId), не ключевой чат.
+  //   ждут в другом чате → openChatById(чат тревоги); ждут в этом чате → onFocusComposer.
+  it('M2: waiting, тревога в другом чате → клик действия открывает чат тревоги (не страницу фичи)', async () => {
+    const f = feat('waiting', { attention: attention('wait', { personaId: 'p-kira', sessionId: 'chat-other' }) });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+    mockOpenChat.openChatById.mockClear();
+
+    const dispatched: { type: string }[] = [];
+    (globalThis as { window: { dispatchEvent: (e: Event) => boolean } }).window.dispatchEvent =
+      (e: Event) => { dispatched.push({ type: e.type }); return true; };
+
+    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: false }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    const btn = findNodeByAttr(container, 'data-testid', 'feature-action');
+    expect(btn, 'нет кнопки главного действия').not.toBeNull();
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(mockOpenChat.openChatById, 'клик не открыл чат тревоги').toHaveBeenCalledTimes(1);
+    expect(mockOpenChat.openChatById).toHaveBeenCalledWith('chat-other');
+    expect(dispatched.some(d => d.type === 'cc-open-feature'), 'цель — чат тревоги, не страница фичи').toBe(false);
+    root.unmount();
+  });
+
+  it('M2: waiting, ждут В ЭТОМ чате → фокус в композер (onFocusComposer), не чат/страница', async () => {
+    const f = feat('waiting', { attention: attention('wait', { sessionId: 'chat-exec' }) });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+    mockOpenChat.openChatById.mockClear();
+
+    let composerFocus = 0;
+    const { root, container } = mount(createElement(FeatureBanner, {
+      sessionId: 'chat-exec', projectId: 'p1', isMobile: false,
+      onFocusComposer: () => { composerFocus++; },
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    const btn = findNodeByAttr(container, 'data-testid', 'feature-action');
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(composerFocus, 'фокус в композер не пришёл').toBe(1);
+    expect(mockOpenChat.openChatById, 'в этом чате чат не открываем').not.toHaveBeenCalled();
+    root.unmount();
+  });
+
+  it('M2: stopped, чат упавшего в другом чате → openChatById(чат тревоги)', async () => {
+    const f = feat('stopped', { attention: attention('stopped', { personaId: 'p-denis', sessionId: 'chat-fallen' }) });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+    mockOpenChat.openChatById.mockClear();
+
+    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: false }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    const btn = findNodeByAttr(container, 'data-testid', 'feature-action');
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(mockOpenChat.openChatById).toHaveBeenCalledWith('chat-fallen');
+    root.unmount();
+  });
+
+  it('M2: merge_pending → клик открывает страницу фичи (cc-open-feature), не чат', async () => {
+    const f = feat('merge_pending', { attention: attention('merge', { sessionId: 'chat-other' }) });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+    mockOpenChat.openChatById.mockClear();
+
+    const dispatched: { type: string; detail?: unknown }[] = [];
+    (globalThis as { window: { dispatchEvent: (e: Event) => boolean } }).window.dispatchEvent =
+      (e: Event) => { dispatched.push({ type: e.type, detail: (e as CustomEvent).detail }); return true; };
+
+    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: false }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    const btn = findNodeByAttr(container, 'data-testid', 'feature-action');
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    const ev = dispatched.find(d => d.type === 'cc-open-feature');
+    expect(ev, 'merge_pending → страница фичи').toBeDefined();
+    expect(ev!.detail).toMatchObject({ featureId: 'f1', fromChatId: 'chat-exec', fromChat: true });
+    expect(mockOpenChat.openChatById, 'merge_pending — не «чат тревоги»').not.toHaveBeenCalled();
+    root.unmount();
+  });
+
+  // M3: проводка шторки через БАННЕР (не прямой проп runs): «где мы» → шторка с
+  // НАСТОЯЩИМИ данными useFeatureRuns (features?sessionId=) — этапы, исполнители,
+  // chatId/taskId доезжают до NavTargetButton (кнопки, не «чата нет»), модель — в чипе.
+  it('M3: шторка через баннер — этапы, исполнители, chatId/taskId до NavTargetButton, модель в чипе', async () => {
+    const f = feat('running', { keySessionId: 'chat-key' });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+
+    // Runs — из НАСТОЯЩЕГО fetch (mock getFeatures → mockRuns), не прямой проп.
+    const run: FeatureRun = {
+      featureId: 'f1',
+      state: 'running',
+      epic: { id: 'f1', title: 'Моя фича' } as unknown as import('../../../types/featureRun').FeatureTask,
+      steps: [], reviews: [], qa: [], final: null, merge: null,
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      progress: 0.5, ready: false,
+      stages: [
+        { key: 'cut', state: 'done', tone: null, passes: 1, taskIds: [], rounds: [], firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: [] },
+        { key: 'plan', state: 'done', tone: null, passes: 1, taskIds: [], rounds: [], firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: [] },
+        {
+          key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: ['t1'],
+          rounds: [], firstStartedAt: '2026-10-20T10:00:00Z', lastCompletedAt: null, approxMinutes: 40, overlapsActive: false,
+          executors: [{
+            personaId: 'p-kira', taskId: 't1', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк',
+            status: 'running', chatId: 'chat-executor', chatArchived: false,
+            modelLabel: 'Qwen 27B', modelFull: 'Qwen3.8-27B',
+          }],
+        },
+        { key: 'review', state: 'pending', tone: null, passes: 0, taskIds: [], rounds: [], firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: [] },
+        { key: 'qa', state: 'pending', tone: null, passes: 0, taskIds: [], rounds: [], firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: [] },
+        { key: 'final', state: 'pending', tone: null, passes: 0, taskIds: [], rounds: [], firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: [] },
+        { key: 'merge', state: 'pending', tone: null, passes: 0, taskIds: [], rounds: [], firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: [] },
+      ],
+    };
+    mockRuns.length = 0;
+    mockRuns.push(run);
+
+    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: false }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    // «Где мы» → шторка (десктоп: раскрывающаяся панель).
+    const where = findNodeByAttr(container, 'data-testid', 'feature-where');
+    expect(where, 'нет «где мы»').not.toBeNull();
+    act(() => { (reactProps(where!)!.onClick as () => void)(); });
+
+    // Панель на месте (role=dialog).
+    const panel = findNodeByAttr(container, 'data-testid', 'feature-sheet-panel');
+    expect(panel, 'шторка (панель) не открылась').not.toBeNull();
+    // Этапы доехали (7).
+    for (const k of ['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge']) {
+      expect(findNodeByAttr(container, 'data-testid', `feature-sheet-stage-${k}`), `нет этапа ${k} в шторке`).not.toBeNull();
+    }
+    // Исполнитель: роль + чип модели (модель доехала).
+    const role = findNodeByAttr(container, 'data-testid', 'feature-sheet-executor-role');
+    expect(role, 'нет роли исполнителя в шторке').not.toBeNull();
+    const chip = findNodeByAttr(container, 'data-testid', 'feature-sheet-executor-model');
+    expect(chip, 'нет чипа модели в шторке').not.toBeNull();
+    expect(textNodes(chip!).join(''), 'модель не доехала до чипа').toContain('Qwen 27B');
+    // chatId/taskId доехали до NavTargetButton: КНОПКИ (не «чата нет»/отсутствие).
+    // Мутация chatId=null → span «nav-target-no-chat» вместо кнопки → red; taskId=null →
+    // кнопки задачи нет → red.
+    const chatBtn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
+    expect(chatBtn, 'chatId не доехал до NavTargetButton (нет кнопки чата)').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'nav-target-no-chat'), '«чата нет» не должно быть').toBeNull();
+    const taskBtn = findNodeByAttr(container, 'data-testid', 'nav-target-task');
+    expect(taskBtn, 'taskId не доехал до NavTargetButton (нет кнопки задачи)').not.toBeNull();
     root.unmount();
   });
 });

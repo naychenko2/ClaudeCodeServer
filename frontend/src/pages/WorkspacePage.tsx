@@ -46,7 +46,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib
 import { FeatureCenter } from '../components/feature/FeatureCenter';
 import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
 import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
-import { focusFeatureStage } from '../lib/featurePage';
+import { focusFeatureStage, setFeaturePageTab } from '../lib/featurePage';
 import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { TasksPanel } from '../features/tasks/TasksPanel';
@@ -1622,9 +1622,16 @@ const windowWidth = useWindowWidth();
       if (d.fromChat && d.fromChatId) recordBackNav(d.fromChatId, { kind: 'feature', id: d.featureId });
       else if (!d.fromChat) clearBackNav();
       setOpenFeatureId(d.featureId);
-      // Якорь этапа (Ф-pl-b): клик по точке на плашке чата открывает «Хронологию»,
-      // раскрытую/прокрученную на этом этапе. One-shot: вкладка прочитает и сбросит.
-      if (d.stage) focusFeatureStage(d.stage);
+      // Якорь этапа (Ф-pl-b, M4): клик по точке на плашке чата открывает «Хронологию»,
+      // раскрытую/прокрученную на этом этапе. Вкладка ставится ЯВНО: setPage(fid) сбрасывает
+      // _tab только при смене fid, а страница, уже открытая на другой вкладке (например
+      // «Чатах»), от повторного клика по точке её бы не сменила. One-shot: вкладка прочитает
+      // якорь и сбросит (clearFeatureStageFocus) — следующее открытие без stage старый
+      // этап не раскроет.
+      if (d.stage) {
+        setFeaturePageTab('timeline');
+        focusFeatureStage(d.stage);
+      }
       // «Открыли» — в момент действия, даже повторное открытие той же фичи (seq, не вывод
       // из сравнения id): повторный «Фича →» возвращает страницу поверх ранее открытого файла.
       setFeatureOpenedAt(bumpOpenSeq());

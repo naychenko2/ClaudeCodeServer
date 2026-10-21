@@ -18,7 +18,7 @@ import { centerWinner } from './workspace/DesktopWorkspace';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { __test as backNavTest, recordBackNav } from '../lib/featureBackNav';
 import { __test as indexTest } from '../lib/featuresIndex';
-import { setFeaturePageTab } from '../lib/featurePage';
+import { setFeaturePageTab, __test as pageTest } from '../lib/featurePage';
 import type { FeatureIndexFeature, FeaturesIndex } from '../types/featureIndex';
 import type { Project, Session } from '../types';
 import {
@@ -295,6 +295,10 @@ describe('WorkspacePage: центр — страница фичи соседом
     (globalThis as any).window.innerWidth = 360;
     // PanelZone читает document.documentElement.style — в fake-DOM documentElement null
     (globalThis as any).document.documentElement = { style: { setProperty: () => {}, removeProperty: () => {} } };
+    // FeatureTimelineTab (якорь этапа, M4) читает document.querySelector — FDoc его не
+    // имеет: заглушка (тот же приём, что в FeaturePage.test.ts).
+    const doc0 = (globalThis as any).document;
+    if (!doc0.querySelector) doc0.querySelector = () => null;
     (globalThis as any).window.innerHeight = 800;
     (globalThis as any).window.location = { hash: '', href: 'http://x/', origin: 'http://x', protocol: 'http:', host: 'x', pathname: '/', search: '' };
     (globalThis as any).window.history = { state: null, pushState: () => {}, replaceState: () => {}, back: () => {}, go: () => {}, forward: () => {}, length: 1 };
@@ -396,6 +400,58 @@ describe('WorkspacePage: центр — страница фичи соседом
     const taAfterReturn = composerTextarea(container);
     expect(taAfterReturn, 'textarea композера пропал после возврата').not.toBeNull();
     expect((reactProps(taAfterReturn!) as any).value, 'черновик композера не пережил возврат').toBe(draft);
+  });
+
+  // M4: страница открыта на «Чатах» → клик по точке (cc-open-feature с stage) → вкладка
+  // ЯВНО «Хронология» (setPage сбрасывает _tab только при смене fid — повторный клик по
+  // точке на уже открытой фиче вкладку бы не сменил) + якорь этапа; вкладка «Хронология»
+  // читает якорь и ГАСИТ его (clearFeatureStageFocus) — «Фича →» без stage старый этап
+  // не раскроет. Мутации: убрать setFeaturePageTab('timeline') → вкладка «chats» → red;
+  // убрать clearFeatureStageFocus → stageFocus() не null → red.
+  it('M4: страница на «Чатах» → точка (stage) → «Хронология» + якорь гашен; «Фича →» без stage → якоря нет', async () => {
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // 1. Открыть страницу фичи из чата (без stage): вкладка — дефолт «Хронология».
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(pageTest.tab(), 'дефолтная вкладка — «Хронология»').toBe('timeline');
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница фичи не открыта').not.toBeNull();
+
+    // 2. Пользователь на вкладке «Чаты».
+    setFeaturePageTab('chats');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(pageTest.tab()).toBe('chats');
+
+    // 3. Клик по точке: cc-open-feature с stage.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true, stage: 'prod' },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // 4. Вкладка ЯВНО «Хронология» (не «Чаты» — старый дефект).
+    expect(pageTest.tab(), 'клик по точке не переключил на «Хронологию»').toBe('timeline');
+    // 5. «Хронология» смонтирована и ГАСИТ якорь (clearFeatureStageFocus после прочтения).
+    expect(pageTest.stageFocus(), 'якорь этапа не гашен вкладкой «Хронология»').toBeNull();
+
+    // 6. «Фича →» без stage: якорь не ставится заново (старый этап не раскроется).
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(pageTest.stageFocus(), '«Фича →» без stage не должна ставить якорь').toBeNull();
+    expect(pageTest.tab(), 'вкладка осталась «Хронология»').toBe('timeline');
   });
 
   it('системное «назад» (popstate): setOpenFeatureId по снимку — в исходнике центра', () => {

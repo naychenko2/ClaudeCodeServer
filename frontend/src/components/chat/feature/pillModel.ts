@@ -32,15 +32,22 @@ function activeStageName(run: FeatureRun): string | null {
   return stage ? STAGE_NAME[stage.key] : null;
 }
 
-// Имена идущих (из now[], уникальные, «Кира, Денис»); '' — никто.
-function runningNames(run: FeatureRun): string {
+// Уникальные имена персон по id («Кира, Денис»); '' — никто/не резолвятся.
+// Единый источник для пилюли (идущие/упавший/мерж) и плашки фичи в чате.
+// id — string | null | undefined (опциональные поля FeatureNow.personaId и т.п.).
+export function uniquePersonaNames(ids: (string | null | undefined)[]): string {
   const names: string[] = [];
-  for (const n of run.now ?? []) {
-    if (!n.personaId) continue;
-    const name = getPersonaById(n.personaId)?.name ?? null;
+  for (const id of ids) {
+    if (!id) continue;
+    const name = getPersonaById(id)?.name ?? null;
     if (name && !names.includes(name)) names.push(name);
   }
   return names.join(', ');
+}
+
+// Имена идущих (из now[], уникальные, «Кира, Денис»); '' — никто.
+function runningNames(run: FeatureRun): string {
+  return uniquePersonaNames((run.now ?? []).map(n => n.personaId));
 }
 
 // Имя упавшего исполнителя (из тревоги); '' — не известно.
@@ -55,6 +62,29 @@ function mergingName(run: FeatureRun): string {
   return (id ? getPersonaById(id)?.name : null) ?? '';
 }
 
+// Фраза состояния по state: { bold, post } — ОДИН ИСТОЧНИК слов для пилюли
+// (buildPillModel) и плашки фичи в чате (FeatureBanner, «где мы»). Входы те же:
+// state, активная стадия и имена (идущие/упавший/мерж).
+//   running → «{этап} · {идущие}»; waiting → «{этап} · ждёт вас»;
+//   stopped → «стоит · {имя}»; merged → «смержена» (без даты, как в пилюле).
+export function statusPhrase(
+  state: FeatureState,
+  stage: string | null,
+  names: { running?: string; stopped?: string; merging?: string },
+): { bold: string; post: string } {
+  switch (state) {
+    case 'not_started': return { bold: 'Не начата', post: '' };
+    case 'idle': return { bold: 'Простаивает', post: '' };
+    case 'running': return { bold: stage ?? 'Разрез', post: names.running ? ` · ${names.running}` : '' };
+    case 'waiting': return { bold: stage ?? 'Разрез', post: ' · ждёт вас' };
+    case 'stopped': return { bold: 'стоит', post: names.stopped ? ` · ${names.stopped}` : '' };
+    case 'merge_pending': return { bold: 'Мерж', post: ' · ждёт согласия' };
+    case 'merging': return { bold: 'Мерж', post: names.merging ? ` · идёт · ${names.merging}` : ' · идёт' };
+    case 'merged': return { bold: 'смержена', post: '' };
+    case 'closed': return { bold: 'закрыта', post: '' };
+  }
+}
+
 // Модель пилюли. null — фич нет и загрузка/ошибка не идёт (пилюля скрыта).
 // Текст и тон — строго по макету S[state].pill; 'loading'/'error' → «фича · …».
 export function buildPillModel(runs: FeatureRun[], loading: boolean, error: string | null): PillModel | null {
@@ -66,51 +96,44 @@ export function buildPillModel(runs: FeatureRun[], loading: boolean, error: stri
   const run = runs[0];
   const stage = activeStageName(run);
 
+  // Слова — из statusPhrase (общий источник с плашкой фичи в чате); тон/aria — по макету.
   switch (run.state) {
-    case 'not_started':
-      return { state: 'not_started', tone: 'neutral', pre: '', bold: 'Не начата', post: '', ariaExtra: null };
-    case 'idle':
-      return { state: 'idle', tone: 'neutral', pre: '', bold: 'Простаивает', post: '', ariaExtra: null };
+    case 'not_started': {
+      const p = statusPhrase('not_started', null, {});
+      return { state: 'not_started', tone: 'neutral', pre: '', bold: p.bold, post: p.post, ariaExtra: null };
+    }
+    case 'idle': {
+      const p = statusPhrase('idle', null, {});
+      return { state: 'idle', tone: 'neutral', pre: '', bold: p.bold, post: p.post, ariaExtra: null };
+    }
     case 'running': {
-      const names = runningNames(run);
-      return {
-        state: 'running', tone: 'neutral',
-        pre: 'фича · ', bold: stage ?? 'Разрез', post: names ? ` · ${names}` : '',
-        ariaExtra: null,
-      };
+      const p = statusPhrase('running', stage, { running: runningNames(run) });
+      return { state: 'running', tone: 'neutral', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
     }
-    case 'waiting':
-      return {
-        state: 'waiting', tone: 'wait',
-        pre: 'фича · ', bold: stage ?? 'Разрез', post: ' · ждёт вас',
-        ariaExtra: 'фича ждёт вас',
-      };
+    case 'waiting': {
+      const p = statusPhrase('waiting', stage, {});
+      return { state: 'waiting', tone: 'wait', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: 'фича ждёт вас' };
+    }
     case 'stopped': {
-      const name = stoppedName(run);
-      return {
-        state: 'stopped', tone: 'stop',
-        pre: 'фича · ', bold: 'стоит', post: name ? ` · ${name}` : '',
-        ariaExtra: 'исполнитель остановлен',
-      };
+      const p = statusPhrase('stopped', null, { stopped: stoppedName(run) });
+      return { state: 'stopped', tone: 'stop', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: 'исполнитель остановлен' };
     }
-    case 'merge_pending':
-      return {
-        state: 'merge_pending', tone: 'wait',
-        pre: 'фича · ', bold: 'Мерж', post: ' · ждёт согласия',
-        ariaExtra: MERGE_PENDING_STATUS,
-      };
+    case 'merge_pending': {
+      const p = statusPhrase('merge_pending', null, {});
+      return { state: 'merge_pending', tone: 'wait', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: MERGE_PENDING_STATUS };
+    }
     case 'merging': {
-      const name = mergingName(run);
-      return {
-        state: 'merging', tone: 'neutral',
-        pre: 'фича · ', bold: 'Мерж', post: name ? ` · идёт · ${name}` : ' · идёт',
-        ariaExtra: null,
-      };
+      const p = statusPhrase('merging', null, { merging: mergingName(run) });
+      return { state: 'merging', tone: 'neutral', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
     }
-    case 'merged':
-      return { state: 'merged', tone: 'ok', pre: 'фича · ', bold: 'смержена', post: '', ariaExtra: null };
-    case 'closed':
-      return { state: 'closed', tone: 'neutral', pre: 'фича · ', bold: 'закрыта', post: '', ariaExtra: null };
+    case 'merged': {
+      const p = statusPhrase('merged', null, {});
+      return { state: 'merged', tone: 'ok', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
+    }
+    case 'closed': {
+      const p = statusPhrase('closed', null, {});
+      return { state: 'closed', tone: 'neutral', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
+    }
   }
   // Запасной путь: state не пришёл (старые данные/кеш) — нейтральная «Не начата».
   return { state: 'not_started', tone: 'neutral', pre: '', bold: 'Не начата', post: '', ariaExtra: null };

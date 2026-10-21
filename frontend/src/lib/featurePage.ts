@@ -168,6 +168,16 @@ export function useFeatureStageFocus(): FeatureStageFocus | null {
   );
 }
 
+// Сброс якоря ПОСЛЕ прочтения (M4): вкладка «Хронология» применила его (раскрыла/
+// прокрутила этап) — якорь гаснет. Иначе повторный монтаж вкладки (смена вкладки и
+// возврат, смена фичи) перечитал бы СТАРЫЙ якорь и раскрыла бы старый этап, хотя
+// последнее открытие было БЕЗ stage.
+export function clearFeatureStageFocus() {
+  if (!_stageFocus) return;
+  _stageFocus = null;
+  emit();
+}
+
 // Живой перезапрос по task_changed: дебаунс 1,5 с. Если перезапрос уже в очереди —
 // новый событие не плодит (серия → один запрос).
 function scheduleRefresh(fid: string) {
@@ -304,7 +314,10 @@ export const __test = {
     _realtimeWired = false;
   },
   focusFeatureStage,
+  clearFeatureStageFocus,
   stageFocus: () => _stageFocus,
+  // Выбранная вкладка (M4: клик по точке ставит 'timeline' явно).
+  tab: () => _tab,
   setState,
   state: () => _state,
   fid: () => _fid,

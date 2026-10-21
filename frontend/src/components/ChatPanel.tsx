@@ -252,6 +252,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // (embedded): там курсор забирает только активная колонка, сигналом composerFocusSignal.
   const isTouch = useIsTouch();
   const [emptyChatFocus, setEmptyChatFocus] = useState(0);
+  // M2: главное действие плашки фичи, когда ждут В ЭТОМ чате — фокус в композер
+  // (ответ пишут здесь, не на странице фичи). Счётчик монотонен, как emptyChatFocus.
+  const [composerFocusBump, setComposerFocusBump] = useState(0);
   const focusDecidedFor = useRef<string | null>(null);
   useEffect(() => {
     if (isMobile || isTouch || embedded || isHistoryLoading) return;
@@ -2810,7 +2813,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           куда вернуться в ключевой чат. Под двумя флагами (режим «Исполнение фичи»
           + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null).
           Центрирование по колонке чата (CHAT_MAX_W, как у ленты) — ВНУТРИ баннера. */}
-      <FeatureBanner sessionId={session.id} projectId={session.projectId ?? null} isMobile={!!isMobile} chatTaskId={session.taskId ?? null} />
+      <FeatureBanner
+        sessionId={session.id}
+        projectId={session.projectId ?? null}
+        isMobile={!!isMobile}
+        chatTaskId={session.taskId ?? null}
+        // Ждут В ЭТОМ чате (waiting/stopped) — фокус в композер (M2), не страница фичи.
+        onFocusComposer={() => setComposerFocusBump(b => b + 1)}
+      />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса
@@ -3222,10 +3232,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             rateWindow={worstRate}
             restore={composerRestore}
             onReplaceAttachments={onAttachedFilesChange}
-            // Два источника «поставь курсор в поле»: колонка стены стала активной и
-            // открылся пустой чат. Оба счётчика монотонны, поэтому сумма растёт от любого
-            // из них; 0 = сигнала не было (Composer такое значение игнорирует).
-            focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus}
+            // Три источника «поставь курсор в поле»: колонка стены стала активной,
+            // открылся пустой чат, главное действие плашки фичи (ждут в этом чате, M2).
+            // Счётчики монотонны, поэтому сумма растёт от любого из них; 0 = сигнала не
+            // было (Composer такое значение игнорирует).
+            focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus + composerFocusBump}
             // Цвет сияния при озвучке: сперва цвет говорящей персоны (тот же, что у кольца
             // её аватара в ленте), иначе фирменный цвет проекта — «голос проекта»;
             // ни того, ни другого нет — оранжевый токен внутри композера

@@ -199,4 +199,98 @@ describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {
     expect(iFirst, 'фичи пересортированы (потерян порядок Б-ord)').toBeLessThan(iSecond);
     root.unmount();
   });
+
+  // Минор 7: проп order (порядок строки/индекса) пересортировывает runs — переключатель
+  // идёт в том же порядке, что строка (а не в бэковом порядке runs).
+  it('order: переключатель пересортирован под порядок строки (order ≠ порядок runs)', async () => {
+    const runs = [mkRun('f1', 'Первая фича'), mkRun('f2', 'Вторая фича')];
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs, isMobile: false, onClose: () => {}, order: ['f2', 'f1'],
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    const all = textNodes(container).join(' ');
+    const iFirst = all.indexOf('Первая фича');
+    const iSecond = all.indexOf('Вторая фича');
+    expect(iFirst, '«Первая фича» в переключателе').toBeGreaterThanOrEqual(0);
+    expect(iSecond, '«Вторая фича» в переключателе').toBeGreaterThanOrEqual(0);
+    // order=['f2','f1'] → «Вторая фича» ПЕРВОЙ (бэковый порядок runs не сохранён).
+    expect(iSecond, 'order не применён: «Вторая фича» должна быть первой').toBeLessThan(iFirst);
+    root.unmount();
+  });
+
+  // Минор 6: runs пуст — шторка не молчит: loading → «Загрузка…», error → причина.
+  it('loading: runs пуст + loading → «Загрузка…» (не тишина)', async () => {
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs: [], isMobile: false, onClose: () => {}, loading: true,
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const state = findNodeByAttr(container, 'data-testid', 'feature-sheet-state');
+    expect(state, 'нет состояния шторки').not.toBeNull();
+    expect(textNodes(state!).join('')).toContain('Загрузка…');
+    root.unmount();
+  });
+
+  it('error: runs пуст + error → причина в шторке (не тишина)', async () => {
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs: [], isMobile: false, onClose: () => {}, error: 'Сервер не ответил',
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const state = findNodeByAttr(container, 'data-testid', 'feature-sheet-state');
+    expect(state, 'нет состояния шторки').not.toBeNull();
+    expect(textNodes(state!).join('')).toContain('Сервер не ответил');
+    root.unmount();
+  });
+
+  it('runs пуст, loading/error нет → шторка не рисуется (null)', async () => {
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs: [], isMobile: false, onClose: () => {},
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-sheet-panel'), 'панель не должна быть').toBeNull();
+    root.unmount();
+  });
+
+  // M5: focus trap в самой шторке (не в ките): при открытии фокус уходит ВНУТРЬ (на
+  // первый фокусируемый — крестик), Tab/Shift+Tab — по кругу. fakeDom: focus() — no-op,
+  // document.addEventListener — no-op: патчим оба (focus → activeElement; keydown-
+  // обработчики — в массив, вызываем напрямую).
+  it('M5: focus trap — фокус внутрь при открытии, Tab/Shift+Tab по кругу (desktop)', async () => {
+    const doc = (globalThis as { document: any }).document;
+    // Захват keydown-обработчиков (Esc + trap) — патч addEventListener на время mount.
+    const keydownHandlers: Function[] = [];
+    const origAdd = doc.addEventListener;
+    doc.addEventListener = (t: string, f: unknown) => { if (t === 'keydown') keydownHandlers.push(f); return origAdd.call(doc, t, f); };
+    // focus() → activeElement (иначе no-op: не видно, куда ушёл фокус).
+    const proto = Object.getPrototypeOf(doc.createElement('div'));
+    const origFocus = proto.focus;
+    proto.focus = function (this: any) { doc.activeElement = this; };
+
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs: [mkRun('f1', 'Моя фича')], isMobile: false, onClose: () => {},
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    doc.addEventListener = origAdd;
+
+    const closeBtn = findNodeByAttr(container, 'data-testid', 'feature-sheet-close');
+    const taskBtn = findNodeByAttr(container, 'data-testid', 'nav-target-task');
+    expect(closeBtn, 'нет крестика').not.toBeNull();
+    expect(taskBtn, 'нет кнопки задачи (последний фокусируемый)').not.toBeNull();
+
+    // При открытии: фокус на ПЕРВОМ фокусируемом (крестик).
+    expect(doc.activeElement, 'фокус не ушёл внутрь панели при открытии').toBe(closeBtn);
+
+    // Tab с ПОСЛЕДНЕГО (кнопка задачи) → на ПЕРВЫЙ (крестик).
+    doc.activeElement = taskBtn;
+    act(() => { for (const h of keydownHandlers) h({ key: 'Tab', shiftKey: false, preventDefault: () => {} }); });
+    expect(doc.activeElement, 'Tab с последнего не привёл на первый').toBe(closeBtn);
+
+    // Shift+Tab с ПЕРВОГО (крестик) → на ПОСЛЕДНИЙ (кнопка задачи).
+    doc.activeElement = closeBtn;
+    act(() => { for (const h of keydownHandlers) h({ key: 'Tab', shiftKey: true, preventDefault: () => {} }); });
+    expect(doc.activeElement, 'Shift+Tab с первого не привёл на последний').toBe(taskBtn);
+
+    proto.focus = origFocus;
+    root.unmount();
+  });
 });

@@ -1,29 +1,34 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { C, R, FS, FONT, SP } from '../../../lib/design';
 import { roleLabel } from '../../../lib/roleLabel';
 import { STAGE_NAME } from '../../../lib/chatGroups';
+import { useCanHover } from '../../../lib/pointer';
 import { NavTargetButton } from '../../feature/NavTargetButton';
 import { openChatById } from '../../../lib/openChat';
 import { openTaskInSection } from '../../../lib/tasks';
 import { Modal } from '../../ui';
+import { Tooltip } from '../../ui/Tooltip';
 import { ICON_SIZE, ICON_STROKE } from '../../ui/icons';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor } from '../../../types/featureRun';
 
 // Шторка фичи (волна 3, Ф-pl-b; макет feature-banner-1, «А · Строка» + раскрытие из «Г»):
 // тап по строке панели раскрывает РАЗВЁРНУТЫЙ СОСТАВ фичи. Состав (в порядке макета):
-//   • переключатель фич — если у чата несколько фич, в порядке Б-ord (первая — фича
-//     задачи этого чата; порядок даёт бэк, фронт не пересортировывает);
+//   • переключатель фич — если у чата несколько фич, в том же порядке, что строка
+//     (единый источник — порядок индекса, проп order; бэковский порядок runs не
+//     пересортировывает, но совпадает с ним по первой фиче — PreferFirst);
 //   • список 7 этапов со статусом и временем (границы + «≈ N мин»);
-//   • исполнители ТЕКУЩЕГО (active) этапа: roleLabel, чип модели, NavTargetButton (чат · задача).
+//   • исполнители ТЕКУЩЕГО (active) этапа: roleLabel, чип модели (подсказка по тапу),
+//     NavTargetButton (чат · задача).
 //
 // Данные — ТОЛЬКО из списка `features?sessionId=` (runs, как в попапе), без догрузки
 // `features/{id}`. Закрытие: Esc, тап вне, кнопка; фокус возвращается на строку.
 //
 // Подача: на мобиле (<768) — bottom-sheet (Modal, штатный паттерн продукта); на
 // десктопе — раскрывающаяся панель под строкой (role=dialog, Esc, тап по подложке).
-// Доступность: aria-expanded на строке (задаёт плашка), role=dialog + aria-modal,
-// focus-trap на мобиле (Modal) и возврат фокуса на строку при закрытии.
+// Доступность: aria-expanded на строке (задаёт плашка, только когда шторка нарисована),
+// role=dialog + aria-modal + focus-trap (M5: ловушка в самой шторке, не в ките) и
+// возврат фокуса на строку при закрытии.
 
 // Подпись состояния этапа (единая с вкладкой «Хронология»): done/active/pending/absent.
 function stageStatusText(s: FeatureStage): string {
@@ -77,7 +82,36 @@ export function executorLines(stage: FeatureStage): { role: string; model: strin
   }));
 }
 
-// Строка исполнителя: roleLabel + чип модели (подсказка «Авто → …») + NavTargetButton (чат · задача).
+// Чип модели (mono) + подсказка с полной моделью. Минор 8: на мобиле нативный
+// `title` по тапу не показывается (только по наведению) — чип-кнопка: тап
+// раскрывает/закрывает подсказку (Tooltip с focused, тот же приём, что у ModelChip
+// попапа, FeatureRunView); на десктопе наведение/клавиатура работают штатно.
+function ModelChip({ label, full }: { label: string; full: string | null }) {
+  const canHover = useCanHover();
+  const [tapped, setTapped] = useState(false);
+  const tip = `Модель чата: ${full && full !== label ? full : label}`;
+  return (
+    <Tooltip content={tip} focused={tapped}>
+      <button
+        type="button"
+        data-testid="feature-sheet-executor-model"
+        aria-label={tip}
+        onClick={() => setTapped(t => !t)}
+        // Десктоп: после клика чип сфокусирован — не «закрепляем» подсказку навсегда.
+        onMouseLeave={() => { if (canHover) setTapped(false); }}
+        style={{
+          border: 'none', cursor: 'pointer', flexShrink: 0,
+          fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+          background: C.bgSelected, borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap',
+        }}
+      >
+        {label}
+      </button>
+    </Tooltip>
+  );
+}
+
+// Строка исполнителя: roleLabel + чип модели (подсказка по тапу) + NavTargetButton (чат · задача).
 function ExecutorRow({ x, isMobile, projectId }: { x: FeatureStageExecutor; isMobile: boolean; projectId: string | null }) {
   const role = roleLabel(x.taskRole, x.stepRef, x.lane);
   const model = x.modelLabel;
@@ -95,18 +129,7 @@ function ExecutorRow({ x, isMobile, projectId }: { x: FeatureStageExecutor; isMo
       >
         {role || (x.personaId ? 'исполнитель' : '—')}
       </span>
-      {model && (
-        <span
-          data-testid="feature-sheet-executor-model"
-          title={x.modelFull ?? model}
-          style={{
-            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
-            background: C.bgSelected, borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap',
-          }}
-        >
-          {model}
-        </span>
-      )}
+      {model && <ModelChip label={model} full={x.modelFull} />}
       <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
         <NavTargetButton
           kind="chat"
@@ -239,9 +262,89 @@ function SheetBody({ run, runs, selected, onSelect, isMobile, projectId }: {
   );
 }
 
-// Раскрывающаяся панель на десктопе: role=dialog, Esc, тап по подложке, возврат фокуса.
-// На мобиле подаёт Modal (bottom-sheet) — там Esc/подложка/крестик уже в Modal.
-export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarget, projectId }: {
+// === Focus trap (M5) ===
+//
+// Минимальная ловушка фокуса в самой шторке (НЕ в ките: у китового Modal управления
+// фокусом нет, а у десктопной панели aria-modal — модалка без ловушки = нарушение ARIA).
+// Поведение:
+//   • при открытии — фокус уходит на ПЕРВЫЙ фокусируемый элемент внутри панели
+//     (крестик); если фокусируемых нет — на корень (tabIndex=-1);
+//   • Tab / Shift+Tab — по кругу внутри панели (с последнего — на первый, с первого — на
+//     последний);
+//   • при закрытии — возврат на строку (close(), уже было).
+// Корень ловушки: desktop — сама панель (ref на ней, крестик внутри); mobile (Modal) —
+// оверлей (cc-overlay), найденный обходом вверх от контента: крестик Modal живёт в
+// оверлее, и ловушка должна его включать.
+type AnyNode = Node & { nodeType: number; parentNode: Node | null };
+
+// Фокусируемые элементы внутри корня: BUTTON/A/INPUT/SELECT/TEXTAREA + [tabindex>=0];
+// disabled не считается.
+function focusablesIn(root: Element): Element[] {
+  const out: Element[] = [];
+  const FOCUSABLE = new Set(['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA']);
+  const walk = (n: Node) => {
+    if (n.nodeType !== 1) return;
+    const el = n as Element;
+    const tag = el.tagName ? el.tagName.toUpperCase() : '';
+    const tab = el.getAttribute ? el.getAttribute('tabindex') : null;
+    const disabled = el.getAttribute ? el.getAttribute('disabled') != null : false;
+    if (!disabled && (FOCUSABLE.has(tag) || (tab != null && tab !== '-1'))) out.push(el);
+    for (const c of el.childNodes) walk(c);
+  };
+  walk(root);
+  return out;
+}
+
+// Корень ловушки: desktop — сам ref (панель); mobile — оверлей Modal (cc-overlay),
+// найденный обходом вверх от контента.
+function trapRoot(ref: React.RefObject<HTMLElement | null>, isMobile: boolean): Element | null {
+  const start = ref.current;
+  if (!start) return null;
+  if (!isMobile) return start;
+  let n: AnyNode | null = start;
+  while (n) {
+    if (n.nodeType === 1) {
+      const el = n as Element;
+      const cls = el.getAttribute ? el.getAttribute('class') ?? '' : '';
+      if (cls.includes('cc-overlay')) return el;
+    }
+    n = n.parentNode;
+  }
+  return start; // оверлея нет (не портал) — сам контент
+}
+
+// Ловушка: на монтировании — фокус внутрь, далее Tab/Shift+Tab по кругу.
+function useFocusTrap(ref: React.RefObject<HTMLElement | null>, isMobile: boolean) {
+  useEffect(() => {
+    const root = trapRoot(ref, isMobile);
+    if (!root) return;
+    // При открытии: фокус на первый фокусируемый (или на корень, если их нет).
+    const els = focusablesIn(root);
+    const target = (els[0] ?? root) as HTMLElement;
+    if (els.length === 0) target.tabIndex = -1;
+    try { target.focus({ preventScroll: true }); } catch { target.focus(); }
+    // Tab/Shift+Tab — по кругу внутри панели.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      const list = focusablesIn(root);
+      if (list.length === 0) { e.preventDefault(); return; }
+      const active = (typeof document !== 'undefined' ? document.activeElement : null) as Element | null;
+      const i = active ? list.indexOf(active) : -1;
+      if (e.shiftKey) {
+        if (i <= 0) { e.preventDefault(); (list[list.length - 1] as HTMLElement).focus(); }
+      } else {
+        if (i === -1 || i === list.length - 1) { e.preventDefault(); (list[0] as HTMLElement).focus(); }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('keydown', onKey); };
+  }, [ref, isMobile]);
+}
+
+// Раскрывающаяся панель на десктопе: role=dialog + aria-modal + focus-trap, Esc, тап по
+// подложке, возврат фокуса. На мобиле подаёт Modal (bottom-sheet) — там Esc/подложка/
+// крестик уже в Modal; ловушка — на оверлее (крестик Modal внутри).
+export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarget, projectId, loading, error, order }: {
   runs: FeatureRun[];
   isMobile?: boolean;
   onClose: () => void;
@@ -249,11 +352,28 @@ export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarge
   focusTarget?: React.RefObject<HTMLElement | null>;
   // Проект чата (область запроса; null — чат вне проектов).
   projectId?: string | null;
+  // Состояния запроса runs (F-pop-a): loading → «Загрузка…», error → причина.
+  loading?: boolean;
+  error?: string | null;
+  // Порядок фич (id) — единый источник с строкой (индекс); runs пересортировывается
+  // под него, чтобы переключатель и «· ещё N» шли в одном порядке (минор 7).
+  order?: string[];
 }) {
-  // Выбранная фича (индекс в runs, порядок Б-ord от бэка). Кламп, если фич стало меньше.
+  // Минор 7: порядок переключателя = порядок строки (индекс), не бэковый порядок runs.
+  const orderedRuns = useMemo(() => {
+    if (!order || order.length === 0) return runs;
+    const pos = new Map(order.map((id, i) => [id, i]));
+    return [...runs].sort((a, b) => (pos.get(a.featureId) ?? Infinity) - (pos.get(b.featureId) ?? Infinity));
+  }, [runs, order]);
+
+  // Выбранная фича (индекс в orderedRuns). Кламп, если фич стало меньше.
   const [sel, setSel] = useState(0);
-  const idx = Math.min(sel, Math.max(0, runs.length - 1));
-  const run = runs[idx];
+  const idx = Math.min(sel, Math.max(0, orderedRuns.length - 1));
+  const run = orderedRuns[idx];
+
+  // Корень ловушки: desktop — панель (ref на ней); mobile — контент (обход к оверлею).
+  const trapRef = useRef<HTMLDivElement | null>(null);
+  useFocusTrap(trapRef, isMobile);
 
   // Возврат фокуса на строку при закрытии (desktop: панель; mobile: Modal сам не возвращает).
   const close = () => {
@@ -273,12 +393,66 @@ export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarge
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMobile, onClose]);
 
-  if (!run) return null;
+  // Минор 6: runs пуст — не молчать: loading → «Загрузка…», error → причина;
+  // только если и loading, и error нет — шторка не рисуется (aria-expanded закрывает плашка).
+  if (!run) {
+    if (!loading && !error) return null;
+    const stateText = loading ? 'Загрузка…' : (error ?? 'Не удалось загрузить');
+    // run ещё нет (loading/error) — названия нет: «Фича».
+    const title = 'Фича';
+    if (isMobile) {
+      return (
+        <ModalLike onClose={close} title={title}>
+          <div ref={trapRef} data-testid="feature-sheet-state" style={{ fontSize: FS.sm, color: C.textSecondary }}>{stateText}</div>
+        </ModalLike>
+      );
+    }
+    return (
+      <div style={{ position: 'relative' }}>
+        <div
+          ref={trapRef}
+          data-testid="feature-sheet-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+          style={{
+            position: 'relative', zIndex: 2,
+            background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+            padding: '10px 12px', marginTop: 6,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: SP.xs }}>
+            <span style={{ fontFamily: FONT.serif, fontSize: FS.md, fontWeight: 700, color: C.textHeading, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {title}
+            </span>
+            <button
+              type="button"
+              data-testid="feature-sheet-close"
+              aria-label="Закрыть"
+              onClick={close}
+              style={{
+                border: 'none', background: 'transparent', cursor: 'pointer',
+                padding: 4, borderRadius: R.sm, color: C.textSecondary, flexShrink: 0,
+              }}
+            >
+              <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+            </button>
+          </div>
+          <div data-testid="feature-sheet-state" style={{ fontSize: FS.sm, color: C.textSecondary }}>{stateText}</div>
+        </div>
+        <div
+          data-testid="feature-sheet-backdrop"
+          onPointerDown={(e) => { if (e.target === e.currentTarget) close(); }}
+          style={{ position: 'fixed', inset: 0, zIndex: 1, background: 'transparent' }}
+        />
+      </div>
+    );
+  }
 
   const body = (
     <SheetBody
       run={run}
-      runs={runs}
+      runs={orderedRuns}
       selected={idx}
       onSelect={setSel}
       isMobile={isMobile}
@@ -290,16 +464,18 @@ export function FeatureBannerSheet({ runs, isMobile = false, onClose, focusTarge
     // Bottom-sheet: Modal сам рисует drag-handle, крестик, Esc и подложку.
     return (
       <ModalLike onClose={close} title={run.epic?.title ?? run.featureId}>
-        {body}
+        <div ref={trapRef}>{body}</div>
       </ModalLike>
     );
   }
 
-  // Desktop: раскрывающаяся панель под строкой. role=dialog + aria-modal; тап по подложке
-  // (fixed, inset 0) закрывает; Esc — в эффекте выше.
+  // Desktop: раскрывающаяся панель под строкой. role=dialog + aria-modal (честно:
+  // focus-trap выше запирает фокус внутри); тап по подложке (fixed, inset 0) закрывает;
+  // Esc — в эффекте выше.
   return (
     <div style={{ position: 'relative' }}>
       <div
+        ref={trapRef}
         data-testid="feature-sheet-panel"
         role="dialog"
         aria-modal="true"

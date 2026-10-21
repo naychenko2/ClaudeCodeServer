@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Info } from 'lucide-react';
-import { useFeatureStageFocus } from '../../lib/featurePage';
+import { useFeatureStageFocus, clearFeatureStageFocus } from '../../lib/featurePage';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
@@ -234,6 +234,9 @@ export function FeatureTimelineTab({ run, isMobile = false }: { run: FeatureRun;
     if (el && 'scrollIntoView' in el) {
       (el as HTMLElement).scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
+    // M4: якорь прочитан — гасим. Повторный монтаж вкладки (смена вкладки/фичи) старый
+    // этап не раскроет, даже если последнее открытие было без stage.
+    clearFeatureStageFocus();
   }, [stageFocus]);
 
   return (

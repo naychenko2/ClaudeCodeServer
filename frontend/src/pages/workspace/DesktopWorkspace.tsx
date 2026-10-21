@@ -39,6 +39,7 @@ import { useHasChatContext } from '../../lib/chatContext';
 import { getTaskById } from '../../lib/tasks';
 import { canSplitCenter, CHAT_SPLIT_MIN_PX, SPLIT_SIDE_MIN_PX } from './splitLayout';
 import { FeatureCenter } from '../../components/feature/FeatureCenter';
+import { centerOccupiedByOther, type CenterOccupancy } from '../../lib/centerOccupancy';
 
 // Минимумы колонок разделённого центра — в splitLayout.ts; на узком центре соседка (минимум 200) всё равно
 // остаётся, поэтому минимум ленты — это то, что остаётся от неё
@@ -400,8 +401,25 @@ export function DesktopWorkspace(p: Props) {
   // Но ленты может и не быть: пока чат не выбран, в центре стоит заставка вдвое уже,
   // и её потребность — SPLASH_W. Дашь тут CHAT_COLUMN_W — на окне ноутбука запаса
   // не останется вовсе, компенсация выродится в ноль и заставку перекосит.
-  const centerFree = !p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen
-    && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen;
+  // «Центр занят другим окном» — ОДИН источник (lib/centerOccupancy), общий со
+  // WorkspacePage (otherCenterOpen/автоскрытие страницы фичи): новое окно центра
+  // добавляется одним полем, а не в два расходящихся перечня. Видео-центр —
+  // «потребитель» свободного центра, а не его блокировщик: для centerFree его поле
+  // гасим (иначе videoInCenter = videoCenter && centerFree было бы противоречием).
+  const centerOccupancy: CenterOccupancy = {
+    file: !!p.openFile,
+    commit: !!p.openCommitSha,
+    task: !!p.selectedTask,
+    graph: p.graphOpen,
+    reader: p.readerState.open,
+    persona: personaOpen,
+    teamCenter: p.teamCenterOpen,
+    board: p.boardOpen,
+    preview: p.previewOpen,
+    terminalMobile: false,
+    videoCenter: videoCenter != null,
+  };
+  const centerFree = !centerOccupiedByOther({ ...centerOccupancy, videoCenter: false });
   // Эфир и каталог занимают тот же остров, что файл и задача, — значит уступают им.
   // Уступка живёт ОДНИМ эффектом, а не колбэком в каждом из девяти открывателей
   // центра: те раскиданы по WorkspacePage, и один забытый вызов дал бы два острова

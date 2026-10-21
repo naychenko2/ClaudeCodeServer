@@ -153,6 +153,10 @@ public static class SharedSpendSplitter
         => FeatureActivityBuilder.Approx(run, now);
 
     // Journal-режим: делегирует в FeatureActivityBuilder.Journal (единый модуль активности, шаг 3).
-    public static IReadOnlyList<FeatureActivityInterval> JournalActivity(FeatureJournalReadResult journal, DateTime now)
-        => FeatureActivityBuilder.Journal(journal, now);
+    // clipFrom = epic.CreatedAt (вызывающий): журнальные интервалы обрезаются по созданию фичи,
+    // как и approx-интервалы — знаменатели режимов однородны (минор 3: раньше journal шёл
+    // без clipFrom, и активность могла начинаться до создания фичи).
+    public static IReadOnlyList<FeatureActivityInterval> JournalActivity(
+        FeatureJournalReadResult journal, DateTime now, DateTime? clipFrom = null)
+        => FeatureActivityBuilder.Journal(journal, now, clipFrom);
 }

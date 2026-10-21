@@ -247,6 +247,39 @@ public class FeatureIndexMembershipTests
         index.Features.Select(f => f.FeatureId).Should().NotContain("epicOther");
     }
 
+    // ── 6b. Per-owner изоляция в едином правиле членства (FeatureChatMembership, минор 4) ────
+
+    // Карта FeatureChatMembership строится по задачам и сессиям ВЛАДЕЛЬЦА: снимок (snapshot)
+    // — результат GetAllOwnedBy(UserId), чужая сессия в нём не живёт. Даже если чужой чат
+    // несёт TaskId задачи владельца (executor-ось его бы поймала), без снимка-владельца он в
+    // карту не попадёт. Контроль: тот же чат, ДОБАВЛЕННЫЙ в снимок, карта ловит (executor) —
+    // значит, именно per-owner-фильтр снимка даёт изоляцию, а не executor-правило.
+    [Fact]
+    public void Членство_ЧужойЧат_НеПопадает_PerOwner()
+    {
+        var owner = new List<TaskItem>
+        {
+            Epic("epicA"),
+            Child("stepA", "epicA"),
+        };
+        // Снимок владельца: только его чат sMine (TaskId=stepA). Чужий чат sOther (другой
+        // владелец) в снимке НЕ живёт — GetAllOwnedBy(OwnerId) его отфильтровал.
+        var ownerSnapshot = new[] { Session("sMine", taskId: "stepA") };
+
+        var map = FeatureChatMembership.Build(owner, ownerSnapshot);
+
+        // Чат владельца — в карте (executor → epicA).
+        map.Should().ContainKey("sMine");
+        map["sMine"].Should().BeEquivalentTo(new[] { "epicA" });
+        // Чужой чат (sOther) не в снимке → не в карте, даже при TaskId=stepA.
+        map.Should().NotContainKey("sOther", "чужой чат вне снимка-владельца → per-owner изоляция");
+
+        // Контроль: тот же чат, добавленный в снимок, executor-ось ловит → изоляция именно
+        // в per-owner-фильтре снимка, не в правиле.
+        var withOther = new[] { Session("sMine", taskId: "stepA"), Session("sOther", taskId: "stepA") };
+        FeatureChatMembership.Build(owner, withOther).Should().ContainKey("sOther");
+    }
+
     // ── Мутация: O(E×T) — owner сканируется константное число раз, а не на каждый эпик ──────
 
     // Ядро индекса (BuildIndexCore) перечисливает список задач владельца константное число раз

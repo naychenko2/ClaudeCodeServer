@@ -705,27 +705,26 @@ public class TasksController(
                 }
             }
 
-            // (3) Интервалы активности: ОДИН ProjectFull/journal.Read на участницу.
+            // (3) ОДИН проход по участницам (решение Александра, п.8: один ProjectFull на
+            // участницу): ProjectFull даёт и интервалы (approx), и Epic.CreatedAt — для
+            // границы окна (from) и для clipFrom journal-интервалов (знаменатели режимов
+            // однородны: оба режима обрезаются по epic.CreatedAt, минор 3). journal.Read —
+            // только в journal-режиме (интервалы из журнала).
             var activities = new List<FeatureActivity>();
-            foreach (var fid in participants)
-            {
-                var intervals = method == "journal"
-                    ? SharedSpendSplitter.JournalActivity(
-                        journal!.Read(UserId, fid), now)
-                    : SharedSpendSplitter.ApproxActivity(
-                        features!.ProjectFull(fid, UserId, snapshot, resolver), now);
-                activities.Add(new FeatureActivity(fid, intervals));
-            }
-
-            // (4) Записи ВСЕХ общих чатов — ОДИН Records (from = min CreatedAt участниц).
             var minCreated = DateTime.MaxValue;
             foreach (var fid in participants)
             {
                 var p = features!.ProjectFull(fid, UserId, snapshot, resolver);
+                var intervals = method == "journal"
+                    ? SharedSpendSplitter.JournalActivity(journal!.Read(UserId, fid), now, p?.Epic.CreatedAt)
+                    : SharedSpendSplitter.ApproxActivity(p, now);
+                activities.Add(new FeatureActivity(fid, intervals));
                 if (p is not null && p.Epic.CreatedAt < minCreated)
                     minCreated = p.Epic.CreatedAt;
             }
             if (minCreated == DateTime.MaxValue) minCreated = run.Epic.CreatedAt;
+
+            // (4) Записи ВСЕХ общих чатов — ОДИН Records (from = min CreatedAt участниц).
             var sharedRecords = spend!.Records(UserId, [], sharedChatIds, [], from: minCreated);
 
             // (5) Деление: один Split на все записи (группировка по SessionId внутри).

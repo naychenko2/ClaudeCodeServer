@@ -23,6 +23,12 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // Для расхода строится БЕЗ фильтра по проекту (projectId = null) — снимок сессий владельца
 // целиком; индекс (BuildIndexCore) фильтрует по projectId сам, но членство в фичах от проекта
 // не зависит.
+//
+// Изоляция per-owner (решение Александра, вопрос 3): карта строится по задачам и сессиям
+// ВЛАДЕЛЬЦА — `owner` это GetByOwner(UserId), `snapshot` — снимок сессий того же владельца
+// (SessionSnapshot fail-closed: чужая/удалённая сессия не в снимке). Чат ЧУЖОГО владельца
+// в карту не попадёт ни как executor (сессия не в снимке), ни как curator/orchestrator
+// (эпики/задачи — только владельца).
 public static class FeatureChatMembership
 {
     // chatId → множество featureId, в которые чат входит (executor ∪ curator ∪ orchestrator).

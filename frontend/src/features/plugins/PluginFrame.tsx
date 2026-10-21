@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, MoreHorizontal, RefreshCw, ShieldAlert, X } from 'lucide-react';
+import { AlertTriangle, MoreHorizontal, Plug, RefreshCw, ShieldAlert, X } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { Island, IslandHeader } from '../../components/ui/Island';
-import { Button, IconButton, Menu, MenuItem, MenuSep, Modal, Notice, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
+import { Button, EmptyState, IconButton, Menu, MenuItem, MenuSep, Modal, Notice, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { getEffectiveTheme, subscribeThemeMode } from '../../lib/themeMode';
@@ -17,6 +16,7 @@ import {
   type BridgeErrorCode, type FrameMessage, type HostMessage,
 } from './bridge';
 import type { PanelTokens } from './panelSrcdoc';
+import { humanizeId, panelDisplayName } from './panelNaming';
 
 // === Токены панели из темы хоста (S8) ===
 // Панель — sandbox-iframe без allow-same-origin: --c-* хоста до неё не доходят.
@@ -66,15 +66,6 @@ function readHostTokens(): PanelTokens {
 // в srcdoc. JWT и стор хоста во фрейм не передаются — панель видит только
 // init/result/theme/context и отвечает ready/call/resize (ADR-031, инвариант 1).
 
-// Человекочитаемое имя из id пакета {publisher}/{slug} (та же логика, что в
-// PluginsProjectSection: slug → слова с большой буквы).
-function humanizeId(id: string): string {
-  const slug = id.split('/').pop() ?? id;
-  return slug.split('-').filter(Boolean)
-    .map(w => w[0].toUpperCase() + w.slice(1))
-    .join(' ') || id;
-}
-
 // Ключ фрейма: (плагин, панель) + версия плагина + НАБОР выданных прав +
 // счётчик перезагрузки. Версия/права в ключе (S7): обновился плагин (новая
 // версия) или выдано/снято право — фрейм пересоздаётся, иначе панель
@@ -99,25 +90,6 @@ function toConsentData(info: PluginInfo): PluginConsentData {
     secrets: info.secrets.map(s => ({ name: s.name, required: false, set: s.set })),
     granted: info.granted,
   };
-}
-
-// Мини-плитка 20×20 с инициалами (шапка острова, макет экран 3) — только в
-// мобильном режиме, где PluginFrame рисует свой Island.
-function MiniTile({ name }: { name: string }) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  const initials = parts.length === 0 ? '?'
-    : parts.length === 1 ? parts[0].slice(0, 2).toUpperCase()
-      : (parts[0][0] + parts[1][0]).toUpperCase();
-  return (
-    <div style={{
-      width: 20, height: 20, borderRadius: R.sm, flexShrink: 0,
-      background: C.accentLight, color: C.accent,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontWeight: 700, fontSize: FS.xs,
-    }}>
-      {initials}
-    </div>
-  );
 }
 
 // Скелет загрузки: 4 полосы (макет, «ЗАГРУЗКА (ДО 1-ГО СООБЩЕНИЯ МОСТА)»).
@@ -149,7 +121,7 @@ type BridgeState = 'waiting' | 'alive' | BridgeErrorCode;
 const MAX_INFLIGHT_CALLS = 8;
 const MAX_ARGS_BYTES = 64 * 1024;
 
-export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: {
+export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, showTitle = true }: {
   project: Project;
   // Конкретный плагин и его конкретная панель: одна панель = одна карточка (S5).
   // На мобиле (свой Island) панель выбирает переключатель; на десктопе карточка
@@ -160,6 +132,10 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
   onOpenPlugins?: () => void;
   // «Скрыть панель» — закрыть панельную зону (на десктопе дублирует крестик PanelShell)
   onClose?: () => void;
+  // Мобила: рисовать ли строку-заголовок в toolbar. Когда панелей несколько,
+  // заголовок даёт активный сегмент переключателя (PluginPanelsSwitcher) — тогда
+  // showTitle=false, чтобы имя не дублировалось.
+  showTitle?: boolean;
 }) {
   const isMobile = useIsMobile();
   const pluginsAvail = useProjectFeature(project, ProjectFeature.Plugins);
@@ -178,10 +154,13 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
   const [logOpen, setLogOpen] = useState(false);
   const [consent, setConsent] = useState<PluginConsentData | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Контент панели длиннее потолка (PANEL_CONTENT_MAX_HEIGHT) — показана только верхняя
+  // часть. Хост раньше писал об этом только в журнал моста; человек об обрезке не узнавал.
+  const [clamped, setClamped] = useState(false);
 
   const name = humanizeId(plugin.id);
-  // Заголовок панели: из манифеста, иначе — имя плагина
-  const panelTitle = panel.title || name;
+  // Заголовок панели: единый вывод (title из манифеста, иначе имя плагина)
+  const panelTitle = panelDisplayName(plugin, panel);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   // init отправлен в текущем монтировании (повторный ready игнорируется, ADR §3.3)
@@ -244,6 +223,7 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
     setBridge('waiting');
     setHeight(null);
     setDeniedKey(null);
+    setClamped(false);
     setLog([]);
     if (!plugin || !panel) {
       setFetch({ kind: 'absent' });
@@ -388,10 +368,11 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
         // страховочный потолок 20 000), применяя не чаще раза за кадр; последнее
         // значение побеждает. Прокручивает обёртка фрейма (overflow:auto ниже).
         pendingHeightRef.current = clampContentHeight(msg.height);
-        // Упёрлись в потолок — хвост контента отрезан: одна строка в журнал моста
-        // («Подробнее»), чтобы автор панели увидел потерю, а не искал её молча.
+        // Упёрлись в потолок — хвост контента отрезан: строка в журнал моста (автор
+        // панели) + видимая плашка (человек), иначе об обрезке никто бы не узнал.
         if (msg.height > PANEL_CONTENT_MAX_HEIGHT) {
           logEvent(`× высота панели ${Math.round(msg.height)} px обрезана до ${PANEL_CONTENT_MAX_HEIGHT} px`);
+          setClamped(true);
         }
         scheduleHeight();
       }
@@ -460,16 +441,13 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
   const body = (() => {
     if (fetch.kind === 'noPanel') {
       return (
-        <div style={{
-          border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: SP.lg,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm, textAlign: 'center',
-        }}>
-          <div style={{ fontWeight: 600, fontSize: FS.base, color: C.textHeading }}>Панель не найдена</div>
-          <div style={{ fontSize: FS.sm, color: C.textMuted }}>У плагина «{name}» панель «{panel.id}» не найдена (404).</div>
-          {onOpenPlugins && (
-            <Button variant="dashed" size="sm" onClick={onOpenPlugins}>Открыть «Плагины»</Button>
-          )}
-        </div>
+        <EmptyState
+          compact
+          icon={<Plug size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+          title="Панель не найдена"
+          subtitle={`У плагина «${name}» панель «${panel.id}» не найдена (404).`}
+          action={onOpenPlugins ? <Button variant="dashed" size="sm" onClick={onOpenPlugins}>Открыть «Плагины»</Button> : undefined}
+        />
       );
     }
     if (fetch.kind === 'failed') {
@@ -518,7 +496,41 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
         // (html{overflow:hidden}), поэтому колесо уходит сюда — в документ хоста, где
         // действует наш стиль полос прокрутки (index.css).
         <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
+          {/* Обрезка высоты: плашка НАД контентом (не оверлей) — человек видит, что
+              панель длиннее 20 000 px и показан только её верх */}
+          {clamped && (
+            <Notice tone="info" icon={AlertTriangle} title="Панель длиннее 20 000 px" style={{ flexShrink: 0, marginBottom: SP.xs }}>
+              Показан только верх.
+            </Notice>
+          )}
+          {/* Отказ в праве: плашка НАД контентом (не оверлей) — не накрывает первые
+              строки панели, как раньше (position:absolute поверх скролла) */}
+          {deniedKey && bridge === 'alive' && (
+            <Notice
+              tone="warning" icon={ShieldAlert}
+              title={`Нет права ${deniedKey}`}
+              style={{ flexShrink: 0, marginBottom: SP.xs }}
+              action={
+                <IconButton size="xs" tone="muted" ariaLabel="Закрыть" onClick={() => setDeniedKey(null)}>
+                  <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              }
+            >
+              Панель вызвала операцию, право на которую не выдано.{' '}
+              <button
+                onClick={() => setConsent(toConsentData(plugin))}
+                style={{
+                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                  color: 'inherit', textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit',
+                }}
+              >
+                Выдать…
+              </button>
+            </Notice>
+          )}
+          {/* Скролл-контейнер — КРАЙ карточки (как у соседних панелей): поле живёт
+              внутри него, поэтому полоса прокрутки у края, а не в 12px от него. */}
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', padding: '4px 12px 16px' }}>
           <iframe
             ref={iframeRef}
             key={frameKey}
@@ -546,44 +558,18 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
               <LoadingSkeleton />
             </div>
           )}
-          {deniedKey && bridge === 'alive' && (
-            <Notice
-              tone="warning" icon={ShieldAlert}
-              title={`Нет права ${deniedKey}`}
-              style={{ position: 'absolute', top: SP.sm, left: SP.sm, right: SP.sm }}
-              action={
-                <IconButton size="xs" tone="muted" ariaLabel="Закрыть" onClick={() => setDeniedKey(null)}>
-                  <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                </IconButton>
-              }
-            >
-              Панель вызвала операцию, право на которую не выдано.{' '}
-              <button
-                onClick={() => setConsent(toConsentData(plugin))}
-                style={{
-                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                  color: 'inherit', textDecoration: 'underline', fontFamily: 'inherit', fontSize: 'inherit',
-                }}
-              >
-                Выдать…
-              </button>
-            </Notice>
-          )}
         </div>
       );
     }
     // absent: панель не найдена или не объявлена
     return (
-      <div style={{
-        border: `1px dashed ${C.dashed}`, borderRadius: R.xl, padding: SP.lg,
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm, textAlign: 'center',
-      }}>
-        <div style={{ fontWeight: 600, fontSize: FS.base, color: C.textHeading }}>Панель не найдена</div>
-        <div style={{ fontSize: FS.sm, color: C.textMuted }}>У плагина «{name}» панель «{panel.id}» не объявлена.</div>
-        {onOpenPlugins && (
-          <Button variant="dashed" size="sm" onClick={onOpenPlugins}>Открыть «Плагины»</Button>
-        )}
-      </div>
+      <EmptyState
+        compact
+        icon={<Plug size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+        title="Панель не найдена"
+        subtitle={`У плагина «${name}» панель «${panel.id}» не объявлена.`}
+        action={onOpenPlugins ? <Button variant="dashed" size="sm" onClick={onOpenPlugins}>Открыть «Плагины»</Button> : undefined}
+      />
     );
   })();
 
@@ -594,24 +580,17 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
         <PanelHeaderSlot>
           {headerControls}
         </PanelHeaderSlot>
+        {/* Тело: для iframe скролл-контейнер панели сам является краем карточки
+            (padding: 0 — поле отдаёт контенту, полоса у края); для не-iframe-состояний
+            (ошибка/пусто) поле даёт обёртка. Служебного футера больше нет: права и
+            версия — в меню «⋯» / «Подробнее» (журнал моста). */}
         <div style={{
           flex: 1, minHeight: 0, overflow: 'auto',
-          background: C.bgCard, padding: SP.md,
+          background: C.bgCard, padding: showIframe ? 0 : SP.md,
           display: 'flex', flexDirection: 'column', gap: SP.sm,
         }}>
           {body}
         </div>
-        {/* Футер: права + версия (макет, экран 3; на мобиле скрыт) */}
-        {!isMobile && (
-          <div style={{
-            flexShrink: 0, padding: '6px 12px',
-            background: C.bgInset, borderTop: `1px solid ${C.borderLight}`,
-            fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {`Права: ${plugin.granted.length > 0 ? plugin.granted.join(', ') : 'не выданы'} · v${plugin.version}`}
-          </div>
-        )}
         {/* Журнал моста («Подробнее»): последние сообщения, моно */}
         {logOpen && (
           <Modal
@@ -646,31 +625,36 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
     );
   }
 
-  // === Мобила: свой Island + шапка (переключатель панели + контролы) ===
+  // === Мобила: контент в край (как соседние вкладки), без второй карточки ===
+  // Заголовок: единственный — подпись активного сегмента переключателя (PluginPanelsSwitcher,
+  // когда панелей несколько); при одной панели — строка-имя в toolbar ниже. Контролы
+  // (перезагрузка, «Права…») — в этом же toolbar, а не в шапке-Island (карточка убрана).
   return (
-    <Island>
-      <IslandHeader
-        icon={<MiniTile name={name} />}
-        title={panelTitle}
-        actions={headerControls}
-      />
+    <>
+      {/* Toolbar хоста: заголовок (только когда нет переключателя) + контролы.
+          Паддинги — как у toolbar'а PanelShell (components/ui/PanelShell.tsx). */}
+      <div style={{
+        flexShrink: 0, padding: '8px 10px 9px',
+        borderBottom: `1px solid ${C.border}`, background: C.bgPanel,
+        display: 'flex', alignItems: 'center', gap: SP.sm,
+      }}>
+        {showTitle && (
+          <span style={{
+            fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textHeading,
+            flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{panelTitle}</span>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }} />
+        {headerControls}
+      </div>
 
+      {/* Тело: скролл-контейнер панели = край (как на десктопе), поле отдаёт контенту */}
       <div style={{
         flex: 1, minHeight: 0, overflow: 'auto',
-        background: C.bgCard, padding: SP.md,
+        background: C.bgCard, padding: showIframe ? 0 : SP.md,
         display: 'flex', flexDirection: 'column', gap: SP.sm,
       }}>
         {body}
-      </div>
-
-      {/* Футер: права + версия (макет, экран 3) */}
-      <div style={{
-        flexShrink: 0, padding: '6px 12px',
-        background: C.bgInset, borderTop: `1px solid ${C.borderLight}`,
-        fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
-        {`Права: ${plugin.granted.length > 0 ? plugin.granted.join(', ') : 'не выданы'} · v${plugin.version}`}
       </div>
 
       {/* Журнал моста («Подробнее»): последние сообщения, моно */}
@@ -704,6 +688,6 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
           onSubmit={submitConsent}
         />
       )}
-    </Island>
+    </>
   );
 }

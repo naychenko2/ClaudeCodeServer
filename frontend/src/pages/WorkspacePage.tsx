@@ -38,7 +38,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
-import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins } from '../features/plugins';
+import { PluginFrame, PluginPanelsSwitcher, useHasInstalledPlugins, useInstalledPlugins, panelDisplayName, pluginIconFor } from '../features/plugins';
 import { BackButton, Button, IconButton, Modal } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
@@ -347,14 +347,18 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     }
     return out;
   }, [installedPlugins]);
-  // Мета карточек: заголовок — из манифеста панели (иначе slug плагина), иконка — Plug.
+  // Мета карточек: заголовок — единый вывод (title из манифеста, иначе имя плагина),
+  // иконка — детерминированно из id плагина (манифест иконки не несёт) — разные
+  // плагины в рельсе различимы, а не все с одной Plug.
   // Заполняем в useMemo (а не в эффекте): WorkspacePage рендерится ПЕРЕД PanelZone,
   // поэтому реестр свеж, когда PanelZone читает panelMetaResolved (иначе fallback).
   useMemo(() => {
     const meta: Record<string, { title: string; Icon: LucideIcon }> = {};
     for (const t of pluginPanelTargets) {
-      const slug = t.plugin.id.split('/').pop() ?? t.plugin.id;
-      meta[pluginPanelKey(t.plugin.id, t.panel.id)] = { title: t.panel.title || slug, Icon: Plug };
+      meta[pluginPanelKey(t.plugin.id, t.panel.id)] = {
+        title: panelDisplayName(t.plugin, t.panel),
+        Icon: pluginIconFor(t.plugin.id),
+      };
     }
     setPluginPanelMeta(meta as Record<import('./workspace/panelCatalog').PluginPanelKey, { title: string; Icon: LucideIcon }>);
   }, [pluginPanelTargets]);

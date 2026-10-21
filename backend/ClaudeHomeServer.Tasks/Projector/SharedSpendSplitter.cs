@@ -127,7 +127,8 @@ public static class SharedSpendSplitter
         }
         // Пересечение с составом чата записи (M[rec.SessionId]): фича, не входящая в этот чат,
         // в знаменатель не попадает (дефект: c1={F,G}, c2={F,H} → ход в c1 делится на 2, не 3).
-        // rec.SessionId null / не в карте → без фильтра (запись не из общих чатов — не ожидается).
+        // rec.SessionId null / не в карте → без фильтра (запись не из общих чатов — не ожидается;
+        // осознанный фолбэк: без чата состав неизвестен, делим между всеми активными участницами).
         if (rec.SessionId is not null && chatParticipants.TryGetValue(rec.SessionId, out var members))
             ids.RemoveAll(id => !members.Contains(id));
         ids.Sort(StringComparer.Ordinal);

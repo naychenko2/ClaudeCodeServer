@@ -720,15 +720,16 @@ public class TasksController(
             // (4) ОДИН проход по участницам (решение Александра, п.8: один ProjectFull на
             // участницу): ProjectFull даёт и интервалы, и Epic.CreatedAt — для границы окна (from)
             // и для clipFrom journal-интервалов (знаменатели режимов однородны: оба обрезаются по
-            // epic.CreatedAt, минор 3). Режим интервалов — journal, только если журналы ВСЕХ
-            // участниц полные (интервалы берём из журнала везде, где он полный).
-            var allParticipantsComplete = participants.All(JournalComplete);
+            // epic.CreatedAt, минор 3). Источник интервалов выбирается ПО УЧАСТНИЦЕ: полный
+            // журнал участницы → её интервалы из её журнала, иначе approx. Так интервалы фичи
+            // не зависят от того, чьё состояние запрашивают (глобальный выбор по объединению
+            // давал F+H ≠ расход чата: у F в запросе от F approx, в запросе от H журнал).
             var activities = new List<FeatureActivity>();
             var minCreated = DateTime.MaxValue;
             foreach (var fid in participants)
             {
                 var p = features!.ProjectFull(fid, UserId, snapshot, resolver);
-                var intervals = allParticipantsComplete
+                var intervals = JournalComplete(fid)
                     ? SharedSpendSplitter.JournalActivity(ReadJournal(fid)!, now, p?.Epic.CreatedAt)
                     : SharedSpendSplitter.ApproxActivity(p, now);
                 activities.Add(new FeatureActivity(fid, intervals));

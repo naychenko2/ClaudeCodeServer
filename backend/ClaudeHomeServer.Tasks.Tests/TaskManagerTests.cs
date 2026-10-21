@@ -1126,23 +1126,95 @@ public class TaskManagerTests : IDisposable
             .WithMessage("*Фича ещё не готова к мержу*");
     }
 
-    // 7d. update merge-задачи БЕЗ смены роли (roleBefore == merge) ⇒ гард не срабатывает.
+    // 7d. update merge-задачи БЕЗ смены роли И фичи ⇒ гард молчит, даже если финал НЕ принят.
+    //     Мутация «гард на любом update merge» (убрать becameMerge/mergeMoved) красит: финал
+    //     разпринят, а гард всё равно сработал бы.
     [Fact]
-    public void Update_Merge_БезСменыРоль_ГардНеСрабатывает()
+    public void Update_Merge_БезСменыРольИФичи_ГардМолчит()
     {
         var epic = CreateEpic("u");
         // Финал принят → merge-задачу можно создать.
-        _sut.Create(null, "u", new CreateTaskRequest("финал",
+        var final = _sut.Create(null, "u", new CreateTaskRequest("финал",
             FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
             Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
         var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
             FeatureId: epic.Id, Role: TaskRoles.Merge));
 
-        // Обновляем merge-задачу, НЕ меняя роль (roleBefore == merge) — гард не срабатывает,
-        // даже если финал «разпринять» (здесь финал всё ещё принят, но ключевое — роль не меняется).
+        // «Разпринимаем» финал (verdict → returned): Status=Done, но вердикт не accepted → не принят.
+        _sut.Update(final.Id, new UpdateTaskRequest(
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Returned }));
+
+        // Update merge-задачи БЕЗ смены роли и фичи (только заголовок) — гард молчит,
+        // хотя финал уже не принят: роль не стала merge, фича не перенесена.
         var updated = _sut.Update(merge.Id, new UpdateTaskRequest(Title: "мерж (правка)"));
 
         updated.Role.Should().Be(TaskRoles.Merge);
+        updated.FeatureId.Should().Be(epic.Id);
+    }
+
+    // 7e. update merge-задачи: ПЕРЕНОС в другую фичу (featureId меняется), финал целевой
+    //     фичи НЕ принят ⇒ 400. Мутация «убрать сравнение фичи» (mergeMoved) красит.
+    [Fact]
+    public void Update_Merge_ПереносВДругуюФичу_ФиналНеПринят_400()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        // Финал A принят → merge-задачу на A можно создать.
+        _sut.Create(null, "u", new CreateTaskRequest("финал A",
+            FeatureId: epicA.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epicA.Id, Role: TaskRoles.Merge));
+        // Фича B: финала нет (не Ready).
+
+        var act = () => _sut.Update(merge.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Фича ещё не готова к мержу*");
+    }
+
+    // 7f. update merge-задачи: перенос в Ready-фичу (финал принят) ⇒ ок.
+    //     Решение: перенос merge-задачи из фичи в фичу допустим, только если целевая фича Ready
+    //     (финал принят) — иначе гард 7e даёт 400.
+    [Fact]
+    public void Update_Merge_ПереносВReadyФичу_Ок()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        // Финалы обеих фич приняты.
+        _sut.Create(null, "u", new CreateTaskRequest("финал A",
+            FeatureId: epicA.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        _sut.Create(null, "u", new CreateTaskRequest("финал B",
+            FeatureId: epicB.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epicA.Id, Role: TaskRoles.Merge));
+
+        // Перенос merge-задачи в Ready-фичу B ⇒ ок (гард не срабатывает: финал B принят).
+        var updated = _sut.Update(merge.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
+
+        updated.FeatureId.Should().Be(epicB.Id);
+        updated.Role.Should().Be(TaskRoles.Merge);
+    }
+
+    // 7g. гард (4-й потребитель «правды о принятии»): финал Status != Done (InProgress) +
+    //     вердикт accepted ⇒ «не принят» (IsFinalAccepted) ⇒ гард срабатывает. Мутация
+    //     «гард без проверки Status == Done» (принят по вердикту) красит.
+    [Fact]
+    public void Create_Merge_ФиналInProgress_ПринятыйВердикт_Гард()
+    {
+        var epic = CreateEpic("u");
+        // Финал: вердикт accepted, но статус InProgress (не Done) → по единой правде «не принят».
+        _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.InProgress,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Фича ещё не готова к мержу*");
     }
 
     [Fact]

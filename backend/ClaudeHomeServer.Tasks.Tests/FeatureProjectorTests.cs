@@ -1034,6 +1034,40 @@ public class FeatureProjectorTests
             "merged → MergedAt = merge.CompletedAt");
     }
 
+    // 5b. Инвариант «правда о принятии»: Ready, merge_pending, merged (ComputeState) и гард
+    //     role=merge (TaskManager) используют ОДИН IsFinalAccepted. Мутация «finalAccepted без
+    //     проверки Status == Done» (скопировать условие «принят/принят с замечаниями» в потребителя,
+    //     минуя IsFinalAccepted) красит: финал Status != Done + вердикт accepted ⇒ «не принят»
+    //     во ВСЕХ потребителях.
+    [Theory]
+    [InlineData(TaskItemStatus.Todo)]
+    [InlineData(TaskItemStatus.InProgress)]
+    public void ПравдаОПринятии_StatusНеDone_ПринятыйВердикт_НеПринят(TaskItemStatus status)
+    {
+        const string epicId = "epic-final-truth";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        // Финал: вердикт accepted, но статус НЕ Done → по единой правде «не принят».
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final,
+            Status = status,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        // 1. Единая точка правды: не принят.
+        FeatureProjector.IsFinalAccepted(final).Should().BeFalse(
+            "Status != Done + вердикт accepted ⇒ не принят (единая правда)");
+
+        var run = FeatureProjector.Build(epic, [epic, final]);
+
+        // 2. Ready — не готов.
+        run.Ready.Should().BeFalse("Ready = IsFinalAccepted (Status != Done → не принят)");
+        // 3. merged (ComputeState) — не merged.
+        run.State.Should().NotBe(FeatureStates.Merged, "merged требует finalAccepted (Status == Done)");
+        // 4. merge_pending (ComputeState) — не merge_pending.
+        run.State.Should().NotBe(FeatureStates.MergePending, "merge_pending требует finalAccepted (Status == Done)");
+    }
+
     // 6. Табличный: Closed, Bucket, ClosureAt согласованы с State на всех 9 состояниях.
     //    Мутация: вернуть Closed = «merge Done || epic Done» (старая вторая точка) →
     //    merged-строка (merge Done, финал не принят, эпик открыт) даст Closed=true ≠ State.
@@ -1077,6 +1111,14 @@ public class FeatureProjectorTests
                 new TaskItem { Id = "e9", Role = TaskRoles.Feature, CreatedAt = t },
                 [new TaskItem { Id = "s1", FeatureId = "e9", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.Done,
                      ClaudeStartedAt = t, CompletedAt = t.AddHours(1) }]),
+            // Частичный мерж (инцидент 21.10): merge Done, финал не принят (returned), эпик открыт
+            // ⇒ idle (не merged, не closed). Мутация «Closed = merge Done || epic Done» красит:
+            // merge Done → Closed=true, а State=idle ⇒ Closed обязан быть false.
+            ("idle",
+                new TaskItem { Id = "e10", Role = TaskRoles.Feature, CreatedAt = t },
+                [Final("e10", TaskVerdicts.Returned),
+                 new TaskItem { Id = "m10", FeatureId = "e10", Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
+                     CompletedAt = t.AddHours(3), ClaudeStartedAt = t }]),
         ];
 
         foreach (var (state, epic, children) in cases)

@@ -136,11 +136,14 @@ public class FeatureEventsTests
     // ── 2. Терминальное событие: вердикт vs merged vs closed vs completed ─────────────────────
 
     // Задача Done с вердиктом даёт вердикт (не completed); merge Done → merged; эпик Done → closed;
-    // обычный шаг Done → completed.
+    // обычный шаг Done → completed. Финал принят (Done + accepted) → фича merged, поэтому merge
+    // Done даёт «merged» (с событием «merged» только при State == merged, см. тест ниже).
     [Fact]
     public void BuildEvents_Терминальное_ПриоритетВердиктаМержаЗакрытия()
     {
         var epic = Epic("epic");
+        var final = Child("fn", "epic", role: TaskRoles.Final, status: TaskItemStatus.Done,
+            completedAt: new DateTime(2026, 10, 4, 8, 0, 0), verdict: TaskVerdicts.Accepted);
         var review = Child("rv", "epic", role: TaskRoles.Review, status: TaskItemStatus.Done,
             completedAt: new DateTime(2026, 10, 4, 9, 0, 0), verdict: TaskVerdicts.Returned);
         var merge = Child("mg", "epic", role: TaskRoles.Merge, status: TaskItemStatus.Done,
@@ -148,7 +151,7 @@ public class FeatureEventsTests
         var step = Child("st", "epic", status: TaskItemStatus.Done,
             completedAt: new DateTime(2026, 10, 3, 9, 0, 0));
 
-        var events = FeatureProjector.BuildEvents(Run(epic, review, merge, step), Sessions());
+        var events = FeatureProjector.BuildEvents(Run(epic, final, review, merge, step), Sessions());
 
         // review Done + вердикт → «returned», НЕ «completed».
         events.Should().Contain(e => e.Kind == "returned" && e.TaskId == "rv");
@@ -158,6 +161,29 @@ public class FeatureEventsTests
         events.Should().NotContain(e => e.Kind == "completed" && e.TaskId == "mg");
         // обычный шаг Done → «completed».
         events.Should().Contain(e => e.Kind == "completed" && e.TaskId == "st");
+    }
+
+    // Частичный мерж (инцидент 21.10): merge Done, финал не принят (returned), эпик открыт ⇒
+    // фича НЕ merged (idle). Событие «merged» не появляется (мутация «merged из любого merge Done»
+    // красит); терминальное событие merge-задачи — «completed».
+    [Fact]
+    public void BuildEvents_ЧастичныйМерж_MergedТолькоЕслиStateMerged()
+    {
+        var epic = Epic("epic-partial-merge");
+        var final = Child("f1", "epic-partial-merge", role: TaskRoles.Final,
+            status: TaskItemStatus.Done, completedAt: T0.AddHours(2), verdict: TaskVerdicts.Returned);
+        var merge = Child("m1", "epic-partial-merge", role: TaskRoles.Merge,
+            status: TaskItemStatus.Done, completedAt: T0.AddHours(3), startedAt: T0);
+
+        var run = Run(epic, final, merge);
+        run.State.Should().NotBe(FeatureStates.Merged, "частичный мерж: финал не принят, эпик открыт");
+
+        var events = FeatureProjector.BuildEvents(run, Sessions());
+
+        // «merged» нет (State != merged); терминальное событие merge-задачи — «completed».
+        events.Should().NotContain(e => e.Kind == "merged" && e.TaskId == "m1",
+            "частичный мерж (State != merged) не даёт события «merged»");
+        Find(events, "completed", "m1").At.Should().Be(T0.AddHours(3));
     }
 
     // ── 3. Порядок: at desc, при равенстве — taskId ───────────────────────────────────────────

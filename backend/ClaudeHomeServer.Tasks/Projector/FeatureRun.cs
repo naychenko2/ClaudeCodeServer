@@ -59,9 +59,15 @@ public sealed class FeatureRun
     public string State { get; init; } = FeatureStates.Idle;
     // Тревога: stopped → wait явный → merge; один элемент либо null.
     public FeatureAttention? Attention { get; init; }
-    // Счётчик шагов: принятые (Done) / все (из StepChains).
+    // Счётчик шагов: принятые ревью / знаменатель (= StepProgress.Accepted / Total). Семантика
+    // изменена сознательно (честный прогресс): «принят» — не «сдан исполнителем (Done)», а
+    // «последний виток ревью/проверки/финала — accepted/accepted_with_remarks и доработок не осталось»;
+    // знаменатель — шаги плана (planSteps) ∪ заведённые шаги, а не только заведённые.
     public int StepsAccepted { get; init; }
     public int StepsTotal { get; init; }
+    // Честный прогресс по шагам: корзины accepted/review/work/notCreated (сумма = Total),
+    // вне знаменателя — withdrawn и unlinkedReworks. Вся арифметика на бэке.
+    public FeatureStepProgress StepProgress { get; init; } = new();
     // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
     public DateTime? LastActivityAt { get; init; }
     // Закрыта: выводится из State (merged или closed) — единая точка правды
@@ -140,8 +146,11 @@ public sealed class FeatureSummary
     public double DurationMinutes { get; init; }
     // Число задач фичи (эпик + дочерние).
     public int Tasks { get; init; }
-    // Число шагов (из StepChains).
+    // Число шагов (знаменатель StepProgress.Total).
     public int Steps { get; init; }
+    // Шагов не принято: Total − Accepted (снятые withdrawn уже вне Total). Заполняется у merged и
+    // closed: «закрыта вручную с непринятыми шагами» = State == closed ∧ StepsOpen > 0.
+    public int StepsOpen { get; init; }
     // Число возвратов (Loops).
     public int Loops { get; init; }
 }
@@ -324,12 +333,36 @@ public sealed class FeatureLane
     public string Lane { get; init; } = "other";
     // Исполнители (уникальные, в порядке первого появления).
     public List<string> PersonaIds { get; init; } = [];
-    // Всего шагов в линии.
+    // Знаменатель линии: шаги плана ∪ заведённые шаги линии (снятые withdrawn не входят).
     public int Total { get; init; }
-    // Принятые (Done) шаги.
+    // Принятые ревью шаги (не «Done»: сдан ≠ принят).
     public int Accepted { get; init; }
+    // Сдан, ждёт ревью (все задачи цепочки Done, витка нет или он идёт).
+    public int Review { get; init; }
+    // В работе (задача идёт/не начата либо последний виток returned).
+    public int Work { get; init; }
+    // Шаг есть в плане, задачи нет.
+    public int NotCreated { get; init; }
     // Шаги с возвратом (их ревью/проверка/финал вернул: returned/accepted_with_remarks).
     public int Returns { get; init; }
+}
+
+// Честный прогресс фичи по шагам (единица учёта — шаг, код stepRef; ключ шага без stepRef — id
+// задачи). Корзины взаимоисключающие: Total = Accepted + Review + Work + NotCreated. Вне знаменателя:
+// Withdrawn (шаг снят ревью с выкладки) и UnlinkedReworks (доработки без привязки к шагу —
+// ни stepRef, ни reviewOf; новую цепочку не заводят).
+public sealed class FeatureStepProgress
+{
+    // none — задач role=plan нет; unstructured — план есть, но planSteps пуст (знаменатель =
+    // только заведённые шаги); structured — planSteps есть хотя бы у одной задачи-плана.
+    public string PlanState { get; init; } = "none";
+    public int Total { get; init; }
+    public int Accepted { get; init; }
+    public int Review { get; init; }
+    public int Work { get; init; }
+    public int NotCreated { get; init; }
+    public int Withdrawn { get; init; }
+    public int UnlinkedReworks { get; init; }
 }
 
 // Состояния фичи (FeatureRun.State) — единая точка правды: 9 значений, camelCase (как в JSON).

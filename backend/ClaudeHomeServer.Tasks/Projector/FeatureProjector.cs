@@ -87,13 +87,14 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // Цепочки: по одной на шаг (stepRef). Шаг = stepRef; в цепочку входят задача шага
         // (role=step) и её доработки (role=rework, тот же stepRef), в порядке времени.
-        var stepChains = BuildStepChains(steps, verdictTasks, nowUtc, sessions);
+        var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, nowUtc, sessions);
+        var stepChains = accounting.Chains;
 
         // Возвраты по источникам (ревью/проверка/финал): число возвратов и сколько открыто.
         var returnsBySource = BuildReturnsBySource(reviews, qa, final, steps);
 
         // Линии (back/front/прочее): исполнители и счётчики.
-        var lanes = BuildLanes(steps, verdictTasks);
+        var lanes = accounting.Lanes;
 
         // ─── Б3: «Сейчас», тревоги, итог ───────────────────────────────────────────────────
         // Attention вычисляется ДО цикла стадий: тон активной стадии — производное от него
@@ -380,9 +381,10 @@ public sealed class FeatureProjector(TaskManager tasks)
             })
             .ToList();
 
-        // Счётчик шагов: принятые (outcome=accepted) / все (из StepChains).
-        int stepsTotal = stepChains.Count;
-        int stepsAccepted = stepChains.Count(c => c.Outcome == "accepted");
+        // Счётчик шагов: принятые ревью / знаменатель (план ∪ заведённые) — из StepProgress.
+        var stepProgress = accounting.Progress;
+        int stepsTotal = stepProgress.Total;
+        int stepsAccepted = stepProgress.Accepted;
 
         // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи
         // (время мержа — это CompletedAt merge-задачи, уже учтено).
@@ -434,6 +436,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 DurationMinutes = duration,
                 Tasks = featureTasks.Count(),
                 Steps = stepsTotal,
+                StepsOpen = stepsTotal - stepsAccepted,
                 Loops = verdicts.Loops,
             };
         }
@@ -469,6 +472,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             Attention = attention,
             StepsAccepted = stepsAccepted,
             StepsTotal = stepsTotal,
+            StepProgress = stepProgress,
             LastActivityAt = lastActivityAt,
             Closed = closed,
             Summary = summary,
@@ -729,6 +733,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         Attention = run.Attention,
         StepsAccepted = run.StepsAccepted,
         StepsTotal = run.StepsTotal,
+        StepProgress = run.StepProgress,
         LastActivityAt = run.LastActivityAt,
         Closed = run.Closed,
         Summary = run.Summary,
@@ -737,10 +742,10 @@ public sealed class FeatureProjector(TaskManager tasks)
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 
     // Старт задачи: ClaudeStartedAt (запуск исполнителя), иначе CreatedAt.
-    private static DateTime TaskStart(TaskItem t) => t.ClaudeStartedAt ?? t.CreatedAt;
+    internal static DateTime TaskStart(TaskItem t) => t.ClaudeStartedAt ?? t.CreatedAt;
 
     // Исход витка: вердикт задачи, если он один из четырёх; иначе «running» (открыт, вердикта нет).
-    private static string RoundVerdict(TaskItem t)
+    internal static string RoundVerdict(TaskItem t)
     {
         var v = t.Verification?.Verdict;
         return v is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks
@@ -750,11 +755,11 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Виток-возврат: returned или accepted_with_remarks (работа вернулась к исполнителю).
-    private static bool IsReturn(string verdict) =>
+    internal static bool IsReturn(string verdict) =>
         verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks;
 
     // Источник возврата: роль задачи → review | qa | final; прочее → null.
-    private static string? RoleToSource(string? role) => role switch
+    internal static string? RoleToSource(string? role) => role switch
     {
         TaskRoles.Review => "review",
         TaskRoles.Qa => "qa",
@@ -764,7 +769,7 @@ public sealed class FeatureProjector(TaskManager tasks)
 
     // Нормализация линии как laneOf во фронтовом PipelineFlow.tsx:
     // back/backend/бэк/бэкенд → back; front/frontend/фронт/фронтенд → front; прочее → other.
-    private static string NormalizeLane(string? lane)
+    internal static string NormalizeLane(string? lane)
     {
         var l = (lane ?? "").Trim().ToLowerInvariant();
         if (l is "back" or "backend" or "бэк" or "бэкенд") return "back";
@@ -774,146 +779,6 @@ public sealed class FeatureProjector(TaskManager tasks)
 
     // (Роль → ключ стадии — общий FeatureTimeMath.RoleToStage, дедуп с FeatureTimeline, минор 8.
     // Эпик (feature) в «Сейчас» не доходит: он контейнер фичи и исключён из Now, см. Build.)
-
-    // Цепочки шагов: группировка steps (role=step/rework) по stepRef. Порядок групп — по первому
-    // появлению (порядок вызывающего); внутри группы — по времени (стабильная сортировка: равные
-    // старты сохраняют порядок вызывающего).
-    private static List<FeatureStepChain> BuildStepChains(
-        List<TaskItem> steps, List<TaskItem> verdictTasks, DateTime nowUtc,
-        IReadOnlyCollection<FeatureIndexSession>? sessions = null)
-    {
-        // Б7: снимок сессий владельца → lookup по id: чаты шага/витка наружу только если в снимке
-        // (fail-closed, как в BuildCore; sessions null → все чаты null).
-        var sessionById = sessions is null
-            ? new Dictionary<string, FeatureIndexSession>()
-            : sessions.ToDictionary(s => s.Id);
-        FeatureIndexSession? LiveSession(string? chatId) =>
-            chatId is not null && sessionById.TryGetValue(chatId, out var s) ? s : null;
-
-        var groups = new List<(string Key, List<TaskItem> Tasks)>();
-        var index = new Dictionary<string, int>();
-        foreach (var t in steps)
-        {
-            var key = t.StepRef ?? "";
-            if (!index.TryGetValue(key, out var i))
-            {
-                index[key] = i = groups.Count;
-                groups.Add((key, []));
-            }
-            groups[i].Tasks.Add(t);
-        }
-
-        var chains = new List<FeatureStepChain>(groups.Count);
-        foreach (var (key, groupTasks) in groups)
-        {
-            var ordered = groupTasks.OrderBy(t => TaskStart(t)).ToList();
-            // Шапка цепочки — задача шага (role=step); если её нет (только доработки) — первая.
-            var head = ordered.FirstOrDefault(t => t.Role == TaskRoles.Step) ?? ordered[0];
-            var idSet = new HashSet<string>(ordered.Select(t => t.Id));
-
-            // Витки: ревью/проверки/финалы, связанные с цепочкой через ReviewOf, в порядке времени.
-            // Одно ревью на два шага попадает в обе цепочки (связка многие-ко-многие).
-            var rounds = verdictTasks
-                .Where(t => t.ReviewOf is not null && t.ReviewOf.Any(id => idSet.Contains(id)))
-                .OrderBy(t => TaskStart(t))
-                .ToList();
-            var featureRounds = rounds.Select((t, i) => new FeatureRound
-            {
-                N = i + 1,
-                Verdict = RoundVerdict(t),
-                ReviewTaskId = t.Id,
-                PersonaId = t.PersonaId,
-                ReviewChatId = LiveSession(t.LinkedSessionId)?.Id, // Б7: чат витка (fail-closed)
-                StartedAt = TaskStart(t),
-                CompletedAt = t.CompletedAt,
-                Reason = t.Verification?.Notes,
-            }).ToList();
-            int loops = featureRounds.Count(r => IsReturn(r.Verdict));
-
-            // Источник возврата: ближайшая (последняя по времени) связанная задача-возврат;
-            // роль → review/qa/final. Связи нет — null (догадок не делаем).
-            var returnTasks = rounds.Where(t => IsReturn(RoundVerdict(t))).ToList();
-            string? source = returnTasks.Count > 0 ? RoleToSource(returnTasks[^1].Role) : null;
-
-            // Исход и шапка.
-            string outcome, status;
-            bool withdrawn = ordered.Any(t => t.Verification?.Verdict == TaskVerdicts.Withdrawn);
-            if (withdrawn)
-            {
-                outcome = "withdrawn";
-                status = "снят с выкладки";
-            }
-            else if (featureRounds.Count > 0)
-            {
-                var last = featureRounds[^1];
-                if (last.Verdict == TaskVerdicts.Accepted)
-                {
-                    outcome = "accepted";
-                    status = "принят";
-                }
-                else if (IsReturn(last.Verdict))
-                {
-                    // Вернули: доработка ещё идёт → «идёт»; закрыто без повторного ревью → «закрыт…».
-                    bool reworkOpen = ordered.Any(t => t.Role == TaskRoles.Rework && t.Status != TaskItemStatus.Done);
-                    if (reworkOpen)
-                    {
-                        outcome = "running";
-                        status = "идёт";
-                    }
-                    else
-                    {
-                        outcome = "returned";
-                        status = "закрыт без повторного ревью";
-                    }
-                }
-                else
-                {
-                    // Виток открыт (running) или снят (withdrawn) без вердикта на задаче.
-                    outcome = "running";
-                    status = "идёт";
-                }
-            }
-            else
-            {
-                // Витков нет: шаг закрыт, но ревью ещё не было → «ждёт ревью»; иначе «идёт».
-                bool allDone = ordered.All(t => t.Status == TaskItemStatus.Done);
-                if (allDone)
-                {
-                    outcome = "pending";
-                    status = "ждёт ревью";
-                }
-                else
-                {
-                    outcome = "running";
-                    status = "идёт";
-                }
-            }
-
-            // Длительность: от старта первой задачи до закрытия последней; у идущей — до сейчас.
-            var first = ordered[0];
-            var lastTask = ordered[^1];
-            var start = TaskStart(first);
-            var end = lastTask.CompletedAt ?? nowUtc;
-            var duration = Math.Max(0, Math.Round((end - start).TotalMinutes));
-
-            chains.Add(new FeatureStepChain
-            {
-                StepRef = key,
-                Lane = head.Lane,
-                Title = head.Title,
-                PersonaId = head.PersonaId,
-                ChatId = LiveSession(head.LinkedSessionId)?.Id, // Б7: чат шага (fail-closed)
-                TaskIds = ordered.Select(t => t.Id).ToList(),
-                Outcome = outcome,
-                Status = status,
-                DurationMinutes = duration,
-                Source = source,
-                Loops = loops,
-                Rounds = featureRounds,
-            });
-        }
-        return chains;
-    }
 
     // Возвраты по источникам: для каждого источника (ревью/проверка/финал) — число возвратов
     // (уникальные задачи с returned/accepted_with_remarks) и сколько из них открыто (их доработка
@@ -942,53 +807,6 @@ public sealed class FeatureProjector(TaskManager tasks)
             Qa = Count(qa),
             Final = Count(finalList),
         };
-    }
-
-    // Линии (back/front/прочее): исполнители (уникальные, по первому появлению) и счётчики.
-    // Считаем по задачам-шагам (role=step): доработка — часть цепочки шага, а не отдельная
-    // позиция линии. total — шаги линии; accepted — Done; returns — шаги с возвратом.
-    private static List<FeatureLane> BuildLanes(List<TaskItem> steps, List<TaskItem> verdictTasks)
-    {
-        var stepTasks = steps.Where(t => t.Role == TaskRoles.Step).ToList();
-        var groups = new List<(string Lane, List<TaskItem> Tasks)>();
-        var index = new Dictionary<string, int>();
-        foreach (var t in stepTasks)
-        {
-            var lane = NormalizeLane(t.Lane);
-            if (!index.TryGetValue(lane, out var i))
-            {
-                index[lane] = i = groups.Count;
-                groups.Add((lane, []));
-            }
-            groups[i].Tasks.Add(t);
-        }
-
-        // Шаги с возвратом: есть связанный (ReviewOf ∩ id шага) виток-возврат.
-        var returnedIds = new HashSet<string>();
-        foreach (var v in verdictTasks)
-        {
-            if (!IsReturn(RoundVerdict(v)) || v.ReviewOf is null) continue;
-            foreach (var id in v.ReviewOf)
-                returnedIds.Add(id);
-        }
-
-        var lanes = new List<FeatureLane>(groups.Count);
-        foreach (var (lane, tasks) in groups)
-        {
-            var personaIds = new List<string>();
-            foreach (var t in tasks)
-                if (t.PersonaId is not null && !personaIds.Contains(t.PersonaId))
-                    personaIds.Add(t.PersonaId);
-            lanes.Add(new FeatureLane
-            {
-                Lane = lane,
-                PersonaIds = personaIds,
-                Total = tasks.Count,
-                Accepted = tasks.Count(t => t.Status == TaskItemStatus.Done),
-                Returns = tasks.Count(t => returnedIds.Contains(t.Id)),
-            });
-        }
-        return lanes;
     }
 
     // Шаг с наибольшим числом витков (для стадии review: строка «дольше всех D1c»).
@@ -1596,7 +1414,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.Epic.WorktreeBranch,
             run.Epic.CreatedAt,
             featureTasks.Count,
-            NowPersonaIdsOf(run));
+            NowPersonaIdsOf(run),
+            run.StepProgress.Review,
+            run.StepProgress.Work,
+            run.StepProgress.NotCreated,
+            run.StepProgress.PlanState);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
@@ -1635,7 +1457,14 @@ public sealed class FeatureProjector(TaskManager tasks)
     public static bool IsFinalAccepted(TaskItem? final) =>
         final is not null
         && final.Status == TaskItemStatus.Done
-        && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
+        && IsAcceptance(final.Verification?.Verdict);
+
+    // «Принятие» — ОДИН предикат о вердикте: accepted ИЛИ accepted_with_remarks. На нём Ready,
+    // merge_pending/merged, гард role=merge и «шаг принят» (FeatureStepAccounting): две правды о
+    // принятии недопустимы. Счётчик петель ↺ (IsReturn: returned/awr) — отдельная ось «сколько раз
+    // возвращали», она принятие не определяет.
+    public static bool IsAcceptance(string? verdict) =>
+        verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
 
     // Состояние фичи (9 значений, приоритет сверху вниз; первое совпавшее побеждает):
     // merged → closed → stopped → waiting → merging → merge_pending → running → not_started → idle.
@@ -1786,7 +1615,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var s = run.Summary;
         if (s is null) return null;
-        return new FeatureIndexSummary(s.MergedAt, s.DurationMinutes);
+        return new FeatureIndexSummary(s.MergedAt, s.DurationMinutes, s.StepsOpen);
     }
 
     // Чатов фичи в этом ответе: число сессий в map, чья карта фич содержит featureId.

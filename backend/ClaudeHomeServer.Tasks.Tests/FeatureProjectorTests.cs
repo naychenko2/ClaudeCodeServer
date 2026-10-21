@@ -431,7 +431,8 @@ public class FeatureProjectorTests
         var back = run.Lanes.Single(l => l.Lane == "back");
         back.PersonaIds.Should().BeEquivalentTo(new[] { "Денис", "Кира" },
             "оба исполнителя линии бэк — в personaIds");
-        back.Total.Should().Be(4, "бэк: 4 шага (Ш1, Ш2, Ш5, Ш6)");
+        // Ш6 снят ревью с выкладки (withdrawn) — вне знаменателя (честный прогресс, Б-pr2).
+        back.Total.Should().Be(3, "бэк: 3 шага в знаменателе (Ш1, Ш2, Ш5); Ш6 снят — вне Total");
         var front = run.Lanes.Single(l => l.Lane == "front");
         front.PersonaIds.Should().ContainSingle().Which.Should().Be("Кира");
         front.Total.Should().Be(2, "фронт: 2 шага (Ш3, Ш4)");

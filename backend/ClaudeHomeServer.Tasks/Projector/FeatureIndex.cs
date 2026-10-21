@@ -70,7 +70,7 @@ public sealed record FeatureIndexRow(
     List<FeatureIndexRailSegment> Rail,
     // Чипы-фильтры: open | waiting | stopped | merge | closed.
     List<string> Chips,
-    // Счётчики шагов: принятые (Done) / все.
+    // Счётчики шагов: принятые ревью / знаменатель (честный прогресс, см. FeatureStepProgress).
     int StepsAccepted,
     int StepsTotal,
     // Число возвратов (Loops).
@@ -98,7 +98,13 @@ public sealed record FeatureIndexRow(
     int TaskCount,
     // «Сейчас»: уникальные PersonaId идущих задач (Now, по убыванию старта) в порядке старта;
     // пустой список — фича не идёт.
-    List<string> NowPersonaIds);
+    List<string> NowPersonaIds,
+    // Честный прогресс (Б-pr2): шаги на ревью / в работе / не заведены (план есть, задачи нет)
+    // и состояние плана: none | unstructured | structured. StepsAccepted/StepsTotal — тоже оттуда.
+    int StepsReview,
+    int StepsWork,
+    int StepsNotCreated,
+    string PlanState);
 
 // Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
 // нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя
@@ -127,4 +133,6 @@ public sealed record FeatureIndexNow(
 // Итог смерженной фичи: только у закрытой, иначе null.
 public sealed record FeatureIndexSummary(
     DateTime? MergedAt,
-    double DurationMinutes);
+    double DurationMinutes,
+    // Шагов не принято (Total − Accepted); у merged и closed — «закрыта вручную с непринятыми шагами».
+    int StepsOpen);

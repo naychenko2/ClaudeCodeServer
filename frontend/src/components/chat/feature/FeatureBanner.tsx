@@ -1,170 +1,207 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { C, FS, R, FONT, SHADOW } from '../../../lib/design';
-import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { ArrowLeft, ArrowRight, ChevronDown } from 'lucide-react';
+import { C, R, FS, FONT, CHAT_MAX_W } from '../../../lib/design';
 import { useFeature, FLAGS } from '../../../lib/featureFlags';
-import { useFeaturesIndex, featureOf, type FeatureOfEntry } from '../../../lib/featuresIndex';
-import { useFeatureRuns } from '../../../lib/featureRuns';
-import { useBackNavFrom, getBackNav, clearBackNav, recordBackNav } from '../../../lib/featureBackNav';
+import { useFeaturesIndex, featureOf } from '../../../lib/featuresIndex';
 import { openChatById } from '../../../lib/openChat';
-import { openTaskInSection } from '../../../lib/tasks';
-import { featureDisplayState } from '../../../lib/chatGroups';
+import { STAGE_NAME, MERGE_PENDING_STATUS } from '../../../lib/chatGroups';
 import { CHAT_ROLE_LABEL } from '../../../lib/featureChatRole';
 import { roleLabel } from '../../../lib/roleLabel';
-import { FeatureGlyph, type FeatureGlyph as GlyphKind } from './FeatureGlyphs';
-import { FeatureRail } from './FeatureRail';
-import { FeatureModeBody } from './FeatureModeBody';
+import { getPersonaById } from '../../../lib/personas';
+import type { FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 import { FeatureBannerSheet } from './FeatureBannerSheet';
 import { dateOnly } from './featureTime';
-import type { FeatureIndexFeature, FeatureChatLink } from '../../../types/featureIndex';
-import type { FeatureRun } from '../../../types/featureRun';
+import type { FeatureIndexFeature, FeatureChatLink, FeatureRailKey, FeatureRailTone } from '../../../types/featureIndex';
 
-// Плашка фичи в чате (макет features-overview.html, .fs; записка
-// features-overview-proposal.md, «Общее для всех вариантов: плашка фичи»).
+// Плашка фичи в чате — ОДНА КОМПАКТНАЯ СТРОКА (макет feature-banner-1, вариант «А · Строка»
+// + кликабельные точки этапов из «Г · Мини-хронология»; записка Майи 20.10, решения Андрея).
 //
-// Сценарий: «я открыл чат Дениса и не понимаю, где фича и где главный чат».
-// Плашка отвечает: глиф состояния · название фичи · мини-рельса · статус ·
-// счётчик · роль ЭТОГО чата в фиче · кнопка перехода в ключевой чат.
+// Строка отвечает на четыре вопроса и ничего сверх (записка §1):
+//   • ГДЕ МЫ     — 7 точек этапов (пройденные, текущий, впереди) + подпись «{этап} · {состояние}»;
+//   • ЧТО ОТ МЕНЯ — одно главное действие, когда от вас что-то нужно (waiting/stopped/merge_pending);
+//   • КТО РАБОТАЕТ — чип роли ЭТОГО чата («этот чат — Ш2 · фронт» / «ключевой»);
+//   • КУДА ПЕРЕЙТИ — точки ведут на страницу фичи (вкладка «Хронология»); «Мерж…» НЕ на панели.
 //
-// Фронт НИЧЕГО не считает: источник правды — индекс фич (lib/featuresIndex.ts,
-// бэк считает bucket/attention/rail/summary/ключевой чат). Компонент только
-// раскладывает строку фичи в глиф/тон/статус/счётчик/роль.
+// Источник правды — БЭК: строка фичи из индекса (lib/featuresIndex, GET features/index)
+// несёт state (9 состояний), rail (7 стадий), attention, keySessionId и связь «чат × фича».
+// Фронт НЕ пересчитывает — только раскладывает в точки/подпись/действие/роль.
 //
-// Показывается под ДВУМЯ флагами: turn-plan-feature-mode (поверхность режима
-// «Исполнение фичи») и features-overview (загрузка индекса). Dark launch:
-// оба выключены — плашки нет, лента как раньше.
+// Показывается под ДВУМЯ флагами: turn-plan-feature-mode (поверхность режима «Исполнение
+// фичи») и features-overview (индекс). Dark launch: оба выключены — строки нет, лента как раньше.
 //
-// Тон фона (записка Майи): ждёт вас/к мержу — C.infoBg, упала — C.dangerBg,
-// закрытая/смержена — C.bgInset (серая, второй план), идёт/доработка — C.bgCard
-// с рамкой C.borderLight.
+// Честность (задача, п.5): «N из M» и «все готово» НЕ выводим; пока Б-pr2 не принят, прогресс
+// по шагам на панели не выводится вообще (будет в Ф-pr).
 //
-// Ф4 (волна 1 «Обзор фич»):
-//   • В КЛЮЧЕВОМ чате вместо перехода «Ключевой чат →» — «Конвейер ▾»: раскрывает
-//     под плашкой тело режима «Исполнение фичи» (FeatureModeBody) + легенду; данные
-//     конвейера — из стора featureRuns по фиче.
-//   • «← назад» (слева) — только ПОСЛЕ перехода из плашки чата фичи в ключевой чат:
-//     возвращает в исходный чат одним кликом. При обычном открытии чата — нет.
-//   • Мультифича (чат связан с ≥ 2 фичами): «фича X · ещё N» с выбором следующей;
-//     порядок — как отдал бэк (по силе связи), фронт не сортирует и не считает.
+// Мобила (360 px): название уходит (оно в шапке), строка переносится, тач-цели ≥ 40;
+// тап по «где мы» открывает шторку (FeatureBannerSheet — отдельный шаг Ф-pl-b, здесь не изобретаем).
 
-// Тон фона плашки.
-type BannerTone = 'wait' | 'stop' | 'closed' | 'run';
+// Тон строки (макет .va.t-*): run — идёт, wait — ждёт/к мержу, stop — стоит, closed — закрыта.
+type BannerTone = 'run' | 'wait' | 'stop' | 'closed';
 
-// Кнопка справа: 'key' — в ключевой чат (openChatById), 'feature' — открыть
-// фичу в трекере (openTaskInSection), когда живого ключевого чата нет;
-// 'pipeline' — «Конвейер ▾» в ключевом чате (раскрывает FeatureModeBody).
-interface BannerButton {
-  label: string;
-  kind: 'key' | 'feature' | 'pipeline';
+// Точка этапа (макет .dots i): done — пройдена (зелёная), active — текущая (вытянутая,
+// цвет тона), pending — впереди (дорожка), absent — нет в трекере (пунктир).
+// «Впереди» (pending) и absent НЕ кликабельны (задача, п.2); done/active — кликабельны
+// (ведут на страницу фичи, вкладка «Хронология», к этому этапу).
+interface StageDot {
+  key: FeatureRailKey;
+  state: 'done' | 'active' | 'pending' | 'absent';
+  tone: FeatureRailTone | null;
+  clickable: boolean;
 }
 
-// Модель плашки: чистая функция от строки фичи + связи чата. Тестируется
-// без рендера (SSR не нужен для логики).
+// Главное действие строки (задача, п.2, «таблица попапа»):
+//   waiting      → «Ответить {имя}» (фокус в композер / чат, где ждут);
+//   stopped      → «Чат {имя}» (в чат упавшего исполнителя);
+//   merge_pending→ «Открыть» (без «Мерж…» — он в попапе и на странице);
+//   иначе       → «Открыть страницу фичи».
+interface BannerAction {
+  label: string;
+  kind: 'reply' | 'chat' | 'open' | 'page';
+}
+
+// Модель плашки (для шторки FeatureBannerSheet): глиф/статус/роль/кнопка. Шторка
+// импортирует этот тип — держим его стабильным (счётчик/«Конвейер» в строке не рисуем,
+// но в модели остаются: шторка показывает свой состав).
 export interface FeatureBannerModel {
   tone: BannerTone;
   glyph: GlyphKind;
   status: string;
-  // m2: тон текста статуса (макет .tn-wait/.tn-stop): 'wait' → C.info 600,
-  // 'stop' → C.dangerText 600, 'run' → обычный (textHeading, как у «идёт»).
   statusTone: 'wait' | 'stop' | 'run';
   counter: string;
-  // Роль этого чата: «ключевой» (сам ключевой) или «этот чат: Ш2 · бэк».
   role: string;
   isKey: boolean;
-  button: BannerButton;
+  button: { label: string; kind: 'key' | 'feature' | 'pipeline' };
 }
 
-// Подпись роли чата по виду связи — общий словарь (lib/featureChatRole, один с
-// featurePageBody): curator/orchestrator/executor. Мёртвая ветка `key` убрана
-// (ADR-031 §1: бэк вид key в chats не отдаёт — ключевой чат приходит как
-// curator/orchestrator и определяется по keySessionId, не по kind).
+// Имя активной стадии (для «{этап} · …»); null — активной нет (всё впереди/закрыта).
+function activeStageName(f: FeatureIndexFeature): string | null {
+  const stage = f.rail.find(s => s.state === 'active');
+  return stage ? STAGE_NAME[stage.key] : null;
+}
 
-// Чистая модель: строка фичи + связь «этот чат × фича» → что рисует плашка.
+// «Где мы» — словами (макет where()): по state фичи и текущему этапу. Формулировки —
+// ОДИ В ОДИН с pillModel/попапом: «ждёт согласия на мерж», «ждёт вас», «стоит», «идёт».
+// Прогресс-состояния (waiting/stopped/running) получают префикс «{этап} · …»; терминальные
+// и особые (merged/closed/merge_pending/merging/not_started/idle) — своё слово без этапа
+// (у merge_pending/merging этап — сам мерж, префикс «Мерж ·» был бы тавтологией).
+function whereText(f: FeatureIndexFeature): string {
+  const stage = activeStageName(f);
+  switch (f.state) {
+    case 'merged': {
+      const d = dateOnly(f.summary?.mergedAt ?? null);
+      return d ? `Смержена ${d}` : 'Смержена';
+    }
+    case 'closed':
+      return 'Закрыта без мержа';
+    case 'merge_pending':
+      return MERGE_PENDING_STATUS; // «ждёт согласия на мерж»
+    case 'merging':
+      return 'Мерж · идёт';
+    case 'waiting':
+      return stage ? `${stage} · ждёт вас` : 'Ждёт вас';
+    case 'stopped':
+      return stage ? `${stage} · стоит` : 'Стоит';
+    case 'running':
+      return stage ? `${stage} · идёт` : 'Идёт';
+    case 'not_started':
+      return 'Не начата';
+    case 'idle':
+      return 'Простаивает';
+    default:
+      return stage ? `${stage} · идёт` : 'Идёт';
+  }
+}
+
+// Тон текста «где мы»: тревога (wait/stop) — цветная, иначе обычный.
+function whereTone(f: FeatureIndexFeature): 'wait' | 'stop' | 'run' {
+  if (f.state === 'waiting' || f.state === 'merge_pending') return 'wait';
+  if (f.state === 'stopped') return 'stop';
+  return 'run';
+}
+
+// Тон строки (фон/кромка): тревога (wait/stop) — цветная, закрыта (merged/closed) — серая,
+// иначе нейтр. Выводится из state (единая точка правды; bucket/state не расходятся).
+function bannerTone(f: FeatureIndexFeature): BannerTone {
+  if (f.state === 'merged' || f.state === 'closed') return 'closed';
+  if (f.state === 'waiting' || f.state === 'merge_pending') return 'wait';
+  if (f.state === 'stopped') return 'stop';
+  return 'run';
+}
+
+// Глиф состояния (для шторки): из state (единая точка правды; bucket/state не расходятся).
+// merged → done (галочка), closed → closed (без мержа), тревога → wait/stopped, иначе run.
+function bannerGlyph(f: FeatureIndexFeature): GlyphKind {
+  if (f.state === 'merged') return 'done';
+  if (f.state === 'closed') return 'closed';
+  if (f.state === 'waiting' || f.state === 'merge_pending') return 'wait';
+  if (f.state === 'stopped') return 'stopped';
+  return 'run';
+}
+
+// Главное действие (таблица попапа, задача п.2): по state фичи.
+//   waiting → «Ответить {имя}» (имя — attention.personaId, резолвит фронт);
+//   stopped → «Чат {имя}»;
+//   merge_pending → «Открыть» (без «Мерж…» — он в попапе и на странице);
+//   иначе → «Открыть страницу фичи».
+function mainAction(f: FeatureIndexFeature): BannerAction {
+  const name = f.attention?.personaId ? (getPersonaById(f.attention.personaId)?.name ?? '') : '';
+  if (f.state === 'waiting') return { label: name ? `Ответить ${name}` : 'Ответить', kind: 'reply' };
+  if (f.state === 'stopped') return { label: name ? `Чат ${name}` : 'Чат', kind: 'chat' };
+  if (f.state === 'merge_pending') return { label: 'Открыть', kind: 'open' };
+  return { label: 'Открыть страницу фичи', kind: 'page' };
+}
+
+// Точки этапов: из rail (бэк считает state/tone). «Впереди» (pending) и absent —
+// не кликабельны; done/active — кликабельны (ведут на страницу фичи, вкладка «Хронология»).
+function stageDots(f: FeatureIndexFeature): StageDot[] {
+  return f.rail.map(seg => ({
+    key: seg.key,
+    state: seg.state,
+    tone: seg.tone,
+    clickable: seg.state === 'done' || seg.state === 'active',
+  }));
+}
+
+// Роль этого чата: ключевой — «ключевой», иначе ОДНА функция roleLabel (сырые
+// taskRole/stepRef/lane): у step — «{stepRef} · {бэк|фронт}», у прочих ролей — слово;
+// без роли (null/неизвестно) — фолбэк на вид связи (куратор/оркестратор/исполнитель).
+function roleOf(f: FeatureIndexFeature, link: FeatureChatLink, sessionId: string): { role: string; isKey: boolean } {
+  const isKey = f.keySessionId != null && sessionId === f.keySessionId;
+  if (isKey) return { role: 'ключевой', isKey: true };
+  const byRole = roleLabel(link.taskRole, link.stepRef, link.lane);
+  return { role: byRole || (CHAT_ROLE_LABEL[link.kind] ?? 'участник'), isKey: false };
+}
+
+// Чистая модель строки: строка фичи + связь «этот чат × фича» → что рисует плашка.
 // sessionId — id текущего чата: «этот чат ключевой» = (sessionId === keySessionId)
 // (ADR-031 §1: бэк вид key в chats не отдаёт).
-export function featureBannerModel(
-  feature: FeatureIndexFeature,
-  link: FeatureChatLink,
-  sessionId: string,
-): FeatureBannerModel {
-  const st = featureDisplayState(feature);
-  const isKey = feature.keySessionId != null && sessionId === feature.keySessionId;
-
-  // Тон фона: тревога (wait/stop) → цветной, закрыта/смержена → серая, иначе нейтр.
-  let tone: BannerTone;
-  if (st.alarm === 'wait') tone = 'wait';
-  else if (st.alarm === 'stop') tone = 'stop';
-  else if (st.kind === 'closed' || st.kind === 'done') tone = 'closed';
-  else tone = 'run';
-
-  // Статус: у смерженной — «смержена <дата>» (локальное время, featureTime),
-  // у закрытой без мержа — «закрыта», иначе статус из featureDisplayState.
-  let status: string;
-  if (st.kind === 'done') {
-    const d = dateOnly(feature.summary?.mergedAt ?? null);
-    status = d ? `смержена ${d}` : 'смержена';
-  } else if (st.kind === 'closed') {
-    status = 'закрыта';
-  } else {
-    status = st.status;
-  }
-
-  // Счётчик: принятые/все шаги + число возвратов (↺N).
-  const counter = feature.loops > 0
-    ? `${feature.stepsAccepted}/${feature.stepsTotal} ↺${feature.loops}`
-    : `${feature.stepsAccepted}/${feature.stepsTotal}`;
-
-  // Роль этого чата: ключевой — «ключевой», иначе — ОДНА функция roleLabel (сырые
-  // taskRole/stepRef/lane): у step — «{stepRef} · {бэк|фронт}», у прочих ролей — слово;
-  // без роли (null/неизвестно) — фолбэк на вид связи (куратор/оркестратор/исполнитель).
-  let role: string;
-  if (isKey) {
-    role = 'ключевой';
-  } else {
-    const byRole = roleLabel(link.taskRole, link.stepRef, link.lane);
-    role = byRole || (CHAT_ROLE_LABEL[link.kind] ?? 'участник');
-  }
-
-  // Кнопка: в КЛЮЧЕВОМ чате — «Конвейер ▾» (раскрывает тело фичи); в другом
-  // чате фичи — есть живой ключевой чат → «Ключевой чат →» (openChatById, сам
-  // переключает проект), живого нет (keySessionId = null) → «Открыть фичу»
-  // (openTaskInSection на эпик, без перехода в чат). Архивный ключевой
-  // (keyArchived, контракт §1) помечен в подписи — человек не попадает в
-  // архив без предупреждения (R3, минор 1).
-  let button: BannerButton;
-  if (isKey) {
-    // R2 minor 8: «Конвейер» → «Исполнение»: тело (FeatureModeBody) после Ф-pop —
-    // компактная карточка фичи (шапка, строка состояния, этапы), а не конвейер с линиями.
-    button = { label: 'Исполнение', kind: 'pipeline' };
-  } else if (feature.keySessionId != null) {
-    button = { label: feature.keyArchived ? 'Ключевой чат (в архиве)' : 'Ключевой чат', kind: 'key' };
-  } else {
-    button = { label: 'Открыть фичу', kind: 'feature' };
-  }
-
-  // m2: тон текста статуса по тону плашки (макет .tn-wait/.tn-stop): ждёт → 'wait',
-  // стоит → 'stop', иначе → 'run' (обычный текст).
-  const statusTone: 'wait' | 'stop' | 'run' = tone === 'wait' ? 'wait' : tone === 'stop' ? 'stop' : 'run';
-
-  return { tone, glyph: st.kind, status, statusTone, counter, role, isKey, button };
+export interface FeatureBannerRow {
+  tone: BannerTone;
+  glyph: GlyphKind;
+  dots: StageDot[];
+  // «Где мы»: «{этап} · {состояние}» (формулировки pillModel/попапа) + « · {сколько}».
+  where: string;
+  whereTone: 'wait' | 'stop' | 'run';
+  action: BannerAction;
+  role: string;
+  isKey: boolean;
 }
 
-// «← назад»: роль исходного чата в ЭТОЙ фиче — roleLabel (сырые taskRole/stepRef/lane);
-// без роли — вид связи. Пусто — исходный чат не принадлежит этой фиче (переход не из её плашки).
-export function backRoleLabel(sourceChatId: string, featureId: string): string {
-  const entry = featureOf(sourceChatId).find(e => e.feature.featureId === featureId);
-  if (!entry) return '';
-  const byRole = roleLabel(entry.link.taskRole, entry.link.stepRef, entry.link.lane);
-  return byRole || (CHAT_ROLE_LABEL[entry.link.kind] ?? 'участник');
+export function featureBannerRow(f: FeatureIndexFeature, link: FeatureChatLink, sessionId: string): FeatureBannerRow {
+  const { role, isKey } = roleOf(f, link, sessionId);
+  return {
+    tone: bannerTone(f),
+    glyph: bannerGlyph(f),
+    dots: stageDots(f),
+    where: whereText(f),
+    whereTone: whereTone(f),
+    action: mainAction(f),
+    role,
+    isKey,
+  };
 }
 
-// Мультифича: число ДРУГИХ фич (entries.length − 1). Фронт не сортирует и не
-// считает порядок — только показывает, сколько ещё фич у чата (порядок — от бэка).
-export function moreFeaturesCount(entries: FeatureOfEntry[]): number {
-  return Math.max(0, entries.length - 1);
-}
-
-// Тон фона → стиль подложки/рамки плашки.
+// Тон строки → фон/рамка (макет .va.t-*): wait → infoBg, stop → dangerBg,
+// closed → bgInset (серая, второй план), run → bgCard с рамкой borderLight.
 function toneStyle(tone: BannerTone): React.CSSProperties {
   switch (tone) {
     case 'wait':
@@ -179,97 +216,97 @@ function toneStyle(tone: BannerTone): React.CSSProperties {
   }
 }
 
-// m1: кнопка плашки по макету .go/.back: текст (C.accent у .go, C.textSecondary у
-// .back), БЕЗ рамки, 12/600, padding 4/8 (go) / 4/6 (back), без переноса. Общий Button
-// не подходит: не прокидывает data-testid/aria-expanded (нужно для тестов и a11y).
-function GoButton({ testId, onClick, children, ariaExpanded, tone = 'go', style }: {
-  testId?: string;
-  onClick: () => void;
-  children: ReactNode;
-  ariaExpanded?: boolean;
-  tone?: 'go' | 'back';
-  style?: React.CSSProperties;
-}) {
-  const isGo = tone === 'go';
+// Цвет активной точки по tone (макет .dots i.a.*): wait → C.info, stop → C.danger,
+// run/loop → C.textHeading. tone null у active — редкость, дефолт (textHeading).
+function activeDotColor(tone: FeatureRailTone | null): string {
+  switch (tone) {
+    case 'wait': return C.info;
+    case 'stopped': return C.danger;
+    case 'loop': return C.warning;
+    case 'run':
+    default: return C.textHeading;
+  }
+}
+
+// Геометрия точки (макет .dots i): 6×6, скругление 3; active — вытянутая 16×6.
+// Значений 6/16/3 в шкале SP/R нет (SP.xs=4, R.sm=6) — размеры макета, константы.
+const DOT = 6;
+const DOT_ACTIVE = 16;
+const DOT_R = 3;
+
+// Точка этапа: done — зелёная, active — вытянутая в цвет тона, pending — дорожка,
+// absent — пунктирный контур. Кликабельные (done/active) — <button>, ведут на страницу
+// фичи (вкладка «Хронология», к этому этапу); pending/absent — <i> (не кликабельны).
+// data-testid — у КАЖДОЙ точки (и <i>, и <button>): тест отличает кликабельную от
+// «впереди» по тегу элемента, а не по наличию testid.
+function StageDotView({ dot, onOpen }: { dot: StageDot; onOpen: (key: FeatureRailKey) => void }) {
+  const base: React.CSSProperties = { display: 'block', height: DOT, borderRadius: DOT_R, flexShrink: 0 };
+  let style: React.CSSProperties;
+  if (dot.state === 'done') style = { ...base, width: DOT, background: C.success };
+  else if (dot.state === 'active') style = { ...base, width: DOT_ACTIVE, background: activeDotColor(dot.tone) };
+  else if (dot.state === 'absent') style = { ...base, width: DOT, background: 'transparent', boxShadow: `inset 0 0 0 1px ${C.dashed}` };
+  else style = { ...base, width: DOT, background: C.progressTrack };
+
+  if (!dot.clickable) return <i data-testid={`feature-dot-${dot.key}`} aria-hidden="true" style={style} />;
   return (
     <button
-      data-testid={testId}
-      aria-expanded={ariaExpanded}
-      onClick={onClick}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
-        border: 'none', background: 'transparent',
-        color: isGo ? C.accent : C.textSecondary,
-        // M2: нативная <button> не наследует font-family — задаём Hanken явно
-        // (кнопки .go/.back и «· ещё N» — иначе Arial).
-        fontFamily: FONT.sans,
-        // m8: «← назад» (back) — вес 400 (макет .back), «.go» — 600
-        fontWeight: isGo ? 600 : 400, fontSize: FS.sm,
-        padding: isGo ? '4px 8px' : '4px 6px',
-        borderRadius: R.md, cursor: 'pointer', whiteSpace: 'nowrap',
-        flexShrink: 0,
-        ...style,
-      }}
+      type="button"
+      data-testid={`feature-dot-${dot.key}`}
+      aria-label={`Этап: ${STAGE_NAME[dot.key]}`}
+      title={STAGE_NAME[dot.key]}
+      onClick={() => onOpen(dot.key)}
+      style={{ ...style, border: 'none', padding: 0, cursor: 'pointer', position: 'relative' }}
     >
-      {children}
+      {/* Тач-цель ≥ 40 на 360: точка 6 px, кликабельная область — расширена (inset). */}
+      <span style={{ position: 'absolute', inset: -9, display: 'block' }} />
     </button>
   );
 }
 
-// m3: чип роли по макету .role: mono, фон C.bgSelected; у ключевого C.accentLight /
-// C.accent. n2: у ключевого вес 700 (макет .role.key: font-weight:700). Тот же вид,
-// что в шторке (FeatureBannerSheet) — плашка и шторка не расходятся внутри фичи.
+// Чип роли этого чата (макет .role): mono, фон bgSelected; у ключевого — accent/accentLight
+// + вес 700 (макет .role.key).
 function RoleChip({ label, isKey }: { label: string; isKey: boolean }) {
   return (
-    <span style={{
-      fontFamily: FONT.mono, fontSize: FS.xs,
-      fontWeight: isKey ? 700 : 400,
-      color: isKey ? C.accent : C.textSecondary,
-      background: isKey ? C.accentLight : C.bgSelected,
-      borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap', flexShrink: 0,
-    }}>
+    <span
+      data-testid="feature-role-chip"
+      style={{
+        fontFamily: FONT.mono, fontSize: FS.xs,
+        fontWeight: isKey ? 700 : 400,
+        color: isKey ? C.accent : C.textSecondary,
+        background: isKey ? C.accentLight : C.bgSelected,
+        borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap', flexShrink: 0,
+      }}
+    >
       {label}
     </span>
   );
 }
 
-// M2: карточка «Конвейер ▾» (макет .fsx) — отдельная карточка ПОД плашкой, не
-// раскрытие внутри: max-height 430, overflow auto, SHADOW.card, фон bgWhite, рамка
-// borderLight, R.xl. Содержимое — FeatureModeBody (режим «Исполнение фичи» + легенда).
-// Вынесена в компонент: тест M2 рендерит её напрямую и проверяет max-height/overflow.
-export function PipelineCard({ run, sessionId, isMobile, chatTaskId }: {
-  run: FeatureRun;
-  sessionId: string;
-  isMobile: boolean;
-  // Задача-владелец чата (Session.TaskId): роль «этот чат — …» в мете (R2 major 5).
-  chatTaskId?: string | null;
+// Кнопка строки (макет .lnk/.btn): текст, без рамки, 12/600, C.accent (действие) или
+// C.textSecondary (тихое). Общий Button не подходит: не прокидывает data-testid/aria.
+function RowButton({ testId, onClick, children, tone = 'accent', style }: {
+  testId?: string;
+  onClick: () => void;
+  children: ReactNode;
+  tone?: 'accent' | 'muted';
+  style?: React.CSSProperties;
 }) {
   return (
-    <div
-      data-testid="feature-pipeline-body"
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={onClick}
       style={{
-        margin: '6px 14px 0',
-        border: `1px solid ${C.borderLight}`,
-        borderRadius: R.xl,
-        background: C.bgWhite,
-        boxShadow: SHADOW.card,
-        padding: '10px 12px 12px',
-        maxHeight: 430,
-        overflow: 'auto',
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        border: 'none', background: 'transparent', cursor: 'pointer',
+        color: tone === 'accent' ? C.accent : C.textSecondary,
+        fontFamily: FONT.sans, fontWeight: 600, fontSize: FS.sm,
+        padding: '4px 6px', borderRadius: R.md, whiteSpace: 'nowrap', flexShrink: 0,
+        ...style,
       }}
     >
-      <FeatureModeBody
-        sessionId={sessionId}
-        todos={[]}
-        runs={[run]}
-        isMobile={isMobile}
-        variant="pipeline"
-        chatTaskId={chatTaskId}
-        headerPad="0"
-        bodyPad="0"
-        headerBorder="none"
-      />
-    </div>
+      {children}
+    </button>
   );
 }
 
@@ -279,321 +316,209 @@ interface FeatureBannerProps {
   // Проект чата — область запроса индекса (null — чат вне проектов).
   projectId: string | null;
   isMobile?: boolean;
-  // Задача-владелец чата (Session.TaskId): роль «этот чат — …» в мете тела (R2 major 5).
+  // Задача-владелец чата (Session.TaskId) — для шторки (Ф-pl-b).
   chatTaskId?: string | null;
 }
 
-// Плашка фичи в слоте баннеров ChatPanel. Возвращает null, когда плашки нет
+// Плашка фичи в слоте баннеров ChatPanel. Возвращает null, когда строки нет
 // (флаги выключены или чат не принадлежит ни одной фиче).
 export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTaskId }: FeatureBannerProps) {
   // Гейт: оба флага (режим «Исполнение фичи» + «Обзор фич»).
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   const featuresOverview = useFeature(FLAGS.featuresOverview);
   const enabled = featureMode && featuresOverview;
-  // Индекс фич проекта (реактивная подписка; один запрос на проект:
-  // первичная загрузка при 0→1 потребителях).
-  // Захватываем сам индекс — шторка (мобила) читает из него чаты фичи.
+  // Индекс фич проекта (реактивная подписка; один запрос на проект).
   const index = useFeaturesIndex(projectId, enabled);
-  // «← назад»: исходный чат (в памяти вкладки); null, пока перехода из плашки не было.
-  const backFrom = useBackNavFrom(sessionId);
-
   // Мультифича: какая фича показана (индекс в featureOf, порядок — от бэка).
   const [selIdx, setSelIdx] = useState(0);
-  // «Конвейер ▾»: раскрытие (локальное, сбрасывается при смене чата/фичи).
-  const [fxOpen, setFxOpen] = useState(false);
-  // Шторка (мобила): тап по плашке открывает; сбрасывается при смене чата.
+  // Шторка (мобила): тап по «где мы» открывает; сбрасывается при смене чата.
   const [sheetOpen, setSheetOpen] = useState(false);
 
   // Фичи, к которым принадлежит чат; первая — сильнейшая связь (порядок — от бэка).
   const entries = featureOf(sessionId);
-  // Кламп, если фич стало меньше; сброс выбора/раскрытия при смене чата.
+  // Кламп, если фич стало меньше; сброс выбора/шторки при смене чата.
   const idx = Math.min(selIdx, Math.max(0, entries.length - 1));
-  // entries[idx] — undefined, когда entries пуст (idx = 0); берём через entry?.*,
-  // т.к. деструктуризация идёт ДО early-return (нужно feature для useFeatureRuns ниже).
   const entry = entries[idx];
   const feature = entry?.feature;
   const link = entry?.link;
 
-  // m7: агрегат фичи живёт в сторе featureRuns под КЛЮЧЕВОЙ сессией (эпик
-  // SourceSessionId = keySessionId), а не под сессией исполнителя — поэтому
-  // запрашиваем по keySessionId (как в ключевом чате) и находим нужную по featureId.
-  // Ключевой чат: keySessionId === sessionId, запрос прежний.
-  const runs = useFeatureRuns(feature?.keySessionId ?? sessionId, featureMode);
-
-  // При смене чата одним эффектом сбрасываем: «← назад» (записанный переход
-  // ведёт в ДРУГОЙ чат, а не в этот — мажем S.prev = null, макет) и локальное
-  // состояние (выбор/раскрытие/шторка — иначе новый чат наследовал бы их).
   useEffect(() => {
-    const back = getBackNav();
-    // Сброс, если записанный переход ведёт в ДРУГОЙ чат (обычное открытие, не из плашки).
-    // `to` — объект { kind, id }: сравниваем id только когда это чат (не страница фичи).
-    if (back && back.to.kind === 'chat' && back.to.id !== sessionId) clearBackNav();
-    setSelIdx(0); setFxOpen(false); setSheetOpen(false);
+    setSelIdx(0);
+    setSheetOpen(false);
   }, [sessionId]);
 
-  if (!enabled || entries.length === 0) return null;
+  if (!enabled || entries.length === 0 || !feature || !link) return null;
 
-  const model = featureBannerModel(feature, link, sessionId);
-  const isKey = model.isKey;
-  const more = moreFeaturesCount(entries);
+  const model = featureBannerRow(feature, link, sessionId);
+  const more = Math.max(0, entries.length - 1);
 
-  // «← назад»: только в ключевом чате, после перехода из плашки, и исходный чат
-  // принадлежит ЭТОЙ фиче (иначе роль пуста → кнопки нет).
-  const backLabel = isKey && backFrom ? backRoleLabel(backFrom, feature.featureId) : '';
-  const goBack = () => {
-    if (backFrom) void openChatById(backFrom);
-    clearBackNav();
+  // «Фича →» / клик по точке: страница фичи на вкладке «Хронология» (cc-open-feature;
+  // WorkspacePage слушает, fromChat — крошка «← К чату «…»»). stage — подсказка для Ф-pl-b.
+  const openFeaturePage = (stage?: FeatureRailKey) => {
+    window.dispatchEvent(new CustomEvent('cc-open-feature', {
+      detail: { featureId: feature.featureId, fromChatId: sessionId, fromChat: true, stage },
+    }));
   };
-  // «Ключевой чат →»: запоминаем, откуда пришли (для «← назад» в ключевом чате).
+  // «Ключевой чат →» (когда этот чат — не ключевой и живой ключевой есть): переход в чат.
   const goKey = () => {
     if (!feature.keySessionId) return;
-    recordBackNav(sessionId, feature.keySessionId);
     void openChatById(feature.keySessionId);
   };
-  // «Конвейер ▾»: раскрывает/сворачивает тело фичи под плашкой.
-  const toggleFx = () => setFxOpen(o => !o);
-  // Мультифича: выбор следующей фичи (цикл по порядку от бэка).
-  const cycleFeature = () => setSelIdx(i => (i + 1) % entries.length);
-  // «Фича →» (Ф2.3): страница фичи. Указатель «чат → фича» и navPush исполняет
-  // WorkspacePage (cc-open-feature); fromChatId = этот чат (крошка «← К чату «…»»).
-  const openFeaturePage = () => {
-    // fromChat: true — вход из чата: WorkspacePage запишет указатель возврата (крошка
-    // «← К чату «…»»). В списке (SessionList) fromChat: false — указатель не пишется (M3).
-    window.dispatchEvent(new CustomEvent('cc-open-feature', { detail: { featureId: feature.featureId, fromChatId: sessionId, fromChat: true } }));
+
+  // Действие: reply/chat → «Ключевой чат →» (goKey), open/page → страница фичи.
+  const onAction = () => {
+    if ((model.action.kind === 'reply' || model.action.kind === 'chat') && feature.keySessionId) goKey();
+    else openFeaturePage();
   };
 
-  // Тело «Конвейер ▾»: FeatureModeBody (режим «Исполнение фичи») + легенда (внутри
-  // FeatureRunView). Агрегат — из стора featureRuns по фиче (runs[0] = эта фича).
-  const run = runs.find(r => r.featureId === feature.featureId) ?? null;
+  // «Где мы»: на мобиле — тап открывает шторку (роль button, клавиатура Enter/Space).
+  const whereNode = (
+    <span
+      data-testid="feature-where"
+      onClick={isMobile ? () => setSheetOpen(true) : undefined}
+      role={isMobile ? 'button' : undefined}
+      tabIndex={isMobile ? 0 : undefined}
+      onKeyDown={isMobile ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSheetOpen(true); } } : undefined}
+      aria-label={isMobile ? `Фича «${feature.title}»: ${model.where}. Подробнее` : undefined}
+      style={{
+        fontSize: FS.sm,
+        color: model.whereTone === 'wait' ? C.info : model.whereTone === 'stop' ? C.dangerText : C.textHeading,
+        fontWeight: model.whereTone === 'run' ? 400 : 600,
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
+        cursor: isMobile ? 'pointer' : 'default',
+      }}
+    >
+      {model.where}
+    </span>
+  );
 
-  // Мобила (360 px, макет .app.m .fs): плашка одной строкой 44 px — глиф + название
-  // (обрезка) + рельса + счётчик + [· ещё N]; справа тач-цель 40×40 («→» / «▾»). Тап по
-  // телу плашки открывает шторку (FeatureBannerSheet). Статус/роль-текст скрыты (у
-  // «← назад» — только иконка); горизонтального скролла нет (nowrap + ellipsis).
-  // m7: рамка — по тону (toneStyle): run/key → 1px borderLight (плашка не сливается
-  // с полем), wait/stop/closed → transparent. n4: высота плашки 48 (не 52):
-  // кнопка-тач-цель 40 + отступы 4/4 (border-box, пересчёт макета .app.m .fs).
+  // Ряд точек (7): done/active кликабельны, pending/absent — нет.
+  const dotsRow = (
+    <span
+      data-testid="feature-dots"
+      aria-hidden="true"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}
+    >
+      {model.dots.map(dot => (
+        <StageDotView key={dot.key} dot={dot} onOpen={k => openFeaturePage(k)} />
+      ))}
+    </span>
+  );
+
+  // Чип роли этого чата: «этот чат — {роль}» (ключевой — просто «ключевой»).
+  const roleChip = (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0, whiteSpace: 'nowrap' }}>
+      <span style={{ fontSize: FS.xs, color: C.textMuted }}>этот чат —</span>
+      <RoleChip label={model.role} isKey={model.isKey} />
+    </span>
+  );
+
+  // Модель для шторки (FeatureBannerSheet): та же, что строит плашка.
+  const sheetModel: FeatureBannerModel = {
+    tone: model.tone,
+    glyph: model.glyph,
+    status: model.where,
+    statusTone: model.whereTone,
+    counter: '',
+    role: model.role,
+    isKey: model.isKey,
+    button: { label: model.action.label, kind: model.action.kind === 'page' || model.action.kind === 'open' ? 'feature' : 'key' },
+  };
+
+  // Мобила (360 px, макет .va): строка переносится, название уходит (оно в шапке),
+  // тач-цели ≥ 40; taп по «где мы» открывает шторку.
+  let inner: ReactNode;
   if (isMobile) {
-    return (
+    inner = (
       <div
         role="region"
         aria-label="Фича этого чата"
         data-testid="feature-banner"
         data-banner-tone={model.tone}
+        data-chat-task-id={chatTaskId ?? undefined}
         style={{
           ...toneStyle(model.tone),
-          display: 'flex',
-          flexDirection: 'column',
-          borderRadius: R.lg,
-          padding: '4px 4px 4px 10px',
-          margin: '0 8px',
-          minHeight: 48,
-          boxSizing: 'border-box',
-          fontFamily: FONT.sans,
+          display: 'flex', flexDirection: 'column',
+          borderRadius: R.lg, padding: '8px 10px', margin: 0,
+          boxSizing: 'border-box', fontFamily: FONT.sans,
         }}
       >
-        <div
-          data-testid="feature-banner-row"
-          style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'nowrap', minHeight: 40 }}
-        >
-          {/* «← назад»: иконка (без текста), только после перехода из плашки (ключевой чат). */}
-          {backLabel && (
-            <GoButton
-              testId="feature-back"
-              tone="back"
-              onClick={goBack}
-              style={{ width: 40, height: 40, padding: 0, justifyContent: 'center' }}
-            >
-              <ArrowLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </GoButton>
-          )}
-          {/* Тело плашки: тап открывает шторку. Глиф + название + рельса + счётчик. */}
-          <GoButton
-            testId="feature-banner-body"
-            tone="back"
-            onClick={() => setSheetOpen(true)}
-            style={{ flex: 1, minWidth: 0, justifyContent: 'flex-start', padding: 0, height: 'auto', gap: 9 }}
-          >
-            <FeatureGlyph kind={model.glyph} size={13} />
-            <span
-              title={feature.title}
-              style={{
-                flex: 1, minWidth: 40,
-                fontSize: FS.base, fontWeight: 700, color: C.textHeading,
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              }}
-            >
-              {feature.title}
-            </span>
-            <FeatureRail rail={feature.rail} closed={feature.bucket === 'closed'} />
-            <span style={{
-              fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap',
-              fontFamily: FONT.mono, flexShrink: 0,
-            }}>
-              {model.counter}
-            </span>
-          </GoButton>
-          {/* m5: мультифича «· ещё N» в строке (N = другие фичи) — выбор следующей.
-              n3: тач-цель ≥ 40 по высоте (было 20): minHeight 40, текст по центру. */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', rowGap: 6 }}>
+          {dotsRow}
+          {whereNode}
           {more > 0 && (
-            <GoButton testId="feature-more" tone="back" onClick={cycleFeature} style={{ fontSize: FS.xs, minHeight: 40 }}>
+            <RowButton testId="feature-more" tone="muted" onClick={() => setSelIdx(i => (i + 1) % entries.length)} style={{ fontSize: FS.xs }}>
               · ещё {more}
-            </GoButton>
+            </RowButton>
           )}
-          {/* Кнопка-тач-цель 40×40: «▾» (ключевой, конвейер) / «→» (не ключевой, в ключевой чат). */}
-          <GoButton
-            testId={model.button.kind === 'pipeline' ? 'feature-pipeline' : 'feature-go'}
-            tone="go"
-            ariaExpanded={model.button.kind === 'pipeline' ? fxOpen : undefined}
-            onClick={() => {
-              // M2: на 360 «Конвейер ▾» (ключевой чат) открывает ШТОРКУ, а не раскрывает
-              // тело внутри плашки (как на десктопе).
-              if (model.button.kind === 'pipeline') setSheetOpen(true);
-              else if (model.button.kind === 'key') goKey();
-              else openTaskInSection({ id: feature.featureId, projectId: feature.projectId ?? undefined });
-            }}
-            style={{ width: 40, height: 40, padding: 0, justifyContent: 'center' }}
-          >
-            {model.button.kind === 'pipeline'
-              ? <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ transform: fxOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
-              : <ArrowRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-          </GoButton>
-          {/* «Фича →» (Ф2.3): страница фичи. Компактная текстовая кнопка — тач-цель
-              выше остаётся для основной роли; название плашки уступает место (обрезка).
-              M2: на 360 minHeight 40 (тач-цель), десктоп — без minHeight. */}
-          <GoButton testId="feature-page-go" tone="go" onClick={openFeaturePage} style={{ minHeight: 40 }}>
-            Фича
-            <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </GoButton>
+          <RowButton testId="feature-action" tone="accent" onClick={onAction} style={{ marginLeft: 'auto', minHeight: 40 }}>
+            {model.action.label}
+          </RowButton>
         </div>
-
-        {/* M2: на 360 «Конвейер ▾» раскрывает ШТОРКУ (ниже), а не inline-тело —
-            inline-тела на мобиле нет (в отличие от десктопа). */}
-
-        {/* Шторка: тап по телу плашки или «▾» (мобила). */}
+        <div style={{ marginTop: 6 }}>{roleChip}</div>
         {sheetOpen && (
           <FeatureBannerSheet
             feature={feature}
-            model={model}
+            model={sheetModel}
             projectId={projectId}
             index={index}
-            run={run}
+            run={null}
             onGoKey={goKey}
             onClose={() => setSheetOpen(false)}
           />
         )}
       </div>
     );
-  }
-
-  // Десктоп (макет .fs): ОДНА строка ≈36 px — глиф · название (обрезка) · [· ещё N] ·
-  // рельса · статус (с тоном) · счётчик · роль-чип · кнопка .go. Без переноса:
-  // nowrap + ellipsis у названия/статуса, у кнопки/рели/счётчика flex-shrink:0.
-  // n1: карточка «Конвейер ▾» (.fsx) — РЯДОМ с плашкой, а не внутри её div:
-  // фон, рамка и отступ плашки её не обнимают (в макете .fs и .fsx — соседи).
-  // Плашка при открытом «Конвейере» остаётся 36 px.
-  return (
-    <>
+  } else {
+    // Десктоп: ОДНА строка ≈36 px — точки · название · «где мы» · [· ещё N] · действие · роль.
+    // Без переноса: nowrap + ellipsis у названия/«где мы», у точек/действия/чипа flex-shrink:0.
+    inner = (
       <div
         role="region"
         aria-label="Фича этого чата"
         data-testid="feature-banner"
         data-banner-tone={model.tone}
+        data-chat-task-id={chatTaskId ?? undefined}
         style={{
           ...toneStyle(model.tone),
-          display: 'flex',
-          flexDirection: 'column',
-          borderRadius: R.lg,
-          padding: '5px 10px 5px 12px',
-          margin: '0 14px',
-          minHeight: 36,
-          boxSizing: 'border-box',
-          fontFamily: FONT.sans,
+          display: 'flex', flexDirection: 'column',
+          borderRadius: R.lg, padding: '5px 10px 5px 12px', margin: 0,
+          minHeight: 36, boxSizing: 'border-box', fontFamily: FONT.sans,
         }}
       >
-        {/* Строка плашки: одна строка, без переноса */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'nowrap', minWidth: 0, flex: 1 }}>
-          {/* «← назад»: слева, только после перехода из плашки (ключевой чат). */}
-          {backLabel && (
-            <GoButton testId="feature-back" tone="back" onClick={goBack}>
-              ← {backLabel}
-            </GoButton>
-          )}
-          {/* Глиф состояния фичи */}
-          <FeatureGlyph kind={model.glyph} size={13} />
-          {/* Название фичи: одна строка, обрезка многоточием (m4: FS.base 13) */}
-          <span
-            title={feature.title}
-            style={{
-              fontSize: FS.base, fontWeight: 700, color: C.textHeading,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              minWidth: 40, flex: 1,
-            }}
-          >
-            {feature.title}
-          </span>
-          {/* Мультифича: «· ещё N» (N = другие фичи) — выбор следующей. */}
-          {more > 0 && (
-            <GoButton testId="feature-more" tone="back" onClick={cycleFeature}>
-              · ещё {more}
-            </GoButton>
-          )}
-          {/* Мини-рельса (7 сегментов) */}
-          <FeatureRail rail={feature.rail} closed={feature.bucket === 'closed'} />
-          {/* Статус (m2: тон текста — ждёт C.info 600, стоит C.dangerText 600, иначе обычный) */}
-          <span style={{
-            fontSize: FS.sm,
-            color: model.statusTone === 'wait' ? C.info : model.statusTone === 'stop' ? C.dangerText : C.textHeading,
-            fontWeight: model.statusTone === 'run' ? 400 : 600,
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
-          }}>
-            {model.status}
-          </span>
-          {/* Счётчик шагов + возвраты */}
-          <span style={{
-            fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap',
-            fontFamily: FONT.mono, flexShrink: 0,
-          }}>
-            {model.counter}
-          </span>
-          {/* Роль этого чата (m3: чип .role, как в шторке): «ключевой» или «· этот чат: {чип}» */}
-          {model.isKey
-            ? <RoleChip label={model.role} isKey />
-            : (
-              <span style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                · этот чат: <RoleChip label={model.role} isKey={false} />
-              </span>
-            )}
-          {/* Кнопка (m1: .go — C.accent, без рамки, 12/600): «Конвейер ▾» / «Ключевой чат →» / «Открыть фичу» */}
-          <GoButton
-            testId={model.button.kind === 'pipeline' ? 'feature-pipeline' : 'feature-go'}
-            ariaExpanded={model.button.kind === 'pipeline' ? fxOpen : undefined}
-            tone="go"
-            style={{ marginLeft: 'auto' }}
-            onClick={() => {
-              if (model.button.kind === 'pipeline') toggleFx();
-              else if (model.button.kind === 'key') goKey();
-              else openTaskInSection({ id: feature.featureId, projectId: feature.projectId ?? undefined });
-            }}
-          >
-            {model.button.label}
-            {model.button.kind === 'pipeline'
-              ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ transform: fxOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
-              : <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-          </GoButton>
-          {/* «Фича →» (Ф2.3): страница фичи. Сосед основной кнопки, не её замена:
-              ключевой/конвейер ведут в чат, а это — на отдельную поверхность фичи. */}
-          <GoButton testId="feature-page-go" tone="go" onClick={openFeaturePage} style={{ marginLeft: 4 }}>
-            Фича
-            <ArrowRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </GoButton>
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'nowrap', minWidth: 0, flex: 1 }}>
+        {dotsRow}
+        <span
+          title={feature.title}
+          style={{
+            fontSize: FS.base, fontWeight: 700, color: C.textHeading,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            minWidth: 40, flex: 1,
+          }}
+        >
+          {feature.title}
+        </span>
+        {whereNode}
+        {more > 0 && (
+          <RowButton testId="feature-more" tone="muted" onClick={() => setSelIdx(i => (i + 1) % entries.length)}>
+            · ещё {more}
+          </RowButton>
+        )}
+        <RowButton testId="feature-action" tone="accent" onClick={onAction} style={{ marginLeft: 'auto' }}>
+          {model.action.label}
+        </RowButton>
+        {roleChip}
       </div>
+    </div>
+  );
+  }
 
-      {/* n1: «Конвейер ▾» (ключевой чат) — карточка .fsx РЯДОМ с плашкой (вне её div). */}
-      {isKey && fxOpen && run && (
-        <PipelineCard run={run} sessionId={sessionId} isMobile={isMobile} chatTaskId={chatTaskId} />
-      )}
-    </>
+  // Центрирование по колонке чата (CHAT_MAX_W) — та же обвязка, что у ленты сообщений
+  // (useChatGutter): баннер самодостаточен, ChatPanel просто рендерит <FeatureBanner>.
+  // На узком окне (< CHAT_MAX_W) maxWidth не режет — баннер во всю ширину с полями 16 px.
+  return (
+    <div style={{ width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', padding: '0 16px', boxSizing: 'border-box' }}>
+      {inner}
+    </div>
   );
 }

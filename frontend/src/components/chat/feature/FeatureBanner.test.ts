@@ -1,38 +1,41 @@
-// Плашка фичи в чате (FeatureBanner): глиф, название, мини-рельса, статус,
-// счётчик, роль чата, кнопка «Ключевой чат →»/«Открыть фичу», тон фона.
+// Плашка фичи в чате (FeatureBanner) — СТРОКА с точками этапов (макет feature-banner-1,
+// вариант «А · Строка» + кликабельные этапы из «Г»). Три вопроса строки:
+//   • ГДЕ МЫ     — 7 точек этапов + подпись «{этап} · {состояние}» (слова 1:1 с pillModel/попапом);
+//   • ЧТО ОТ МЕНЯ — одно главное действие (waiting → «Ответить», stopped → «Чат»,
+//                    merge_pending → «Открыть», иначе → «Открыть страницу фичи»);
+//   • КТО РАБОТАЕТ — чип роли этого чата («этот чат — {роль}» / «ключевой»).
 //
 // Два уровня:
-//   1 — ЧИСТАЯ модель featureBannerModel (тон/статус/счётчик/роль/кнопка) —
-//      без рендера, независима от пояса (дата — локальным геттером от той же Date).
-//   2 — SSR-рендер компонента (renderToStaticMarkup): 4 тона, закрытая, нет
-//      ключевого, чат без фичи (null), оба флага выключены (null).
+//   1 — ЧИСТАЯ модель featureBannerRow (where/действие/тон/роль) — без рендера,
+//      табличный прогон по 9 состояниям FeatureState.
+//   2 — РЕНДЕР панели с НАСТОЯЩИМИ данными списка (стор индекса через __test.setIndex,
+//      не прямой проп): SSR (подпись/действие/тон по каждому состоянию) + mount
+//      (клик по точке → cc-open-feature, «впереди» не кликабельно).
 //
-// Окружение node (без jsdom): renderToStaticMarkup. Стор индекса и флаги
-// заполняются напрямую (__test.setIndex / setAllFlags) — useEffect-фетч в SSR
-// не идёт, компонент читает уже заполненный стор.
+// Окружение node (без jsdom): SSR — renderToStaticMarkup; mount — fakeDom.
+// Стор индекса и флаги заполняются напрямую (setIndex / setAllFlags) — useEffect-фетч
+// в SSR не идёт, компонент читает уже заполненный стор.
 
 import { createElement, act } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { FeatureBanner, PipelineCard, featureBannerModel, backRoleLabel, moreFeaturesCount } from './FeatureBanner';
+import { FeatureBanner, featureBannerRow } from './FeatureBanner';
 import { __test } from '../../../lib/featuresIndex';
-import { __test as backNavTest, recordBackNav, clearBackNav, backNavFrom } from '../../../lib/featureBackNav';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps } from '../__tests__/fakeDom';
 import { __test as runsTest } from '../../../lib/featureRuns';
 import type { FeatureAttention, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../../types/featureIndex';
-import type { FeatureRun } from '../../../types/featureRun';
+import type { FeatureState } from '../../../types/featureRun';
 
 // m7: управляемый индекс фич — mock `api.tasks.featuresIndex` возвращает этот объект,
-// чтобы эффект useFeaturesIndex (live-перезапрос) не затирал синхронный сид стора.
+// чтобы live-перезапрос (useFeaturesIndex) не затирал синхронный сид стора.
 const mockIdx = vi.hoisted(() => ({
   features: [] as FeatureIndexFeature[],
   chats: {} as Record<string, FeatureChatLink[]>,
 }));
-// n1: управляемый список агрегатов (getFeatures → mockRuns), чтобы в mount-тесте
-// карточка «Конвейер» отрисовалась (run ≠ null).
-const mockRuns = vi.hoisted(() => [] as FeatureRun[]);
-// === Мок lib/api: featuresIndex → mockIdx, getFeatures → mockRuns (m7: агрегат по ключевой сессии) ===
+// Персоны: управляемый список для getPersonaById (имя исполнителя в «Ответить {имя}»).
+const mockPersonas = vi.hoisted(() => [] as { id: string; name: string }[]);
+// === Мок lib/api: featuresIndex → mockIdx ===
 vi.mock('../../../lib/api', () => ({
   api: {
     sessions: { list: async () => [] },
@@ -40,7 +43,7 @@ vi.mock('../../../lib/api', () => ({
     tasks: {
       execute: async () => {},
       featuresIndex: async () => mockIdx,
-      getFeatures: async () => mockRuns,
+      getFeatures: async () => [],
     },
     personas: { list: async () => [] },
   },
@@ -51,25 +54,15 @@ vi.mock('../../../lib/signalr', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/signalr')>();
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
 });
-// === Мок lib/personas: ensurePersonasLoaded — no-op (иначе joinUserGroup → localStorage) ===
+// === Мок lib/personas: ensurePersonasLoaded — no-op; getPersonaById — из mockPersonas ===
 vi.mock('../../../lib/personas', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/personas')>();
-  return { ...orig, ensurePersonasLoaded: async () => {} };
+  return { ...orig, ensurePersonasLoaded: async () => {}, getPersonaById: (id: string) => mockPersonas.find(p => p.id === id) };
 });
-
-// Минимальный агрегат фичи для PipelineCard (M2): достаточно полей, которые
-// FeatureModeBody/FeatureRunView читают для шапки (epic.title) и конвейера.
-const mockRun = {
-  featureId: 'f1',
-  epic: { id: 'f1', title: 'Эпик фичи', status: 'inProgress' as const },
-  steps: [], reviews: [], qa: [], final: null, merge: null,
-  awaitingHumanSince: null, awaitingHumanReason: null,
-  verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
-  progress: 0, ready: false, now: [], attention: null, closed: false, summary: null,
-} as unknown as FeatureRun;
 
 // === Фикстуры ===
 
+// Рельса 7 стадий: cut/plan пройдены, prod — активная (run), остальное — впереди.
 function rail(): FeatureIndexFeature['rail'] {
   return [
     { key: 'cut', state: 'done', tone: null },
@@ -82,10 +75,11 @@ function rail(): FeatureIndexFeature['rail'] {
   ];
 }
 
-function feat(over: Partial<FeatureIndexFeature> = {}): FeatureIndexFeature {
+// Строка фичи: по умолчанию running (prod активна). `state` — переопределяемый (9 значений).
+function feat(state: FeatureState = 'running', over: Partial<FeatureIndexFeature> = {}): FeatureIndexFeature {
   return {
     featureId: 'f1', title: 'Моя фича', projectId: 'p1',
-    bucket: 'running', attention: null,
+    bucket: 'running', attention: null, state,
     rail: rail(),
     chips: ['open'],
     stepsAccepted: 1, stepsTotal: 3, loops: 1,
@@ -95,8 +89,8 @@ function feat(over: Partial<FeatureIndexFeature> = {}): FeatureIndexFeature {
   };
 }
 
-function attention(kind: FeatureAttention['kind']): FeatureAttention {
-  return { kind, since: null, reason: null, personaId: null, sessionId: null };
+function attention(kind: FeatureAttention['kind'], over: Partial<FeatureAttention> = {}): FeatureAttention {
+  return { kind, since: null, reason: null, personaId: null, sessionId: null, taskId: null, ...over };
 }
 
 // Связь «этот чат × фича»: по умолчанию исполнитель Ш2 · бэк.
@@ -104,403 +98,190 @@ function link(over: Partial<FeatureChatLink> = {}): FeatureChatLink {
   return { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк', ...over };
 }
 
-// === 1: чистая модель ===
-
-describe('featureBannerModel: тон, статус, счётчик, роль, кнопка', () => {
-  it('идёт (run): тон run, статус «{этап} · идёт», счётчик 1/3 ↺1, роль Ш2 · бэк, кнопка «Ключевой чат»', () => {
-    const m = featureBannerModel(feat(), link(), 'chat-exec');
-    expect(m.tone).toBe('run');
-    expect(m.status).toBe('Производство · идёт');
-    expect(m.counter).toBe('1/3 ↺1');
-    expect(m.role).toBe('Ш2 · бэк');
-    expect(m.isKey).toBe(false);
-    expect(m.button).toEqual({ label: 'Ключевой чат', kind: 'key' });
-  });
-
-  it('нормализация линии (roleLabel): lane «back» (англ.) → «Ш2 · бэк», а не «Ш2 · back»', () => {
-    const m = featureBannerModel(feat(), link({ lane: 'back' }), 'chat-exec');
-    expect(m.role).toBe('Ш2 · бэк');
-  });
-
-  it('ждёт вас (wait): тон wait, статус «ждёт вас»', () => {
-    const m = featureBannerModel(feat({ bucket: 'attention', attention: attention('wait') }), link(), 'chat-exec');
-    expect(m.tone).toBe('wait');
-    expect(m.status).toBe('ждёт вас');
-  });
-
-  it('к мержу (merge): тон wait, статус «ждёт согласия на мерж»', () => {
-    const m = featureBannerModel(feat({ bucket: 'attention', attention: attention('merge') }), link(), 'chat-exec');
-    expect(m.tone).toBe('wait');
-    expect(m.status).toBe('ждёт согласия на мерж');
-  });
-
-  it('упала (stopped): тон stop, статус «стоит»', () => {
-    const m = featureBannerModel(feat({ bucket: 'attention', attention: attention('stopped') }), link(), 'chat-exec');
-    expect(m.tone).toBe('stop');
-    expect(m.status).toBe('стоит');
-  });
-
-  it('смержена (closed + mergedAt): тон closed, статус «смержена <дата>», глиф done', () => {
-    const f = feat({ bucket: 'closed', summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } });
-    const m = featureBannerModel(f, link(), 'chat-exec');
-    expect(m.tone).toBe('closed');
-    expect(m.glyph).toBe('done');
-    // дата — локальным геттером от той же Date (независимо от пояса машины)
-    const d = new Date('2026-10-18T12:00:00Z');
-    const date = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
-    expect(m.status).toBe(`смержена ${date}`);
-  });
-
-  it('закрыта без мержа: тон closed, статус «закрыта», глиф closed', () => {
-    const m = featureBannerModel(feat({ bucket: 'closed', summary: null }), link(), 'chat-exec');
-    expect(m.tone).toBe('closed');
-    expect(m.glyph).toBe('closed');
-    expect(m.status).toBe('закрыта');
-  });
-
-  it('нет ключевого (keySessionId = null): кнопка «Открыть фичу» (не переход)', () => {
-    const m = featureBannerModel(feat({ keySessionId: null }), link(), 'chat-exec');
-    expect(m.button).toEqual({ label: 'Открыть фичу', kind: 'feature' });
-  });
-
-  it('этот чат — ключевой (sessionId === keySessionId): роль «ключевой», isKey', () => {
-    const m = featureBannerModel(feat({ keySessionId: 'chat-key' }), link(), 'chat-key');
-    expect(m.isKey).toBe(true);
-    expect(m.role).toBe('ключевой');
-  });
-
-  it('ключевой чат: кнопка «Конвейер ▾» (kind pipeline), не «Ключевой чат»', () => {
-    const m = featureBannerModel(feat({ keySessionId: 'chat-key' }), link(), 'chat-key');
-    // R2 minor 8: «Конвейер» → «Исполнение».
-    expect(m.button).toEqual({ label: 'Исполнение', kind: 'pipeline' });
-  });
-
-  it('не-ключевой чат с живым ключевым: кнопка «Ключевой чат» (kind key) — переход, не конвейер', () => {
-    const m = featureBannerModel(feat({ keySessionId: 'chat-key' }), link(), 'chat-exec');
-    expect(m.button).toEqual({ label: 'Ключевой чат', kind: 'key' });
-  });
-
-  it('архивный ключевой чат (keyArchived): кнопка «Ключевой чат (в архиве)» (R3, минор 1)', () => {
-    const m = featureBannerModel(feat({ keySessionId: 'chat-key', keyArchived: true }), link(), 'chat-exec');
-    expect(m.button).toEqual({ label: 'Ключевой чат (в архиве)', kind: 'key' });
-  });
-
-  it('куратор без stepRef/lane: роль по виду (куратор)', () => {
-    const m = featureBannerModel(feat(), link({ kind: 'curator', stepRef: null, lane: null }), 'chat-cur');
-    expect(m.role).toBe('куратор');
-  });
-
-  it('m2: тон статуса — wait→wait, stop→stop, run/closed→run', () => {
-    expect(featureBannerModel(feat({ bucket: 'attention', attention: attention('wait') }), link(), 'chat-exec').statusTone).toBe('wait');
-    expect(featureBannerModel(feat({ bucket: 'attention', attention: attention('stopped') }), link(), 'chat-exec').statusTone).toBe('stop');
-    expect(featureBannerModel(feat(), link(), 'chat-exec').statusTone).toBe('run');
-    // смержена (closed) — обычный тон (не тревога)
-    expect(featureBannerModel(feat({ bucket: 'closed', summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } }), link(), 'chat-exec').statusTone).toBe('run');
-  });
-});
-
-// === 1b: «← назад» — роль исходного чата (backRoleLabel) ===
-
-// Индекс с двумя чатами одной фичи: ключевой (orchestrator) + исполнитель (Ш2 · бэк).
-function seedKeyAndExec(f: FeatureIndexFeature, keyLink: FeatureChatLink, execLink: FeatureChatLink, projectKey: string) {
-  const index: FeaturesIndex = {
-    features: [f],
-    chats: { [f.keySessionId!]: [keyLink], 'chat-exec': [execLink] },
-  };
-  __test.setIndex(projectKey, index);
-}
-
-describe('backRoleLabel: роль исходного чата в фиче', () => {
-  beforeEach(() => __test.reset());
-  afterEach(() => __test.reset());
-
-  it('исполнитель с stepRef+lane → «Ш2 · бэк»', () => {
-    const f = feat({ keySessionId: 'chat-key' });
-    seedKeyAndExec(f, { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
-      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }, 'p1');
-    expect(backRoleLabel('chat-exec', 'f1')).toBe('Ш2 · бэк');
-  });
-
-  it('исходный чат не принадлежит этой фиче → пусто (кнопки «← назад» нет)', () => {
-    const f = feat({ keySessionId: 'chat-key' });
-    // Связь чата-exec — к ДРУГОЙ фиче (f2), не к f1.
-    const index: FeaturesIndex = {
-      features: [f],
-      chats: { 'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }],
-        'chat-exec': [{ featureId: 'f2', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
-    };
-    __test.setIndex('p1', index);
-    expect(backRoleLabel('chat-exec', 'f1')).toBe('');
-  });
-
-  it('куратор без stepRef/lane → роль по виду (куратор)', () => {
-    const f = feat({ keySessionId: 'chat-key' });
-    const index: FeaturesIndex = {
-      features: [f],
-      chats: { 'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }],
-        'chat-exec': [{ featureId: 'f1', kind: 'curator', taskRole: null, stepRef: null, lane: null }] },
-    };
-    __test.setIndex('p1', index);
-    expect(backRoleLabel('chat-exec', 'f1')).toBe('куратор');
-  });
-});
-
-// === 1c: мультифича — число других фич (moreFeaturesCount) ===
-
-describe('moreFeaturesCount: фронт не сортирует и не считает порядок', () => {
-  it('одна фича → 0 (кнопки «· ещё» нет)', () => {
-    expect(moreFeaturesCount([{ feature: feat(), link: link() }])).toBe(0);
-  });
-  it('две фичи → 1; три → 2 (N = entries.length − 1)', () => {
-    expect(moreFeaturesCount([
-      { feature: feat(), link: link() },
-      { feature: feat({ featureId: 'f2', title: 'Вторая' }), link: link({ featureId: 'f2' }) },
-    ])).toBe(1);
-    expect(moreFeaturesCount([
-      { feature: feat(), link: link() },
-      { feature: feat({ featureId: 'f2' }), link: link({ featureId: 'f2' }) },
-      { feature: feat({ featureId: 'f3' }), link: link({ featureId: 'f3' }) },
-    ])).toBe(2);
-  });
-});
-
-// === 2: SSR-рендер компонента ===
-
-// Заполнить стор индекса одним проектом с одной фичей и связью «чат × фича».
+// Заполнить стор индекса одним проектом: одна фича + связь «чат × фича».
 function seedIndex(f: FeatureIndexFeature, l: FeatureChatLink, chatId: string, projectKey: string) {
   const index: FeaturesIndex = { features: [f], chats: { [chatId]: [l] } };
   __test.setIndex(projectKey, index);
 }
 
-function renderBanner(sessionId: string, projectId: string | null): string {
-  return renderToStaticMarkup(
-    createElement(FeatureBanner, { sessionId, projectId, isMobile: false }),
-  );
+// === 1: чистая модель featureBannerRow — подпись/действие/тон/роль по 9 состояниям ===
+
+describe('featureBannerRow: «где мы», действие, тон, роль', () => {
+  // Таблица: state → (подпись, действие, тон). Активная стадия фикстуры — prod.
+  const cases: { state: FeatureState; where: string; action: string; kind: 'reply' | 'chat' | 'open' | 'page'; tone: 'run' | 'wait' | 'stop' | 'closed' }[] = [
+    { state: 'not_started', where: 'Не начата', action: 'Открыть страницу фичи', kind: 'page', tone: 'run' },
+    { state: 'running', where: 'Производство · идёт', action: 'Открыть страницу фичи', kind: 'page', tone: 'run' },
+    { state: 'waiting', where: 'Производство · ждёт вас', action: 'Ответить', kind: 'reply', tone: 'wait' },
+    { state: 'stopped', where: 'Производство · стоит', action: 'Чат', kind: 'chat', tone: 'stop' },
+    { state: 'merge_pending', where: 'ждёт согласия на мерж', action: 'Открыть', kind: 'open', tone: 'wait' },
+    { state: 'merging', where: 'Мерж · идёт', action: 'Открыть страницу фичи', kind: 'page', tone: 'run' },
+    { state: 'merged', where: 'Смержена', action: 'Открыть страницу фичи', kind: 'page', tone: 'closed' },
+    { state: 'closed', where: 'Закрыта без мержа', action: 'Открыть страницу фичи', kind: 'page', tone: 'closed' },
+    { state: 'idle', where: 'Простаивает', action: 'Открыть страницу фичи', kind: 'page', tone: 'run' },
+  ];
+
+  it.each(cases)('state=$state → «$where», действие «$action» ($kind), тон $tone', c => {
+    const m = featureBannerRow(feat(c.state), link(), 'chat-exec');
+    expect(m.where).toBe(c.where);
+    expect(m.action.label).toBe(c.action);
+    expect(m.action.kind).toBe(c.kind);
+    expect(m.tone).toBe(c.tone);
+  });
+
+  it('merged с датой: «Смержена {дд.мм}» (локальным геттером от той же Date)', () => {
+    const f = feat('merged', { summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } });
+    const d = new Date('2026-10-18T12:00:00Z');
+    const date = `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+    expect(featureBannerRow(f, link(), 'chat-exec').where).toBe(`Смержена ${date}`);
+  });
+
+  it('waiting с персоной: «Ответить {имя}» (имя — из стора персон)', () => {
+    mockPersonas.length = 0;
+    mockPersonas.push({ id: 'p-kira', name: 'Кира' });
+    const f = feat('waiting', { attention: attention('wait', { personaId: 'p-kira' }) });
+    expect(featureBannerRow(f, link(), 'chat-exec').action.label).toBe('Ответить Кира');
+  });
+
+  it('stopped с персоной: «Чат {имя}»', () => {
+    mockPersonas.length = 0;
+    mockPersonas.push({ id: 'p-denis', name: 'Денис' });
+    const f = feat('stopped', { attention: attention('stopped', { personaId: 'p-denis' }) });
+    expect(featureBannerRow(f, link(), 'chat-exec').action.label).toBe('Чат Денис');
+  });
+
+  it('роль: исполнитель step → «Ш2 · бэк»; lane «back» (англ.) нормализуется в «бэк»', () => {
+    expect(featureBannerRow(feat('running'), link(), 'chat-exec').role).toBe('Ш2 · бэк');
+    expect(featureBannerRow(feat('running'), link({ lane: 'back' }), 'chat-exec').role).toBe('Ш2 · бэк');
+  });
+
+  it('роль: куратор без stepRef/lane → «куратор» (фолбэк на вид связи)', () => {
+    expect(featureBannerRow(feat('running'), link({ kind: 'curator', stepRef: null, lane: null }), 'chat-cur').role).toBe('куратор');
+  });
+
+  it('этот чат — ключевой (sessionId === keySessionId): роль «ключевой», isKey', () => {
+    const m = featureBannerRow(feat('running', { keySessionId: 'chat-key' }), link(), 'chat-key');
+    expect(m.isKey).toBe(true);
+    expect(m.role).toBe('ключевой');
+  });
+
+  it('точки: done/active кликабельны, pending/absent — нет (7 точек, порядок — от бэка)', () => {
+    const m = featureBannerRow(feat('running'), link(), 'chat-exec');
+    expect(m.dots).toHaveLength(7);
+    expect(m.dots.map(d => d.key)).toEqual(['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge']);
+    expect(m.dots.filter(d => d.clickable).map(d => d.key)).toEqual(['cut', 'plan', 'prod']);
+  });
+});
+
+// === 2: рендер панели с настоящими данными списка (SSR) ===
+
+function renderBanner(sessionId: string, projectId: string | null, isMobile = false): string {
+  return renderToStaticMarkup(createElement(FeatureBanner, { sessionId, projectId, isMobile }));
 }
 
-// Мобильный рендер (360 px): плашка одной строкой + тач-цель 40×40.
-function renderBannerMobile(sessionId: string, projectId: string | null): string {
-  return renderToStaticMarkup(
-    createElement(FeatureBanner, { sessionId, projectId, isMobile: true }),
-  );
-}
-
-describe('FeatureBanner: рендер (SSR)', () => {
+describe('FeatureBanner: рендер с данными списка (SSR)', () => {
   beforeEach(() => {
     __test.reset();
-    backNavTest.reset();
     setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
   });
   afterEach(() => {
     __test.reset();
-    backNavTest.reset();
     setAllFlags({});
   });
 
-  it('идёт: плашка с тоном run и рамкой', () => {
-    seedIndex(feat(), link(), 'chat-exec', 'p1');
+  it('идёт: тон run, «Производство · идёт», действие «Открыть страницу фичи», роль «Ш2 · бэк»', () => {
+    seedIndex(feat('running'), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-testid="feature-banner"');
     expect(html).toContain('data-banner-tone="run"');
-    expect(html).toContain('Моя фича');
-    expect(html).toContain('Ключевой чат');
+    expect(html).toContain('Производство · идёт');
+    expect(html).toContain('Открыть страницу фичи');
+    expect(html).toContain('Ш2 · бэк');
   });
 
-  it('ждёт вас: тон wait (C.infoBg)', () => {
-    seedIndex(feat({ bucket: 'attention', attention: attention('wait') }), link(), 'chat-exec', 'p1');
+  it('ждёт вас: тон wait (C.infoBg), «Производство · ждёт вас», «Ответить»', () => {
+    seedIndex(feat('waiting', { attention: attention('wait') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="wait"');
     expect(html).toContain('var(--c-info-bg)');
+    expect(html).toContain('Производство · ждёт вас');
+    expect(html).toContain('Ответить');
   });
 
-  it('упала: тон stop (C.dangerBg)', () => {
-    seedIndex(feat({ bucket: 'attention', attention: attention('stopped') }), link(), 'chat-exec', 'p1');
+  it('стоит: тон stop (C.dangerBg), «Производство · стоит», «Чат»', () => {
+    seedIndex(feat('stopped', { attention: attention('stopped') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="stop"');
     expect(html).toContain('var(--c-danger-bg)');
+    expect(html).toContain('Производство · стоит');
+    expect(html).toContain('Чат');
   });
 
-  it('к мержу: тон wait (C.infoBg), статус «ждёт согласия на мерж»', () => {
-    seedIndex(feat({ bucket: 'attention', attention: attention('merge') }), link(), 'chat-exec', 'p1');
+  it('к мержу: тон wait, «ждёт согласия на мерж», действие «Открыть» (НЕ «Мерж…»)', () => {
+    seedIndex(feat('merge_pending', { attention: attention('merge') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="wait"');
     expect(html).toContain('ждёт согласия на мерж');
+    expect(html).toContain('Открыть');
+    // «Мерж…» — только в попапе и на странице, НЕ на панели (задача, п.2).
+    expect(html).not.toContain('Мерж…');
   });
 
-  it('смержена: серая (C.bgInset), статус «смержена <дата>», глиф done', () => {
-    seedIndex(feat({ bucket: 'closed', summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } }), link(), 'chat-exec', 'p1');
+  it('смержена: серая (C.bgInset), «Смержена {дата}»', () => {
+    seedIndex(feat('merged', { summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="closed"');
     expect(html).toContain('var(--c-bg-inset)');
-    expect(html).toContain('смержена ');
+    expect(html).toContain('Смержена ');
   });
 
-  it('нет ключевого (keySessionId = null): кнопка «Открыть фичу»', () => {
-    seedIndex(feat({ keySessionId: null }), link(), 'chat-exec', 'p1');
+  it('закрыта без мержа: «Закрыта без мержа», тон closed', () => {
+    seedIndex(feat('closed', { summary: null }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
-    expect(html).toContain('Открыть фичу');
-    expect(html).not.toContain('Ключевой чат');
+    expect(html).toContain('data-banner-tone="closed"');
+    expect(html).toContain('Закрыта без мержа');
+  });
+
+  it('не начата: «Не начата»; простаивает: «Простаивает»; merging: «Мерж · идёт»', () => {
+    seedIndex(feat('not_started'), link(), 'chat-exec', 'p1');
+    expect(renderBanner('chat-exec', 'p1')).toContain('Не начата');
+    seedIndex(feat('idle'), link(), 'chat-exec', 'p1');
+    expect(renderBanner('chat-exec', 'p1')).toContain('Простаивает');
+    seedIndex(feat('merging'), link(), 'chat-exec', 'p1');
+    expect(renderBanner('chat-exec', 'p1')).toContain('Мерж · идёт');
   });
 
   it('чат без фичи: плашки нет (null)', () => {
-    // индекс с фичей, но связь другого чата — для 'nope' links нет
-    seedIndex(feat(), link(), 'other-chat', 'p1');
-    const html = renderBanner('nope', 'p1');
-    expect(html).toBe('');
+    seedIndex(feat('running'), link(), 'other-chat', 'p1');
+    expect(renderBanner('nope', 'p1')).toBe('');
   });
 
   it('оба флага выключены: плашки нет (null), даже если фича в сторе', () => {
-    seedIndex(feat(), link(), 'chat-exec', 'p1');
+    seedIndex(feat('running'), link(), 'chat-exec', 'p1');
     setAllFlags({ 'turn-plan-feature-mode': false, 'features-overview': false });
+    expect(renderBanner('chat-exec', 'p1')).toBe('');
+  });
+
+  it('точки: 7 data-testid feature-dot-*, «впереди» (pending) — <i>, не <button>', () => {
+    seedIndex(feat('running'), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
-    expect(html).toBe('');
+    // Все 7 точек на месте (data-testid у каждой).
+    for (const k of ['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge']) {
+      expect(html).toContain(`data-testid="feature-dot-${k}"`);
+    }
+    // «Впереди» (pending) — <i>, не <button>: тег-открывашка сразу перед data-testid.
+    const i = html.indexOf('data-testid="feature-dot-review"');
+    expect(i, 'нет точки review').not.toBe(-1);
+    expect(html.slice(Math.max(0, i - 20), i), 'pending review должен быть <i>').toContain('<i');
+    // Текущий (active) — <button> (type="button" перед data-testid).
+    const b = html.indexOf('data-testid="feature-dot-prod"');
+    expect(html.slice(Math.max(0, b - 40), b), 'active prod должен быть <button>').toContain('<button');
   });
 
-  // === M1: десктоп — одна строка (nowrap + minHeight 36) ===
-  it('M1: десктоп — одна строка: nowrap + minHeight 36 (кнопка «Ключевой чат» не переносится)', () => {
-    seedIndex(feat(), link(), 'chat-exec', 'p1');
-    const html = renderBanner('chat-exec', 'p1');
-    // M1: строка плашки — без переноса (было flexWrap: 'wrap' → 84–100 px).
-    expect(html).toContain('flex-wrap:nowrap');
-    // M1: плашка — minHeight 36 (макет .fs), не 84–100 px.
-    expect(html).toContain('min-height:36px');
-  });
-
-  // === M2: карточка конвейера .fsx (max-height 430, overflow auto) ===
-  it('M2: карточка конвейера .fsx — max-height 430 + overflow auto (лента не вытесняется)', () => {
-    const html = renderToStaticMarkup(createElement(PipelineCard, { run: mockRun, sessionId: 'chat-key', isMobile: false }));
-    // M2: тело «Конвейер ▾» — отдельная карточка с ограничением высоты и прокруткой.
-    expect(html).toContain('max-height:430px');
-    expect(html).toContain('overflow:auto');
-  });
-
-  // === M2: «Фича →» на 360 — minHeight 40 (тач-цель), десктоп без minHeight ===
-  it('M2: «Фича →» на 360 — minHeight 40 (тач-цель), десктоп — без minHeight', () => {
-    seedIndex(feat(), link(), 'chat-exec', 'p1');
-    // Мобила (360): «Фича →» — minHeight 40 (тач-цель, §6).
-    expect(renderBannerMobile('chat-exec', 'p1')).toContain('min-height:40px');
-    // Десктоп: «Фича →» без minHeight (натуральная высота); minHeight 40 в плашке не появляется.
-    expect(renderBanner('chat-exec', 'p1')).not.toContain('min-height:40px');
-  });
-
-  // === m2: тон текста статуса (ждёт → C.info, стоит → C.dangerText) ===
-  it('m2: тон текста статуса — «ждёт» C.info, «стоит» C.dangerText', () => {
-    seedIndex(feat({ bucket: 'attention', attention: attention('wait') }), link(), 'chat-exec', 'p1');
-    expect(renderBanner('chat-exec', 'p1')).toContain('color:var(--c-info)');
-    seedIndex(feat({ bucket: 'attention', attention: attention('stopped') }), link(), 'chat-exec', 'p1');
-    expect(renderBanner('chat-exec', 'p1')).toContain('color:var(--c-danger-text)');
-  });
-
-  // === Ф4: «Конвейер ▾» в ключевом чате ===
-
-  it('ключевой чат: кнопка «Конвейер ▾» (data-testid feature-pipeline), НЕ «Ключевой чат»', () => {
-    // Чат = ключевой (keySessionId === sessionId) → button kind pipeline.
-    seedIndex(feat({ keySessionId: 'chat-key' }), link({ kind: 'orchestrator', stepRef: null, lane: null }), 'chat-key', 'p1');
-    const html = renderBanner('chat-key', 'p1');
-    expect(html).toContain('data-testid="feature-pipeline"');
-    // R2 minor 8: «Конвейер» → «Исполнение».
-    expect(html).toContain('Исполнение');
-    expect(html).not.toContain('data-testid="feature-go"');
-    expect(html).not.toContain('Ключевой чат');
-  });
-
-  it('не-ключевой чат: кнопка «Ключевой чат» (data-testid feature-go), без «Конвейер»', () => {
-    seedIndex(feat({ keySessionId: 'chat-key' }), link(), 'chat-exec', 'p1');
-    const html = renderBanner('chat-exec', 'p1');
-    expect(html).toContain('data-testid="feature-go"');
-    expect(html).toContain('Ключевой чат');
-    expect(html).not.toContain('data-testid="feature-pipeline"');
-  });
-
-  it('архивный ключевой чат: кнопка «Ключевой чат (в архиве)» (R3, минор 1)', () => {
-    seedIndex(feat({ keySessionId: 'chat-key', keyArchived: true }), link(), 'chat-exec', 'p1');
-    const html = renderBanner('chat-exec', 'p1');
-    expect(html).toContain('Ключевой чат (в архиве)');
-  });
-
-  // === Ф4: «← назад» только после перехода из плашки ===
-
-  it('«← назад» (feature-back) — ПОСЛЕ перехода из плашки: роль исходного чата', () => {
-    // Ключевой чат + исполнитель той же фичи; переход из плашки исполнителя.
-    seedKeyAndExec(
-      feat({ keySessionId: 'chat-key' }),
-      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
-      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
-      'p1',
-    );
-    recordBackNav('chat-exec', 'chat-key');
-    const html = renderBanner('chat-key', 'p1');
-    expect(html).toContain('data-testid="feature-back"');
-    expect(html).toContain('← Ш2 · бэк');
-  });
-
-  it('«← назад» НЕ при обычном открытии ключевого чата (перехода из плашки не было)', () => {
-    seedKeyAndExec(
-      feat({ keySessionId: 'chat-key' }),
-      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
-      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
-      'p1',
-    );
-    // Без recordBackNav — «← назад» нет, даже в ключевом чате.
-    const html = renderBanner('chat-key', 'p1');
-    expect(html).not.toContain('data-testid="feature-back"');
-  });
-
-  it('«← назад» не показывается, если исходный чат — другой фиче (роль пуста)', () => {
-    // Ключевой чат фичи f1; исходный чат-exec — фичи f2 (не f1).
-    const index: FeaturesIndex = {
-      features: [feat({ keySessionId: 'chat-key' })],
-      chats: {
-        'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }],
-        'chat-exec': [{ featureId: 'f2', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }],
-      },
-    };
-    __test.setIndex('p1', index);
-    recordBackNav('chat-exec', 'chat-key');
-    const html = renderBanner('chat-key', 'p1');
-    expect(html).not.toContain('data-testid="feature-back"');
-  });
-
-  it('«← назад» в НЕ-ключевом чате не показывается (даже если back-nav записан)', () => {
-    seedKeyAndExec(
-      feat({ keySessionId: 'chat-key' }),
-      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
-      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
-      'p1',
-    );
-    // Back-nav ведёт в chat-key, но рендерим chat-exec (не ключевой) → «← назад» нет.
-    recordBackNav('chat-exec', 'chat-key');
-    const html = renderBanner('chat-exec', 'p1');
-    expect(html).not.toContain('data-testid="feature-back"');
-  });
-
-  it('возврат в исходный чат: «← назад» → исходный чат + сброс back-nav (кнопка исчезает)', () => {
-    seedKeyAndExec(
-      feat({ keySessionId: 'chat-key' }),
-      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
-      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
-      'p1',
-    );
-    // Переход из плашки исполнителя → ключевой чат.
-    recordBackNav('chat-exec', 'chat-key');
-    // Ключевой чат: «← назад» на исходный чат (chat-exec).
-    expect(backNavFrom('chat-key')).toBe('chat-exec');
-    // Клик «← назад»: возврат в исходный чат + сброс указателя (ядро goBack, без навигации).
-    clearBackNav();
-    expect(backNavFrom('chat-key')).toBeNull();
-    // После возврата в исходный чат (chat-exec) «← назад» не показывается: указатель пуст.
-    const html = renderBanner('chat-exec', 'p1');
-    expect(html).not.toContain('data-testid="feature-back"');
-  });
-
-  // === Ф4: мультифича «· ещё N» ===
-
-  it('чат с двумя фичами: «· ещё 1» (feature-more); порядок — от бэка', () => {
-    const f1 = feat({ keySessionId: 'chat-key' });
-    const f2 = feat({ featureId: 'f2', title: 'Вторая фича', keySessionId: 'chat-key2' });
+  it('«· ещё N»: чат с двумя фичами → «· ещё 1» (порядок — от бэка)', () => {
+    const f1 = feat('running', { keySessionId: 'chat-key' });
+    const f2 = feat('running', { featureId: 'f2', title: 'Вторая фича', keySessionId: 'chat-key2' });
     const index: FeaturesIndex = {
       features: [f1, f2],
-      // chat-exec связан с ОБЕИМИ фичами: f1 (исполнитель) и f2 (куратор).
       chats: { 'chat-exec': [
         { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
         { featureId: 'f2', kind: 'curator', taskRole: null, stepRef: null, lane: null },
@@ -512,241 +293,93 @@ describe('FeatureBanner: рендер (SSR)', () => {
     expect(html).toContain('· ещё 1');
   });
 
-  it('чат с одной фичей: «· ещё» нет', () => {
-    seedIndex(feat(), link(), 'chat-exec', 'p1');
-    const html = renderBanner('chat-exec', 'p1');
-    expect(html).not.toContain('data-testid="feature-more"');
-  });
-
-  // === n2: чип «ключевой» — вес 700 (макет .role.key) ===
-  it('n2: чип «ключевой» — font-weight 700 + accent/accentLight (макет .role.key)', () => {
-    seedIndex(feat({ keySessionId: 'chat-key' }), link({ kind: 'orchestrator', stepRef: null, lane: null }), 'chat-key', 'p1');
+  it('чип «ключевой»: font-weight 700 + accent/accentLight (макет .role.key)', () => {
+    seedIndex(feat('running', { keySessionId: 'chat-key' }), link({ kind: 'orchestrator', stepRef: null, lane: null }), 'chat-key', 'p1');
     const html = renderBanner('chat-key', 'p1');
-    // Чип «ключевой»: font-weight:700 + color accent + background accentLight (макет .role.key).
     expect(html).toContain('font-weight:700;color:var(--c-accent);background:var(--c-accent-light)');
   });
-});
 
-// === Ф5: мобильная ветка (360 px) — одна строка 44 px, тач-цель 40×40, тап → шторка ===
-
-describe('FeatureBanner: мобильная ветка (SSR, 360 px)', () => {
-  beforeEach(() => {
-    __test.reset();
-    backNavTest.reset();
-    setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
-  });
-  afterEach(() => {
-    __test.reset();
-    backNavTest.reset();
-    setAllFlags({});
-  });
-
-  it('не-ключевой чат: одна строка (feature-banner-row) с телом (body) и тач-целью 40×40 (feature-go)', () => {
-    seedIndex(feat(), link(), 'chat-exec', 'p1');
-    const html = renderBannerMobile('chat-exec', 'p1');
-    expect(html).toContain('data-testid="feature-banner-row"');
-    expect(html).toContain('data-testid="feature-banner-body"');
-    expect(html).toContain('data-testid="feature-go"');
-    // Тач-цель 40×40 (TB.iconHitMobile): width/height 40px в стиле кнопки.
-    expect(html).toContain('width:40px');
-    expect(html).toContain('height:40px');
-    // n4: плашка 48 (кнопка 40 + отступы 4/4, border-box), строка 40.
-    expect(html).toContain('min-height:48px');
-    expect(html).toContain('min-height:40px');
-  });
-
-  // === n3: тач-цель «· ещё N» на 360 ≥ 40 по высоте (было 20) ===
-  it('n3: «· ещё N» — minHeight 40 (тач-цель ≥ 40 на 360)', () => {
-    const f1 = feat({ keySessionId: 'chat-key' });
-    const f2 = feat({ featureId: 'f2', title: 'Вторая фича', keySessionId: 'chat-key2' });
-    const index: FeaturesIndex = {
-      features: [f1, f2],
-      chats: { 'chat-exec': [
-        { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
-        { featureId: 'f2', kind: 'curator', taskRole: null, stepRef: null, lane: null },
-      ] },
-    };
-    __test.setIndex('p1', index);
-    const html = renderBannerMobile('chat-exec', 'p1');
-    // Кнопка «· ещё 1»: её style обязан нести min-height:40px (тач-цель ≥ 40).
-    // Проверяем именно атрибут кнопки (не строки): от data-testid="feature-more" до '>'.
-    const i = html.indexOf('data-testid="feature-more"');
-    expect(i, 'нет кнопки «· ещё»').not.toBe(-1);
-    const tag = html.slice(i, html.indexOf('>', i) + 1);
-    expect(tag, 'у кнопки «· ещё» нет min-height:40px').toContain('min-height:40px');
-  });
-
-  it('мобила: статус и роль чата скрыты (в строке только глиф+название+рельса+счётчик)', () => {
-    seedIndex(feat(), link(), 'chat-exec', 'p1');
-    const html = renderBannerMobile('chat-exec', 'p1');
-    // Название, счётчик и рельса — на месте.
-    expect(html).toContain('Моя фича');
-    expect(html).toContain('1/3 ↺1');
-    expect(html).toContain('data-testid="feature-rail"');
-    // Статус («Производство · идёт») и роль («· этот чат: …») — НЕ в строке.
-    expect(html).not.toContain('Производство · идёт');
-    expect(html).not.toContain('этот чат:');
-  });
-
-  it('мобила: «← назад» — иконка (data-testid feature-back), без текстовой роли', () => {
-    seedKeyAndExec(
-      feat({ keySessionId: 'chat-key' }),
-      { featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null },
-      { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
-      'p1',
-    );
-    recordBackNav('chat-exec', 'chat-key');
-    const html = renderBannerMobile('chat-key', 'p1');
-    // Ключевой чат: кнопка — «Конвейер» (feature-pipeline), «← назад» — иконка.
-    expect(html).toContain('data-testid="feature-back"');
-    expect(html).toContain('data-testid="feature-pipeline"');
-    // Текстовая роль («Ш2 · бэк») в «← назад» не рисуется (только иконка).
-    expect(html).not.toContain('← Ш2 · бэк');
-  });
-
-  it('мобила: чат без фичи → плашки нет (null)', () => {
-    seedIndex(feat(), link(), 'other-chat', 'p1');
-    expect(renderBannerMobile('nope', 'p1')).toBe('');
-  });
-
-  it('m5: мультифича «· ещё N» видна в строке (360)', () => {
-    const f1 = feat({ keySessionId: 'chat-key' });
-    const f2 = feat({ featureId: 'f2', title: 'Вторая фича', keySessionId: 'chat-key2' });
-    const index: FeaturesIndex = {
-      features: [f1, f2],
-      chats: { 'chat-exec': [
-        { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' },
-        { featureId: 'f2', kind: 'curator', taskRole: null, stepRef: null, lane: null },
-      ] },
-    };
-    __test.setIndex('p1', index);
-    const html = renderBannerMobile('chat-exec', 'p1');
-    expect(html).toContain('data-testid="feature-more"');
-    expect(html).toContain('· ещё 1');
+  it('центрирование по колонке чата: внешний div — max-width:950px (CHAT_MAX_W) + margin:0 auto (useChatGutter)', () => {
+    seedIndex(feat('running'), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    // Внешняя обёртка баннера центрирует его по колонке чата (как лента): max-width CHAT_MAX_W + margin auto.
+    expect(html).toContain('max-width:950px');
+    expect(html).toContain('margin:0 auto');
   });
 });
 
-// === m7: агрегат фичи — по КЛЮЧЕВОЙ сессии (feature.keySessionId), не по сессии исполнителя ===
-//
-// Бэк отдаёт агрегат фичи (ProjectForSession) по SourceSessionId = keySessionId (ключевой
-// чат), а не по сессии исполнителя — поэтому в чате исполнителя run = null, если запрашивать
-// по своей сессии. Фикс: useFeatureRuns(feature.keySessionId). Тест — реальный mount (не SSR):
-// после mount эффекты useFeaturesIndex/useFeatureRuns отработали, и _active (стор featureRuns)
-// содержит КЛЮЧЕВУЮ сессию, а не сессию исполнителя.
+// === 3: клик по точке → cc-open-feature (mount, реальный DOM) ===
 
-describe('FeatureBanner: m7 — агрегат фичи по ключевой сессии (реальный mount)', () => {
+describe('FeatureBanner: клик по точке → переход (mount)', () => {
   beforeEach(() => {
     installFakeDom();
     __test.reset();
     runsTest.reset();
-    backNavTest.reset();
     setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
   });
   afterEach(() => {
     __test.reset();
     runsTest.reset();
-    backNavTest.reset();
     setAllFlags({});
     uninstallFakeDom();
   });
 
-  it('чат исполнителя: useFeatureRuns подписан на keySessionId (chat-key), не на свою (chat-exec)', async () => {
-    const f = feat({ keySessionId: 'chat-key' });
+  it('клик по текущему этапу (prod) → cc-open-feature { featureId, fromChatId, fromChat, stage: prod }', async () => {
+    const f = feat('running', { keySessionId: 'chat-key' });
     const index: FeaturesIndex = {
       features: [f],
-      chats: {
-        'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }],
-        'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }],
-      },
-    };
-    // Сидим стор синхронно (до mount): featureOf('chat-exec') находит фичу на первом рендере,
-    // и useFeatureRuns получает feature.keySessionId = 'chat-key'.
-    __test.setIndex('p1', index);
-    // mock api.tasks.featuresIndex возвращает тот же индекс (live-перезапрос не затирает сид).
-    mockIdx.features = index.features;
-    mockIdx.chats = index.chats;
-
-    const { root } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: true }));
-    // Даём микротаскам (live-перезапрос) отработать, чтобы состояние стора было стабильным.
-    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-
-    // m7: подписка — на КЛЮЧЕВОЙ сессии (keySessionId), не на сессии исполнителя.
-    expect(runsTest.active().has('chat-key')).toBe(true);
-    expect(runsTest.active().has('chat-exec')).toBe(false);
-    root.unmount();
-  });
-
-  it('ключевой чат: useFeatureRuns подписан на свою сессию (keySessionId === sessionId)', async () => {
-    const f = feat({ keySessionId: 'chat-key' });
-    const index: FeaturesIndex = {
-      features: [f],
-      chats: { 'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }] },
+      chats: { 'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
     };
     __test.setIndex('p1', index);
     mockIdx.features = index.features;
     mockIdx.chats = index.chats;
 
-    const { root } = mount(createElement(FeatureBanner, { sessionId: 'chat-key', projectId: 'p1', isMobile: true }));
+    // Перехват window.dispatchEvent (fake window — no-op): записать cc-open-feature.
+    const dispatched: { type: string; detail: unknown }[] = [];
+    (globalThis as { window: { dispatchEvent: (e: Event) => boolean } }).window.dispatchEvent =
+      (e: Event) => { dispatched.push({ type: e.type, detail: (e as CustomEvent).detail }); return true; };
+
+    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: false }));
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
 
-    // Ключевой чат: keySessionId === sessionId → подписка на свою сессию (как и раньше).
-    expect(runsTest.active().has('chat-key')).toBe(true);
-    root.unmount();
-  });
-});
-
-// === n1: карточка «Конвейер» — СНАРУЖИ div плашки (сосед, не потомок) ===
-//
-// Мутация: вернуть PipelineCard внутрь div плашки (как было) → banner.contains(card) = true
-// → тест краснеет. Реальный mount: клик по «Конвейер ▾» раскрывает карточку, и мы
-// проверяем её положение в дереве (FNode.contains), а не строку SSR.
-describe('FeatureBanner: n1 — карточка «Конвейер» — сосед плашки (mount, 1280)', () => {
-  beforeEach(() => {
-    installFakeDom();
-    __test.reset();
-    runsTest.reset();
-    backNavTest.reset();
-    setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
-  });
-  afterEach(() => {
-    __test.reset();
-    runsTest.reset();
-    backNavTest.reset();
-    setAllFlags({});
-    mockRuns.length = 0;
-    uninstallFakeDom();
-  });
-
-  it('карточка (feature-pipeline-body) — СОСЕД плашки (feature-banner), не её потомок', async () => {
-    const f = feat({ keySessionId: 'chat-key' });
-    const index: FeaturesIndex = {
-      features: [f],
-      chats: { 'chat-key': [{ featureId: 'f1', kind: 'orchestrator', taskRole: null, stepRef: null, lane: null }] },
-    };
-    __test.setIndex('p1', index);
-    mockIdx.features = index.features;
-    mockIdx.chats = index.chats;
-    // Агрегат фичи — чтобы карточка отрисовалась (run ≠ null).
-    mockRuns.length = 0;
-    mockRuns.push(mockRun);
-
-    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-key', projectId: 'p1', isMobile: false }));
-    // Даём эффекту useFeatureRuns (getFeatures → setRuns) отработать.
-    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-
-    // Раскрываем «Конвейер ▾» (feature-pipeline) — карточка появляется.
-    const btn = findNodeByAttr(container, 'data-testid', 'feature-pipeline');
-    expect(btn, 'нет кнопки «Конвейер»').not.toBeNull();
-    const props = reactProps(btn!);
-    expect(props?.onClick, 'у «Конвейер» нет onClick').toBeDefined();
+    const dot = findNodeByAttr(container, 'data-testid', 'feature-dot-prod');
+    expect(dot, 'нет точки prod').not.toBeNull();
+    const props = reactProps(dot!);
+    expect(props?.onClick, 'у точки prod нет onClick').toBeDefined();
     act(() => { (props!.onClick as () => void)(); });
 
-    // Карточка отрисована и — главное — НЕ внутри div плашки (n1: сосед, а не потомок).
-    const banner = findNodeByAttr(container, 'data-testid', 'feature-banner');
-    const card = findNodeByAttr(container, 'data-testid', 'feature-pipeline-body');
-    expect(card, 'карточка «Конвейер» не отрисована').not.toBeNull();
-    expect(banner, 'плашка не найдена').not.toBeNull();
-    expect(banner!.contains(card!), 'карточка — потомок плашки (n1: должна быть соседом)').toBe(false);
+    const ev = dispatched.find(d => d.type === 'cc-open-feature');
+    expect(ev, 'cc-open-feature не диспатчен').toBeDefined();
+    expect(ev!.detail).toMatchObject({ featureId: 'f1', fromChatId: 'chat-exec', fromChat: true, stage: 'prod' });
+    root.unmount();
+  });
+
+  it('«впереди» (pending) не кликабельно: <i> без onClick (клик не диспатчит cc-open-feature)', async () => {
+    const f = feat('running', { keySessionId: 'chat-key' });
+    const index: FeaturesIndex = {
+      features: [f],
+      chats: { 'chat-exec': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш2', lane: 'бэк' }] },
+    };
+    __test.setIndex('p1', index);
+    mockIdx.features = index.features;
+    mockIdx.chats = index.chats;
+
+    const dispatched: { type: string }[] = [];
+    (globalThis as { window: { dispatchEvent: (e: Event) => boolean } }).window.dispatchEvent =
+      (e: Event) => { dispatched.push({ type: e.type }); return true; };
+
+    const { root, container } = mount(createElement(FeatureBanner, { sessionId: 'chat-exec', projectId: 'p1', isMobile: false }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+
+    // review — pending: тег <i>, без onClick (в отличие от done/active — <button> + onClick).
+    const pending = findNodeByAttr(container, 'data-testid', 'feature-dot-review');
+    expect(pending, 'нет точки review').not.toBeNull();
+    expect(pending!.nodeName, 'pending должен быть <i>, не <button>').toBe('I');
+    expect(reactProps(pending!)?.onClick, 'у pending не должно быть onClick').toBeUndefined();
+    // Клик по pending (если бы onClick был) не диспатчит cc-open-feature.
+    const onClick = reactProps(pending!)?.onClick as (() => void) | undefined;
+    if (onClick) act(() => { onClick(); });
+    expect(dispatched.some(d => d.type === 'cc-open-feature'), 'pending не должен диспатчить переход').toBe(false);
     root.unmount();
   });
 });

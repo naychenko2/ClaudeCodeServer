@@ -2806,9 +2806,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         </div>
       )}
 
-      {/* Плашка фичи: чат принадлежит фиче (индекс фич) — где фича, её статус и
+      {/* Плашка фичи: чат принадлежит фиче (индекс фич) — где фичи, её статус и
           куда вернуться в ключевой чат. Под двумя флагами (режим «Исполнение фичи»
-          + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null). */}
+          + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null).
+          Центрирование по колонке чата (CHAT_MAX_W, как у ленты) — ВНУТРИ баннера. */}
       <FeatureBanner sessionId={session.id} projectId={session.projectId ?? null} isMobile={!!isMobile} chatTaskId={session.taskId ?? null} />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).

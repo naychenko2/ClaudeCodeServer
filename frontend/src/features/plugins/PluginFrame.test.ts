@@ -60,7 +60,7 @@ const { api } = await import('../../lib/api');
 const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
   '../../components/chat/__tests__/fakeDom'
 );
-const { PluginFrame } = await import('./PluginFrame');
+const { PluginFrame, pluginFrameKey } = await import('./PluginFrame');
 
 // === Фиксированные данные ===
 const PROJECT: Project = {
@@ -141,5 +141,76 @@ describe('PluginFrame: фрейм конкретной панели', () => {
     vi.mocked(api.plugins.panelHtml).mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     const { text } = await renderFrame(P_WITH_PANEL, PANEL_1);
     expect(text()).toContain('Панель не найдена');
+  });
+});
+
+// === S7: версия плагина и набор прав в ключе фрейма ===
+// Обновился плагин (новая версия) или выдано/снято право → ключ меняется →
+// фрейм пересоздаётся, иначе панель продолжала бы показывать старое.
+// Мутации: убрать version из pluginFrameKey → «новая версия → другой ключ»
+// краснеет; убрать granted → «выданное/снятое право → другой ключ» краснеет.
+describe('pluginFrameKey: версия и права в ключе', () => {
+  const base: PluginInfo = { ...P_WITH_PANEL, granted: [] };
+
+  it('ключ несёт id/панель, версию и отсортированный набор прав', () => {
+    const k = pluginFrameKey({ ...base, granted: ['b:write', 'a:read'] }, PANEL_1, 0);
+    expect(k).toBe('local-1/with-panel::p1#1.0.0#a:read,b:write#0');
+  });
+
+  it('обновление плагина (новая версия) → другой ключ', () => {
+    const a = pluginFrameKey(base, PANEL_1, 0);
+    const b = pluginFrameKey({ ...base, version: '2.0.0' }, PANEL_1, 0);
+    expect(a).not.toBe(b);
+  });
+
+  it('выданное/снятое право → другой ключ', () => {
+    const a = pluginFrameKey(base, PANEL_1, 0);
+    const b = pluginFrameKey({ ...base, granted: ['notes:read'] }, PANEL_1, 0);
+    expect(a).not.toBe(b);
+  });
+
+  it('один и тот же набор прав в другом порядке — тот же ключ (без лишнего перемонтирования)', () => {
+    const a = pluginFrameKey({ ...base, granted: ['a:read', 'b:write'] }, PANEL_1, 0);
+    const b = pluginFrameKey({ ...base, granted: ['b:write', 'a:read'] }, PANEL_1, 0);
+    expect(a).toBe(b);
+  });
+
+  it('«Перезагрузить» (reloadKey) тоже в ключе', () => {
+    expect(pluginFrameKey(base, PANEL_1, 0)).not.toBe(pluginFrameKey(base, PANEL_1, 1));
+  });
+});
+
+// Поведенческий: смена версии пересоздаёт iframe (React remount по key) —
+// панель в новом фрейме получит init с новой версией, а не продолжит жить в старом.
+describe('PluginFrame: смена версии пересоздаёт iframe', () => {
+  // Первый iframe в дереве контейнера (обход childNodes)
+  function findIframe(n: FNode): FNode | null {
+    if (n.nodeType === 1 && n.nodeName === 'IFRAME') return n;
+    for (const c of n.childNodes) {
+      const hit = findIframe(c);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  it('обновление плагина (v1 → v2) → iframe-узел заменён', async () => {
+    installFakeDom();
+    const { root, container } = mount(createElement(PluginFrame, {
+      project: PROJECT, plugin: P_WITH_PANEL, panel: PANEL_1,
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const iframe1 = findIframe(container);
+    expect(iframe1, 'iframe смонтирован после загрузки html').not.toBeNull();
+
+    // Сервер обновил плагин: хост перечитал список, фрейм получил новую версию
+    act(() => {
+      root.render(createElement(PluginFrame, {
+        project: PROJECT, plugin: { ...P_WITH_PANEL, version: '2.0.0' }, panel: PANEL_1,
+      }));
+    });
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const iframe2 = findIframe(container);
+    expect(iframe2, 'iframe смонтирован после обновления').not.toBeNull();
+    expect(iframe2, 'фрейм пересоздан: прежний узел заменён новым').not.toBe(iframe1);
   });
 });

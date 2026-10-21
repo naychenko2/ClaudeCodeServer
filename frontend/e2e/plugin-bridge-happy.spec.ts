@@ -238,3 +238,111 @@ test('R-A: колесо над панелью выше карточки прок
   expect(m.wrapScroll, 'колесо прокрутило обёртку').toBeGreaterThan(0);
   expect(m.pageScroll, 'страница не прокручивается').toBe(0);
 });
+
+// === S7: панель обновляется сама по plugins_changed (версия в ключе фрейма) ===
+//
+// Механизм один в один как в приложении: хост держит «список» (версию плагина),
+// ключ фрейма включает версию, и по событию plugins_changed хост ПЕРЕЧИТЫВАЕТ
+// список (не кэш) — сменилась версия → iframe пересоздаётся (в React это
+// remount по key), панель в новом фрейме получает init с НОВОЙ версией.
+// Мутация «не пересоздавать фрейм при смене версии» (тот же iframe) красит:
+// панель остаётся на старой версии и новый init не получает.
+const s7PanelHtml =
+  '<script>' +
+  'window.__s7 = { inits: [] };' +
+  'ccsPlugin.on("init", function (d) { window.__s7.inits.push(d.plugin.version); });' +
+  '</script><p>s7</p>';
+
+// JS-выражение, равное escShell, но без </script> в исходнике:
+// каждая </script> расщеплена на "</scr" + "ipt>" (HTML-парсер не видит
+// закрывающий тег, JS-движок склеивает).
+function buildEscShellExpr(escShell: string): string {
+  const parts = escShell.split(/<\/script>/i);
+  let expr = JSON.stringify(parts[0]);
+  for (let i = 1; i < parts.length; i++) {
+    expr += ' + "</scr" + "ipt>" + ' + JSON.stringify(parts[i]);
+  }
+  return expr;
+}
+
+function s7HostHtml(): string {
+  const shell = buildPanelSrcdoc(s7PanelHtml, 'light', shimJs, shimCss);
+  const escShell = esc(shell);
+  return (
+    '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
+    '<div id="frames">' +
+    '<iframe id="f" style="width:900px;height:400px;border:0" srcdoc="' + escShell + '"></iframe>' +
+    '</div>' +
+    '<button id="update">обновить</button>' +
+    '<script>' +
+    'window.__store = { version: "1.0.0" };' +
+    'window.__host = { remounts: 0, lastKey: null, listReads: 0, readyCount: 0, initVersions: [] };' +
+    'window.__escShell = ' + buildEscShellExpr(escShell) + ';' +
+    'function readList() { window.__host.listReads++; return { version: window.__store.version }; }' +
+    'function frameKey() { return "p1::p1#" + readList().version; }' +
+    'function mountFrame() {' +
+    '  var key = frameKey();' +
+    '  if (window.__host.lastKey === key) return;' +
+    '  window.__host.lastKey = key;' +
+    '  window.__host.remounts++;' +
+    '  var box = document.getElementById("frames");' +
+    '  box.innerHTML = \'<iframe id="f" style="width:900px;height:400px;border:0" srcdoc="\' + window.__escShell + \'"></iframe>\';' +
+    '}' +
+    'window.addEventListener("message", function (e) {' +
+    '  var d = e.data;' +
+    '  if (!d || d.source !== "ccs-plugin" || d.v !== 1 || d.type !== "ready") return;' +
+    '  if (e.origin !== "null") return;' +
+    '  window.__host.readyCount++;' +
+    '  var list = readList();' +
+    '  window.__host.initVersions.push(list.version);' +
+    '  var f = document.getElementById("frames").firstElementChild;' +
+    '  var pw = f && f.contentWindow ? f.contentWindow.frames[0] : null;' +
+    '  if (pw) pw.postMessage({ source: "ccs-host", v: 1, type: "init", plugin: { id: "p1", version: list.version }, slot: "sidebar", context: {}, theme: "light", locale: "ru-RU", granted: [] }, "*");' +
+    '});' +
+    'window.addEventListener("plugins_changed", function () {' +
+    '  var list = readList();' +
+    '  if (window.__host.lastKey !== "p1::p1#" + list.version) mountFrame();' +
+    '});' +
+    'document.getElementById("update").addEventListener("click", function () {' +
+    '  window.__store.version = "2.0.0";' +
+    '  window.dispatchEvent(new Event("plugins_changed"));' +
+    '});' +
+    'window.__host.lastKey = frameKey();' +
+    '</script>' +
+    '</body></html>'
+  );
+}
+
+test('S7: plugins_changed → перечитывание списка → фрейм пересоздан, панель видит новую версию', async ({ page }) => {
+  await page.setContent(s7HostHtml(), { waitUntil: 'load' });
+
+  // Первый init: панель (вложенный фрейм, cross-origin) послала ready,
+  // хост ответил init с версией 1.0.0. Проверяем по состоянию хоста
+  // (same-origin), не по окну панели (SecurityError на cross-origin).
+  // Первый init: ready получен, init с 1.0.0 отправлен.
+  // Polling через page.evaluate (waitForFunction в этом e2e не видит __host).
+  const waitState = async (pred: (h: any) => boolean, timeout = 10_000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      const h = await page.evaluate(() => (window as any).__host);
+      if (h && pred(h)) return h;
+      await page.waitForTimeout(50);
+    }
+    throw new Error('timeout waiting for host state');
+  };
+  await waitState((h) => h.readyCount >= 1 && h.initVersions.length >= 1 && h.initVersions[0] === '1.0.0');
+
+  // «Сервер» обновил плагин до 2.0.0 и послал plugins_changed.
+  await page.click('#update');
+
+  // Хост перечитал список (по событию, а не по кэшу) и пересоздал фрейм:
+  // НОВАЯ панель послала ready, хост ответил init с версией 2.0.0.
+  await waitState((h) => h.readyCount >= 2 && h.initVersions.length >= 2 && h.initVersions[1] === '2.0.0');
+
+  const h = await page.evaluate(() => {
+    const host = (window as unknown as { __host: { remounts: number; listReads: number } }).__host;
+    return { ...host };
+  });
+  expect(h.remounts, 'фрейм пересоздан один раз (ключ изменился)').toBe(1);
+  expect(h.listReads, 'список перечитан (по событию и при init), не из кэша').toBeGreaterThanOrEqual(2);
+});

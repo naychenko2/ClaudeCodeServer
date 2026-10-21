@@ -798,6 +798,24 @@ export function evictForeign(zones: PanelZones, zone: Zone, allowed: readonly Pa
   };
 }
 
+// Есть ли в состоянии хотя бы один ключ этого плагина (в любом из шести мест:
+// layout/stash обеих зон, home, weights, tucked, railOrder). Нужен стору (S7):
+// плагин исчез из живого списка, но его панель никогда не открывали — ключей
+// нет, и commit дёргал бы localStorage и подписчиков зря.
+export function hasPluginKeys(zones: PanelZones, pluginId: string): boolean {
+  const prefix = `plugin:${pluginId}:`;
+  const isKey = (k: PanelKey) => k.startsWith(prefix);
+  if (zones.left.layout.some(c => c.some(isKey))) return true;
+  if (zones.right.layout.some(c => c.some(isKey))) return true;
+  if (zones.left.stash.some(c => c.some(isKey))) return true;
+  if (zones.right.stash.some(c => c.some(isKey))) return true;
+  if (zones.tucked.some(isKey)) return true;
+  if (zones.railOrder.some(isKey)) return true;
+  for (const k of Object.keys(zones.home)) if (isKey(k as PanelKey)) return true;
+  for (const k of Object.keys(zones.weights)) if (isKey(k as PanelKey)) return true;
+  return false;
+}
+
 // Снять ВСЕ ключи одного плагина из состояния (S7, по диффу живого списка):
 // layout, stash, home, weights, railOrder и tucked обеих зон. Чистая функция —
 // результат коммитит вызывающий. Ключи других плагинов и все статические
@@ -948,6 +966,9 @@ export interface PanelZonesApi {
   // Ремонт сохранённой раскладки: выгнать из зоны панели, которых на этом экране
   // в ней быть не может (см. evictForeign)
   evict: (zone: Zone, allowed: readonly PanelKey[]) => void;
+  // Плагин исчез из живого списка (S7): снять ВСЕ его ключи из состояния
+  // (forgetPluginKeys). Ключей нет (панель не открывали) — состояние не трогает.
+  forgetPlugin: (pluginId: string) => void;
   // Дроп кнопки в ящик рельсы (её меню «…») / возврат кнопки из ящика на рельсу.
   // Зона в обоих случаях та, к чьей рельсе относится жест: кнопка ложится и
   // возвращается туда, куда её бросили.
@@ -1206,6 +1227,14 @@ function createPanelZones(ns: string, opts?: {
       if (next) commit(next);
     }, []);
 
+    // S7: плагин удалён из живого списка — его ключи (layout/stash/home/weights/
+    // railOrder/tucked) снимаем. Без ключей (панель не открывали) commit не пишем:
+    // иначе каждый uninstall дёргал бы localStorage и подписчиков зря.
+    const forgetPlugin = useCallback((pluginId: string) => {
+      if (!hasPluginKeys(_zones, pluginId)) return;
+      commit(forgetPluginKeys(_zones, pluginId));
+    }, []);
+
     const swapWith = useCallback((a: PanelKey, b: PanelKey) => {
       // Вес — высота СЛОТА, а не панели: вместе с местами меняем и веса,
       // иначе панель утащила бы свою высоту и раскладка «прыгнула» бы
@@ -1368,7 +1397,7 @@ function createPanelZones(ns: string, opts?: {
       return false;
     }, []);
 
-    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, releaseCompactSide, reveal, registerOpener, moveTo, registerZoneKeys, zoneKeys };
+    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, forgetPlugin, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, releaseCompactSide, reveal, registerOpener, moveTo, registerZoneKeys, zoneKeys };
   }
 
   const api = { use: usePanelZones };

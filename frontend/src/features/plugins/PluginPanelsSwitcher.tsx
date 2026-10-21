@@ -17,8 +17,15 @@ import { PluginFrame } from './PluginFrame';
 // панелей, и переключатель выбирает панель, а не только плагин.
 
 type PanelTarget = { plugin: PluginInfo; panel: PluginPanelView };
-// Ключ цели: id плагина + id панели (id панели уникален в пределах пакета)
+// Ключ цели: id плагина + id панели (id панели уникален в пределах пакета).
+// Стабильен при обновлении плагина: выбранная в переключателе панель не
+// «срывается» на первую, когда у плагина сменилась версия/права.
 const targetKey = (t: PanelTarget) => `${t.plugin.id}::${t.panel.id}`;
+// Ключ React-компонента: цель + версия + набор прав (S7). Обновился плагин или
+// сменились выданные права — PluginFrame перемонтируется целиком (включая
+// frameKey внутри), и панель показывает свежую версию/права.
+const frameKey = (t: PanelTarget) =>
+  `${targetKey(t)}#${t.plugin.version}#${[...t.plugin.granted].sort().join(',')}`;
 // Короткое имя панели для подписи переключателя: title из манифеста, иначе slug плагина
 function panelLabel(t: PanelTarget): string {
   if (t.panel.title) return t.panel.title;
@@ -84,7 +91,7 @@ export function PluginPanelsSwitcher({ project, plugins, onOpenPlugins, onClose 
       )}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <PluginFrame
-          key={targetKey(active)}
+          key={frameKey(active)}
           project={project}
           plugin={active.plugin}
           panel={active.panel}

@@ -1219,6 +1219,9 @@ export type ServerMessage = { sessionId: string } & (
   // data/plugins/{owner}/_drafts/{slug} шлёт владельцу сигнал обновить предпросмотр.
   // slug + монотонная ревизия; без содержимого файлов и хостовых путей.
   | { type: 'plugin_draft_changed'; slug: string; revision: number }
+  // Установка плагина изменилась (S6): install/обновление/grant/enable/uninstall/секрет.
+  // Без полезной нагрузки (владельцу): клиент сам перечитывает GET /api/plugins.
+  | { type: 'plugins_changed' }
   | { type: 'thinking_delta'; text: string }
   // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
   | { type: 'agent_text'; parentToolUseId: string; text: string }

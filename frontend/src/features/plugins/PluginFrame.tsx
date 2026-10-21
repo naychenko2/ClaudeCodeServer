@@ -40,6 +40,16 @@ function humanizeId(id: string): string {
     .join(' ') || id;
 }
 
+// Ключ фрейма: (плагин, панель) + версия плагина + НАБОР выданных прав +
+// счётчик перезагрузки. Версия/права в ключе (S7): обновился плагин (новая
+// версия) или выдано/снято право — фрейм пересоздаётся, иначе панель
+// продолжала бы показывать старую версию/права. Права сортируются: набор тот
+// же при любом порядке в DTO — перемонтирования без причины не плодим.
+// Смена темы в key не входит (тема — сообщением, см. srcdoc).
+export function pluginFrameKey(plugin: PluginInfo, panel: PluginPanelView, reloadKey: number): string {
+  return `${plugin.id}::${panel.id}#${plugin.version}#${[...plugin.granted].sort().join(',')}#${reloadKey}`;
+}
+
 // Данные диалога «Права…» в режиме «изменить» из записи установки (та же
 // логика, что в PluginsProjectSection: вклады в DTO бэка нет, required — false).
 function toConsentData(info: PluginInfo): PluginConsentData {
@@ -246,8 +256,7 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose }: 
 
   // Ключ iframe: пересборка srcdoc (тема) НЕ перемонтирует (key не меняется),
   // «Перезагрузить» и смена панели (плагин+панель) — да (reloadKey / targetKey).
-  const targetKey = `${plugin.id}::${panel.id}`;
-  const frameKey = `${targetKey}#${reloadKey}`;
+  const frameKey = pluginFrameKey(plugin, panel, reloadKey);
 
   // === Таймаут ready: 3 с после монтирования iframe → bridge_timeout ===
   useEffect(() => {

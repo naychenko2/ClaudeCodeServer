@@ -10,7 +10,7 @@ import {
   enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
   markActiveSide, restoreOppositeIfEmpty,
   isTucked, tuckPanel, untuckPanel, parseKeyList, sortRail, reorderRail, mergeTuckDefaults,
-  railSequence, COL_DEFAULT, COL_MIN, COL_MAX, WS_DEFAULT_TUCKED, forgetPluginKeys,
+  railSequence, COL_DEFAULT, COL_MIN, COL_MAX, WS_DEFAULT_TUCKED, forgetPluginKeys, hasPluginKeys,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
 import {
@@ -1199,6 +1199,23 @@ describe('ключи плагинов (S3)', () => {
     expect(r.weights[K2]).toBe(2);
     expect(r.weights.files).toBe(1);
     expect(r.railOrder).toContain(K2);
+  });
+
+  // S7: guard стора — плагин исчез из живого списка, но его панель не
+  // открывали: ключей в состоянии нет, и commit не должен дёргать
+  // localStorage/подписчиков. hasPluginKeys — проверка «есть ли что снимать».
+  it('hasPluginKeys: true, если ключ плагина в любом из шести мест; false — если нет', () => {
+    // в каждом из шести мест по отдельности
+    expect(hasPluginKeys(sanitizeZones({ right: { layout: [[K]] } }), 'acme/x')).toBe(true);
+    expect(hasPluginKeys(sanitizeZones({ left: { layout: [], stash: [[K]] } }), 'acme/x')).toBe(true);
+    expect(hasPluginKeys(sanitizeZones({ home: { [K]: 'right' } }), 'acme/x')).toBe(true);
+    expect(hasPluginKeys(sanitizeZones({ weights: { [K]: 2 } }), 'acme/x')).toBe(true);
+    expect(hasPluginKeys(sanitizeZones({ tucked: [K] }), 'acme/x')).toBe(true);
+    expect(hasPluginKeys(sanitizeZones({ railOrder: [K] }), 'acme/x')).toBe(true);
+    // ключей нет — false
+    expect(hasPluginKeys(sanitizeZones({ right: { layout: [['files']] } }), 'acme/x')).toBe(false);
+    // ключ ДРУГОГО плагина (acme/y) для acme/x — false (префикс с ':' не пересекается)
+    expect(hasPluginKeys(sanitizeZones({ right: { layout: [[K2]] } }), 'acme/x')).toBe(false);
   });
 
   // Регрессия: формат хранилища не меняется — старая раскладка (все статические

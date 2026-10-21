@@ -33,8 +33,8 @@ import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../componen
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth, MOBILE_MAX, PANEL_INLINE_MAX_SHARE, TABLET_MAX } from '../../lib/breakpoints';
 import {
-  PANEL_META, PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
-  isPanelKey, type PanelKey, type RailBadgeInfo, type Zone,
+  PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
+  keyAllowed, panelMetaResolved, type PanelKey, type RailBadgeInfo, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
 import { compactStack, genPanelInZone } from './genPanelPlacement';
@@ -814,7 +814,7 @@ export function PanelZone({
       // В большом плейсхолдере показываем иконку той панели, которую тащат: место
       // размером в полколонки без опознавательных знаков читается как «что-то
       // сломалось», а не как «панель встанет сюда»
-      icon={dnd.from ? PANEL_META[dnd.from].Icon : undefined}
+      icon={dnd.from ? panelMetaResolved(dnd.from).Icon : undefined}
       {...dnd.guideProps(`row:${vi}:${ri}`, from => {
         // Кнопку вытащили ИЗ ЯЩИКА прямо в раскладку — это и возврат кнопки на
         // рельсу, и открытие панели одним жестом
@@ -861,8 +861,8 @@ export function PanelZone({
     const bd: RailBadgeInfo | null = sessionPanels?.railBadge(k) ?? railBadges?.[k] ?? null;
     return {
     key: k,
-    title: PANEL_META[k].title,
-    Icon: PANEL_META[k].Icon,
+    title: panelMetaResolved(k).title,
+    Icon: panelMetaResolved(k).Icon,
     active: openKeys.includes(k),
     badge: bd?.primary ?? null,
     badgeTone: bd?.primaryTone,
@@ -949,7 +949,7 @@ export function PanelZone({
   // ряды не у центра) — на всю высоту с делением по весам. В компактном режиме
   // колонок нет (vi не передан) — там стек из двух панелей делит высоту, как и был.
   const renderPanel = (k: PanelKey, multiInCol: boolean, vi?: number): ReactNode => {
-    const { title, Icon } = PANEL_META[k];
+    const { title, Icon } = panelMetaResolved(k);
     const stretched = vi === undefined
       ? multiInCol || !!fillWanted[k]
       : panelStretched(k, vi, multiInCol ? 2 : 1);
@@ -1027,8 +1027,8 @@ export function PanelZone({
   const peekFull = openKeys.length > 0;
   const peekCard = peek && (
     <PanelShell
-      icon={(() => { const { Icon } = PANEL_META[peek]; return <Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />; })()}
-      title={PANEL_META[peek].title}
+      icon={(() => { const { Icon } = panelMetaResolved(peek); return <Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />; })()}
+      title={panelMetaResolved(peek).title}
       badge={sessionPanels?.headerBadge(peek) ?? null}
       // Закрепить — той же механикой, что закрытие у обычных панелей: иконка в
       // шапке под курсором становится булавкой. Отдельная кнопка справа была бы
@@ -1133,7 +1133,7 @@ export function PanelZone({
             key: railDrop,
             // Знак на месте вставки: крестик — только когда дроп ЗАКРОЕТ панель
             // (своя рельса); иначе иконка панели — «встанет сюда»
-            icon: railWillClose ? undefined : PANEL_META[railDrop].Icon,
+            icon: railWillClose ? undefined : panelMetaResolved(railDrop).Icon,
             onInsert: pos => { railInsert.current = pos; },
             ...dnd.guideProps('rail', from => {
               // Порядок кнопки в столбце — ПЕРВЫМ: он про место, всё остальное ниже
@@ -1143,7 +1143,7 @@ export function PanelZone({
               const pos = railInsert.current;
               const group = railGroupOf(from);
               railInsert.current = null;
-              if (pos && group) reorder(group, from, isPanelKey(pos.before) ? pos.before : null);
+              if (pos && group) reorder(group, from, keyAllowed(pos.before as PanelKey, allowedKeys) ? pos.before as PanelKey : null);
               // Кнопку вернули из ящика на рельсу: панель не открываем — возвращают
               // именно кнопку (открытие — это дроп в раскладку)
               if (dnd.fromTucked) untuck(side, from);

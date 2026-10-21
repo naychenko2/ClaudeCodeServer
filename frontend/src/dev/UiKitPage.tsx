@@ -2295,7 +2295,7 @@ const DEMO_CONTEXT_PRUNED_ITEMS: Extract<ChatItem, { kind: 'context_pruned' }>[]
   },
 ];
 
-// Мета 9 панелей правой рельсы — копия PANEL_META из RightPanelStack (там
+// Мета 9 панелей правой рельсы — копия меты (panelMeta) из каталога (там
 // не экспортируется). Меняется только Icon и title; контент у каждого свой.
 const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: boolean }[] = [
   { key: 'plan',     title: 'План',      Icon: ClipboardList },

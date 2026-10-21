@@ -345,6 +345,22 @@ export function panelHome(k: PanelKey): Zone {
   return isPluginPanelKey(k) ? 'right' : PANEL_HOME[k];
 }
 
+// Мета панели с запасным вариантом (S4): ключ плагина без записи в реестре (пока
+// S5 его не наполнил) даёт заголовок из имени панели и иконку по умолчанию — панель
+// не падает. Статические ключи мету всегда имеют, так что fallback нужен только
+// для plugin:*. Возвращает объект, а не undefined: потребитель не обязан проверять.
+export function panelMetaResolved(k: PanelKey): { title: string; Icon: LucideIcon } {
+  const m = panelMeta(k);
+  if (m) return m;
+  if (isPluginPanelKey(k)) {
+    // plugin:{publisher}/{slug}:{panelId} — имя панели (panelId) как запасной заголовок
+    const panelId = k.slice(k.lastIndexOf(':') + 1);
+    return { title: panelId, Icon: Plug };
+  }
+  // Статический ключ без меты — не должен встречаться, но не падаем
+  return { title: k, Icon: AppWindow };
+}
+
 // Разрешает ли экран панель: статические ключи — по перечню, ключи плагинов —
 // СЕМЕЙСТВОМ: экран разрешает всё семейство plugin:* (маркер — слот pluginPanels
 // в перечне, либо сам ключ, если экран уже знает установленные плагины), а не

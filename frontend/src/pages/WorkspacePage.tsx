@@ -12,7 +12,7 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying } from '../lib/videoStage';
-import { isPanelKey, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { keyAllowed, WORKSPACE_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
@@ -120,14 +120,14 @@ const leftTabSvg = (children: React.ReactNode) => (
 const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
   sessions: leftTabSvg(<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />),
   files: leftTabSvg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />),
-  // Та же иконка, что у панели «Изменения» в рельсе (PANEL_META.changes): на мобиле
+  // Та же иконка, что у панели «Изменения» в рельсе (panelMeta): на мобиле
   // рельсы нет, и вкладка — единственный путь к git
   changes: <GitCompare size={18} strokeWidth={2} />,
   // База знаний проекта — иконка панели knowledge из того же реестра
   knowledge: <BookOpen size={18} strokeWidth={2} />,
   tasks: leftTabSvg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>),
   personas: leftTabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
-  // Пазл — та же метафора, что у панели «Навыки» в рельсе (PANEL_META.skills)
+  // Пазл — та же метафора, что у панели «Навыки» в рельсе (panelMeta)
   skills: <Puzzle size={18} strokeWidth={2} />,
   tools: leftTabSvg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>),
   // Панели плагинов: на мобиле рельсы нет, вкладка — единственный путь (как skills/tools)
@@ -473,10 +473,10 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   useEffect(() => {
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
-      const key = d?.key;
-      if (!isPanelKey(key)) return;
+      const key = d?.key as PanelKey | undefined;
+      if (!key || !keyAllowed(key, WORKSPACE_KEYS)) return;
       const host = d?.follow ? followHost(wsOpenKeys.current, key) : null;
-      if (host && isPanelKey(host)) replacePanelKey(key, host);
+      if (host && keyAllowed(host as PanelKey, WORKSPACE_KEYS)) replacePanelKey(key, host as PanelKey);
       else revealPanelKey(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
@@ -2340,7 +2340,7 @@ const windowWidth = useWindowWidth();
                 onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,
             } : {}),
             ...Object.fromEntries(panelDefs.flatMap(d => (
-              d.name && isPanelKey(d.name) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
+              d.name && keyAllowed(d.name as PanelKey, WORKSPACE_KEYS) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
                 ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => { markGenPanelDismissed(activeSessionId, d.name!); closePanelKey(d.name as PanelKey); } })]]
                 : []
             ))),

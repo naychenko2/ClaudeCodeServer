@@ -192,6 +192,11 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         UnreliableCost = SpendCostReliability.IsUnreliable(r.Model, r.Source, _unreliableModels),
     };
 
+    // Дневная строка: IsDaily = true — признак выставляет ШОВ (единственный, кто знает, что
+    // строка дневной агрегат, а не ход). Сплиттер (SharedSpendSplitter) по признаку делит строку
+    // между фичами, активными в ЛЮБОЙ момент суток [d, d+1), и принудительно метод approx
+    // (агрегат не несёт точного времени). Без признака строка делится как ход в 00:00,
+    // активных в полночь нет → доля 0, расход свёрнутых суток теряется (ревью Глеба, major).
     private FeatureSpendRecord ToRecord(DailySpendRow d, DateTime timestamp) => new()
     {
         Timestamp = timestamp,
@@ -206,5 +211,6 @@ public sealed class SpendFeatureReader : ISpendFeatureReader
         CostUsd = d.CostUsd,
         Source = d.Source,
         UnreliableCost = SpendCostReliability.IsUnreliable(d.Model, d.Source, _unreliableModels),
+        IsDaily = true,
     };
 }

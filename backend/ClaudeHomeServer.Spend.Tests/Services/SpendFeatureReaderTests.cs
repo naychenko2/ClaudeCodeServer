@@ -258,6 +258,29 @@ public class SpendFeatureReaderTests : IDisposable
         Assert.Equal("deepseek-chat", r1.Model);
     }
 
+    // Доработка-2 (ревью Глеба, major): признак IsDaily выставляет ШОВ. Records по дневной
+    // строке из daily.json ⇒ IsDaily == true; детальная запись ⇒ false. Мутация «убрать
+    // IsDaily = true из ToRecord(DailySpendRow)» красит первый тест.
+    [Fact]
+    public void Records_ДневнаяСтрокаИзDaily_IsDailyTrue_ДетальнаяFalse()
+    {
+        var store = NewStore();
+        // Дневная строка: запись старше окна (30 дней) → свёрнута в daily.json.
+        var oldTs = new DateTime(2026, 7, 5, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(Rec(oldTs, task: "t1", session: "s1"));
+        store.RollupOlderThan(new DateOnly(2026, 9, 1));
+        // Детальная запись: в окне, не свёрнута.
+        var recentTs = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(Rec(recentTs, task: "t2", session: "s2"));
+
+        var records = NewReader(store).Records("u1", ["t1", "t2"], ["s1", "s2"], [], null);
+
+        var daily = records.Single(r => r.SessionId == "s1");
+        Assert.True(daily.IsDaily, "дневная строка из daily.json ⇒ IsDaily == true (шов выставляет)");
+        var detail = records.Single(r => r.SessionId == "s2");
+        Assert.False(detail.IsDaily, "детальная запись ⇒ IsDaily == false");
+    }
+
     // --- минор Б9b: отрицательные/нулевые токены не дают отрицательных сумм ---
 
     [Fact]

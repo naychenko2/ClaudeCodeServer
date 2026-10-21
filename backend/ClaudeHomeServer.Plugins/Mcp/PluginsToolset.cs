@@ -26,7 +26,7 @@ namespace ClaudeHomeServer.Services.Plugins.Mcp;
 /// <c>plugins-build-yourself</c>, выключенная подсистема, локальный проект (ProjectCapabilities) —
 /// честный отказ с причиной, не исключение.
 /// </summary>
-public sealed partial class PluginsToolset : IMcpParameterizedToolset
+public sealed partial class PluginsToolset : IMcpParameterizedToolset, IMcpInstructionalToolset
 {
     public const string BuildYourselfFlag = "plugins-build-yourself";
     public const string SubsystemKey = "plugins";

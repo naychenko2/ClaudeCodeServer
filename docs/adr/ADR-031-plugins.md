@@ -137,7 +137,7 @@ data/plugins/{ownerId}/
 - Панель монтирует компонент хоста `PluginFrame` в `<iframe sandbox="allow-scripts">` **без `allow-same-origin`**. Origin фрейма непрозрачный: ни куки, ни JWT, ни хранилища хоста.
 - Навигация iframe не несёт заголовок `Authorization`, а все ручки у нас под JWT Bearer. Поэтому в MVP хост сам забирает entry панели по REST (с JWT, только из установленного пакета владельца) и монтирует её через `srcdoc` (как `WidgetView`). Перед монтированием хост вставляет CSP: `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'` (константа `PANEL_CSP`, та же стоит в оболочке, §3.6), а также шим `plugin-kit` (мост и CSS-токены тем). Панель монтируется во фрейм-оболочку, а не прямо в страницу хоста: устройство описано в §3.6.
 - Следствие: **панель MVP — один самодостаточный HTML** (скрипты и стили инлайн, потолок размера задаёт валидатор). Многофайловые панели — открытый вопрос (§7).
-- React хоста во фрейм не передаётся. Панель — статический HTML/ESM, при желании со своим vendored preact; `plugin-kit` даёт стили контролов под дизайн-систему.
+- React хоста во фрейм не передаётся. Панель — статический HTML/ESM, при желании со своим vendored preact; `plugin-kit` даёт стили контролов под дизайн-систему. Справочник шима для авторов панелей (API `ccsPlugin`, правило высоты, набор классов, шрифт) — [plugin-kit.md](../features/plugin-kit.md).
 
 ### 3.2. Приём сообщений
 

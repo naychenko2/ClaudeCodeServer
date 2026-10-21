@@ -16,6 +16,29 @@ public sealed partial class PluginsToolset
 {
     public const string ServerName = McpEndpoints.PluginsName;
 
+    // Справочник шима для агента (поле instructions ответа initialize): сводка API ccsPlugin +
+    // правило высоты + набор классов + ссылка на полный документ. Отдельное поле initialize, а не
+    // tools/list: не раздувает состав и не зависит от хода (McpToolsetStabilityTests); потолок
+    // ~1950 символов держит McpInstructionsLengthGuardTests (CLI усекает instructions на ~2 КБ).
+    public string? Instructions => KitReference;
+
+    private const string KitReference =
+        "Панель плагина — один HTML в sandbox-iframe (без allow-same-origin); единственный канал к хосту — "
+        + "window.ccsPlugin (шим встраивает хост перед <body>). "
+        + "API: ccsPlugin.ready() (шим шлёт сам), ccsPlugin.call(op, args) → Promise (данные на успех, "
+        + "{code,message} на сбой), ccsPlugin.resize(h) (желаемая высота px), "
+        + "ccsPlugin.on('init'|'theme'|'context', cb) (возвращает отписку), "
+        + "ccsPlugin.state ({plugin,slot,context,theme,locale,granted}). "
+        + "Хост шлёт init/result/theme/context. Операции: notes.search, notes.read, tasks.list, net.fetch. "
+        + "Коды ошибок: denied/not_found/invalid/unavailable/upstream/timeout/limit. "
+        + "ПРАВИЛО ВЫСОТЫ: не задавай height body и не используй 100vh — прокрутка у хоста, фрейм "
+        + "растягивается по контенту; шим сам шлёт resize с высотой body. "
+        + "КЛАССЫ (опт-ин, голые button/input не стилизуются): .cc-btn (--primary/--ghost/--danger/--sm), "
+        + ".cc-input, .cc-list/.cc-list-item (.is-active), .cc-card, .cc-badge, .cc-empty (__title/__text), "
+        + ".cc-notice, .cc-skeleton. "
+        + "Шрифт: латиница Hanken Grotesk, кириллица — системный фолбэк. "
+        + "Полный справочник: docs/features/plugin-kit.md";
+
     // Имена не однокоренные, чтобы модель их не путала: create / write_file / validate / preview / delete_file.
     public const string ToolCreate = "draft_create";
     public const string ToolWriteFile = "draft_write_file";

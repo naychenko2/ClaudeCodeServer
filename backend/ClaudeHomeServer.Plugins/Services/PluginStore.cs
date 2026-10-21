@@ -1,6 +1,8 @@
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
@@ -29,11 +31,15 @@ public class PluginStore
 
     private readonly string _dataDir;
     private readonly object _lock = new();
+    // S6: брокастер события «установка плагина изменилась» (plugins_changed) — необязательный:
+    // DI авто-инъектит ISessionBroadcaster (Main), в тестах и выключенной подсистеме — null.
+    private readonly ISessionBroadcaster? _broadcaster;
 
-    public PluginStore(IConfiguration config)
+    public PluginStore(IConfiguration config, ISessionBroadcaster? broadcaster = null)
     {
         _dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
+        _broadcaster = broadcaster;
     }
 
     // Корень владельца: data/plugins/{owner}.
@@ -92,6 +98,7 @@ public class PluginStore
             var path = InstalledFile(ownerId);
             JsonFileStore.Save(path, records.ToList());
         }
+        NotifyChanged(ownerId);
     }
 
     // Load → modify → save под одной блокировкой: атомарное изменение записей владельца.
@@ -101,14 +108,17 @@ public class PluginStore
     // за accept (один раз, не два).
     public virtual List<PluginInstall> Update(string ownerId, Func<List<PluginInstall>, List<PluginInstall>> mutate)
     {
+        List<PluginInstall> result;
         lock (_lock)
         {
             var path = InstalledFile(ownerId);
             var records = (JsonFileStore.Load<List<PluginInstall>>(path) ?? []).ToList();
-            var result = mutate(records);
+            result = mutate(records);
             JsonFileStore.Save(path, result);
-            return result;
         }
+        // S6: Update всегда пишет (install/enable/disable) → событие после записи, вне lock'а.
+        NotifyChanged(ownerId);
+        return result;
     }
 
     // Load → mutate → save под одной блокировкой, возвращает произвольный результат
@@ -120,16 +130,31 @@ public class PluginStore
     // (NotFound/BadRequest) не должна переписывать файл лишний раз.
     public T Update<T>(string ownerId, Func<List<PluginInstall>, T> mutate)
     {
+        T result;
+        bool changed;
         lock (_lock)
         {
             var path = InstalledFile(ownerId);
             var records = (JsonFileStore.Load<List<PluginInstall>>(path) ?? []).ToList();
             var before = JsonSerializer.Serialize(records);
-            var result = mutate(records);
-            if (JsonSerializer.Serialize(records) != before)
+            result = mutate(records);
+            changed = JsonSerializer.Serialize(records) != before;
+            if (changed)
                 JsonFileStore.Save(path, records);
-            return result;
         }
+        // S6: событие только при фактическом изменении (no-op grant/NotFound не шумит), вне lock'а.
+        if (changed)
+            NotifyChanged(ownerId);
+        return result;
+    }
+
+    // S6: после успешной записи установки — событие «установка изменилась» ВЛАДЕЛЬЦУ (ToOwner),
+    // вне lock'а (рассылка не держит замок стора). Без брокастера (тесты/выключенная подсистема)
+    // молчит — запись уже на диске, событие потеряно не считается сбоем.
+    private void NotifyChanged(string ownerId)
+    {
+        if (_broadcaster is { } b)
+            _ = b.ToOwner(ownerId, new PluginsChangedMessage());
     }
 
     // Критическая секция на lock-е стора: сериализует операции, которые гоняются за одним и тем

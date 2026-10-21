@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Plugins;
 
@@ -17,14 +19,18 @@ public class PluginSecretsStore
     private readonly string _filePath;
     private Dictionary<string, Dictionary<string, Dictionary<string, string>>> _byOwner = new();
     private readonly object _lock = new();
+    // S6: брокастер события «установка плагина изменилась» (plugins_changed) — необязательный:
+    // DI авто-инъектит ISessionBroadcaster (Main), в тестах и выключенной подсистеме — null.
+    private readonly ISessionBroadcaster? _broadcaster;
 
-    public PluginSecretsStore(IConfiguration config)
+    public PluginSecretsStore(IConfiguration config, ISessionBroadcaster? broadcaster = null)
     {
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _filePath = Path.Combine(dataDir, FileName);
         _byOwner = JsonFileStore.Load<Dictionary<string, Dictionary<string, Dictionary<string, string>>>>(
             _filePath, JsonOptions) ?? new();
+        _broadcaster = broadcaster;
     }
 
     /// <summary>Значение секрета плагина владельца; null — не задан.</summary>
@@ -47,29 +53,47 @@ public class PluginSecretsStore
             byName[secretName] = value;
             Save();
         }
+        // S6: Set всегда пишет → событие после записи, вне lock'а.
+        NotifyChanged(ownerId);
     }
 
     /// <summary>Удалить одно значение секрета (minor 5: grant перезаписывает record.Secrets,
     /// невключённые секреты не должны оставаться в plugin-secrets.json).</summary>
     public void RemoveSecret(string ownerId, string pluginId, string secretName)
     {
+        bool changed;
         lock (_lock)
         {
-            if (_byOwner.TryGetValue(ownerId, out var byPlugin)
+            changed = _byOwner.TryGetValue(ownerId, out var byPlugin)
                 && byPlugin.TryGetValue(pluginId, out var byName)
-                && byName.Remove(secretName))
+                && byName.Remove(secretName);
+            if (changed)
                 Save();
         }
+        if (changed)
+            NotifyChanged(ownerId);
     }
 
     /// <summary>Удалить все секреты плагина (каскад uninstall, M7).</summary>
     public void RemovePlugin(string ownerId, string pluginId)
     {
+        bool changed;
         lock (_lock)
         {
-            if (_byOwner.TryGetValue(ownerId, out var byPlugin) && byPlugin.Remove(pluginId))
+            changed = _byOwner.TryGetValue(ownerId, out var byPlugin) && byPlugin.Remove(pluginId);
+            if (changed)
                 Save();
         }
+        if (changed)
+            NotifyChanged(ownerId);
+    }
+
+    // S6: после успешной записи/удаления секрета — событие «установка изменилась» ВЛАДЕЛЬЦУ
+    // (ToOwner), вне lock'а. Без брокастера (тесты/выключенная подсистема) молчит.
+    private void NotifyChanged(string ownerId)
+    {
+        if (_broadcaster is { } b)
+            _ = b.ToOwner(ownerId, new PluginsChangedMessage());
     }
 
     // Плейсхолдер секрета в аргументах запроса (ADR-031 §3.4, шаг 3.3): {{secret:NAME}}.

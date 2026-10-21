@@ -8,6 +8,7 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import type { Task } from '../../../types';
 import { C, FONT, R } from '../../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
+import { Button } from '../../../components/ui/Button';
 import { setWip } from '../../../lib/boardControls';
 import { BoardCard } from './BoardCard';
 
@@ -88,9 +89,11 @@ function WipEditor({ wip, onWip }: { wip?: number; onWip: (v?: number) => void }
 }
 
 // Ячейка доски: конкретная колонка статуса в конкретной дорожке. Droppable + сортируемый список.
-export function BoardCell({ cellId, cards, projectNameOf, deviceNameOf, onOpen, onQuickAdd, minEmptyHeight }: {
+export function BoardCell({ cellId, cards, windowSize, projectNameOf, deviceNameOf, onOpen, onQuickAdd, minEmptyHeight }: {
   cellId: string;
   cards: Task[];
+  // Окно отрисовки (колонка «Готово»): показываем первые windowSize карточек + «Показать ещё»
+  windowSize?: number;
   projectNameOf: (t: Task) => string | undefined;
   deviceNameOf?: (t: Task) => string | undefined;
   onOpen: (t: Task) => void;
@@ -100,6 +103,8 @@ export function BoardCell({ cellId, cards, projectNameOf, deviceNameOf, onOpen, 
   const { setNodeRef, isOver } = useDroppable({ id: cellId });
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState('');
+  const [limit, setLimit] = useState(windowSize ?? Infinity);
+  const visible = cards.length > limit ? cards.slice(0, limit) : cards;
 
   const submit = () => {
     const t = title.trim();
@@ -120,11 +125,17 @@ export function BoardCell({ cellId, cards, projectNameOf, deviceNameOf, onOpen, 
         minHeight: cards.length === 0 ? minEmptyHeight : undefined,
       }}
     >
-      <SortableContext items={cards.map(c => c.id)} strategy={verticalListSortingStrategy}>
-        {cards.map(t => (
-          <BoardCard key={t.id} task={t} projectName={projectNameOf(t)} deviceName={deviceNameOf?.(t)} onOpen={() => onOpen(t)} />
+      <SortableContext items={visible.map(c => c.id)} strategy={verticalListSortingStrategy}>
+        {visible.map(t => (
+          <BoardCard key={t.id} task={t} projectName={projectNameOf(t)} deviceName={deviceNameOf?.(t)} onOpen={onOpen} />
         ))}
       </SortableContext>
+
+      {windowSize !== undefined && cards.length > limit && (
+        <Button variant="secondary" size="sm" fullWidth onClick={() => setLimit(n => n + windowSize)}>
+          Показать ещё {Math.min(windowSize, cards.length - limit)}
+        </Button>
+      )}
 
       {cards.length === 0 && !adding && (
         <div style={{

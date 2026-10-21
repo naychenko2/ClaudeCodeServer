@@ -305,6 +305,7 @@ export function TaskBoard({
                   key={`${lane.key}::${col.id}`}
                   cellId={`${lane.key}::${col.id}`}
                   cards={cellCards.get(`${lane.key}::${col.id}`) ?? []}
+                  windowSize={col.category === 'done' ? 50 : undefined}
                   projectNameOf={projectNameOf}
                   deviceNameOf={deviceNameOf}
                   onOpen={onOpenTask}

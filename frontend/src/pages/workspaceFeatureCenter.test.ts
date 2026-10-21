@@ -14,6 +14,7 @@ import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
+import { centerWinner } from './workspace/DesktopWorkspace';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { __test as backNavTest, recordBackNav } from '../lib/featureBackNav';
 import { __test as indexTest } from '../lib/featuresIndex';
@@ -1055,11 +1056,16 @@ describe('WorkspacePage: центр — страница фичи соседом
     let center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
     expect((center as any).style?.display, 'последний (второй) файл не виден (д.1)').toBe('flex');
 
-    // (2) Быстрый повторный клик «Открыть макет» (тот же bar.html): файл остаётся видим.
+    // (2) Быстрый повторный клик «Открыть макет» (тот же bar.html): файл остаётся
+    // победителем — файл виден, страница скрыта (не размонтирована). Подшаг краснеет при
+    // мутации yielded={false}: тогда страница осталась бы видимой (flex), а файл — в
+    // скрытом центре (none).
     clickNode(container, 'mockup-open-area');
     await act(async () => { vi.advanceTimersByTime(100); });
     center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
     expect((center as any).style?.display, 'файл не виден после повторного клика (д.2)').toBe('flex');
+    const pageAfterRepeat = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((pageAfterRepeat as any).style?.display, 'страница не скрыта после повторного клика (д.2: файл должен остаться победителем)').toBe('none');
 
     // (3) Закрыли страницу (крестик «Закрыть» страницы) при открытом файле → файл виден.
     const pageClose = findNodeByAttr(container, 'data-testid', 'feature-page-close');
@@ -1070,6 +1076,245 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(findNodeByAttr(container, 'data-testid', 'feature-center-page'), 'страница не закрыта (д.3)').toBeNull();
     center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
     expect((center as any).style?.display, 'файл не виден после закрытия страницы (д.3)').toBe('flex');
+  });
+
+  // === П1: файл открыт ДО страницы (диплинк = действие, не «восстановление») → страница →
+  // повторное открытие ТОГО ЖЕ файла → файл виден. Повторное открытие того же файла —
+  // событие (seq), а не вывод из сравнения значений: файл снова «позже» страницы и выигрывает.
+  // Старая логика (prevFileRef): openFile не изменился → события нет → страница осталась бы
+  // видимой → тест краснеет.
+  it('П1: файл (диплинк) → страница → повторное открытие ТОГО ЖЕ файла → файл виден', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    // Макет на странице — для «Открыть макет» (тот же файл, что в диплинке).
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    // Диплинк файла (cc_pending_file): файл открывается действием при монтировании.
+    sstore.set('cc_pending_file', 'p1|docs/mockups/foo.html');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Файл открыт (центр виден).
+    let center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после диплинка (П1)').toBe('flex');
+
+    // Страница: открыта ПОСЛЕ файла → страница видна, файл скрыт.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    let page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не видна после открытия (П1)').toBe('flex');
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не скрыт под страницей (П1)').toBe('none');
+
+    // Повторное открытие ТОГО ЖЕ файла («Открыть макет», тот же путь): событие →
+    // файл снова «позже» страницы → файл виден, страница скрыта.
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после повторного открытия того же файла (П1)').toBe('flex');
+    page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не скрыта после повторного открытия того же файла (П1)').toBe('none');
+  });
+
+  // === П2: страница → «Открыть макет» → «Фича →» на ТУ ЖЕ фичу → страница видна.
+  // Повторное «Фича →» на ту же фичу — событие (seq), а не вывод из сравнения id:
+  // страница снова «позже» файла и выигрывает. Старая логика (prevFeatureRef):
+  // openFeatureId не изменился → события нет → файл остался бы победителем → тест краснеет.
+  it('П2: страница → «Открыть макет» → «Фича →» на ТУ ЖЕ фичу → страница видна', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Страница.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // «Открыть макет» → файл победитель (страница скрыта).
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    let center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после «Открыть макет» (П2)').toBe('flex');
+
+    // «Фича →» на ТУ ЖЕ фичу (f1): повторное открытие = событие → страница победитель.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (П2): страница ВИДНА (display:flex), центр (файл) скрыт.
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не видна после повторного «Фича →» на ту же фичу (П2)').toBe('flex');
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл) не скрыт при повторном «Фича →» (П2)').toBe('none');
+  });
+
+  // === П3: два события «открыли» в ОДНОМ коммите (popstate восстанавливает файл и страницу
+  // одним снимком) — порядок по seq, не по совпадению в одном эффекте.
+  // (а) файл, затем страница → страница; (б) страница, затем файл (в одном коммите) → файл.
+  it('П3(а): файл (диплинк), затем страница → страница выигрывает', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    sstore.set('cc_pending_file', 'p1|docs/mockups/foo.html');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница открыта ПОСЛЕ файла → страница выигрывает.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не выиграла (П3а)').toBe('flex');
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не скрыт (П3а)').toBe('none');
+  });
+
+  it('П3(б): страница, затем файл в ОДНОМ коммите (popstate) → файл выигрывает', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Страница открыта (seq 1).
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // popstate: снимок несёт И файл, И страницу — оба «открытия» в одном коммите.
+    // Обработчик ставит seq страницы, затем seq файла → файл «позже» → файл выигрывает.
+    (globalThis as any).window.dispatchEvent({
+      type: 'popstate',
+      state: { screen: 'project', project, view: 'sidebar', file: 'docs/mockups/foo.html', feature: 'f1' },
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (П3б): файл (последнее событие) ВИДИМ, страница скрыта.
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не выиграл при popstate с обоими (П3б)').toBe('flex');
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не скрыта при popstate с обоими (П3б)').toBe('none');
+  });
+
+  // === П4: холодный старт — хэш фичи + сохранённый openFile → страница.
+  // Страница открыта при монтировании из хэша (seq ставится при монтировании);
+  // сохранённый файл — «восстановлен», а не «открыт» (fileOpenedAt = 0) → страница
+  // выигрывает.
+  it('П4: холодный старт: хэш фичи + сохранённый файл → страница', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
+    (globalThis as any).window.history.state = null;
+    // Сохранённый файл (workspaceState): «восстановлен», а не «открыт» — fileOpenedAt = 0.
+    wsState.openFile = 'docs/mockups/foo.html';
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница смонтирована и ВИДНА (победитель холодного старта).
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect(page, 'страница не смонтирована (П4)').not.toBeNull();
+    expect((page as any).style?.display, 'страница не видна при холодном старте (П4)').toBe('flex');
+    // Восстановленный файл не вытесняет страницу (он «не позже» по seq).
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не скрыт при холодном старте (П4)').toBe('none');
+  });
+});
+
+// === centerWinner: чистая функция «кто выигрывает центр» — табличная проверка ===
+// Порядок определяется seq событий «открыли» (монотонный счётчик WorkspacePage), а не
+// выводом из сравнения значений: файл выигрывает, только если его seq БОЛЬШЕ seq страницы.
+// 0 = не открыто (восстановленный файл при холодном старте, закрытая страница).
+describe('centerWinner: файл выигрывает, только если его seq > seq страницы', () => {
+  it('таблица: (featureOpenedAt, fileOpenedAt) → победитель', () => {
+    // [featureOpenedAt, fileOpenedAt, ожидаемый победитель]: файл выигрывает, только
+    // если его seq БОЛЬШЕ seq страницы (открыт позже).
+    const rows: Array<[number, number, 'page' | 'file']> = [
+      // Ничего не открыто (0,0) — страница (центр по умолчанию чат, файл не открыт).
+      [0, 0, 'page'],
+      // Только страница открыта (1,0) — страница.
+      [1, 0, 'page'],
+      // Только файл открыт (0,1) — файл.
+      [0, 1, 'file'],
+      // Файл (seq 1) открыт ДО страницы (seq 2) → страница позже → страница.
+      [2, 1, 'page'],
+      // Страница (seq 1) открыта ДО файла (seq 2) → файл позже → файл.
+      [1, 2, 'file'],
+      // Повторное открытие той же фичи: страница seq 3, файл seq 2 → страница позже → страница.
+      [3, 2, 'page'],
+      // Повторное открытие того же файла: файл seq 3, страница seq 2 → файл позже → файл.
+      [2, 3, 'file'],
+      // Равные seq невозможны (счётчик строго растёт), но при равенстве — страница
+      // (файл выигрывает строго при >, не при >=).
+      [2, 2, 'page'],
+    ];
+    for (const [f, fl, expected] of rows) {
+      expect(centerWinner(f, fl), `centerWinner(${f}, ${fl})`).toBe(expected);
+    }
+  });
+  it('файл выигрывает строго при fileOpenedAt > featureOpenedAt (граница)', () => {
+    // Граница: файл seq ровно на 1 больше → файл; ровно на 1 меньше → страница.
+    expect(centerWinner(5, 6)).toBe('file');
+    expect(centerWinner(6, 5)).toBe('page');
   });
 });
 

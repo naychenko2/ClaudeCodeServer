@@ -153,6 +153,20 @@ interface Props {
   // страница рисуется соседом (FeatureCenter). Исполнитель «← назад» — от WorkspacePage.
   openFeatureId: string | null;
   onFeatureBack: (t: import('../../components/feature/FeaturePage').FeaturePageBackTarget) => void;
+  // seq события «открыли страницу фичи» (монотонный счётчик WorkspacePage): 0 — страница
+  // не открыта. Порядок «кто выигрывает центр» — по seq, см. centerWinner.
+  featureOpenedAt: number;
+  // seq события «открыли файл» (тот же счётчик): 0 — файл не открыт (холодный старт:
+  // файл «восстановлен» из сохранённого состояния, а не открыт действием).
+  fileOpenedAt: number;
+}
+
+// Кто выигрывает центр: страница фичи или файл — тот, чьё событие «открыли»
+// ПОЗЖЕ (больший seq монотонного счётчика WorkspacePage). 0 = не открыто:
+// восстановленный файл при холодном старте и закрытая страница. Чистая функция —
+// порядок определяется в момент действия, а не выводом из сравнения значений.
+export function centerWinner(featureOpenedAt: number, fileOpenedAt: number): 'page' | 'file' {
+  return fileOpenedAt > featureOpenedAt ? 'file' : 'page';
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -227,37 +241,16 @@ export function DesktopWorkspace(p: Props) {
   }, [p.isTablet, p.activeSession?.id]);
 
   // «Последнее действие выигрывает» (продуктовое правило, Софья): центр показывает
-  // то, что открыто ПОСЛЕДНИМ — страницу фичи или файл. lastOpened — метка «что было
-  // открыто позже»: меняется на каждом событии «открыть» (страница или файл; смена
-  // фичи A→B — новое открытие, смена на другой файл — тоже). Страница уступает центр
-  // файлу, открытому ПОСЛЕ неё (свой макет или любой другой: «Открыть макет», панель
-  // «Файлы», ссылка из чата, карточка задачи), а открытие страницы — вкл. смена фичи —
-  // возвращает её поверх ранее открытого файла. Файл не сбрасывается при закрытии
-  // страницы: остаётся в состоянии и вернётся. Мобильная раскладка не меняется (там
-  // yielded не передаётся, FileViewer вне центра).
-  const [lastOpened, setLastOpened] = useState<'page' | 'file' | null>(null);
-  const prevFeatureRef = useRef<string | null>(null);
-  const prevFileRef = useRef<string | null>(null);
-  const mountedRef = useRef(false);
-  useEffect(() => {
-    const firstMount = !mountedRef.current;
-    mountedRef.current = true;
-    // Событие «открыли страницу»: null → фича или фича A → B (смена = новое открытие).
-    const pageOpened = p.openFeatureId !== null && p.openFeatureId !== prevFeatureRef.current;
-    prevFeatureRef.current = p.openFeatureId;
-    // Событие «открыли файл»: null → файл или файл X → Y (любой источник).
-    const fileOpened = p.openFile !== null && p.openFile !== prevFileRef.current;
-    prevFileRef.current = p.openFile;
-    if (pageOpened || fileOpened) {
-      // Оба на первом монтировании (восстановление из диплинка/состояния): приоритет
-      // за страницей — диплинк в адресе = явный «последний» переход. Иначе файл, открытый
-      // поверх открытой страницы, — «позднее» действие и выигрывает.
-      setLastOpened(pageOpened && fileOpened && firstMount ? 'page' : (fileOpened ? 'file' : 'page'));
-    }
-  }, [p.openFeatureId, p.openFile]);
-
-  // Страница уступает центр файлу, открытому ПОСЛЕ неё (lastOpened === 'file').
-  const yielded = !!p.openFeatureId && !!p.openFile && lastOpened === 'file';
+  // то, что открыто ПОСЛЕДНИМ — страницу фичи или файл. Порядок — по seq событий
+  // «открыли» (монотонный счётчик WorkspacePage, ставится в момент действия — повторное
+  // открытие того же файла/той же фичи тоже событие, а не вывод из сравнения значений):
+  // страница уступает центр файлу, открытому ПОСЛЕ неё (свой макет или любой другой:
+  // «Открыть макет», панель «Файлы», ссылка из чата, карточка задачи), а открытие
+  // страницы — вкл. повторное «Фича →» на ту же фичу — возвращает её поверх ранее
+  // открытого файла. Файл не сбрасывается при закрытии страницы: остаётся в состоянии
+  // и вернётся. Мобильная раскладка не меняется (там yielded не передаётся, FileViewer
+  // вне центра).
+  const yielded = !!p.openFile && centerWinner(p.featureOpenedAt, p.fileOpenedAt) === 'file';
 
   // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
   const handleSplitDrag = (e: ReactPointerEvent) => {

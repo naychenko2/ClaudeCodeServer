@@ -369,6 +369,19 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const availableSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions]);
   const [pendingMessage, setPendingMessage] = useState<string | undefined>();
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
+  // Монотонный счётчик событий «открыли» (страница фичи / файл) — владелец порядка
+  // «последнее действие выигрывает». Счётчик — ref (не состояние): порядок определяется
+  // в МОМЕНТ действия (повторное открытие того же файла/той же фичи — тоже событие),
+  // а не выводом из сравнения текущих и предыдущих значений.
+  const openSeqRef = useRef(0);
+  // seq события «открыли страницу фичи»: ставится в момент открытия (из любого
+  // источника, вкл. повторное открытие той же фичи) и обнуляется при закрытии.
+  // 0 — страница не открыта (холодный старт: файл «восстановлен», а не открыт).
+  const [featureOpenedAt, setFeatureOpenedAt] = useState(0);
+  // seq события «открыли файл»: та же модель, что featureOpenedAt.
+  const [fileOpenedAt, setFileOpenedAt] = useState(0);
+  // Бамп счётчика и возврат новой seq — вызывается в момент действия «открыли».
+  const bumpOpenSeq = () => ++openSeqRef.current;
   // Файл открыт из git-панели «Изменения» → FileViewer стартует на вкладке Diff
   const [openFileDiffMode, setOpenFileDiffMode] = useState(false);
   // Путь unstaged-файла из git-«Изменений» — включает зернистый stage хунков в diff-вкладке
@@ -416,6 +429,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Показ страницы гейтится по флагу: openFeatureId ставится из хэша/снимка без гейта
   // (инициализатор выше), а решаем, рисовать ли страницу, здесь.
   const featurePageOpen = openFeatureId != null && featuresOn;
+  // Холодный старт: страница открыта при монтировании из хэша/снимка (диплинк) — её seq
+  // ставится при монтировании. Восстановленный файл (openFile из workspaceState) событием
+  // «открыли» не является (fileOpenedAt = 0), поэтому страница выигрывает.
+  useEffect(() => {
+    if (openFeatureId != null) setFeatureOpenedAt(bumpOpenSeq());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- исполняется только при монтировании
+  }, []);
   // «Архитектура» — MF-remote (modules/architecture): панель рельсы и документ центра
   // приходят вкладами слотов, ноль прямых импортов фичи. Гейт — только наличие ОБОИХ
   // вкладов (remote не загрузился / подсистема выключена — раздела нет целиком);
@@ -626,6 +646,7 @@ const windowWidth = useWindowWidth();
   // filePath — открыть diff сразу на этом файле (клик по файлу коммита), иначе первый
   const handleOpenCommit = useCallback((sha: string, filePath?: string) => {
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
@@ -825,6 +846,7 @@ const windowWidth = useWindowWidth();
     setAutoEditTaskId(autoEdit ? task.id : null);
     // Открытый файл и граф уступают место карточке задачи
     setOpenFile(null);
+    setFileOpenedAt(0);
     setGraphOpen(false);
     if (isMobile) {
       setMobileView('chat');
@@ -1004,6 +1026,7 @@ const windowWidth = useWindowWidth();
     sessionStorage.removeItem('cc_pending_file');
     // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое потребление диплинка из sessionStorage
     setOpenFile(path);
+    setFileOpenedAt(bumpOpenSeq());
     setFileFullscreen(loadFileFullscreenPref());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1027,6 +1050,7 @@ const windowWidth = useWindowWidth();
       if (edit) setAutoEditTaskId(pending);
       // Открытый файл уступает место карточке задачи
       setOpenFile(null);
+      setFileOpenedAt(0);
       // Пишем запись истории с задачей — hash-URL сохраняет /task/… и после перезагрузки
       if (window.matchMedia(MOBILE_QUERY).matches) {
         setMobileView('chat');
@@ -1058,6 +1082,7 @@ const windowWidth = useWindowWidth();
       setPersonaCreating(false);
       setPendingPersonaView(view === 'automation' ? 'automation' : null);
       setOpenFile(null);
+      setFileOpenedAt(0);
       if (window.matchMedia(MOBILE_QUERY).matches) {
         setMobileView('chat');
         navPush({ screen: 'project', project, view: 'chat', file: null, task: null, persona: pending });
@@ -1111,6 +1136,7 @@ const windowWidth = useWindowWidth();
   const ensureGraphOpen = useCallback(() => {
     setGraphOpen(true);
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setOpenCommitSha(null);
@@ -1154,6 +1180,7 @@ const windowWidth = useWindowWidth();
       // и граф, показываем чат во весь экран
       if (!keepSplitFile) {
         setOpenFile(null);
+        setFileOpenedAt(0);
         setOpenFileDiffMode(false);
       }
       setOpenCommitSha(null);
@@ -1289,6 +1316,7 @@ const windowWidth = useWindowWidth();
             // Запись, только что записанную выбором чата, перезаписываем — новой не кладём.
             // Снимок «чат + файл» бывает только из сплита — полноэкранный файл снимаем всегда
             setOpenFile(view.file);
+            if (view.file) setFileOpenedAt(bumpOpenSeq()); else setFileOpenedAt(0);
             setOpenFileDiffMode(false);
             setFileFullscreen(false);
             setSelectedTaskId(view.task);
@@ -1549,6 +1577,10 @@ const windowWidth = useWindowWidth();
       // Страница фичи из снимка: «назад/вперёд» открывает/закрывает её (чат под ней
       // остаётся смонтированным, центр лишь переключает, что видно).
       setOpenFeatureId(s.feature ?? null);
+      // seq событий «открыли»: страница ПЕРВЫМ, файл ПОСЛЕ — если снимок несёт оба,
+      // файл выигрывает (как раньше: на снимке с обоими файл показывался поверх страницы).
+      if (s.feature) setFeatureOpenedAt(bumpOpenSeq()); else setFeatureOpenedAt(0);
+      if (f) setFileOpenedAt(bumpOpenSeq()); else setFileOpenedAt(0);
       // Персона / командный центр (вкладка «Команда») — восстанавливаем, если снимок несёт
       if (s.persona !== undefined) {
         setLeftTab('personas');
@@ -1589,6 +1621,9 @@ const windowWidth = useWindowWidth();
       if (d.fromChat && d.fromChatId) recordBackNav(d.fromChatId, { kind: 'feature', id: d.featureId });
       else if (!d.fromChat) clearBackNav();
       setOpenFeatureId(d.featureId);
+      // «Открыли» — в момент действия, даже повторное открытие той же фичи (seq, не вывод
+      // из сравнения id): повторный «Фича →» возвращает страницу поверх ранее открытого файла.
+      setFeatureOpenedAt(bumpOpenSeq());
       if (isMobileRef.current) setMobileView('chat');
       // Снимок ДО navPush = предыдущая запись (список/чат, с которого открыли страницу)
       featurePrevStateRef.current = getNav();
@@ -1620,6 +1655,7 @@ const windowWidth = useWindowWidth();
     // восстановит снимок (feature: null) — setOpenFeatureId(null) дублирует его синхронно.
     if (target.kind === 'chat' && target.chatId === activeSessionRef.current?.id) {
       setOpenFeatureId(null);
+      setFeatureOpenedAt(0);
       window.history.back();
       return;
     }
@@ -1631,11 +1667,13 @@ const windowWidth = useWindowWidth();
       const prev = featurePrevStateRef.current;
       if (prev && prev.screen === 'project' && prev.project?.id === project.id && !prev.feature) {
         setOpenFeatureId(null);
+        setFeatureOpenedAt(0);
         window.history.back();
         return;
       }
     }
     setOpenFeatureId(null);
+    setFeatureOpenedAt(0);
     // Синхронизация URL с состоянием (крошка и история — в одно место, разрез §4): крошка
     // закрывала страницу, но URL #/project/{pid}/feature/{fid} оставался — системное
     // «назад» (popstate) уводило не туда. navReplace на снимок БЕЗ feature: адрес схлопывается
@@ -1669,6 +1707,7 @@ const windowWidth = useWindowWidth();
     if (isMobile && mobileView === 'chat') setMobileView('sidebar');
     navReplace({ screen: 'project', project, view, file: null, task: null, chatId: chatShown ? (activeSessionId ?? undefined) : undefined, feature: null });
     setOpenFeatureId(null);
+    setFeatureOpenedAt(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на переход
     // в «загружено и выключено»; project/mobileView/activeSessionId в замыкании — текущие
   }, [flagsLoaded, featuresOn, openFeatureId]);
@@ -1687,6 +1726,7 @@ const windowWidth = useWindowWidth();
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(loadFileFullscreenPref());
@@ -1710,6 +1750,7 @@ const windowWidth = useWindowWidth();
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setGraphOpen(false);
@@ -1725,6 +1766,7 @@ const windowWidth = useWindowWidth();
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(isMobile || isTablet ? true : loadFileFullscreenPref());
@@ -1739,6 +1781,7 @@ const windowWidth = useWindowWidth();
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(true);
     setGitStagePath(staged ? null : filePath);
     setFileFullscreen(true);
@@ -1753,6 +1796,7 @@ const windowWidth = useWindowWidth();
   // иначе каждая навигация плодила бы копии и кнопка «вперёд» обрезалась бы.
   const applyHistEntry = (e: FileHistoryEntry) => {
     setOpenFile(e.path);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(!!e.diffMode);
     setGitStagePath(e.gitStagePath ?? null);
     setScrollToLine(e.line);
@@ -1776,6 +1820,7 @@ const windowWidth = useWindowWidth();
   // файла: вытесняет открытый файл, ридер занимает то же место в центре
   const handleOpenReader = (url: string) => {
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
@@ -1794,6 +1839,7 @@ const windowWidth = useWindowWidth();
   const clearCenterToChat = () => {
     if (!openFile && !openCommitSha && !selectedTaskId) return;  // уже чат — ничего не делаем
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
@@ -1809,6 +1855,7 @@ const windowWidth = useWindowWidth();
   // история браузера пуста, и history.back() ничего не делает. Всегда ведём на уровень выше.
   const backFromFile = () => {
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
@@ -2180,6 +2227,10 @@ const windowWidth = useWindowWidth();
           // Показ страницы гейтится по флагу: при выключенном передаём null (open=false),
           // чтобы DesktopWorkspace/FeatureCenter не рисовали страницу (dark launch).
           openFeatureId={featurePageOpen ? openFeatureId : null}
+          // seq событий «открыли» (монотонный счётчик этой страницы): центр показывает
+          // то, что открыто последним — страницу фичи или файл (DesktopWorkspace).
+          featureOpenedAt={featureOpenedAt}
+          fileOpenedAt={fileOpenedAt}
           onFeatureBack={handleFeatureBack}
           project={project}
           projectForEdit={projectForEdit}

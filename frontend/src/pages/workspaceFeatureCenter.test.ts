@@ -775,11 +775,15 @@ describe('WorkspacePage: центр — страница фичи соседом
     void container;
   });
 
-  // === Major (1) — сквозная защита на НАСТОЯЩЕЙ десктопной раскладке (DesktopWorkspace +
-  // FeatureCenter с реальными children, не заглушкой). Страница уступает центр ТОЛЬКО
-  // файлу, открытому СО СТРАНИЦЫ («Открыть макет»); «чужой» файл (из дерева) её не вытесняет.
-  // Мутация «yielded по факту openFile» (yielded={!!p.openFile}, исходный баг) краснеет в (а);
-  // мутация «yielded={false}» (буквальный возврат бага) краснеет в (б).
+  // === «Последнее действие выигрывает» — сквозная защита на НАСТОЯЩЕЙ десктопной
+  // раскладке (DesktopWorkspace + FeatureCenter с реальными children, не заглушкой).
+  // Центр показывает то, что открыто ПОСЛЕДНИМ: страницу фичи или файл. Открыли страницу
+  // (вкл. смена фичи A→B) — она поверх ранее открытого файла; открыли файл (любой источник)
+  // при открытой странице — файл поверх, страница смонтирована и скрыта; закрыли файл —
+  // страница вернулась, закрыли страницу — файл/чат как до. Мутации: «yielded={false}»
+  // (страница никогда не уступает) краснеет в (б); «yielded={!!p.openFile}» (уступает
+  // ЛЮБОЙ файл — исходный баг) краснеет в (а); «lastOpened сбрасывается только при
+  // закрытии страницы» (частный сброс, не на смене) краснеет в (г).
 
   // Клик по узлу по data-testid (+ опц. title): reactProps.onClick в act().
   function clickNode(container: any, testId: string, title?: string): void {
@@ -796,7 +800,27 @@ describe('WorkspacePage: центр — страница фичи соседом
     act(() => { (props!.onClick as () => void)(); });
   }
 
-  // (а) файл уже открыт (из дерева) → «Фича →» → страница ВИДНА (центр скрыт), а не наоборот.
+  // Закрыть файл в центре: крестик FileViewer — это кнопка CenterViewShell (title «Закрыть»,
+  // родитель SPAN — обёртка closeTestId). Ищем ВНУТРИ feature-center-center (страница фичи —
+  // в feature-center-page). Другая кнопка «Закрыть» в FileViewer (parent DIV) — не та.
+  function clickFileClose(container: any): void {
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect(center, 'центр (feature-center-center) не найден').not.toBeNull();
+    let node: any = null;
+    const walk = (x: any): void => {
+      if (node) return;
+      if (x.nodeType === 1 && x.getAttribute?.('title') === 'Закрыть' && x.parentNode?.nodeType === 1 && x.parentNode?.nodeName === 'SPAN') { node = x; return; }
+      for (const c of x.childNodes ?? []) walk(c);
+    };
+    walk(center);
+    expect(node, 'крестик закрытия файла (CenterViewShell, parent SPAN) не найден в центре').not.toBeNull();
+    const props = reactProps(node);
+    expect(props?.onClick, 'onClick у крестика закрытия файла').toBeTruthy();
+    act(() => { (props!.onClick as () => void)(); });
+  }
+
+  // (а) файл открыт ДО страницы (из дерева) → «Фича →» → страница ВИДНА (центр скрыт):
+  // страница открыта ПОСЛЕ файла → последнее действие (страница) выигрывает.
   it('major(а): файл открыт (из дерева) → «Фича →» → страница видна, центр (файл) скрыт', async () => {
     (globalThis as any).window.innerWidth = 1280;
     // Файл открыт ДО страницы (из дерева): wsState.openFile задаёт инициализатор openFile.
@@ -867,6 +891,185 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect((center as any).style?.display, 'центр (файл) не виден (major б)').toBe('flex');
     const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
     expect((page as any).style?.display, 'страница не скрыта (major б)').toBe('none');
+
+    // Закрыл файл (крестик) → страница вернулась (display:flex), центр (чат) скрыт:
+    // файл не сбрасывался при открытии страницы, а закрытие файла возвращает страницу.
+    clickFileClose(container);
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const pageAfterClose = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((pageAfterClose as any).style?.display, 'страница не вернулась после закрытия файла (major б)').toBe('flex');
+    const centerAfterClose = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((centerAfterClose as any).style?.display, 'центр не скрыт после закрытия файла (major б)').toBe('none');
+  });
+
+  // (в) страница открыта → открыли файл (любой источник; правило «последнее действие
+  // выигрывает» не различает «свой макет» и «чужой файл» — старый критерий «только свой
+  // файл» убран) → файл ВИДИМ, страница скрыта. Два макета: первый открыт, затем второй
+  // (другой путь) — последний (чужой) выигрывает.
+  it('(в): страница открыта → открыли файл (любой источник) → файл виден, страница скрыта', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [
+        { path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved', files: [{ path: 'docs/mockups/foo.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+        { path: 'docs/mockups/bar.html', title: 'Bar', status: 'approved', files: [{ path: 'docs/mockups/bar.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+      ],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Открываем страницу фичи.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Открываем первый макет (foo.html) — файл после страницы.
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Открываем ВТОРОЙ, другой макет (bar.html) — «чужой» файл, тоже после страницы.
+    clickNode(container, 'mockup-row', 'docs/mockups/bar.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (в): файл (последний открытый) ВИДИМ (центр display:flex), страница СКРЫТА.
+    // Мутация «yielded={false}» (страница никогда не уступает) краснеет: страница осталась
+    // бы видной, а файл — в скрытом центре.
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл) не виден (в)').toBe('flex');
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не скрыта (в)').toBe('none');
+  });
+
+  // (г) зонд A Глеба: страница A → «Открыть макет» (файл открыт, страница уступила) →
+  // «Фича →» на ДРУГУЮ фичу B → страница B ВИДНА (смена фичи = новое открытие → страница
+  // снова поверх файла). Старый баг: признак «свой файл» сбрасывался только при ЗАКРЫТИИ
+  // страницы, а не при СМЕНЕ → страница B монтировалась, но оставалась display:none.
+  it('(г): страница A → «Открыть макет» → «Фича →» на B → страница B видна (зонд A)', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    // Две фичи в индексе: A (f1) и B (f2).
+    const idx = {
+      features: [feat(), feat({ featureId: 'f2', title: 'Вторая фича' })],
+      chats: {},
+    } as FeaturesIndex;
+    indexTest.setIndex('p1', idx);
+    mockData.index = idx;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Страница A (f1).
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // «Открыть макет» → файл открыт, страница A уступила (скрыта).
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const centerBefore = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((centerBefore as any).style?.display, 'файл не виден после «Открыть макет» (г)').toBe('flex');
+
+    // «Фича →» на ДРУГУЮ фичу B (f2): смена фичи = новое открытие страницы.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f2', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (г, зонд A): страница B ВИДНА (display:flex), центр (файл A) скрыт.
+    // Мутация «lastOpened сбрасывается только при закрытии страницы» (частный сброс)
+    // краснеет: страница B смонтирована, но осталась бы display:none (файл A виден).
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect(page, 'страница B не смонтирована (г)').not.toBeNull();
+    expect((page as any).style?.display, 'страница B скрыта (утечка: файл A поверх) (г)').toBe('flex');
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл A) не скрыт при открытой странице B (г)').toBe('none');
+  });
+
+  // (д) три под-сценария: (1) два файла подряд — последний выигрывает; (2) быстрый
+  // повторный клик «Открыть макет» — файл остаётся видим (нет сброса/мигания); (3)
+  // закрыли страницу при открытом файле — файл виден (страница не удерживает центр).
+  it('(д): два файла подряд → последний; быстрый повторный клик → файл; закрыли страницу при открытом файле → файл', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [
+        { path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved', files: [{ path: 'docs/mockups/foo.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+        { path: 'docs/mockups/bar.html', title: 'Bar', status: 'approved', files: [{ path: 'docs/mockups/bar.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+      ],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Страница.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // (1) Два файла подряд: foo.html, затем bar.html → последний (bar) выигрывает.
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-row', 'docs/mockups/bar.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    let center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'последний (второй) файл не виден (д.1)').toBe('flex');
+
+    // (2) Быстрый повторный клик «Открыть макет» (тот же bar.html): файл остаётся видим.
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после повторного клика (д.2)').toBe('flex');
+
+    // (3) Закрыли страницу (крестик «Закрыть» страницы) при открытом файле → файл виден.
+    const pageClose = findNodeByAttr(container, 'data-testid', 'feature-page-close');
+    expect(pageClose, '«Закрыть» страницы не найдено (д.3)').not.toBeNull();
+    act(() => { (reactProps(pageClose!.childNodes[0]) as any).onClick(); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Страница закрыта (не смонтирована), центр (файл) виден.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-center-page'), 'страница не закрыта (д.3)').toBeNull();
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после закрытия страницы (д.3)').toBe('flex');
   });
 });
 

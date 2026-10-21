@@ -226,18 +226,38 @@ export function DesktopWorkspace(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.isTablet, p.activeSession?.id]);
 
-  // Страница фичи уступает центр ТОЛЬКО файлу, открытому СО СТРАНИЦЫ («Открыть макет»):
-  // файл из дерева/задачи её не вытесняет — страница показывается поверх (центр скрыт),
-  // как до доработки. fileFromFeature — путь такого файла; сбрасывается при закрытии
-  // файла и при смене/закрытии страницы (иначе «свой» файл, переоткрытый из дерева,
-  // снова вытеснил бы страницу).
-  const [fileFromFeature, setFileFromFeature] = useState<string | null>(null);
-  const onOpenFileFromFeature = (path: string) => {
-    setFileFromFeature(path);
-    p.onOpenFileFromTree(path);
-  };
-  useEffect(() => { if (!p.openFile) setFileFromFeature(null); }, [p.openFile]);
-  useEffect(() => { if (!p.openFeatureId) setFileFromFeature(null); }, [p.openFeatureId]);
+  // «Последнее действие выигрывает» (продуктовое правило, Софья): центр показывает
+  // то, что открыто ПОСЛЕДНИМ — страницу фичи или файл. lastOpened — метка «что было
+  // открыто позже»: меняется на каждом событии «открыть» (страница или файл; смена
+  // фичи A→B — новое открытие, смена на другой файл — тоже). Страница уступает центр
+  // файлу, открытому ПОСЛЕ неё (свой макет или любой другой: «Открыть макет», панель
+  // «Файлы», ссылка из чата, карточка задачи), а открытие страницы — вкл. смена фичи —
+  // возвращает её поверх ранее открытого файла. Файл не сбрасывается при закрытии
+  // страницы: остаётся в состоянии и вернётся. Мобильная раскладка не меняется (там
+  // yielded не передаётся, FileViewer вне центра).
+  const [lastOpened, setLastOpened] = useState<'page' | 'file' | null>(null);
+  const prevFeatureRef = useRef<string | null>(null);
+  const prevFileRef = useRef<string | null>(null);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    const firstMount = !mountedRef.current;
+    mountedRef.current = true;
+    // Событие «открыли страницу»: null → фича или фича A → B (смена = новое открытие).
+    const pageOpened = p.openFeatureId !== null && p.openFeatureId !== prevFeatureRef.current;
+    prevFeatureRef.current = p.openFeatureId;
+    // Событие «открыли файл»: null → файл или файл X → Y (любой источник).
+    const fileOpened = p.openFile !== null && p.openFile !== prevFileRef.current;
+    prevFileRef.current = p.openFile;
+    if (pageOpened || fileOpened) {
+      // Оба на первом монтировании (восстановление из диплинка/состояния): приоритет
+      // за страницей — диплинк в адресе = явный «последний» переход. Иначе файл, открытый
+      // поверх открытой страницы, — «позднее» действие и выигрывает.
+      setLastOpened(pageOpened && fileOpened && firstMount ? 'page' : (fileOpened ? 'file' : 'page'));
+    }
+  }, [p.openFeatureId, p.openFile]);
+
+  // Страница уступает центр файлу, открытому ПОСЛЕ неё (lastOpened === 'file').
+  const yielded = !!p.openFeatureId && !!p.openFile && lastOpened === 'file';
 
   // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
   const handleSplitDrag = (e: ReactPointerEvent) => {
@@ -492,12 +512,11 @@ export function DesktopWorkspace(p: Props) {
           Страница фичи (Ф2.3/C1) — СОСЕД центра: при открытой (openFeatureId) весь центр
           прячется display:none (не размонтируется), страница рисуется рядом. FeatureCenter —
           общий паттерн с мобильной веткой.
-          Уступка: страница уступает центр ТОЛЬКО файлу, открытому СО СТРАНИЦЫ («Открыть
-          макет») — иначе FileViewer лежит в скрытом центре и клик без эффекта. Файл из
-          дерева/задачи страницу не вытесняет: она показывается поверх (центр скрыт).
-          Страница остаётся смонтированной (display:none): закрыл «свой» файл — вернулась
-          с прежним состоянием. */}
-      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} onOpenFile={onOpenFileFromFeature} yielded={fileFromFeature !== null && p.openFile === fileFromFeature}>
+          «Последнее действие выигрывает»: страница уступает центр файлу, открытому ПОСЛЕ неё
+          (свой макет или любой другой), а открытие страницы (вкл. смена фичи) возвращает её
+          поверх ранее открытого файла. Страница остаётся смонтированной (display:none):
+          закрыл файл — вернулась с прежним состоянием; файл при закрытии страницы не сбрасывается. */}
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree} yielded={yielded}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />

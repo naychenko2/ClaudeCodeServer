@@ -35,12 +35,18 @@ public static class UiProbeReport
                 + "стенд. Для проекта в песочнице стенд хоста по loopback не виден: попроси поднять стенд, "
                 + "доступный из среды проекта, и повтори вызов.";
         var auth = Str(root["auth"]);
-        if (auth is not ("ok" or "skipped" or ""))
+        if (auth is not ("ok" or "cached" or "skipped" or ""))
             return $"Не удалось войти на стенд (auth: {auth}) — передай user/password; без входа замерялась бы "
                 + "страница логина.";
         var requested = Normalize(requestedUrl);
         foreach (var vp in Objects(root["viewports"]))
         {
+            // Приложение рисуется по состоянию токена без смены маршрута (LoginPage), поэтому по URL отрисовку
+            // не проверить: ноль видимых интерактивных элементов на всей странице — не замер, а нули
+            if (vp["error"] is null && vp["pageInteractive"] is JsonValue pi && pi.TryGetValue<double>(out var visible) && visible == 0)
+                return $"Страница {requestedUrl} не отрисовалась или вход не выполнен: при ширине {Int(vp["width"])} px на ней нет "
+                    + "ни одного видимого интерактивного элемента. Замер из нулей был бы ложным «находок нет» — "
+                    + "проверь маршрут и user/password, подожди загрузки и повтори вызов.";
             var final = Str(vp["finalUrl"]);
             if (final.Length == 0 || Normalize(final) == requested) continue;
             if (IsLoginUrl(final) && !IsLoginUrl(requestedUrl))
@@ -64,19 +70,10 @@ public static class UiProbeReport
     private static bool IsLoginUrl(string url) =>
         url.Contains("login", StringComparison.OrdinalIgnoreCase) || url.Contains("signin", StringComparison.OrdinalIgnoreCase);
 
-    // Сырой вывод скрипта → итог для модели под потолком maxBytes. Битый JSON — FormatException
+    // Сырой вывод скрипта → итог для модели под потолком maxBytes. Битый JSON — FormatException.
+    // Разбор один: ступени потолка строят итог по уже разобранной модели; не уложились и на ступени 0 —
+    // итог отдаётся с признаком overLimit
     public static JsonObject Build(string scriptJson, string url, int minTargetPx, int maxBytes = int.MaxValue)
-    {
-        JsonObject result = null!;
-        foreach (var limit in ListLimits)
-        {
-            result = BuildLimited(scriptJson, url, minTargetPx, limit);
-            if (System.Text.Encoding.UTF8.GetByteCount(Serialize(result)) <= maxBytes) break;
-        }
-        return result;
-    }
-
-    private static JsonObject BuildLimited(string scriptJson, string url, int minTargetPx, int listLimit)
     {
         JsonNode? raw;
         try { raw = JsonNode.Parse(scriptJson); }
@@ -84,6 +81,18 @@ public static class UiProbeReport
         if (raw is not JsonObject root || root["viewports"] is not JsonArray viewports)
             throw new FormatException("Вывод скрипта замера без поля viewports.");
 
+        JsonObject result = null!;
+        foreach (var limit in ListLimits)
+        {
+            result = BuildLimited(root, viewports, url, minTargetPx, limit);
+            if (System.Text.Encoding.UTF8.GetByteCount(Serialize(result)) <= maxBytes) return result;
+        }
+        result["overLimit"] = true;
+        return result;
+    }
+
+    private static JsonObject BuildLimited(JsonObject root, JsonArray viewports, string url, int minTargetPx, int listLimit)
+    {
         var result = new JsonObject
         {
             ["url"] = url,
@@ -107,7 +116,7 @@ public static class UiProbeReport
         }
         result["viewports"] = perViewport;
         result["totals"] = totals;
-        // Скрипт копит не больше MaxItems записей на список: счётчики выше нижние оценки
+        // Счётчики — нижние оценки, если скрипт упёрся в MaxItems записей на список или сервер опустил хвост по потолку
         result["truncated"] = perViewport.Any(v => v!["truncated"]!.GetValue<bool>());
         return result;
     }
@@ -121,11 +130,11 @@ public static class UiProbeReport
             .Where(e => Num(e["w"]) < min || Num(e["h"]) < min)
             .Select(e => (JsonNode)new JsonObject
             {
-                ["selector"] = Str(e["s"]), ["width"] = Num(e["w"]), ["height"] = Num(e["h"]), ["screenWidth"] = width,
+                ["selector"] = Str(e["s"]), ["width"] = Tenth(e["w"]), ["height"] = Tenth(e["h"]), ["screenWidth"] = width,
             }).ToArray());
         var unnamed = new JsonArray(interactive
             .Where(e => e["named"] is JsonValue v && v.TryGetValue<bool>(out var named) && !named)
-            .Select(e => (JsonNode)new JsonObject { ["selector"] = Str(e["s"]), ["width"] = Num(e["w"]), ["height"] = Num(e["h"]) })
+            .Select(e => (JsonNode)new JsonObject { ["selector"] = Str(e["s"]), ["width"] = Tenth(e["w"]), ["height"] = Tenth(e["h"]) })
             .ToArray());
 
         var doc = vp["doc"] as JsonObject;
@@ -183,7 +192,7 @@ public static class UiProbeReport
             ["status"] = vp["status"] is { } st ? Int(st) : null,
             ["finalUrl"] = Str(vp["finalUrl"]),
             ["interactiveTotal"] = interactive.Count,
-            ["truncated"] = scriptTruncated.Count > 0,
+            ["truncated"] = false,
             ["counts"] = counts,
             ["smallTargets"] = Cap("smallTargets", small),
             ["horizontalOverflow"] = overflow,
@@ -194,6 +203,7 @@ public static class UiProbeReport
         };
         overflow["containers"] = Cap("overflowContainers", containers);
         if (omitted.Count > 0) item["omitted"] = omitted;
+        item["truncated"] = scriptTruncated.Count > 0 || omitted.Count > 0;
         if (vp["error"] is { } error) item["error"] = Str(error);
         return item;
     }
@@ -206,6 +216,9 @@ public static class UiProbeReport
 
     private static double Num(JsonNode? node) =>
         node is JsonValue v && v.TryGetValue<double>(out var d) ? d : 0;
+
+    // Размеры в выходе — с точностью до 0,1 px
+    private static double Tenth(JsonNode? node) => Math.Round(Num(node), 1);
 
     private static int Int(JsonNode? node) => (int)Math.Round(Num(node));
 

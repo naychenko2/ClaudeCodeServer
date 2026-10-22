@@ -414,10 +414,18 @@ public sealed partial class TestRunService
             var package = packages.FirstOrDefault(p => File.Exists(Path.Combine(modules, p, "package.json")));
             if (package is not null)
             {
-                if (ResolvesInside(rootFull, modules)) return modules;
-                if (LinkedModulesOutside(modules, package)) return modules;
+                // Сам пакет проверяется в обеих ветках: node_modules/playwright → ссылка наружу исполнила бы чужой код
+                var packagePath = Path.Combine(modules, package);
+                if (ResolvesInside(rootFull, modules))
+                {
+                    if (ResolvesInside(rootFull, packagePath)) return modules;
+                    error = $"{Relative(rootFull, packagePath)} ведёт символической ссылкой за пределы проекта — "
+                        + "такой пакет не запускаем.";
+                    return null;
+                }
+                if (LinkedModulesInRepository(rootFull, modules, package)) return modules;
                 error = $"{Relative(rootFull, modules)} ведёт символической ссылкой за пределы проекта не на "
-                    + "node_modules с package.json рядом — такой пакет не запускаем.";
+                    + "node_modules с package.json рядом в основном дереве того же репозитория — такой пакет не запускаем.";
                 return null;
             }
             if (PathComparer.Equals(dir, rootFull) || !IsInside(rootFull, dir)) break;
@@ -428,16 +436,47 @@ public sealed partial class TestRunService
         return null;
     }
 
-    // node_modules — ссылка на каталог ТАКОГО ЖЕ имени, рядом с которым лежит package.json, а пакет
-    // внутри него ссылками из него не выходит
-    private static bool LinkedModulesOutside(string modules, string package)
+    // node_modules — ссылка на каталог ТАКОГО ЖЕ имени, рядом с которым лежит package.json, внутри дерева
+    // того же репозитория (основной checkout или любой его worktree), а пакет внутри него ссылками из него не выходит
+    private static bool LinkedModulesInRepository(string rootFull, string modules, string package)
     {
         FileSystemInfo? resolved;
         try { resolved = new DirectoryInfo(modules).ResolveLinkTarget(returnFinalTarget: true); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
         if (resolved is not DirectoryInfo { Name: "node_modules", Parent: { } owner } real || !real.Exists) return false;
+        var realFull = real.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         return File.Exists(Path.Combine(owner.FullName, "package.json"))
-            && ResolvesInside(real.FullName.TrimEnd(Path.DirectorySeparatorChar), Path.Combine(real.FullName, package));
+            && RepositoryTrees(rootFull).Any(tree => IsInside(tree, realFull))
+            && ResolvesInside(realFull, Path.Combine(real.FullName, package));
+    }
+
+    // Деревья репозитория корня (как `git worktree list`, но без запуска git): основной checkout и worktree'ы
+    // из <общий .git>/worktrees/*/gitdir. Корень без .git — пусто (сам по себе он не «репозиторий»)
+    private static IEnumerable<string> RepositoryTrees(string rootFull)
+    {
+        var dotGit = Path.Combine(rootFull, ".git");
+        string? commonDir = null;
+        try
+        {
+            if (Directory.Exists(dotGit)) commonDir = dotGit;
+            else if (File.Exists(dotGit)
+                && File.ReadAllText(dotGit).Trim() is var line && line.StartsWith("gitdir:", StringComparison.Ordinal))
+            {
+                // gitdir: <общий .git>/worktrees/<имя>
+                var gitDir = Path.GetFullPath(line["gitdir:".Length..].Trim(), rootFull);
+                commonDir = Path.GetDirectoryName(Path.GetDirectoryName(gitDir));
+            }
+            if (commonDir is null || Path.GetDirectoryName(commonDir) is not { } primary) return [];
+            var trees = new List<string> { primary };
+            var worktrees = Path.Combine(commonDir, "worktrees");
+            if (Directory.Exists(worktrees))
+                foreach (var entry in Directory.EnumerateDirectories(worktrees))
+                    if (File.Exists(Path.Combine(entry, "gitdir"))
+                        && Path.GetDirectoryName(File.ReadAllText(Path.Combine(entry, "gitdir")).Trim()) is { Length: > 0 } tree)
+                        trees.Add(tree);
+            return trees.Select(t => t.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return []; }
     }
 
     private static readonly StringComparer PathComparer =

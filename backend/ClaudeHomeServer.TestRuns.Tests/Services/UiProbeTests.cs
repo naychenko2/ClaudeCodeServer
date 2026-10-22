@@ -291,15 +291,20 @@ public class UiProbeTests : IDisposable
 
     // node_modules worktree — ссылка на зависимости основного дерева (scripts/worktree-setup.sh)
     private (string Worktree, string Primary) WorktreeWithLinkedModules(bool packageJsonBesideModules = true,
-        string modulesName = "node_modules")
+        string modulesName = "node_modules", bool sameRepository = true)
     {
-        var primary = Path.Combine(_root, "primary");
+        var primary = Path.Combine(_root, sameRepository ? "primary" : "stranger");
         var modules = Path.Combine(primary, "frontend", modulesName);
         Directory.CreateDirectory(Path.Combine(modules, "playwright"));
         File.WriteAllText(Path.Combine(modules, "playwright", "package.json"), "{}");
         if (packageJsonBesideModules) File.WriteAllText(Path.Combine(primary, "frontend", "package.json"), "{}");
         var worktree = Path.Combine(_root, "wt");
         Directory.CreateDirectory(Path.Combine(worktree, "frontend"));
+        // Раскладка git: основной checkout с .git/worktrees/wt и worktree с файлом .git (как у `git worktree add`)
+        var common = Path.Combine(_root, "primary", ".git");
+        Directory.CreateDirectory(Path.Combine(common, "worktrees", "wt"));
+        File.WriteAllText(Path.Combine(common, "worktrees", "wt", "gitdir"), Path.Combine(worktree, ".git") + "\n");
+        File.WriteAllText(Path.Combine(worktree, ".git"), "gitdir: " + Path.Combine(common, "worktrees", "wt") + "\n");
         return (worktree, modules);
     }
 
@@ -346,5 +351,168 @@ public class UiProbeTests : IDisposable
             "монорепа поднимает пакет в корень");
         TestRunService.FindPackageDir(_root, "wt", UiProbeService.RequiredPackages, out var error).Should().BeNull();
         error.Should().Contain("нет пакета playwright");
+    }
+
+    [Fact]
+    public void FindPackageDir_NodeModulesСсылкойВЧужойРепозиторий_Отказ()
+    {
+        var (worktree, modules) = WorktreeWithLinkedModules(sameRepository: false);
+        if (!TreeLinks.TryLink(Path.Combine(worktree, "frontend", "node_modules"), modules, directory: true)) return;
+
+        TestRunService.FindPackageDir(worktree, "frontend", UiProbeService.RequiredPackages, out var error).Should().BeNull(
+            "имя node_modules и package.json рядом не делают каталог из чужого дерева своим");
+        error.Should().Contain("основном дереве того же репозитория");
+    }
+
+    [Fact]
+    public void FindPackageDir_ПакетВОбычномNodeModulesСсылкойНаружу_Отказ()
+    {
+        var plain = Path.Combine(_root, "plain-link");
+        var outside = Path.Combine(_root, "outside-pkg");
+        Directory.CreateDirectory(Path.Combine(plain, "node_modules"));
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "package.json"), "{}");
+        if (!TreeLinks.TryLink(Path.Combine(plain, "node_modules", "playwright"), outside, directory: true)) return;
+
+        TestRunService.FindPackageDir(plain, ".", UiProbeService.RequiredPackages, out var error).Should().BeNull(
+            "пакет-ссылка наружу дерева исполнил бы чужой код");
+        error.Should().Contain("node_modules/playwright").And.Contain("за пределы проекта");
+    }
+
+    [Fact]
+    public void Build_ОпущенныйПотолкомХвост_ПомечаетTruncated_НеУложившийсяИтог_OverLimit()
+    {
+        var items = string.Join(',', Enumerable.Range(0, 300).Select(i => $"{{\"s\":\"button.item-{i}\",\"w\":10,\"h\":10,\"named\":true}}"));
+        var raw = "{\"auth\":\"ok\",\"viewports\":[{\"width\":360,\"interactive\":[" + items + "]}]}";
+
+        var whole = UiProbeReport.Build(raw, "http://h/", 40);
+        var capped = UiProbeReport.Build(raw, "http://h/", 40, maxBytes: 4096);
+        var impossible = UiProbeReport.Build(raw, "http://h/", 40, maxBytes: 10);
+
+        whole["truncated"]!.GetValue<bool>().Should().BeFalse("ничего не опущено и скрипт не обрезал");
+        capped["truncated"]!.GetValue<bool>().Should().BeTrue("серверная обрезка по потолку — тоже нижняя оценка");
+        Viewport(capped, 360)["truncated"]!.GetValue<bool>().Should().BeTrue();
+        capped.ContainsKey("overLimit").Should().BeFalse();
+        impossible["overLimit"]!.GetValue<bool>().Should().BeTrue("даже ступень «одни числа» не влезла в 10 байт");
+        Viewport(impossible, 360)["counts"]!["smallTargets"]!.GetValue<int>().Should().Be(300);
+    }
+
+    [Fact]
+    public void Размеры_ОкруглённыДо01_ПорогСтрогий()
+    {
+        const string raw = "{\"auth\":\"ok\",\"viewports\":[{\"width\":360,\"interactive\":[{\"s\":\"a.x\",\"w\":39.64,\"h\":44,\"named\":true},{\"s\":\"a.y\",\"w\":40,\"h\":40,\"named\":true}]}]}";
+
+        var small = Viewport(UiProbeReport.Build(raw, "http://h/", 40), 360)["smallTargets"]!.AsArray();
+
+        small.Should().ContainSingle().Which!["width"]!.GetValue<double>().Should().Be(39.6);
+    }
+
+    [Fact]
+    public void ПустаяСтраница_ЧисленныйРазбор_ОтказНеНули()
+    {
+        const string empty = "{\"reach\":\"ok\",\"auth\":\"ok\",\"viewports\":[{\"width\":360,\"finalUrl\":\"http://h:1/#/notes\",\"pageInteractive\":0}]}";
+
+        UiProbeReport.RefusalOf(empty, "http://h:1/#/notes", "http://h:1").Should().Contain("не отрисовалась");
+        UiProbeReport.RefusalOf(empty.Replace("\"pageInteractive\":0", "\"pageInteractive\":3"), "http://h:1/#/notes", "http://h:1").Should().BeNull();
+        UiProbeReport.RefusalOf(empty.Replace("\"pageInteractive\":0", "\"error\":\"timeout\",\"pageInteractive\":0"), "http://h:1/#/notes", "http://h:1")
+            .Should().BeNull("страница с ошибкой навигации — отдельный исход, его покажет поле error");
+    }
+
+    [Fact]
+    public async Task СтраницаБезИнтерактивныхЭлементов_ОтказВместоНулевогоЗамера()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-empty-page.txt");
+
+        var result = await Service(launcher, new BuildConcurrencyGate(1)).RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        result.Json.Should().BeNull("все нули при status=200 — ложное «находок нет»");
+        result.Refusal.Should().Contain("не отрисовалась или вход не выполнен");
+    }
+
+    private static int Logins(DotnetBuildServiceTests.FakeLauncher launcher) =>
+        launcher.Specs.Count(s => !s.Env!.ContainsKey("UIPROBE_TOKEN"));
+
+    [Fact]
+    public async Task ДвенадцатьВызововПодряд_ОдинВход_ТокенНеВИтогеИНеВАргументах()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt");
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+        var results = new List<UiProbeResult>();
+
+        for (var i = 0; i < 12; i++)
+            results.Add(await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait));
+
+        results.Should().OnlyContain(r => r.Json != null && r.Refusal == null);
+        Logins(launcher).Should().Be(1, "лимит входа 10/мин: остальные 11 вызовов идут по кэшированному токену");
+        launcher.Specs.Where(s => s.Env!.ContainsKey("UIPROBE_TOKEN")).Should().OnlyContain(s => s.Env!["UIPROBE_TOKEN"] == "tok-fresh");
+        launcher.Specs.Select(s => string.Join(' ', s.Args)).Should().NotContain(a => a.Contains("tok-fresh"));
+        results.Should().OnlyContain(r => !r.Json!.Contains("tok-fresh"), "токен в итог для модели не попадает");
+    }
+
+    [Fact]
+    public async Task КэшТокена_НеПересекаетВладельцевOriginИПользователей()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt");
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+        var mine = Request();
+        var other = mine with { Project = new Project { Id = "p2", OwnerId = "u2", Name = "Чужой", RootPath = _root } };
+
+        await service.RunAsync(mine, null, CancellationToken.None).WaitAsync(Wait);
+        await service.RunAsync(other, null, CancellationToken.None).WaitAsync(Wait);
+        await service.RunAsync(mine with { Origin = "http://127.0.0.1:5560" }, null, CancellationToken.None).WaitAsync(Wait);
+        await service.RunAsync(mine with { User = "other" }, null, CancellationToken.None).WaitAsync(Wait);
+        await service.RunAsync(mine with { Password = "changed" }, null, CancellationToken.None).WaitAsync(Wait);
+
+        Logins(launcher).Should().Be(5, "владелец, origin, пользователь и пароль — части ключа: токен чужого входа не подставляется");
+    }
+
+    [Fact]
+    public async Task КэшТокена_ИстёкТокен_ВходЗаново()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt");
+        var time = new ManualTime();
+        var service = new UiProbeService(launcher, new TestRunsOptions(),
+            new PhasePipeline(new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5)), (_, _) => Task.FromResult(true), time);
+
+        await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+        time.Advance(TimeSpan.FromMinutes(5));
+        await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+        time.Advance(TimeSpan.FromMinutes(6));
+        await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        Logins(launcher).Should().Be(2, "токену без exp — 10 минут жизни: через 5 мин кэш жив, через 11 — нет");
+    }
+
+    [Fact]
+    public async Task ТокенОтклонён401_ОдинПовторныйВход()
+    {
+        var factory = new SwitchFactory(new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt"));
+        var service = new UiProbeService(factory, new TestRunsOptions(),
+            new PhasePipeline(new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5)), (_, _) => Task.FromResult(true));
+        await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        var rejecting = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-token-rejected.txt");
+        factory.Current = rejecting;
+        var result = await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        rejecting.Specs.Should().HaveCount(2, "кэшированный токен получил 401 — ровно один повторный вход, не цикл");
+        rejecting.Specs.First().Env!.Should().ContainKey("UIPROBE_TOKEN");
+        rejecting.Specs.Last().Env!.Should().NotContainKey("UIPROBE_TOKEN");
+        result.Json.Should().NotBeNull();
+    }
+
+    private sealed class ManualTime : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 10, 22, 12, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    private sealed class SwitchFactory(DotnetBuildServiceTests.FakeLauncher current) : ILauncherFactory
+    {
+        public DotnetBuildServiceTests.FakeLauncher Current { get; set; } = current;
+        public IProcessLauncher Local => Current;
+        public IProcessLauncher ForOwner(string? ownerId) => Current;
+        public IProcessLauncher ForProject(Project project) => Current;
     }
 }

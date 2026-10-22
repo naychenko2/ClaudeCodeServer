@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -31,6 +32,9 @@ public sealed record UiProbeResult(string? Refusal, string? Json, string? Failur
 //  • процесс — headless Chromium из node_modules проекта через `node --eval` в среде проекта
 //    (ILauncherFactory.ForProject: local или песочница); учётка — переменными окружения процесса,
 //    не аргументами;
+//  • JWT стенда кэшируется (владелец, origin, user, пароль) до истечения с запасом: вход лимитирован
+//    10/мин на IP, замер при каждом вызове упёрся бы в 429; 401 на кэшированном токене — один повторный
+//    вход. Токен в итог для модели не попадает;
 //  • пороги и ширины — параметры запроса, применяются в UiProbeReport.
 public sealed class UiProbeService
 {
@@ -44,18 +48,29 @@ public sealed class UiProbeService
     private readonly TestRunsOptions _options;
     private readonly PhasePipeline _pipeline;
     private readonly Func<Uri, CancellationToken, Task<bool>> _standProbe;
+    private readonly TimeProvider _time;
+    private readonly ConcurrentDictionary<TokenKey, CachedToken> _tokens = new();
+
+    // Запас до истечения токена и срок жизни токена без exp
+    private static readonly TimeSpan TokenMargin = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan TokenFallbackLifetime = TimeSpan.FromMinutes(10);
+
+    // Пароль в ключе: смена пароля не должна проходить по токену, выданному со старым
+    private readonly record struct TokenKey(string? OwnerId, string Origin, string User, string Password);
+    private sealed record CachedToken(string Token, DateTimeOffset ExpiresAt);
 
     public UiProbeService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline)
         : this(launchers, options, pipeline, standProbe: null) { }
 
-    // Для тестов: своя проверка «стенд жив»
+    // Для тестов: своя проверка «стенд жив» и свои часы
     internal UiProbeService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline,
-        Func<Uri, CancellationToken, Task<bool>>? standProbe)
+        Func<Uri, CancellationToken, Task<bool>>? standProbe, TimeProvider? time = null)
     {
         _launchers = launchers;
         _options = options;
         _pipeline = pipeline;
         _standProbe = standProbe ?? ProbeStandAsync;
+        _time = time ?? TimeProvider.System;
     }
 
     public TestRunsOptions Options => _options;
@@ -105,33 +120,25 @@ public sealed class UiProbeService
         using (slot)
         {
             progress?.Invoke(new TestRunProgress("probe", $"замер · {string.Join(", ", request.Viewports)} px"));
-            var lines = new List<string>();
-            var errors = new Queue<string>();
-            var gate = new object();
-            void OnLine(string line)
+            var key = request.User is null ? (TokenKey?)null
+                : new TokenKey(request.Project.OwnerId, request.Origin, request.User, request.Password ?? "");
+            var cached = key is { } k ? CachedTokenFor(k) : null;
+            var run = await RunScriptAsync(launcher, request, cached, limit.Token, ct);
+            // 401 на кэшированном токене — токен отозван или истёк: один повторный вход
+            if (cached is not null && run.Json is not null && Has401(run.Json))
             {
-                lock (gate)
-                {
-                    if (line.StartsWith(UiProbeScript.ResultMarker, StringComparison.Ordinal)) lines.Add(line);
-                    else
-                    {
-                        errors.Enqueue(line);
-                        if (errors.Count > FailureTailLines) errors.Dequeue();
-                    }
-                }
+                _tokens.TryRemove(key!.Value, out _);
+                progress?.Invoke(new TestRunProgress("probe", "токен стенда не принят — повторный вход"));
+                run = await RunScriptAsync(launcher, request, null, limit.Token, ct);
+                cached = null;
             }
-            var outcome = await _pipeline.RunProcessAsync(launcher, spec, OnLine, limit.Token);
-            if (outcome.Aborted)
-                return new UiProbeResult(null, null, "замер прерван", ct.IsCancellationRequested, !ct.IsCancellationRequested);
-            string[] tail;
-            string[] output;
-            lock (gate) { tail = [.. errors]; output = [.. lines]; }
-            if (UiProbeReport.FindResultLine(output) is not { } json)
-                return new UiProbeResult(null, null,
-                    $"Скрипт замера не вернул результат (код выхода {outcome.ExitCode?.ToString() ?? "—"})."
-                    + (tail.Length == 0 ? "" : "\n" + string.Join('\n', tail)), false, false);
+            if (run.Result is { } early) return early;
+            var json = run.Json!;
             try
             {
+                // Кэш пополняет только настоящий вход: запуск по кэшированному токену срок не продлевает
+                if (cached is null && key is { } kk && FreshToken(json) is { } fresh)
+                    _tokens[kk] = new CachedToken(fresh, ExpiryOf(fresh));
                 var url = request.Origin + request.Path;
                 if (UiProbeReport.RefusalOf(json, url, request.Origin) is { } refusal) return UiProbeResult.Refused(refusal);
                 var report = UiProbeReport.Build(json, url, request.MinTargetPx, _options.MaxResultBytes);
@@ -144,8 +151,85 @@ public sealed class UiProbeService
         }
     }
 
+    // Один запуск скрипта. Result — готовый исход без JSON (прервано, нет результата); иначе Json
+    private async Task<(string? Json, UiProbeResult? Result)> RunScriptAsync(IProcessLauncher launcher,
+        UiProbeRequest request, string? token, CancellationToken limit, CancellationToken ct)
+    {
+        var spec = BuildSpec(request, ProcessTurnIds.New(), token);
+        var lines = new List<string>();
+        var errors = new Queue<string>();
+        var gate = new object();
+        void OnLine(string line)
+        {
+            lock (gate)
+            {
+                if (line.StartsWith(UiProbeScript.ResultMarker, StringComparison.Ordinal)) lines.Add(line);
+                else
+                {
+                    errors.Enqueue(line);
+                    if (errors.Count > FailureTailLines) errors.Dequeue();
+                }
+            }
+        }
+        var outcome = await _pipeline.RunProcessAsync(launcher, spec, OnLine, limit);
+        if (outcome.Aborted)
+            return (null, new UiProbeResult(null, null, "замер прерван", ct.IsCancellationRequested, !ct.IsCancellationRequested));
+        string[] tail;
+        string[] output;
+        lock (gate) { tail = [.. errors]; output = [.. lines]; }
+        if (UiProbeReport.FindResultLine(output) is { } json) return (json, null);
+        return (null, new UiProbeResult(null, null,
+            $"Скрипт замера не вернул результат (код выхода {outcome.ExitCode?.ToString() ?? "—"})."
+            + (tail.Length == 0 ? "" : "\n" + string.Join('\n', tail)), false, false));
+    }
+
+    private string? CachedTokenFor(TokenKey key)
+    {
+        if (!_tokens.TryGetValue(key, out var cached)) return null;
+        if (cached.ExpiresAt > _time.GetUtcNow()) return cached.Token;
+        _tokens.TryRemove(key, out _);
+        return null;
+    }
+
+    // Токен, который скрипт получил входом (при кэшированном поле token нет)
+    private static string? FreshToken(string json)
+    {
+        try { return JsonNode.Parse(json) is JsonObject o && o["token"] is JsonValue v && v.TryGetValue<string>(out var t) && t.Length > 0 ? t : null; }
+        catch (JsonException) { return null; }
+    }
+
+    private static bool Has401(string json)
+    {
+        try
+        {
+            return JsonNode.Parse(json)?["viewports"] is JsonArray viewports && viewports.OfType<JsonObject>()
+                .Any(vp => vp["failed"] is JsonArray failed && failed.OfType<JsonObject>()
+                    .Any(f => f["status"] is JsonValue s && s.TryGetValue<int>(out var code) && code == 401));
+        }
+        catch (JsonException) { return false; }
+    }
+
+    // exp из JWT минус запас; нет exp или токен не разобрался — короткий срок по умолчанию
+    internal DateTimeOffset ExpiryOf(string jwt)
+    {
+        var now = _time.GetUtcNow();
+        try
+        {
+            var parts = jwt.Split('.');
+            if (parts.Length == 3)
+            {
+                var payload = parts[1].Replace('-', '+').Replace('_', '/');
+                payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+                if (JsonNode.Parse(Convert.FromBase64String(payload))?["exp"] is JsonValue exp && exp.TryGetValue<long>(out var unix))
+                    return DateTimeOffset.FromUnixTimeSeconds(unix) - TokenMargin;
+            }
+        }
+        catch (Exception e) when (e is FormatException or JsonException or ArgumentException) { /* не JWT */ }
+        return now + TokenFallbackLifetime;
+    }
+
     // node --eval <скрипт> <json>: скрипт целиком одним аргументом (ArgumentList, без shell)
-    internal static ProcessSpec BuildSpec(UiProbeRequest request, string turnId)
+    internal static ProcessSpec BuildSpec(UiProbeRequest request, string turnId, string? token = null)
     {
         var input = new JsonObject
         {
@@ -161,6 +245,7 @@ public sealed class UiProbeService
             env["UIPROBE_USER"] = request.User;
             env["UIPROBE_PASS"] = request.Password ?? "";
         }
+        if (token is not null) env["UIPROBE_TOKEN"] = token;
         return new ProcessSpec
         {
             FileName = "node",

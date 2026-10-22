@@ -832,6 +832,10 @@ public class TestsToolsetTests : IDisposable
         Directory.CreateDirectory(Path.Combine(primary, "node_modules", "playwright"));
         File.WriteAllText(Path.Combine(primary, "node_modules", "playwright", "package.json"), "{}");
         File.WriteAllText(Path.Combine(primary, "package.json"), "{}");
+        // Репозиторий: primary — основной checkout, root — его worktree (файл .git → общий .git/worktrees/wt)
+        var worktrees = Directory.CreateDirectory(Path.Combine(primary, ".git", "worktrees", "wt")).FullName;
+        File.WriteAllText(Path.Combine(worktrees, "gitdir"), Path.Combine(root, ".git") + "\n");
+        File.WriteAllText(Path.Combine(root, ".git"), "gitdir: " + worktrees + "\n");
         var front = Directory.CreateDirectory(Path.Combine(root, "frontend")).FullName;
         File.WriteAllText(Path.Combine(front, "playwright.config.ts"), "");
         try { Directory.CreateSymbolicLink(Path.Combine(front, "node_modules"), Path.Combine(primary, "node_modules")); }

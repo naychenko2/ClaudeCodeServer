@@ -90,8 +90,11 @@ internal static class UiProbeScript
               put(clipped, 'clipped', { s: sel(el), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
           }
           const de = document.documentElement;
+          // Видимые интерактивные элементы ВСЕЙ страницы (не зоны selector): ноль — приложение не отрисовалось
+          let pageInteractive = 0;
+          for (const el of document.body ? document.body.querySelectorAll(interactiveSel) : []) if (visible(el, el.getBoundingClientRect())) pageInteractive++;
           return {
-            interactive, containers, clipped, truncated,
+            interactive, containers, clipped, truncated, pageInteractive,
             doc: { scrollWidth: Math.max(de.scrollWidth, document.body ? document.body.scrollWidth : 0), clientWidth: de.clientWidth },
           };
         }
@@ -105,13 +108,15 @@ internal static class UiProbeScript
           catch (e) { out.reach = 'failed:' + String((e.cause && e.cause.code) || e.message || e).slice(0, 80); console.log('UIPROBE-RESULT ' + JSON.stringify(out)); return; }
           const browser = await chromium.launch({ headless: true });
           try {
-            let token = null;
-            if (process.env.UIPROBE_USER) {
+            // Токен из кэша сервера (UIPROBE_TOKEN) — без повторного входа: лимит входа 10/мин на IP
+            let token = process.env.UIPROBE_TOKEN || null;
+            if (token) out.auth = 'cached';
+            else if (process.env.UIPROBE_USER) {
               const ctx0 = await browser.newContext();
               try {
                 const res = await ctx0.request.post(origin + '/api/auth/login', {
                   data: { username: process.env.UIPROBE_USER, password: process.env.UIPROBE_PASS || '' }, timeout: 10000 });
-                if (res.ok()) { token = (await res.json()).token || null; out.auth = token ? 'ok' : 'no-token'; }
+                if (res.ok()) { token = (await res.json()).token || null; out.auth = token ? 'ok' : 'no-token'; if (token) out.token = token; }
                 else out.auth = 'failed:' + res.status();
               } catch (e) { out.auth = 'failed:' + String(e.message || e).slice(0, 80); }
               await ctx0.close();
@@ -134,6 +139,10 @@ internal static class UiProbeScript
                 vp.finalUrl = page.url();
                 await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
                 await page.waitForTimeout(300);
+                // SPA рисуется после load: ждём первый видимый интерактивный элемент; не дождались — замер скажет
+                // pageInteractive == 0, а сервер откажет, а не отдаст нули
+                await page.waitForFunction(() => [...document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, [role=button], [tabindex]')]
+                  .some((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }), null, { timeout: 8000 }).catch(() => {});
                 Object.assign(vp, await page.evaluate(measure, { selector: input.selector, max: MAX }));
                 vp.finalUrl = page.url();
               } catch (e) { vp.error = String(e.message || e).slice(0, 200); }

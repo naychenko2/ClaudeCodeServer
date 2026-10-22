@@ -5,8 +5,9 @@
 <title>Хост-эмулятор панелей плагинов</title>
 <!--
   Хост-эмулятор (шаг A2 плана «Погода»): собирает и гоняет панель плагина в браузере
-  БЕЗ установки. Инструмент разработки, в пакет плагина не входит (allow-list пакета —
-  только panel/** и манифесты).
+  БЕЗ установки. Штатный инструмент разработки рядом с китом (plugin-kit), общий для
+  любых панелей: панель, права и фикстуры задаются параметрами URL, ничего погодного
+  в код эмулятора не вшито.
 
   Верхнее окно эмулятора играет хост:
   - двухуровневый фрейм и srcdoc — точная копия сборки хоста (panelSrcdoc.ts):
@@ -15,9 +16,9 @@
     frontend/public/plugin-kit/ — тот же, что вживую;
   - токены --cc-*: эмулятор подключает frontend/src/lib/theme.css себе, ставит
     data-theme и читает computed --c-* по копии CC_TOKEN_MAP (panelTokens.ts);
-  - сообщения моста: ready → init; call net.fetch → window.fetch (или фикстуры)
+  - сообщения моста: ready → init; call net.fetch → window.fetch (или фикстура)
     с ответом {status, headers, body}; отказ по праву — тем же текстом, что сервер
-    (PluginBridge/PluginNetProxy), и плашка «Нет права …» над панелью;
+    (PluginBridge / PluginNetProxy), и плашка «Нет права …» над панелью;
   - высоту фрейма ставит по resize (кламп 48..20000), как хост.
 
   Платформенный код не меняется — здесь только его минимальная переносимая копия.
@@ -42,13 +43,7 @@
 <body>
   <div class="toolbar">
     <label>панель <input id="in-panel" size="34"></label>
-    <label>права
-      <select id="in-grant">
-        <option value="all">оба (прогноз + геокодер)</option>
-        <option value="forecast">только прогноз</option>
-        <option value="none">ничего</option>
-      </select>
-    </label>
+    <label>права (хосты через запятую) <input id="in-grant" size="28"></label>
     <label>сбой
       <select id="in-fail">
         <option value="">нет</option>
@@ -59,7 +54,7 @@
       </select>
     </label>
     <label>задержка <input id="in-delay" type="number" min="0" step="100" style="width:70px"></label>
-    <label><input id="in-fixtures" type="checkbox"> фикстуры</label>
+    <label>фикстуры (пути через запятую) <input id="in-fixtures" size="30"></label>
     <label>ширина
       <select id="in-width">
         <option value="rail">рельс</option>
@@ -160,20 +155,19 @@ function buildShell(panelHtml, theme, shimJs, shimCss, tokens) {
   );
 }
 
-/* === Конфигурация из URL === */
+/* === Конфигурация из URL: всё задаётся параметрами, ничего не вшито === */
 
 const params = new URLSearchParams(location.search);
-const GRANTS = {
-  all: ['net:api.open-meteo.com', 'net:geocoding-api.open-meteo.com'],
-  forecast: ['net:api.open-meteo.com'],
-  none: [],
-};
+const listParam = (name) => (params.get(name) || '').split(',').map(s => s.trim()).filter(Boolean);
+
 const cfg = {
-  panel: params.get('panel') || '/tools/plugins/weather/panel/index.html',
-  grant: GRANTS[params.get('grant')] ? params.get('grant') : 'all',
+  panel: params.get('panel') || '/frontend/public/plugin-dev/weather/panel/index.html',
+  // grant= — список хостов (или net:хостов), которым выдано право; пусто — ни одного.
+  grant: listParam('grant').map(h => h.replace(/^net:/, '').toLowerCase()),
   fail: ['upstream', 'timeout', 'limit', 'status400'].includes(params.get('fail')) ? params.get('fail') : '',
   delay: Math.max(0, parseInt(params.get('delay') || '0', 10) || 0),
-  fixtures: params.get('fixtures') === '1',
+  // fixtures= — пути к файлам-фикстурам; одна — для всех вызовов, несколько — по порядку вызовов.
+  fixtures: listParam('fixtures'),
   theme: params.get('theme') === 'dark' ? 'dark' : 'light',
   width: ['rail', '320', '390'].includes(params.get('width')) ? params.get('width') : 'rail',
   selftest: params.get('selftest') === '1',
@@ -234,12 +228,14 @@ window.addEventListener('message', (e) => {
   if (d.type === 'ready') {
     postToPanel({
       type: 'init',
-      plugin: { id: 'local-an/weather', version: '0.1.0' },
+      // Идентификатор «плагина» для эмулятора — условный: он нужен панели только
+      // для показа версии (A1). Реальные права — из параметра grant.
+      plugin: { id: 'local-dev/' + encodeURIComponent(cfg.panel), version: 'dev' },
       slot: 'sidebar',
       context: { projectId: null },
       theme: cfg.theme,
       locale: 'ru',
-      granted: GRANTS[cfg.grant],
+      granted: cfg.grant.map(h => 'net:' + h),
       tokens: hostTokens(),
     });
   } else if (d.type === 'call') {
@@ -260,6 +256,7 @@ window.addEventListener('message', (e) => {
 /* === net.fetch: права, сбои, фикстуры, сеть === */
 
 const fixtureCache = new Map();
+let callSeq = 0;
 
 async function fetchText(path) {
   const r = await fetch(path);
@@ -272,21 +269,11 @@ async function fixtureText(path) {
   return fixtureCache.get(path);
 }
 
-// Фикстуры по §1 плана: ответ выбирается по хосту и параметрам запроса.
-function fixtureFor(url) {
-  const u = new URL(url);
-  const FIX = '/tools/plugins/weather/fixtures/';
-  if (u.hostname === 'geocoding-api.open-meteo.com') {
-    const name = (u.searchParams.get('name') || '').toLowerCase();
-    if (name.includes('ярославл')) return FIX + 'geocode-yaroslavl.json';
-    if (name.includes('ярц')) return FIX + 'geocode-arts.json';
-    return FIX + 'geocode-empty.json';
-  }
-  if (u.hostname === 'api.open-meteo.com') {
-    if ((u.searchParams.get('latitude') || '').includes(',')) return FIX + 'forecast-batch.json';
-    return FIX + 'forecast-yaroslavl.json';
-  }
-  return null;
+// Выбор фикстуры: одна — для всех вызовов; несколько — по порядку вызовов.
+function fixturePathFor() {
+  if (cfg.fixtures.length === 0) return null;
+  if (cfg.fixtures.length === 1) return cfg.fixtures[0];
+  return cfg.fixtures[callSeq++ % cfg.fixtures.length];
 }
 
 function respond(id, res) {
@@ -308,14 +295,14 @@ async function handleCall(id, op, args) {
     res = { ok: false, error: { code: 'unavailable', message: 'Обработчик не зарегистрирован: ' + String(op).split('.')[0] } };
   } else {
     // Отказ по праву — тексты ровно как у сервера (PluginBridge / PluginNetProxy).
-    const granted = GRANTS[cfg.grant];
-    if (!granted.some(g => g.startsWith('net:'))) {
+    const granted = cfg.grant.map(h => 'net:' + h);
+    if (granted.length === 0) {
       res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' } };
     } else {
       // Точный хост из granted — как PluginNetProxy: право net:{host} должно
       // совпадать с хостом url (порт из права не несём).
       const host = hostOf(args.url);
-      if (!granted.some(g => g.slice(4).split(':')[0].toLowerCase() === host)) {
+      if (!granted.some(g => g.slice(4).split(':')[0] === host)) {
         res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } };
       }
     }
@@ -326,11 +313,11 @@ async function handleCall(id, op, args) {
       else if (cfg.fail === 'limit') res = { ok: false, error: { code: 'limit', message: 'Превышено число запросов на плагин в минуту' } };
       else if (cfg.fail === 'status400') {
         // Ошибочный HTTP — как успех net.fetch: {status, headers, body} (см. §1 плана).
-        res = { ok: true, data: { status: 400, headers: { 'content-type': 'application/json' }, body: await fixtureText('/tools/plugins/weather/fixtures/error-400.json') } };
-      } else if (cfg.fixtures) {
-        const f = fixtureFor(args.url);
-        if (!f) res = { ok: false, error: { code: 'invalid', message: 'Нет фикстуры для url: ' + args.url } };
-        else res = { ok: true, data: { status: 200, headers: { 'content-type': 'application/json' }, body: await fixtureText(f) } };
+        const fp = fixturePathFor();
+        res = { ok: true, data: { status: 400, headers: { 'content-type': 'application/json' }, body: fp ? await fixtureText(fp) : '{"error":true,"reason":"Некорректный запрос"}' } };
+      } else if (cfg.fixtures.length > 0) {
+        const body = await fixtureText(fixturePathFor());
+        res = { ok: true, data: { status: 200, headers: { 'content-type': 'application/json' }, body } };
       } else {
         try {
           const r = await fetch(args.url, { method: (args.method || 'GET').toUpperCase(), headers: args.headers || {} });
@@ -367,9 +354,9 @@ function applyWidth() {
 
 function updateStatus() {
   document.getElementById('status').textContent =
-    'права: ' + (GRANTS[cfg.grant].join(', ') || 'нет') +
+    'права: ' + (cfg.grant.map(h => 'net:' + h).join(', ') || 'нет') +
     ' · тема: ' + cfg.theme + ' · ширина: ' + cfg.width +
-    (cfg.fixtures ? ' · фикстуры' : '') + (cfg.delay ? ' · задержка ' + cfg.delay + ' мс' : '');
+    (cfg.fixtures.length ? ' · фикстуры' : '') + (cfg.delay ? ' · задержка ' + cfg.delay + ' мс' : '');
 }
 
 /* === Самопроверка (selftest=1): тестовый скрипт, добавляемый в документ панели === */
@@ -417,16 +404,16 @@ async function main() {
   applyWidth();
 
   document.getElementById('in-panel').value = cfg.panel;
-  document.getElementById('in-grant').value = cfg.grant;
+  document.getElementById('in-grant').value = cfg.grant.join(',');
   document.getElementById('in-fail').value = cfg.fail;
   document.getElementById('in-delay').value = cfg.delay;
-  document.getElementById('in-fixtures').checked = cfg.fixtures;
+  document.getElementById('in-fixtures').value = cfg.fixtures.join(',');
   document.getElementById('in-width').value = cfg.width;
   document.getElementById('btn-theme').textContent = cfg.theme === 'dark' ? 'светлая' : 'тёмная';
   updateStatus();
 
-  window.__emulator = { cfg, granted: GRANTS[cfg.grant] };
-  logLine('хост-эмулятор: панель ' + cfg.panel + ' · права: ' + (GRANTS[cfg.grant].join(', ') || 'нет'));
+  window.__emulator = { cfg, granted: cfg.grant.map(h => 'net:' + h) };
+  logLine('хост-эмулятор: панель ' + cfg.panel + ' · права: ' + (cfg.grant.length ? cfg.grant.map(h => 'net:' + h).join(', ') : 'нет'));
 }
 
 /* Переключатели: всё, кроме темы, перезагружает страницу с новым URL. */
@@ -442,7 +429,7 @@ document.getElementById('in-panel').addEventListener('change', e => reload({ pan
 document.getElementById('in-grant').addEventListener('change', e => reload({ grant: e.target.value }));
 document.getElementById('in-fail').addEventListener('change', e => reload({ fail: e.target.value }));
 document.getElementById('in-delay').addEventListener('change', e => reload({ delay: e.target.value }));
-document.getElementById('in-fixtures').addEventListener('change', e => reload({ fixtures: e.target.checked ? '1' : '' }));
+document.getElementById('in-fixtures').addEventListener('change', e => reload({ fixtures: e.target.value }));
 document.getElementById('in-width').addEventListener('change', e => reload({ width: e.target.value }));
 document.getElementById('btn-theme').addEventListener('click', () => setTheme(cfg.theme === 'dark' ? 'light' : 'dark'));
 

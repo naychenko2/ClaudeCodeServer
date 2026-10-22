@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Погода</title>
+<!--
+  Панель «Погода» на ките панели плагина (plugin-kit, S9). Хост инжектит в <head> сам:
+  шим plugin-kit.js, CSP, структурный theme.css + font.css + controls.css (классы .cc-*)
+  и токены текущей темы --cc-* (style#cc-tokens). Панель палитру сама не знает.
+  A1 — заглушка: по init показывает имя плагина и версию из ccsPlugin.state.plugin.
+  Данные, сцены и поиск города — шаги B1/C1.
+-->
+<style>
+  body { padding: 0; }
+  /* Шапка панели: название и версия — ритм как у лейблов витрины */
+  .panel-head { display: flex; gap: 8px; align-items: baseline; }
+  .panel-title { font-size: 14px; font-weight: 600; color: var(--cc-fg); }
+  .panel-version { font-size: 11px; color: var(--cc-fg-muted); }
+</style>
+</head>
+<body>
+  <div class="panel-head">
+    <span class="panel-title">Погода</span>
+    <span class="panel-version" id="version"></span>
+  </div>
+
+  <div class="cc-empty">
+    <div class="cc-empty__title">Панель погоды собирается</div>
+    <div class="cc-empty__text">Прогноз и выбор города появятся в следующих шагах (B1–C1).</div>
+  </div>
+
+  <script>
+  (function () {
+    function showVersion(plugin) {
+      var el = document.getElementById('version');
+      el.textContent = plugin && plugin.version ? 'версия ' + plugin.version : '';
+    }
+
+    // Первая информация о плагине — по событию init (хост сообщает её в сообщении).
+    window.ccsPlugin.on('init', function (message) {
+      showVersion(message && message.plugin);
+    });
+
+    // Если init уже пришёл до подписки — состояние доступно сразу.
+    if (window.ccsPlugin.state && window.ccsPlugin.state.plugin) {
+      showVersion(window.ccsPlugin.state.plugin);
+    }
+  })();
+  </script>
+</body>
+</html>

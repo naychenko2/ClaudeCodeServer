@@ -8,40 +8,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { C, FS } from '../../../lib/design';
 import { FLAGS, useFeature } from '../../../lib/featureFlags';
-import { api, type PluginDraftAcceptResult } from '../../../lib/api';
+import { api } from '../../../lib/api';
 import { ConsentDialog, type PluginConsentData } from '../ConsentDialog';
 import { DraftCard } from '../DraftCard';
+import { toConsentDataFromAccept } from '../draftModel';
 import { refreshDraft, useDraftEntry } from './draftsStore';
 
 // Подсветка «Черновик обновлён агентом» после события, мс (как в useDraftCard)
 const JUST_UPDATED_MS = 6000;
 
-// Человекочитаемое имя из id пакета {publisher}/{slug} (та же логика, что в DraftsSection)
-function humanizeId(id: string): string {
-  const slug = id.split('/').pop() ?? id;
-  return slug.split('-').filter(Boolean)
-    .map(w => w[0].toUpperCase() + w.slice(1))
-    .join(' ') || id;
-}
-
 // Текст ошибки действия: message сервера (409/5xx) или сбой сети; не-Error — общий текст
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : 'Не удалось выполнить действие';
-}
-
-// Результат «Принять» → данные существующего диалога согласия (режим «установить»)
-function toConsentDataFromAccept(res: PluginDraftAcceptResult): PluginConsentData {
-  return {
-    id: res.id,
-    name: humanizeId(res.id),
-    version: res.version,
-    path: res.source.startsWith('upload:') ? res.source.slice('upload:'.length) : undefined,
-    sha256: res.sha256 ? res.sha256.slice(0, 8) : undefined,
-    contributions: [],
-    requested: res.requested,
-    secrets: res.secrets.map(s => ({ name: s.name, required: true, set: s.set, setAt: s.updatedAt ?? null })),
-    granted: res.granted,
-  };
 }
 
 // Нейтральная строка в ленте (404 / без флага / загрузка): как тихие строки соседних модулей

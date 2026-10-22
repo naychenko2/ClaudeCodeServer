@@ -24,6 +24,15 @@ export function panelDisplayName(plugin: PluginInfo, panel: PluginPanelView): st
   return panel.title || humanizeId(plugin.id);
 }
 
+// Имя УСТАНОВЛЕННОГО пакета для людей: title первой панели манифеста, иначе humanizeId
+// — то же правило, что на бэке (PluginDisplayName.Of: первая панель, иначе null →
+// запасное имя). Бэк имени установленному пакету не отдаёт (PluginResponse), поэтому
+// это единственная точка вывода имени в списке плагинов и его диалоге согласия.
+export function pluginDisplayName(plugin: PluginInfo): string {
+  const title = plugin.contributes?.panels?.[0]?.title;
+  return title?.trim() || humanizeId(plugin.id);
+}
+
 // Набор иконок для карточек плагинов. Манифест пакета (PluginPanel) несёт только
 // id/slot/entry/title — иконки в нём нет, а бэк (не трогаем) её не поднимает.
 // Поэтому иконку выводим из id плагина детерминированно: разные плагины в рельсе

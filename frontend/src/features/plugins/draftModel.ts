@@ -3,13 +3,34 @@
 // Чистые функции — тестируются без рендера (DraftCard.test.ts).
 
 import type {
-  PluginDraftPreview, PluginDraftSummary, PluginDraftDiffFile,
+  PluginDraftAcceptResult, PluginDraftPreview, PluginDraftSummary, PluginDraftDiffFile,
 } from '../../lib/api';
+import { type PluginConsentData } from './ConsentDialog';
+import { humanizeId } from './panelNaming';
 
 // Имя пакета для людей: displayName от бэка («Погода»), иначе запасное имя. Пустая
 // строка и пробелы считаются «не пришло». Единая точка для карточки и диалога согласия.
 export function draftDisplayName(displayName: string | null | undefined, fallback: string): string {
   return displayName?.trim() || fallback;
+}
+
+// Результат «Принять» → данные существующего диалога согласия. ОДНА реализация для
+// секции «Черновики» (DraftsSection) и карточки в ленте чата (feed/DraftFeedCard):
+// имя — displayName от бэка («Погода»), запасное (humanizeId из id) — только когда
+// бэк имя не прислал (пакет без панелей). Режим «установить»: права по умолчанию —
+// все, кроме net:* (решение В1); consentRequired → newPermissions.
+export function toConsentDataFromAccept(res: PluginDraftAcceptResult): PluginConsentData {
+  return {
+    id: res.id,
+    name: draftDisplayName(res.displayName, humanizeId(res.id)),
+    version: res.version,
+    path: res.source.startsWith('upload:') ? res.source.slice('upload:'.length) : undefined,
+    sha256: res.sha256 ? res.sha256.slice(0, 8) : undefined,
+    contributions: [],
+    requested: res.requested,
+    secrets: res.secrets.map(s => ({ name: s.name, required: true, set: s.set, setAt: s.updatedAt ?? null })),
+    granted: res.granted,
+  };
 }
 
 // Вклад «Что будет после установки» (макет 4): панель/команда/навык — человекочитаемая строка

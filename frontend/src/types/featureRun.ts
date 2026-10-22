@@ -57,6 +57,9 @@ export type FeatureRoundVerdict =
 
 // Один виток ревью/проверки/финала (бэк: `FeatureRound`). Живёт в цепочке шагов
 // (`FeatureStepChain.rounds`) и в стадиях qa/final (`FeatureStage.rounds`).
+// Порядок витков в цепочке даёт бэк — по завершению (CompletedAt, при равенстве —
+// по старту задачи); `startedAt` здесь только для показа, по нему НЕ сортировать
+// (решение Александра, шов 2б: старты внутри цепочки могут идти не по возрастанию).
 export interface FeatureRound {
   n: number;
   verdict: FeatureRoundVerdict;

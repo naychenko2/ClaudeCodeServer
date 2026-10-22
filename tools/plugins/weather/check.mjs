@@ -420,48 +420,40 @@ async function scenarioSearchEmpty(browser, base) {
 }
 
 async function scenarioRace(browser, base) {
-  await scenario('7. Гонка: два поиска подряд — старый пакет не красит новый список (R3)', async (checks) => {
+  await scenario('7. Гонка: два поиска подряд — старый геокодер не перетирает новый список (R3)', async (checks) => {
     const GAP = 2000; // пауза между поисками (больше дебаунса)
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
-      // Фикстуры привязаны к запросу через «|match», а не к порядку вызовов:
-      // первый геокодер быстрый — пакет первой волны реально запрашивается; его
-      // задержка 6000 мс — он приходит позже, чем новый список нарисован
-      // (t0+2400). Это настоящая гонка, а не подавленная guard'ом (minor M2).
-      // Match'и берутся без запятых (параметр разделяется запятыми) и уникальные:
-      // «apparent_temperature» есть только в URL главного экрана, координаты
-      // пакетов различимы между собой.
+      // Фикстуры привязаны к запросу через «|match», а не к порядку вызовов.
+      // Медленный здесь СТАРЫЙ ГЕОКОДЕР (6000 мс): именно он перетирает `found`
+      // и без guard'а searchSeq подменил бы уже нарисованный новый список.
+      // Задержка пакета не годится: пакет применяется к собственному снимку
+      // и в новый список не попадает при любом guard'е (MAJOR-2, ревью R3).
+      // Match'и без запятых (параметр разделяется запятыми) и уникальные.
       fixtures: [
         FX + 'forecast-yaroslavl.json|apparent_temperature',
-        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
-        FX + 'forecast-batch-arts.json|55.06491|6000',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86|6000',
+        FX + 'forecast-batch-arts.json|55.06491',
         FX + 'geocode-yaroslavl.json|name=%D0%AF%D1%80%D0%BE%D1%81%D0%BB%D0%B0%D0%B2',
         FX + 'forecast-batch.json|58.58259',
       ].join(','),
     });
     try {
-      // Ждём настоящего главного экрана, не скелетона.
       await frame.locator('.hero .temp').waitFor({ timeout: 20000 });
       await frame.locator('#citybtn').click();
       await frame.locator('#q').waitFor({ timeout: 5000 });
       await frame.locator('#q').fill('Ярц');
       await page.waitForTimeout(GAP);
       await frame.locator('#q').fill('Ярослав');
-      // Событийное ожидание (minor M2): ждём не стенку времени, а доставку
-      // старого пакета — «←» с координатами первой волны в логе эмулятора.
-      // Проверка сразу после него: запас — секунды, а не 500 мс джиттера.
+      // Ждём не стенку времени, а сигнал эмулятора «ответ старого геокодера
+      // отправлен панели» (строка «⇢ доставлено» пишется после postToPanel).
       await page.waitForFunction(() => {
         const lines = Array.from(document.querySelectorAll('#log p'));
-        return lines.some((p) => p.textContent.includes('←') && p.textContent.includes('55.06491'));
+        return lines.some((p) => p.textContent.includes('⇢ доставлено') && p.textContent.includes('name=%D0%AF%D1%80%D1%86'));
       }, { timeout: 20000 });
-      // «←» пишется ДО postToPanel (dev-host/index.html:372 против :374): событие
-      // в логе ещё не значит, что панель применила пакет. Без запаса откат guard'а
-      // ловится только при синхронном применении (MAJOR-2, ревью R3). Это тайминг-
-      // стена, а не ожидание события: прямого сигнала «панель применила» у эмулятора нет.
-      await page.waitForTimeout(1200);
-      // Старый пакет обработан хостом: если guard'а нет, температуры первой
-      // волны (+30°, +31°…) появились бы на строках второго списка. Правильный
-      // ответ — только свои значения второго поиска.
+      // Сообщение уже в очереди фрейма: два кадра — и панель его обработала.
+      await frame.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      // Без guard'а старый геокодер перетёр бы список «Ярцево…» без температур.
       const temps = await frame.locator('.city .t').allInnerTexts();
       assertEq(checks, 'температуры нового списка — только свои', temps.join(' '), '+10° +8°');
       const first = (await textOf(frame, '.city:first-child')).replace(/\n/g, ' ').trim();
@@ -646,7 +638,7 @@ async function scenarioSearchTimer(browser, base) {
       grant: GRANT_ALL,
       fixtures: [
         FX + 'forecast-yaroslavl.json|apparent_temperature',
-        FX + 'geocode-arts.json',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80|1500',
         FX + 'forecast-batch-arts.json',
       ].join(','),
     });
@@ -672,8 +664,103 @@ async function scenarioSearchTimer(browser, base) {
       await frame.locator('#back').click();
       await page.waitForTimeout(1200);
       assertEq(checks, 'после второго «Назад» запросов к геокодеру тоже нет', await geoCalls(), 0);
+      // Шаг 3 (MINOR-A): «Назад» при ответе В ПОЛЁТЕ. Геокодер ответит через 1500 мс —
+      // уже в закрытом режиме; searchSeq++ в closeSearch обязан погасить ответ, и
+      // пакет температур не должен уйти (ни геокодера, ни пакета после «Назад»).
+      const searchCalls = () => page.evaluate(() =>
+        Array.from(document.querySelectorAll('#log p'))
+          .filter((p) => p.textContent.includes('→ net.fetch') && !p.textContent.includes('apparent_temperature')).length);
+      const before = await geoCalls();
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Яр');
+      await page.waitForFunction((n) => {
+        const lines = Array.from(document.querySelectorAll('#log p'));
+        return lines.filter((p) => p.textContent.includes('→ net.fetch https://geocoding-api')).length > n;
+      }, before, { timeout: 5000 });
+      const inFlight = await searchCalls();
+      await frame.locator('#back').click();
+      await page.waitForFunction(() => {
+        const lines = Array.from(document.querySelectorAll('#log p'));
+        return lines.some((p) => p.textContent.includes('⇢ доставлено') && p.textContent.includes('name=%D0%AF%D1%80'));
+      }, { timeout: 10000 });
+      await frame.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      assertEq(checks, 'после «Назад» при ответе в полёте новых запросов (геокодер/пакет) нет', await searchCalls(), inFlight);
     } catch (e) {
       await shot(page, 'scenario-12-timer');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// MINOR-B (ревью R3): право с портом «net:host:443» — тот же хост, что и без порта
+// (боевой PluginNetProxy.HostOf отрезает порт по последнему двоеточию, без регистра).
+// Эмулятор и панель обязаны сойтись с боем: запрос уходит, плашки отказа нет.
+async function scenarioGeoRightWithPort(browser, base) {
+  await scenario('15. Право net:геокодер:443 (с портом) — запрос уходит, плашки отказа нет (MINOR-B)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: 'api.open-meteo.com,net:Geocoding-API.open-meteo.com:443',
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json|55.06491',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Ярц');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      const geo = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('#log p'))
+          .filter((p) => p.textContent.includes('→ net.fetch https://geocoding-api')).length);
+      assertTrue(checks, 'запрос к геокодеру ушёл', geo >= 1, String(geo));
+      assertEq(checks, 'плашки «Поиск города недоступен» нет', await frame.locator('.notice-row').count(), 0);
+    } catch (e) {
+      await shot(page, 'scenario-15-port-right');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// MINOR-C (ревью R3): событие `online` перерисовывает панель через load() и тем самым
+// закрывает режим поиска — висящий дебаунс обязан погаснуть, иначе запрос к геокодеру
+// уйдёт уже в закрытом режиме.
+async function scenarioOnlineClosesSearch(browser, base) {
+  await scenario('16. «online» в режиме поиска гасит дебаунс (MINOR-C)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json',
+        FX + 'forecast-batch-arts.json',
+      ].join(','),
+    });
+    const geoCalls = () => page.evaluate(() =>
+      Array.from(document.querySelectorAll('#log p'))
+        .filter((p) => p.textContent.includes('→ net.fetch https://geocoding-api')).length);
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      // Уходим офлайн и обновляем: панель показывает «Нет подключения» (offlineShown).
+      await context.setOffline(true);
+      await frame.locator('#refresh').click();
+      await frame.locator('#retry').waitFor({ timeout: 5000 });
+      // Из офлайн-экрана открываем поиск и набираем запрос — дебаунс взведён.
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Яр');
+      // Связь вернулась: `online` → load() → режим закрыт.
+      await context.setOffline(false);
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await page.waitForTimeout(1200); // дольше дебаунса (400 мс)
+      assertEq(checks, 'после «online» запросов к геокодеру нет', await geoCalls(), 0);
+    } catch (e) {
+      await shot(page, 'scenario-16-online');
       throw e;
     } finally {
       await context.close();
@@ -790,6 +877,8 @@ try {
   await scenarioSearchTimer(browser, base);
   await scenarioGeoRightLater(browser, base);
   await scenarioStorageOff(browser, base);
+  await scenarioGeoRightWithPort(browser, base);
+  await scenarioOnlineClosesSearch(browser, base);
 } finally {
   await browser.close();
   server.close();

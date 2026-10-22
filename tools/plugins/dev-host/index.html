@@ -371,8 +371,11 @@ function respond(id, res, counted, quiet, delayMs, url) {
     logLine(res.ok
       ? '← ' + (res.data.status !== undefined ? res.data.status + ' (' + (res.data.body || '').length + ' bytes)' : 'ok') + (url ? ' ' + url : '')
       : '← ' + res.error.code + ': ' + res.error.message);
-    if (res.ok) postToPanel({ type: 'result', id, ok: true, data: res.data });
-    else {
+    if (res.ok) {
+      postToPanel({ type: 'result', id, ok: true, data: res.data });
+      // Сигнал для автопроверок: пишется ПОСЛЕ postToPanel, т.е. ответ уже отправлен панели.
+      logLine('⇢ доставлено' + (url ? ' ' + url : ''));
+    } else {
       postToPanel({ type: 'result', id, ok: false, error: res.error });
       // Отказ по storage — тихий (решение Софьи, 22.10, как на боевом хосте):
       // панель работает дальше, плашки «Нет права …» нет. Отказы по net: и прочим
@@ -452,7 +455,14 @@ async function handleCall(id, op, args) {
         // Точный хост из granted — как PluginNetProxy: право net:{host} должно
         // совпадать с хостом url (порт из права не несём).
         const host = hostOf(url);
-        if (!netRights.some(g => g.slice(4).split(':')[0] === host)) {
+        // Правило боя (PluginNetProxy.HostOf): порт отрезается по ПОСЛЕДНЕМУ двоеточию,
+        // сравнение без учёта регистра.
+        const rightHost = (g) => {
+          const h = g.slice(4);
+          const i = h.lastIndexOf(':');
+          return (i >= 0 ? h.slice(0, i) : h).toLowerCase();
+        };
+        if (!netRights.some(g => rightHost(g) === host)) {
           res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } };
         }
       }

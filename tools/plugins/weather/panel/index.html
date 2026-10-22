@@ -595,6 +595,9 @@
     }
 
     function load() {
+      // load() пересоздаёт разметку и тем самым закрывает режим выбора города —
+      // дебаунс и ответы в полёте гасим здесь, каким бы путём ни пришли (MINOR-C, R3).
+      closeSearch();
       if (navigator.onLine === false) { renderProblem('offline'); return; }
       offlineShown = false;
       root.setAttribute('aria-busy', 'true');

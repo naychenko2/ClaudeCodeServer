@@ -247,6 +247,55 @@ describe('пределы (инв. 6)', () => {
   });
 });
 
+// --- Несериализуемое значение (F1-д) ---
+
+describe('несериализуемое значение (F1-д)', () => {
+  // handleStorageCall синхронный: если бросит — тест падает с исключением,
+  // а значит панель ответа не получает. Зелёный тест = ответ есть, промис не висит.
+  it('циклический объект → invalid, без исключения, store не изменён', () => {
+    const store = new MapStore();
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    const r = call(store, 'set', { key: 'a', value: cycle });
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('invalid');
+    expect(r.error.message).toBe('Значение не выражается в JSON');
+    expect(store.length).toBe(0);
+  });
+
+  it('BigInt → invalid, без исключения, store не изменён', () => {
+    const store = new MapStore();
+    const r = call(store, 'set', { key: 'a', value: BigInt(10) });
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('invalid');
+    expect(store.length).toBe(0);
+  });
+
+  it('значение-функция → invalid, не TypeError на raw.length', () => {
+    const store = new MapStore();
+    const r = call(store, 'set', { key: 'a', value: () => 1 });
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('invalid');
+    expect(store.length).toBe(0);
+  });
+
+  it('Symbol → invalid, без исключения', () => {
+    const store = new MapStore();
+    const r = call(store, 'set', { key: 'a', value: Symbol('s') });
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('invalid');
+    expect(store.length).toBe(0);
+  });
+
+  it('get не-JSON значения → invalid, а не сырая строка (минор 3)', () => {
+    const store = storeWith({ [keyOf('a')]: 'не JSON {' });
+    const r = call(store, 'get', { key: 'a' });
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('invalid');
+    expect(r.error.message).toBe('Значение повреждено: не JSON');
+  });
+});
+
 // --- Инвариант 7: ошибки браузера ---
 
 describe('ошибки хранилища (инв. 7)', () => {

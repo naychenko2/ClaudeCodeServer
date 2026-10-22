@@ -89,10 +89,13 @@ export function handleStorageCall({ op, args, granted, ownerId, pluginId, store 
       const raw = store.getItem(prefix + key);
       if (raw === null) return { ok: true, data: { exists: false } };
       // Отсутствие ключа — НЕ ошибка; значение отдаём разобранным JSON.
+      // Контракт строгий: записанное модулем значение всегда JSON. Чужое или
+      // испорченное — отказ invalid, а не смена типа значения на лету
+      // (ревью Глеба, F1-д минор 3).
       try {
         return { ok: true, data: { exists: true, value: JSON.parse(raw) } };
       } catch {
-        return { ok: true, data: { exists: true, value: raw } };
+        return fail('invalid', 'Значение повреждено: не JSON');
       }
     }
 
@@ -101,7 +104,16 @@ export function handleStorageCall({ op, args, granted, ownerId, pluginId, store 
       const value = args.value;
       if (!validKey(key)) return fail('invalid', 'Неверный ключ');
       if (jsonUnrepresentable(value)) return fail('invalid', 'Значение не выражается в JSON');
-      const raw = JSON.stringify(value);
+      // JSON.stringify бросает на циклах, BigInt и Symbol. Без try/catch исключение
+      // выходит из handleStorageCall: промис панели висит, обработчик хоста падает
+      // (ревью Глеба, F1-д). Function даёт undefined — тоже отказ, не падение.
+      let raw;
+      try {
+        raw = JSON.stringify(value);
+      } catch {
+        return fail('invalid', 'Значение не выражается в JSON');
+      }
+      if (typeof raw !== 'string') return fail('invalid', 'Значение не выражается в JSON');
       if (raw.length > VALUE_MAX_BYTES) return fail('limit', 'Значение больше 8 КиБ');
 
       const fullKey = prefix + key;

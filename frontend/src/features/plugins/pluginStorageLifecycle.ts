@@ -5,15 +5,40 @@ import type { StorageLike } from './hostOps/storage';
 // Жизненный цикл данных storage.* плагина в этом браузере. Работает только по
 // ключам (clear() не зовём никогда); без владельца — ничего не делает.
 
+// Обращение к браузерному хранилище может бросить SecurityError: при отключённом
+// хранилище (Firefox dom.storage.enabled=false) и в приватном режиме сам геттер
+// window.localStorage бросает при чтении — typeof от этого не спасает (R2-д, F-д2).
+// Для lifecycle это тихий no-op: список плагинов обязан открываться и без
+// хранилища — сборка мусора побочный эффект, а не причина ронять список.
+// Настоящая ошибка не прячется — она идёт вверх, как раньше.
+function safeLocalStorage(): StorageLike | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null; // SecurityError — хранилище отключено
+  }
+}
+
+// SecurityError от операции с store — тихий ноль; прочее — без изменений.
+function quietSecurity(fn: () => number): number {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof Error && e.name === 'SecurityError') return 0;
+    throw e;
+  }
+}
+
 // Удаление плагина = «забыть»: стираем ровно его префикс.
-export function eraseOnUninstall(pluginId: string, store: StorageLike = localStorage): number {
+export function eraseOnUninstall(pluginId: string, store?: StorageLike): number {
   const ownerId = getMeSnapshot().userId;
-  return ownerId ? removePluginStorage({ ownerId, pluginId, store }) : 0;
+  const target = store ?? safeLocalStorage();
+  return ownerId && target ? quietSecurity(() => removePluginStorage({ ownerId, pluginId, store: target })) : 0;
 }
 
 // Ленивая сборка мусора: звать ТОЛЬКО после успешного GET /api/plugins.
 export function collectOnListLoaded(pluginIds: string[], store?: StorageLike): number {
   const ownerId = getMeSnapshot().userId;
-  const target = store ?? (typeof localStorage === 'undefined' ? null : localStorage);
-  return ownerId && target ? collectStorageGarbage({ ownerId, keepPluginIds: pluginIds, store: target }) : 0;
+  const target = store ?? safeLocalStorage();
+  return ownerId && target ? quietSecurity(() => collectStorageGarbage({ ownerId, keepPluginIds: pluginIds, store: target })) : 0;
 }

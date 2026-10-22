@@ -377,6 +377,47 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
     });
   }
 
+  // R2-д (F-д2, M1): настоящая ошибка хоста не должна прятаться под текст для
+  // человека. Мутации: убрать логирование или объединить ветки (любая ошибка →
+  // «Хранилище недоступно») — этот тест красный.
+  it('настоящая ошибка хоста — логируется, не прячется под «Хранилище недоступно»', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() { throw new Error('boom'); },
+    });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      callFromPanel(panelWin, 'storage.get', { key: 'city' });
+      expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
+      expect(sent[0]).toEqual({
+        source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Внутренняя ошибка хранилища' },
+      });
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // SecurityError остаётся тихим: в консоль ничего не пишется.
+  it('SecurityError — тихый unavailable, console.error не зовётся', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() { throw Object.assign(new Error('denied'), { name: 'SecurityError' }); },
+    });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      callFromPanel(panelWin, 'storage.get', { key: 'city' });
+      expect(sent[0]).toEqual({
+        source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' },
+      });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // Fail-closed: нет id владельца в состоянии авторизации — unavailable, ни одной
   // записи. cc_user_id в хранилище больше ни на что не влияет — источник один
   // (getMeSnapshot), как в pluginStorageLifecycle.ts.

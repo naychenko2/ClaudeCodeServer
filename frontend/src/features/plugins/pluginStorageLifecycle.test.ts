@@ -53,6 +53,49 @@ describe('collectOnListLoaded', () => {
   });
 });
 
+// F-д2: при отключённом хранилище (Firefox dom.storage.enabled=false, приватный
+// режим) сам геттер localStorage бросает SecurityError — typeof от этого не спасает.
+// Lifecycle обязан отвечать тихим нулем: список плагинов не падает из-за сборки мусора.
+describe('хранилище отключено (F-д2)', () => {
+  const sec = () => Object.assign(new Error('sandboxed'), { name: 'SecurityError' });
+
+  it('store бросает SecurityError на операции — тихий 0, ни один ключ не тронут', () => {
+    me.userId = 'u1';
+    const s = seed();
+    s.getItem = () => { throw sec(); };
+    s.removeItem = () => { throw sec(); };
+    expect(collectOnListLoaded(['acme/two'], s)).toBe(0);
+    expect(eraseOnUninstall('acme/one', s)).toBe(0);
+    expect(s.keys()).toEqual(['cc_token', 'ccs.plugin.u1.acme/one.a', 'ccs.plugin.u1.acme/one.b', 'ccs.plugin.u1.acme/two.a', 'ccs.plugin.u2.acme/one.a']);
+  });
+
+  // Мутация (а): вернуть в lifecycle «typeof localStorage === 'undefined' ? null :
+  // localStorage» без try/catch — чтение бросит SecurityError → этот тест красный.
+  it('globalThis.localStorage бросает SecurityError: без store — тихий 0, без исключения', () => {
+    me.userId = 'u1';
+    const orig = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() { throw sec(); },
+    });
+    try {
+      expect(collectOnListLoaded(['acme/one'])).toBe(0);
+      expect(eraseOnUninstall('acme/one')).toBe(0);
+    } finally {
+      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+  });
+
+  it('настоящая ошибка не прячется: пробрасывается, как раньше', () => {
+    me.userId = 'u1';
+    const s = seed();
+    // GC работает только по ключам и removeItem — именно там и бросаем.
+    s.removeItem = () => { throw new Error('boom'); };
+    expect(() => collectOnListLoaded(['acme/two'], s)).toThrow('boom');
+  });
+});
+
 describe('отзыв права: данные остаются, повторная выдача возвращает их', () => {
   it('denied без права, те же значения после повторной выдачи', () => {
     me.userId = 'u1';

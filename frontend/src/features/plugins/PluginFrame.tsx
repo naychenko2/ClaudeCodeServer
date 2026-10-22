@@ -329,8 +329,17 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
           pluginId: p.id,
           store: localStorage,
         });
-      } catch {
-        res = { ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' } };
+      } catch (e) {
+        // Р2-д (F-д2, M1): два разных случая, один текст их прятал. SecurityError —
+        // хранилище отключено, штатный тихий «unavailable» для панели. Всё прочее —
+        // настоящая ошибка хоста: логируем в консоль, чтобы разработчик её видел,
+        // и не прячем её под текст «Хранилище недоступно».
+        if (e instanceof Error && e.name === 'SecurityError') {
+          res = { ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' } };
+        } else {
+          console.error('[plugin storage] неожиданная ошибка в handleStorageCall:', e);
+          res = { ok: false, error: { code: 'unavailable', message: 'Внутренняя ошибка хранилища' } };
+        }
       }
       if (res.ok) {
         postToFrame(buildResultMessage(msg.id, true, res.data));

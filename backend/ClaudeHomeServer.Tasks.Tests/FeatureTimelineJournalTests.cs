@@ -640,8 +640,11 @@ public class FeatureTimelineJournalTests
     // ── 10. Замер: 20 000 записей журнала → сотни мс (major 3; порог с запасом, без Task.Delay) ──
 
     // Журнал на 20k записей (ходы + ожидания + started/stopped): sweep обязан уложиться в сотни
-    // мс (старый O(n²) давал ~4.5 с на 20k, по замеру Глеба). Порог 1.5 с — с запасом, чтобы не
-    // флачить на медленной CI; без Task.Delay (детерминизм времени не нужен, только верхняя граница).
+    // мс (старый O(n²) давал ~4.5 с на 20k, по замеру Глеба). Порог был 1.5 с: 10 прогонов подряд
+    // на нагруженной машине — 9 зелёных, 1 падение с внутренним временем 2.0 с (замечание 6
+    // ревью Глеба). Порог поднят до 3 с: старый O(n²) (~4.5 с) по-прежнему ловится, а флук
+    // от параллельных процессов — нет. Без Task.Delay (детерминизм времени не нужен, только
+    // верхняя граница).
     [Fact]
     public void Build_Замер_20kЗаписей_Быстрый()
     {
@@ -686,7 +689,7 @@ public class FeatureTimelineJournalTests
         sw.Stop();
 
         tl.Totals.ElapsedMinutes.Should().BeGreaterThan(0);
-        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1.5),
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3.0),
             $"sweep на 20k записей должен быть в сотнях мс, а не {sw.Elapsed.TotalMilliseconds:F0} мс");
     }
 

@@ -9986,6 +9986,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     msg = m;
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError, m.FinishedAt);
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
+                    // Продолженный после рестарта ход дошёл до результата инструмента — это уже не
+                    // crash-loop, а живая работа: счётчик auto-resume обнуляем, чтобы СЛЕДУЮЩИЙ
+                    // рестарт (вечер 22.10: девять выкаток подряд, долгие ходы исполнителей не
+                    // успевали дойти до result) снова мог продолжить этот ход. До первого
+                    // tool_result счётчик стоит: ход, падающий сразу после --resume, не зациклится.
+                    if (entry is not null && entry.Info.RestartResumeAttempts > 0)
+                    {
+                        entry.Info.RestartResumeAttempts = 0;
+                        SaveSessions();
+                    }
                     TryTrackFalCost(sessionId, m.Content); // fire-and-forget: стоимость придёт позже
                     TryTrackGlifCost(sessionId, m.Content); // синхронно: кредиты уже в tool_result
                     break;

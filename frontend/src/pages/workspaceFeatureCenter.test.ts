@@ -1729,13 +1729,14 @@ describe('WorkspacePage: центр — страница фичи соседом
   // её сразу за выбором). Мутации: вернуть false третьим аргументом в consumePendingProjectChat
   // → красный; снять feature из снимка в App.tsx → красный (тест в App.deeplink.test.ts);
   // снять запись канала → красный (тот же тест).
-  const runFallbackTransition = async (mobile: boolean) => {
+  const runFallbackTransition = async (mobile: boolean, restored = false) => {
     const win = globalThis as any;
     if (!mobile) win.window.innerWidth = 1280;
     const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
     mockSessionList.push(chatB);
     mockData.chats.push(chatB);
-    wsState.activeSession = null; // холодный старт: активного чата нет
+    // холодный старт: активного чата нет; restored — активный чат восстановлен из ws:{projectId}
+    if (!restored) wsState.activeSession = null;
     // Ровно то, что делает App.tsx на запасном переходе: navPush-снимок (toHash: сегмент
     // feature приоритетнее chatId) + pending-канал.
     win.window.location.hash = '#/project/p1/feature/f1';
@@ -1758,9 +1759,19 @@ describe('WorkspacePage: центр — страница фичи соседом
     // Pending-канал потреблён эффектом.
     expect(win.sessionStorage.getItem('cc_pending_project_chat'),
       'pending-канал не очищен (запасный переход)').toBeNull();
+    if (restored) {
+      expect(win.window.location.hash, 'адрес потерял /feature/ (восстановленный активный чат)')
+        .toContain('/feature/');
+    }
   };
   it('запасный переход: снимок + канал — страница фичи остаётся, чат выбран (мобила 360)', () => runFallbackTransition(true));
   it('запасный переход: снимок + канал — страница фичи остаётся, чат выбран (десктоп 1280)', () => runFallbackTransition(false));
+
+  // Дефект Ф-хв (второй возврат): активный чат восстановлен из ws:{projectId}, затем pending-канал
+  // на чат B со снимком feature — страница остаётся, адрес с /feature/. Мутация: вернуть
+  // проверку activeSessionRef.current == null вместо признака из снимка → красный.
+  it('запасный переход при восстановленном активном чате — страница остаётся (мобила 360)', () => runFallbackTransition(true, true));
+  it('запасный переход при восстановленном активном чате — страница остаётся (десктоп 1280)', () => runFallbackTransition(false, true));
 
   // Парный: тот же холодный переход, затем ЯВНЫЙ выбор ДРУГОГО чата (тот же канал, что в
   // тестах автоскрытия выше) — автоскрытие работает, страница закрыта. Мутация «вернуть

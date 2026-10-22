@@ -1410,13 +1410,15 @@ const windowWidth = useWindowWidth();
 
   // replaceNav — перезаписать текущую запись истории вместо новой: её уже положил переход
   // в проект с chatId (openProject из диплинка), вторая запись сломала бы «назад»
-  const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean, replaceNav?: boolean) => {
+  // keepFeaturePage — выбор по pending-каналу под открытой страницей фичи (запасный переход
+  // «чип ← к фиче»): страницу не закрываем и навигацию без feature не перезаписываем
+  const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean, replaceNav?: boolean, keepFeaturePage?: boolean) => {
     // Стартовый автовыбор первого чата (activeSession ещё null: холодный вход/диплинк)
     // страницу НЕ закрывает: она только что открыта по диплинку (M1, регрессия c3ae97728 —
     // вызов closeFeaturePage вынесли из-под if (!autoSelect) ради MAJOR-3, и стартовый
     // автовыбор SessionList её закрывал). Автовыбор ПОСЛЕ ухода из чата (архивация/
     // удаление активного, activeSession ≠ null) — закрывает (MAJOR-3).
-    const coldAutoSelect = !!autoSelect && activeSession == null;
+    const coldAutoSelect = (!!autoSelect && activeSession == null) || !!keepFeaturePage;
     setActiveSession(session);
     setPendingMessage(firstMessage);
     // Открытый чат — прочитанный. Отмечаем и при autoSelect (восстановление чата
@@ -1583,8 +1585,13 @@ const windowWidth = useWindowWidth();
           // Ф-хв-д (возврат ревью): при холодном старте страница фичи пришла из снимка, а чат
           // выбирается под ней — тот же coldAutoSelect, что у стартового автовыбора диплинка
           // (:1421), иначе closeFeaturePage закрывал бы страницу сразу за выбором (регрессия
-          // c84677f3c). Если чат уже активен — выбор явный: автоскрытие работает как раньше.
-          handleSelectSession(s, undefined, activeSessionRef.current == null, replace);
+          // c84677f3c). Признак берём из самого канала: снимок записан App.tsx для ЭТОГО чата
+          // и несёт feature, — а не из активного чата (восстановленный из ws:{projectId}
+          // активный чат давал false и страница терялась). Явный выбор ДРУГОГО чата
+          // (снимок без feature или с чужим chatId) закрывает страницу как раньше.
+          const snap = getNav();
+          const keepFeaturePage = !!snap?.feature && snap.chatId === s.id;
+          handleSelectSession(s, undefined, activeSessionRef.current == null || keepFeaturePage, replace, keepFeaturePage);
           if (view) {
             // «Назад» на снимок (с перемонтажом или внутри проекта): файл и задача — из
             // снимка, а не из сохранённого состояния проекта или замыкания первого рендера.

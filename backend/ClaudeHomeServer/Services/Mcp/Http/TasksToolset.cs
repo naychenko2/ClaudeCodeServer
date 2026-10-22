@@ -260,7 +260,8 @@ public sealed class TasksToolset(
                     StepRef: OptionalArg(arguments, "stepRef"),
                     Lane: OptionalArg(arguments, "lane"),
                     ReviewOf: LabelsArg(arguments, "reviewOf"),
-                    ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId));
+                    ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId),
+                    Acceptance: AcceptanceArg(arguments));
                 TaskItem created;
                 try
                 {
@@ -376,14 +377,19 @@ public sealed class TasksToolset(
                     Role: arguments.ContainsKey("role") ? StringArg(arguments, "role") : null,
                     StepRef: arguments.ContainsKey("stepRef") ? StringArg(arguments, "stepRef") : null,
                     Lane: arguments.ContainsKey("lane") ? StringArg(arguments, "lane") : null,
-                    ReviewOf: arguments.ContainsKey("reviewOf") ? LabelsArg(arguments, "reviewOf") : null);
+                    ReviewOf: arguments.ContainsKey("reviewOf") ? LabelsArg(arguments, "reviewOf") : null,
+                    // Критерии приёмки и свидетельства: null = не менять. Гейт закрытия и запрет
+                    // исполнителю менять критерии — в TaskManager.Update (здесь только разбор)
+                    Acceptance: AcceptanceArg(arguments),
+                    Evidence: EvidenceArg(arguments));
                 TaskItem updated;
                 try
                 {
                     // Агентский путь (MCP): isAgentCall=true — гард против затирания
                     // DroppedByHumanAt выдаёт внятный 400 вместо молчаливого 200 OK
                     // (фикс-волна 4 team-blocker-honest)
-                    updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true)
+                    updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
+                        callerIsExecutor: session.TaskId == id)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -444,10 +450,13 @@ public sealed class TasksToolset(
                         ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
                         LinkedFiles: arguments.ContainsKey("linkedFiles") ? LabelsArg(arguments, "linkedFiles") : null,
                         Verification: verificationEffective,
-                        Outcome: outcomeArg),
+                        Outcome: outcomeArg,
+                        // Свидетельства по критериям приёмки; отказ гейта — Deny с перечнем незакрытых
+                        Evidence: EvidenceArg(arguments)),
                         // Агентский путь (MCP): защита от затирания снятой задачи —
                         // tasks_complete на снятой задаче вернёт 400 вместо молчаливого 200 OK
-                        isAgentCall: true)
+                        isAgentCall: true,
+                        callerIsExecutor: session.TaskId == id)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -993,6 +1002,21 @@ public sealed class TasksToolset(
             Verdict = OptionalArg(ver, "verdict"),
         };
 
+    // Критерии приёмки: [{id?, text}]; id пустой — присвоит TaskManager. null — ключа нет, не менять
+    private static List<AcceptanceCriterion>? AcceptanceArg(JsonObject arguments) =>
+        arguments["acceptance"] is not JsonArray arr ? null
+            : arr.OfType<JsonObject>()
+                .Select(o => new AcceptanceCriterion(OptionalArg(o, "id") ?? "", OptionalArg(o, "text") ?? ""))
+                .ToList();
+
+    // Свидетельства: [{criterionId, how, result}]; null — ключа нет, не менять
+    private static List<AcceptanceEvidence>? EvidenceArg(JsonObject arguments) =>
+        arguments["evidence"] is not JsonArray arr ? null
+            : arr.OfType<JsonObject>()
+                .Select(o => new AcceptanceEvidence(
+                    OptionalArg(o, "criterionId") ?? "", OptionalArg(o, "how") ?? "", OptionalArg(o, "result") ?? ""))
+                .ToList();
+
     // Исход дефекта: единственное допустимое значение — closedWithoutCheck. Прочее отбрасываем
     // как «не передано» (парсер stdio-ветки делает то же). Применение к kind=Task игнорируется
     // выше — Outcome по инварианту только у Defect (DefectRules, проверка Д-3).
@@ -1156,6 +1180,7 @@ public sealed class TasksToolset(
                     ["stepRef"] = StepRefSchema(),
                     ["lane"] = LaneSchema(),
                     ["reviewOf"] = ReviewOfSchema(),
+                    ["acceptance"] = AcceptanceSchema(),
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
@@ -1222,6 +1247,8 @@ public sealed class TasksToolset(
                     ["stepRef"] = StepRefSchema(),
                     ["lane"] = LaneSchema(),
                     ["reviewOf"] = ReviewOfSchema(),
+                    ["acceptance"] = AcceptanceSchema(),
+                    ["evidence"] = EvidenceSchema(),
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject
@@ -1261,6 +1288,7 @@ public sealed class TasksToolset(
                         ["items"] = new JsonObject { ["type"] = "string" },
                         ["description"] = "Итоговые файлы проекта (пути от корня, через /)",
                     },
+                    ["evidence"] = EvidenceSchema(),
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                 },
@@ -1465,6 +1493,41 @@ public sealed class TasksToolset(
                 ["type"] = "string",
                 ["enum"] = StringArray(TaskVerdicts.All),
                 ["description"] = "Исход витка: accepted · accepted_with_remarks · returned · withdrawn",
+            },
+        },
+    };
+
+    // Критерии приёмки. Описание парное ACCEPTANCE_SCHEMA в mcp/tasks-server/index.js
+    private static JsonObject AcceptanceSchema() => new()
+    {
+        ["type"] = "array",
+        ["description"] = "Критерии приёмки (измеримые): заменяют список целиком; исполнитель задачи их не меняет",
+        ["items"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["required"] = new JsonArray { "text" },
+            ["properties"] = new JsonObject
+            {
+                ["id"] = new JsonObject { ["type"] = "string", ["description"] = "Id критерия (пусто — присвоится c1, c2…)" },
+                ["text"] = new JsonObject { ["type"] = "string", ["description"] = "Измеримая формулировка критерия" },
+            },
+        },
+    };
+
+    // Свидетельства по критериям приёмки. Описание парное EVIDENCE_SCHEMA в mcp/tasks-server/index.js
+    private static JsonObject EvidenceSchema() => new()
+    {
+        ["type"] = "array",
+        ["description"] = "Свидетельства по критериям приёмки: добавляются к имеющимся; закрытие задачи требует свидетельство на каждый критерий",
+        ["items"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["required"] = new JsonArray { "criterionId", "how", "result" },
+            ["properties"] = new JsonObject
+            {
+                ["criterionId"] = new JsonObject { ["type"] = "string", ["description"] = "Id критерия" },
+                ["how"] = new JsonObject { ["type"] = "string", ["description"] = "Чем проверено (команда, замер)" },
+                ["result"] = new JsonObject { ["type"] = "string", ["description"] = "Что получилось (вывод, цифры)" },
             },
         },
     };

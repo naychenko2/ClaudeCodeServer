@@ -402,7 +402,12 @@ public class TasksController(
             // подделки, а разведение путей: подделанный заголовок делает правило строже.
             var isAgentCall = !string.IsNullOrEmpty(
                 Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault());
-            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall)
+            // Исполнитель = чат, привязанный к ЭТОЙ задаче (Session.TaskId): критерии приёмки
+            // он не меняет (TaskManager.Update); постановщик и человек — меняют
+            var callerSessionHeader = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
+            var callerIsExecutor = callerSessionHeader is not null
+                && sessions.GetById(callerSessionHeader)?.TaskId == taskId;
+            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor)
                 ?? throw new InvalidOperationException("Задача не найдена");
         }
         catch (InvalidOperationException ex)

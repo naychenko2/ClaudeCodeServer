@@ -1912,7 +1912,23 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
     // Текст гостевой реплики B: маркер + пустая строка + итог задачи
     internal static string BuildDelegationReportText(TaskItem task) =>
-        $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task)}";
+        $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task)}{DelegationReportAcceptance(task)}";
+
+    // Таблица «критерий → свидетельство» для задач с критериями приёмки; без критериев — пусто.
+    // Критерий без свидетельства (задачу закрыли мимо гейта, например человек через UI) —
+    // явная пометка, а не пропуск строки.
+    private static string DelegationReportAcceptance(TaskItem task)
+    {
+        if (task.Acceptance.Count == 0) return "";
+        static string Cell(string v) => v.Replace("|", "\\|").Replace("\r", "").Replace("\n", " ");
+        var rows = task.Acceptance.Select(c =>
+        {
+            var e = task.Evidence.FirstOrDefault(x => x.CriterionId == c.Id);
+            var proof = e is null ? "_нет свидетельства_" : $"{Cell(e.How)} — {Cell(e.Result)}";
+            return $"| {Cell(c.Id)}. {Cell(c.Text)} | {proof} |";
+        });
+        return "\n\n**Критерии приёмки**\n\n| Критерий | Свидетельство |\n|---|---|\n" + string.Join("\n", rows);
+    }
 
     // Промпт авто-хода постановщика A: выжимка (id/название) + просьба отреагировать.
     // MINOR 1: полное тело resultMarkdown сюда НЕ дублируем — оно уже перед этим ходом

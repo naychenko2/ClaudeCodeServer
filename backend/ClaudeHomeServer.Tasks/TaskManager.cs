@@ -394,6 +394,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             AwaitingHumanSince = req.AwaitingHumanSince,
             AwaitingHumanReason = Trimmed(req.AwaitingHumanReason),
             Verification = req.Verification,
+            Acceptance = AcceptanceRules.Normalize(req.Acceptance),
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
@@ -424,6 +425,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // review-признак резолвится вызывающей стороной (BoardColumnHelper.IsReview).
         DefectRules.EnsureNotClosedAtCreate(task, targetColumn);
         DefectRules.EnsureReproOnReview(task, targetColumn);
+        // Критерии приёмки: создать сразу закрытой задачу с критериями нельзя — свидетельств ещё нет
+        if (task.Status == TaskItemStatus.Done || targetColumn is { Category: TaskItemStatus.Done })
+            AcceptanceRules.EnsureClosable(task.Acceptance, task.Evidence);
         // Фича: fail-closed валидация featureId/role/verdict/reviewOf (до вставки в словарь,
         // чтобы при отказе состояние менеджера не изменилось)
         ValidateFeatureFields(task.FeatureId, task.Role, task.Verification?.Verdict,
@@ -574,7 +578,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // в работу и снять пометку, а агенту мы обязаны отказать внятно — иначе «200 OK и
     // ничего не изменилось» (находка фикс-волны 4, мутация в TaskManagerTests).
     public TaskItem? Update(string id, UpdateTaskRequest req, BoardColumn? effectiveColumn = null,
-        bool isAgentCall = false)
+        bool isAgentCall = false, bool callerIsExecutor = false)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
@@ -649,6 +653,24 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         DefectRules.EnsureVerificationOnClose(effective);
         DefectRules.EnsureReproOnReview(effective, effectiveColumn);
 
+        // Критерии приёмки и свидетельства: эффективное состояние считаем до мутации (как гейты
+        // выше). Чат-исполнитель своей задачи критерии не меняет — иначе гейт обходится удалением
+        // критерия; постановщик и человек меняют свободно. Свидетельства добавляют все.
+        var newAcceptance = req.Acceptance is null ? null : AcceptanceRules.Normalize(req.Acceptance);
+        if (callerIsExecutor && newAcceptance is not null
+            && !AcceptanceRules.SameCriteria(newAcceptance, task.Acceptance))
+            throw new InvalidOperationException(
+                "Исполнитель не может менять критерии приёмки (acceptance): их задаёт постановщик. " +
+                "Свидетельства по критериям передавайте в evidence.");
+        var effAcceptance = newAcceptance ?? task.Acceptance;
+        var effEvidence = req.Evidence is null
+            ? task.Evidence
+            : AcceptanceRules.MergeEvidence(task.Evidence, req.Evidence, effAcceptance);
+        // Критерий убрали — его свидетельство осиротело и отбрасывается
+        effEvidence = effEvidence.Where(e => effAcceptance.Any(c => c.Id == e.CriterionId)).ToList();
+        if (effective.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done)
+            AcceptanceRules.EnsureClosable(effAcceptance, effEvidence);
+
         // Фича: fail-closed валидация на ЭФФЕКТИВНОМ состоянии (req ?? task), до мутации.
         // null в req = не менять (берём из task), "" = сбросить (null) — та же семантика,
         // что и при применении полей ниже.
@@ -718,6 +740,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.Repro is not null) task.Repro = req.Repro;
         if (req.Verification is not null) task.Verification = req.Verification;
         if (req.Outcome is not null) task.Outcome = req.Outcome;
+        task.Acceptance = effAcceptance;
+        task.Evidence = effEvidence;
         // Фича (режим «Исполнение фичи»): null = не менять, "" = сбросить (строки);
         // ReviewOf — null = не менять, список = задать целиком; AwaitingHuman* — null = не менять
         if (req.FeatureId is not null) task.FeatureId = Trimmed(req.FeatureId);
@@ -1281,7 +1305,9 @@ public record CreateTaskRequest(
     string? AwaitingHumanReason = null,
     // Вердикт (TaskVerification.Verdict): accepted · accepted_with_remarks · returned · withdrawn;
     // null = старая семантика «проверено»
-    TaskVerification? Verification = null);
+    TaskVerification? Verification = null,
+    // Критерии приёмки (измеримые); пустой Id получает «cN». См. AcceptanceRules
+    List<AcceptanceCriterion>? Acceptance = null);
 
 public record CreateSubtaskRequest(string Title);
 
@@ -1345,6 +1371,11 @@ public record UpdateTaskRequest(
     List<string>? ReviewOf = null,
     // «Ждёт вас»: null = не менять, значение = задать
     DateTime? AwaitingHumanSince = null,
-    string? AwaitingHumanReason = null);
+    string? AwaitingHumanReason = null,
+    // Критерии приёмки: null = не менять, список = задать целиком (пустой — снять все).
+    // Исполнитель-чат своей задачи критерии не меняет (TaskManager.Update, callerIsExecutor)
+    List<AcceptanceCriterion>? Acceptance = null,
+    // Свидетельства: null = не менять, список = добавить/заменить по criterionId
+    List<AcceptanceEvidence>? Evidence = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

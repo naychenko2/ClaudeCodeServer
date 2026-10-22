@@ -51,4 +51,6 @@ public sealed class SessionManagerTurnResumeHost(
         var r = await sessions.ResumeAfterRestartAsync(sessionId);
         return new TurnResumeSendResult(r.Sent, r.Reason);
     }
+
+    public Task DrainRestoredQueuesAsync() => sessions.DrainRestoredPendingAsync();
 }

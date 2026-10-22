@@ -180,12 +180,21 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Агентские (chats_send) прерывают обычный ход — ждущий их агент упрётся в таймаут, —
         // но ход в цикле «до готово» и в штабе не рушат: там они ждут конца цикла и штатного
         // конца хода соответственно. Явный перебой по кнопке — PreemptForPending.
-        // Только в памяти — при рестарте сессия и так становится Orphaned, доставлять
-        // накопленное в умерший контекст незачем. QueueFrozen — «Стоп» заморозил разбор:
-        // автодоставки нет до возобновления пользователем (новое сообщение).
-        public readonly List<QueuedMessage> Pending = [];
+        // Переживает рестарт: каждая мутация пишется в data/sessions/{ключ}/pending.json
+        // (PendingQueue.Changed → PersistPending; смена QueueFrozen — явным PersistPending),
+        // на старте очередь поднимается с диска, а чаты
+        // без живого хода разбираются штатным DrainNextPendingAsync (DrainRestoredPendingAsync).
+        // QueueFrozen — «Стоп» заморозил разбор: автодоставки нет до возобновления пользователем
+        // (новое сообщение); заморозка тоже переживает рестарт.
+        public readonly PendingQueue Pending = new();
         public readonly Lock PendingLock = new();
+        // Меняется только через PersistPending-места (FreezePending, возобновление человеком)
         public volatile bool QueueFrozen;
+        // Сообщения старше срока годности, не оживлённые при загрузке: карточку «не доставлено»
+        // в историю пишет DrainRestoredPendingAsync (на загрузке брокера и истории ещё нет).
+        public List<QueuedMessage>? ExpiredOnRestore;
+        // Очередь поднята с диска — чат кандидат на автодренаж после старта.
+        public bool PendingRestored;
         // Прогон, в котором идёт сворачивание контекста (/compact). Обычный ход, но обёртка
         // фолбэка его не оркеструет, а exited убитой компакции глотает — поэтому прерывать
         // компакцию нельзя (чат залип бы в Working навсегда). Хранится идентификатор прогона,
@@ -1481,7 +1490,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             // раньше («только последний рестарт»).
             if (originalStatus == SessionStatus.Working)
                 _restartResumeCandidates.Add(session.Id);
-            _sessions[session.Id] = new SessionEntry { Info = session };
+            var restoredEntry = new SessionEntry { Info = session };
+            RestorePending(restoredEntry);
+            _sessions[session.Id] = restoredEntry;
         }
         // Значок темы переехал из имени в Session.Topic — переносим старые эмодзи-имена.
         // Идемпотентно: на уже перенесённых сессиях это no-op. Один SaveSessions покрывает
@@ -1501,6 +1512,104 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                         Console.Error.WriteLine($"[SessionManager] Маркер обрыва хода ({csid}) не записан: {ex.Message}");
                     }
             });
+    }
+
+    // --- Персистентность очереди отложенных сообщений (pending.json) ---
+
+    // Срок годности восстановленного сообщения: старше — не оживляем, чтобы не будить чаты
+    // недельной давности (в историю ложится плашка «не доставлено»).
+    internal static readonly TimeSpan PendingRestoreMaxAge = TimeSpan.FromHours(24);
+
+    private void AttachPendingPersistence(SessionEntry entry) =>
+        entry.Pending.Changed = () => PersistPending(entry);
+
+    // Запись очереди и заморозки. Берёт PendingLock сам (замок реентерабелен): QueueFrozen
+    // пишется и вне замка, а две параллельные записи одного файла не должны разъезжаться.
+    private void PersistPending(SessionEntry entry)
+    {
+        try
+        {
+            lock (entry.PendingLock)
+            {
+                var key = HistoryKeyOf(entry.Info);
+                _history.SavePending(key, new PendingQueueFile(entry.QueueFrozen, entry.Pending.ToList()));
+                // Чат получил ClaudeSessionId уже после первой записи — файл под id чата устарел
+                if (key != entry.Info.Id) _history.SavePending(entry.Info.Id, new PendingQueueFile(false, []));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Очередь чата {entry.Info.Id} не записана: {ex.Message}");
+        }
+    }
+
+    // Загрузка очереди на старте: свежие сообщения — в Pending (в том же порядке), старше срока —
+    // в ExpiredOnRestore (плашку пишет DrainRestoredPendingAsync). Файл читаем ДО подключения
+    // Changed: восстановление не должно писать диск, пока не отсеяли просроченное.
+    private void RestorePending(SessionEntry entry)
+    {
+        try
+        {
+            var state = _history.LoadPending(HistoryKeyOf(entry.Info))
+                ?? (entry.Info.ClaudeSessionId is not null ? _history.LoadPending(entry.Info.Id) : null);
+            if (state is { Items.Count: > 0 })
+            {
+                var now = DateTime.UtcNow;
+                var fresh = state.Items.Where(m => now - m.EnqueuedAt <= PendingRestoreMaxAge).ToList();
+                var expired = state.Items.Where(m => now - m.EnqueuedAt > PendingRestoreMaxAge).ToList();
+                entry.Pending.Restore(fresh);
+                entry.QueueFrozen = state.Frozen;
+                entry.PendingRestored = fresh.Count > 0;
+                if (expired.Count > 0) entry.ExpiredOnRestore = expired;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Очередь чата {entry.Info.Id} не прочитана: {ex.Message}");
+        }
+        AttachPendingPersistence(entry);
+        if (entry.ExpiredOnRestore is not null) PersistPending(entry);
+    }
+
+    // После того как авто-возобновление отработало: чаты без живого хода с восстановленной
+    // незамороженной очередью разбираются штатным DrainNextPendingAsync; просроченные
+    // сообщения получают плашку «не доставлено». Чат с возобновлённым ходом (Working/Waiting/
+    // Starting) не трогаем — очередь разберёт его конец. Идемпотентно: PendingRestored гасится.
+    public async Task DrainRestoredPendingAsync()
+    {
+        foreach (var (sessionId, entry) in _sessions.ToArray())
+        {
+            try
+            {
+                var expired = entry.ExpiredOnRestore;
+                if (expired is not null)
+                {
+                    entry.ExpiredOnRestore = null;
+                    await AppendPendingExpiredCardAsync(sessionId, entry, expired);
+                }
+
+                if (!entry.PendingRestored) continue;
+                if (entry.Info.Status is SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting)
+                    continue;
+                entry.PendingRestored = false;
+                if (entry.QueueFrozen || !HasPending(entry)) continue;
+                await DrainNextPendingAsync(sessionId);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Автодренаж очереди ({sessionId}) после рестарта: {ex.Message}");
+            }
+        }
+    }
+
+    private async Task AppendPendingExpiredCardAsync(string sessionId, SessionEntry entry, List<QueuedMessage> expired)
+    {
+        const string reason = "pending_expired";
+        var text = expired.Count == 1
+            ? "Не доставлено: сервер перезапускался, а сообщение в очереди устарело (старше 24 ч)"
+            : $"Не доставлено: сервер перезапускался, а {expired.Count} сообщений в очереди устарели (старше 24 ч)";
+        await AppendStoredAsync(sessionId, new StoredWorkLoopStoppedMessage(reason, text),
+            new WorkLoopStoppedMessage(reason, text));
     }
 
     // Выдача кандидатов на auto-resume: возвращает захваченный LoadSessions список и
@@ -1566,7 +1675,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     }
 
     // Тестовый хук: наполнить стор сессиями без полного CreateAsync (бенчмарк MarkRead).
-    internal void AddSessionForTest(Session info) => _sessions[info.Id] = new SessionEntry { Info = info };
+    internal void AddSessionForTest(Session info)
+    {
+        var entry = new SessionEntry { Info = info };
+        AttachPendingPersistence(entry);
+        _sessions[info.Id] = entry;
+    }
 
     // Публичный (волна В): TeamPlanService сохраняет каталог сессий после правки PlanCardId/
     // PlanVersion/Replanning — через тот же канал, что и TeamWaveService.
@@ -4546,6 +4660,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var accumulator = new TurnAccumulator(await _history.LoadAsync(historyKey), historyKey);
 
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
+        AttachPendingPersistence(entry);
         _sessions[session.Id] = entry;
 
         var ownerId = ResolveOwnerId(session);
@@ -4730,7 +4845,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
                 // Пользователь возобновил разговор — заморозка «Стоп» снимается ДО постановки,
                 // иначе форсаж dispatchNow и разбор по концу хода упёрлись бы в QueueFrozen
-                entry.QueueFrozen = false;
+                if (entry.QueueFrozen) { entry.QueueFrozen = false; PersistPending(entry); }
                 var enqueued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
                     agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode);
                 if (enqueued is SendAndWaitResult.QueueFull f)
@@ -4778,7 +4893,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             {
                 if (entry.Pending.Count > 0)
                 {
-                    entry.QueueFrozen = false;
+                    if (entry.QueueFrozen) { entry.QueueFrozen = false; PersistPending(entry); }
                     head = entry.Pending[0];
                     entry.Pending.RemoveAt(0);
                     // Потолок не пробивается: голова изъята до добавления
@@ -5710,6 +5825,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         lock (entry.PendingLock)
         {
             entry.QueueFrozen = true;
+            PersistPending(entry);
             hadAny = entry.Pending.Count > 0;
             // Последнее пользовательское изымаем — оно вернётся в композер для правки/повтора.
             // Агентские и более ранние пользовательские остаются ждать возобновления.

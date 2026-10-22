@@ -58,7 +58,7 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // файл вне графа, ответ дольше 3 с, ошибка авторизации — молчание и код 0. Адрес, проект и
 // токен приезжают в окружении процесса CLI (CCS_HOOK_API / CCS_HOOK_PROJECT / CCS_HOOK_TOKEN,
 // ставит ClaudeSession; токен — тот же сервисный JWT, что в заголовках MCP-конфига хода).
-// Признак «файл уже правили» — файл <префикс проекта>_<session_id> в каталоге hook-state рядом со скриптом (0700, файлы 0600); пометка — только после ответа 200.
+// Признак «файл уже правили» — файл <префикс проекта>_<session_id> в каталоге hook-state рядом со скриптом (0700, файлы 0600); пометка — только когда контекст реально отдан (200 с непустым списком; файл вне графа не помечается).
 // В песочнице и на Windows-хосте хука нет по построению (см. ниже) — для них отдельный шаг.
 //
 // Только для local-среды: в песочнице (Linux) окон нет, а путь к хостовому файлу
@@ -244,12 +244,12 @@ public static class ClaudeRuntimeSettings
                 if status in (401, 403) or status >= 500:
                     touch_down()
                 return
-            mark_seen(seen_path, rel)
             text = render(rel, body, note)
             if text:
                 sys.stdout.write(json.dumps({"hookSpecificOutput": {
                     "hookEventName": "PreToolUse", "additionalContext": text}}))
                 sys.stdout.flush()
+                mark_seen(seen_path, rel)
 
 
         try:
@@ -297,6 +297,9 @@ public static class ClaudeRuntimeSettings
     // На Windows хуки плагинов порождают мелькающие окна консоли — гасим.
     // На остальных платформах хуки нужны как канал влияния на локальную модель.
     private static bool HostRequiresHooksOff => OperatingSystem.IsWindows();
+
+    // Хук потребителей реально запускается: не песочница (--settings там не передаётся) и хост не гасит хуки.
+    public static bool ConsumersHookRuns(IProcessLauncher launcher) => !launcher.IsSandboxed && !HostRequiresHooksOff;
 
     // Ключ кэша — (temp-каталог среды, режим, гасить ли хуки): temp у драйверов запуска
     // разный, одного флага мало — первый владелец «застолбил» бы путь в своей папке для
@@ -371,14 +374,33 @@ public static class ClaudeRuntimeSettings
 
     // Уборка состояния хука потребителей (признаки «файл правили» и паузы после сбоев): TTL сутки.
     // Каталог состояния лежит в каталоге отпечатка — обходим все плюс прежний общий hook-state.
+    // Сами каталоги отпечатков (скрипты и settings.json прежних сборок) убираем, когда в них
+    // ничего не менялось дольше TTL; каталоги, чьи файлы настроек отданы в этом процессе
+    // (_cachedPaths), не трогаем никогда.
     public static void CleanupHookState(string hostTempDir, TimeSpan ttl)
     {
         var runtime = Path.Combine(hostTempDir, RuntimeDirName);
         if (!Directory.Exists(runtime)) return;
+        var threshold = DateTime.UtcNow - ttl;
         var states = Directory.EnumerateDirectories(runtime).Select(d => Path.Combine(d, HookStateDirName))
             .Append(Path.Combine(runtime, HookStateDirName));
         foreach (var state in states.Where(Directory.Exists))
             foreach (var f in Directory.EnumerateFiles(state))
-                try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow - ttl) File.Delete(f); } catch { }
+                try { if (File.GetLastWriteTimeUtc(f) < threshold) File.Delete(f); } catch { }
+
+        HashSet<string> live;
+        lock (_lock)
+            live = _cachedPaths.Values.Select(p => Path.GetFullPath(Path.GetDirectoryName(p)!)).ToHashSet();
+        foreach (var dir in Directory.EnumerateDirectories(runtime))
+        {
+            if (live.Contains(Path.GetFullPath(dir))) continue;
+            try
+            {
+                var newest = Directory.EnumerateFileSystemEntries(dir, "*", SearchOption.AllDirectories)
+                    .Append(dir).Max(e => File.GetLastWriteTimeUtc(e));
+                if (newest < threshold) Directory.Delete(dir, true);
+            }
+            catch { }
+        }
     }
 }

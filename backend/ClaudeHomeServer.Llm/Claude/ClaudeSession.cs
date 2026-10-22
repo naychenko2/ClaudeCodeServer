@@ -1016,6 +1016,12 @@ public class ClaudeSession : ILlmSessionAdapter
         env[ConsumersHookTokenEnv] = _codeGraphMcp.TokenFactory();
     }
 
+    // Хук потребителей доедет до процесса CLI: хост не гасит хуки, не песочница и есть http-адрес API
+    // (те же условия, что у env хука в RunTurnAsync). Иначе потребителей несёт хвост первого хода.
+    private bool ConsumersHookDelivered =>
+        ClaudeRuntimeSettings.ConsumersHookRuns(_launcher)
+        && _codeGraphMcp is { } g && g.ApiUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
+
     private string GatewayBaseUrl(string turnId) => $"{_llmGatewayApiUrl!.TrimEnd('/')}/gw/t/{turnId}/llm";
 
     // Настоящий токен шлюза новому процессу: заглушки env заменяются уже после сигнатуры.
@@ -3598,7 +3604,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasDevMcp: _testsMcp is not null && McpDelivered(McpEndpoints.DevName),
                     HasAudioEditorMcp: _audioEditorMcp is not null && McpDelivered(McpEndpoints.AudioEditorName),
                     HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
-                    Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth));
+                    Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth),
+                    ConsumersHookActive: ConsumersHookDelivered);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try

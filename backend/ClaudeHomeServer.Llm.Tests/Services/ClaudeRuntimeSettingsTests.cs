@@ -122,6 +122,62 @@ public class ClaudeRuntimeSettingsTests
     }
 
     [Fact]
+    public void ОчисткаСостоянияХука_УбираетСтарыеКаталогиОтпечатков_СвежиеОставляет()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-cleanup-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var runtime = Path.Combine(temp, ClaudeRuntimeSettings.RuntimeDirName);
+            var oldDir = Path.Combine(runtime, "old");
+            var freshDir = Path.Combine(runtime, "fresh");
+            foreach (var d in new[] { oldDir, freshDir }) Directory.CreateDirectory(d);
+            File.WriteAllText(Path.Combine(oldDir, "hook.py"), "x");
+            File.WriteAllText(Path.Combine(freshDir, "hook.py"), "x");
+            var past = DateTime.UtcNow.AddDays(-3);
+            File.SetLastWriteTimeUtc(Path.Combine(oldDir, "hook.py"), past);
+            Directory.SetLastWriteTimeUtc(oldDir, past);
+
+            ClaudeRuntimeSettings.CleanupHookState(temp, TimeSpan.FromDays(1));
+
+            Directory.Exists(oldDir).Should().BeFalse("в каталоге прежней сборки ничего не менялось дольше TTL");
+            Directory.Exists(freshDir).Should().BeTrue("недавно менявшийся каталог остаётся");
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    [Fact]
+    public void ОчисткаСостоянияХука_КаталогТекущегоОтпечатка_НеУдаляетсяДажеСтарый()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-cleanup-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var settings = ClaudeRuntimeSettings.HooksOffArgs(new TempLauncher(temp)).ToList()[1];
+            var current = Path.GetDirectoryName(settings)!;
+            var past = DateTime.UtcNow.AddDays(-3);
+            foreach (var f in Directory.EnumerateFiles(current)) File.SetLastWriteTimeUtc(f, past);
+            Directory.SetLastWriteTimeUtc(current, past);
+
+            ClaudeRuntimeSettings.CleanupHookState(temp, TimeSpan.FromDays(1));
+
+            File.Exists(settings).Should().BeTrue("файл настроек отдан живому процессу: каталог текущего отпечатка не трогаем");
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    private sealed class TempLauncher(string temp) : IProcessLauncher
+    {
+        public bool IsSandboxed => false;
+        public bool TargetIsWindows => false;
+        public IPathMapper Paths => IdentityPathMapper.Instance;
+        public string ClaudeCliCommand => "fake-claude";
+        public string HostTempDir => temp;
+        public string? McpApiUrlOverride => null;
+        public Process Start(ProcessSpec spec) => throw new NotSupportedException();
+        public void Kill(Process process, string? turnId = null) { }
+        public int EstimateCommandLineLength(ProcessSpec spec) => 0;
+    }
+
+    [Fact]
     public void ОкружениеХукаПотребителей_НеПопадаетВЛогиИСнимки()
     {
         // Гвард от регрессии: CCS_HOOK_TOKEN — сервисный JWT. Имена окружения хука знает только

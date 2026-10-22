@@ -66,7 +66,7 @@ public class ConsumersHookTests
     private readonly string _project = "proj-" + Guid.NewGuid().ToString("N");
 
     private Run RunHook(string? api, string session, string file, string cwd = "/work/tree",
-        string? token = "tok")
+        string? token = "tok", string? project = null)
     {
         var psi = new ProcessStartInfo("python3")
         {
@@ -79,7 +79,7 @@ public class ConsumersHookTests
         psi.Environment.Remove("CCS_HOOK_PROJECT");
         if (api is not null) psi.Environment["CCS_HOOK_API"] = api;
         if (token is not null) psi.Environment["CCS_HOOK_TOKEN"] = token;
-        psi.Environment["CCS_HOOK_PROJECT"] = _project;
+        psi.Environment["CCS_HOOK_PROJECT"] = project ?? _project;
         var sw = Stopwatch.StartNew();
         using var proc = Process.Start(psi)!;
         proc.StandardInput.Write(JsonSerializer.Serialize(new
@@ -258,5 +258,37 @@ public class ConsumersHookTests
         var file = Directory.EnumerateFiles(dir).Single(f => f.EndsWith("_" + session));
         File.GetUnixFileMode(file).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite);
         Path.GetFileName(file).Should().NotBe(session, "имя несёт префикс проекта");
+    }
+
+    [Fact]
+    public void ФайлВнеГрафа_НеПомечается_ПослеДостройкиГрафаПравкаПолучаетПотребителей()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var body = JsonSerializer.Serialize(new { node = new { }, neighbors = Array.Empty<object>(), total = 0 });
+        using var stub = new Stub(_ => (200, body, 0));
+        var session = NewSession();
+
+        RunHook(stub.Url, session, "src/a.ts").Stdout.Should().BeEmpty("файл вне графа — контекста нет");
+
+        body = Neighbors(2);
+        Context(RunHook(stub.Url, session, "src/a.ts")).Should().Contain(l => l.Contains("Consumer1"),
+            "контекст не выдавался — файл не помечен, граф достроился, повторная правка его получает");
+        stub.Requests.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void ДваПроектаСОдинымSessionId_ДваРазныхФайлаСостояния()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var stub = new Stub(_ => (200, Neighbors(1), 0));
+        var session = NewSession();
+
+        RunHook(stub.Url, session, "src/a.ts", project: "proj-a-" + Guid.NewGuid().ToString("N"));
+        RunHook(stub.Url, session, "src/a.ts", project: "proj-b-" + Guid.NewGuid().ToString("N"));
+
+        var dir = Path.Combine(Path.GetDirectoryName(ScriptPath())!, "hook-state");
+        Directory.EnumerateFiles(dir, "*_" + session).Should().HaveCount(2,
+            "одинаковый session_id у разных проектов не должен делить файл состояния");
+        stub.Requests.Should().HaveCount(2, "второй проект не считает файл уже виденным");
     }
 }

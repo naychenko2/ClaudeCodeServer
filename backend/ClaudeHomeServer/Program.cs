@@ -1708,7 +1708,7 @@ if (!inspectionMode)
         catch { /* нет доступа к temp — не критично */ }
         try
         {
-            // hook-state хука потребителей: признаки «файл уже правили» по session_id, TTL сутки
+            // хук потребителей: признаки «файл уже правили» (<префикс проекта>_<session_id>) и каталоги отпечатков прежних сборок, TTL сутки
             ClaudeRuntimeSettings.CleanupHookState(Path.GetTempPath(), TimeSpan.FromDays(1));
         }
         catch { /* не критично */ }

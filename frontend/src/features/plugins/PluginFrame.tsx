@@ -324,10 +324,11 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
         postToFrame(buildResultMessage(msg.id, true, res.data));
       } else {
         postToFrame(buildResultMessage(msg.id, false, res.error));
-        // Отказ по праву — та же плашка «Нет права {key}», что для серверных
-        // отказов; только если фрейм не сменился (R-Gleb, минор 1).
-        const key = deniedKeyOfError(res.error);
-        if (key && stateRef.current.frameKey === startFrameKey) setDeniedKey(key);
+        // Отказ по storage — тихий (решение Софьи, 22.10): панель получает
+        // {code:'denied'} и работает дальше, плашки «Нет права …» нет — без права
+        // storage панель просто не запоминает данные, это штатное состояние, а не
+        // поломка. Человек, отозвавший право, знает об этом сам. Отказы по net: и
+        // прочим доменам идут серверной веткой ниже и плашку дают, как раньше.
       }
       return;
     }

@@ -324,17 +324,39 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
     });
   });
 
-  // Отказ по праву ставит плашку «Нет права storage» (тот же путь, что для
-  // серверных отказов: deniedKeyOfError + bridge === 'alive').
-  it('отказ по праву — плашка «Нет права storage» на фрейме', async () => {
+  // Отказ по storage — тихий (решение Софьи, 22.10): панель получает {code:'denied'},
+  // но плашки «Нет права …» нет — без права storage панель работает, просто не
+  // запоминает. Мутации: вернуть setDeniedKey в storage-ветке → плашка появится →
+  // этот тест красный; снять тихий режим и для net: → красный тест ниже.
+  it('отказ по storage — тихий: result denied, плашки «Нет права storage» нет', async () => {
     const { container, sent, panelWin } = await mountWithBridge(P_WITH_PANEL, PANEL_1, {}, 'u1');
-    // ready → bridge alive: плашка рисуется только на живом мосту (как и раньше).
+    // ready → bridge alive: даже на живом мосту плашки по storage нет.
     dispatch({ type: 'message', source: panelWin, origin: 'null', data: { source: 'ccs-plugin', v: 1, type: 'ready' } });
     callFromPanel(panelWin, 'storage.get', { key: 'city' });
     expect(sent[sent.length - 1]).toEqual({
       source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'denied', message: 'Нет права: storage' },
     });
-    expect(textNodes(container).join(' ')).toContain('Нет права storage');
+    expect(textNodes(container).join(' ')).not.toContain('Нет права storage');
+  });
+
+  // Регрессия на прежнее поведение для других доменов: отказ сервера по net: —
+  // плашка «Нет права net:… остаётся» (deniedKeyOfError + bridge === 'alive').
+  it('отказ по net: — плашка «Нет права net:…», как раньше', async () => {
+    const { container, sent, panelWin } = await mountWithBridge(P_WITH_PANEL, PANEL_1, {}, 'u1');
+    vi.mocked(api.plugins.call).mockRejectedValue(
+      Object.assign(new Error('forbidden'), {
+        status: 403,
+        body: { ok: false, error: { code: 'denied', message: 'Нет права: net:example.com' } },
+      }),
+    );
+    dispatch({ type: 'message', source: panelWin, origin: 'null', data: { source: 'ccs-plugin', v: 1, type: 'ready' } });
+    callFromPanel(panelWin, 'net:example.com/weather', { q: 'Ярославль' });
+    // handleCall — async: даём промису отказа дойти до catch-ветки
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    expect(sent[sent.length - 1]).toEqual({
+      source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'denied', message: 'Нет права: net:example.com' },
+    });
+    expect(textNodes(container).join(' ')).toContain('Нет права net:example.com');
   });
 
   // Fail-closed: нет id владельца в состоянии авторизации — unavailable, ни одной

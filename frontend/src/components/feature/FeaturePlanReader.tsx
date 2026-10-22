@@ -385,14 +385,11 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                     <div key={i} data-testid="plan-section" data-plan-section={i}>
                       {/* Заголовок не внутри button (button допускает только phrasing-контент):
                           h2 остаётся заголовком, переключатель — отдельная кнопка-шевелон рядом. */}
+                      {/* Свёртка — только кнопкой-шевелоном: тап по тексту заголовка раздел не сворачивает
+                          (известный компромисс, он ломал выделение, ссылки и двойной клик — не возвращать). */}
                       <div
                         data-testid="plan-section-head"
-                        onClick={() => {
-                          // Выделяя текст заголовка, человек не хочет сворачивать раздел.
-                          if (window.getSelection?.()?.toString()) return;
-                          toggleSection(i, expanded);
-                        }}
-                        style={{ display: 'flex', alignItems: 'center', gap: SP.sm, textAlign: 'left', cursor: 'pointer' }}
+                        style={{ display: 'flex', alignItems: 'center', gap: SP.sm, textAlign: 'left' }}
                       >
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <MarkdownContent text={sec.head} />
@@ -403,11 +400,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                           aria-expanded={expanded}
                           aria-label={`${expanded ? 'Свернуть' : 'Развернуть'} раздел ${sec.title}`}
                           title={expanded ? 'Свернуть раздел' : 'Развернуть раздел'}
-                          onClick={e => {
-                            // Строка заголовка тоже переключает: без остановки клик сработал бы дважды.
-                            e?.stopPropagation?.();
-                            toggleSection(i, expanded);
-                          }}
+                          onClick={() => toggleSection(i, expanded)}
                           style={{
                             width: 34, minWidth: isMobile ? 40 : undefined, minHeight: isMobile ? 40 : 26, flexShrink: 0,
                             border: 'none', background: 'transparent', cursor: 'pointer',

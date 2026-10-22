@@ -123,6 +123,16 @@ const TEXTS = vi.hoisted(() => ({
     '    ```md',
     '## Раздел 6', 'тело 6',
   ].join('\n'),
+  // Ссылка внутри заголовка раздела.
+  link: [
+    'Преамбула.',
+    '## Шаг 2 (см. [ADR-016](https://example.com/adr))', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+    '## Раздел 6', 'тело 6',
+  ].join('\n'),
   // Заголовки с разметкой — подпись переключателя без `**`.
   markup: [
     'Преамбула.',
@@ -408,37 +418,65 @@ describe('FeaturePlanReader: свёртка разделов', () => {
     expect(textNodes(allNodes(container, 'plan-reader-toc-item')[0]).join(' ')).toBe('Шаг два');
   });
 
-  // === 16. Клик по строке заголовка раздела ===
-  const fakeEvent = () => ({ stopPropagation: vi.fn() });
+  // === 16. Свёртка — только кнопкой-шевелоном; строка заголовка не кликабельна ===
+  const fakeEvent = () => {
+    const ev = { stopped: false, stopPropagation() { ev.stopped = true; }, preventDefault() {} };
+    return ev;
+  };
 
-  it('клик по строке заголовка переключает раздел', async () => {
+  // Клик по узлу с всплытием вверх до корня: зовём onClick каждого предка, пока не остановят.
+  function bubbleClick(target: FNode): void {
+    const ev = fakeEvent();
+    act(() => {
+      for (let n: FNode | null = target; n && !ev.stopped; n = n.parentNode as FNode | null) {
+        const h = reactProps(n)?.onClick as ((e: unknown) => void) | undefined;
+        h?.(ev);
+      }
+    });
+  }
+
+  function firstDescendant(root: FNode, pred: (n: FNode) => boolean): FNode | null {
+    for (const c of root.childNodes as FNode[]) {
+      if (c.nodeType === 1 && pred(c)) return c;
+      const r = firstDescendant(c, pred);
+      if (r) return r;
+    }
+    return null;
+  }
+
+  it('клик по тексту заголовка раздел не переключает', async () => {
     const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
     await flush();
     const head = allNodes(container, 'plan-section-head')[1];
-    act(() => { (reactProps(head)!.onClick as (e: unknown) => void)(fakeEvent()); });
-    expect(expandedFlags(container)).toEqual(['true', 'false', 'true', 'true', 'true', 'true']);
-    act(() => { (reactProps(allNodes(container, 'plan-section-head')[1])!.onClick as (e: unknown) => void)(fakeEvent()); });
+    expect(reactProps(head)!.onClick).toBeUndefined();
+    bubbleClick(firstDescendant(head, n => n.tagName?.toLowerCase() === 'h2') ?? head);
     expect(expandedFlags(container)).toEqual(['true', 'true', 'true', 'true', 'true', 'true']);
   });
 
-  it('клик по шевелону переключает один раз и не всплывает к строке', async () => {
-    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+  it('клик по ссылке внутри заголовка раздел не переключает', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('link'), mockups: [] }));
     await flush();
-    const ev = fakeEvent();
-    act(() => { (reactProps(allNodes(container, 'plan-section-toggle')[0])!.onClick as (e: unknown) => void)(ev); });
-    expect(ev.stopPropagation).toHaveBeenCalledTimes(1);
-    expect(expandedFlags(container)[0]).toBe('false');
+    const head = allNodes(container, 'plan-section-head')[0];
+    const link = firstDescendant(head, n => n.tagName?.toLowerCase() === 'a');
+    expect(link, 'ссылка в заголовке').not.toBeNull();
+    bubbleClick(link!);
+    expect(expandedFlags(container)[0]).toBe('true');
   });
 
-  it('при выделенном тексте клик по строке заголовка не переключает', async () => {
+  it('двойной клик по тексту заголовка раздел не переключает', async () => {
     const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
     await flush();
-    (globalThis as { window: { getSelection?: unknown } }).window.getSelection = () => ({ toString: () => 'выделено' });
-    try {
-      act(() => { (reactProps(allNodes(container, 'plan-section-head')[0])!.onClick as (e: unknown) => void)(fakeEvent()); });
-      expect(expandedFlags(container)[0]).toBe('true');
-    } finally {
-      delete (globalThis as { window: { getSelection?: unknown } }).window.getSelection;
-    }
+    const head = allNodes(container, 'plan-section-head')[0];
+    bubbleClick(head);
+    expect(expandedFlags(container)[0]).toBe('true');
+    bubbleClick(head);
+    expect(expandedFlags(container)[0]).toBe('true');
+  });
+
+  it('клик по шевелону переключает раздел один раз', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    bubbleClick(allNodes(container, 'plan-section-toggle')[0]);
+    expect(expandedFlags(container)).toEqual(['false', 'true', 'true', 'true', 'true', 'true']);
   });
 });

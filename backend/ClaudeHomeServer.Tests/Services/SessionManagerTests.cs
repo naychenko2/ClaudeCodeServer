@@ -10112,6 +10112,125 @@ public class SessionManagerTests : IDisposable
         history.Should().BeEmpty();
     }
 
+    // --- Очередь отложенных сообщений переживает рестарт (pending.json) ---
+
+    private static object GetEntryOf(SessionManager manager, string sessionId)
+    {
+        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        return ((System.Collections.IDictionary)field.GetValue(manager)!)[sessionId]!;
+    }
+
+    private string PendingFilePath(string key) =>
+        Path.Combine(_tempDir, "sessions", key, "pending.json");
+
+    [Fact]
+    public async Task Pending_РестартСервера_ОчередьВосстановленаВТомЖеПорядке()
+    {
+        var session = await MkBusySessionAsync("persist-rt");
+        session.Name = "есть имя";
+
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад исполнителя", senderPersonaId: "exec-1",
+            silent: true, suppressTasksExecute: true, staffNote: "служебная заметка",
+            kind: SessionManager.PendingKind.Report);
+        await _sut.SendMessageAsync(session.Id, "вопрос человека", []);
+
+        File.Exists(PendingFilePath(session.Id)).Should().BeTrue("очередь записана на диск при постановке");
+
+        var restarted = BuildSecondManager();
+        var restored = restarted.GetPending(session.Id);
+
+        restored.Select(m => m.Text).Should().Equal("доклад исполнителя", "вопрос человека");
+        restored[0].Kind.Should().Be(SessionManager.PendingKind.Report);
+        restored[0].StaffNote.Should().Be("служебная заметка");
+        restored[0].Silent.Should().BeTrue();
+        restored[0].SuppressTasksExecute.Should().BeTrue();
+        restored[0].SenderPersonaId.Should().Be("exec-1");
+        restored[1].Kind.Should().Be(SessionManager.PendingKind.User);
+    }
+
+    [Fact]
+    public async Task Pending_ОчередьРазобрана_ФайлУдалён()
+    {
+        var session = await MkBusySessionAsync("persist-empty");
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад", kind: SessionManager.PendingKind.Report);
+        File.Exists(PendingFilePath(session.Id)).Should().BeTrue();
+
+        var entry = GetEntry(session.Id);
+        var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
+        pending.RemoveAt(0);
+
+        File.Exists(PendingFilePath(session.Id)).Should().BeFalse("пустая очередь — файла нет");
+    }
+
+    [Fact]
+    public async Task Pending_АвтодренажНаСтарте_ЧатБезХодаПолучаетСообщение()
+    {
+        var session = await MkBusySessionAsync("persist-drain");
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад до рестарта", kind: SessionManager.PendingKind.Report);
+
+        var restarted = BuildSecondManager();
+        var entry = GetEntryOf(restarted, session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        await restarted.DrainRestoredPendingAsync();
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(3));
+
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("доклад до рестарта")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        restarted.GetPending(session.Id).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Pending_ЗамороженнаяОчередь_ПослеРестартаНеРазбираетсяАвтоматически()
+    {
+        var session = await MkBusySessionAsync("persist-frozen");
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        await _sut.SendOrEnqueueAsync(session.Id, "ждёт возобновления", kind: SessionManager.PendingKind.Report);
+
+        _sut.Interrupt(session.Id); // «Стоп» замораживает очередь
+        await WaitForComposerRestoresAsync(1);
+
+        var restarted = BuildSecondManager();
+        var restartedEntry = GetEntryOf(restarted, session.Id);
+        restartedEntry.GetType().GetField("QueueFrozen")!.GetValue(restartedEntry).Should().Be(true);
+        var adapter = StubAdapter(restartedEntry);
+        SetProcess(restartedEntry, adapter.Object);
+
+        await restarted.DrainRestoredPendingAsync();
+        await Task.Delay(200);
+
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        restarted.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("ждёт возобновления");
+    }
+
+    [Fact]
+    public async Task Pending_СтаршеСуток_НеОживляетсяАВИсторииПлашкаНеДоставлено()
+    {
+        var session = await MkBusySessionAsync("persist-expired");
+        var old = new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), "недельной давности", null, null,
+            0, DateTime.UtcNow - TimeSpan.FromDays(7), Kind: SessionManager.PendingKind.Report);
+        _historyService.SavePending(session.Id, new PendingQueueFile(false, [old]));
+
+        var restarted = BuildSecondManager();
+        var entry = GetEntryOf(restarted, session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        restarted.GetPending(session.Id).Should().BeEmpty("просроченное не оживляем");
+        await restarted.DrainRestoredPendingAsync();
+
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        File.Exists(PendingFilePath(session.Id)).Should().BeFalse();
+        var history = await _historyService.LoadAsync(session.Id);
+        history.OfType<StoredWorkLoopStoppedMessage>()
+            .Should().ContainSingle(m => m.Reason == "pending_expired" && m.Text.Contains("Не доставлено"));
+    }
+
     // --- FreezePending и CurrentTurnSnapshot (фикс бага композера) ---
 
     [Fact]

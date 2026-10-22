@@ -701,7 +701,7 @@ async function scenarioSearchTimer(browser, base) {
 async function scenarioGeoRightWithPort(browser, base) {
   await scenario('15. Право net:геокодер:443 (с портом) — запрос уходит, плашки отказа нет (MINOR-B)', async (checks) => {
     const { context, page, frame } = await openEmulator(browser, base, {
-      grant: 'api.open-meteo.com,net:Geocoding-API.open-meteo.com:443',
+      grant: 'api.open-meteo.com,net:geocoding-api.open-meteo.com:443',
       fixtures: [
         FX + 'forecast-yaroslavl.json|apparent_temperature',
         FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
@@ -753,11 +753,16 @@ async function scenarioOnlineClosesSearch(browser, base) {
       // Из офлайн-экрана открываем поиск и набираем запрос — дебаунс взведён.
       await frame.locator('#citybtn').click();
       await frame.locator('#q').waitFor({ timeout: 5000 });
+      // Отсчёт ведём от взведения таймера: стена от момента проверки при зависшей
+      // вкладке прошла бы вакуумно (таймер сработал бы уже после неё).
+      const armedAt = await page.evaluate(() => Date.now());
       await frame.locator('#q').fill('Яр');
       // Связь вернулась: `online` → load() → режим закрыт.
       await context.setOffline(false);
       await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
-      await page.waitForTimeout(1200); // дольше дебаунса (400 мс)
+      // Ждём не стену, а факт: с момента взведения прошло больше дебаунса (400 мс) с запасом,
+      // и таймер при этом успел бы сработать (часы страницы — те же, что у таймера).
+      await page.waitForFunction((t0) => Date.now() - t0 >= 800, armedAt);
       assertEq(checks, 'после «online» запросов к геокодеру нет', await geoCalls(), 0);
     } catch (e) {
       await shot(page, 'scenario-16-online');

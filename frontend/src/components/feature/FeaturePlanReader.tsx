@@ -328,7 +328,10 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                     title={t}
                     style={{
                       width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer',
-                      padding: 0, fontFamily: FONT.sans, fontSize: FS.sm, color: C.accent,
+                      // Тач-цель на 360 — не меньше 40 px по обеим сторонам (высота). На десктопе
+                      // строки остаются компактными: двухколоночная сетка от высоты не разъезжается.
+                      padding: isMobile ? '0 8px' : 0, minHeight: isMobile ? 40 : 0,
+                      fontFamily: FONT.sans, fontSize: FS.sm, color: C.accent,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}
                   >

@@ -350,6 +350,32 @@ describe('FeaturePlanReader: свёртка разделов', () => {
     }
   });
 
+  // === 9а. 360: тач-цель пункта «Содержание» ≥ 40 px (дефект приёмки: высота 17 px) ===
+  it('на 360 пункт «Содержания» не ниже 40 px', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [], isMobile: true }));
+    await flush();
+    // На 360 оглавление по умолчанию свёрнуто (макет): сначала раскрыть «Содержание · N».
+    const toc = findNodeByAttr(container, 'data-testid', 'plan-reader-toc');
+    expect(toc, 'панель «Содержание»').not.toBeNull();
+    const header = toc!.children[0];
+    act(() => { (reactProps(header)!.onClick as () => void)(); });
+    const items = allNodes(container, 'plan-reader-toc-item');
+    expect(items.length).toBe(6);
+    for (const n of items) {
+      const style = reactProps(n)?.style as Record<string, unknown> | undefined;
+      expect(Number(style?.minHeight ?? 0), 'высота пункта оглавления на 360').toBeGreaterThanOrEqual(40);
+    }
+  });
+
+  it('на 1280 пункт «Содержания» остаётся компактной строкой (двухколоночная сетка не разъезжается)', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    for (const n of allNodes(container, 'plan-reader-toc-item')) {
+      const style = reactProps(n)?.style as Record<string, unknown> | undefined;
+      expect(Number(style?.minHeight ?? 0)).toBe(0);
+    }
+  });
+
   // === 9. Заголовок раздела выровнен по левому краю (кнопка по умолчанию центрирует) ===
   it('заголовок раздела имеет text-align: left', async () => {
     const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));

@@ -353,9 +353,9 @@ public sealed class FeatureLane
 // ни stepRef, ни reviewOf; новую цепочку не заводят).
 public sealed class FeatureStepProgress
 {
-    // pending — задач role=plan нет; partial — план есть, но planSteps пуст (знаменатель = только
-    // заведённые шаги); cut — planSteps есть хотя бы у одной задачи-плана; done — cut и все
-    // шаги приняты.
+    // pending — задач role=plan нет, или у всех пустой planSteps; partial — списки есть только у
+    // части планов; cut — у всех; done — cut, total > 0 и все шаги приняты. Снятые (withdrawn)
+    // планы в маппинг не входят.
     public string PlanState { get; init; } = "pending";
     public int Total { get; init; }
     public int Accepted { get; init; }

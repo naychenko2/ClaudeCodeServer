@@ -390,11 +390,44 @@ public class FeatureStepProgressTests
         noPlan.StepProgress.PlanState.Should().Be("pending", "плана нет — done не выводим");
     }
 
+    // Маппинг по шву Александра (63a69b77 п.2а): состояние плана — по ДОЛЕ планов со списками,
+    // снятые (withdrawn) планы не учитываются. Строки контракта прежние, меняется только маппинг.
     [Fact]
-    public void ПланБезСписка_Partial_ПланаНет_Pending()
+    public void ПланБезСписка_Pending_ПланаНет_Pending()
     {
-        Run(Feature(), Plan("p", 0), Step("s", "Ш1", 1)).StepProgress.PlanState.Should().Be("partial");
+        // План есть, но не разобран ни на один шаг — не «частично», а «не разобран».
+        Run(Feature(), Plan("p", 0), Step("s", "Ш1", 1)).StepProgress.PlanState.Should().Be("pending");
         Run(Feature(), Step("s", "Ш1", 1)).StepProgress.PlanState.Should().Be("pending");
+    }
+
+    [Fact]
+    public void ДваПлана_СписокТолькоУОдного_Partial()
+    {
+        var run = Run(Feature(), Plan("p1", 0, ("Ш1", "back")), Plan("p2", 1));
+
+        run.StepProgress.PlanState.Should().Be("partial", "списки есть только у части планов");
+    }
+
+    [Fact]
+    public void СнятыйПланБезСписка_НеМешает_Cut()
+    {
+        var oldPlan = Plan("p-old", 0);
+        oldPlan.Verification = new TaskVerification { Verdict = TaskVerdicts.Withdrawn };
+        var run = Run(Feature(), oldPlan, Plan("p-new", 1, ("Ш1", "back")));
+
+        run.StepProgress.PlanState.Should().Be("cut", "снятый старый план не держит фичу в partial");
+    }
+
+    // «total == 0 ⇒ не done» (замечание 2 ревью Глеба Б-pr-st): список не пуст, но валидных
+    // кодов нет — знаменатель нулевой, done не выводится даже при cut.
+    [Fact]
+    public void ПланСНевалиднымиШагами_CutНоTotalНоль_НеDone()
+    {
+        var run = Run(Feature(), Plan("p", 0, (" ", "back")));
+
+        run.StepProgress.PlanState.Should().Be("cut");
+        run.StepProgress.Total.Should().Be(0);
+        run.StepProgress.PlanState.Should().NotBe("done");
     }
 
     [Fact]

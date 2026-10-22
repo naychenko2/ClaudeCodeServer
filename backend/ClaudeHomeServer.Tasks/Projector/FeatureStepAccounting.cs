@@ -59,9 +59,15 @@ internal static class FeatureStepAccounting
                 var key = ps.StepRef.Trim();
                 if (planned.TryAdd(key, ps)) plannedOrder.Add(key);
             }
-        // Строки — фронтовый контракт (featureProgress.ts): pending — плана нет, partial — план без
-        // planSteps, cut — план разобран на шаги; done выводится ниже, когда принято всё.
-        string planState = plan.Count == 0 ? PlanPending : planned.Count > 0 ? PlanCut : PlanPartial;
+        // Маппинг состояния плана (решение Александра, шов 63a69b77 п.2а; строки контракта не
+        // меняются): учитываются задачи role=plan, КРОМЕ снятых (withdrawn) — снятый старый план
+        // не должен держать фичу в partial. pending — таких задач нет, или у всех planSteps пуст;
+        // partial — списки есть только у части планов; cut — у всех; done выводится ниже, когда
+        // план разобран и всё принято.
+        var countedPlans = plan.Where(p => p.Verification?.Verdict != TaskVerdicts.Withdrawn).ToList();
+        int plansWithSteps = countedPlans.Count(p => p.PlanSteps is not null && p.PlanSteps.Count > 0);
+        string planState = plansWithSteps == 0 ? PlanPending
+            : plansWithSteps < countedPlans.Count ? PlanPartial : PlanCut;
 
         // ─── Шаги и доработки ───────────────────────────────────────────────────────────────
         var stepTasks = steps.Where(t => t.Role == TaskRoles.Step).ToList();

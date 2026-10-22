@@ -6951,6 +6951,20 @@ public class ClaudeSession : ILlmSessionAdapter
         var eventType = et.GetString();
         var index = evt.TryGetProperty("index", out var ix) && ix.TryGetInt32(out var ixv) ? ixv : -1;
 
+        // Заполнение контекста из message_delta. Anthropic кладёт входные токены и кэш уже в
+        // message_start, и строка assistant на stdout их несёт; Strata (локальный стенд) шлёт в
+        // message_start нули, а настоящие input/cache_read/cache_creation — только здесь, в
+        // конце ответа. Строку assistant CLI собирает раньше, с нулями, и TrackContextTokens их
+        // отбрасывал: у локальных ходов result.ContextTokens всегда был пуст, кольцо контекста в
+        // шапке молчало (22.10.2026). Берём цифру из дельты — она одинаково верна для обоих.
+        if (eventType == "message_delta" && evt.TryGetProperty("usage", out var deltaUsage)
+            && deltaUsage.ValueKind == JsonValueKind.Object)
+        {
+            if (TrackContextUsage(deltaUsage) is { } ctx)
+                await _onMessage(new ContextUsageMessage(ctx));
+            return;
+        }
+
         // Начало блока tool_use — показываем карточку сразу (до прихода полного assistant-сообщения)
         if (eventType == "content_block_start")
         {
@@ -7189,16 +7203,25 @@ public class ClaudeSession : ILlmSessionAdapter
     // основной сессии отношения не имеющий.
     // internal (а не private) ради теста одноразовости BareMode-сторожа: он подаёт
     // assistant-сообщение с usage напрямую, минуя запуск настоящего CLI.
+    // Сумма входных токенов usage (input + cache_read + cache_creation) = текущее заполнение
+    // окна; > 0 — запоминаем и возвращаем, иначе null (нули message_start у Strata, пустой usage).
+    internal int? TrackContextUsage(JsonElement usage)
+    {
+        var tokens = IntProp(usage, "input_tokens")
+            + IntProp(usage, "cache_read_input_tokens")
+            + IntProp(usage, "cache_creation_input_tokens");
+        if (tokens <= 0) return null;
+        _lastContextTokens = tokens;
+        return tokens;
+    }
+
     internal void TrackContextTokens(JsonElement root)
     {
         if (HasParentToolUseId(root)) return;
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("usage", out var u)) return;
 
-        var tokens = IntProp(u, "input_tokens")
-            + IntProp(u, "cache_read_input_tokens")
-            + IntProp(u, "cache_creation_input_tokens");
-        if (tokens > 0) _lastContextTokens = tokens;
+        var tokens = TrackContextUsage(u) ?? 0;
 
         // Сторож на пропажу CLAUDE_CODE_DISABLE_CLAUDE_MDS: переменная не в claude --help,
         // в любом обновлении CLI она может исчезнуть/сменить имя. На первом ходу BareMode

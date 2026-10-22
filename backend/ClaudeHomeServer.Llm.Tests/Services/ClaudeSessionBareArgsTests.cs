@@ -868,6 +868,28 @@ public class ClaudeSessionBareArgsTests : IDisposable
             "{\"type\":\"assistant\",\"message\":{\"usage\":{\"input_tokens\":" + inputTokens + "}}}");
 
     /// <summary>
+    /// Заполнение контекста из usage события message_delta (Strata кладёт входные токены и
+    /// кэш только туда, message_start у неё с нулями): сумма input + cache_read + cache_creation
+    /// запоминается как LastContextTokens; нули (message_start) — null и прежнее значение
+    /// не трогают. Мутация «считать только input_tokens» → RED (21 ≠ 1).
+    /// </summary>
+    [Fact]
+    public async Task TrackContextUsage_ИзДельтыПотока_СуммаВходаИКэша_НулиНеЗатирают()
+    {
+        var providers = LocalProviders(localBareMode: true, localSystemPromptFile: "SystemPrompts/CLAUDE-local.md");
+        var (_, session) = await RunTurnAsync(LocalModelId, providers);
+        var delta = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            "{\"input_tokens\":1,\"cache_creation_input_tokens\":20,\"cache_read_input_tokens\":0,\"output_tokens\":4}");
+        session.TrackContextUsage(delta).Should().Be(21);
+        session.LastContextTokens.Should().Be(21);
+
+        var zeros = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
+            "{\"input_tokens\":0,\"output_tokens\":0}");
+        session.TrackContextUsage(zeros).Should().BeNull();
+        session.LastContextTokens.Should().Be(21, "нули message_start не должны затирать живую цифру");
+    }
+
+    /// <summary>
     /// СТОРОЖ ОДНОРАЗОВОСТИ (_bareModeWatchdogFired): при заведомо раздутом входе
     /// предупреждение уходит в stderr РОВНО ОДИН раз за сессию, сколько бы
     /// assistant-сообщений с usage ни пришло. Мутация «убрать латч» → RED (две строки).

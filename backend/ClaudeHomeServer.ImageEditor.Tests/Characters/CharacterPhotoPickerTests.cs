@@ -226,4 +226,76 @@ public class CharacterPhotoPickerTests
         pick.Pick.Should().Be("fallback");
         Files(pick).Should().Equal("main.jpg");
     }
+
+    // ─── Набор ракурсов для Klein (A/B 2026-10-22) ───────────────────────────
+
+    // Манифест «Андрея» как есть: главное — face-08 (анфас), лучший набор A/B — анфас, анфас снизу,
+    // три четверти, профиль, ещё анфас
+    private static readonly CharacterPhoto[] Andrey =
+    [
+        P("face-08.jpg", primary: true, angle: "front", pitch: "level"),
+        P("face-01.jpg", angle: "front", pitch: "up"),
+        P("face-02.jpg", angle: "three-quarter", pitch: "up"),
+        P("face-03.jpg", angle: "profile", pitch: "unknown"),
+        P("face-04.jpg", angle: "profile", pitch: "unknown"),
+        P("face-05.jpg", angle: "three-quarter", pitch: "level"),
+        P("face-06.jpg", angle: "profile", pitch: "unknown"),
+        P("face-07.jpg", angle: "profile", pitch: "unknown"),
+        P("face-09.jpg", angle: "front", pitch: "level"),
+        P("face-10.jpg", angle: "front", pitch: "level"),
+    ];
+
+    [Fact]
+    public void Разные_ракурсы_главное_анфас_снизу_три_четверти_профиль_анфас()
+    {
+        var pick = CharacterPhotoPicker.Diverse(Andrey, 5);
+
+        pick.Pick.Should().Be("auto");
+        Files(pick).Should().Equal("face-08.jpg", "face-01.jpg", "face-05.jpg", "face-03.jpg", "face-09.jpg");
+    }
+
+    [Fact]
+    public void Разные_ракурсы_главное_первым_даже_в_профиль()
+    {
+        CharacterPhoto[] set =
+        [
+            P("a.jpg", angle: "front", pitch: "level"),
+            P("main.jpg", primary: true, angle: "profile"),
+            P("b.jpg", angle: "three-quarter"),
+            P("c.jpg", angle: "front", pitch: "down"),
+        ];
+
+        Files(CharacterPhotoPicker.Diverse(set, 4)).Should().Equal("main.jpg", "a.jpg", "c.jpg", "b.jpg");
+    }
+
+    [Fact]
+    public void Разные_ракурсы_нет_нужного_ракурса_берётся_следующий_неразмеченные_в_конце()
+    {
+        CharacterPhoto[] set =
+        [
+            P("main.jpg", primary: true, angle: "front"),
+            P("x.jpg"),
+            P("p.jpg", angle: "profile"),
+            P("f.jpg", angle: "front"),
+        ];
+
+        // Анфас, (трёх четвертей нет) профиль, затем неразмеченное — после размеченных
+        Files(CharacterPhotoPicker.Diverse(set, 4)).Should().Equal("main.jpg", "f.jpg", "p.jpg", "x.jpg");
+    }
+
+    [Fact]
+    public void Разные_ракурсы_без_меток_порядок_манифеста_и_фолбэк()
+    {
+        var pick = CharacterPhotoPicker.Diverse([P("a.jpg"), P("main.jpg", primary: true), P("b.jpg")], 2);
+
+        pick.Pick.Should().Be("fallback");
+        Files(pick).Should().Equal("main.jpg", "a.jpg");
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData(1, false)]
+    [InlineData(5, true)]
+    public void Набор_ракурсов_только_у_модели_с_несколькими_фото_на_человека(int? max, bool expected) =>
+        CharacterPhotoPicker.WantsDiverse(max).Should().Be(expected);
 }

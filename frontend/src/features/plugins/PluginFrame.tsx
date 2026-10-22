@@ -22,6 +22,12 @@ import {
 // computed --c-* (текущая тема) и мапит в --cc-* панели.
 import { readHostTokens } from './panelTokens';
 import { humanizeId, panelDisplayName } from './panelNaming';
+// Перехват домена storage на хосте (решение Александра, 6760e1d8 §2/§4): общая
+// реализация с эмулятором панели — hostOps/storage.js, второй копии логики нет.
+import { handleStorageCall, type StorageOp } from './hostOps/storage';
+// Владелец — из состояния авторизации хоста (ответ /auth/me), тот же источник,
+// что в pluginStorageLifecycle.ts: F2-d, единый способ в перехвате и цикле.
+import { getMeSnapshot } from '../../lib/defaultPersona';
 
 // === Панель плагина (S5): одна панель = одна карточка ===
 // Десктоп: карточка — обычная панель рельса (PanelZone рисует её через PanelShell),
@@ -294,6 +300,37 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
       }
     } catch {
       args = {};
+    }
+    // === Перехват домена storage: хост, не сервер (6760e1d8 §2/§4) ===
+    // Общие потолки (inflight, args) уже проверены — дальше storage НЕ уходит на
+    // сервер никогда. Из сообщения панели читаются только op и args: подделанные
+    // панелью granted/pluginId/ownerId/prefix в args игнорируются — право, id
+    // плагина и владелец берутся только из состояния хоста.
+    if (msg.op.startsWith('storage.')) {
+      logEvent(`← call ${msg.id} ${msg.op} (host)`);
+      // Владелец — из состояния авторизации хоста (getMeSnapshot, ответ /auth/me),
+      // не из cc_user_id в хранилище: id есть сразу после входа, независимо от
+      // «запомни меня». Пустой id — fail-closed: unavailable, ни одной записи.
+      const ownerId = getMeSnapshot().userId ?? '';
+      const res = handleStorageCall({
+        op: msg.op.slice('storage.'.length) as StorageOp,
+        args,
+        granted: p.granted,
+        ownerId,
+        pluginId: p.id,
+        store: localStorage,
+      });
+      if (res.ok) {
+        postToFrame(buildResultMessage(msg.id, true, res.data));
+      } else {
+        postToFrame(buildResultMessage(msg.id, false, res.error));
+        // Отказ по storage — тихий (решение Софьи, 22.10): панель получает
+        // {code:'denied'} и работает дальше, плашки «Нет права …» нет — без права
+        // storage панель просто не запоминает данные, это штатное состояние, а не
+        // поломка. Человек, отозвавший право, знает об этом сам. Отказы по net: и
+        // прочим доменам идут серверной веткой ниже и плашку дают, как раньше.
+      }
+      return;
     }
     inflightRef.current++;
     logEvent(`← call ${msg.id} ${msg.op}`);

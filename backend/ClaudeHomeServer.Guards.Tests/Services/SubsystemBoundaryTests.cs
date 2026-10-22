@@ -1932,6 +1932,10 @@ public class SubsystemBoundaryTests
         // (маркеры XML-формата вызова в text-блоке), зовётся и Llm (ClaudeSession), и Main
         // (TaskExecutionService). Примитив без владения — прецедент ExecutorStopClassifier.
         "ClaudeHomeServer.Services.ToolCallLeakDetector",
+        // Известен ли утёкший инструмент сессии-исполнителю по LightProfile её модели: чистая
+        // функция над Core-типом, пара к ToolCallLeakDetector (детектор нашёл вызов —
+        // этот решает, повторять формат или сообщать об отсутствии инструмента).
+        "ClaudeHomeServer.Services.ExecutorToolAvailability",
         // Состояние ```-забора при построчном разборе markdown (правила CommonMark).
         // В спине, а не в вертикали Docs: её зовут и сканер карты (Docs), и раскрытие
         // @-импортов CLAUDE.md (Core, ClaudeMdExpander) — третий комплект правил

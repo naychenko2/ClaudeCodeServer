@@ -712,6 +712,60 @@ public class PluginsControllerTests : IDisposable
         record.Enabled.Should().BeTrue();
     }
 
+    // --- Шаг B2: выдача права storage — тем же путём, что net: (grant ⊆ requested, без фильтров) ---
+    // Мутация (исключить storage из requested в PluginInstaller): grant storage → 400, тест красный.
+
+    [Fact]
+    public void Grant_ВыдаётStorage_ТемЖеПутёмЧтоNet()
+    {
+        Install(OwnerA, "local-952568751510/pkg", "1.0.0", ["net:api.linear.app", "storage"]);
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["net:api.linear.app", "storage"],
+        });
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("storage", "storage в granted ответа (панель увидит его в state.granted)");
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
+        record.Granted.Should().Equal("net:api.linear.app", "storage");
+    }
+
+    // --- Шаг B2: отзыв одного права (storage) не срезает остальные (net:) ---
+    // Мутация (grant = union вместо полной замены): после отзыва storage остался бы в
+    // granted, и обратная выдача не проверялась бы — тест красный.
+
+    [Fact]
+    public void Grant_ОтзывStorage_ОстальныеПраваНаМесте_ИОбратнаяВыдачаБезПотерь()
+    {
+        Install(OwnerA, "local-952568751510/pkg", "1.0.0", ["net:api.linear.app", "storage"]);
+        var ctl = NewController(OwnerA);
+
+        // Выдать оба.
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["net:api.linear.app", "storage"],
+        }).Should().BeOfType<OkObjectResult>();
+
+        // Отзыв: в теле только net: — storage уходит, net: остаётся.
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["net:api.linear.app"],
+        }).Should().BeOfType<OkObjectResult>();
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
+        record.Granted.Should().Equal(new[] { "net:api.linear.app" }, "отзыв storage не срезает net:");
+
+        // Обратно: выдача storage поверх net: — обе на месте, ничего не потеряно.
+        ctl.Grant("local-952568751510~pkg", new PluginGrantRequest
+        {
+            Permissions = ["net:api.linear.app", "storage"],
+        }).Should().BeOfType<OkObjectResult>();
+        record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
+        record.Granted.Should().Equal("net:api.linear.app", "storage");
+    }
+
     // --- Install: пакет изменился (sha256) → 409 ---
 
     [Fact]

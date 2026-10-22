@@ -3,6 +3,7 @@ import { api, type PluginInfo } from '../../lib/api';
 import { onMessage, onReconnected } from '../../lib/signalr';
 import { wsPanels } from '../../pages/workspace/panelStackState';
 import { setInstalledPlugins } from './pluginStore';
+import { collectOnListLoaded } from './pluginStorageLifecycle';
 
 // Единый источник «установленные плагины проекта» (R-Gleb, minor 5).
 //
@@ -100,6 +101,8 @@ async function refresh(e: Entry) {
   emit(e);
   try {
     const list = await api.plugins.list();
+    // Сборка мусора storage.* — только после УСПЕШНОГО списка (ошибка/офлайн/403 уходят в catch)
+    collectOnListLoaded(list.map(p => p.id));
     if (e.seq === seq) {
       // Не-хуковый путь (ops/getZones): refresh() идёт ПОСЛЕ await, т.е. вне рендера,
       // где wsPanels.use() (useSyncExternalStore) дал бы «Invalid hook call».

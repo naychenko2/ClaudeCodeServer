@@ -28,6 +28,7 @@ export function secretNameOf(key: string): string | null {
 export function permissionLabel(key: string): string | null {
   if (key === 'notes:read') return 'Читать заметки проекта';
   if (key === 'tasks:read') return 'Читать задачи проекта';
+  if (key === 'storage') return 'Хранить данные в этом браузере';
   if (isNetPermission(key)) {
     const host = netHostOf(key);
     return host ? `Ходить в сеть: только ${host}` : 'Ходить в сеть';
@@ -39,3 +40,11 @@ export function permissionLabel(key: string): string | null {
 
 // Предупреждение для прав net:* (макет, экран 2): данные уйдут за пределы AI Home
 export const NET_PERMISSION_WARNING = 'Данные уйдут за пределы AI Home. Выдавайте, если доверяете автору.';
+
+// Пояснение под пунктом права (null — пояснения нет). Одно право storage, без деления на чтение и запись.
+export const STORAGE_PERMISSION_HINT =
+  'До 128 КБ. На другом устройстве их не будет. Их может прочитать любой, кто работает в этом браузере';
+
+export function permissionHint(key: string): string | null {
+  return key === 'storage' ? STORAGE_PERMISSION_HINT : null;
+}

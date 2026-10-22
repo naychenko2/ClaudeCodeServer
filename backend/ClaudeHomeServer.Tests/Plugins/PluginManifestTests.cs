@@ -137,6 +137,24 @@ public class PluginManifestTests
     }
 
     [Fact]
+    public void ПравоStorage_Проходит()
+    {
+        const string json = """
+        {
+          "id": "local-x/storage",
+          "name": "Хранилище",
+          "version": "0.1.0",
+          "contributes": { "skills": ["skills/a"] },
+          "permissions": { "requested": ["storage"] }
+        }
+        """;
+
+        var v = Parse(json).Validate();
+
+        v.IsValid.Should().BeTrue();
+    }
+
+    [Fact]
     public void ОбязательныйСекрет_БлокируетУстановку()
     {
         const string json = """

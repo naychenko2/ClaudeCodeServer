@@ -51,12 +51,14 @@ public static class ImageEditCatalog
             ["seedream_v5_pro"] = EditInput,
             ["flux_2_pro_outpaint"] = EditInput,
             ["image_background_remover"] = EditInput,
-            // Локальные модели. Энкодер правки Qwen-Image берёт холст в его размере (resolution 0),
+            // Локальные модели. Klein — как у Qwen: ему отдаётся тот же холст, а на масках и персонаже
+            // запуск уходит на Qwen «качественно». Энкодер правки Qwen-Image берёт холст в его размере (resolution 0),
             // поэтому держим его у верхней границы родной сетки модели: 1664 по длинной стороне
             // (16:9 — 1664×928), 1,8 Мп (1:1 — 1328×1328). FaceDetailer работает кропами лиц, ему
             // крупный холст по силам; 30 МБ — потолок входа local-media. Холст с кропом лица
             // (90 МБ) — потолок загрузки узла (LocalMediaService.MaxMediaInputBytes, зеркало в
             // MediaFormatDriversTests): модель видит только кроп, холст не пережимается
+            ["flux3-klein"] = (1664, 1.8, 30, 90),
             ["qwen-image-2.1"] = (1664, 1.8, 30, 90),
             ["qwen-image-2.1-turbo"] = (1664, 1.8, 30, 90),
             ["face-detailer"] = (4096, 16.8, 30, null),

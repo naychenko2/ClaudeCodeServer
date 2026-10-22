@@ -91,6 +91,9 @@ public record ImageEditCaps(
     // Сколько фото персонажа модель берёт как ОДНОГО человека; null — все. Qwen-Image рисует по
     // человеку на каждое фото, и текст запроса это не лечит (живой прогон 2026-09-26)
     int? MaxCharacterPhotos = null,
+    // То же при подстановке на лицо (кроп, ADR-028); null — как MaxCharacterPhotos. Klein подстановку
+    // отдаёт Qwen-Image, а тот по пяти фото нарисовал бы пять человек
+    int? MaxFaceCropPhotos = null,
     // Выходные пропорции, ступени и «Точно…» модели (ADR-025); null — модель размеров не сообщает:
     // «Как у модели», текущее поведение
     ClaudeHomeServer.Services.Media.MediaFormatCaps? Format = null);

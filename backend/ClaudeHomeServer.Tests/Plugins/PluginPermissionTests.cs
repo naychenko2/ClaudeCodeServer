@@ -49,6 +49,7 @@ public class PluginPermissionTests
     [InlineData("net:api.linear.app")]
     [InlineData("net:localhost:8080")]
     [InlineData("secret:LINEAR_TOKEN")]
+    [InlineData("storage")]
     public void Parse_ИзвестноеПраво_Valid(string permission) =>
         PluginPermission.Parse(permission).IsValid.Should().BeTrue($"право {permission} должно быть валидно");
 
@@ -69,4 +70,16 @@ public class PluginPermissionTests
     [Fact]
     public void IsKnown_NetValidHost_Истина() =>
         PluginPermission.IsKnown("net:api.linear.app").Should().BeTrue();
+
+    // --- IsKnown: право storage (шаг B1): точное «storage» известно; параметр и регистр — нет ---
+
+    [Fact]
+    public void IsKnown_Storage_Истина() =>
+        PluginPermission.IsKnown("storage").Should().BeTrue();
+
+    [Theory]
+    [InlineData("storage:x")]
+    [InlineData("Storage")]
+    public void IsKnown_Storage_НеточнаяФорма_Ложь(string permission) =>
+        PluginPermission.IsKnown(permission).Should().BeFalse();
 }

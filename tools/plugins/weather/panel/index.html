@@ -436,17 +436,19 @@
     function readStoredCity() {
       return ccsPlugin.call('storage.get', { key: CITY_KEY }).then(function (res) {
         var v = res && (typeof res === 'string' ? res : res.value);
-        if (typeof v !== 'string') return;
-        try {
-          var c = JSON.parse(v);
-          if (c && typeof c.lat === 'number' && typeof c.lon === 'number' && typeof c.name === 'string') {
-            city = { name: c.name, lat: c.lat, lon: c.lon };
-          }
-        } catch (e) { /* мусор в значении — работаем с дефолтом */ }
+        // Контракт storage: значение — любой JSON, сериализует сам хост (C1-д).
+        // Строку всё равно принимаем: старые записи панели лежат как строки.
+        if (typeof v === 'string') {
+          try { v = JSON.parse(v); } catch (e) { return; } /* мусор в значении — дефолт */
+        }
+        if (v && typeof v.lat === 'number' && typeof v.lon === 'number' && typeof v.name === 'string') {
+          city = { name: v.name, lat: v.lat, lon: v.lon };
+        }
       }).catch(function () { /* нет права или операции ещё нет (F2) — без запоминания */ });
     }
     function rememberCity() {
-      ccsPlugin.call('storage.set', { key: CITY_KEY, value: JSON.stringify(city) }).catch(function () {});
+      // Объект, не строка: сериализацию делает хост (C1-д).
+      ccsPlugin.call('storage.set', { key: CITY_KEY, value: city }).catch(function () {});
     }
 
     function renderMain(data) {

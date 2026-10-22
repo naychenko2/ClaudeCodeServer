@@ -74,10 +74,46 @@ public class LocalImageMediaAdapterKleinTests
     }
 
     [Fact]
-    public async Task Klein_СФотоЭталона_УходитНаQwenКачественно()
+    public async Task Klein_Персонаж_ОстаётсяKlein_БезЛоры_СоСходством_ОбразцыАпсемплеруУжатыми()
     {
-        var submitted = await Build().SubmitAsync(new LocalImageRequest(LocalImageOp.Edit, "сидит в кафе",
-            [LocalMediaTestImages.Png(8, 8)], null, 1, FaceReferences: [LocalMediaTestImages.Png(8, 8)],
+        var photos = Enumerable.Range(0, 5).Select(i => LocalMediaTestImages.Png(8 + i, 8)).ToList();
+        var submitted = await Build().SubmitAsync(new LocalImageRequest(LocalImageOp.Generate, "сидит в кафе",
+            photos, "1:1", 1, Lora: new LocalImageLora("timur.safetensors", 0.8),
+            FaceReferences: [LocalMediaTestImages.Png(8, 8), LocalMediaTestImages.Png(9, 9)], Model: LocalImageModels.Klein), default);
+
+        submitted.Error.Should().BeNull();
+        var graph = Graph();
+        Unet(graph).Should().Be("flux3-image-klein-int8-convrot.safetensors");
+        graph.ContainsKey("lora").Should().BeFalse("LoRA персонажа обучены под Qwen-Image");
+        graph["sim"]!["class_type"]!.GetValue<string>().Should().Be("CcsFaceSimilarity");
+        graph["sim"]!["inputs"]!["references"]!.GetValue<string>().Split('\n').Should().HaveCount(2);
+        for (var k = 1; k <= 5; k++)
+        {
+            graph[$"ups_img{k}"]!["inputs"]!["megapixels"]!.GetValue<double>().Should().Be(ComfyWorkflows.KleinUpsamplerMegapixels);
+            graph["ref"]!["inputs"]![$"images.image{k - 1}"]!.ToJsonString().Should().Be($"[\"img{k}\",0]");
+        }
+        submitted.EtaSeconds.Should().Be(LocalMediaService.KleinEditEta(5));
+    }
+
+    [Fact]
+    public async Task Klein_ПравкаСПерсонажем_ХолстАпсемплеруПолным()
+    {
+        await Build().SubmitAsync(new LocalImageRequest(LocalImageOp.Edit, "поставь сюда",
+            [LocalMediaTestImages.Png(16, 16), LocalMediaTestImages.Png(8, 8)], null, 1,
+            FaceReferences: [LocalMediaTestImages.Png(8, 8)], Model: LocalImageModels.Klein), default);
+
+        var graph = Graph();
+        graph.ContainsKey("ups_img1").Should().BeFalse("с холста апсемплер переписывает текст дословно");
+        graph.ContainsKey("ups_img2").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Klein_ПодстановкаНаЛицо_УходитНаQwenКачественно()
+    {
+        var canvas = LocalMediaTestImages.Png(64, 64);
+        var submitted = await Build().SubmitAsync(new LocalImageRequest(LocalImageOp.Edit, "лицо",
+            [canvas, LocalMediaTestImages.Png(8, 8)], null, 1, FaceReferences: [LocalMediaTestImages.Png(8, 8)],
+            KeepMask: LocalMediaTestImages.Png(64, 64), Crop: new LocalImageCrop(0, 0, 32, 32, 64, 64),
             Model: LocalImageModels.Klein), default);
 
         submitted.Error.Should().BeNull();
@@ -85,7 +121,7 @@ public class LocalImageMediaAdapterKleinTests
         Unet(graph).Should().Be("qwen_image_2.1_int8_convrot.safetensors");
         graph["ks"]!["inputs"]!["steps"]!.GetValue<int>().Should().Be(25);
         graph.ContainsKey("ups").Should().BeFalse();
-        submitted.EtaSeconds.Should().Be(LocalMediaService.EditImageEta(1));
+        submitted.EtaSeconds.Should().Be(LocalMediaService.EditImageEta(2));
     }
 
     [Fact]
@@ -103,5 +139,6 @@ public class LocalImageMediaAdapterKleinTests
         var adapter = Build();
         adapter.EtaSeconds(LocalImageOp.Generate, 1, 0, LocalImageModels.Klein).Should().Be(15);
         adapter.EtaSeconds(LocalImageOp.Edit, 1, 1, LocalImageModels.Klein).Should().Be(20);
+        adapter.EtaSeconds(LocalImageOp.Generate, 1, 5, LocalImageModels.Klein).Should().Be(64, "персонаж по пяти фото — замер 64–69 с");
     }
 }

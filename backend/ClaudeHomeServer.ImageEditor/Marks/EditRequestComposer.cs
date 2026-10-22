@@ -109,8 +109,9 @@ public static class EditRequestComposer
         var userRefs = input.References ?? [];
         var character = input.Character;
         // Модель, которая рисует по человеку на фото, получает лишь первые (primary идёт первым)
+        var photoLimit = faceCrop ? model.Caps.MaxFaceCropPhotos ?? model.Caps.MaxCharacterPhotos : model.Caps.MaxCharacterPhotos;
         var facePhotos = character is null ? [] : userRefs.Where(r => r.Role == ReferenceRole.Character)
-            .Take(model.Caps.MaxCharacterPhotos is > 0 and var max ? max : int.MaxValue).ToList();
+            .Take(photoLimit is > 0 and var max ? max : int.MaxValue).ToList();
         var otherRefs = userRefs.Where(r => character is null || r.Role != ReferenceRole.Character).ToList();
         var faces = facePhotos.Count;
         var others = otherRefs.Count;

@@ -495,10 +495,12 @@ public sealed partial class LocalMediaService(
     public static int EditImageEtaTurbo(int images) => 20 + 4 * (Math.Max(1, images) - 1);
 
     // FLUX 3 Klein (замер на проде 2026-10-22): картинка 1328² прогретой моделью ~8,5 с, апсемплер
-    // промпта 5–11 с; у правки апсемплер ещё смотрит на каждый образец
+    // промпта 5–11 с. У правки и генерации по образцам каждый образец (1 Мп в ReferenceMultiLatent)
+    // удлиняет диффузию на ~10–11 с: персонаж по пяти фото — 64–69 с (апсемплер на ужатых фото 5–8 с,
+    // на полных 11,5 с и 73–77 с всего), одно фото — ~28 с, три — ~46 с (A/B 2026-10-22)
     public static int KleinGenerateEta(int count) => 6 + 9 * Math.Max(1, count);
 
-    public static int KleinEditEta(int images) => 20 + 3 * (Math.Max(1, images) - 1);
+    public static int KleinEditEta(int images) => 20 + 11 * (Math.Max(1, images) - 1);
 
     public const int FaceDetailEta = 25;
 

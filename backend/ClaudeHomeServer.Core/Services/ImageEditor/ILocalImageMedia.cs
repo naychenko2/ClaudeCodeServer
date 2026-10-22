@@ -71,18 +71,20 @@ public static class LocalImageModels
     // Больше картинок на входе Klein не проверяли (A/B и граф BFL — до четырёх)
     public const int KleinMaxImages = 10;
 
+    // Сколько фото персонажа Klein берёт как одного человека (A/B 2026-10-22, «Андрей»: схожесть
+    // 0,705 на одном фото, 0,765 на пяти; Qwen-Image на каждое фото рисует отдельного человека)
+    public const int KleinCharacterPhotos = 5;
+
     public static bool IsKnown(string? model) => model is null or Quality or Turbo or Klein;
 
-    // Модель, на которой запуск пойдёт на самом деле. Klein не проверен на персонаже с LoRA,
-    // подстановке лица, масках, дорисовке за края и длинных наборах входов — такие запуски
-    // уходят на Qwen «качественно», даже если выбран Klein
+    // Модель, на которой запуск пойдёт на самом деле. Персонажа Klein берёт сам — по фото, без
+    // LoRA (она обучена под Qwen). Не проверен он на подстановке лица (кроп), масках, дорисовке
+    // за края и длинных наборах входов — такие запуски уходят на Qwen «качественно»
     public static string? Effective(LocalImageRequest request) =>
         request.Model == Klein && NeedsQwen(request) ? Quality : request.Model;
 
     public static bool NeedsQwen(LocalImageRequest request) =>
-        request.Lora is not null
-        || request.FaceReferences is { Count: > 0 }
-        || request.Crop is not null
+        request.Crop is not null
         || request.EraseMask is { Length: > 0 }
         || request.KeepMask is { Length: > 0 }
         || request.VeilMask is { Length: > 0 }
@@ -109,7 +111,7 @@ public static class LocalImageModels
 // края»), результат — в пропорции расширенного холста
 // Model — локальная модель (LocalImageModels); null — Qwen «качественно», прежнее поведение.
 // Klein в случаях из LocalImageModels.NeedsQwen идёт на Qwen «качественно»
-// Lora — только у Edit и у Generate с образцами
+// Lora — только у Edit и у Generate с образцами; графы Klein её не применяют
 // FaceReferences — фото эталона персонажа только для узла сходства лица (граф правки); в
 // энкодер модели они не идут. У FaceDetail и у генерации без образцов узла сходства нет
 public sealed record LocalImageRequest(

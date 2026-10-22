@@ -18,6 +18,12 @@ public static partial class ComfyWorkflows
     // Потолок холста правки — как у узла «Output size» эталона (ImageScaleToTotalPixels, 4 Мп)
     public const double KleinMaxMegapixels = 4.0;
 
+    // Площадь картинок на входе апсемплера (Qwen3.5-9B) у запусков с персонажем. Замер на проде
+    // 2026-10-22 («Андрей», 5 фото, кафе и гора × 2 сида): апсемплер 11,5 → 5–8 с, весь прогон
+    // 73–77 → 64–69 с, схожесть 0,654–0,769 → 0,684–0,781 (медиана 0,686 → 0,726). Основное время
+    // съедает не апсемплер, а диффузия с пятью образцами по 1 Мп — её не трогаем
+    public const double KleinUpsamplerMegapixels = 0.3;
+
     private const string KleinUnet = "flux3-image-klein-int8-convrot.safetensors";
     private const string KleinClip = "qwen3vl_4b_int8_convrot.safetensors";
     private const string KleinVae = "flux2-vae.safetensors";
@@ -44,9 +50,14 @@ public static partial class ComfyWorkflows
 
     // Правка и генерация по образцам: первая картинка — основная, все идут и апсемплеру
     // (BatchImagesNode), и в ReferenceMultiLatent (каждая ужимается до 1 Мп). Холст — canvas,
-    // кратно 16: у правки — размер исходника (KleinCanvas), у генерации — из таблицы пропорций
+    // кратно 16: у правки — размер исходника (KleinCanvas), у генерации — из таблицы пропорций.
+    // upsamplerMegapixels — до какой площади ужать картинки для апсемплера (диффузия видит их как
+    // есть); null — апсемплер смотрит полный размер, как в эталоне BFL. Первые upsamplerKeep картинок
+    // не ужимаются (холст правки: апсемплер переписывает текст с него дословно). faceReferences —
+    // эталон персонажа для узла сходства (CcsFaceSimilarity), в модель не идёт
     public static JsonObject KleinEdit(string prompt, IReadOnlyList<string> images, (int Width, int Height) canvas,
-        long seed, string filenamePrefix)
+        long seed, string filenamePrefix, IReadOnlyList<string>? faceReferences = null,
+        double? upsamplerMegapixels = null, int upsamplerKeep = 0)
     {
         if (images.Count is < 1 or > LocalImageModels.KleinMaxImages)
             throw new ArgumentOutOfRangeException(nameof(images), $"Нужно от 1 до {LocalImageModels.KleinMaxImages} картинок");
@@ -64,8 +75,22 @@ public static partial class ComfyWorkflows
         for (var k = 0; k < images.Count; k++)
         {
             wf[$"img{k + 1}"] = Node("LoadImage", new JsonObject { ["image"] = images[k] });
-            batch[$"images.image{k}"] = Link($"img{k + 1}");
             refs[$"images.image{k}"] = Link($"img{k + 1}");
+            if (upsamplerMegapixels is { } mp && k >= upsamplerKeep)
+            {
+                wf[$"ups_img{k + 1}"] = Node("ImageScaleToTotalPixels", new JsonObject
+                {
+                    ["image"] = Link($"img{k + 1}"),
+                    ["upscale_method"] = "area",
+                    ["megapixels"] = mp,
+                    ["resolution_steps"] = 1,
+                });
+                batch[$"images.image{k}"] = Link($"ups_img{k + 1}");
+            }
+            else
+            {
+                batch[$"images.image{k}"] = Link($"img{k + 1}");
+            }
         }
         wf["ups_imgs"] = Node("BatchImagesNode", batch);
         wf["ups_fmt"] = Node("StringFormat", new JsonObject
@@ -79,6 +104,12 @@ public static partial class ComfyWorkflows
         wf["ks"]!["inputs"]!["positive"] = Link("ref");
         wf["ks"]!["inputs"]!["negative"] = Link("ref", 1);
         AddDecodeAndSave(wf, filenamePrefix);
+        if (faceReferences is { Count: > 0 })
+            wf["sim"] = Node("CcsFaceSimilarity", new JsonObject
+            {
+                ["image"] = Link("dec"),
+                ["references"] = string.Join("\n", faceReferences),
+            });
         return wf;
     }
 

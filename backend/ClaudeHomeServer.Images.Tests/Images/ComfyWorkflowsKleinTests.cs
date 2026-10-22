@@ -163,8 +163,6 @@ public class ComfyWorkflowsKleinTests
 
     public static IEnumerable<object[]> QwenCases() => new (string, LocalImageRequest)[]
     {
-        ("lora", Klein() with { Lora = new LocalImageLora("timur.safetensors", 1) }),
-        ("face-refs", Klein() with { FaceReferences = [Png] }),
         ("crop", Klein() with { Crop = new LocalImageCrop(0, 0, 8, 8, 16, 16) }),
         ("erase", Klein() with { EraseMask = Png }),
         ("keep", Klein() with { KeepMask = Png }),
@@ -186,7 +184,60 @@ public class ComfyWorkflowsKleinTests
         LocalImageModels.Effective(Klein(10)).Should().Be(LocalImageModels.Klein);
         LocalImageModels.Effective(Klein() with { Model = LocalImageModels.Turbo, EraseMask = Png }).Should().Be(LocalImageModels.Turbo);
         LocalImageModels.Effective(Klein() with { Model = null, Lora = new LocalImageLora("a", 1) }).Should().BeNull();
+        // Персонажа Klein берёт сам (A/B 2026-10-22): ни LoRA, ни эталон сходства на Qwen не уводят
+        LocalImageModels.Effective(Klein(5) with { Lora = new LocalImageLora("a", 1), FaceReferences = [Png] })
+            .Should().Be(LocalImageModels.Klein);
+        LocalImageModels.NeedsQwen(Klein() with { FaceReferences = [Png], Crop = new LocalImageCrop(0, 0, 8, 8, 16, 16) })
+            .Should().BeTrue("подстановка на лицо — по кропу — остаётся за Qwen");
         LocalImageModels.Effective(Klein() with { EraseMask = [] }).Should().Be(LocalImageModels.Klein, "пустой массив — маски нет");
         LocalImageModels.IsKnown(LocalImageModels.Klein).Should().BeTrue();
     }
+
+    // ─── Персонаж: сходство и ужатые образцы для апсемплера ───────────────────
+
+    [Fact]
+    public void Персонаж_УзелСходства_ПоВыходуДекодера_ВМодельЭталонНеИдёт()
+    {
+        var wf = ComfyWorkflows.KleinEdit("в кафе", ["f1.png", "f2.png"], (1328, 1328), 1, "p", faceReferences: ["r1.png", "r2.png"]);
+
+        Class(wf, "sim").Should().Be("CcsFaceSimilarity");
+        Inputs(wf, "sim")["image"]!.ToJsonString().Should().Be(Link("dec").ToJsonString());
+        Inputs(wf, "sim")["references"]!.GetValue<string>().Should().Be("r1.png\nr2.png");
+        wf.ToJsonString().Should().NotContain("\"image\":\"r1.png\"", "эталон — только узлу сходства");
+    }
+
+    [Fact]
+    public void БезЭталона_УзлаСходстваНет_АпсемплерСмотритПолныеКартинки()
+    {
+        var wf = ComfyWorkflows.KleinEdit("x", ["a.png", "b.png"], (1328, 1328), 1, "p");
+
+        wf.ContainsKey("sim").Should().BeFalse();
+        wf.Select(n => n.Key).Should().NotContain(k => k.StartsWith("ups_img") && k != "ups_imgs");
+        Inputs(wf, "ups_imgs")["images.image1"]!.ToJsonString().Should().Be(Link("img2").ToJsonString());
+    }
+
+    [Fact]
+    public void Апсемплер_ВидитУжатыеОбразцы_ХолстПолным_ДиффузияВидитВсёКакЕсть()
+    {
+        var wf = ComfyWorkflows.KleinEdit("x", ["canvas.png", "f1.png", "f2.png"], (1328, 1328), 1, "p",
+            upsamplerMegapixels: 0.3, upsamplerKeep: 1);
+
+        var batch = Inputs(wf, "ups_imgs");
+        batch["images.image0"]!.ToJsonString().Should().Be(Link("img1").ToJsonString(), "холст правки — полным");
+        batch["images.image1"]!.ToJsonString().Should().Be(Link("ups_img2").ToJsonString());
+        batch["images.image2"]!.ToJsonString().Should().Be(Link("ups_img3").ToJsonString());
+        wf.ContainsKey("ups_img1").Should().BeFalse();
+        Class(wf, "ups_img2").Should().Be("ImageScaleToTotalPixels");
+        Inputs(wf, "ups_img2")["image"]!.ToJsonString().Should().Be(Link("img2").ToJsonString());
+        Inputs(wf, "ups_img2")["megapixels"]!.GetValue<double>().Should().Be(0.3);
+
+        var refs = Inputs(wf, "ref");
+        refs["images.image1"]!.ToJsonString().Should().Be(Link("img2").ToJsonString(), "диффузия — без ужатия");
+        refs["resolution.megapixels"]!.GetValue<double>().Should().Be(1.0);
+    }
+
+    [Fact]
+    public void ПятьФотоПерсонажа_ВЛимитеKlein() =>
+        (LocalImageModels.KleinCharacterPhotos + 1).Should().BeLessThanOrEqualTo(LocalImageModels.KleinMaxImages,
+            "пять фото и холст правки проходят без запасного пути");
 }

@@ -273,7 +273,11 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
         }
 
-        if (request.Lora is { } requested)
+        // Фактическая модель: Klein в непроверенных для него случаях идёт на Qwen «качественно»
+        var model = request.Op == LocalImageOp.FaceDetail ? null : LocalImageModels.Effective(request);
+
+        // Графы Klein LoRA не применяют — и не проверяют
+        if (request.Lora is { } requested && !ComfyWorkflows.IsKlein(model))
         {
             var name = requested.Name ?? "";
             if (name.Length == 0 || name.Contains("..") || name.StartsWith('/') || name.StartsWith('\\') || name.Contains(':'))
@@ -309,8 +313,6 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             return LocalImageSubmitted.Fail($"Очередь локальной видеокарты занята ({queue.Length} задач). "
                 + "Попробуйте позже или выберите другого поставщика.", busy: true);
 
-        // Фактическая модель: Klein в непроверенных для него случаях идёт на Qwen «качественно»
-        var model = request.Op == LocalImageOp.FaceDetail ? null : LocalImageModels.Effective(request);
         if (model is not null && model != request.Model)
             log.LogInformation("Запуск редактора {Op} на {Model} вместо {Requested}: Klein для него не проверен",
                 request.Op, model, request.Model);
@@ -368,7 +370,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             var graph = request.Op switch
             {
                 LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsKlein(model) =>
-                    KleinGraph(prompt, request, names, images, seed, count, prefix),
+                    KleinGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request with { Model = model }, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
                 LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs, model: model),
@@ -436,19 +438,22 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         request.Width is > 0 && request.Height is > 0 ? (request.Width.Value, request.Height.Value) : SizeFor(request.Aspect);
 
     // Klein: генерация по тексту, по образцам (холст из формата) и правка (холст по исходнику).
-    // Размер исходника — с поворотом EXIF: LoadImage ComfyUI поворачивает JPEG сам
+    // Размер исходника — с поворотом EXIF: LoadImage ComfyUI поворачивает JPEG сам.
+    // С персонажем (есть эталон для сходства) апсемплер смотрит образцы ужатыми — холст правки нет
     private System.Text.Json.Nodes.JsonObject KleinGraph(string prompt, LocalImageRequest request, IReadOnlyList<string> names,
-        IReadOnlyList<byte[]> images, long seed, int count, string prefix)
+        IReadOnlyList<byte[]> images, IReadOnlyList<string> faceRefs, long seed, int count, string prefix)
     {
         if (names.Count == 0)
         {
             var size = CanvasFor(request);
             return ComfyWorkflows.KleinGenerate(prompt, size.Width, size.Height, seed, count, prefix);
         }
+        double? upsampler = faceRefs.Count > 0 ? ComfyWorkflows.KleinUpsamplerMegapixels : null;
         if (request.Op == LocalImageOp.Generate)
-            return ComfyWorkflows.KleinEdit(prompt, names, CanvasFor(request), seed, prefix);
+            return ComfyWorkflows.KleinEdit(prompt, names, CanvasFor(request), seed, prefix, faceRefs, upsampler);
         var (width, height) = SourceSize(images[0]) ?? SizeFor(request.Aspect);
-        return ComfyWorkflows.KleinEdit(prompt, names, ComfyWorkflows.KleinCanvas(width, height), seed, prefix);
+        return ComfyWorkflows.KleinEdit(prompt, names, ComfyWorkflows.KleinCanvas(width, height), seed, prefix, faceRefs,
+            upsampler, upsamplerKeep: 1);
     }
 
     private (int Width, int Height)? SourceSize(byte[] image) =>

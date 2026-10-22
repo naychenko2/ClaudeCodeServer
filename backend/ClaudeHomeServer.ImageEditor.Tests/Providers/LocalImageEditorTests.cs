@@ -336,7 +336,7 @@ public class LocalImageEditorTests : IDisposable
     }
 
     [Fact]
-    public async Task КотировкаKlein_СПерсонажем_СчитаетВремяQwen()
+    public async Task КотировкаKlein_СПерсонажем_СчитаетВремяKleinНаПятьФото()
     {
         var media = new FakeMedia();
         var service = Service(Editor(media));
@@ -348,8 +348,25 @@ public class LocalImageEditorTests : IDisposable
         while (media.EtaModels.TryDequeue(out _)) { }
         var withCharacter = await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Generate) with { Model = LocalImageEditor.FluxKlein }, default);
         withCharacter.Value!.Model.Should().Be(LocalImageEditor.FluxKlein);
-        media.EtaModels.Should().Contain(LocalImageEditor.QwenImage, "с персонажем запуск уйдёт на Qwen «качественно»")
-            .And.NotContain(LocalImageEditor.FluxKlein);
+        media.EtaModels.Should().Contain(LocalImageEditor.FluxKlein, "персонажа Klein берёт сам")
+            .And.NotContain(LocalImageEditor.QwenImage);
+        withCharacter.Value.Estimate.EtaSeconds.Should().Be(60 + 10 * 4, "пять фото персонажа — пять картинок в графе");
+
+        while (media.EtaModels.TryDequeue(out _)) { }
+        await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Edit, mask: true) with { Model = LocalImageEditor.FluxKlein }, default);
+        media.EtaModels.Should().Contain(LocalImageEditor.QwenImage, "кисть Klein по-прежнему отдаёт Qwen");
+    }
+
+    [Fact]
+    public void Каталог_KleinПятьФотоПерсонажа_QwenОдно_ПодстановкаНаЛицоВездеОдно()
+    {
+        var models = new LocalImageEditor(new FakeMedia()).Models;
+
+        models.Single(m => m.Id == LocalImageEditor.FluxKlein).Caps.MaxCharacterPhotos.Should().Be(5);
+        models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps.MaxCharacterPhotos.Should().Be(1);
+        models.Single(m => m.Id == LocalImageEditor.QwenImageTurbo).Caps.MaxCharacterPhotos.Should().Be(1);
+        models.Where(m => m.Id != LocalImageEditor.FaceDetailer)
+            .Should().OnlyContain(m => m.Caps.MaxFaceCropPhotos == 1, "подстановку на лицо делает Qwen: одно фото");
     }
 
     [Fact]
@@ -716,6 +733,121 @@ public class LocalImageEditorTests : IDisposable
         var sent = media.Submitted.Should().ContainSingle().Subject;
         sent.Lora.Should().BeNull();
         sent.Prompt.Should().NotContain("photo of");
+    }
+
+    // ── Персонаж на Klein: пять фото, без LoRA (A/B 2026-10-22) ──
+
+    private static ImageEditQuoteRequest KleinCharacterQuote(ImageEditOp op) =>
+        CharacterQuote(op) with { Model = LocalImageEditor.FluxKlein };
+
+    [Fact]
+    public async Task Klein_ПерсонажПоТексту_ПятьФото_БезЛоры_ЗапросСФотографийОбразцов()
+    {
+        var media = new FakeMedia();
+        var faces = Faces(5);
+        var character = TimurLora with { Description = "мужчина 30 лет", FacePhotos = [.. faces.Select(f => f.Bytes)] };
+
+        var job = await RunAsync(Service(Editor(media)), KleinCharacterQuote(ImageEditOp.Generate),
+            new ImageEditJobInput("", "сидит в кафе", null, null, null, null, faces, null, character));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Model.Should().Be(LocalImageEditor.FluxKlein);
+        LocalImageModels.Effective(sent).Should().Be(LocalImageEditor.FluxKlein, "персонаж больше не уводит Klein на Qwen");
+        sent.Images.Should().HaveCount(5, "Klein берёт пять фото как одного человека");
+        sent.Images[0].Should().Equal(faces[0].Bytes, "главное фото первым");
+        sent.Lora.Should().BeNull("LoRA обучены под Qwen-Image");
+        sent.FaceReferences.Should().HaveCount(5, "эталон для сходства едет, как у Qwen");
+        sent.Prompt.Should().Be("Человек с фотографий-образцов (на всех фото он один) — «Тимур», мужчина 30 лет: сидит в кафе")
+            .And.NotContain("andreyk");
+    }
+
+    [Fact]
+    public async Task Klein_ПерсонажВПравке_ХолстИПятьФото_РолиКомпозера_БезТриггера()
+    {
+        var media = new FakeMedia();
+        var faces = Faces(5);
+        var source = TestImages.Png(8, 8, 1);
+
+        var job = await RunAsync(Service(Editor(media)), KleinCharacterQuote(ImageEditOp.Edit),
+            new ImageEditJobInput("", "поставь сюда Тимура", null, new ImageBytes(source, "image/png"), null, null, faces,
+                "images/hero.png", TimurLora));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Images.Should().HaveCount(6);
+        sent.Images[0].Should().Equal(source);
+        sent.Lora.Should().BeNull();
+        sent.Prompt.Should().StartWith("поставь сюда Тимура").And.Contain("2–6) 5 фото лица одного и того же человека")
+            .And.NotContain("photo of andreyk");
+    }
+
+    [Fact]
+    public async Task Qwen_ПерсонажСЛорой_ПоПрежнемуОдноФотоИЛора()
+    {
+        var media = new FakeMedia();
+
+        var job = await RunAsync(Service(Editor(media)), CharacterQuote(ImageEditOp.Generate) with { Model = LocalImageEditor.QwenImage },
+            new ImageEditJobInput("", "сидит в кафе", null, null, null, null, Faces(5), null, TimurLora));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Images.Should().ContainSingle();
+        sent.Lora.Should().NotBeNull();
+        sent.Prompt.Should().StartWith("photo of andreyk, ");
+    }
+
+    [Fact]
+    public async Task Klein_ПодстановкаНаЛицо_УходитНаQwen_СЛоройИОднимФото()
+    {
+        var media = new FakeMedia();
+        var source = TestImages.Png(16, 16, 1);
+        var mask = TestImages.Png(16, 16, 2);
+        var request = new ImageEditRequest(ImageEditOp.Edit, "лицо Тимура", new ImageBytes(source, "image/png"),
+            null, Faces(1), 1, null, null, LocalImageEditor.FluxKlein, TimurLora,
+            FaceCrop: new LocalImageCrop(0, 0, 16, 16, 16, 16), KeepMask: new ImageBytes(mask, "image/png"));
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        LocalImageModels.Effective(sent).Should().Be(LocalImageEditor.QwenImage);
+        sent.Lora.Should().NotBeNull("подстановку делает Qwen — его LoRA остаётся");
+        sent.Prompt.Should().StartWith("photo of andreyk, ");
+    }
+
+    [Fact]
+    public void Композер_Klein_ПятьФото_АПриПодстановкеНаЛицоОдно()
+    {
+        var klein = new LocalImageEditor(new FakeMedia()).Models.Single(m => m.Id == LocalImageEditor.FluxKlein);
+        var source = new ImageBytes(TestImages.Png(16, 16, 1), "image/png");
+        var input = new ImageEditJobInput("", "сюда Тимура", null, source, null, null, Faces(7), null, Timur);
+
+        var plain = EditRequestComposer.Compose(input, ImageEditOp.Edit, klein, 1).Value!;
+        plain.References.Count(r => r.Role == ReferenceRole.Character).Should().Be(5);
+
+        var faceSwap = EditRequestComposer.Compose(input with
+        {
+            Mask = new ImageBytes(TestImages.Png(16, 16, 2), "image/png"),
+            FaceCrop = new LocalImageCrop(0, 0, 16, 16, 16, 16),
+        }, ImageEditOp.Edit, klein, 1).Value!;
+        faceSwap.References.Count(r => r.Role == ReferenceRole.Character).Should().Be(1,
+            "подстановку на лицо Klein отдаёт Qwen, а тот по пяти фото нарисует пять человек");
+    }
+
+    [Fact]
+    public void Klein_ЗапросПерсонажа_ОдноФото_ИЧужиеОбразцы()
+    {
+        var one = new ImageEditRequest(ImageEditOp.Generate, "ignored", null, null, Faces(1), 1, null, null,
+            LocalImageEditor.FluxKlein, Timur, Instruction: "в кафе");
+        LocalImageEditor.KleinCharacterPrompt(one).Should().Be("Человек с фотографии-образца — «Тимур»: в кафе");
+
+        var withObject = one with
+        {
+            References = [.. Faces(2), new ReferenceImage(TestImages.Png(8, 8), "image/png", ReferenceRole.Object, "кот")],
+        };
+        LocalImageEditor.KleinCharacterPrompt(withObject).Should().BeNull("с чужими образцами — роли композера по номерам");
+        LocalImageEditor.KleinCharacterPrompt(one with { Character = null }).Should().BeNull();
     }
 
     [Fact]

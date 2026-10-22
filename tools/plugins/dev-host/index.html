@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <title>Хост-эмулятор панелей плагинов</title>
 <!--
-  Хост-эмулятор (шаг A2 плана «Погода»): собирает и гоняет панель плагина в браузере
-  БЕЗ установки. Штатный инструмент разработки рядом с китом (plugin-kit), общий для
-  любых панелей: панель, права и фикстуры задаются параметрами URL, ничего погодного
-  в код эмулятора не вшито.
+  Хост-эмулятор (шаг A2 плана «Погода», доработка R1): гоняет панель плагина в браузере
+  БЕЗ установки. Это инструмент разработки в репозитории: живёт в tools/plugins/dev-host/
+  и раздаётся статическим сервером из корня репозитория. В прод он не попадает: frontend/
+  public/ уходит в dist → wwwroot, а эмулятор должен оставаться вне сборки.
 
   Верхнее окно эмулятора играет хост:
   - двухуровневый фрейм и srcdoc — точная копия сборки хоста (panelSrcdoc.ts):
@@ -16,10 +16,13 @@
     frontend/public/plugin-kit/ — тот же, что вживую;
   - токены --cc-*: эмулятор подключает frontend/src/lib/theme.css себе, ставит
     data-theme и читает computed --c-* по копии CC_TOKEN_MAP (panelTokens.ts);
-  - сообщения моста: ready → init; call net.fetch → window.fetch (или фикстура)
-    с ответом {status, headers, body}; отказ по праву — тем же текстом, что сервер
+  - сообщения моста: ready → init; call net.fetch → fetch с credentials: 'omit'
+    (куки и токен origin не уходят) или фикстура; отказ по праву — текстом сервера
     (PluginBridge / PluginNetProxy), и плашка «Нет права …» над панелью;
-  - высоту фрейма ставит по resize (кламп 48..20000), как хост.
+  - гейты хоста воспроизведены: e.origin === 'null', не более 8 вызовов в полёте,
+    64 КиБ на args, таймаут ready 3 с (bridge_timeout), высота по resize (кламп 48..20000);
+  - panel= и fixtures= — только пути внутри репозитория (без схемы, без «..»):
+    чужая страница не может прочитать превью и отправить результат на свой сервер.
 
   Платформенный код не меняется — здесь только его минимальная переносимая копия.
 -->
@@ -114,6 +117,15 @@ const CC_TOKEN_MAP = {
   '--cc-danger-border': '--c-danger-border',
 };
 
+// Гейты моста хоста (PluginFrame.tsx, bridge.ts): потолок одновременных вызовов,
+// размер args, таймаут ready и его текст — дословно как на сервере/фронте.
+const MAX_INFLIGHT_CALLS = 8;
+const MAX_ARGS_BYTES = 64 * 1024;
+const READY_TIMEOUT_MS = 3000;
+const BRIDGE_TIMEOUT_TEXT = 'Мост не получил ответа за 3 с.'; // bridge.ts BRIDGE_ERROR_TEXT
+// Типичная сетевая ошибка боевого хоста (PluginNetProxy отдаёт ex.Message upstream).
+const UPSTREAM_TEXT = 'Connection refused';
+
 // Кламп высоты контента (bridge.ts clampContentHeight).
 function clampContentHeight(h) {
   return Math.min(20000, Math.max(48, Math.round(h)));
@@ -155,19 +167,40 @@ function buildShell(panelHtml, theme, shimJs, shimCss, tokens) {
   );
 }
 
+/* === Paths только внутри репозитория === */
+
+// Статический сервер раздаёт корень репозитория, поэтому panel= и fixtures= —
+// относительные пути от него. Чужая страница не допускается: ссылка в один клик
+// «?panel=https://evil/…&grant=<origin>,evil» заставила бы чужую панель прочитать
+// превью и отправить результат на свой сервер. Отбрасываем схему, protocol-relative
+// и «..» за пределы корня. null — путь не наш.
+function repoPath(raw) {
+  if (!raw) return null;
+  let s = String(raw).trim();
+  if (s.startsWith('//')) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(s)) return null;
+  s = s.replace(/^\/+/, '');
+  if (!s || s.split('/').some(part => part === '..')) return null;
+  return '/' + s;
+}
+
 /* === Конфигурация из URL: всё задаётся параметрами, ничего не вшито === */
 
 const params = new URLSearchParams(location.search);
 const listParam = (name) => (params.get(name) || '').split(',').map(s => s.trim()).filter(Boolean);
 
+const rawPanel = params.get('panel');
 const cfg = {
-  panel: params.get('panel') || '/frontend/public/plugin-dev/weather/panel/index.html',
+  // Панель — исходник пакета (копии нет: она бы расходилась с оригиналом).
+  // panel= с чужим URL не принимается вовсе (не подменяется дефолтом).
+  panel: rawPanel === null ? '/tools/plugins/weather/panel/index.html' : repoPath(rawPanel),
   // grant= — список хостов (или net:хостов), которым выдано право; пусто — ни одного.
+  // Это имитация согласия: реальные права выдаёт сервер при установке.
   grant: listParam('grant').map(h => h.replace(/^net:/, '').toLowerCase()),
   fail: ['upstream', 'timeout', 'limit', 'status400'].includes(params.get('fail')) ? params.get('fail') : '',
   delay: Math.max(0, parseInt(params.get('delay') || '0', 10) || 0),
-  // fixtures= — пути к файлам-фикстурам; одна — для всех вызовов, несколько — по порядку вызовов.
-  fixtures: listParam('fixtures'),
+  // fixtures= — пути к файлам-фикстурам внутри репозитория; основной режим — фикстуры.
+  fixtures: listParam('fixtures').map(repoPath).filter(Boolean),
   theme: params.get('theme') === 'dark' ? 'dark' : 'light',
   width: ['rail', '320', '390'].includes(params.get('width')) ? params.get('width') : 'rail',
   selftest: params.get('selftest') === '1',
@@ -220,12 +253,18 @@ function hostOf(url) {
   try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ''; }
 }
 
+let readyReceived = false;
+
 window.addEventListener('message', (e) => {
   const d = e.data;
   if (!d || typeof d !== 'object' || d.source !== 'ccs-plugin' || d.v !== 1) return;
+  // Origin sandbox-фрейма без allow-same-origin — строка 'null' (bridge.ts
+  // OPAQUE_ORIGIN). Любой другой origin — не сообщение панели.
+  if (e.origin !== 'null') return;
   if (e.source !== panelWindow()) return; // сообщения только из окна панели
 
   if (d.type === 'ready') {
+    readyReceived = true;
     postToPanel({
       type: 'init',
       // Идентификатор «плагина» для эмулятора — условный: он нужен панели только
@@ -253,13 +292,14 @@ window.addEventListener('message', (e) => {
   }
 });
 
-/* === net.fetch: права, сбои, фикстуры, сеть === */
+/* === net.fetch: права, гейты, сбои, фикстуры, сеть === */
 
 const fixtureCache = new Map();
 let callSeq = 0;
+let inflight = 0;
 
 async function fetchText(path) {
-  const r = await fetch(path);
+  const r = await fetch(path, { credentials: 'omit' });
   if (!r.ok) throw new Error(path + ': HTTP ' + r.status);
   return r.text();
 }
@@ -276,8 +316,9 @@ function fixturePathFor() {
   return cfg.fixtures[callSeq++ % cfg.fixtures.length];
 }
 
-function respond(id, res) {
+function respond(id, res, counted) {
   const send = () => {
+    if (counted) inflight--;
     if (res.ok) postToPanel({ type: 'result', id, ok: true, data: res.data });
     else {
       postToPanel({ type: 'result', id, ok: false, error: res.error });
@@ -290,40 +331,69 @@ function respond(id, res) {
 async function handleCall(id, op, args) {
   logLine('→ ' + op + (args.url ? ' ' + args.url : ''));
   let res;
+  let counted = false;
 
-  if (op !== 'net.fetch') {
-    res = { ok: false, error: { code: 'unavailable', message: 'Обработчик не зарегистрирован: ' + String(op).split('.')[0] } };
+  // Гейты хоста (PluginFrame.handleCall): потолок одновременных вызовов и размер args.
+  if (inflight >= MAX_INFLIGHT_CALLS) {
+    res = { ok: false, error: { code: 'limit', message: 'Слишком много одновременных вызовов' } };
   } else {
-    // Отказ по праву — тексты ровно как у сервера (PluginBridge / PluginNetProxy).
-    const granted = cfg.grant.map(h => 'net:' + h);
-    if (granted.length === 0) {
-      res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' } };
-    } else {
-      // Точный хост из granted — как PluginNetProxy: право net:{host} должно
-      // совпадать с хостом url (порт из права не несём).
-      const host = hostOf(args.url);
-      if (!granted.some(g => g.slice(4).split(':')[0] === host)) {
-        res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } };
+    try {
+      if (JSON.stringify(args).length > MAX_ARGS_BYTES) {
+        res = { ok: false, error: { code: 'limit', message: 'Аргументы слишком большие' } };
       }
+    } catch (e) {
+      // Как хост: нечитаемые args — пустой объект, вызов идёт дальше.
+      args = {};
     }
+  }
 
-    if (!res) {
-      if (cfg.fail === 'upstream') res = { ok: false, error: { code: 'upstream', message: 'Вышестоящий сервис не ответил' } };
-      else if (cfg.fail === 'timeout') res = { ok: false, error: { code: 'timeout', message: 'Таймаут запроса' } };
-      else if (cfg.fail === 'limit') res = { ok: false, error: { code: 'limit', message: 'Превышено число запросов на плагин в минуту' } };
-      else if (cfg.fail === 'status400') {
-        // Ошибочный HTTP — как успех net.fetch: {status, headers, body} (см. §1 плана).
-        const fp = fixturePathFor();
-        res = { ok: true, data: { status: 400, headers: { 'content-type': 'application/json' }, body: fp ? await fixtureText(fp) : '{"error":true,"reason":"Некорректный запрос"}' } };
-      } else if (cfg.fixtures.length > 0) {
-        const body = await fixtureText(fixturePathFor());
-        res = { ok: true, data: { status: 200, headers: { 'content-type': 'application/json' }, body } };
+  if (!res) {
+    inflight++;
+    counted = true;
+    if (op !== 'net.fetch') {
+      // Текст — как у сервера (PluginBridge.DispatchAsync).
+      res = { ok: false, error: { code: 'unavailable', message: 'Обработчик не зарегистрирован: ' + String(op).split('.')[0] } };
+    } else {
+      // Отказ по праву и тексты — ровно как у сервера (PluginBridge / PluginNetProxy).
+      const url = typeof args.url === 'string' ? args.url : '';
+      if (!url) {
+        res = { ok: false, error: { code: 'invalid', message: 'Не задан url' } };
+      } else if (!/^https?:\/\//i.test(url)) {
+        res = { ok: false, error: { code: 'invalid', message: 'Некорректный url: ' + url } };
       } else {
-        try {
-          const r = await fetch(args.url, { method: (args.method || 'GET').toUpperCase(), headers: args.headers || {} });
-          res = { ok: true, data: { status: r.status, headers: Object.fromEntries(r.headers.entries()), body: await r.text() } };
-        } catch (e) {
-          res = { ok: false, error: { code: 'upstream', message: e.message } };
+        const granted = cfg.grant.map(h => 'net:' + h);
+        if (granted.length === 0) {
+          // Нет ни одного net:права — отказ на уровне моста (PluginBridge): «Нет права: net:».
+          res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' } };
+        } else {
+          // Точный хост из granted — как PluginNetProxy: право net:{host} должно
+          // совпадать с хостом url (порт из права не несём).
+          const host = hostOf(url);
+          if (!granted.some(g => g.slice(4).split(':')[0] === host)) {
+            res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } };
+          }
+        }
+      }
+
+      if (!res) {
+        if (cfg.fail === 'upstream') res = { ok: false, error: { code: 'upstream', message: UPSTREAM_TEXT } };
+        else if (cfg.fail === 'timeout') res = { ok: false, error: { code: 'timeout', message: 'Таймаут запроса' } };
+        else if (cfg.fail === 'limit') res = { ok: false, error: { code: 'limit', message: 'Превышено число запросов на плагин в минуту' } };
+        else if (cfg.fail === 'status400') {
+          // Ошибочный HTTP — как успех net.fetch: {status, headers, body} (см. §1 плана).
+          const fp = fixturePathFor();
+          res = { ok: true, data: { status: 400, headers: { 'content-type': 'application/json' }, body: fp ? await fixtureText(fp) : '{"error":true,"reason":"Некорректный запрос"}' } };
+        } else if (cfg.fixtures.length > 0) {
+          const body = await fixtureText(fixturePathFor());
+          res = { ok: true, data: { status: 200, headers: { 'content-type': 'application/json' }, body } };
+        } else {
+          try {
+            // Сеть: только http(s) (проверено выше), без куков и токена origin.
+            const r = await fetch(url, { method: (args.method || 'GET').toUpperCase(), headers: args.headers || {}, credentials: 'omit' });
+            res = { ok: true, data: { status: r.status, headers: Object.fromEntries(r.headers.entries()), body: await r.text() } };
+          } catch (e) {
+            res = { ok: false, error: { code: 'upstream', message: e.message } };
+          }
         }
       }
     }
@@ -332,7 +402,7 @@ async function handleCall(id, op, args) {
   logLine(res.ok
     ? '← ' + res.data.status + ' (' + (res.data.body || '').length + ' bytes)'
     : '← ' + res.error.code + ': ' + res.error.message);
-  respond(id, res);
+  respond(id, res, counted);
 }
 
 /* === Тема и ширина === */
@@ -380,6 +450,10 @@ const SELFTEST_JS =
 /* === Запуск === */
 
 async function main() {
+  if (!cfg.panel) {
+    logLine('× panel= — только путь внутри репозитория (без схемы и «..»): ' + rawPanel);
+    return;
+  }
   // Тема хоста: тот же theme.css, что у приложения; data-theme — как в themeMode.ts.
   const hostThemeCss = await fetchText('/frontend/src/lib/theme.css');
   const st = document.createElement('style');
@@ -402,6 +476,12 @@ async function main() {
 
   frame.srcdoc = buildShell(panelHtml, cfg.theme, shimJs, shimCss, hostTokens());
   applyWidth();
+
+  // Таймаут ready (bridge.ts READY_TIMEOUT_MS): панель, не приславшая ready за 3 с,
+  // — «не отвечает»; хост показывает bridge_timeout.
+  setTimeout(() => {
+    if (!readyReceived) logLine('× ' + BRIDGE_TIMEOUT_TEXT);
+  }, READY_TIMEOUT_MS);
 
   document.getElementById('in-panel').value = cfg.panel;
   document.getElementById('in-grant').value = cfg.grant.join(',');

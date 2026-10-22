@@ -101,10 +101,39 @@ async function refresh(e: Entry) {
   try {
     const list = await api.plugins.list();
     if (e.seq === seq) {
+      // Не-хуковый путь (ops/getZones): refresh() идёт ПОСЛЕ await, т.е. вне рендера,
+      // где wsPanels.use() (useSyncExternalStore) дал бы «Invalid hook call».
       // Сборка мусора по диффу УСПЕШНОЙ загрузки: плагин был в последней, а в новой
       // его нет — его ключи снимаем из раскладки. Только по УСПЕШНОМУ ответу: упавший
       // GET (ошибка/таймаут) ничего не выносит.
-      for (const p of e.lastList) if (!list.some(n => n.id === p.id)) wsPanels.use().forgetPlugin(p.id);
+      for (const p of e.lastList) if (!list.some(n => n.id === p.id)) wsPanels.ops.forgetPlugin(p.id);
+      // Итерация 2: orphan-ключи. Плагин удалён вне текущей сессии (другое окно,
+      // другое устройство) и никогда не был в lastList — дифф его не видит. Сканируем
+      // раскладку: ключ plugin:* чьё id не в текущем списке — сносим.
+      const zones = wsPanels.getZones();
+      const validIds = new Set(list.map(p => p.id));
+      const allKeys = [
+        ...zones.left.layout.flat(),
+        ...zones.right.layout.flat(),
+        ...zones.left.stash.flat(),
+        ...zones.right.stash.flat(),
+        ...Object.keys(zones.home),
+        ...Object.keys(zones.weights),
+        ...zones.tucked,
+        ...zones.railOrder,
+      ];
+      const seen = new Set<string>();
+      for (const k of allKeys) {
+        if (!k.startsWith('plugin:')) continue;
+        // Ключ: plugin:{publisher}/{slug}:{panelId} → pluginId = всё между 'plugin:' и последним ':'
+        const lastColon = k.lastIndexOf(':');
+        if (lastColon < 7) continue; // 'plugin:' = 7 символов, panelId пустой — мусор
+        const pluginId = k.slice(7, lastColon);
+        if (pluginId && !validIds.has(pluginId) && !seen.has(pluginId)) {
+          seen.add(pluginId);
+          wsPanels.ops.forgetPlugin(pluginId);
+        }
+      }
       e.lastList = list;
       e.state = { ...e.state, plugins: list, loading: false };
       setInstalledPlugins(e.projectId, list);

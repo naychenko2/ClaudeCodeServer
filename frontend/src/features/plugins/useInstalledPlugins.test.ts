@@ -35,10 +35,27 @@ vi.mock('../../lib/api', () => ({
   api: { plugins: { list: () => m.list() } },
 }));
 
-// Стор раскладки: forgetPlugin (S7) — шпион
-const store = vi.hoisted(() => ({ forgetPlugin: vi.fn() }));
+// Стор раскладки: forgetPlugin (S7) + zones (итерация 2: orphan-ключи) — шпион
+const store = vi.hoisted(() => ({
+  forgetPlugin: vi.fn(),
+  zones: {
+    left: { layout: [], stash: [] },
+    right: { layout: [], stash: [] },
+    weights: {},
+    home: {},
+    tucked: [],
+    railOrder: [],
+  },
+}));
+// refresh() (R-Финал-2) читает раскладку не-хуковым путём: ops.forgetPlugin + getZones
+// (use() — хук, после await в refresh() дал бы «Invalid hook call»). use() оставлен для
+// хука-читателя; store — общий источник для обоих.
 vi.mock('../../pages/workspace/panelStackState', () => ({
-  wsPanels: { use: () => ({ forgetPlugin: store.forgetPlugin }) },
+  wsPanels: {
+    use: () => store,
+    ops: { forgetPlugin: store.forgetPlugin },
+    getZones: () => store.zones,
+  },
 }));
 
 // Стор «установленные плагины» (pluginStore) — шпион

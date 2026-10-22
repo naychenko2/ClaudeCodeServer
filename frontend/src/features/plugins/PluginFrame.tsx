@@ -321,24 +321,19 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
       // hostOps/storage.js: store передаётся ленивым провайдером, и бросающий
       // геттер window.localStorage (Firefox dom.storage.enabled=false, приватный
       // режим) встречается try внутри модуля. Панель всегда получает result.
-      let res: ReturnType<typeof handleStorageCall>;
-      try {
-        res = handleStorageCall({
-          op: msg.op.slice('storage.'.length) as StorageOp,
-          args,
-          granted: p.granted,
-          ownerId,
-          pluginId: p.id,
-          // globalThis, а не window: в браузере это один объект, а тестовые
-          // подмены (withThrowingLocalStorage, fakeStorage) живут на globalThis.
-          store: () => globalThis.localStorage,
-        });
-      } catch (e) {
-        // Защита от «модуль всё-таки бросил»: только в лог, текст для панели —
-        // модульный, нового здесь не придумывается.
-        console.error('[plugin storage] handleStorageCall unexpectedly threw:', e);
-        res = { ok: false, error: { code: 'unavailable', message: 'Внутренняя ошибка хранилища' } };
-      }
+      // handleStorageCall не бросает никогда (F-д6): провайдер и разбор ошибок
+      // внутри try модуля, панель всегда получает result. Своего catch здесь нет —
+      // текст отказа существует только в hostOps/storage.js.
+      const res = handleStorageCall({
+        op: msg.op.slice('storage.'.length) as StorageOp,
+        args,
+        granted: p.granted,
+        ownerId,
+        pluginId: p.id,
+        // globalThis, а не window: в браузере это один объект, а тестовые
+        // подмены (withThrowingLocalStorage, fakeStorage) живут на globalThis.
+        store: () => globalThis.localStorage,
+      });
       if (res.ok) {
         postToFrame(buildResultMessage(msg.id, true, res.data));
       } else {

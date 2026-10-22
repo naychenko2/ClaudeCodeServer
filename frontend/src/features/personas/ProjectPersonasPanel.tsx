@@ -114,7 +114,7 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
     if (talking) return;
     setTalking(true);
     try {
-      const session = await api.personas.createChat(p.id, { mode: 'auto', projectId: project.id });
+      const session = await api.personas.createChat(p.id, { projectId: project.id });
       onOpenChat(session);
     } catch (e) {
       showToast('Персоны', e instanceof Error ? e.message : 'Не удалось создать чат');

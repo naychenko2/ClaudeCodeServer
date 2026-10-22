@@ -365,15 +365,23 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
   for (const op of ['storage.get', 'storage.set', 'storage.remove', 'storage.keys']) {
     it(`localStorage бросает SecurityError → ${op} отвечает unavailable`, async () => {
       const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+      // F-д3 (минор 3): дескриптор сохраняется и возвращается в finally —
+      // бросающий геттер не должен оставаться на следующих тестах.
+      const orig = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
       Object.defineProperty(globalThis, 'localStorage', {
         configurable: true,
         get() { throw Object.assign(new Error('denied'), { name: 'SecurityError' }); },
       });
-      callFromPanel(panelWin, op, { key: 'city', value: 1 });
-      expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
-      expect(sent[0]).toEqual({
-        source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' },
-      });
+      try {
+        callFromPanel(panelWin, op, { key: 'city', value: 1 });
+        expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
+        expect(sent[0]).toEqual({
+          source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' },
+        });
+      } finally {
+        if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
+        else delete (globalThis as { localStorage?: unknown }).localStorage;
+      }
     });
   }
 
@@ -382,6 +390,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
   // «Хранилище недоступно») — этот тест красный.
   it('настоящая ошибка хоста — логируется, не прячется под «Хранилище недоступно»', async () => {
     const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+    const orig = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
       get() { throw new Error('boom'); },
@@ -393,15 +402,21 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
       expect(sent[0]).toEqual({
         source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Внутренняя ошибка хранилища' },
       });
-      expect(spy).toHaveBeenCalled();
+      // F-д3 (минор 4): лог привязан к метке [plugin storage] — посторонний
+      // console.error (например, от React) этот тест не проходит.
+      const logged = spy.mock.calls.some(([first]) => String(first).includes('[plugin storage]'));
+      expect(logged, 'console.error вызван с меткой [plugin storage]').toBe(true);
     } finally {
       spy.mockRestore();
+      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
     }
   });
 
   // SecurityError остаётся тихим: в консоль ничего не пишется.
   it('SecurityError — тихый unavailable, console.error не зовётся', async () => {
     const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+    const orig = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
       get() { throw Object.assign(new Error('denied'), { name: 'SecurityError' }); },
@@ -415,7 +430,42 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
+      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
     }
+  });
+
+  // F-д3 (минор 2): тихая ветка keyed по name, не по instanceof Error:
+  // исключение из другого realm — объект не instanceof Error, но name тот же.
+  // Мутация (б): вернуть в PluginFrame `e instanceof Error &&` — этот тест красный.
+  it('SecurityError не экземпляр Error (другой realm) — тоже тихый unavailable', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+    const orig = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() { throw { name: 'SecurityError', message: 'cross-realm' }; },
+    });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      callFromPanel(panelWin, 'storage.get', { key: 'city' });
+      expect(sent[0]).toEqual({
+        source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' },
+      });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+  });
+
+  // F-д3 (минор 3): тесты с бросающими геттерами возвращают дескриптор —
+  // состояние не течёт между тестами. Мутация (в): оставить где-то выше
+  // геттер без восстановления (путь без stubGlobal, который unstubAllGlobals
+  // не чистит) — этот тест красный.
+  it('после тестов с бросающими геттерами globalThis.localStorage чистый', () => {
+    const d = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    expect(d === undefined || !('get' in d), 'не остался чужий бросающий геттер').toBe(true);
   });
 
   // Fail-closed: нет id владельца в состоянии авторизации — unavailable, ни одной

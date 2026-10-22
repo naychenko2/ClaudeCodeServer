@@ -94,6 +94,56 @@ describe('хранилище отключено (F-д2)', () => {
     s.removeItem = () => { throw new Error('boom'); };
     expect(() => collectOnListLoaded(['acme/two'], s)).toThrow('boom');
   });
+
+  // F-д3 (минор 2): тихая ветка keyed по name, не по instanceof Error —
+  // исключение из другого realm не instanceof Error. Мутация (б): вернуть
+  // `e instanceof Error &&` в quietSecurity — этот тест красный.
+  it('SecurityError не экземпляр Error (другой realm) — тоже тихий 0', () => {
+    me.userId = 'u1';
+    const s = seed();
+    // Бросаем с key() — до частичной обработки в removePluginStorage: исключение
+    // доходит до quietSecurity, и именно её проверка (по name, не instanceof)
+    // здесь и проверяется.
+    s.key = () => { throw { name: 'SecurityError', message: 'cross-realm' }; };
+    expect(collectOnListLoaded(['acme/two'], s)).toBe(0);
+    expect(s.keys()).toEqual(['cc_token', 'ccs.plugin.u1.acme/one.a', 'ccs.plugin.u1.acme/one.b', 'ccs.plugin.u1.acme/two.a', 'ccs.plugin.u2.acme/one.a']);
+  });
+
+  // F-д3 (минор 1): TypeError геттера — не SecurityError, не глотается:
+  // настоящая ошибка видна, а не прячется в тихом нуле.
+  it('геттер localStorage бросает TypeError — ошибка идёт вверх, не в тихий 0', () => {
+    me.userId = 'u1';
+    const orig = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      get() { throw new TypeError('extension broke the getter'); },
+    });
+    try {
+      expect(() => collectOnListLoaded(['acme/one'])).toThrow('extension broke the getter');
+    } finally {
+      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
+  });
+
+  // F-д3 (минор 5): хранилище отключилось в середине цикла — часть ключей
+  // реально удалена, счётчик обязан быть честным, а не нулем.
+  it('частичный сбой: первый ключ удалён, затем SecurityError — счётчик = фактически удалённое', () => {
+    me.userId = 'u1';
+    const s = makeStore({
+      'ccs.plugin.u1.acme/one.a': '1',
+      'ccs.plugin.u1.acme/one.b': '2',
+      cc_token: 'tok',
+    });
+    const origRemove = s.removeItem;
+    let n = 0;
+    s.removeItem = (k: string) => {
+      if (n === 0) { origRemove(k); n++; return; }
+      throw Object.assign(new Error('sandboxed'), { name: 'SecurityError' });
+    };
+    expect(eraseOnUninstall('acme/one', s)).toBe(1);
+    expect(s.keys()).toEqual(['cc_token', 'ccs.plugin.u1.acme/one.b']);
+  });
 });
 
 describe('отзыв права: данные остаются, повторная выдача возвращает их', () => {

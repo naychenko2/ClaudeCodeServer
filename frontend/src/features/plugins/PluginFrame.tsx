@@ -334,7 +334,9 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
         // хранилище отключено, штатный тихий «unavailable» для панели. Всё прочее —
         // настоящая ошибка хоста: логируем в консоль, чтобы разработчик её видел,
         // и не прячем её под текст «Хранилище недоступно».
-        if (e instanceof Error && e.name === 'SecurityError') {
+        // F-д3 (минор 2): тихая ветка — по name, без instanceof Error:
+        // исключение из другого realm не instanceof Error, но name тот же.
+        if ((e as { name?: string })?.name === 'SecurityError') {
           res = { ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' } };
         } else {
           console.error('[plugin storage] неожиданная ошибка в handleStorageCall:', e);

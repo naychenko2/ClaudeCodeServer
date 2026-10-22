@@ -193,8 +193,16 @@ export function removePluginStorage({ ownerId, pluginId, store }) {
   let removed = 0;
   for (const k of allKeys(store)) {
     if (k.startsWith(prefix)) {
-      store.removeItem(k);
-      removed++;
+      try {
+        store.removeItem(k);
+        removed++;
+      } catch (e) {
+        // F-д3 (минор 5): хранилище отключилось в середине цикла — часть ключей
+        // уже удалена, счётчик возвращаем честный (фактически удалённое), цикл
+        // останавливаем. Настоящая ошибка — вверх, как раньше.
+        if (e && e.name === 'SecurityError') break;
+        throw e;
+      }
     }
   }
   return removed;
@@ -216,8 +224,14 @@ export function collectStorageGarbage({ ownerId, keepPluginIds, store }) {
     // (грамматика publisher/slug), первая точка — граница.
     const pluginId = k.slice(ownerPrefix.length).split('.')[0];
     if (!keep.has(pluginId)) {
-      store.removeItem(k);
-      removed++;
+      try {
+        store.removeItem(k);
+        removed++;
+      } catch (e) {
+        // F-д3 (минор 5): частичный сбой — счётчик по фактически удалённому.
+        if (e && e.name === 'SecurityError') break;
+        throw e;
+      }
     }
   }
   return removed;

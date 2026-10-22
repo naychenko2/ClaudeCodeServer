@@ -416,7 +416,11 @@ export function PluginsProjectSection({ project, onUpdated, onEdit }: {
           onConfirm={() => {
             const d = deleting;
             setDeleting(null);
-            api.plugins.uninstall(d.id).then(() => { eraseOnUninstall(d.id); void refresh(); onUpdated?.(project); }).catch(() => {});
+            api.plugins.uninstall(d.id).then(() => { eraseOnUninstall(d.id); void refresh(); onUpdated?.(project); }).catch((e) => {
+              // F-д3 (минор 6): настоящая ошибка стирания не глотается молча —
+              // логируется, чтобы разработчик её видел.
+              console.error('[plugin storage] ошибка стирания данных плагина после удаления:', e);
+            });
           }}
           onCancel={() => setDeleting(null)}
         />

@@ -11,20 +11,26 @@ import type { StorageLike } from './hostOps/storage';
 // Для lifecycle это тихий no-op: список плагинов обязан открываться и без
 // хранилища — сборка мусора побочный эффект, а не причина ронять список.
 // Настоящая ошибка не прячется — она идёт вверх, как раньше.
+// F-д3 (минор 1): тихий null — ТОЛЬКО на SecurityError. TypeError геттера
+// (расширения, прокси) и прочее не глотается: иначе сборка мусора молча не идёт,
+// а разработчик ничего не видит.
 function safeLocalStorage(): StorageLike | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage;
-  } catch {
-    return null; // SecurityError — хранилище отключено
+  } catch (e) {
+    if ((e as { name?: string })?.name === 'SecurityError') return null; // хранилище отключено
+    throw e;
   }
 }
 
 // SecurityError от операции с store — тихий ноль; прочее — без изменений.
+// F-д3 (минор 2): instanceof Error не нужен: исключение из другого realm не
+// instanceof Error, но name у него тот же — проверяем только name.
 function quietSecurity(fn: () => number): number {
   try {
     return fn();
   } catch (e) {
-    if (e instanceof Error && e.name === 'SecurityError') return 0;
+    if ((e as { name?: string })?.name === 'SecurityError') return 0;
     throw e;
   }
 }

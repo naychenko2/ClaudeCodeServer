@@ -2821,6 +2821,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // работать. Разрешаем ВСЕ инструменты автоматически: deny-правило проекта выше учтено,
         // а права персоны уже ограничены Persona.Tools и ExtraDisallowedTools.
         if (ruleDecision == null && (Info.TaskExecution || Info.AutomationRuleId is not null)) return "allow";
+        // Чат с персоной в AcceptEdits — автономный собеседник (решение 22.10): без карточек
+        // согласия на Bash и прочее вне правил CLI. Deny-правила проекта (выше), ExtraDisallowedTools
+        // и ограничения персоны (Persona.Tools, Access) остаются; карточка — только у чатов без
+        // персоны и у Default/Plan, выбранных человеком; «Авто» не трогаем. Сознательная замена
+        // внешнего классификатора «Авто», где каждый вызов стоил 10–120 с.
+        if (ruleDecision == null && Info.PersonaId is not null && Info.Mode == ClaudeMode.AcceptEdits) return "allow";
         // Свои MCP-серверы — без карточки, см. комментарий у BuiltInMcpServerPrefixes.
         if (ruleDecision == null && Array.Exists(BuiltInMcpServerPrefixes, p => toolName.StartsWith(p, StringComparison.Ordinal)))
             return "allow";

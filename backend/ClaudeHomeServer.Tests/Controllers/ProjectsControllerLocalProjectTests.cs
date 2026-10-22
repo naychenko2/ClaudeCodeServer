@@ -70,9 +70,11 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     private string AllowedRoot => Path.Combine(_machine, "allowed");
     private string Outside => Path.Combine(_machine, "outside");
 
-    // Машина агента с выдачей папки — рядом с тестами, а не в temp: на Windows temp лежит в
-    // запретном для выдачи AppData. Профиль этой «машины» — BindHome
-    private readonly string _bindMachine = Path.Combine(AppContext.BaseDirectory, "lp-bind-" + Guid.NewGuid().ToString("N"));
+    // Машина агента с выдачей папки: её каталог не должен попасть в агентный запретный список —
+    // правило безусловное (ADR-016 §5), и каталог бинарника тестов не гарантированно чистый:
+    // git-worktree живёт под .claude, а temp на Windows — в AppData. Берём первую базу, которую
+    // допускает то же AgentForbiddenPaths. Профиль этой «машины» — BindHome
+    private readonly string _bindMachine = Path.Combine(SafeMachineBase(), "lp-bind-" + Guid.NewGuid().ToString("N"));
     private string BindHome => Path.Combine(_bindMachine, "home");
     private readonly AgentRootsStore _bindRoots;
 
@@ -124,6 +126,21 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
             Refuse = new DeviceExecRefusedException(DeviceExecRefusal.NoBindFolderCapability, "старый агент"),
         };
         _relay.Agents["dev-bind-refused"] = new LoopbackRelayChannel { Agent = bindRelay.RunAsync };
+    }
+
+    // База, под которой тестовой машине не запрещено жить: temp, затем каталог бинарника,
+    // поднимаясь до ближайшего разрешённого предка (корень диска — тоже запретный)
+    private static string SafeMachineBase()
+    {
+        foreach (var start in new[] { Path.GetTempPath(), AppContext.BaseDirectory })
+        {
+            for (var path = Path.GetFullPath(start); path.Length > 1; path = Path.GetDirectoryName(path) ?? "")
+            {
+                if (AgentForbiddenPaths.RefusalOf(path, new AgentForbiddenContext([], [], [])) is null)
+                    return path;
+            }
+        }
+        throw new InvalidOperationException("Нет безопасной базы для тестовой машины");
     }
 
     // Каталог только владельцу на запись: общий на запись корень агент не добавит

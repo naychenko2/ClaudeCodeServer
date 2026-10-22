@@ -58,7 +58,7 @@ public class TestsToolsetTests : IDisposable
         }
     }
 
-    private Env Build(bool withService = true)
+    private Env Build(bool withService = true, bool viaDi = false)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -76,6 +76,18 @@ public class TestsToolsetTests : IDisposable
         var runs = withService ? new TestRunService(launchers, new TestRunsOptions()) : null;
         var probe = withService ? new UiProbeService(launchers, new TestRunsOptions(), new PhasePipeline()) : null;
         var toolset = new TestsToolset(sessions, projects, personas, runs, probe: probe);
+        if (viaDi)
+        {
+            // Тулсет собирает контейнер ровно так, как Program.cs: движки приходят из TestRunsSubsystem
+            var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+            services.AddSingleton(sessions);
+            services.AddSingleton(projects);
+            services.AddSingleton(personas);
+            services.AddSingleton<ClaudeHomeServer.Services.Execution.ILauncherFactory>(launchers);
+            new TestRunsSubsystem().Register(services, config);
+            services.AddSingleton<TestsToolset>();
+            toolset = services.BuildServiceProvider().GetRequiredService<TestsToolset>();
+        }
         return new Env(toolset, new McpToolCallContext(TestUserId, session.Id, session.Id), session, project,
             personas, launchers, sessions);
     }
@@ -454,6 +466,8 @@ public class TestsToolsetTests : IDisposable
             File.WriteAllText(Path.Combine(front, "playwright.config.ts"), "");
             Directory.CreateDirectory(Path.Combine(front, "node_modules", "@playwright", "test"));
             File.WriteAllText(Path.Combine(front, "node_modules", "@playwright", "test", "cli.js"), "");
+            Directory.CreateDirectory(Path.Combine(front, "node_modules", "playwright"));
+            File.WriteAllText(Path.Combine(front, "node_modules", "playwright", "package.json"), "{}");
         }
         Directory.CreateDirectory(Path.Combine(front, "src", "lib"));
         File.WriteAllText(Path.Combine(front, "src", "lib", "x.test.ts"), "");
@@ -789,6 +803,47 @@ public class TestsToolsetTests : IDisposable
 
         env.Launchers.Calls.Should().Be(1);
         result.Text.Should().Contain("Не удалось запустить замер");
+    }
+
+    // Юнит-тесты с конструктором руками не ловят пропавшую регистрацию: тулсет получал null и отказывал всегда
+    [Fact]
+    public async Task UiProbe_ТулсетИзКонтейнераПодсистемы_ПолучаетДвижокИДоходитДоСреды()
+    {
+        var env = Build(viaDi: true);
+        FrontendRoot(env.Project.RootPath);
+
+        var result = await Probe(env, new JsonObject
+        {
+            ["url"] = "http://127.0.0.1:5559",
+            ["viewports"] = new JsonArray(360),
+            ["target"] = "frontend",
+        });
+
+        result.Text.Should().NotContain("выключен", "UiProbeService обязан быть в DI подсистемы");
+        env.Launchers.Calls.Should().Be(1);
+        result.Text.Should().Contain("Не удалось запустить замер");
+    }
+
+    [SkippableFact]
+    public void UiProbe_ЦельWorktreeСNodeModulesСсылкойНаОсновноеДерево_Резолвится()
+    {
+        var root = Directory.CreateDirectory(Path.Combine(_tempDir, "wt-root")).FullName;
+        var primary = Directory.CreateDirectory(Path.Combine(_tempDir, "primary-front")).FullName;
+        Directory.CreateDirectory(Path.Combine(primary, "node_modules", "playwright"));
+        File.WriteAllText(Path.Combine(primary, "node_modules", "playwright", "package.json"), "{}");
+        File.WriteAllText(Path.Combine(primary, "package.json"), "{}");
+        var front = Directory.CreateDirectory(Path.Combine(root, "frontend")).FullName;
+        File.WriteAllText(Path.Combine(front, "playwright.config.ts"), "");
+        try { Directory.CreateSymbolicLink(Path.Combine(front, "node_modules"), Path.Combine(primary, "node_modules")); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            Skip.If(true, "симлинк недоступен на этой платформе");
+        }
+
+        TestsToolset.TryResolveProbeTarget(root, null, out var target, out var error).Should().BeTrue(error);
+        target.Should().Be("frontend");
+        TestsToolset.TryResolveNodeTarget(root, null, TestRunKind.Playwright, out _, out _, out _)
+            .Should().BeFalse("run_tests в таком worktree по-прежнему строгий: бинарь раннера за пределами дерева");
     }
 
     [Fact]

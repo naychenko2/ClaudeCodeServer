@@ -150,8 +150,9 @@ public sealed class TestsToolset(
         }
         else
         {
-            (var found, error) = await _stands.FindRunningOriginAsync(session, project, context.OwnerId, rawService);
-            if (found is null) return Deny(error);
+            // Контракт fail-closed: нет адреса — ошибка непустая; на случай нарушения контракта отказ всё равно текстом
+            var (found, standError) = await _stands.FindRunningOriginAsync(session, project, context.OwnerId, rawService);
+            if (found is null) return Deny(standError ?? "Стенд сервиса не найден — передай url живого стенда.");
             origin = found;
         }
         if (!TryParsePath(StringArg(arguments, "path"), out var path, out error)) return Deny(error);
@@ -160,8 +161,7 @@ public sealed class TestsToolset(
         var selector = StringArg(arguments, "selector");
         if (selector is { Length: > MaxSelectorLength } || selector?.Any(char.IsControl) == true)
             return Deny($"selector — CSS-селектор до {MaxSelectorLength} символов без управляющих символов.");
-        if (!TryResolveNodeTarget(root, StringArg(arguments, "target"), TestRunKind.Playwright, out var target, out _,
-                out error))
+        if (!TryResolveProbeTarget(root, StringArg(arguments, "target"), out var target, out error))
             return Deny(error);
 
         // Учётка стенда: по умолчанию та же, что у e2e (playwright.config). Едет в окружение процесса
@@ -437,8 +437,26 @@ public sealed class TestsToolset(
     internal static bool TryResolveNodeTarget(string root, string? raw, TestRunKind kind, out string? target,
         out string? nodeBin, out string error)
     {
-        target = null;
         nodeBin = null;
+        if (!TryPickNodeDirectory(root, raw, kind, out target, out error)) return false;
+
+        // Монорепа: пакет лежит в node_modules выше цели (до корня дерева, не выше)
+        nodeBin = TestRunService.FindNodeBin(root, target!, kind, out error);
+        return nodeBin is not null;
+    }
+
+    // Каталог для ui_probe: тот же выбор цели, но от дерева нужен только пакет playwright
+    // (require из скрипта), а не бинарь тест-раннера; node_modules worktree может вести на основное дерево
+    internal static bool TryResolveProbeTarget(string root, string? raw, out string? target, out string error)
+    {
+        if (!TryPickNodeDirectory(root, raw, TestRunKind.Playwright, out target, out error)) return false;
+        return TestRunService.FindPackageDir(root, target!, UiProbeService.RequiredPackages, out error) is not null;
+    }
+
+    private static bool TryPickNodeDirectory(string root, string? raw, TestRunKind kind, out string? target,
+        out string error)
+    {
+        target = null;
         var tool = TestRunService.KindName(kind);
         if (string.IsNullOrWhiteSpace(raw))
         {
@@ -460,10 +478,7 @@ public sealed class TestsToolset(
             }
             target = relative;
         }
-
-        // Монорепа: пакет лежит в node_modules выше цели (до корня дерева, не выше)
-        nodeBin = TestRunService.FindNodeBin(root, target!, kind, out error);
-        return nodeBin is not null;
+        return true;
     }
 
     // Пути тестов vitest/Playwright: те же правила, что у цели (не опция, внутри дерева,
@@ -639,7 +654,7 @@ public sealed class TestsToolset(
             + "оценок): интерактивные элементы с любой стороной меньше порога, горизонтальное переполнение "
             + "документа и контейнеров, обрезанный текст, ошибки консоли и упавшие запросы за время загрузки, "
             + "интерактивные элементы без доступного имени. Результат — JSON с числами по каждой ширине экрана. "
-            + "Стенд сам не поднимает: нет стенда — отказ, подними его start_stand. Встаёт в общую очередь "
+            + "Стенд сам не поднимает: нет стенда — отказ (попроси поднять его). Встаёт в общую очередь "
             + $"сборок, останавливается по «Стоп», потолок — {TestRunsOptions.DefaultCeilingSeconds / 60} минут.",
             new JsonObject
             {

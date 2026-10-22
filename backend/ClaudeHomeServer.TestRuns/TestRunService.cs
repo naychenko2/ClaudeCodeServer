@@ -390,6 +390,56 @@ public sealed partial class TestRunService
         return null;
     }
 
+    // Каталог node_modules с одним из пакетов (ui_probe: скрипту нужен только require('playwright'), без CLI тест-раннера).
+    // Идём от цели вверх до корня дерева по правилам Node. Мягче FindNodeBin ровно в одном: сам
+    // node_modules может быть ссылкой на node_modules другого каталога с package.json (так
+    // scripts/worktree-setup.sh подключает зависимости основного дерева к worktree). Всё внутри
+    // этого node_modules обязано в нём и оставаться. Возвращает каталог node_modules с пакетом или null
+    public static string? FindPackageDir(string root, string target, IReadOnlyList<string> packages, out string error)
+    {
+        error = "";
+        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string targetFull;
+        try { targetFull = SafePath.Join(rootFull, target); }
+        catch (Exception e) when (e is UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            error = "target выходит за пределы проекта — вызов отклонён.";
+            return null;
+        }
+        targetFull = targetFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        for (var dir = targetFull; ; dir = Path.GetDirectoryName(dir)!)
+        {
+            var modules = Path.Combine(dir, "node_modules");
+            var package = packages.FirstOrDefault(p => File.Exists(Path.Combine(modules, p, "package.json")));
+            if (package is not null)
+            {
+                if (ResolvesInside(rootFull, modules)) return modules;
+                if (LinkedModulesOutside(modules, package)) return modules;
+                error = $"{Relative(rootFull, modules)} ведёт символической ссылкой за пределы проекта не на "
+                    + "node_modules с package.json рядом — такой пакет не запускаем.";
+                return null;
+            }
+            if (PathComparer.Equals(dir, rootFull) || !IsInside(rootFull, dir)) break;
+        }
+        var shown = Relative(rootFull, targetFull);
+        error = $"Ни в «{(shown.Length == 0 ? "." : shown)}», ни выше до корня проекта нет пакета {string.Join(" / ", packages)} — зависимости "
+            + "не установлены (npm ci / pnpm install или scripts/worktree-setup.sh) или это не тот каталог.";
+        return null;
+    }
+
+    // node_modules — ссылка на каталог ТАКОГО ЖЕ имени, рядом с которым лежит package.json, а пакет
+    // внутри него ссылками из него не выходит
+    private static bool LinkedModulesOutside(string modules, string package)
+    {
+        FileSystemInfo? resolved;
+        try { resolved = new DirectoryInfo(modules).ResolveLinkTarget(returnFinalTarget: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+        if (resolved is not DirectoryInfo { Name: "node_modules", Parent: { } owner } real || !real.Exists) return false;
+        return File.Exists(Path.Combine(owner.FullName, "package.json"))
+            && ResolvesInside(real.FullName.TrimEnd(Path.DirectorySeparatorChar), Path.Combine(real.FullName, package));
+    }
+
     private static readonly StringComparer PathComparer =
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 

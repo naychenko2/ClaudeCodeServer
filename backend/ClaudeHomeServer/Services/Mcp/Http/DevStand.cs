@@ -210,7 +210,8 @@ internal sealed partial class DevStand(
         }
         return live is { Status: "started", Port: { } port }
             ? ($"http://127.0.0.1:{port}", null)
-            : (null, $"Стенд «{name}» не поднят — ui_probe сам стенды не поднимает. Подними его start_stand и повтори вызов.");
+            : (null, $"Стенд «{name}» не поднят — ui_probe сам стенды не поднимает. Попроси поднять его "
+                + $"(start_stand, service «{raw}») и повтори вызов.");
     }
 
     public async Task<McpToolCallResult> StopAsync(Session session, Project project, string ownerId,

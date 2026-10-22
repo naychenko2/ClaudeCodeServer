@@ -197,4 +197,154 @@ public class UiProbeTests : IDisposable
         result.Cancelled.Should().BeTrue();
         launcher.Specs.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task ВходНеПрошёл_ОтказВместоЗамераСтраницыЛогина()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-auth-failed.txt");
+
+        var result = await Service(launcher, new BuildConcurrencyGate(1)).RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        result.Json.Should().BeNull("страница логина — не замер");
+        result.Refusal.Should().Contain("войти").And.Contain("failed:401").And.Contain("user/password");
+    }
+
+    [Fact]
+    public async Task СтендНедостижимИзСреды_ОтказДляКаждойСреды()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-unreachable.txt");
+
+        var result = await Service(launcher, new BuildConcurrencyGate(1)).RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        result.Json.Should().BeNull();
+        result.Refusal.Should().Contain("недостижим").And.Contain("ECONNREFUSED");
+    }
+
+    [Fact]
+    public async Task ЗамерЕсть_ВИтогеФактическийUrlКаждойШирины()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt");
+
+        var result = await Service(launcher, new BuildConcurrencyGate(1)).RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        var viewports = JsonNode.Parse(result.Json!)!["viewports"]!.AsArray();
+        viewports.Select(v => v!["finalUrl"]!.GetValue<string>()).Should().OnlyContain(u => u == "http://127.0.0.1:5559/#/ui-kit");
+    }
+
+    [Fact]
+    public void РедиректНаВход_Отказ_ЛогинПоЗапросу_НеОтказ()
+    {
+        const string redirected = "{\"reach\":\"ok\",\"auth\":\"ok\",\"viewports\":[{\"width\":360,\"finalUrl\":\"http://h:1/#/login\"}]}";
+
+        UiProbeReport.RefusalOf(redirected, "http://h:1/#/ui-kit", "http://h:1").Should().Contain("перенаправила на вход");
+        UiProbeReport.RefusalOf(redirected, "http://h:1/#/login", "http://h:1").Should().BeNull("логин запрошен сам");
+        UiProbeReport.RefusalOf(redirected.Replace("#/login", "#/ui-kit"), "http://h:1/#/ui-kit", "http://h:1").Should().BeNull();
+    }
+
+    [Fact]
+    public void ОбрезкаСкрипта_ВыходНеМолчаЗанижаетСчётчики()
+    {
+        Build(40)["truncated"]!.GetValue<bool>().Should().BeFalse();
+        Viewport(Build(40), 360)["truncated"]!.GetValue<bool>().Should().BeFalse();
+
+        var cut = UiProbeReport.Build(
+            "{\"auth\":\"ok\",\"viewports\":[{\"width\":360,\"interactive\":[],\"truncated\":[\"interactive\"]},{\"width\":1280,\"pageTruncated\":[\"console\"]}]}",
+            "http://h/", 40);
+
+        cut["truncated"]!.GetValue<bool>().Should().BeTrue();
+        Viewport(cut, 360)["truncated"]!.GetValue<bool>().Should().BeTrue();
+        Viewport(cut, 1280)["truncated"]!.GetValue<bool>().Should().BeTrue("страничные списки console/failed режутся в обработчиках страницы");
+    }
+
+    [Fact]
+    public void ПотолокРазмера_СписокРежется_СчётчикиИОстаткиСохраняются()
+    {
+        var items = string.Join(',', Enumerable.Range(0, 300).Select(i => $"{{\"s\":\"button.item-{i}\",\"w\":10,\"h\":10,\"named\":true}}"));
+        var raw = "{\"auth\":\"ok\",\"viewports\":[{\"width\":360,\"interactive\":[" + items + "]}]}";
+
+        var whole = UiProbeReport.Build(raw, "http://h/", 40);
+        var capped = UiProbeReport.Build(raw, "http://h/", 40, maxBytes: 4096);
+
+        System.Text.Encoding.UTF8.GetByteCount(UiProbeReport.Serialize(whole)).Should().BeGreaterThan(4096);
+        System.Text.Encoding.UTF8.GetByteCount(UiProbeReport.Serialize(capped)).Should().BeLessThanOrEqualTo(4096);
+        var vp = Viewport(capped, 360);
+        vp["counts"]!["smallTargets"]!.GetValue<int>().Should().Be(300, "счётчик — по всем находкам");
+        var shown = vp["smallTargets"]!.AsArray().Count;
+        shown.Should().BeLessThan(300);
+        vp["omitted"]!["smallTargets"]!.GetValue<int>().Should().Be(300 - shown, "«ещё N»");
+        Viewport(whole, 360).AsObject().ContainsKey("omitted").Should().BeFalse("влезло целиком — ничего не опущено");
+    }
+
+    [Fact]
+    public void DI_ПодсистемаРегистрируетДвижокЗамераНаОбщемКонвейере()
+    {
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        services.AddSingleton<ILauncherFactory>(new DotnetBuildServiceTests.FakeLauncher(_processes, null));
+        new TestRunsSubsystem().Register(services, new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        using var provider = services.BuildServiceProvider();
+
+        var probe = provider.GetService<UiProbeService>();
+
+        probe.Should().NotBeNull("без регистрации тулсет получает null и ui_probe всегда отказывает");
+        probe!.Options.Should().BeSameAs(provider.GetRequiredService<TestRunsOptions>());
+    }
+
+    // node_modules worktree — ссылка на зависимости основного дерева (scripts/worktree-setup.sh)
+    private (string Worktree, string Primary) WorktreeWithLinkedModules(bool packageJsonBesideModules = true,
+        string modulesName = "node_modules")
+    {
+        var primary = Path.Combine(_root, "primary");
+        var modules = Path.Combine(primary, "frontend", modulesName);
+        Directory.CreateDirectory(Path.Combine(modules, "playwright"));
+        File.WriteAllText(Path.Combine(modules, "playwright", "package.json"), "{}");
+        if (packageJsonBesideModules) File.WriteAllText(Path.Combine(primary, "frontend", "package.json"), "{}");
+        var worktree = Path.Combine(_root, "wt");
+        Directory.CreateDirectory(Path.Combine(worktree, "frontend"));
+        return (worktree, modules);
+    }
+
+    [Fact]
+    public void FindPackageDir_NodeModulesWorktreeСсылкойНаОсновноеДерево_Находит()
+    {
+        var (worktree, modules) = WorktreeWithLinkedModules();
+        if (!TreeLinks.TryLink(Path.Combine(worktree, "frontend", "node_modules"), modules, directory: true)) return;
+
+        var found = TestRunService.FindPackageDir(worktree, "frontend", UiProbeService.RequiredPackages, out var error);
+
+        found.Should().NotBeNull(error);
+        TestRunService.FindNodeBin(worktree, "frontend", TestRunKind.Playwright, out _)
+            .Should().BeNull("строгий резолв бинаря тест-раннера в таком worktree отказывает — ради него и мягче");
+    }
+
+    [Fact]
+    public void FindPackageDir_СсылкаНеНаNodeModulesИлиБезPackageJson_Отказ()
+    {
+        var (worktree, modules) = WorktreeWithLinkedModules(packageJsonBesideModules: false);
+        if (!TreeLinks.TryLink(Path.Combine(worktree, "frontend", "node_modules"), modules, directory: true)) return;
+        TestRunService.FindPackageDir(worktree, "frontend", UiProbeService.RequiredPackages, out var noPackageJson).Should().BeNull();
+        noPackageJson.Should().Contain("за пределы проекта");
+
+        // Каталог с чужим именем: даже с package.json рядом ссылка не годится
+        Directory.Delete(Path.Combine(worktree, "frontend", "node_modules"));
+        var foreign = Path.Combine(_root, "foreign");
+        Directory.CreateDirectory(Path.Combine(foreign, "playwright"));
+        File.WriteAllText(Path.Combine(foreign, "playwright", "package.json"), "{}");
+        File.WriteAllText(Path.Combine(_root, "package.json"), "{}");
+        TreeLinks.TryLink(Path.Combine(worktree, "frontend", "node_modules"), foreign, directory: true).Should().BeTrue();
+        TestRunService.FindPackageDir(worktree, "frontend", UiProbeService.RequiredPackages, out _).Should().BeNull();
+    }
+
+    [Fact]
+    public void FindPackageDir_ОбычныйИПоднятыйВКореньNodeModules_Находит_ПустойДеревоОтказ()
+    {
+        var plain = Path.Combine(_root, "plain");
+        Directory.CreateDirectory(Path.Combine(plain, "node_modules", "playwright"));
+        File.WriteAllText(Path.Combine(plain, "node_modules", "playwright", "package.json"), "{}");
+        Directory.CreateDirectory(Path.Combine(plain, "web", "app"));
+
+        TestRunService.FindPackageDir(plain, "web/app", UiProbeService.RequiredPackages, out _).Should().Be(Path.Combine(plain, "node_modules"),
+            "монорепа поднимает пакет в корень");
+        TestRunService.FindPackageDir(_root, "wt", UiProbeService.RequiredPackages, out var error).Should().BeNull();
+        error.Should().Contain("нет пакета playwright");
+    }
 }

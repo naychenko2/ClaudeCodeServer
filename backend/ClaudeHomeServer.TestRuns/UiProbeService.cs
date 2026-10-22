@@ -25,7 +25,9 @@ public sealed record UiProbeResult(string? Refusal, string? Json, string? Failur
 //
 // Инварианты:
 //  • только читает стенд: файлов проекта не пишет, процессов стенда не порождает — нет стенда,
-//    честный отказ ДО запуска браузера (а не таймаут каждой страницы);
+//    честный отказ ДО запуска браузера (а не таймаут каждой страницы): с хоста для local, из самой
+//    среды проекта (первым делом скрипт) — для песочницы;
+//  • замер страницы логина — не замер: вход не удался или страница ушла на вход — отказ;
 //  • процесс — headless Chromium из node_modules проекта через `node --eval` в среде проекта
 //    (ILauncherFactory.ForProject: local или песочница); учётка — переменными окружения процесса,
 //    не аргументами;
@@ -58,6 +60,9 @@ public sealed class UiProbeService
 
     public TestRunsOptions Options => _options;
 
+    // Пакеты, один из которых обязан лежать в node_modules дерева (из них скрипт берёт chromium)
+    public static IReadOnlyList<string> RequiredPackages => UiProbeScript.Packages;
+
     // Любой HTTP-ответ — стенд жив; отказ соединения или тайм-аут — лежит. Без прокси
     private static readonly HttpClient StandClient = new(new SocketsHttpHandler { UseProxy = false })
     {
@@ -85,7 +90,7 @@ public sealed class UiProbeService
         // Из песочницы стенд хоста не виден по loopback хоста — проба с хоста там врала бы
         if (!launcher.IsSandboxed && !await _standProbe(origin, ct))
             return UiProbeResult.Refused($"Стенд {request.Origin} не отвечает — ui_probe только читает уже "
-                + "запущенный стенд и сам его не поднимает. Подними стенд (start_stand) и повтори вызов.");
+                + "запущенный стенд и сам его не поднимает. Попроси поднять стенд (start_stand) и повтори вызов.");
 
         using var limit = PhasePipeline.Ceiling(_options.CeilingSeconds, ct);
         var turnId = ProcessTurnIds.New();
@@ -127,9 +132,10 @@ public sealed class UiProbeService
                     + (tail.Length == 0 ? "" : "\n" + string.Join('\n', tail)), false, false);
             try
             {
-                var report = UiProbeReport.Build(json, request.Origin + request.Path, request.MinTargetPx);
-                return new UiProbeResult(null, report.ToJsonString(new JsonSerializerOptions { WriteIndented = false,
-                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }), null, false, false);
+                var url = request.Origin + request.Path;
+                if (UiProbeReport.RefusalOf(json, url, request.Origin) is { } refusal) return UiProbeResult.Refused(refusal);
+                var report = UiProbeReport.Build(json, url, request.MinTargetPx, _options.MaxResultBytes);
+                return new UiProbeResult(null, UiProbeReport.Serialize(report), null, false, false);
             }
             catch (FormatException e)
             {

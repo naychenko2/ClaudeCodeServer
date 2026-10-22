@@ -9,6 +9,9 @@ internal static class UiProbeScript
 {
     public const string ResultMarker = "UIPROBE-RESULT ";
 
+    // Пакеты, из которых loadChromium берёт chromium (в том же порядке): дерево обязано нести хотя бы один
+    public static readonly string[] Packages = ["playwright", "@playwright/test", "playwright-core"];
+
     // Потолок записей в каждом списке: страница с тысячами элементов не должна раздувать вывод
     public const int MaxItems = 400;
 
@@ -69,34 +72,39 @@ internal static class UiProbeScript
           }
           const interactiveSel = 'button, a[href], input:not([type=hidden]), select, textarea, [role=button], [tabindex]';
           const interactive = [], containers = [], clipped = [];
+          const truncated = [];
+          const put = (list, name, item) => { if (list.length < args.max) list.push(item); else if (!truncated.includes(name)) truncated.push(name); };
           for (const el of all) {
             const r = el.getBoundingClientRect();
             if (!visible(el, r)) continue;
             const native = el.matches('button, a[href], input, select, textarea, [role=button]');
             if (el.matches(interactiveSel) && !el.disabled && (native || el.getAttribute('tabindex') !== '-1')) {
-              if (interactive.length < args.max) interactive.push({ s: sel(el), w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10, named: nameOf(el) });
+              put(interactive, 'interactive', { s: sel(el), w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10, named: nameOf(el) });
             }
             const cs = getComputedStyle(el);
             const overX = el.scrollWidth > el.clientWidth + 1, overY = el.scrollHeight > el.clientHeight + 1;
             const hides = (v) => v === 'hidden' || v === 'clip';
-            if (overX && !hides(cs.overflowX) && el.clientWidth > 0 && containers.length < args.max)
-              containers.push({ s: sel(el), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, overflowX: cs.overflowX });
-            if ((overX && hides(cs.overflowX) || overY && hides(cs.overflowY)) && (el.textContent || '').trim() && clipped.length < args.max)
-              clipped.push({ s: sel(el), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
+            if (overX && !hides(cs.overflowX) && el.clientWidth > 0)
+              put(containers, 'containers', { s: sel(el), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, overflowX: cs.overflowX });
+            if ((overX && hides(cs.overflowX) || overY && hides(cs.overflowY)) && (el.textContent || '').trim())
+              put(clipped, 'clipped', { s: sel(el), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
           }
           const de = document.documentElement;
           return {
-            interactive, containers, clipped,
+            interactive, containers, clipped, truncated,
             doc: { scrollWidth: Math.max(de.scrollWidth, document.body ? document.body.scrollWidth : 0), clientWidth: de.clientWidth },
           };
         }
 
         (async () => {
-          const out = { auth: 'skipped', viewports: [] };
+          const out = { reach: 'ok', auth: 'skipped', viewports: [] };
           const chromium = loadChromium();
+          const origin = new URL(input.url).origin;
+          // Стенд виден из среды процесса? Иначе каждый viewport упрётся в 30-секундный таймаут навигации
+          try { await fetch(origin, { signal: AbortSignal.timeout(5000) }); }
+          catch (e) { out.reach = 'failed:' + String((e.cause && e.cause.code) || e.message || e).slice(0, 80); console.log('UIPROBE-RESULT ' + JSON.stringify(out)); return; }
           const browser = await chromium.launch({ headless: true });
           try {
-            const origin = new URL(input.url).origin;
             let token = null;
             if (process.env.UIPROBE_USER) {
               const ctx0 = await browser.newContext();
@@ -107,22 +115,27 @@ internal static class UiProbeScript
                 else out.auth = 'failed:' + res.status();
               } catch (e) { out.auth = 'failed:' + String(e.message || e).slice(0, 80); }
               await ctx0.close();
+              // Без входа страница — экран логина: замер дал бы ложное «находок нет»
+              if (out.auth !== 'ok') { console.log('UIPROBE-RESULT ' + JSON.stringify(out)); return; }
             }
             for (const width of input.viewports) {
               const ctx = await browser.newContext({ viewport: { width, height: input.height } });
               if (token) await ctx.addInitScript((t) => { localStorage.setItem('cc_token', t); }, token);
               const page = await ctx.newPage();
-              const vp = { width, status: null, console: [], failed: [] };
-              page.on('console', (m) => { if (m.type() === 'error' && vp.console.length < MAX) vp.console.push({ type: 'error', text: m.text().slice(0, 300) }); });
-              page.on('pageerror', (e) => { if (vp.console.length < MAX) vp.console.push({ type: 'pageerror', text: String(e.message || e).slice(0, 300) }); });
-              page.on('requestfailed', (r) => { if (vp.failed.length < MAX) vp.failed.push({ url: r.url().slice(0, 200), failure: (r.failure() || {}).errorText || 'failed' }); });
-              page.on('response', (r) => { if (r.status() >= 400 && vp.failed.length < MAX) vp.failed.push({ url: r.url().slice(0, 200), status: r.status() }); });
+              const vp = { width, status: null, console: [], failed: [], pageTruncated: [] };
+              const keep = (list, name, item) => { if (list.length < MAX) list.push(item); else if (!vp.pageTruncated.includes(name)) vp.pageTruncated.push(name); };
+              page.on('console', (m) => { if (m.type() === 'error') keep(vp.console, 'console', { type: 'error', text: m.text().slice(0, 300) }); });
+              page.on('pageerror', (e) => keep(vp.console, 'console', { type: 'pageerror', text: String(e.message || e).slice(0, 300) }));
+              page.on('requestfailed', (r) => keep(vp.failed, 'failed', { url: r.url().slice(0, 200), failure: (r.failure() || {}).errorText || 'failed' }));
+              page.on('response', (r) => { if (r.status() >= 400) keep(vp.failed, 'failed', { url: r.url().slice(0, 200), status: r.status() }); });
               try {
                 const res = await page.goto(input.url, { waitUntil: 'load', timeout: 30000 });
                 vp.status = res ? res.status() : null;
+                vp.finalUrl = page.url();
                 await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
                 await page.waitForTimeout(300);
                 Object.assign(vp, await page.evaluate(measure, { selector: input.selector, max: MAX }));
+                vp.finalUrl = page.url();
               } catch (e) { vp.error = String(e.message || e).slice(0, 200); }
               out.viewports.push(vp);
               await ctx.close();

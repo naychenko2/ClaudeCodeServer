@@ -221,11 +221,20 @@ public sealed record FeatureTimeline(
         var elapsed = FeatureTimeMath.Minutes(from, to);
         var workWall = FeatureTimeMath.UnionMinutes(
             work.Select(w => (start: w.Start, end: w.End)).ToList(), from, to);
-        // AgentsSum — «агентные» минуты: сумма work-интервалов (параллельные складываются), НЕ
-        // объединение (то было бы workWall). ОДНО правило округления с journal (хвост Б5b):
-        // суммируем сырые TimeSpan, затем один CeilMinutes — две задачи по 30 с дают 1 мин в
-        // обоих режимах (прежнее per-task ceil давало 2 в approx против 1 в journal).
-        var agentsSpan = work.Aggregate(TimeSpan.Zero, (acc, w) => acc + (w.End - w.Start));
+        // AgentsSum — «агентные» минуты ВНУТРИ окна фичи [from, to] (решение Александра, шов
+        // 63a69b77 п.2в): сумма work-интервалов (параллельные складываются), НЕ объединение (то
+        // было бы workWall). Start/End клипятся по [from, to] перед суммой: незакрытый
+        // started-период закрытой фичи не должен наращивать число после закрытия. ОДНО правило
+        // округления с journal (хвост Б5b): суммируем сырые TimeSpan, затем один CeilMinutes —
+        // две задачи по 30 с дают 1 мин в обоих режимах (прежнее per-task ceil давало 2 в approx
+        // против 1 в journal).
+        var agentsSpan = TimeSpan.Zero;
+        foreach (var w in work)
+        {
+            var s = FeatureTimeMath.Clamp(w.Start, from, to);
+            var e = FeatureTimeMath.Clamp(w.End, from, to);
+            if (e > s) agentsSpan += e - s;
+        }
         var agentsSum = FeatureTimeMath.CeilMinutes(agentsSpan);
         var notWorking = Math.Max(0, elapsed - workWall);
         var totals = new TimelineTotals(
@@ -409,19 +418,29 @@ public sealed record FeatureTimeline(
         var (workWall, waitingMin, errorMin, idleMin) =
             FeatureTimeMath.LargestRemainderMinutes(elapsed, workSpan, waitingSpan, errorSpan, idleSpan);
 
-        // AgentsSum — «агентные» минуты: сумма work-интервалов (параллельные складываются), НЕ
-        // объединение (то было бы workWall). Семантика выровнена с approx (минор 10): одна
+        // AgentsSum — «агентные» минуты ВНУТРИ окна фичи [from, to] (решение Александра, шов
+        // 63a69b77 п.2в): сумма started-периодов (параллельные складываются), НЕ объединение (то
+        // было бы workWall). Start/End клипятся по [from, to] перед суммой: незакрытый
+        // started-период закрытой фичи не должен расти после закрытия — подсказка
+        // «агенты в сумме ≈ …» воспроизводится. Семантика выровнена с approx (минор 10): одна
         // задача = один период [started, done|stopped|now] (started-период), ходы ВНУТРИ него
         // не пересчитываются — иначе started-период и его ходы шли бы двойным счётом (проба:
         // started 08:00 + ход 08:00–08:10 + Done → 20 мин против 10 в approx).
-        var agentsSpan = startedIntervals.Aggregate(TimeSpan.Zero, (acc, w) => acc + (w.End - w.Start));
+        var agentsSpan = TimeSpan.Zero;
+        foreach (var w in startedIntervals)
+        {
+            var s = FeatureTimeMath.Clamp(w.Start, from, to);
+            var e = FeatureTimeMath.Clamp(w.End, from, to);
+            if (e > s) agentsSpan += e - s;
+        }
         var agentsSum = FeatureTimeMath.CeilMinutes(agentsSpan);
         var notWorking = Math.Max(0, elapsed - workWall);
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
             WorkWallMinutes: workWall,
-            // AgentsSum = сумма started-периодов (параллельные складываются) — та же семантика,
-            // что в approx (минор 10): одна задача = один период, не объединение.
+            // AgentsSum = сумма started-периодов, обрезанных по окну [from, to] (параллельные
+            // складываются) — та же семантика, что в approx (минор 10): одна задача = один
+            // период, не объединение.
             AgentsSumMinutes: agentsSum,
             NotWorkingMinutes: notWorking,
             WaitingMinutes: waitingMin,

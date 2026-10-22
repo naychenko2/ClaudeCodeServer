@@ -300,6 +300,33 @@ public class FeatureTimelineTests
         tl.Totals.AgentsSumMinutes.Should().Be(1, "сумма 60 с → ceil = 1, не 2 (per-task)");
     }
 
+    // ── 7c. Хвост шова Александра (п.2в): AgentsSum — агентные минуты ВНУТРИ окна фичи ─────────
+
+    // Фича закрыта в 08:30 (to = 08:30): незакрытая задача s1 (старт 08:10, без CompletedAt) —
+    // её work-интервал тянется до now. Без клипа по окну число растёт каждый день после
+    // закрытия. После клипа: [08:10, 08:30] = 20 мин — одно и то же при двух разных now, и
+    // не больше параллельных (1) × Elapsed (30). Мутация «убрать клип» → 710 ≠ 20 → краснеет.
+    [Fact]
+    public void Build_Approx_AgentsSum_ОбрезанПоTo_НезависимОтNow()
+    {
+        var closedAt = new DateTime(2026, 10, 1, 8, 30, 0);
+        var epic = Epic("epic", status: TaskItemStatus.Done, completedAt: closedAt);
+        var s1 = Child("s1", "epic", startedAt: new DateTime(2026, 10, 1, 8, 10, 0));
+
+        var now1 = new DateTime(2026, 10, 1, 20, 0, 0);
+        var now2 = new DateTime(2026, 10, 2, 20, 0, 0); // сутки спустя — число не меняется
+
+        var tl1 = Timeline(Run(epic, s1), now1);
+        var tl2 = Timeline(Run(epic, s1), now2);
+
+        tl1.To.Should().Be(closedAt);
+        tl1.Totals.ElapsedMinutes.Should().Be(30);
+        tl1.Totals.AgentsSumMinutes.Should().Be(20, "агентные минуты внутри окна [from, to]");
+        tl2.Totals.AgentsSumMinutes.Should().Be(20, "число не зависит от now");
+        // Верхняя граница: параллельные (1) × Elapsed.
+        tl1.Totals.AgentsSumMinutes.Should().BeLessThanOrEqualTo(tl1.Totals.ElapsedMinutes);
+    }
+
     // ── 8. Мутация: WorkWallMinutes = сумма → краснеет ───────────────────────────────────────
 
     // Две пересекающиеся задачи: если WorkWall считать суммой (480), а не объединением (360),

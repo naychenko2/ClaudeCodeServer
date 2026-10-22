@@ -984,6 +984,41 @@ public class FeatureTimelineJournalTests
         tl.Totals.WorkWallMinutes.Should().Be(10);
     }
 
+    // ── 18b. Хвост шова Александра (п.2в): AgentsSum — агентные минуты ВНУТРИ окна фичи ────────
+
+    // Фича закрыта в 08:30 (to = 08:30), started-период 08:10 без stopped/done: его конец — now.
+    // Без клипа по окну число растёт каждый день после закрытия (подсказка «агенты в сумме ≈ …»
+    // не воспроизводится). После клипа: AgentsSum = [08:10, 08:30] = 20 мин — одно и то же при
+    // двух разных now, и не больше параллельных (1) × Elapsed (30). Мутация «убрать клип» →
+    // 710 ≠ 20 → краснеет.
+    [Fact]
+    public void Build_ЗакрытаяФича_AgentsSum_ОбрезанПоTo_НезависимОтNow()
+    {
+        var closedAt = new DateTime(2026, 10, 1, 8, 30, 0);
+        var epic = Epic("epic");
+        epic.Status = TaskItemStatus.Done;
+        epic.CompletedAt = closedAt;
+        var s1 = Child("s1", "epic");
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("started", new DateTime(2026, 10, 1, 8, 10, 0), taskId: "s1",
+                startedAt: new DateTime(2026, 10, 1, 8, 10, 0)));
+
+        var now1 = new DateTime(2026, 10, 1, 20, 0, 0);
+        var now2 = new DateTime(2026, 10, 2, 20, 0, 0); // сутки спустя — число не меняется
+
+        var tl1 = FeatureTimeline.Build(Run(epic, s1), journal, now1);
+        var tl2 = FeatureTimeline.Build(Run(epic, s1), journal, now2);
+
+        tl1.To.Should().Be(closedAt);
+        tl1.Totals.ElapsedMinutes.Should().Be(30);
+        tl1.Totals.AgentsSumMinutes.Should().Be(20, "агентные минуты внутри окна [from, to]");
+        tl2.Totals.AgentsSumMinutes.Should().Be(20, "число не зависит от now");
+        // Верхняя граница: параллельные (1) × Elapsed.
+        tl1.Totals.AgentsSumMinutes.Should().BeLessThanOrEqualTo(tl1.Totals.ElapsedMinutes);
+    }
+
     // ── 19. (минор 2) Ожидание в СЕРЕДИНЕ среди 1000 ходов: склейка не искажает его длительность ─
 
     // 1000 ходов по 1 мин + 10-мин ожидание В СЕРЕДИНЕ (после 500 ходов) = 1001 сегмент > 500.

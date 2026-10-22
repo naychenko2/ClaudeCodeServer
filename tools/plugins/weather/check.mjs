@@ -302,7 +302,19 @@ async function scenarioErrors(browser, base) {
       await frame.locator('.hero .cond').waitFor({ timeout: 15000 });
       assertEq(checks, 'состояние героя — прочерк', (await textOf(frame, '.hero .cond')).trim(), '—');
       assertEq(checks, 'температура героя — прочерк', (await textOf(frame, '.hero .temp')).trim(), '—');
+      // Строки недели без температур: min/max — прочерки, полосы диапазона нет.
+      // Выдуманного «0°» в строке быть не должно — ровно то, что раньше пропускала
+      // слабая проверка (minor M1, M6).
+      const rows = await frame.locator('.week .day').all();
+      assertEq(checks, 'строк недели', rows.length, 2);
+      for (let i = 0; i < rows.length; i++) {
+        const lo = (await rows[i].locator('.lo').innerText()).trim();
+        const hi = (await rows[i].locator('.hi').innerText()).trim();
+        assertEq(checks, 'строка ' + (i + 1) + ' — min и max прочерки', lo + ' ' + hi, '— —');
+      }
+      assertEq(checks, 'полос диапазона без значений', await frame.locator('.range i').count(), 0);
       const panelText = await frame.locator('.wx').innerText();
+      assertTrue(checks, 'нет выдуманного «0°» нигде', !panelText.includes('0°'), 'в тексте панели: ' + panelText.replace(/\n/g, ' '));
       assertTrue(checks, 'нет NaN° нигде', !panelText.includes('NaN'), 'в тексте панели: ' + panelText.replace(/\n/g, ' '));
       assertTrue(checks, 'нет выдуманного «Ясно»/«Облачно»', !panelText.includes('Ясно') && !panelText.includes('Облачно'),
         'в тексте панели: ' + panelText.replace(/\n/g, ' '));
@@ -401,46 +413,45 @@ async function scenarioSearchEmpty(browser, base) {
 }
 
 async function scenarioRace(browser, base) {
-  await scenario('7. Гонка: два поиска подряд — температуры только свои (R3)', async (checks) => {
-    const D = 3000;      // задержка ответа эмулятора на каждом вызове
-    const GAP = 2000;    // пауза между двумя запросами (больше дебаунса, меньше D)
+  await scenario('7. Гонка: два поиска подряд — старый пакет не красит новый список (R3)', async (checks) => {
+    const GAP = 2000; // пауза между поисками (больше дебаунса)
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
-      delay: String(D),
-      // Фикстуры — по порядку вызовов: главный прогноз, геокодер «Ярц»,
-      // геокодер «Ярослав» (второй поиск ушёл, пока первый в полёте), пакет по
-      // координатам первой поисковой волны — его ответ и есть гонка: он приходит
-      // после того, как второй поиск заменил список.
+      // Фикстуры привязаны к запросу через «|match», а не к порядку вызовов:
+      // первый геокодер быстрый — пакет первой волны реально запрашивается; его
+      // задержка 6000 мс — он приходит позже, чем новый список нарисован
+      // (t0+2400). Это настоящая гонка, а не подавленная guard'ом (minor M2).
+      // Match'и берутся без запятых (параметр разделяется запятыми) и уникальные:
+      // «apparent_temperature» есть только в URL главного экрана, координаты
+      // пакетов различимы между собой.
       fixtures: [
-        FX + 'forecast-yaroslavl.json',
-        FX + 'geocode-arts.json',
-        FX + 'geocode-yaroslavl.json',
-        FX + 'forecast-batch.json',
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json|55.06491|6000',
+        FX + 'geocode-yaroslavl.json|name=%D0%AF%D1%80%D0%BE%D1%81%D0%BB%D0%B0%D0%B2',
+        FX + 'forecast-batch.json|58.58259',
       ].join(','),
     });
     try {
-      // Ждём настоящего главного экрана, не скелетона: при задержке и чтение
-      // storage, и первый прогноз тянутся — порядок вызовов фикстур должен быть
-      // предсказуемым.
+      // Ждём настоящего главного экрана, не скелетона.
       await frame.locator('.hero .temp').waitFor({ timeout: 20000 });
       await frame.locator('#citybtn').click();
       await frame.locator('#q').waitFor({ timeout: 5000 });
-      const t0 = Date.now();
       await frame.locator('#q').fill('Ярц');
       await page.waitForTimeout(GAP);
       await frame.locator('#q').fill('Ярослав');
-      // Тайминг от момента первого запроса: геокодер «Ярц» отвечает на t0+400+D,
-      // геокодер «Ярослав» — на t0+GAP+400+D. При общем `found` пакет первой
-      // волны применялся бы ко второму списку на t0+400+2D. Проверяем после этого
-      // ответа и до ответа пакета второй волны (t0+GAP+400+2D): в исправленной
-      // панели температур в этом окне нет, в старой — температуры первого
-      // поиска на строках второго.
-      await frame.locator('.city').first().waitFor({ timeout: 15000 });
-      const checkAt = t0 + 400 + 2 * D + 500;
-      const remain = checkAt - Date.now();
-      if (remain > 0) await page.waitForTimeout(remain);
-
-      assertEq(checks, 'чужих температур в новом списке нет', await frame.locator('.city .t').count(), 0);
+      // Событийное ожидание (minor M2): ждём не стенку времени, а доставку
+      // старого пакета — «←» с координатами первой волны в логе эмулятора.
+      // Проверка сразу после него: запас — секунды, а не 500 мс джиттера.
+      await page.waitForFunction(() => {
+        const lines = Array.from(document.querySelectorAll('#log p'));
+        return lines.some((p) => p.textContent.includes('←') && p.textContent.includes('55.06491'));
+      }, { timeout: 20000 });
+      // Старый пакет обработан хостом: если guard'а нет, температуры первой
+      // волны (+30°, +31°…) появились бы на строках второго списка. Правильный
+      // ответ — только свои значения второго поиска.
+      const temps = await frame.locator('.city .t').allInnerTexts();
+      assertEq(checks, 'температуры нового списка — только свои', temps.join(' '), '+10° +8°');
       const first = (await textOf(frame, '.city:first-child')).replace(/\n/g, ' ').trim();
       assertTrue(checks, 'первая строка — Ярославль', first.includes('Ярославль'), first);
     } catch (e) {

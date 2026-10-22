@@ -503,20 +503,29 @@
 
       var tmin = daily.temperature_2m_min || [], tmax = daily.temperature_2m_max || [];
       var wcodes = daily.weather_code || [], pmax = daily.precipitation_probability_max || [];
-      var lo = tmin.length ? Math.min.apply(null, tmin) : 0;
-      var hi = tmax.length ? Math.max.apply(null, tmax) : 0;
+      // Шкала полос — только из реальных значений: строка без температуры не
+      // должна порождать выдуманный ноль (minor M1).
+      var hasNum = function (v) { return typeof v === 'number' && isFinite(v); };
+      var loVals = tmin.filter(hasNum), hiVals = tmax.filter(hasNum);
+      var lo = loVals.length ? Math.min.apply(null, loVals) : 0;
+      var hi = hiVals.length ? Math.max.apply(null, hiVals) : 0;
       var span = Math.max(1, hi - lo);
 
       var rows = '';
       for (var i = 0; i < daily.time.length; i++) {
         var pr = pmax[i] || 0;
+        // Полосу диапазона рисуем только когда есть оба конца; иначе — пустая
+        // ячейка, чтобы сетка строки не съехала (minor M1).
+        var bar = hasNum(tmin[i]) && hasNum(tmax[i])
+          ? '<span class="range" aria-hidden="true"><i style="left:' + ((tmin[i] - lo) / span * 100).toFixed(1) + '%;right:' + ((hi - tmax[i]) / span * 100).toFixed(1) + '%"></i></span>'
+          : '<span class="range" aria-hidden="true" style="background:transparent"></span>';
         rows += '<li class="day">' +
           '<span class="dn">' + (i === 0 ? 'Сегодня' : weekDay(daily.time[i])) + '<small>' + dateShort(daily.time[i]) + '</small></span>' +
           wxIcon(sceneOf(wcodes[i]), false) +
           '<span class="pr' + (pr >= 50 ? ' wet' : '') + '" title="Вероятность осадков">' + (pr ? DROP + pr + '%' : '') + '</span>' +
           '<span class="lo">' + fmt(tmin[i]) + '</span>' +
-          '<span class="range" aria-hidden="true"><i style="left:' + (((tmin[i] || 0) - lo) / span * 100).toFixed(1) + '%;right:' + ((hi - (tmax[i] || 0)) / span * 100).toFixed(1) + '%"></i></span>' +
-          '<span class="hi">' + fmt(tmax[i] || 0) + '</span>' +
+          bar +
+          '<span class="hi">' + fmt(tmax[i]) + '</span>' +
         '</li>';
       }
 

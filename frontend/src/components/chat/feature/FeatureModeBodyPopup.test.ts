@@ -16,6 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeatureRun, FeatureTask, FeatureStage, FeatureStageExecutor, FeatureAttention } from '../../../types/featureRun';
 import { FeatureModeBody } from './FeatureModeBody';
 import { __test } from '../../../lib/featureRuns';
+import { __test as backNav } from '../../../lib/featureBackNav';
 import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../__tests__/fakeDom';
 
 // useIsMobile — управляемый флаг (SSR по умолчанию false).
@@ -35,10 +36,15 @@ vi.mock('../../../lib/personas', async (importOriginal) => {
     usePersonasVersion: () => 0,
   };
 });
-// Навигация: openChatById (lib/openChat) и openTaskInSection (lib/tasks) — vi.fn (попап закрывается переходом).
-const { navMock } = vi.hoisted(() => ({ navMock: { openChat: [] as string[], openTask: [] as string[] } }));
+// Навигация: openChatById (lib/openChat) и openTaskInSection (lib/tasks) — vi.fn (попап
+// закрывается переходом). openChatById — асинхронный, как настоящий (lib/openChat.ts:23),
+// с управляемым исходом: true (чат открылся) / false (не найден — точка возврата не пишется).
+const { navMock, openChatResult } = vi.hoisted(() => ({
+  navMock: { openChat: [] as string[], openTask: [] as string[] },
+  openChatResult: { value: true },
+}));
 vi.mock('../../../lib/openChat', () => ({
-  openChatById: (id: string) => { navMock.openChat.push(id); },
+  openChatById: async (id: string) => { navMock.openChat.push(id); return openChatResult.value; },
 }));
 vi.mock('../../../lib/tasks', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/tasks')>();
@@ -58,8 +64,9 @@ vi.mock('../../../lib/toast', () => ({
 beforeEach(() => {
   personaMap.clear(); mobileFlag.value = false;
   navMock.openChat.length = 0; navMock.openTask.length = 0;
+  openChatResult.value = true;
   apiMock.mergeImpl = async () => {}; toastMock.calls.length = 0;
-  __test.reset();
+  __test.reset(); backNav.reset();
 });
 
 // Задача-заглушка.
@@ -206,12 +213,14 @@ describe('попап: этапы', () => {
 
 // === Переход (чат/задача) закрывает попап ===
 describe('попап: переход закрывает попап', () => {
-  it('клик по «Чат {имя}» (stopped) вызывает openChatById и закрывает попап (onClose)', () => {
+  it('клик по «Чат {имя}» (stopped) вызывает openChatById и закрывает попап (onClose)', async () => {
     installFakeDom();
     personaMap.set('denis', 'Денис');
     const att: FeatureAttention = { kind: 'stopped', reason: 'auth_failed', personaId: 'denis', linkedSessionId: 'sess-d' };
     __test.setRuns('s-nav', [run({ state: 'stopped', attention: att })]);
     // R2 major 3 + minor 3: onClose — шпиг; тест проверяет именно ЗАКРЫТИЕ (не только openChatById).
+    // Открытие — асинхронное (Ф-хв, ревью Ф9b зам. 2): onClose идёт после await openChatById,
+    // поэтому клик прогоняем через await act — синхронный act не дожидается микротаска.
     const onCloseCalls = { n: 0 };
     const { root, container } = mount(createElement(FeatureModeBody, {
       sessionId: 's-nav', todos: [], runs: [run({ state: 'stopped', attention: att })],
@@ -220,9 +229,61 @@ describe('попап: переход закрывает попап', () => {
     }));
     const btn = findButtonByText(container, 'Чат Денис', false);
     expect(btn, 'кнопка «Чат Денис» не найдена').not.toBeNull();
-    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); await Promise.resolve(); });
     expect(navMock.openChat).toContain('sess-d');
     expect(onCloseCalls.n, 'onClose не вызван — попап не закрылся').toBe(1);
+    root.unmount();
+    uninstallFakeDom();
+  });
+
+  // Ф-хв (ревью Ф9b, зам. 2): точка возврата пишется только если чат реально открылся.
+  // Мутации проверяют обе ветки: снятие await в openChat красит тест с false (промис
+  // истинен — возврат пишется всегда); снятие guard «if (opened)» красит тест с true.
+  it('openChatById → true: попап закрыт, точка возврата «← к фиче» записана', async () => {
+    installFakeDom();
+    personaMap.set('denis', 'Денис');
+    const att: FeatureAttention = { kind: 'stopped', reason: 'auth_failed', personaId: 'denis', linkedSessionId: 'sess-d' };
+    __test.setRuns('s-nav-ok', [run({ state: 'stopped', attention: att })]);
+    const onCloseCalls = { n: 0 };
+    const { root, container } = mount(createElement(FeatureModeBody, {
+      sessionId: 's-nav-ok', todos: [], runs: [run({ state: 'stopped', attention: att })],
+      isMobile: false, variant: 'pill',
+      onClose: () => { onCloseCalls.n++; },
+    }));
+    const btn = findButtonByText(container, 'Чат Денис', false);
+    expect(btn, 'кнопка «Чат Денис» не найдена').not.toBeNull();
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); await Promise.resolve(); });
+    expect(onCloseCalls.n, 'onClose не вызван — попап не закрылся').toBe(1);
+    const info = backNav.featureBackNavFrom('sess-d');
+    expect(info, 'точка возврата не записана').not.toBeNull();
+    expect(info!.featureId).toBe('epic-1');
+    expect(info!.title).toBe('Пульт куратора');
+    expect(info!.showTab, 'из попапа — БЕЗ вкладки').toBe(false);
+    root.unmount();
+    uninstallFakeDom();
+  });
+
+  it('openChatById → false: попап всё равно закрыт, возврат НЕ записан, прежняя точка жива', async () => {
+    openChatResult.value = false;
+    // Прежняя точка возврата — на старый чат: её код не должен трогать при неудачном открытии.
+    backNav.recordFeatureReturn('epic-1', { kind: 'chat', id: 'sess-old' }, 'Пульт куратора', undefined, false);
+    installFakeDom();
+    personaMap.set('denis', 'Денис');
+    const att: FeatureAttention = { kind: 'stopped', reason: 'auth_failed', personaId: 'denis', linkedSessionId: 'sess-d' };
+    __test.setRuns('s-nav-no', [run({ state: 'stopped', attention: att })]);
+    const onCloseCalls = { n: 0 };
+    const { root, container } = mount(createElement(FeatureModeBody, {
+      sessionId: 's-nav-no', todos: [], runs: [run({ state: 'stopped', attention: att })],
+      isMobile: false, variant: 'pill',
+      onClose: () => { onCloseCalls.n++; },
+    }));
+    const btn = findButtonByText(container, 'Чат Денис', false);
+    expect(btn, 'кнопка «Чат Денис» не найдена').not.toBeNull();
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); await Promise.resolve(); });
+    // Попап закрывается при любом исходе (FeatureRunView.tsx:716 — onClose вне ветки if (opened)).
+    expect(onCloseCalls.n, 'onClose не вызван — попап не закрылся').toBe(1);
+    expect(backNav.featureBackNavFrom('sess-d'), 'указатель на несуществующий чат').toBeNull();
+    expect(backNav.featureBackNavFrom('sess-old'), 'прежняя точка возврата потеряна').not.toBeNull();
     root.unmount();
     uninstallFakeDom();
   });

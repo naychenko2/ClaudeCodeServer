@@ -23,11 +23,12 @@ public class FeatureStepProgressTests
     };
 
     private static TaskItem Rework(string id, string? stepRef, int minute, string[]? reviewOf = null,
-        TaskItemStatus status = TaskItemStatus.Done) => new()
+        TaskItemStatus status = TaskItemStatus.Done, string? verdict = null) => new()
     {
         Id = id, FeatureId = Epic, Role = TaskRoles.Rework, StepRef = stepRef, Status = status,
         ReviewOf = reviewOf?.ToList(), CreatedAt = T0.AddMinutes(minute),
         CompletedAt = status == TaskItemStatus.Done ? T0.AddMinutes(minute + 1) : null,
+        Verification = verdict is null ? null : new TaskVerification { Verdict = verdict },
     };
 
     private static TaskItem Verdict(string id, string role, string? verdict, int minute, params string[] reviewOf) => new()
@@ -201,6 +202,93 @@ public class FeatureStepProgressTests
         run.StepProgress.Total.Should().Be(1, "сироты в знаменатель не входят");
         run.StepProgress.UnlinkedReworks.Should().Be(2);
         run.StepChains.Should().ContainSingle().Which.StepRef.Should().Be("Ш1");
+    }
+
+    // ─── Порядок витков: по завершению (решение 2 ревью Александра) ────────────────────────────
+
+    [Fact]
+    public void ВиткиПоЗавершению_ПоследнийВозвратРешает_ШагВРаботе()
+    {
+        // Зонд 11 Глеба: r1 returned старт 5/завершён 40, r2 accepted старт 9/завершён 20.
+        // По старту последним был бы accepted; по завершению — returned ⇒ шаг честно «в работе».
+        var r1 = Verdict("r1", TaskRoles.Review, TaskVerdicts.Returned, 5, "s");
+        r1.CompletedAt = T0.AddMinutes(40);
+        var r2 = Verdict("r2", TaskRoles.Review, TaskVerdicts.Accepted, 9, "s");
+        r2.CompletedAt = T0.AddMinutes(20);
+        var run = Run(Feature(), Step("s", "Ш1", 1), r1, r2);
+
+        run.StepProgress.Work.Should().Be(1);
+        run.StepProgress.Accepted.Should().Be(0);
+        // Порядок один на всю цепочку: N, lastVerdict и Source — из одного порядка по завершению.
+        var chain = run.StepChains.Single();
+        chain.Rounds.Select(r => r.N).Should().Equal(1, 2);
+        chain.Rounds[^1].ReviewTaskId.Should().Be("r1");
+        chain.Rounds[^1].Verdict.Should().Be(TaskVerdicts.Returned);
+        chain.Source.Should().Be("review");
+    }
+
+    [Fact]
+    public void ИдущийВитокПоследним_ШагНаРевью_АНеПринят()
+    {
+        // Первый виток закрыт accepted, второй идёт (без CompletedAt): по завершению он последний —
+        // шаг числится «на ревью», а не «принят».
+        var run = Run(Feature(), Step("s", "Ш1", 1),
+            Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s"),
+            Verdict("r2", TaskRoles.Review, null, 9, "s"));
+
+        run.StepProgress.Review.Should().Be(1);
+        run.StepChains.Single().Outcome.Should().Be("running");
+    }
+
+    // ─── Снятие шага (решение 3 ревью Александра) ──────────────────────────────────────────────
+
+    [Fact]
+    public void СнятаяДоработка_ИсключенаИзЦепочки_ШагСчитаетсяПоОстальному()
+    {
+        var run = Run(Feature(), Step("s", "Ш1", 1),
+            Verdict("r1", TaskRoles.Review, TaskVerdicts.Returned, 5, "s"),
+            Rework("w", "Ш1", 8, null, TaskItemStatus.InProgress, TaskVerdicts.Withdrawn),
+            Verdict("r2", TaskRoles.Review, TaskVerdicts.Accepted, 12, "s"));
+
+        run.StepProgress.Total.Should().Be(1, "снятая доработка не выносит шаг из знаменателя");
+        run.StepProgress.Accepted.Should().Be(1, "снятая доработка не открывает work и не считается в reworkOpen");
+        run.StepProgress.Withdrawn.Should().Be(0);
+        run.StepChains.Single().TaskIds.Should().NotContain("w", "снятая доработка не входит в цепочку");
+    }
+
+    [Fact]
+    public void ПоследнийВитокWithdrawn_ШагСнят()
+    {
+        var run = Run(Feature(), Step("s", "Ш1", 1),
+            Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s"),
+            Verdict("r2", TaskRoles.Review, TaskVerdicts.Withdrawn, 9, "s"));
+
+        run.StepProgress.Withdrawn.Should().Be(1);
+        run.StepProgress.Total.Should().Be(0);
+        run.StepChains.Single().Outcome.Should().Be("withdrawn");
+    }
+
+    [Fact]
+    public void СнятыйВитокВСерединеЦепочки_ШагНеСнят()
+    {
+        var run = Run(Feature(), Step("s", "Ш1", 1),
+            Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s"),
+            Verdict("r2", TaskRoles.Review, TaskVerdicts.Withdrawn, 9, "s"),
+            Verdict("r3", TaskRoles.Review, TaskVerdicts.Accepted, 12, "s"));
+
+        run.StepProgress.Accepted.Should().Be(1);
+        run.StepProgress.Withdrawn.Should().Be(0);
+    }
+
+    [Fact]
+    public void СнятаяЗадачаШаг_ШагСнят()
+    {
+        var step = Step("s", "Ш1", 1);
+        step.Verification = new TaskVerification { Verdict = TaskVerdicts.Withdrawn };
+        var run = Run(Feature(), step);
+
+        run.StepProgress.Withdrawn.Should().Be(1);
+        run.StepProgress.Total.Should().Be(0);
     }
 
     // ─── Знаменатель: план ∪ заведённые ──────────────────────────────────────────────────────

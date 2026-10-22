@@ -123,17 +123,27 @@ internal static class FeatureStepAccounting
         var personasByLane = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (key, groupTasks) in groups)
         {
-            var members = groupTasks.Concat(reworksByKey.GetValueOrDefault(key) ?? []).ToList();
+            // Снятая (withdrawn) доработка исключается из цепочки целиком (решение 3 ревью):
+            // не открывает work, не считается в reworkOpen/allDone, не даёт withdrawn.
+            var members = groupTasks
+                .Concat((reworksByKey.GetValueOrDefault(key) ?? []).Where(r => r.Verification?.Verdict != TaskVerdicts.Withdrawn))
+                .ToList();
+            // Порядок задач цепочки — по старту (длительность и шапка), НЕ трогать.
             var ordered = members.OrderBy(FeatureProjector.TaskStart).ToList();
             // Шапка цепочки — задача шага (role=step); доработки её не подменяют.
             var head = ordered.First(t => t.Role == TaskRoles.Step);
             var idSet = new HashSet<string>(ordered.Select(t => t.Id));
 
-            // Витки: ревью/проверки/финалы, связанные с цепочкой через ReviewOf, по времени.
+            // Витки: ревью/проверки/финалы, связанные с цепочкой через ReviewOf. Порядок — по
+            // ЗАВЕРШЕНИЮ: (CompletedAt ?? +∞, TaskStart) (решение 2 ревью Александра): вердикт
+            // появляется в момент закрытия витка, поэтому решает самая свежая информация. Идущий
+            // виток без CompletedAt встаёт последним — шаг честно числится «на ревью». Порядок
+            // один на всю цепочку: Rounds/N, lastVerdict и Source берутся из этого же списка.
             // Одно ревью на два шага попадает в обе цепочки (связка многие-ко-многим).
             var rounds = verdictTasks
                 .Where(t => t.ReviewOf is not null && t.ReviewOf.Any(idSet.Contains))
-                .OrderBy(FeatureProjector.TaskStart)
+                .OrderBy(t => t.CompletedAt ?? DateTime.MaxValue)
+                .ThenBy(FeatureProjector.TaskStart)
                 .ToList();
             var featureRounds = rounds.Select((t, i) => new FeatureRound
             {
@@ -148,13 +158,16 @@ internal static class FeatureStepAccounting
             }).ToList();
             int loops = featureRounds.Count(r => FeatureProjector.IsReturn(r.Verdict));
 
-            // Источник возврата: последняя по времени связанная задача-возврат; связи нет — null.
+            // Источник возврата: последний виток-возврат в порядке по завершению; связи нет — null.
             var returnTasks = rounds.Where(t => FeatureProjector.IsReturn(FeatureProjector.RoundVerdict(t))).ToList();
             string? source = returnTasks.Count > 0 ? FeatureProjector.RoleToSource(returnTasks[^1].Role) : null;
 
             string? lastVerdict = featureRounds.Count > 0 ? featureRounds[^1].Verdict : null;
-            bool withdrawn = ordered.Any(t => t.Verification?.Verdict == TaskVerdicts.Withdrawn)
-                || lastVerdict == TaskVerdicts.Withdrawn;
+            // Снятие шага (решение 3): последний виток (в порядке по завершению) withdrawn, либо
+            // снята сама задача-шаг (role=step с вердиктом withdrawn). Снятый виток в середине
+            // цепочки ничего не решает; снятая доработка уже исключена из members.
+            bool withdrawn = lastVerdict == TaskVerdicts.Withdrawn
+                || ordered.Any(t => t.Role == TaskRoles.Step && t.Verification?.Verdict == TaskVerdicts.Withdrawn);
             bool reworkOpen = ordered.Any(t => t.Role == TaskRoles.Rework && t.Status != TaskItemStatus.Done);
             bool allDone = ordered.All(t => t.Status == TaskItemStatus.Done);
 

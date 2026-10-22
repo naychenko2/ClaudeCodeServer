@@ -37,7 +37,7 @@ import { resetAgentHubs } from './lib/agentHub'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
-import { pendingChatOnPop } from './lib/pendingProjectChat'
+import { pendingChatOnPop, encodePendingChat } from './lib/pendingProjectChat'
 import { requestOpenModelsSpend } from './lib/modelProvidersNav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
@@ -1028,7 +1028,7 @@ export default function App() {
           if (!p) { showToast('Фича', 'Проект фичи недоступен — возможно, он удалён.'); return }
           // minor (ревью Ф9b-д4, зам. 1): чат запасного перехода выбирается тем же каналом,
           // что и диплинк: WorkspacePage читает cc_pending_project_chat при монтировании.
-          if (d.chatId) sessionStorage.setItem('cc_pending_project_chat', `${d.projectId}|${d.chatId}`)
+          if (d.chatId) sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(d.projectId, d.chatId, undefined, true))
           recordRecentProject(p.id)
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
           localStorage.setItem(HUB_TAB_KEY, 'projects')

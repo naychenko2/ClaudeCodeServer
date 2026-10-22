@@ -1566,7 +1566,7 @@ const windowWidth = useWindowWidth();
     const consumePendingProjectChat = async () => {
       const raw = sessionStorage.getItem('cc_pending_project_chat');
       if (!raw) return;
-      const { pid, chatId, view } = parsePendingChat(raw, project.id);
+      const { pid, chatId, view, keepFeature } = parsePendingChat(raw, project.id);
       if (pid !== project.id) return;
       sessionStorage.removeItem('cc_pending_project_chat');
       const gen = guard.next();
@@ -1585,15 +1585,12 @@ const windowWidth = useWindowWidth();
           // Переход из чужого проекта уже положил запись с этим chatId (openProject) —
           // перезаписываем её. Диплинк внутри того же проекта пишет новую, «назад» вернёт в прежний чат
           const replace = getNav()?.chatId === s.id;
-          // Ф-хв-д (возврат ревью): при холодном старте страница фичи пришла из снимка, а чат
-          // выбирается под ней — тот же coldAutoSelect, что у стартового автовыбора диплинка
-          // (:1421), иначе closeFeaturePage закрывал бы страницу сразу за выбором (регрессия
-          // c84677f3c). Признак берём из самого канала: снимок записан App.tsx для ЭТОГО чата
-          // и несёт feature, — а не из активного чата (восстановленный из ws:{projectId}
-          // активный чат давал false и страница терялась). Явный выбор ДРУГОГО чата
-          // (снимок без feature или с чужим chatId) закрывает страницу как раньше.
-          const snap = getNav();
-          const keepFeaturePage = !!snap?.feature && snap.chatId === s.id;
+          // Запасный переход «← к фиче»: страница пришла из снимка, чат выбирается под ней —
+          // coldAutoSelect, иначе closeFeaturePage закрыл бы страницу сразу за выбором
+          // (регрессия c84677f3c). Намерение несёт сам канал (метка keepFeature), а не запись
+          // истории: та хранит feature при любом выборе чата из открытой фичи, и «ждёт ответа»,
+          // уведомление или инцидент оставляли бы страницу поверх чата. Без метки страница закрывается.
+          const keepFeaturePage = keepFeature;
           handleSelectSession(s, undefined, false, replace, keepFeaturePage);
           if (view) {
             // «Назад» на снимок (с перемонтажом или внутри проекта): файл и задача — из

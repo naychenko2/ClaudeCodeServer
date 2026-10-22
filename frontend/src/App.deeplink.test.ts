@@ -187,7 +187,7 @@ vi.mock('./lib/notifications', () => ({ __esModule: true, ensureNotificationsSub
 vi.mock('./lib/contextPrefs', () => ({ __esModule: true, setCtxThresholdsFromServer: () => {} }));
 vi.mock('./lib/models', () => ({ __esModule: true, loadModels: () => Promise.resolve([]) }));
 vi.mock('./lib/modules', () => ({ __esModule: true, loadModules: () => Promise.resolve([]) }));
-vi.mock('./lib/pendingProjectChat', () => ({ __esModule: true, pendingChatOnPop: () => null }));
+vi.mock('./lib/pendingProjectChat', async (importOriginal) => ({ ...(await importOriginal<typeof import('./lib/pendingProjectChat')>()), pendingChatOnPop: () => null }));
 vi.mock('./features/projects/useAllProjects', () => ({ __esModule: true, onProjectIconBackfilled: () => () => {} }));
 // eslint-disable-next-line design/no-raw-color -- тестовый мок цвета проекта, не дизайн-токен
 vi.mock('./features/projects/projectUtil', () => ({ __esModule: true, projectMainColor: () => '#000' }));
@@ -332,7 +332,7 @@ describe('App: cc-open-project-feature — канал выбора чата и �
     openFeature();
     await act(async () => { vi.advanceTimersByTime(100); });
     // КЛЮЧЕВОЕ: чат передан в канал выбора — тот же формат, что у диплинка («pid|chatId»).
-    expect(sstore.get('cc_pending_project_chat'), 'чат не попал в канал выбора').toBe('p1|chat-1');
+    expect(sstore.get('cc_pending_project_chat'), 'чат не попал в канал выбора').toBe('p1|chat-1\n{"keepFeature":true}');
     // Снимок истории несёт фичу и чат.
     expect(getNav()?.feature, 'featureId потерян в снимке').toBe('f1');
     expect(getNav()?.chatId).toBe('chat-1');

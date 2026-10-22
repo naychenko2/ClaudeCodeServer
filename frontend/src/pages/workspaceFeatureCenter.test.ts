@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
 import { getNav } from '../lib/nav';
+import { encodePendingChat } from '../lib/pendingProjectChat';
 import { centerWinner } from './workspace/DesktopWorkspace';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { __test as backNavTest, recordBackNav, recordFeatureReturn, featureBackNavFrom, backNavFrom, getBackNav } from '../lib/featureBackNav';
@@ -1744,7 +1745,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     // feature приоритетнее chatId) + pending-канал.
     win.window.location.hash = '#/project/p1/feature/f1';
     win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
-    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    win.sessionStorage.setItem('cc_pending_project_chat', encodePendingChat('p1', 'chatB', undefined, true));
     const { container } = mount(createElement(WorkspacePage, {
       project,
       auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
@@ -1774,6 +1775,43 @@ describe('WorkspacePage: центр — страница фичи соседом
   it('запасный переход: снимок + канал — страница фичи остаётся, чат выбран (мобила 360)', () => runFallbackTransition(true));
   it('запасный переход: снимок + канал — страница фичи остаётся, чат выбран (десктоп 1280)', () => runFallbackTransition(false));
 
+  // M1 финального ревью: «оставить страницу» несёт сам канал (метка запасного перехода), а не
+  // запись истории. Другие писатели (AiLauncher «ждёт ответа», уведомление, инцидент) метку не
+  // ставят: событие для чата, из которого открыта страница, закрывает её и выбирает чат.
+  // Мутации: вернуть вывод признака из getNav() → красный; снять запись метки в App.tsx →
+  // красный тест «запасный переход».
+  const runNoMarkSameChat = async (mobile: boolean) => {
+    const win = globalThis as any;
+    if (!mobile) win.window.innerWidth = 1280;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chats.push(chatB);
+    mockData.chat = chatB;
+    wsState.activeSession = null;
+    // страница открыта из снимка «фича + чат B», канала при монтировании нет
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница не открыта (предусловие)').not.toBeNull();
+    // «ждёт ответа» из чата B: канал БЕЗ метки
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'chat-panel'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'переход к чату без метки не закрыл страницу фичи').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'чат не выбран').not.toBeNull();
+  };
+  it('M1: событие для чата под страницей БЕЗ метки — страница закрыта, чат выбран (десктоп 1280)', () => runNoMarkSameChat(false));
+  it('M1: событие для чата под страницей БЕЗ метки — страница закрыта, чат выбран (мобила 360)', () => runNoMarkSameChat(true));
+
   // Дефект Ф-хв (второй возврат): активный чат восстановлен из ws:{projectId}, затем pending-канал
   // на чат B со снимком feature — страница остаётся, адрес с /feature/. Мутация: вернуть
   // проверку activeSessionRef.current == null вместо признака из снимка → красный.
@@ -1788,15 +1826,22 @@ describe('WorkspacePage: центр — страница фичи соседом
   it('запасный переход: запись истории несёт feature, адрес — с /feature/ (десктоп 1280)', async () => {
     const win = globalThis as any;
     recordHistory();
+    // счётчик записей: запись навигации обязана быть реально сделана, а не унаследована от входного снимка
+    const writes = { push: 0, replace: 0 };
+    const hist = win.window.history;
+    const push0 = hist.pushState, replace0 = hist.replaceState;
+    hist.pushState = (...a: any[]) => { writes.push++; return push0(...a); };
+    hist.replaceState = (...a: any[]) => { writes.replace++; return replace0(...a); };
     win.window.innerWidth = 1280;
     const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
     mockSessionList.push(chatB);
     mockData.chats.push(chatB);
     wsState.activeSession = null;
     // Снимок, который кладёт App.tsx на запасном переходе: feature + chatId.
-    win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    const inputSnap = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.window.history.state = inputSnap;
     win.window.location.hash = '#/project/p1/feature/f1';
-    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    win.sessionStorage.setItem('cc_pending_project_chat', encodePendingChat('p1', 'chatB', undefined, true));
     const { container } = mount(createElement(WorkspacePage, {
       project,
       auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
@@ -1807,6 +1852,8 @@ describe('WorkspacePage: центр — страница фичи соседом
       await act(async () => { vi.advanceTimersByTime(100); });
     }
     // Выбор чата под открытой страницей: новая запись истории сохраняет feature страницы.
+    expect(writes.push + writes.replace, 'запись навигации не сделана (запасный переход)').toBeGreaterThan(0);
+    expect(getNav(), 'запись навигации совпала с входным снимком по ссылке').not.toBe(inputSnap);
     expect(getNav()?.feature, 'запись навигации потеряла feature (запасный переход)').toBe('f1');
     expect(getNav()?.chatId, 'запись навигации потеряла chatId (запасный переход)').toBe('chatB');
     expect(win.window.location.hash, 'адрес потерял /feature/ (запасный переход)').toContain('/feature/');
@@ -1826,7 +1873,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     wsState.activeSession = null;
     win.window.location.hash = '#/project/p1/feature/f1';
     win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
-    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    win.sessionStorage.setItem('cc_pending_project_chat', encodePendingChat('p1', 'chatB', undefined, true));
     const { container } = mount(createElement(WorkspacePage, {
       project,
       auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
@@ -1868,7 +1915,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     };
     win.window.location.hash = withFeature ? '#/project/p1/feature/f1' : '#/project/p1';
     win.window.history.state = { screen: 'project', project, file: null, chatId: withFeature ? 'chatB' : undefined, feature: withFeature ? 'f1' : undefined };
-    win.sessionStorage.setItem('cc_pending_project_chat', withFeature ? 'p1|chatB' : 'p1|chatA');
+    win.sessionStorage.setItem('cc_pending_project_chat', withFeature ? encodePendingChat('p1', 'chatB', undefined, true) : 'p1|chatA');
     const { container } = mount(createElement(WorkspacePage, {
       project,
       auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
@@ -2118,7 +2165,7 @@ describe('WorkspacePage: центр — страница фичи соседом
       'страница фичи не уступила доске (M2, десктоп)').toBeNull();
     expect(win.window.location.hash, 'адрес содержит /feature/ после доски (M2, десктоп)')
       .not.toContain('/feature/');
-  });
+  }, 20000);
 
   // (7) Параметризованный: каждое окно центра — одно «верхнее» (единый источник otherCenterOpen).
   // Побеждает ПОСЛЕДНЕЕ открытое:

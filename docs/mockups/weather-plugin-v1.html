@@ -412,7 +412,7 @@ function searchView({ q = 'Яр', results = CITIES, geo = 'idle', empty = false 
     ${geoBtn}${geoNote}
     ${q && !empty ? `<div class="sec"><h3>Найдено</h3><span>${results.length}</span></div>` : ''}
     ${list}
-    ${geo === 'none' ? `<div class="hint">Город запоминается до перезагрузки страницы.</div>` : ''}
+    ${geo === 'none' ? `<div class="hint">Город запоминается в этом браузере.</div>` : ''}
   </div>`;
 }
 function loadingView() {

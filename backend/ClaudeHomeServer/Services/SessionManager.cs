@@ -9415,8 +9415,20 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             await entry.Process.DisposeAsync();
         // Дренаж очереди сессии до конца: ResultMessage последнего хода обязан дойти до всех
         // наблюдателей (иначе TaskExecutionService не закроет задачу исполнителя)
+        // HTTP-путь удаления не ждёт зависшего наблюдателя: дренаж идёт в фоне, исход — в лог
         if (entry.Pipeline is { } pipeline)
-            await pipeline.CompleteAsync(TimeSpan.FromSeconds(30));
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await pipeline.CompleteAsync(TimeSpan.FromSeconds(30));
+                    _log.LogDebug("Очередь удалённой сессии {SessionId} разобрана", sessionId);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Дренаж очереди удалённой сессии {SessionId} упал", sessionId);
+                }
+            });
 
         // Дочищаем историю на диске — иначе data/sessions/{id} копится мусором
         if (entry.Info.ClaudeSessionId is string csid)
@@ -9618,6 +9630,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // боевые вызывающие идут в OnMessageQueuedAsync и очередь не ждут
         await DrainPipelineAsync(sessionId);
     }
+
+    internal SessionMessagePipeline? PipelineForTest(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) ? entry.Pipeline : null;
 
     // Дожидается разбора всего, что легло в очередь сессии (тесты и точки, которым нужны
     // отработавшие наблюдатели)
@@ -10277,12 +10292,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             },
             msg, entry.Info,
             Droppable: SessionMessagePipeline.IsDroppable(msg),
-            EnqueuedAt: Stopwatch.GetTimestamp()));
+            EnqueuedAt: Stopwatch.GetTimestamp(),
+            // Слитой дельте очередь пересобирает рассылку по новому тексту (кадр без показа не рассылается)
+            WorkFor: broadcastMsg ? merged => () => BroadcastAsync(sessionId, merged) : null));
     }
 
     private SessionMessagePipeline GetPipeline(SessionEntry entry) =>
         LazyInitializer.EnsureInitialized(ref entry.Pipeline,
-            () => new SessionMessagePipeline(item => ProcessPipelineItemAsync(entry, item)));
+            () => new SessionMessagePipeline(item => ProcessPipelineItemAsync(entry, item),
+                sessionId: entry.Info.Id, sessionKind: () => entry.Info.TaskId is null ? "human" : "executor",
+                log: _log));
 
     // Работа без сообщения для наблюдателей (догоняющая дельта, presence, смена статуса)
     private ValueTask EnqueueWorkAsync(SessionEntry entry, Func<Task> work) =>
@@ -10317,7 +10336,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             }
             ServerMetrics.RecordSessionObserverDuration(
                 Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                observer.Target?.GetType().Name ?? observer.Method.DeclaringType?.Name ?? "unknown", kind);
+                observer.Method.DeclaringType?.Name ?? observer.Target?.GetType().Name ?? "unknown", kind);
         }
     }
 

@@ -11787,7 +11787,7 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task Pipeline_УдалениеСессии_ДренируетОчередьДоResult()
+    public async Task Pipeline_УдалениеСессии_НеБлокируетВызывающего_ДренажВФонеДоводитResult()
     {
         var session = AddPipelineSession(executor: true);
         var acc = new TurnAccumulator(new List<StoredMessage>());
@@ -11801,18 +11801,24 @@ public class SessionManagerTests : IDisposable
         await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("x"));
         await _sut.OnMessageQueuedAsync(session.Id, acc, new ResultMessage("success", 1, 1, null, null));
 
-        var delete = _sut.DeleteAsync(session.Id);
-        await Task.WhenAny(delete, Task.Delay(300));
-        delete.IsCompleted.Should().BeFalse("удаление ждёт дренажа очереди, а наблюдатель ещё держит Result");
+        // Удаление не держит HTTP-путь на дренаже: возвращается, пока наблюдатель ещё держит Result
+        await _sut.DeleteAsync(session.Id).WaitAsync(TimeSpan.FromSeconds(5));
+        lock (seen) seen.Should().BeEmpty("наблюдатель ещё не отпущен");
 
         release.SetResult();
-        await delete.WaitAsync(TimeSpan.FromSeconds(5));
+        // Дренаж идёт в фоне и доводит Result до наблюдателя
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (seen) if (seen.Count == 2) break;
+            await Task.Delay(20);
+        }
 
         lock (seen) seen.Should().Equal(nameof(TextDeltaMessage), nameof(ResultMessage));
     }
 
     [Fact]
-    public async Task Pipeline_Переполнение_ДельтыСливаются_ToolUseИResultДоходятВПорядке()
+    public async Task Pipeline_Переполнение_ДельтыСклеиваются_ТекстНеТеряется_ToolUseИResultВПорядке()
     {
         var session = AddPipelineSession();
         var acc = new TurnAccumulator(new List<StoredMessage>());
@@ -11832,7 +11838,7 @@ public class SessionManagerTests : IDisposable
         await Task.Run(async () =>
         {
             for (var i = 1; i < 5000; i++)
-                await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage(i.ToString()));
+                await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage(i.ToString() + ","));
         }).WaitAsync(TimeSpan.FromSeconds(5));
 
         // Редкие кадры не сливаются и писателя не блокируют: кладутся даже в «полную» очередь
@@ -11845,9 +11851,10 @@ public class SessionManagerTests : IDisposable
         release.SetResult();
         await _sut.DrainPipelineAsync(session.Id);
 
-        var deltas = Sent<TextDeltaMessage>().Select(m => int.Parse(m.Text)).ToList();
-        deltas.Count.Should().BeLessThan(5000, "дельты сверх ёмкости очереди слиты");
-        deltas.Should().BeInAscendingOrder("порядок оставшихся дельт не нарушен");
+        // Ни одного символа не потеряно: слитые дельты склеены в том же порядке
+        var expected = "0" + string.Concat(Enumerable.Range(1, 4999).Select(i => i.ToString() + ","));
+        string.Concat(Sent<TextDeltaMessage>().Select(m => m.Text)).Should().Be(expected);
+        _sut.PipelineForTest(session.Id)!.Coalesced.Should().BeGreaterThan(0, "дельты сверх ёмкости слиты, а не выброшены");
         var all = Sent<ServerMessage>();
         var toolIdx = all.FindIndex(m => m is ToolUseMessage);
         var resultIdx = all.FindIndex(m => m is ResultMessage);
@@ -11874,6 +11881,7 @@ public class SessionManagerTests : IDisposable
         await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("3"));
         // Второй потребитель (если бы он был) разобрал бы «2» не дожидаясь «1»
         await Task.WhenAny(second.Task, Task.Delay(300));
+        second.Task.IsCompleted.Should().BeFalse("второй потребитель не разбирает «2» мимо зависшего «1»");
         release.SetResult();
         await _sut.DrainPipelineAsync(session.Id);
 

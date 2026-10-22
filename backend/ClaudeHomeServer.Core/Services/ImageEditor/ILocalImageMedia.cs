@@ -29,7 +29,7 @@ public interface ILocalImageMedia
     // Ожидаемое время одного запуска по таблице замеров local-media; null — не замерено
     int? EtaSeconds(LocalImageOp op, int count, int images);
 
-    // То же для варианта Qwen-Image (LocalImageModels; null — «качественно»). По умолчанию
+    // То же для локальной модели (LocalImageModels; null — Qwen «качественно»). По умолчанию
     // вариант не различается: подсистема images переопределяет
     int? EtaSeconds(LocalImageOp op, int count, int images, string? model) => EtaSeconds(op, count, images);
 
@@ -58,15 +58,36 @@ public interface ILocalImageMedia
 
 public enum LocalImageOp { Generate, Edit, FaceDetail }
 
-// Варианты Qwen-Image 2.1 в локальном шве. Quality — 25 шагов, int8 convrot; Turbo — 8 шагов,
-// дистиллят (замер 2026-10-13, RTX 3090: генерация 8 с против 22 с). Строки совпадают с id
-// моделей каталога редактора; неизвестное значение шов отвергает, а не молча берёт умолчание
+// Локальные модели картинок в шве. Quality — Qwen-Image 2.1, 25 шагов, int8 convrot; Turbo — его
+// дистиллят на 8 шагов (замер 2026-10-13, RTX 3090: генерация 8 с против 22 с); Klein — FLUX 3
+// Image Klein, 16 шагов, с апсемплером промпта (A/B 2026-10-22). Строки совпадают с id моделей
+// каталога редактора; неизвестное значение шов отвергает, а не молча берёт умолчание
 public static class LocalImageModels
 {
     public const string Quality = "qwen-image-2.1";
     public const string Turbo = "qwen-image-2.1-turbo";
+    public const string Klein = "flux3-klein";
 
-    public static bool IsKnown(string? model) => model is null or Quality or Turbo;
+    // Больше картинок на входе Klein не проверяли (A/B и граф BFL — до четырёх)
+    public const int KleinMaxImages = 10;
+
+    public static bool IsKnown(string? model) => model is null or Quality or Turbo or Klein;
+
+    // Модель, на которой запуск пойдёт на самом деле. Klein не проверен на персонаже с LoRA,
+    // подстановке лица, масках, дорисовке за края и длинных наборах входов — такие запуски
+    // уходят на Qwen «качественно», даже если выбран Klein
+    public static string? Effective(LocalImageRequest request) =>
+        request.Model == Klein && NeedsQwen(request) ? Quality : request.Model;
+
+    public static bool NeedsQwen(LocalImageRequest request) =>
+        request.Lora is not null
+        || request.FaceReferences is { Count: > 0 }
+        || request.Crop is not null
+        || request.EraseMask is { Length: > 0 }
+        || request.KeepMask is { Length: > 0 }
+        || request.VeilMask is { Length: > 0 }
+        || request.Pad is not null
+        || (request.Images?.Count ?? 0) > KleinMaxImages;
 }
 
 // Images: у Edit первая — холст, дальше образцы (до 16 всего); у Generate — необязательные
@@ -86,7 +107,8 @@ public static class LocalImageModels
 // Несовместима с EraseMask, Pad и Crop (подстановка на лицо остаётся на кропе)
 // Pad — только у Edit: холст расширяется полями нейтрального серого до модели («Дорисовать за
 // края»), результат — в пропорции расширенного холста
-// Model — вариант Qwen-Image (LocalImageModels); null — «качественно», прежнее поведение
+// Model — локальная модель (LocalImageModels); null — Qwen «качественно», прежнее поведение.
+// Klein в случаях из LocalImageModels.NeedsQwen идёт на Qwen «качественно»
 // Lora — только у Edit и у Generate с образцами
 // FaceReferences — фото эталона персонажа только для узла сходства лица (граф правки); в
 // энкодер модели они не идут. У FaceDetail и у генерации без образцов узла сходства нет

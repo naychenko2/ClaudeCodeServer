@@ -3,7 +3,7 @@ using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
-// Поставщик «Локальные модели» (ADR-018, раздел «Локальные модели»): Qwen-Image 2.1 и
+// Поставщик «Локальные модели» (ADR-018, раздел «Локальные модели»): FLUX 3 Klein, Qwen-Image 2.1 и
 // FaceDetailer в ComfyUI на своей видеокарте через Core-шов ILocalImageMedia — вертикаль Images
 // модулю не видна. Денег нет: котировка — ноль в единицах free плюс время по таблице замеров и
 // длина очереди GPU. Доступен всем; нет шва (Images выключена) или тумблера LocalMedia:Enabled —
@@ -21,7 +21,8 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, IImageEditQuoter
 {
     public const string ProviderKey = "local";
-    // «Качественно» (25 шагов) и «быстро» (Turbo, 8 шагов); умолчание авто-выбора — «качественно»
+    // FLUX 3 Klein — умолчание авто-выбора; Qwen «качественно» (25 шагов) и «быстро» (Turbo, 8 шагов)
+    public const string FluxKlein = LocalImageModels.Klein;
     public const string QwenImage = LocalImageModels.Quality;
     public const string QwenImageTurbo = LocalImageModels.Turbo;
     public const string FaceDetailer = "face-detailer";
@@ -57,34 +58,45 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         ["2:3"] = new(1056, 1584),
     };
 
-    private static readonly MediaFormatCaps QwenFormat = new("Qwen-Image 2.1",
+    private static readonly MediaFormatCaps QwenFormat = FormatOf("Qwen-Image 2.1");
+
+    // Klein держит до 4 Мп, но остаёмся на сетке Qwen (~1,7 Мп): размеры и «Точно…» те же
+    private static readonly MediaFormatCaps KleinFormat = FormatOf("FLUX 3 Klein");
+
+    private static MediaFormatCaps FormatOf(string label) => new(label,
         [.. QwenSizes.Keys],
         [new FormatTierSpec(FormatTier.Standard, "~1,7 Мп", QwenSizes)],
         new ExactSizeSpec(Step: 16, MinSide: 256, MaxSide: 1664, MaxMegapixels: 1.8),
         null, "один размер ~1,7 Мп");
 
-    // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов)
+    // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов).
+    // Возможности у Klein те же, что у Qwen: маски, дорисовку, персонажа и больше 10 картинок он
+    // отдаёт Qwen «качественно» (LocalImageModels.NeedsQwen), отказа человек не видит
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
-        QwenModel(QwenImage, "Qwen-Image 2.1 — качественно"),
-        QwenModel(QwenImageTurbo, "Qwen-Image 2.1 Turbo — быстро"),
+        QwenModel(FluxKlein, "FLUX 3 Klein — по умолчанию", KleinFormat),
+        QwenModel(QwenImage, "Qwen-Image 2.1 — качественно", QwenFormat),
+        QwenModel(QwenImageTurbo, "Qwen-Image 2.1 Turbo — быстро", QwenFormat),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
     ];
 
-    private static ImageEditModelInfo QwenModel(string id, string label) =>
+    private static ImageEditModelInfo QwenModel(string id, string label, MediaFormatCaps format) =>
         new(id, label,
             new ImageEditCaps([ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint, ImageEditOp.Outpaint],
                 MaskSupport.Veil,
-                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1, Format: QwenFormat),
+                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1, Format: format),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
 
-    // Умолчание авто-выбора — «качественно» (решение Андрея 2026-10-17); Turbo — по явному выбору человека
+    // Умолчание авто-выбора генерации и правки — FLUX 3 Klein (решение Андрея 2026-10-22 по A/B против
+    // Qwen-Image 2.1). Маска и дорисовка за края на Klein не проверены и всё равно ушли бы на Qwen
+    // «качественно» — их авто-выбор сразу Qwen, чтобы котировка и подпись не врали. Turbo — по явному выбору
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => op switch
     {
         ImageEditOp.EnhanceFaces => Catalog.First(m => m.Id == FaceDetailer),
-        ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint or ImageEditOp.Outpaint => Catalog[0],
+        ImageEditOp.Generate or ImageEditOp.Edit => Catalog.First(m => m.Id == FluxKlein),
+        ImageEditOp.Inpaint or ImageEditOp.Outpaint => Catalog.First(m => m.Id == QwenImage),
         _ => null,
     };
 
@@ -116,10 +128,20 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         // MaxCharacterPhotos) — фронт считает в References только образцы, фото добавляет сервер
         var images = request.References + (request.HasAnnotations ? 1 : 0) + (request.HasMask ? 1 : 0)
                      + (request.HasCharacter ? 1 : 0);
+        var variant = EtaVariant(model.Id, request, images);
         if (request.Op == ImageEditOp.Generate)
-            return media!.EtaSeconds(LocalImageOp.Generate, 1, images, model.Id) * count;
-        return media!.EtaSeconds(LocalImageOp.Edit, 1, images + 1, model.Id) * count;
+            return media!.EtaSeconds(LocalImageOp.Generate, 1, images, variant) * count;
+        return media!.EtaSeconds(LocalImageOp.Edit, 1, images + 1, variant) * count;
     }
+
+    // Модель, на которой запуск пойдёт на самом деле, — грубо, по признакам котировки: точный
+    // выбор делает шов (LocalImageModels.Effective) по готовому запросу
+    private static string EtaVariant(string id, ImageEditQuoteRequest request, int images) =>
+        id == FluxKlein && (request.HasMask || request.HasCharacter
+                            || request.Op is ImageEditOp.Inpaint or ImageEditOp.Outpaint
+                            || images + 1 > LocalImageModels.KleinMaxImages)
+            ? QwenImage
+            : id;
 
     // ── Запуск ───────────────────────────────────────────────────────────────────
 

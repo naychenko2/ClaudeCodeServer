@@ -494,6 +494,12 @@ public sealed partial class LocalMediaService(
     // Turbo (8 шагов): правка по замеру 2026-10-13 — 11 с против 36 с; с запасом на загрузку входов
     public static int EditImageEtaTurbo(int images) => 20 + 4 * (Math.Max(1, images) - 1);
 
+    // FLUX 3 Klein (замер на проде 2026-10-22): картинка 1328² прогретой моделью ~8,5 с, апсемплер
+    // промпта 5–11 с; у правки апсемплер ещё смотрит на каждый образец
+    public static int KleinGenerateEta(int count) => 6 + 9 * Math.Max(1, count);
+
+    public static int KleinEditEta(int images) => 20 + 3 * (Math.Max(1, images) - 1);
+
     public const int FaceDetailEta = 25;
 
     // Время — зачётные прогоны замера d653be60 (одна RTX 3090, модели уже загружены); первый

@@ -125,7 +125,10 @@ public static class ComfyGraphValidator
                     ? list.Select(n => n!.GetValue<string>())
                     : Enumerable.Range(0, template?["max"]?.GetValue<int>() ?? 0)
                         .Select(i => (template?["prefix"]?.GetValue<string>() ?? "") + i);
-                if (template?["input"]?["required"] is JsonObject item && item.FirstOrDefault().Value is JsonArray itemSpec)
+                // Вход элемента бывает и необязательным (ReferenceMultiLatent: images.image0 — optional image)
+                var item = (template?["input"]?["required"] as JsonObject)?.FirstOrDefault().Value
+                    ?? (template?["input"]?["optional"] as JsonObject)?.FirstOrDefault().Value;
+                if (item is JsonArray itemSpec)
                     foreach (var itemName in names)
                         allowed[$"{name}.{itemName}"] = itemSpec;
                 continue;
@@ -191,6 +194,9 @@ public static class ComfyGraphValidator
             case "BOOLEAN":
                 return value is JsonValue b && b.GetValueKind() is System.Text.Json.JsonValueKind.True
                     or System.Text.Json.JsonValueKind.False ? null : "ждём true/false";
+            // Вход «любой тип» (StringFormat.values.a) ComfyUI принимает и значением
+            case "*":
+                return null;
             case "STRING":
                 return value is JsonValue str && str.GetValueKind() == System.Text.Json.JsonValueKind.String ? null : "ждём строку";
             default:

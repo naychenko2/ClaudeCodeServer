@@ -6,6 +6,12 @@ import type {
   PluginDraftPreview, PluginDraftSummary, PluginDraftDiffFile,
 } from '../../lib/api';
 
+// Имя пакета для людей: displayName от бэка («Погода»), иначе запасное имя. Пустая
+// строка и пробелы считаются «не пришло». Единая точка для карточки и диалога согласия.
+export function draftDisplayName(displayName: string | null | undefined, fallback: string): string {
+  return displayName?.trim() || fallback;
+}
+
 // Вклад «Что будет после установки» (макет 4): панель/команда/навык — человекочитаемая строка
 export interface DraftContribution {
   kind: 'panel' | 'command' | 'skill';

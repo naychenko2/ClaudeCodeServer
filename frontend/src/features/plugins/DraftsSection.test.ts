@@ -208,6 +208,56 @@ describe('DraftsSection: «Принять…» (диалог согласия)',
   });
 });
 
+describe('DraftsSection: человекочитаемое имя пакета (D2)', () => {
+  const ACCEPT_BASE = {
+    id: 'local-1/weather', version: '1.0.0', sha256: 'abc12345', source: 'upload:weather',
+    enabled: true, requested: ['notes:read'], granted: [], consentRequired: true,
+    newPermissions: [], secrets: [],
+  };
+
+  async function acceptAndGetDialog(summary: PluginDraftSummary, accept: Record<string, unknown>) {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([summary]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue({ ...PREVIEW, name: 'Weather' });
+    vi.mocked(api.plugins.draftAccept).mockResolvedValue({ ...ACCEPT_BASE, ...accept });
+    const { container, text } = await renderSection();
+    const body = (globalThis as { document: { body: FNode } }).document.body;
+    for (const c of [...body.childNodes]) body.removeChild(c);
+    const cardText = text();
+    await act(async () => { findButton(container, 'Принять…')!.onClick(); });
+    return { cardText, dialogText: textOf(body) };
+  }
+
+  it('displayName «Погода» → в карточке и в диалоге согласия «Погода», а не «Weather» (мутация: вернуть humanizeId)', async () => {
+    const { cardText, dialogText } = await acceptAndGetDialog(
+      { ...SUMMARY, id: 'local-1/weather', displayName: 'Погода' },
+      { displayName: 'Погода' },
+    );
+    expect(cardText).toContain('Погода');
+    expect(cardText).not.toContain('Weather');
+    expect(dialogText).toContain('Погода');
+    expect(dialogText).not.toContain('Weather');
+  });
+
+  it('без displayName (пакет без панелей) → прежний fallback: имя манифеста в карточке, humanizeId(id) в диалоге', async () => {
+    const { cardText, dialogText } = await acceptAndGetDialog(
+      { ...SUMMARY, id: 'local-1/weather', displayName: null },
+      { displayName: null },
+    );
+    expect(cardText).toContain('Weather');
+    expect(dialogText).toContain('Weather');
+    expect(dialogText).not.toContain('Погода');
+  });
+
+  it('пустой displayName считается «не пришло» → fallback', async () => {
+    const { dialogText } = await acceptAndGetDialog(
+      { ...SUMMARY, id: 'local-1/weather', displayName: '  ' },
+      { displayName: '  ' },
+    );
+    expect(dialogText).toContain('Weather');
+  });
+});
+
 describe('DraftsSection: «Установлен» → ссылка «Открыть в «Плагинах»»', () => {
   it('установлен той же версией → свёрнутая строка со ссылкой на экран плагинов', async () => {
     setFlagLocal('plugins-build-yourself', true);

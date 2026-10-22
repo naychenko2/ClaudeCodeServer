@@ -2,6 +2,9 @@
 // Порог длинного — 6 и больше `##`; короткий остаётся сплошным текстом без свёртки.
 // «Свернуть все»/«Развернуть все» в панели оглавления; переход по пункту «Содержание»
 // раскрывает свёрнутый раздел. `##` внутри ```-забора — не заголовок раздела.
+// Доработка по ревью: тач-цель переключателя раздела ≥ 40 на 360, заголовок — left,
+// сброс свёртки при новом тексте и после «Повторить», привязка скролла к секции (не к
+// индексу h2 в DOM), закрытие забора только той же разновидности.
 //
 // Окружение node (без jsdom): fakeDom (mount) + mock api.tasks.get (текст документа).
 
@@ -59,12 +62,59 @@ const TEXTS = vi.hoisted(() => ({
     '## Внутри кода',
     '```',
   ].join('\n'),
+  // Другой длинный план — для теста сброса свёртки, когда приходит новый текст.
+  longB: [
+    'Преамбула второго плана.',
+    '## Раздел 1', 'тело Б1',
+    '## Раздел 2', 'тело Б2',
+    '## Раздел 3', 'тело Б3',
+    '## Раздел 4', 'тело Б4',
+    '## Раздел 5', 'тело Б5',
+    '## Раздел 6', 'тело Б6',
+  ].join('\n'),
+  // 6 настоящих разделов + h2 внутри блок-цитаты: сканер его не считает, но в DOM он есть —
+  // переход по «Содержанию» не должен прыгать на соседний раздел.
+  quoteH2: [
+    'Преамбула.',
+    '## Раздел 1', 'тело 1',
+    '> ## Заголовок в цитате',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+    '## Раздел 6', 'тело 6',
+  ].join('\n'),
+  // ``` внутри ~~~-забора: закрывающий забор — той же разновидности, строка ``` — текст.
+  fenceMix: [
+    'Преамбула.',
+    '## Раздел 1', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+    '## Раздел 6', 'тело 6',
+    '~~~text',
+    '```',
+    '## Внутри забора',
+    '~~~',
+  ].join('\n'),
 }));
 
+// 'flaky': первый вызов роняет (состояние error), последующие дают текст — путь «Повторить».
+const _flakyCalls = vi.hoisted(() => new Map<string, number>());
 vi.mock('../../lib/api', () => ({
   api: {
     tasks: {
-      get: (id: string) => Promise.resolve({ resultMarkdown: TEXTS[id] ?? '' }),
+      get: (id: string) => {
+        if (id === 'flaky') {
+          const n = (_flakyCalls.get(id) ?? 0) + 1;
+          _flakyCalls.set(id, n);
+          return n === 1
+            ? Promise.reject(new Error('отказ загрузки'))
+            : Promise.resolve({ resultMarkdown: TEXTS.long });
+        }
+        return Promise.resolve({ resultMarkdown: TEXTS[id] ?? '' });
+      },
     },
   },
 }));
@@ -102,9 +152,9 @@ function allNodes(container: FNode, testId: string): FNode[] {
   return out;
 }
 
-// Состояние свёртки каждого раздела: aria-expanded заголовка по порядку.
+// Состояние свёртки каждого раздела: aria-expanded кнопки-переключателя по порядку.
 function expandedFlags(container: FNode): string[] {
-  return allNodes(container, 'plan-section-head').map(n => String(n.getAttribute('aria-expanded')));
+  return allNodes(container, 'plan-section-toggle').map(n => String(n.getAttribute('aria-expanded')));
 }
 
 // Текст тел разделов (содержимое контейнеров plan-section, кроме самих заголовков).
@@ -217,5 +267,83 @@ describe('FeaturePlanReader: свёртка разделов', () => {
       const style = props?.style as Record<string, unknown> | undefined;
       expect(Number(style?.minHeight ?? 0)).toBeGreaterThanOrEqual(40);
     }
+  });
+
+  // === 8. 360: тач-цель переключателя раздела ≥ 40 px (макет: тач-целей < 40 — 0) ===
+  it('на 360 кнопка-переключатель раздела не ниже 40 px', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [], isMobile: true }));
+    await flush();
+    const toggles = allNodes(container, 'plan-section-toggle');
+    expect(toggles.length).toBe(6);
+    for (const n of toggles) {
+      const props = reactProps(n);
+      const style = props?.style as Record<string, unknown> | undefined;
+      expect(Number(style?.minHeight ?? 0)).toBeGreaterThanOrEqual(40);
+    }
+  });
+
+  // === 9. Заголовок раздела выровнен по левому краю (кнопка по умолчанию центрирует) ===
+  it('заголовок раздела имеет text-align: left', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    const heads = allNodes(container, 'plan-section-head');
+    expect(heads.length).toBe(6);
+    for (const n of heads) {
+      const props = reactProps(n);
+      const style = props?.style as Record<string, unknown> | undefined;
+      expect(String(style?.textAlign ?? '')).toBe('left');
+    }
+  });
+
+  // === 10. Приходит текст другого плана — свёртка сбрасывается ===
+  it('при новом тексте все разделы раскрыты', async () => {
+    const { root, container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    click(container, 'plan-collapse-all');
+    expect(expandedFlags(container)).toEqual(['false', 'false', 'false', 'false', 'false', 'false']);
+    // Тот же читатель рисует другой план: эффект загрузки проходит заново и сбрасывает свёртку.
+    act(() => { root.render(createElement(FeaturePlanReader, { plan: plan('longB'), mockups: [] })); });
+    await flush();
+    expect(expandedFlags(container)).toEqual(['true', 'true', 'true', 'true', 'true', 'true']);
+    expect(bodyText(container)).toContain('тело Б6');
+  });
+
+  // === 11. Ошибка → «Повторить» → текст: свёртка тоже сброшена ===
+  it('после «Повторить» все разделы раскрыты', async () => {
+    const { root, container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    click(container, 'plan-collapse-all');
+    // План переписан: новая загрузка сначала ошибается, после «Повторить» даёт текст.
+    act(() => { root.render(createElement(FeaturePlanReader, { plan: plan('flaky'), mockups: [] })); });
+    await flush();
+    expect(findNodeByAttr(container, 'data-testid', 'plan-reader-error')).not.toBeNull();
+    click(container, 'plan-retry');
+    await flush();
+    expect(expandedFlags(container)).toEqual(['true', 'true', 'true', 'true', 'true', 'true']);
+    expect(bodyText(container)).toContain('тело 6');
+  });
+
+  // === 12. Переход по «Содержанию» — к своей секции, а не по индексу h2 в DOM ===
+  it('переход к разделу 3, когда в теле раздела 1 есть h2 в цитате', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('quoteH2'), mockups: [] }));
+    await flush();
+    // Сканер считает только настоящие разделы: 6, без заголовка в цитате.
+    expect(allNodes(container, 'plan-reader-toc-item').length).toBe(6);
+    const items = allNodes(container, 'plan-reader-toc-item');
+    const props = reactProps(items[2]);
+    act(() => { (props!.onClick as () => void)(); });
+    // Цель скролла — сама секция 3 (data-plan-section="2"), а не h2 из цитаты раздела 1.
+    const target = findNodeByAttr(container, 'data-plan-section', '2');
+    expect(target, 'секция 3').not.toBeNull();
+    expect(target!.style.scrollMarginTop).toBe('72px');
+  });
+
+  // === 13. ``` внутри ~~~-забора не закрывает его (CommonMark: та же разновидность) ===
+  it('строка ``` внутри ~~~-забора — текст, а не закрытие забора', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('fenceMix'), mockups: [] }));
+    await flush();
+    // Если бы ``` закрыл ~~~-забор, «## Внутри забора» стал бы седьмым разделом.
+    expect(allNodes(container, 'plan-section-head').length).toBe(6);
+    expect(allNodes(container, 'plan-reader-toc-item').length).toBe(6);
   });
 });

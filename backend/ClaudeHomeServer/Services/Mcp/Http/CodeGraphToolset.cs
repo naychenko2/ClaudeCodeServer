@@ -46,18 +46,37 @@ public sealed class CodeGraphToolset(
     public string Version => "1.0.0";
 
     public IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context) =>
-        TryResolve(context, out _, out _, out _) ? AllTools : [];
+        TryResolve(context, out _, out _, out _, out _) ? AllTools : [];
 
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
         // Права — на КАЖДЫЙ вызов (гейт в составе недостаточен — см. шапку)
-        if (!TryResolve(context, out var root, out var resolveError, out var projectless))
+        if (!TryResolve(context, out var root, out var mainRoot, out var resolveError, out var projectless))
             return projectless
                 // Как stdio-ветка: чат вне проекта — не отказ протокола, а честный текст
                 ? new McpToolCallResult(resolveError)
                 : Deny(resolveError);
 
+        var result = await RunToolAsync(tool, arguments, root, ct);
+        if (result is not null) return result;
+
+        // Граф дерева ещё не построен: просим фоновое построение и, пока оно идёт, честно отвечаем
+        // по графу основного дерева проекта (ADR-003: подмена временная, с пометкой, не замена)
+        graphs.StartRebuildIfIdle(root);
+        if (PathNormalizer.NormalizePath(mainRoot) != PathNormalizer.NormalizePath(root)
+            && await RunToolAsync(tool, arguments, mainRoot, ct) is { IsError: false } fallback)
+            return fallback with { Text = BuildingNote + "\n" + fallback.Text };
+        return Deny("Граф строится, вызови ещё раз через минуту.");
+    }
+
+    public const string BuildingNote =
+        "Граф этого дерева ещё строится; ниже — по основному дереву проекта (ветка может отличаться).";
+
+    // null — графа этого дерева ещё нет (вызывающий решает, что отвечать)
+    private async Task<McpToolCallResult?> RunToolAsync(string tool, JsonObject arguments, string root,
+        CancellationToken ct)
+    {
         switch (tool)
         {
             case "codegraph_find":
@@ -67,7 +86,7 @@ public sealed class CodeGraphToolset(
                 var limit = ClampLimit(IntArg(arguments, "limit"), 20);
                 var result = await queries.FindAsync(root, query, limit, ct);
                 return result is null
-                    ? Building(root)
+                    ? null
                     : Text(RenderFind(result, query, limit));
             }
 
@@ -78,7 +97,7 @@ public sealed class CodeGraphToolset(
                 var limit = ClampLimit(IntArg(arguments, "limit"), 20);
                 var outcome = await queries.NeighborsAsync(root, node,
                     OptionalArg(arguments, "direction"), OptionalArg(arguments, "relation"), limit, ct);
-                if (!outcome.HasGraph) return Building(root);
+                if (!outcome.HasGraph) return null;
                 // «Узел не найден» — не сбой инструмента, а полезный ответ с кандидатами:
                 // иначе модель пошла бы гадать имя вслепую (как stdio-ветка)
                 if (outcome.Result is null)
@@ -97,7 +116,7 @@ public sealed class CodeGraphToolset(
                 var limit = ClampLimit(IntArg(arguments, "limit"), 10);
                 var result = await queries.HubsAsync(root, limit, ct);
                 return result is null
-                    ? Building(root)
+                    ? null
                     : Text(RenderHubs(result));
             }
 
@@ -134,9 +153,10 @@ public sealed class CodeGraphToolset(
     /// у stdio-ветки.
     /// </summary>
     private bool TryResolve(McpToolCallContext context,
-        out string root, [NotNullWhen(false)] out string? error, out bool projectless)
+        out string root, out string mainRoot, [NotNullWhen(false)] out string? error, out bool projectless)
     {
         root = "";
+        mainRoot = "";
         error = null;
         projectless = false;
         if (!TryParseRoute(context.RouteTail, out var sessionId))
@@ -179,6 +199,7 @@ public sealed class CodeGraphToolset(
         // Дерево сессии: отдельное worktree имеет СВОЙ граф (ADR-003). Watcher его файлов
         // поднимаем лениво — как CodeGraphController.ResolveRoot (первая дверь к графу
         // отдельного дерева). Резолв живой: смена WorktreePath подхватывается сама.
+        mainRoot = project.RootPath;
         if (session.WorktreePath is { Length: > 0 } worktree)
         {
             watchers.WatchPath("worktree:" + session.Id, worktree);
@@ -189,13 +210,6 @@ public sealed class CodeGraphToolset(
             root = project.RootPath;
         }
         return true;
-    }
-
-    // «Графа нет» — фоновая постройка + честный текст (как stdio-ветка: 404 building)
-    private McpToolCallResult Building(string root)
-    {
-        graphs.StartRebuildIfIdle(root);
-        return Deny("Граф строится, повтори запрос через 1–2 минуты.");
     }
 
     private static int ClampLimit(int? value, int fallback) =>

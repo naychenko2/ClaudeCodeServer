@@ -1602,7 +1602,8 @@ const windowWidth = useWindowWidth();
             setOpenFileDiffMode(false);
             setFileFullscreen(false);
             setSelectedTaskId(view.task);
-            navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: view.file, task: view.task, chatId: s.id });
+            // Страницу фичи из снимка запись несёт дальше (метка канала), иначе адрес потерял бы /feature/
+            navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: view.file, task: view.task, chatId: s.id, feature: keepFeature ? getNav()?.feature ?? null : null });
           }
         }
       } catch {
@@ -1874,10 +1875,11 @@ const windowWidth = useWindowWidth();
       // Снимок с уже открытым чатом пропускаем: так «назад» снимает запись шторки чатов,
       // и восстановление гонялось бы с переходом, который шторка запускает следом.
       // Файл и задача снимка едут вместе с чатом: обработчик pending держит замыкание
-      // первого рендера, и выбор чата там закрыл бы файл, восстановленный выше
+      // первого рендера, и выбор чата там закрыл бы файл, восстановленный выше.
+      // Метка keepFeature — из снимка: страница фичи, восстановленная выше, переживёт выбор чата
       const restoreChatId = chatToRestore(s.chatId, activeSessionRef.current?.id);
       if (restoreChatId) {
-        sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, restoreChatId, { file: f, task: s.task ?? null }));
+        sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, restoreChatId, { file: f, task: s.task ?? null }, !!s.feature));
         window.dispatchEvent(new Event('cc-pending-project-chat'));
       }
     };

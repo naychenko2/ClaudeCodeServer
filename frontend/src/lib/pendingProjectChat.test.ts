@@ -22,6 +22,11 @@ describe('pendingChatOnPop', () => {
     expect(pop(withView, 'B', 'projects')).toEqual({ pid: 'A', chatId: 'X', view: { file: 'src/a|b.ts', task: 'T1' }, keepFeature: false });
   });
 
+  it('страница фичи из снимка едет меткой keepFeature; без неё метки нет', () => {
+    expect(pop({ ...snap, feature: 'f1' }, 'B', 'projects')).toMatchObject({ pid: 'A', chatId: 'X', keepFeature: true });
+    expect(pop({ ...snap, feature: null }, 'B', 'projects')).toMatchObject({ keepFeature: false });
+  });
+
   it('внутри смонтированного проекта pending не нужен — снимок применит сам WorkspacePage', () => {
     expect(pendingChatOnPop(snap, 'A', 'projects')).toBeNull();
   });

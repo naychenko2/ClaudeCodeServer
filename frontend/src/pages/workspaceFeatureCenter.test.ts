@@ -1939,6 +1939,26 @@ describe('WorkspacePage: центр — страница фичи соседом
   it('холодный pending-чат без страницы фичи: чат виден, адрес /chat/{id} (десктоп 1280)', () => runColdPendingNoFeature(false));
   it('холодный pending-чат без страницы фичи: чат виден, адрес /chat/{id}, центр display:flex (мобила 360)', () => runColdPendingNoFeature(true));
 
+  // M1′: системное «назад» на снимок страницы фичи из чата A в чат B — восстановление идёт
+  // через pending-канал, и писатель popstate обязан нести метку keepFeature из снимка.
+  // Мутация: убрать `!!s.feature` в писателе popstate (WorkspacePage) → страница закрывается.
+  it('popstate на снимок со страницей фичи и другим чатом: страница остаётся (десктоп 1280)', async () => {
+    const { win, container } = await mountPending(false, false);
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'чат А не активен (предусловие)').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница открыта до popstate (предусловие)').toBeNull();
+    const snap = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.window.history.state = snap;
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.dispatchEvent({ type: 'popstate', state: snap });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'feature-page'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи закрылась при popstate на снимок с feature (M1′)').not.toBeNull();
+    expect(win.window.location.hash, 'адрес потерял /feature/ при popstate (M1′)').toContain('/feature/');
+  });
+
   // Страница фичи открыта, активного чата нет, явный выбор ДРУГОГО чата — страница закрыта.
   const runExplicitOtherChat = async (mobile: boolean) => {
     const { win, container } = await mountPending(mobile, true);

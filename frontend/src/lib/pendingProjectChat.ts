@@ -63,14 +63,14 @@ export function parsePendingChat(raw: string, fallbackPid: string): PendingChat 
  *  сохранённого состояния, и «назад» вернул бы чат не с тем файлом в сплите.
  *  null — восстанавливать нечего или этим займётся смонтированный WorkspacePage сам. */
 export function pendingChatOnPop(
-  snapshot: { project?: { id: string } | null; chatId?: string | null; file?: string | null; task?: string | null },
+  snapshot: { project?: { id: string } | null; chatId?: string | null; file?: string | null; task?: string | null; feature?: string | null },
   openProjectId: string | null | undefined,
   hubTab: string,
 ): string | null {
   if (!snapshot.project || !snapshot.chatId) return null;
   const remount = openProjectId !== snapshot.project.id || hubTab !== 'projects';
   return remount
-    ? encodePendingChat(snapshot.project.id, snapshot.chatId, { file: snapshot.file ?? null, task: snapshot.task ?? null })
+    ? encodePendingChat(snapshot.project.id, snapshot.chatId, { file: snapshot.file ?? null, task: snapshot.task ?? null }, !!snapshot.feature)
     : null;
 }
 

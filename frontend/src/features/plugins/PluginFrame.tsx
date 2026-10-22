@@ -22,8 +22,9 @@ import {
 // computed --c-* (текущая тема) и мапит в --cc-* панели.
 import { readHostTokens } from './panelTokens';
 import { humanizeId, panelDisplayName } from './panelNaming';
-// Перехват домена storage на хосте (решение Александра, 6760e1d8 §2/§4): общая
-// реализация с эмулятором панели — hostOps/storage.js, второй копии логики нет.
+// Перехват домена storage на хосте (решение Александра, 6760e1d8 §2/§4): этот же
+// модуль hostOps/storage.js подключает и хост-эмулятор панели (tools/plugins/dev-host)
+// — второй копии логики нигде нет, result хоста и эмулятора совпадают по построению (C3-д).
 import { handleStorageCall, type StorageOp } from './hostOps/storage';
 // Владелец — из состояния авторизации хоста (ответ /auth/me), тот же источник,
 // что в pluginStorageLifecycle.ts: F2-d, единый способ в перехвате и цикле.

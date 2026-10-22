@@ -25,6 +25,11 @@
 //   6. Пустой поиск — пустое состояние.
 //   7. Гонка: два поиска подряд, пакет первого приходит позже результатов
 //      второго — температуры только свои (R3, major 1).
+//   8. Город в storage — объект (не двойная строка), и панель читает
+//      запомненный город при повторном открытии (C3-д).
+//   9. Подсказка «Город запоминается…» — только при выданном праве storage (C3-д).
+//   10. Нет права на геокодер — человеческий текст и бейдж с ключом права,
+//       главный экран работает (C3-д).
 
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
@@ -309,10 +314,16 @@ async function scenarioErrors(browser, base) {
     }
   });
 
-  await scenario('4c. status400 — свой кадр', async (checks) => {
+  await scenario('4c. status400 — свой кадр (тело валидное по форме)', async (checks) => {
+    // Тело ответа — настоящая фикстура прогноза со всеми полями. Смысл: привязать
+    // сценарий к проверке status (минор C3-д). С пустым телом панель показала бы
+    // ошибку и без проверки status (невалидная форма), поэтому мутация «не смотреть
+    // status» проходила бы зелёной. С валидным телом без проверки status панель
+    // построила бы главный экран из ответа 400 — сценарий краснеет.
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
       fail: 'status400',
+      fixtures: FX + 'forecast-yaroslavl.json',
     });
     try {
       await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
@@ -441,6 +452,129 @@ async function scenarioRace(browser, base) {
   });
 }
 
+// Сценарии инвариантов storage (C3-д): значение в хранилище — объект; чтение
+// принимает и старую строку; подсказка — только при выданном праве.
+async function scenarioStorageCity(browser, base) {
+  await scenario('8. Город в storage — объект; повторное открытие читает его', async (checks) => {
+    const grant = GRANT_ALL + ',storage';
+    const fixtures = [FX + 'forecast-yaroslavl.json', FX + 'geocode-arts.json', FX + 'forecast-batch.json'].join(',');
+    const { context, page, frame } = await openEmulator(browser, base, { grant, fixtures });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Ярц');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      await frame.locator('.city').first().click();
+
+      // Барьер — сама запись, а не неделя в DOM: скелетон тоже содержит семь .day,
+      // и ожидание по ним ловит момент ДО того, как хост обработал storage.set.
+      // Ждём появления ключа в хранилище хоста (пишет его именно хост, panel —
+      // в sandbox без доступа к localStorage).
+      await page.waitForFunction(() => {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k.startsWith('ccs.plugin.') && k.endsWith('.city')) return true;
+        }
+        return false;
+      }, { timeout: 15000 });
+
+      // Что реально лежит в хранилище хоста: значение под ключом .city. Панель
+      // шлёт объект, сериализует хост — двойное кодирование (JSON.stringify(city)
+      // в rememberCity) краснит именно эту проверку.
+      const raw = await page.evaluate(() => {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k.startsWith('ccs.plugin.') && k.endsWith('.city')) return localStorage.getItem(k);
+        }
+        return null;
+      });
+      assertTrue(checks, 'запись в storage есть', raw !== null, 'ключа .city в хранилище нет');
+      let value = null;
+      try { value = JSON.parse(raw); } catch (e) { /* не JSON — проверка красная */ }
+      assertTrue(checks, 'значение — объект, не строка',
+        value && typeof value === 'object' && typeof value.lat === 'number' && typeof value.name === 'string',
+        'raw: ' + raw);
+
+      // Чтение: та же страница заново (тот же контекст — localStorage жив). Значение
+      // перекладываем в старый формат (строка внутри JSON) — панель обязана принять
+      // и его: в логе координаты запомненного города, а не дефолтного Ярославля.
+      await page.evaluate((v) => {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k.startsWith('ccs.plugin.') && k.endsWith('.city')) localStorage.setItem(k, JSON.stringify(v));
+        }
+      }, value);
+      await page.goto(base + '/' + DEV_HOST + '?' + new URLSearchParams({ panel: PANEL, grant, fixtures }).toString(), { waitUntil: 'load' });
+      const frame2 = await panelFrame(page);
+      await frame2.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      const logText = await page.evaluate(() => document.getElementById('log').textContent);
+      assertTrue(checks, 'панель прочитала город из старой строки и запросила его координаты',
+        logText.includes('latitude=' + value.lat), 'лог: ' + logText.replace(/\n/g, ' ').slice(0, 400));
+    } catch (e) {
+      await shot(page, 'scenario-8-storage');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+async function scenarioHint(browser, base) {
+  await scenario('9. Подсказка про запоминание — только при выданном storage', async (checks) => {
+    const fixtures = [FX + 'forecast-yaroslavl.json', FX + 'geocode-arts.json', FX + 'forecast-batch.json'].join(',');
+    for (const [grant, expect] of [[GRANT_ALL, false], [GRANT_ALL + ',storage', true]]) {
+      const { context, page, frame } = await openEmulator(browser, base, { grant, fixtures });
+      try {
+        await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+        await frame.locator('#citybtn').click();
+        await frame.locator('#q').waitFor({ timeout: 5000 });
+        const n = await frame.locator('.hint').count();
+        assertEq(checks, 'подсказок при ' + (grant.includes('storage') ? 'storage выдан' : 'без storage'), n, expect ? 1 : 0);
+        if (expect) {
+          const t = (await textOf(frame, '.hint')).trim();
+          assertEq(checks, 'текст подсказки', t, 'Город запоминается в этом браузере.');
+        }
+      } catch (e) {
+        await shot(page, 'scenario-9-hint-' + (expect ? 'on' : 'off'));
+        throw e;
+      } finally {
+        await context.close();
+      }
+    }
+  });
+}
+
+async function scenarioGeoDenied(browser, base) {
+  await scenario('10. Нет права на геокодер — человеческий текст и бейдж ключа', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: 'api.open-meteo.com',
+      fixtures: FX + 'forecast-yaroslavl.json',
+    });
+    try {
+      // Главный экран работает: права на прогноз достаточно.
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Ярц');
+      await frame.locator('.notice-row').waitFor({ timeout: 15000 });
+      const notice = (await textOf(frame, '.notice-row')).replace(/\n/g, ' ').trim();
+      assertTrue(checks, 'человеческий текст отказа', notice.includes('Поиск города недоступен'), notice);
+      const badge = (await textOf(frame, '.notice-row .cc-badge')).trim();
+      assertEq(checks, 'бейдж с ключом права', badge, 'net:geocoding-api.open-meteo.com');
+      // Главный экран не сломан: «Назад» — неделя на месте.
+      await frame.locator('#back').click();
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      assertEq(checks, 'строк недели', await frame.locator('.week .day').count(), 7);
+    } catch (e) {
+      await shot(page, 'scenario-10-geo-denied');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 // ---------- Запуск ----------
 
 const { server, base } = await startServer();
@@ -453,6 +587,9 @@ try {
   await scenarioSearchSort(browser, base);
   await scenarioSearchEmpty(browser, base);
   await scenarioRace(browser, base);
+  await scenarioStorageCity(browser, base);
+  await scenarioHint(browser, base);
+  await scenarioGeoDenied(browser, base);
 } finally {
   await browser.close();
   server.close();

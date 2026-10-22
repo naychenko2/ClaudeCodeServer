@@ -19,6 +19,9 @@
   - сообщения моста: ready → init; call net.fetch → fetch с credentials: 'omit'
     (куки и токен origin не уходят) или фикстура; отказ по праву — текстом сервера
     (PluginBridge / PluginNetProxy), и плашка «Нет права …» над панелью;
+  - вызовы storage.* — через общую реализацию хоста, модуль
+    frontend/src/features/plugins/hostOps/storage.js: result, тексты отказа и
+    тихость отказа по storage — те же, что на боевом хосте (C3-д);
   - гейты хоста воспроизведены: e.origin === 'null', не более 8 вызовов в полёте,
     64 КиБ на args, таймаут ready 3 с (bridge_timeout), высота по resize (кламп 48..20000);
   - panel= и fixtures= — только пути внутри репозитория (без схемы, без «..»):
@@ -50,7 +53,7 @@
 <body>
   <div class="toolbar">
     <label>панель <input id="in-panel" size="34"></label>
-    <label>права (хосты через запятую) <input id="in-grant" size="28"></label>
+    <label>права (net:хосты или storage, через запятую) <input id="in-grant" size="28"></label>
     <label>сбой
       <select id="in-fail">
         <option value="">нет</option>
@@ -82,8 +85,16 @@
 
   <div class="log" id="log"></div>
 
-<script>
+<script type="module">
 'use strict';
+
+/* === Общая реализация storage.* === */
+
+// Тот же модуль, что подключает боевой хост (PluginFrame.tsx): логика storage
+// пишется один раз и эмулятор не держит свою копию — result и тексты отказа
+// совпадают с боевым хостом по построению (инвариант 12, C3-д). Эмулятор
+// раздаётся статическим сервером из корня репозитория, поэтому путь достижим.
+import { handleStorageCall } from '/frontend/src/features/plugins/hostOps/storage.js';
 
 /* === Копии платформенных констант (panelSrcdoc.ts, panelTokens.ts, bridge.ts) === */
 
@@ -198,9 +209,10 @@ const cfg = {
   // Панель — исходник пакета (копии нет: она бы расходилась с оригиналом).
   // panel= с чужим URL не принимается вовсе (не подменяется дефолтом).
   panel: rawPanel === null ? '/tools/plugins/weather/panel/index.html' : repoPath(rawPanel),
-  // grant= — список хостов (или net:хостов), которым выдано право; пусто — ни одного.
-  // Это имитация согласия: реальные права выдаёт сервер при установке.
-  grant: listParam('grant').map(h => h.replace(/^net:/, '').toLowerCase()),
+  // grant= — права: net:хосты (префикс необязателен) или storage; пусто — ни одного.
+  // Это имитация согласия: реальные права выдаёт сервер при установке. Формат
+  // granted — тот же, что на боевом хосте: сырые строки «net:{host}» и «storage».
+  grant: listParam('grant').map(p => p === 'storage' ? 'storage' : 'net:' + p.replace(/^net:/, '').toLowerCase()),
   fail: ['upstream', 'timeout', 'limit', 'status400'].includes(params.get('fail')) ? params.get('fail') : '',
   delay: Math.max(0, parseInt(params.get('delay') || '0', 10) || 0),
   // fixtures= — пути к файлам-фикстурам внутри репозитория; основной режим — фикстуры.
@@ -209,6 +221,20 @@ const cfg = {
   width: ['rail', '320', '390'].includes(params.get('width')) ? params.get('width') : 'rail',
   selftest: params.get('selftest') === '1',
 };
+
+/* === Идентификаторы для префикса storage === */
+
+// Префикс ccs.plugin.<ownerId>.<pluginId>. собирает общая реализация из host-параметров.
+// Грамматика pluginId боевого хоста — publisher/slug ([a-z0-9-]/[a-z0-9-]): путь панели
+// приводится к безопасному слагу. Владелец условный: авторизации в эмуляторе нет, id
+// нужен только для устойчивости префикса.
+function pluginIdOf(path) {
+  const slug = String(path || '').replace(/^\/+/, '').split('/')
+    .map(s => s.toLowerCase().replace(/[^a-z0-9-]+/g, '-')).filter(Boolean).join('-');
+  return 'local-dev/' + (slug || 'panel');
+}
+const PLUGIN_ID = pluginIdOf(cfg.panel);
+const OWNER_ID = 'local-dev';
 
 /* === Хост: чтение токенов текущей темы === */
 
@@ -275,13 +301,14 @@ window.addEventListener('message', (e) => {
     postToPanel({
       type: 'init',
       // Идентификатор «плагина» для эмулятора — условный: он нужен панели только
-      // для показа версии (A1). Реальные права — из параметра grant.
-      plugin: { id: 'local-dev/' + encodeURIComponent(cfg.panel), version: 'dev' },
+      // для показа версии (A1) и совпадает с id, из которого строится префикс
+      // storage. Реальные права — из параметра grant.
+      plugin: { id: PLUGIN_ID, version: 'dev' },
       slot: 'sidebar',
       context: { projectId: null },
       theme: cfg.theme,
       locale: 'ru',
-      granted: cfg.grant.map(h => 'net:' + h),
+      granted: cfg.grant,
       tokens: hostTokens(),
     });
   } else if (d.type === 'call') {
@@ -323,13 +350,16 @@ function fixturePathFor() {
   return cfg.fixtures[callSeq++ % cfg.fixtures.length];
 }
 
-function respond(id, res, counted) {
+function respond(id, res, counted, quiet) {
   const send = () => {
     if (counted) inflight--;
     if (res.ok) postToPanel({ type: 'result', id, ok: true, data: res.data });
     else {
       postToPanel({ type: 'result', id, ok: false, error: res.error });
-      if (res.error.code === 'denied') showDenied(res.error.message);
+      // Отказ по storage — тихий (решение Софьи, 22.10, как на боевом хосте):
+      // панель работает дальше, плашки «Нет права …» нет. Отказы по net: и прочим
+      // доменам — плашку дают, как раньше.
+      if (res.error.code === 'denied' && !quiet) showDenied(res.error.message);
     }
   };
   if (cfg.delay > 0) setTimeout(send, cfg.delay); else send();
@@ -357,7 +387,20 @@ async function handleCall(id, op, args) {
   if (!res) {
     inflight++;
     counted = true;
-    if (op !== 'net.fetch') {
+    if (op.startsWith('storage.')) {
+      // storage.* — через общую реализацию хоста (hostOps/storage.js): result и
+      // тексты отказа совпадают с боевыми по построению, второй копии логики нет.
+      // Подделанные панелью granted/pluginId/ownerId в args игнорируются — право,
+      // id и владелец берутся только из состояния эмулятора (как в PluginFrame).
+      res = handleStorageCall({
+        op: op.slice('storage.'.length),
+        args,
+        granted: cfg.grant,
+        ownerId: OWNER_ID,
+        pluginId: PLUGIN_ID,
+        store: localStorage,
+      });
+    } else if (op !== 'net.fetch') {
       // Текст — как у сервера (PluginBridge.DispatchAsync).
       res = { ok: false, error: { code: 'unavailable', message: 'Обработчик не зарегистрирован: ' + String(op).split('.')[0] } };
     } else {
@@ -365,8 +408,8 @@ async function handleCall(id, op, args) {
       // PluginNetProxy): сначала мост проверяет права (до валидации url в обработчике),
       // при отказе называет хост из url аргументов, а если его не вытащить — текст по домену.
       const url = typeof args.url === 'string' ? args.url : '';
-      const granted = cfg.grant.map(h => 'net:' + h);
-      if (granted.length === 0) {
+      const netRights = cfg.grant.filter(g => g.startsWith('net:'));
+      if (netRights.length === 0) {
         // Нет ни одного net:права — отказ на уровне моста: хост из url вызова;
         // url нечитаем — «Нет права на сетевые запросы» (не «Нет права: net:»).
         const host = hostOf(url);
@@ -381,7 +424,7 @@ async function handleCall(id, op, args) {
         // Точный хост из granted — как PluginNetProxy: право net:{host} должно
         // совпадать с хостом url (порт из права не несём).
         const host = hostOf(url);
-        if (!granted.some(g => g.slice(4).split(':')[0] === host)) {
+        if (!netRights.some(g => g.slice(4).split(':')[0] === host)) {
           res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } };
         }
       }
@@ -411,9 +454,9 @@ async function handleCall(id, op, args) {
   }
 
   logLine(res.ok
-    ? '← ' + res.data.status + ' (' + (res.data.body || '').length + ' bytes)'
+    ? '← ' + (res.data.status !== undefined ? res.data.status + ' (' + (res.data.body || '').length + ' bytes)' : 'ok')
     : '← ' + res.error.code + ': ' + res.error.message);
-  respond(id, res, counted);
+  respond(id, res, counted, op.startsWith('storage.'));
 }
 
 /* === Тема и ширина === */
@@ -445,7 +488,7 @@ function applyWidth() {
 
 function updateStatus() {
   document.getElementById('status').textContent =
-    'права: ' + (cfg.grant.map(h => 'net:' + h).join(', ') || 'нет') +
+    'права: ' + (cfg.grant.join(', ') || 'нет') +
     ' · тема: ' + cfg.theme + ' · ширина: ' + cfg.width +
     (cfg.fixtures.length ? ' · фикстуры' : '') + (cfg.delay ? ' · задержка ' + cfg.delay + ' мс' : '');
 }
@@ -513,8 +556,8 @@ async function main() {
   document.getElementById('btn-theme').textContent = cfg.theme === 'dark' ? 'светлая' : 'тёмная';
   updateStatus();
 
-  window.__emulator = { cfg, granted: cfg.grant.map(h => 'net:' + h) };
-  logLine('хост-эмулятор: панель ' + cfg.panel + ' · права: ' + (cfg.grant.length ? cfg.grant.map(h => 'net:' + h).join(', ') : 'нет'));
+  window.__emulator = { cfg, granted: cfg.grant };
+  logLine('хост-эмулятор: панель ' + cfg.panel + ' · права: ' + (cfg.grant.length ? cfg.grant.join(', ') : 'нет'));
 }
 
 /* Переключатели: всё, кроме темы, перезагружает страницу с новым URL. */

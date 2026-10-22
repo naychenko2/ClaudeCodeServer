@@ -161,17 +161,30 @@ public class CodeGraphController(
 
     /// <summary>
     /// Связи узла: входящие/исходящие с типом отношения и confidence (инструмент codegraph_neighbors).
+    /// С ?file=&lt;путь от корня дерева&gt; — входящие связи файла по файлам-потребителям (хук PreToolUse).
     /// 200 — связи; 404 — граф не построен, проект не найден или узел не опознан (в теле —
     /// похожие кандидаты); 403 — чужой проект.
     /// </summary>
     [HttpGet("neighbors")]
-    public Task<IActionResult> Neighbors(string projectId, [FromQuery] string node,
+    public Task<IActionResult> Neighbors(string projectId, [FromQuery] string? node = null,
         [FromQuery] string? direction = null, [FromQuery] string? relation = null,
         [FromQuery] int limit = CodeGraphQueryService.DefaultLimit,
-        [FromQuery] string? rootPath = null, CancellationToken ct = default)
+        [FromQuery] string? rootPath = null, [FromQuery] string? file = null, CancellationToken ct = default)
         => QueryAsync(projectId, rootPath, "запроса связей узла графа",
             async root =>
             {
+                // Режим «по файлу» (хук PreToolUse): входящие связи типов, объявленных в файле,
+                // по файлам-потребителям. Только входящие — другого хуку не нужно.
+                if (!string.IsNullOrWhiteSpace(file))
+                {
+                    var byFile = await queries.NeighborsByFileAsync(root, file, limit, ct);
+                    if (!byFile.HasGraph) return null;
+                    if (byFile.Result is null)
+                        return NotFound(new { message = $"В графе нет типов из файла «{file}»" });
+                    return Ok(byFile.Result);
+                }
+                if (string.IsNullOrWhiteSpace(node))
+                    return BadRequest(new { message = "Нужен параметр node или file" });
                 var outcome = await queries.NeighborsAsync(root, node, direction, relation, limit, ct);
                 if (!outcome.HasGraph) return null; // граф не построен — общий 404 + фоновая постройка
                 if (outcome.Result is null)

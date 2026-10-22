@@ -1705,6 +1705,15 @@ if (!inspectionMode)
                     try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
         }
         catch { /* нет доступа к temp — не критично */ }
+        try
+        {
+            // hook-state хука потребителей: признаки «файл уже правили» по session_id, TTL сутки
+            var hookState = Path.Combine(Path.GetTempPath(), "claude-runtime", "hook-state");
+            if (Directory.Exists(hookState))
+                foreach (var f in Directory.EnumerateFiles(hookState))
+                    try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddDays(-1)) File.Delete(f); } catch { }
+        }
+        catch { /* не критично */ }
     });
 
 // Однократная миграция: переносим DifyDatasetId/DocumentTags из старых Project-записей в WorkspaceKnowledge

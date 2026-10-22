@@ -51,6 +51,16 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // 12.10, 16.10, 17.10: последний оборвал все ходы). Запрет в тексте задач не держится —
 // держит только отказ на уровне инструмента. Скрипт пишется рядом с файлом настроек.
 //
+// Шестая обязанность файла — хук PreToolUse на Edit|Write: при ПЕРВОЙ правке файла в сессии CLI
+// спрашивает граф кода (GET .../code-graph/neighbors?file=…&direction=in) и кладёт в ход
+// additionalContext со списком потребителей и покрывающих тестов (≤ 20 строк, дальше «ещё N»).
+// Только контекст: правку хук не блокирует никогда — нет переменных окружения, нет графа,
+// файл вне графа, ответ дольше 3 с, ошибка авторизации — молчание и код 0. Адрес, проект и
+// токен приезжают в окружении процесса CLI (CCS_HOOK_API / CCS_HOOK_PROJECT / CCS_HOOK_TOKEN,
+// ставит ClaudeSession; токен — тот же сервисный JWT, что в заголовках MCP-конфига хода).
+// Признак «файл уже правили» — файл claude-runtime/hook-state/<session_id> рядом со скриптом.
+// В песочнице и на Windows-хосте хука нет по построению (см. ниже) — для них отдельный шаг.
+//
 // Только для local-среды: в песочнице (Linux) окон нет, а путь к хостовому файлу
 // внутри контейнера недоступен — там --settings не добавляем (и гейт браузера
 // в песочнице не работает; браузера в образе всё равно нет).
@@ -64,6 +74,142 @@ public static class ClaudeRuntimeSettings
     private const int TranscriptRetentionDays = 3650;
 
     private const string BlockKillScriptName = "block-process-kill.py";
+
+    internal const string ConsumersHookScriptName = "edit-consumers-hook.py";
+
+    // Читает session_id, cwd и tool_input.file_path из stdin. Весь скрипт обёрнут так, чтобы любой
+    // сбой заканчивался молчанием и кодом 0: хук не должен ни блокировать правку, ни ронять ход.
+    // Общий потолок — 3 с на всё (setitimer), плюс таймаут сокета; прокси отключены явно.
+    private const string ConsumersHookScript = """
+        import json, os, re, signal, sys, time
+        import urllib.error, urllib.parse, urllib.request
+
+        LIMIT = 20
+        TIMEOUT = 3
+        STATE_TTL = 86400
+        BUILDING_NOTE = "Граф этого дерева ещё строится; ниже — по основному дереву проекта (ветка может отличаться)."
+
+
+        def quiet(*_):
+            os._exit(0)
+
+
+        def is_test(path):
+            parts = path.split("/")
+            if any(c.lower() in ("__tests__", "tests", "test") or c.endswith((".Tests", ".Test")) for c in parts[:-1]):
+                return True
+            return re.search(r"(Tests?\.cs|\.(test|spec)\.[jt]sx?)$", parts[-1]) is not None
+
+
+        def first_edit(session_id, rel):
+            state_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook-state")
+            os.makedirs(state_dir, exist_ok=True)
+            now = time.time()
+            for name in os.listdir(state_dir):
+                full = os.path.join(state_dir, name)
+                try:
+                    if now - os.path.getmtime(full) > STATE_TTL:
+                        os.remove(full)
+                except OSError:
+                    pass
+            path = os.path.join(state_dir, session_id)
+            seen = set()
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as f:
+                    seen = {line.rstrip("\n") for line in f}
+            if rel in seen:
+                return False
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(rel + "\n")
+            return True
+
+
+        def fetch(api, project, token, rel, root_path):
+            query = {"file": rel, "direction": "in", "limit": "100"}
+            if root_path:
+                query["rootPath"] = root_path
+            url = "%s/api/projects/%s/code-graph/neighbors?%s" % (
+                api.rstrip("/"), urllib.parse.quote(project, safe=""), urllib.parse.urlencode(query))
+            request = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            try:
+                with opener.open(request, timeout=TIMEOUT) as response:
+                    return response.status, json.load(response)
+            except urllib.error.HTTPError as e:
+                try:
+                    return e.code, json.load(e)
+                except Exception:
+                    return e.code, None
+
+
+        def render(rel, result, note):
+            neighbors = result.get("neighbors") or []
+            total = int(result.get("total") or len(neighbors))
+            if total <= 0:
+                return None
+            tests = [n for n in neighbors if is_test(n.get("location") or n.get("fqn") or "")]
+            others = [n for n in neighbors if not is_test(n.get("location") or n.get("fqn") or "")]
+            ordered = tests[:4] + others + tests[4:]
+            lines = [note] if note else []
+            lines.append("Потребители %s по графу кода (файлов: %d, тестов среди них: %d):" % (rel, total, len(tests)))
+            room = LIMIT - len(lines)
+            if total <= room:
+                show = ordered[:room]
+            else:
+                show = ordered[:room - 1]
+            for n in show:
+                path = n.get("location") or n.get("fqn") or "?"
+                mark = " [тест]" if is_test(path) else ""
+                lines.append("- %s%s (%s)" % (path, mark, n.get("relation") or ""))
+            rest = total - len(show)
+            if rest > 0:
+                lines.append("ещё %d" % rest)
+            return "\n".join(lines[:LIMIT])
+
+
+        def main():
+            api = os.environ.get("CCS_HOOK_API")
+            token = os.environ.get("CCS_HOOK_TOKEN")
+            project = os.environ.get("CCS_HOOK_PROJECT")
+            if not (api and token and project):
+                return
+            data = json.load(sys.stdin.buffer)
+            session_id = data.get("session_id") or ""
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", session_id):
+                return
+            file_path = (data.get("tool_input") or {}).get("file_path")
+            if not file_path:
+                return
+            cwd = data.get("cwd") or os.getcwd()
+            if not os.path.isabs(file_path):
+                file_path = os.path.join(cwd, file_path)
+            rel = os.path.relpath(file_path, cwd).replace(os.sep, "/")
+            if rel.startswith(".."):
+                return
+            if not first_edit(session_id, rel):
+                return
+            status, body = fetch(api, project, token, rel, cwd)
+            note = None
+            if status == 404 and isinstance(body, dict) and body.get("building"):
+                status, body = fetch(api, project, token, rel, None)
+                note = BUILDING_NOTE
+            if status != 200 or not isinstance(body, dict):
+                return
+            text = render(rel, body, note)
+            if text:
+                sys.stdout.write(json.dumps({"hookSpecificOutput": {
+                    "hookEventName": "PreToolUse", "additionalContext": text}}))
+                sys.stdout.flush()
+
+
+        try:
+            signal.signal(signal.SIGALRM, quiet)
+            signal.setitimer(signal.ITIMER_REAL, TIMEOUT)
+            main()
+        except BaseException:
+            pass
+        os._exit(0)
+        """;
 
     // Читает tool_input.command из stdin; код 2 + stderr — отказ, текст уходит модели.
     // Совпадение ищется только там, где слово стоит в позиции команды (начало, после
@@ -141,7 +287,10 @@ public static class ClaudeRuntimeSettings
                 var scriptPath = Path.Combine(dir, BlockKillScriptName);
                 File.WriteAllText(scriptPath, BlockKillScript);
                 var command = JsonSerializer.Serialize($"python3 -I \"{scriptPath}\"");
-                hooksJson = $",\"hooks\":{{\"PreToolUse\":[{{\"matcher\":\"Bash\",\"hooks\":[{{\"type\":\"command\",\"command\":{command}}}]}}]}}";
+                var consumersPath = Path.Combine(dir, ConsumersHookScriptName);
+                File.WriteAllText(consumersPath, ConsumersHookScript);
+                var consumersCommand = JsonSerializer.Serialize($"python3 -I \"{consumersPath}\"");
+                hooksJson = $",\"hooks\":{{\"PreToolUse\":[{{\"matcher\":\"Bash\",\"hooks\":[{{\"type\":\"command\",\"command\":{command}}}]}},{{\"matcher\":\"Edit|Write\",\"hooks\":[{{\"type\":\"command\",\"command\":{consumersCommand}}}]}}]}}";
             }
             File.WriteAllText(path,
                 $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays},\"syncClaudeAiSkills\":false,\"syncClaudeAiPlugins\":false{hooksJson}}}");

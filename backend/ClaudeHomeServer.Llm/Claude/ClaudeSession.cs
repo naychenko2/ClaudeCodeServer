@@ -1002,6 +1002,20 @@ public class ClaudeSession : ILlmSessionAdapter
         return false;
     }
 
+    // Имена окружения хука потребителей (читает скрипт в ClaudeRuntimeSettings). Префикс CCS_ вне
+    // списка ANTHROPIC_*/CLAUDE_*, который сервер вычищает на запуске.
+    internal const string ConsumersHookApiEnv = "CCS_HOOK_API";
+    internal const string ConsumersHookProjectEnv = "CCS_HOOK_PROJECT";
+    internal const string ConsumersHookTokenEnv = "CCS_HOOK_TOKEN";
+    internal const string ConsumersHookTokenPlaceholder = "ccs-hook-token-placeholder";
+
+    // Настоящий сервисный токен вместо заглушки — уже после сигнатуры, только новому процессу.
+    private void BindConsumersHookToken(IDictionary<string, string> env)
+    {
+        if (_codeGraphMcp is null || !env.ContainsKey(ConsumersHookTokenEnv)) return;
+        env[ConsumersHookTokenEnv] = _codeGraphMcp.TokenFactory();
+    }
+
     private string GatewayBaseUrl(string turnId) => $"{_llmGatewayApiUrl!.TrimEnd('/')}/gw/t/{turnId}/llm";
 
     // Настоящий токен шлюза новому процессу: заглушки env заменяются уже после сигнатуры.
@@ -4254,6 +4268,19 @@ public class ClaudeSession : ILlmSessionAdapter
         foreach (var (k, v) in PlaywrightMcpEnv(_browserEnabled, _launcher.IsSandboxed, _rootPath))
             envOverrides[k] = v;
 
+        // Хук PreToolUse «потребители правленого файла» (ClaudeRuntimeSettings): адрес, проект и
+        // токен берёт из окружения процесса. Токен — заглушка до сигнатуры (как у шлюза): JWT
+        // выдаётся заново на каждую сборку и мерцал бы в сигнатуре; настоящий ставит
+        // BindConsumersHookToken новому процессу. Только http на хосте: в песочнице хука нет,
+        // https CLI всё равно не отдаст (ADR-012). Значения не логируем и в снимки не пишем.
+        if (_codeGraphMcp is { } hookGraph && !_launcher.IsSandboxed
+            && hookGraph.ApiUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+        {
+            envOverrides[ConsumersHookApiEnv] = hookGraph.ApiUrl;
+            envOverrides[ConsumersHookProjectEnv] = hookGraph.ProjectId;
+            envOverrides[ConsumersHookTokenEnv] = ConsumersHookTokenPlaceholder;
+        }
+
         // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
         // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели
         // ПОСЛЕ ResolveModelForCli — ровно по той, что уедет в --model: срезанный по
@@ -4512,6 +4539,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Ход через шлюз LLM идёт новым процессом — только теперь выдаём ему настоящий токен:
         // сигнатура посчитана по заглушкам, живому процессу ход отдан выше с его токеном
         var (gatewayTurnId, gatewayToken) = viaGateway ? BindGatewayTurn(envOverrides) : default((string?, string?));
+        BindConsumersHookToken(envOverrides);
 
         // ArgumentList/Args экранирует каждый аргумент корректно (важно для многострочного
         // системного промпта); env-оверрайды собраны выше — они входят в сигнатуру прогона.

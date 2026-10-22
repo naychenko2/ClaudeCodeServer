@@ -48,6 +48,21 @@ public class SessionManagerTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
     private readonly ClaudeSubscriptionPool _subPool;
     private readonly SessionManager _sut;
+    // Подставной шов графа кода: считает запросы прогрева дерева (ADR-003)
+    private readonly RecordingGraphInspector _graphInspector = new();
+
+    private sealed class RecordingGraphInspector : ClaudeHomeServer.Services.CodeGraph.ICodeGraphInspector
+    {
+        public List<string> Warmed { get; } = [];
+        public Task<ClaudeHomeServer.Services.CodeGraph.CodeGraphSnapshot?> GetSnapshotAsync(string rootPath, CancellationToken ct)
+            => Task.FromResult<ClaudeHomeServer.Services.CodeGraph.CodeGraphSnapshot?>(null);
+        public void StartRebuildIfIdle(string rootPath) { }
+        public Task WarmIfNeeded(string rootPath)
+        {
+            lock (Warmed) Warmed.Add(rootPath);
+            return Task.CompletedTask;
+        }
+    }
     private readonly TrackingBroadcaster _broadcaster;
     private readonly List<ServerMessage> _sentMessages = new();
     // Broadcast'ы из фоновых задач (OnMessageAsync запускает HandleTeamTurnEnd fire-and-forget)
@@ -194,7 +209,7 @@ public class SessionManagerTests : IDisposable
         _teamPlanning = new TeamPlanningService(personas, _plannerStub);
         // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
         // сверяет путь с «git worktree list»); остальные тесты его не трогают
-        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster);
+        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster, graphInspector: _graphInspector);
     }
 
     public void Dispose()
@@ -10248,6 +10263,31 @@ public class SessionManagerTests : IDisposable
         info.WorktreePath.Should().Be(Path.GetFullPath(worktree));
         // Ветку не передавали — берётся из самого дерева
         info.WorktreeBranch.Should().Be("wt/тест");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task AttachWorktree_СуществующееДерево_ПрогреваетГрафДереваОдинРаз()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("attach-warm");
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+
+        (await _sut.AttachWorktreeAsync(session.Id, worktree)).Should().BeTrue();
+
+        _graphInspector.Warmed.Should().Equal(Path.GetFullPath(worktree));
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task AttachWorktree_ЧужаяПапка_ГрафНеПрогревается()
+    {
+        var (project, _) = await MkRepoWithWorktreeAsync("attach-warm-alien");
+        var alien = Directory.CreateDirectory(Path.Combine(_tempDir, "alien-warm")).FullName;
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+
+        (await _sut.AttachWorktreeAsync(session.Id, alien)).Should().BeFalse();
+
+        _graphInspector.Warmed.Should().BeEmpty();
     }
 
     [Fact]

@@ -648,6 +648,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly Spend.ISpendCollector? _spend;
     // Граф кода: уборка снимка отдельного дерева чата при его удалении (ADR-003); null — в тестах
     private readonly CodeGraph.CodeGraphService? _codeGraphs;
+    private readonly CodeGraph.ICodeGraphInspector? _graphInspector;
     // Watcher'ы файлов: снятие watcher'а отдельного дерева чата при его удалении; null — в тестах
     private readonly FileWatcherService? _fileWatchers;
     // Шов «ядро → штаб» (этап 4, шаг 2б плана выноса штаба): четыре крючка уведомления
@@ -804,8 +805,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         ISphereDirectory? spheres = null,
         // Опционально (ADR-031, шаг 2.1): шов каталогов плагинов владельца для --plugin-dir.
         // null — подсистема Plugins выключена (IPluginDirSource не в DI): ход идёт без --plugin-dir.
-        Plugins.IPluginDirSource? pluginDirSource = null)
+        Plugins.IPluginDirSource? pluginDirSource = null,
+        // Опционально (в тестах не передаётся): шов графа кода — прогрев графа свежепривязанного
+        // worktree, чтобы первый вызов codegraph_* не упирался в «граф строится»
+        CodeGraph.ICodeGraphInspector? graphInspector = null)
     {
+        _graphInspector = graphInspector;
         _spheres = spheres;
         _pluginDirSource = pluginDirSource;
         _deviceGate = deviceGate;
@@ -8789,6 +8794,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Чат сам создал дерево — владеет им: при удалении чата/проекта дерево сносится
             entry.Info.WorktreeOwned = true;
             _warmup.TryStart(project, wtPath);
+            _ = _graphInspector?.WarmIfNeeded(wtPath);
         }
         else
         {
@@ -8873,6 +8879,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Дерево задачи заводит не сервер, а человек/агент, — прогрев здесь, при первой привязке;
         // уже собранное (obj/ есть) или уже прогретое дерево прогрев пропускает сам
         _warmup.TryStart(project, path);
+        _ = _graphInspector?.WarmIfNeeded(path);
         return true;
     }
 

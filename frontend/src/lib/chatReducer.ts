@@ -51,6 +51,11 @@ export interface ChatState {
   isCompacting: boolean;
   // Мягкое уведомление о последнем компакте (например «нечего сжимать») — не ошибка
   compactNote?: string;
+  // Живое заполнение контекста посреди хода (событие context_usage после каждого ответа
+  // модели): кольцо контекста в шапке двигается по ходу, а не раз в конце. Сбрасывается
+  // на result (итог хода — в result.contextTokens) и на compact_boundary (после сжатия
+  // прежняя цифра неверна). Транзитное — в историю не персистится.
+  liveContextTokens?: number;
   // Live-состояние цикла «до готово» (событие work_loop, флаг work-loop).
   // undefined — событий ещё не было (UI берёт значение из Session.workLoop)
   workLoop?: WorkLoopState;
@@ -765,7 +770,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         }
       }
       items.push({ kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials, contextTokens: msg.contextTokens, durationApiMs: msg.durationApiMs });
-      return { ...prev, isWaiting: false, items };
+      return { ...prev, isWaiting: false, items, liveContextTokens: undefined };
     }
 
     case 'fal_cost':
@@ -806,12 +811,16 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         },
       };
 
+    case 'context_usage':
+      return msg.contextTokens > 0 ? { ...prev, liveContextTokens: msg.contextTokens } : prev;
+
     case 'compact_boundary':
-      // Успешное сжатие — сбрасываем note о «нечего сжимать»
+      // Успешное сжатие — сбрасываем note о «нечего сжимать» и живую цифру контекста
       return {
         ...prev,
         isCompacting: false,
         compactNote: undefined,
+        liveContextTokens: undefined,
         items: [...prev.items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens, postTokens: msg.postTokens }],
       };
 

@@ -152,6 +152,9 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
   // Пункт «Содержание» → раскрыть соответствующую `##`-секцию и докрутить её (макет).
   // Привязка по data-атрибуту секции, а не по индексу `h2` в DOM: заголовок внутри
   // цитаты или списка рендерится как h2, но сканер его не считает — индексы разъехались бы.
+  // Скролл — в эффекте после коммита DOM (дефект приёмки): позиция, посчитанная по
+  // свёрнутому разделу, после раскрытия «уезжает» вниз и раздел остаётся в середине.
+  const [pendingScroll, setPendingScroll] = useState<number | null>(null);
   const scrollToSection = (i: number) => {
     setCollapsed(s => {
       if (!s.has(i)) return s;
@@ -159,14 +162,21 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
       next.delete(i);
       return next;
     });
+    setPendingScroll(i);
+  };
+
+  // Позиция считается уже по раскрытому разделу: эффект выполняется после фиксации DOM.
+  useEffect(() => {
+    if (pendingScroll === null) return;
+    setPendingScroll(null);
     const root = bodyRef.current;
     if (!root) return;
-    const target = root.querySelector(`[data-plan-section="${i}"]`) as HTMLElement | undefined;
+    const target = root.querySelector(`[data-plan-section="${pendingScroll}"]`) as HTMLElement | undefined;
     if (!target) return;
     // Компенсация липкой шапки/вкладок: секция встаёт под ними, а не под верх.
     target.style.scrollMarginTop = '72px';
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
+  }, [pendingScroll]);
 
   const toggleSection = (i: number, expanded: boolean) => setCollapsed(s => {
     const next = new Set(s);

@@ -376,6 +376,24 @@ describe('FeaturePlanReader: свёртка разделов', () => {
     }
   });
 
+  // === 9б. Порядок «раскрыть → докрутить»: прокрука считается по уже раскрытому разделу ===
+  it('докрутка к разделу считается после раскрытия, а не по свёрнутому', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    click(container, 'plan-collapse-all');
+    const target = findNodeByAttr(container, 'data-plan-section', '2');
+    expect(target, 'секция 3').not.toBeNull();
+    // Что видно в DOM в момент прокрутки: подменяем scrollIntoView и снимаем состояние.
+    const atScroll: string[] = [];
+    target!.scrollIntoView = () => { atScroll.push(textNodes(target!).join(' ')); };
+    const items = allNodes(container, 'plan-reader-toc-item');
+    act(() => { (reactProps(items[2])!.onClick as () => void)(); });
+    expect(atScroll.length, 'докрутка не выполнена').toBe(1);
+    // Тело раздела уже в DOM: позиция считается по раскрытому содержимому, а не по одной
+    // строке заголовка (иначе после раскрытия раздел уезжает из-под липких вкладок).
+    expect(atScroll[0], 'прокрука по свёрнутому разделу').toContain('тело 3');
+  });
+
   // === 9. Заголовок раздела выровнен по левому краю (кнопка по умолчанию центрирует) ===
   it('заголовок раздела имеет text-align: left', async () => {
     const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));

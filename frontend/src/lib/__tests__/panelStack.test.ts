@@ -1172,11 +1172,14 @@ describe('ключи плагинов (S3)', () => {
     expect(panelHome('files')).toBe('right');
   });
 
-  it('panelMeta: статические — из каталога, плагины — undefined; panelMetaResolved даёт fallback', () => {
+  it('panelMeta: статические — из каталога, плагины — undefined', () => {
     expect(panelMeta('files')?.title).toBe('Файлы');
     // каталог о плагинах не знает: мету передаёт WorkspacePage пропсом
     expect(panelMeta(K)).toBeUndefined();
     expect(panelMeta(K2)).toBeUndefined();
+  });
+
+  it('panelMetaResolved даёт запасную мету', () => {
     // запасная мета: заголовок из panelId, иконка по умолчанию
     expect(panelMetaResolved(K).title).toBe(K.slice(K.lastIndexOf(':') + 1));
     expect(panelMetaResolved('files').title).toBe('Файлы');

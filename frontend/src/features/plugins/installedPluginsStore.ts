@@ -102,7 +102,12 @@ async function refresh(e: Entry) {
   try {
     const list = await api.plugins.list();
     // Сборка мусора storage.* — только после УСПЕШНОГО списка (ошибка/офлайн/403 уходят в catch)
-    collectOnListLoaded(list.map(p => p.id));
+    // Побочный эффект не отменяет успешный список: сбой сборки — логом (F-д4).
+    try {
+      collectOnListLoaded(list.map(p => p.id));
+    } catch (err) {
+      console.error('[plugin storage] ошибка сборки мусора после загрузки списка:', err);
+    }
     if (e.seq === seq) {
       // Не-хуковый путь (ops/getZones): refresh() идёт ПОСЛЕ await, т.е. вне рендера,
       // где wsPanels.use() (useSyncExternalStore) дал бы «Invalid hook call».

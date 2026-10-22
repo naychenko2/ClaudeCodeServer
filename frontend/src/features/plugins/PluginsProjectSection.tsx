@@ -13,7 +13,7 @@ import { useProjectFeature } from '../../lib/projectCapabilities';
 import { ProjectFeature, type Project } from '../../types';
 import { api, type PluginInfo } from '../../lib/api';
 import { useInstalledPlugins } from './useInstalledPlugins';
-import { eraseOnUninstall } from './pluginStorageLifecycle';
+import { uninstallPlugin } from './pluginStorageLifecycle';
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import { DraftsSection } from './DraftsSection';
 import { pluginDisplayName } from './panelNaming';
@@ -416,11 +416,7 @@ export function PluginsProjectSection({ project, onUpdated, onEdit }: {
           onConfirm={() => {
             const d = deleting;
             setDeleting(null);
-            api.plugins.uninstall(d.id).then(() => { eraseOnUninstall(d.id); void refresh(); onUpdated?.(project); }).catch((e) => {
-              // F-д3 (минор 6): настоящая ошибка стирания не глотается молча —
-              // логируется, чтобы разработчик её видел.
-              console.error('[plugin storage] ошибка стирания данных плагина после удаления:', e);
-            });
+            void uninstallPlugin(d.id, api.plugins.uninstall, () => { void refresh(); onUpdated?.(project); });
           }}
           onCancel={() => setDeleting(null)}
         />

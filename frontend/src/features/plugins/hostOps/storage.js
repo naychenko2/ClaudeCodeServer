@@ -182,6 +182,11 @@ function handleStorageCallImpl({ op, args, granted, ownerId, pluginId, store }) 
   }
 }
 
+// Частичное стирание (хранилище отключилось в середине цикла) не молчит.
+function logPartial(what, removed) {
+  console.warn('[plugin storage] ' + what + ' прервано SecurityError: удалено ключей ' + removed + ', остальные остались');
+}
+
 /**
  * Стереть ровно свой префикс. clear() не вызывается никогда: он гасит токен
  * и шлёт событие storage с key === null во всех вкладках (offline.ts:75-77).
@@ -200,7 +205,10 @@ export function removePluginStorage({ ownerId, pluginId, store }) {
         // F-д3 (минор 5): хранилище отключилось в середине цикла — часть ключей
         // уже удалена, счётчик возвращаем честный (фактически удалённое), цикл
         // останавливаем. Настоящая ошибка — вверх, как раньше.
-        if (e && e.name === 'SecurityError') break;
+        if (e && e.name === 'SecurityError') {
+          logPartial('стирание плагина', removed);
+          break;
+        }
         throw e;
       }
     }
@@ -229,7 +237,10 @@ export function collectStorageGarbage({ ownerId, keepPluginIds, store }) {
         removed++;
       } catch (e) {
         // F-д3 (минор 5): частичный сбой — счётчик по фактически удалённому.
-        if (e && e.name === 'SecurityError') break;
+        if (e && e.name === 'SecurityError') {
+          logPartial('сборка мусора', removed);
+          break;
+        }
         throw e;
       }
     }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   handleStorageCall,
   removePluginStorage,
@@ -379,6 +379,21 @@ describe('ошибки хранилища (инв. 7)', () => {
       expect(store.m.get(keyOf('keep'))).toBe('1');
     });
   }
+
+  // F-д4: частичное стирание не молчит.
+  it('removePluginStorage: SecurityError посреди цикла — счётчик честный, предупреждение с меткой', () => {
+    const store = new MapStore();
+    store.m.set(keyOf('a'), '1');
+    store.m.set(keyOf('b'), '2');
+    const orig = store.removeItem.bind(store);
+    let n = 0;
+    store.removeItem = (k: string) => { if (n++ >= 1) throw sec(); orig(k); };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const removed = removePluginStorage({ ownerId: OWNER, pluginId: PLUGIN, store });
+    expect(removed).toBe(1);
+    expect(warn.mock.calls[0][0]).toContain('[plugin storage]');
+    warn.mockRestore();
+  });
 
   it('не-SecurityError пробрасывается как раньше', () => {
     const store = new MapStore();

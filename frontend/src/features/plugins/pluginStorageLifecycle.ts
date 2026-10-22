@@ -48,3 +48,26 @@ export function collectOnListLoaded(pluginIds: string[], store?: StorageLike): n
   const target = store ?? safeLocalStorage();
   return ownerId && target ? quietSecurity(() => collectStorageGarbage({ ownerId, keepPluginIds: pluginIds, store: target })) : 0;
 }
+
+// Удаление плагина: отказ удаления и отказ стирания — разные ветки и тексты.
+// Стирание — побочный эффект: его сбой не должен срывать обновление списка,
+// поэтому afterUninstall (refresh/onUpdated) идёт вне try стирания.
+export async function uninstallPlugin(
+  pluginId: string,
+  uninstall: (id: string) => Promise<unknown>,
+  afterUninstall: () => void,
+  store?: StorageLike,
+): Promise<void> {
+  try {
+    await uninstall(pluginId);
+  } catch (e) {
+    console.error('[plugins] не удалось удалить плагин:', e);
+    return;
+  }
+  try {
+    eraseOnUninstall(pluginId, store);
+  } catch (e) {
+    console.error('[plugin storage] ошибка стирания данных плагина после удаления:', e);
+  }
+  afterUninstall();
+}

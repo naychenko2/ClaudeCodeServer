@@ -1,9 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const me = vi.hoisted(() => ({ userId: 'u1' as string | null }));
 vi.mock('../../lib/defaultPersona', () => ({ getMeSnapshot: () => ({ userId: me.userId }) }));
 
-const { eraseOnUninstall, collectOnListLoaded } = await import('./pluginStorageLifecycle');
+const { eraseOnUninstall, collectOnListLoaded, uninstallPlugin } = await import('./pluginStorageLifecycle');
 const { handleStorageCall } = await import('./hostOps/storage.js');
 
 function makeStore(init: Record<string, string>) {
@@ -155,5 +155,43 @@ describe('отзыв права: данные остаются, повторна
     call(['storage'], 'set', { key: 'k', value: { a: 1 } });
     expect(call([], 'get', { key: 'k' })).toMatchObject({ ok: false, error: { code: 'denied' } });
     expect(call(['storage'], 'get', { key: 'k' })).toEqual({ ok: true, data: { exists: true, value: { a: 1 } } });
+  });
+});
+
+// F-д4: удаление плагина не зависит от стирания.
+describe('uninstallPlugin', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+  const boom = () => ({
+    ...makeStore({}),
+    get length(): number { throw new TypeError('сломанный геттер'); },
+  });
+
+  // Мутация: убрать try/catch вокруг eraseOnUninstall → afterUninstall не зовётся, тест красный.
+  it('стирание бросило — afterUninstall вызван, ошибка в логе с меткой', async () => {
+    me.userId = 'u1';
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const after = vi.fn();
+    await uninstallPlugin('acme/one', async () => ({}), after, boom());
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toContain('[plugin storage]');
+  });
+  it('отказ удаления: стирание и afterUninstall не вызываются, текст другой', async () => {
+    me.userId = 'u1';
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const s = seed();
+    const after = vi.fn();
+    await uninstallPlugin('acme/one', async () => { throw new Error('500'); }, after, s);
+    expect(after).not.toHaveBeenCalled();
+    expect(s.keys()).toHaveLength(5);
+    expect(spy.mock.calls[0][0]).toContain('не удалось удалить плагин');
+    expect(spy.mock.calls[0][0]).not.toContain('стирания');
+  });
+  it('успех: ключи стёрты, afterUninstall вызван', async () => {
+    me.userId = 'u1';
+    const s = seed();
+    const after = vi.fn();
+    await uninstallPlugin('acme/one', async () => ({}), after, s);
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(s.keys()).toHaveLength(3);
   });
 });

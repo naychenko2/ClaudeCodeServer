@@ -127,6 +127,18 @@ describe('refresh() вне рендера (R-Финал-2, CRITICAL)', () => {
 });
 
 describe('сборка мусора storage.*', () => {
+  // F-д4. Мутация: убрать try/catch вокруг collectOnListLoaded в refresh() → error станет текстом.
+  it('сбой сборки мусора не отменяет успешный список — логом', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    gc.collect.mockImplementationOnce(() => { throw new TypeError('геттер сломан'); });
+    m.list.mockResolvedValue([P1]);
+    await renderProbe();
+    expect(probe?.error).toBeNull();
+    expect(probe?.plugins).toEqual([P1]);
+    expect(spy.mock.calls[0][0]).toContain('[plugin storage]');
+    spy.mockRestore();
+  });
+
   it('успешный список запускает сборку, ошибка списка — нет', async () => {
     gc.collect.mockClear();
     m.list.mockRejectedValue(new Error('offline'));

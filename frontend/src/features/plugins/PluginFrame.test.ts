@@ -116,6 +116,16 @@ beforeEach(() => {
 
 afterAll(() => { uninstallFakeDom(); });
 
+// F-д4: возврат дескриптора после теста с бросающим геттером localStorage.
+// Проверка сразу после восстановления: чтение геттера не бросает. Только так
+// утечка видна — afterEach(unstubAllGlobals) всё равно чистит её к следующему
+// тесту. Мутация: убрать тело — все тесты с бросающим геттером красные.
+function restoreLocalStorage(orig: PropertyDescriptor | undefined) {
+  if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
+  else delete (globalThis as { localStorage?: unknown }).localStorage;
+  expect(() => globalThis.localStorage, 'остался бросающий геттер localStorage').not.toThrow();
+}
+
 describe('PluginFrame: фрейм конкретной панели', () => {
   it('panelHtml вызывается с id/версией плагина и entry панели из манифеста', async () => {
     await renderFrame(P_WITH_PANEL, PANEL_1);
@@ -379,8 +389,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
           source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' },
         });
       } finally {
-        if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
-        else delete (globalThis as { localStorage?: unknown }).localStorage;
+        restoreLocalStorage(orig);
       }
     });
   }
@@ -408,8 +417,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
       expect(logged, 'console.error вызван с меткой [plugin storage]').toBe(true);
     } finally {
       spy.mockRestore();
-      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
-      else delete (globalThis as { localStorage?: unknown }).localStorage;
+      restoreLocalStorage(orig);
     }
   });
 
@@ -430,8 +438,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
-      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
-      else delete (globalThis as { localStorage?: unknown }).localStorage;
+      restoreLocalStorage(orig);
     }
   });
 
@@ -454,18 +461,8 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
-      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
-      else delete (globalThis as { localStorage?: unknown }).localStorage;
+      restoreLocalStorage(orig);
     }
-  });
-
-  // F-д3 (минор 3): тесты с бросающими геттерами возвращают дескриптор —
-  // состояние не течёт между тестами. Мутация (в): оставить где-то выше
-  // геттер без восстановления (путь без stubGlobal, который unstubAllGlobals
-  // не чистит) — этот тест красный.
-  it('после тестов с бросающими геттерами globalThis.localStorage чистый', () => {
-    const d = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
-    expect(d === undefined || !('get' in d), 'не остался чужий бросающий геттер').toBe(true);
   });
 
   // Fail-closed: нет id владельца в состоянии авторизации — unavailable, ни одной

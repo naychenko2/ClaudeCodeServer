@@ -1018,14 +1018,40 @@ public class TaskManagerTests : IDisposable
         var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
             FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
 
+        // Вердик живёт только у закрытой задачи (инвариант Create, шов 63a69b77 п.1) —
+        // поэтому закрытое ревью создаём сразу Done.
         var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
             FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [step.Id],
+            Status: TaskItemStatus.Done,
             Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted, Notes = "принято" }));
 
         review.FeatureId.Should().Be(epic.Id);
         review.Role.Should().Be(TaskRoles.Review);
         review.ReviewOf.Should().BeEquivalentTo([step.Id]);
         review.Verification!.Verdict.Should().Be(TaskVerdicts.Accepted);
+    }
+
+    // Инвариант (шов Александра 63a69b77 п.1, замечание 7): вердикт — только у закрытой задачи.
+    // Update при уходе из Done уже обнуляет Verification/Outcome; Create не должен принимать
+    // вердикт при статусе ≠ Done. Мутация «убрать обнуление» краснит этот тест.
+    [Fact]
+    public void Create_ВердиктПриНеЗакрытойЗадаче_Обнуляется()
+    {
+        var open = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            Status: TaskItemStatus.InProgress,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted, Notes = "проверка" }));
+
+        open.Status.Should().Be(TaskItemStatus.InProgress);
+        open.Verification.Should().BeNull();
+        open.Outcome.Should().BeNull();
+
+        // Другая половина инварианта: закрытая при создании — вердик сохранён (см.
+        // Create_ПоляФичиВалидны_Принята), CompletedAt зафиксирован.
+        var closed = _sut.Create(null, "u", new CreateTaskRequest("финал",
+            Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        closed.Verification!.Verdict.Should().Be(TaskVerdicts.Accepted);
+        closed.CompletedAt.Should().NotBeNull();
     }
 
     // Роли, привязанные к фиче (featureId обязателен): всё, кроме feature/cut/plan.

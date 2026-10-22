@@ -432,6 +432,15 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         ValidateFeatureFields(task.FeatureId, task.Role, task.Verification?.Verdict,
             task.ReviewOf, task.PersonaId, ownerId,
             planSteps: task.PlanSteps, enforceReworkReviewOf: true);
+        // Инвариант (шов Александра 63a69b77 п.1, замечание 7): вердикт и исход дефекта — только
+        // у закрытой задачи, по образцу Update (при уходе из Done обнуляются и они, и CompletedAt).
+        // Без этого незакрытая задача получила бы вердикт, и опора «без CompletedAt остаются только
+        // идущие витки» (FeatureStepAccounting, порядок витков) перестала бы быть правдой.
+        if (task.Status != TaskItemStatus.Done)
+        {
+            task.Verification = null;
+            task.Outcome = null;
+        }
         _tasks[task.Id] = task;
         // created: эпик фичи — первая запись её журнала (журнал точный, только если
         // начинается с created; дочерние задачи фичи created не пишут).

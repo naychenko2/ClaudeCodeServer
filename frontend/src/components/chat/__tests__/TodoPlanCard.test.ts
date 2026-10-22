@@ -142,7 +142,8 @@ describe('TodoPlanView: живая + без фич → полный чек-ли�
     expect(html).toContain('1/3');
     // Все три пункта списка
     expect(html).toContain('Шаг A');
-    expect(html).toContain('делаю B');
+    // Подпись — content, а не activeForm (master 2634fd6d8): активность видна по кружку
+    expect(html).toContain('Шаг B');
     expect(html).toContain('Шаг C');
     // Нет «Подробнее» (это не короткая карточка)
     expect(html).not.toContain('Подробнее');

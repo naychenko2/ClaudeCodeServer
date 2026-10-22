@@ -10,8 +10,9 @@
 // Состояния: hasText=false → «Текста пока нет»; loading (скелет); error + «Повторить»;
 // ok → markdown. Чипы «Макеты в тексте» — по plan.mockupPaths (тап → карточка макета).
 //
-// Длинный документ (6 и больше `##`): «Содержание · N» — на 1280 раскрыто, на 360 свёрнуто
-// (свёртка/развёртка «Свернуть все / Развернуть все» — шаг Ф-plans-b, не здесь).
+// Длинный документ (6 и больше `##`): «Содержание · N» — на 1280 раскрыто, на 360 свёрнуто;
+// каждый `##`-раздел сворачивается отдельно, «Свернуть все / Развернуть все» в панели
+// оглавления. Короткий документ — сплошной текст без свёртки (байт в байт).
 
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, FileText, RotateCw, Scissors, MessageCircle, ChevronDown, type LucideIcon } from 'lucide-react';
@@ -51,14 +52,33 @@ type TextState =
 const _textCache = new Map<string, TextState>();
 const textCacheKey = (p: FeaturePlan) => `${p.taskId}|${p.completedAt ?? ''}`;
 
-// `##`-заголовки markdown (для «Содержание · N»). Только уровень 2, без `###`.
-function extractH2(text: string): string[] {
-  const out: string[] = [];
-  for (const line of text.split('\n')) {
-    const m = /^##\s+(.+?)\s*$/.exec(line);
-    if (m) out.push(m[1]);
+// Разбор длинного документа: преамбула + `##`-секции. Один сканер и для «Содержание»,
+// и для свёртки: строки внутри ```- или ~~~-забора — не заголовки, `##` в код-блоке
+// раздел не начинает. Только уровень 2, без `###`.
+export interface PlanSection {
+  // Текст строки заголовка как в исходном markdown (`## Заголовок`) — её отдаём общему рендеру.
+  head: string;
+  // Заголовок без `##` — подпись пункта «Содержание».
+  title: string;
+  // Тело раздела (без строки заголовка) — общий рендер отдельным вызовом.
+  body: string;
+}
+
+function splitDoc(text: string): { preamble: string; sections: PlanSection[] } {
+  const lines = text.split('\n');
+  const heads: number[] = [];
+  let fence = false;
+  for (let i = 0; i < lines.length; i++) {
+    // Строка-забор меняет состояние, но остаётся в теле раздела: её рендерит общий рендер.
+    if (/^\s*(`{3}|~{3})/.test(lines[i])) { fence = !fence; continue; }
+    if (!fence && /^##\s+/.test(lines[i])) heads.push(i);
   }
-  return out;
+  const sections = heads.map((start, k) => {
+    const block = lines.slice(start, k + 1 < heads.length ? heads[k + 1] : lines.length);
+    const m = /^##\s+(.+?)\s*$/.exec(block[0]);
+    return { head: block[0], title: m ? m[1] : block[0], body: block.slice(1).join('\n').trim() };
+  });
+  return { preamble: lines.slice(0, heads[0] ?? 0).join('\n').trim(), sections };
 }
 
 // Значок роли: 24×24, R 7, цвет по роли (макет §токены).
@@ -99,10 +119,18 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
   const [reload, setReload] = useState(0);
   // «Содержание · N» — раскрыто на 1280, свёрнуто на 360.
   const [tocOpen, setTocOpen] = useState(!isMobile);
+  // Свёрнутые `##`-разделы длинного документа: по умолчанию пустое — все раскрыты.
+  const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
   // Корень тела — для скролла к `##`-секции по пункту «Содержание» (под липкие вкладки).
   const bodyRef = useRef<HTMLDivElement>(null);
-  // Пункт «Содержание» → докрутить соответствующую `##`-секцию (макет).
+  // Пункт «Содержание» → раскрыть соответствующую `##`-секцию и докрутить её (макет).
   const scrollToH2 = (i: number) => {
+    setCollapsed(s => {
+      if (!s.has(i)) return s;
+      const next = new Set(s);
+      next.delete(i);
+      return next;
+    });
     const root = bodyRef.current;
     if (!root) return;
     const target = root.querySelectorAll('h2')[i] as HTMLElement | undefined;
@@ -115,6 +143,8 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
   // Текст по клику: GET /api/tasks/{id} → resultMarkdown. Кэш на время жизни страницы.
   useEffect(() => {
     if (!plan.hasText) return; // «Текста пока нет» — запрос не идёт
+    // Новый документ (или повтор) — свёртка начинается заново: все разделы раскрыты.
+    setCollapsed(new Set());
     const key = textCacheKey(plan);
     // Повтор (reload > 0): сбросить кэш (в т.ч. ошибку), чтобы тянуть заново.
     if (reload > 0) _textCache.delete(key);
@@ -145,8 +175,12 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
     plan.mockupPaths.some(p => p === m.path || m.files.some(f => f.path === p))
   );
 
-  const h2 = state.status === 'ok' ? extractH2(state.text) : [];
+  const doc = state.status === 'ok' ? splitDoc(state.text) : null;
+  const h2 = doc ? doc.sections.map(s => s.title) : [];
   const longDoc = h2.length >= 6;
+  // Кнопки свёртки: не показываем обе активными, когда делать нечего.
+  const allCollapsed = longDoc && doc!.sections.every((_, i) => collapsed.has(i));
+  const allExpanded = !longDoc || collapsed.size === 0;
 
   return (
     <div data-testid="plan-reader" style={{ display: 'flex', flexDirection: 'column', gap: SP.md, fontFamily: FONT.sans }}>
@@ -227,6 +261,28 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
             <span>Содержание · {h2.length}</span>
             <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ transform: tocOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
           </button>
+          {/* Свёртка разделов: видны и при закрытом оглавлении (на 360 оно по умолчанию свёрнуто).
+              «Свернуть все» неактивна, когда всё уже свёрнуто, «Развернуть все» — когда всё раскрыто. */}
+          <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap', padding: `0 ${SP.md}px ${SP.sm}px` }}>
+            <Button
+              size={isMobile ? 'md' : 'xs'}
+              variant="ghost"
+              dataTestId="plan-collapse-all"
+              disabled={allCollapsed}
+              onClick={() => setCollapsed(new Set(doc!.sections.map((_, i) => i)))}
+            >
+              Свернуть все
+            </Button>
+            <Button
+              size={isMobile ? 'md' : 'xs'}
+              variant="ghost"
+              dataTestId="plan-expand-all"
+              disabled={allExpanded}
+              onClick={() => setCollapsed(new Set())}
+            >
+              Развернуть все
+            </Button>
+          </div>
           {tocOpen && (
             <ol style={{ margin: 0, padding: `${SP.xs}px ${SP.md}px ${SP.sm}px`, listStyle: 'none', display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: `${SP.xs}px ${SP.md}px` }}>
               {h2.map((t, i) => (
@@ -295,7 +351,41 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
       ) : (
         <>
           <div ref={bodyRef} data-testid="plan-reader-body" style={{ fontSize: FS.base, lineHeight: 1.6, color: C.textPrimary }}>
-            <MarkdownContent text={state.text} />
+            {!longDoc ? (
+              // Короткий документ — сплошной текст, без свёртки (как раньше).
+              <MarkdownContent text={state.text} />
+            ) : (
+              // Длинный: преамбула и каждый `##`-раздел — отдельным вызовом общего рендера.
+              // Свёрнутый раздел отдаёт рендеру только строку заголовка: тело скрыто.
+              <>
+                {doc!.preamble && <MarkdownContent text={doc!.preamble} />}
+                {doc!.sections.map((sec, i) => {
+                  const expanded = !collapsed.has(i);
+                  return (
+                    <div key={i} data-testid="plan-section">
+                      <button
+                        type="button"
+                        data-testid="plan-section-head"
+                        aria-expanded={expanded}
+                        title={expanded ? 'Свернуть раздел' : 'Развернуть раздел'}
+                        onClick={() => setCollapsed(s => {
+                          const next = new Set(s);
+                          if (expanded) next.add(i); else next.delete(i);
+                          return next;
+                        })}
+                        style={{
+                          width: '100%', display: 'block', border: 'none', background: 'transparent',
+                          padding: 0, cursor: 'pointer',
+                        }}
+                      >
+                        <MarkdownContent text={sec.head} />
+                      </button>
+                      {expanded && sec.body && <MarkdownContent text={sec.body} />}
+                    </div>
+                  );
+                })}
+              </>
+            )}
           </div>
           {/* Подвал: текст — итог задачи, здесь только чтение (макет). */}
           <div data-testid="plan-reader-footer" style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: SP.md, paddingTop: SP.sm, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>

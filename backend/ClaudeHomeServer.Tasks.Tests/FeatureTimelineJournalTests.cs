@@ -299,6 +299,41 @@ public class FeatureTimelineJournalTests
         tl.Totals.LongestWaitMinutes.Should().Be(30);
     }
 
+    // ── 3c. Граница `to` ровно на конце ожидания: без off-by-one ───────────────────────────
+
+    // Фича закрыта в 08:30 (to = 08:30), waiting_cleared — ровно в 08:30: конец ожидания
+    // совпадает с границей окна. Обрезка `wEnd <= to` на границе noop: интервал [08:00, 08:30]
+    // считается целиком (30 мин), LongestWait = 30 = Elapsed. Сдвиг границы на минуту
+    // (обрезка до to − 1 мин) дал бы LongestWait = 29 при Waiting = 30 — противоречие,
+    // которую этот тест ловит (мутация краснит его).
+    [Fact]
+    public void Build_ГраницаTo_РовноНаКонцеОжидания_БезOffByOne()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var closedAt = new DateTime(2026, 10, 1, 8, 30, 0);
+        var epic = Epic("epic");
+        epic.Status = TaskItemStatus.Done;
+        epic.CompletedAt = closedAt;
+        var s1 = Child("s1", "epic");
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("waiting", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "s1"),
+            Entry("waiting_cleared", closedAt, taskId: "s1"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.To.Should().Be(closedAt);
+        tl.Totals.ElapsedMinutes.Should().Be(30);
+        // Ожидание [08:00, 08:30] = 30 мин: конец ровно на `to` не обрезается и не сдвигается.
+        tl.Totals.WaitingMinutes.Should().Be(30);
+        tl.Totals.WaitingCount.Should().Be(1);
+        tl.Totals.LongestWaitMinutes.Should().Be(30);
+        // Инвариант: сумма видов = elapsed.
+        (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
+            + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
+    }
+
     // ── 4. Ожидание устройства (device_wait…device_wait_cleared) → как waiting ───────────────
 
     // Журнал: created + device_wait 10:00 → device_wait_cleared 11:00 (60 мин). Без work
@@ -982,6 +1017,37 @@ public class FeatureTimelineJournalTests
 
         // Сумма started-периодов 60 с → один CeilMinutes = 1 мин (per-task ceil дал бы 2).
         tl.Totals.AgentsSumMinutes.Should().Be(1, "сумма 60 с → ceil = 1, не 2 (per-task)");
+    }
+
+    // ── Дефект 2c5e5d87 (проба карточки): WaitingCount и инвариант при ожидании ровно в from ──
+
+    // Проба из карточки дефекта: created 08:00, waiting 08:00 (ровно в from), waiting_cleared
+    // 08:10, now = 08:10. Прежнее `e.At > from` теряло эпизод: WaitingMinutes = 0, WaitingCount = 0,
+    // 10 минут уходили в idle. После фикса: WaitingMinutes = 10, WaitingCount = 1, сумма видов
+    // = elapsed (инвариант). Мутация «вернуть >» → 0 ≠ 10 → краснеет.
+    [Fact]
+    public void Build_Дефект2c5e5d87_ПробаКарточки_Count1_Инвариант()
+    {
+        var t0 = new DateTime(2026, 10, 1, 8, 0, 0);
+        var now = t0.AddMinutes(10); // 08:00 → 08:10
+        var epic = Epic("epic"); // CreatedAt = 08:00 = from
+        var s1 = Child("s1", "epic");
+
+        var journal = Journal(
+            Entry("created", t0, taskId: "epic"),
+            Entry("waiting", t0, taskId: "s1"),
+            Entry("waiting_cleared", t0.AddMinutes(10), taskId: "s1"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.Totals.ElapsedMinutes.Should().Be(10);
+        tl.Totals.WaitingMinutes.Should().Be(10,
+            "ожидание ровно в from (08:00) не теряется (прежнее > давало 0)");
+        tl.Totals.WaitingCount.Should().Be(1);
+        tl.Totals.LongestWaitMinutes.Should().Be(10);
+        // Сумма видов = elapsed: минуты ожидания не «стекают» в idle.
+        (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
+            + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
     }
 
     // ── Дефект 2c5e5d87: ожидание ровно в `from` не отбрасывается ─────────────────────────────

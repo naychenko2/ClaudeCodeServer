@@ -24,6 +24,15 @@ export function panelDisplayName(plugin: PluginInfo, panel: PluginPanelView): st
   return panel.title || humanizeId(plugin.id);
 }
 
+// Human-readable имя плагина в карточке раздела «Плагины»: title первой объявленной
+// панели (для «Погоды» — «Погода», а не «Weather»), иначе — humanizeId. Та же цепочка,
+// что у panelDisplayName, только без аргумента панели: у плагина без панелей или с
+// пустым title поведение остаётся прежним.
+export function pluginDisplayName(plugin: PluginInfo): string {
+  const title = plugin.contributes?.panels?.find(p => p.title)?.title;
+  return title || humanizeId(plugin.id);
+}
+
 // Набор иконок для карточек плагинов. Манифест пакета (PluginPanel) несёт только
 // id/slot/entry/title — иконки в нём нет, а бэк (не трогаем) её не поднимает.
 // Поэтому иконку выводим из id плагина детерминированно: разные плагины в рельсе

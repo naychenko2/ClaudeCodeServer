@@ -22,17 +22,11 @@ import {
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import { DraftCard } from './DraftCard';
 import { useDraftCard } from './useDraftCard';
+import { humanizeId } from './panelNaming';
 
-// Человекочитаемое имя из id пакета {publisher}/{slug}: slug → слова с большой буквы
-// (та же логика, что в PluginsProjectSection).
-function humanizeId(id: string): string {
-  const slug = id.split('/').pop() ?? id;
-  return slug.split('-').filter(Boolean)
-    .map(w => w[0].toUpperCase() + w.slice(1))
-    .join(' ') || id;
-}
-
-// Результат «Принять» → данные существующего диалога согласия. Режим «установить»:
+// Результат «Принять» → данные существующего диалога согласия. Имя — из общей
+// цепочки panelNaming; в PluginDraftAcceptResult панелей нет (бэк их не отдаёт),
+// поэтому здесь всегда fallback humanizeId. Режим «установить»:
 // права по умолчанию — все, кроме net:* (решение В1); consentRequired → newPermissions.
 function toConsentDataFromAccept(res: PluginDraftAcceptResult): PluginConsentData {
   return {

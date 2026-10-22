@@ -15,18 +15,11 @@ import { api, type PluginInfo } from '../../lib/api';
 import { useInstalledPlugins } from './useInstalledPlugins';
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import { DraftsSection } from './DraftsSection';
+import { pluginDisplayName } from './panelNaming';
 
 // === Секция «Плагины» в настройках проекта (экран 1 макетов, ADR-031, флаг plugins-mvp) ===
 // Самодостаточная: сама грузит список (useInstalledPlugins), сама ведёт установку/удаление/
 // выдачу прав. По образцу McpProjectSection: возвращает null, когда фича выключена.
-
-// Человекочитаемое имя из id пакета {publisher}/{slug}: slug → слова с большой буквы.
-function humanizeId(id: string): string {
-  const slug = id.split('/').pop() ?? id;
-  return slug.split('-').filter(Boolean)
-    .map(w => w[0].toUpperCase() + w.slice(1))
-    .join(' ') || id;
-}
 
 // Данные диалога согласия из записи установки. Вклады (contributes) в DTO бэка нет —
 // не показываем. Флаг «обязательный» (В2) DTO тоже не отдаёт (только {name, set, updatedAt}),
@@ -35,7 +28,7 @@ function humanizeId(id: string): string {
 function toConsentData(info: PluginInfo, mode: 'install' | 'modify'): PluginConsentData {
   return {
     id: info.id,
-    name: humanizeId(info.id),
+    name: pluginDisplayName(info),
     version: info.version,
     path: info.source.startsWith('upload:') ? info.source.slice('upload:'.length) : undefined,
     sha256: info.sha256 ? info.sha256.slice(0, 8) : undefined,
@@ -99,7 +92,8 @@ function PluginRow({ plugin, isMobile, onToggle, onOpenConsent, onDelete, onRefr
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const status = rowStatus(plugin);
-  const name = humanizeId(plugin.id);
+  // Human-readable имя: title объявленной панели, иначе humanizeId (panelNaming — один источник)
+  const name = pluginDisplayName(plugin);
   const isDev = plugin.version === 'dev';
 
   const openMenu = () => {
@@ -413,7 +407,7 @@ export function PluginsProjectSection({ project, onUpdated, onEdit }: {
       {/* Подтверждение удаления */}
       {deleting && (
         <ConfirmDialog
-          title={`Удалить «${humanizeId(deleting.id)}»?`}
+          title={`Удалить «${pluginDisplayName(deleting)}»?`}
           subtitle="Пакет и выданные права будут удалены. Секреты останутся в архиве владельца."
           confirmLabel="Удалить"
           confirmVariant="danger"

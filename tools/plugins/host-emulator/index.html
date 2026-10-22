@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Хост-эмулятор панелей плагинов</title>
+<!--
+  Хост-эмулятор (шаг A2 плана «Погода»): собирает и гоняет панель плагина в браузере
+  БЕЗ установки. Инструмент разработки, в пакет плагина не входит (allow-list пакета —
+  только panel/** и манифесты).
+
+  Верхнее окно эмулятора играет хост:
+  - двухуровневый фрейм и srcdoc — точная копия сборки хоста (panelSrcdoc.ts):
+    оболочка с PANEL_CSP + внутренний iframe sandbox="allow-scripts";
+  - шим кита (plugin-kit.js + theme.css + font.css + controls.css) берётся из
+    frontend/public/plugin-kit/ — тот же, что вживую;
+  - токены --cc-*: эмулятор подключает frontend/src/lib/theme.css себе, ставит
+    data-theme и читает computed --c-* по копии CC_TOKEN_MAP (panelTokens.ts);
+  - сообщения моста: ready → init; call net.fetch → window.fetch (или фикстуры)
+    с ответом {status, headers, body}; отказ по праву — тем же текстом, что сервер
+    (PluginBridge/PluginNetProxy), и плашка «Нет права …» над панелью;
+  - высоту фрейма ставит по resize (кламп 48..20000), как хост.
+
+  Платформенный код не меняется — здесь только его минимальная переносимая копия.
+-->
+<style>
+  /* UI эмулятора — на токенах темы приложения (--c-*), которые эмулятор сам
+     подключает из frontend/src/lib/theme.css. Сырого hex в интерфейсе нет. */
+  body { margin: 0; background: var(--c-bg-main); color: var(--c-text-primary); font-family: system-ui, sans-serif; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: var(--c-bg-panel); border-bottom: 1px solid var(--c-border); }
+  .toolbar label { font-size: 11px; color: var(--c-text-muted); }
+  .toolbar select, .toolbar input { font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-bg-card); color: var(--c-text-primary); }
+  .toolbar button { font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-bg-card); color: var(--c-text-primary); cursor: pointer; }
+  .status { font-size: 11px; color: var(--c-text-muted); font-family: monospace; }
+  .stage { padding: 16px; }
+  .card { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 8px; overflow: hidden; }
+  .notice { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--c-bg-selected); border-bottom: 1px solid var(--c-warning); color: var(--c-warning-text); font-size: 12px; }
+  .scroll { overflow: auto; padding: 4px 12px 16px; }
+  .log { padding: 12px 16px; font-family: monospace; font-size: 11px; color: var(--c-text-muted); }
+  .log p { margin: 2px 0; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <label>панель <input id="in-panel" size="34"></label>
+    <label>права
+      <select id="in-grant">
+        <option value="all">оба (прогноз + геокодер)</option>
+        <option value="forecast">только прогноз</option>
+        <option value="none">ничего</option>
+      </select>
+    </label>
+    <label>сбой
+      <select id="in-fail">
+        <option value="">нет</option>
+        <option value="upstream">upstream</option>
+        <option value="timeout">timeout</option>
+        <option value="limit">limit</option>
+        <option value="status400">HTTP 400</option>
+      </select>
+    </label>
+    <label>задержка <input id="in-delay" type="number" min="0" step="100" style="width:70px"></label>
+    <label><input id="in-fixtures" type="checkbox"> фикстуры</label>
+    <label>ширина
+      <select id="in-width">
+        <option value="rail">рельс</option>
+        <option value="320">320</option>
+        <option value="390">390</option>
+      </select>
+    </label>
+    <button id="btn-theme" type="button">тема</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <div class="stage">
+    <div class="card" id="card">
+      <div class="notice" id="notice" hidden>Нет права …</div>
+      <div class="scroll"><iframe id="frame" sandbox="allow-scripts" title="Панель плагина"></iframe></div>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+
+<script>
+'use strict';
+
+/* === Копии платформенных констант (panelSrcdoc.ts, panelTokens.ts, bridge.ts) === */
+
+// CSP оболочки и панели (ADR-031 §3.1) — дословно из panelSrcdoc.ts.
+const PANEL_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+  "img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; " +
+  "base-uri 'none'; frame-src 'none'";
+
+// Стили оболочки (panelSrcdoc.ts SHELL_STYLE).
+const SHELL_STYLE =
+  'html,body{margin:0;height:100%;overflow:hidden}' +
+  ' iframe{display:block;border:0;width:100%;height:100%}';
+
+// --cc-* → --c-* (panelTokens.ts CC_TOKEN_MAP) — копия для эмулятора.
+const CC_TOKEN_MAP = {
+  '--cc-bg':            '--c-bg-card',
+  '--cc-fg':            '--c-text-primary',
+  '--cc-fg-muted':      '--c-text-muted',
+  '--cc-accent':        '--c-accent',
+  '--cc-accent-fg':     '--c-on-accent',
+  '--cc-accent-soft':   '--c-accent-soft',
+  '--cc-border':        '--c-border',
+  '--cc-bg-inset':      '--c-bg-inset',
+  '--cc-bg-panel':      '--c-bg-panel',
+  '--cc-bg-selected':   '--c-bg-selected',
+  '--cc-surface':       '--c-bg-white',
+  '--cc-success':       '--c-success',
+  '--cc-warning':       '--c-warning',
+  '--cc-danger':        '--c-danger',
+  '--cc-info':          '--c-info',
+  '--cc-success-text':  '--c-success-text',
+  '--cc-warning-text':  '--c-warning-text',
+  '--cc-danger-text':   '--c-danger-text',
+  '--cc-danger-border': '--c-danger-border',
+};
+
+// Кламп высоты контента (bridge.ts clampContentHeight).
+function clampContentHeight(h) {
+  return Math.min(20000, Math.max(48, Math.round(h)));
+}
+
+// Экранирование srcdoc (panelSrcdoc.ts escapeSrcdoc).
+function escapeSrcdoc(s) {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+// <style> токенов панели (panelSrcdoc.ts buildTokensStyle).
+function buildTokensStyle(tokens) {
+  const names = Object.keys(tokens);
+  if (names.length === 0) return '';
+  const rules = names.map(n => '  ' + n + ': ' + tokens[n] + ';').join('\n');
+  return ':root {\n' + rules + '\n}';
+}
+
+// Сборка документа оболочки — как buildPanelSrcdoc в хосте.
+function buildShell(panelHtml, theme, shimJs, shimCss, tokens) {
+  const themeAttr = theme === 'dark' ? ' data-cc-theme="dark"' : '';
+  const tokensStyle = buildTokensStyle(tokens);
+  const inner =
+    '<!doctype html><html' + themeAttr + '><head>' +
+    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
+    '<style>' + shimCss + '</style>' +
+    (tokensStyle ? '<style id="cc-tokens">' + tokensStyle + '</style>' : '') +
+    // <\/script> — экранированный закрывающий тег: HTML-парсер оборвал бы этот
+    // скрипт на первом неэкранированном «/script-теге» внутри строки.
+    '<script>' + shimJs + '<\/script>' +
+    '</head><body>' + panelHtml + '</body></html>';
+  return (
+    '<!doctype html><html><head>' +
+    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
+    '<style>' + SHELL_STYLE + '</style>' +
+    '</head><body>' +
+    '<iframe sandbox="allow-scripts" srcdoc="' + escapeSrcdoc(inner) + '"></iframe>' +
+    '</body></html>'
+  );
+}
+
+/* === Конфигурация из URL === */
+
+const params = new URLSearchParams(location.search);
+const GRANTS = {
+  all: ['net:api.open-meteo.com', 'net:geocoding-api.open-meteo.com'],
+  forecast: ['net:api.open-meteo.com'],
+  none: [],
+};
+const cfg = {
+  panel: params.get('panel') || '/tools/plugins/weather/panel/index.html',
+  grant: GRANTS[params.get('grant')] ? params.get('grant') : 'all',
+  fail: ['upstream', 'timeout', 'limit', 'status400'].includes(params.get('fail')) ? params.get('fail') : '',
+  delay: Math.max(0, parseInt(params.get('delay') || '0', 10) || 0),
+  fixtures: params.get('fixtures') === '1',
+  theme: params.get('theme') === 'dark' ? 'dark' : 'light',
+  width: ['rail', '320', '390'].includes(params.get('width')) ? params.get('width') : 'rail',
+  selftest: params.get('selftest') === '1',
+};
+
+/* === Хост: чтение токенов текущей темы === */
+
+function hostTokens() {
+  const cs = getComputedStyle(document.documentElement);
+  const tokens = {};
+  for (const cc of Object.keys(CC_TOKEN_MAP)) {
+    const v = cs.getPropertyValue(CC_TOKEN_MAP[cc]).trim();
+    if (v) tokens[cc] = v;
+  }
+  return tokens;
+}
+
+/* === Мост: сообщения хоста ↔ панели === */
+
+const frame = document.getElementById('frame');
+const notice = document.getElementById('notice');
+const logEl = document.getElementById('log');
+
+function panelWindow() {
+  return frame.contentWindow ? frame.contentWindow.frames[0] : null;
+}
+
+function postToPanel(msg) {
+  const win = panelWindow();
+  if (!win) return;
+  msg.source = 'ccs-host';
+  msg.v = 1;
+  win.postMessage(msg, '*');
+}
+
+function logLine(text) {
+  const p = document.createElement('p');
+  p.textContent = new Date().toLocaleTimeString('ru-RU') + '  ' + text;
+  logEl.prepend(p);
+}
+
+function showDenied(message) {
+  const prefix = 'Нет права: ';
+  const key = message.startsWith(prefix) ? message.slice(prefix.length) : message;
+  notice.textContent = 'Нет права ' + key;
+  notice.hidden = false;
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ''; }
+}
+
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || typeof d !== 'object' || d.source !== 'ccs-plugin' || d.v !== 1) return;
+  if (e.source !== panelWindow()) return; // сообщения только из окна панели
+
+  if (d.type === 'ready') {
+    postToPanel({
+      type: 'init',
+      plugin: { id: 'local-an/weather', version: '0.1.0' },
+      slot: 'sidebar',
+      context: { projectId: null },
+      theme: cfg.theme,
+      locale: 'ru',
+      granted: GRANTS[cfg.grant],
+      tokens: hostTokens(),
+    });
+  } else if (d.type === 'call') {
+    handleCall(d.id, d.op, d.args || {});
+  } else if (d.type === 'resize') {
+    // Высота контента — как в хосте: кламп 48..20000, фрейм растягивается под неё.
+    const h = clampContentHeight(d.height);
+    frame.style.height = h + 'px';
+    if (d.height > 20000) logLine('× высота панели ' + Math.round(d.height) + ' px обрезана до 20000 px');
+  } else if (d.type === 'selftest') {
+    // Самопроверка (selftest=1): панель сама сообщает результат тестовых вызовов.
+    window.__emulator = window.__emulator || {};
+    window.__emulator.selftest = d.data;
+    logLine('selftest: ' + JSON.stringify(d.data));
+  }
+});
+
+/* === net.fetch: права, сбои, фикстуры, сеть === */
+
+const fixtureCache = new Map();
+
+async function fetchText(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(path + ': HTTP ' + r.status);
+  return r.text();
+}
+
+async function fixtureText(path) {
+  if (!fixtureCache.has(path)) fixtureCache.set(path, await fetchText(path));
+  return fixtureCache.get(path);
+}
+
+// Фикстуры по §1 плана: ответ выбирается по хосту и параметрам запроса.
+function fixtureFor(url) {
+  const u = new URL(url);
+  const FIX = '/tools/plugins/weather/fixtures/';
+  if (u.hostname === 'geocoding-api.open-meteo.com') {
+    const name = (u.searchParams.get('name') || '').toLowerCase();
+    if (name.includes('ярославл')) return FIX + 'geocode-yaroslavl.json';
+    if (name.includes('ярц')) return FIX + 'geocode-arts.json';
+    return FIX + 'geocode-empty.json';
+  }
+  if (u.hostname === 'api.open-meteo.com') {
+    if ((u.searchParams.get('latitude') || '').includes(',')) return FIX + 'forecast-batch.json';
+    return FIX + 'forecast-yaroslavl.json';
+  }
+  return null;
+}
+
+function respond(id, res) {
+  const send = () => {
+    if (res.ok) postToPanel({ type: 'result', id, ok: true, data: res.data });
+    else {
+      postToPanel({ type: 'result', id, ok: false, error: res.error });
+      if (res.error.code === 'denied') showDenied(res.error.message);
+    }
+  };
+  if (cfg.delay > 0) setTimeout(send, cfg.delay); else send();
+}
+
+async function handleCall(id, op, args) {
+  logLine('→ ' + op + (args.url ? ' ' + args.url : ''));
+  let res;
+
+  if (op !== 'net.fetch') {
+    res = { ok: false, error: { code: 'unavailable', message: 'Обработчик не зарегистрирован: ' + String(op).split('.')[0] } };
+  } else {
+    // Отказ по праву — тексты ровно как у сервера (PluginBridge / PluginNetProxy).
+    const granted = GRANTS[cfg.grant];
+    if (!granted.some(g => g.startsWith('net:'))) {
+      res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' } };
+    } else {
+      // Точный хост из granted — как PluginNetProxy: право net:{host} должно
+      // совпадать с хостом url (порт из права не несём).
+      const host = hostOf(args.url);
+      if (!granted.some(g => g.slice(4).split(':')[0].toLowerCase() === host)) {
+        res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } };
+      }
+    }
+
+    if (!res) {
+      if (cfg.fail === 'upstream') res = { ok: false, error: { code: 'upstream', message: 'Вышестоящий сервис не ответил' } };
+      else if (cfg.fail === 'timeout') res = { ok: false, error: { code: 'timeout', message: 'Таймаут запроса' } };
+      else if (cfg.fail === 'limit') res = { ok: false, error: { code: 'limit', message: 'Превышено число запросов на плагин в минуту' } };
+      else if (cfg.fail === 'status400') {
+        // Ошибочный HTTP — как успех net.fetch: {status, headers, body} (см. §1 плана).
+        res = { ok: true, data: { status: 400, headers: { 'content-type': 'application/json' }, body: await fixtureText('/tools/plugins/weather/fixtures/error-400.json') } };
+      } else if (cfg.fixtures) {
+        const f = fixtureFor(args.url);
+        if (!f) res = { ok: false, error: { code: 'invalid', message: 'Нет фикстуры для url: ' + args.url } };
+        else res = { ok: true, data: { status: 200, headers: { 'content-type': 'application/json' }, body: await fixtureText(f) } };
+      } else {
+        try {
+          const r = await fetch(args.url, { method: (args.method || 'GET').toUpperCase(), headers: args.headers || {} });
+          res = { ok: true, data: { status: r.status, headers: Object.fromEntries(r.headers.entries()), body: await r.text() } };
+        } catch (e) {
+          res = { ok: false, error: { code: 'upstream', message: e.message } };
+        }
+      }
+    }
+  }
+
+  logLine(res.ok
+    ? '← ' + res.data.status + ' (' + (res.data.body || '').length + ' bytes)'
+    : '← ' + res.error.code + ': ' + res.error.message);
+  respond(id, res);
+}
+
+/* === Тема и ширина === */
+
+function setTheme(theme) {
+  cfg.theme = theme;
+  document.documentElement.setAttribute('data-theme', theme);
+  params.set('theme', theme);
+  history.replaceState(null, '', location.pathname + '?' + params.toString());
+  postToPanel({ type: 'theme', theme, tokens: hostTokens() });
+  updateStatus();
+}
+
+function applyWidth() {
+  const card = document.getElementById('card');
+  if (cfg.width === 'rail') { card.style.maxWidth = '420px'; }
+  else { card.style.width = cfg.width + 'px'; }
+}
+
+function updateStatus() {
+  document.getElementById('status').textContent =
+    'права: ' + (GRANTS[cfg.grant].join(', ') || 'нет') +
+    ' · тема: ' + cfg.theme + ' · ширина: ' + cfg.width +
+    (cfg.fixtures ? ' · фикстуры' : '') + (cfg.delay ? ' · задержка ' + cfg.delay + ' мс' : '');
+}
+
+/* === Самопроверка (selftest=1): тестовый скрипт, добавляемый в документ панели === */
+
+const SELFTEST_JS =
+  '(function(){' +
+  '  function report(o){ try { (window.top||window.parent).postMessage({source:"ccs-plugin",v:1,type:"selftest",data:o},"*"); } catch(e){} }' +
+  '  var out = {};' +
+  '  window.ccsPlugin.call("net.fetch", {url:"https://api.open-meteo.com/v1/forecast?latitude=57.62987&longitude=39.87368&timezone=auto"})' +
+  '    .then(function(r){ out.forecast = {status: r.status, bytes: (r.body||"").length}; })' +
+  '    .catch(function(e){ out.forecast = {code: e.code, message: e.message}; });' +
+  '  window.ccsPlugin.call("net.fetch", {url:"https://geocoding-api.open-meteo.com/v1/search?name=%D0%AF%D1%80%D1%86&count=10&language=ru&format=json"})' +
+  '    .then(function(r){ out.geocode = {status: r.status, bytes: (r.body||"").length}; })' +
+  '    .catch(function(e){ out.geocode = {code: e.code, message: e.message}; });' +
+  '  fetch("https://api.open-meteo.com/v1/forecast?latitude=57.62987&longitude=39.87368&timezone=auto")' +
+  '    .then(function(r){ out.directFetch = "ok " + r.status; })' +
+  '    .catch(function(e){ out.directFetch = "fail: " + e.message; });' +
+  '  setTimeout(function(){ out.granted = window.ccsPlugin.state.granted; out.theme = window.ccsPlugin.state.theme; report(out); }, 1500);' +
+  '})();';
+
+/* === Запуск === */
+
+async function main() {
+  // Тема хоста: тот же theme.css, что у приложения; data-theme — как в themeMode.ts.
+  const hostThemeCss = await fetchText('/frontend/src/lib/theme.css');
+  const st = document.createElement('style');
+  st.textContent = hostThemeCss;
+  document.head.appendChild(st);
+  document.documentElement.setAttribute('data-theme', cfg.theme);
+
+  // Шим кита — те же файлы, что подставляет хост (bridge.ts): theme + font + controls.
+  const shimJs = await fetchText('/frontend/public/plugin-kit/plugin-kit.js');
+  const shimCss = [
+    await fetchText('/frontend/public/plugin-kit/theme.css'),
+    await fetchText('/frontend/public/plugin-kit/font.css'),
+    await fetchText('/frontend/public/plugin-kit/controls.css'),
+  ].join('\n');
+
+  let panelHtml = await fetchText(cfg.panel);
+  if (cfg.selftest) {
+    panelHtml = panelHtml.replace('</body>', '<script>' + SELFTEST_JS + '<\/script></body>');
+  }
+
+  frame.srcdoc = buildShell(panelHtml, cfg.theme, shimJs, shimCss, hostTokens());
+  applyWidth();
+
+  document.getElementById('in-panel').value = cfg.panel;
+  document.getElementById('in-grant').value = cfg.grant;
+  document.getElementById('in-fail').value = cfg.fail;
+  document.getElementById('in-delay').value = cfg.delay;
+  document.getElementById('in-fixtures').checked = cfg.fixtures;
+  document.getElementById('in-width').value = cfg.width;
+  document.getElementById('btn-theme').textContent = cfg.theme === 'dark' ? 'светлая' : 'тёмная';
+  updateStatus();
+
+  window.__emulator = { cfg, granted: GRANTS[cfg.grant] };
+  logLine('хост-эмулятор: панель ' + cfg.panel + ' · права: ' + (GRANTS[cfg.grant].join(', ') || 'нет'));
+}
+
+/* Переключатели: всё, кроме темы, перезагружает страницу с новым URL. */
+function reload(next) {
+  const p = new URLSearchParams(location.search);
+  for (const [k, v] of Object.entries(next)) {
+    if (v === '' || v === null) p.delete(k); else p.set(k, v);
+  }
+  location.search = p.toString();
+}
+
+document.getElementById('in-panel').addEventListener('change', e => reload({ panel: e.target.value }));
+document.getElementById('in-grant').addEventListener('change', e => reload({ grant: e.target.value }));
+document.getElementById('in-fail').addEventListener('change', e => reload({ fail: e.target.value }));
+document.getElementById('in-delay').addEventListener('change', e => reload({ delay: e.target.value }));
+document.getElementById('in-fixtures').addEventListener('change', e => reload({ fixtures: e.target.checked ? '1' : '' }));
+document.getElementById('in-width').addEventListener('change', e => reload({ width: e.target.value }));
+document.getElementById('btn-theme').addEventListener('click', () => setTheme(cfg.theme === 'dark' ? 'light' : 'dark'));
+
+main().catch(e => logLine('× ' + e.message));
+</script>
+</body>
+</html>

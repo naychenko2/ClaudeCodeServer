@@ -102,6 +102,13 @@ function renderConsent(overrides: Partial<PluginConsentData> = {}, mode: 'instal
 }
 
 describe('ConsentDialog (рендер)', () => {
+  it('storage: один пункт «Хранить данные в этом браузере» с пояснением', () => {
+    const html = renderConsent({ requested: ['storage'] }, 'install');
+    expect(html).toContain('Хранить данные в этом браузере');
+    expect(html).toContain('До 128 КБ. На другом устройстве их не будет. Их может прочитать любой, кто работает в этом браузере');
+    expect((html.match(/aria-checked=/g) ?? []).length).toBe(1);
+  });
+
   it('net:* по умолчанию снят, прочие права — отмечены', () => {
     const html = renderConsent({}, 'install');
     // ровно один снятый чекбокс (net:*) и один отмеченный (notes:read)

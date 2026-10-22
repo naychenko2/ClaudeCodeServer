@@ -31,7 +31,8 @@
 //   10. Нет права на геокодер — человеческий текст и бейдж с ключом права,
 //       главный экран работает (C3-д).
 //   11. Сброс запроса ниже двух символов гасит предыдущий поиск (minor M3).
-//   12. Выход из режима в пределах дебаунса гасит висящий таймер (minor M4).
+//   12. Выход из режима по «Назад» не оставляет висящего дебаунса: ни одного
+//       запроса к геокодеру — и без повторного открытия режима (minor M4, major MAJOR-1).
 //   13. Выданное позже право на геокодер оживляет поиск при повторном
 //       открытии — липкая плашка отказа снимается (minor M5).
 //   14. Хранилище отключено: эмулятор отвечает «unavailable», а не роняет
@@ -453,6 +454,11 @@ async function scenarioRace(browser, base) {
         const lines = Array.from(document.querySelectorAll('#log p'));
         return lines.some((p) => p.textContent.includes('←') && p.textContent.includes('55.06491'));
       }, { timeout: 20000 });
+      // «←» пишется ДО postToPanel (dev-host/index.html:372 против :374): событие
+      // в логе ещё не значит, что панель применила пакет. Без запаса откат guard'а
+      // ловится только при синхронном применении (MAJOR-2, ревью R3). Это тайминг-
+      // стена, а не ожидание события: прямого сигнала «панель применила» у эмулятора нет.
+      await page.waitForTimeout(1200);
       // Старый пакет обработан хостом: если guard'а нет, температуры первой
       // волны (+30°, +31°…) появились бы на строках второго списка. Правильный
       // ответ — только свои значения второго поиска.
@@ -630,9 +636,12 @@ async function scenarioSearchClear(browser, base) {
   });
 }
 
-// M4: выход из режима в пределах дебаунса не должен оставлять висящий таймер.
+// M4 (ревью R2-д) и MAJOR-1 (ревью R3): инвариант — дебаунс живёт только пока
+// открыт режим поиска. Проверка — по факту запросов к геокодеру, а не по стенке
+// времени: после «Назад» их не должно быть ни одного, в том числе без повторного
+// открытия режима (именно этого прежняя проверка не ловила).
 async function scenarioSearchTimer(browser, base) {
-  await scenario('12. Выход из режима в пределах дебаунса гасит висящий таймер (M4)', async (checks) => {
+  await scenario('12. Выход по «Назад» не оставляет висящего дебаунса (M4, MAJOR-1)', async (checks) => {
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
       fixtures: [
@@ -641,19 +650,28 @@ async function scenarioSearchTimer(browser, base) {
         FX + 'forecast-batch-arts.json',
       ].join(','),
     });
+    // Инвариант проверяется по логу эмулятора: строки «→ net.fetch https://geocoding-api…»
+    // — это реальные запросы к геокодеру.
+    const geoCalls = () => page.evaluate(() =>
+      Array.from(document.querySelectorAll('#log p'))
+        .filter((p) => p.textContent.includes('→ net.fetch https://geocoding-api')).length);
     try {
       await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      // Шаг 1 (MAJOR-1): «Назад» БЕЗ повторного открытия режима — в пределах
+      // дебаунса. Без гашения запрос ушёл бы уже в закрытом режиме.
       await frame.locator('#citybtn').click();
       await frame.locator('#q').waitFor({ timeout: 5000 });
       await frame.locator('#q').fill('Яр');
-      // Быстрее дебаунса: «Назад», затем снова «Другой город». Без гашения таймера
-      // дебаунс сработает уже в закрытом режиме — с пустым запросом.
       await frame.locator('#back').click();
+      await page.waitForTimeout(1200); // дольше дебаунса (400 мс)
+      assertEq(checks, 'после «Назад» запросов к геокодеру нет', await geoCalls(), 0);
+      // Шаг 2: тот же инвариант после повторного открытия режима и выхода.
       await frame.locator('#citybtn').click();
-      await page.waitForTimeout(1000); // время, к которому сработал бы старый дебаунс
-      const logText = await page.evaluate(() => document.getElementById('log').textContent);
-      assertTrue(checks, 'пустого запроса к геокодеру не было', !logText.includes('search?name=&'),
-        'лог: ' + logText.replace(/\n/g, ' ').slice(0, 400));
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Яр');
+      await frame.locator('#back').click();
+      await page.waitForTimeout(1200);
+      assertEq(checks, 'после второго «Назад» запросов к геокодеру тоже нет', await geoCalls(), 0);
     } catch (e) {
       await shot(page, 'scenario-12-timer');
       throw e;

@@ -336,10 +336,21 @@
     var query = '', found = [], geoDenied = false, searchTimer = 0, searchSeq = 0;
 
     // Право на net-хост — из состояния хоста, формат «net:{host}» (M5, ревью R2-д).
+    // Сравнение — по правилу боевого прокси (PluginNetProxy.HostOf): хост права
+    // без порта и в нижнем регистре. Строгое «net:{host}» давало ложный отказ
+    // при выданном «net:host:port» (minor, ревью R3).
     function hasNetRight(host) {
       var st = ccsPlugin.state;
-      return !!(st && Array.isArray(st.granted) &&
-        st.granted.some(function (g) { return String(g) === 'net:' + host; }));
+      if (!st || !Array.isArray(st.granted)) return false;
+      var want = String(host).toLowerCase();
+      return st.granted.some(function (g) {
+        var s = String(g);
+        if (s.slice(0, 4) !== 'net:') return false;
+        var h = s.slice(4);
+        var i = h.lastIndexOf(':');
+        if (i >= 0) h = h.slice(0, i);
+        return h.toLowerCase() === want;
+      });
     }
 
     // Подпись строки результата: «Ярославская Область» → «Ярославская обл.» (§1, грабли).
@@ -358,15 +369,22 @@
       return esc(nm);
     }
 
+    // Выход из режима выбора города: дебаунс живёт только пока режим открыт
+    // (MAJOR-1, ревью R3). Гасим висящий таймер и поднимаем счётчик — ответ
+    // старого поиска не применится к уже закрытому режиму.
+    function closeSearch() {
+      if (searchTimer) { clearTimeout(searchTimer); searchTimer = 0; }
+      searchSeq++;
+    }
+
     function openSearch() {
       // Повторное открытие режима — чистое: прошлый запрос и его результаты
       // сбрасываются; идущие в полёте ответы старых поисков гасятся счётчиком (R3).
       query = '';
       found = [];
-      searchSeq++;
       // M4 (ревью R2-д): висящий дебаунс относится к закрытому режиму — гасим его,
       // иначе через 400 мс выстрелит searchCity('') с пустым именем.
-      if (searchTimer) { clearTimeout(searchTimer); searchTimer = 0; }
+      closeSearch();
       // M5 (ревью R2-д): право на геокодер могли выдать после первого открытия —
       // при открытии проверяем его заново: с правом плашка снимается, без права — остаётся.
       geoDenied = !hasNetRight(GEO_HOST);
@@ -481,6 +499,9 @@
     function selectCity(c) {
       city = { name: c.name, lat: c.lat, lon: c.lon };
       rememberCity();
+      // Выбор города — тоже выход из режима: висящий дебаунс следующего ввода
+      // не должен остаться после закрытия (MAJOR-1, ревью R3).
+      closeSearch();
       load(); // главный экран с новым городом
     }
 
@@ -605,7 +626,9 @@
     root.addEventListener('click', function (e) {
       if (e.target.closest('#refresh') || e.target.closest('#retry')) { load(); return; }
       if (e.target.closest('#citybtn')) { openSearch(); return; }
-      if (e.target.closest('#back')) { load(); return; }
+      // «Назад» — выход из режима: гасим дебаунс до load(), иначе висящий ответ
+      // применится к уже закрытому режиму (MAJOR-1, ревью R3).
+      if (e.target.closest('#back')) { closeSearch(); load(); return; }
       var li = e.target.closest('.city');
       if (li) selectCity(found[+li.getAttribute('data-i')]);
     });

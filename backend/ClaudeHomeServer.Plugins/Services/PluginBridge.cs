@@ -62,12 +62,14 @@ public class PluginBridge
         return await handler.HandleAsync(context, capability, args ?? default, granted, ct);
     }
 
-    // Формулировка отказа по праву. Точное право (notes:read) называем ключом — по нему
-    // панель предлагает «Выдать…». Параметризованное (net:{host}, Permission = префикс
-    // "net:") с пустым параметром человеку ничего не говорит: называем хост из аргументов
-    // операции (для net.fetch — хост url), а если его не вытащить — осмысленный текст по
-    // домену, а не «Нет права: net:». Хост — единственное, чего панель не знает: она его
-    // и так запросила, URL целиком не несём.
+    // Формулировка отказа по праву — единая грамматика «Нет права: {key}»: по этому ключу
+    // панель рисует плашку и кнопку «Выдать…» (deniedKeyOf в frontend bridge.ts). Любой
+    // текст другой формы ключ не отдаёт, и плашка не появляется. Точное право (notes:read)
+    // называем ключом. Параметризованное (net:{host}, Permission = префикс "net:") с пустым
+    // параметром человеку ничего не говорит: называем хост из аргументов операции (для
+    // net.fetch — хост url), а если url некорректный — отказ по форме url, как делает сам
+    // прокси (PluginNetProxy.HandleAsync). Хост — единственное, чего панель не знает: она
+    // его и так запросила, URL целиком не несём.
     private static PluginCallError DeniedError(string domain, IPluginCapability handler, JsonElement args)
     {
         if (!handler.Permission.EndsWith(":", StringComparison.Ordinal))
@@ -75,25 +77,35 @@ public class PluginBridge
 
         if (domain == "net")
         {
-            var host = HostFromArgs(args);
-            if (host is not null)
-                return new PluginCallError("denied", $"Нет права: {handler.Permission}{host}");
-            return new PluginCallError("denied", "Нет права на сетевые запросы");
+            var url = UrlFromArgs(args);
+            if (url is not null)
+            {
+                // Схема — та же, что у прокси: право net:{host} — про http/https. Для
+                // ftp://example.com/x хоста права нет и быть не может: отказ по форме url,
+                // а не «Нет права: net:example.com».
+                if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+                    (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                    return new PluginCallError("invalid", $"Некорректный url: {url}");
+                var host = uri.IdnHost.ToLowerInvariant();
+                if (host.Length > 0)
+                    return new PluginCallError("denied", $"Нет права: {handler.Permission}{host}");
+            }
         }
 
-        return new PluginCallError("denied", $"Нет права на операции домена: {domain}");
+        // Хоста нет (или другой параметризованный домен): ключ — префикс права самого
+        // обработчика. Формат тот же: плашка и «Выдать…» работают при любом домене, даже
+        // если права такого ещё нет в грамматике (публичная точка — следующий домен).
+        return new PluginCallError("denied", $"Нет права: {handler.Permission}");
     }
 
-    // Хост из аргументов net.fetch: поле "url" (http/https), в нижнем регистре — как
-    // грамматика хоста права net:{host} (PluginNetProxy.HostOf). Другая форма аргументов
-    // или не-URL → null (отказ по домену, не по хосту).
-    private static string? HostFromArgs(JsonElement args)
+    // Url из аргументов net.fetch: поле "url" (строка). Другая форма аргументов или
+    // пустое поле → null (отказ по префиксу права, не по форме url).
+    private static string? UrlFromArgs(JsonElement args)
     {
         if (args.ValueKind != JsonValueKind.Object) return null;
         if (!args.TryGetProperty("url", out var urlEl) || urlEl.ValueKind != JsonValueKind.String)
             return null;
-        if (!Uri.TryCreate(urlEl.GetString(), UriKind.Absolute, out var uri)) return null;
-        var host = uri.IdnHost.ToLowerInvariant();
-        return host.Length > 0 ? host : null;
+        var url = urlEl.GetString();
+        return string.IsNullOrWhiteSpace(url) ? null : url;
     }
 }

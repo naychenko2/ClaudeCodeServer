@@ -13,8 +13,11 @@ namespace ClaudeHomeServer.Tests.Plugins;
 //   - диспетчер: нет обработчика → unavailable (503), нет права → denied (403),
 //     есть право → вызывает обработчик;
 //   - отказ по недопустому домену net называет хост запроса (дефект «Нет права: net:»):
-//     без сетевых прав → «Нет права: net:{хост}»; без url → осмысленный текст;
+//     без сетевых прав → «Нет права: net:{хост}»; без url → ключ-префикс «Нет права: net:»;
 //     право на другой хост → отказ прокси «Нет права: net:{хост}» без изменений;
+//   - все тексты отказа — в формате «Нет права: {key}» (deniedKeyOf на фронте):
+//     схема url — только http/https, как у прокси (ftp:// → «Некорректный url», не хост);
+//     доменная ветка параметризованного права — «Нет права: {префикс}», не свободный текст;
 //   - валидация: source=ccs-plugin + v=1 → валидно; чужой source → невалидно;
 //     другая версия → невалидно;
 //   - мутации (критерий): ЧужойSource_Прошёл, ДругаяВерсия_Прошёл.
@@ -66,8 +69,8 @@ public class PluginBridgeTests
     }
 
     // --- Отказ по недопустому домену net: называет хост запроса (дефект «Нет права: net:») ---
-    // Мутация: вернуть старый текст $"Нет права: {handler.Permission}" → первый тест красный
-    // (в нём нет хоста), второй — тоже (в нём нет осмысленного текста).
+    // Мутация: вернуть старый текст $"Нет права: {handler.Permission}" без хоста → первый
+    // тест красный (в нём нет хоста).
 
     [Fact]
     public async Task Dispatch_НетСетевыхПрав_ОтказНазываетХост()
@@ -84,7 +87,7 @@ public class PluginBridgeTests
     }
 
     [Fact]
-    public async Task Dispatch_НетСетевыхПрав_БезUrl_ОсмысленныйТекст()
+    public async Task Dispatch_НетСетевыхПрав_БезUrl_КлючПрефикса()
     {
         var bridge = new PluginBridge([new StubCapability("net:")]);
         var ctx = new PluginCallContext("owner-a", "local-a/pkg", null, null);
@@ -93,7 +96,43 @@ public class PluginBridgeTests
 
         result.Ok.Should().BeFalse();
         result.Error!.Code.Should().Be("denied");
-        result.Error.Message.Should().Be("Нет права на сетевые запросы");
+        // Хоста нет — ключом остаётся префикс права: текст проходит deniedKeyOf.
+        result.Error.Message.Should().Be("Нет права: net:");
+    }
+
+    // --- Схема url: право net:{host} — про http/https (как в PluginNetProxy.HandleAsync).
+    // Мутация: убрать проверку схемы (Uri.TryCreate без сравнения scheme) → тест красный:
+    // отказ назовёт «Нет права: net:example.com».
+    [Fact]
+    public async Task Dispatch_FtpСхема_ОтказПоФормеUrlАНеПоХосту()
+    {
+        var bridge = new PluginBridge([new StubCapability("net:")]);
+        var ctx = new PluginCallContext("owner-a", "local-a/pkg", null, null);
+        var args = JsonDocument.Parse("""{"url":"ftp://example.com/x"}""").RootElement;
+
+        var result = await bridge.DispatchAsync(ctx, "net.fetch", args, [], CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Error!.Code.Should().Be("invalid");
+        result.Error.Message.Should().Be("Некорректный url: ftp://example.com/x");
+        result.Error.Message.Should().NotContain("Нет права: net:example.com");
+    }
+
+    // --- Доменная ветка параметризованного права: текст в формате «Нет права: {key}».
+    // Сейчас такой домена, кроме net, нет — ветка публичная: следующий домен её разбудит,
+    // и плашка/«Выдать…» должны работать с первого раза.
+    // Мутация: вернуть $"Нет права на операции домена: {domain}" → тест красный (нет ключа).
+    [Fact]
+    public async Task Dispatch_ДоменБезПрава_ТекстВФорматеКлюча()
+    {
+        var bridge = new PluginBridge([new StubCapability("weather:")]);
+        var ctx = new PluginCallContext("owner-a", "local-a/pkg", null, null);
+
+        var result = await bridge.DispatchAsync(ctx, "weather.get", null, [], CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Error!.Code.Should().Be("denied");
+        result.Error.Message.Should().Be("Нет права: weather:");
     }
 
     // Право на ДРУГОЙ хост выдано: мост пропускает вызов (covered), отказ формурует сам

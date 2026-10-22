@@ -307,6 +307,13 @@ public record RateLimitMessage(string LimitType, string? ResetsAt, string? Statu
 public record CompactBoundaryMessage(string Trigger, int? PreTokens, int? PostTokens = null)
     : ServerMessage("compact_boundary");
 
+// Живое заполнение контекста посреди хода: после каждого ответа модели основного агента
+// (usage assistant-сообщения — input + cache_read + cache_creation, см. ClaudeSession.
+// TrackContextTokens). Транзитное: в историю не пишется, итог хода по-прежнему несёт
+// ResultMessage.ContextTokens. Нужно, чтобы кольцо контекста в шапке чата двигалось по ходу
+// длинного хода (десятки вызовов инструментов на локальной модели), а не раз в конце (22.10.2026).
+public record ContextUsageMessage(int ContextTokens) : ServerMessage("context_usage");
+
 // Обрезка контекста прокси локальной модели: сдвиг границы прунинга (Kind = "prune") либо уход
 // автосжатия в облако (Kind = "compact_cloud"), либо перехват петли модели в потоке
 // (Kind = "loop_guard": Blocks — сколько петель, ResultBlocks — был ли повтор). ImageBlocks /

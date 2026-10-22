@@ -243,7 +243,7 @@ function memoizedCacheEntry(
 }
 
 export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
   // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
@@ -550,7 +550,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
   // Оценка заполнения контекстного окна — по последнему result-элементу ленты
   const ctxThresholds = useCtxThresholds();
-  const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds), [items, session.model, ctxThresholds]);
+  const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds, liveContextTokens), [items, session.model, ctxThresholds, liveContextTokens]);
   // Возможности провайдера модели (UI скрывает недоступное)
   const caps = useModelCaps(session.model);
   // Чат-исполнитель задачи: композер помечается строкой «Исполнитель задачи «…»».

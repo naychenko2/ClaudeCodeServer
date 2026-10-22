@@ -6095,6 +6095,11 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 if (await AbortOnToolUseAfterStdinClosedAsync(run, root)) break;
                 TrackContextTokens(root);
+                // Живое заполнение контекста — клиенту сразу, не дожидаясь result (кольцо в шапке
+                // чата). Только основной агент: у субагентов свой контекст (TrackContextTokens их
+                // и так пропускает, но _lastContextTokens хранит прошлое значение — не шлём его повторно).
+                if (!HasParentToolUseId(root) && _lastContextTokens > 0)
+                    await _onMessage(new ContextUsageMessage(_lastContextTokens));
                 await HandleAssistantToolsAsync(run, root);
                 break;
 

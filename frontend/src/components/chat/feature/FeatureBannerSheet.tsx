@@ -142,10 +142,12 @@ function ExecutorRow({ x, isMobile, projectId, featureId, featureTitle = null, m
           // minor 3: ОДИН источник «в архиве» — marks.chatArchived (unified), не x.chatArchived.
           chatArchived={marks.chatArchived(x.chatId)}
           isMobile={isMobile}
-          onOpen={() => {
+          onOpen={async () => {
             if (!x.chatId) return;
-            recordFeatureReturn(featureId, { kind: 'chat', id: x.chatId }, featureTitle, undefined, false);
-            void openChatById(x.chatId);
+            // minor (ревью Ф9b, зам. 2): точка возврата — только после успешного открытия:
+            // при openChatById → false («Чат не найден») указатель не должен терять прежнюю точку.
+            const opened = await openChatById(x.chatId);
+            if (opened) recordFeatureReturn(featureId, { kind: 'chat', id: x.chatId }, featureTitle, undefined, false);
           }}
         />
         <NavTargetButton

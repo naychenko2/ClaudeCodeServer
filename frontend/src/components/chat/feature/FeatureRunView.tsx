@@ -707,9 +707,12 @@ export function FeatureRunView({
   // Навигация: переход в чат/задачу; onClose — закрыть попап (R2 major 3).
   // major 1: точка возврата «← к фиче {название}» — БЕЗ вкладки (из попапа/панели, не из
   // вкладки страницы); возврат ведёт на последнюю использованную вкладку (механизм Ф-pl-b).
-  const openChat = (chatId: string) => {
-    recordFeatureReturn(run.featureId, { kind: 'chat', id: chatId }, run.epic?.title ?? null, undefined, false);
-    void openChatById(chatId);
+  // minor (ревью Ф9b, зам. 2): точка возврата пишется только если чат реально открылся:
+  // при openChatById → false («Чат не найден») указатель на несуществующий чат только
+  // потерял бы прежнюю точку возврата без видимой причины.
+  const openChat = async (chatId: string) => {
+    const opened = await openChatById(chatId);
+    if (opened) recordFeatureReturn(run.featureId, { kind: 'chat', id: chatId }, run.epic?.title ?? null, undefined, false);
     onClose?.();
   };
   const openTask = (taskId: string) => { openTaskInSection({ id: taskId }); onClose?.(); };

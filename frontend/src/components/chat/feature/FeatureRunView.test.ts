@@ -46,13 +46,14 @@ const { toastMock } = vi.hoisted(() => ({ toastMock: { calls: [] as string[] } }
 vi.mock('../../../lib/toast', () => ({
   showToast: (title: string) => { toastMock.calls.push(title); },
 }));
-// openChat (lib/openChat) — no-op: в node-окружении api.chats.get уходит в сеть;
-// для теста точки возврата (major 1) достаточно, что openChatById не роняет.
+// openChat (lib/openChat) — управляемый результат открытия: для теста точки возврата
+// (major 1) — true; для порядка «открыть → записать» (ревью Ф9b, зам. 2) — false.
+const openChatMock = vi.hoisted(() => ({ result: true }));
 vi.mock('../../../lib/openChat', () => ({
-  openChatById: async (_id: string) => true,
+  openChatById: async (_id: string) => openChatMock.result,
 }));
 
-beforeEach(() => { personaMap.clear(); mobileFlag.value = false; toastMock.calls.length = 0; backNav.reset(); });
+beforeEach(() => { personaMap.clear(); mobileFlag.value = false; toastMock.calls.length = 0; openChatMock.result = true; backNav.reset(); });
 
 // Задача-заглушка (подмножество TaskItem, как несёт GET /api/tasks/features).
 function task(over: Partial<FeatureTask> = {}): FeatureTask {
@@ -330,7 +331,7 @@ describe('FeatureRunView — рендер', () => {
 // major 1: переход в чат из попапа/панели пишет точку возврата «← к фиче {название}»
 // (БЕЗ вкладки — showTab=false); возврат ведёт на последнюю использованную вкладку.
 describe('FeatureRunView: точка возврата из попапа/панели (major 1)', () => {
-  it('клик «чат» исполнителя → точка возврата с названием фичи, БЕЗ вкладки', () => {
+  it('клик «чат» исполнителя → точка возврата с названием фичи, БЕЗ вкладки', async () => {
     const stages: FeatureStage[] = [
       { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
         executors: [{ personaId: null, taskId: 'x', taskRole: null, stepRef: null, lane: null, status: 'running', chatId: 'chat-target', chatArchived: false, modelLabel: null, modelFull: null }] },
@@ -339,13 +340,61 @@ describe('FeatureRunView: точка возврата из попапа/пане
     const { root, container } = mount(createElement(FeatureRunView, { run: run({ state: 'running', stages }) }));
     const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
     expect(btn, 'кнопка чата исполнителя').not.toBeNull();
-    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    // Открытие — асинхронное (ревью Ф9b, зам. 2): возврат пишется после openChatById.
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); await Promise.resolve(); });
     // Точка возврата: featureId, название фичи, showTab=false (без вкладки).
     const info = backNav.featureBackNavFrom('chat-target');
     expect(info, 'точки возврата нет').not.toBeNull();
     expect(info!.featureId).toBe('epic-1');
     expect(info!.title).toBe('Пульт куратора');
     expect(info!.showTab, 'из попапа/панели — БЕЗ вкладки').toBe(false);
+    root.unmount();
+    uninstallFakeDom();
+  });
+
+  // Ревью Ф9b, зам. 2: если чат НЕ открылся (openChatById → false, тост «Чат не найден»),
+  // указатель не перезаписывается на несуществующий чат — прежняя точка возврата жива.
+  // Мутация «записать возврат до открытия» красит этот тест.
+  it('openChatById вернул false → точка НЕ перезаписана, прежняя сохранена', async () => {
+    openChatMock.result = false;
+    // Прежняя точка возврата — на старый чат.
+    backNav.recordFeatureReturn('epic-1', { kind: 'chat', id: 'chat-old' }, 'Пульт куратора', undefined, false);
+    const stages: FeatureStage[] = [
+      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: null, taskId: 'x', taskRole: null, stepRef: null, lane: null, status: 'running', chatId: 'chat-target', chatArchived: false, modelLabel: null, modelFull: null }] },
+    ];
+    installFakeDom();
+    const { root, container } = mount(createElement(FeatureRunView, { run: run({ state: 'running', stages }) }));
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
+    expect(btn, 'кнопка чата исполнителя').not.toBeNull();
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); await Promise.resolve(); });
+    expect(backNav.featureBackNavFrom('chat-target'), 'указатель на несуществующий чат').toBeNull();
+    expect(backNav.featureBackNavFrom('chat-old'), 'прежняя точка возврата потеряна').not.toBeNull();
+    root.unmount();
+    uninstallFakeDom();
+  });
+
+  // Ревью Ф9b, зам. 3: пометка «в архиве» в попапе идёт из marks (агрегат фичи), а не из
+  // ex.chatArchived по себе. Мутация «снять chatArchived={marks…}» красит этот тест.
+  it('архивный чат исполнителя → пометка «в архиве» на кнопке «чат»', () => {
+    const stages: FeatureStage[] = [
+      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: null, taskId: 'x', taskRole: null, stepRef: null, lane: null, status: 'running', chatId: 'chat-arch', chatArchived: true, modelLabel: null, modelFull: null }] },
+    ];
+    installFakeDom();
+    const { root, container } = mount(createElement(FeatureRunView, { run: run({ state: 'running', stages }) }));
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
+    expect(btn, 'кнопка чата исполнителя').not.toBeNull();
+    expect(textNodes(btn!).join(''), 'пометки «в архиве» нет').toContain('в архиве');
+    // Неархивный чат — без пометки.
+    const { root: r2, container: c2 } = mount(createElement(FeatureRunView, {
+      run: run({ state: 'running', stages: [{ key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: null, taskId: 'y', taskRole: null, stepRef: null, lane: null, status: 'running', chatId: 'chat-live', chatArchived: false, modelLabel: null, modelFull: null }] }] }),
+    }));
+    const btn2 = findNodeByAttr(c2, 'data-testid', 'nav-target-chat');
+    expect(btn2, 'кнопка чата').not.toBeNull();
+    expect(textNodes(btn2!).join(''), 'пометка на неархивном чате').not.toContain('в архиве');
+    r2.unmount();
     root.unmount();
     uninstallFakeDom();
   });

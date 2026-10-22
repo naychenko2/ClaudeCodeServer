@@ -29,10 +29,11 @@ vi.mock('../../../lib/personas', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/personas')>();
   return { ...orig, ensurePersonasLoaded: async () => {}, getPersonaById: () => undefined };
 });
-// openChat (lib/openChat) — no-op: в node-окружении api.chats.get уходит в сеть;
-// для теста точки возврата (major 2) достаточно, что openChatById не роняет.
+// openChat (lib/openChat) — управляемый результат открытия: для теста точки возврата
+// (major 2) — true; для порядка «открыть → записать» (ревью Ф9b, зам. 2) — false.
+const openChatMock = vi.hoisted(() => ({ result: true }));
 vi.mock('../../../lib/openChat', () => ({
-  openChatById: async (_id: string) => true,
+  openChatById: async (_id: string) => openChatMock.result,
 }));
 
 // === Фикстуры ===
@@ -131,7 +132,7 @@ describe('focusablesIn: tabindex', () => {
 // === 2: рендер (mount, fakeDom) ===
 
 describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {
-  beforeEach(() => { installFakeDom(); backNav.reset(); });
+  beforeEach(() => { installFakeDom(); openChatMock.result = true; backNav.reset(); });
   afterEach(() => uninstallFakeDom());
 
   it('7 этапов (data-testid feature-sheet-stage-*), исполнители активного этапа, название фичи', async () => {
@@ -450,13 +451,33 @@ describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
     const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
     expect(btn, 'кнопка чата исполнителя в шторке').not.toBeNull();
-    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    // Открытие — асинхронное (ревью Ф9b, зам. 2): возврат пишется после openChatById.
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); await Promise.resolve(); });
     // Точка возврата: featureId, название фичи, showTab=false (без вкладки).
     const info = backNav.featureBackNavFrom('chat-exec');
     expect(info, 'точки возврата нет').not.toBeNull();
     expect(info!.featureId).toBe('f1');
     expect(info!.title).toBe('Тестовая фича');
     expect(info!.showTab, 'из шторки — БЕЗ вкладки').toBe(false);
+    root.unmount();
+  });
+
+  // Ревью Ф9b, зам. 2: если чат НЕ открылся (openChatById → false, тост «Чат не найден»),
+  // указатель не перезаписывается на несуществующий чат — прежняя точка возврата жива.
+  // Мутация «записать возврат до открытия» красит этот тест.
+  it('openChatById вернул false → точка НЕ перезаписана, прежняя сохранена', async () => {
+    openChatMock.result = false;
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'chat-old' }, 'Тестовая фича', undefined, false);
+    const run = mkRun('f1', 'Тестовая фича');
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs: [run], isMobile: false, onClose: () => {},
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
+    expect(btn, 'кнопка чата исполнителя в шторке').not.toBeNull();
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); await Promise.resolve(); });
+    expect(backNav.featureBackNavFrom('chat-exec'), 'указатель на несуществующий чат').toBeNull();
+    expect(backNav.featureBackNavFrom('chat-old'), 'прежняя точка возврата потеряна').not.toBeNull();
     root.unmount();
   });
 });

@@ -1722,6 +1722,79 @@ describe('WorkspacePage: центр — страница фичи соседом
       .not.toContain('/feature/');
   });
 
+  // Ф-хв-д (возврат ревью Ф-хв, п.1): запасный переход «чип ← к фиче» из раздела «Чаты».
+  // App.tsx пишет снимок с feature + chatId и канал cc_pending_project_chat; WorkspacePage
+  // открывает страницу фичи из снимка, а чат выбирается холодным автовыбором — страница
+  // НЕ закрывается (регрессия c84677f3c: closeFeaturePage в handleSelectSession закрывала
+  // её сразу за выбором). Мутации: вернуть false третьим аргументом в consumePendingProjectChat
+  // → красный; снять feature из снимка в App.tsx → красный (тест в App.deeplink.test.ts);
+  // снять запись канала → красный (тот же тест).
+  const runFallbackTransition = async (mobile: boolean) => {
+    const win = globalThis as any;
+    if (!mobile) win.window.innerWidth = 1280;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chats.push(chatB);
+    wsState.activeSession = null; // холодный старт: активного чата нет
+    // Ровно то, что делает App.tsx на запасном переходе: navPush-снимок (toHash: сегмент
+    // feature приоритетнее chatId) + pending-канал.
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ: страница фичи открыта И чат выбран — одновременно.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи не открылась из снимка (запасный переход)').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'на странице фичи нет «Закрыть» (запасный переход)').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'чат не выбран (запасный переход)').not.toBeNull();
+    // Pending-канал потреблён эффектом.
+    expect(win.sessionStorage.getItem('cc_pending_project_chat'),
+      'pending-канал не очищен (запасный переход)').toBeNull();
+  };
+  it('запасный переход: снимок + канал — страница фичи остаётся, чат выбран (мобила 360)', () => runFallbackTransition(true));
+  it('запасный переход: снимок + канал — страница фичи остаётся, чат выбран (десктоп 1280)', () => runFallbackTransition(false));
+
+  // Парный: тот же холодный переход, затем ЯВНЫЙ выбор ДРУГОГО чата (тот же канал, что в
+  // тестах автоскрытия выше) — автоскрытие работает, страница закрыта. Мутация «вернуть
+  // false третьим аргументом» (то есть закрыть и холодный выбор) краснит предыдущий тест.
+  it('парный: после запасного перехода явный выбор другого чата закрывает страницу', async () => {
+    const win = globalThis as any;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    const chatC: Session = { id: 'chatC', name: 'Чат Ц', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB, chatC);
+    mockData.chats.push(chatB, chatC);
+    wsState.activeSession = null;
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Предусловие: холодный выбор chatB — страница открыта.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница не открыта перед явным выбором (предусловие)').not.toBeNull();
+    // Явный выбор другого чата — тот же путь, что в тестах автоскрытия: канал + событие.
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatC');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Автоскрытие: страница закрыта, выбранный чат в DOM.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'явный выбор другого чата не закрыл страницу').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'выбранный чат не в DOM').not.toBeNull();
+  });
+
   // M2 (мобила): задача открыта, явное открытие страницы рисует её ПОВЕРХ; «Закрыть» → задача.
   it('M2: задача в центре (мобила) → страница ПОВЕРХ (адрес /feature/), «Закрыть» → задача видна', async () => {
     recordHistory();

@@ -1130,6 +1130,9 @@ describe('WorkspacePage: центр — страница фичи соседом
       'страница не скрыта при открытом позже файле (мобила)').toBe('none');
     const fileName = findNodeByAttr(container, 'data-testid', 'file-name');
     expect(fileName, 'файл не в DOM (мобила)').not.toBeNull();
+    // Не только в DOM, но и ВИДЕН: мутации «обёртка файла display:none» и
+    // «featurePageOpen ? none : block» (поведение до дельты) краснят это утверждение.
+    expect(hasHiddenAncestor(fileName!), 'файл СКРЫТ при уступке страницы (мобила)').toBe(false);
 
     // Обратный переход: повторное открытие страницы — страница поверх файла.
     await openFeature(container);
@@ -1614,6 +1617,32 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница не закрыта').toBeNull();
     expect(featureBackNavFrom('chatB'), 'указатель возврата в фичу погашен выбором чата')
       .toMatchObject({ featureId: 'f1', title: 'Моя фича' });
+  });
+
+  // Ф9b-д4: ОБЫЧНЫЙ выбор другого чата гасит указатель возврата, записанный для чата chatB
+  // (иначе позже в chatB всплывёт протухший чип «← к фиче»). Мутация «снять сброс в
+  // handleSelectSession» краснит тест; парный выше (цель = выбираемый чат) — не краснит.
+  it('выбор ДРУГОГО чата гасит указатель возврата (фича → chatB)', async () => {
+    const win = globalThis as any;
+    const chatC: Session = { id: 'chatC', name: 'Чат Ц', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatC);
+    mockData.chat = chatC;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    recordFeatureReturn('f1', { kind: 'chat', id: 'chatB' }, 'Моя фича', undefined, false);
+    expect(featureBackNavFrom('chatB'), 'указатель не записан (предусловие)').not.toBeNull();
+
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatC');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    expect(featureBackNavFrom('chatB'), 'указатель «фича → chatB» пережил обычный выбор другого чата').toBeNull();
   });
 
   it('автоскрытие: выбор другого чата (десктоп) — страница фичи скрыта', async () => {

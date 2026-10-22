@@ -334,6 +334,58 @@ public class FeatureTimelineJournalTests
             + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
     }
 
+    // ── 3d. Эпизоды, начавшиеся за пределами окна, не считаются (замечание 3 ревью Глеба) ────
+
+    // Ожидание, начавшееся после `to`, даёт в окне ноль минут: прежнее `e.At >= from` пропускало
+    // события за окном → WaitingCount = 1 при нулевых минутах. Считаются только эпизоды с
+    // from <= At < to. Мутация «вернуть без верхней границы» → 1 ≠ 0 → краснеет.
+    [Fact]
+    public void Build_ОжиданиеПослеTo_НеСчитается()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var closedAt = new DateTime(2026, 10, 1, 8, 30, 0);
+        var epic = Epic("epic");
+        epic.Status = TaskItemStatus.Done;
+        epic.CompletedAt = closedAt;
+        var s1 = Child("s1", "epic");
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("waiting", closedAt.AddMinutes(30), taskId: "s1"), // 09:00 — после to
+            Entry("device_wait", closedAt.AddMinutes(60), taskId: "s1")); // 09:30 — после to
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.Totals.WaitingCount.Should().Be(0, "эпизод, начавшийся за окном, не считается");
+        tl.Totals.WaitingMinutes.Should().Be(0);
+        tl.Totals.LongestWaitMinutes.Should().Be(0);
+        // Инвариант не сломан: всё окно — idle.
+        (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
+            + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
+    }
+
+    // Ожидание, начавшееся ровно в `to` (момент закрытия), длится в окне ноль минут — не
+    // считается (граница to исключена). Без верхней границы мутации: WaitingCount = 1 → красный.
+    [Fact]
+    public void Build_ОжиданиеРовноВTo_НеСчитается()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var closedAt = new DateTime(2026, 10, 1, 8, 30, 0);
+        var epic = Epic("epic");
+        epic.Status = TaskItemStatus.Done;
+        epic.CompletedAt = closedAt;
+        var s1 = Child("s1", "epic");
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("device_wait", closedAt, taskId: "s1")); // ровно в to
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.Totals.WaitingCount.Should().Be(0, "ожидание ровно в момент закрытия длится ноль минут");
+        tl.Totals.WaitingMinutes.Should().Be(0);
+    }
+
     // ── 4. Ожидание устройства (device_wait…device_wait_cleared) → как waiting ───────────────
 
     // Журнал: created + device_wait 10:00 → device_wait_cleared 11:00 (60 мин). Без work

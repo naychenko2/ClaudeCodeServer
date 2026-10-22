@@ -302,7 +302,10 @@ public sealed record FeatureTimeline(
         foreach (var e in journal.Entries)
         {
             // waiting: ожидание человека waiting…(waiting_cleared | now).
-            if (e.Kind == "waiting" && e.At >= from)
+            // Считаются только эпизоды, начавшиеся внутри окна [from, to) (замечание 3 ревью
+            // Глеба): ожидание, начавшееся после `to`, длится в окне ноль минут, но без верхней
+            // границы давало WaitingCount = 1 при нулевых минутах.
+            if (e.Kind == "waiting" && e.At >= from && e.At < to)
             {
                 var wEnd = FirstAfter(waitingClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;
@@ -316,7 +319,7 @@ public sealed record FeatureTimeline(
             // waiting: ожидание устройства device_wait…(device_wait_cleared | now). Контракт
             // TimelineSegment (Б5a) не имеет отдельного под-вида ожидания, поэтому device_wait
             // рисуется как обычный waiting (kind="waiting"); WaitingMinutes — сумма обоих.
-            else if (e.Kind == "device_wait" && e.At >= from)
+            else if (e.Kind == "device_wait" && e.At >= from && e.At < to)
             {
                 var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;

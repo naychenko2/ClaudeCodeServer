@@ -335,6 +335,13 @@
     // ---------- Выбор города (C1) ----------
     var query = '', found = [], geoDenied = false, searchTimer = 0, searchSeq = 0;
 
+    // Право на net-хост — из состояния хоста, формат «net:{host}» (M5, ревью R2-д).
+    function hasNetRight(host) {
+      var st = ccsPlugin.state;
+      return !!(st && Array.isArray(st.granted) &&
+        st.granted.some(function (g) { return String(g) === 'net:' + host; }));
+    }
+
     // Подпись строки результата: «Ярославская Область» → «Ярославская обл.» (§1, грабли).
     function regionText(r) {
       var parts = [];
@@ -357,6 +364,12 @@
       query = '';
       found = [];
       searchSeq++;
+      // M4 (ревью R2-д): висящий дебаунс относится к закрытому режиму — гасим его,
+      // иначе через 400 мс выстрелит searchCity('') с пустым именем.
+      if (searchTimer) { clearTimeout(searchTimer); searchTimer = 0; }
+      // M5 (ревью R2-д): право на геокодер могли выдать после первого открытия —
+      // при открытии проверяем его заново: с правом плашка снимается, без права — остаётся.
+      geoDenied = !hasNetRight(GEO_HOST);
       root.setAttribute('aria-busy', 'false');
       // Подсказка про запоминание — только когда право storage действительно выдано
       // (правка приёмки 22.10): без него панель ничего не запоминает.
@@ -376,7 +389,14 @@
       input.addEventListener('input', function () {
         query = input.value;
         if (searchTimer) clearTimeout(searchTimer);
-        if (query.length < 2) { found = []; renderGeo(); return; } // поиск с 2 символов (§1)
+        if (query.length < 2) {
+          // M3 (ревью R2-д): запрос стёрли — ответ предыдущего поиска не должен
+          // примениться к пустому списку: гасим его тем же счётчиком, что и новый.
+          searchSeq++;
+          found = [];
+          renderGeo();
+          return;
+        } // поиск с 2 символов (§1)
         searchTimer = setTimeout(function () { searchCity(query); }, 400);
       });
       renderGeo();

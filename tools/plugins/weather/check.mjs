@@ -30,6 +30,12 @@
 //   9. Подсказка «Город запоминается…» — только при выданном праве storage (C3-д).
 //   10. Нет права на геокодер — человеческий текст и бейдж с ключом права,
 //       главный экран работает (C3-д).
+//   11. Сброс запроса ниже двух символов гасит предыдущий поиск (minor M3).
+//   12. Выход из режима в пределах дебаунса гасит висящий таймер (minor M4).
+//   13. Выданное позже право на геокодер оживляет поиск при повторном
+//       открытии — липкая плашка отказа снимается (minor M5).
+//   14. Хранилище отключено: эмулятор отвечает «unavailable», а не роняет
+//       обработчик (minor M2, ревью R2-д).
 
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
@@ -586,6 +592,167 @@ async function scenarioGeoDenied(browser, base) {
   });
 }
 
+// M3: запрос, стёртый ниже двух символов, гасит поиск, который уже в полёте.
+async function scenarioSearchClear(browser, base) {
+  await scenario('11. Сброс запроса ниже двух символов гасит предыдущий поиск (M3)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      // Ответ геокодера намеренно с опозданием: человек стирает запрос ДО ответа.
+      // «Яр» и «Ярц» содержат один и тот же префикс — привязка по нему ловит оба.
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80|3000',
+        FX + 'forecast-batch-arts.json|55.06491',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Яр');
+      // Ждём, пока дебаунс сработал и поиск реально ушёл к геокодеру (иначе
+      // сброс просто отменит таймер — это сценарий 12, а не гашение ответа).
+      await page.waitForTimeout(600);
+      await frame.locator('#q').fill('Я'); // стёрли до одного символа — поиска нет
+      // Ждём реальной доставки старого ответа: без гашения он нарисовал бы
+      // города по уже стёртому «Яр».
+      await page.waitForFunction(() => {
+        const lines = Array.from(document.querySelectorAll('#log p'));
+        return lines.some((p) => p.textContent.includes('←') && p.textContent.includes('name=%D0%AF%D1%80'));
+      }, { timeout: 20000 });
+      assertEq(checks, 'строк результатов после сброса нет', await frame.locator('.city').count(), 0);
+    } catch (e) {
+      await shot(page, 'scenario-11-clear');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// M4: выход из режима в пределах дебаунса не должен оставлять висящий таймер.
+async function scenarioSearchTimer(browser, base) {
+  await scenario('12. Выход из режима в пределах дебаунса гасит висящий таймер (M4)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json',
+        FX + 'forecast-batch-arts.json',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Яр');
+      // Быстрее дебаунса: «Назад», затем снова «Другой город». Без гашения таймера
+      // дебаунс сработает уже в закрытом режиме — с пустым запросом.
+      await frame.locator('#back').click();
+      await frame.locator('#citybtn').click();
+      await page.waitForTimeout(1000); // время, к которому сработал бы старый дебаунс
+      const logText = await page.evaluate(() => document.getElementById('log').textContent);
+      assertTrue(checks, 'пустого запроса к геокодеру не было', !logText.includes('search?name=&'),
+        'лог: ' + logText.replace(/\n/g, ' ').slice(0, 400));
+    } catch (e) {
+      await shot(page, 'scenario-12-timer');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// M5: право на геокодер, выданное после первого отказа, снимает липкую плашку.
+async function scenarioGeoRightLater(browser, base) {
+  await scenario('13. Выданное позже право на геокодер оживляет поиск при открытии (M5)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: 'api.open-meteo.com', // права на геокодер сначала нет
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Ярц');
+      await frame.locator('.notice-row').waitFor({ timeout: 15000 }); // отказ — плашка есть
+
+      // «Право выдали»: хост обновляет права и переинициализирует панель с новым
+      // granted — ровно так же, как при пересборке фрейма на боевом хосте.
+      await page.evaluate(() => {
+        const g = window.__emulator.cfg.grant;
+        g.push('net:geocoding-api.open-meteo.com');
+        const inner = document.getElementById('frame').contentWindow.frames[0];
+        inner.postMessage({ source: 'ccs-host', v: 1, type: 'init', granted: g }, '*');
+      });
+
+      // Повторное открытие режима: старой плашки быть не должно.
+      await frame.locator('#back').click();
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      assertEq(checks, 'плашки отказа при повторном открытии нет', await frame.locator('.notice-row').count(), 0);
+      // И поиск действительно работает: результаты по «Ярц».
+      await frame.locator('#q').fill('Ярц');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      assertTrue(checks, 'результаты поиска есть', await frame.locator('.city').count() > 0);
+    } catch (e) {
+      await shot(page, 'scenario-13-right-later');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// M2: хранилище отключено (геттер бросит) — эмулятор отвечает, а не роняет обработчик.
+async function scenarioStorageOff(browser, base) {
+  await scenario('14. Хранилище отключено: эмулятор отвечает unavailable, панель работает (M2)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL + ',storage',
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      // «Отключаем» хранилище: доступ к localStorage бросает, как при отключённом
+      // хранилище браузера. Геттер читается на месте вызова storage.* — именно
+      // этот случай и должен ловиться обёрткой (minor M2).
+      await page.evaluate(() => {
+        Object.defineProperty(window, 'localStorage', {
+          configurable: true,
+          get: function () { throw new Error('storage disabled'); },
+        });
+      });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Ярц');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      await frame.locator('.city').first().click(); // rememberCity → storage.set
+      // Хост-эмулятор обязан ОТВЕТИТЬ (result unavailable), а не потерять вызов:
+      await page.waitForFunction(() => {
+        const lines = Array.from(document.querySelectorAll('#log p'));
+        return lines.some((p) => p.textContent.includes('← unavailable: Хранилище недоступно'));
+      }, { timeout: 15000 });
+      // Панель не зависла: главный экран с выбранным городом на месте.
+      const cityName = (await textOf(frame, '.wx-city .nm')).trim();
+      assertTrue(checks, 'город выбран, панель работает', cityName.includes('Ярцево'), cityName);
+    } catch (e) {
+      await shot(page, 'scenario-14-storage-off');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 // ---------- Запуск ----------
 
 const { server, base } = await startServer();
@@ -601,6 +768,10 @@ try {
   await scenarioStorageCity(browser, base);
   await scenarioHint(browser, base);
   await scenarioGeoDenied(browser, base);
+  await scenarioSearchClear(browser, base);
+  await scenarioSearchTimer(browser, base);
+  await scenarioGeoRightLater(browser, base);
+  await scenarioStorageOff(browser, base);
 } finally {
   await browser.close();
   server.close();

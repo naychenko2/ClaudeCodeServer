@@ -411,14 +411,23 @@ async function handleCall(id, op, args) {
       // тексты отказа совпадают с боевыми по построению, второй копии логики нет.
       // Подделанные панелью granted/pluginId/ownerId в args игнорируются — право,
       // id и владелец берутся только из состояния эмулятора (как в PluginFrame).
-      res = handleStorageCall({
-        op: op.slice('storage.'.length),
-        args,
-        granted: cfg.grant,
-        ownerId: OWNER_ID,
-        pluginId: PLUGIN_ID,
-        store: localStorage,
-      });
+      try {
+        res = handleStorageCall({
+          op: op.slice('storage.'.length),
+          args,
+          granted: cfg.grant,
+          ownerId: OWNER_ID,
+          pluginId: PLUGIN_ID,
+          store: localStorage,
+        });
+      } catch (e) {
+        // M2 (ревью R2-д): «store: localStorage» вычисляется на месте вызова, и
+        // SecurityError геттера (хранилище отключено) бросается ДО внутренней
+        // обёртки handleStorageCall: без этой обёртки вызов теряется и промис
+        // панели висит. Ответ — тот же отказ, что отдаёт общая реализация для
+        // недоступного хранилища (hostOps/storage.js, ветка SecurityError).
+        res = { ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' } };
+      }
     } else if (op !== 'net.fetch') {
       // Текст — как у сервера (PluginBridge.DispatchAsync).
       res = { ok: false, error: { code: 'unavailable', message: 'Обработчик не зарегистрирован: ' + String(op).split('.')[0] } };

@@ -13,6 +13,7 @@ import { useProjectFeature } from '../../lib/projectCapabilities';
 import { ProjectFeature, type Project } from '../../types';
 import { api, type PluginInfo } from '../../lib/api';
 import { useInstalledPlugins } from './useInstalledPlugins';
+import { eraseOnUninstall } from './pluginStorageLifecycle';
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import { DraftsSection } from './DraftsSection';
 
@@ -420,7 +421,7 @@ export function PluginsProjectSection({ project, onUpdated, onEdit }: {
           onConfirm={() => {
             const d = deleting;
             setDeleting(null);
-            api.plugins.uninstall(d.id).then(() => { void refresh(); onUpdated?.(project); }).catch(() => {});
+            api.plugins.uninstall(d.id).then(() => { eraseOnUninstall(d.id); void refresh(); onUpdated?.(project); }).catch(() => {});
           }}
           onCancel={() => setDeleting(null)}
         />

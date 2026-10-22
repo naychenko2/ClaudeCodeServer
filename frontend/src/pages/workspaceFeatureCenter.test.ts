@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
 import { centerWinner } from './workspace/DesktopWorkspace';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
-import { __test as backNavTest, recordBackNav, recordFeatureReturn, featureBackNavFrom } from '../lib/featureBackNav';
+import { __test as backNavTest, recordBackNav, recordFeatureReturn, featureBackNavFrom, backNavFrom, getBackNav } from '../lib/featureBackNav';
 import { centerOccupiedByOther, centerFingerprint, CENTER_OCCUPANCY_KEYS, type CenterOccupancy } from '../lib/centerOccupancy';
 import { __test as indexTest } from '../lib/featuresIndex';
 import { setFeaturePageTab, __test as pageTest } from '../lib/featurePage';
@@ -1643,6 +1643,53 @@ describe('WorkspacePage: центр — страница фичи соседом
     await act(async () => { vi.advanceTimersByTime(100); });
 
     expect(featureBackNavFrom('chatB'), 'указатель «фича → chatB» пережил обычный выбор другого чата').toBeNull();
+  });
+
+  // Ф-ал (шов Александра 2д-2): эффект монтирования воркспейса гасит ТОЛЬКО указатели
+  // fromKind='chat' («чат → чат» локальны для проекта). Возврат из фичи остаётся: переход
+  // «фича → чат другого проекта» настоящий, чип должен появиться. Мутация: вернуть
+  // безусловный clearBackNav() в эффекте — первый тест красный; снять fromKind-проверку
+  // совсем (никогда не гасить) — красный второй тест.
+  it('монтирование другого воркспейса: возврат «фича → чат» не гасится, чип виден (2д-2)', async () => {
+    const win = globalThis as any;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chat = chatB;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    // Переход с страницы фичи записан ДО монтирования нового воркспейса (другое
+    // пространство: фича в одном проекте, её ключевой чат — в другом).
+    recordFeatureReturn('f1', { kind: 'chat', id: 'chatB' }, 'Моя фича', undefined, false);
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Указатель пережил монтирование нового воркспейса.
+    expect(featureBackNavFrom('chatB'), 'указатель «фича → chatB» погашен монтированием воркспейса').not.toBeNull();
+    // Выбор chatB — чип «← к фиче» в шапке чата.
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-back-chip'),
+      'чип «← к фиче» не показан после перехода «фича → чат другого проекта»').not.toBeNull();
+  });
+
+  it('монтирование другого воркспейса: указатель «чат → чат» гасится (2д-2, парный)', async () => {
+    const win = globalThis as any;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    // «Чат → чат» из предыдущего проекта: локальный указатель, должен быть снят.
+    recordBackNav('chatOld', 'chatB');
+    expect(backNavFrom('chatB'), 'предусловие: указатель «чат → чат» записан').not.toBeNull();
+    mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(getBackNav(), 'указатель «чат → чат» пережил монтирование другого воркспейса').toBeNull();
   });
 
   it('автоскрытие: выбор другого чата (десктоп) — страница фичи скрыта', async () => {

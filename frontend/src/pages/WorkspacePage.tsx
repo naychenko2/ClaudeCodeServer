@@ -1919,11 +1919,15 @@ const windowWidth = useWindowWidth();
   }, []);
 
   // Смена проекта: WorkspacePage перемонтируется (key={project.id} в App), но указатель
-  // «← назад» (featureBackNav) — module-level и живёт до конца вкладки. Сбрасываем его,
-  // чтобы указатель из старого проекта (chat → фича/чат) не применился к новому, если
-  // id чата совпали (MINOR: «← назад» не должен перескакивать через границу проекта).
+  // «← назад» (featureBackNav) — module-level и живёт до конца вкладки. Сбрасываем только
+  // указатели fromKind === 'chat': «чат → чат» локален для проекта и не должен
+  // перескакивать через границу проекта (MINOR). Возврат из фичи (fromKind='feature')
+  // остаётся — сузено по решению Александра (шов 2д-2): переход «фича → чат другого
+  // проекта» настоящий, чип сверяет to.id с id чата (id — GUID, между проектами не
+  // совпадут), без projectId чип не рисуется (FeatureBackChip.tsx:21), а протухший
+  // указатель гасит следующий обычный выбор чата (handleSelectSession, :1440).
   useEffect(() => {
-    clearBackNav();
+    if (getBackNav()?.fromKind === 'chat') clearBackNav();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- по key={project.id} эффект
     // исполняется ровно на перемонтировании (смену проекта); [project.id] дублирует это
   }, []);

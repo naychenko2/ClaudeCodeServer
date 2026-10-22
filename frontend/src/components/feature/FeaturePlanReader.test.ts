@@ -98,6 +98,41 @@ const TEXTS = vi.hoisted(() => ({
     '## Внутри забора',
     '~~~',
   ].join('\n'),
+  // ```js внутри ```-забора — содержимое кода, забор не закрывает: `##` после неё остаётся в коде.
+  fenceInfo: [
+    'Преамбула.',
+    '## Раздел 1', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+    '## Раздел 6', 'тело 6',
+    '```',
+    '```js',
+    '## Внутри забора',
+    '```',
+  ].join('\n'),
+  // Забор с отступом 4 пробела — indented code, а не забор: `##` после него настоящий раздел.
+  fenceIndent4: [
+    'Преамбула.',
+    '## Раздел 1', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+    '    ```md',
+    '## Раздел 6', 'тело 6',
+  ].join('\n'),
+  // Заголовки с разметкой — подпись переключателя без `**`.
+  markup: [
+    'Преамбула.',
+    '## Шаг **два**', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+    '## Раздел 6', 'тело 6',
+  ].join('\n'),
 }));
 
 // 'flaky': первый вызов роняет (состояние error), последующие дают текст — путь «Повторить».
@@ -279,6 +314,8 @@ describe('FeaturePlanReader: свёртка разделов', () => {
       const props = reactProps(n);
       const style = props?.style as Record<string, unknown> | undefined;
       expect(Number(style?.minHeight ?? 0)).toBeGreaterThanOrEqual(40);
+      // Цель меряется по обеим сторонам: ширина тоже не меньше 40.
+      expect(Math.max(Number(style?.width ?? 0), Number(style?.minWidth ?? 0))).toBeGreaterThanOrEqual(40);
     }
   });
 
@@ -345,5 +382,63 @@ describe('FeaturePlanReader: свёртка разделов', () => {
     // Если бы ``` закрыл ~~~-забор, «## Внутри забора» стал бы седьмым разделом.
     expect(allNodes(container, 'plan-section-head').length).toBe(6);
     expect(allNodes(container, 'plan-reader-toc-item').length).toBe(6);
+  });
+
+  // === 14. Забор: info-строка не закрывает, отступ 4 не открывает ===
+  it('строка ```js внутри ```-забора не закрывает его: `##` после неё остаётся в коде', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('fenceInfo'), mockups: [] }));
+    await flush();
+    expect(allNodes(container, 'plan-section-head').length).toBe(6);
+    expect(allNodes(container, 'plan-reader-toc-item').length).toBe(6);
+  });
+
+  it('забор с отступом 4 пробела не открывает забор: следующий `##` — раздел', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('fenceIndent4'), mockups: [] }));
+    await flush();
+    expect(allNodes(container, 'plan-section-head').length).toBe(6);
+    expect(allNodes(container, 'plan-reader-toc-item').length).toBe(6);
+  });
+
+  // === 15. Подпись переключателя и «Содержание» — без markdown ===
+  it('aria-label переключателя и пункт «Содержание» без разметки markdown', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('markup'), mockups: [] }));
+    await flush();
+    const toggle = allNodes(container, 'plan-section-toggle')[0];
+    expect(toggle.getAttribute('aria-label')).toBe('Свернуть раздел Шаг два');
+    expect(textNodes(allNodes(container, 'plan-reader-toc-item')[0]).join(' ')).toBe('Шаг два');
+  });
+
+  // === 16. Клик по строке заголовка раздела ===
+  const fakeEvent = () => ({ stopPropagation: vi.fn() });
+
+  it('клик по строке заголовка переключает раздел', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    const head = allNodes(container, 'plan-section-head')[1];
+    act(() => { (reactProps(head)!.onClick as (e: unknown) => void)(fakeEvent()); });
+    expect(expandedFlags(container)).toEqual(['true', 'false', 'true', 'true', 'true', 'true']);
+    act(() => { (reactProps(allNodes(container, 'plan-section-head')[1])!.onClick as (e: unknown) => void)(fakeEvent()); });
+    expect(expandedFlags(container)).toEqual(['true', 'true', 'true', 'true', 'true', 'true']);
+  });
+
+  it('клик по шевелону переключает один раз и не всплывает к строке', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    const ev = fakeEvent();
+    act(() => { (reactProps(allNodes(container, 'plan-section-toggle')[0])!.onClick as (e: unknown) => void)(ev); });
+    expect(ev.stopPropagation).toHaveBeenCalledTimes(1);
+    expect(expandedFlags(container)[0]).toBe('false');
+  });
+
+  it('при выделенном тексте клик по строке заголовка не переключает', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    (globalThis as { window: { getSelection?: unknown } }).window.getSelection = () => ({ toString: () => 'выделено' });
+    try {
+      act(() => { (reactProps(allNodes(container, 'plan-section-head')[0])!.onClick as (e: unknown) => void)(fakeEvent()); });
+      expect(expandedFlags(container)[0]).toBe('true');
+    } finally {
+      delete (globalThis as { window: { getSelection?: unknown } }).window.getSelection;
+    }
   });
 });

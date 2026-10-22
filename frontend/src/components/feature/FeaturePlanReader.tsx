@@ -26,6 +26,7 @@ import { NavTargetButton, NavTargetPair } from './NavTargetButton';
 import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { hhmm, dateOnly } from '../chat/feature/featureTime';
 import { api } from '../../lib/api';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
 
 // === Роль документа: подпись + цвет значка (макет §токены) ===
@@ -73,11 +74,13 @@ function splitDoc(text: string): { preamble: string; sections: PlanSection[] } {
   let fenceLen = 0;
   for (let i = 0; i < lines.length; i++) {
     // Строка-забор меняет состояние, но остаётся в теле раздела: её рендерит общий рендер.
-    const m = /^\s*(`{3,}|~{3,})/.exec(lines[i]);
+    // Отступ забора — до 3 пробелов (таб = 4: это уже indented code). Закрывает забор только
+    // строка из одного забора и пробелов: ```js внутри ```-забора — содержимое кода.
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[i]);
     if (m) {
       const run = m[1];
       if (fence === null) { fence = run[0]; fenceLen = run.length; }
-      else if (run[0] === fence && run.length >= fenceLen) { fence = null; }
+      else if (run[0] === fence && run.length >= fenceLen && m[2].trim() === '') { fence = null; }
       continue;
     }
     if (!fence && /^##\s+/.test(lines[i])) heads.push(i);
@@ -85,7 +88,7 @@ function splitDoc(text: string): { preamble: string; sections: PlanSection[] } {
   const sections = heads.map((start, k) => {
     const block = lines.slice(start, k + 1 < heads.length ? heads[k + 1] : lines.length);
     const m = /^##\s+(.+?)\s*$/.exec(block[0]);
-    return { head: block[0], title: m ? m[1] : block[0], body: block.slice(1).join('\n').trim() };
+    return { head: block[0], title: markdownToPlain((m ? m[1] : block[0]).replace(/<\/?[A-Za-z][^>]*>/g, '')), body: block.slice(1).join('\n').trim() };
   });
   return { preamble: lines.slice(0, heads[0] ?? 0).join('\n').trim(), sections };
 }
@@ -150,6 +153,12 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
     target.style.scrollMarginTop = '72px';
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+
+  const toggleSection = (i: number, expanded: boolean) => setCollapsed(s => {
+    const next = new Set(s);
+    if (expanded) next.add(i); else next.delete(i);
+    return next;
+  });
 
   // Текст по клику: GET /api/tasks/{id} → resultMarkdown. Кэш на время жизни страницы.
   useEffect(() => {
@@ -378,7 +387,12 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                           h2 остаётся заголовком, переключатель — отдельная кнопка-шевелон рядом. */}
                       <div
                         data-testid="plan-section-head"
-                        style={{ display: 'flex', alignItems: 'center', gap: SP.sm, textAlign: 'left' }}
+                        onClick={() => {
+                          // Выделяя текст заголовка, человек не хочет сворачивать раздел.
+                          if (window.getSelection?.()?.toString()) return;
+                          toggleSection(i, expanded);
+                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: SP.sm, textAlign: 'left', cursor: 'pointer' }}
                       >
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <MarkdownContent text={sec.head} />
@@ -389,13 +403,13 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                           aria-expanded={expanded}
                           aria-label={`${expanded ? 'Свернуть' : 'Развернуть'} раздел ${sec.title}`}
                           title={expanded ? 'Свернуть раздел' : 'Развернуть раздел'}
-                          onClick={() => setCollapsed(s => {
-                            const next = new Set(s);
-                            if (expanded) next.add(i); else next.delete(i);
-                            return next;
-                          })}
+                          onClick={e => {
+                            // Строка заголовка тоже переключает: без остановки клик сработал бы дважды.
+                            e?.stopPropagation?.();
+                            toggleSection(i, expanded);
+                          }}
                           style={{
-                            width: 34, minHeight: isMobile ? 40 : 26, flexShrink: 0,
+                            width: 34, minWidth: isMobile ? 40 : undefined, minHeight: isMobile ? 40 : 26, flexShrink: 0,
                             border: 'none', background: 'transparent', cursor: 'pointer',
                             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                             color: C.textSecondary,

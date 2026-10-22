@@ -32,6 +32,13 @@ public static class ToolCallLeakDetector
     // Инлайн-код в markdown: `…` (в одной строке; незакрытый — до конца строки).
     private static readonly Regex InlineCode = new(@"`[^`\n]+`", RegexOptions.Compiled);
 
+    // Имя инструмента в утёкшем вызове: XML-формат Qwen (<function=ИМЯ>) или Anthropic
+    // (<invoke name="ИМЯ">). Нужно, чтобы отличить слип формата от вызова инструмента,
+    // которого у сессии нет: Strata такой вызов возвращает текстом, и просьба «повтори
+    // в штатном формате» не поможет никогда (22.10, задача A1 «Погода»).
+    private static readonly Regex FunctionName = new(
+        @"<function=([A-Za-z0-9_\-\.]+)>|<invoke name=""([A-Za-z0-9_\-\.]+)""", RegexOptions.Compiled);
+
     // Первый найденный маркер или null (утечки нет).
     public static string? Detect(string? text)
     {
@@ -40,6 +47,15 @@ public static class ToolCallLeakDetector
         foreach (var sig in Signatures)
             if (stripped.Contains(sig, StringComparison.Ordinal)) return sig;
         return null;
+    }
+
+    // Имя инструмента из первого утёкшего вызова (вне кода) или null — имени не видно.
+    public static string? ExtractToolName(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+        var m = FunctionName.Match(StripCodeSpans(text));
+        if (!m.Success) return null;
+        return m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
     }
 
     // Вырезает содержимое markdown-код-блоков и инлайн-кода: маркеры XML-формата

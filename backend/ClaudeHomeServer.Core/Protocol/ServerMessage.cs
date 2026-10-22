@@ -267,7 +267,9 @@ public record TruncatedMessage() : ServerMessage("truncated");
 // человек читает, чуть больше контекста ок); тот же текст SubagentPrompts.TruncateSnippet
 // режет ещё до 120 для текста директивы (модель читает, не раздуваем инструкцию).
 // Два разных лимита — осознанно: у плашки и у директивы разная аудитория.
-public record ToolCallLeakMessage(string Kind, string? AfterTool, string Snippet)
+// Tool — имя инструмента из утёкшего вызова (ToolCallLeakDetector.ExtractToolName) или null:
+// по нему исполнитель отличает слип формата от вызова инструмента, которого у сессии нет.
+public record ToolCallLeakMessage(string Kind, string? AfterTool, string Snippet, string? Tool = null)
     : ServerMessage("tool_call_leak");
 
 // Скрытое (зашифрованное) размышление — блок redacted_thinking

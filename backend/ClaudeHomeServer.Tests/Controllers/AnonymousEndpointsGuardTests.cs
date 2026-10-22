@@ -69,6 +69,8 @@ public class AnonymousEndpointsGuardTests
         "minimal: ANY /gw/t/{turnId}/egress",
         "minimal: ANY /gw/t/{turnId}/llm/{**path}",
         "minimal: ANY /gw/t/{turnId}/mcp/{name}/{**tail}",
+        // OCR рук локального проекта — тот же TurnTokenEndpointFilter, что у остальных ручек шлюза
+        "minimal: POST /gw/t/{turnId}/ocr",
         "minimal: GET /.well-known/aihome-modules/jwks.json",
         // Раздача фронта (SPA)
         "minimal: GET,HEAD {*path:nonfile}",

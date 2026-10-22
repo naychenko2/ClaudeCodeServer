@@ -44,7 +44,7 @@ public partial class SessionManagerTests
         var adapter = StubAdapter(entry);
         adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
                 It.IsAny<int>(), It.IsAny<bool>()))
-            .Callback((string _, IReadOnlyList<string>? _, int d, bool s) =>
+            .Callback((string _, IReadOnlyList<string>? _, int d, bool s, string? _) =>
             {
                 fake.LastDepth = d;
                 if (fake.DeferTurn) return;

@@ -149,8 +149,10 @@ public class RunDelegationGateTests : IDisposable
             "прогон делегированного хода делегирован, пока живы его фоновые агенты");
         (await ChatsSendAsync(client, sessionId, otherId)).Should().Contain("недоступно на делегированном ходу",
             "фоновый агент не пишет в третьи чаты");
-        (await RunExecutorAsync(client, sessionId)).Should().Contain("недоступно на делегированном ходу",
-            "и не запускает исполнителей");
+        // Запуск исполнителя на глубине 1 разрешён (RunExecutorAllowedDepth): фоновый агент
+        // хода глубины 1 вправе ровно то же, что сам ход, — гейт пропускает, отказ только по задаче
+        (await RunExecutorAsync(client, sessionId)).Should().Contain("не найдена")
+            .And.NotContain("делегированном", "глубина 1 — в пределах разрешённой для запуска исполнителя");
 
         // Авто-ход глубины 0 (автоматика, не человек) делегированность прогона не снимает
         await Sessions.SendOrEnqueueAsync(sessionId, "автоматика");

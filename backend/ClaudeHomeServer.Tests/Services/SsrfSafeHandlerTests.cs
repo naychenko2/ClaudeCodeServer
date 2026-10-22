@@ -191,7 +191,13 @@ public class SsrfSafeHandlerTests
             .Select(f => Path.GetRelativePath(backend, f).Replace('\\', '/'))
             .ToList();
 
-        owners.Should().Equal("ClaudeHomeServer.Core/Services/SsrfSafeHandler.cs");
+        // PluginNetProxy — известный долг, а не разрешение: своя копия пришла с плагинами (ADR-031 §3.4)
+        // параллельно с примитивом. Адреса он проверяет тем же SsrfGuard.IsPublic, HTTP/3 сейчас
+        // недостижим (запрос с версией по умолчанию, RequestVersionOrLower). Перевод на SsrfSafeHandler —
+        // отдельной задачей; после неё строка уходит, и сторож снова пускает ровно одного владельца.
+        owners.Should().Equal(
+            "ClaudeHomeServer.Core/Services/SsrfSafeHandler.cs",
+            "ClaudeHomeServer.Plugins/Services/PluginNetProxy.cs");
     }
 
     [Fact]

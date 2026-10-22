@@ -1026,6 +1026,9 @@ export default function App() {
         .then(list => {
           const p = list.find(x => x.id === d.projectId)
           if (!p) { showToast('Фича', 'Проект фичи недоступен — возможно, он удалён.'); return }
+          // minor (ревью Ф9b-д4, зам. 1): чат запасного перехода выбирается тем же каналом,
+          // что и диплинк: WorkspacePage читает cc_pending_project_chat при монтировании.
+          if (d.chatId) sessionStorage.setItem('cc_pending_project_chat', `${d.projectId}|${d.chatId}`)
           recordRecentProject(p.id)
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
           localStorage.setItem(HUB_TAB_KEY, 'projects')

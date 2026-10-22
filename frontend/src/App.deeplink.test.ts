@@ -67,8 +67,8 @@ const { store, sstore } = vi.hoisted(() => {
   return { store, sstore };
 });
 
-// ── api: projects.list отдаёт проект p1; остальное — no-op ──
-const mockData = vi.hoisted(() => ({ projects: [] as Project[] }));
+// ── api: projects.list отдаёт проект p1 (или падает, если fail); остальное — no-op ──
+const mockData = vi.hoisted(() => ({ projects: [] as Project[], fail: false }));
 vi.mock('./lib/api', () => {
   const ns = (overrides: Record<string, () => any>): any => new Proxy({}, {
     get: (_t, prop) => {
@@ -79,13 +79,20 @@ vi.mock('./lib/api', () => {
   });
   const api: any = new Proxy({}, {
     get: (_t, prop) => {
-      if (prop === 'projects') return ns({ list: () => Promise.resolve(mockData.projects) });
+      if (prop === 'projects') return ns({ list: () => mockData.fail ? Promise.reject(new Error('list')) : Promise.resolve(mockData.projects) });
       if (prop === 'auth') return ns({ me: () => Promise.resolve(null) });
       return () => Promise.resolve(null);
     },
   });
   return { api, setGitSessionContext: () => {} };
 });
+
+// ── toast: журнал тостов (тосты запасного перехода и его отказы) ──
+const toastMock = vi.hoisted(() => ({ calls: [] as string[] }));
+vi.mock('./lib/toast', () => ({
+  __esModule: true,
+  showToast: (title: string, body: string) => { toastMock.calls.push(`${title}: ${body}`); },
+}));
 
 // ── signalr / terminalSignalr / agentHub: подписки и действия no-op ──
 vi.mock('./lib/signalr', () => {
@@ -233,30 +240,34 @@ const project: Project = {
   tagRegistry: [], subjectRegistry: [], subjectsSweepSince: null,
 } as Project;
 
+// Окно для обоих describe: installFakeDom + настоящий location/history/listeners
+// (installFakeDom сбрасывает window/location — возвращаем диплинк и историю).
+function setupTestWindow() {
+  vi.useFakeTimers();
+  installFakeDom();
+  const win = globalThis as any;
+  win.window.location = { hash: '#/project/p1/feature/f1', href: 'http://x/', origin: 'http://x', protocol: 'http:', host: 'x', pathname: '/', search: '' };
+  win.window.history = { state: null, pushState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; }, replaceState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; }, back: () => {}, go: () => {}, forward: () => {}, length: 1 };
+  const winListeners: Record<string, Set<Function>> = {};
+  win.window.addEventListener = (t: string, f: Function) => { (winListeners[t] ??= new Set()).add(f); };
+  win.window.removeEventListener = (t: string, f: Function) => { winListeners[t]?.delete(f); };
+  win.window.dispatchEvent = (e: any) => { (winListeners[e?.type] ?? new Set()).forEach(f => f(e)); return true; };
+  win.window.setTimeout = win.setTimeout; win.window.clearTimeout = win.clearTimeout;
+  win.window.setInterval = win.setInterval; win.window.clearInterval = win.clearInterval;
+  win.window.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+  win.window.getSelection = () => null;
+  win.window.requestAnimationFrame = (cb: any) => { cb(0); return 1; };
+  win.window.cancelAnimationFrame = () => {};
+  win.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+  win.getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px' });
+  win.MutationObserver = class { observe() {} disconnect() {} takeRecords() { return []; } };
+  win.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} };
+  win.Image = class { set src(_v: string) {} onload: any; onerror: any; width = 0; height = 0; };
+}
+
 describe('App: диплинк #/project/{pid}/feature/{fid} — проект не запомнен, /me позже', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-    installFakeDom();
-    const win = globalThis as any;
-    // installFakeDom сбрасывает window/location — возвращаем диплинк и историю
-    win.window.location = { hash: '#/project/p1/feature/f1', href: 'http://x/', origin: 'http://x', protocol: 'http:', host: 'x', pathname: '/', search: '' };
-    win.window.history = { state: null, pushState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; }, replaceState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; }, back: () => {}, go: () => {}, forward: () => {}, length: 1 };
-    const winListeners: Record<string, Set<Function>> = {};
-    win.window.addEventListener = (t: string, f: Function) => { (winListeners[t] ??= new Set()).add(f); };
-    win.window.removeEventListener = (t: string, f: Function) => { winListeners[t]?.delete(f); };
-    win.window.dispatchEvent = (e: any) => { (winListeners[e?.type] ?? new Set()).forEach(f => f(e)); return true; };
-    win.window.setTimeout = win.setTimeout; win.window.clearTimeout = win.clearTimeout;
-    win.window.setInterval = win.setInterval; win.window.clearInterval = win.clearInterval;
-    win.window.fetch = () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
-    win.window.getSelection = () => null;
-    win.window.requestAnimationFrame = (cb: any) => { cb(0); return 1; };
-    win.window.cancelAnimationFrame = () => {};
-    win.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
-    win.getComputedStyle = () => ({ paddingLeft: '0px', paddingRight: '0px' });
-    win.MutationObserver = class { observe() {} disconnect() {} takeRecords() { return []; } };
-    win.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} };
-    win.Image = class { set src(_v: string) {} onload: any; onerror: any; width = 0; height = 0; };
-
+    setupTestWindow();
     store.clear(); sstore.clear();
     flagsTest.reset(); // «не загружено»: toHash не схлопывает сегмент feature до ответа /me
     // auth задан (токен в localStorage) → эффект диплинка запустится; проект НЕ запомнен
@@ -284,5 +295,64 @@ describe('App: диплинк #/project/{pid}/feature/{fid} — проект н�
     // Проект запомнен (OPEN_PROJECT_KEY) и адрес — #/project/p1/feature/f1
     expect(JSON.parse(store.get('cc_open_project') ?? 'null')?.id).toBe('p1');
     expect((globalThis as any).window.location.hash).toContain('/feature/f1');
+  });
+});
+
+// ═══ Ф-хв (ревью Ф9b-д4, зам. 1 и 4): запасный переход из раздела «Чаты» ═══════════
+// Чип «← к фиче» вне воркспейса шлёт cc-open-project-feature с chatId: обработчик
+// открывает проект со страницей фичи И пишет чат в канал выбора cc_pending_project_chat
+// (тот же, что диплинк) — иначе WorkspacePage при монтировании нужный чат не выберет.
+// Плюс два отказных тоста (проект не найден / список не загрузился) — раньше без тестов.
+describe('App: cc-open-project-feature — канал выбора чата и отказные тосты', () => {
+  beforeEach(() => {
+    setupTestWindow();
+    store.clear(); sstore.clear();
+    flagsTest.reset();
+    store.set('cc_token', 't');
+    store.set('cc_server_url', 'http://x');
+    store.set('cc_username', 'u');
+    mockData.fail = false;
+    mockData.projects = [project];
+    toastMock.calls.length = 0;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  const openFeature = () => {
+    (globalThis as any).window.dispatchEvent(
+      new CustomEvent('cc-open-project-feature', { detail: { projectId: 'p1', featureId: 'f1', chatId: 'chat-1' } }),
+    );
+  };
+
+  it('событие с chatId → канал cc_pending_project_chat записан (мутация: убрать запись → red)', async () => {
+    mount(createElement(App));
+    openFeature();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // КЛЮЧЕВОЕ: чат передан в канал выбора — тот же формат, что у диплинка («pid|chatId»).
+    expect(sstore.get('cc_pending_project_chat'), 'чат не попал в канал выбора').toBe('p1|chat-1');
+    // Снимок истории несёт фичу и чат.
+    expect(getNav()?.feature, 'featureId потерян в снимке').toBe('f1');
+    expect(getNav()?.chatId).toBe('chat-1');
+  });
+
+  it('проект не найден → тост «Проект фичи недоступен», канал не записан', async () => {
+    mockData.projects = [];
+    mount(createElement(App));
+    openFeature();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(toastMock.calls.some(t => t.includes('Проект фичи недоступен')), 'тоста о недоступном проекте нет').toBe(true);
+    expect((globalThis as any).sessionStorage.getItem('cc_pending_project_chat'), 'канал не должен быть написан').toBe(null);
+  });
+
+  it('список проектов не загрузился → тост «Не удалось открыть проект фичи»', async () => {
+    mockData.fail = true;
+    mount(createElement(App));
+    openFeature();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(toastMock.calls.some(t => t.includes('Не удалось открыть проект фичи')), 'тоста о сбое списка нет').toBe(true);
+    expect((globalThis as any).sessionStorage.getItem('cc_pending_project_chat'), 'канал не должен быть написан').toBe(null);
   });
 });

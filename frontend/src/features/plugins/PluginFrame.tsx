@@ -312,14 +312,21 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
       // не из cc_user_id в хранилище: id есть сразу после входа, независимо от
       // «запомни меня». Пустой id — fail-closed: unavailable, ни одной записи.
       const ownerId = getMeSnapshot().userId ?? '';
-      const res = handleStorageCall({
-        op: msg.op.slice('storage.'.length) as StorageOp,
-        args,
-        granted: p.granted,
-        ownerId,
-        pluginId: p.id,
-        store: localStorage,
-      });
+      // Даже само чтение window.localStorage бросает SecurityError при отключённом
+      // хранилище — поэтому получение store внутри try: панель всегда получает result.
+      let res: ReturnType<typeof handleStorageCall>;
+      try {
+        res = handleStorageCall({
+          op: msg.op.slice('storage.'.length) as StorageOp,
+          args,
+          granted: p.granted,
+          ownerId,
+          pluginId: p.id,
+          store: localStorage,
+        });
+      } catch {
+        res = { ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' } };
+      }
       if (res.ok) {
         postToFrame(buildResultMessage(msg.id, true, res.data));
       } else {

@@ -198,20 +198,55 @@ describe('пределы (инв. 6)', () => {
     expect(call(store, 'set', { key: 'k0', value: 2 }).ok).toBe(true);
   });
 
-  it('128 КиБ на плагин: ровно 128 КиБ проходит, +1 байт → limit', () => {
+  it('128 КиБ на плагин считаются по keyBytes (ключ + значение): объём ≤ предела, +1 байт → limit', () => {
     const store = new MapStore();
-    // Один ключ не может быть 128 КиБ (предел значения 8 КиБ), набираем 16 ключей.
+    // Ключи одной длины ('k00'..'k15'): 16 записей, значение подбираем так, чтобы
+    // ключ+значение в сумме дали ровно предел. Инвариант: фактический объём по
+    // storage.keys → bytes никогда не превышает PLUGIN_BYTES_MAX.
     const n = 16;
-    const keyLen = keyOf('k0').length; // все ключы 'kN' одной длины
+    const keyLen = keyOf('k00').length;
     const rawLen = (PLUGIN_BYTES_MAX - n * keyLen) / n;
     const value = 'a'.repeat(rawLen - 2); // JSON — с кавычками
     for (let i = 0; i < n; i++) {
-      expect(call(store, 'set', { key: `k${i}`, value }).ok).toBe(true);
+      expect(call(store, 'set', { key: `k${String(i).padStart(2, '0')}`, value }).ok).toBe(true);
     }
-    const r2 = call(store, 'set', { key: 'tiny', value: 'x' });
+    const bytes = (call(store, 'keys').data as { bytes: number }).bytes;
+    expect(bytes).toBe(PLUGIN_BYTES_MAX);
+    // Любая новая запись (даже ключ 1 символ + значение 1 символ) превысила бы предел.
+    const r2 = call(store, 'set', { key: 'x', value: 1 });
     expect(r2.ok).toBe(false);
     expect(r2.error.code).toBe('limit');
-    expect(store.getItem(keyOf('tiny'))).toBe(null);
+    expect(store.getItem(keyOf('x'))).toBe(null);
+    // Перезапись на то же значение — объём не растёт, проходит; на большее — limit.
+    expect(call(store, 'set', { key: 'k00', value }).ok).toBe(true);
+    expect(call(store, 'set', { key: 'k00', value: value + 'b' }).ok).toBe(false);
+  });
+
+  it('последняя запись, выходящая за 128 КиБ ровно на 1 байт (из-за длины ключа), отвергается', () => {
+    const store = new MapStore();
+    const n = 16;
+    const keyLen = keyOf('k00').length;
+    const rawLen = (PLUGIN_BYTES_MAX - n * keyLen) / n;
+    const value = 'a'.repeat(rawLen - 2);
+    for (let i = 0; i < n - 1; i++) {
+      expect(call(store, 'set', { key: `k${String(i).padStart(2, '0')}`, value }).ok).toBe(true);
+    }
+    // Значение на 1 символ длиннее: по keyBytes суммарно PLUGIN_BYTES_MAX + 1.
+    const r = call(store, 'set', { key: 'k15', value: value + 'b' });
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('limit');
+    expect((call(store, 'keys').data as { bytes: number }).bytes).toBeLessThanOrEqual(PLUGIN_BYTES_MAX);
+  });
+
+  it('набивка максимальными записями: объём по keys → bytes не превышает 128 КиБ ни на одном шаге', () => {
+    const store = new MapStore();
+    const value = 'a'.repeat(VALUE_MAX_BYTES - 2);
+    for (let i = 0; i < 30; i++) {
+      call(store, 'set', { key: `key-${i}`, value });
+      expect((call(store, 'keys').data as { bytes: number }).bytes).toBeLessThanOrEqual(PLUGIN_BYTES_MAX);
+    }
+    // Предел достигнут: следующая такая запись отвергнута.
+    expect(call(store, 'set', { key: 'key-last', value }).ok).toBe(false);
   });
 
   it('1 МиБ на весь ccs.plugin.* в origin: превышение → limit, store не изменён', () => {
@@ -311,16 +346,44 @@ describe('ошибки хранилища (инв. 7)', () => {
     expect(r.error.code).toBe('limit');
   });
 
-  it('SecurityError от store → unavailable', () => {
+  it('SecurityError от store.setItem → unavailable', () => {
     const store = new MapStore();
     store.setItem = () => {
-      const e = new Error('sandboxed');
-      e.name = 'SecurityError';
-      throw e;
+      throw Object.assign(new Error('sandboxed'), { name: 'SecurityError' });
     };
     const r = call(store, 'set', { key: 'a', value: 1 });
     expect(r.ok).toBe(false);
     expect(r.error.code).toBe('unavailable');
+  });
+
+  // Хранилище отключено целиком: бросает любое обращение. Панель обязана получить
+  // result unavailable на КАЖДОЙ операции, store при этом не меняется.
+  const sec = () => Object.assign(new Error('sandboxed'), { name: 'SecurityError' });
+  for (const [op, args] of [
+    ['get', { key: 'a' }],
+    ['set', { key: 'a', value: 1 }],
+    ['remove', { key: 'a' }],
+    ['keys', {}],
+  ] as const) {
+    it(`SecurityError на любом обращении к store → ${op}: unavailable, store не тронут`, () => {
+      const store = new MapStore();
+      store.m.set(keyOf('keep'), '1');
+      const writes: string[] = [];
+      store.getItem = () => { throw sec(); };
+      store.removeItem = (k: string) => { writes.push(k); throw sec(); };
+      store.setItem = (k: string) => { writes.push(k); throw sec(); };
+      Object.defineProperty(store, 'length', { get() { throw sec(); } });
+      const r = call(store, op, { ...args });
+      expect(r.ok).toBe(false);
+      expect(r.error.code).toBe('unavailable');
+      expect(store.m.get(keyOf('keep'))).toBe('1');
+    });
+  }
+
+  it('не-SecurityError пробрасывается как раньше', () => {
+    const store = new MapStore();
+    store.getItem = () => { throw new Error('boom'); };
+    expect(() => call(store, 'get', { key: 'a' })).toThrow('boom');
   });
 });
 

@@ -359,6 +359,24 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
     expect(textNodes(container).join(' ')).toContain('Нет права net:example.com');
   });
 
+  // Хранилище отключено (Firefox dom.storage.enabled=false, приватный режим): уже
+  // чтение window.localStorage бросает SecurityError. Панель обязана получить
+  // result unavailable, а не висеть (инвариант 7).
+  for (const op of ['storage.get', 'storage.set', 'storage.remove', 'storage.keys']) {
+    it(`localStorage бросает SecurityError → ${op} отвечает unavailable`, async () => {
+      const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+      Object.defineProperty(globalThis, 'localStorage', {
+        configurable: true,
+        get() { throw Object.assign(new Error('denied'), { name: 'SecurityError' }); },
+      });
+      callFromPanel(panelWin, op, { key: 'city', value: 1 });
+      expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
+      expect(sent[0]).toEqual({
+        source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' },
+      });
+    });
+  }
+
   // Fail-closed: нет id владельца в состоянии авторизации — unavailable, ни одной
   // записи. cc_user_id в хранилище больше ни на что не влияет — источник один
   // (getMeSnapshot), как в pluginStorageLifecycle.ts.

@@ -66,7 +66,20 @@ function jsonUnrepresentable(value) {
  * op: get|set|remove|keys; args: {key} / {key, value} / {}.
  * Возвращает {ok:true, data} или {ok:false, error:{code, message}}.
  */
-export function handleStorageCall({ op, args, granted, ownerId, pluginId, store }) {
+export function handleStorageCall(input) {
+  // SecurityError (хранилище отключено/приватный режим) бросает любое обращение к
+  // store — get/remove/keys/length/key(i), не только setItem. Для панели это
+  // unavailable на ЛЮБОЙ операции: иначе исключение уходит в хост, а промис
+  // ccsPlugin.call висит вечно (ревью Глеба R2, инвариант 7).
+  try {
+    return handleStorageCallImpl(input);
+  } catch (e) {
+    if (e && e.name === 'SecurityError') return fail('unavailable', 'Хранилище недоступно');
+    throw e;
+  }
+}
+
+function handleStorageCallImpl({ op, args, granted, ownerId, pluginId, store }) {
   // 1. Право — только по granted состояния хоста (п.2).
   if (!Array.isArray(granted) || !granted.includes('storage')) {
     return fail('denied', 'Нет права: storage');
@@ -126,12 +139,15 @@ export function handleStorageCall({ op, args, granted, ownerId, pluginId, store 
         return fail('limit', 'Больше 100 ключей на плагин');
       }
       const ownBytes = ownKeys.reduce((sum, k) => sum + keyBytes(store, k), 0);
-      const newOwnBytes = ownBytes - (oldRaw === null ? 0 : oldRaw.length) + raw.length;
+      // Объём — по той же мере, что keyBytes/storage.keys: длина ключа + длина значения.
+      const oldBytes = oldRaw === null ? 0 : fullKey.length + oldRaw.length;
+      const newBytes = fullKey.length + raw.length;
+      const newOwnBytes = ownBytes - oldBytes + newBytes;
       if (newOwnBytes > PLUGIN_BYTES_MAX) return fail('limit', 'Больше 128 КиБ на плагин');
 
       const originKeys = allKeys(store).filter(k => k.startsWith(STORAGE_PREFIX));
       const originBytes = originKeys.reduce((sum, k) => sum + keyBytes(store, k), 0);
-      const newOriginBytes = originBytes - (oldRaw === null ? 0 : oldRaw.length) + raw.length;
+      const newOriginBytes = originBytes - oldBytes + newBytes;
       if (newOriginBytes > ORIGIN_BYTES_MAX) return fail('limit', 'Хранилище плагинов больше 1 МиБ');
 
       try {

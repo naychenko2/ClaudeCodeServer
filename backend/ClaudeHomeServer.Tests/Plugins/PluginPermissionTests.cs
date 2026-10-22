@@ -69,4 +69,16 @@ public class PluginPermissionTests
     [Fact]
     public void IsKnown_NetValidHost_Истина() =>
         PluginPermission.IsKnown("net:api.linear.app").Should().BeTrue();
+
+    // --- IsKnown: право storage (шаг B1): точное «storage» известно; параметр и регистр — нет ---
+
+    [Fact]
+    public void IsKnown_Storage_Истина() =>
+        PluginPermission.IsKnown("storage").Should().BeTrue();
+
+    [Theory]
+    [InlineData("storage:x")]
+    [InlineData("Storage")]
+    public void IsKnown_Storage_НеточнаяФорма_Ложь(string permission) =>
+        PluginPermission.IsKnown(permission).Should().BeFalse();
 }

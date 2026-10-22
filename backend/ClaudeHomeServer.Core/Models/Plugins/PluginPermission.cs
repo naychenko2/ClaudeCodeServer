@@ -13,6 +13,9 @@ public static class PluginPermission
 {
     public const string NotesRead = "notes:read";
     public const string TasksRead = "tasks:read";
+    // Право хостового хранилища панели (шаг B1): сервер знает право, обработчик операций
+    // storage.get/set/remove/keys живёт на фронте (шаг F1) — в мосте его нет.
+    public const string Storage = "storage";
 
     // Грамматика точного хоста (rework C3, minor): [a-z0-9.-]+ и опционально :port (1..5 цифр).
     // До фикса IsKnown принимал ЛЮБОЙ непустой параметр net:* — «принимает что угодно».
@@ -27,7 +30,7 @@ public static class PluginPermission
     public static bool IsKnown(string? permission)
     {
         if (string.IsNullOrEmpty(permission)) return false;
-        if (permission is NotesRead or TasksRead) return true;
+        if (permission is NotesRead or TasksRead or Storage) return true;
         if (permission.StartsWith("net:", StringComparison.Ordinal))
             return IsHost(permission["net:".Length..]);
         if (permission.StartsWith("secret:", StringComparison.Ordinal))

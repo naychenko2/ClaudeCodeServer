@@ -1780,6 +1780,40 @@ describe('WorkspacePage: центр — страница фичи соседом
   it('запасный переход при восстановленном активном чате — страница остаётся (мобила 360)', () => runFallbackTransition(true, true));
   it('запасный переход при восстановленном активном чате — страница остаётся (десктоп 1280)', () => runFallbackTransition(false, true));
 
+  // Находка MINOR (ревью 0fe2753c): строка feature в записи навигации при запасном переходе
+  // не была покрыта — в beforeEach pushState/replaceState no-op, и проверки hash проходили
+  // по нему, а не по реальному снимку. Здесь история пишет state и hash (как recordHistory),
+  // поэтому проверяется и запись, и адрес. Мутация: feature = null в WorkspacePage.tsx
+  // (строка 1471) → красный.
+  it('запасный переход: запись истории несёт feature, адрес — с /feature/ (десктоп 1280)', async () => {
+    const win = globalThis as any;
+    recordHistory();
+    win.window.innerWidth = 1280;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chats.push(chatB);
+    wsState.activeSession = null;
+    // Снимок, который кладёт App.tsx на запасном переходе: feature + chatId.
+    win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'chat-panel'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+    // Выбор чата под открытой страницей: новая запись истории сохраняет feature страницы.
+    expect(getNav()?.feature, 'запись навигации потеряла feature (запасный переход)').toBe('f1');
+    expect(getNav()?.chatId, 'запись навигации потеряла chatId (запасный переход)').toBe('chatB');
+    expect(win.window.location.hash, 'адрес потерял /feature/ (запасный переход)').toContain('/feature/');
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи закрылась при запасном переходе').not.toBeNull();
+  });
+
   // Парный: тот же холодный переход, затем ЯВНЫЙ выбор ДРУГОГО чата (тот же канал, что в
   // тестах автоскрытия выше) — автоскрытие работает, страница закрыта. Мутация «вернуть
   // false третьим аргументом» (то есть закрыть и холодный выбор) краснит предыдущий тест.

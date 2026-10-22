@@ -1,0 +1,196 @@
+/**
+ * Операции storage.* для плагинов — чистая логика, общая для боевого хоста
+ * (обычный import) и эмулятора панели (<script type="module">). Логика пишется
+ * ОДИН раз: ошибка в одной копии — дыра (решение Александра, шаг F1).
+ *
+ * Прямого доступа к localStorage у модуля нет: хост передаёт store в форме
+ * Storage. Префикс ccs.plugin.<ownerId>.<pluginId>. собирает только хост —
+ * модуль берёт ownerId и pluginId сверху, из args их не достаёт. Поля
+ * сообщения панели (свои granted/pluginId/ownerId/prefix) на проверку права
+ * и префикс не влияют.
+ */
+
+// Префикс всего хранилища плагинов в origin.
+export const STORAGE_PREFIX = 'ccs.plugin.';
+
+// Пределы (в code units UTF-16 — так считает квота браузера).
+export const KEY_MAX_LEN = 64;
+export const VALUE_MAX_BYTES = 8 * 1024; // 8 КиБ сериализованного JSON на значение
+export const KEYS_MAX_PER_PLUGIN = 100; // ключей на плагин
+export const PLUGIN_BYTES_MAX = 128 * 1024; // 128 КиБ на плагин
+export const ORIGIN_BYTES_MAX = 1024 * 1024; // 1 МиБ на весь ccs.plugin.* в origin
+
+// Ключ: 1–64 символов из [A-Za-z0-9._-]. Разделитель префикса — «.», поэтому
+// подряд идущие точки («..») запрещены: ключ не должен выглядеть границей
+// префикса (Александр, чек-лист инвариантов, п.3).
+const KEY_RE = /^[A-Za-z0-9._-]{1,64}$/;
+// pluginId — грамматика publisher/slug, обе части [a-z0-9-].
+const PLUGIN_ID_RE = /^[a-z0-9-]+\/[a-z0-9-]+$/;
+
+function fail(code, message) {
+  return { ok: false, error: { code, message } };
+}
+
+function prefixOf(ownerId, pluginId) {
+  return STORAGE_PREFIX + ownerId + '.' + pluginId + '.';
+}
+
+function validKey(key) {
+  return typeof key === 'string' && key.length >= 1 && key.length <= KEY_MAX_LEN && KEY_RE.test(key) && !key.includes('..');
+}
+
+// Все ключи store через индексацию Storage (key(i)/length).
+function allKeys(store) {
+  const out = [];
+  for (let i = 0; i < store.length; i++) {
+    const k = store.key(i);
+    if (typeof k === 'string') out.push(k);
+  }
+  return out;
+}
+
+// Байты ключа: длина ключа + длина сохранённого значения, в code units.
+function keyBytes(store, key) {
+  const raw = store.getItem(key);
+  return key.length + (raw === null ? 0 : raw.length);
+}
+
+// Значение, которое нельзя выразить в JSON: undefined/NaN/±Infinity. Молча
+// превращать их в null нельзя — это silent-потеря данных.
+function jsonUnrepresentable(value) {
+  return value === undefined || Number.isNaN(value) || value === Infinity || value === -Infinity;
+}
+
+/**
+ * Один вызов storage.* от панели.
+ * op: get|set|remove|keys; args: {key} / {key, value} / {}.
+ * Возвращает {ok:true, data} или {ok:false, error:{code, message}}.
+ */
+export function handleStorageCall({ op, args, granted, ownerId, pluginId, store }) {
+  // 1. Право — только по granted состояния хоста (п.2).
+  if (!Array.isArray(granted) || !granted.includes('storage')) {
+    return fail('denied', 'Нет права: storage');
+  }
+  // 2. Нет владельца — fail-closed: unavailable, ни одной записи (п.5).
+  if (!ownerId) {
+    return fail('unavailable', 'Нет владельца: хранилище недоступно');
+  }
+  // 3. Префикс собирается только из host-параметров (п.3).
+  if (typeof pluginId !== 'string' || !PLUGIN_ID_RE.test(pluginId)) {
+    return fail('invalid', 'Неверный идентификатор плагина');
+  }
+
+  const prefix = prefixOf(ownerId, pluginId);
+
+  switch (op) {
+    case 'get': {
+      const key = args.key;
+      if (!validKey(key)) return fail('invalid', 'Неверный ключ');
+      const raw = store.getItem(prefix + key);
+      if (raw === null) return { ok: true, data: { exists: false } };
+      // Отсутствие ключа — НЕ ошибка; значение отдаём разобранным JSON.
+      try {
+        return { ok: true, data: { exists: true, value: JSON.parse(raw) } };
+      } catch {
+        return { ok: true, data: { exists: true, value: raw } };
+      }
+    }
+
+    case 'set': {
+      const key = args.key;
+      const value = args.value;
+      if (!validKey(key)) return fail('invalid', 'Неверный ключ');
+      if (jsonUnrepresentable(value)) return fail('invalid', 'Значение не выражается в JSON');
+      const raw = JSON.stringify(value);
+      if (raw.length > VALUE_MAX_BYTES) return fail('limit', 'Значение больше 8 КиБ');
+
+      const fullKey = prefix + key;
+      const ownKeys = allKeys(store).filter(k => k.startsWith(prefix));
+      const oldRaw = store.getItem(fullKey);
+
+      // Пределы проверяются ДО setItem — «всё или ничего»: после отказа store
+      // не меняется (п.6).
+      if (oldRaw === null && ownKeys.length >= KEYS_MAX_PER_PLUGIN) {
+        return fail('limit', 'Больше 100 ключей на плагин');
+      }
+      const ownBytes = ownKeys.reduce((sum, k) => sum + keyBytes(store, k), 0);
+      const newOwnBytes = ownBytes - (oldRaw === null ? 0 : oldRaw.length) + raw.length;
+      if (newOwnBytes > PLUGIN_BYTES_MAX) return fail('limit', 'Больше 128 КиБ на плагин');
+
+      const originKeys = allKeys(store).filter(k => k.startsWith(STORAGE_PREFIX));
+      const originBytes = originKeys.reduce((sum, k) => sum + keyBytes(store, k), 0);
+      const newOriginBytes = originBytes - (oldRaw === null ? 0 : oldRaw.length) + raw.length;
+      if (newOriginBytes > ORIGIN_BYTES_MAX) return fail('limit', 'Хранилище плагинов больше 1 МиБ');
+
+      try {
+        store.setItem(fullKey, raw);
+      } catch (e) {
+        // Квота браузера — тот же код, что наши пределы (п.7).
+        if (e && e.name === 'QuotaExceededError') return fail('limit', 'Квота хранилища исчерпана');
+        if (e && e.name === 'SecurityError') return fail('unavailable', 'Хранилище недоступно');
+        throw e;
+      }
+      return { ok: true, data: {} };
+    }
+
+    case 'remove': {
+      const key = args.key;
+      if (!validKey(key)) return fail('invalid', 'Неверный ключ');
+      const fullKey = prefix + key;
+      const existed = store.getItem(fullKey) !== null;
+      store.removeItem(fullKey);
+      return { ok: true, data: { removed: existed } };
+    }
+
+    case 'keys': {
+      // Только свой префикс; ключи отдаём БЕЗ префикса — панели он не нужен (п.4).
+      const ownKeys = allKeys(store).filter(k => k.startsWith(prefix));
+      const bytes = ownKeys.reduce((sum, k) => sum + keyBytes(store, k), 0);
+      return { ok: true, data: { keys: ownKeys.map(k => k.slice(prefix.length)), bytes } };
+    }
+
+    default:
+      return fail('invalid', 'Неизвестная операция: ' + String(op));
+  }
+}
+
+/**
+ * Стереть ровно свой префикс. clear() не вызывается никогда: он гасит токен
+ * и шлёт событие storage с key === null во всех вкладках (offline.ts:75-77).
+ * Возвращает число удалённых ключей.
+ */
+export function removePluginStorage({ ownerId, pluginId, store }) {
+  if (!ownerId || typeof pluginId !== 'string' || !PLUGIN_ID_RE.test(pluginId)) return 0;
+  const prefix = prefixOf(ownerId, pluginId);
+  let removed = 0;
+  for (const k of allKeys(store)) {
+    if (k.startsWith(prefix)) {
+      store.removeItem(k);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+/**
+ * Ленивая сборка мусора: удалить ключи текущего владельца, чей pluginId не в
+ * keepPluginIds. Чужой ownerId не трогается никогда (п.10).
+ * Возвращает число удалённых ключей.
+ */
+export function collectStorageGarbage({ ownerId, keepPluginIds, store }) {
+  if (!ownerId) return 0;
+  const ownerPrefix = STORAGE_PREFIX + ownerId + '.';
+  const keep = new Set(keepPluginIds);
+  let removed = 0;
+  for (const k of allKeys(store)) {
+    if (!k.startsWith(ownerPrefix)) continue;
+    // После ownerPrefix идёт "<pluginId>.<key>"; pluginId не содержит точек
+    // (грамматика publisher/slug), первая точка — граница.
+    const pluginId = k.slice(ownerPrefix.length).split('.')[0];
+    if (!keep.has(pluginId)) {
+      store.removeItem(k);
+      removed++;
+    }
+  }
+  return removed;
+}

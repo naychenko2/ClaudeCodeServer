@@ -38,6 +38,8 @@
   .stage { padding: 16px; }
   .card { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 8px; overflow: hidden; }
   .notice { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--c-bg-selected); border-bottom: 1px solid var(--c-warning); color: var(--c-warning-text); font-size: 12px; }
+  /* display:flex базового правила перебивает UA-стиль [hidden]; скрытие должно побеждать. */
+  .notice[hidden] { display: none; }
   .scroll { overflow: auto; padding: 4px 12px 16px; }
   .log { padding: 12px 16px; font-family: monospace; font-size: 11px; color: var(--c-text-muted); }
   .log p { margin: 2px 0; }

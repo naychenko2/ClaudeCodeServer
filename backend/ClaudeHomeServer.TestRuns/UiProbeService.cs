@@ -50,6 +50,8 @@ public sealed class UiProbeService
     private readonly Func<Uri, CancellationToken, Task<bool>> _standProbe;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<TokenKey, CachedToken> _tokens = new();
+    // Single-flight входа: параллельные холодные вызовы одного ключа ждут первый и берут его токен из кэша
+    private readonly ConcurrentDictionary<TokenKey, SemaphoreSlim> _logins = new();
 
     // Запас до истечения токена и срок жизни токена без exp
     private static readonly TimeSpan TokenMargin = TimeSpan.FromMinutes(2);
@@ -122,48 +124,73 @@ public sealed class UiProbeService
             progress?.Invoke(new TestRunProgress("probe", $"замер · {string.Join(", ", request.Viewports)} px"));
             var key = request.User is null ? (TokenKey?)null
                 : new TokenKey(request.Project.OwnerId, request.Origin, request.User, request.Password ?? "");
-            var cached = key is { } k ? CachedTokenFor(k) : null;
-            var run = await RunScriptAsync(launcher, request, cached, limit.Token, ct);
-            // 401 на кэшированном токене — токен отозван или истёк: один повторный вход
-            if (cached is not null && run.Json is not null && Has401(run.Json))
+            SemaphoreSlim? flight = null;
+            if (key is { } fk && CachedTokenFor(fk) is null)
             {
-                _tokens.TryRemove(key!.Value, out _);
-                progress?.Invoke(new TestRunProgress("probe", "токен стенда не принят — повторный вход"));
-                run = await RunScriptAsync(launcher, request, null, limit.Token, ct);
-                cached = null;
+                flight = _logins.GetOrAdd(fk, _ => new SemaphoreSlim(1, 1));
+                try { await flight.WaitAsync(limit.Token); }
+                catch (OperationCanceledException)
+                {
+                    return new UiProbeResult(null, null, "замер прерван в ожидании входа",
+                        ct.IsCancellationRequested, !ct.IsCancellationRequested);
+                }
             }
-            if (run.Result is { } early) return early;
-            var json = run.Json!;
             try
             {
-                // Кэш пополняет только настоящий вход: запуск по кэшированному токену срок не продлевает
-                if (cached is null && key is { } kk && FreshToken(json) is { } fresh)
-                    _tokens[kk] = new CachedToken(fresh, ExpiryOf(fresh));
-                var url = request.Origin + request.Path;
-                if (UiProbeReport.RefusalOf(json, url, request.Origin) is { } refusal) return UiProbeResult.Refused(refusal);
-                var report = UiProbeReport.Build(json, url, request.MinTargetPx, _options.MaxResultBytes);
-                return new UiProbeResult(null, UiProbeReport.Serialize(report), null, false, false);
+                var cached = key is { } k ? CachedTokenFor(k) : null;
+                var run = await RunScriptAsync(launcher, request, turnId, cached, limit.Token, ct);
+                // 401 на кэшированном токене — токен отозван или истёк: один повторный вход
+                if (cached is not null && run.Json is not null && Has401(run.Json))
+                {
+                    _tokens.TryRemove(key!.Value, out _);
+                    progress?.Invoke(new TestRunProgress("probe", "токен стенда не принят — повторный вход"));
+                    run = await RunScriptAsync(launcher, request, turnId, null, limit.Token, ct);
+                    cached = null;
+                }
+                if (run.Result is { } early) return early;
+                var json = run.Json!;
+                try
+                {
+                    // Кэш пополняет только настоящий вход: запуск по кэшированному токену срок не продлевает
+                    if (cached is null && key is { } kk && run.Token is { } fresh)
+                        _tokens[kk] = new CachedToken(fresh, ExpiryOf(fresh));
+                    var url = request.Origin + request.Path;
+                    if (UiProbeReport.RefusalOf(json, url, request.Origin) is { } refusal) return UiProbeResult.Refused(refusal);
+                    var report = UiProbeReport.Build(json, url, request.MinTargetPx, _options.MaxResultBytes);
+                    return new UiProbeResult(null, UiProbeReport.Serialize(report), null, false, false);
+                }
+                catch (FormatException e)
+                {
+                    return new UiProbeResult(null, null, e.Message, false, false);
+                }
             }
-            catch (FormatException e)
-            {
-                return new UiProbeResult(null, null, e.Message, false, false);
-            }
+            finally { flight?.Release(); }
         }
     }
 
-    // Один запуск скрипта. Result — готовый исход без JSON (прервано, нет результата); иначе Json
-    private async Task<(string? Json, UiProbeResult? Result)> RunScriptAsync(IProcessLauncher launcher,
-        UiProbeRequest request, string? token, CancellationToken limit, CancellationToken ct)
+    // Исход одного запуска: Result — готовый исход без JSON (прервано, нет результата); иначе Json.
+    // Token — токен, которого скрипт добился входом (при кэшированном его нет)
+    private sealed record ScriptRun(string? Json, UiProbeResult? Result, string? Token);
+
+    // Один запуск скрипта под turnId вызова — тем же, что у слота очереди: гашение по TurnId в песочнице
+    private async Task<ScriptRun> RunScriptAsync(IProcessLauncher launcher, UiProbeRequest request, string turnId,
+        string? token, CancellationToken limit, CancellationToken ct)
     {
-        var spec = BuildSpec(request, ProcessTurnIds.New(), token);
+        var spec = BuildSpec(request, turnId, token);
         var lines = new List<string>();
         var errors = new Queue<string>();
+        string? fresh = null;
         var gate = new object();
         void OnLine(string line)
         {
             lock (gate)
             {
-                if (line.StartsWith(UiProbeScript.ResultMarker, StringComparison.Ordinal)) lines.Add(line);
+                // Токен — первым делом и мимо любого накопления вывода: ни в хвост отказа, ни в итог
+                if (line.StartsWith(UiProbeScript.TokenMarker, StringComparison.Ordinal))
+                {
+                    if (line[UiProbeScript.TokenMarker.Length..].Trim() is { Length: > 0 } t) fresh = t;
+                }
+                else if (line.StartsWith(UiProbeScript.ResultMarker, StringComparison.Ordinal)) lines.Add(line);
                 else
                 {
                     errors.Enqueue(line);
@@ -173,14 +200,15 @@ public sealed class UiProbeService
         }
         var outcome = await _pipeline.RunProcessAsync(launcher, spec, OnLine, limit);
         if (outcome.Aborted)
-            return (null, new UiProbeResult(null, null, "замер прерван", ct.IsCancellationRequested, !ct.IsCancellationRequested));
+            return new(null, new UiProbeResult(null, null, "замер прерван", ct.IsCancellationRequested, !ct.IsCancellationRequested), null);
         string[] tail;
         string[] output;
-        lock (gate) { tail = [.. errors]; output = [.. lines]; }
-        if (UiProbeReport.FindResultLine(output) is { } json) return (json, null);
-        return (null, new UiProbeResult(null, null,
+        string? issued;
+        lock (gate) { tail = [.. errors]; output = [.. lines]; issued = fresh; }
+        if (UiProbeReport.FindResultLine(output) is { } json) return new(json, null, issued);
+        return new(null, new UiProbeResult(null, null,
             $"Скрипт замера не вернул результат (код выхода {outcome.ExitCode?.ToString() ?? "—"})."
-            + (tail.Length == 0 ? "" : "\n" + string.Join('\n', tail)), false, false));
+            + (tail.Length == 0 ? "" : "\n" + string.Join('\n', tail)), false, false), null);
     }
 
     private string? CachedTokenFor(TokenKey key)
@@ -189,13 +217,6 @@ public sealed class UiProbeService
         if (cached.ExpiresAt > _time.GetUtcNow()) return cached.Token;
         _tokens.TryRemove(key, out _);
         return null;
-    }
-
-    // Токен, который скрипт получил входом (при кэшированном поле token нет)
-    private static string? FreshToken(string json)
-    {
-        try { return JsonNode.Parse(json) is JsonObject o && o["token"] is JsonValue v && v.TryGetValue<string>(out var t) && t.Length > 0 ? t : null; }
-        catch (JsonException) { return null; }
     }
 
     private static bool Has401(string json)
@@ -229,7 +250,8 @@ public sealed class UiProbeService
     }
 
     // node --eval <скрипт> <json>: скрипт целиком одним аргументом (ArgumentList, без shell)
-    internal static ProcessSpec BuildSpec(UiProbeRequest request, string turnId, string? token = null)
+    internal static ProcessSpec BuildSpec(UiProbeRequest request, string turnId, string? token = null,
+        int settleMs = UiProbeScript.SettleTimeoutMs)
     {
         var input = new JsonObject
         {
@@ -238,6 +260,7 @@ public sealed class UiProbeService
             ["height"] = ViewportHeight,
             ["max"] = UiProbeScript.MaxItems,
             ["selector"] = request.Selector,
+            ["settleMs"] = settleMs,
         };
         var env = new Dictionary<string, string> { ["NO_COLOR"] = "1" };
         if (request.User is not null)

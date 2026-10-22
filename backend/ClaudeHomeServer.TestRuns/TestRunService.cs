@@ -446,25 +446,32 @@ public sealed partial class TestRunService
         if (resolved is not DirectoryInfo { Name: "node_modules", Parent: { } owner } real || !real.Exists) return false;
         var realFull = real.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         return File.Exists(Path.Combine(owner.FullName, "package.json"))
-            && RepositoryTrees(rootFull).Any(tree => IsInside(tree, realFull))
+            && RepositoryTrees(rootFull).Any(tree => IsInside(tree, RealPath(realFull)))
             && ResolvesInside(realFull, Path.Combine(real.FullName, package));
     }
 
     // Деревья репозитория корня (как `git worktree list`, но без запуска git): основной checkout и worktree'ы
-    // из <общий .git>/worktrees/*/gitdir. Корень без .git — пусто (сам по себе он не «репозиторий»)
+    // из <общий .git>/worktrees/*/gitdir. .git ищется от корня вверх: корень проекта — подкаталог репозитория.
+    // Нет .git ни в корне, ни выше — пусто (сам по себе корень не «репозиторий»)
     private static IEnumerable<string> RepositoryTrees(string rootFull)
     {
-        var dotGit = Path.Combine(rootFull, ".git");
-        string? commonDir = null;
         try
         {
-            if (Directory.Exists(dotGit)) commonDir = dotGit;
-            else if (File.Exists(dotGit)
-                && File.ReadAllText(dotGit).Trim() is var line && line.StartsWith("gitdir:", StringComparison.Ordinal))
+            string? commonDir = null;
+            for (var dir = rootFull; dir is { Length: > 0 }; dir = Path.GetDirectoryName(dir))
             {
-                // gitdir: <общий .git>/worktrees/<имя>
-                var gitDir = Path.GetFullPath(line["gitdir:".Length..].Trim(), rootFull);
-                commonDir = Path.GetDirectoryName(Path.GetDirectoryName(gitDir));
+                var dotGit = Path.Combine(dir, ".git");
+                if (Directory.Exists(dotGit)) { commonDir = dotGit; break; }
+                if (File.Exists(dotGit))
+                {
+                    if (File.ReadAllText(dotGit).Trim() is var line && line.StartsWith("gitdir:", StringComparison.Ordinal))
+                    {
+                        // gitdir: <общий .git>/worktrees/<имя>
+                        var gitDir = Path.GetFullPath(line["gitdir:".Length..].Trim(), dir);
+                        commonDir = Path.GetDirectoryName(Path.GetDirectoryName(gitDir));
+                    }
+                    break;
+                }
             }
             if (commonDir is null || Path.GetDirectoryName(commonDir) is not { } primary) return [];
             var trees = new List<string> { primary };
@@ -474,9 +481,30 @@ public sealed partial class TestRunService
                     if (File.Exists(Path.Combine(entry, "gitdir"))
                         && Path.GetDirectoryName(File.ReadAllText(Path.Combine(entry, "gitdir")).Trim()) is { Length: > 0 } tree)
                         trees.Add(tree);
-            return trees.Select(t => t.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            // Реальные пути: сравнение с целью ссылки идёт по раскрытым ссылкам, а не по тому, как записан путь
+            return trees.Select(t => RealPath(t.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return []; }
+    }
+
+    // Путь с раскрытыми ссылками на каждом сегменте; сегмент, который не удалось раскрыть, остаётся как есть
+    private static string RealPath(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? "";
+        var current = root;
+        foreach (var segment in full[root.Length..].Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar,
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            try
+            {
+                if (new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true) is { } target)
+                    current = target.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* не раскрылся */ }
+        }
+        return current;
     }
 
     private static readonly StringComparer PathComparer =

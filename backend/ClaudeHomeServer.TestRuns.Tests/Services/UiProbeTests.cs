@@ -234,7 +234,7 @@ public class UiProbeTests : IDisposable
     [Fact]
     public void РедиректНаВход_Отказ_ЛогинПоЗапросу_НеОтказ()
     {
-        const string redirected = "{\"reach\":\"ok\",\"auth\":\"ok\",\"viewports\":[{\"width\":360,\"finalUrl\":\"http://h:1/#/login\"}]}";
+        const string redirected = "{\"reach\":\"ok\",\"auth\":\"ok\",\"viewports\":[{\"settled\":true,\"width\":360,\"finalUrl\":\"http://h:1/#/login\"}]}";
 
         UiProbeReport.RefusalOf(redirected, "http://h:1/#/ui-kit", "http://h:1").Should().Contain("перенаправила на вход");
         UiProbeReport.RefusalOf(redirected, "http://h:1/#/login", "http://h:1").Should().BeNull("логин запрошен сам");
@@ -410,7 +410,7 @@ public class UiProbeTests : IDisposable
     [Fact]
     public void ПустаяСтраница_ЧисленныйРазбор_ОтказНеНули()
     {
-        const string empty = "{\"reach\":\"ok\",\"auth\":\"ok\",\"viewports\":[{\"width\":360,\"finalUrl\":\"http://h:1/#/notes\",\"pageInteractive\":0}]}";
+        const string empty = "{\"reach\":\"ok\",\"auth\":\"ok\",\"viewports\":[{\"settled\":true,\"width\":360,\"finalUrl\":\"http://h:1/#/notes\",\"pageInteractive\":0}]}";
 
         UiProbeReport.RefusalOf(empty, "http://h:1/#/notes", "http://h:1").Should().Contain("не отрисовалась");
         UiProbeReport.RefusalOf(empty.Replace("\"pageInteractive\":0", "\"pageInteractive\":3"), "http://h:1/#/notes", "http://h:1").Should().BeNull();
@@ -499,6 +499,222 @@ public class UiProbeTests : IDisposable
         rejecting.Specs.First().Env!.Should().ContainKey("UIPROBE_TOKEN");
         rejecting.Specs.Last().Env!.Should().NotContainKey("UIPROBE_TOKEN");
         result.Json.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void НеУстоялась_ИлиНетПоляSettled_Отказ_ГодныйЗамерТолькоСУстоялась()
+    {
+        const string page = "{\"reach\":\"ok\",\"auth\":\"ok\",\"viewports\":[{\"settled\":false,\"width\":360,\"finalUrl\":\"http://h:1/#/home\",\"pageInteractive\":32}]}";
+
+        UiProbeReport.RefusalOf(page, "http://h:1/#/home", "http://h:1").Should().Contain("не устоялась");
+        UiProbeReport.RefusalOf(page.Replace("\"settled\":false,", ""), "http://h:1/#/home", "http://h:1")
+            .Should().Contain("не устоялась", "нет признака устойчивости — отказ, а не молчаливо годный замер");
+        UiProbeReport.RefusalOf(page.Replace("false", "true"), "http://h:1/#/home", "http://h:1").Should().BeNull();
+    }
+
+    [Fact]
+    public void ФормаВхода_НаЗапрошенномНеЛогинеМаршруте_Отказ_ЛогинПоЗапросу_НеОтказ()
+    {
+        const string login = "{\"reach\":\"ok\",\"auth\":\"ok\",\"viewports\":[{\"settled\":true,\"width\":360,\"finalUrl\":\"http://h:1/#/home\",\"pageInteractive\":4,\"loginForm\":true}]}";
+
+        UiProbeReport.RefusalOf(login, "http://h:1/#/home", "http://h:1").Should().Contain("форму входа",
+            "на экране входа есть интерактивные элементы — отказ по нулям его не поймает");
+        UiProbeReport.RefusalOf(login.Replace("#/home", "#/login"), "http://h:1/#/login", "http://h:1").Should().BeNull("логин запрошен сам");
+        UiProbeReport.RefusalOf(login.Replace("true,\"pageInteractive", "false,\"pageInteractive").Replace("\"loginForm\":true", "\"loginForm\":false"),
+            "http://h:1/#/home", "http://h:1").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ТокенНеПопадаетВХвостОтказа_ИмеетсяТолькоВКэше()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-token-no-result.txt", exit: 1);
+
+        var result = await Service(launcher, new BuildConcurrencyGate(1)).RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        result.Failure.Should().Contain("не вернул результат").And.Contain("Executable doesn't exist");
+        result.Failure.Should().NotContain("tok-secret-leak", "токен — отдельная строка-маркер, вырезаемая до накопления вывода");
+        launcher.Specs.Select(s => string.Join(' ', s.Args)).Should().NotContain(a => a.Contains("tok-secret-leak"));
+    }
+
+    [Fact]
+    public async Task ТокенВИтогеЗамера_НеВыходитНаружу_СкриптНеКладётЕгоВJson()
+    {
+        UiProbeScript.Source.Should().NotContain("out.token", "токен печатается отдельной строкой UIPROBE-TOKEN, а не полем итога");
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt");
+
+        var result = await Service(launcher, new BuildConcurrencyGate(1)).RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        result.Json.Should().NotContain("tok-fresh").And.NotContain("UIPROBE-TOKEN");
+    }
+
+    [Fact]
+    public async Task ПараллельныеХолодныеВызовы_ОдинВход()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt");
+        var service = Service(launcher, new BuildConcurrencyGate(3));
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 3)
+            .Select(_ => Task.Run(() => service.RunAsync(Request(), null, CancellationToken.None)))).WaitAsync(Wait);
+
+        results.Should().OnlyContain(r => r.Json != null && r.Refusal == null);
+        Logins(launcher).Should().Be(1, "single-flight: параллельные холодные вызовы ждут первый вход и берут токен из кэша");
+    }
+
+    [Fact]
+    public async Task ПовторныйВходПо401_ТотЖеTurnIdЧтоИУСлота()
+    {
+        var factory = new SwitchFactory(new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt"));
+        var service = new UiProbeService(factory, new TestRunsOptions(),
+            new PhasePipeline(new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5)), (_, _) => Task.FromResult(true));
+        await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+        var rejecting = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-token-rejected.txt");
+        factory.Current = rejecting;
+
+        await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        rejecting.Specs.Select(s => s.TurnId).Distinct().Should().ContainSingle("гашение по TurnId в песочнице: один id на вызов, а не новый на запуск");
+    }
+
+    [Fact]
+    public void FindPackageDir_КореньПроектаПодкаталогРепозитория_ЛегальнаяСсылкаНаМодулиНеОтказ()
+    {
+        var (worktree, modules) = WorktreeWithLinkedModules();
+        var projectRoot = Path.Combine(worktree, "frontend");
+        if (!TreeLinks.TryLink(Path.Combine(projectRoot, "node_modules"), modules, directory: true)) return;
+
+        TestRunService.FindPackageDir(projectRoot, ".", UiProbeService.RequiredPackages, out var error).Should().NotBeNull(error);
+    }
+
+    [Fact]
+    public void FindPackageDir_ДеревоРепозиторияЗаписаноЧерезСимссылку_СравнениеПоРеальномуПути()
+    {
+        var (worktree, modules) = WorktreeWithLinkedModules();
+        var alias = Path.Combine(_root, "alias");
+        if (!TreeLinks.TryLink(alias, Path.Combine(_root, "primary"), directory: true)) return;
+        File.WriteAllText(Path.Combine(worktree, ".git"), "gitdir: " + Path.Combine(alias, ".git", "worktrees", "wt") + "\n");
+        if (!TreeLinks.TryLink(Path.Combine(worktree, "frontend", "node_modules"), modules, directory: true)) return;
+
+        TestRunService.FindPackageDir(worktree, "frontend", UiProbeService.RequiredPackages, out var error).Should().NotBeNull(
+            "основное дерево, записанное в .git через ссылку, — то же дерево: сравнение по раскрытым путям, а не по записи");
+        error.Should().BeNullOrEmpty();
+    }
+
+    // ── Замер на настоящем браузере: страница отдаётся локальным HttpListener, скрипт — тот же, что в бою ──
+
+    private static string? PlaywrightModules()
+    {
+        for (var dir = AppContext.BaseDirectory; dir is not null; dir = Path.GetDirectoryName(dir))
+        {
+            var modules = Path.Combine(dir, "frontend", "node_modules");
+            if (File.Exists(Path.Combine(modules, "playwright", "package.json"))) return modules;
+        }
+        return null;
+    }
+
+    private static string Buttons(int from, int to) =>
+        string.Concat(Enumerable.Range(from, to - from).Select(i => $"<button style=\"height:20px\">b{i}</button>"));
+
+    private static string Page(string name) => name switch
+    {
+        // Все 36 кнопок сразу + скрытая (visibility:hidden — в подсчёт не входит)
+        "full" => "<body><button style=\"visibility:hidden\">x</button>" + Buttons(0, 36) + "</body>",
+        // Ступенями: 6 сразу, потом по 10 с паузами 600 мс — позже, чем «первый видимый элемент»
+        "staged" => "<body><button style=\"visibility:hidden\">x</button>" + Buttons(0, 6)
+            + "<script>const add=(a,b)=>{for(let i=a;i<b;i++){const e=document.createElement('button');e.style.height='20px';e.textContent='b'+i;document.body.appendChild(e)}};"
+            + "setTimeout(()=>add(6,16),1000);setTimeout(()=>add(16,26),1600);setTimeout(()=>add(26,36),2200)</script></body>",
+        // Никогда не устаканивается: кнопка каждые 100 мс
+        "never" => "<body>" + Buttons(0, 3)
+            + "<script>let n=3;setInterval(()=>{const e=document.createElement('button');e.textContent='n'+(n++);document.body.appendChild(e)},100)</script></body>",
+        // Экран входа: форма из двух полей и кнопка
+        "login" => "<body><input type=\"text\" autocomplete=\"username\"><input type=\"password\" autocomplete=\"current-password\"><button>Войти</button></body>",
+        _ => "<body>ok</body>",
+    };
+
+    // Поднимает страницу и мерит её настоящим скриптом; null и Skip — если браузера нет
+    private async Task<(string? Json, string? Refusal)> ProbeRealAsync(string page, int settleMs = 4000)
+    {
+        var modules = PlaywrightModules();
+        Skip.If(modules is null, "frontend/node_modules/playwright не найден");
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        using var http = new System.Net.HttpListener();
+        http.Prefixes.Add($"http://127.0.0.1:{port}/");
+        try { http.Start(); }
+        catch (Exception e) { Skip.If(true, $"HttpListener недоступен: {e.Message}"); }
+        var serving = Task.Run(async () =>
+        {
+            while (http.IsListening)
+            {
+                System.Net.HttpListenerContext ctx;
+                try { ctx = await http.GetContextAsync(); } catch { return; }
+                var body = System.Text.Encoding.UTF8.GetBytes(ctx.Request.Url!.AbsolutePath == "/" ? "<body>ok</body>" : Page(page));
+                ctx.Response.ContentType = "text/html; charset=utf-8";
+                await ctx.Response.OutputStream.WriteAsync(body);
+                ctx.Response.Close();
+            }
+        });
+
+        var request = new UiProbeRequest(new Project { Id = "p", OwnerId = "u", Name = "Замер", RootPath = _root }, _root, modules!,
+            "s", $"http://127.0.0.1:{port}", "/app", [360], 40, null, null, null);
+        var spec = UiProbeService.BuildSpec(request, "turn", settleMs: settleMs);
+        var psi = new System.Diagnostics.ProcessStartInfo("node")
+        {
+            WorkingDirectory = modules, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+        };
+        foreach (var a in spec.Args) psi.ArgumentList.Add(a);
+        System.Diagnostics.Process process;
+        try { process = System.Diagnostics.Process.Start(psi)!; }
+        catch (Exception e) { Skip.If(true, $"node недоступен: {e.Message}"); return default; }
+        using (process)
+        {
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+            var lines = (await stdout).Split('\n');
+            var json = UiProbeReport.FindResultLine(lines);
+            Skip.If(json is null, "скрипт замера не отработал (нет chromium?): " + (await stderr)[..Math.Min(200, (await stderr).Length)]);
+            http.Stop();
+            await serving;
+            var url = request.Origin + request.Path;
+            return UiProbeReport.RefusalOf(json!, url, request.Origin) is { } refusal
+                ? (null, refusal)
+                : (UiProbeReport.Serialize(UiProbeReport.Build(json!, url, 40)), null);
+        }
+    }
+
+    [SkippableFact]
+    public async Task ЧастичнаяОтрисовка_СтраницаСтупенями_ЗамерСовпадаетСПолной()
+    {
+        var full = await ProbeRealAsync("full");
+        var staged = await ProbeRealAsync("staged");
+
+        full.Refusal.Should().BeNull();
+        staged.Refusal.Should().BeNull();
+        var expected = JsonNode.Parse(full.Json!)!["viewports"]![0]!;
+        var actual = JsonNode.Parse(staged.Json!)!["viewports"]![0]!;
+        expected["interactiveTotal"]!.GetValue<int>().Should().Be(36, "скрытая кнопка не считается");
+        actual["interactiveTotal"]!.GetValue<int>().Should().Be(36, "ждём устойчивости картины, а не первый элемент");
+        actual["counts"]!.ToJsonString().Should().Be(expected["counts"]!.ToJsonString());
+    }
+
+    [SkippableFact]
+    public async Task СтраницаНеУстаканивается_ОтказВместоЗаниженногоЗамера()
+    {
+        var never = await ProbeRealAsync("never", settleMs: 3000);
+
+        never.Json.Should().BeNull();
+        never.Refusal.Should().Contain("не устоялась");
+    }
+
+    [SkippableFact]
+    public async Task ЭкранВхода_НаЖивомБраузере_ОтказВместоНаходокНет()
+    {
+        var login = await ProbeRealAsync("login", settleMs: 3000);
+
+        login.Json.Should().BeNull("форма входа не пуста по нулям, но это не страница");
+        login.Refusal.Should().Contain("форму входа");
     }
 
     private sealed class ManualTime : TimeProvider

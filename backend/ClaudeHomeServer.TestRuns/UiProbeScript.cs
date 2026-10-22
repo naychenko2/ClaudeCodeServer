@@ -9,6 +9,13 @@ internal static class UiProbeScript
 {
     public const string ResultMarker = "UIPROBE-RESULT ";
 
+    // Токен входа отдельной строкой: сервер вырезает её в первом же обработчике строк, до любого
+    // накопления вывода (хвост ошибок, итог), поэтому в итоговый JSON и в хвост отказа он не попадает
+    public const string TokenMarker = "UIPROBE-TOKEN ";
+
+    // Потолок ожидания устойчивой картины на ширину, мс: не устоялась за него — отказ, а не недозамер
+    public const int SettleTimeoutMs = 8000;
+
     // Пакеты, из которых loadChromium берёт chromium (в том же порядке): дерево обязано нести хотя бы один
     public static readonly string[] Packages = ["playwright", "@playwright/test", "playwright-core"];
 
@@ -90,13 +97,40 @@ internal static class UiProbeScript
               put(clipped, 'clipped', { s: sel(el), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight });
           }
           const de = document.documentElement;
-          // Видимые интерактивные элементы ВСЕЙ страницы (не зоны selector): ноль — приложение не отрисовалось
+          // Видимые интерактивные элементы ВСЕЙ страницы (не зоны selector): ноль — приложение не отрисовалось.
+          // Этим же признаком (visible) ждёт устойчивости settle(): ожидание и подсчёт не расходятся
           let pageInteractive = 0;
           for (const el of document.body ? document.body.querySelectorAll(interactiveSel) : []) if (visible(el, el.getBoundingClientRect())) pageInteractive++;
+          // Экран входа (LoginPage): видимое поле текущего пароля. Токен не применился — приложение показывает его
+          const loginForm = [...document.querySelectorAll('input[type=password][autocomplete=current-password]')]
+            .some((el) => visible(el, el.getBoundingClientRect()));
           return {
-            interactive, containers, clipped, truncated, pageInteractive,
-            doc: { scrollWidth: Math.max(de.scrollWidth, document.body ? document.body.scrollWidth : 0), clientWidth: de.clientWidth },
+            interactive, containers, clipped, truncated, pageInteractive, loginForm,
+            doc: {
+              scrollWidth: Math.max(de.scrollWidth, document.body ? document.body.scrollWidth : 0), clientWidth: de.clientWidth,
+              scrollHeight: Math.max(de.scrollHeight, document.body ? document.body.scrollHeight : 0),
+            },
           };
+        }
+
+        // SPA дорисовывается ступенями, и между ступенями бывают паузы: меряем, пока картина (число видимых
+        // интерактивных элементов, размеры документа, экран входа) не простоит неизменной STABLE_MS подряд. Ноль
+        // элементов за устойчивость не считается до потолка: пустой первый кадр — не итог. Не устоялась за потолок —
+        // settled=false, и сервер откажет, а не отдаст заниженные числа
+        const STABLE_MS = 1000;
+        async function settle(page, args, timeoutMs) {
+          const deadline = Date.now() + timeoutMs;
+          let prev = null, since = Date.now();
+          for (;;) {
+            const m = await page.evaluate(measure, args);
+            const sig = [m.pageInteractive, m.interactive.length, m.doc.scrollWidth, m.doc.scrollHeight, m.loginForm].join('|');
+            const now = Date.now();
+            if (sig !== prev) { prev = sig; since = now; }
+            const timeUp = now >= deadline;
+            if (now - since >= STABLE_MS && (m.pageInteractive > 0 || timeUp)) { m.settled = true; return m; }
+            if (timeUp) { m.settled = false; return m; }
+            await page.waitForTimeout(250);
+          }
         }
 
         (async () => {
@@ -116,7 +150,7 @@ internal static class UiProbeScript
               try {
                 const res = await ctx0.request.post(origin + '/api/auth/login', {
                   data: { username: process.env.UIPROBE_USER, password: process.env.UIPROBE_PASS || '' }, timeout: 10000 });
-                if (res.ok()) { token = (await res.json()).token || null; out.auth = token ? 'ok' : 'no-token'; if (token) out.token = token; }
+                if (res.ok()) { token = (await res.json()).token || null; out.auth = token ? 'ok' : 'no-token'; if (token) console.log('UIPROBE-TOKEN ' + token); }
                 else out.auth = 'failed:' + res.status();
               } catch (e) { out.auth = 'failed:' + String(e.message || e).slice(0, 80); }
               await ctx0.close();
@@ -139,11 +173,7 @@ internal static class UiProbeScript
                 vp.finalUrl = page.url();
                 await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
                 await page.waitForTimeout(300);
-                // SPA рисуется после load: ждём первый видимый интерактивный элемент; не дождались — замер скажет
-                // pageInteractive == 0, а сервер откажет, а не отдаст нули
-                await page.waitForFunction(() => [...document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, [role=button], [tabindex]')]
-                  .some((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }), null, { timeout: 8000 }).catch(() => {});
-                Object.assign(vp, await page.evaluate(measure, { selector: input.selector, max: MAX }));
+                Object.assign(vp, await settle(page, { selector: input.selector, max: MAX }, input.settleMs));
                 vp.finalUrl = page.url();
               } catch (e) { vp.error = String(e.message || e).slice(0, 200); }
               out.viewports.push(vp);

@@ -41,18 +41,36 @@ public static class UiProbeReport
         var requested = Normalize(requestedUrl);
         foreach (var vp in Objects(root["viewports"]))
         {
-            // Приложение рисуется по состоянию токена без смены маршрута (LoginPage), поэтому по URL отрисовку
-            // не проверить: ноль видимых интерактивных элементов на всей странице — не замер, а нули
-            if (vp["error"] is null && vp["pageInteractive"] is JsonValue pi && pi.TryGetValue<double>(out var visible) && visible == 0)
-                return $"Страница {requestedUrl} не отрисовалась или вход не выполнен: при ширине {Int(vp["width"])} px на ней нет "
-                    + "ни одного видимого интерактивного элемента. Замер из нулей был бы ложным «находок нет» — "
-                    + "проверь маршрут и user/password, подожди загрузки и повтори вызов.";
+            if (vp["error"] is null && MeasurementRefusal(vp, requestedUrl) is { } bad) return bad;
             var final = Str(vp["finalUrl"]);
             if (final.Length == 0 || Normalize(final) == requested) continue;
             if (IsLoginUrl(final) && !IsLoginUrl(requestedUrl))
                 return $"Страница {requestedUrl} перенаправила на вход ({final}) — вход не действует, "
                     + "проверь user/password.";
         }
+        return null;
+    }
+
+    // Замер ширины без навигационной ошибки: годен, только если картина устоялась, страница отрисована
+    // и это не экран входа. null — годен
+    private static string? MeasurementRefusal(JsonObject vp, string requestedUrl)
+    {
+        // Картина не устоялась за потолок скрипта: замер застал бы страницу на полдороге — не замер, а недозамер.
+        // Нет поля settled — тоже отказ (fail-closed): годным замер делает только явное «устоялась»
+        if (vp["settled"] is not JsonValue st || !st.TryGetValue<bool>(out var settled) || !settled)
+            return $"Страница {requestedUrl} не устоялась: при ширине {Int(vp["width"])} px число интерактивных элементов "
+                + "или размеры документа продолжали меняться весь потолок ожидания. Замер на полдороге занизил бы "
+                + "числа — подожди загрузки (или найди, что перерисовывает страницу) и повтори вызов.";
+        // Приложение рисуется по состоянию токена без смены маршрута (LoginPage), поэтому по URL отрисовку
+        // не проверить: ноль видимых интерактивных элементов на всей странице — не замер, а нули
+        if (vp["pageInteractive"] is JsonValue pi && pi.TryGetValue<double>(out var visible) && visible == 0)
+            return $"Страница {requestedUrl} не отрисовалась или вход не выполнен: при ширине {Int(vp["width"])} px на ней нет "
+                + "ни одного видимого интерактивного элемента. Замер из нулей был бы ложным «находок нет» — "
+                + "проверь маршрут и user/password, подожди загрузки и повтори вызов.";
+        // Экран входа не пуст (форма из двух полей), поэтому по нулям его не поймать: токен не применился
+        if (vp["loginForm"] is JsonValue lf && lf.TryGetValue<bool>(out var onLogin) && onLogin && !IsLoginUrl(requestedUrl))
+            return $"Страница {requestedUrl} показывает форму входа: при ширине {Int(vp["width"])} px токен не применился "
+                + "или вход не выполнен — замерялся бы экран логина, а не страница. Проверь user/password и повтори вызов.";
         return null;
     }
 
@@ -186,24 +204,29 @@ public static class UiProbeReport
             return new JsonArray(list.Take(listLimit).Select(n => n!.DeepClone()).ToArray());
         }
         var scriptTruncated = Strings(vp["truncated"]).Concat(Strings(vp["pageTruncated"])).Distinct().ToList();
+        var smallShown = Cap("smallTargets", small);
+        var clippedShown = Cap("clippedText", clipped);
+        var consoleShown = Cap("consoleErrors", console);
+        var failedShown = Cap("failedRequests", failed);
+        var unnamedShown = Cap("unnamedInteractive", unnamed);
+        var containersShown = Cap("overflowContainers", containers);
+        overflow["containers"] = containersShown;
         var item = new JsonObject
         {
             ["width"] = width,
             ["status"] = vp["status"] is { } st ? Int(st) : null,
             ["finalUrl"] = Str(vp["finalUrl"]),
             ["interactiveTotal"] = interactive.Count,
-            ["truncated"] = false,
+            ["truncated"] = scriptTruncated.Count > 0 || omitted.Count > 0,
             ["counts"] = counts,
-            ["smallTargets"] = Cap("smallTargets", small),
+            ["smallTargets"] = smallShown,
             ["horizontalOverflow"] = overflow,
-            ["clippedText"] = Cap("clippedText", clipped),
-            ["consoleErrors"] = Cap("consoleErrors", console),
-            ["failedRequests"] = Cap("failedRequests", failed),
-            ["unnamedInteractive"] = Cap("unnamedInteractive", unnamed),
+            ["clippedText"] = clippedShown,
+            ["consoleErrors"] = consoleShown,
+            ["failedRequests"] = failedShown,
+            ["unnamedInteractive"] = unnamedShown,
         };
-        overflow["containers"] = Cap("overflowContainers", containers);
         if (omitted.Count > 0) item["omitted"] = omitted;
-        item["truncated"] = scriptTruncated.Count > 0 || omitted.Count > 0;
         if (vp["error"] is { } error) item["error"] = Str(error);
         return item;
     }

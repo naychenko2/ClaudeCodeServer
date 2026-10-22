@@ -1487,7 +1487,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Идемпотентно: на уже перенесённых сессиях это no-op. Один SaveSessions покрывает
         // обе миграции: перенос темы + сохранение Orphaned (залипший Working, см. выше).
         var migratedTopics = Llm.ChatTopicMigration.Apply(list);
-        if (migratedTopics || anyLiveOrphaned) SaveSessions();
+        var migratedModes = MigratePersonaChatMode(list);
+        if (migratedModes > 0)
+            Console.WriteLine($"[SessionManager] Миграция режима: {migratedModes} чатов персон переведены из Auto в AcceptEdits");
+        if (migratedTopics || migratedModes > 0 || anyLiveOrphaned) SaveSessions();
         // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт.
         // Task храним в AbortMarkersWritten (не fire-and-forget): B2 дождётся его перед
         // запуском resume, чтобы маркер не обогнал снимок.
@@ -1501,6 +1504,23 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                         Console.Error.WriteLine($"[SessionManager] Маркер обрыва хода ({csid}) не записан: {ex.Message}");
                     }
             });
+    }
+
+    // Чаты одной персоны в Auto гоняют классификатор разрешений на каждый вызов инструмента
+    // (отдельный запрос к модели чата — до минуты на медленных прокси). Решение владельца:
+    // персоны работают в AcceptEdits. Идемпотентно; UpdatedAt не двигаем (сортировка/архив).
+    // Групповые чаты и чаты штаба (режим навязывает TeamImplement) не трогаем.
+    internal static int MigratePersonaChatMode(IEnumerable<Session> sessions)
+    {
+        var migrated = 0;
+        foreach (var s in sessions)
+        {
+            if (s.PersonaId is null || s.Mode != ClaudeMode.Auto) continue;
+            if (s.Participants is { Count: > 1 } || s.TeamImplement is not null) continue;
+            s.Mode = ClaudeMode.AcceptEdits;
+            migrated++;
+        }
+        return migrated;
     }
 
     // Выдача кандидатов на auto-resume: возвращает захваченный LoadSessions список и

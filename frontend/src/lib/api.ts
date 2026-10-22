@@ -94,6 +94,8 @@ export interface LocalModelStats {
     genTokens?: number | null;
     itlSeconds?: number | null;
     itlCount?: number | null;
+    // База шага (мс) для этой точки: по числу потоков в ней у батч-движка, иначе общая база стенда.
+    cleanStepMs?: number | null;
     // Полоса «Куда уходит время агентов» (ADR-029, v2.3): prefillSeconds/queueSeconds —
     // приращения гистограмм (сек), promptTokens — прочитанный промпт (токены).
     // null — нет прошлой точки/рестарт (см. api.md)

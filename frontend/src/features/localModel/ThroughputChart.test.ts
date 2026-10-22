@@ -215,6 +215,7 @@ function sample(p: Partial<ThroughputSample> & { t: number }): ThroughputSample 
     preemptions: p.preemptions ?? null,
     genTokens: p.genTokens ?? null,
     itlSeconds: p.itlSeconds ?? null,
+    cleanStepMs: p.cleanStepMs ?? null,
     itlCount: p.itlCount ?? null,
     prefillSeconds: p.prefillSeconds ?? null,
     queueSeconds: p.queueSeconds ?? null,
@@ -802,6 +803,26 @@ describe('buildIssuedSegments: линия «всего по стенду» (genT
 
 describe('buildIntervals: «куда уходит время» — доли из сумм и базы шага', () => {
   const T_MIN = 0, T_MAX = 60_000, INTERVAL_MS = 30_000;
+
+  // База точки по числу потоков (батч-движок): три потока дают шаг 25 мс при базе стенда 8 мс —
+  // это параллельный декод, а не «ждёт соседа». С базой точки 25 мс wait = 0; общая база
+  // 8 мс дала бы 68 % «ждёт». Мутация «игнорировать cleanStepMs точки» → красный.
+  it('база точки (по числу потоков) побеждает общую: параллельный декод — «генерирует»', () => {
+    const samples = [
+      sample({ t: 5_000, running: 3, itlSeconds: 2.5, itlCount: 100, cleanStepMs: 25 }),   // 25 мс/шаг при 3 потоках
+      sample({ t: 35_000, running: 3, itlSeconds: 5.0, itlCount: 100, cleanStepMs: 25 }),  // 50 мс/шаг — половина сверх базы
+    ];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS, 8);
+    expect(intervals[0].timeShares).toEqual({ kind: 'shares', shares: { gen: 1, prefill: 0, wait: 0, queue: 0 } });
+    expect(intervals[1].timeShares).toEqual({ kind: 'shares', shares: { gen: 0.5, prefill: 0, wait: 0.5, queue: 0 } });
+  });
+
+  // Точка без своей базы берёт общую базу стенда (как раньше): шаги быстрее базы — wait = 0.
+  it('точка без базы — общая база стенда', () => {
+    const samples = [sample({ t: 5_000, itlSeconds: 1.0, itlCount: 100, cleanStepMs: null })];
+    const intervals = buildIntervals(samples, T_MIN, T_MAX, INTERVAL_MS, 20); // 100×20 мс = 2 с > 1 с измеренной
+    expect(intervals[0].timeShares).toEqual({ kind: 'shares', shares: { gen: 1, prefill: 0, wait: 0, queue: 0 } });
+  });
 
   it('база шага из ответа бэкенда: wait = ΣitlSec − ΣitlCnt×база', () => {
     const samples = [

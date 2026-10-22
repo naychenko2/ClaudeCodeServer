@@ -66,6 +66,40 @@ internal static class LocalModelStatsCleanStep
         return null;
     }
 
+    // База шага по числу одновременных потоков (Strata, 22.10): у батч-движка шаг растёт с
+    // числом строк в окне (1 поток ≈ 8 мс, 3 ≈ 25 мс) — это норма параллельного декода, а не
+    // «ждёт соседа». Одна база на стенд относила всё превышение над самым быстрым шагом к
+    // ожиданию, и при трёх агентах полоса показывала 65 % «ждёт» на здоровой системе.
+    // Для каждого уровня running (≥1) — свой 10-й перцентиль; уровень с выборкой меньше
+    // MinPointsForPercentile не публикуется (клиент берёт общую базу).
+    internal static IReadOnlyDictionary<int, double> ComputeBaseByRunning(
+        IReadOnlyList<(double? Seconds, long? Count, int? Running)> steps)
+    {
+        var samples = new Dictionary<int, List<double>>();
+        foreach (var (seconds, count, running) in steps)
+        {
+            if (seconds is not { } s || count is not { } c || c < MinItlCount) continue;
+            if (running is not { } r || r < 1) continue;
+            if (!samples.TryGetValue(r, out var list)) samples[r] = list = [];
+            list.Add(s / c * 1000.0);
+        }
+        var result = new Dictionary<int, double>();
+        foreach (var (r, list) in samples)
+            if (list.Count >= MinPointsForPercentile)
+                result[r] = Percentile10(list);
+        return result;
+    }
+
+    // Гистерезис по уровням: ключ без кандидата — снимается (данных по уровню больше нет).
+    internal static IReadOnlyDictionary<int, double> ApplyHysteresisByRunning(
+        IReadOnlyDictionary<int, double>? current, IReadOnlyDictionary<int, double> candidate)
+    {
+        var result = new Dictionary<int, double>();
+        foreach (var (r, next) in candidate)
+            result[r] = ApplyHysteresis(current is not null && current.TryGetValue(r, out var prev) ? prev : null, next)!.Value;
+        return result;
+    }
+
     // Гистерезис: current — опубликованная база, candidate — новая. Возвращает то, что
     // публикуем. candidate null — данных нет: публикуем null (честно «нет данных»).
     internal static double? ApplyHysteresis(double? current, double? candidate)

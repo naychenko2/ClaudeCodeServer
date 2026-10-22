@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { withThrowingLocalStorage } from './testing/withThrowingLocalStorage';
 
 const me = vi.hoisted(() => ({ userId: 'u1' as string | null }));
 vi.mock('../../lib/defaultPersona', () => ({ getMeSnapshot: () => ({ userId: me.userId }) }));
@@ -73,18 +74,10 @@ describe('хранилище отключено (F-д2)', () => {
   // localStorage» без try/catch — чтение бросит SecurityError → этот тест красный.
   it('globalThis.localStorage бросает SecurityError: без store — тихий 0, без исключения', () => {
     me.userId = 'u1';
-    const orig = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      get() { throw sec(); },
-    });
-    try {
+    withThrowingLocalStorage(() => { throw sec(); }, () => {
       expect(collectOnListLoaded(['acme/one'])).toBe(0);
       expect(eraseOnUninstall('acme/one')).toBe(0);
-    } finally {
-      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
-      else delete (globalThis as { localStorage?: unknown }).localStorage;
-    }
+    });
   });
 
   it('настоящая ошибка не прячется: пробрасывается, как раньше', () => {
@@ -113,17 +106,9 @@ describe('хранилище отключено (F-д2)', () => {
   // настоящая ошибка видна, а не прячется в тихом нуле.
   it('геттер localStorage бросает TypeError — ошибка идёт вверх, не в тихий 0', () => {
     me.userId = 'u1';
-    const orig = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      get() { throw new TypeError('extension broke the getter'); },
-    });
-    try {
+    withThrowingLocalStorage(() => { throw new TypeError('extension broke the getter'); }, () => {
       expect(() => collectOnListLoaded(['acme/one'])).toThrow('extension broke the getter');
-    } finally {
-      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
-      else delete (globalThis as { localStorage?: unknown }).localStorage;
-    }
+    });
   });
 
   // F-д3 (минор 5): хранилище отключилось в середине цикла — часть ключей
@@ -164,6 +149,14 @@ describe('uninstallPlugin', () => {
   const boom = () => ({
     ...makeStore({}),
     get length(): number { throw new TypeError('сломанный геттер'); },
+  });
+
+  // Мутация: убрать try/catch вокруг afterUninstall → промис отклоняется, тест красный.
+  it('afterUninstall бросил — промис не отклоняется, отказ в логе', async () => {
+    me.userId = 'u1';
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(uninstallPlugin('acme/one', async () => ({}), () => { throw new Error('onUpdated'); }, seed())).resolves.toBeUndefined();
+    expect(spy.mock.calls.some(([first, e]) => String(first).includes('[plugins]') && String(e).includes('onUpdated'))).toBe(true);
   });
 
   // Мутация: убрать try/catch вокруг eraseOnUninstall → afterUninstall не зовётся, тест красный.

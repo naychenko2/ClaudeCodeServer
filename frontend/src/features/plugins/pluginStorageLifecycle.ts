@@ -69,5 +69,9 @@ export async function uninstallPlugin(
   } catch (e) {
     console.error('[plugin storage] ошибка стирания данных плагина после удаления:', e);
   }
-  afterUninstall();
+  try {
+    afterUninstall();
+  } catch (e) {
+    console.error('[plugins] ошибка обновления после удаления плагина:', e);
+  }
 }

@@ -7,6 +7,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import type { PluginInfo } from '../../lib/api';
+import { withThrowingLocalStorage } from './testing/withThrowingLocalStorage';
 
 vi.mock('../../lib/defaultPersona', () => ({ getMeSnapshot: () => ({ userId: 'u1' }) }));
 vi.mock('../../lib/signalr', () => ({ onMessage: () => () => {}, onReconnected: () => () => {} }));
@@ -49,21 +50,13 @@ describe('список при отключённом хранилище (F-д2)'
   // null : localStorage» без try/catch — refresh() словит SecurityError, error
   // станет текстом, plugins пустым → этот тест красный.
   it('настоящий collectOnListLoaded встречает SecurityError: список открыт, error null', async () => {
-    const orig = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      get() { throw Object.assign(new Error('sandboxed'), { name: 'SecurityError' }); },
-    });
-    try {
+    await withThrowingLocalStorage(() => { throw Object.assign(new Error('sandboxed'), { name: 'SecurityError' }); }, async () => {
       m.list.mockResolvedValue([P1]);
       installFakeDom();
       mount(createElement(Probe));
       await flush();
       expect(probe?.error).toBeNull();
       expect(probe?.plugins).toEqual([P1]);
-    } finally {
-      if (orig) Object.defineProperty(globalThis, 'localStorage', orig);
-      else delete (globalThis as { localStorage?: unknown }).localStorage;
-    }
+    });
   });
 });

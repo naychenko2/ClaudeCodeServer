@@ -392,6 +392,7 @@ describe('ошибки хранилища (инв. 7)', () => {
     const removed = removePluginStorage({ ownerId: OWNER, pluginId: PLUGIN, store });
     expect(removed).toBe(1);
     expect(warn.mock.calls[0][0]).toContain('[plugin storage]');
+    expect(warn.mock.calls[0][0]).toContain('удалено ключей 1, остальные остались');
     warn.mockRestore();
   });
 

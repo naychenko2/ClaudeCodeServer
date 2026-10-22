@@ -29,6 +29,11 @@ public sealed record LocalModelStatsCurrent
     // null — базы ещё нет (данных не было).
     public double? CleanStepMs { get; init; }
 
+    // База шага по числу одновременных потоков (ключ — Running точки, мс): у батч-движка
+    // (Strata) шаг растёт с числом строк в окне, и общая база выдавала параллельный декод
+    // за «ждёт соседа». Уровень без достаточной выборки отсутствует — берётся CleanStepMs.
+    public IReadOnlyDictionary<int, double>? CleanStepMsByRunning { get; init; }
+
     public LocalModelStatsKv? Kv { get; init; }
 
     // Метрики, которых движок не сообщил (отсутствуют в /metrics).

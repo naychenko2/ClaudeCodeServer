@@ -24,7 +24,8 @@ public class PluginBridge
     /// Диспетчер: найти обработчик операции {область}.{глагол} по домену (часть до первой
     /// '.'), проверить, что его право есть в granted, вызвать.
     /// Нет обработчика → <c>unavailable</c> (503, «обработчик не зарегистрирован»);
-    /// право не в granted → <c>denied</c> (403).
+    /// право не в granted → <c>denied</c> (403): точное право названо ключом,
+    /// параметризованное (<c>net:</c>) — хостом запроса (см. <see cref="DeniedError"/>).
     /// </summary>
     /// <param name="context">Владелец + id плагина + контекст слота (ADR-031 §3.3, M8).</param>
     /// <param name="capability">Операция: {область}.{глагол} (например notes.read).</param>
@@ -56,9 +57,43 @@ public class PluginBridge
             ? granted.Any(g => g.StartsWith(handler.Permission, StringComparison.Ordinal))
             : granted.Contains(handler.Permission, StringComparer.Ordinal);
         if (!covered)
-            return new PluginCapabilityResult(false,
-                Error: new PluginCallError("denied", $"Нет права: {handler.Permission}"));
+            return new PluginCapabilityResult(false, Error: DeniedError(domain, handler, args ?? default));
 
         return await handler.HandleAsync(context, capability, args ?? default, granted, ct);
+    }
+
+    // Формулировка отказа по праву. Точное право (notes:read) называем ключом — по нему
+    // панель предлагает «Выдать…». Параметризованное (net:{host}, Permission = префикс
+    // "net:") с пустым параметром человеку ничего не говорит: называем хост из аргументов
+    // операции (для net.fetch — хост url), а если его не вытащить — осмысленный текст по
+    // домену, а не «Нет права: net:». Хост — единственное, чего панель не знает: она его
+    // и так запросила, URL целиком не несём.
+    private static PluginCallError DeniedError(string domain, IPluginCapability handler, JsonElement args)
+    {
+        if (!handler.Permission.EndsWith(":", StringComparison.Ordinal))
+            return new PluginCallError("denied", $"Нет права: {handler.Permission}");
+
+        if (domain == "net")
+        {
+            var host = HostFromArgs(args);
+            if (host is not null)
+                return new PluginCallError("denied", $"Нет права: {handler.Permission}{host}");
+            return new PluginCallError("denied", "Нет права на сетевые запросы");
+        }
+
+        return new PluginCallError("denied", $"Нет права на операции домена: {domain}");
+    }
+
+    // Хост из аргументов net.fetch: поле "url" (http/https), в нижнем регистре — как
+    // грамматика хоста права net:{host} (PluginNetProxy.HostOf). Другая форма аргументов
+    // или не-URL → null (отказ по домену, не по хосту).
+    private static string? HostFromArgs(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return null;
+        if (!args.TryGetProperty("url", out var urlEl) || urlEl.ValueKind != JsonValueKind.String)
+            return null;
+        if (!Uri.TryCreate(urlEl.GetString(), UriKind.Absolute, out var uri)) return null;
+        var host = uri.IdnHost.ToLowerInvariant();
+        return host.Length > 0 ? host : null;
     }
 }

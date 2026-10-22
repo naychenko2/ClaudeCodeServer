@@ -4,16 +4,19 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Шаг B-1 фичи «Индикатор prompt cache»: ResultMessage.PromptCache собирается из stream-json
+// Шаг B-1/B-1r фичи «Индикатор prompt cache»: ResultMessage.PromptCache собирается из stream-json
 // основного агента: прочитанные/записанные токены — из usage result'а хода, якорь последней
-// записи — по приходу message_start вызова, писавшего кэш, причина промаха — из
-// diagnostics.cache_miss_reason ПЕРВОГО вызова после эха нашего сообщения (вызовы до эха —
-// ход-продолжение CLI, не наш ход). White-box через ProcessLineAsync — тот же приём, что
+// записи — по приходу message_start вызова, писавшего кэш, TTL — из usage.cache_creation.ephemeral_*,
+// причина промаха и MissedTokens — из diagnostics.cache_miss_reason ПЕРВОГО вызова после эха
+// нашего сообщения (вызовы до эха — ход-продолжение CLI, не наш ход), страховка причины — из
+// строки assistant того же вызова. Поле не появляется у сторонних провайдеров (свой кэш без
+// TTL, ephemeral_* — эхо CLI). White-box через ProcessLineAsync — тот же приём, что
 // ClaudeSessionReplayEchoCorrelationTests.
 public class ClaudeSessionPromptCacheTests : IDisposable
 {
@@ -50,7 +53,8 @@ public class ClaudeSessionPromptCacheTests : IDisposable
         return run;
     }
 
-    private static (ClaudeSession Session, List<ServerMessage> Sent, ManualClock Clock) NewSession()
+    private static (ClaudeSession Session, List<ServerMessage> Sent, ManualClock Clock) NewSession(
+        string? model = null, LlmProviderRegistry? providers = null)
     {
         var sent = new List<ServerMessage>();
         var context = new LlmSessionContext(
@@ -60,15 +64,16 @@ public class ClaudeSessionPromptCacheTests : IDisposable
             PermissionRules: null,
             TasksMcp: null);
         var clock = new ManualClock(1_000_000);
-        var session = new ClaudeSession(new Session(), context) { PromptCacheClock = clock };
+        var session = new ClaudeSession(new Session { Model = model }, context, providers: providers)
+            { PromptCacheClock = clock };
         return (session, sent, clock);
     }
 
     private static async Task Drive(ClaudeSession session, object run, string line) =>
         await (Task)ProcessLineAsyncMethod.Invoke(session, [run, line])!;
 
-    private static string Usage(long read, long create) =>
-        $$$"""{"input_tokens":3,"output_tokens":0,"cache_read_input_tokens":{{{read}}},"cache_creation_input_tokens":{{{create}}}}""";
+    private static string Usage(long read, long create, long eph1h = 0, long eph5m = 0) =>
+        $$$"""{"input_tokens":3,"output_tokens":0,"cache_read_input_tokens":{{{read}}},"cache_creation_input_tokens":{{{create}}},"cache_creation":{"ephemeral_1h_input_tokens":{{{eph1h}}},"ephemeral_5m_input_tokens":{{{eph5m}}}}}""";
 
     private static string MessageStart(string usage, string diagnostics = "null") =>
         """{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_1","role":"assistant","usage":"""
@@ -178,23 +183,144 @@ public class ClaudeSessionPromptCacheTests : IDisposable
         pc.ReadTokens.Should().Be(70_000);
     }
 
-    // Незнакомый type — «причина неизвестна» (Unavailable), а не потеря; нет diagnostics — промаха нет
+    // Все различаемые причины origin (bdf2c9bbd) мапятся в свои значения; незнакомый type —
+    // «причина неизвестна» (Unavailable), а не потеря; нет diagnostics — промаха нет
     [Fact]
-    public async Task НезнакомыйТипПричины_Unavailable_НетDiagnostics_None()
+    public async Task ПричиныПромаха_Мапятся_НезнакомыйType_Unavailable_БезDiagnostics_None()
     {
-        var (session, sent, _) = NewSession();
-        var run = NewRun();
-
-        await Drive(session, run, MessageStart(Usage(0, 10_000),
-            """{"cache_miss_reason":{"type":"model_changed","cache_missed_input_tokens":10000}}"""));
-        await Drive(session, run, ResultLine(0, 10_000));
-        LastPromptCache(sent)!.MissReason.Should().Be(PromptCacheMissReason.Unavailable);
+        foreach (var (type, expected) in new[]
+        {
+            ("system_changed", PromptCacheMissReason.SystemChanged),
+            ("messages_changed", PromptCacheMissReason.MessagesChanged),
+            ("previous_message_not_found", PromptCacheMissReason.PreviousMessageNotFound),
+            ("model_changed", PromptCacheMissReason.ModelChanged),
+            ("tools_changed", PromptCacheMissReason.ToolsChanged),
+            ("unavailable", PromptCacheMissReason.Unavailable),
+            ("window_expired", PromptCacheMissReason.Unavailable), // новый тип API — не в известные bucket'ы
+        })
+        {
+            var (session, sent, _) = NewSession();
+            var run = NewRun();
+            await Drive(session, run, MessageStart(Usage(0, 10_000),
+                "{\"cache_miss_reason\":{\"type\":\"" + type + "\",\"cache_missed_input_tokens\":10000}}"));
+            await Drive(session, run, ResultLine(0, 10_000));
+            LastPromptCache(sent)!.MissReason.Should().Be(expected, $"type {type}");
+        }
 
         var (session2, sent2, _) = NewSession();
         var run2 = NewRun();
         await Drive(session2, run2, MessageStart(Usage(0, 10_000), "null"));
         await Drive(session2, run2, ResultLine(0, 10_000));
         LastPromptCache(sent2)!.MissReason.Should().Be(PromptCacheMissReason.None);
+    }
+
+    // MissedTokens — cache_missed_input_tokens того же diagnostics; без промаха — null
+    [Fact]
+    public async Task MissedTokens_ИзDiagnostics_БезПромаха_Null()
+    {
+        var (session, sent, _) = NewSession();
+        var run = NewRun();
+
+        await Drive(session, run, MessageStart(Usage(0, 80_000),
+            """{"cache_miss_reason":{"type":"previous_message_not_found","cache_missed_input_tokens":80000}}"""));
+        await Drive(session, run, ResultLine(0, 80_000));
+
+        var pc = LastPromptCache(sent)!;
+        pc.MissReason.Should().Be(PromptCacheMissReason.PreviousMessageNotFound);
+        pc.MissedTokens.Should().Be(80_000);
+
+        var (session2, sent2, _) = NewSession();
+        var run2 = NewRun();
+        await Drive(session2, run2, MessageStart(Usage(50_000, 0), "null"));
+        await Drive(session2, run2, ResultLine(50_000, 0));
+        LastPromptCache(sent2)!.MissedTokens.Should().BeNull();
+    }
+
+    // TTL — из usage.cache_creation.ephemeral_* вызова, писавшего кэш; без ephemeral — null
+    // (записи за жизнь процесса сервер не видел)
+    [Fact]
+    public async Task Ttl_ИзEphemeralUsage_БезЗаписи_Null()
+    {
+        var (session, sent, _) = NewSession();
+        var run = NewRun();
+
+        await Drive(session, run, MessageStart(Usage(0, 120_000, eph1h: 120_000)));
+        await Drive(session, run, ResultLine(0, 120_000));
+        LastPromptCache(sent)!.Ttl.Should().Be("1h");
+
+        var (session2, sent2, _) = NewSession();
+        var run2 = NewRun();
+        await Drive(session2, run2, MessageStart(Usage(0, 9_000, eph5m: 9_000)));
+        await Drive(session2, run2, ResultLine(0, 9_000));
+        LastPromptCache(sent2)!.Ttl.Should().Be("5m");
+
+        var (session3, sent3, _) = NewSession();
+        var run3 = NewRun();
+        await Drive(session3, run3, MessageStart(Usage(0, 10_000)));
+        await Drive(session3, run3, ResultLine(0, 10_000));
+        LastPromptCache(sent3)!.Ttl.Should().BeNull("ephemeral_* не пришёл — срок записи неизвестен");
+    }
+
+    // Вызов, который только читал кэш, TTL не стирает: наследует срок последней записи
+    [Fact]
+    public async Task ТолькоЧтение_TtlНаследуется()
+    {
+        var (session, sent, _) = NewSession();
+        var run = NewRun();
+
+        await Drive(session, run, MessageStart(Usage(0, 50_000, eph1h: 50_000)));
+        await Drive(session, run, MessageStart(Usage(50_000, 0)));
+        await Drive(session, run, ResultLine(50_000, 0));
+
+        LastPromptCache(sent)!.Ttl.Should().Be("1h");
+    }
+
+    // Сторонний провайдер: свой кэш без TTL, ephemeral_* в его потоке — эхо CLI; поля нет вовсе
+    [Fact]
+    public async Task СтороннийПровайдер_PromptCacheNull()
+    {
+        const string thirdPartyModel = "deepseek-v9-test";
+        var providers = new LlmProviderRegistry(TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:Models:0:Id"] = thirdPartyModel,
+        }));
+        var (session, sent, _) = NewSession(thirdPartyModel, providers);
+        var run = NewRun();
+
+        await Drive(session, run, MessageStart(Usage(0, 50_000, eph1h: 50_000),
+            """{"cache_miss_reason":{"type":"system_changed","cache_missed_input_tokens":50000}}"""));
+        await Drive(session, run, ResultLine(0, 50_000));
+
+        LastPromptCache(sent).Should().BeNull();
+    }
+
+    // Страховка: если message_start не принёс diagnostics, причина берётся из строки assistant
+    // того же вызова (по id сообщения); промах последующего вызова хода — не промах между ходами
+    [Fact]
+    public async Task Страховка_ПричинаИзСтрокиAssistant_ТогоЖеВызова()
+    {
+        var (session, sent, _) = NewSession();
+        var run = NewRun();
+
+        await Drive(session, run, MessageStart(Usage(0, 80_000))); // diagnostics нет
+        await Drive(session, run, Assistant(Usage(0, 80_000),
+            """{"cache_miss_reason":{"type":"messages_changed","cache_missed_input_tokens":80000}}"""));
+        await Drive(session, run, ResultLine(0, 80_000));
+
+        var pc = LastPromptCache(sent)!;
+        pc.MissReason.Should().Be(PromptCacheMissReason.MessagesChanged);
+        pc.MissedTokens.Should().Be(80_000);
+
+        // Второй вызов того же хода (другой id) не переносит причину на промах между ходами
+        var (session2, sent2, _) = NewSession();
+        var run2 = NewRun();
+        await Drive(session2, run2, MessageStart(Usage(70_000, 0)));
+        await Drive(session2, run2, """{"type":"assistant","message":{"id":"msg_2","role":"assistant","content":[{"type":"text","text":"ок"}],"diagnostics":{"cache_miss_reason":{"type":"tools_changed","cache_missed_input_tokens":1000}}}}""");
+        await Drive(session2, run2, ResultLine(70_000, 0));
+        LastPromptCache(sent2)!.MissReason.Should().Be(PromptCacheMissReason.None,
+            "промах второго вызова — греет префикс самого хода, а не пауза между ходами");
     }
 
     // Нет ни одного сигнала кэша — поля нет (а не пустой объект)

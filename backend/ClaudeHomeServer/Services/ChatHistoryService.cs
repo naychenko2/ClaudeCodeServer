@@ -6,9 +6,13 @@ namespace ClaudeHomeServer.Services;
 public class ChatHistoryService
 {
     private readonly string _basePath;
+    // Строковый контракт enum'ов тот же, что на SignalR/MVC (Program.cs): PromptCacheMissReason
+    // в PromptCache обязан сериализоваться одинаково и в history.json, и в хабе — без конвертера
+    // история отдавала число. Числовые значения старых записий конвертер читает обратно.
     private static readonly JsonSerializerOptions _opts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     public ChatHistoryService(IConfiguration config)

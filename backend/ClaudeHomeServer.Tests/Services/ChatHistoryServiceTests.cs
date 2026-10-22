@@ -1,4 +1,5 @@
-﻿using ClaudeHomeServer.Protocol;
+﻿using System.Text.Json;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -73,6 +74,35 @@ public class ChatHistoryServiceTests : IDisposable
         card.PrefillSeconds.Should().Be(87.5);
         card.CacheReadTokens.Should().Be(18_000);
         card.PromptTokens.Should().Be(20_000);
+    }
+
+    // Строковый контракт PromptCacheMissReason (шаг B-1r): JSON одного поля идентичен в обоих
+    // каналах — history.json пишется _opts (конвертер добавлен ровно ради этого совпадения),
+    // SignalR/MVC — с JsonStringEnumConverter(CamelCase) из Program.cs. Атрибут на enum
+    // держится как гарантия строкового формата сериализаторам без глобального конвертера.
+    // До фикса история отдавала число, а хаб — строку: фронте пришлось бы разбирать два
+    // формата одного поля.
+    [Fact]
+    public async Task PromptCacheMissReason_одинаковый_строковый_JSON_в_обох_каналах()
+    {
+        var state = new PromptCacheState(1000, 500, 1_700_000_000_000, "1h", 8000, PromptCacheMissReason.SystemChanged);
+
+        // SignalR/MVC-канал: те же опции, что в Program.cs (AddJsonOptions / AddJsonProtocol)
+        var hubOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        hubOpts.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        var expected = JsonSerializer.Serialize(state, hubOpts);
+        expected.Should().Contain("\"missReason\":\"systemChanged\"", "enum сериализуется строкой, а не числом");
+
+        var sessionId = Guid.NewGuid().ToString();
+        await _sut.SaveAsync(sessionId, [new StoredResultMessage("success", 100, 1, null, null) { PromptCache = state }]);
+
+        var raw = File.ReadAllText(Path.Combine(_tempDir, "sessions", sessionId, "history.json"));
+        raw.Should().Contain(expected, "поле в истории пишется ровно тем же JSON, что и на SignalR");
+
+        // Обратное чтение: строка парсится обратно в enum
+        (await _sut.LoadAsync(sessionId)).Should().ContainSingle()
+            .Which.Should().BeOfType<StoredResultMessage>()
+            .Which.PromptCache!.MissReason.Should().Be(PromptCacheMissReason.SystemChanged);
     }
 
     [Fact]

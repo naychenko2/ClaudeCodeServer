@@ -168,7 +168,7 @@ public sealed class SafeMediaDownloader
     /// авто-редиректов и кук, адрес соединения резолвится и проверяется в момент connect.
     /// <paramref name="resolve"/> — резолвер имени для тестов; null — системный DNS.
     /// </summary>
-    public static SocketsHttpHandler CreateHandler(Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null) =>
+    public static SsrfSafeHttpHandler CreateHandler(Func<string, CancellationToken, Task<IPAddress[]>>? resolve = null) =>
         SsrfSafeHandler.Create(new SsrfSafeHandlerOptions
         {
             ConnectTimeout = TimeSpan.FromSeconds(10),

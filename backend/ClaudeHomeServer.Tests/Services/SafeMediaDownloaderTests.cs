@@ -194,9 +194,9 @@ public class SafeMediaDownloaderTests
     public async Task БоевойТранспорт_ИмяСПубличнымИПриватнымАдресом_Отказ()
     {
         // Смешанный DNS: правило «все адреса публичные» (а не «первый публичный») режет имя целиком.
-        // Публичный адрес — TEST-NET-2: при поломке правила транспорт пошёл бы туда и упал бы иначе
+        // Публичный адрес — 8.8.8.8 (TEST-NET сам не публичный): при поломке правила транспорт пошёл бы туда
         using var handler = SafeMediaDownloader.CreateHandler((_, _) =>
-            Task.FromResult(new[] { IPAddress.Parse("198.51.100.7"), IPAddress.Loopback }));
+            Task.FromResult(new[] { IPAddress.Parse("8.8.8.8"), IPAddress.Loopback }));
         var downloader = new SafeMediaDownloader(handler, (_, _) => Task.FromResult(SsrfGuard.AddressCheck.Public))
             { Timeout = TimeSpan.FromSeconds(5) };
 

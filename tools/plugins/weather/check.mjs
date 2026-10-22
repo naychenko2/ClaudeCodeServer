@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Автопроверка панели «Погода» (шаг C3 плана «Погода»).
 //
-// Прогоняет шесть сценариев Playwright'ом против хост-эмулятора
+// Прогоняет сценарии Playwright'ом против хост-эмулятора
 // (tools/plugins/dev-host/) на фикстурах из tools/plugins/dev-host/fixtures/.
 //
 // Запуск из корня репозитория:
@@ -13,17 +13,22 @@
 // ответы панели — фикстуры.
 //
 // Сценарии:
-//   1. Главный экран: 7 строк недели, герой с температурой и состоянием.
+//   1. Главный экран: 7 строк недели, герой с температурой и состоянием;
+//      подвал — «обновлено в» по времени города (R3).
 //   2. «Сегодня 22 окт» при timezoneId America/Los_Angeles и Asia/Tokyo —
 //      дата по фикстуре, а не по поясу машины.
 //   3. Нет горизонтальной прокрутки на ширинах 320 и 390.
-//   4. denied (нет права на прогноз) и status400 — каждый даёт свой кадр.
-//   5. Поиск «Ярц» — сортировка по населению (Ярцево Смоленское первым).
+//   4. denied (нет права на прогноз), status400 и неполный ответ — каждый
+//      даёт свой кадр; неполный ответ — прочерки, не выдуманная погода (R3).
+//   5. Поиск «Ярц» — сортировка по населению (Ярцево Смоленское первым);
+//      повторное открытие режима выбора — чистое (R3).
 //   6. Пустой поиск — пустое состояние.
+//   7. Гонка: два поиска подряд, пакет первого приходит позже результатов
+//      второго — температуры только свои (R3, major 1).
 
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
-import { readFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, extname, sep } from 'node:path';
 
@@ -175,6 +180,11 @@ async function scenarioMain(browser, base) {
       const hl = (await textOf(frame, '.hero .hl')).trim();
       assertTrue(checks, 'днём/ночью в герое', hl.includes('Днём') && hl.includes('ночью'), hl);
 
+      // Подвал — «обновлено в» по времени города (R3): формат HH:MM, не «данные на».
+      const foot = (await textOf(frame, '.foot')).trim();
+      assertTrue(checks, 'подвал «обновлено в» с временем города',
+        /^Данные: Open-Meteo · обновлено в \d{2}:\d{2}$/.test(foot), foot);
+
       assertTrue(checks, 'три плитки героя', (await frame.locator('.hero .metric').count()) === 3);
     } catch (e) {
       await shot(page, 'scenario-1-main');
@@ -269,7 +279,37 @@ async function scenarioErrors(browser, base) {
     }
   });
 
-  await scenario('4b. status400 — свой кадр', async (checks) => {
+  await scenario('4b. Неполный ответ — прочерки, не выдуманная погода (R3)', async (checks) => {
+    // Синтетическая фикстура в gitignore-папке: current без значений, daily без
+    // температур — ровно тот вид неполного ответа, который раньше давал «ясно» и «NaN°».
+    const incomplete = '.cc-attachments/weather-c3/forecast-incomplete.json';
+    await mkdir(join(ROOT, '.cc-attachments', 'weather-c3'), { recursive: true });
+    await writeFile(join(ROOT, incomplete), JSON.stringify({
+      latitude: 57.63, longitude: 39.87, utc_offset_seconds: 10800, timezone: 'Europe/Moscow',
+      current: { time: '2026-10-22T15:45', interval: 900 },
+      daily: { time: ['2026-10-22', '2026-10-23'], weather_code: [2, 3] },
+    }));
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: incomplete,
+    });
+    try {
+      await frame.locator('.hero .cond').waitFor({ timeout: 15000 });
+      assertEq(checks, 'состояние героя — прочерк', (await textOf(frame, '.hero .cond')).trim(), '—');
+      assertEq(checks, 'температура героя — прочерк', (await textOf(frame, '.hero .temp')).trim(), '—');
+      const panelText = await frame.locator('.wx').innerText();
+      assertTrue(checks, 'нет NaN° нигде', !panelText.includes('NaN'), 'в тексте панели: ' + panelText.replace(/\n/g, ' '));
+      assertTrue(checks, 'нет выдуманного «Ясно»/«Облачно»', !panelText.includes('Ясно') && !panelText.includes('Облачно'),
+        'в тексте панели: ' + panelText.replace(/\n/g, ' '));
+    } catch (e) {
+      await shot(page, 'scenario-4b-incomplete');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+
+  await scenario('4c. status400 — свой кадр', async (checks) => {
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
       fail: 'status400',
@@ -281,7 +321,7 @@ async function scenarioErrors(browser, base) {
       const btn = await frame.locator('#retry').innerText().catch(() => '');
       assertEq(checks, 'кнопка «Повторить»', btn.trim(), 'Повторить');
     } catch (e) {
-      await shot(page, 'scenario-4b-status400');
+      await shot(page, 'scenario-4c-status400');
       throw e;
     } finally {
       await context.close();
@@ -308,6 +348,14 @@ async function scenarioSearchSort(browser, base) {
       const first = (await textOf(frame, '.city:first-child')).replace(/\n/g, ' ').trim();
       assertTrue(checks, 'первым — Ярцево', first.includes('Ярцево'), first);
       assertTrue(checks, 'Ярцево Смоленское (по населению)', first.includes('Смоленская обл.'), first);
+
+      // Повторное открытие режима — чистое: пустое поле и без старых результатов (R3).
+      await frame.locator('#back').click();
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      assertEq(checks, 'поле поиска пустое', await frame.locator('#q').inputValue(), '');
+      assertEq(checks, 'старых результатов нет', await frame.locator('.city').count(), 0);
     } catch (e) {
       await shot(page, 'scenario-5-search');
       throw e;
@@ -341,6 +389,58 @@ async function scenarioSearchEmpty(browser, base) {
   });
 }
 
+async function scenarioRace(browser, base) {
+  await scenario('7. Гонка: два поиска подряд — температуры только свои (R3)', async (checks) => {
+    const D = 3000;      // задержка ответа эмулятора на каждом вызове
+    const GAP = 2000;    // пауза между двумя запросами (больше дебаунса, меньше D)
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      delay: String(D),
+      // Фикстуры — по порядку вызовов: главный прогноз, геокодер «Ярц»,
+      // геокодер «Ярослав» (второй поиск ушёл, пока первый в полёте), пакет по
+      // координатам первой поисковой волны — его ответ и есть гонка: он приходит
+      // после того, как второй поиск заменил список.
+      fixtures: [
+        FX + 'forecast-yaroslavl.json',
+        FX + 'geocode-arts.json',
+        FX + 'geocode-yaroslavl.json',
+        FX + 'forecast-batch.json',
+      ].join(','),
+    });
+    try {
+      // Ждём настоящего главного экрана, не скелетона: при задержке и чтение
+      // storage, и первый прогноз тянутся — порядок вызовов фикстур должен быть
+      // предсказуемым.
+      await frame.locator('.hero .temp').waitFor({ timeout: 20000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      const t0 = Date.now();
+      await frame.locator('#q').fill('Ярц');
+      await page.waitForTimeout(GAP);
+      await frame.locator('#q').fill('Ярослав');
+      // Тайминг от момента первого запроса: геокодер «Ярц» отвечает на t0+400+D,
+      // геокодер «Ярослав» — на t0+GAP+400+D. При общем `found` пакет первой
+      // волны применялся бы ко второму списку на t0+400+2D. Проверяем после этого
+      // ответа и до ответа пакета второй волны (t0+GAP+400+2D): в исправленной
+      // панели температур в этом окне нет, в старой — температуры первого
+      // поиска на строках второго.
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      const checkAt = t0 + 400 + 2 * D + 500;
+      const remain = checkAt - Date.now();
+      if (remain > 0) await page.waitForTimeout(remain);
+
+      assertEq(checks, 'чужих температур в новом списке нет', await frame.locator('.city .t').count(), 0);
+      const first = (await textOf(frame, '.city:first-child')).replace(/\n/g, ' ').trim();
+      assertTrue(checks, 'первая строка — Ярославль', first.includes('Ярославль'), first);
+    } catch (e) {
+      await shot(page, 'scenario-7-race');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 // ---------- Запуск ----------
 
 const { server, base } = await startServer();
@@ -352,6 +452,7 @@ try {
   await scenarioErrors(browser, base);
   await scenarioSearchSort(browser, base);
   await scenarioSearchEmpty(browser, base);
+  await scenarioRace(browser, base);
 } finally {
   await browser.close();
   server.close();

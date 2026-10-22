@@ -1665,6 +1665,40 @@ public class LlmProviderRegistryTests
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("262144");
     }
 
+    // Свой состав MCP у записи модели (LlmModelConfig.KeepMcpServers/KeepMcpTools) перекрывает
+    // провайдерский только для этой записи: вторая запись того же стенда — с составом провайдера.
+    [Fact]
+    public void LightProfileFor_ЗаписьМоделиСоСвоимСоставомMcp_ПерекрываетПровайдера()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:DisplayName"] = "Qwen",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:TrimMcpServers"] = "true",
+            ["LlmProviders:local-qwen:KeepMcpServers:0"] = "tasks",
+            ["LlmProviders:local-qwen:KeepMcpTools:tasks:0"] = "tasks_get",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
+            ["LlmProviders:local-qwen:Models:1:Id"] = "qwen3.8-flash-500k",
+            ["LlmProviders:local-qwen:Models:1:KeepMcpServers:0"] = "tasks",
+            ["LlmProviders:local-qwen:Models:1:KeepMcpServers:1"] = "wsp",
+            ["LlmProviders:local-qwen:Models:1:KeepMcpTools:tasks:0"] = "tasks_get",
+            ["LlmProviders:local-qwen:Models:1:KeepMcpTools:tasks:1"] = "tasks_run_executor",
+            ["LlmProviders:local-qwen:Models:1:KeepMcpTools:wsp:0"] = "chats_send",
+        };
+        var registry = CreateWithLocal(settings, new FakeLocalProbe(knownWindow: 0));
+
+        var wide = registry.LightProfileFor("qwen3.8-flash-500k", persona: null)!;
+        wide.KeepMcpServers.Should().BeEquivalentTo(["tasks", "wsp"]);
+        wide.KeepMcpTools["tasks"].Should().Contain("tasks_run_executor");
+        wide.KeepMcpTools["wsp"].Should().Contain("chats_send");
+
+        var narrow = registry.LightProfileFor("qwen3.8-27b", persona: null)!;
+        narrow.KeepMcpServers.Should().BeEquivalentTo(["tasks"]);
+        narrow.KeepMcpTools.Should().NotContainKey("wsp");
+        narrow.KeepMcpTools["tasks"].Should().NotContain("tasks_run_executor");
+    }
+
     // Проба не успела опросить стенд (knownWindow=0) — fail-open на каталог.
     [Fact]
     public void BuildCliEnv_ЛокальныйПровайдер_ПробаНеЗнает_ФолалноНаКаталог()

@@ -14,6 +14,7 @@ import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
+import { getNav } from '../lib/nav';
 import { centerWinner } from './workspace/DesktopWorkspace';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { __test as backNavTest, recordBackNav, recordFeatureReturn, featureBackNavFrom, backNavFrom, getBackNav } from '../lib/featureBackNav';
@@ -1811,6 +1812,66 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
       'выбранный чат не в DOM').not.toBeNull();
   });
+
+  // Дефект Ф-хв (третий возврат): запасный переход не должен подавлять навигацию и мобильный
+  // показ чата — keepFeaturePage гасит только closeFeaturePage. Мутация: вернуть третьим
+  // аргументом handleSelectSession `activeSessionRef.current == null || keepFeaturePage` →
+  // красные тесты холодного чата (адрес, display:flex) и явного выбора без активного чата.
+  const mountPending = async (mobile: boolean, withFeature: boolean) => {
+    const win = globalThis as any;
+    if (!mobile) win.window.innerWidth = 1280;
+    const chatA: Session = { id: 'chatA', name: 'Чат А', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatA, chatB);
+    mockData.chats.push(chatA, chatB);
+    mockData.chat = chatA;
+    wsState.activeSession = null;
+    // фейк-история пишет снимок и адрес (в beforeEach pushState/replaceState — no-op)
+    win.window.history = {
+      state: null, back: () => {}, go: () => {}, forward: () => {}, length: 1,
+      pushState: (st: any, _t: string, h: string) => { win.window.history.state = st; win.window.location.hash = h; },
+      replaceState: (st: any, _t: string, h: string) => { win.window.history.state = st; win.window.location.hash = h; },
+    };
+    win.window.location.hash = withFeature ? '#/project/p1/feature/f1' : '#/project/p1';
+    win.window.history.state = { screen: 'project', project, file: null, chatId: withFeature ? 'chatB' : undefined, feature: withFeature ? 'f1' : undefined };
+    win.sessionStorage.setItem('cc_pending_project_chat', withFeature ? 'p1|chatB' : 'p1|chatA');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'chat-panel'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+    return { win, container };
+  };
+  const runColdPendingNoFeature = async (mobile: boolean) => {
+    const { win, container } = await mountPending(mobile, false);
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'чат не виден (холодный pending-чат)').not.toBeNull();
+    expect(getNav()?.chatId, 'запись навигации без chatId (холодный pending-чат)').toBe('chatA');
+    if (mobile) {
+      expect((findNodeByAttr(container, 'data-testid', 'workspace-center-container') as any).style?.display,
+        'центр скрыт на мобиле (холодный pending-чат)').toBe('flex');
+    }
+  };
+  it('холодный pending-чат без страницы фичи: чат виден, адрес /chat/{id} (десктоп 1280)', () => runColdPendingNoFeature(false));
+  it('холодный pending-чат без страницы фичи: чат виден, адрес /chat/{id}, центр display:flex (мобила 360)', () => runColdPendingNoFeature(true));
+
+  // Страница фичи открыта, активного чата нет, явный выбор ДРУГОГО чата — страница закрыта.
+  const runExplicitOtherChat = async (mobile: boolean) => {
+    const { win, container } = await mountPending(mobile, true);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница не открыта (предусловие)').not.toBeNull();
+    // снимок указывал на chatB, но активный чат так и не выбран; явно выбираем chatA
+    wsState.activeSession = null;
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatA');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'явный выбор другого чата без активного не закрыл страницу').toBeNull();
+  };
+  it('страница фичи, активного чата нет, явный выбор другого чата — страница закрыта (десктоп 1280)', () => runExplicitOtherChat(false));
+  it('страница фичи, активного чата нет, явный выбор другого чата — страница закрыта (мобила 360)', () => runExplicitOtherChat(true));
 
   // M2 (мобила): задача открыта, явное открытие страницы рисует её ПОВЕРХ; «Закрыть» → задача.
   it('M2: задача в центре (мобила) → страница ПОВЕРХ (адрес /feature/), «Закрыть» → задача видна', async () => {

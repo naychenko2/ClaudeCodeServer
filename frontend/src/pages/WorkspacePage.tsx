@@ -1411,7 +1411,8 @@ const windowWidth = useWindowWidth();
   // replaceNav — перезаписать текущую запись истории вместо новой: её уже положил переход
   // в проект с chatId (openProject из диплинка), вторая запись сломала бы «назад»
   // keepFeaturePage — выбор по pending-каналу под открытой страницей фичи (запасный переход
-  // «чип ← к фиче»): страницу не закрываем и навигацию без feature не перезаписываем
+  // «чип ← к фиче»): гасит ТОЛЬКО закрытие страницы; мобильный показ чата и запись истории
+  // (с feature из снимка) выполняются как при явном выборе
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean, replaceNav?: boolean, keepFeaturePage?: boolean) => {
     // Стартовый автовыбор первого чата (activeSession ещё null: холодный вход/диплинк)
     // страницу НЕ закрывает: она только что открыта по диплинку (M1, регрессия c3ae97728 —
@@ -1466,11 +1467,13 @@ const windowWidth = useWindowWidth();
       // вернул бы чат без файла, который с экрана не уходил.
       const file = keepSplitFile ? openFile : null;
       const nav = replaceNav ? navReplace : navPush;
+      // Под сохранённой страницей фичи запись несёт feature: без него адрес потерял бы страницу
+      const feature = keepFeaturePage ? getNav()?.feature ?? null : null;
       if (isMobile) {
         setMobileView('chat');
-        nav({ screen: 'project', project, view: 'chat', file, chatId: session.id });
+        nav({ screen: 'project', project, view: 'chat', file, chatId: session.id, feature });
       } else {
-        nav({ screen: 'project', project, view: 'sidebar', file, chatId: session.id });
+        nav({ screen: 'project', project, view: 'sidebar', file, chatId: session.id, feature });
       }
     }
   };
@@ -1591,7 +1594,7 @@ const windowWidth = useWindowWidth();
           // (снимок без feature или с чужим chatId) закрывает страницу как раньше.
           const snap = getNav();
           const keepFeaturePage = !!snap?.feature && snap.chatId === s.id;
-          handleSelectSession(s, undefined, activeSessionRef.current == null || keepFeaturePage, replace, keepFeaturePage);
+          handleSelectSession(s, undefined, false, replace, keepFeaturePage);
           if (view) {
             // «Назад» на снимок (с перемонтажом или внутри проекта): файл и задача — из
             // снимка, а не из сохранённого состояния проекта или замыкания первого рендера.

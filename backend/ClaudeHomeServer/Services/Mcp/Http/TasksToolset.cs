@@ -1028,8 +1028,7 @@ public sealed class TasksToolset(
 
         yield return Tool("tasks_list",
             $"Список задач. {context} scope=all — все задачи пользователя по всем проектам и личные. " +
-            $"Без status и from/to отдаются открытые и закрытые за последние {DefaultDoneDays} дней (doneDays переопределяет окно); " +
-            $"не больше {ListLimit} записей, при обрезке первым элементом идёт note. Старое — status=done, doneDays=all или tasks_search.",
+            $"По умолчанию открытые + закрытые за последние дни (doneDays); детали окна и потолка — в doneDays.",
             new JsonObject
             {
                 ["type"] = "object",
@@ -1066,7 +1065,7 @@ public sealed class TasksToolset(
                     ["doneDays"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = $"Окно закрытых задач по дате закрытия: число дней (0 — без закрытых) или all — все закрытые; по умолчанию {DefaultDoneDays}. Не действует при status и from/to",
+                        ["description"] = $"Окно закрытых задач по дате закрытия: число дней (0 — без закрытых) или all — все закрытые; по умолчанию {DefaultDoneDays}. Не действует при status и from/to. Потолок выдачи {ListLimit} записей (при обрезке первым элементом note); старое — doneDays=all, status=done или tasks_search.",
                     },
                     ["scope"] = new JsonObject
                     {

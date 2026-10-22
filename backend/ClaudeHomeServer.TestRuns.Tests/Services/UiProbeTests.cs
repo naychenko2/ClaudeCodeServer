@@ -484,6 +484,26 @@ public class UiProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task СемафорыВхода_ЧистятсяПриИстеченииТокена_ПарольВКлючеТолькоХешем()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt");
+        var time = new ManualTime();
+        var service = new UiProbeService(launcher, new TestRunsOptions(),
+            new PhasePipeline(new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5)), (_, _) => Task.FromResult(true), time);
+        var logins = (System.Collections.IDictionary)typeof(UiProbeService)
+            .GetField("_logins", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(service)!;
+
+        await service.RunAsync(Request() with { Password = "secret-pass" }, null, CancellationToken.None).WaitAsync(Wait);
+        logins.Count.Should().Be(1);
+        logins.Keys.Cast<object>().Single().ToString().Should().NotContain("secret-pass", "пароль в памяти открытым не держим");
+
+        time.Advance(TimeSpan.FromMinutes(11));
+        await service.RunAsync(Request() with { User = "other" }, null, CancellationToken.None).WaitAsync(Wait);
+
+        logins.Count.Should().Be(1, "ключ с истёкшим токеном вычищен, хотя к нему не обращались; остался только новый");
+    }
+
+    [Fact]
     public async Task ТокенОтклонён401_ОдинПовторныйВход()
     {
         var factory = new SwitchFactory(new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt"));
@@ -622,6 +642,16 @@ public class UiProbeTests : IDisposable
         "staged" => "<body><button style=\"visibility:hidden\">x</button>" + Buttons(0, 6)
             + "<script>const add=(a,b)=>{for(let i=a;i<b;i++){const e=document.createElement('button');e.style.height='20px';e.textContent='b'+i;document.body.appendChild(e)}};"
             + "setTimeout(()=>add(6,16),1000);setTimeout(()=>add(16,26),1600);setTimeout(()=>add(26,36),2200)</script></body>",
+        // Ступени с паузами 1,2 с — больше прежнего окна в 1 с: 1 кнопка сразу, +10 через 1200, +10 через 2400, +10 через 3600 мс
+        "slow" => "<body>" + Buttons(0, 1)
+            + "<script>const add=(a,b)=>{for(let i=a;i<b;i++){const e=document.createElement('button');e.style.height='20px';e.textContent='b'+i;document.body.appendChild(e)}};"
+            + "setTimeout(()=>add(1,11),1200);setTimeout(()=>add(11,21),2400);setTimeout(()=>add(21,31),3600)</script></body>",
+        "full31" => "<body>" + Buttons(0, 31) + "</body>",
+        // Число кнопок не меняется, меняются размеры: 20 → 30 (через 2500 мс) → 50 (ещё через 2500 мс); пауза меньше окна
+        "grow" => "<body>" + string.Concat(Enumerable.Range(0, 5).Select(i => $"<button class=\"g\" style=\"width:60px;height:20px\">g{i}</button>"))
+            + "<script>const set=(h)=>document.querySelectorAll('.g').forEach(e=>e.style.height=h+'px');"
+            + "setTimeout(()=>set(30),2500);setTimeout(()=>set(50),5000)</script></body>",
+        "grown" => "<body>" + string.Concat(Enumerable.Range(0, 5).Select(i => $"<button class=\"g\" style=\"width:60px;height:50px\">g{i}</button>")) + "</body>",
         // Никогда не устаканивается: кнопка каждые 100 мс
         "never" => "<body>" + Buttons(0, 3)
             + "<script>let n=3;setInterval(()=>{const e=document.createElement('button');e.textContent='n'+(n++);document.body.appendChild(e)},100)</script></body>",
@@ -631,7 +661,7 @@ public class UiProbeTests : IDisposable
     };
 
     // Поднимает страницу и мерит её настоящим скриптом; null и Skip — если браузера нет
-    private async Task<(string? Json, string? Refusal)> ProbeRealAsync(string page, int settleMs = 4000)
+    private async Task<(string? Json, string? Refusal)> ProbeRealAsync(string page, int settleMs = UiProbeScript.SettleTimeoutMs)
     {
         var modules = PlaywrightModules();
         Skip.If(modules is null, "frontend/node_modules/playwright не найден");
@@ -700,6 +730,35 @@ public class UiProbeTests : IDisposable
     }
 
     [SkippableFact]
+    public async Task СтупениСПаузойБольшеПрежнегоОкна_ЗамерСовпадаетСПолнойОтрисовкой()
+    {
+        var full = await ProbeRealAsync("full31");
+        var slow = await ProbeRealAsync("slow");
+
+        full.Refusal.Should().BeNull();
+        slow.Refusal.Should().BeNull("окно устойчивости длиннее паузы 1,2 с — либо верный замер, либо отказ");
+        var expected = JsonNode.Parse(full.Json!)!["viewports"]![0]!;
+        var actual = JsonNode.Parse(slow.Json!)!["viewports"]![0]!;
+        actual["interactiveTotal"]!.GetValue<int>().Should().Be(31, "последняя ступень на 3600 мс не потеряна");
+        actual["counts"]!.ToJsonString().Should().Be(expected["counts"]!.ToJsonString());
+    }
+
+    [SkippableFact]
+    public async Task МеняютсяТолькоРазмеры_ЗамерЖдётПоследнегоИзменения()
+    {
+        var grown = await ProbeRealAsync("grown");
+        var grow = await ProbeRealAsync("grow");
+
+        grown.Refusal.Should().BeNull();
+        grow.Refusal.Should().BeNull();
+        var expected = JsonNode.Parse(grown.Json!)!["viewports"]![0]!;
+        var actual = JsonNode.Parse(grow.Json!)!["viewports"]![0]!;
+        expected["counts"]!["smallTargets"]!.GetValue<int>().Should().Be(0, "эталон — кнопки 50 px выше порога 40");
+        actual["counts"]!.ToJsonString().Should().Be(expected["counts"]!.ToJsonString(),
+            "число элементов не менялось, но размеры — признак картины: ждём последнего изменения, а не первого простоя");
+    }
+
+    [SkippableFact]
     public async Task СтраницаНеУстаканивается_ОтказВместоЗаниженногоЗамера()
     {
         var never = await ProbeRealAsync("never", settleMs: 3000);
@@ -711,7 +770,7 @@ public class UiProbeTests : IDisposable
     [SkippableFact]
     public async Task ЭкранВхода_НаЖивомБраузере_ОтказВместоНаходокНет()
     {
-        var login = await ProbeRealAsync("login", settleMs: 3000);
+        var login = await ProbeRealAsync("login", settleMs: 8000);
 
         login.Json.Should().BeNull("форма входа не пуста по нулям, но это не страница");
         login.Refusal.Should().Contain("форму входа");

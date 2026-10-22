@@ -13,8 +13,13 @@ internal static class UiProbeScript
     // накопления вывода (хвост ошибок, итог), поэтому в итоговый JSON и в хвост отказа он не попадает
     public const string TokenMarker = "UIPROBE-TOKEN ";
 
-    // Потолок ожидания устойчивой картины на ширину, мс: не устоялась за него — отказ, а не недозамер
-    public const int SettleTimeoutMs = 8000;
+    // Окно устойчивости, мс: картина считается устойчивой, если не менялась столько подряд. Дольше типичной
+    // паузы между ступенями догрузки SPA (1–2 с); ступень с паузой больше окна поймать нельзя в принципе
+    public const int StableWindowMs = 3000;
+
+    // Потолок ожидания устойчивой картины на ширину, мс: не устоялась за него — отказ, а не недозамер.
+    // Вмещает окно с запасом на несколько ступеней догрузки; на потолок 9 мин всего вызова (3 ширины) не влияет
+    public const int SettleTimeoutMs = 15000;
 
     // Пакеты, из которых loadChromium берёт chromium (в том же порядке): дерево обязано нести хотя бы один
     public static readonly string[] Packages = ["playwright", "@playwright/test", "playwright-core"];
@@ -113,21 +118,23 @@ internal static class UiProbeScript
           };
         }
 
-        // SPA дорисовывается ступенями, и между ступенями бывают паузы: меряем, пока картина (число видимых
-        // интерактивных элементов, размеры документа, экран входа) не простоит неизменной STABLE_MS подряд. Ноль
-        // элементов за устойчивость не считается до потолка: пустой первый кадр — не итог. Не устоялась за потолок —
-        // settled=false, и сервер откажет, а не отдаст заниженные числа
-        const STABLE_MS = 1000;
-        async function settle(page, args, timeoutMs) {
+        // SPA дорисовывается ступенями, и между ступенями бывают паузы: меряем, пока картина не простоит неизменной
+        // stableMs подряд. В картину входит всё, по чему выдаются находки: число видимых интерактивных элементов,
+        // их размеры, счётчики переполнения и обрезки, размеры документа, экран входа. Ноль элементов за
+        // устойчивость не считается до потолка: пустой первый кадр — не итог. Не устоялась за потолок —
+        // settled=false, и сервер откажет, а не отдаст заниженные числа. Предел метода: ступень с паузой дольше
+        // stableMs не поймать
+        async function settle(page, args, timeoutMs, stableMs) {
           const deadline = Date.now() + timeoutMs;
           let prev = null, since = Date.now();
           for (;;) {
             const m = await page.evaluate(measure, args);
-            const sig = [m.pageInteractive, m.interactive.length, m.doc.scrollWidth, m.doc.scrollHeight, m.loginForm].join('|');
+            const sig = [m.pageInteractive, m.interactive.map((i) => i.w + 'x' + i.h).join(','), m.containers.length, m.clipped.length,
+              m.truncated.join(','), m.doc.scrollWidth, m.doc.scrollHeight, m.loginForm].join('|');
             const now = Date.now();
             if (sig !== prev) { prev = sig; since = now; }
             const timeUp = now >= deadline;
-            if (now - since >= STABLE_MS && (m.pageInteractive > 0 || timeUp)) { m.settled = true; return m; }
+            if (now - since >= stableMs && (m.pageInteractive > 0 || timeUp)) { m.settled = true; return m; }
             if (timeUp) { m.settled = false; return m; }
             await page.waitForTimeout(250);
           }
@@ -173,7 +180,7 @@ internal static class UiProbeScript
                 vp.finalUrl = page.url();
                 await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
                 await page.waitForTimeout(300);
-                Object.assign(vp, await settle(page, { selector: input.selector, max: MAX }, input.settleMs));
+                Object.assign(vp, await settle(page, { selector: input.selector, max: MAX }, input.settleMs, input.stableMs));
                 vp.finalUrl = page.url();
               } catch (e) { vp.error = String(e.message || e).slice(0, 200); }
               out.viewports.push(vp);

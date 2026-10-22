@@ -57,8 +57,13 @@ public sealed class UiProbeService
     private static readonly TimeSpan TokenMargin = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan TokenFallbackLifetime = TimeSpan.FromMinutes(10);
 
-    // Пароль в ключе: смена пароля не должна проходить по токену, выданному со старым
-    private readonly record struct TokenKey(string? OwnerId, string Origin, string User, string Password);
+    // Пароль в ключе только хешем (в памяти открытым не держим): смена пароля не должна проходить по токену,
+    // выданному со старым
+    private readonly record struct TokenKey(string? OwnerId, string Origin, string User, string PasswordHash)
+    {
+        public static TokenKey Of(string? ownerId, string origin, string user, string password) =>
+            new(ownerId, origin, user, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(password))));
+    }
     private sealed record CachedToken(string Token, DateTimeOffset ExpiresAt);
 
     public UiProbeService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline)
@@ -79,6 +84,9 @@ public sealed class UiProbeService
 
     // Пакеты, один из которых обязан лежать в node_modules дерева (из них скрипт берёт chromium)
     public static IReadOnlyList<string> RequiredPackages => UiProbeScript.Packages;
+
+    // Окно устойчивости картины, мс (для описания инструмента)
+    public static int StableWindowMs => UiProbeScript.StableWindowMs;
 
     // Любой HTTP-ответ — стенд жив; отказ соединения или тайм-аут — лежит. Без прокси
     private static readonly HttpClient StandClient = new(new SocketsHttpHandler { UseProxy = false })
@@ -122,8 +130,9 @@ public sealed class UiProbeService
         using (slot)
         {
             progress?.Invoke(new TestRunProgress("probe", $"замер · {string.Join(", ", request.Viewports)} px"));
+            SweepExpired();
             var key = request.User is null ? (TokenKey?)null
-                : new TokenKey(request.Project.OwnerId, request.Origin, request.User, request.Password ?? "");
+                : TokenKey.Of(request.Project.OwnerId, request.Origin, request.User, request.Password ?? "");
             SemaphoreSlim? flight = null;
             if (key is { } fk && CachedTokenFor(fk) is null)
             {
@@ -164,7 +173,12 @@ public sealed class UiProbeService
                     return new UiProbeResult(null, null, e.Message, false, false);
                 }
             }
-            finally { flight?.Release(); }
+            finally
+            {
+                flight?.Release();
+                // Вход не удался (токена в кэше нет) — семафор не копим
+                if (key is { } done && !_tokens.ContainsKey(done)) TrimLogin(done);
+            }
         }
     }
 
@@ -216,7 +230,25 @@ public sealed class UiProbeService
         if (!_tokens.TryGetValue(key, out var cached)) return null;
         if (cached.ExpiresAt > _time.GetUtcNow()) return cached.Token;
         _tokens.TryRemove(key, out _);
+        TrimLogin(key);
         return null;
+    }
+
+    // Вычистка по истечении кэша: протухшие токены и их семафоры входа уходят все разом, а не только у того ключа,
+    // к которому обратились
+    private void SweepExpired()
+    {
+        var now = _time.GetUtcNow();
+        foreach (var (key, cached) in _tokens)
+            if (cached.ExpiresAt <= now && _tokens.TryRemove(key, out _)) TrimLogin(key);
+    }
+
+    // Семафор входа ключа без токена в кэше и без ожидающих больше не нужен: словарь не растёт по числу ключей.
+    // Занятый (идёт вход или ждут) не трогаем — иначе параллельные вызовы пошли бы на два входа
+    private void TrimLogin(TokenKey key)
+    {
+        if (_logins.TryGetValue(key, out var sem) && sem.CurrentCount == 1)
+            _logins.TryRemove(new KeyValuePair<TokenKey, SemaphoreSlim>(key, sem));
     }
 
     private static bool Has401(string json)
@@ -261,6 +293,7 @@ public sealed class UiProbeService
             ["max"] = UiProbeScript.MaxItems,
             ["selector"] = request.Selector,
             ["settleMs"] = settleMs,
+            ["stableMs"] = UiProbeScript.StableWindowMs,
         };
         var env = new Dictionary<string, string> { ["NO_COLOR"] = "1" };
         if (request.User is not null)

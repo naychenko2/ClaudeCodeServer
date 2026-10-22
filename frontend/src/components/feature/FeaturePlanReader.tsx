@@ -67,10 +67,19 @@ export interface PlanSection {
 function splitDoc(text: string): { preamble: string; sections: PlanSection[] } {
   const lines = text.split('\n');
   const heads: number[] = [];
-  let fence = false;
+  // Открытый забор: закрывается только той же разновидности и не короче открывающего
+  // (CommonMark). Строка ``` внутри ~~~-забора — просто текст, а не смена состояния.
+  let fence: string | null = null;
+  let fenceLen = 0;
   for (let i = 0; i < lines.length; i++) {
     // Строка-забор меняет состояние, но остаётся в теле раздела: её рендерит общий рендер.
-    if (/^\s*(`{3}|~{3})/.test(lines[i])) { fence = !fence; continue; }
+    const m = /^\s*(`{3,}|~{3,})/.exec(lines[i]);
+    if (m) {
+      const run = m[1];
+      if (fence === null) { fence = run[0]; fenceLen = run.length; }
+      else if (run[0] === fence && run.length >= fenceLen) { fence = null; }
+      continue;
+    }
     if (!fence && /^##\s+/.test(lines[i])) heads.push(i);
   }
   const sections = heads.map((start, k) => {
@@ -124,7 +133,9 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
   // Корень тела — для скролла к `##`-секции по пункту «Содержание» (под липкие вкладки).
   const bodyRef = useRef<HTMLDivElement>(null);
   // Пункт «Содержание» → раскрыть соответствующую `##`-секцию и докрутить её (макет).
-  const scrollToH2 = (i: number) => {
+  // Привязка по data-атрибуту секции, а не по индексу `h2` в DOM: заголовок внутри
+  // цитаты или списка рендерится как h2, но сканер его не считает — индексы разъехались бы.
+  const scrollToSection = (i: number) => {
     setCollapsed(s => {
       if (!s.has(i)) return s;
       const next = new Set(s);
@@ -133,7 +144,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
     });
     const root = bodyRef.current;
     if (!root) return;
-    const target = root.querySelectorAll('h2')[i] as HTMLElement | undefined;
+    const target = root.querySelector(`[data-plan-section="${i}"]`) as HTMLElement | undefined;
     if (!target) return;
     // Компенсация липкой шапки/вкладок: секция встаёт под ними, а не под верх.
     target.style.scrollMarginTop = '72px';
@@ -290,7 +301,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                   <button
                     type="button"
                     data-testid="plan-reader-toc-item"
-                    onClick={() => scrollToH2(i)}
+                    onClick={() => scrollToSection(i)}
                     title={t}
                     style={{
                       width: '100%', textAlign: 'left', border: 'none', background: 'transparent', cursor: 'pointer',
@@ -334,7 +345,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: C.dangerText, fontSize: FS.sm }}>
             <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> Не удалось загрузить текст
           </span>
-          <Button size="xs" variant="ghost" onClick={() => setReload(n => n + 1)}>
+          <Button size="xs" variant="ghost" dataTestId="plan-retry" onClick={() => setReload(n => n + 1)}>
             <RotateCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> Повторить
           </Button>
           {plan.taskId && (
@@ -362,24 +373,37 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                 {doc!.sections.map((sec, i) => {
                   const expanded = !collapsed.has(i);
                   return (
-                    <div key={i} data-testid="plan-section">
-                      <button
-                        type="button"
+                    <div key={i} data-testid="plan-section" data-plan-section={i}>
+                      {/* Заголовок не внутри button (button допускает только phrasing-контент):
+                          h2 остаётся заголовком, переключатель — отдельная кнопка-шевелон рядом. */}
+                      <div
                         data-testid="plan-section-head"
-                        aria-expanded={expanded}
-                        title={expanded ? 'Свернуть раздел' : 'Развернуть раздел'}
-                        onClick={() => setCollapsed(s => {
-                          const next = new Set(s);
-                          if (expanded) next.add(i); else next.delete(i);
-                          return next;
-                        })}
-                        style={{
-                          width: '100%', display: 'block', border: 'none', background: 'transparent',
-                          padding: 0, cursor: 'pointer',
-                        }}
+                        style={{ display: 'flex', alignItems: 'center', gap: SP.sm, textAlign: 'left' }}
                       >
-                        <MarkdownContent text={sec.head} />
-                      </button>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <MarkdownContent text={sec.head} />
+                        </div>
+                        <button
+                          type="button"
+                          data-testid="plan-section-toggle"
+                          aria-expanded={expanded}
+                          aria-label={`${expanded ? 'Свернуть' : 'Развернуть'} раздел ${sec.title}`}
+                          title={expanded ? 'Свернуть раздел' : 'Развернуть раздел'}
+                          onClick={() => setCollapsed(s => {
+                            const next = new Set(s);
+                            if (expanded) next.add(i); else next.delete(i);
+                            return next;
+                          })}
+                          style={{
+                            width: 34, minHeight: isMobile ? 40 : 26, flexShrink: 0,
+                            border: 'none', background: 'transparent', cursor: 'pointer',
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            color: C.textSecondary,
+                          }}
+                        >
+                          <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+                        </button>
+                      </div>
                       {expanded && sec.body && <MarkdownContent text={sec.body} />}
                     </div>
                   );

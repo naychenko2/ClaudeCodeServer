@@ -142,7 +142,7 @@ public class LocalImageEditorTests : IDisposable
 
         quote.Value.Should().NotBeNull(quote.Error);
         quote.Value!.Provider.Should().Be("local");
-        quote.Value.Model.Should().Be(LocalImageEditor.FluxKlein, "авто-выбор генерации — FLUX 3 Klein (решение 2026-10-22)");
+        quote.Value.Model.Should().Be(LocalImageEditor.QwenImageTurbo, "авто-выбор — Qwen Turbo (решение 2026-10-22)");
         quote.Value.Estimate.Should().Be(new ImageEditEstimateDto(0, ImageEditPriceUnits.Free, false,
             ImageEditEstimateSources.Provider, EtaSeconds: 80, QueueLength: 3));
         quote.Value.ExpectedSeconds.Should().Be(80, "время для процентов — то же, что в котировке");
@@ -294,29 +294,28 @@ public class LocalImageEditorTests : IDisposable
 
         editor.Models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps.Ops.Should().Contain(ImageEditOp.Outpaint);
         editor.Models.Single(m => m.Id == LocalImageEditor.QwenImageTurbo).Caps.Ops.Should().Contain(ImageEditOp.Outpaint);
-        editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be(LocalImageEditor.QwenImage);
+        editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
     }
 
     [Fact]
-    public void Каталог_KleinПервый_ЗатемДвеМоделиQwen_ПодписиСРежимом()
+    public void Каталог_TurboПервый_ЗатемKleinИКачественно_ПодписиСРежимом()
     {
         var editor = new LocalImageEditor(new FakeMedia());
 
-        editor.Models.Select(m => m.Id).Should().Equal("flux3-klein", "qwen-image-2.1", "qwen-image-2.1-turbo", "face-detailer");
-        editor.Models[0].Label.Should().Be("FLUX 3 Klein — по умолчанию");
-        editor.Models[1].Label.Should().Be("Qwen-Image 2.1 — качественно");
-        editor.Models[2].Label.Should().Be("Qwen-Image 2.1 Turbo — быстро");
+        editor.Models.Select(m => m.Id).Should().Equal("qwen-image-2.1-turbo", "flux3-klein", "qwen-image-2.1", "face-detailer");
+        editor.Models[0].Label.Should().Be("Qwen-Image 2.1 Turbo — быстро");
+        editor.Models[1].Label.Should().Be("FLUX 3 Klein — текст и точная правка");
+        editor.Models[2].Label.Should().Be("Qwen-Image 2.1 — качественно");
         editor.PickModel(ImageEditOp.EnhanceFaces, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be("face-detailer");
     }
 
-    // Решение Андрея 2026-10-22: Klein — умолчание генерации и правки; маска и дорисовка на Klein не
-    // проверены и ушли бы на Qwen «качественно» всё равно — их авто-выбор сразу Qwen
+    // Решение Андрея 2026-10-22: умолчание всех операций — Qwen Turbo; Klein и «качественно» — по выбору
     [Theory]
-    [InlineData(ImageEditOp.Generate, "flux3-klein")]
-    [InlineData(ImageEditOp.Edit, "flux3-klein")]
-    [InlineData(ImageEditOp.Inpaint, "qwen-image-2.1")]
-    [InlineData(ImageEditOp.Outpaint, "qwen-image-2.1")]
-    public void АвтоВыбор_KleinДляГенерацииИПравки(ImageEditOp op, string expected)
+    [InlineData(ImageEditOp.Generate, "qwen-image-2.1-turbo")]
+    [InlineData(ImageEditOp.Edit, "qwen-image-2.1-turbo")]
+    [InlineData(ImageEditOp.Inpaint, "qwen-image-2.1-turbo")]
+    [InlineData(ImageEditOp.Outpaint, "qwen-image-2.1-turbo")]
+    public void АвтоВыбор_TurboПоУмолчанию(ImageEditOp op, string expected)
     {
         new LocalImageEditor(new FakeMedia()).PickModel(op, EditMode.Auto, new EditTraits(false, 0, false))!.Id
             .Should().Be(expected);
@@ -342,12 +341,12 @@ public class LocalImageEditorTests : IDisposable
         var media = new FakeMedia();
         var service = Service(Editor(media));
 
-        var plain = await service.QuoteAsync("user-a", Project, Quote(ImageEditOp.Generate, count: 1), default);
+        var plain = await service.QuoteAsync("user-a", Project, Quote(ImageEditOp.Generate, count: 1) with { Model = LocalImageEditor.FluxKlein }, default);
         plain.Value!.Model.Should().Be(LocalImageEditor.FluxKlein);
         media.EtaModels.Should().Contain(LocalImageEditor.FluxKlein);
 
         while (media.EtaModels.TryDequeue(out _)) { }
-        var withCharacter = await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Generate), default);
+        var withCharacter = await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Generate) with { Model = LocalImageEditor.FluxKlein }, default);
         withCharacter.Value!.Model.Should().Be(LocalImageEditor.FluxKlein);
         media.EtaModels.Should().Contain(LocalImageEditor.QwenImage, "с персонажем запуск уйдёт на Qwen «качественно»")
             .And.NotContain(LocalImageEditor.FluxKlein);

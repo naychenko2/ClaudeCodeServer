@@ -160,7 +160,8 @@ describe('мок-каталог локальных моделей', () => {
   it('FLUX 3 Klein — первым после «Авто», Qwen остаётся в выборе', async () => {
     const catalog = await createMockApi('all').catalog('p1');
     const local = catalog.providers.find(p => p.key === 'local')!;
-    expect(local.models.map(m => m.id)).toEqual(['auto', 'flux3-klein', 'qwen-image-2.1', 'qwen-image-2.1-turbo', 'face-detailer']);
-    expect(local.models[1].label).toBe('FLUX 3 Klein — по умолчанию');
+    expect(local.models.map(m => m.id)).toEqual(['auto', 'qwen-image-2.1-turbo', 'flux3-klein', 'qwen-image-2.1', 'face-detailer']);
+    expect(local.models[1].label).toBe('Qwen-Image 2.1 Turbo — быстро');
+    expect(local.models[2].label).toBe('FLUX 3 Klein — текст и точная правка');
   });
 });

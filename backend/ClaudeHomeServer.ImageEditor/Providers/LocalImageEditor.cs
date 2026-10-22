@@ -21,7 +21,7 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, IImageEditQuoter
 {
     public const string ProviderKey = "local";
-    // FLUX 3 Klein — умолчание авто-выбора; Qwen «качественно» (25 шагов) и «быстро» (Turbo, 8 шагов)
+    // Qwen Turbo (8 шагов) — умолчание авто-выбора; FLUX 3 Klein и Qwen «качественно» (25 шагов) — по выбору
     public const string FluxKlein = LocalImageModels.Klein;
     public const string QwenImage = LocalImageModels.Quality;
     public const string QwenImageTurbo = LocalImageModels.Turbo;
@@ -74,9 +74,9 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     // отдаёт Qwen «качественно» (LocalImageModels.NeedsQwen), отказа человек не видит
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
-        QwenModel(FluxKlein, "FLUX 3 Klein — по умолчанию", KleinFormat),
-        QwenModel(QwenImage, "Qwen-Image 2.1 — качественно", QwenFormat),
         QwenModel(QwenImageTurbo, "Qwen-Image 2.1 Turbo — быстро", QwenFormat),
+        QwenModel(FluxKlein, "FLUX 3 Klein — текст и точная правка", KleinFormat),
+        QwenModel(QwenImage, "Qwen-Image 2.1 — качественно", QwenFormat),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
@@ -89,14 +89,13 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1, Format: format),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
 
-    // Умолчание авто-выбора генерации и правки — FLUX 3 Klein (решение Андрея 2026-10-22 по A/B против
-    // Qwen-Image 2.1). Маска и дорисовка за края на Klein не проверены и всё равно ушли бы на Qwen
-    // «качественно» — их авто-выбор сразу Qwen, чтобы котировка и подпись не врали. Turbo — по явному выбору
+    // Умолчание авто-выбора — Qwen Turbo (решение Андрея 2026-10-22, заменяет «качественно» от 2026-10-17):
+    // по умолчанию важнее скорость. FLUX 3 Klein и «качественно» — по явному выбору человека
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => op switch
     {
         ImageEditOp.EnhanceFaces => Catalog.First(m => m.Id == FaceDetailer),
-        ImageEditOp.Generate or ImageEditOp.Edit => Catalog.First(m => m.Id == FluxKlein),
-        ImageEditOp.Inpaint or ImageEditOp.Outpaint => Catalog.First(m => m.Id == QwenImage),
+        ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint or ImageEditOp.Outpaint =>
+            Catalog.First(m => m.Id == QwenImageTurbo),
         _ => null,
     };
 

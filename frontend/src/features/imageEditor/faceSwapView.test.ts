@@ -462,7 +462,7 @@ describe('тексты режима: номер лица не отрываетс
 // ── Подпись модели в строке запуска (v2): локальные — «локальные модели», облачные — label ──
 describe('modelLabel: подпись модели', () => {
   const catalog = { providers: [
-    { key: 'local', models: [{ id: 'flux3-klein', label: 'FLUX 3 Klein — по умолчанию' }, { id: 'qwen-image-2.1', label: 'Qwen-Image 2.1 — качественно' }] },
+    { key: 'local', models: [{ id: 'flux3-klein', label: 'FLUX 3 Klein — текст и точная правка' }, { id: 'qwen-image-2.1', label: 'Qwen-Image 2.1 — качественно' }] },
     { key: 'fal', models: [{ id: 'fal-ai/flux-pro/kontext', label: 'FLUX Kontext' }] },
   ] };
   it('локальная модель — «локальные модели», не id (мутация: вернуть id → краснеет)', () => {

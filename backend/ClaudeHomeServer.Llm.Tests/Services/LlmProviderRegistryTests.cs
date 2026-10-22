@@ -1647,6 +1647,24 @@ public class LlmProviderRegistryTests
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("65536");
     }
 
+    // Каталог МЕНЬШЕ живого окна — это намеренный лимит записи (две записи одного стенда
+    // с разным окном, 22.10.2026): живое 524288 не должно поднимать каталожные 262144.
+    [Fact]
+    public void BuildCliEnv_ЛокальныйПровайдер_КаталогМеньшеЖивого_ОстаётсяЛимитом()
+    {
+        var settings = new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:DisplayName"] = "Qwen",
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
+            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "262144",
+        };
+        var probe = new FakeLocalProbe(knownWindow: 524288);
+        var env = CreateWithLocal(settings, probe).BuildCliEnv("qwen3.8-27b")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("262144");
+    }
+
     // Проба не успела опросить стенд (knownWindow=0) — fail-open на каталог.
     [Fact]
     public void BuildCliEnv_ЛокальныйПровайдер_ПробаНеЗнает_ФолалноНаКаталог()
@@ -1688,8 +1706,8 @@ public class LlmProviderRegistryTests
     // голое max_model_len, а reserve из ExtraEnv не вычитать — CLI не сожмёт контекст вовремя
     // и ход упадёт 400 (122881 + 8192 = 131073 > 131072).
 
-    // Живое окно 131072, в ExtraEnv CLAUDE_CODE_MAX_OUTPUT_TOKENS = "8192":
-    // объявляем 131072 − 8192 − 512 = 122368.
+    // Живое окно 131072 (каталог выше — 262144, иначе он сам стал бы лимитом), в ExtraEnv
+    // CLAUDE_CODE_MAX_OUTPUT_TOKENS = "8192": объявляем 131072 − 8192 − 512 = 122368.
     [Fact]
     public void BuildCliEnv_РезервПодОтвет_ВычитаетсяИЗЖивогоОкна()
     {
@@ -1699,7 +1717,7 @@ public class LlmProviderRegistryTests
             ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
             ["LlmProviders:local-qwen:IsLocal"] = "true",
             ["LlmProviders:local-qwen:Models:0:Id"] = "qwen3.8-27b",
-            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "71680",
+            ["LlmProviders:local-qwen:Models:0:ContextWindow"] = "262144",
             ["LlmProviders:local-qwen:ExtraEnv:CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = "8192",
         };
         var probe = new FakeLocalProbe(knownWindow: 131072);

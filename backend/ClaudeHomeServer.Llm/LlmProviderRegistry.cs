@@ -581,7 +581,11 @@ public class LlmProviderRegistry
             && _localProbe.TryGetKnownContextWindow(p.Key, out var liveWindow)
             && liveWindow > 0)
         {
-            contextWindow = liveWindow;
+            // Каталог МЕНЬШЕ живого — намеренный лимит записи, а не устаревшее число: один
+            // стенд (Strata, 512K) обслуживает две записи каталога с разным окном —
+            // 256K для исполнителей и 512K для оркестратора (22.10.2026). Берём меньшее:
+            // живое по-прежнему режет завышенный каталог, а заниженный каталог остаётся лимитом.
+            contextWindow = contextWindow > 0 ? Math.Min(contextWindow, liveWindow) : liveWindow;
             liveWindowUsed = true;
         }
         // vLLM сверяет prompt + max_tokens ≤ max_model_len ДО генерации, поэтому

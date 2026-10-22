@@ -136,7 +136,8 @@ public sealed class ImageEditLaunchAssembler(
         // «Дорисовать» (ADR-025): холст любых пропорций «W:H», белый список трёх пропорций — только у старого пути правки.
         // Модели дорисовки формата не объявляют (caps.Format = null), поэтому проверка — читаемость пропорции,
         // тот же разбор, что у ImageFormatPlan
-        var outpaint = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim())?.Op == ImageEditOp.Outpaint;
+        var quoteInfo = jobs!.QuoteInfo(ownerId, scope.Key, req.QuoteId!.Trim());
+        var outpaint = quoteInfo?.Op == ImageEditOp.Outpaint;
         if (aspectRatio is not null)
         {
             if (outpaint && !AspectCrop.TryParse(aspectRatio, out _))
@@ -165,20 +166,25 @@ public sealed class ImageEditLaunchAssembler(
         Func<int, CancellationToken, Task<CharacterPickOutcome>>? picker = null;
         if (req.CharacterSlug is { Length: > 0 } slug)
         {
-            var found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug);
+            // Фото в запрос — сколько модель берёт как одного человека, но не меньше прежних трёх
+            // (облако без потолка); Klein — пять разных ракурсов
+            var modelPhotos = quoteInfo?.InputCaps?.MaxCharacterPhotos;
+            var maxPhotos = Math.Max(CharacterStore.PhotosPerRequest, modelPhotos ?? 0);
+            var diverse = CharacterPhotoPicker.WantsDiverse(modelPhotos);
+            var found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, maxPhotos, diverse: diverse);
             if (found is null) return Invalid("Персонаж не найден");
             labeling?.Enqueue(ownerId, scope.Project!.RootPath, slug);
             // Явный список — только при включённом флаге; любое нарушение отказывает целиком
             if (req.CharacterPhotos is { } chosen)
             {
                 found = flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) == true
-                    ? CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, explicitPhotos: chosen)
+                    ? CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, maxPhotos, explicitPhotos: chosen)
                     : null;
                 if (found is null) return PhotosInvalid();
             }
             character = found.Ref;
             references.InsertRange(0, found.Photos);
-            picker = CharacterPicker(ownerId, scope.Project!.RootPath, slug, req, found.Photos.Count);
+            picker = CharacterPicker(ownerId, scope.Project!.RootPath, slug, req, found.Photos.Count, diverse);
         }
         else if (req.CharacterPhotos is not null)
             return PhotosInvalid();
@@ -211,8 +217,9 @@ public sealed class ImageEditLaunchAssembler(
     // Подбор фото персонажа под сюжет (ADR-027 §7) — только при включённом флаге владельца. Возвращает
     // делегат, который исполнитель зовёт в задаче перед драйвером: разбор сюжета не держит ответ «запустить».
     // Явный список — Pick=manual без подбора; пустой промпт или нет разбора — подбора нет, запись в запуск тоже
+    // diverse — модель берёт фото как одного человека (Klein): набор ракурсов вместо подбора под сюжет
     private Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker(
-        string ownerId, string root, string slug, ImageEditLaunchRequest req, int count)
+        string ownerId, string root, string slug, ImageEditLaunchRequest req, int count, bool diverse)
     {
         if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) != true) return null;
         if (req.CharacterPhotos is { } chosen)
@@ -225,7 +232,9 @@ public sealed class ImageEditLaunchAssembler(
             var manifest = CharacterStore.Get(root, slug);
             if (manifest is null) throw new InvalidOperationException("Персонаж пропал до подбора");
             var scene = await sceneParser.ParseAsync(prompt, ct);
-            var pick = CharacterPhotoPicker.Pick(manifest.Photos, scene, count, confidentScore);
+            var pick = diverse
+                ? CharacterPhotoPicker.Diverse(manifest.Photos, count)
+                : CharacterPhotoPicker.Pick(manifest.Photos, scene, count, confidentScore);
             var names = pick.Photos.Select(p => p.File).ToList();
             var launch = new ImageThreadCharacter(slug, names, pick.Pick, scene);
             if (pick.Pick == CharacterPhotoPick.Fallback) return new CharacterPickOutcome(null, launch);

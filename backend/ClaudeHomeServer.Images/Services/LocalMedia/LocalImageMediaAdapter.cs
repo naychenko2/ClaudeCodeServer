@@ -148,7 +148,9 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
 
     public int? EtaSeconds(LocalImageOp op, int count, int images, string? model) => op switch
     {
+        LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsKlein(model) => LocalMediaService.KleinGenerateEta(Math.Max(1, count)),
         LocalImageOp.Generate when images == 0 => LocalMediaService.GenerateImageEta(ComfyWorkflows.StepsFor(model), Math.Max(1, count)),
+        LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsKlein(model) => LocalMediaService.KleinEditEta(images),
         LocalImageOp.Generate or LocalImageOp.Edit => ComfyWorkflows.IsTurbo(model)
             ? LocalMediaService.EditImageEtaTurbo(images)
             : LocalMediaService.EditImageEta(images),
@@ -271,7 +273,11 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
         }
 
-        if (request.Lora is { } requested)
+        // Фактическая модель: Klein в непроверенных для него случаях идёт на Qwen «качественно»
+        var model = request.Op == LocalImageOp.FaceDetail ? null : LocalImageModels.Effective(request);
+
+        // Графы Klein LoRA не применяют — и не проверяют
+        if (request.Lora is { } requested && !ComfyWorkflows.IsKlein(model))
         {
             var name = requested.Name ?? "";
             if (name.Length == 0 || name.Contains("..") || name.StartsWith('/') || name.StartsWith('\\') || name.Contains(':'))
@@ -306,6 +312,10 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         if (queue.Length >= options.MaxComfyQueue)
             return LocalImageSubmitted.Fail($"Очередь локальной видеокарты занята ({queue.Length} задач). "
                 + "Попробуйте позже или выберите другого поставщика.", busy: true);
+
+        if (model is not null && model != request.Model)
+            log.LogInformation("Запуск редактора {Op} на {Model} вместо {Requested}: Klein для него не проверен",
+                request.Op, model, request.Model);
 
         var id = Guid.NewGuid().ToString("N");
         var jobId = LocalMediaService.JobIdPrefix + id;
@@ -359,18 +369,20 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             var lora = request.Lora is { } l ? (l.Name, l.Strength) : ((string, double)?)null;
             var graph = request.Op switch
             {
-                LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request, seed, count, prefix),
+                LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsKlein(model) =>
+                    KleinGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
+                LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request with { Model = model }, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
-                LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs, model: request.Model),
-                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName, request.Crop, modelCanvas, request.Model),
+                LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs, model: model),
+                LocalImageOp.Edit => ComfyWorkflows.EditImage(prompt, names, canvas, seed, prefix, lora, faceRefs, maskName, request.Crop, modelCanvas, model),
                 _ => ComfyWorkflows.FaceDetail(names[0], seed, prefix),
             };
             var queued = await comfy.QueuePromptAsync(graph, ct);
             promptId = queued.PromptId;
-            var eta = EtaSeconds(request.Op, count, names.Count, request.Model);
+            var eta = EtaSeconds(request.Op, count, names.Count, model);
             // Реестр прогонов (шаг 7): метка происхождения из запроса (шаг 23); null — неопределённое.
-            // Детали: модель (вариант Qwen-Image), промпт, параметры (размер, число, сид)
-            var details = new LocalRunDetails(request.Model ?? LocalImageModels.Quality, request.Prompt ?? "",
+            // Детали: фактическая модель (с учётом запасного пути Klein → Qwen), промпт, параметры
+            var details = new LocalRunDetails(model ?? LocalImageModels.Quality, request.Prompt ?? "",
                 new LocalRunParams(Width: request.Width, Height: request.Height, Count: count, Seed: seed));
             ledger?.Register(queued.PromptId, request.Origin, eta, details);
             return new LocalImageSubmitted(queued.PromptId, queue.Length, eta, null);
@@ -424,6 +436,28 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     // Холст генерации: точный размер формата, иначе по пропорции из таблицы Qwen-Image
     internal static (int Width, int Height) CanvasFor(LocalImageRequest request) =>
         request.Width is > 0 && request.Height is > 0 ? (request.Width.Value, request.Height.Value) : SizeFor(request.Aspect);
+
+    // Klein: генерация по тексту, по образцам (холст из формата) и правка (холст по исходнику).
+    // Размер исходника — с поворотом EXIF: LoadImage ComfyUI поворачивает JPEG сам.
+    // С персонажем (есть эталон для сходства) апсемплер смотрит образцы ужатыми — холст правки нет
+    private System.Text.Json.Nodes.JsonObject KleinGraph(string prompt, LocalImageRequest request, IReadOnlyList<string> names,
+        IReadOnlyList<byte[]> images, IReadOnlyList<string> faceRefs, long seed, int count, string prefix)
+    {
+        if (names.Count == 0)
+        {
+            var size = CanvasFor(request);
+            return ComfyWorkflows.KleinGenerate(prompt, size.Width, size.Height, seed, count, prefix);
+        }
+        double? upsampler = faceRefs.Count > 0 ? ComfyWorkflows.KleinUpsamplerMegapixels : null;
+        if (request.Op == LocalImageOp.Generate)
+            return ComfyWorkflows.KleinEdit(prompt, names, CanvasFor(request), seed, prefix, faceRefs, upsampler);
+        var (width, height) = SourceSize(images[0]) ?? SizeFor(request.Aspect);
+        return ComfyWorkflows.KleinEdit(prompt, names, ComfyWorkflows.KleinCanvas(width, height), seed, prefix, faceRefs,
+            upsampler, upsamplerKeep: 1);
+    }
+
+    private (int Width, int Height)? SourceSize(byte[] image) =>
+        raster?.Probe(image) is { } probe ? (probe.DisplayWidth, probe.DisplayHeight) : ImageDimensions.Read(image);
 
     private static System.Text.Json.Nodes.JsonObject GenerateGraph(string prompt, LocalImageRequest request, long seed, int count,
         string prefix)

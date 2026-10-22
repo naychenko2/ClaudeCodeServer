@@ -3,7 +3,7 @@ using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
 
-// Поставщик «Локальные модели» (ADR-018, раздел «Локальные модели»): Qwen-Image 2.1 и
+// Поставщик «Локальные модели» (ADR-018, раздел «Локальные модели»): FLUX 3 Klein, Qwen-Image 2.1 и
 // FaceDetailer в ComfyUI на своей видеокарте через Core-шов ILocalImageMedia — вертикаль Images
 // модулю не видна. Денег нет: котировка — ноль в единицах free плюс время по таблице замеров и
 // длина очереди GPU. Доступен всем; нет шва (Images выключена) или тумблера LocalMedia:Enabled —
@@ -21,7 +21,8 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, IImageEditQuoter
 {
     public const string ProviderKey = "local";
-    // «Качественно» (25 шагов) и «быстро» (Turbo, 8 шагов); умолчание авто-выбора — «качественно»
+    // Qwen Turbo (8 шагов) — умолчание авто-выбора; FLUX 3 Klein и Qwen «качественно» (25 шагов) — по выбору
+    public const string FluxKlein = LocalImageModels.Klein;
     public const string QwenImage = LocalImageModels.Quality;
     public const string QwenImageTurbo = LocalImageModels.Turbo;
     public const string FaceDetailer = "face-detailer";
@@ -57,34 +58,46 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         ["2:3"] = new(1056, 1584),
     };
 
-    private static readonly MediaFormatCaps QwenFormat = new("Qwen-Image 2.1",
+    private static readonly MediaFormatCaps QwenFormat = FormatOf("Qwen-Image 2.1");
+
+    // Klein держит до 4 Мп, но остаёмся на сетке Qwen (~1,7 Мп): размеры и «Точно…» те же
+    private static readonly MediaFormatCaps KleinFormat = FormatOf("FLUX 3 Klein");
+
+    private static MediaFormatCaps FormatOf(string label) => new(label,
         [.. QwenSizes.Keys],
         [new FormatTierSpec(FormatTier.Standard, "~1,7 Мп", QwenSizes)],
         new ExactSizeSpec(Step: 16, MinSide: 256, MaxSide: 1664, MaxMegapixels: 1.8),
         null, "один размер ~1,7 Мп");
 
-    // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов)
+    // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов).
+    // Возможности у Klein те же, что у Qwen: маски, дорисовку, подстановку на лицо и больше 10 картинок
+    // он отдаёт Qwen «качественно» (LocalImageModels.NeedsQwen), отказа человек не видит. Персонажа
+    // Klein берёт сам, по пяти фото как одного человека; Qwen — по одному (иначе рисует толпу)
     private static readonly IReadOnlyList<ImageEditModelInfo> Catalog =
     [
-        QwenModel(QwenImage, "Qwen-Image 2.1 — качественно"),
-        QwenModel(QwenImageTurbo, "Qwen-Image 2.1 Turbo — быстро"),
+        QwenModel(QwenImageTurbo, "Qwen-Image 2.1 Turbo — быстро", QwenFormat, 1),
+        QwenModel(FluxKlein, "FLUX 3 Klein — текст и точная правка", KleinFormat, LocalImageModels.KleinCharacterPhotos),
+        QwenModel(QwenImage, "Qwen-Image 2.1 — качественно", QwenFormat, 1),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
     ];
 
-    private static ImageEditModelInfo QwenModel(string id, string label) =>
+    private static ImageEditModelInfo QwenModel(string id, string label, MediaFormatCaps format, int characterPhotos) =>
         new(id, label,
             new ImageEditCaps([ImageEditOp.Generate, ImageEditOp.Edit, ImageEditOp.Inpaint, ImageEditOp.Outpaint],
                 MaskSupport.Veil,
-                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1, Format: QwenFormat),
+                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: characterPhotos,
+                MaxFaceCropPhotos: 1, Format: format),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
 
-    // Умолчание авто-выбора — «качественно» (решение Андрея 2026-10-17); Turbo — по явному выбору человека
+    // Умолчание авто-выбора — Qwen Turbo (решение Андрея 2026-10-22, заменяет «качественно» от 2026-10-17):
+    // по умолчанию важнее скорость. FLUX 3 Klein и «качественно» — по явному выбору человека
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => op switch
     {
         ImageEditOp.EnhanceFaces => Catalog.First(m => m.Id == FaceDetailer),
-        ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint or ImageEditOp.Outpaint => Catalog[0],
+        ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint or ImageEditOp.Outpaint =>
+            Catalog.First(m => m.Id == QwenImageTurbo),
         _ => null,
     };
 
@@ -112,14 +125,24 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
     {
         var count = Math.Max(1, request.Count);
         if (model.Id == FaceDetailer) return media!.EtaSeconds(LocalImageOp.FaceDetail, 1, 1);
-        // Картинок в запросе: холст, размеченная копия, маска, образцы и фото персонажа (одно,
-        // MaxCharacterPhotos) — фронт считает в References только образцы, фото добавляет сервер
+        // Картинок в запросе: холст, размеченная копия, маска, образцы и фото персонажа (по
+        // MaxCharacterPhotos модели) — фронт считает в References только образцы, фото добавляет сервер
         var images = request.References + (request.HasAnnotations ? 1 : 0) + (request.HasMask ? 1 : 0)
-                     + (request.HasCharacter ? 1 : 0);
+                     + (request.HasCharacter ? model.Caps.MaxCharacterPhotos ?? 1 : 0);
+        var variant = EtaVariant(model.Id, request, images);
         if (request.Op == ImageEditOp.Generate)
-            return media!.EtaSeconds(LocalImageOp.Generate, 1, images, model.Id) * count;
-        return media!.EtaSeconds(LocalImageOp.Edit, 1, images + 1, model.Id) * count;
+            return media!.EtaSeconds(LocalImageOp.Generate, 1, images, variant) * count;
+        return media!.EtaSeconds(LocalImageOp.Edit, 1, images + 1, variant) * count;
     }
+
+    // Модель, на которой запуск пойдёт на самом деле, — грубо, по признакам котировки: точный
+    // выбор делает шов (LocalImageModels.Effective) по готовому запросу. Персонаж Klein не уводит
+    private static string EtaVariant(string id, ImageEditQuoteRequest request, int images) =>
+        id == FluxKlein && (request.HasMask
+                            || request.Op is ImageEditOp.Inpaint or ImageEditOp.Outpaint
+                            || images + 1 > LocalImageModels.KleinMaxImages)
+            ? QwenImage
+            : id;
 
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
@@ -152,6 +175,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                 // вариант и без образцов: первый вариант виден сразу, а не после всей пачки
                 run = new LocalImageRequest(LocalImageOp.Generate, WithTrigger(req.Prompt, req), references, req.AspectRatio, 1,
                     Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos, Model: req.Model);
+                if (IsKlein(run))
+                    run = run with { Prompt = KleinCharacterPrompt(req) ?? req.Prompt, Lora = null };
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             case ImageEditOp.Edit or ImageEditOp.Inpaint
@@ -186,6 +211,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
                     Crop: req.FaceCrop,
                     VeilMask: VeilMaskOf(req),
                     Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos, Model: req.Model);
+                if (IsKlein(run))
+                    run = run with { Prompt = req.Prompt, Lora = null };
                 runs = Math.Clamp(req.Count, 1, 4);
                 break;
             default:
@@ -251,6 +278,22 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         return images.Count == 0
             ? new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets), "Локальная модель не вернула картинок")
             : new ImageEditResult(EditOutcome.Ok, images, Free, false, RemoteId(tickets), null);
+    }
+
+    // Запуск пойдёт на Klein: LoRA персонажа обучены под Qwen-Image, поэтому ни её, ни триггера
+    private static bool IsKlein(LocalImageRequest run) => LocalImageModels.Effective(run) == FluxKlein;
+
+    // Генерация Klein по фото персонажа (A/B 2026-10-22): без чужих образцов роли картинок не
+    // нумеруются, а запрос начинается с «человек с фотографий-образцов» и описания персонажа.
+    // С другими образцами — промпт композера с ролями по номерам; null — персонажа нет
+    internal static string? KleinCharacterPrompt(ImageEditRequest req)
+    {
+        if (req.Character is not { } character || req.References.Any(r => r.Role != ReferenceRole.Character)) return null;
+        var photos = req.References.Count;
+        if (photos == 0) return null;
+        var who = string.IsNullOrWhiteSpace(character.Description) ? $"«{character.Name}»" : $"«{character.Name}», {character.Description.Trim()}";
+        var lead = photos == 1 ? "Человек с фотографии-образца" : "Человек с фотографий-образцов (на всех фото он один)";
+        return $"{lead} — {who}: {(req.Instruction ?? req.Prompt).Trim()}";
     }
 
     // Режим B: LoRA персонажа плюс фото-образец. Только для Generate и обычной правки

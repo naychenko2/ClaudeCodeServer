@@ -321,15 +321,18 @@ public static partial class CharacterStore
     // чужая владельцу LoRA из манифеста отбрасывается целиком (триггер и сила тоже).
     // explicitPhotos (ADR-027 §8) — явный выбор человека: образцами уходят ровно эти файлы манифеста
     // в этом порядке; любое нарушение (чужое имя, дубль, лишние, ссылка, не картинка) — null целиком.
-    // Эталон facePhotos от явного списка не зависит
+    // Эталон facePhotos от явного списка не зависит. diverse — модель берёт несколько фото как одного
+    // человека (Klein): primary первым, дальше разные ракурсы (CharacterPhotoPicker.Diverse)
     public static CharacterForRequest? ForRequest(string root, string ownerId, string slug,
-        int maxPhotos = PhotosPerRequest, IReadOnlyList<string>? explicitPhotos = null)
+        int maxPhotos = PhotosPerRequest, IReadOnlyList<string>? explicitPhotos = null, bool diverse = false)
     {
         var manifest = Get(root, slug);
         var dir = CharacterDir(root, slug);
         if (manifest is null || dir is null) return null;
 
-        var ordered = manifest.Photos.OrderByDescending(p => p.Primary).ToList();
+        var ordered = diverse
+            ? CharacterPhotoPicker.Diverse(manifest.Photos, manifest.Photos.Count).Photos.ToList()
+            : manifest.Photos.OrderByDescending(p => p.Primary).ToList();
         var photos = new List<ReferenceImage>();
         var facePhotos = new List<byte[]>();
         foreach (var photo in ordered)

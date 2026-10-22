@@ -30,6 +30,11 @@ public class ComfyWorkflowsTests
         "EmptyYuE2LatentAudio", "PreviewAny", "MiniMaxMusic3TextEncode", "EmptyMiniMaxMusic3LatentAudio",
         "VAEDecodeAudioTiled", "CcsAudioWorker", "AudioEncoderLoader", "SheetSage2AudioToABC", "CcsFaceSimilarity",
         "CcsFaceDetect",
+        // FLUX 3 Klein (2026-10-22): апсемплер промпта и диффузия по графам BFL — файлов хоста не касаются
+        "ModelSamplingFlux", "CLIPTextEncode", "EmptyFlux2LatentImage", "ReferenceMultiLatent", "TextGenerate",
+        "StringFormat", "BatchImagesNode",
+        // Персонаж на Klein (2026-10-22): образцы для апсемплера ужимаются
+        "ImageScaleToTotalPixels",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -462,6 +467,13 @@ public class ComfyWorkflowsTests
             // Подстановка на лицо (ADR-028, решение 12): кроп вокруг цели, склейка в месте кропа
             ("edit-crop", ComfyWorkflows.EditImage("a", ["x.png"], null, 1, "p", mask: "m.png",
                 crop: new LocalImageCrop(8, 16, 64, 32, 128, 64))),
+            ("klein-generate", ComfyWorkflows.KleinGenerate("ёжик", 1664, 928, 1, 2, "p")),
+            ("klein-edit", ComfyWorkflows.KleinEdit("добавь лодку", ["x.png"], (1328, 1328), 1, "p")),
+            ("klein-multi", ComfyWorkflows.KleinEdit("сложи", Enumerable.Range(1, 10).Select(i => $"r{i}.png").ToList(),
+                (1104, 1472), 1, "p")),
+            // Персонаж на Klein: холст полным, образцы апсемплеру ужатыми (узел сходства — не в object_info)
+            ("klein-character", ComfyWorkflows.KleinEdit("сюда его", ["x.png", "f1.png", "f2.png"], (1328, 1328), 1, "p",
+                upsamplerMegapixels: ComfyWorkflows.KleinUpsamplerMegapixels, upsamplerKeep: 1)),
             ("face", ComfyWorkflows.FaceDetail("x.png", 1, "p")),
             ("face-detect", ComfyWorkflows.FaceDetect("x.png")),
             ("t2v", ComfyWorkflows.TextToVideo("a", 1344, 768, 124, 1, false, "p", "l")),

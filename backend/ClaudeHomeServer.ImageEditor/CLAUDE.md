@@ -277,8 +277,12 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   «Дорисовать за края» — тот же шаблон правки: поля под пропорцию (`OutpaintSpec.ForAspect`) адаптер
   заливает серым на холсте до модели, результат — в пропорции холста; образцы не едут
   ([local-media.md](../../docs/features/local-media.md), «Дорисовка за края»).
-  **Персонаж — одно фото (`MaxCharacterPhotos: 1`)**: Qwen-Image рисует по человеку на каждое фото,
+  **Персонаж у Qwen — одно фото (`MaxCharacterPhotos: 1`)**: Qwen-Image рисует по человеку на каждое фото,
   и текст запроса это не лечит (живой прогон 2026-09-26); больше 16 картинок — отказ, не обрезка.
+  **FLUX 3 Klein берёт персонажа сам — пять фото разных ракурсов, без LoRA** (A/B 2026-10-22: всегда
+  один человек, схожесть 0,765 против 0,692 у Qwen с LoRA): набор собирает `CharacterPhotoPicker.Diverse`,
+  LoRA и триггер к Klein не едут (обучены под Qwen). Подстановку на лицо Klein отдаёт Qwen, поэтому у неё
+  свой потолок `MaxFaceCropPhotos: 1` — иначе Qwen получил бы пять фото и нарисовал пять человек.
   **LoRA персонажа и режим B.** LoRA — блок `providers.local` манифеста (`lora`, `trigger`,
   `strength`, по умолчанию 0,8); читается в `CharacterStore.ForRequest` — **единственной точке**
   создания `CharacterRef`; `CharacterRef.Lora` под `JsonIgnore`, наружу не уходит. **Режим B =

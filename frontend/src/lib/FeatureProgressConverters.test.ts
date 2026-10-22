@@ -10,6 +10,8 @@ import type { FeatureIndexFeature } from '../types/featureIndex';
 import type { FeatureRun } from '../types/featureRun';
 
 // === Фикстуры ===
+// Все числа согласованы с инвариантом бэка: total = accepted + review + work + notCreated
+// (FeatureStepAccounting.cs, «Итог: контрактные числа») — такого ответа сервер не даёт.
 
 // Минимальная строка фичи индекса: новые поля (stepsReview/stepsWork/stepsNotCreated/
 // planState) по умолчанию отсутствуют (undefined) — как в старых ответах.
@@ -39,7 +41,7 @@ function run(over: Partial<FeatureRun> = {}): FeatureRun {
 // === stepProgressFromRun: run.stepProgress ?? null ===
 describe('stepProgressFromRun', () => {
   it('stepProgress задан → возвращает его (те же значения)', () => {
-    const sp = { planState: 'partial' as const, total: 5, accepted: 2, review: 2, work: 0, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 };
+    const sp = { planState: 'partial' as const, total: 5, accepted: 2, review: 2, work: 1, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 };
     expect(stepProgressFromRun(run({ stepProgress: sp }))).toEqual(sp);
   });
 
@@ -51,7 +53,8 @@ describe('stepProgressFromRun', () => {
 // === stepProgressFromIndex: hasNew / planState ?? 'done' / обнуление / clamp ===
 describe('stepProgressFromIndex', () => {
   it('hasNew=false (только stepsAccepted/stepsTotal/loops, новых полей нет) → null', () => {
-    expect(stepProgressFromIndex(idx({ stepsAccepted: 3, stepsTotal: 5, loops: 2 }))).toBeNull();
+    // Старый ответ: всё принято — total = accepted (иначе инвариант бэка нарушен).
+    expect(stepProgressFromIndex(idx({ stepsAccepted: 3, stepsTotal: 3, loops: 2 }))).toBeNull();
   });
 
   it('null-вход (новые поля приходят null, как в старых JSON) → null', () => {
@@ -66,21 +69,24 @@ describe('stepProgressFromIndex', () => {
   });
 
   it('hasNew=true: review/work/notCreated маппятся, withdrawn/unlinkedReworks обнулены', () => {
-    const p = stepProgressFromIndex(idx({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, stepsWork: 1, stepsNotCreated: 3, planState: 'partial' }));
-    expect(p).toEqual({ planState: 'partial', total: 5, accepted: 3, review: 2, work: 1, notCreated: 3, withdrawn: 0, unlinkedReworks: 0 });
+    // 2+1+1+1 = 5 — корзины в сумме дают знаменатель (инвариант бэка).
+    const p = stepProgressFromIndex(idx({ stepsAccepted: 2, stepsTotal: 5, stepsReview: 1, stepsWork: 1, stepsNotCreated: 1, planState: 'partial' }));
+    expect(p).toEqual({ planState: 'partial', total: 5, accepted: 2, review: 1, work: 1, notCreated: 1, withdrawn: 0, unlinkedReworks: 0 });
   });
 
   it('отрицательные значения (баг бэка) → обнулены (нет «принято -2 из -5»)', () => {
-    const p = stepProgressFromIndex(idx({ stepsAccepted: -2, stepsTotal: -5, stepsReview: -3, stepsWork: -1, stepsNotCreated: -4, planState: 'partial' }));
+    // Даже в «баге» суммы сходятся: -2-3-1-4 = -10 (инвариант бэка).
+    const p = stepProgressFromIndex(idx({ stepsAccepted: -2, stepsTotal: -10, stepsReview: -3, stepsWork: -1, stepsNotCreated: -4, planState: 'partial' }));
     expect(p).toEqual({ planState: 'partial', total: 0, accepted: 0, review: 0, work: 0, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 });
   });
 
   it('stepsWithdrawn/unlinkedReworks из индекса подтягиваются (не хардкод 0) → «X снято · Y без привязки»', () => {
-    const f = idx({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 0, stepsWork: 0, stepsNotCreated: 0, planState: 'done', stepsWithdrawn: 2, unlinkedReworks: 1 });
+    // 3+2 = 5 — знаменатель закрыт корзиной ревью (инвариант бэка).
+    const f = idx({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, stepsWork: 0, stepsNotCreated: 0, planState: 'done', stepsWithdrawn: 2, unlinkedReworks: 1 });
     const p = stepProgressFromIndex(f);
     expect(p).not.toBeNull();
     expect(p!.withdrawn).toBe(2);
     expect(p!.unlinkedReworks).toBe(1);
-    expect(formatStepProgress(p!)).toBe('принято 3 из 5 · 2 снято · 1 без привязки');
+    expect(formatStepProgress(p!)).toBe('принято 3 из 5 · 2 в ревью · 2 снято · 1 без привязки');
   });
 });

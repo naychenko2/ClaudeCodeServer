@@ -4256,6 +4256,13 @@ public class ClaudeSession : ILlmSessionAdapter
         // исполнителю задачи план-тулы всё равно закрыты через --disallowedTools.
         envOverrides["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1";
 
+        // Подсказка следующего сообщения: с CLI 2.1.300 одного --prompt-suggestions мало —
+        // без переменной CLI в -p выключает подсказки как non_interactive (гейт найден в
+        // бинарнике 2.1.300; замер: без неё prompt_suggestion не приходит вовсе). Переменная
+        // заодно снимает back-off CLI после 20 неиспользованных подсказок подряд.
+        if (promptSuggestionsActive)
+            envOverrides["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] = "1";
+
         // Потолки внутренних повторов CLI (429/529): владелец фолбэка — наша цепочка (ADR-007 §4),
         // CLI получает только короткий внутренний backoff, чтобы отказ доходил до TurnErrorClassifier
         // за десятки секунд, а не минуты (с 2.1.246 headless-сессии сами дотягивают оборванный

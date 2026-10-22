@@ -375,6 +375,26 @@ public class SessionStatusTests : IDisposable
         loaded.RestartResumeAttempts.Should().Be(0, "result хода сбрасывает счётчик auto-resume");
     }
 
+    // Продолженный ход дошёл до результата инструмента — счётчик auto-resume обнуляется
+    // (следующий рестарт снова его продолжит); до tool_result (crash сразу после --resume)
+    // счётчик не трогаем. Мутация «убрать сброс в ToolResultMessage» → RED.
+    [Fact]
+    public async Task OnToolResult_ResetsRestartResumeAttempts()
+    {
+        var working = MakeSession(SessionStatus.Working);
+        working.RestartResumeAttempts = 1;
+        WriteSessions([working]);
+
+        var sut = CreateSessionManager();
+        var loaded = sut.GetById(working.Id)!;
+
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        await sut.OnMessageAsync(working.Id, acc, new ToolUseMessage("tu-1", "Bash", new { }));
+        loaded.RestartResumeAttempts.Should().Be(1, "вызов инструмента — ещё не прогресс");
+        await sut.OnMessageAsync(working.Id, acc, new ToolResultMessage("tu-1", "ok", false));
+        loaded.RestartResumeAttempts.Should().Be(0, "результат инструмента — живая работа, не crash-loop");
+    }
+
     [Fact]
     public void ResetRestartResumeAttempts_DoesNotMoveUpdatedAt()
     {

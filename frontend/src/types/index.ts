@@ -100,6 +100,10 @@ export interface ProjectCapabilitiesView {
   // Механики, читающие транскрипт CLI с диска сервера; у старого бэка поля нет
   transcript?: ProjectCapabilityGroup;
   exec: { available: boolean; reason: string | null };
+  // Плагины владельца (ADR-031): не группа, а отдельная возможность — доступность
+  // считает ProjectCapabilities.Plugins (у локального проекта в MVP выключена:
+  // каталог пакетов и секреты на устройство не едут). У старого бэка поля нет
+  plugins?: { available: boolean; reason: string | null };
 }
 
 // Ключи возможностей (ADR-016 §4, ключи ProjectFeatures на бэке). Фронт держит свой
@@ -133,6 +137,9 @@ export const ProjectFeature = {
   // Руки на устройстве (ADR-016 §7): ни в одну группу не входят — доступность решает
   // handsRefusal проекта, а не состояние группы (зеркало ProjectFeatures.Hands)
   Hands: 'hands',
+  // Плагины владельца (ADR-031): ни в одну группу не входят — доступность считает
+  // capabilities.plugins (у локального проекта в MVP выключена, причина — в reason)
+  Plugins: 'plugins',
 } as const;
 export type ProjectFeatureKey = (typeof ProjectFeature)[keyof typeof ProjectFeature];
 
@@ -822,7 +829,7 @@ export interface FeatureFlagDefinition {
   title: string;
   description: string;
   default: boolean;
-  stage: 'dev' | 'beta' | 'stable';
+  stage: 'dev' | 'beta' | 'stable' | 'experimental';
 }
 
 // Привязка чата картинки к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/»
@@ -1208,6 +1215,13 @@ export type ServerMessage = { sessionId: string } & (
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
   // delegationTaskId — задача этого доклада (StoredTextMessage.DelegationTaskId)
   | { type: 'guest_text'; text: string; personaId: string; timestamp?: number; delegationTaskId?: string }
+  // Черновик плагина build-it-yourself изменился (ADR-031, шаг 4.2): наблюдатель
+  // data/plugins/{owner}/_drafts/{slug} шлёт владельцу сигнал обновить предпросмотр.
+  // slug + монотонная ревизия; без содержимого файлов и хостовых путей.
+  | { type: 'plugin_draft_changed'; slug: string; revision: number }
+  // Установка плагина изменилась (S6): install/обновление/grant/enable/uninstall/секрет.
+  // Без полезной нагрузки (владельцу): клиент сам перечитывает GET /api/plugins.
+  | { type: 'plugins_changed' }
   | { type: 'thinking_delta'; text: string }
   // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
   | { type: 'agent_text'; parentToolUseId: string; text: string }
@@ -3069,7 +3083,8 @@ export interface AutomationRuleDto {
 // projectPersonas/projectTasks — кросс-проектные привязки: доступ к персонам/задачам
 // ДРУГОГО проекта того же владельца (target — projectId; path — сужение: personaId для
 // projectPersonas, "readonly" для projectTasks; пусто — вся команда / полный доступ)
-export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill' | 'projectPersonas' | 'projectTasks';
+// plugin (ADR-031) — навык плагина: target — «plugin:{id}/{skill}» (id пакета {publisher}/{slug})
+export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill' | 'plugin' | 'projectPersonas' | 'projectTasks';
 
 // Режим привязки: auto — персона обращается по условию; always — выжимка в каждый ход; off — выключена
 export type PersonaBindingMode = 'auto' | 'always' | 'off';
@@ -3078,7 +3093,8 @@ export interface PersonaBinding {
   id: string;
   type: PersonaBindingType;
   // Цель по типам: project/projectPath → projectId; knowledge → datasetId;
-  // notes → ключ источника; tool → ключ инструмента; skill — имя навыка
+  // notes → ключ источника; tool → ключ инструмента; skill — имя навыка;
+  // plugin → «plugin:{id}/{skill}» (навык плагина, ADR-031)
   target: string;
   // Путь внутри цели: папка/файл проекта или папка источника заметок
   path?: string | null;

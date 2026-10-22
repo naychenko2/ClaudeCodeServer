@@ -1,7 +1,9 @@
 ﻿using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.ChatSubjects;
@@ -21,6 +23,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private class SessionEntry
     {
         public required Session Info;
+        // Очередь рассылки и наблюдателей сессии (создаётся лениво первым сообщением хода)
+        public SessionMessagePipeline? Pipeline;
         public ILlmSessionAdapter? Process;
         public TurnAccumulator? Accumulator;
         // Кэш последних workflow_progress для replay при подключении нового клиента
@@ -797,9 +801,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Composition.SubsystemStateStore? subsystemStates = null,
         // Опционально (в тестах без сфер не передаётся): справочник сфер для зоны персон; без него
         // персона сферы нигде не видна (fail-closed)
-        ISphereDirectory? spheres = null)
+        ISphereDirectory? spheres = null,
+        // Опционально (ADR-031, шаг 2.1): шов каталогов плагинов владельца для --plugin-dir.
+        // null — подсистема Plugins выключена (IPluginDirSource не в DI): ход идёт без --plugin-dir.
+        Plugins.IPluginDirSource? pluginDirSource = null)
     {
         _spheres = spheres;
+        _pluginDirSource = pluginDirSource;
         _deviceGate = deviceGate;
         _services = services;
         _subsystemStates = subsystemStates;
@@ -1199,6 +1207,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             VideoEditor.VideoEditorAgentTools.AutoAllowTools);
     }
 
+    // MCP-сервер plugins (ADR-031, шаг 4.1): любой чат владельца, тулсет в реестре (подсистема
+    // plugins загружена). Ограничения (флаг plugins-build-yourself, локальный проект) — на
+    // вызове, не в составе. От хода, фокуса и черновиков состав не зависит (McpToolsetStabilityTests).
+    internal PluginsMcpContext? BuildPluginsContext(string? ownerId, Session session)
+    {
+        if (ownerId is null) return null;
+        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
+        if (_mcpToolsets?.Find(McpEndpoints.PluginsName) is null) return null;
+        var apiUrl = ResolveTasksApiUrl(ownerId);
+        return new PluginsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
+    }
+
     // MCP-сервер «Контекст чата» (ADR-023 §3.2) — любой чат владельца, тулсет в реестре, все три точки
     // сборки контекста. От хода и
     // содержимого контекста состав не зависит (McpToolsetStabilityTests).
@@ -1290,7 +1310,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         HiggsfieldMcpContext? higgsfield = null, ImageEditorMcpContext? imageEditor = null,
         LocalMediaMcpContext? localMedia = null, ArchitectureMcpContext? architecture = null,
         AudioEditorMcpContext? audioEditor = null, VideoEditorMcpContext? videoEditor = null,
-        TurnContextMcpContext? turnContext = null, TestsMcpContext? tests = null) =>
+        TurnContextMcpContext? turnContext = null, TestsMcpContext? tests = null,
+        PluginsMcpContext? plugins = null) =>
         architecture is { UseHttp: true } || tests is { UseHttp: true }
         || widgets is { UseHttp: true } || memory is { UseHttp: true }
         || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
@@ -1299,7 +1320,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         || watch is { UseHttp: true } || webSearch is { UseHttp: true }
         || higgsfield is { UseHttp: true } || imageEditor is { UseHttp: true }
         || localMedia is { UseHttp: true } || audioEditor is { UseHttp: true }
-        || videoEditor is { UseHttp: true }
+        || videoEditor is { UseHttp: true } || plugins is { UseHttp: true }
         || turnContext is { UseHttp: true };
 
     // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
@@ -1307,6 +1328,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // как git/kb; чат без персоны получает браузер как раньше — ручную проверку страницы
     // человек делает из своего чата. Решение зависит только от персоны, поэтому постоянно
     // в рамках сессии (оно входит в сигнатуру прогона — см. ClaudeRuntimeSettings).
+    // Единственное место чтения Llm:SystemPromptViaFile (нет ключа = файл включён)
+    private bool SystemPromptViaFile =>
+        !bool.TryParse(_config["Llm:SystemPromptViaFile"], out var viaFile) || viaFile;
+
     private bool BrowserEnabled(string? ownerId, Persona? persona) =>
         persona is null || _bindings.SectionEnabled(ownerId, persona, "browser");
 
@@ -3513,6 +3538,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     private readonly ISphereDirectory? _spheres;
+    // Шов каталогов плагинов владельца для --plugin-dir (ADR-031, шаг 2.1); null — подсистема
+    // Plugins выключена (опциональная зависимость, ход идёт без --plugin-dir).
+    private readonly Plugins.IPluginDirSource? _pluginDirSource;
 
     private ISphereDirectory SphereDir => _spheres ?? NoSphereDirectory.Instance;
 
@@ -4539,6 +4567,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var imageEditorMcp = BuildImageEditorContext(ownerId, session);
         var audioEditorMcp = BuildAudioEditorContext(ownerId, session);
         var videoEditorMcp = BuildVideoEditorContext(ownerId, session);
+        var pluginsMcp = BuildPluginsContext(ownerId, session);
         var turnContextMcp = BuildTurnContextContext(ownerId, session);
         var localMediaMcp = BuildLocalMediaContext(ownerId, session.ProjectId, persona.Persona);
         var testsMcp = BuildTestsContext(ownerId, session.ProjectId, persona.Persona);
@@ -4554,7 +4583,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var difyMcp = BuildDifyContext(ownerId);
         var hands = HandsFor(session.ProjectId);
         var adapter = _adapters.Create(session, new LlmSessionContext(rootPath,
-            msg => OnMessageAsync(session.Id, accumulator, msg, runId),
+            msg => OnMessageQueuedAsync(session.Id, accumulator, msg, runId),
             rawSystemPrompt, ProjectManager.BuiltInSystemPrompt, permissionRules,
 
             ContentRootPath: AppContext.BaseDirectory,
@@ -4577,6 +4606,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             CodeGraphMcp: codeGraphMcp,
             DifyMcp: difyMcp,
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
+            SystemPromptViaFile: SystemPromptViaFile,
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
             ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
             PersistSessions: SaveSessions,
@@ -4584,7 +4614,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             OrchestrationDone: BuildOrchestrationDone(session.Id),
             HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                 workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp),
+                imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp,
+                pluginsMcp),
             HttpMcpEnabledProvider: HttpMcpEnabled,
             ArchitectureMcp: architectureMcp,
             // Материалы контекста — только у проектных чатов (адреса file/task живут внутри
@@ -4597,6 +4628,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ImageEditorMcp: imageEditorMcp,
             AudioEditorMcp: audioEditorMcp,
             VideoEditorMcp: videoEditorMcp,
+            PluginsMcp: pluginsMcp,
             TurnContextMcp: turnContextMcp,
             LocalMediaMcp: localMediaMcp,
             TestsMcp: testsMcp,
@@ -4607,7 +4639,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ServerContent: ServerContentFor(session.ProjectId),
             TranscriptOnServer: TranscriptOnServer(session),
             HandsEnabled: hands,
-            LlmGatewayApiUrl: LlmGatewayApiUrlFor(session, ownerId)));
+            LlmGatewayApiUrl: LlmGatewayApiUrlFor(session, ownerId),
+            // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект
+            // для проверки локальности (у локального проекта в MVP плагинов нет).
+            PluginDirSource: _pluginDirSource,
+            Project: session.ProjectId is { } pluginProjectId ? _projects.GetById(pluginProjectId) : null));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -4766,10 +4802,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var runId = Interlocked.Increment(ref _runSeq);
         entry.RunId = runId;
         var acc = entry.Accumulator!;
-        await OnMessageAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true, Action: PersonaZone.ChangeCompanionAction), runId);
-        await OnMessageAsync(sessionId, acc, new ResultMessage(
+        await OnMessageQueuedAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true, Action: PersonaZone.ChangeCompanionAction), runId);
+        await OnMessageQueuedAsync(sessionId, acc, new ResultMessage(
             Subtype: "error", DurationMs: 0, NumTurns: 0, Usage: null, TotalCostUsd: null), runId);
-        await OnMessageAsync(sessionId, acc, new ExitedMessage(), runId);
+        await OnMessageQueuedAsync(sessionId, acc, new ExitedMessage(), runId);
     }
 
     // Непосредственный запуск хода в процесс (гейты очереди уже пройдены либо не требуются).
@@ -5205,7 +5241,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         // Provider не заполняем (дефолт claude): фронт модель из каталога не знает и
         // деградирует в Claude-облик — бейдж не ломается, фронт не трогаем.
-        await OnMessageAsync(sessionId, acc, new SessionStartedMessage(
+        await OnMessageQueuedAsync(sessionId, acc, new SessionStartedMessage(
             entry.Info.ClaudeSessionId ?? sessionId, IsResume: false,
             Model: _router!.LocalModel, Mode: entry.Info.Mode.ToString().ToLowerInvariant()), runId);
 
@@ -5232,7 +5268,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 onDelta: async chunk =>
                 {
                     streamed += chunk.Length;
-                    await OnMessageAsync(sessionId, acc, new TextDeltaMessage(chunk), runId);
+                    await OnMessageQueuedAsync(sessionId, acc, new TextDeltaMessage(chunk), runId);
                 },
                 ct: cts.Token);
         }
@@ -5243,7 +5279,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
         catch (Exception ex)
         {
-            await OnMessageAsync(sessionId, acc, new ErrorMessage($"Локальная модель: {ex.Message}"), runId);
+            await OnMessageQueuedAsync(sessionId, acc, new ErrorMessage($"Локальная модель: {ex.Message}"), runId);
         }
         finally
         {
@@ -5256,8 +5292,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Обычный путь: текст уже ушёл кусками из onDelta. Целиком шлём только если
             // поток не дал ничего (не-потоковый ответ, сбой до первого куска)
             if (streamed == 0)
-                await OnMessageAsync(sessionId, acc, new TextDeltaMessage(answer), runId);
-            await OnMessageAsync(sessionId, acc, new ResultMessage(
+                await OnMessageQueuedAsync(sessionId, acc, new TextDeltaMessage(answer), runId);
+            await OnMessageQueuedAsync(sessionId, acc, new ResultMessage(
                 Subtype: "success", DurationMs: sw.ElapsedMilliseconds, NumTurns: 1,
                 Usage: turn.Usage, TotalCostUsd: 0), runId);
         }
@@ -5266,11 +5302,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Пустой ответ/сбой HTTP — честная ошибка без фолбэка на CLI
             // (ErrorMessage исключения уже ушёл выше — второй не дублируем).
             if (turn is not null)
-                await OnMessageAsync(sessionId, acc,
+                await OnMessageQueuedAsync(sessionId, acc,
                     new ErrorMessage("Локальная модель не ответила"), runId);
         }
 
-        await OnMessageAsync(sessionId, acc, new ExitedMessage(), runId);
+        await OnMessageQueuedAsync(sessionId, acc, new ExitedMessage(), runId);
     }
 
 
@@ -6149,6 +6185,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var imageEditorMcp = BuildImageEditorContext(entry.Info.OwnerId, entry.Info);
             var audioEditorMcp = BuildAudioEditorContext(entry.Info.OwnerId, entry.Info);
             var videoEditorMcp = BuildVideoEditorContext(entry.Info.OwnerId, entry.Info);
+            var pluginsMcp = BuildPluginsContext(entry.Info.OwnerId, entry.Info);
             var turnContextMcp = BuildTurnContextContext(entry.Info.OwnerId, entry.Info);
             var tasksMcp = TasksMcpEnabled(entry.Info.OwnerId, entry.Info, persona.Persona)
                 ? BuildTasksContext(entry.Info.OwnerId, null, persona.Persona) : null;
@@ -6158,7 +6195,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var notificationsMcp = BuildNotificationsContext(entry.Info.OwnerId, entry.Info.PersonaId, persona.Persona);
             var difyMcp = BuildDifyContext(entry.Info.OwnerId);
             context = new LlmSessionContext(rootPath,
-                msg => OnMessageAsync(sessionId, accumulator, msg, runId),
+                msg => OnMessageQueuedAsync(sessionId, accumulator, msg, runId),
                 RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
                 PermissionRules: null,
                 ContentRootPath: AppContext.BaseDirectory,
@@ -6179,6 +6216,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 CodeGraphMcp: null,
                 DifyMcp: difyMcp,
                 BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
+                SystemPromptViaFile: SystemPromptViaFile,
                 CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona),
                 PersistSessions: SaveSessions,
@@ -6187,7 +6225,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 HttpMcpActive: HttpMcpActive(widgetsMcp, persona.Memory, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, dify: difyMcp, watch: watchMcp, webSearch: webSearchMcp,
                     higgsfield: higgsfieldMcp, imageEditor: imageEditorMcp, audioEditor: audioEditorMcp, videoEditor: videoEditorMcp,
-                    turnContext: turnContextMcp),
+                    turnContext: turnContextMcp, plugins: pluginsMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 Events: _turnEvents,
                 WatchMcp: watchMcp,
@@ -6196,10 +6234,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ImageEditorMcp: imageEditorMcp,
                 AudioEditorMcp: audioEditorMcp,
                 VideoEditorMcp: videoEditorMcp,
+                PluginsMcp: pluginsMcp,
                 TurnContextMcp: turnContextMcp,
                 // Чат вне проекта — fallback для slice графа не применяется (граф ключуется проектом)
                 MainRootPath: null,
-                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId));
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, entry.Info.OwnerId),
+                // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально);
+                // чат вне проекта — локальности нет (все включённые пакеты владельца).
+                PluginDirSource: _pluginDirSource,
+                Project: null);
                 // Чат вне проекта: трейлер CCS-Session в подсказке досье (DossierTrailerContributor) пропускается
         }
         else
@@ -6220,6 +6263,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var imageEditorMcp = BuildImageEditorContext(project.OwnerId, entry.Info);
             var audioEditorMcp = BuildAudioEditorContext(project.OwnerId, entry.Info);
             var videoEditorMcp = BuildVideoEditorContext(project.OwnerId, entry.Info);
+            var pluginsMcp = BuildPluginsContext(project.OwnerId, entry.Info);
             var turnContextMcp = BuildTurnContextContext(project.OwnerId, entry.Info);
             var localMediaMcp = BuildLocalMediaContext(project.OwnerId, project.Id, persona.Persona);
             var testsMcp = BuildTestsContext(project.OwnerId, project.Id, persona.Persona);
@@ -6235,7 +6279,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             var difyMcp = BuildDifyContext(project.OwnerId);
             var hands = HandsFor(project.Id);
             context = new LlmSessionContext(rootPath,
-                msg => OnMessageAsync(sessionId, accumulator, msg, runId),
+                msg => OnMessageQueuedAsync(sessionId, accumulator, msg, runId),
                 project.SystemPrompt,
                 ProjectManager.BuiltInSystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
@@ -6256,6 +6300,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 CodeGraphMcp: codeGraphMcp,
                 DifyMcp: difyMcp,
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
+                SystemPromptViaFile: SystemPromptViaFile,
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona),
                 PersistSessions: SaveSessions,
@@ -6263,7 +6308,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 OrchestrationDone: BuildOrchestrationDone(sessionId),
                 HttpMcpActive: HttpMcpActive(widgetsMcp, memoryMcp, tasksMcp, notesMcp, personasMcp,
                     workspace, notificationsMcp, codeGraphMcp, difyMcp, watchMcp, webSearchMcp, higgsfieldMcp,
-                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp),
+                    imageEditorMcp, localMediaMcp, architectureMcp, audioEditorMcp, videoEditorMcp, turnContextMcp, testsMcp,
+                    pluginsMcp),
                 HttpMcpEnabledProvider: HttpMcpEnabled,
                 ArchitectureMcp: architectureMcp,
                 ChatContextProvider: BuildChatContextProvider(sessionId),
@@ -6274,6 +6320,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ImageEditorMcp: imageEditorMcp,
                 AudioEditorMcp: audioEditorMcp,
                 VideoEditorMcp: videoEditorMcp,
+                PluginsMcp: pluginsMcp,
                 TurnContextMcp: turnContextMcp,
                 LocalMediaMcp: localMediaMcp,
                 TestsMcp: testsMcp,
@@ -6283,7 +6330,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ServerContent: ProjectCapabilities.ServerContentEnabled(project),
                 TranscriptOnServer: ProjectCapabilities.TranscriptOnServer(project),
                 HandsEnabled: hands,
-                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, project.OwnerId));
+                LlmGatewayApiUrl: LlmGatewayApiUrlFor(entry.Info, project.OwnerId),
+                // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект
+                // для проверки локальности (у локального проекта в MVP плагинов нет).
+                PluginDirSource: _pluginDirSource,
+                Project: project);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -9355,6 +9406,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.Accumulator?.MarkDeleted();
         if (entry.Process is not null)
             await entry.Process.DisposeAsync();
+        // Дренаж очереди сессии до конца: ResultMessage последнего хода обязан дойти до всех
+        // наблюдателей (иначе TaskExecutionService не закроет задачу исполнителя)
+        if (entry.Pipeline is { } pipeline)
+            await pipeline.CompleteAsync(TimeSpan.FromSeconds(30));
+
         // Дочищаем историю на диске — иначе data/sessions/{id} копится мусором
         if (entry.Info.ClaudeSessionId is string csid)
         {
@@ -9549,6 +9605,24 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // internal (InternalsVisibleTo): тесты гоняют сообщения (в т.ч. ResultMessage) через
     // обработчик, чтобы проверить побочные эффекты (сброс RestartResumeAttempts, статус).
     internal async Task OnMessageAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
+    {
+        await OnMessageQueuedAsync(sessionId, acc, msg, runId);
+        // Тестовый шов сохраняет прежнюю семантику «вернулся — рассылка и наблюдатели отработали»;
+        // боевые вызывающие идут в OnMessageQueuedAsync и очередь не ждут
+        await DrainPipelineAsync(sessionId);
+    }
+
+    // Дожидается разбора всего, что легло в очередь сессии (тесты и точки, которым нужны
+    // отработавшие наблюдатели)
+    internal Task DrainPipelineAsync(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) && entry.Pipeline is { } pipeline
+            ? pipeline.DrainAsync() : Task.CompletedTask;
+
+    // Боевой вход обработчика сообщений адаптера. Всё, что меняет состояние сессии (снимок в
+    // аккумулятор, статус, гейты прогона, запуск очереди и цикла), выполняется здесь же и по
+    // порядку; рассылка в SignalR и обход наблюдателей уходят в очередь сессии
+    // (SessionMessagePipeline), чтобы медленный клиент или наблюдатель не держал read-loop CLI.
+    internal async Task OnMessageQueuedAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0)
     {
         _sessions.TryGetValue(sessionId, out var entry);
         // Волна 6: живая трансляция хода штаба фильтрует маркеры протокола (см. кейс ниже) —
@@ -9775,7 +9849,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // трогаем — ApplyStatusAsync двигал бы UpdatedAt, а по нему идут сортировка,
                 // секции дерева и непрочитанность. Рассылка — в session + project/user-группы
                 case BgAgentsPresenceMessage m:
-                    await BroadcastSessionMessageAsync(sessionId, m);
+                    if (entry is not null)
+                        await EnqueueWorkAsync(entry, () => BroadcastSessionMessageAsync(sessionId, m));
+                    else
+                        await BroadcastSessionMessageAsync(sessionId, m);
                     break;
                 case FileChangedMessage m:
                     acc.OnFileChanged(m.Path, m.Added, m.Removed, m.External);
@@ -9978,7 +10055,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     entry.LastTurnEndedAt = newStatus == SessionStatus.Active ? DateTimeOffset.UtcNow : null;
                 // exited — та же доводка, что у sweep: содержимое хода пришло раньше
                 // (result/сообщения), а обрыв без result его не добавляет
-                await ApplyStatusAsync(sessionId, entry, newStatus.Value,
+                // Состояние и SaveSessions — здесь же; рассылка смены статуса уходит в очередь
+                // (раньше await на SignalR держал read-loop), порядок «статус → сообщение» сохранён
+                await ApplyStatusQueuedAsync(sessionId, entry, newStatus.Value,
                     touchUpdatedAt: msg is not ExitedMessage);
             }
 
@@ -10018,7 +10097,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // TeamTurnLock через реентрантность lock()). Здесь — только осушение буфера.
                 }
                 if (!string.IsNullOrEmpty(catchUpDelta))
-                    await BroadcastAsync(sessionId, new TextDeltaMessage(catchUpDelta));
+                {
+                    // Догоняющая дельта — единственная порция придержанного текста: слить её нельзя
+                    var catchUp = new TextDeltaMessage(catchUpDelta);
+                    await EnqueueWorkAsync(entry, () => BroadcastAsync(sessionId, catchUp));
+                }
             }
 
             // При поднятом _stopping план штабу не кладём: разбор хода (HandleTeamTurnEndAsync)
@@ -10163,23 +10246,71 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             }
         }
 
-        if (sendBroadcast) await BroadcastAsync(sessionId, msg);
-        // Карточка в ленте — старт MCP-вызова, обогнавший её рассылку, уходит следом
-        if (msg is ToolUseMessage announced && acc.OnToolAnnounced(announced.Id) is { } earlyStart)
-            await BroadcastAsync(sessionId, new ToolStartedMessage(announced.Id, earlyStart));
+        // Карточка в ленте — старт MCP-вызова, обогнавший её рассылку, уходит следом.
+        // Вычисляется здесь, синхронно: аккумулятор принадлежит порядку чтения stdout
+        ToolStartedMessage? earlyStarted = msg is ToolUseMessage announced
+            && acc.OnToolAnnounced(announced.Id) is { } earlyStart
+            ? new ToolStartedMessage(announced.Id, earlyStart) : null;
 
-        if (entry is not null && OnSessionMessage is { } observers)
+        if (entry is null)
         {
-            // Multicast Func<> await-ит только Task ПОСЛЕДНЕГО подписчика — ждём всех явно,
-            // иначе исключения и незавершённая работа не-последних наблюдателей теряются
-            foreach (var observer in observers.GetInvocationList().Cast<Func<Session, ServerMessage, Task>>())
+            // Записи сессии нет (удалена) — наблюдателей у кадра не было и раньше
+            if (sendBroadcast) await BroadcastAsync(sessionId, msg);
+            if (earlyStarted is not null) await BroadcastAsync(sessionId, earlyStarted);
+            return;
+        }
+
+        // Дальше рассылку и наблюдателей ведёт потребитель очереди сессии, read-loop свободен
+        var broadcastMsg = sendBroadcast;
+        await GetPipeline(entry).EnqueueAsync(new PipelineItem(
+            async () =>
             {
-                try { await observer(entry.Info, msg); }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[SessionManager] Ошибка наблюдателя сессии ({sessionId}): {ex.Message}");
-                }
+                if (broadcastMsg) await BroadcastAsync(sessionId, msg);
+                if (earlyStarted is not null) await BroadcastAsync(sessionId, earlyStarted);
+            },
+            msg, entry.Info,
+            Droppable: SessionMessagePipeline.IsDroppable(msg),
+            EnqueuedAt: Stopwatch.GetTimestamp()));
+    }
+
+    private SessionMessagePipeline GetPipeline(SessionEntry entry) =>
+        LazyInitializer.EnsureInitialized(ref entry.Pipeline,
+            () => new SessionMessagePipeline(item => ProcessPipelineItemAsync(entry, item)));
+
+    // Работа без сообщения для наблюдателей (догоняющая дельта, presence, смена статуса)
+    private ValueTask EnqueueWorkAsync(SessionEntry entry, Func<Task> work) =>
+        GetPipeline(entry).EnqueueAsync(new PipelineItem(work, null, null, false, Stopwatch.GetTimestamp()));
+
+    // Единственный потребитель очереди сессии: рассылка, затем наблюдатели по порядку
+    private async Task ProcessPipelineItemAsync(SessionEntry entry, PipelineItem item)
+    {
+        var sessionId = entry.Info.Id;
+        var kind = entry.Info.TaskId is null ? "human" : "executor";
+        ServerMetrics.RecordSessionQueueWait(Stopwatch.GetElapsedTime(item.EnqueuedAt).TotalMilliseconds, kind);
+
+        if (item.Work is { } work)
+        {
+            try { await work(); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Ошибка рассылки сообщения сессии ({sessionId}): {ex.Message}");
             }
+        }
+
+        if (item.Msg is null || item.Info is null || OnSessionMessage is not { } observers) return;
+        // Multicast Func<> await-ит только Task ПОСЛЕДНЕГО подписчика — ждём всех явно,
+        // иначе исключения и незавершённая работа не-последних наблюдателей теряются
+        foreach (var observer in observers.GetInvocationList().Cast<Func<Session, ServerMessage, Task>>())
+        {
+            var started = Stopwatch.GetTimestamp();
+            try { await observer(item.Info, item.Msg); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Ошибка наблюдателя сессии ({sessionId}): {ex.Message}");
+            }
+            ServerMetrics.RecordSessionObserverDuration(
+                Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+                observer.Target?.GetType().Name ?? observer.Method.DeclaringType?.Name ?? "unknown", kind);
         }
     }
 
@@ -10411,6 +10542,20 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         SaveSessions();
         await BroadcastStatusChangeAsync(sessionId, entry.Info,
             status, entry.Info.LastMessage, entry.Info.MessageCount);
+    }
+
+    // То же, что ApplyStatusAsync, но рассылка смены статуса идёт через очередь сессии:
+    // состояние и запись sessions.json остаются синхронными, read-loop не ждёт SignalR
+    private async Task ApplyStatusQueuedAsync(string sessionId, SessionEntry entry, SessionStatus status,
+        bool touchUpdatedAt = true)
+    {
+        entry.Info.Status = status;
+        if (touchUpdatedAt && !entry.Info.IsArchived) entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        var lastMessage = entry.Info.LastMessage;
+        var messageCount = entry.Info.MessageCount;
+        await EnqueueWorkAsync(entry,
+            () => BroadcastStatusChangeAsync(sessionId, entry.Info, status, lastMessage, messageCount));
     }
 
     // Текст последней реплики ассистента текущего хода (сообщения после baseline) —

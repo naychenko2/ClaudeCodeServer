@@ -40,8 +40,22 @@ const listeners = new Set<() => void>();
 function emit() { listeners.forEach(l => l()); }
 function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
 
+// Пока панель тащат, body несёт data-panel-drag: CSS-правило (index.css, рядом
+// с правилами зон) глушит pointer-events у iframe панели плагина. Без него iframe
+// глотает drag-события родительского документа — dragover/drop над ним падают на
+// документ iframe, и цель сброса не подсвечивается. Живёт атрибут ровно столько,
+// сколько состояние: ставится на старте, снимается на конце (dragend — в т.ч. Esc).
+// Гвард — node-тесты без DOM.
+function setBodyDragAttr(on: boolean) {
+  const body = typeof document === 'undefined' ? null : document.body;
+  if (!body) return;
+  if (on) body.setAttribute('data-panel-drag', '1');
+  else body.removeAttribute('data-panel-drag');
+}
+
 export function startPanelDrag(from: PanelKey, fromZone: Zone, fromTucked = false) {
   _state = { from, fromZone, over: null, fromTucked, moved: null };
+  setBodyDragAttr(true);
   emit();
 }
 
@@ -92,7 +106,19 @@ export function endPanelDrag() {
   // moved переживает конец перетаскивания: dragend приходит ПОСЛЕ drop, и
   // сброс в IDLE стёр бы метку раньше, чем зоны успели перерисоваться.
   _state = { ...IDLE, moved: _state.moved };
+  // dragend — единственный выход из drag'а (после drop и при отмене Esc),
+  // поэтому атрибут body снимается здесь же, а не в отдельных обработчиках зон
+  setBodyDragAttr(false);
   emit();
+}
+
+// Конец drag'а, если источник — именно ЭТА зона (R-Gleb, minor 6). Нужен демонтажу
+// источника во время drag'а: dragstart откладывает startPanelDrag на rAF, и если
+// источник (зона или её панель) демонтируется до dragend, атрибут data-panel-drag
+// остаётся на body — iframe панелей остаются без pointer-events. Проверяем fromZone,
+// чтобы демонтаж ЧУЖОЙ зоны (не источника) не снёс чужой drag.
+export function endPanelDragIfFrom(zone: Zone) {
+  if (_state.fromZone === zone) endPanelDrag();
 }
 
 export function usePanelDragState(): PanelDragState {

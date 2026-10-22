@@ -119,6 +119,7 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
             PermissionRules: null,
             TasksMcp: null,
             Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            SystemPromptViaFile: false,
             Events: bus);
 
         var session = new ClaudeSession(info, context);

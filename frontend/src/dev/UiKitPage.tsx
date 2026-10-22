@@ -78,6 +78,7 @@ import { ContextPanelKitSection } from './ContextPanelKitSection';
 import { FormatKitSection } from './FormatKitSection';
 import { ComposerActionRowKitSection } from './ComposerActionRowKitSection';
 import { LocalGpuQueueKitSection } from './LocalGpuQueueKitSection';
+import { PluginKitSection } from './PluginKitSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -150,6 +151,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-ring-pill',  label: 'Пилюля «кольца»'    },
   { id: 'sec-tool-progress', label: 'Прогресс инструмента' },
   { id: 'sec-local-gpu-queue', label: 'Очередь локальной GPU' },
+  { id: 'sec-plugin-kit', label: 'Кит панели плагина' },
 ];
 
 // Высота sticky-элементов над контентом: шапка темы + TOC-бар. Секция
@@ -353,6 +355,12 @@ export function UiKitPage() {
             {/* Строка ожидания локальной GPU-генерации (шаг 34): форматтер + компонент */}
             <div id="sec-local-gpu-queue" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <LocalGpuQueueKitSection />
+            </div>
+
+            {/* Кит панели плагина (S11): девять классов plugin-kit в токенах текущей
+                темы + «неправильный» голый button (опт-ин) + пример «как писать панель» */}
+            <div id="sec-plugin-kit" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <PluginKitSection />
             </div>
           </div>
 
@@ -2295,7 +2303,7 @@ const DEMO_CONTEXT_PRUNED_ITEMS: Extract<ChatItem, { kind: 'context_pruned' }>[]
   },
 ];
 
-// Мета 9 панелей правой рельсы — копия PANEL_META из RightPanelStack (там
+// Мета 9 панелей правой рельсы — копия меты (panelMeta) из каталога (там
 // не экспортируется). Меняется только Icon и title; контент у каждого свой.
 const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: boolean }[] = [
   { key: 'plan',     title: 'План',      Icon: ClipboardList },

@@ -1426,7 +1426,7 @@ public sealed partial class WorkspaceToolset(
                         personaId ??= (await provisioner.EnsureAsync(context.OwnerId))?.Id;
                         if (personaId is null)
                             return Deny("Новый чат создаётся только с персоной: укажите personaId");
-                        created = await sessions.CreateChatAsync(context.OwnerId, ClaudeMode.Auto,
+                        created = await sessions.CreateChatAsync(context.OwnerId, ClaudeModeExtensions.ForNewChat(null, hasPersona: true),
                             resumeSessionId: null, name: name, model: model, personaId: personaId);
                     }
                 }

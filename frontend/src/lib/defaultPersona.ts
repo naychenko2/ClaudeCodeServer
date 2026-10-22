@@ -163,15 +163,15 @@ export async function createChatWithContextPersona(
   const defaultId = getContextDefaultPersonaId(project);
   if (defaultId) {
     return api.personas.createChat(defaultId, {
-      mode: opts?.mode ?? 'auto',
+      mode: opts?.mode,
       name: opts?.name,
       projectId: project?.id,
     });
   }
   try {
     return project
-      ? await api.sessions.create(project.id, opts?.mode ?? 'auto', undefined, opts?.name)
-      : await api.chats.create(opts?.mode ?? 'auto', undefined, opts?.name);
+      ? await api.sessions.create(project.id, opts?.mode, undefined, opts?.name)
+      : await api.chats.create(opts?.mode, undefined, opts?.name);
   } catch (e) {
     if ((e as Error & { status?: number }).status === 400) {
       throw new OnboardingRequiredError(project ? 'project' : 'user');

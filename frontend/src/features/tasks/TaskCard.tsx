@@ -5,7 +5,7 @@
 // (внутренний путь без отдельной Verification). Этим путём обычно снимаются
 // дефекты волной командной реализации или авто-правилом заметок.
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import type { Task } from '../../types';
 // Иконки: Bug — дефект (волна 2 фичи карточек дефектов),
 // Check/SquareStack — контекстное меню «В контекст чата» (фича chat-context).
@@ -41,7 +41,7 @@ function StateChip({ tone, title, children }: { tone: 'warning' | 'danger'; titl
   );
 }
 
-export function TaskCard({ task, selected, onClick, compact, projectName, deviceName }: Props) {
+function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceName }: Props) {
   const color = projectColor(task.projectId);
   const done = task.status === 'done';
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
@@ -189,3 +189,8 @@ export function TaskCard({ task, selected, onClick, compact, projectName, device
     </div>
   );
 }
+
+// memo: стор задач отдаёт новый массив на каждое task_changed, но ссылки неизменённых
+// задач сохраняются (upsert), поэтому карточки без изменений пропсов не перерисовываются.
+// Вызывающий обязан передавать стабильный onClick (useCallback), иначе memo бесполезен.
+export const TaskCard = memo(TaskCardImpl);

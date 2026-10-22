@@ -137,7 +137,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
                 return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
             personaId = provisioned.Id;
         }
-        var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
+        var mode = ClaudeModeExtensions.ForNewChat(req.Mode, personaId is not null);
         try
         {
             var chat = await sessions.CreateChatAsync(UserId, mode, req.ResumeSessionId, req.Name,
@@ -156,7 +156,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost("group")]
     public async Task<IActionResult> CreateGroup([FromBody] CreateGroupChatRequest req)
     {
-        var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
+        var mode = ClaudeModeExtensions.ForNewChat(req.Mode, hasPersona: true);
         try
         {
             var chat = await sessions.CreateGroupChatAsync(UserId, req.PersonaIds ?? [], mode, req.Name);
@@ -673,7 +673,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
 // PersonaId — собеседник нового чата; под флагом default-personas-onboarding обязателен
 // (либо resumeSessionId — продолжение существующего разговора).
-public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null, string? PersonaId = null);
+public record CreateChatRequest(string? Mode = null, string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null, string? PersonaId = null);
 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать чат постоянным;
 // N > 0 — временный, авто-удаление через N минут после последней активности.
@@ -688,7 +688,7 @@ public record SetParentRequest(string? ParentId = null);
 
 public record SetPersonaRequest(string? PersonaId = null, string? AgentName = null);
 
-public record CreateGroupChatRequest(List<string>? PersonaIds, string Mode = "auto", string? Name = null);
+public record CreateGroupChatRequest(List<string>? PersonaIds, string? Mode = null, string? Name = null);
 
 public record SetParticipantsRequest(List<string>? PersonaIds);
 

@@ -179,10 +179,11 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
             switch (method)
             {
                 case "initialize":
-                    return Ok(id, new JsonObject
+                {
+                    // Версию протокола эхом от клиента: свою навязывать нечем, а несовпадение
+                    // строки CLI трактует как несовместимость сервера
+                    var initialize = new JsonObject
                     {
-                        // Версию протокола эхом от клиента: свою навязывать нечем, а несовпадение
-                        // строки CLI трактует как несовместимость сервера
                         ["protocolVersion"] = parms?["protocolVersion"]?.DeepClone()
                             ?? JsonValue.Create("2025-06-18"),
                         ["capabilities"] = new JsonObject { ["tools"] = new JsonObject() },
@@ -191,7 +192,13 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
                             ["name"] = toolset.Name,
                             ["version"] = toolset.Version,
                         },
-                    });
+                    };
+                    // Инструкции сервера (сводка справочника + ссылка на документ): отдельное
+                    // поле initialize, не tools/list — состав не раздувается, от хода не зависит
+                    if (toolset is IMcpInstructionalToolset { Instructions: { } instructions })
+                        initialize["instructions"] = instructions;
+                    return Ok(id, initialize);
+                }
 
                 case "tools/list":
                 {

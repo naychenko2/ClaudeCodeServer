@@ -9,6 +9,7 @@
 import { api } from './api';
 import { isOnline, OfflineError } from './offline';
 import { outboxAll, outboxGet, outboxPut, outboxDelete } from './idb';
+import { showToast } from './toast';
 import type { CreateTaskDto, Task, UpdateTaskDto } from '../types';
 import {
   ensureNotClosedAtCreate, ensureVerificationOnClose,
@@ -124,6 +125,20 @@ export function mergeOps(prev: OutboxOp, incoming: { kind: OutboxKind; dto: Crea
 
 // === Постановка в очередь ===
 
+// Запись в outbox не удалась (квота, сбой IDB): правка НЕ числится сохранённой
+// (_pending не выставляем), а пользователь видит тост — иначе офлайн-правка
+// молча пропала бы.
+async function putOrWarn(op: OutboxOp): Promise<boolean> {
+  try {
+    await outboxPut(op);
+    return true;
+  } catch (e) {
+    console.warn('[taskOutbox] не удалось записать офлайн-правку:', op.taskId, e);
+    showToast('Не сохранено', 'Не удалось сохранить офлайн-правку', 'error');
+    return false;
+  }
+}
+
 export async function enqueue(
   taskId: string,
   kind: OutboxKind,
@@ -139,7 +154,7 @@ export async function enqueue(
       projectId: opts?.projectId, baseUpdatedAt: opts?.baseUpdatedAt,
       attempts: 0, enqueuedAt: Date.now(),
     };
-    await outboxPut(op).catch(() => {});
+    if (!(await putOrWarn(op))) return;
     _pending.add(taskId);
     return;
   }
@@ -159,7 +174,7 @@ export async function enqueue(
     attempts: 0,
     nextAttemptAt: undefined,
   };
-  await outboxPut(op).catch(() => {});
+  if (!(await putOrWarn(op))) return;
   _pending.add(taskId);
 }
 

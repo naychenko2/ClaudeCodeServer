@@ -43,6 +43,7 @@
   <Project Path="ClaudeHomeServer.Notes/ClaudeHomeServer.Notes.csproj" />
   <Project Path="ClaudeHomeServer.Notes.Tests/ClaudeHomeServer.Notes.Tests.csproj" />
   <Project Path="ClaudeHomeServer.Personas/ClaudeHomeServer.Personas.csproj" />
+  <Project Path="ClaudeHomeServer.Plugins/ClaudeHomeServer.Plugins.csproj" />
   <Project Path="ClaudeHomeServer.Personas.Tests/ClaudeHomeServer.Personas.Tests.csproj" />
   <Project Path="ClaudeHomeServer.ProjectIcons/ClaudeHomeServer.ProjectIcons.csproj" />
   <Project Path="ClaudeHomeServer.ProjectServices/ClaudeHomeServer.ProjectServices.csproj" />

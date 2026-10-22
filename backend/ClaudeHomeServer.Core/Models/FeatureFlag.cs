@@ -50,6 +50,14 @@ public static class FeatureFlagKeys
     // чате + режим исполнения. Dark launch, выключено по умолчанию.
     public const string TurnPlanFeatureMode = "turn-plan-feature-mode";
 
+    // Плагины (ADR-031): установка пакетов владельца, skills/команды через --plugin-dir, панели.
+    // Dark launch, выключено по умолчанию.
+    public const string PluginsMvp = "plugins-mvp";
+
+    // Плагины (ADR-031): build-it-yourself — агент собирает пакет через MCP-тулсет plugins.
+    // Dark launch, выключено по умолчанию.
+    public const string PluginsBuildYourself = "plugins-build-yourself";
+
     // «Обзор фич» (волна 1): фасет «Фичи» в списке сессий + плашка фичи в чате.
     // Dark launch, выключено по умолчанию. Запись в каталоге — шаг Б3.
     public const string FeaturesOverview = "features-overview";
@@ -128,6 +136,25 @@ public static class FeatureFlagCatalog
             Description: "Включает карточку фичи в чате и режим «Исполнение фичи» в «Плане хода» (этап 2 «Пульта куратора»).",
             Default: false,
             Stage: "dev"),
+
+        // Плагины (ADR-031): пакет владельца — навыки/команды через --plugin-dir, панели,
+        // прокси net:. Стадия experimental: тумблер в «Экспериментальных функциях», по
+        // умолчанию выключен.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PluginsMvp,
+            Title: "Плагины (MVP)",
+            Description: "Пакеты владельца: навыки и slash-команды агента, панели в интерфейсе и ссылки на MCP-серверы и секреты. Пакет ставит и права выдаёт только человек.",
+            Default: false,
+            Stage: "experimental"),
+
+        // Плагины (ADR-031): build-it-yourself — агент собирает пакет (черновики) через
+        // MCP-тулсет plugins; принять и выдать права может только человек.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PluginsBuildYourself,
+            Title: "Плагины: собери сам",
+            Description: "Агент собирает пакет плагина (черновик) по вашему промпту; принять его, выдать права и ввести секреты — только вы, кнопкой.",
+            Default: false,
+            Stage: "experimental"),
 
         // «Обзор фич» (волна 1): фасет «Фичи» в списке сессий + плашка фичи в чате.
         // Dark launch, выключено по умолчанию.

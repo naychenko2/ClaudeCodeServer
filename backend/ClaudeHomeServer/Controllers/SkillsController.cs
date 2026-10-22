@@ -57,7 +57,10 @@ public class SkillsController(
                 projectSkills = await skills.GetProjectSkillsAsync(projectFiles, project, ct),
                 agents = await skills.GetProjectAgentsAsync(projectFiles, project, ct),
                 workflows = skills.GetGlobalWorkflows(),
+                // Плагины профиля CLI (installed_plugins.json) и пакеты владельца — разные
+                // источники (ADR-031 §2.5): в API метятся явно.
                 plugins = pluginLocalizer.Localize(skills.GetPluginSkills()),
+                ownerPlugins = pluginLocalizer.Localize(skills.GetOwnerPluginSkills(UserId, project)),
             });
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -69,7 +72,10 @@ public class SkillsController(
     [HttpGet("api/skills")]
     public IActionResult ListGlobal() =>
         Ok(skills.GetGlobalSkills().Concat(skills.GetGlobalWorkflows())
-            .Concat(pluginLocalizer.Localize(skills.GetPluginSkills())).ToList());
+            .Concat(pluginLocalizer.Localize(skills.GetPluginSkills()))
+            // Пакеты владельца — отдельный источник (ADR-031 §2.5); ход без привязки
+            // (project null) — все включённые пакеты, локальности нет.
+            .Concat(pluginLocalizer.Localize(skills.GetOwnerPluginSkills(UserId, null))).ToList());
 
     // --- Реестр: поиск и установка (обёртка npx skills) ---
 

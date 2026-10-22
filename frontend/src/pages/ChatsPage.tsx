@@ -29,7 +29,7 @@ import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels, openKeysOf } from './workspace/panelStackState';
 import { followHost } from '../lib/genPanelFollow';
-import { CHAT_KEYS, CHAT_RIGHT_KEYS, isPanelKey, type PanelKey } from './workspace/panelCatalog';
+import { CHAT_KEYS, CHAT_RIGHT_KEYS, keyAllowed, type PanelKey } from './workspace/panelCatalog';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
 import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
@@ -42,6 +42,7 @@ import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
 import { autoNavigateToContinued } from '../lib/chatContinue';
 import { useWatchdogPresence } from '../lib/watchdogPresence';
+import { acceptDraftReplyByChat } from '../lib/draftReply';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -209,6 +210,25 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     return () => window.removeEventListener('cc-open-chat', open);
   }, []);
 
+  // «Править»/«Попросить агента исправить» из карточки черновика в ленте: готовая реплика
+  // → поле ввода ТОГО чата, в чьей ленте нарисована карточка (cc-compose-prefill), не
+  // отправляется сама. Событие несёт chatId карточки; принимаем, только если chatId = id
+  // активного чата. Проект не сравниваем: черновик может быть из проекта, а чат — вне
+  // проекта (сравнение проектов роняло реплику в чате вне проекта). Ref — чтобы handler
+  // видел свежий activeId без перерегистрации слушателя на каждом обновлении списка.
+  const activeIdRef = useRef<string | null>(null);
+  activeIdRef.current = activeId;
+  useEffect(() => {
+    const onDraftReply = (e: Event) => {
+      const { chatId, reply } = (e as CustomEvent<{ chatId?: unknown; reply?: string }>).detail ?? {};
+      if (!acceptDraftReplyByChat(chatId, activeIdRef.current, reply)) return;
+      sessionStorage.setItem('cc_pending_chat_prompt', reply!);
+      window.dispatchEvent(new Event('cc-compose-prefill'));
+    };
+    window.addEventListener('cc-draft-reply', onDraftReply);
+    return () => window.removeEventListener('cc-draft-reply', onDraftReply);
+  }, []);
+
   const selectChat = (chat: Session) => {
     // Эфир трогать не надо: развёрнутый кадр занимает центр вместо ленты, но
     // выбор чата его не гасит — кадр сворачивают сами, кнопкой или крестиком,
@@ -337,12 +357,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   useEffect(() => {
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
-      const key = d?.key;
-      if (!isPanelKey(key) || !chatRight.includes(key)) return;
+      const key = d?.key as PanelKey | undefined;
+      if (!key || !keyAllowed(key, chatRight)) return;
       if (isGenPanelKey(key)) setGenZoneFor(activeId);
       // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
       const host = d?.follow ? followHost(chatOpenKeys.current, key) : null;
-      if (host && isPanelKey(host)) replaceWith(key, host);
+      if (host && keyAllowed(host as PanelKey, chatRight)) replaceWith(key, host as PanelKey);
       else reveal(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
@@ -623,7 +643,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               onUserClose={k => markGenPanelDismissed(activeChat.id, k)}
               panels={{
                 ...Object.fromEntries(panelDefs.flatMap(d => (
-                  d.name && isPanelKey(d.name) && chatRight.includes(d.name) && d.render && d.name !== 'chatContext' && (d.action?.isAvailable?.(null) ?? true)
+                  d.name && keyAllowed(d.name as PanelKey, chatRight) && d.render && d.name !== 'chatContext' && (d.action?.isAvailable?.(null) ?? true)
                     ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => { markGenPanelDismissed(activeChat.id, d.name!); closePanelKey(d.name as PanelKey); } })]]
                     : []
                 ))),

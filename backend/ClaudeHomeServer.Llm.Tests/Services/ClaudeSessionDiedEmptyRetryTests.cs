@@ -43,6 +43,8 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
     private readonly ConcurrentDictionary<int, Process> _clis = new();
     // Номер запуска → (--mcp-config из args, существует ли файл на момент старта)
     private readonly ConcurrentDictionary<int, (string? Path, bool Exists)> _mcpChecks = new();
+    // Номер запуска → (--append-system-prompt-file из args, текст файла на момент старта или null)
+    private readonly ConcurrentDictionary<int, (string? Path, string? Text, bool HasInlineFlag)> _promptChecks = new();
     private readonly TaskCompletionSource _p1Started = NewTcs();
     private readonly TaskCompletionSource _p2Started = NewTcs();
     private string? _firstCliScript;
@@ -107,6 +109,7 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
         string firstCliScript,
         ConcurrentDictionary<int, Process> clis,
         ConcurrentDictionary<int, (string? Path, bool Exists)> mcpChecks,
+        ConcurrentDictionary<int, (string? Path, string? Text, bool HasInlineFlag)> promptChecks,
         TaskCompletionSource p1Started, TaskCompletionSource p2Started) : IProcessLauncher
     {
         private int _starts;
@@ -127,6 +130,13 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
             for (var i = 0; i + 1 < spec.Args.Count; i++)
                 if (spec.Args[i] == "--mcp-config") { mcpPath = spec.Args[i + 1]; break; }
             mcpChecks[n] = (mcpPath, mcpPath is null || File.Exists(mcpPath));
+            // Файл системного промпта: путь, текст на момент старта и признак прежнего аргумента
+            string? promptPath = null;
+            for (var i = 0; i + 1 < spec.Args.Count; i++)
+                if (spec.Args[i] == "--append-system-prompt-file") { promptPath = spec.Args[i + 1]; break; }
+            promptChecks[n] = (promptPath,
+                promptPath is not null && File.Exists(promptPath) ? File.ReadAllText(promptPath) : null,
+                spec.Args.Contains("--append-system-prompt"));
 
             // Первый старт — script-CLI (печатает события хода и доживает), ретрай — молчун
             var fake = new ProcessSpec
@@ -198,7 +208,7 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
                     Headers: new Dictionary<string, string>(), AlwaysLoad: false, AuthVersion: 1),
             ]),
             Launcher: new RetryCliLauncher(_firstCliScript = WriteFirstCliScript(),
-                _clis, _mcpChecks, _p1Started, _p2Started));
+                _clis, _mcpChecks, _promptChecks, _p1Started, _p2Started));
         var session = new ClaudeSession(new Session(), context);
 
         // Ход 1: P1 печатает result и доживает с фоновой задачей — ход завершён, прогон жив
@@ -232,11 +242,25 @@ public class ClaudeSessionDiedEmptyRetryTests : IDisposable
             "удаляли до ожидания конца same-process хода, CLI умирал с «Invalid MCP " +
             "configuration: config file not found», и ход погибал молча");
 
+        // Файл системного промпта есть у обоих запусков (ретрай пересобирает args — путь у него свой)
+        _promptChecks.TryGetValue(1, out var prompt1).Should().BeTrue();
+        _promptChecks.TryGetValue(2, out var prompt2).Should().BeTrue();
+        prompt1.HasInlineFlag.Should().BeFalse("при включённом тумблере промпт аргументом не едет");
+        prompt1.Path.Should().NotBeNullOrEmpty("системный промпт едет файлом --append-system-prompt-file");
+        prompt1.Text.Should().NotBeNullOrWhiteSpace("файл содержит склеенный промпт на момент старта P1");
+        prompt2.Path.Should().NotBeNullOrEmpty("ретрай стартует с файлом промпта");
+        prompt2.Text.Should().NotBeNullOrWhiteSpace(
+            "файл промпта ретрай-процесса обязан существовать на момент старта: иначе CLI не найдёт файл и ход погибнет молча");
+
         // Ход 2 обязан завершиться видимой ошибкой, а не тишиной: убиваем P2 (ретрай
         // единственный, пустая смерть нового прогона уходит наружу как Unreachable)
         _clis[2].Kill(entireProcessTree: true);
         await WhenAnyAsync(Task.WhenAll(turn2ErrorSeen.Task, turn2ExitedSeen.Task),
             TimeSpan.FromSeconds(30), "ErrorMessage + ExitedMessage второго хода", messages);
+
+        // Уборка: финализация прогона удаляет файл промпта
+        await UntilAsync(() => !File.Exists(prompt1.Path!), TimeSpan.FromSeconds(10),
+            "удаление файла промпта финализацией прогона");
     }
 
     private static object? RunOf(ClaudeSession session) => RunField.GetValue(session);

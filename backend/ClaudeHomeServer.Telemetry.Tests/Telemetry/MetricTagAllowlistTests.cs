@@ -134,6 +134,8 @@ public class MetricTagAllowlistTests
             // Гейдж ccs.dify.error_documents (реконсайлер): ровно 5 × 2 комбинации
             "dataset_type",// notes | persona | team | dossiers | project
             "healability", // healable | unhealable
+            "observer",    // имя типа наблюдателя сообщений сессии
+            "session_kind",// human | executor
         };
 
         ServerMetrics.AllowedTags.Should().BeEquivalentTo(expected);

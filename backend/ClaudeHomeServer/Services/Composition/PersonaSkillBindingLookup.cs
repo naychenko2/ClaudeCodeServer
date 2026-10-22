@@ -20,8 +20,10 @@ public sealed class PersonaSkillBindingLookup(PersonaManager personas) : IPerson
         var mustDo = persona.Contract?.MustDo is { Count: > 0 } m
             ? m.Where(x => !string.IsNullOrWhiteSpace(x)).ToList()
             : null;
+        // M4.2: выключенная человеком привязка (Mode == Off) не открывает пакет — иначе
+        // --plugin-dir доставлялся бы даже для выключенной привязки.
         var skillTargets = persona.Bindings?
-            .Where(b => b.Type == PersonaBindingType.Skill)
+            .Where(b => b.Type == PersonaBindingType.Skill && b.Mode != PersonaBindingMode.Off)
             .Select(b => b.Target)
             .ToList() ?? [];
 

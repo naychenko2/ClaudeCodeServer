@@ -21,6 +21,10 @@ export const FLAGS = {
   localModelStats: 'local-model-stats',
   // Режим «Исполнение фичи» в «Плане хода»: переключатель + карточка фичи (этап 2).
   turnPlanFeatureMode: 'turn-plan-feature-mode',
+  // Плагины (ADR-031): установка пакетов владельца, skills/команды, панели.
+  pluginsMvp: 'plugins-mvp',
+  // Плагины (ADR-031): build-it-yourself — агент собирает пакет (черновики) через MCP-тулсет.
+  pluginsBuildYourself: 'plugins-build-yourself',
   // «Обзор фич»: фасет «Фичи» в списке сессий + плашка фичи в чате (волна 1, dark launch).
   featuresOverview: 'features-overview',
   // «Авто-возобновление ходов»: после рестарта сервера прерванные активные ходы дотягиваются

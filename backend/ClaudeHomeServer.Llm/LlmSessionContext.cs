@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Plugins;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -178,6 +179,11 @@ public sealed record AudioEditorMcpContext(string ApiUrl, Func<string> TokenFact
 // модуль не загружен. Свойства сессии, владельца и процесса, не хода.
 public sealed record VideoEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
     IReadOnlyList<string>? AutoAllowTools = null);
+// Контекст MCP-сервера plugins (ADR-031, шаг 4.1): тулсет живёт в вертикали Plugins, сессия едет
+// хвостом URL (/mcp/plugins/{sessionId}), в любом чате владельца. null — подсистема plugins не
+// загружена (тулсета нет в реестре). Ограничения (флаг plugins-build-yourself, локальный проект) —
+// на вызове, не в составе. Свойства сессии, владельца и процесса, не хода.
+public sealed record PluginsMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 // Контекст MCP-сервера «Контекст чата» (ADR-023 §3.2): тулсет живёт в Main, сессия едет хвостом URL
 // (/mcp/turn-context/{sessionId}), в любом чате владельца. null — тулсета нет в реестре. Свойства сессии и владельца, не хода: от содержимого контекста состав не зависит.
 public sealed record TurnContextMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
@@ -328,6 +334,9 @@ public sealed record LlmSessionContext(
     // Tool-ключ «browser» с дефолтом по роли (тестировщику включён). true — как раньше:
     // чат без персоны и все прочие пути ничего не теряют.
     bool BrowserEnabled = true,
+    // Системный промпт хода едет файлом --append-system-prompt-file, а не аргументом
+    // (Llm:SystemPromptViaFile, дефолт true; false — прежний путь аргументом).
+    bool SystemPromptViaFile = true,
     // Корень профиля claude CLI (CLAUDE_CONFIG_DIR) этого хода: оттуда берутся глобальный
     // CLAUDE.md и каталог скиллов для блока «слой CLI». Резолвится в SessionManager
     // (ConfigRootFor знает раскладку профилей и песочницы), сюда приходит готовым;
@@ -455,7 +464,17 @@ public sealed record LlmSessionContext(
     AudioEditorMcpContext? AudioEditorMcp = null,
     // MCP-сервер модуля «Видео» (ADR-022 §5): null — флаг video-editor выключен или модуль не загружен
     VideoEditorMcpContext? VideoEditorMcp = null,
+    // MCP-сервер plugins (ADR-031, шаг 4.1): null — подсистема plugins не загружена
+    PluginsMcpContext? PluginsMcp = null,
     // MCP-сервер «Контекст чата» (ADR-023 §3.2)
     TurnContextMcpContext? TurnContextMcp = null,
     // Владелец хода (SessionManager.ResolveOwnerId); у проектной сессии Session.OwnerId пуст по контракту.
-    string? OwnerId = null);
+    string? OwnerId = null,
+    // Каталоги плагинов владельца для --plugin-dir (ADR-031 §2.4/§2.5): набор считается
+    // ТОЛЬКО от свойств сессии (владелец, персона, проект), не от хода — установка/удаление/
+    // смена версии вступают в силу со следующего старта процесса CLI (инвариант 4). null —
+    // подсистема выключена (IPluginDirSource не в DI) или у владельца нет включённых пакетов.
+    IPluginDirSource? PluginDirSource = null,
+    // Проект чата (null — чат вне проекта): уходит в IPluginDirSource для проверки локальности
+    // (у локального проекта в MVP плагинов нет, ADR-016/ADR-031 §5.8).
+    Project? Project = null);

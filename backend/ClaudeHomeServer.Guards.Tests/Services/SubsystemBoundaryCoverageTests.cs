@@ -82,6 +82,9 @@ public class SubsystemBoundaryCoverageTests
         // TestRuns — отдельная сборка (движок run_tests): без typeof проверка полноты
         // Boundaries по ней ничего не проверяет.
         _ = typeof(ClaudeHomeServer.Services.TestRuns.TestRunsSubsystem).Assembly;
+        // Plugins (ADR-031) — отдельная сборка: без typeof проверка полноты Boundaries
+        // по ней ничего не проверяет (PluginsSubsystem не попадёт в реестр вертикалей).
+        _ = typeof(ClaudeHomeServer.Services.Plugins.PluginsSubsystem).Assembly;
     }
 
     [Fact]

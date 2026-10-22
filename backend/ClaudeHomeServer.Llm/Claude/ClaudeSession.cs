@@ -49,6 +49,14 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly string? _turnOwnerId;
     internal string? TurnOwnerId => _turnOwnerId;
 
+    // Каталоги плагинов владельца для --plugin-dir (ADR-031 §2.4/§2.5): шов IPluginDirSource
+    // (опциональная зависимость — null, если подсистема Plugins выключена) и проект чата для
+    // проверки локальности. Набор считается ТОЛЬКО от свойств сессии (владелец, персона, проект),
+    // не от хода: installed.json перечитывается на каждый ход, и установка/удаление/смена версии
+    // вступают в силу со следующего хода (процесс перезапускается, если сигнатура изменилась).
+    private readonly ClaudeHomeServer.Services.Plugins.IPluginDirSource? _pluginDirSource;
+    private readonly Models.Project? _pluginProject;
+
     // Модель для --model / set_model. Хранится семейство (opus/fable/sonnet/haiku), окно 1M
     // дописывает пул по плану подписки хода (ClaudeSubscriptionPool.LaunchModel): Max получает
     // opus[1m], Pro — opus с объявленным окном 200K, и CLI сожмёт контекст вовремя.
@@ -348,6 +356,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Per-run файл --agents (состав сабагентов-персон): та же жизнь, что у MCP-конфига —
         // нужен только на старте процесса, на same-process-ходах не перечитывается
         public string? TurnAgentsPath { get; init; }
+        // Per-run файл --append-system-prompt-file (текст системного промпта хода): та же жизнь
+        public string? TurnPromptPath { get; init; }
         // Ход шлюза LLM этого процесса (серверный ход провайдера, ADR-016 §2): отзывается
         // финализацией прогона. null — процесс ходит в провайдера напрямую.
         public string? GatewayTurnId { get; init; }
@@ -761,6 +771,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // (собирать части умеет спина — Core: SystemPromptComposer)
     private readonly string _builtInSystemPrompt;
     private readonly string? _mcpConfigPath;
+    // Системный промпт хода едет файлом (--append-system-prompt-file), а не аргументом:
+    // Llm:SystemPromptViaFile, дефолт true; false — прежний путь аргументом
+    private readonly bool _systemPromptViaFile;
     // Ключ HTTP MCP-сервера fal-ai (Fal:McpApiKey) — сервер инжектится в конфиг хода
     // из appsettings, а не хардкодится в .mcp.json (секрет вне git); пусто — без fal-ai
     private readonly string? _falMcpApiKey;
@@ -860,6 +873,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
     internal static bool IsVideoEditorAutoAllowed(VideoEditorMcpContext? context, string toolName) =>
         context?.AutoAllowTools?.Contains(toolName, StringComparer.Ordinal) == true;
+    // MCP-сервер plugins (ADR-031, шаг 4.1): null — подсистема plugins не загружена
+    private readonly PluginsMcpContext? _pluginsMcp;
+    private bool PluginsHttpOn() => _pluginsMcp is { UseHttp: true } && HttpMcpOnNow();
     // MCP-сервер «Контекст чата»: null — тулсета нет в реестре (ADR-023 §3.2)
     private readonly TurnContextMcpContext? _turnContextMcp;
     private bool TurnContextHttpOn() => _turnContextMcp is { UseHttp: true } && HttpMcpOnNow();
@@ -1044,6 +1060,8 @@ public class ClaudeSession : ILlmSessionAdapter
         _bgLingerTimeout = bgLingerTimeout ?? TimeSpan.FromMinutes(30);
         Info = info;
         _turnOwnerId = context.OwnerId ?? info.OwnerId;
+        _pluginDirSource = context.PluginDirSource;
+        _pluginProject = context.Project;
         _rootPath = context.RootPath;
         _mainRootPath = context.MainRootPath;
         _serverContent = context.ServerContent;
@@ -1051,6 +1069,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _serverContentRoot = context.ContentRootPath;
         _onMessage = context.OnMessage;
         _mcpConfigPath = mcpConfigPath;
+        _systemPromptViaFile = context.SystemPromptViaFile;
         _falMcpApiKey = falMcpApiKey;
         _glifMcpToken = glifMcpToken;
         _rawSystemPrompt = context.RawSystemPrompt;
@@ -1079,6 +1098,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _imageEditorMcp = context.ImageEditorMcp;
         _audioEditorMcp = context.AudioEditorMcp;
         _videoEditorMcp = context.VideoEditorMcp;
+        _pluginsMcp = context.PluginsMcp;
         _turnContextMcp = context.TurnContextMcp;
         _localMediaMcp = context.LocalMediaMcp;
         _testsMcp = context.TestsMcp;
@@ -1167,6 +1187,8 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasAudioEditor = AudioEditorHttpOn();
         // Видео: как у звука — stdio-ветки нет
         var hasVideoEditor = VideoEditorHttpOn();
+        // Плагины build-it-yourself (ADR-031, шаг 4.1): stdio-ветки нет, сервер в любом чате владельца
+        var hasPlugins = PluginsHttpOn();
         var hasTurnContext = TurnContextHttpOn();
         // Локальная генерация: stdio-ветки нет, контекста нет при выключенном LocalMedia:Enabled
         var hasLocalMedia = LocalMediaHttpOn();
@@ -1272,6 +1294,7 @@ public class ClaudeSession : ILlmSessionAdapter
             hasImageEditor = hasImageEditor && Keep(McpEndpoints.ImageEditorName);
             hasAudioEditor = hasAudioEditor && Keep(McpEndpoints.AudioEditorName);
             hasVideoEditor = hasVideoEditor && Keep(McpEndpoints.VideoEditorName);
+            hasPlugins = hasPlugins && Keep(McpEndpoints.PluginsName);
             hasTurnContext = hasTurnContext && Keep(McpEndpoints.TurnContextName);
             hasLocalMedia = hasLocalMedia && Keep("local-media");
             hasTests = hasTests && Keep(McpEndpoints.TestsName);
@@ -1285,7 +1308,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDify && !hasDataset && !hasModules && !hasFalAi && !hasGlif
-            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
+            && !hasHiggsfield && !hasImageEditor && !hasAudioEditor && !hasVideoEditor && !hasPlugins && !hasTurnContext && !hasLocalMedia && !hasTests && !hasDev && userServers is null
             && !hasExternal && !hasWatch && !hasWebSearch && !hasArchitecture && !hands
             && !(hasConsultants && (memoryServerPath is not null
                 || personaAgents!.MemoryServers.Any(ConsultantHttp)))) return (null, "", []);
@@ -2006,6 +2029,25 @@ public class ClaudeSession : ILlmSessionAdapter
                 };
                 // Состав — свойство инстанса (VideoEditor:AgentLaunch), вариативен только транспорт
                 shapes[McpEndpoints.VideoEditorName] = "t:http";
+            }
+
+            if (hasPlugins)
+            {
+                // Плагины build-it-yourself (ADR-031, шаг 4.1): тулсет вертикали, http-ветка только;
+                // сессия — хвостом URL. Состав фиксирован (5 инструментов), ограничения — на вызове.
+                servers[McpEndpoints.PluginsName] = new System.Text.Json.Nodes.JsonObject
+                {
+                    ["type"] = "http",
+                    ["url"] = McpEndpoints.EndpointFor(_pluginsMcp!.ApiUrl, McpEndpoints.PluginsName, Info.Id),
+                    ["headers"] = new System.Text.Json.Nodes.JsonObject
+                    {
+                        ["Authorization"] = $"Bearer {_pluginsMcp.TokenFactory()}",
+                        [McpEndpoints.CallerSessionHeader] = Info.Id,
+                    },
+                    ["alwaysLoad"] = true,
+                };
+                // Состав фиксирован (5 инструментов), вариативен только транспорт
+                shapes[McpEndpoints.PluginsName] = "t:http";
             }
 
             if (hasTurnContext)
@@ -3372,6 +3414,27 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
 
+        // Каталоги плагинов владельца (ADR-031 §2.4/§2.5): --plugin-dir на каждый включённый
+        // пакет. Набор считается ТОЛЬКО от свойств сессии (владелец, персона, проект), не от
+        // хода — installed.json перечитывается на каждый ход, и установка/удаление/смена версии
+        // вступают в силу со следующего хода (инвариант 4): аргумент стабилен, пока набор не
+        // изменился, и не мерцает в сигнатуре запуска. Путь — в среде исполнения: в песочнице
+        // data/plugins смонтирована в /plugins (ro), ToRuntime переводит; локально — identity.
+        // Локальный проект (ProjectCapabilities.Plugins = false, MVP) — GetPluginDirs отдаёт [],
+        // аргументов нет. _pluginDirSource null — подсистема Plugins выключена.
+        if (_pluginDirSource is not null && _turnOwnerId is { } pluginOwnerId)
+        {
+            var pluginDirs = _pluginDirSource.GetPluginDirs(pluginOwnerId, Info.PersonaId, _pluginProject);
+            foreach (var dir in pluginDirs)
+            {
+                try { args.AddRange(["--plugin-dir", _launcher.Paths.ToRuntime(dir)]); }
+                catch (InvalidOperationException ex)
+                {
+                    Console.Error.WriteLine($"[ClaudeSession] Каталог плагина недоступен в песочнице, ход без него: {ex.Message}");
+                }
+            }
+        }
+
         // Папки файловых сабагентов: CLI сканирует {dir}/.claude/agents при старте процесса —
         // правки персон применяются со следующего хода
         if (personaAgents is not null)
@@ -4271,7 +4334,8 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         };
         var budget = TurnPromptAssembler.ApplyBudget(
-            sections, agentPrompt, args, safeEstimate);
+            sections, agentPrompt, args, safeEstimate,
+            promptFileLimit: _systemPromptViaFile ? TurnPromptAssembler.PromptFileLimit : null);
         var combinedPrompt = budget.CombinedPrompt;
         truncatedSections = budget.TruncatedSections;
         // Срезку применяем к самому списку секций: снимок промпта строится из него, и
@@ -4298,12 +4362,23 @@ public class ClaudeSession : ILlmSessionAdapter
             // обработает и сформирует [Win32:206]-префикс в Details ErrorMessage.
             // Лимит в сообщении — CmdlineLimit: именно он перейдён, порог срезки
             // (BudgetThreshold) отказом не является.
+            // Файловый режим отказывает по потолку файла, если командная строка в порядке
+            if (_systemPromptViaFile && budget.TotalCmdlineChars < TurnPromptAssembler.CmdlineLimit)
+                throw new PromptOverflowException(budget.PromptChars,
+                    TurnPromptAssembler.PromptFileLimit, promptFile: true);
             throw new PromptOverflowException(budget.TotalCmdlineChars,
                 TurnPromptAssembler.CmdlineLimit);
         }
 
+        string? turnPromptPath = null;
         if (!string.IsNullOrWhiteSpace(combinedPrompt))
-            args.AddRange(["--append-system-prompt", combinedPrompt]);
+        {
+            if (_systemPromptViaFile)
+                turnPromptPath = PrepareTurnPromptFile(
+                    combinedPrompt, _launcher.HostTempDir, _launcher.Paths.ToRuntime, args);
+            else
+                args.AddRange(["--append-system-prompt", combinedPrompt]);
+        }
 
         // Сообщение хода: с картинками content — массив блоков (text + image base64), иначе строка
         var imageBlocks = BuildImageBlocks(imagePaths);
@@ -4383,6 +4458,14 @@ public class ClaudeSession : ILlmSessionAdapter
                     catch (Exception ex)
                     {
                         Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл --agents same-process хода {turnAgentsPath}: {ex.Message}");
+                    }
+                // Файл системного промпта: та же логика (DiedEmpty-ветка не трогает —
+                // ретрай стартует новый процесс с теми же args, файл уберёт его финализация)
+                if (turnPromptPath != null)
+                    try { File.Delete(turnPromptPath); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл промпта same-process хода {turnPromptPath}: {ex.Message}");
                     }
                 return;
             }
@@ -4473,7 +4556,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, TurnAgentsPath = turnAgentsPath, TurnPromptPath = turnPromptPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq, GatewayTurnId = gatewayTurnId, GatewayToken = gatewayToken };
             // Смерть процесса — по событию ОС (см. HandleProcessExitedAsync): EnableRaisingEvents=true
             // выставлен в spec. Подписка обязательна: закрытие stdout ненадёжно как сигнал гибели
             // (дочерние node-процессы MCP держат pipe — P27), и без Exited обрыв хода зависает
@@ -4561,6 +4644,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 catch { /* temp-каталог приберёт ОС */ }
             if (turnAgentsPath != null)
                 try { File.Delete(turnAgentsPath); }
+                catch { /* temp-каталог приберёт ОС */ }
+            if (turnPromptPath != null)
+                try { File.Delete(turnPromptPath); }
                 catch { /* temp-каталог приберёт ОС */ }
             await _onMessage(new ExitedMessage(turnSeq));
             throw;
@@ -4819,6 +4905,13 @@ public class ClaudeSession : ILlmSessionAdapter
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл --agents {run.TurnAgentsPath}: {ex.Message}");
+            }
+
+        if (run.TurnPromptPath != null)
+            try { File.Delete(run.TurnPromptPath); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp файл промпта {run.TurnPromptPath}: {ex.Message}");
             }
 
         // Процесс мёртв, но Workflow-агенты — независимые процессы и не обязаны погибнуть
@@ -5331,7 +5424,7 @@ public class ClaudeSession : ILlmSessionAdapter
         for (var i = 0; i < args.Count; i++)
         {
             result.Add(args[i]);
-            if (args[i] == "--append-system-prompt" && i + 1 < args.Count)
+            if (args[i] is "--append-system-prompt" or "--append-system-prompt-file" && i + 1 < args.Count)
             {
                 result.Add("<секции промпта выше>");
                 i++;
@@ -5377,6 +5470,24 @@ public class ClaudeSession : ILlmSessionAdapter
         File.WriteAllText(path, agentsJson);
         args.AddRange(["--agents", toRuntime(path)]);
         return (path, TurnAgentsFingerprint(agentsJson));
+    }
+
+    // Имя per-run файла системного промпта: claude-prompt-{Guid}.md. Guid на каждую сборку по
+    // тем же причинам, что у --agents (гонка финализации убитого прогона с новым стартом).
+    internal static string BuildTurnPromptFileName() => $"claude-prompt-{Guid.NewGuid():N}.md";
+
+    // Проводка файла системного промпта: пишет combined в hostTempDir (UTF-8 без BOM), дописывает
+    // в args пару «--append-system-prompt-file <путь среды>» и возвращает хостовый путь для
+    // уборки. В сигнатуру запуска ничего не идёт: промпт и раньше в ней не участвовал (его
+    // нестабильные секции меняются каждый ход и не должны перезапускать процесс), а путь
+    // уникален и исключается как путь --agents. internal для поведенческого теста.
+    internal static string PrepareTurnPromptFile(
+        string combinedPrompt, string hostTempDir, Func<string, string> toRuntime, List<string> args)
+    {
+        var path = Path.Combine(hostTempDir, BuildTurnPromptFileName());
+        File.WriteAllText(path, combinedPrompt, new System.Text.UTF8Encoding(false));
+        args.AddRange([TurnPromptAssembler.AppendSystemPromptFileFlag, toRuntime(path)]);
+        return path;
     }
 
     // Сигнатура окружения прогона — жёсткая часть запуска процесса. Совпала у следующего
@@ -5648,7 +5759,7 @@ public class ClaudeSession : ILlmSessionAdapter
         {
             // --agents исключён, как --mcp-config: путь уникален на каждую сборку (Guid) и
             // не должен мерцать в сигнатуре; смена состава сабагентов ловится fingerprint'ом.
-            if (args[i] is "--resume" or "--mcp-config" or "--append-system-prompt" or "--agents") { i++; continue; }
+            if (args[i] is "--resume" or "--mcp-config" or "--append-system-prompt" or "--append-system-prompt-file" or "--agents") { i++; continue; }
             sb.Append(args[i]).Append('\u0001');
         }
         sb.Append("mcp=").Append(mcpServerKeys).Append('\u0001');

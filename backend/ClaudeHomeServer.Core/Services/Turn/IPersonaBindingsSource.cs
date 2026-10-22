@@ -16,9 +16,12 @@ public interface IPersonaBindingsSource
 {
     // Собрать блок привязок для системного промпта хода. null — привязок нет,
     // или ни одна не попала в индекс, или в Always-выжимках пусто.
+    // projectId — проект хода (M2): Skill-привязки плагинов фильтруются по локальности
+    // (ProjectCapabilities.PluginsFor); null — ход без привязки.
     Task<string?> BuildTurnBlockAsync(
         string ownerId,
         string personaId,
         string turnText,
-        IReadOnlyList<string> mountedSections);
+        IReadOnlyList<string> mountedSections,
+        string? projectId = null);
 }

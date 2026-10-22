@@ -14,6 +14,7 @@ import {
   noteContentGet, noteContentPut, noteContentDelete, noteContentAll,
   notesOutboxAll, notesOutboxPut, notesOutboxDelete,
 } from './idb';
+import { showToast } from './toast';
 import type { CreateNoteDto, NoteDetail, NoteSummary } from '../types';
 
 export interface NoteRecord {
@@ -103,7 +104,7 @@ async function upsertFromDetail(d: NoteDetail): Promise<NoteRecord> {
     content: d.content, tags: d.tags, baseUpdatedAt: d.updatedAt,
     dirty: false, createdOffline: false, deletedOffline: false, localUpdatedAt: Date.now(),
   };
-  await noteContentPut(rec);
+  await cachePut(rec);
   await setIndex(d.id, lk);
   return rec;
 }
@@ -163,18 +164,31 @@ export function mergeNoteOps(last: NotesOutboxOp, kind: NoteOpKind, payload: Not
   return { kind: 'update', payload: assignDefined(last.payload, payload) };
 }
 
+// Сбой записи в notesOutbox не глотаем молча: пользователь видит тост.
+async function putOpOrWarn(op: NotesOutboxOp): Promise<void> {
+  try {
+    await notesOutboxPut(op);
+  } catch (e) {
+    console.warn('[notesOffline] не удалось записать офлайн-правку:', op.localKey, e);
+    showToast('Не сохранено', 'Не удалось сохранить офлайн-правку', 'error');
+  }
+}
+
+// Кэш контента — не источник истины для показа: сбой записи не ломает просмотр.
+const cachePut = (rec: NoteRecord): Promise<unknown> => noteContentPut(rec).catch(() => {});
+
 async function enqueueNote(localKey: string, kind: NoteOpKind, payload: NotePayload, baseUpdatedAt?: string | null): Promise<void> {
   const ops = (await notesOutboxAll<NotesOutboxOp>().catch(() => []))
     .filter(o => o.localKey === localKey).sort((a, b) => a.opId - b.opId);
   const last = ops[ops.length - 1];
   if (!last) {
-    await notesOutboxPut({ opId: await nextNoteSeq(), localKey, kind, payload, baseUpdatedAt, attempts: 0 }).catch(() => {});
+    await putOpOrWarn({ opId: await nextNoteSeq(), localKey, kind, payload, baseUpdatedAt, attempts: 0 });
     return;
   }
   const merged = mergeNoteOps(last, kind, payload);
   if (merged === 'drop') { for (const o of ops) await notesOutboxDelete(o.opId).catch(() => {}); return; }
   for (const o of ops.slice(0, -1)) await notesOutboxDelete(o.opId).catch(() => {});
-  await notesOutboxPut({ ...last, kind: merged.kind, payload: merged.payload, baseUpdatedAt: baseUpdatedAt ?? last.baseUpdatedAt, attempts: 0 }).catch(() => {});
+  await putOpOrWarn({ ...last, kind: merged.kind, payload: merged.payload, baseUpdatedAt: baseUpdatedAt ?? last.baseUpdatedAt, attempts: 0 });
 }
 
 async function dropNoteOps(localKey: string): Promise<void> {
@@ -190,7 +204,7 @@ export async function saveNoteOffline(id: string, patch: { content: string; titl
   if (patch.title !== undefined && rec.createdOffline && !rec.serverId) rec.title = patch.title;
   rec.dirty = true;
   rec.localUpdatedAt = Date.now();
-  await noteContentPut(rec);
+  await cachePut(rec);
 
   const asCreate = rec.createdOffline && !rec.serverId;
   await enqueueNote(
@@ -214,7 +228,7 @@ export async function createNoteOffline(dto: CreateNoteDto): Promise<string> {
     content: dto.content ?? `# ${title}\n`, tags: [],
     baseUpdatedAt: null, dirty: true, createdOffline: true, deletedOffline: false, localUpdatedAt: Date.now(),
   };
-  await noteContentPut(rec);
+  await cachePut(rec);
   await enqueueNote(localKey, 'create', { title, content: rec.content, source: rec.source, folder });
   return localKey;
 }
@@ -228,7 +242,7 @@ export async function deleteNoteOffline(id: string): Promise<void> {
     return;
   }
   rec.deletedOffline = true; rec.dirty = true; rec.localUpdatedAt = Date.now();
-  await noteContentPut(rec);
+  await cachePut(rec);
   await enqueueNote(rec.localKey, 'delete', {}, rec.baseUpdatedAt);
 }
 
@@ -248,7 +262,7 @@ async function remapNote(localKey: string, d: NoteDetail): Promise<void> {
     content: d.content, tags: d.tags, baseUpdatedAt: d.updatedAt,
     dirty: false, createdOffline: false, deletedOffline: false, localUpdatedAt: Date.now(),
   };
-  await noteContentPut(next);
+  await cachePut(next);
   if (prevServerId && prevServerId !== d.id) await removeIndex(prevServerId);
   await setIndex(d.id, localKey);
   const from = [localKey, ...(prevServerId ? [prevServerId] : [])];

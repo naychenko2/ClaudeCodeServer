@@ -93,8 +93,8 @@ public sealed class PersonaPromptAssemblerAdapter(PersonaPromptBuilder builder) 
 public sealed class PersonaBindingsSourceAdapter(PersonaBindingsService bindings) : IPersonaBindingsSource
 {
     public Task<string?> BuildTurnBlockAsync(string ownerId, string personaId, string turnText,
-        IReadOnlyList<string> mountedSections) =>
-        bindings.BuildTurnBlockAsync(ownerId, personaId, turnText, mountedSections);
+        IReadOnlyList<string> mountedSections, string? projectId = null) =>
+        bindings.BuildTurnBlockAsync(ownerId, personaId, turnText, mountedSections, projectId);
 }
 
 // Этап 5 (Skills): два узких шва, чтобы Llm не зависел от SkillsService. Те же адаптеры

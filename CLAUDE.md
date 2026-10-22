@@ -158,9 +158,8 @@ one-shot действия и разговор с исполнителем «Ло
 - Нестабильные секции промпта (recall заметок и памяти, досье, привязки персоны, граф кода)
   при `RecallInTurnText` едут хвостом хода, а не системным блоком: иначе они обнуляют prefix
   cache всей истории следом за собой.
-- Слот (strong/medium/weak) разворачивает в модель только
-  `UserModelTierResolver.ModelFor(tier, ownerId)` — единственная точка склейки, дублировать
-  её логику нельзя.
+- Слот (strong/medium/weak) разворачивает в модель только `UserModelTierResolver.ModelFor(tier, ownerId)` — единственная точка склейки, дублировать её логику нельзя.
+- Системный промпт хода едет файлом `--append-system-prompt-file` (`Llm:SystemPromptViaFile`, дефолт `true`): лимит cmdline 32 767 его не ограничивает, потолок файла — `PromptFileLimit` (200 000).
 - **Фолбэк хода — только по цепочке**, автоподбора нет; `None` (неопознанная или
   содержательная ошибка) фолбэк НЕ запускает, но ход обязан завершиться `error`, а не штатным
   finished. Классификатор (`TurnErrorClassifier`) работает с СЫРЫМ текстом: по русской
@@ -239,6 +238,9 @@ one-shot действия и разговор с исполнителем «Ло
 
 C4-схема проекта в Viaduct (sandbox-iframe), модель — `docs/architecture/model.viaduct.json` под git; динамический модуль + MF-remote, фич-флага нет. **Код Viaduct здесь не правится.**
 Инварианты и подробности — [backend/ClaudeHomeServer.Architecture/CLAUDE.md](backend/ClaudeHomeServer.Architecture/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+
+## Плагины (ClaudeHomeServer.Plugins) — в работе
+Пакет владельца из существующих примитивов: навыки и команды — нативный формат CLI через `--plugin-dir`, панель — iframe без `allow-same-origin` с мостом v1, сеть — прокси `net:{host}`; флаги `plugins-mvp`, `plugins-build-yourself` ([ADR-031](docs/adr/ADR-031-plugins.md)). Пакеты — только в `data/plugins/{owner}`, не в общих каталогах CLI; ставит и выдаёт права только человек. Серверная вертикаль `ClaudeHomeServer.Plugins` (PluginStore, IPluginDirSource) — [CLAUDE.md](backend/ClaudeHomeServer.Plugins/CLAUDE.md); устройство и правила правок — [docs/architecture/plugins.md](docs/architecture/plugins.md).
 
 ## Внутренние подсистемы (Services/Composition)
 
@@ -444,7 +446,7 @@ OpenTelemetry в двух режимах: dev → Aspire Dashboard, prod → Sig
 ## Фич-флаги (feature toggles)
 
 Dark launch: фича коммитится выключенной и включается per-user в меню «Экспериментальные функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All` ([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)), там же у каждого ключа title и описание; хранение — override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts), хук `useFeature(FLAGS.key)`.
-Перечня флагов карта не держит: он протухает быстрее всего остального. Активные — `workspace-destructive`, `spheres`, `change-dossiers-recall`; снятые (15): chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format.
+Перечня флагов карта не держит: он протухает быстрее всего остального. Активные — `workspace-destructive`, `spheres`, `change-dossiers-recall`, `plugins-mvp`, `plugins-build-yourself`; снятые (15): chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format.
 **Пометки «за флагом …» в доках — исторические**, актуальный состав только в каталоге кода (ADR-013, например, до сих пор описывает сторожей чатов как флажных — флаг снят 2026-09-01).
 
 Флаги, снятые после dark launch, работают у всех безусловно: ассистент по умолчанию и

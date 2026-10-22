@@ -1,0 +1,197 @@
+# Kit панели плагина (plugin-kit)
+
+> Справочник для авторов панелей: API шима `ccsPlugin`, правило высоты, набор классов и шрифт.
+> Протокол моста и инварианты — [ADR-031 §3](../adr/ADR-031-plugins.md), устройство фичи —
+> [plugins.md в architecture](../architecture/plugins.md). Панель — недоверенный код в
+> sandbox-iframe (без `allow-same-origin`): единственный канал к хосту — мост `window.ccsPlugin`.
+
+## Что это
+
+Панель плагина — один самодостаточный HTML (скрипты и стили инлайн, потолок 256 КиБ на файл).
+Хост встраивает в его `<head>` шим `plugin-kit` (мост + токены тем) и CSP, а сам HTML панели
+кладёт в `<body>` (ADR-031 §3.6). Панель не видит DOM, хранилища и JWT хоста; сеть из кадра
+закрыта CSP (`connect-src 'none'`) — весь выход наружу только мостом.
+
+## API шима `ccsPlugin`
+
+Хост встраивает шим перед `<body>`; объект `window.ccsPlugin` — единственный канал к хосту.
+
+| Метод | Смысл |
+|---|---|
+| `ccsPlugin.ready()` | Шим загрузился. Шим шлёт его сам при загрузке — хост отвечает `init`. Повторный `ready` игнорируется |
+| `ccsPlugin.call(op, args)` | Вызов операции хоста. Возвращает `Promise`: данные на успех, `{code, message}` на сбой |
+| `ccsPlugin.resize(height)` | Высота контента панели (px); шим шлёт её сам, вручную звать не нужно |
+| `ccsPlugin.on(type, cb)` | Подписка на `init` / `theme` / `context`; возвращает функцию отписки |
+| `ccsPlugin.state` | Текущий снимок `{plugin, slot, context, theme, locale, granted, tokens}` — читать можно в любой момент, не только из `on()`. `tokens` — значения `--cc-*` текущей темы (S8): панель применяет их, сама палитру не знает |
+
+Шим дополнительно диспатчит DOM-события `ccs:init` / `ccs:theme` / `ccs:context` на `window`
+(detail — те же данные): панель, которая не использует `on()`, может слушать их через
+`addEventListener`.
+
+### Сообщения хоста
+
+| type | Поля | Смысл |
+|---|---|---|
+| `init` | `plugin: {id, version}`, `slot`, `context`, `theme`, `locale`, `granted`, `tokens` | Ответ на `ready`: кто вы, в каком слоте, какие права; `tokens` — `--cc-*` текущей темы (по умолчанию `{}`: first-paint уже в srcdoc) |
+| `result` | `id`, `ok: true, data` или `ok: false, error: {code, message}` | Итог `call` с тем же `id` |
+| `theme` | `theme`, `tokens` | Смена темы без перемонтирования; `tokens` — `--cc-*` НОВОЙ темы (шим обновляет `<style id="cc-tokens">`, панель перекрашивается) |
+| `context` | `context` | Смена контекста слота (например, другой проект) |
+
+`granted` — информационная копия выданных прав, чтобы панель прятала недоступное. **Источник
+правды — сервер**: панель, совравшая себе про права, получит `denied` на вызове.
+
+### Операции и коды ошибок
+
+Операции называются `{область}.{глагол}`; каждая требует ровно одного права (ADR-031 §3.4). MVP:
+
+| op | Право | args |
+|---|---|---|
+| `notes.search` | `notes:read` | `{query, limit?}` |
+| `notes.read` | `notes:read` | `{id}` |
+| `tasks.list` | `tasks:read` | `{status?, limit?}` в пределах проекта контекста |
+| `net.fetch` | `net:{host}` (+ `secret:{name}` при `auth`) | `{url, method?, headers?, body?, auth?}` |
+
+`call` резолвится данными на успех и `{code, message}` на сбой. Коды:
+
+| code | Смысл |
+|---|---|
+| `denied` | Нет выданного права (или подсистема/локальный проект) |
+| `not_found` | Нет установки или объекта |
+| `invalid` | Не тот формат args, неизвестный `op` |
+| `unavailable` | Подсистема или фича выключены |
+| `upstream` | Сбой внешнего хоста у `net.fetch` |
+| `timeout` | Превышен таймаут |
+| `limit` | Превышен потолок размера или числа вызовов в полёте |
+
+## Правило высоты
+
+**Не задавай высоту `body` и не используй `100vh`.** Прокрутка — у хоста, а не у фрейма:
+фрейм растягивается по контенту. Хост не видит DOM фрейма (sandbox), поэтому шим сам измеряет
+`body.scrollHeight` через `ResizeObserver` и шлёт `resize` с высотой контента; хост растягивает
+фрейм под неё (потолок 20 000px: длиннее — разбивай на страницы, хвост отрезается) и прокручивает
+панель сам, своей полосой. Панель раскладывает контент вертикально и не рисует собственный скролл.
+Известное ограничение: при фокусе внутри панели PgDn и пробел её не прокручивают; чинить не будем.
+
+## Набор классов
+
+Готовые стили контролов под дизайн-систему хоста. **Классы опт-ин: голые `button`/`input`
+не стилизуются** — старые плагины, которые рисуют контролы сами, не ломаются.
+
+Живая витрина всех девяти классов в обеих темах — страница UI-кита (dev: `#/ui-kit`,
+раздел «Кит панели плагина»).
+
+| Класс | Модификаторы | Назначение |
+|---|---|---|
+| `.cc-btn` | `--primary`, `--ghost`, `--danger`, `--sm`, `--loading` | Кнопка: основной / призрак / опасный / малый / в работе (спиннер, заливка `accentSoft`) |
+| `.cc-input` | `--invalid` | Поле ввода; `--invalid` — поле с ошибкой (рамка `dangerBorder`) |
+| `.cc-field-error` | — | Текст ошибки поля (цвет `danger-text`); вешается на подпись под `.cc-input--invalid` |
+| `.cc-list` / `.cc-list-item` | `.is-active` | Список; `.is-active` — выбранный элемент |
+| `.cc-card` | — | Карточка-контейнер |
+| `.cc-badge` | тона | Метка-бейдж |
+| `.cc-empty` | `__title`, `__text` | Пустое состояние: заголовок + текст |
+| `.cc-notice` | — | Уведомление |
+| `.cc-skeleton` | — | Скелетон-заглушка при загрузке |
+
+Все девять классов — готовые контролы под дизайн-систему хоста. Цвета — только
+токенами `--cc-*`, которые хост доставляет панели (текущая тема, обе темы; сырого
+hex нет), размеры — из шкал `FS`/`SP`/`R`; фокус — видимый `outline` в акценте,
+элементы достижимы с клавиатуры, контраст — не ниже хостового. Панель, собранная
+из этих классов, выглядит как часть продукта, а не как чужой виджет.
+
+### Токены поверхностей и состояний
+
+Помимо базовой палитры (`--cc-bg`, `--cc-fg`, `--cc-accent`, `--cc-border` и тона
+`--cc-success`/`--cc-warning`/`--cc-danger`/`--cc-info`) хост доставляет панели:
+
+- **`--cc-surface`** (= `--c-bg-white`) — «приподнятая» поверхность: поля ввода
+  (`.cc-input`) и карточки (`.cc-card`) на ней, а не на общем тоне `--cc-bg`
+  (в тёмной теме `--c-bg-white` совпадает с карточным тоном, в светлой — белый).
+- **`--cc-bg-panel` / `--cc-bg-selected`** (= `--c-bg-panel` / `--c-bg-selected`) —
+  «приподнятые» слои: базовая кнопка `.cc-btn` и hover/выбранный элемент списка
+  `.cc-list-item` на них. `--cc-bg-inset` остался для утопленных плашек
+  (`.cc-skeleton`, `.cc-notice`): в тёмной теме inset темнее подложки карточки,
+  поэтому на нём кнопка/hover «проваливались» в темноту.
+- **`--cc-success-text` / `--cc-warning-text` / `--cc-danger-text`** (= `--c-*-text`) —
+  парные текстовые токены статусов: бейджи `.cc-badge--*` красят текст по ним, а не
+  по сырому тону, чтобы контраст текста на 4%-ном фоне бейджа держал ≥ 4.5:1
+  (WCAG AA) в светлой теме. У `info` парного текстового токена в теме хоста нет —
+  `.cc-badge--info` берёт основной текст `--cc-fg`.
+- **`--cc-danger-border`** (= `--c-danger-border`) — рамка поля с ошибкой
+  `.cc-input--invalid` (текст ошибки — `.cc-field-error`, цвет `--cc-danger-text`).
+- **`--cc-accent-soft`** (= `--c-accent-soft`) — приглушённая заливка loading-кнопки
+  `.cc-btn--loading` (спиннер + `accentSoft`, как `loading` у `Button` хоста).
+
+Размеры интерактивных контролов — тач-цель не меньше 40px (`min-height: 40px` у
+`.cc-btn`, `.cc-btn--sm` и `.cc-list-item`), как требует
+[гайд дизайн-системы](../design/guidelines.md).
+
+## Шрифт
+
+Латиница — вшитый **Hanken Grotesk**; кириллица — системный фолбэк. В бесплатном Hanken
+Grotesk кириллических глифов нет, и у хоста та же история — паритет: панель и хост рендерят
+кириллицу одним системным шрифтом.
+
+## Пример панели
+
+Минимальный рабочий HTML: список результатов `notes.search` с обработкой отказа по праву.
+Классы из набора, высота — по контенту (без `100vh`), отказ по праву — в `.cc-notice`.
+
+```html
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <style>
+    .cc-list-item.is-active { background: var(--cc-bg-inset); }
+  </style>
+</head>
+<body>
+  <h1>Заметки</h1>
+  <input class="cc-input" id="q" placeholder="Поиск…">
+  <ul class="cc-list" id="results"></ul>
+  <div class="cc-empty" id="empty" hidden>
+    <div class="cc-empty__title">Ничего не найдено</div>
+    <div class="cc-empty__text">Попробуйте другой запрос</div>
+  </div>
+  <div class="cc-notice" id="notice" hidden></div>
+  <script>
+    const q = document.getElementById('q');
+    const list = document.getElementById('results');
+    const empty = document.getElementById('empty');
+    const notice = document.getElementById('notice');
+
+    async function search() {
+      notice.hidden = true;
+      try {
+        const hits = await ccsPlugin.call('notes.search', { query: q.value, limit: 20 });
+        list.innerHTML = '';
+        empty.hidden = hits.length > 0;
+        for (const hit of hits) {
+          const li = document.createElement('li');
+          li.className = 'cc-list-item';
+          li.textContent = hit.title ?? hit.id;
+          li.addEventListener('click', () => select(li, hit));
+          list.appendChild(li);
+        }
+      } catch (err) {
+        // Отказ по праву: панель не обязана иметь notes:read
+        if (err.code === 'denied') {
+          notice.textContent = 'Нет права на чтение заметок — включите его в настройках плагина.';
+          notice.hidden = false;
+        } else {
+          notice.textContent = 'Ошибка: ' + (err.message || err.code);
+          notice.hidden = false;
+        }
+      }
+    }
+
+    function select(el, hit) {
+      for (const child of list.children) child.classList.remove('is-active');
+      el.classList.add('is-active');
+    }
+
+    q.addEventListener('input', search);
+  </script>
+</body>
+</html>
+```

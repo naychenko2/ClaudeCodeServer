@@ -229,7 +229,7 @@ public class PersonasController(
     public async Task<ActionResult<Session>> CreateChat(string id, [FromBody] CreatePersonaChatRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
-        var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
+        var mode = ClaudeModeExtensions.ForNewChat(req.Mode, hasPersona: true);
         try
         {
             var chat = await _sessions.CreatePersonaChatAsync(UserId, id, mode, req.ResumeSessionId, req.Name,
@@ -1763,7 +1763,7 @@ public record UpdatePersonaRequest(
     // Сфера для Scope.Sphere (смена scope на Sphere требует её); null — не менять
     string? SphereId = null);
 
-public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
+public record CreatePersonaChatRequest(string? Mode = null, string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);
 
 public record ConnectPantheonRequest(List<string>? Keys = null);

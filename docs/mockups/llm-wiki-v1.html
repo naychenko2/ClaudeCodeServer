@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM-wiki · вкладка «Вики», «Входящие базы», пакет, здоровье · v1</title>
+<!--
+  Макет к записке llm-wiki-v1-proposal.md. Код продукта не правится.
+  Привязка: featureId 5e5d0c18-9ab1-408c-9775-6cd6f5f3283c, шаг M (lane front).
+  Пользуются шаги: S5a, S5b (фронт Ф0 — каталог, страница, здоровье, «Завести», дрейф),
+  S7a, S7b (фронт Ф1 — «Входящие», пакет, «Разобрать в базу»).
+  Пометка .new (пунктир C.accentMuted) — то, чего в продукте сейчас нет.
+  Пометка .f2 — контур этапа Ф2, в Ф0–Ф1 не реализуется.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196; --c-plan-border:#D6CFEF;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 18px rgba(60,50,35,.06);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-sheet:0 -8px 28px rgba(60,50,35,.18);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6; --c-plan-border:#45406A;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+/* Сброс UA-стилей <button>: в продукте это делают ui/Button и PressableArea */
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; -webkit-appearance:none; appearance:none; cursor:pointer; }
+button:focus-visible, [tabindex]:focus-visible, textarea:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.serif { font-family:"PT Serif",Georgia,serif; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.new { outline:1.5px dashed var(--c-accent-muted); outline-offset:2px; }
+.f2 { border:1.5px dashed var(--c-dashed) !important; background:transparent !important; }
+.f2tag { font-size:10px; font-weight:700; color:var(--c-text-muted); border:1px dashed var(--c-dashed); border-radius:6px; padding:0 5px; }
+.nonew .new { outline:none; }
+svg { flex-shrink:0; }
+
+/* ===== Обвязка макета (не продукт) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.mk label { font-size:12px; color:var(--c-text-secondary); display:flex; gap:4px; align-items:center; }
+.note { max-width:1240px; margin:10px auto 0; padding:0 16px; font-size:12.5px; color:var(--c-text-secondary); }
+.note b { color:var(--c-text-heading); }
+
+/* ui/PillSwitch, ui/SegmentedControl — одна геометрия: дорожка C.bgSelected, бегунок C.bgWhite */
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; display:inline-flex; gap:5px; align-items:center; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.pills.fill { display:flex; }
+.pills.fill button { flex:1; justify-content:center; }
+.app.m .pills button { min-height:36px; }
+
+/* ===== Окно продукта ===== */
+.stage { padding:14px 16px 40px; display:flex; justify-content:center; }
+.app { position:relative; width:100%; max-width:1240px; height:800px; border:1px solid var(--c-border); border-radius:14px;
+  background:var(--c-bg-main); overflow:hidden; display:flex; gap:8px; padding:8px; transform:translateZ(0); }
+.app.m { width:360px; height:780px; border-radius:28px; padding:0; gap:0; display:flex; flex-direction:column; }
+.rail { width:40px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:4px; padding-top:4px; }
+.rb { width:34px; height:34px; border-radius:8px; color:var(--c-text-secondary); display:flex; align-items:center; justify-content:center; }
+.rb:hover { background:var(--c-bg-selected); }
+.rb.on { background:var(--c-bg-white); color:var(--c-accent); box-shadow:var(--shadow-thumb); }
+.isl { background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; min-height:0; position:relative; }
+.side { width:330px; flex-shrink:0; }
+.center { flex:1; min-width:0; }
+.app.m .isl { border-radius:0; box-shadow:none; flex:1; width:auto; }
+
+/* Шапки */
+.ph { display:flex; align-items:center; gap:6px; padding:12px 12px 8px 14px; }
+.ph .ttl { font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:700; color:var(--c-text-heading); margin-right:auto; }
+.ctl { padding:2px 10px 9px; border-bottom:1px solid var(--c-border); display:flex; flex-direction:column; gap:8px; }
+.mhead { display:flex; align-items:center; gap:6px; height:56px; padding:0 8px 0 6px; border-bottom:1px solid var(--c-border); background:var(--c-bg-main); flex-shrink:0; }
+.mhead .ttl { font-size:15px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* ui/IconButton */
+.ib { width:28px; height:28px; border-radius:8px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.app.m .ib { width:40px; height:40px; border-radius:10px; }
+/* ui/Button */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; font-weight:600; white-space:nowrap; transition:filter .12s, background .12s; }
+.btn.xs { height:24px; padding:0 9px; font-size:12px; border-radius:8px; }
+.btn.sm { min-height:32px; padding:6px 13px; font-size:13px; border-radius:10px; }
+.btn.md { min-height:40px; padding:10px 16px; font-size:14px; border-radius:12px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.pri:hover { filter:brightness(.96); }
+.btn.sech { background:var(--c-bg-panel); color:var(--c-text-secondary); }
+.btn.sec:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.btn.gh { border:1px solid var(--c-border); color:var(--c-text-secondary); }
+.btn.gh:hover { background:var(--c-bg-selected); }
+.btn.dng { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.btn:disabled { opacity:.5; cursor:default; filter:none; }
+.app.m .btn.sm, .app.m .btn.xs { min-height:40px; height:auto; }
+.lnk { color:var(--c-accent); font-weight:600; font-size:12px; border-radius:6px; padding:2px 4px; }
+.lnk:hover { background:var(--c-accent-light); }
+
+/* ui/Badge (xs) */
+.bdg { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:999px; padding:1px 8px; white-space:nowrap; line-height:16px; }
+.bdg .d { width:7px; height:7px; border-radius:50%; background:currentColor; }
+.t-neutral { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.t-accent { background:var(--c-accent-light); color:var(--c-accent); }
+.t-success { background:var(--c-success-bg); color:var(--c-success-text); }
+.t-warning { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.t-danger { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.t-info { background:var(--c-info-bg); color:var(--c-info); }
+.t-plan { background:var(--c-plan-light); color:var(--c-plan-text); }
+/* ui/Dot */
+.dot { width:7px; height:7px; border-radius:50%; display:inline-block; flex-shrink:0; }
+/* ui/CountBadge inline */
+.cnt { min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--c-accent); color:var(--c-on-accent); font:700 10.5px/18px "JetBrains Mono",monospace; text-align:center; }
+.cnt.muted { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+
+/* ui/Notice */
+.ntc { display:flex; gap:9px; align-items:flex-start; border-radius:12px; padding:10px 12px; font-size:12.5px; color:var(--c-text-primary); }
+.ntc.warning { background:var(--c-warning-bg); } .ntc.warning > svg { color:var(--c-warning); }
+.ntc.danger { background:var(--c-danger-bg); } .ntc.danger > svg { color:var(--c-danger); }
+.ntc.info { background:var(--c-info-bg); } .ntc.info > svg { color:var(--c-info); }
+.ntc .nt { font-weight:700; color:var(--c-text-heading); margin-bottom:2px; }
+.ntc .na { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.ntc ul { margin:4px 0 0; padding-left:16px; }
+.ntc li { margin:3px 0; }
+
+/* Плашка «только чтение» — тихая строка, не Notice: на каждой странице, не должна кричать */
+.ro { display:flex; align-items:center; gap:7px; font-size:12px; color:var(--c-text-secondary); background:var(--c-bg-inset); border-radius:10px; padding:6px 10px; }
+.ro b { color:var(--c-text-primary); font-weight:600; }
+
+/* Поле и поиск (ui/Field, ui/TextArea) */
+.srch { display:flex; align-items:center; gap:6px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:8px; height:30px; padding:0 8px; color:var(--c-text-muted); font-size:12.5px; }
+.app.m .srch { height:40px; }
+.ta { width:100%; min-height:56px; resize:none; border:1px solid var(--c-border); border-radius:12px; background:var(--c-bg-white); color:var(--c-text-heading); font:inherit; font-size:13px; padding:8px 10px; }
+.ta:focus { outline:none; border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.hint { font-size:11px; color:var(--c-text-muted); }
+
+/* Списки боковой панели */
+.scroll { flex:1; overflow:auto; min-height:0; padding:0 10px 14px; }
+.sech { display:flex; align-items:center; gap:6px; width:100%; padding:12px 6px 5px; font-size:10px; font-weight:700;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); text-align:left; }
+.sech .n { font-family:"JetBrains Mono",monospace; letter-spacing:0; }
+.sech .r { margin-left:auto; text-transform:none; letter-spacing:0; font-weight:400; font-size:11px; }
+.row { display:flex; gap:9px; width:100%; border-radius:10px; padding:7px 8px; text-align:left; margin:1px 0; min-height:44px; align-items:flex-start; }
+.row:hover { background:var(--c-bg-card); }
+.row.on { background:var(--c-bg-selected); }
+.row .ic { width:26px; height:26px; border-radius:8px; background:var(--c-bg-panel); color:var(--c-text-secondary); display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:1px; }
+.row .w { min-width:0; flex:1; }
+.row .t { display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.row .t span.x { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.row .s { font-size:11.5px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.row .m { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:3px; font-size:11px; color:var(--c-text-muted); }
+.row .tm { font-size:11px; color:var(--c-text-muted); flex-shrink:0; }
+.foot { border-top:1px solid var(--c-border); background:var(--c-bg-inset); padding:8px 12px; font-size:11.5px; color:var(--c-text-secondary); display:flex; gap:7px; align-items:center; flex-shrink:0; }
+
+/* Документ (центр) */
+.doc { flex:1; overflow:auto; min-height:0; }
+.docin { max-width:760px; margin:0 auto; padding:22px 28px 40px; }
+.app.m .docin { padding:14px 14px 90px; }
+.kicker { display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:11.5px; color:var(--c-text-muted); }
+h2.pt { font-family:"PT Serif",Georgia,serif; font-size:28px; line-height:1.2; margin:6px 0 4px; color:var(--c-text-heading); }
+.app.m h2.pt { font-size:22px; }
+.summary { font-size:14px; color:var(--c-text-secondary); margin:0 0 12px; }
+.meta { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:12px; color:var(--c-text-muted); margin-bottom:12px; }
+h3.sh { font-family:"PT Serif",Georgia,serif; font-size:16px; color:var(--c-text-heading); margin:22px 0 8px; display:flex; align-items:center; gap:8px; }
+h3.sh .n { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); font-weight:400; }
+.claims { margin:0; padding-left:18px; font-size:14px; line-height:1.6; color:var(--c-text-primary); }
+.claims li { margin:4px 0; }
+.chron { list-style:none; margin:0; padding:0; font-size:13.5px; }
+.chron li { display:flex; gap:10px; padding:4px 0; }
+.chron .dt { font-family:"JetBrains Mono",monospace; font-size:12px; color:var(--c-text-muted); width:84px; flex-shrink:0; padding-top:1px; }
+.conf { border:1px solid var(--c-border); border-radius:12px; padding:10px 12px; background:var(--c-bg-card); }
+.conf .sides { display:grid; grid-template-columns:1fr auto 1fr; gap:10px; align-items:stretch; margin-top:8px; }
+.app.m .conf .sides { grid-template-columns:1fr; }
+.conf .q { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:10px; padding:8px 10px; font-size:13px; }
+.conf .vs { align-self:center; color:var(--c-warning); font-weight:700; text-align:center; }
+.hist { list-style:none; margin:0; padding:0; font-size:13px; color:var(--c-text-secondary); }
+.hist li { padding:6px 0; border-bottom:1px dashed var(--c-border-light); }
+.hist .per { font-family:"JetBrains Mono",monospace; font-size:11.5px; color:var(--c-text-muted); display:block; }
+.srcs { display:flex; flex-direction:column; gap:6px; }
+.srcc { display:flex; gap:10px; align-items:flex-start; border:1px solid var(--c-border-light); border-radius:12px; padding:9px 11px; background:var(--c-bg-card); }
+.srcc .no { font-family:"JetBrains Mono",monospace; font-size:12px; color:var(--c-accent); font-weight:700; width:18px; flex-shrink:0; }
+.srcc .tt { font-weight:600; color:var(--c-text-heading); font-size:13px; }
+.srcc .sm { font-size:11.5px; color:var(--c-text-muted); display:flex; gap:8px; flex-wrap:wrap; margin-top:2px; }
+
+/* Сноска и её подсказка (ui/Tooltip с карточкой; на телефоне — нижняя шторка) */
+.fn { position:relative; display:inline-block; vertical-align:super; font:700 10px/1 "JetBrains Mono",monospace; color:var(--c-accent);
+  background:var(--c-accent-light); border-radius:5px; padding:2px 4px; margin-left:2px; cursor:pointer; }
+.fn:hover, .fn:focus { background:var(--c-accent-muted); outline:none; }
+.tipc { display:none; position:absolute; left:-8px; top:calc(100% + 6px); z-index:50; width:320px; text-align:left; vertical-align:baseline;
+  background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:10px 12px;
+  font:400 12.5px/1.45 "Hanken Grotesk","Segoe UI",sans-serif; color:var(--c-text-primary); }
+.app:not(.m) .fn:hover .tipc, .app:not(.m) .fn:focus .tipc, .app:not(.m) .fn.open .tipc { display:block; }
+.qt { display:block; font-family:"PT Serif",Georgia,serif; font-size:13.5px; color:var(--c-text-heading); border-left:3px solid var(--c-accent-muted); padding-left:9px; margin-bottom:8px; }
+.tsrc { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--c-text-secondary); }
+.tsrc .nm { font-weight:600; color:var(--c-text-heading); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sheet { position:absolute; left:0; right:0; bottom:0; z-index:60; background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); padding:8px 16px 20px; }
+.sheet .grab { width:36px; height:4px; border-radius:999px; background:var(--c-divider); margin:0 auto 12px; }
+.scrim { position:absolute; inset:0; background:var(--c-overlay); z-index:59; }
+
+/* Дифф (опора — components/DiffView.tsx: строки add/del/ctx, моноширинный, номера) */
+.diff { font-family:"JetBrains Mono",monospace; font-size:12px; border:1px solid var(--c-border-light); border-radius:10px; overflow:hidden; margin-top:8px; }
+.dr { display:flex; gap:8px; padding:2px 10px 2px 0; white-space:pre-wrap; word-break:break-word; }
+.dr .g { width:28px; text-align:right; color:var(--c-text-muted); flex-shrink:0; user-select:none; }
+.dr.add { background:var(--c-diff-add-bg); color:var(--c-diff-add-text); }
+.dr.del { background:var(--c-diff-rem-bg); color:var(--c-diff-rem-text); }
+.dr.ctx { color:var(--c-text-secondary); }
+.dr.hunk { background:var(--c-bg-inset); color:var(--c-text-muted); font-size:11px; }
+
+/* Пакет */
+.pkgwrap { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:14px; padding:16px 18px 30px; }
+.app.m .pkgwrap { grid-template-columns:1fr; padding:12px 12px 100px; }
+.pg { border:1px solid var(--c-border); border-radius:14px; background:var(--c-bg-card); margin-bottom:12px; overflow:hidden; }
+.pg .pgh { display:flex; align-items:center; gap:8px; padding:9px 12px; border-bottom:1px solid var(--c-border-light); background:var(--c-bg-panel); }
+.pg .pgh .nm { font-family:"PT Serif",Georgia,serif; font-weight:700; color:var(--c-text-heading); font-size:14px; }
+.op { padding:10px 12px 12px; border-top:1px solid var(--c-border-light); border-left:3px solid transparent; background:var(--c-bg-white); }
+.op:first-of-type { border-top:0; }
+.op.acc { border-left-color:var(--c-success); }
+.op.rej { border-left-color:var(--c-danger); }
+.op.blk { opacity:.7; }
+.op .oh { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.op .seq { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+.op .where { font-size:11.5px; color:var(--c-text-muted); }
+.op .dec { margin-left:auto; display:flex; gap:6px; align-items:center; }
+.app.m .op .dec { margin-left:0; width:100%; }
+.app.m .op .dec .btn { flex:1; }
+.op .claim { font-size:13px; color:var(--c-text-primary); margin-top:6px; }
+.qchip { display:inline; font-family:"PT Serif",Georgia,serif; background:var(--c-accent-light); color:var(--c-text-heading); border-radius:5px; padding:0 4px; }
+.why { margin-top:8px; }
+.ck { display:inline-flex; align-items:center; gap:3px; font-size:11px; }
+.ck.ok { color:var(--c-success-text); } .ck.bad { color:var(--c-danger-text); }
+.srcpanel { position:sticky; top:0; align-self:start; border:1px solid var(--c-border); border-radius:14px; background:var(--c-bg-card); overflow:hidden; }
+.srcpanel .sph { padding:10px 12px; border-bottom:1px solid var(--c-border-light); background:var(--c-bg-panel); }
+.msg { padding:8px 12px; font-size:12.5px; border-bottom:1px dashed var(--c-border-light); }
+.msg .who { font-size:11px; color:var(--c-text-muted); display:flex; gap:6px; }
+mark.hl { background:var(--c-accent-light); color:var(--c-text-heading); border-bottom:2px solid var(--c-accent-muted); border-radius:3px; padding:0 2px; transition:background .12s; }
+mark.hl.hot { background:var(--c-accent-muted); border-bottom-color:var(--c-accent); }
+mark.hl sup { font:700 9px "JetBrains Mono",monospace; color:var(--c-accent); margin-left:2px; }
+.applybar { position:sticky; bottom:0; display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:10px 18px; border-top:1px solid var(--c-border); background:var(--c-bg-white); }
+.app.m .applybar { position:absolute; left:0; right:0; bottom:0; padding:10px 12px 14px; box-shadow:var(--shadow-sheet); }
+.prog { height:4px; border-radius:999px; background:var(--c-progress-track); overflow:hidden; width:120px; }
+.prog i { display:block; height:100%; background:var(--c-accent); }
+
+/* Здоровье */
+.tiles { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
+.app.m .tiles { grid-template-columns:1fr 1fr; }
+.tile { border:1px solid var(--c-border); border-radius:14px; background:var(--c-bg-card); padding:10px 12px; display:flex; flex-direction:column; gap:4px; text-align:left; }
+.tile:hover { border-color:var(--c-accent-muted); }
+.tile .lb { font-size:11.5px; color:var(--c-text-secondary); min-height:32px; }
+.tile .v { font-family:"JetBrains Mono",monospace; font-size:22px; font-weight:700; color:var(--c-text-heading); }
+.tile .dl { font-size:11px; }
+.chart { border:1px solid var(--c-border); border-radius:14px; background:var(--c-bg-card); padding:12px; margin-top:14px; }
+.lg { display:flex; gap:12px; flex-wrap:wrap; font-size:11.5px; color:var(--c-text-secondary); }
+.lg i { display:inline-block; width:14px; height:3px; border-radius:2px; vertical-align:middle; margin-right:4px; }
+
+/* Пустые состояния (ui/EmptyState) */
+.empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:30px 24px; gap:10px; }
+.empty .ei { width:56px; height:56px; border-radius:16px; background:var(--c-accent-light); color:var(--c-accent); display:flex; align-items:center; justify-content:center; }
+.empty .et { font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:700; color:var(--c-text-heading); }
+.empty .es { font-size:13px; color:var(--c-text-secondary); max-width:420px; }
+.steps3 { display:flex; flex-direction:column; gap:6px; text-align:left; font-size:12.5px; color:var(--c-text-secondary); max-width:420px; margin:4px 0 6px; }
+.steps3 div { display:flex; gap:8px; }
+
+/* Скелет загрузки */
+.sk { background:var(--c-bg-selected); border-radius:6px; animation:pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:.55} 50%{opacity:1} }
+@media (prefers-reduced-motion:reduce){ .sk { animation:none; } }
+.spin { width:12px; height:12px; border-radius:50%; border:2px solid var(--c-progress-track); border-top-color:var(--c-accent); animation:sp 0.9s linear infinite; display:inline-block; }
+@keyframes sp { to { transform:rotate(360deg); } }
+
+/* Меню (ui/Menu) */
+.menu { position:absolute; z-index:40; min-width:240px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:5px; }
+.mi { display:flex; gap:9px; align-items:flex-start; width:100%; text-align:left; padding:7px 9px; border-radius:8px; font-size:13px; color:var(--c-text-primary); }
+.mi:hover { background:var(--c-bg-selected); }
+.mi .h { display:block; font-size:11px; color:var(--c-text-muted); }
+.mi.dis { opacity:.55; cursor:default; }
+.msep { height:1px; background:var(--c-border-light); margin:4px 2px; }
+.toast { display:flex; gap:10px; align-items:center; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:9px 12px; font-size:12.5px; }
+.panel { border:1px solid var(--c-border); border-radius:14px; background:var(--c-bg-white); overflow:hidden; position:relative; }
+.panel .phd { display:flex; align-items:center; gap:6px; padding:8px 10px; border-bottom:1px solid var(--c-border); background:var(--c-bg-main); font-size:13px; }
+.cap { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); margin:0 0 6px; }
+</style>
+</head>
+<body>
+<div class="mk" id="mk"></div>
+<div class="note" id="note"></div>
+<div class="stage"><div class="app" id="app"></div></div>
+
+<script>
+// ===== Иконки (lucide-эквиваленты; в продукте — components/ui/icons.ts) =====
+const I = (p, s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+const ic = {
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  pulse: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  alert: '<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3z"/><path d="M12 9v4M12 17h.01"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>', x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  back: '<path d="m15 18-6-6 6-6"/>', chev: '<path d="m6 9 6 6 6-6"/>', right: '<path d="m9 18 6-6-6-6"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  note: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  bulb: '<path d="M9 18h6M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  gavel: '<path d="m14 13-7.5 7.5a2.1 2.1 0 0 1-3-3L11 10"/><path d="m16 16 6-6M8 8l6-6M9 7l8 8M21 11l-8-8"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  compass: '<circle cx="12" cy="12" r="10"/><path d="m16.2 7.8-2.1 6.3-6.3 2.1 2.1-6.3z"/>',
+  quote: '<path d="M3 21c3 0 7-1 7-8V5H3v7h4c0 3-1 5-4 5zM14 21c3 0 7-1 7-8V5h-7v7h4c0 3-1 5-4 5z"/>',
+  git: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="9" r="3"/><path d="M6 9v6M18 12a6 6 0 0 1-6 6H9"/>',
+  spark: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-1"/>',
+  graph: '<circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10M6 8l5 8M18 8l-5 8"/>',
+  tasks: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  device: '<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+};
+
+// ===== Данные макета =====
+const TYPES = [
+  { k:'overview', ru:'Обзоры',   one:'обзор',    icon:'compass' },
+  { k:'topic',    ru:'Темы',     one:'тема',     icon:'layers' },
+  { k:'entity',   ru:'Сущности', one:'сущность', icon:'user' },
+  { k:'concept',  ru:'Понятия',  one:'понятие',  icon:'bulb' },
+  { k:'decision', ru:'Решения',  one:'решение',  icon:'gavel' },
+  { k:'source',   ru:'Источники',one:'источник', icon:'quote' },
+];
+const PAGES = [
+  { id:'ov', type:'overview', t:'Обзор — AI Home', s:'С чего начать: устройство продукта, команда, правила', st:'active', n:12 },
+  { id:'notes', type:'topic', t:'Заметки и вики', s:'Заметки, граф и база, которую ведёт Хранитель', st:'active', n:6 },
+  { id:'llm', type:'topic', t:'Локальные модели', s:'Стенд vLLM, ComfyUI, очередь GPU', st:'stale', n:9 },
+  { id:'gleb', type:'entity', kind:'человек', t:'Глеб (ревьюер)', s:'Ревьюер AI Home: находки по severity, фронт и звук', st:'disputed', n:4 },
+  { id:'mark', type:'entity', kind:'человек', t:'Марк (DevOps)', s:'Сборки, релизы, выкатка прода', st:'active', n:5 },
+  { id:'stand', type:'entity', kind:'система', t:'Стенд разработки', s:'Дев-стенд :5000 и его грабли', st:'drift', n:3 },
+  { id:'pkg', type:'concept', t:'Пакет изменений', s:'Как правки ИИ попадают в базу через ревью', st:'active', n:2 },
+  { id:'adr35', type:'decision', t:'ADR-035 — вики как производный слой', s:'Один писатель, цитата на утверждение, без удаления', st:'active', n:3 },
+  { id:'rev', type:'decision', t:'Ревью всегда', s:'Смысловые правки ИИ — только через «Входящие»', st:'active', n:1 },
+  { id:'s1', type:'source', t:'Источник — Чат «Ревью звука» 20.10', s:'чат · сообщения 12–18', st:'active', n:0 },
+  { id:'s2', type:'source', t:'Источник — guidelines.md', s:'файл · docs/design', st:'active', n:0 },
+];
+const ST = {
+  active:   { ru:'актуальна', tone:'success', tip:'Утверждения подтверждены источниками, противоречий нет' },
+  stale:    { ru:'устарела',  tone:'neutral', tip:'Источник новее опроверг утверждение или страница не менялась 90 дней' },
+  disputed: { ru:'спорная',   tone:'warning', tip:'Есть открытые противоречия — см. раздел на странице' },
+  drift:    { ru:'дрейф',     tone:'danger',  tip:'Файл изменён мимо Хранителя (Obsidian, git, редактор)' },
+};
+const SRC = [
+  { no:1, o:'note', t:'Источник — Персона «Глеб»', d:'01.09.2026', ref:'[[Глеб — карточка персоны]]', q:'Код-ревьюер AI Home: находки по severity, соглашения проекта, безопасность и изоляция данных', c:2 },
+  { no:2, o:'chat', t:'Источник — Чат «Ревью звука»', d:'20.10.2026', ref:'чат · сообщения 12–18', q:'закрываю ревью фронта и звука до пятницы', c:3 },
+  { no:3, o:'file', t:'Источник — docs/design/guidelines.md', d:'19.10.2026', ref:'файл проекта', q:'Для заметного UI перед коммитом предложить прогон через субагента designer', c:1 },
+  { no:4, o:'chat', t:'Источник — Чат «План QA на неделю»', d:'14.10.2026', ref:'чат удалён · выдержка сохранена', q:'звук ревьюит Вера, Глеб только фронт', c:1, gone:true },
+];
+const SRC_STAND = [
+  { no:1, o:'file', t:'Источник — CLAUDE.md', d:'02.10.2026', ref:'файл проекта', q:'Хостовый дев-стенд поднимаем только через dotnet run', c:1 },
+  { no:2, o:'chat', t:'Источник — Чат «Стенд не поднимается»', d:'28.09.2026', ref:'чат · сообщения 4–9', q:'порождённые процессы наследуют Production', c:2 },
+];
+const curSrc = () => S.screen === 'drift' ? SRC_STAND : SRC;
+const OICON = { note:'note', chat:'chat', file:'file', url:'link' };
+const ORU = { note:'заметка', chat:'чат', file:'файл', url:'ссылка' };
+
+const PKGS = [
+  { id:'p1', risk:'high', o:'chat', t:'Чат «Ревью звука»', ops:5, mix:'противоречие, замещение, +1 страница', ck:'ok', ckn:'14 проверок', age:'12 мин' },
+  { id:'p2', risk:'high', o:'note', t:'Заметка «Итоги недели 42»', ops:7, mix:'4 новых страницы', ck:'bad', ckn:'4 нарушения', age:'1 ч' },
+  { id:'p3', risk:'mid', o:'file', t:'docs/adr/ADR-035-llm-wiki.md', ops:3, mix:'3 новых страницы', ck:'ok', ckn:'9 проверок', age:'2 ч' },
+  { id:'p4', risk:'mid', o:'url', t:'karpathy — LLM Wiki (gist)', ops:0, mix:'', ck:'run', ckn:'разбирается', age:'сейчас' },
+  { id:'p5', risk:'low', o:'chat', t:'Итог сессии «Панель истории»', ops:2, mix:'дописать хронологию', ck:'ok', ckn:'4 проверки', age:'вчера' },
+  { id:'p6', risk:'low', o:'chat', t:'Чат «Фичи, волна 2»', ops:3, mix:'3 связи', ck:'ok', ckn:'6 проверок', age:'вчера' },
+];
+const DONE = [
+  { t:'Заметка «Стенд :5000»', st:'stale', ru:'устарел', tone:'neutral', d:'19.10' },
+  { t:'Чат «Пульт куратора»', st:'applied', ru:'применён 4 из 4', tone:'success', d:'18.10' },
+  { t:'Файл README.md', st:'rejected', ru:'отклонён', tone:'neutral', d:'18.10' },
+];
+const RISK = { high:{ ru:'Высокий риск', tone:'danger', hint:'противоречия и замещения' }, mid:{ ru:'Средний', tone:'warning', hint:'новые страницы' }, low:{ ru:'Низкий', tone:'neutral', hint:'дописать и связать' } };
+const OPRU = { conflict:'противоречие', supersede:'замещение', create:'новая страница', append:'дописать', link:'связь' };
+const OPRISK = { conflict:'high', supersede:'high', create:'mid', append:'low', link:'low' };
+
+// Операции пакета p1, сгруппированы по страницам (порядок страниц — по максимальному риску)
+const OPS = [
+  { seq:1, op:'conflict', page:'Глеб (ревьюер)', sec:'Противоречия', claim:'Кто ревьюит звук: источник говорит «Глеб», а страница опирается на «Вера».',
+    q:'закрываю ревью фронта и звука до пятницы',
+    diff:[['hunk','## Противоречия'],['add','- открыто с 20.10: «закрываю ревью фронта и звука до пятницы» [^2] ↔ «звук ревьюит Вера, Глеб только фронт» [^4]']] },
+  { seq:2, op:'supersede', page:'Глеб (ревьюер)', sec:'Сводка → История', claim:'«Ревьюит только бэкенд» больше не верно: заменяется новым утверждением, старое уходит в «Историю» с датами.',
+    q:'закрываю ревью фронта и звука до пятницы',
+    diff:[['hunk','## Сводка'],['del','- Глеб ревьюит только бэкенд.[^1]'],['add','- Закрывает ревью фронта и звука до пятницы.[^2]'],['hunk','## История'],['add','- 01.09 → 20.10: Глеб ревьюит только бэкенд. [^1] · заменено [^2]']] },
+  { seq:5, op:'append', page:'Глеб (ревьюер)', sec:'Хронология', claim:'Событие в хронологию.', q:'закрываю ревью фронта и звука до пятницы',
+    diff:[['hunk','## Хронология'],['ctx','- 01.09 — взял ревью линии «Персоны-Fold» [^1]'],['add','- 20.10 — принял ревью звука [^2]']] },
+  { seq:3, op:'create', page:'Вера (QA)', isNew:true, sec:'новая страница · сущность · человек', claim:'В источнике есть роль, а страницы нет. Дублей по aliases не найдено.',
+    q:'QA — это я, проверки со скриншотами',
+    diff:[['add','---'],['add','type: entity'],['add','kind: person'],['add','summary: QA-тестер AI Home, проверки со скриншотами'],['add','aliases: [Вера, @vera]'],['add','---'],['add','## Сводка'],['add','- Проверяет фичи живым прогоном со скриншотами.[^2]'],['add','- Ведёт QA редактора видео.[^2]']] },
+  { seq:4, op:'link', page:'Обзор — AI Home', sec:'Сводка', claim:'Упоминание Веры становится ссылкой на новую страницу.', q:'Веру ставлю на QA редактора видео', dep:3,
+    diff:[['hunk','## Сводка'],['del','- Ревью — [[Глеб (ревьюер)]], QA — Вера.[^7]'],['add','- Ревью — [[Глеб (ревьюер)]], QA — [[Вера (QA)]].[^7]']] },
+];
+const CHECKS_BAD = [
+  ['Операция 2', 'цитата не найдена в источнике дословно: «бюджет на GPU согласован до декабря». В заметке: «…согласован до конца года».'],
+  ['Операция 4', 'ссылка [[Артём (инфраструктура)]] ведёт в пустоту, и пакет эту страницу не создаёт.'],
+  ['Пакет', 'новых страниц 4 при лимите 3 на источник.'],
+  ['Операция 6', 'запись в Вики/_schema.md. Схему меняет только человек.'],
+];
+
+// ===== Состояние макета =====
+const SCREENS = [
+  ['catalog','Каталог'],['page','Страница'],['drift','Дрейф'],['inbox','Входящие'],['pkg','Пакет'],['checks','Отбит проверками'],
+  ['health','Здоровье'],['loading','Загрузка'],['empty','Не заведена'],['local','Локальный проект'],['entry','«Разобрать в базу»'],
+];
+const PSTATES = [['proposed','на ревью'],['checking','проверяется'],['stale','устарел'],['applied','применён'],['apply_failed','не применён']];
+const S = { screen:'page', dark:false, m:false, ps:'proposed', dec:{ 1:'acc', 2:'acc' }, rs:{}, tip:null, nonew:false, srcOpen:false, driftDiff:true, scope:'base' };
+(function readHash(){
+  const h = location.hash.slice(1).split('&');
+  for (const p of h) {
+    const [k, v] = p.split('=');
+    if (k === 'dark') S.dark = true; else if (k === 'm') S.m = true; else if (k === 'calm') S.nonew = true;
+    else if (k === 'ps') S.ps = v; else if (SCREENS.some(s => s[0] === k)) S.screen = k;
+    else if (k === 'rej') { S.dec = { 1:'acc', 2:'acc', 3:'rej' }; }
+  }
+})();
+
+// ===== Мелкие примитивы =====
+const badge = (tone, text, dot) => `<span class="bdg t-${tone}">${dot ? '<span class="d"></span>' : ''}${text}</span>`;
+const stBadge = st => st === 'active'
+  ? `<span class="dot" style="background:var(--c-success)" title="${ST.active.ru}: ${ST.active.tip}"></span>`
+  : `<span title="${ST[st].tip}">${badge(ST[st].tone, ST[st].ru)}</span>`;
+const btn = (kind, size, text, act = '', extra = '') => `<button class="btn ${kind} ${size}" ${act ? `data-act="${act}"` : ''} ${extra}>${text}</button>`;
+const ckBadge = (ck, n) => ck === 'ok' ? `<span class="ck ok">${I(ic.check,12)}${n}</span>`
+  : ck === 'bad' ? `<span class="ck bad">${I(ic.x,12)}${n}</span>` : `<span class="ck" style="color:var(--c-text-muted)"><span class="spin"></span>${n}</span>`;
+const tab = () => ['inbox','pkg','checks'].includes(S.screen) ? 'inbox' : S.screen === 'health' ? 'health' : 'catalog';
+const isDetail = () => ['page','drift','pkg','checks'].includes(S.screen);
+
+// ===== Боковая панель вики =====
+function sideHead() {
+  return `<div class="ph"><span class="ttl">Заметки</span>
+      <button class="bdg t-neutral new" title="База: у проекта и у личного хранилища — своя вики" style="cursor:pointer">AI Home ${I(ic.chev,12)}</button>
+    </div>
+    <div class="ctl">
+      ${S.m ? '' : `<div class="pills fill new"><button>${I(ic.note,13)}Заметки</button><button class="on">${I(ic.book,13)}Вики</button></div>`}
+      ${['empty','local'].includes(S.screen) ? '' : `<div class="pills fill new">
+        <button class="${tab()==='catalog'?'on':''}" data-go="catalog">Каталог</button>
+        <button class="${tab()==='inbox'?'on':''}" data-go="inbox">Входящие <span class="cnt">5</span></button>
+        <button class="${tab()==='health'?'on':''}" data-go="health">Здоровье</button></div>`}
+    </div>`;
+}
+function catalogList() {
+  if (S.screen === 'loading') {
+    return `<div class="scroll">${[0,1,2].map(() => `<div class="sech"><span class="sk" style="width:70px;height:9px"></span></div>` +
+      [0,1,2].map(() => `<div class="row"><span class="sk" style="width:26px;height:26px;border-radius:8px"></span><div class="w"><div class="sk" style="width:60%;height:11px;margin:3px 0 6px"></div><div class="sk" style="width:85%;height:9px"></div></div></div>`).join('')).join('')}</div>`;
+  }
+  const cur = S.screen === 'drift' ? 'stand' : S.m ? '' : 'gleb';
+  let h = `<div style="padding:8px 10px 0"><div class="srch">${I(ic.search,14)}<span>Поиск по вики…</span></div></div><div class="scroll">`;
+  for (const T of TYPES) {
+    const ps = PAGES.filter(p => p.type === T.k);
+    const total = T.k === 'source' ? 14 : ps.length;
+    h += `<div class="sech">${T.ru} <span class="n">${total}</span>${T.k==='source' ? '<span class="r">показаны 2 из 14</span>' : ''}</div>`;
+    for (const p of ps) {
+      h += `<button class="row ${p.id===cur ? 'on' : ''}" data-go="${p.id==='stand' ? 'drift' : 'page'}">
+        <span class="ic">${I(ic[T.icon],14)}</span>
+        <span class="w"><span class="t"><span class="x">${p.t}</span>${stBadge(p.st)}</span>
+        <span class="s" style="display:block">${p.s}</span>
+        ${p.type !== 'source' ? `<span class="m">${I(ic.quote,11)} ${p.n} ист.${p.kind ? ' · ' + p.kind : ''}</span>` : ''}</span></button>`;
+    }
+  }
+  return h + `</div>${gitFoot()}`;
+}
+const gitFoot = () => `<div class="foot new">${I(ic.git,14)}<span>Хранитель не коммитит — вики проекта страхует git. Коммит — за вами.</span></div>`;
+
+function inboxList() {
+  const cur = ['pkg'].includes(S.screen) ? 'p1' : S.screen === 'checks' ? 'p2' : (S.m ? '' : 'p1');
+  let h = `<div class="scroll">`;
+  for (const r of ['high','mid','low']) {
+    const ps = PKGS.filter(p => p.risk === r);
+    h += `<div class="sech"><span class="dot" style="background:var(--c-${RISK[r].tone==='neutral'?'text-muted':RISK[r].tone})"></span>${RISK[r].ru} <span class="n">${ps.length}</span><span class="r">${RISK[r].hint}</span></div>`;
+    for (const p of ps) {
+      h += `<button class="row ${p.id===cur ? 'on' : ''}" data-go="${p.id==='p2' ? 'checks' : 'pkg'}" ${p.ck==='run' ? 'aria-disabled="true"' : ''}>
+        <span class="ic">${I(ic[OICON[p.o]],14)}</span>
+        <span class="w"><span class="t"><span class="x">${p.t}</span></span>
+        <span class="s" style="display:block">${p.ops ? `${p.ops} операц${p.ops<5?'ии':'ий'} · ${p.mix}` : 'Хранитель читает источник…'}</span>
+        <span class="m">${ckBadge(p.ck, p.ckn)}</span></span><span class="tm">${p.age}</span></button>`;
+    }
+  }
+  h += `<div class="sech">Разобранные <span class="n">12</span><span class="r">90 дней</span></div>`;
+  for (const d of DONE) h += `<div class="row" style="min-height:36px;align-items:center"><span class="w"><span class="s" style="display:block">${d.t}</span></span>${badge(d.tone, d.ru)}<span class="tm">${d.d}</span></div>`;
+  return h + `</div><div class="foot">${I(ic.inbox,14)}<span>Открыто 5 из 20. При 20 новые разборы ждут, пока вы не разберёте очередь.</span></div>`;
+}
+function healthSide() {
+  return `<div class="scroll">
+    <div class="sech">Проблемы в Вики/ <span class="n">2</span></div>
+    <button class="row" data-go="drift"><span class="ic" style="color:var(--c-danger)">${I(ic.alert,14)}</span><span class="w"><span class="t"><span class="x">Стенд разработки</span>${badge('danger','дрейф')}</span><span class="s" style="display:block">изменён мимо Хранителя 20.10 14:32</span></span></button>
+    <button class="row"><span class="ic">${I(ic.layers,14)}</span><span class="w"><span class="t"><span class="x">Локальные модели</span>${badge('neutral','устарела')}</span><span class="s" style="display:block">94 дня без изменений</span></span></button>
+    <div class="sech">Страница просится <span class="n">3</span><span class="r">ссылок в пустоту ≥ 3</span></div>
+    ${[['Хранитель базы',7],['Vibe-кодинг',4],['Стенд vLLM',3]].map(([t,n]) => `<div class="row" style="align-items:center;min-height:38px"><span class="ic" style="border:1px dashed var(--c-dashed);background:none">${I(ic.file,13)}</span><span class="w"><span class="s" style="display:block;color:var(--c-text-primary)">${t}</span></span><span class="tm mono">${n}×</span></div>`).join('')}
+    <div class="hint" style="padding:6px 8px">Заметки вне Вики/ lint только считает и никогда не предлагает править.</div>
+  </div>`;
+}
+function sideEmpty() {
+  const local = S.screen === 'local';
+  return `<div class="scroll"><div class="hint" style="padding:16px 8px">${local ? 'Проект живёт на устройстве — вики для него нет.' : 'В этой базе вики ещё нет.'}</div></div>`;
+}
+function side() {
+  const body = ['empty','local'].includes(S.screen) ? sideEmpty() : tab() === 'inbox' ? inboxList() : tab() === 'health' ? healthSide() : catalogList();
+  return sideHead() + body;
+}
+
+// ===== Страница вики =====
+function fn(no) {
+  const s = curSrc()[no - 1];
+  const card = `<span class="qt">«${s.q}»</span>
+    <span class="tsrc">${I(ic[OICON[s.o]],13)}<span class="nm">${s.t}</span></span>
+    <span class="tsrc" style="margin-top:3px"><span>${ORU[s.o]} · ${s.ref} · ${s.d}</span></span>
+    <span style="display:flex;gap:6px;margin-top:8px">${s.gone ? badge('neutral','оригинал удалён, выдержка сохранена') : '<span class="lnk" style="padding:0">Открыть источник →</span>'}</span>`;
+  return `<span class="fn ${S.tip===no && !S.m ? 'open' : ''}" tabindex="0" data-act="tip" data-n="${no}" aria-label="Сноска ${no}: источник и цитата">${no}<span class="tipc" role="tooltip">${card}</span></span>`;
+}
+function glebBody() {
+  return `    <h3 class="sh">Сводка</h3>
+    <ul class="claims">
+      <li>Ведёт код-ревью AI Home: находки по severity, соглашения проекта, безопасность и изоляция данных.${fn(1)}</li>
+      <li>Закрывает ревью фронта и звука до пятницы.${fn(2)}</li>
+      <li>Ревью заметного UI идёт после прогона субагента designer, а не вместо него.${fn(3)}</li>
+    </ul>
+
+    <h3 class="sh">Хронология</h3>
+    <ul class="chron">
+      <li><span class="dt">01.09.2026</span><span>Взял ревью линии «Персоны-Fold».${fn(1)}</span></li>
+      <li><span class="dt">20.10.2026</span><span>Принял ревью звука.${fn(2)}</span></li>
+    </ul>
+
+    <h3 class="sh">Противоречия <span class="n">1</span></h3>
+    <div class="conf">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${badge('warning','открыто с 20.10')}<span class="hint">Кто ревьюит звук</span></div>
+      <div class="sides"><div class="q">«закрываю ревью фронта и звука до пятницы»${fn(2)}</div><div class="vs">↔</div><div class="q">«звук ревьюит Вера, Глеб только фронт»${fn(4)}</div></div>
+      <div class="hint" style="margin-top:8px">Разрешится пакетом: новый источник или замещение одной из сторон.</div>
+    </div>
+
+    <h3 class="sh">История <span class="n">1</span></h3>
+    <ul class="hist"><li><span class="per">01.09.2026 → 20.10.2026</span>Глеб ревьюит только бэкенд.${fn(1)} · заменено${fn(2)}</li></ul>`;
+}
+function standBody() {
+  return `<h3 class="sh">Сводка</h3>
+    <ul class="claims">
+      <li>Хостовый дев-стенд поднимается только через dotnet run.${fn(1)}</li>
+      <li>Порождённые процессы наследуют окружение Production и уводят стенд на занятый порт.${fn(2)}</li>
+      <li><span style="background:var(--c-warning-bg);border-radius:4px;padding:0 3px">Дев-стенд поднимается через dotnet run, порт 5555.</span> <span class="bdg t-warning" title="Строка появилась мимо Хранителя — у неё нет сноски">без источника</span></li>
+    </ul>
+    <h3 class="sh">Хронология</h3>
+    <ul class="chron"><li><span class="dt">28.09.2026</span><span>Стенд ушёл на :80 из-за унаследованного Production.${fn(2)}</span></li></ul>
+    <h3 class="sh">Противоречия</h3>
+    <div class="hint">Открытых противоречий нет.</div>
+    <h3 class="sh">История</h3>
+    <div class="hint">Замещённых утверждений пока нет.</div>`;
+}
+function page() {
+  const drift = S.screen === 'drift';
+  const st = drift ? 'drift' : 'disputed';
+  return `<div class="doc"><div class="docin">
+    ${drift ? `<div class="ntc warning new" style="margin-bottom:12px">${I(ic.alert,16)}<div style="flex:1">
+      <div class="nt">Расходится с журналом Хранителя</div>
+      Файл изменён мимо Хранителя 20.10 в 14:32 — в Obsidian, git или редакторе. Пока вы не решите, пакеты по этой странице не применяются.
+      <div class="na">${btn('sec','sm','Принять как есть','', 'title="Хранитель запомнит текущий файл как верный и запишет в журнал «ручная правка вне Хранителя»"')}
+        ${btn('gh','sm',I(ic.undo,14)+'Вернуть','','title="Вернуть версию из журнала Хранителя от 20.10 12:10"')}
+        <button class="lnk" data-act="driftdiff">${S.driftDiff ? 'Скрыть разницу' : 'Что изменилось'}</button></div>
+      ${S.driftDiff ? `<div class="diff" style="background:var(--c-bg-white)"><div class="dr hunk"><span class="g"></span>журнал 20.10 12:10 → диск 20.10 14:32</div>
+        <div class="dr ctx"><span class="g"></span>- Порождённые процессы наследуют окружение Production…[^2]</div>
+        <div class="dr add"><span class="g">+</span>- Дев-стенд поднимается через dotnet run, порт 5555.</div></div>
+        <div class="hint" style="margin-top:6px">У добавленной строки нет сноски — после «Принять как есть» lint отметит её в «Здоровье».</div>` : ''}
+    </div></div>` : ''}
+    <div class="kicker">${I(ic.user,13)} сущность · ${drift ? 'система' : 'человек'} ${stBadge(st)}</div>
+    <h2 class="pt">${drift ? 'Стенд разработки' : 'Глеб (ревьюер)'}</h2>
+    <p class="summary">${drift ? 'Дев-стенд :5000 и его грабли' : 'Ревьюер AI Home: находки по severity, фронт и звук'}</p>
+    <div class="meta"><span>${I(ic.quote,12)} ${curSrc().length} источника</span><span>обновлено ${drift ? '02.10.2026' : '20.10.2026'}</span><span>aliases: ${drift ? 'стенд, :5000' : 'Глеб, @gleb'}</span></div>
+    <div class="ro new">${I(ic.lock,14)}<span><b>Только чтение</b> — правки идут через Хранителя: разберите новый источник или отклоните пакет с причиной.</span></div>
+    ${drift ? standBody() : glebBody()}
+    <h3 class="sh">Источники <span class="n">${curSrc().length}</span></h3>
+    <div class="srcs">${curSrc().map(s => `<div class="srcc"><span class="no">${s.no}</span>${I(ic[OICON[s.o]],15)}<div style="min-width:0;flex:1"><div class="tt">${s.t}</div>
+      <div class="sm"><span>${ORU[s.o]} · ${s.ref}</span><span>разобран ${s.d}</span><span>${s.c} цит.</span>${s.gone ? badge('neutral','оригинал удалён') : ''}</div></div>
+      ${s.gone ? '' : '<button class="ib" title="Открыть оригинал">'+I(ic.right,15)+'</button>'}</div>`).join('')}</div>
+    <div class="hint" style="margin-top:8px">Блок собирается из сносок — отдельно в файле он не хранится.</div>
+  </div></div>`;
+}
+
+// ===== Пакет =====
+function opCard(o) {
+  const d = S.dec[o.seq];
+  const depRej = o.dep && S.dec[o.dep] === 'rej';
+  const decided = d === 'acc' ? `${badge('success', I(ic.check,11)+' принята')}<button class="lnk" data-act="undo" data-s="${o.seq}">отменить</button>`
+    : d === 'rej' ? `${badge('danger', I(ic.x,11)+' отклонена')}<button class="lnk" data-act="undo" data-s="${o.seq}">отменить</button>`
+    : `${btn('gh','xs','Отклонить','rej',`data-s="${o.seq}"`)}${btn('sec','xs',I(ic.check,12)+'Принять','acc',`data-s="${o.seq}"`)}`;
+  const ro = S.screen === 'checks' || ['applied','stale','apply_failed'].includes(S.ps);
+  const ok = !(S.screen === 'checks' && [2,4].includes(o.seq));
+  const mark = S.screen === 'checks' ? '' : d==='acc'?'acc':d==='rej'?'rej':'';
+  return `<div class="op ${mark} ${depRej?'blk':''}" data-seq="${o.seq}">
+    <div class="oh"><span class="seq">№${o.seq}</span>${badge(RISK[OPRISK[o.op]].tone==='neutral'?'neutral':RISK[OPRISK[o.op]].tone, OPRU[o.op])}<span class="where">${o.sec}</span>
+      ${S.screen==='checks' ? `<span class="dec">${ok ? `<span class="ck ok">${I(ic.check,12)}проверки</span>` : `<span class="ck bad">${I(ic.x,12)}не прошла</span>`}</span>`
+        : ro ? '' : `<span class="dec">${depRej ? badge('neutral','зависит от №'+o.dep) : decided}</span>`}</div>
+    <div class="claim">${o.claim}</div>
+    <div class="claim" style="font-size:12px;color:var(--c-text-secondary)">${I(ic.quote,12)} <span class="qchip">«${o.q}»</span> <span class="ck ok">${I(ic.check,11)}дословно</span></div>
+    ${depRej ? `<div class="hint" style="margin-top:6px">Ссылка ведёт на страницу из №${o.dep}, а она отклонена — эта операция не применится.</div>` : ''}
+    <div class="diff">${o.diff.map(([k,t]) => `<div class="dr ${k}"><span class="g">${k==='add'?'+':k==='del'?'−':''}</span>${t.replace(/</g,'&lt;')}</div>`).join('')}</div>
+    ${d === 'rej' && !ro ? `<div class="why"><textarea class="ta" placeholder="Почему отклоняете? Например: «Вера — QA, но страница ей пока не нужна»">${S.rs[o.seq] || ''}</textarea>
+      <div class="hint">Причина уйдёт Хранителю как правило-кандидат в _schema.md. Необязательно.</div></div>` : ''}
+  </div>`;
+}
+function srcPanel() {
+  const body = `<div class="msg"><div class="who"><b>Андрей</b><span>m12 · 19:31</span></div>Глеб, возьмёшь звук? Вера сказала, что не успевает.</div>
+    <div class="msg"><div class="who"><b>Глеб</b><span>m13 · 19:33</span></div>Да, <mark class="hl" data-op="1,2,5">закрываю ревью фронта и звука до пятницы<sup>1 2 5</sup></mark>.</div>
+    <div class="msg"><div class="who"><b>Андрей</b><span>m15 · 19:35</span></div>Тогда <mark class="hl" data-op="4">Веру ставлю на QA редактора видео<sup>4</sup></mark>.</div>
+    <div class="msg"><div class="who"><b>Вера</b><span>m18 · 19:40</span></div>Ок. <mark class="hl" data-op="3">QA — это я, проверки со скриншотами<sup>3</sup></mark>, как обычно.</div>
+    <div class="msg hint" style="border:0">Вызовы инструментов вырезаны, секреты скрыты. Выдержку собрал сервер по ссылке на чат — агент текст не присылал.</div>`;
+  return `<aside class="srcpanel new">
+    <div class="sph"><div class="cap" style="margin:0 0 4px">Источник</div>
+      <div style="display:flex;gap:6px;align-items:center">${I(ic.chat,14)}<b style="color:var(--c-text-heading)">Чат «Ревью звука»</b></div>
+      <div class="hint">сообщения 12–18 · 20.10.2026 · <span class="lnk" style="padding:0">открыть чат →</span></div>
+      ${S.m ? `<button class="lnk" data-act="src" style="margin-top:4px;padding:0">${S.srcOpen ? 'Свернуть выдержку' : 'Показать выдержку с цитатами'}</button>` : ''}</div>
+    ${!S.m || S.srcOpen ? body : ''}</aside>`;
+}
+function pkgHead(running) {
+  const checks = S.screen === 'checks';
+  const p = checks ? PKGS[1] : PKGS[0];
+  return `<div class="docin" style="max-width:none;padding:16px 18px 0">
+    <div class="kicker">${I(ic.inbox,13)} Пакет изменений · ${ORU[p.o]} · ${checks ? '20.10 18:58' : '20.10 19:41'} · разобрал Хранитель (слот medium, 31k токенов)</div>
+    <h2 class="pt" style="font-size:22px">${p.t}</h2>
+    <div class="meta" style="margin-bottom:6px">${badge(RISK[p.risk].tone, RISK[p.risk].ru)} ${running ? ckBadge('run', 'проверки кода идут') : ckBadge(p.ck, checks ? 'отбит проверками кода: 4 нарушения' : 'проверки кода пройдены: 14 из 14')}
+      <span>${checks ? 7 : 5} операций · ${checks ? 'Итоги недели 42' : '2 страницы, 1 новая'}</span></div>
+  </div>`;
+}
+function pkgState() {
+  if (S.screen === 'checks') return `<div class="ntc danger new" style="margin:10px 18px 0">${I(ic.x,16)}<div style="flex:1">
+    <div class="nt">Пакет отбит проверками кода — принимать нечего</div>
+    Хранитель уже раз чинил план по списку нарушений, и вторая попытка тоже не прошла. Код не показывает такие правки на ревью.
+    <ul>${CHECKS_BAD.map(([w,t]) => `<li><b>${w}</b> — ${t}</li>`).join('')}</ul>
+    <div class="na">${btn('sec','sm',I(ic.refresh,14)+'Разобрать заново')}${btn('gh','sm','Закрыть пакет')}</div></div></div>`;
+  if (S.ps === 'stale') return `<div class="ntc warning" style="margin:10px 18px 0">${I(ic.alert,16)}<div><div class="nt">Пакет устарел</div>Страница «Глеб (ревьюер)» изменилась после разбора: заменяемого утверждения №2 на ней уже нет. Источник нужно разобрать заново.<div class="na">${btn('sec','sm',I(ic.refresh,14)+'Разобрать заново')}${btn('gh','sm','Закрыть')}</div></div></div>`;
+  if (S.ps === 'applied') return `<div class="ntc info" style="margin:10px 18px 0">${I(ic.check,16)}<div><div class="nt">Применён 20.10 в 19:52 — принято 4 из 5</div>Записано 2 страницы, обновлены _index и _log. Хранитель не коммитит: вики проекта страхует git, коммит — за вами.<div class="na">${btn('gh','sm',I(ic.undo,14)+'Откатить пакет','', 'title="Доступно, пока страницы не менялись после применения"')}</div></div></div>`;
+  if (S.ps === 'apply_failed') return `<div class="ntc danger" style="margin:10px 18px 0">${I(ic.x,16)}<div><div class="nt">Не применён — на диске ничего не изменилось</div>Страница «Глеб (ревьюер)» разошлась с журналом Хранителя между проверкой и записью. Решите дрейф на странице и примените снова.<div class="na">${btn('sec','sm','Открыть страницу','go-drift')}</div></div></div>`;
+  return '';
+}
+function pkg() {
+  if (S.screen === 'pkg' && S.ps === 'checking') {
+    return `<div class="doc">${pkgHead(true)}
+      <div style="padding:12px 18px"><div class="ntc info">${I(ic.shield,16)}<div><div class="nt">Хранитель проверяет план</div>Сверяет каждую цитату с источником дословно, ссылки, лимиты и дубли. Пакет появится на ревью, только если всё сошлось.</div></div>
+      ${[0,1,2].map(() => `<div class="pg" style="margin-top:12px;padding:12px"><div class="sk" style="width:40%;height:12px;margin-bottom:10px"></div><div class="sk" style="width:90%;height:9px;margin-bottom:6px"></div><div class="sk" style="width:70%;height:9px"></div></div>`).join('')}</div></div>`;
+  }
+  const ro = S.screen === 'checks' || ['applied','stale','apply_failed'].includes(S.ps);
+  const pages = [...new Set(OPS.map(o => o.page))];
+  const groups = pages.map(pg => {
+    const ops = OPS.filter(o => o.page === pg);
+    const isNew = ops.some(o => o.isNew);
+    return `<div class="pg"><div class="pgh">${I(ic.file,14)}<span class="nm">${pg}</span>${isNew ? badge('accent','новая') : ''}<span class="hint" style="margin-left:auto">${ops.length} операц${ops.length>1?'ии':'ия'}</span></div>${ops.map(opCard).join('')}</div>`;
+  }).join('');
+  const nAcc = Object.values(S.dec).filter(v => v === 'acc').length - (S.dec[4]==='acc' && S.dec[3]==='rej' ? 1 : 0);
+  const nDec = Object.keys(S.dec).length;
+  const bar = ro ? '' : `<div class="applybar new">
+      ${btn('gh','sm','Принять всё','accall')}
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--c-text-secondary)"><span class="prog"><i style="width:${nDec/5*100}%"></i></span>решено ${nDec} из 5</div>
+      ${S.m ? '' : `<span class="hint" style="flex:1;min-width:160px">${I(ic.git,12)} Хранитель запишет файлы в notes/Вики/, коммит — за вами</span>`}
+      ${btn('pri','sm',`Применить принятые (${nAcc})`, '', nDec < 5 ? 'disabled title="Решите все операции: принять или отклонить"' : '')}
+    </div>`;
+  return `<div class="doc" style="display:flex;flex-direction:column">${pkgHead()}${pkgState()}
+    <div class="pkgwrap">${S.m ? srcPanel() : ''}<div>${groups}</div>${S.m ? '' : srcPanel()}</div></div>${bar}`;
+}
+
+// ===== Здоровье =====
+function spark(pts, color) {
+  const max = Math.max(...pts), min = Math.min(...pts);
+  const p = pts.map((v,i) => `${i*(100/(pts.length-1))},${28 - ((v-min)/((max-min)||1))*24}`).join(' ');
+  return `<svg width="100%" height="30" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"><polyline points="${p}" fill="none" style="stroke:var(${color});stroke-width:1.6" vector-effect="non-scaling-stroke"/></svg>`;
+}
+function health() {
+  const base = S.scope === 'base';
+  const T = base ? [
+    ['Ссылки в пустоту (призраки)', '64%', '−6 п.п. к базовой линии 70%', 'success', [70,70,69,67,66,64], '--c-success'],
+    ['Сироты (без Journal)', '45%', '−3 п.п. к 48%', 'success', [48,48,47,47,46,45], '--c-success'],
+    ['Упоминания без ссылки', '96', '−16 к 112', 'success', [112,110,108,104,99,96], '--c-success'],
+    ['Страницы вики без источников', '0', 'гейт держит ноль', 'success', [0,0,0,0,0,0], '--c-text-muted'],
+    ['Дрейф', '1', 'Стенд разработки', 'danger', [0,0,0,1,0,1], '--c-danger'],
+  ] : [
+    ['Ссылки в пустоту внутри Вики/', '0', 'гейт держит ноль', 'success', [0,0,0,0,0,0], '--c-text-muted'],
+    ['Сироты в Вики/', '2', '+1 за неделю', 'warning', [0,1,1,1,1,2], '--c-warning'],
+    ['Упоминания без ссылки', '5', '−2 за неделю', 'success', [9,8,8,7,7,5], '--c-success'],
+    ['Страницы без источников', '0', 'гейт держит ноль', 'success', [0,0,0,0,0,0], '--c-text-muted'],
+    ['Дрейф', '1', 'Стенд разработки', 'danger', [0,0,0,1,0,1], '--c-danger'],
+  ];
+  const W = 600, H = 150, xs = i => 30 + i * ((W-40)/5);
+  const yv = v => 130 - (v-30)/50*110;
+  const line = (d, c, dash) => `<polyline points="${d.map((v,i)=>`${xs(i)},${yv(v)}`).join(' ')}" fill="none" style="stroke:var(${c});stroke-width:2${dash?';stroke-dasharray:4 4':''}"/>`;
+  return `<div class="doc"><div class="docin" style="max-width:900px">
+    <div class="kicker">${I(ic.pulse,13)} lint 20.10 в 03:00 · 61 заметка базы · 14 страниц вики</div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 12px"><h2 class="pt" style="margin:0;flex:1;min-width:180px">Здоровье базы</h2>
+      <div class="pills"><button class="${base?'on':''}" data-act="scope" data-v="base">Вся база</button><button class="${!base?'on':''}" data-act="scope" data-v="wiki">Только Вики/</button></div>
+      ${btn('gh','sm',I(ic.refresh,14)+'Проверить сейчас')}</div>
+    <div class="tiles new">${T.map(([l,v,d,tone,pts,c]) => `<button class="tile"><span class="lb">${l}</span><span class="v">${v}</span><span class="dl" style="color:var(--c-${tone}-text)">${d}</span>${spark(pts,c)}</button>`).join('')}</div>
+    <div class="chart new"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px"><b style="color:var(--c-text-heading)">Динамика за 6 недель</b>
+      <div class="lg"><span><i style="background:var(--c-accent)"></i>призраки, %</span><span><i style="background:var(--c-info)"></i>сироты, %</span><span><i style="background:var(--c-text-muted)"></i>базовая линия</span></div></div>
+      <svg width="100%" viewBox="0 0 ${W} ${H}" role="img" aria-label="Доля призраков упала с 70 до 64 процентов, сирот — с 48 до 45">
+        ${[40,60,80].map(v => `<line x1="30" x2="${W-10}" y1="${yv(v)}" y2="${yv(v)}" style="stroke:var(--c-border-light)"/><text x="4" y="${yv(v)+4}" style="fill:var(--c-text-muted);font:10px 'JetBrains Mono',monospace">${v}</text>`).join('')}
+        ${line([70,70,70,70,70,70],'--c-text-muted',true)}${line([70,70,69,67,66,64],'--c-accent')}${line([48,48,47,47,46,45],'--c-info')}
+        <line x1="${xs(1)}" x2="${xs(1)}" y1="14" y2="132" style="stroke:var(--c-dashed);stroke-dasharray:3 3"/><text x="${xs(1)+4}" y="22" style="fill:var(--c-text-muted);font:10px sans-serif">вики заведена</text>
+        ${['15.09','22.09','29.09','06.10','13.10','20.10'].map((d,i) => `<text x="${xs(i)-(i===5?30:14)}" y="146" style="fill:var(--c-text-muted);font:10px 'JetBrains Mono',monospace">${d}</text>`).join('')}
+      </svg>
+      <div class="hint">Базовая линия снята lint-кодом после фикса парсера ссылок, до первой записи в Вики/. Замеры — metrics.jsonl базы.</div></div>
+    ${S.m ? `<div style="margin-top:14px" class="isl">${healthSide()}</div>` : ''}
+    <div class="chart f2" style="margin-top:14px"><div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">${I(ic.graph,15)}<b style="color:var(--c-text-heading)">Граф вики</b><span class="f2tag">Ф2 · контур</span></div>
+      <div class="lg"><span><i style="background:var(--c-accent)"></i>обзор</span><span><i style="background:var(--c-plan)"></i>тема</span><span><i style="background:var(--c-info)"></i>сущность</span><span><i style="background:var(--c-success)"></i>понятие</span><span><i style="background:var(--c-warning)"></i>решение</span><span><i style="background:var(--c-text-muted)"></i>источник</span></div>
+      <div class="hint" style="margin-top:6px">Цвет узла по type, отметки stale и disputed, «страница просится» пунктиром. В Ф0–Ф1 не делаем — граф заметок остаётся как есть.</div></div>
+  </div></div>`;
+}
+
+// ===== Пустые состояния =====
+function emptyCenter() {
+  if (S.screen === 'local') return `<div class="empty new"><div class="ei">${I(ic.device,26)}</div>
+    <div class="et">Вики доступна для серверных проектов</div>
+    <div class="es">Файлы этого проекта живут на устройстве «Ноутбук», а Хранитель пишет на сервере. Ваши заметки работают как раньше; вики можно завести в личной базе или в серверном проекте.</div>
+    ${btn('gh','sm','Открыть личную вики')}</div>`;
+  return `<div class="empty new"><div class="ei">${I(ic.book,26)}</div>
+    <div class="et">Вики не заведена</div>
+    <div class="es">Хранитель соберёт из ваших заметок, файлов и чатов связную базу. Каждое утверждение — с цитатой, каждая правка — через ваше ревью.</div>
+    <div class="steps3"><div>${I(ic.lock,15)}<span>Ваши заметки Хранитель не трогает: он пишет только в папку <b>Вики/</b>.</span></div>
+      <div>${I(ic.inbox,15)}<span>Правки приходят пакетами во «Входящие» — принять, отклонить с причиной.</span></div>
+      <div>${I(ic.git,15)}<span>Хранитель не коммитит: вики проекта страхует git, коммит — за вами.</span></div></div>
+    ${btn('pri','md','Завести вики')}
+    <div class="hint">Появятся Вики/_schema.md, _index.md и _log.md. Сразу после — первый замер «Здоровья».</div></div>`;
+}
+
+// ===== Точки входа «Разобрать в базу» =====
+function entry() {
+  const item = (dis, hint) => `<button class="mi new ${dis ? 'dis' : ''}">${I(ic.book,15)}<span>Разобрать в базу<span class="h">${hint}</span></span></button>`;
+  const cols = S.m ? '1fr' : '1fr 1fr 1fr';
+  return `<div class="doc"><div class="docin" style="max-width:1100px">
+    <h2 class="pt" style="font-size:22px">«Разобрать в базу» — три точки входа</h2>
+    <p class="summary">Действие ставит заявку Хранителю со <b>ссылкой</b> на источник, а не с его текстом. Пакет придёт во «Входящие».</p>
+    <div style="display:grid;grid-template-columns:${cols};gap:14px;align-items:start">
+      <div><div class="cap">Заметка · меню ⋯ в шапке</div><div class="panel" style="min-height:250px">
+        <div class="phd"><b style="flex:1">Итоги недели 42</b><button class="ib">${I(ic.more,16)}</button></div>
+        <div style="padding:10px 12px;font-size:12.5px;color:var(--c-text-secondary)">Обсудили бюджет на GPU, Глеб берёт звук…</div>
+        <div class="menu" style="right:8px;top:40px">
+          <button class="mi">${I(ic.chat,15)}<span>Спросить Claude</span></button>
+          ${item(false,'Хранитель соберёт пакет правок вики')}
+          <div class="msep"></div><button class="mi">${I(ic.file,15)}<span>Переместить</span></button></div></div></div>
+      <div><div class="cap">Файл · кнопка в шапке просмотра</div><div class="panel" style="min-height:250px">
+        <div class="phd">${I(ic.file,14)}<span class="mono" style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">docs/adr/ADR-035-llm-wiki.md</span>
+          <button class="btn gh xs new" title="Разобрать в базу: Хранитель соберёт пакет правок вики">${I(ic.book,13)}${S.m ? '' : 'В базу'}</button></div>
+        <div style="padding:10px 12px;font-size:12.5px;color:var(--c-text-secondary)"># ADR-035. LLM-wiki как производный слой…</div>
+        <div style="padding:0 12px 12px"><div class="toast new">${I(ic.check,15)}<span style="flex:1">Разбор поставлен. Пакет появится во «Входящих» через 1–2 минуты.</span><button class="lnk">Во «Входящие»</button></div></div></div></div>
+      <div><div class="cap">Чат · выбор сообщений</div><div class="panel" style="min-height:250px">
+        <div class="phd"><b style="flex:1">Ревью звука</b></div>
+        <div style="padding:8px 12px;font-size:12.5px;display:flex;flex-direction:column;gap:6px">
+          <div style="background:var(--c-accent-light);border-radius:8px;padding:5px 8px">☑ m12 · Глеб, возьмёшь звук?…</div>
+          <div style="background:var(--c-accent-light);border-radius:8px;padding:5px 8px">☑ m13 · Да, закрываю ревью…</div>
+          <div style="border-radius:8px;padding:5px 8px;color:var(--c-text-muted)">☐ m19 · ок, спасибо</div></div>
+        <div class="new" style="display:flex;gap:8px;align-items:center;padding:8px 12px;border-top:1px solid var(--c-border);background:var(--c-bg-inset)">
+          <span style="flex:1;font-size:12px">Выбрано: сообщения 12–18</span>${btn('gh','xs','Отмена')}${btn('pri','xs','Разобрать в базу')}</div></div>
+        <div class="hint" style="margin-top:6px">Вход в режим выбора — пункт «Разобрать в базу» в меню сообщения. Чат другого проекта или чужой — отказ сервера.</div></div>
+    </div>
+    <h3 class="sh">Когда кнопки нет или она выключена</h3>
+    <div class="panel" style="max-width:420px;padding:5px">
+      ${item(true,'Временные заметки не разбираются — у них есть срок жизни')}
+      ${item(true,'Сначала заведите вики в этой базе')}
+      ${item(true,'Во «Входящих» 20 пакетов — сначала разберите их')}
+      ${item(true,'Личная база: разбор с моделью откроется на этапе Ф2')}
+    </div>
+    <div class="hint" style="margin-top:6px">Внутри Вики/ и у локального проекта пункта нет совсем.</div>
+  </div></div>`;
+}
+
+function center() {
+  if (['empty','local'].includes(S.screen)) return emptyCenter();
+  if (S.screen === 'health') return health();
+  if (['inbox','pkg','checks'].includes(S.screen)) return pkg();
+  if (S.screen === 'loading') return `<div class="doc"><div class="docin"><div class="sk" style="width:30%;height:10px"></div><div class="sk" style="width:55%;height:26px;margin:10px 0"></div><div class="sk" style="width:80%;height:12px;margin-bottom:22px"></div>${[0,1,2,3].map(()=>'<div class="sk" style="width:95%;height:11px;margin:8px 0"></div>').join('')}</div></div>`;
+  return page();
+}
+
+// ===== Сборка =====
+function rail() {
+  return `<div class="rail">${[['home',0],['chat',0],['tasks',0],['note',1],['graph',0]].map(([k,on]) => `<span class="rb ${on?'on':''}">${I(ic[k],17)}</span>`).join('')}</div>`;
+}
+function desktop() {
+  if (S.screen === 'entry') return rail() + `<div class="isl center">${entry()}</div>`;
+  return rail() + `<div class="isl side">${side()}</div><div class="isl center">${center()}</div>`;
+}
+function mobile() {
+  if (S.screen === 'entry') return `<div class="mhead"><span class="ttl" style="padding-left:8px">Точки входа</span></div><div class="isl">${entry()}</div>`;
+  if (isDetail()) {
+    const t = S.screen === 'drift' ? 'Стенд разработки' : S.screen === 'page' ? 'Глеб (ревьюер)' : 'Пакет изменений';
+    const back = ['pkg','checks'].includes(S.screen) ? 'inbox' : 'catalog';
+    let sheet = '';
+    if (S.tip) {
+      const s = curSrc()[S.tip - 1];
+      sheet = `<div class="scrim" data-act="tipclose"></div><div class="sheet" role="dialog" aria-label="Сноска ${s.no}"><div class="grab"></div>
+        <div class="cap">Сноска ${s.no}</div><div class="qt">«${s.q}»</div>
+        <div class="tsrc">${I(ic[OICON[s.o]],14)}<span class="nm">${s.t}</span></div><div class="hint" style="margin:3px 0 12px">${ORU[s.o]} · ${s.ref} · ${s.d}</div>
+        ${s.gone ? badge('neutral','оригинал удалён, выдержка сохранена') : btn('sec','md','Открыть источник','', 'style="width:100%"')}</div>`;
+    }
+    return `<div class="mhead"><button class="ib" data-go="${back}" aria-label="Назад">${I(ic.back,20)}</button><span class="ttl">${t}</span><button class="ib">${I(ic.more,18)}</button></div>
+      <div class="isl" style="position:static">${center()}</div>${sheet}`;
+  }
+  const list = ['empty','local','health'].includes(S.screen) ? center() : tab() === 'inbox' ? inboxList() : catalogList();
+  return `<div class="mhead" style="padding-left:14px"><span class="ttl serif" style="font-size:18px">Заметки</span><button class="bdg t-neutral new">AI Home ${I(ic.chev,12)}</button></div>
+    <div class="ctl" style="padding-top:8px;background:var(--c-bg-white)">
+      <div class="pills fill new"><button>Заметки</button><button class="on">Вики</button><button>Граф</button></div>
+      ${['empty','local'].includes(S.screen) ? '' : `<div class="pills fill new"><button class="${tab()==='catalog'?'on':''}" data-go="catalog">Каталог</button><button class="${tab()==='inbox'?'on':''}" data-go="inbox">Входящие <span class="cnt">5</span></button><button class="${tab()==='health'?'on':''}" data-go="health">Здоровье</button></div>`}
+    </div><div class="isl">${list}</div>`;
+}
+
+function mk() {
+  document.getElementById('mk').innerHTML = `<h1>LLM-wiki · v1</h1>
+    <div class="grp"><span class="lbl">Экран</span><div class="pills">${SCREENS.map(([k,t]) => `<button class="${S.screen===k?'on':''}" data-go="${k}">${t}</button>`).join('')}</div></div>
+    ${['pkg'].includes(S.screen) ? `<div class="grp"><span class="lbl">Пакет</span><div class="pills">${PSTATES.map(([k,t]) => `<button class="${S.ps===k?'on':''}" data-act="ps" data-v="${k}">${t}</button>`).join('')}</div></div>` : ''}
+    <div class="grp"><div class="pills"><button class="${!S.dark?'on':''}" data-act="theme" data-v="0">Светлая</button><button class="${S.dark?'on':''}" data-act="theme" data-v="1">Тёмная</button></div>
+      <div class="pills"><button class="${!S.m?'on':''}" data-act="w" data-v="0">1240</button><button class="${S.m?'on':''}" data-act="w" data-v="1">360</button></div>
+      <label><input type="checkbox" data-act="calm" ${S.nonew?'checked':''}> без пометок</label></div>`;
+  document.getElementById('note').innerHTML = `Пунктир <b>C.accentMuted</b> — нового в продукте; серый пунктир с меткой <b>Ф2</b> — только контур. Наведите на сноску (на 360 — тап). В пакете наведение на операцию подсвечивает её цитату в источнике. Диплинки: <span class="mono">#pkg&amp;ps=applied&amp;dark&amp;m</span>.`;
+}
+function render() {
+  document.documentElement.dataset.theme = S.dark ? 'dark' : 'light';
+  document.body.classList.toggle('nonew', S.nonew);
+  const app = document.getElementById('app');
+  app.className = 'app' + (S.m ? ' m' : '');
+  app.innerHTML = S.m ? mobile() : desktop();
+  mk();
+  const parts = [S.screen]; if (S.screen === 'pkg' && S.ps !== 'proposed') parts.push('ps=' + S.ps);
+  if (S.dark) parts.push('dark'); if (S.m) parts.push('m'); if (S.nonew) parts.push('calm');
+  history.replaceState(null, '', '#' + parts.join('&'));
+}
+
+document.addEventListener('click', e => {
+  const g = e.target.closest('[data-go]');
+  if (g) { S.screen = g.dataset.go; S.tip = null; if (S.screen === 'pkg' && !e.target.closest('.mk')) S.ps = S.ps; render(); return; }
+  const a = e.target.closest('[data-act]'); if (!a) return;
+  const k = a.dataset.act, v = a.dataset.v, s = +a.dataset.s;
+  if (k === 'theme') S.dark = v === '1';
+  else if (k === 'w') S.m = v === '1';
+  else if (k === 'calm') S.nonew = a.checked;
+  else if (k === 'ps') S.ps = v;
+  else if (k === 'scope') S.scope = v;
+  else if (k === 'acc') S.dec[s] = 'acc';
+  else if (k === 'rej') S.dec[s] = 'rej';
+  else if (k === 'undo') delete S.dec[s];
+  else if (k === 'accall') { for (const o of OPS) if (!S.dec[o.seq]) S.dec[o.seq] = 'acc'; }
+  else if (k === 'tip') { S.tip = S.tip === +a.dataset.n ? null : +a.dataset.n; }
+  else if (k === 'tipclose') S.tip = null;
+  else if (k === 'driftdiff') S.driftDiff = !S.driftDiff;
+  else if (k === 'src') S.srcOpen = !S.srcOpen;
+  else if (k === 'go-drift') S.screen = 'drift';
+  else return;
+  render();
+});
+document.addEventListener('input', e => {
+  const op = e.target.closest('.op'); if (op && e.target.matches('textarea')) S.rs[op.dataset.seq] = e.target.value;
+});
+// Наведение на операцию подсвечивает её цитату в карточке источника
+document.addEventListener('mouseover', e => {
+  const op = e.target.closest('.op');
+  document.querySelectorAll('mark.hl').forEach(m => m.classList.toggle('hot', !!op && m.dataset.op.split(',').includes(op.dataset.seq)));
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && S.tip) { S.tip = null; render(); } });
+render();
+</script>
+</body>
+</html>

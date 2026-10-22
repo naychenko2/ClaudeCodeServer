@@ -44,7 +44,7 @@ public sealed class PersonaBindingsContributor : IPromptSectionContributor
             // Пустой список — честное «смонтированных секций нет», null был бы миной.
             var block = await _bindings.BuildTurnBlockAsync(
                 sessionContext.OwnerId, sessionContext.Persona.Id, turnText,
-                sessionContext.WorkspaceSections ?? []);
+                sessionContext.WorkspaceSections ?? [], sessionContext.Session.ProjectId);
             if (string.IsNullOrWhiteSpace(block)) return null;
             return new PromptSectionContribution([new PromptSection(Key, block)]);
         }

@@ -77,6 +77,23 @@ public record GuestTextMessage(string Text, string PersonaId, long? Timestamp = 
     string? DelegationTaskId = null)
     : ServerMessage("guest_text");
 
+// Черновик плагина build-it-yourself изменился (ADR-031, шаг 4.2): наблюдатель
+// data/plugins/{owner}/_drafts/{slug} шлёт ВЛАДЕЛЬЦУ сигнал обновить предпросмотр панели.
+// Slug + монотонная ревизия (каждая правка файла в черновике её увеличивает); БЕЗ содержимого
+// файлов и без хостовых путей — карточка по slug сама перечитает предпросмотр. Эфемерное:
+// в history.json не пишется (нет case в OnMessageAsync), после F5 предпросмотр перечитается.
+public record PluginDraftChangedMessage(string Slug, long Revision)
+    : ServerMessage("plugin_draft_changed");
+
+// Установка плагина изменилась (ADR-031, S6): install/обновление/принятие черновика,
+// grant прав, enable/disable, uninstall или запись/удаление секрета. Точка испускания —
+// хранилище (PluginStore/PluginSecretsStore), а не контроллеры: каждая запись установки
+// испускает событие, поэтому новая ручка не сможет «забыть» его. ВЛАДЕЛЬЦУ (ToOwner),
+// БЕЗ полезной нагрузки: клиент сам перечитает GET /api/plugins (панель подхватит новую
+// версию/права/секреты). Эфемерное: в history.json не пишется, UpdatedAt не двигает.
+public record PluginsChangedMessage()
+    : ServerMessage("plugins_changed");
+
 public record ThinkingDeltaMessage(string Text)
     : ServerMessage("thinking_delta");
 

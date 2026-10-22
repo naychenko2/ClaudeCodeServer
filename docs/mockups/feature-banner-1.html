@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · панель фичи в чате — 4 варианта</title>
+<!--
+  Макет: панель фичи в чате (волна 3 «Обзор фич»).
+  Привязка: эпик 9919bd75-0b1c-4fda-8196-72354cbcba29, шаг М2 (lane front).
+  Записка: feature-banner-1.md, токены: feature-banner-1-tokens.md.
+  Файл самодостаточный: без внешних ресурсов. Сырые цвета живут ТОЛЬКО в блоке
+  переменных ниже (копия theme.css); вся вёрстка — через var(--c-*).
+-->
+<style>
+/* ===== Токены: копия frontend/src/lib/theme.css (светлая/тёмная).
+   Единственное место с сырыми значениями; ниже — только var(--c-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --c-msg-bg:rgba(251,248,242,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-sheet:0 -8px 28px rgba(60,50,35,.18);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --font-sans:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-serif:'PT Serif',Georgia,serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A2E26;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-nav-ink:#EDE6DB; --c-on-nav-ink:#201C18;
+  --c-msg-bg:rgba(46,42,37,.42);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-modal:0 24px 60px rgba(0,0,0,.6);
+  --shadow-sheet:0 -10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+
+* { box-sizing:border-box; }
+html, body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary); font:13px/1.45 var(--font-sans); overflow-x:hidden; }
+/* Раздел 0 токенов: сброс UA у кнопок */
+button { font:inherit; color:inherit; background:none; border:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible, [tabindex]:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:var(--font-mono); }
+.be { display:inline-flex; align-items:center; gap:3px; font-size:10px; font-weight:700; color:var(--c-warning-text);
+  background:var(--c-warning-bg); border-radius:6px; padding:0 6px; white-space:nowrap; vertical-align:middle; }
+
+/* ===== Пульт макета (не часть продукта) ===== */
+.mk { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; padding:10px 14px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); width:100%; }
+.mk .grp { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 9px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.note { padding:8px 14px 0; font-size:12.5px; color:var(--c-text-secondary); max-width:1240px; }
+.note b { color:var(--c-text-heading); }
+.meter { padding:4px 14px 8px; font:11px/1.4 var(--font-mono); color:var(--c-text-muted); }
+.meter.ok b { color:var(--c-success-text); } .meter.bad b { color:var(--c-danger-text); }
+
+/* ===== Рамка приложения ===== */
+#stage { padding:0 14px 20px; }
+#stage.w360 { max-width:388px; }
+@media (max-width:719px) { #stage { padding:0; } .app.m { border:none; border-radius:0; } }
+.app { position:relative; display:flex; gap:8px; padding:8px; height:760px; background:var(--c-bg-main);
+  border:1px solid var(--c-border); border-radius:14px; overflow:hidden; }
+.app.m { padding:0; gap:0; height:720px; border-radius:14px; }
+.list { width:270px; flex-shrink:0; background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); padding:10px 8px; overflow:hidden; }
+.app.m .list { display:none; }
+.list .h { font-weight:600; color:var(--c-text-heading); padding:2px 8px 8px; }
+.list .it { display:block; width:100%; padding:8px; border-radius:8px; color:var(--c-text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.list .it.on { background:var(--c-bg-selected); font-weight:600; }
+.list .it small { display:block; font-size:11px; color:var(--c-text-muted); overflow:hidden; text-overflow:ellipsis; }
+.chat { position:relative; flex:1; min-width:0; display:flex; flex-direction:column; }
+
+/* Шапка чата */
+.ch { display:flex; align-items:center; gap:10px; padding:8px 16px 10px; flex-shrink:0; min-width:0; }
+.app.m .ch { padding:8px 8px 8px 4px; background:var(--c-bg-card); border-bottom:1px solid var(--c-border-light); }
+.ch .bk { width:40px; height:40px; display:none; align-items:center; justify-content:center; color:var(--c-text-secondary); border-radius:8px; flex-shrink:0; }
+.app.m .ch .bk { display:inline-flex; }
+.av { display:inline-flex; align-items:center; justify-content:center; border-radius:50%; flex-shrink:0;
+  background:var(--c-accent-light); color:var(--c-accent); font-weight:700; }
+.ch .av { width:40px; height:40px; font-size:14px; }
+.ch .tt { min-width:0; flex:1; }
+.ch .t1 { font:700 18px/1.25 var(--font-serif); color:var(--c-accent); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ch .t1 span { font-weight:400; color:var(--c-text-secondary); font-size:15px; }
+.ch .t2 { display:flex; align-items:center; gap:6px; margin-top:2px; min-width:0; font-size:12px; color:var(--c-text-secondary); }
+.ch .t2 .sub { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.stepchip { display:inline-flex; align-items:center; gap:3px; font-size:11px; color:var(--c-info); background:var(--c-info-bg); border-radius:6px; padding:0 6px; white-space:nowrap; flex-shrink:0; }
+.backlink { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--c-text-secondary); padding:4px 6px; border-radius:8px; white-space:nowrap; flex-shrink:0; }
+.backlink:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.app.m .backlink { min-height:40px; }
+
+/* Дорожки: верхняя (плашка), лента, композер. Все три центрируются ОДНОЙ
+   колонкой .col: CHAT_MAX_W 950 + поле CHAT_GUTTER 16 с обеих сторон. Полоса
+   прокрутки ленты резервируется симметрично (scrollbar-gutter both-edges) — и у
+   дорожек без прокрутки тоже, иначе колонки разойдутся на ширину полосы. */
+.lane { flex-shrink:0; overflow-y:hidden; scrollbar-gutter:stable both-edges; }
+.feed { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; scrollbar-gutter:stable both-edges; position:relative; }
+.col { max-width:950px; margin:0 auto; padding:0 16px; box-sizing:content-box; }
+.app.m .col { padding:0 16px; }
+.colin { width:100%; }
+.lane.top .col { padding-top:2px; }
+.lane.top:empty { display:none; }
+
+/* Лента */
+.msg { margin:12px 0; }
+.msg.u { display:flex; justify-content:flex-end; }
+.msg.u .b { background:var(--c-accent-light); color:var(--c-text-primary); border-radius:14px 14px 4px 14px; padding:8px 12px; max-width:78%; }
+.msg.a .b { background:var(--c-msg-bg); border-radius:12px; padding:8px 4px; color:var(--c-text-primary); }
+.msg.a .who { font-size:11px; color:var(--c-text-muted); margin-bottom:2px; }
+.toolline { font:11px var(--font-mono); color:var(--c-text-muted); padding:4px 0; }
+
+/* Композер */
+.lane.bot { padding:6px 0 10px; }
+.cmp { display:flex; align-items:center; gap:8px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:14px;
+  padding:10px 12px; min-height:48px; color:var(--c-text-muted); box-shadow:var(--shadow-card); }
+.cmp.focus { box-shadow:var(--shadow-focus); border-color:var(--c-accent-muted); color:var(--c-text-primary); }
+.cmp .ph { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* ===== Общие кирпичи панели ===== */
+.glyph { width:13px; height:13px; flex-shrink:0; display:inline-block; }
+.dots { display:inline-flex; align-items:center; gap:3px; flex-shrink:0; }
+.dots i { width:6px; height:6px; border-radius:3px; background:var(--c-progress-track); display:block; }
+.dots i.d { background:var(--c-success); }
+.dots i.a { width:16px; background:var(--c-text-heading); }
+.dots i.a.wait { background:var(--c-info); } .dots i.a.stop { background:var(--c-danger); }
+.dots i.x { background:none; box-shadow:inset 0 0 0 1px var(--c-dashed); }
+.tone-wait { color:var(--c-info); font-weight:600; }
+.tone-stop { color:var(--c-danger-text); font-weight:600; }
+.tone-done { color:var(--c-success-text); }
+.tone-closed, .tone-mute { color:var(--c-text-muted); }
+.role { font:11px var(--font-mono); color:var(--c-text-secondary); background:var(--c-bg-selected); border-radius:6px; padding:0 5px; white-space:nowrap; flex-shrink:0; }
+.role.key { color:var(--c-accent); background:var(--c-accent-light); font-weight:700; }
+.rolebtn { display:inline-flex; align-items:center; cursor:help; border-radius:6px; flex-shrink:0; }
+.ppl { display:inline-flex; align-items:center; flex-shrink:0; }
+.ppl .av { width:20px; height:20px; font-size:9px; box-shadow:0 0 0 2px var(--c-bg-card); background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.ppl .av + .av { margin-left:-5px; }
+.ppl .av.me { background:var(--c-accent-light); color:var(--c-accent); }
+.lnk { display:inline-flex; align-items:center; gap:4px; color:var(--c-accent); font-weight:600; font-size:12px; border-radius:8px; padding:4px 8px; white-space:nowrap; flex-shrink:0; }
+.lnk:hover { background:var(--c-accent-light); }
+.lnk.mute { color:var(--c-text-secondary); font-weight:400; }
+.lnk.mute:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:5px; height:26px; padding:0 10px; border-radius:8px; font-size:12px; font-weight:600; white-space:nowrap; flex-shrink:0; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.pri:hover { filter:brightness(1.05); }
+.btn.info { background:var(--c-info); color:var(--c-on-accent); }
+.btn.gh { border:1px solid var(--c-border); color:var(--c-text-secondary); background:var(--c-bg-white); }
+.btn.gh:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.chev { width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-muted); border-radius:8px; flex-shrink:0; }
+.chev:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.chev svg { transition:transform .15s; }
+.chev[aria-expanded="true"] svg { transform:rotate(180deg); }
+.skel { background:var(--c-bg-selected); border-radius:6px; height:10px; display:block; animation:pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity:.5; } }
+@media (prefers-reduced-motion:reduce) { .skel { animation:none; } .chev svg { transition:none; } }
+.reason { border-radius:10px; padding:8px 10px; font-size:12px; line-height:1.45; display:flex; gap:8px; align-items:flex-start; }
+.reason.wait { background:var(--c-info-bg); color:var(--c-text-primary); }
+.reason.stop { background:var(--c-danger-bg); color:var(--c-text-primary); }
+.reason b { font-weight:700; color:var(--c-text-heading); }
+.reason.stop b { color:var(--c-danger-text); }
+.reason .txt { flex:1; min-width:0; }
+.kv { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; font-size:12px; color:var(--c-text-secondary); }
+.kv .k { color:var(--c-text-muted); }
+.sep { color:var(--c-text-muted); }
+
+/* ===== Вариант А · «Строка» ===== */
+.va { border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); }
+.va.t-wait { background:var(--c-info-bg); border-color:transparent; }
+.va.t-stop { background:var(--c-danger-bg); border-color:transparent; }
+.va.t-done, .va.t-closed { background:var(--c-bg-inset); border-color:transparent; }
+.va .row { display:flex; align-items:center; gap:8px; min-height:34px; padding:3px 4px 3px 10px; min-width:0; }
+.va .row > .hit { display:flex; align-items:center; gap:8px; flex:1; min-width:0; align-self:stretch; border-radius:8px; }
+.va .ttl { font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:30px; flex:0 1 auto; }
+.va .st { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1 1 auto; font-size:12px; color:var(--c-text-secondary); }
+.va .st b { font-weight:600; color:var(--c-text-heading); }
+.va.t-done .ttl, .va.t-closed .ttl { color:var(--c-text-secondary); }
+.va .more { padding:2px 10px 10px 10px; display:flex; flex-direction:column; gap:10px; border-top:1px solid var(--c-border-light); margin-top:2px; padding-top:10px; }
+.va.t-wait .more, .va.t-stop .more, .va.t-done .more, .va.t-closed .more { border-top-color:var(--c-divider); }
+.va .full { font:700 15px/1.3 var(--font-serif); color:var(--c-text-heading); }
+.va .acts { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.app.m .va .row { min-height:44px; padding:2px 2px 2px 10px; gap:6px; }
+.app.m .va .row > .hit { min-height:40px; }
+.app.m .va .ttl { display:none; }
+.app.m .va .alarm { display:flex; align-items:center; gap:8px; padding:0 4px 4px 10px; }
+.app.m .va .alarm .txt { flex:1; min-width:0; font-size:12px; color:var(--c-text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* ===== Вариант Б · «Карточка в ленте» ===== */
+.vb-sticky.open { position:static; }
+.vb-sticky { position:sticky; top:0; z-index:2; padding:8px 0 4px; background:linear-gradient(var(--c-bg-main) 75%, transparent); }
+.vb { border-radius:12px; background:var(--c-bg-white); border:1px solid var(--c-border-light); box-shadow:var(--shadow-card); position:relative; overflow:hidden; }
+.vb::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--c-progress-track); }
+.vb.t-run::before { background:var(--c-text-heading); }
+.vb.t-wait::before { background:var(--c-info); } .vb.t-stop::before { background:var(--c-danger); }
+.vb.t-done::before { background:var(--c-success); } .vb.t-closed::before { background:var(--c-dashed); }
+.vb .hd { display:flex; align-items:center; gap:8px; padding:8px 6px 8px 14px; min-width:0; }
+.vb .hd .hit { display:flex; align-items:center; gap:8px; flex:1; min-width:0; border-radius:8px; }
+.vb .eyebrow { font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); flex-shrink:0; }
+.vb .ttl { font:700 14px/1.3 var(--font-serif); color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+.tag { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; border-radius:999px; padding:1px 8px; white-space:nowrap; flex-shrink:0; background:var(--c-bg-selected); color:var(--c-text-heading); }
+.tag.wait { background:var(--c-info-bg); color:var(--c-text-primary); }
+.tag.wait::before { content:''; width:6px; height:6px; border-radius:3px; background:var(--c-info); }
+.tag.stop { background:var(--c-danger-bg); color:var(--c-danger-text); box-shadow:inset 0 0 0 1px var(--c-danger); }
+.tag.done { background:var(--c-success-bg); color:var(--c-success-text); }
+.tag.closed { color:var(--c-text-secondary); font-weight:400; }
+.vb .bd { padding:2px 12px 12px 14px; display:flex; flex-direction:column; gap:10px; }
+.pipe { display:grid; grid-template-columns:repeat(7,1fr); gap:0; position:relative; padding-top:2px; }
+.pipe .s { display:flex; flex-direction:column; align-items:center; gap:4px; position:relative; min-width:0; border-radius:8px; padding:2px 0; }
+.pipe .s::before { content:''; position:absolute; top:9px; left:-50%; width:100%; height:2px; background:var(--c-progress-track); z-index:0; }
+.pipe .s:first-child::before { display:none; }
+.pipe .s.d::before, .pipe .s.a::before { background:var(--c-success); }
+.pipe .s.x::before { background:none; border-top:2px dashed var(--c-dashed); height:0; }
+.pipe .n { width:14px; height:14px; border-radius:7px; background:var(--c-bg-white); box-shadow:inset 0 0 0 2px var(--c-progress-track); position:relative; z-index:1; }
+.pipe .d .n { background:var(--c-success); box-shadow:none; }
+.pipe .a .n { background:var(--c-text-heading); box-shadow:0 0 0 3px var(--c-bg-selected); }
+.pipe .a.wait .n { background:var(--c-info); box-shadow:0 0 0 3px var(--c-info-bg); }
+.pipe .a.stop .n { background:var(--c-danger); box-shadow:0 0 0 3px var(--c-danger-bg); }
+.pipe .x .n { box-shadow:inset 0 0 0 2px var(--c-dashed); }
+.pipe .l { font-size:10px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
+.pipe .a .l { color:var(--c-text-heading); font-weight:700; }
+.pipe .a.wait .l { color:var(--c-info); } .pipe .a.stop .l { color:var(--c-danger-text); }
+.app.m .pipe .s:not(.a) .l { visibility:hidden; }
+.app.m .pipe .a .l { overflow:visible; }
+.now { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--c-text-secondary); flex-wrap:wrap; }
+.now b { color:var(--c-text-heading); font-weight:600; }
+.vb .acts { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.vb.col1 .bd { display:none; }
+
+/* ===== Вариант В · «Пилюля в шапке» ===== */
+.pill { display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:100%; height:24px; padding:0 8px 0 7px; border-radius:999px;
+  background:var(--c-bg-selected); color:var(--c-text-primary); font-size:12px; flex-shrink:1; }
+.pill:hover { box-shadow:inset 0 0 0 1px var(--c-border); }
+.pill[aria-expanded="true"] { box-shadow:inset 0 0 0 1px var(--c-accent-muted); background:var(--c-accent-light); }
+.pill.t-wait { background:var(--c-info-bg); } .pill.t-stop { background:var(--c-danger-bg); }
+.pill.t-done, .pill.t-closed { background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.pill .pt { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; font-weight:600; color:var(--c-text-heading); }
+.pill .ps { white-space:nowrap; flex-shrink:0; color:var(--c-text-secondary); }
+.pill .dot { width:6px; height:6px; border-radius:3px; background:var(--c-info); flex-shrink:0; }
+.pill .dot.stop { background:var(--c-danger); }
+.ring { width:16px; height:16px; flex-shrink:0; }
+.app.m .pill { height:28px; }
+.app.m .ch .t2 .pillwrap { flex:1; min-width:0; display:flex; }
+.app.m .ch .t2 .pill { min-height:40px; height:auto; padding:0; background:none!important; box-shadow:none!important; width:100%; }
+.app.m .ch .t2 .pill .pin { display:inline-flex; align-items:center; gap:6px; min-width:0; max-width:100%; height:24px; padding:0 8px 0 7px; border-radius:999px; background:var(--c-bg-selected); }
+.app.m .ch .t2 .pill.t-wait .pin { background:var(--c-info-bg); } .app.m .ch .t2 .pill.t-stop .pin { background:var(--c-danger-bg); }
+.app.m .ch .t2 .pill.t-done .pin, .app.m .ch .t2 .pill.t-closed .pin { background:var(--c-bg-inset); }
+.pin { display:contents; }
+.pop { position:absolute; z-index:50; width:380px; max-width:calc(100% - 16px); background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+  box-shadow:var(--shadow-dropdown); padding:12px; display:flex; flex-direction:column; gap:10px; }
+.pop .full { font:700 15px/1.3 var(--font-serif); color:var(--c-text-heading); }
+.pop .acts { display:flex; flex-wrap:wrap; gap:6px; }
+
+/* ===== Вариант Г · «Мини-хронология» ===== */
+.vg { border-radius:12px; background:var(--c-bg-card); border:1px solid var(--c-border-light); padding:8px 8px 8px 12px; display:flex; flex-direction:column; gap:6px; }
+.vg.t-wait { border-color:var(--c-info); } .vg.t-stop { border-color:var(--c-danger-border); }
+.vg.t-done, .vg.t-closed { background:var(--c-bg-inset); border-color:transparent; }
+.vg .top { display:flex; align-items:center; gap:8px; min-width:0; }
+.vg .ttl { font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+.vg .tabs { display:flex; gap:2px; flex-shrink:0; }
+.vg .tabs button { font-size:12px; color:var(--c-text-secondary); padding:3px 7px; border-radius:7px; white-space:nowrap; }
+.vg .tabs button:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.vg .tabs .cnt { font:11px var(--font-mono); color:var(--c-text-muted); margin-left:3px; }
+.vg .tabs .wd { display:inline-block; width:6px; height:6px; border-radius:3px; background:var(--c-info); margin-left:3px; vertical-align:1px; }
+.tl { display:flex; align-items:stretch; gap:3px; min-width:0; }
+.tl .seg { flex:1 1 0; min-width:0; display:flex; flex-direction:column; gap:3px; padding:3px 4px 4px; border-radius:7px; text-align:left; }
+.tl .seg:hover { background:var(--c-bg-selected); }
+.tl .bar { height:4px; border-radius:2px; background:var(--c-progress-track); }
+.tl .d .bar { background:var(--c-success); }
+.tl .a .bar { background:var(--c-text-heading); }
+.tl .a.wait .bar { background:var(--c-info); } .tl .a.stop .bar { background:var(--c-danger); }
+.tl .x .bar { background:none; border-top:2px dashed var(--c-dashed); height:0; margin-top:2px; }
+.tl .nm { font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tl .d .nm { color:var(--c-text-secondary); }
+.tl .a { flex:2.4 1 0; }
+.tl .a .nm { color:var(--c-text-heading); font-weight:700; }
+.tl .a .sub { font-size:11px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:5px; }
+.tl .a.wait .sub { color:var(--c-info); font-weight:600; } .tl .a.stop .sub { color:var(--c-danger-text); font-weight:600; }
+.vg .foot { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:var(--c-text-secondary); }
+.vg.col1 .tl, .vg.col1 .foot { display:none; }
+.app.m .vg { padding:2px 2px 4px 10px; gap:2px; }
+.app.m .vg .tabs { display:none; }
+.app.m .vg .top { min-height:40px; }
+.app.m .vg .foot { display:none; }
+.app.m .vg .foot.need { display:flex; padding:2px 2px 0 0; }
+.app.m .vg .foot.need .btn { flex:1; }
+.app.m .tl .seg:not(.a) .nm { visibility:hidden; }
+.app.m .tl .seg { padding:6px 2px; }
+.tlbtn { display:block; width:100%; border-radius:8px; }
+.app.m .tl .seg:not(.a) { flex:0 0 24px; }
+.app.m .tl .a { flex:1 1 auto; }
+.vrow { display:flex; align-items:flex-start; gap:10px; padding:6px 4px; border-radius:8px; width:100%; min-height:40px; }
+.vrow .nd { width:12px; height:12px; border-radius:6px; margin-top:4px; flex-shrink:0; box-shadow:inset 0 0 0 2px var(--c-progress-track); }
+.vrow.d .nd { background:var(--c-success); box-shadow:none; } .vrow.a .nd { background:var(--c-text-heading); box-shadow:0 0 0 3px var(--c-bg-selected); }
+.vrow.a.wait .nd { background:var(--c-info); box-shadow:0 0 0 3px var(--c-info-bg); } .vrow.a.stop .nd { background:var(--c-danger); box-shadow:0 0 0 3px var(--c-danger-bg); }
+.vrow.x .nd { box-shadow:inset 0 0 0 2px var(--c-dashed); }
+.vrow .n1 { font-weight:600; color:var(--c-text-heading); } .vrow.p .n1, .vrow.x .n1 { color:var(--c-text-muted); }
+.vrow .n2 { font-size:11px; color:var(--c-text-secondary); }
+
+/* ===== Загрузка / ошибка ===== */
+.ld { display:flex; align-items:center; gap:10px; height:36px; padding:0 12px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); }
+.er { display:flex; align-items:center; gap:10px; min-height:36px; padding:3px 4px 3px 12px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); font-size:12px; color:var(--c-text-secondary); }
+.er .txt { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* ===== Шторка, подсказка, модалка, страница фичи, тост ===== */
+.scrim { position:absolute; inset:0; background:var(--c-overlay); z-index:60; }
+.sheet { position:absolute; left:0; right:0; bottom:0; z-index:61; background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet);
+  max-height:82%; overflow:auto; padding:6px 16px 20px; display:flex; flex-direction:column; gap:12px; }
+.sheet .grab { width:36px; height:4px; border-radius:2px; background:var(--c-divider); margin:4px auto 0; }
+.sheet .hdr { display:flex; align-items:flex-start; gap:8px; }
+.sheet .hdr .full { flex:1; font:700 17px/1.3 var(--font-serif); color:var(--c-text-heading); }
+.sheet .x { width:40px; height:40px; display:inline-flex; align-items:center; justify-content:center; border-radius:10px; color:var(--c-text-secondary); flex-shrink:0; }
+.sheet .acts { display:flex; flex-direction:column; gap:8px; }
+.sheet .acts .btn { height:40px; width:100%; font-size:13px; }
+.tip { position:absolute; z-index:80; max-width:260px; background:var(--c-nav-ink); color:var(--c-on-nav-ink); font-size:12px; line-height:1.45; border-radius:10px; padding:8px 10px; box-shadow:var(--shadow-dropdown); }
+.modal { position:absolute; z-index:71; left:50%; top:50%; transform:translate(-50%,-50%); width:440px; max-width:calc(100% - 24px); background:var(--c-bg-white);
+  border-radius:20px; box-shadow:var(--shadow-modal); padding:20px; display:flex; flex-direction:column; gap:12px; }
+.modal h3 { margin:0; font:700 18px/1.3 var(--font-serif); color:var(--c-text-heading); }
+.modal p { margin:0; font-size:13px; color:var(--c-text-secondary); }
+.modal .acts { display:flex; justify-content:flex-end; gap:8px; }
+.app.m .modal { left:0; right:0; top:auto; bottom:0; transform:none; width:auto; max-width:none; border-radius:22px 22px 0 0; }
+.app.m .modal .acts .btn { flex:1; height:40px; }
+.fpage { position:absolute; inset:0; z-index:40; background:var(--c-bg-card); border-radius:14px; box-shadow:var(--shadow-island); display:flex; flex-direction:column; overflow:hidden; }
+.app.m .fpage { border-radius:0; }
+.fpage .tb { display:flex; align-items:center; gap:8px; padding:10px 12px; border-bottom:1px solid var(--c-border-light); min-height:52px; }
+.fpage .tb .t { font:700 16px/1.3 var(--font-serif); color:var(--c-text-heading); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fpage .tabsb { display:flex; gap:4px; padding:0 12px; border-bottom:1px solid var(--c-border-light); overflow-x:auto; }
+.fpage .tabsb span { padding:0 10px; height:38px; display:inline-flex; align-items:center; color:var(--c-text-secondary); white-space:nowrap; }
+.fpage .tabsb span.on { color:var(--c-accent); font-weight:600; box-shadow:inset 0 -2px 0 var(--c-accent); }
+.fpage .bd { padding:16px; color:var(--c-text-secondary); font-size:13px; display:flex; flex-direction:column; gap:10px; }
+.fpage .hl { background:var(--c-accent-light); border-radius:10px; padding:10px 12px; color:var(--c-text-primary); }
+.toast { position:absolute; z-index:90; left:50%; bottom:84px; transform:translateX(-50%); background:var(--c-nav-ink); color:var(--c-on-nav-ink); border-radius:10px; padding:8px 12px; font-size:12px; max-width:calc(100% - 24px); box-shadow:var(--shadow-dropdown); }
+.app.m .toast { top:70px; bottom:auto; }
+
+/* Тач-цели на 360: всё интерактивное в прототипе ≥ 40 */
+.app.m .chat button { min-height:40px; min-width:40px; }
+.app.m .btn { height:40px; }
+.app.m .chev { width:40px; height:40px; }
+.app.m .lnk { min-height:40px; }
+</style>
+</head>
+<body>
+
+<div class="mk" id="mk">
+  <h1>AI Home · панель фичи в чате — 4 варианта</h1>
+  <div class="grp"><span class="lbl">Вариант</span><div class="pills" data-k="v"></div></div>
+  <div class="grp"><span class="lbl">Состояние</span><div class="pills" data-k="st"></div></div>
+  <div class="grp"><span class="lbl">Этот чат</span><div class="pills" data-k="role"></div></div>
+  <div class="grp"><span class="lbl">Тема</span><div class="pills" data-k="theme"></div></div>
+  <div class="grp"><span class="lbl">Ширина</span><div class="pills" data-k="w"></div></div>
+</div>
+<div class="note" id="note"></div>
+<div class="meter" id="meter"></div>
+<div id="stage"><div class="app" id="app"></div></div>
+
+<script>
+'use strict';
+// ===== Данные макета: проекция индекса фич + run.state (см. записку) =====
+const STAGES = ['Разрез', 'План', 'Производство', 'Ревью', 'Проверка', 'Финал', 'Мерж'];
+const STAGE_WHO = ['Софья', 'Егор', 'Денис, Кира', 'Глеб', 'Вера', 'Александр', 'Марк'];
+const INI = { 'Софья': 'СФ', 'Егор': 'ЕГ', 'Денис': 'ДН', 'Кира': 'КР', 'Глеб': 'ГЛ', 'Вера': 'ВР', 'Александр': 'АЛ', 'Марк': 'МК', 'вы': 'Вы' };
+const FEATURE = { title: 'Обзор фич: страница фичи как файл', branch: 'feat/feature-page-as-file', chats: 6, tasks: 14 };
+const OTHER = { title: 'Голосовой ввод: псевдо-стриминг распознавания', st: 'wait', role: 'оркестратор' };
+// ai — индекс активного этапа (7 = всё пройдено, -1 = закрыта без мержа)
+const STATES = {
+  run:     { label: 'идёт', ai: 2, tone: 'run', tag: 'идёт · производство', now: ['Кира', 'Денис'] },
+  wait:    { label: 'ждёт вас', ai: 2, tone: 'wait', tag: 'ждёт вас', since: '25 мин', reason: 'Кира спрашивает: какой вариант оверлея оставить — А или Б?', now: ['Кира'] },
+  stop:    { label: 'стоит', ai: 2, tone: 'stop', tag: 'стоит', since: '40 мин', reason: 'Сборка упала: tsc -b, 3 ошибки.', now: ['Кира'] },
+  merge:   { label: 'ждёт согласия на мерж', ai: 6, tone: 'wait', tag: 'ждёт согласия на мерж', since: '12 мин', reason: 'Финал принят Александром. Ветка готова влиться в master.', now: [], be: true },
+  merging: { label: 'мерж идёт', ai: 6, tone: 'run', tag: 'мерж · идёт', now: ['Марк'], be: true },
+  merged:  { label: 'смержена', ai: 7, tone: 'done', tag: 'смержена 20.10', now: [] },
+  closed:  { label: 'закрыта', ai: -1, tone: 'closed', tag: 'закрыта без мержа', now: [] },
+  loading: { label: 'загрузка' },
+  error:   { label: 'ошибка' },
+  none:    { label: 'чат вне фичи' },
+};
+const VARIANTS = {
+  A: 'А · Строка',
+  B: 'Б · Карточка в ленте',
+  C: 'В · Пилюля в шапке',
+  D: 'Г · Мини-хронология',
+};
+const NOTES = {
+  A: '<b>А · Строка.</b> Одна строка 36 в ширину колонки: точки этапов, «где мы» словами и одно главное действие, если от вас что-то нужно. Всё остальное — в раскрытии (стрелка) или в шторке на 360. Роль чата не дублируется: она уже есть в шапке чипом шага.',
+  B: '<b>Б · Карточка в ленте.</b> Фича — первая карточка самой ленты, как сообщение-сводка: конвейер-миниатюра с подписями, «сейчас работает», действия. Липнет к верху ленты; свёрнутая — одна строка. Ширина равна колонке по построению.',
+  C: '<b>В · Пилюля в шапке.</b> В ленте ничего не висит. Шапка чата и так пишет фичу и шаг — пилюля заменяет эту подпись: название, кольцо прогресса, этап. Тревога красит пилюлю. По клику — поповер (на 360 — шторка).',
+  D: '<b>Г · Мини-хронология.</b> Компактная панель-лента этапов, как вкладка «Хронология» на новой странице фичи. Клик по этапу открывает страницу на «Хронологии» у этого этапа; справа ярлыки вкладок «Чаты», «Задачи».',
+};
+const OPTS = {
+  v: Object.entries(VARIANTS),
+  st: Object.entries(STATES).map(([k, s]) => [k, s.label]),
+  role: [['exec', 'исполнитель Ш2'], ['key', 'ключевой'], ['multi', 'в двух фичах']],
+  theme: [['light', 'светлая'], ['dark', 'тёмная']],
+  w: [['auto', 'по окну'], ['w360', '360']],
+};
+const S = { v: 'A', st: 'run', role: 'exec', theme: 'light', w: 'auto', open: false, sheet: false, pop: false, page: null, modal: false, fi: 0, back: false, tip: null, toast: '', focus: false };
+
+// ===== Утилиты =====
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ICON = {
+  right: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  left: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>',
+  down: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  x: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+  retry: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg>',
+};
+function glyph(tone) {
+  const c = { run: 'var(--c-text-heading)', wait: 'var(--c-info)', stop: 'var(--c-danger)', done: 'var(--c-success)', closed: 'var(--c-text-muted)' }[tone] || 'var(--c-text-muted)';
+  if (tone === 'wait') return `<svg class="glyph" viewBox="0 0 14 14"><path d="M7 1l6 6-6 6-6-6z" fill="${c}"/></svg>`;
+  if (tone === 'stop') return `<svg class="glyph" viewBox="0 0 14 14"><rect x="2" y="2" width="10" height="10" rx="2" fill="${c}"/></svg>`;
+  if (tone === 'done') return `<svg class="glyph" viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" fill="${c}"/><path d="M4.2 7.2l1.9 1.9 3.7-3.9" fill="none" stroke="var(--c-bg-white)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  if (tone === 'closed') return `<svg class="glyph" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.2" fill="none" stroke="${c}" stroke-width="1.6"/></svg>`;
+  return `<svg class="glyph" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="${c}" stroke-width="1.6"/><circle cx="7" cy="7" r="2.6" fill="${c}"/></svg>`;
+}
+function stageState(i, st) {
+  if (st.ai === -1) return i <= 2 ? 'd' : 'x';
+  if (i < st.ai) return 'd';
+  if (i === st.ai) return 'a';
+  return 'p';
+}
+const toneCls = st => st.tone === 'wait' ? 'wait' : st.tone === 'stop' ? 'stop' : '';
+function dots(st) {
+  return `<span class="dots" aria-hidden="true">${STAGES.map((_, i) => { const s = stageState(i, st); return `<i class="${s} ${s === 'a' ? toneCls(st) : ''}"></i>`; }).join('')}</span>`;
+}
+function ring(st) {
+  const done = st.ai === 7 ? 7 : st.ai === -1 ? 3 : st.ai;
+  const r = 6, L = 2 * Math.PI * r, p = done / 7;
+  const col = st.tone === 'wait' ? 'var(--c-info)' : st.tone === 'stop' ? 'var(--c-danger)' : st.tone === 'done' ? 'var(--c-success)' : st.tone === 'closed' ? 'var(--c-text-muted)' : 'var(--c-text-heading)';
+  return `<svg class="ring" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="${r}" fill="none" stroke="var(--c-progress-track)" stroke-width="2.2"/><circle cx="8" cy="8" r="${r}" fill="none" stroke="${col}" stroke-width="2.2" stroke-dasharray="${(L * p).toFixed(2)} ${L.toFixed(2)}" transform="rotate(-90 8 8)" stroke-linecap="round"/></svg>`;
+}
+function ppl(names) {
+  if (!names.length) return '';
+  return `<span class="ppl">${names.map(n => `<span class="av ${n === 'вы' ? 'me' : ''}" title="${esc(n)}">${INI[n] || n.slice(0, 2)}</span>`).join('')}</span>`;
+}
+// Активная фича этого чата (мультифича — переключается)
+function cur() {
+  if (S.role === 'multi' && S.fi === 1) return { f: { title: OTHER.title, branch: 'feat/voice-pseudo-stream', chats: 4, tasks: 9 }, st: STATES[OTHER.st], other: true };
+  return { f: FEATURE, st: STATES[S.st], other: false };
+}
+// Где мы — словами
+function where(st) {
+  if (st.ai === 7) return 'Смержена 20.10';
+  if (st.ai === -1) return 'Закрыта без мержа';
+  const name = STAGES[st.ai];
+  if (st.tone === 'wait') return st.ai === 6 ? 'Мерж ждёт вашего согласия' : `${name} · ждёт вас`;
+  if (st.tone === 'stop') return `${name} · стоит`;
+  return `${name} · идёт`;
+}
+function whereSince(st) { return st.since ? ` · ${st.since}` : ''; }
+// Роль этого чата
+function roleOf(c) {
+  if (c.other) return { label: OTHER.role, key: false };
+  if (S.role === 'key') return { label: 'ключевой', key: true };
+  return { label: 'Ш2 · фронт', key: false };
+}
+// Главное действие — только когда от вас что-то нужно (или есть куда идти по делу)
+function mainAct(c) {
+  const st = c.st, key = S.role === 'key' && !c.other;
+  if (st.tone === 'wait' && st.ai === 6) return { label: 'Мерж…', cls: 'pri', act: 'merge' };
+  if (st.tone === 'wait') return key ? { label: 'Ответить Кире', cls: 'info', act: 'goExec', arrow: true } : { label: 'Ответить', cls: 'info', act: 'reply' };
+  if (st.tone === 'stop') return key ? { label: 'Чат Киры', cls: 'gh', act: 'goExec', arrow: true } : { label: 'Открыть задачу', cls: 'gh', act: 'task' };
+  if (S.st === 'merging' && !c.other) return { label: 'Чат Марка', cls: 'gh', act: 'goMark', arrow: true };
+  return null;
+}
+function actBtn(a, extra = '') {
+  if (!a) return '';
+  return `<button class="btn ${a.cls} ${extra}" data-act="${a.act}">${esc(a.label)}${a.arrow ? ' ' + ICON.right : ''}</button>`;
+}
+function roleChip(c) {
+  const r = roleOf(c);
+  return r.key
+    ? `<button class="rolebtn" data-tipkey aria-describedby="tipkey" aria-label="ключевой чат — что это"><span class="role key">ключевой</span></button>`
+    : `<span class="role">${esc(r.label)}</span>`;
+}
+function linksHtml(c, { compact = false } = {}) {
+  const out = [];
+  if (S.role !== 'key' || c.other) out.push(`<button class="lnk" data-act="goKey">Ключевой чат ${ICON.right}</button>`);
+  out.push(`<button class="lnk" data-act="page" data-tab="Хронология">Фича ${ICON.right}</button>`);
+  if (S.role === 'multi' && !compact) out.push(`<button class="lnk mute" data-act="switch">${c.other ? 'К фиче этого шага' : 'Ещё фича: голосовой ввод'}</button>`);
+  return out.join('');
+}
+function reasonHtml(st) {
+  if (!st.reason) return '';
+  const head = st.tone === 'stop' ? `Стоит ${st.since}.` : st.ai === 6 ? `Ждёт согласия ${st.since}.` : `Ждёт вас ${st.since}.`;
+  return `<div class="reason ${st.tone}">${glyph(st.tone)}<span class="txt"><b>${head}</b> ${esc(st.reason)}</span></div>`;
+}
+function nowHtml(c) {
+  const st = c.st;
+  if (st.ai === 7) return `<div class="now"><span>Шла 3 дня · 14 задач · 2 возврата</span><button class="lnk mute" data-act="page" data-tab="Метрики">Итоги ${ICON.right}</button></div>`;
+  if (st.ai === -1) return `<div class="now"><span>Закрыта 19.10 без мержа · вернуть можно в «Задачах»</span></div>`;
+  const names = st.now || [];
+  const who = names.length ? `${ppl(names)}<span><b>${names.join(', ')}</b> ${names.length > 1 ? 'работают' : 'работает'}</span>` : `${ppl(['вы'])}<span><b>Ход за вами</b></span>`;
+  return `<div class="now">${who}<span class="sep">·</span><span>этот чат</span>${roleChip(c)}</div>`;
+}
+
+// ===== Варианты =====
+function variantA(c) {
+  const st = c.st, a = mainAct(c), m = isM();
+  const t = `t-${st.tone}`;
+  const stTxt = `<b class="${st.tone === 'wait' ? 'tone-wait' : st.tone === 'stop' ? 'tone-stop' : ''}">${esc(where(st))}</b>${esc(whereSince(st))}`;
+  const more = S.open && !m ? `<div class="more">
+      <div class="kv"><span class="k">Ветка</span><span class="mono" style="font-size:11px">${esc(c.f.branch)}</span><span class="sep">·</span><span>${c.f.chats} чатов · ${c.f.tasks} задач</span></div>
+      ${reasonHtml(st)}
+      ${nowHtml(c)}
+      <div class="acts">${linksHtml(c)}</div>
+    </div>` : '';
+  const alarmM = m && a ? `<div class="alarm"><span class="txt">${esc(st.reason || '')}</span>${actBtn(a)}</div>` : '';
+  return `<div class="va ${t}" data-banner role="region" aria-label="Фича этого чата">
+    <div class="row">
+      <button class="hit" data-act="${m ? 'sheet' : 'toggle'}" aria-expanded="${m ? S.sheet : S.open}" aria-label="Фича «${esc(c.f.title)}»: ${esc(where(st))}. Подробнее">
+        ${dots(st)}
+        <span class="ttl" title="${esc(c.f.title)}">${esc(c.f.title)}</span>
+        <span class="st">${m ? '' : '<span class="sep">·</span> '}${stTxt}</span>
+      </button>
+      ${S.role === 'multi' && !m ? `<button class="lnk mute" data-act="switch" title="Чат входит в две фичи">${c.other ? '2 из 2' : '1 из 2'}</button>` : ''}
+      ${!m ? (a ? actBtn(a) : `<button class="lnk" data-act="page" data-tab="Хронология">Фича ${ICON.right}</button>`) : ''}
+      <button class="chev" data-act="${m ? 'sheet' : 'toggle'}" aria-expanded="${m ? S.sheet : S.open}" aria-label="${S.open ? 'Свернуть' : 'Подробнее о фиче'}">${ICON.down}</button>
+    </div>
+    ${alarmM}${more}
+  </div>`;
+}
+function variantB(c) {
+  const st = c.st, a = mainAct(c), alarm = !!a && st.tone !== 'run', collapsed = alarm ? S.open : !S.open;
+  const tagCls = st.tone === 'run' ? '' : st.tone;
+  const pipe = `<div class="pipe">${STAGES.map((n, i) => { const s = stageState(i, st); return `<button class="s ${s} ${s === 'a' ? toneCls(st) : ''}" data-act="page" data-tab="Хронология" data-stage="${i}" title="${n} — ${STAGE_WHO[i]}"><span class="n"></span><span class="l">${n}</span></button>`; }).join('')}</div>`;
+  return `<div class="vb-sticky ${collapsed ? '' : 'open'}"><div class="vb t-${st.tone} ${collapsed ? 'col1' : ''}" data-banner role="region" aria-label="Фича этого чата">
+    <div class="hd">
+      <button class="hit" data-act="${isM() && collapsed ? 'sheet' : 'toggle'}" aria-expanded="${!collapsed}">
+        ${glyph(st.tone)}<span class="ttl" title="${esc(c.f.title)}">${esc(c.f.title)}</span>
+        ${isM() ? '' : `<span class="tag ${tagCls}">${esc(st.tag)}</span>`}
+      </button>
+      ${collapsed && !isM() && a ? actBtn(a) : ''}
+      <button class="chev" data-act="toggle" aria-expanded="${!collapsed}" aria-label="${collapsed ? 'Развернуть' : 'Свернуть'}">${ICON.down}</button>
+    </div>
+    <div class="bd">
+      ${isM() ? `<div><span class="tag ${tagCls}">${esc(st.tag)}</span></div>` : ''}
+      ${pipe}
+      ${reasonHtml(st)}
+      ${nowHtml(c)}
+      <div class="acts">${actBtn(a)}${linksHtml(c)}</div>
+    </div>
+  </div></div>`;
+}
+function pillHtml(c) {
+  const st = c.st;
+  const alarm = st.tone === 'wait' || st.tone === 'stop';
+  const short = st.ai === 7 ? 'смержена' : st.ai === -1 ? 'закрыта' : st.tone === 'wait' ? (st.ai === 6 ? 'мерж ждёт вас' : 'ждёт вас') : st.tone === 'stop' ? 'стоит' : STAGES[st.ai].toLowerCase();
+  return `<span class="pillwrap"><button class="pill t-${st.tone}" data-banner data-act="${isM() ? 'sheet' : 'pop'}" aria-expanded="${isM() ? S.sheet : S.pop}" aria-haspopup="dialog" aria-label="Фича «${esc(c.f.title)}»: ${esc(where(st))}">
+    <span class="pin">${ring(st)}${isM() ? '' : `<span class="pt">${esc(c.f.title)}</span>`}<span class="ps">${isM() ? '' : '· '}${esc(isM() ? 'фича · ' + short : short)}</span>${alarm ? `<span class="dot ${st.tone === 'stop' ? 'stop' : ''}"></span>` : ''}</span>
+  </button></span>`;
+}
+function popBody(c) {
+  const st = c.st, a = mainAct(c);
+  return `<div class="full">${esc(c.f.title)}</div>
+    <div class="kv"><span class="tag ${st.tone === 'run' ? '' : st.tone}">${esc(st.tag)}</span><span class="mono" style="font-size:11px;color:var(--c-text-muted)">${esc(c.f.branch)}</span></div>
+    <div class="pipe" style="margin-top:2px">${STAGES.map((n, i) => { const s = stageState(i, st); return `<button class="s ${s} ${s === 'a' ? toneCls(st) : ''}" data-act="page" data-tab="Хронология" data-stage="${i}" title="${n} — ${STAGE_WHO[i]}"><span class="n"></span><span class="l">${n}</span></button>`; }).join('')}</div>
+    ${reasonHtml(st)}
+    ${nowHtml(c)}
+    <div class="acts">${actBtn(a)}${linksHtml(c)}</div>`;
+}
+function variantD(c) {
+  const st = c.st, a = mainAct(c), collapsed = !isM() && !!S.dCollapsed;
+  const tl = `<div class="tl">${STAGES.map((n, i) => {
+    const s = stageState(i, st);
+    const sub = s === 'a' ? `<span class="sub">${st.tone === 'run' ? ppl(st.now || []) : ''}${esc(st.tone === 'wait' ? (st.ai === 6 ? 'ждёт согласия' : 'ждёт вас') + whereSince(st) : st.tone === 'stop' ? 'стоит' + whereSince(st) : 'идёт · ' + (st.now || []).join(', '))}</span>` : '';
+    return isM()
+      ? `<span class="seg ${s} ${s === 'a' ? toneCls(st) : ''}"><span class="bar"></span><span class="nm">${n}</span>${sub}</span>`
+      : `<button class="seg ${s} ${s === 'a' ? toneCls(st) : ''}" data-act="page" data-tab="Хронология" data-stage="${i}" title="${n} — ${STAGE_WHO[i]}"><span class="bar"></span><span class="nm">${n}</span>${sub}</button>`;
+  }).join('')}</div>`;
+  const tlWrap = isM() ? `<button class="tlbtn" data-act="sheet" aria-label="Этапы фичи: ${esc(where(st))}">${tl}</button>` : tl;
+  const ended = st.ai === 7 || st.ai === -1;
+  return `<div class="vg t-${st.tone} ${collapsed ? 'col1' : ''}" data-banner role="region" aria-label="Фича этого чата">
+    <div class="top">
+      ${glyph(st.tone)}
+      <button class="ttl" data-act="${isM() ? 'sheet' : 'page'}" data-tab="Хронология" title="${esc(c.f.title)}">${esc(c.f.title)}</button>
+      <span class="tabs">
+        <button data-act="page" data-tab="Хронология">Хронология</button>
+        <button data-act="page" data-tab="Чаты">Чаты<span class="cnt">${c.f.chats}</span>${st.tone === 'wait' ? '<span class="wd" title="ждёт вашего ответа"></span>' : ''}</button>
+        <button data-act="page" data-tab="Задачи">Задачи<span class="cnt">${c.f.tasks}</span></button>
+      </span>
+      ${isM() ? `<button class="chev" data-act="sheet" aria-expanded="${S.sheet}" aria-label="Подробнее о фиче">${ICON.down}</button>` : `<button class="chev" data-act="dfold" aria-expanded="${!collapsed}" aria-label="${collapsed ? 'Показать этапы' : 'Свернуть этапы'}">${ICON.down}</button>`}
+    </div>
+    ${tlWrap}
+    <div class="foot ${a ? 'need' : ''}">${isM() ? actBtn(a) : ended ? nowHtml(c) : `<span>этот чат</span>${roleChip(c)}${S.role !== 'key' || c.other ? `<button class="lnk" data-act="goKey">Ключевой чат ${ICON.right}</button>` : ''}${S.role === 'multi' ? `<button class="lnk mute" data-act="switch">${c.other ? 'К фиче этого шага' : 'Ещё фича'}</button>` : ''}<span style="flex:1"></span>${actBtn(a)}`}</div>
+  </div>`;
+}
+function sheetBody(c) {
+  const st = c.st, a = mainAct(c);
+  let mid = '';
+  if (S.v === 'D') {
+    mid = `<div>${STAGES.map((n, i) => { const s = stageState(i, st); return `<button class="vrow ${s} ${s === 'a' ? toneCls(st) : ''} ${s === 'p' ? 'p' : ''}" data-act="page" data-tab="Хронология" data-stage="${i}"><span class="nd"></span><span><span class="n1">${n}</span><br><span class="n2">${s === 'a' ? esc(where(st)) + esc(whereSince(st)) : s === 'd' ? 'пройден · ' + STAGE_WHO[i] : s === 'x' ? 'пропущен' : 'впереди'}</span></span></button>`; }).join('')}</div>`;
+  } else {
+    mid = `<div class="pipe">${STAGES.map((n, i) => { const s = stageState(i, st); return `<button class="s ${s} ${s === 'a' ? toneCls(st) : ''}" data-act="page" data-tab="Хронология" data-stage="${i}" title="${n}"><span class="n"></span><span class="l">${n}</span></button>`; }).join('')}</div>`;
+  }
+  return `<div class="grab"></div>
+    <div class="hdr"><div class="full">${esc(c.f.title)}</div><button class="x" data-act="close" aria-label="Закрыть">${ICON.x}</button></div>
+    <div class="kv"><span class="tag ${st.tone === 'run' ? '' : st.tone}">${esc(st.tag)}</span><span class="mono" style="font-size:11px;color:var(--c-text-muted)">${esc(c.f.branch)}</span></div>
+    ${mid}
+    ${reasonHtml(st)}
+    ${nowHtml(c)}
+    <div class="acts">${a ? actBtn(a) : ''}
+      ${S.role !== 'key' || c.other ? `<button class="btn gh" data-act="goKey">Ключевой чат ${ICON.right}</button>` : ''}
+      <button class="btn gh" data-act="page" data-tab="Хронология">Страница фичи ${ICON.right}</button>
+      ${S.role === 'multi' ? `<button class="btn gh" data-act="switch">${c.other ? 'К фиче этого шага' : 'Ещё фича: голосовой ввод'}</button>` : ''}
+    </div>`;
+}
+function loadingHtml() {
+  if (S.v === 'C') return `<span class="pillwrap"><span class="pill" data-banner aria-busy="true" style="width:180px"><span class="skel" style="width:100%"></span></span></span>`;
+  return `<div class="ld" data-banner aria-busy="true" aria-label="Загружаю фичу"><span class="skel" style="width:60px"></span><span class="skel" style="flex:1;max-width:260px"></span><span class="skel" style="width:70px;margin-left:auto"></span></div>`;
+}
+function errorHtml() {
+  if (S.v === 'C') return `<span class="pillwrap"><button class="pill" data-banner data-act="retry" aria-label="Фича не загрузилась. Повторить"><span class="pin">${ICON.retry}<span class="ps">фича не загрузилась · повторить</span></span></button></span>`;
+  return `<div class="er" data-banner role="status"><span class="txt">Не удалось загрузить фичу этого чата</span><button class="btn gh" data-act="retry">${ICON.retry} Повторить</button></div>`;
+}
+
+// ===== Сборка экрана =====
+const isM = () => document.getElementById('app').classList.contains('m');
+function render() {
+  document.documentElement.setAttribute('data-theme', S.theme);
+  const stage = document.getElementById('stage');
+  stage.className = S.w === 'w360' ? 'w360' : '';
+  const app = document.getElementById('app');
+  const narrow = (S.w === 'w360') || window.innerWidth < 720;
+  app.className = 'app' + (narrow ? ' m' : '');
+  // Пульт
+  document.querySelectorAll('.mk .pills').forEach(el => {
+    const k = el.dataset.k;
+    el.innerHTML = OPTS[k].map(([v, l]) => `<button data-k="${k}" data-v="${v}" class="${S[k] === v ? 'on' : ''}">${l}</button>`).join('');
+  });
+  document.getElementById('note').innerHTML = NOTES[S.v] + (STATES[S.st].be ? ' <span class="be">нужно от бэка: run.state</span>' : '');
+
+  const c = cur();
+  const stKey = S.st;
+  const hasF = stKey !== 'none';
+  const keyChat = S.role === 'key';
+  // Шапка чата: подпись — как в продукте (имя чата и чип шага); В заменяет подпись пилюлей
+  let sub;
+  if (S.v === 'C' && hasF) {
+    sub = stKey === 'loading' ? loadingHtml() : stKey === 'error' ? errorHtml() : pillHtml(c);
+  } else {
+    sub = `<span class="sub">${hasF ? (keyChat ? 'Ключевой чат фичи' : 'Исполнитель Ш2 · ' + esc(FEATURE.title)) : 'Обычный чат вне фичи'}</span>${hasF && !keyChat ? '<span class="stepchip">Шаг 2 · фронт</span>' : ''}`;
+  }
+  const title = keyChat ? 'Софья<span> · куратор</span>' : (hasF ? 'Кира<span> · фронтенд</span>' : 'Ассистент');
+  const back = S.back && keyChat ? `<button class="backlink" data-act="goBack" title="Вернуться в чат Ш2 · фронт">${ICON.left}<span>Ш2 · фронт</span></button>` : '';
+  const header = `<div class="ch">
+    <button class="bk" aria-label="К списку чатов">${ICON.left}</button>
+    <span class="av">${keyChat ? 'СФ' : hasF ? 'КР' : 'АС'}</span>
+    <div class="tt"><div class="t1">${title}</div><div class="t2">${sub}</div></div>
+    ${back}
+  </div>`;
+
+  // Верхняя дорожка (А, Г) / карточка в ленте (Б)
+  let top = '', inFeed = '';
+  if (hasF && S.v !== 'C') {
+    let html;
+    if (stKey === 'loading') html = loadingHtml();
+    else if (stKey === 'error') html = errorHtml();
+    else html = S.v === 'A' ? variantA(c) : S.v === 'B' ? variantB(c) : variantD(c);
+    if (S.v === 'B') inFeed = (stKey === 'loading' || stKey === 'error') ? `<div class="vb-sticky">${html}</div>` : html;
+    else top = `<div class="col"><div class="colin">${html}</div></div>`;
+  }
+  const msgs = `
+    <div class="msg u"><div class="b">Сделай оверлей страницы фичи поверх чата, как у файлов.</div></div>
+    <div class="msg a"><div class="who">Кира</div><div class="b">Взяла шаг Ш2. Оболочка просмотра общая с файлами: шапка 52, «Закрыть» и Esc возвращают в чат.</div></div>
+    <div class="toolline">✓ Read FeatureBanner.tsx · ✓ Edit WorkspacePage.tsx · ✓ tsc -b</div>
+    <div class="msg a"><div class="b">Сделала два варианта оверлея: А — остров на всю центральную колонку, Б — шторка справа. ${S.st === 'wait' && !keyChat ? '<b>Какой оставить?</b>' : 'Собираю.'}</div></div>
+    <div class="msg u"><div class="b">Покажи на 360.</div></div>
+    <div class="msg a"><div class="b">На 360 оба варианта превращаются в полноэкранную страницу с «‹ Чат» слева в шапке.</div></div>`;
+  const feed = `<div class="feed" id="feed"><div class="col"><div class="colin" data-col>${inFeed}${msgs}</div></div></div>`;
+  const cmp = `<div class="lane bot"><div class="col"><div class="cmp ${S.focus ? 'focus' : ''}" data-cmp><span class="ph">${S.focus ? 'Ответ Кире: оставляем вариант А|' : `Написать ${keyChat ? 'Софье' : hasF ? 'Кире' : 'Ассистенту'}…`}</span></div></div></div>`;
+
+  // Оверлеи
+  let ov = '';
+  const live = hasF && stKey !== 'loading' && stKey !== 'error';
+  if (S.sheet && live) ov += `<div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-label="Фича этого чата">${sheetBody(c)}</div>`;
+  if (S.page) {
+    const tabs = ['Хронология', 'Чаты', 'Задачи', 'События', 'Метрики'];
+    ov += `<div class="fpage" role="dialog" aria-label="Страница фичи">
+      <div class="tb"><button class="backlink" data-act="closePage" aria-label="К чату">${ICON.left}<span>Чат</span></button><span class="t">${esc(c.f.title)}</span><button class="chev" data-act="closePage" aria-label="Закрыть">${ICON.x}</button></div>
+      <div class="tabsb">${tabs.map(t => `<span class="${t === S.page.tab ? 'on' : ''}">${t}</span>`).join('')}</div>
+      <div class="bd"><div class="hl">Открыта страница фичи на вкладке <b>«${esc(S.page.tab)}»</b>${S.page.stage != null ? `, этап <b>«${STAGES[S.page.stage]}»</b> прокручен в видимость и раскрыт` : ''}.</div>
+      <div>Сама страница — макет <span class="mono">features-overview-3-final.html</span> (соседняя сессия). Чат под страницей не размонтируется: «Закрыть», Esc и «‹ Чат» возвращают сюда с тем же черновиком.</div></div>
+    </div>`;
+  }
+  if (S.modal) ov += `<div class="scrim" data-act="closeModal"></div><div class="modal" role="dialog" aria-label="Мерж">
+      <h3>Смержить «${esc(FEATURE.title)}» в master?</h3>
+      <p>Ветка <span class="mono">${esc(FEATURE.branch)}</span>. Мерж сделает Марк отдельной задачей; при конфликте он остановится и спросит вас.</p>
+      <div class="acts"><button class="btn gh" data-act="closeModal">Отмена</button><button class="btn pri" data-act="doMerge">Мерж</button></div></div>`;
+  if (S.toast) ov += `<div class="toast" role="status">${esc(S.toast)}</div>`;
+
+  app.innerHTML = `${narrow ? '' : `<aside class="list"><div class="h">Чаты</div>
+      <button class="it ${keyChat ? 'on' : ''}" data-act="goKey">Софья · куратор<small>${esc(FEATURE.title)}</small></button>
+      <button class="it ${!keyChat && hasF ? 'on' : ''}" data-act="goBack">Кира · Ш2 · фронт<small>Исполнитель</small></button>
+      <button class="it">Денис · Ш1 · бэк<small>Исполнитель</small></button>
+      <button class="it ${!hasF ? 'on' : ''}">Обычный чат<small>вне фичи</small></button></aside>`}
+    <main class="chat">${header}<div class="lane top">${top}</div>${feed}${cmp}${ov}</main>`;
+  // Поповер В — привязан к пилюле
+  if (S.v === 'C' && S.pop && live && !narrow) {
+    const pill = app.querySelector('.pill'); const chat = app.querySelector('.chat');
+    const pr = pill.getBoundingClientRect(), cr = chat.getBoundingClientRect();
+    const pop = document.createElement('div'); pop.className = 'pop'; pop.setAttribute('role', 'dialog'); pop.setAttribute('aria-label', 'Фича этого чата');
+    pop.innerHTML = popBody(c);
+    chat.appendChild(pop);
+    const left = Math.max(8, Math.min(pr.left - cr.left, cr.width - pop.offsetWidth - 8));
+    pop.style.left = left + 'px'; pop.style.top = (pr.bottom - cr.top + 6) + 'px';
+  }
+  if (S.tip) showTip();
+  measure();
+}
+
+// Подсказка «ключевой»: hover/focus/тап, читается целиком, прижата внутрь окна
+const TIPTEXT = 'Ключевой чат фичи — отсюда её запустили и ведут: здесь план, решения, приёмка и мерж. Остальные чаты фичи — исполнители шагов.';
+function showTip() {
+  const app = document.getElementById('app');
+  const el = app.querySelector('[data-tipkey]');
+  app.querySelector('.tip')?.remove();
+  if (!el) return;
+  const ar = app.getBoundingClientRect(), r = el.getBoundingClientRect();
+  const tip = document.createElement('div'); tip.className = 'tip'; tip.id = 'tipkey'; tip.setAttribute('role', 'tooltip'); tip.textContent = TIPTEXT;
+  app.appendChild(tip);
+  const left = Math.max(8, Math.min(r.left - ar.left, ar.width - tip.offsetWidth - 8));
+  let top = r.bottom - ar.top + 6;
+  if (top + tip.offsetHeight > ar.height - 8) top = r.top - ar.top - tip.offsetHeight - 6;
+  tip.style.left = left + 'px'; tip.style.top = top + 'px';
+}
+
+// Замер: плашка vs колонка ленты vs композер (то же правило, что проверяет Playwright)
+function measure() {
+  const app = document.getElementById('app');
+  const b = app.querySelector('[data-banner]'), col = app.querySelector('[data-col]'), cmp = app.querySelector('[data-cmp]');
+  const r = e => e ? e.getBoundingClientRect() : null;
+  const rb = r(b), rc = r(col), rm = r(cmp);
+  const hs = document.documentElement.scrollWidth > window.innerWidth;
+  const out = { banner: rb && { l: Math.round(rb.left), w: Math.round(rb.width) }, column: rc && { l: Math.round(rc.left), w: Math.round(rc.width) }, composer: rm && { l: Math.round(rm.left), w: Math.round(rm.width) }, hscroll: hs, inHeader: S.v === 'C' };
+  let ok, txt;
+  if (!rb) { ok = !hs; txt = 'Плашки нет (чат вне фичи)'; }
+  else if (S.v === 'C') { ok = !hs && rb.right <= app.getBoundingClientRect().right; txt = `Пилюля в шапке: ${Math.round(rb.width)} px, в ленте ничего · колонка ${Math.round(rc.width)} px`; }
+  else { ok = Math.abs(rb.left - rc.left) < 1 && Math.abs(rb.width - rc.width) < 1 && Math.abs(rm.width - rc.width) < 1 && !hs; txt = `Плашка ${Math.round(rb.left)}…${Math.round(rb.right)} (${Math.round(rb.width)}) · колонка ${Math.round(rc.left)}…${Math.round(rc.right)} (${Math.round(rc.width)}) · композер ${Math.round(rm.width)}`; }
+  out.ok = ok;
+  const m = document.getElementById('meter');
+  m.className = 'meter ' + (ok ? 'ok' : 'bad');
+  m.innerHTML = `Замер: ${txt} · гориз. прокрутки ${hs ? 'есть' : 'нет'} · <b>${ok ? 'ширина = колонке ✓' : 'расходится ✗'}</b>`;
+  window.__fb = out;
+  return out;
+}
+window.__measure = measure;
+window.__set = (patch) => { Object.assign(S, patch); render(); return measure(); };
+
+// ===== Действия =====
+let toastT;
+function toast(t) { S.toast = t; clearTimeout(toastT); toastT = setTimeout(() => { S.toast = ''; render(); }, 2600); }
+function act(a, el) {
+  switch (a) {
+    case 'toggle': S.open = !S.open; break;
+    case 'dfold': S.dCollapsed = !S.dCollapsed; S.open = !S.dCollapsed; break;
+    case 'sheet': S.sheet = !S.sheet; S.pop = false; break;
+    case 'pop': S.pop = !S.pop; break;
+    case 'close': S.sheet = false; S.pop = false; break;
+    case 'page': S.page = { tab: el.dataset.tab || 'Хронология', stage: el.dataset.stage != null ? +el.dataset.stage : null }; S.sheet = false; S.pop = false; break;
+    case 'closePage': S.page = null; break;
+    case 'goKey': if (S.role !== 'key') { S.prevRole = S.role; S.role = 'key'; S.back = true; S.fi = 0; S.open = false; S.sheet = false; S.pop = false; toast('Открыт ключевой чат фичи. «← Ш2 · фронт» вернёт обратно.'); } break;
+    case 'goBack': if (S.role === 'key') { S.role = S.prevRole || 'exec'; S.back = false; S.sheet = false; S.pop = false; } break;
+    case 'goExec': S.role = 'exec'; S.back = false; S.sheet = false; S.pop = false; toast('Открыт чат Киры · Ш2 · фронт'); break;
+    case 'goMark': S.sheet = false; S.pop = false; toast('Открылся бы чат Марка (задача «Мерж»)'); break;
+    case 'reply': S.focus = true; S.sheet = false; S.pop = false; break;
+    case 'task': S.sheet = false; S.pop = false; toast('Открылась бы задача «Шаг 2 · фронт» в «Задачах»'); break;
+    case 'merge': S.modal = true; S.sheet = false; S.pop = false; break;
+    case 'closeModal': S.modal = false; break;
+    case 'doMerge': S.modal = false; S.st = 'merging'; toast('Мерж запущен · исполнитель Марк'); break;
+    case 'switch': S.fi = S.fi ? 0 : 1; break;
+    case 'retry': S.st = 'loading'; render(); setTimeout(() => { S.st = 'run'; render(); }, 900); return;
+  }
+  render();
+}
+document.addEventListener('click', e => {
+  const k = e.target.closest('.mk [data-k]');
+  if (k) { S[k.dataset.k] = k.dataset.v; Object.assign(S, { open: false, sheet: false, pop: false, page: null, modal: false, fi: 0, back: false, tip: null, focus: false, toast: '' }); render(); return; }
+  const tk = e.target.closest('[data-tipkey]');
+  if (tk) { S.tip = S.tip === 'click' ? null : 'click'; S.tip ? showTip() : document.querySelector('.tip')?.remove(); e.stopPropagation(); return; }
+  const a = e.target.closest('[data-act]');
+  if (a && document.getElementById('app').contains(a)) { act(a.dataset.act, a); return; }
+  if (S.pop && !e.target.closest('.pop')) { S.pop = false; render(); }
+  if (S.tip && !e.target.closest('.tip')) { S.tip = null; document.querySelector('.tip')?.remove(); }
+});
+document.addEventListener('mouseover', e => { const tk = e.target.closest('[data-tipkey]'); if (tk && !S.tip) { S.tip = 'hover'; showTip(); } });
+document.addEventListener('mouseout', e => { const tk = e.target.closest('[data-tipkey]'); if (tk && S.tip === 'hover') { S.tip = null; document.querySelector('.tip')?.remove(); } });
+document.addEventListener('focusin', e => { if (e.target.closest('[data-tipkey]')) { S.tip = 'focus'; showTip(); } });
+document.addEventListener('focusout', e => { if (e.target.closest('[data-tipkey]') && S.tip === 'focus') { S.tip = null; document.querySelector('.tip')?.remove(); } });
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (S.tip) { S.tip = null; document.querySelector('.tip')?.remove(); return; }
+  if (S.modal) S.modal = false; else if (S.page) S.page = null; else if (S.sheet || S.pop) { S.sheet = false; S.pop = false; } else if (S.open) S.open = false; else return;
+  render();
+});
+window.addEventListener('resize', render);
+// Начальное состояние из адреса: #v=A&st=wait&role=key&theme=dark&w=w360
+(function fromHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  for (const k of ['v', 'st', 'role', 'theme', 'w']) if (h.get(k) && OPTS[k].some(([v]) => v === h.get(k))) S[k] = h.get(k);
+  if (h.get('open')) S.open = true;
+})();
+render();
+</script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { CheckSquare, File, Layers, Pencil, Users, Wrench, Zap } from 'lucide-react';
+import { CheckSquare, File, Layers, Pencil, Plug, Users, Wrench, Zap } from 'lucide-react';
 import type { BindingTarget, PersonaBinding, PersonaBindingMode, PersonaBindingType } from '../../types';
 import { api } from '../../lib/api';
 import { C, R } from '../../lib/design';
@@ -33,6 +33,8 @@ export const BINDING_ICONS: Record<PersonaBindingType, (size: number) => ReactNo
   tool: size => <Wrench size={size} strokeWidth={ICON_STROKE} />,
   // Навык — молния
   skill: size => <Zap size={size} strokeWidth={ICON_STROKE} />,
+  // Плагин — разъём (навык установленного плагина, ADR-031)
+  plugin: size => <Plug size={size} strokeWidth={ICON_STROKE} />,
   // Команда чужого проекта — люди
   projectPersonas: size => <Users size={size} strokeWidth={ICON_STROKE} />,
   // Задачи чужого проекта — чек-лист
@@ -47,12 +49,14 @@ export const BINDING_TYPE_META: Record<PersonaBindingType, { name: string; hint:
   notes:       { name: 'Заметки',        hint: 'Vault заметок или его папка',     bg: C.successBg,   fg: C.successText },
   tool:        { name: 'Инструмент',     hint: 'Задачи, веб, чаты, проекты…',     bg: C.planLight,   fg: C.plan },
   skill:       { name: 'Навык',          hint: 'Готовый приём работы',            bg: C.warningBg,   fg: C.warning },
+  // Плагин (ADR-031) — навык установленного плагина; info-тон (иконка Plug отличает от «Знаний»)
+  plugin:      { name: 'Плагин',         hint: 'Навык установленного плагина',    bg: C.infoBg,      fg: C.info },
   // Кросс-проектные привязки (доступ за пределы своего проекта) — одна тональность на двоих
   projectPersonas: { name: 'Команда проекта', hint: 'Персоны другого вашего проекта',       bg: C.dangerBg, fg: C.dangerText },
   projectTasks:    { name: 'Задачи проекта',  hint: 'Ставить и вести задачи в другом проекте', bg: C.dangerBg, fg: C.dangerText },
 };
 
-export const BINDING_TYPE_ORDER: PersonaBindingType[] = ['project', 'projectPath', 'knowledge', 'notes', 'tool', 'skill', 'projectPersonas', 'projectTasks'];
+export const BINDING_TYPE_ORDER: PersonaBindingType[] = ['project', 'projectPath', 'knowledge', 'notes', 'tool', 'skill', 'plugin', 'projectPersonas', 'projectTasks'];
 
 export const MODE_LABEL: Record<PersonaBindingMode, string> = { auto: 'авто', always: 'всегда', off: 'выкл' };
 
@@ -160,5 +164,18 @@ export function bindingLabel(b: PersonaBinding, targets: Map<string, BindingTarg
     case 'projectTasks':    return b.path?.toLowerCase() === 'readonly'
       ? `Задачи «${label}» · только чтение`
       : `Задачи «${label}» · полный доступ`;
+    // plugin:{publisher}/{slug}/{skill} — навык плагина (ADR-031): skill — часть после последнего «/»
+    case 'plugin': {
+      const rest = b.target.replace(/^plugin:/, '');
+      const lastSlash = rest.lastIndexOf('/');
+      const skill = lastSlash >= 0 ? rest.slice(lastSlash + 1) : rest;
+      return `Плагин · навык «${humanizeSkill(skill)}»`;
+    }
   }
+}
+
+// Slug навыка → человекочитаемое: «weekly-report» → «Weekly Report»
+function humanizeSkill(s: string): string {
+  return s.split(/[-_]+/).filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
 }

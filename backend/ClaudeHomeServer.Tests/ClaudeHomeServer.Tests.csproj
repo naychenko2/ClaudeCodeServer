@@ -167,6 +167,12 @@
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
     <!--
+      Plugins (ADR-031) — отдельная сборка. Нужен ProjectReference, чтобы юниты
+      PluginStoreTests и др. резолвили PluginStore/PluginDirSource напрямую (сторожа границ
+      живут в Guards.Tests и получают Plugins транзитно через Main).
+    -->
+    <ProjectReference Include="..\ClaudeHomeServer.Plugins\ClaudeHomeServer.Plugins.csproj" />
+    <!--
       Personas.Tests (шаг 3.4): 30 Persona*Tests переехали в отдельную тестовую сборку
       вертикали. Монолит тянет её как ProjectReference, чтобы в переходный период
       (до финальной чистки) обе копии перенесённых тестов компилировались

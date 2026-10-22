@@ -537,6 +537,7 @@ public class TurnPromptGoldenTests : IDisposable
                 ProjectId: projectMcpProjectId ?? "proj-1"),
             // CapturingLauncher ОБЯЗАН идти отсюда — иначе ClaudeSession стартанёт настоящий claude.exe
             Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            SystemPromptViaFile: false,
             Events: bus);
     }
 }

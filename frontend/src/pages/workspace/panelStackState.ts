@@ -14,7 +14,7 @@
 // Стор параметризован неймспейсом (createPanelZones): воркспейс и раздел «Чаты»
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
 import { useCallback, useSyncExternalStore } from 'react';
-import { PANEL_HOME, RAIL_GROUPS, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
+import { RAIL_GROUPS, isPluginPanelKey, keyAllowed, migrateLegacyKey, panelHome, type PanelKey, type Zone } from './panelCatalog';
 
 // Реестр панелей (ключи, мета, домашние зоны) — соседний panelCatalog.ts.
 // Здесь только раскладка: что где лежит и какого размера.
@@ -321,7 +321,7 @@ export interface PanelZones {
   // Где панель лежала в последний раз. Закрытая панель показывает иконку именно
   // здесь, а не в зашитой домашней зоне: перетащив «Задачи» налево и закрыв их,
   // человек ждёт кнопку слева — там, где панель была, а не там, где родилась.
-  // Пусто (панель ещё нигде не открывали) — берётся PANEL_HOME.
+  // Пусто (панель ещё нигде не открывали) — берётся panelHome.
   home: Partial<Record<PanelKey, Zone>>;
   // Кнопки, убранные с рельсы в её ящик (меню «…»): редко используемые панели,
   // чтобы столбец иконок не рос бесконечно. Список ОБЩИЙ на обе зоны, а не свой у
@@ -368,9 +368,10 @@ export function emptyZones(): PanelZones {
   return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [], railOrder: [], exclusive: false, activeSide: null, closeCompactSignal: 0, restoreCompactSignal: 0 };
 }
 
-// Зона, в которой панель показывает свою иконку, когда закрыта
+// Зона, в которой панель показывает свою иконку, когда закрыта. Для ключей
+// плагинов домашняя зона — 'right' (как у прежней панели pluginPanels, S3)
 export function homeOf(zones: PanelZones, k: PanelKey): Zone {
-  return zones.home[k] ?? PANEL_HOME[k];
+  return zones.home[k] ?? panelHome(k);
 }
 
 // Кнопка панели убрана в ящик рельсы (меню «…»)
@@ -603,8 +604,14 @@ export function sortRail(order: readonly PanelKey[], keys: readonly PanelKey[]):
 // колонке считается по относительному рангу панелей (placeByRail) — на нём выпавшие
 // ключи не сказываются. Полный список при этом строже: у ключа, которого в столбце
 // нет, ранга не было бы вовсе, и панель считалась бы самой нижней.
-export function railSequence(railOrder: readonly PanelKey[]): PanelKey[] {
-  return RAIL_GROUPS.flatMap(g => sortRail(railOrder, g));
+//
+// plugin:* — динамические ключи: RAIL_GROUPS статичен, поэтому открытые plugin:*
+// добираем к ПЕРВОЙ группе (как зона, PanelZone.tsx:127) — иначе фолбэк внешнего
+// показа ставил бы панель плагина в конец колонки (R-Gleb, minor 4).
+export function railSequence(zones: PanelZones): PanelKey[] {
+  const pluginKeys = openKeysOf(zones).filter(isPluginPanelKey);
+  return RAIL_GROUPS.map((g, i) => (i === 0 ? [...g, ...pluginKeys] : g))
+    .flatMap(g => sortRail(zones.railOrder, g));
 }
 
 // Перестановка кнопки внутри своей группы: moved встаёт ПЕРЕД before (null — в
@@ -781,15 +788,62 @@ export function moveAcrossToNewColumn(zones: PanelZones, k: PanelKey, zone: Zone
 // null — выселять нечего (сигнал вызывающему не дёргать запись).
 export function evictForeign(zones: PanelZones, zone: Zone, allowed: readonly PanelKey[]): PanelZones | null {
   const z = zones[zone];
-  const strays = [...z.layout.flat(), ...z.stash.flat()].filter(k => !allowed.includes(k));
+  // keyAllowed: экран разрешает ключи плагинов СЕМЕЙСТВОМ (маркер pluginPanels
+  // в перечне), а не перечнем отдельных ключей — на первом рендере список
+  // установленных плагинов ещё не известен, и по перечню карточки выселялись бы
+  // молча, до того как экран их узнает
+  const strays = [...z.layout.flat(), ...z.stash.flat()].filter(k => !keyAllowed(k, allowed));
   if (strays.length === 0) return null;
-  const drop = (cols: PanelKey[][]) => cols.map(c => c.filter(k => allowed.includes(k))).filter(c => c.length > 0);
+  const drop = (cols: PanelKey[][]) => cols.map(c => c.filter(k => keyAllowed(k, allowed))).filter(c => c.length > 0);
   const home = { ...zones.home };
-  for (const k of strays) home[k] = PANEL_HOME[k];
+  for (const k of strays) home[k] = panelHome(k);
   return {
     ...zones,
     home,
     [zone]: { ...z, layout: drop(z.layout), stash: drop(z.stash) },
+  };
+}
+
+// Есть ли в состоянии хотя бы один ключ этого плагина (в любом из шести мест:
+// layout/stash обеих зон, home, weights, tucked, railOrder). Нужен стору (S7):
+// плагин исчез из живого списка, но его панель никогда не открывали — ключей
+// нет, и commit дёргал бы localStorage и подписчиков зря.
+export function hasPluginKeys(zones: PanelZones, pluginId: string): boolean {
+  const prefix = `plugin:${pluginId}:`;
+  const isKey = (k: PanelKey) => k.startsWith(prefix);
+  if (zones.left.layout.some(c => c.some(isKey))) return true;
+  if (zones.right.layout.some(c => c.some(isKey))) return true;
+  if (zones.left.stash.some(c => c.some(isKey))) return true;
+  if (zones.right.stash.some(c => c.some(isKey))) return true;
+  if (zones.tucked.some(isKey)) return true;
+  if (zones.railOrder.some(isKey)) return true;
+  for (const k of Object.keys(zones.home)) if (isKey(k as PanelKey)) return true;
+  for (const k of Object.keys(zones.weights)) if (isKey(k as PanelKey)) return true;
+  return false;
+}
+
+// Снять ВСЕ ключи одного плагина из состояния (S7, по диффу живого списка):
+// layout, stash, home, weights, railOrder и tucked обеих зон. Чистая функция —
+// результат коммитит вызывающий. Ключи других плагинов и все статические
+// остаются на месте. Ключ имеет вид `plugin:{pluginId}:{panelId}`, поэтому
+// совпадение — по префиксу `plugin:{pluginId}:` (заключительный ':' не даёт
+// пересечься с плагин-идентификатором, являющимся его префиксом).
+export function forgetPluginKeys(zones: PanelZones, pluginId: string): PanelZones {
+  const prefix = `plugin:${pluginId}:`;
+  const isKey = (k: PanelKey) => k.startsWith(prefix);
+  const strip = (cols: PanelKey[][]) => cols.map(c => c.filter(k => !isKey(k))).filter(c => c.length > 0);
+  const home: Partial<Record<PanelKey, Zone>> = {};
+  for (const [k, v] of Object.entries(zones.home)) if (!isKey(k as PanelKey)) home[k as PanelKey] = v;
+  const weights: Partial<Record<PanelKey, number>> = {};
+  for (const [k, v] of Object.entries(zones.weights)) if (!isKey(k as PanelKey)) weights[k as PanelKey] = v;
+  return {
+    ...zones,
+    left: { ...zones.left, layout: strip(zones.left.layout), stash: strip(zones.left.stash) },
+    right: { ...zones.right, layout: strip(zones.right.layout), stash: strip(zones.right.stash) },
+    home,
+    weights,
+    tucked: zones.tucked.filter(k => !isKey(k)),
+    railOrder: zones.railOrder.filter(k => !isKey(k)),
   };
 }
 
@@ -811,7 +865,7 @@ export function isZoneCollapsed(z: ZoneState): boolean {
 export function revealPanel(zones: PanelZones, k: PanelKey): { zones: PanelZones; wasOpen: boolean } {
   if (zoneOf(zones, k)) return { zones, wasOpen: true };
   const home = homeOf(zones, k);
-  return { zones: openPanelIn(zones, home, k, COL_CAP, railSequence(zones.railOrder)), wasOpen: false };
+  return { zones: openPanelIn(zones, home, k, COL_CAP, railSequence(zones)), wasOpen: false };
 }
 
 // ---------- миграция со старых раздельных ключей ----------
@@ -918,6 +972,9 @@ export interface PanelZonesApi {
   // Ремонт сохранённой раскладки: выгнать из зоны панели, которых на этом экране
   // в ней быть не может (см. evictForeign)
   evict: (zone: Zone, allowed: readonly PanelKey[]) => void;
+  // Плагин исчез из живого списка (S7): снять ВСЕ его ключи из состояния
+  // (forgetPluginKeys). Ключей нет (панель не открывали) — состояние не трогает.
+  forgetPlugin: (pluginId: string) => void;
   // Дроп кнопки в ящик рельсы (её меню «…») / возврат кнопки из ящика на рельсу.
   // Зона в обоих случаях та, к чьей рельсе относится жест: кнопка ложится и
   // возвращается туда, куда её бросили.
@@ -1176,6 +1233,14 @@ function createPanelZones(ns: string, opts?: {
       if (next) commit(next);
     }, []);
 
+    // S7: плагин удалён из живого списка — его ключи (layout/stash/home/weights/
+    // railOrder/tucked) снимаем. Без ключей (панель не открывали) commit не пишем:
+    // иначе каждый uninstall дёргал бы localStorage и подписчиков зря.
+    const forgetPlugin = useCallback((pluginId: string) => {
+      if (!hasPluginKeys(_zones, pluginId)) return;
+      commit(forgetPluginKeys(_zones, pluginId));
+    }, []);
+
     const swapWith = useCallback((a: PanelKey, b: PanelKey) => {
       // Вес — высота СЛОТА, а не панели: вместе с местами меняем и веса,
       // иначе панель утащила бы свою высоту и раскладка «прыгнула» бы
@@ -1338,7 +1403,7 @@ function createPanelZones(ns: string, opts?: {
       return false;
     }, []);
 
-    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, releaseCompactSide, reveal, registerOpener, moveTo, registerZoneKeys, zoneKeys };
+    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, forgetPlugin, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, releaseCompactSide, reveal, registerOpener, moveTo, registerZoneKeys, zoneKeys };
   }
 
   const api = { use: usePanelZones };

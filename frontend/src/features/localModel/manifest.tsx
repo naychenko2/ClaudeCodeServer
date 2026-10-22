@@ -4,13 +4,31 @@
 // не-админ — только configured (isAvailable) и сама панель (то же условие внутри).
 
 import { Cpu } from 'lucide-react';
-import { ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
   SubsystemManifest, WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
 import { FLAGS, getFlag } from '../../lib/featureFlags';
+import { C, ISLAND } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { getLocalModelAdmin, getLocalModelConfigured, isLocalModelPanelVisible } from './useLocalModelStats';
-import { LocalModelPanel } from './LocalModelPanel';
+import { lazy, Suspense } from 'react';
+const LocalModelPanel = lazy(() => import('./LocalModelPanel').then(m => ({ default: m.LocalModelPanel })));
+
+// Заглушка на время загрузки ленивого чанка панели: каркас один в один как у PanelShell
+// (Island: рамка/тень/радиус + 40px-шапка + белое тело). Без неё панель (весь остров)
+// на миг исчезает, и макет «мигает»; заглушка того же размера держит раскладку.
+function PanelLoadingPlaceholder() {
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0,
+      background: ISLAND.bg, border: `1px solid ${ISLAND.border}`,
+      borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow,
+    }}>
+      <div style={{ flexShrink: 0, height: ISLAND.headerH, background: ISLAND.headerBg, borderBottom: `1px solid ${C.border}` }} />
+      <div style={{ flex: 1, minHeight: 0, background: C.bgWhite }} />
+    </div>
+  );
+}
 
 // Ключ панели в каталоге (panelCatalog)
 export const LOCAL_MODEL_PANEL = 'localModel';
@@ -28,7 +46,9 @@ export const manifest: SubsystemManifest = {
     'workspace-panel-def': [
       {
         name: LOCAL_MODEL_PANEL,
-        render: (ctx: WorkspacePanelDefCtx) => <LocalModelPanel ctx={ctx} />,
+        render: (ctx: WorkspacePanelDefCtx) => (
+          <Suspense fallback={<PanelLoadingPlaceholder />}><LocalModelPanel ctx={ctx} /></Suspense>
+        ),
         action: {
           title: 'Локальные модели',
           icon: <Cpu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,

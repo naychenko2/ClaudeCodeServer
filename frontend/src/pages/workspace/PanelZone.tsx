@@ -104,8 +104,8 @@ interface Props {
   // ставит по нему признак «закрыта в этом чате» панели генерации (ADR-021 §3)
   onUserClose?: (k: PanelKey) => void;
   // Мета панелей плагинов (итерация 2): заголовок и иконка каждой панели плагина.
-  // Передаётся пропсом из WorkspacePage (а не через глобальный реестр setPluginPanelMeta),
-  // чтобы рендер был чистым. При наличии — имеет приоритет над глобальным реестром.
+  // Передаётся пропсом из WorkspacePage (а не через глобальный реестр),
+  // чтобы рендер был чистым. Без неё — panelMetaResolved (fallback).
   pluginPanelMeta?: Record<import('./panelCatalog').PluginPanelKey, { title: string; Icon: import('lucide-react').LucideIcon }>;
 }
 

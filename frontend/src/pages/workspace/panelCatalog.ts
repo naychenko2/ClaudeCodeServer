@@ -327,26 +327,14 @@ export function pluginPanelKey(pluginId: string, panelId: string): PluginPanelKe
   return `plugin:${pluginId}:${panelId}` as PluginPanelKey;
 }
 
-// Реестр меты плагинов: заголовок и иконка каждой панели плагина. Наполняет
-// WorkspacePage (S5) по списку установленных плагинов; сам стор о плагинах
-// не знает — принимает только ключи по синтаксису.
-const pluginPanelMeta = new Map<PluginPanelKey, { title: string; Icon: LucideIcon }>();
-
-// Заменить реестр целиком: текущий набор панелей плагинов (пустой — очистить).
-// Следующие вызовы panelMeta читают уже новый набор.
-export function setPluginPanelMeta(meta: Record<PluginPanelKey, { title: string; Icon: LucideIcon }>): void {
-  pluginPanelMeta.clear();
-  for (const [k, v] of Object.entries(meta)) pluginPanelMeta.set(k as PluginPanelKey, v);
-}
-
-// Мета панели по ключу: статические — из реестра, плагины — из реестра меты
-// плагинов. Для ключа плагина без меты — undefined: ключ принят по синтаксису,
-// а мета известна только после GET списка плагинов.
+// Мета панели по ключу: статические — из реестра. Для ключа плагина — всегда
+// undefined: каталог о плагинах не знает, мету передаёт WorkspacePage пропсом
+// в PanelZone (из GET списка плагинов); без неё — panelMetaResolved.
 export function panelMeta(k: PanelKey): { title: string; Icon: LucideIcon } | undefined {
   // pluginPanels — маркер семейства (S5), не реальная панель: меты у него нет
   // (R-Gleb, minor 7) — реальные карточки читают meta по своим ключам plugin:*.
   if (k === 'pluginPanels') return undefined;
-  return isPluginPanelKey(k) ? pluginPanelMeta.get(k) : PANEL_META[k];
+  return isPluginPanelKey(k) ? undefined : PANEL_META[k];
 }
 
 // Домашняя зона панели: статические — из реестра, ключи `plugin:` — 'right'

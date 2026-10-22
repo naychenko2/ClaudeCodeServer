@@ -15,9 +15,8 @@ import {
 } from '../../pages/workspace/panelStackState';
 import {
   CHAT_KEYS, PANEL_KEYS, RAIL_GROUPS, WORKSPACE_KEYS,
-  isPanelKey, isPluginPanelKey, keyAllowed, panelHome, panelMeta, pluginPanelKey, setPluginPanelMeta,
+  isPanelKey, isPluginPanelKey, keyAllowed, panelHome, panelMeta, panelMetaResolved, pluginPanelKey,
 } from '../../pages/workspace/panelCatalog';
-import { Plug } from 'lucide-react';
 
 // Компактный конструктор пары зон: остальные поля берутся дефолтные
 function zones(left: string[][], right: string[][]): PanelZones {
@@ -1173,18 +1172,14 @@ describe('ключи плагинов (S3)', () => {
     expect(panelHome('files')).toBe('right');
   });
 
-  it('panelMeta: статические — из реестра, плагины — из реестра меты плагинов', () => {
+  it('panelMeta: статические — из каталога, плагины — undefined; panelMetaResolved даёт fallback', () => {
     expect(panelMeta('files')?.title).toBe('Файлы');
-    // до наполнения реестра — undefined: ключ принят по синтаксису, а мета
-    // известна только после GET списка плагинов
+    // каталог о плагинах не знает: мету передаёт WorkspacePage пропсом
     expect(panelMeta(K)).toBeUndefined();
-    setPluginPanelMeta({ [K]: { title: 'Главная', Icon: Plug } });
-    expect(panelMeta(K)?.title).toBe('Главная');
-    // реестр заменяется целиком: новый набор — прежние ключи без меты
-    setPluginPanelMeta({ [K2]: { title: 'Боковая', Icon: Plug } });
-    expect(panelMeta(K)).toBeUndefined();
-    expect(panelMeta(K2)?.title).toBe('Боковая');
-    setPluginPanelMeta({});
+    expect(panelMeta(K2)).toBeUndefined();
+    // запасная мета: заголовок из panelId, иконка по умолчанию
+    expect(panelMetaResolved(K).title).toBe(K.slice(K.lastIndexOf(':') + 1));
+    expect(panelMetaResolved('files').title).toBe('Файлы');
   });
 
   it('forgetPluginKeys снимает ключи только этого плагина', () => {

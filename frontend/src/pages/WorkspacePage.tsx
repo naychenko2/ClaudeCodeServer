@@ -339,7 +339,7 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const hasPlugins = useHasInstalledPlugins(project.id)
   // S5: у каждой панели плагина — своя карточка в рельсе. Плоский список (плагин,
   // панель) у ВКЛЮЧЕННЫХ плагинов с ОБЪЯВЛЕННЫМИ панелями: из него строим мету
-  // (реестр setPluginPanelMeta), карточки (panels) и мобильный переключатель.
+  // карточки (panels) и мобильный переключатель.
   // Выключенный не монтирует панели (бэк — 409), панель может не быть (404).
   const pluginPanelTargets = useMemo(() => {
     const out: { plugin: PluginInfo; panel: PluginPanelView }[] = [];
@@ -352,7 +352,7 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Мета карточек: заголовок — единый вывод (title из манифеста, иначе имя плагина),
   // иконка — детерминированно из id плагина (манифест иконки не несёт) — разные
   // плагины в рельсе различимы, а не все с одной Plug.
-  // Итерация 2: вместо побочного эффекта (setPluginPanelMeta в useMemo) — чистый
+  // Итерация 2: вместо побочного эффекта в useMemo — чистый
   // объект, передаваемый пропсом в DesktopWorkspace → PanelZone.
   const pluginPanelMeta = useMemo<Record<import('./workspace/panelCatalog').PluginPanelKey, { title: string; Icon: LucideIcon }> | undefined>(() => {
     if (pluginPanelTargets.length === 0) return undefined;

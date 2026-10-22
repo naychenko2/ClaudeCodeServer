@@ -40,6 +40,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/
 import { pendingChatOnPop, encodePendingChat } from './lib/pendingProjectChat'
 import { requestOpenModelsSpend } from './lib/modelProvidersNav'
 import { api } from './lib/api'
+import { notificationTargetUrl } from './swPush'
 import { idbClear } from './lib/idb'
 import { resetChatContextMemory } from './lib/chatContext/forget'
 import { setAllFlags, useFeatureFlagsRefresh } from './lib/featureFlags'
@@ -1222,8 +1223,9 @@ export default function App() {
       switchHubTab(dest)
       return
     }
-    // Не диплинк (абсолютный внешний URL) — полная загрузка, как раньше
-    window.location.assign(url)
+    // Не диплинк (абсолютный URL) — полная загрузка, но только в свой origin: чужой адрес
+    // или javascript: ведут в корень приложения (то же правило, что у клика по push)
+    window.location.assign(notificationTargetUrl({ url }, window.location.origin))
   }
   // Переход из карточки инцидента в затронутый чат. Каналы разные, и подменять их
   // нельзя: раздел «Чаты» показывает ТОЛЬКО внепроектные (ChatsController.GetAll →

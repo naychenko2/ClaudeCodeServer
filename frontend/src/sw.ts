@@ -5,6 +5,7 @@
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import type { PrecacheEntry } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
+import { notificationTargetUrl } from './swPush';
 
 declare let self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<PrecacheEntry | string>;
@@ -63,11 +64,9 @@ self.addEventListener('push', e => {
 // или открываем новое
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  const raw = e.notification.data?.url ?? '/';
-  // URL от бэка: /chats/{id} или /notes/{id}. Превращаем в абсолютный
-  // hash-URL для SPA: https://naychenko.me/#/chats/{id}
-  const baseUrl = self.location.origin.replace(/\/+$/, '');
-  const url = raw.startsWith('/') ? baseUrl + '/#' + raw.slice(1) : raw;
+  // URL от бэка (/chats/{id}) → абсолютный hash-URL SPA; чужой origin и javascript: —
+  // в корень приложения (url пишет и модель, S7)
+  const url = notificationTargetUrl(e.notification.data, self.location.origin);
   e.waitUntil((async () => {
     const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of clientList) {

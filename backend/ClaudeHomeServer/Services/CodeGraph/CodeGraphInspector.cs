@@ -23,4 +23,19 @@ public sealed class CodeGraphInspector(CodeGraphService codeGraph) : ICodeGraphI
     }
 
     public void StartRebuildIfIdle(string rootPath) => codeGraph.StartRebuildIfIdle(rootPath);
+
+    public Task WarmIfNeeded(string rootPath) => Task.Run(() =>
+    {
+        try
+        {
+            // Нет graph.json — строим; есть, но исходники новее — перестраиваем; свежий — не трогаем
+            var signature = codeGraph.GetCacheSignature(rootPath);
+            if (signature is null || codeGraph.IsStaleFor(rootPath, signature.Value))
+                codeGraph.StartRebuildIfIdle(rootPath);
+        }
+        catch
+        {
+            // Прогрев — best-effort: первый вызов инструмента всё равно построит граф сам
+        }
+    });
 }

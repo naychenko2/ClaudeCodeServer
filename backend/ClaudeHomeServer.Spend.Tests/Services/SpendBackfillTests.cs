@@ -47,6 +47,9 @@ public class SpendBackfillTests : IDisposable
             {
                 ["DataPath"] = Path.Combine(_dir, "projects.json"),
                 ["Glif:McpToken"] = "glif-test-token",
+                // Локальный провайдер — для тестов «локальный = бесплатный»
+                ["LlmProviders:local-qwen:IsLocal"] = "true",
+                ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:18020",
             })
             .Build();
 
@@ -233,5 +236,75 @@ public class SpendBackfillTests : IDisposable
         r.Model.Should().Be("image_seedream_v45_v1");
         r.Label.Should().Be("image");
         r.CostUsd.Should().BeNull();
+    }
+
+    // --- «локальный = бесплатный»: путь записи и пересчёт истории ---
+
+    [Fact]
+    public async Task Backfill_ЛокальныйПровайдер_ПишетсяКакБесплатный()
+    {
+        var user = _userStore.Add("loc-user", "pw-123456", "user");
+        var projDir = Directory.CreateDirectory(Path.Combine(_dir, "proj_loc")).FullName;
+        var project = _projectManager.Create("LOC", projDir, user.Id, user.Username);
+        var session = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.ClaudeSessionId = "cs-local-1";
+        session.Provider = "local-qwen";
+        session.Model = "qwen3.8-27b";
+        await _history.SaveAsync(session.ClaudeSessionId, Turns(2));
+
+        var store = new SpendStore(Path.Combine(_dir, "spend_local"), detailDays: 30);
+        await NewMaintenance(store).BackfillAsync(DateTime.UtcNow.AddDays(1), CancellationToken.None);
+
+        var all = store.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        all.Should().HaveCount(2);
+        all.Should().OnlyContain(r => r.Source == SpendSources.Free,
+            "IsLocal-провайдер — своя машина, подписки за ней нет");
+    }
+
+    [Fact]
+    public void Reclassify_ЛокальныеХоды_СтановятсяБесплатными_Идемпотентно()
+    {
+        var dir = Path.Combine(_dir, "spend_reclass");
+        var store = new SpendStore(dir, detailDays: 30);
+        var now = DateTime.UtcNow;
+        // Записи, оставшиеся chat-turn/one-shot до учёта IsLocal
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "local-qwen", Model = "qwen3.8-27b",
+            InputTokens = 100, Timestamp = now });
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "local-qwen", Model = "qwen3.8-27b",
+            Source = SpendSources.OneShot, InputTokens = 50, Timestamp = now });
+        store.Record(new SpendRecord { OwnerId = "u1", Provider = "claude", Model = "opus",
+            InputTokens = 10, Timestamp = now });
+
+        store.ReclassifyLocalAsFree(p => p == "local-qwen").Should().Be(2);
+        // Идемпотентность: уже бесплатных не трогает, повторный проход — no-op
+        store.ReclassifyLocalAsFree(p => p == "local-qwen").Should().Be(0);
+
+        // Пересчёт переживает перезагрузку: на диске — free
+        var reloaded = new SpendStore(dir, detailDays: 30);
+        var all = reloaded.DetailsBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        all.Where(r => r.Provider == "local-qwen").Should().OnlyContain(r => r.Source == SpendSources.Free);
+        all.Single(r => r.Provider == "claude").Source.Should().Be(SpendSources.ChatTurn);
+    }
+
+    [Fact]
+    public void Reclassify_СвёрнутыеДни_СливаютсяПоКлючуБезДвойногоСчёта()
+    {
+        var store = new SpendStore(Path.Combine(_dir, "spend_reclass_daily"), detailDays: 30);
+        var old = DateTime.UtcNow.AddDays(-40);
+        // Два хода одной модели в одном чате: один записан как chat-turn, другой — уже free
+        store.Record(new SpendRecord { Id = "loc-r1", OwnerId = "u1", SessionId = "s1",
+            Provider = "local-qwen", Model = "qwen3.8-27b", InputTokens = 100, Timestamp = old });
+        store.Record(new SpendRecord { Id = "loc-r2", OwnerId = "u1", SessionId = "s1",
+            Provider = "local-qwen", Model = "qwen3.8-27b", Source = SpendSources.Free,
+            InputTokens = 30, Timestamp = old });
+        store.RollupOlderThan(store.WindowStart);
+
+        store.ReclassifyLocalAsFree(p => p == "local-qwen").Should().Be(1);
+
+        var rows = store.DailyBetween(DateOnly.MinValue, DateOnly.MaxValue);
+        var row = rows.Single(r => r.Provider == "local-qwen"); // слитая строка, не две
+        row.Source.Should().Be(SpendSources.Free);
+        row.InputTokens.Should().Be(130);
+        row.Turns.Should().Be(2);
     }
 }

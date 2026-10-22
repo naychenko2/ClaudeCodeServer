@@ -46,6 +46,8 @@ public class TurnAutoResumeService : BackgroundService
             await _delay(TimeSpan.FromSeconds(Math.Max(0, _options.WarmupSeconds)), ct);
 
             await RunCycleAsync(ct);
+            // Очереди отложенных сообщений (pending.json) разбираем и без кандидатов на resume
+            await _host.DrainRestoredQueuesAsync();
         }
         catch (OperationCanceledException) { /* остановка приложения */ }
         catch (Exception ex)

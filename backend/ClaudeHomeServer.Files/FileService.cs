@@ -485,8 +485,8 @@ public class FileService(
         if (!IsGitRepo(rootPath)) return null;
         try
         {
-            // Путь через SafeJoin — валидация до передачи в git
-            SafeJoin(rootPath, relativePath);
+            // Валидация до передачи в git; корень — отказ: с «:(literal)» это всё дерево
+            SafePath.JoinBelowRoot(rootPath, relativePath);
             return await DiffFileVsHeadAsync(rootPath, relativePath, ct);
         }
         catch
@@ -505,9 +505,11 @@ public class FileService(
 
     private static string? TryLocalDiff(string rootPath, string relativePath)
     {
-        var head = GitRun(rootPath, "diff", "HEAD", "--", relativePath);
+        // «:(literal)» — путь, а не маска: «[ab]», «*» в имени не подтянут соседей
+        var spec = ":(literal)" + relativePath;
+        var head = GitRun(rootPath, "diff", "HEAD", "--", spec);
         if (!string.IsNullOrWhiteSpace(head)) return head;
-        var cached = GitRun(rootPath, "diff", "--cached", "--", relativePath);
+        var cached = GitRun(rootPath, "diff", "--cached", "--", spec);
         return string.IsNullOrWhiteSpace(cached) ? null : cached;
     }
 
@@ -571,7 +573,8 @@ public class FileService(
         // git checkout HEAD -- file
         try
         {
-            SafeJoin(rootPath, relativePath);
+            // Корень — отказ: с «:(literal)» откат «одного файла» снёс бы всё дерево
+            SafePath.JoinBelowRoot(rootPath, relativePath);
             if (git is not null)
             {
                 // Через слой Execution (container-юзеры) — DiscardAsync бросает при ошибке
@@ -586,7 +589,8 @@ public class FileService(
                 UseShellExecute = false,
                 RedirectStandardError = true
             };
-            foreach (var a in new[] { "checkout", "HEAD", "--", relativePath }) psi.ArgumentList.Add(a);
+            // «:(literal)» — путь, а не маска: «[ab]», «*» в имени не откатят соседей
+            foreach (var a in new[] { "checkout", "HEAD", "--", ":(literal)" + relativePath }) psi.ArgumentList.Add(a);
             using var proc = System.Diagnostics.Process.Start(psi)!;
             proc.BeginErrorReadLine();
             if (!proc.WaitForExit(3000))

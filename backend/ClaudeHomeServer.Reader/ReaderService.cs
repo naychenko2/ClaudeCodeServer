@@ -460,7 +460,9 @@ public sealed partial class ReaderService(
         // класс живых страниц — одноэкранные лендинги, карточки товаров, страницы-указатели.
         // Решаем по РЕЗУЛЬТАТУ разбора: сколько текста реально извлечено (замер 2026-09-07 на
         // тех же фикстурах — страница-меню даёт 99 символов, заглушка 5, пустое тело 0).
-        var extractedText = (article.TextContent ?? "").Trim();
+        // Абзацы SmartReader склеивает через Environment.NewLine: без приведения к LF один и
+        // тот же текст на Windows длиннее, чем на Linux, и порог зависел бы от ОС
+        var extractedText = (article.TextContent ?? "").Replace("\r\n", "\n").Trim();
         if (extractedText.Length < charThreshold)
             return ReaderOutcome.Fail(ReaderErrorCode.NotReadable, status);
 
@@ -552,7 +554,7 @@ public sealed partial class ReaderService(
 
     private static ReaderErrorCode MapHttpException(HttpRequestException ex)
     {
-        if (ex.InnerException is ReaderConnectBlockedException blocked)
+        if (ex.InnerException is SsrfBlockedException blocked)
             return blocked.DnsFailed ? ReaderErrorCode.DnsFailed : ReaderErrorCode.LocalAddress;
 
         return ex.HttpRequestError switch

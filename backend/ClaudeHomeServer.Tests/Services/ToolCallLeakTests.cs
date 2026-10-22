@@ -83,6 +83,87 @@ public class ToolCallLeakTests : IDisposable
             NullLogger<TaskExecutionService>.Instance, config);
     }
 
+    // ─── Имя инструмента из утёкшего вызова ─────────────────────────────────────────────
+
+    [Fact]
+    public void ExtractToolName_XmlQwen_ИмяФункции() =>
+        ToolCallLeakDetector.ExtractToolName("<tool_call>\n<function=mcp__notes__notes_search>\n<parameter=query>\nПлан\n</parameter>\n</function>\n</tool_call>")
+            .Should().Be("mcp__notes__notes_search");
+
+    [Fact]
+    public void ExtractToolName_AnthropicInvoke_ИмяФункции() =>
+        ToolCallLeakDetector.ExtractToolName("<invoke name=\"Read\"><parameter name=\"file_path\">a.md</parameter></invoke>")
+            .Should().Be("Read");
+
+    [Fact]
+    public void ExtractToolName_ВнутриКода_Null() =>
+        ToolCallLeakDetector.ExtractToolName("Формат такой:\n```\n<function=Read>\n```\nи всё.")
+            .Should().BeNull("цитата формата в код-блоке — не вызов");
+
+    // ─── Состав инструментов исполнителя ─────────────────────────────────────────────────
+
+    private static LightProfile LocalProfile() => new()
+    {
+        BareMode = true,
+        BareTools = ["Bash", "Edit", "Read", "Write", "Glob", "Grep", "Task"],
+        TrimMcpServers = true,
+        KeepMcpServers = ["tasks", "memory", "codegraph"],
+        KeepMcpTools = new Dictionary<string, string[]>
+        {
+            ["tasks"] = ["tasks_get", "tasks_complete"],
+            ["memory"] = ["memory_recall"],
+        },
+    };
+
+    [Fact]
+    public void ToolAvailability_СерверНеВБеломСписке_Неизвестен() =>
+        ExecutorToolAvailability.IsKnown("mcp__notes__notes_search", LocalProfile()).Should().BeFalse();
+
+    [Fact]
+    public void ToolAvailability_ИнструментВнеСпискаСервера_Неизвестен() =>
+        ExecutorToolAvailability.IsKnown("mcp__tasks__tasks_delete", LocalProfile()).Should().BeFalse();
+
+    [Fact]
+    public void ToolAvailability_ИнструментИзСписка_Известен() =>
+        ExecutorToolAvailability.IsKnown("mcp__tasks__tasks_get", LocalProfile()).Should().BeTrue();
+
+    [Fact]
+    public void ToolAvailability_СерверБезСпискаИнструментов_Известен() =>
+        ExecutorToolAvailability.IsKnown("mcp__codegraph__codegraph_hubs", LocalProfile()).Should().BeTrue("codegraph оставлен целиком");
+
+    [Fact]
+    public void ToolAvailability_ВстроенныйПодBare_ПоСписку()
+    {
+        ExecutorToolAvailability.IsKnown("Read", LocalProfile()).Should().BeTrue();
+        ExecutorToolAvailability.IsKnown("WebFetch", LocalProfile()).Should().BeFalse("под --bare состав CLI задан BareTools");
+    }
+
+    [Fact]
+    public void ToolAvailability_ПрофильБезОграничений_ВсёИзвестно() =>
+        ExecutorToolAvailability.IsKnown("mcp__notes__notes_search", new LightProfile { BareMode = false, TrimMcpServers = false })
+            .Should().BeTrue("профиль ничего не режет — ошибка «известен» дешевле");
+
+    [Fact]
+    public void ToolAvailability_Describe_ВстроенныеИMcp()
+    {
+        var list = ExecutorToolAvailability.Describe(LocalProfile());
+        list.Should().Contain("Bash").And.Contain("mcp__tasks__tasks_get").And.Contain("mcp__memory__memory_recall")
+            .And.Contain("mcp__codegraph__*", "сервер без белого списка — целиком")
+            .And.NotContain("mcp__notes__*");
+    }
+
+    // ─── Директива о несуществующем инструменте ──────────────────────────────────────────
+
+    [Fact]
+    public void ДирективаНеизвестногоИнструмента_ИмяИСостав()
+    {
+        var text = SubagentPrompts.ResumeToolCallUnknownTool(1, 2, "mcp__notes__notes_search", ["Bash", "mcp__tasks__tasks_get"]);
+        text.Should().Contain("НЕСУЩЕСТВУЮЩЕГО ИНСТРУМЕНТА 1/2")
+            .And.Contain("`mcp__notes__notes_search`")
+            .And.Contain("Bash, mcp__tasks__tasks_get")
+            .And.NotContain("<function=", "образец формата тут не нужен — повторять нечего");
+    }
+
     public void Dispose() => Helpers.TestFs.DeleteDirectoryResilient(_dir);
 
     private TaskItem CreateTrackedTask()

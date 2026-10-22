@@ -72,6 +72,9 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     // окна запроса и не дёргается между опросами. null — данных нет.
     // Читается и пишется под _gate: Nullable<double> не атомарна, а читает другой поток.
     private double? _cleanStepMs;
+    // База шага по числу одновременных потоков (ключ — Running точки): у батч-движка шаг
+    // растёт с числом строк, и одна база на стенд выдавала параллельный декод за «ждёт соседа».
+    private IReadOnlyDictionary<int, double>? _cleanStepMsByRunning;
 
     // Ожидаемый интервал: по умолчанию Task.Delay; тест подменяет, чтобы гонять цикл
     // на фейковых часах (без реального Task.Delay).
@@ -339,8 +342,12 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     private void UpdateCleanStep(EngineSnapshot snap)
     {
         List<(double? Seconds, long? Count)> steps;
+        List<(double? Seconds, long? Count, int? Running)> stepsByRunning;
         lock (_gate)
+        {
             steps = _history.Select(p => (p.ItlSeconds, p.ItlCount)).ToList();
+            stepsByRunning = _history.Select(p => (p.ItlSeconds, p.ItlCount, p.Running)).ToList();
+        }
 
         // Накопленные счётчики движка (Σitl за его жизнь) — последний fallback, когда валидных
         // точек кольца меньше десяти (перцентиль по такой выборке слишком шумный) и по кольцу
@@ -349,8 +356,19 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             steps, snap.InterTokenLatencySum, snap.InterTokenLatencyCount);
 
         // Гистерезис: база не дёргается между опросами (новое значение отличается < 10 %).
+        var byRunning = LocalModelStatsCleanStep.ComputeBaseByRunning(stepsByRunning);
         lock (_gate)
+        {
             _cleanStepMs = LocalModelStatsCleanStep.ApplyHysteresis(_cleanStepMs, candidate);
+            _cleanStepMsByRunning = LocalModelStatsCleanStep.ApplyHysteresisByRunning(_cleanStepMsByRunning, byRunning);
+        }
+    }
+
+    // Опубликованные базы шага по уровням параллелизма (мс); пустой словарь — данных ещё нет.
+    private IReadOnlyDictionary<int, double>? CleanStepByRunningOf()
+    {
+        lock (_gate)
+            return _cleanStepMsByRunning;
     }
 
     // Опубликованная база шага декода (мс): null — данных ещё нет.
@@ -573,6 +591,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
             Speed = ThroughputOf(),
             SpeculativeSpeedup = speculativeSpeedup,
             CleanStepMs = CleanStepOf(),
+            CleanStepMsByRunning = CleanStepByRunningOf(),
             Kv = kv,
             Unsupported = snap.Unsupported,
             Engine = engine,

@@ -54,6 +54,13 @@ public class NotificationsController(
     {
         // Через NotificationService — денормализация персоны/проекта (Enrich) + SignalR + push
         // единой точкой. Push для важных: напоминания, ответы персон/агентов, завершение задач.
+        // url сюда шлёт модель (stdio-ветка MCP сервисным токеном): только путь приложения,
+        // чужой адрес — 400 (S7). Фронт сам сюда не пишет, свои диплинки сервер шлёт мимо ручки
+        if (!string.IsNullOrEmpty(req.Url) && !NotificationUrls.IsAppRelative(req.Url))
+        {
+            log.LogWarning("Уведомление отклонено: url «{Url}» не путь приложения", req.Url);
+            return BadRequest(new { error = NotificationUrls.RejectReason });
+        }
         var sendPush = req.Kind is "reminder" or "claude" or "success";
         var id = await notif.SendAsync(UserId, req, sendPush);
         var item = await store.GetByIdAsync(UserId, id);

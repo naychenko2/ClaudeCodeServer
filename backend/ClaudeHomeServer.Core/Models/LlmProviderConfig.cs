@@ -236,6 +236,15 @@ public class LlmModelConfig
     // (A/B 19.10.2026). Явный выбор человека не перебивает — поэтому поле каталога,
     // а не env CLAUDE_CODE_EFFORT_LEVEL: тот перекрывает и --effort. Читает EffortFor.
     public string? DefaultEffort { get; set; }
+
+    // Свой состав MCP у записи модели поверх провайдера (семантика — KeepMcpServers /
+    // KeepMcpTools провайдера). Нужен, когда один стенд обслуживает две записи с разным
+    // окном и разной ролью (22.10.2026: qwen3.8-27b на 256K — исполнителям, узкий состав;
+    // qwen3.8-flash-500k на 512K — ведущему фич, ему нужны tasks_run_executor и chats_send).
+    // Второй провайдер под это не годится: группа в списке моделей — провайдер, а модель
+    // одна. null/пусто — состав провайдера.
+    public string[]? KeepMcpServers { get; set; }
+    public Dictionary<string, string[]>? KeepMcpTools { get; set; }
 }
 
 // Секция статистики локального движка (фича «Статистика локальных моделей»).

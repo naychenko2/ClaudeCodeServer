@@ -119,8 +119,12 @@ public class McpProbeServiceTests : IDisposable
     public async Task ВтораяПробаТогоЖеСервера_НеПлодитПроцесс()
     {
         Skip.IfNot(NodeAvailable(), "node не найден в PATH");
-        var (probe, _) = NewProbe(timeoutSeconds: 5);
-        // Сервер, который молчит: первая проба честно висит до таймаута. Стартовав, он
+        // Конец первой пробы задаёт тест (отменой), а не её таймаут: с таймаутом 5 с проба под
+        // нагрузкой гасила сервер раньше, чем node успевал стартовать, и вторая проба уже не
+        // видела занятого гейта. Таймаут — максимальный, он лишь страховка от вечного зависания.
+        var (probe, _) = NewProbe(timeoutSeconds: 120);
+        Directory.CreateDirectory(_dir);
+        // Сервер, который молчит: первая проба висит, пока её не отменят. Стартовав, он
         // отмечается файлом — по нему ждём СОБЫТИЕ, а не фиксированную паузу
         var marker = Path.Combine(_dir, "started.marker");
         var record = new McpServerRecord
@@ -130,17 +134,27 @@ public class McpProbeServiceTests : IDisposable
             Args = ["-e", "require('fs').writeFileSync(process.argv[1],'1');process.stdin.resume()", marker],
         };
 
-        var first = probe.ProbeAsync("owner1", record);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = new FileSystemWatcher(_dir, Path.GetFileName(marker));
+        watcher.Created += (_, _) => started.TrySetResult();
+        watcher.Changed += (_, _) => started.TrySetResult();
+        watcher.EnableRaisingEvents = true;
 
-        var deadline = DateTime.UtcNow.AddSeconds(15);
-        while (!File.Exists(marker) && DateTime.UtcNow < deadline) await Task.Delay(25);
-        File.Exists(marker).Should().BeTrue("проба обязана поднять сервер");
+        using var stopFirst = new CancellationTokenSource();
+        var first = probe.ProbeAsync("owner1", record, stopFirst.Token);
+        // Файл мог появиться до подписки — тогда события не будет, но он уже есть
+        if (File.Exists(marker)) started.TrySetResult();
+
+        // Первая проба завершилась раньше старта сервера — это провал, а не ожидание
+        (await Task.WhenAny(started.Task, first)).Should().BeSameAs(started.Task,
+            "проба обязана поднять сервер и держать его до отмены");
 
         var second = await probe.ProbeAsync("owner1", record);
 
         second.Error.Should().Contain("уже идёт");
         // Отказ «занято» — не наблюдение: статус сервера от него меняться не должен
         second.Status.Should().Be(McpServerStatuses.Unknown);
+        stopFirst.Cancel();
         (await first).Ok.Should().BeFalse();
     }
 }

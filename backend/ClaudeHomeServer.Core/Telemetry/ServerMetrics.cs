@@ -73,6 +73,11 @@ public static class ServerMetrics
         unit: "ms",
         description: "Время обработки сообщения чата наблюдателем (ms)");
 
+    public static readonly Histogram<long> SessionQueueBytes = _meter.CreateHistogram<long>(
+        "ccs.session.queue_bytes",
+        unit: "By",
+        description: "Суммарный текст несливаемых кадров в очереди сессии (символов), по моменту добавления кадра");
+
     /// <summary>
     /// Явные границы бакетов для <see cref="LlmDuration"/> (мс). Регистрируются как View
     /// в ObservabilityExtensions.
@@ -129,6 +134,11 @@ public static class ServerMetrics
         "ccs.chat_subjects.parse_failed",
         unit: "{batch}",
         description: "Пачки разбора чатов по темам с неразборчивым ответом модели");
+
+    public static readonly Counter<long> CoalescedFrames = _meter.CreateCounter<long>(
+        "ccs.session.coalesced_frames",
+        unit: "{frame}",
+        description: "Кадры-дельты, слитые с предыдущим при переполнении очереди сессии (текст не теряется)");
 
     public static readonly Counter<long> TelemetryHeartbeat = _meter.CreateCounter<long>(
         "ccs.telemetry.heartbeat",
@@ -189,6 +199,10 @@ public static class ServerMetrics
     /// <summary>Время ожидания сообщения в очереди сессии: <paramref name="sessionKind"/> — human | executor.</summary>
     public static void RecordSessionQueueWait(double waitMs, string sessionKind) =>
         SessionQueueWait.Record(waitMs, new KeyValuePair<string, object?>("session_kind", sessionKind));
+
+    /// <summary>Суммарный текст несливаемых кадров в очереди сессии: <paramref name="sessionKind"/> — human | executor.</summary>
+    public static void RecordSessionQueueBytes(long bytes, string sessionKind) =>
+        SessionQueueBytes.Record(bytes, new KeyValuePair<string, object?>("session_kind", sessionKind));
 
     /// <summary>Время наблюдателя: <paramref name="observer"/> — имя типа обработчика (значения из кода, не из данных).</summary>
     public static void RecordSessionObserverDuration(double durationMs, string observer, string sessionKind) =>

@@ -46,13 +46,17 @@ export interface CtxThresholds {
   dangerPct: number;
 }
 
+// liveTokens — живое заполнение посреди хода (ChatState.liveContextTokens, событие
+// context_usage): есть — оно и есть текущая оценка, маркеры ленты дают только модель и
+// итог сжатия. Нет (между ходами) — как раньше, по последнему result/compact_boundary.
 export function estimateContext(
   items: ChatItem[],
   fallbackModel?: string | null,
   thresholds: CtxThresholds = { warnPct: DEFAULT_CTX_WARN, dangerPct: DEFAULT_CTX_DANGER },
+  liveTokens?: number,
 ): ContextEstimate {
   let model: string | undefined;
-  let tokens: number | undefined;
+  let tokens: number | undefined = liveTokens && liveTokens > 0 ? liveTokens : undefined;
   let fresh = false;
   let lastCompact: CompactSummary | undefined;
 

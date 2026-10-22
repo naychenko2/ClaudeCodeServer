@@ -1,5 +1,7 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Plugins;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -242,6 +244,50 @@ public class PluginUninstallTests : IDisposable
 
         // «Коммит» (удаление записи) — ПОСЛЕ шова: шов упал → запись осталась (идемпотентный повтор).
         _store.LoadInstalled(Owner).Should().Contain(r => r.Id == Id, "запись не удалена: шов упал до коммита");
+    }
+
+    // Итерация 2 (R-Финал-2, MAJOR): каскад uninstall даёт ровно ОДНО plugins_changed.
+    // SaveInstalled и RemovePlugin — с fireEvent: false (иначе по одному событию), единое
+    // событие — в шаге 8. Мутация: вернуть fireEvent: true в SaveInstalled/RemovePlugin →
+    // 2-3 события → тест красный. Секрет нужен: RemovePlugin на плагине без секретов
+    // не мутирует (changed=false) и даже с fireEvent: true не испустил бы.
+    [Fact]
+    public void Uninstall_Каскад_РовноОдноСобытие()
+    {
+        var broadcaster = new RecordingBroadcaster();
+        var store = new PluginStore(BuildConfig(_dir), broadcaster);
+        var secrets = new PluginSecretsStore(BuildConfig(_dir), broadcaster);
+        var sut = new PluginUninstall(store, secrets, _cascade, null, broadcaster);
+
+        // Установка + секрет: RemovePlugin реально мутирует (changed) → при fireEvent: true испустил бы.
+        store.SaveInstalled(Owner,
+        [
+            new PluginInstall
+            {
+                Id = Id, Version = Version, Sha256 = "abc", Enabled = true, Source = "draft",
+                Secrets = [new PluginInstallSecret { Name = "LINEAR_TOKEN", Set = true }],
+            },
+        ]);
+        secrets.Set(Owner, Id, "LINEAR_TOKEN", "tok-123");
+        broadcaster.Reset();
+
+        sut.Uninstall(Owner, Id).Should().BeTrue();
+
+        // Ровно ОДНО plugins_changed за весь каскад (шаг 8), не два (SaveInstalled + RemovePlugin).
+        broadcaster.OwnerMessages.Should().ContainSingle()
+            .Which.Should().BeOfType<PluginsChangedMessage>();
+    }
+
+    // ISessionBroadcaster: собирает ToOwner-сообщения; Reset — «считать с нуля» перед каскадом.
+    private sealed class RecordingBroadcaster : ISessionBroadcaster
+    {
+        public List<ServerMessage> OwnerMessages { get; } = [];
+        public void Reset() => OwnerMessages.Clear();
+        public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToOwner(string ownerId, ServerMessage message) { OwnerMessages.Add(message); return Task.CompletedTask; }
+        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 
     // IPluginInstallCascade: фиксирует вызовы.

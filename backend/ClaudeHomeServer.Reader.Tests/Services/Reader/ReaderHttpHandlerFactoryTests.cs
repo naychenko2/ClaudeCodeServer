@@ -40,7 +40,7 @@ public class ReaderHttpHandlerFactoryTests
         // и весь SSRF-периметр держался бы на прокси, а не на нас.
         using var handler = ReaderHttpHandlerFactory.Create();
 
-        handler.UseProxy.Should().BeFalse();
+        handler.Transport.UseProxy.Should().BeFalse();
     }
 
     [Fact]

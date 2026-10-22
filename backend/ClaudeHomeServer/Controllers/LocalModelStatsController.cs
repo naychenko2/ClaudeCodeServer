@@ -101,9 +101,9 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             GenTokens = p.GenTokens,
             ItlSeconds = p.ItlSeconds,
             ItlCount = p.ItlCount,
-            // База шага декода (мс) — глобальная величина, одинаковая во всех точках
-            // (ADR-029, v2.5): клиенту не нужно выбирать базу из своего окна.
-            CleanStepMs = current.CleanStepMs,
+            // База шага декода (мс) для этой точки: по числу потоков в ней (батч-движок:
+            // шаг растёт с числом строк, 22.10), иначе общая база стенда (ADR-029, v2.5).
+            CleanStepMs = CleanStepFor(current, p.Running),
             PrefillSeconds = p.PrefillSeconds,
             QueueSeconds = p.QueueSeconds,
             PromptTokens = p.PromptTokens,
@@ -322,6 +322,10 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // Прогон (идущий) → DTO. Own — прогон текущего пользователя: sessionId/projectId отдаются,
     // title null (в строке нет названия чата — фронт резолвит по sessionId); чужой —
     // «Чат другого пользователя», id/проект null. OwnerId наружу не уходит.
+    // База шага для точки: своя для уровня параллелизма точки, если бэкенд её набрал, иначе общая.
+    internal static double? CleanStepFor(LocalModelStatsCurrent current, int? running) =>
+        running is { } r && current.CleanStepMsByRunning is { } by && by.TryGetValue(r, out var v) ? v : current.CleanStepMs;
+
     private static MediaRunningDto MapRunning(ComfyJobRow r, string? myId)
     {
         var own = r.OwnerId == myId;

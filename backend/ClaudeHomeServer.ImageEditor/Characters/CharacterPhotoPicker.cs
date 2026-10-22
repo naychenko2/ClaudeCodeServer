@@ -55,6 +55,54 @@ public static class CharacterPhotoPicker
         return new CharacterPhotoPick(result.Take(count).ToList(), CharacterPhotoPick.Auto);
     }
 
+    // Модель берёт несколько фото как ОДНОГО человека (Klein): ей нужен набор ракурсов, а не
+    // лучшее совпадение с сюжетом. У Qwen-Image (1 фото) и облака (null) — прежний подбор
+    public static bool WantsDiverse(int? maxCharacterPhotos) => maxCharacterPhotos is > 1;
+
+    // Очередь ракурсов набора после главного: анфас несёт больше всего черт, поэтому его вдвое
+    // больше. A/B 2026-10-22 («Андрей», Klein): лучший набор из пяти — анфас, анфас снизу, три
+    // четверти, профиль, ещё анфас (0,765 против 0,717 у трёх фото)
+    private static readonly string[] DiverseOrder = ["front", "front", "three-quarter", "profile"];
+
+    // Набор разных ракурсов: главное первым, дальше ракурсы по очереди DiverseOrder (нет фото
+    // нужного ракурса — следующий в очереди). Внутри ракурса — наклон, которого среди уже взятых фото
+    // этого ракурса меньше всего, при равенстве ровный, затем порядок манифеста. Фото без метки
+    // ракурса — в конце, по манифесту; без меток вовсе — порядок манифеста
+    public static CharacterPhotoPick Diverse(IReadOnlyList<CharacterPhoto> photos, int count)
+    {
+        var current = photos.OrderByDescending(p => p.Primary).ToList();
+        if (count <= 0 || current.Count == 0 || current.All(p => AngleOf(p) is null))
+            return new CharacterPhotoPick(current.Take(count).ToList(), CharacterPhotoPick.Fallback);
+
+        var result = new List<CharacterPhoto> { current[0] };
+        var left = current.Skip(1).ToList();
+        var slot = AngleOf(current[0]) == DiverseOrder[0] ? 1 : 0;
+        while (result.Count < count && left.Count > 0)
+        {
+            CharacterPhoto? next = null;
+            for (var tried = 0; tried < DiverseOrder.Length && next is null; tried++, slot++)
+            {
+                var angle = DiverseOrder[slot % DiverseOrder.Length];
+                var pitches = result.Where(p => AngleOf(p) == angle).Select(PitchOf).ToList();
+                next = left
+                    .Where(p => AngleOf(p) == angle)
+                    .OrderBy(p => pitches.Count(x => x == PitchOf(p)))
+                    .ThenBy(p => PitchOf(p) == "level" ? 0 : 1)
+                    .FirstOrDefault();
+            }
+            next ??= left[0];
+            result.Add(next);
+            left.Remove(next);
+        }
+        return new CharacterPhotoPick(result, CharacterPhotoPick.Auto);
+    }
+
+    private static string? AngleOf(CharacterPhoto photo) =>
+        CharacterScene.IsKnown(photo.Angle) && AngleChain.Contains(photo.Angle) ? photo.Angle : null;
+
+    private static string PitchOf(CharacterPhoto photo) =>
+        CharacterScene.IsKnown(photo.Pitch) ? photo.Pitch! : PhotoLabelValues.Unknown;
+
     internal static int Score(CharacterPhoto photo, CharacterScene scene) =>
         AngleScore(photo.Angle, scene.Angle) + PitchScore(photo.Pitch, scene.Pitch) + EmotionScore(photo.Emotion, scene.Emotion);
 

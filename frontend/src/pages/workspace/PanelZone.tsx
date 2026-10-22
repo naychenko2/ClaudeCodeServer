@@ -103,14 +103,26 @@ interface Props {
   // Человек закрыл панель — крестиком в шапке или повторным кликом по рельсе. Хост
   // ставит по нему признак «закрыта в этом чате» панели генерации (ADR-021 §3)
   onUserClose?: (k: PanelKey) => void;
+  // Мета панелей плагинов (итерация 2): заголовок и иконка каждой панели плагина.
+  // Передаётся пропсом из WorkspacePage (а не через глобальный реестр),
+  // чтобы рендер был чистым. Без неё — panelMetaResolved (fallback).
+  pluginPanelMeta?: Record<import('./panelCatalog').PluginPanelKey, { title: string; Icon: import('lucide-react').LucideIcon }>;
 }
 
 export function PanelZone({
   side, panels, railBadges, panelStack,
   allowedKeys: allowedKeysProp, hideWhenEmpty, compact, sessionPanels,
-  railFooter, floating, centerFileOpen, onUserClose,
+  railFooter, floating, centerFileOpen, onUserClose, pluginPanelMeta,
 }: Props) {
   const allowedKeys = allowedKeysProp ?? WORKSPACE_KEYS;
+  // Итерация 2: мета плагинов — пропсом (а не глобальный реестр). Для ключей plugin:*
+  // проп имеет приоритет; для статических — panelMetaResolved (как раньше).
+  const resolveMeta = (k: PanelKey): { title: string; Icon: import('lucide-react').LucideIcon } => {
+    if (isPluginPanelKey(k) && pluginPanelMeta && pluginPanelMeta[k]) {
+      return pluginPanelMeta[k];
+    }
+    return panelMetaResolved(k);
+  };
   // S5: динамические ключи плагинов. RAIL_GROUPS статичен, а plugin:* — нет, поэтому
   // текущие plugin:* (те, что разрешены экраном и имеют контент) добираем к ПЕРВОЙ
   // группе (PROJECT_KEYS): панели плагинов — содержимое проекта, как файлы/знания.
@@ -826,7 +838,7 @@ export function PanelZone({
       // В большом плейсхолдере показываем иконку той панели, которую тащат: место
       // размером в полколонки без опознавательных знаков читается как «что-то
       // сломалось», а не как «панель встанет сюда»
-      icon={dnd.from ? panelMetaResolved(dnd.from).Icon : undefined}
+      icon={dnd.from ? resolveMeta(dnd.from).Icon : undefined}
       {...dnd.guideProps(`row:${vi}:${ri}`, from => {
         // Кнопку вытащили ИЗ ЯЩИКА прямо в раскладку — это и возврат кнопки на
         // рельсу, и открытие панели одним жестом
@@ -873,8 +885,8 @@ export function PanelZone({
     const bd: RailBadgeInfo | null = sessionPanels?.railBadge(k) ?? railBadges?.[k] ?? null;
     return {
     key: k,
-    title: panelMetaResolved(k).title,
-    Icon: panelMetaResolved(k).Icon,
+    title: resolveMeta(k).title,
+    Icon: resolveMeta(k).Icon,
     active: openKeys.includes(k),
     badge: bd?.primary ?? null,
     badgeTone: bd?.primaryTone,
@@ -961,7 +973,7 @@ export function PanelZone({
   // ряды не у центра) — на всю высоту с делением по весам. В компактном режиме
   // колонок нет (vi не передан) — там стек из двух панелей делит высоту, как и был.
   const renderPanel = (k: PanelKey, multiInCol: boolean, vi?: number): ReactNode => {
-    const { title, Icon } = panelMetaResolved(k);
+    const { title, Icon } = resolveMeta(k);
     const stretched = vi === undefined
       ? multiInCol || !!fillWanted[k]
       : panelStretched(k, vi, multiInCol ? 2 : 1);
@@ -1039,8 +1051,8 @@ export function PanelZone({
   const peekFull = openKeys.length > 0;
   const peekCard = peek && (
     <PanelShell
-      icon={(() => { const { Icon } = panelMetaResolved(peek); return <Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />; })()}
-      title={panelMetaResolved(peek).title}
+      icon={(() => { const { Icon } = resolveMeta(peek); return <Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />; })()}
+      title={resolveMeta(peek).title}
       badge={sessionPanels?.headerBadge(peek) ?? null}
       // Закрепить — той же механикой, что закрытие у обычных панелей: иконка в
       // шапке под курсором становится булавкой. Отдельная кнопка справа была бы
@@ -1145,7 +1157,7 @@ export function PanelZone({
             key: railDrop,
             // Знак на месте вставки: крестик — только когда дроп ЗАКРОЕТ панель
             // (своя рельса); иначе иконка панели — «встанет сюда»
-            icon: railWillClose ? undefined : panelMetaResolved(railDrop).Icon,
+            icon: railWillClose ? undefined : resolveMeta(railDrop).Icon,
             onInsert: pos => { railInsert.current = pos; },
             ...dnd.guideProps('rail', from => {
               // Порядок кнопки в столбце — ПЕРВЫМ: он про место, всё остальное ниже

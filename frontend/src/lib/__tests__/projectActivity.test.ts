@@ -25,8 +25,9 @@ vi.mock('../chatReadState', () => ({
 import type { HomeSessionInfo } from '../../types';
 import { api } from '../api';
 import { __resetAgentsPresence } from '../agentsPresence';
+import { hasUnread } from '../chatReadState';
 import {
-  __subscribeActivity, __projectAggSnapshot, __chatAggSnapshot, __resetProjectActivity, foldChatActivity,
+  __subscribeActivity, __projectAggSnapshot, __chatAggSnapshot, __rootChatAggSnapshot, __resetProjectActivity, foldChatActivity,
 } from '../projectActivity';
 
 function chat(id: string, status: string, projectId = 'p1'): HomeSessionInfo {
@@ -116,6 +117,34 @@ describe('projectActivity: живые фоновые агенты', () => {
 
     __subscribeActivity(() => {});
     await vi.waitFor(() => expect(__projectAggSnapshot().get('p1')?.status).toBe('waiting'));
+  });
+});
+
+// Срез для шеврона переключателя: дочерние чаты не считаются, как и в шторке
+describe('projectActivity: корневые чаты для шеврона', () => {
+  it('дочерний чат исполнителя в срез не попадает, закреплённый дочерний — попадает', async () => {
+    const child = { ...chat('kid', 'working'), parentSessionId: 'root' } as HomeSessionInfo;
+    const pinnedChild = { ...chat('pinnedKid', 'waiting'), parentSessionId: 'root', isPinned: true } as HomeSessionInfo;
+    summary([child, pinnedChild, chat('root', 'working')], []);
+
+    __subscribeActivity(() => {});
+    await vi.waitFor(() => expect(__rootChatAggSnapshot().get('root')).toBe('working'));
+
+    expect(__chatAggSnapshot().get('kid')).toBe('working');
+    expect(__rootChatAggSnapshot().has('kid')).toBe(false);
+    expect(__rootChatAggSnapshot().get('pinnedKid')).toBe('waiting');
+  });
+
+  it('непрочитанный дочерний чат точку шеврона не зажигает', async () => {
+    vi.mocked(hasUnread).mockImplementation((_u, id) => id === 'kid');
+    const child = { ...chat('kid', 'finished'), parentSessionId: 'root' } as HomeSessionInfo;
+    summary([], [chat('root', 'finished'), child]);
+
+    __subscribeActivity(() => {});
+    await vi.waitFor(() => expect(__chatAggSnapshot().get('kid')).toBe('unread'));
+
+    expect(__rootChatAggSnapshot().size).toBe(0);
+    vi.mocked(hasUnread).mockReturnValue(false);
   });
 });
 

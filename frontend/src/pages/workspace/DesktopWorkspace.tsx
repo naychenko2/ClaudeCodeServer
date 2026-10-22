@@ -160,6 +160,8 @@ interface Props {
   // seq события «открыли файл» (тот же счётчик): 0 — файл не открыт (холодный старт:
   // файл «восстановлен» из сохранённого состояния, а не открыт действием).
   fileOpenedAt: number;
+  // Итерация 2: мета панелей плагинов (заголовок + иконка) — пропсом в PanelZone.
+  pluginPanelMeta?: Record<import('./panelCatalog').PluginPanelKey, { title: string; Icon: import('lucide-react').LucideIcon }>;
 }
 
 // Кто выигрывает центр: страница фичи или файл — тот, чьё событие «открыли»
@@ -513,6 +515,7 @@ export function DesktopWorkspace(p: Props) {
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}
+        pluginPanelMeta={p.pluginPanelMeta}
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
           // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
@@ -699,6 +702,7 @@ export function DesktopWorkspace(p: Props) {
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}
         centerFileOpen={!!p.openFile}
+        pluginPanelMeta={p.pluginPanelMeta}
       />
     </div>
   );

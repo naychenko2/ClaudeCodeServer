@@ -218,7 +218,9 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     // Как и chats_send: делегированный ход не пишет в чужие чаты. Главный сценарий это не
     // задевает — ход чата-исполнителя запускает сервер (глубина 0), а не chats_send; гейт
     // закрывает лишь эскалацию с уже делегированного хода, поверх лимита цепочки.
-    [DenyOnDelegatedTurn("Отчёт в вышестоящий чат")]
+    // Липкая часть делегированности (живые фоновые агенты прошлого делегированного хода при
+    // текущем ходе глубины 0) отчёт не закрывает.
+    [DenyOnDelegatedTurn("Отчёт в вышестоящий чат", AllowOnStickyRun = true)]
     public async Task<IActionResult> ReportUp(string sessionId, [FromBody] ReportUpRequest req)
     {
         var outcome = await messaging.ReportUpAsync(UserId, sessionId, req.Text, req.Blocker);

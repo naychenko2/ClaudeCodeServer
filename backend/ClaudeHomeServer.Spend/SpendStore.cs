@@ -222,6 +222,105 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
         return [.. map.Values];
     }
 
+    // --- переклассификация «локальный = бесплатный» ---
+
+    // Ходы локальных провайдеров (IsLocal в конфиге), записанные до учёта этого признака
+    // в SpendSources.IsFree, лежат в сторе как chat-turn/one-shot. Проход переставляет их
+    // в "free" — и в деталях, и в дневных агрегатах (инвариант «день либо в деталях, либо
+    // в daily» не затрагивается). Идемпотентен: уже бесплатные не трогает, ничего не
+    // перевернулось — никакого обращения к диску.
+    public int ReclassifyLocalAsFree(Func<string, bool> isLocalProvider)
+    {
+        var flipped = 0;
+        lock (_ioLock)
+        {
+            foreach (var (date, list) in _details)
+            {
+                List<SpendRecord> snapshot;
+                bool changed = false;
+                lock (list)
+                {
+                    foreach (var r in list)
+                    {
+                        if (!Reclassifiable(r.Source, r.Provider, r.Model, isLocalProvider)) continue;
+                        r.Source = SpendSources.Free;
+                        changed = true;
+                        flipped++;
+                    }
+                    snapshot = [.. list];
+                }
+                if (!changed) continue;
+                try
+                {
+                    File.WriteAllText(TurnsPath(date),
+                        string.Join(Environment.NewLine,
+                            snapshot.Select(r => JsonSerializer.Serialize(r, JsonOpts)))
+                        + Environment.NewLine);
+                }
+                catch (Exception ex)
+                {
+                    // Память уже исправлена — диск догонит при следующем проходе
+                    _log?.LogError(ex, "spend: переклассификация — не переписать {Date}", date);
+                }
+            }
+
+            flipped += ReclassifyDaily(isLocalProvider);
+        }
+        return flipped;
+    }
+
+    private static bool Reclassifiable(string source, string provider, string? model, Func<string, bool> isLocal) =>
+        (source == SpendSources.ChatTurn || source == SpendSources.OneShot)
+        && SpendSources.IsFree(provider, model, isLocal(provider));
+
+    // Дневные агрегаты: после смены источника две строки могут сойтись по полному
+    // составному ключу — их сливает MergeByKey (двойного счёта не должно быть).
+    private int ReclassifyDaily(Func<string, bool> isLocalProvider)
+    {
+        Dictionary<string, List<DailySpendRow>>? next = null;
+        var flipped = 0;
+        foreach (var (date, rows) in _daily)
+        {
+            var changed = false;
+            foreach (var r in rows)
+            {
+                if (!Reclassifiable(r.Source, r.Provider, r.Model, isLocalProvider)) continue;
+                r.Source = SpendSources.Free;
+                changed = true;
+                flipped++;
+            }
+            if (!changed) continue;
+            next ??= new Dictionary<string, List<DailySpendRow>>(_daily);
+            next[date] = MergeByKey(rows);
+        }
+        if (next is null) return 0;
+        if (PersistDaily(next)) _daily = next;
+        return flipped;
+    }
+
+    private static List<DailySpendRow> MergeByKey(List<DailySpendRow> rows)
+    {
+        var map = new Dictionary<(string, string?, string?, string?, string?, string, string?, string), DailySpendRow>();
+        foreach (var r in rows)
+        {
+            var key = (r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.Provider, r.Model, r.Source);
+            if (map.TryGetValue(key, out var acc))
+            {
+                acc.InputTokens += r.InputTokens;
+                acc.OutputTokens += r.OutputTokens;
+                acc.CacheReadTokens += r.CacheReadTokens;
+                acc.CacheCreationTokens += r.CacheCreationTokens;
+                acc.CostUsd += r.CostUsd;
+                acc.CostRub += r.CostRub;
+                acc.CostCredits += r.CostCredits;
+                acc.Generations += r.Generations;
+                acc.Turns += r.Turns;
+            }
+            else map[key] = r;
+        }
+        return [.. map.Values];
+    }
+
     // --- backfill: маркер разового импорта истории ---
 
     private string BackfillMarkerPath => Path.Combine(_dir, "backfill.done");

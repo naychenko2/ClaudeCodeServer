@@ -75,7 +75,9 @@ public class PluginSecretsStore
     }
 
     /// <summary>Удалить все секреты плагина (каскад uninstall, M7).</summary>
-    public void RemovePlugin(string ownerId, string pluginId)
+    /// <paramref name="fireEvent"/>: false — не испускать plugins_changed (итерация 2:
+    /// PluginUninstall схлопывает каскад в одно событие, вызывая с fireEvent: false).
+    public void RemovePlugin(string ownerId, string pluginId, bool fireEvent = true)
     {
         bool changed;
         lock (_lock)
@@ -84,7 +86,7 @@ public class PluginSecretsStore
             if (changed)
                 Save();
         }
-        if (changed)
+        if (changed && fireEvent)
             NotifyChanged(ownerId);
     }
 

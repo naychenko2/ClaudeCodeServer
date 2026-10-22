@@ -12,7 +12,7 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying, useVideoCenter } from '../lib/videoStage';
-import { keyAllowed, pluginPanelKey, setPluginPanelMeta, WORKSPACE_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { keyAllowed, pluginPanelKey, WORKSPACE_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
@@ -340,7 +340,7 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const hasPlugins = useHasInstalledPlugins(project.id)
   // S5: у каждой панели плагина — своя карточка в рельсе. Плоский список (плагин,
   // панель) у ВКЛЮЧЕННЫХ плагинов с ОБЪЯВЛЕННЫМИ панелями: из него строим мету
-  // (реестр setPluginPanelMeta), карточки (panels) и мобильный переключатель.
+  // карточки (panels) и мобильный переключатель.
   // Выключенный не монтирует панели (бэк — 409), панель может не быть (404).
   const pluginPanelTargets = useMemo(() => {
     const out: { plugin: PluginInfo; panel: PluginPanelView }[] = [];
@@ -353,9 +353,10 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Мета карточек: заголовок — единый вывод (title из манифеста, иначе имя плагина),
   // иконка — детерминированно из id плагина (манифест иконки не несёт) — разные
   // плагины в рельсе различимы, а не все с одной Plug.
-  // Заполняем в useMemo (а не в эффекте): WorkspacePage рендерится ПЕРЕД PanelZone,
-  // поэтому реестр свеж, когда PanelZone читает panelMetaResolved (иначе fallback).
-  useMemo(() => {
+  // Итерация 2: вместо побочного эффекта в useMemo — чистый
+  // объект, передаваемый пропсом в DesktopWorkspace → PanelZone.
+  const pluginPanelMeta = useMemo<Record<import('./workspace/panelCatalog').PluginPanelKey, { title: string; Icon: LucideIcon }> | undefined>(() => {
+    if (pluginPanelTargets.length === 0) return undefined;
     const meta: Record<string, { title: string; Icon: LucideIcon }> = {};
     for (const t of pluginPanelTargets) {
       meta[pluginPanelKey(t.plugin.id, t.panel.id)] = {
@@ -363,7 +364,7 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
         Icon: pluginIconFor(t.plugin.id),
       };
     }
-    setPluginPanelMeta(meta as Record<import('./workspace/panelCatalog').PluginPanelKey, { title: string; Icon: LucideIcon }>);
+    return meta as Record<import('./workspace/panelCatalog').PluginPanelKey, { title: string; Icon: LucideIcon }>;
   }, [pluginPanelTargets]);
   // Карточки панелей плагинов для десктопного panels: ключ plugin:{...} → PluginFrame.
   // На мобиле (вкладка «Плагины») их не строим — там PluginPanelsSwitcher.
@@ -2598,6 +2599,7 @@ const windowWidth = useWindowWidth();
           onOpenPersonaChat={handleOpenPersonaChat}
           availableChatIds={availableSessionIds}
           onPanelUserClose={k => markGenPanelDismissed(activeSessionId, k)}
+          pluginPanelMeta={pluginPanelMeta}
           onPersonaSelectAfterCreate={handlePersonaSelectAfterCreate}
           onPersonaCleared={handlePersonaCleared}
           teamCenterOpen={teamCenterOpen}

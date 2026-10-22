@@ -91,14 +91,17 @@ public class PluginStore
     }
 
     // Сохранить записи установки владельца (целым списком, атомарно).
-    public void SaveInstalled(string ownerId, IEnumerable<PluginInstall> records)
+    // <paramref name="fireEvent"/>: false — не испускать plugins_changed (итерация 2:
+    // PluginUninstall схлопывает каскад в одно событие, вызывая с fireEvent: false).
+    public void SaveInstalled(string ownerId, IEnumerable<PluginInstall> records, bool fireEvent = true)
     {
         lock (_lock)
         {
             var path = InstalledFile(ownerId);
             JsonFileStore.Save(path, records.ToList());
         }
-        NotifyChanged(ownerId);
+        if (fireEvent)
+            NotifyChanged(ownerId);
     }
 
     // Load → modify → save под одной блокировкой: атомарное изменение записей владельца.

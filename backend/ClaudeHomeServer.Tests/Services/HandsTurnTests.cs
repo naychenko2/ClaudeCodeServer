@@ -148,6 +148,29 @@ public class HandsTurnTests
             "без зрения агент запускает мост без screenshot_control");
     }
 
+    // Замечание 3 ревью F1-5: ход, обогнавший «реализуй одобренный план», если он делегированный
+    // (ход процесса, chats_send), идёт с ЯВНЫМ режимом — без флага CLI взял бы defaultMode из
+    // .claude/settings проекта (там бывает bypass). Признак плана он не тратит: его получит
+    // следующий ход человека
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ПослеОдобренияПлана_ДелегированныйХод_ЯвныйРежим_ПризнакДостаётсяСледующему(bool hands)
+    {
+        using var h = new HandsTurnHarness(hands, mode: ClaudeMode.Plan);
+        var force = typeof(ClaudeSession).GetField("_forceNonPlanNextTurn",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        force.SetValue(h.Session, true);
+
+        var delegated = await h.RunTurnAsync("ход процесса", agentDepth: 1);
+        var human = await h.RunTurnAsync("реализуй план");
+
+        delegated.PermissionMode.Should().Be("plan", "делегированный ход — в режиме чата, явным флагом");
+        ((bool)force.GetValue(h.Session)!).Should().BeFalse("признак потрачен ходом человека, а не процессом");
+        if (hands) human.PermissionMode.Should().Be("default", "ход с руками идёт с явным режимом, план снят");
+        else human.PermissionMode.Should().BeNull("исполнение одобренного плана — без plan, как раньше");
+    }
+
     [Fact]
     public void HandsPermissionMode_BypassПонижается_ОстальноеКакЕсть()
     {

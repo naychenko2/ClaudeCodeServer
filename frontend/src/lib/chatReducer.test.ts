@@ -497,3 +497,18 @@ describe('запись модуля module_record (ADR-019 §2)', () => {
     expect(serverHistoryNewer(stored, live.items)).toBe(false);
   });
 });
+
+describe('context_usage: живое заполнение контекста посреди хода', () => {
+  it('ставит liveContextTokens, result и compact_boundary его сбрасывают, ноль не пишется', () => {
+    let s = feed(initialChatState(), { type: 'context_usage', contextTokens: 42_000 });
+    expect(s.liveContextTokens).toBe(42_000);
+    s = feed(s, { type: 'context_usage', contextTokens: 0 });
+    expect(s.liveContextTokens).toBe(42_000);
+    s = feed(s, { type: 'result', subtype: 'success', durationMs: 1, numTurns: 1, contextTokens: 43_000 });
+    expect(s.liveContextTokens).toBeUndefined();
+    s = feed(s, { type: 'context_usage', contextTokens: 50_000 }, { type: 'compact_boundary', trigger: 'auto', preTokens: 50_000, postTokens: 9_000 });
+    expect(s.liveContextTokens).toBeUndefined();
+    // в ленту транзитное событие не попадает
+    expect(s.items.some(it => (it as { kind: string }).kind === 'context_usage')).toBe(false);
+  });
+});

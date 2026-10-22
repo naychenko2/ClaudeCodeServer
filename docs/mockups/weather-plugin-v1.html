@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Плагин «Погода» — панель в рельсе · макет v1 (D1)</title>
+<!--
+  Макет панели тестового плагина «Погода» (задача D1, bda47b71). Только макет — кода плагина нет.
+  Записка с развилками — weather-plugin-v1-proposal.md рядом.
+
+  Устройство файла:
+    1) ХОСТ (эмуляция): значения --c-* из frontend/src/lib/theme.css (как в plugins/plugins-v1.html).
+       Сырой hex живёт ТОЛЬКО здесь — это тема хоста, а не панель.
+    2) МОСТ ТОКЕНОВ: .panel получает --cc-* ровно по CC_TOKEN_MAP (features/plugins/panelTokens.ts).
+    3) КИТ: дословная копия frontend/public/plugin-kit/controls.css (то, что шим кладёт в srcdoc).
+    4) ПАНЕЛЬ: свои стили — только var(--cc-*) и color-mix() от них; размеры — шкалы FS/SP/R.
+
+  Адресация кадра (для скриншотов):
+    weather-plugin-v1.html#state=main&wx=rain&night=0&theme=dark&w=390
+    state: main | search | search-empty | search-v1 | geo-loading | geo-ok | geo-denied |
+           loading | upstream | no-right | offline
+    wx: clear | clouds | rain | storm | snow | fog;  night: 0 | 1;  w: desktop | 320 | 390
+    view=board — доска всех состояний разом.
+-->
+<style>
+/* ===== 1. Хост: тема (frontend/src/lib/theme.css) ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-accent:#D97757; --c-accent-soft:#E8A990; --c-accent-light:#F4ECE1;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4;
+  --c-success:#5E8B4E; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6;
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-accent:#E38A6A; --c-accent-soft:#9A5E48; --c-accent-light:#3A2E27;
+  --c-border:#3D3830; --c-border-light:#34302A;
+  --c-success:#7CB86A; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC;
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html, body { margin:0; }
+body {
+  background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size:13px;
+}
+
+/* --- обвязка макета (не часть панели) --- */
+.toolbar { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:12px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.toolbar label { display:flex; gap:4px; align-items:center; font-size:12px; color:var(--c-text-secondary); }
+.toolbar select, .toolbar button { font:inherit; font-size:12px; color:var(--c-text-primary); background:var(--c-bg-white);
+  border:1px solid var(--c-border); border-radius:8px; padding:4px 8px; min-height:32px; cursor:pointer; }
+.toolbar .ttl { font-weight:600; color:var(--c-text-heading); margin-right:8px; }
+.canvas { padding:24px 16px 48px; display:flex; justify-content:center; }
+.board { display:grid; grid-template-columns:repeat(auto-fill, minmax(380px, 1fr)); gap:24px 24px; padding:24px; align-items:start; }
+.board .cap { font-size:12px; color:var(--c-text-secondary); margin:0 0 8px 4px; font-weight:600; }
+
+/* --- хост: карточка рельса (десктоп) и экран панели (мобила) --- */
+.stage { background:var(--c-bg-main); padding:16px; }
+.stage.w-desktop { width:412px; }
+.stage.w-320 { width:320px; padding:0; }
+.stage.w-390 { width:390px; padding:0; }
+.rail-card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:14px;
+  box-shadow:var(--shadow-island); overflow:hidden; }
+.rail-head { display:flex; align-items:center; gap:8px; height:44px; padding:0 8px 0 14px;
+  border-bottom:1px solid var(--c-border-light); }
+.rail-head .nm { font-size:13px; font-weight:600; color:var(--c-text-heading); flex:1; }
+.rail-head .ib { width:32px; height:32px; display:grid; place-items:center; border-radius:8px; color:var(--c-text-muted); }
+.rail-head svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.mob { background:var(--c-bg-card); min-height:640px; }
+.mob .rail-head { height:52px; padding:0 8px; }
+.mob .rail-head .nm { font-size:16px; }
+.host-scroll { padding:4px 12px 16px; }  /* как скролл-контейнер PluginFrame */
+/* плашка хоста «Нет права …» (Notice tone=warning) — НАД фреймом, рисует хост, не панель */
+.host-notice { display:flex; gap:8px; margin:8px 12px 4px; padding:8px 12px; border-radius:10px;
+  background:var(--c-warning-bg); border:1px solid color-mix(in srgb, var(--c-warning) 40%, transparent);
+  color:var(--c-text-primary); font-size:12px; line-height:1.45; }
+.host-notice b { display:block; font-size:13px; color:var(--c-text-heading); }
+.host-notice svg { flex-shrink:0; width:16px; height:16px; margin-top:1px; fill:none; stroke:var(--c-warning-text); stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.host-notice u { cursor:pointer; }
+.host-notice .x { margin-left:auto; color:var(--c-text-muted); }
+
+/* ===== 2. Мост токенов: --cc-* ← --c-* (CC_TOKEN_MAP) ===== */
+.panel {
+  --cc-bg:var(--c-bg-card); --cc-fg:var(--c-text-primary); --cc-fg-muted:var(--c-text-muted);
+  --cc-accent:var(--c-accent); --cc-accent-fg:var(--c-on-accent); --cc-accent-soft:var(--c-accent-soft);
+  --cc-border:var(--c-border); --cc-bg-inset:var(--c-bg-inset); --cc-bg-panel:var(--c-bg-panel);
+  --cc-bg-selected:var(--c-bg-selected); --cc-surface:var(--c-bg-white);
+  --cc-success:var(--c-success); --cc-warning:var(--c-warning); --cc-danger:var(--c-danger); --cc-info:var(--c-info);
+  --cc-success-text:var(--c-success-text); --cc-warning-text:var(--c-warning-text);
+  --cc-danger-text:var(--c-danger-text); --cc-danger-border:var(--c-danger-border);
+  background:var(--cc-bg); color:var(--cc-fg);
+  font-family:'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size:13px; line-height:1.4;
+  container-type:inline-size;   /* в настоящей панели это просто ширина iframe — @media */
+}
+
+/* ===== 3. Кит: копия frontend/public/plugin-kit/controls.css ===== */
+.cc-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;font-family:inherit;font-size:13px;font-weight:600;line-height:1;cursor:pointer;border:1px solid transparent;border-radius:10px;padding:8px 12px;min-height:40px;background:var(--cc-bg-panel);color:var(--cc-fg);transition:background .15s,border-color .15s,color .15s}
+.cc-btn:hover{background:var(--cc-bg-selected)}
+.cc-btn:focus-visible{outline:2px solid var(--cc-accent);outline-offset:2px}
+.cc-btn:disabled{opacity:.55;cursor:not-allowed}
+.cc-btn--primary{background:var(--cc-accent);color:var(--cc-accent-fg);border-color:transparent}
+.cc-btn--primary:hover{background:var(--cc-accent)}
+.cc-btn--ghost{background:transparent;color:var(--cc-fg);border-color:var(--cc-border)}
+.cc-btn--ghost:hover{background:var(--cc-bg-inset)}
+.cc-btn--sm{font-size:12px;padding:4px 8px;border-radius:8px;min-height:40px}
+.cc-btn--loading{background:var(--cc-accent-soft);color:var(--cc-accent-fg);cursor:progress}
+.cc-btn--loading::before{content:'';width:14px;height:14px;flex-shrink:0;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:cc-cc-spin .8s linear infinite}
+.cc-input{box-sizing:border-box;width:100%;font-family:inherit;font-size:14px;color:var(--cc-fg);background:var(--cc-surface);border:1px solid var(--cc-border);border-radius:12px;padding:10px 13px;outline:none;transition:border-color .15s,box-shadow .15s}
+.cc-input::placeholder{color:var(--cc-fg-muted)}
+.cc-input:focus{border-color:var(--cc-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--cc-accent) 16%,transparent)}
+.cc-list{list-style:none;margin:0;padding:0}
+.cc-list-item{display:flex;align-items:center;gap:8px;box-sizing:border-box;font-family:inherit;font-size:13px;color:var(--cc-fg);padding:8px 12px;border-radius:10px;cursor:pointer;min-height:40px;transition:background .15s}
+.cc-list-item:hover{background:var(--cc-bg-selected)}
+.cc-list-item:focus-visible{outline:2px solid var(--cc-accent);outline-offset:-2px}
+.cc-list-item.is-active{background:var(--cc-bg-selected);box-shadow:inset 0 0 0 1.5px var(--cc-accent)}
+.cc-card{box-sizing:border-box;background:var(--cc-surface);border:1px solid var(--cc-border);border-radius:12px;padding:12px 16px}
+.cc-badge{display:inline-flex;align-items:center;gap:4px;box-sizing:border-box;font-family:inherit;font-size:11px;font-weight:600;line-height:1.4;padding:2px 8px;border-radius:999px;background:var(--cc-bg-inset);color:var(--cc-fg-muted);border:none}
+.cc-badge--success{color:var(--cc-success-text);background:color-mix(in srgb,var(--cc-success) 4%,transparent)}
+.cc-badge--warning{color:var(--cc-warning-text);background:color-mix(in srgb,var(--cc-warning) 4%,transparent)}
+.cc-badge--info{color:var(--cc-fg);background:color-mix(in srgb,var(--cc-info) 4%,transparent)}
+.cc-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:4px;padding:24px 16px}
+.cc-empty__title{font-family:inherit;font-size:16px;font-weight:600;color:var(--cc-fg)}
+.cc-empty__text{font-family:inherit;font-size:13px;color:var(--cc-fg-muted);line-height:1.5}
+.cc-notice{box-sizing:border-box;font-family:inherit;font-size:13px;line-height:1.45;color:var(--cc-fg);background:var(--cc-bg-inset);border:1px solid var(--cc-border);border-radius:8px;padding:8px 12px}
+.cc-notice--success{border-color:var(--cc-success);background:color-mix(in srgb,var(--cc-success) 14%,transparent)}
+.cc-notice--warning{border-color:var(--cc-warning);background:color-mix(in srgb,var(--cc-warning) 14%,transparent)}
+.cc-notice--danger{border-color:var(--cc-danger);background:color-mix(in srgb,var(--cc-danger) 14%,transparent)}
+.cc-notice--info{border-color:var(--cc-info);background:color-mix(in srgb,var(--cc-info) 14%,transparent)}
+.cc-skeleton{box-sizing:border-box;display:block;width:100%;height:12px;border-radius:8px;background:var(--cc-bg-inset);animation:cc-skeleton-pulse 1.2s ease-in-out infinite}
+@keyframes cc-skeleton-pulse{0%,100%{opacity:1}50%{opacity:.45}}
+@keyframes cc-cc-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.cc-skeleton{animation:none}.cc-btn--loading::before{animation:none}}
+
+/* ===== 4. Панель «Погода»: только var(--cc-*), шкалы FS/SP/R ===== */
+.wx { display:flex; flex-direction:column; gap:12px; }               /* SP.md */
+.wx-top { display:flex; align-items:center; gap:8px; }
+.wx-city { flex:1; min-width:0; justify-content:flex-start; border-color:transparent; padding-left:8px; }
+.wx-city .nm { font-size:16px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; } /* FS.lg */
+.wx-city .chev { color:var(--cc-fg-muted); }
+.ico { width:16px; height:16px; flex-shrink:0; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.wx-icobtn { width:40px; padding:0; color:var(--cc-fg-muted); }
+
+/* Герой: подложка-иллюстрация по погоде (градиенты от токенов) */
+.hero { position:relative; overflow:hidden; border-radius:14px; padding:16px; min-height:188px;   /* R.xxl, SP.lg */
+  border:1px solid color-mix(in srgb, var(--cc-border) 70%, transparent); isolation:isolate; }
+.hero::before { content:''; position:absolute; inset:0; z-index:-1; }  /* слой осадков/тумана */
+.hero .art { position:absolute; right:-10px; top:-6px; width:132px; height:132px; z-index:-1; }
+.hero .stars { position:absolute; inset:0; z-index:-1; }
+.hero .when { font-size:12px; color:var(--cc-fg-muted); }
+.hero .temp { font-size:34px; font-weight:600; letter-spacing:-.02em; line-height:1.05; margin-top:8px; } /* FS.display */
+.hero .cond { font-size:16px; font-weight:600; margin-top:4px; }
+.hero .hl { font-size:12px; color:var(--cc-fg-muted); margin-top:2px; }
+.metrics { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px; margin-top:16px; }
+.metric { border-radius:10px; padding:8px; background:color-mix(in srgb, var(--cc-surface) 72%, transparent); }
+.metric .k { display:flex; align-items:center; gap:4px; font-size:11px; color:var(--cc-fg-muted); white-space:nowrap; }
+.metric .k .ico { width:12px; height:12px; }
+.metric .v { font-size:14px; font-weight:600; margin-top:2px; white-space:nowrap; }
+.metric .v small { font-size:11px; font-weight:400; color:var(--cc-fg-muted); }
+/* узкая колонка (мобила 320): подписи без иконок, плитки плотнее */
+@container (max-width: 330px) {
+  .metrics { gap:4px; }
+  .metric { padding:8px 6px; }
+  .metric .k .ico { display:none; }
+  .panel .day { gap:6px; padding:0 4px; }   /* .panel — чтобы перебить правило .day ниже */
+}
+
+/* фоны сцен */
+.sc-clear  { background:radial-gradient(120% 90% at 92% 0%, color-mix(in srgb,var(--cc-warning) 34%,transparent), transparent 60%),
+                       linear-gradient(170deg, color-mix(in srgb,var(--cc-warning) 16%,var(--cc-surface)), color-mix(in srgb,var(--cc-accent) 6%,var(--cc-surface))); }
+.sc-clouds { background:linear-gradient(170deg, color-mix(in srgb,var(--cc-fg-muted) 22%,var(--cc-surface)), color-mix(in srgb,var(--cc-fg-muted) 6%,var(--cc-surface))); }
+.sc-rain   { background:linear-gradient(170deg, color-mix(in srgb,var(--cc-info) 24%,var(--cc-surface)), color-mix(in srgb,var(--cc-fg-muted) 10%,var(--cc-surface))); }
+.sc-storm  { background:linear-gradient(170deg, color-mix(in srgb, color-mix(in srgb,var(--cc-info) 60%,var(--cc-fg-muted)) 34%,var(--cc-surface)), color-mix(in srgb,var(--cc-info) 12%,var(--cc-surface))); }
+.sc-snow   { background:linear-gradient(170deg, color-mix(in srgb,var(--cc-info) 12%,var(--cc-surface)), var(--cc-surface)); }
+.sc-fog    { background:linear-gradient(180deg, color-mix(in srgb,var(--cc-fg-muted) 16%,var(--cc-surface)), color-mix(in srgb,var(--cc-fg-muted) 26%,var(--cc-surface))); }
+.night.sc-clear, .night.sc-clouds, .night.sc-fog, .night.sc-snow { background:linear-gradient(170deg,
+       color-mix(in srgb, color-mix(in srgb,var(--cc-info) 45%,var(--cc-bg-inset)) 40%,var(--cc-surface)),
+       color-mix(in srgb,var(--cc-info) 8%,var(--cc-surface))); }
+.night.sc-rain, .night.sc-storm { background:linear-gradient(170deg,
+       color-mix(in srgb, color-mix(in srgb,var(--cc-info) 55%,var(--cc-bg-inset)) 46%,var(--cc-surface)),
+       color-mix(in srgb,var(--cc-info) 12%,var(--cc-surface))); }
+.sc-rain::before, .sc-storm::before { background:repeating-linear-gradient(105deg, transparent 0 14px,
+       color-mix(in srgb,var(--cc-info) 16%,transparent) 14px 15px); opacity:.9; }
+.sc-snow::before { background-image:radial-gradient(circle, color-mix(in srgb,var(--cc-info) 30%,transparent) 1.4px, transparent 1.8px),
+       radial-gradient(circle, color-mix(in srgb,var(--cc-info) 22%,transparent) 1px, transparent 1.4px);
+       background-size:26px 26px, 17px 17px; background-position:0 0, 9px 7px; }
+.sc-fog::before { background:repeating-linear-gradient(180deg, transparent 0 18px,
+       color-mix(in srgb,var(--cc-surface) 55%,transparent) 18px 30px); }
+
+/* иконки погоды: заливки и штрихи — от токенов */
+.f-sun { fill:var(--cc-warning); }
+.s-sun { stroke:var(--cc-warning); stroke-width:1.8; stroke-linecap:round; fill:none; }
+.f-moon { fill:color-mix(in srgb,var(--cc-warning) 60%,var(--cc-surface)); stroke:color-mix(in srgb,var(--cc-warning) 80%,var(--cc-fg-muted)); stroke-width:1; }
+.f-cloud { fill:color-mix(in srgb,var(--cc-fg-muted) 22%,var(--cc-surface)); stroke:var(--cc-fg-muted); stroke-width:1.3; stroke-linejoin:round; }
+.f-cloud-d { fill:color-mix(in srgb,var(--cc-fg-muted) 52%,var(--cc-surface)); stroke:var(--cc-fg-muted); stroke-width:1.3; stroke-linejoin:round; }
+.s-rain { stroke:var(--cc-info); stroke-width:1.8; stroke-linecap:round; fill:none; }
+.f-bolt { fill:var(--cc-warning); stroke:color-mix(in srgb,var(--cc-warning) 70%,var(--cc-fg)); stroke-width:.8; stroke-linejoin:round; }
+.s-snow { stroke:var(--cc-info); stroke-width:1.5; stroke-linecap:round; fill:none; }
+.s-fog { stroke:var(--cc-fg-muted); stroke-width:1.8; stroke-linecap:round; fill:none; }
+.f-star { fill:color-mix(in srgb,var(--cc-warning) 50%,var(--cc-fg-muted)); }
+
+/* Неделя */
+.sec { display:flex; align-items:baseline; justify-content:space-between; padding:0 4px; }
+.sec h3 { margin:0; font-size:11px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--cc-fg-muted); }
+.sec span { font-size:11px; color:var(--cc-fg-muted); }
+.week { list-style:none; margin:0; padding:4px 0; }
+.day { display:grid; grid-template-columns:66px 24px 40px 30px minmax(32px,1fr) 30px; align-items:center;
+  gap:8px; min-height:40px; padding:0 12px; font-size:13px; }
+.day + .day { border-top:1px solid color-mix(in srgb,var(--cc-border) 60%,transparent); }
+.day .dn { font-weight:600; white-space:nowrap; }
+.day .dn small { display:block; font-size:11px; font-weight:400; color:var(--cc-fg-muted); }
+.day .ic { width:24px; height:24px; }
+.day .pr { font-size:11px; color:var(--cc-fg-muted); display:flex; align-items:center; gap:2px; }
+.day .pr.wet { color:var(--cc-fg); }
+.day .pr svg { width:10px; height:10px; }
+.drop { fill:var(--cc-info); }
+.day .lo { text-align:right; color:var(--cc-fg-muted); }
+.day .hi { font-weight:600; }
+.range { position:relative; height:6px; border-radius:999px; background:var(--cc-bg-inset); }
+.range i { position:absolute; top:0; bottom:0; border-radius:999px;
+  background:linear-gradient(90deg, var(--cc-info), color-mix(in srgb,var(--cc-info) 40%,var(--cc-warning)) 55%, var(--cc-warning)); }
+.foot { font-size:11px; color:var(--cc-fg-muted); text-align:center; padding:4px 0 0; }
+
+/* Выбор города */
+.search-wrap { position:relative; }
+.search-wrap .ico { position:absolute; left:13px; top:50%; transform:translateY(-50%); color:var(--cc-fg-muted); pointer-events:none; }
+.search-wrap .cc-input { padding-left:36px; }
+.city .nm { font-weight:600; }
+.city .rg { color:var(--cc-fg-muted); font-size:12px; }
+.city .cn { display:flex; flex-direction:column; min-width:0; flex:1; }
+.city .t { font-size:12px; color:var(--cc-fg-muted); }
+.city mark { background:none; color:inherit; text-decoration:underline; text-decoration-color:var(--cc-accent); text-underline-offset:3px; }
+.geo { width:100%; justify-content:flex-start; }
+.geo .ico { color:var(--cc-accent); }
+.cc-btn--loading .ico { display:none; }
+.hint { font-size:12px; color:var(--cc-fg-muted); padding:0 4px; }
+.err-ico { fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; width:40px; height:40px; color:var(--cc-fg-muted); margin-bottom:8px; }
+.cc-empty .cc-btn { margin-top:12px; }
+.notice-row { display:flex; gap:8px; align-items:flex-start; }
+.notice-row .ico { margin-top:2px; }
+</style>
+</head>
+<body>
+
+<div class="toolbar" id="tb">
+  <span class="ttl">Погода · макет v1</span>
+  <label>Вид <select id="view"><option value="single">Один кадр</option><option value="board">Доска состояний</option></select></label>
+  <label>Состояние <select id="state">
+    <option value="main">Главное</option>
+    <option value="search">Выбор города</option>
+    <option value="search-empty">Выбор города — пусто</option>
+    <option value="search-v1">Выбор города — без автоопределения (v1)</option>
+    <option value="geo-loading">Автоопределение — идёт</option>
+    <option value="geo-ok">Автоопределение — нашли</option>
+    <option value="geo-denied">Автоопределение — недоступно</option>
+    <option value="loading">Загрузка</option>
+    <option value="upstream">Ошибка сервиса</option>
+    <option value="no-right">Нет права сети</option>
+    <option value="offline">Нет интернета</option>
+  </select></label>
+  <label>Погода <select id="wx">
+    <option value="clear">Ясно</option><option value="clouds">Облачно</option><option value="rain">Дождь</option>
+    <option value="storm">Гроза</option><option value="snow">Снег</option><option value="fog">Туман</option>
+  </select></label>
+  <label><input type="checkbox" id="night"> Ночь</label>
+  <label>Ширина <select id="w"><option value="desktop">Рельс (десктоп)</option><option value="320">Мобила 320</option><option value="390">Мобила 390</option></select></label>
+  <button id="theme" type="button">Тема: светлая</button>
+</div>
+<div id="out"></div>
+
+<script>
+/* ---------- Данные (фикстура) ---------- */
+const SCENES = {
+  clear:  { t:'+9°',  cond:'Ясно',             feels:'+7°',  wind:'3', dir:'Ю',  hum:'58', hi:'+11°', lo:'+1°' },
+  clouds: { t:'+7°',  cond:'Облачно',          feels:'+4°',  wind:'5', dir:'СЗ', hum:'74', hi:'+8°',  lo:'+2°' },
+  rain:   { t:'+6°',  cond:'Небольшой дождь',  feels:'+3°',  wind:'6', dir:'З',  hum:'88', hi:'+7°',  lo:'+2°' },
+  storm:  { t:'+14°', cond:'Гроза',            feels:'+13°', wind:'11',dir:'ЮЗ', hum:'91', hi:'+16°', lo:'+9°' },
+  snow:   { t:'−2°',  cond:'Снег',             feels:'−6°',  wind:'4', dir:'С',  hum:'86', hi:'−1°',  lo:'−5°' },
+  fog:    { t:'+4°',  cond:'Туман',            feels:'+3°',  wind:'1', dir:'В',  hum:'97', hi:'+6°',  lo:'+2°' },
+};
+const WEEK = [
+  { d:'Сегодня', dt:'22 окт', wx:'rain',   pr:80, lo:2,  hi:7 },
+  { d:'Пт',      dt:'23 окт', wx:'clouds', pr:20, lo:1,  hi:6 },
+  { d:'Сб',      dt:'24 окт', wx:'snow',   pr:60, lo:-2, hi:3 },
+  { d:'Вс',      dt:'25 окт', wx:'clear',  pr:0,  lo:-3, hi:5 },
+  { d:'Пн',      dt:'26 окт', wx:'clouds', pr:10, lo:1,  hi:8 },
+  { d:'Вт',      dt:'27 окт', wx:'storm',  pr:70, lo:4,  hi:11 },
+  { d:'Ср',      dt:'28 окт', wx:'fog',    pr:10, lo:2,  hi:6 },
+];
+const CITIES = [
+  { nm:'Ярославль', rg:'Ярославская обл., Россия', t:'+6°', active:true },
+  { nm:'Ярцево',    rg:'Смоленская обл., Россия',  t:'+8°' },
+  { nm:'Яранск',    rg:'Кировская обл., Россия',   t:'+3°' },
+  { nm:'Ярково',    rg:'Тюменская обл., Россия',   t:'+1°' },
+];
+
+/* ---------- Иконки (инлайновый SVG, цвета — классы от токенов) ---------- */
+const CLOUD = 'M6.5 19h11a4 4 0 0 0 .6-7.95 5.5 5.5 0 0 0-10.6-1.3A4.6 4.6 0 0 0 6.5 19z';
+const rays = (cx, cy, r1, r2) => Array.from({length:8}, (_, i) => {
+  const a = i * Math.PI / 4, c = Math.cos(a), s = Math.sin(a);
+  return `<line x1="${(cx + c*r1).toFixed(2)}" y1="${(cy + s*r1).toFixed(2)}" x2="${(cx + c*r2).toFixed(2)}" y2="${(cy + s*r2).toFixed(2)}"/>`;
+}).join('');
+const SUN  = (cx=12, cy=12, r=4.2) => `<circle class="f-sun" cx="${cx}" cy="${cy}" r="${r}"/><g class="s-sun">${rays(cx, cy, r + 2.2, r + 4.4)}</g>`;
+const MOON = (tx=0, ty=0, k=1) => `<path class="f-moon" transform="translate(${tx} ${ty}) scale(${k})" d="M15.6 3.6a8 8 0 1 0 4.8 13.9A7 7 0 0 1 15.6 3.6z"/>`;
+function glyph(wx, night) {
+  const lift = '<g transform="translate(0 -3)">';
+  const behind = night ? MOON(9, -1, .55) : SUN(16.5, 7, 3.1);
+  switch (wx) {
+    case 'clear':  return night ? MOON() : SUN();
+    case 'clouds': return behind + `<path class="f-cloud" d="${CLOUD}"/>`;
+    case 'rain':   return lift + `<path class="f-cloud" d="${CLOUD}"/></g><g class="s-rain"><line x1="8.5" y1="18.5" x2="7.5" y2="21.5"/><line x1="12.5" y1="18.5" x2="11.5" y2="21.5"/><line x1="16.5" y1="18.5" x2="15.5" y2="21.5"/></g>`;
+    case 'storm':  return lift + `<path class="f-cloud-d" d="${CLOUD}"/></g><path class="f-bolt" d="M12.8 14.5 9.6 19.2h2.6l-1.1 4 3.9-5.4h-2.7l1.4-3.3z"/>`;
+    case 'snow':   return lift + `<path class="f-cloud" d="${CLOUD}"/></g><g class="s-snow"><path d="M8 19.2v2.6M6.7 20.5h2.6"/><path d="M12 20v2.6M10.7 21.3h2.6"/><path d="M16 19.2v2.6M14.7 20.5h2.6"/></g>`;
+    case 'fog':    return `<g class="s-fog"><line x1="4" y1="9" x2="20" y2="9"/><line x1="6" y1="13" x2="18" y2="13"/><line x1="4" y1="17" x2="17" y2="17"/></g>`;
+  }
+}
+const wxIcon = (wx, night, cls='ic') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${glyph(wx, night)}</svg>`;
+const DROP = '<svg viewBox="0 0 10 10" aria-hidden="true"><path class="drop" d="M5 .8C3.6 3 2.2 4.6 2.2 6.3a2.8 2.8 0 0 0 5.6 0C7.8 4.6 6.4 3 5 .8z"/></svg>';
+const I = {   // линейные иконки интерфейса (в духе lucide), цвет — currentColor
+  pin:    '<path d="M12 21s-6-5.3-6-10a6 6 0 0 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="2.2"/>',
+  chev:   '<path d="m7 10 5 5 5-5"/>',
+  back:   '<path d="m15 18-6-6 6-6"/>',
+  refresh:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>',
+  locate: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>',
+  wind:   '<path d="M3 8h11a3 3 0 1 0-3-3"/><path d="M3 12h16a3 3 0 1 1-3 3"/><path d="M3 16h7"/>',
+  hum:    '<path d="M12 3c-3 4-6 7.2-6 10.5a6 6 0 0 0 12 0C18 10.2 15 7 12 3z"/>',
+  therm:  '<path d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0z"/>',
+  cloudoff:'<path d="M3 3l18 18"/><path d="M8.4 8.4A5.5 5.5 0 0 0 6.5 19h11"/><path d="M20.6 16.6A4 4 0 0 0 18.1 11 5.5 5.5 0 0 0 11.4 6.6"/>',
+  wifioff:'<path d="M3 3l18 18"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M5 12.9a10 10 0 0 1 5.2-2.8"/><path d="M19 12.9a10 10 0 0 0-2.4-1.6"/><path d="M2 9.3a15 15 0 0 1 4.3-2.6"/><path d="M22 9.3A15 15 0 0 0 11 5.1"/><circle cx="12" cy="20" r=".6"/>',
+  shield: '<path d="M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6z"/><path d="M12 8v5M12 16.5v.01"/>',
+  info:   '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8v.01"/>',
+  check:  '<circle cx="12" cy="12" r="9"/><path d="m8.5 12.3 2.4 2.4 4.6-5"/>',
+  more:   '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  x:      '<path d="M6 6l12 12M18 6 6 18"/>',
+  sun:    '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+};
+const ico = (k, cls='ico') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${I[k]}</svg>`;
+
+/* ---------- Куски панели ---------- */
+function topBar(city = 'Ярославль', extra = '') {
+  return `<div class="wx-top">
+    <button class="cc-btn cc-btn--ghost wx-city" type="button" aria-label="Сменить город: ${city}">
+      ${ico('pin')}<span class="nm">${city}</span>${ico('chev', 'ico chev')}
+    </button>${extra}
+    <button class="cc-btn cc-btn--ghost cc-btn--sm wx-icobtn" type="button" aria-label="Обновить" title="Обновить">${ico('refresh')}</button>
+  </div>`;
+}
+function stars() {
+  const pts = [[18,22],[44,14],[70,30],[120,12],[150,34],[200,18],[236,40],[96,48],[176,58]];
+  return `<svg class="stars" viewBox="0 0 280 190" preserveAspectRatio="xMinYMin slice" aria-hidden="true">${
+    pts.map(([x, y], i) => `<circle class="f-star" cx="${x}" cy="${y}" r="${i % 3 ? 1 : 1.5}"/>`).join('')}</svg>`;
+}
+function hero(wx, night) {
+  const s = SCENES[wx];
+  return `<section class="hero sc-${wx}${night ? ' night' : ''}" aria-label="Сейчас: ${s.t}, ${s.cond}">
+    ${night ? stars() : ''}${wxIcon(wx, night, 'art')}
+    <div class="when">Сейчас · ${night ? '23:40' : '14:05'}</div>
+    <div class="temp">${s.t}</div>
+    <div class="cond">${s.cond}</div>
+    <div class="hl">Днём ${s.hi}, ночью ${s.lo}</div>
+    <div class="metrics">
+      <div class="metric"><div class="k">${ico('therm')}Ощущается</div><div class="v">${s.feels}</div></div>
+      <div class="metric"><div class="k">${ico('wind')}Ветер</div><div class="v">${s.wind} <small>м/с, ${s.dir}</small></div></div>
+      <div class="metric"><div class="k">${ico('hum')}Влажность</div><div class="v">${s.hum} <small>%</small></div></div>
+    </div>
+  </section>`;
+}
+const fmt = n => (n > 0 ? '+' : n < 0 ? '−' : '') + Math.abs(n) + '°';
+function week() {
+  const min = Math.min(...WEEK.map(d => d.lo)), max = Math.max(...WEEK.map(d => d.hi)), span = max - min;
+  return `<div class="sec"><h3>Прогноз на 7 дней</h3><span>макс / мин</span></div>
+  <ul class="week">${WEEK.map(d => `<li class="day">
+    <span class="dn">${d.d}<small>${d.dt}</small></span>
+    ${wxIcon(d.wx, false)}
+    <span class="pr${d.pr >= 50 ? ' wet' : ''}" title="Вероятность осадков">${d.pr ? DROP + d.pr + '%' : ''}</span>
+    <span class="lo">${fmt(d.lo)}</span>
+    <span class="range" aria-hidden="true"><i style="left:${(d.lo - min) / span * 100}%;right:${(max - d.hi) / span * 100}%"></i></span>
+    <span class="hi">${fmt(d.hi)}</span>
+  </li>`).join('')}</ul>
+  <div class="foot">Данные: Open-Meteo · обновлено в 14:05</div>`;
+}
+function main(wx, night, badge = '') { return `<div class="wx">${topBar('Ярославль', badge)}${hero(wx, night)}${week()}</div>`; }
+
+function searchView({ q = 'Яр', results = CITIES, geo = 'idle', empty = false } = {}) {
+  const hl = nm => q && nm.toLowerCase().startsWith(q.toLowerCase()) ? `<mark>${nm.slice(0, q.length)}</mark>${nm.slice(q.length)}` : nm;
+  const geoBtn = geo === 'none' ? '' : geo === 'loading'
+    ? `<button class="cc-btn cc-btn--loading geo" type="button" disabled>${ico('locate')}Определяем местоположение…</button>`
+    : `<button class="cc-btn geo" type="button">${ico('locate')}Определить автоматически</button>`;
+  const geoNote = geo === 'denied' ? `<div class="cc-notice cc-notice--info notice-row" role="status">${ico('info')}
+      <span>Не получилось определить, где вы. Выберите город вручную — начните вводить название.</span></div>` : '';
+  const list = empty
+    ? `<div class="cc-empty"><div class="cc-empty__title">Город не найден</div>
+        <div class="cc-empty__text">Проверьте написание или введите название по-английски — например, Yaroslavl.</div></div>`
+    : `<ul class="cc-list" role="listbox" aria-label="Найденные города">${results.map(c => `<li class="cc-list-item city${c.active ? ' is-active' : ''}" role="option" tabindex="0" aria-selected="${!!c.active}">
+        <span class="cn"><span class="nm">${hl(c.nm)}</span><span class="rg">${c.rg}</span></span><span class="t">${c.t}</span></li>`).join('')}</ul>`;
+  return `<div class="wx">
+    <div class="wx-top"><button class="cc-btn cc-btn--ghost cc-btn--sm" type="button" style="border-color:transparent;padding-left:4px">${ico('back')}Назад</button>
+      <span style="font-size:16px;font-weight:600">Выбор города</span></div>
+    <div class="search-wrap">${ico('search')}<input class="cc-input" value="${q}" placeholder="Город, например Ярославль" aria-label="Поиск города"${geo === 'denied' ? ' autofocus' : ''}></div>
+    ${geoBtn}${geoNote}
+    ${q && !empty ? `<div class="sec"><h3>Найдено</h3><span>${results.length}</span></div>` : ''}
+    ${list}
+    ${geo === 'none' ? `<div class="hint">Город запоминается до перезагрузки страницы.</div>` : ''}
+  </div>`;
+}
+function loadingView() {
+  const row = w => `<li class="day"><span class="cc-skeleton" style="width:${w}px"></span><span class="cc-skeleton" style="width:24px;height:24px;border-radius:50%"></span><span></span><span class="cc-skeleton"></span><span class="cc-skeleton" style="height:6px"></span><span class="cc-skeleton"></span></li>`;
+  return `<div class="wx" aria-busy="true" aria-label="Загружаем погоду">${topBar()}
+    <div class="cc-skeleton" style="height:188px;border-radius:14px"></div>
+    <div class="sec"><span class="cc-skeleton" style="width:120px"></span></div>
+    <ul class="week">${[48, 32, 32, 32, 32, 32, 32].map(row).join('')}</ul></div>`;
+}
+function problem(icon, title, text, btn, extraTop = '') {
+  return `<div class="wx">${topBar()}${extraTop}<div class="cc-card"><div class="cc-empty">
+      ${ico(icon, 'err-ico')}<div class="cc-empty__title">${title}</div><div class="cc-empty__text">${text}</div>${btn}</div></div></div>`;
+}
+const VIEWS = {
+  main:          (wx, n) => main(wx, n),
+  search:        () => searchView(),
+  'search-empty':() => searchView({ q:'Ярославлб', empty:true }),
+  'search-v1':   () => searchView({ geo:'none' }),
+  'geo-loading': () => searchView({ q:'', results:CITIES.slice(0, 0), geo:'loading' }),
+  'geo-ok':      (wx, n) => main(wx, n, `<span class="cc-badge cc-badge--success" title="Город определён по координатам браузера">${ico('locate', 'ico')}рядом</span>`),
+  'geo-denied':  () => searchView({ q:'', results:[], geo:'denied' }),
+  loading:       () => loadingView(),
+  upstream:      () => problem('cloudoff', 'Сервис погоды не ответил', 'Open-Meteo вернул ошибку. Обычно это проходит за минуту.',
+                   '<button class="cc-btn cc-btn--primary" type="button">Повторить</button>'),
+  'no-right':    () => problem('shield', 'Нужен доступ к сервису погоды', 'Панели не выдано право ходить на&nbsp;api.open-meteo.com. Выдайте его в плашке выше или в настройках плагина.',
+                   '<span class="cc-badge cc-badge--warning" style="margin-top:12px">net:api.open-meteo.com</span>'),
+  offline:       () => problem('wifioff', 'Нет подключения к интернету', 'Погода обновится, как только связь вернётся.',
+                   '<button class="cc-btn cc-btn--ghost" type="button">Повторить</button>'),
+};
+const LABEL = { main:'Главное', search:'Выбор города', 'search-empty':'Выбор города — пусто', 'search-v1':'Выбор города без автоопределения (рекомендация v1)',
+  'geo-loading':'Автоопределение — идёт', 'geo-ok':'Автоопределение — нашли (а)', 'geo-denied':'Автоопределение — недоступно (б)',
+  loading:'Загрузка', upstream:'Ошибка сервиса (upstream)', 'no-right':'Нет права сети', offline:'Нет интернета' };
+
+/* ---------- Хост вокруг панели ---------- */
+function hostNotice() {
+  return `<div class="host-notice" role="alert">${'<svg viewBox="0 0 24 24">' + I.shield + '</svg>'}
+    <div><b>Нет права net:api.open-meteo.com</b>Панель вызвала операцию, право на которую не выдано. <u>Выдать…</u></div>
+    <span class="x">${'<svg viewBox="0 0 24 24" style="stroke:currentColor">' + I.x + '</svg>'}</span></div>`;
+}
+function stage(state, wx, night, w) {
+  const body = `${state === 'no-right' ? hostNotice() : ''}<div class="host-scroll"><div class="panel">${VIEWS[state](wx, night)}</div></div>`;
+  const head = w === 'desktop'
+    ? `<div class="rail-head"><span class="ib" style="color:var(--c-accent)"><svg viewBox="0 0 24 24">${I.sun}</svg></span><span class="nm">Погода</span><span class="ib"><svg viewBox="0 0 24 24">${I.more}</svg></span></div>`
+    : `<div class="rail-head"><span class="ib"><svg viewBox="0 0 24 24">${I.back}</svg></span><span class="nm">Погода</span><span class="ib"><svg viewBox="0 0 24 24">${I.more}</svg></span></div>`;
+  return `<div class="stage w-${w}">${w === 'desktop' ? `<div class="rail-card">${head}${body}</div>` : `<div class="mob">${head}${body}</div>`}</div>`;
+}
+
+/* ---------- Обвязка ---------- */
+const $ = id => document.getElementById(id);
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  return { view:p.get('view') || 'single', state:p.get('state') || 'main', wx:p.get('wx') || 'rain',
+           night:p.get('night') === '1', theme:p.get('theme') || 'light', w:p.get('w') || 'desktop', bare:p.get('bare') === '1' };
+}
+function render() {
+  const s = readHash();
+  document.documentElement.dataset.theme = s.theme;
+  $('tb').style.display = s.bare ? 'none' : '';   // bare=1 — кадр без панели управления (для скриншотов)
+  $('view').value = s.view; $('state').value = s.state; $('wx').value = s.wx; $('night').checked = s.night; $('w').value = s.w;
+  $('theme').textContent = 'Тема: ' + (s.theme === 'dark' ? 'тёмная' : 'светлая');
+  if (s.view === 'board') {
+    const cells = [
+      ...['clear','clouds','rain','storm','snow','fog'].map(wx => [`Главное — ${SCENES[wx].cond.toLowerCase()}, день`, stage('main', wx, false, 'desktop')]),
+      ['Главное — ясно, ночь', stage('main', 'clear', true, 'desktop')],
+      ['Главное — дождь, ночь', stage('main', 'rain', true, 'desktop')],
+      ...Object.keys(VIEWS).filter(k => k !== 'main').map(k => [LABEL[k], stage(k, s.wx, s.night, 'desktop')]),
+    ];
+    $('out').innerHTML = `<div class="board">${cells.map(([c, h]) => `<div><p class="cap">${c}</p>${h}</div>`).join('')}</div>`;
+  } else {
+    $('out').innerHTML = `<div class="canvas">${stage(s.state, s.wx, s.night, s.w)}</div>`;
+  }
+}
+function setHash(patch) {
+  const p = new URLSearchParams(location.hash.slice(1));
+  for (const [k, v] of Object.entries(patch)) p.set(k, v);
+  location.hash = p.toString();
+}
+$('view').onchange = e => setHash({ view:e.target.value });
+$('state').onchange = e => setHash({ state:e.target.value });
+$('wx').onchange = e => setHash({ wx:e.target.value });
+$('night').onchange = e => setHash({ night:e.target.checked ? '1' : '0' });
+$('w').onchange = e => setHash({ w:e.target.value });
+$('theme').onclick = () => setHash({ theme:readHash().theme === 'dark' ? 'light' : 'dark' });
+window.addEventListener('hashchange', render);
+render();
+</script>
+</body>
+</html>

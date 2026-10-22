@@ -1,0 +1,9 @@
+[Unit]
+Description=Уборка /tmp: брошенные review-worktree и мусор сборок (MSBuildTemp*, fake-cli-*, ccs_*, tmp.*)
+
+[Service]
+Type=oneshot
+Environment=CCS_REPO=%h/Sources/ClaudeCodeServer
+ExecStart=%h/.local/bin/ccs-tmp-cleanup.sh
+Nice=19
+IOSchedulingClass=idle

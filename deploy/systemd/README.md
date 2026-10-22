@@ -22,6 +22,7 @@ Unit-файлы, drop-in'ы и sysctl для машины, на которой �
 | `../sysctl.d/60-inotify.conf` | **root.** `max_user_watches=1048576`, `max_user_instances=8192`. |
 | `install-user-units.sh` | Раскладка user-части в `~/.config/systemd/user/` и очистка `user.control/`. |
 | `install-system-tuning.sh` | Раскладка root-части (`/etc/systemd/system/user@.service.d/`, `/etc/sysctl.d/`). |
+| `ccs-tmp-cleanup.sh` + `.service` + `.timer` | Суточная (04:30) уборка `/tmp`: брошенные review-worktree и мусор сборок. Скрипт ставится в `~/.local/bin`, таймер включает `install-user-units.sh`. См. раздел «Уборка /tmp» ниже. |
 | `ccs-gddr6.service` | **root.** Помощник температуры памяти GDDR6X и hotspot видеокарт — см. раздел «ccs-gddr6» ниже; ставится `../gddr6-helper/install.sh`. |
 
 `ccs.slice` и `ccs-agents.slice` как файлы отсутствуют: они создаются на лету
@@ -200,3 +201,52 @@ python3 -I deploy/gddr6-helper/test_ccs_gddr6_helper.py   # unittest, без ж�
 Нужны `STRICT_DEVMEM=y` без `IO_STRICT_DEVMEM` и `lockdown=none` (как на этой
 машине); перезагрузка и `iomem=relaxed` не требуются. Если ядро запретит
 отображение BAR, служба останется живой и отдаст `null`.
+
+## Уборка /tmp (ccs-tmp-cleanup)
+
+22.10 диск `/` дошёл до 100 % (замер: `/tmp` — 102 ГБ и 506 тыс. записей). Основной объём — не
+мелочь, а брошенные review-worktree по 1–9 ГБ (с `node_modules`, `bin/obj`); «мелочь» — сотни
+тысяч пустых каталогов `MSBuildTemp??????` (inode, а не гигабайты).
+
+Правила `ccs-tmp-cleanup.sh` (`--dry-run` показывает план, `--min-age-hours N`, по умолчанию 24):
+
+- **worktree под `/tmp`** снимается `git worktree remove --force` из основного репозитория
+  (`CCS_REPO`), потом `git worktree prune` и удаление опустевших родительских каталогов. Пропуск
+  (с причиной в логе): `locked`; у какого-либо процесса cwd внутри; что-то внутри новее порога;
+  правки отслеженных файлов; отсоединённый HEAD, не достижимый ни из одной ветки (коммиты
+  пропали бы при gc). Игнорируемое (`node_modules`, `bin/obj`) `--force` сносит осознанно.
+- **влитые worktree вне `/tmp`** (`~/Sources`: 7–15 ГБ каждое из-за `bin/obj` полной сборки; 22.10
+  вручную сняли 85 штук — 356 ГБ). Правило строже, снимается только если ВСЁ сразу: `HEAD` — предок
+  `master` (`merge-base --is-ancestor`); `git status --porcelain` пуст, включая неотслеженные; нет
+  процесса с cwd внутри и файлов новее порога; последний коммит старше `--merged-age-days` (3); путь
+  не значится в `WorktreePath` незакрытой задачи (`Status != done`) из `CCS_TASKS_FILE`
+  (`/srv/ccs/data/tasks.json`; нет файла или он не читается — правило отключается целиком); не
+  `locked`; основной checkout (первая запись `git worktree list`) — никогда. Ветка остаётся.
+  Невлитые, грязные и привязанные к задаче идут в лог строкой `ПРОПУЩЕН … — причина`.
+- **верхний уровень `/tmp`**: свои записи старше порога по шаблонам `MSBuildTemp??????`
+  (ровно 6 символов — `MSBuildTemp<user>` живого MSBuild не трогаем), `fake-cli-*`, `ccs_*`, `tmp.*`.
+  `systemd-private-*`, `.X11-unix`, чужие записи не попадают в шаблоны.
+- Каталоги проектов в контейнере-песочнице скрипт не видит: cwd процессов из чужого mount-namespace
+  недоступен; такие worktree в `/tmp` держать не надо.
+
+Лог — `journalctl --user -u ccs-tmp-cleanup`; ручной запуск — `systemctl --user start ccs-tmp-cleanup`.
+
+**Откуда `MSBuildTemp??????`.** Любой `dotnet build/test` оставляет по несколько пустых каталогов
+(замер 22.10: один пересбор `ClaudeHomeServer.Core` — 3 каталога в `$TMPDIR`; с `TMPDIR=<каталог>`
+они уходят туда, в `/tmp` ничего не попадает). То есть это не особенность наших инструментов, а
+поведение самого MSBuild, ~20–40 тыс. в сутки. В код запуска (`LocalProcessRunner`) `TMPDIR` не
+выносим: выигрыш — только inode, а суточный таймер с ним справляется.
+
+**Наборы тестов, не убирающие temp** (эвристика по коду: temp создаётся, `Delete`/`Dispose` нет;
+в `/tmp` на момент замера — ~1,7 тыс. `fake-cli-*`, ~40 `ccs_*`) — отдельный дефект кода тестов:
+
+- `fake-cli-*`: `ClaudeHomeServer.DeviceAgent.Tests/Exec/TurnExecutorUnixTests.cs`,
+  `ClaudeHomeServer.DeviceAgent.Tests/Hands/HandsTurnExecutorTests.cs` — главные виновники по числу.
+- `ccs_*`: `ClaudeHomeServer.Tests/Controllers/` (`ChatsControllerBranchTests`, `ChatsArchivedEndpointTests`,
+  `ChatSubjectsEndpointTests`, `ProjectMcpCatalogConfirmationTests`, `ProjectArchiveRunEndpointTests`,
+  `ChatsControllerContinueTests`), `ClaudeHomeServer.Tests/DynamicModules/SubsystemModulesControllerTests`,
+  `ClaudeHomeServer.Deploy.Tests/Services/` (`DeployBuildIdTests`, `DeployServiceLinuxTests`, `DeployServiceTests`),
+  `ClaudeHomeServer.Devices.Tests/Devices/DeviceHubTests`, `ClaudeHomeServer.Llm.Tests/Services/`
+  (`FallbackSettingsStoreTests`, `LocalActionOverridesStoreTests`), `ClaudeHomeServer.Images.Tests/Images/`
+  (`LocalMediaLoraTrainTests`, `LocalImageMediaAdapterTests`, `LocalImageMediaInputsCleanupTests`),
+  `TestConfig.cs` в `Reader.Tests`, `Yandex.Tests`, `CodeGraph.Tests`, `Video.Tests` и `TestKit`.

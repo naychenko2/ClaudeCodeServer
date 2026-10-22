@@ -101,6 +101,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // ход нёс WholeCall-утечку (вызов целиком ушёл текстом). Tail-утечка ход не валит — сюда
     // не попадает. Ключ живёт до result хода (TakeLeakState снимает его) либо до удаления чата.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _leakThisTurn = new();
+    // Имя инструмента из последней WholeCall-утечки хода (ToolCallLeakMessage.Tool): по нему
+    // ветка result решает, повторять ли вызов (слип формата) или объяснять, что инструмента нет.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _leakTool = new();
     // Сколько ходов подряд было WholeCall-утечкой по этой сессии-исполнителю. Ход без такой
     // утечки обрывает серию; потолок попыток — SessionManager.MaxSubagentNudges (как у обрывов
     // сабагентов): до него — восстановимый повтор, после — работа встала (терминальная причина).
@@ -175,6 +178,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             _truncations.TryRemove(s.Id, out _);
             _leakThisTurn.TryRemove(s.Id, out _);
             _leakAttempts.TryRemove(s.Id, out _);
+            _leakTool.TryRemove(s.Id, out _);
         };
         // Точка B join-а (CT-8): D-сигнал (Status=Done из tasks_complete/PUT/UI) может прийти
         // раньше или позже R-сигнала (ResultMessage хода, точка A ниже) — TaskManager.Update
@@ -595,8 +599,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         string? rulesTemplate = null)
     {
         if (persona is not null)
-            return BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath,
-                rulesTemplate);
+            return ToLf(BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath,
+                rulesTemplate));
 
         var sb = new StringBuilder();
         sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
@@ -635,8 +639,14 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // Тот же канал эскалации, что и у персоны (см. комментарий в BuildPersonaPrompt)
         sb.AppendLine("- Застрял или выполнить невозможно — не завершай задачу: эскалируй через " +
                       "chats_report_up тому, кто её поставил (blocker: true — работа встала).");
-        return sb.ToString();
+        return ToLf(sb.ToString());
     }
+
+    // Постановка уходит в CLI с единым концом строки LF на любой ОС. AppendLine пишет
+    // Environment.NewLine, и на Windows обвязка шла с CRLF, а тело шаблона — с LF.
+    // Меняем именно "\r\n", а не Environment.NewLine: CRLF приходит и из пользовательского
+    // текста (описание, repro, заметки), и на Linux он иначе остался бы как есть.
+    private static string ToLf(string text) => text.Replace("\r\n", "\n");
 
     // 6-секционный контракт постановки для персоны-исполнителя. Характер персоны
     // инжектится системным промптом сессии (персона-слой) — здесь только постановка.
@@ -876,7 +886,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             sb.AppendLine($"### {h.Title} ({h.SourceLabel})");
             sb.AppendLine(h.Snippet.Trim());
         }
-        return sb.ToString();
+        return ToLf(sb.ToString());
     }
 
     // Наблюдатель сообщений всех сессий: реагируем только на сессии, привязанные к задачам.
@@ -897,7 +907,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             // ПЕРЕД result: помечаем ход, чтобы по result решить — повторить вызов (WholeCall)
             // или просто посчитать (Tail). Копим на сессию, как NoteTurnError.
             case ToolCallLeakMessage leak:
-                NoteLeak(session.Id, leak.Kind);
+                NoteLeak(session.Id, leak.Kind, leak.Tool);
                 return;
             // Текст ошибки хода приезжает ОТДЕЛЬНЫМ сообщением перед result (CLI кладёт
             // API-ошибку в result-поле при subtype=success + is_error) — копим его до result,
@@ -923,11 +933,29 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                     {
                         if (stopReason == ExecutorStopClassifier.ToolCallLeakedReason)
                         {
-                            _log.LogWarning("Ход исполнителя задачи {TaskId}: вызов инструмента ушёл в текст " +
-                                "({Attempts}/{Max}) — директива повторить вызов, итог не принимаем",
-                                task.Id, leakAttempts, SessionManager.MaxSubagentNudges);
-                            var directive = Prompts.SubagentPrompts.ResumeToolCallLeak(
-                                leakAttempts, SessionManager.MaxSubagentNudges);
+                            // Вызов инструмента не из состава сессии — не слип формата, повтор не поможет:
+                            // объясняем, что инструмента нет, и перечисляем доступные.
+                            _leakTool.TryRemove(session.Id, out var leakedTool);
+                            var profile = ExecutorProfile(session);
+                            string directive;
+                            if (leakedTool is not null && profile is not null
+                                && !ExecutorToolAvailability.IsKnown(leakedTool, profile))
+                            {
+                                _log.LogWarning("Ход исполнителя задачи {TaskId}: вызов несуществующего инструмента " +
+                                    "{Tool} ({Attempts}/{Max}) — директива «инструмента нет», итог не принимаем",
+                                    task.Id, leakedTool, leakAttempts, SessionManager.MaxSubagentNudges);
+                                directive = Prompts.SubagentPrompts.ResumeToolCallUnknownTool(
+                                    leakAttempts, SessionManager.MaxSubagentNudges, leakedTool,
+                                    ExecutorToolAvailability.Describe(profile));
+                            }
+                            else
+                            {
+                                _log.LogWarning("Ход исполнителя задачи {TaskId}: вызов инструмента ушёл в текст " +
+                                    "({Attempts}/{Max}) — директива повторить вызов, итог не принимаем",
+                                    task.Id, leakAttempts, SessionManager.MaxSubagentNudges);
+                                directive = Prompts.SubagentPrompts.ResumeToolCallLeak(
+                                    leakAttempts, SessionManager.MaxSubagentNudges);
+                            }
                             await _sessions.SendMessageAsync(session.Id, directive, [],
                                 systemDirective: true, cause: SessionManager.DeliveryCause.ToolCallLeakNudge);
                         }
@@ -1020,10 +1048,24 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
     // Пометка WholeCall-утечки в завершающемся ходу (ToolCallLeakMessage приходит до result).
     // Tail-утечка ход не валит — сюда не попадает (считает её счётчик локальной модели).
-    internal void NoteLeak(string sessionId, string kind)
+    internal void NoteLeak(string sessionId, string kind, string? tool = null)
     {
-        if (kind == "whole_call")
-            _leakThisTurn[sessionId] = true;
+        if (kind != "whole_call") return;
+        _leakThisTurn[sessionId] = true;
+        if (!string.IsNullOrWhiteSpace(tool)) _leakTool[sessionId] = tool;
+        else _leakTool.TryRemove(sessionId, out _);
+    }
+
+    // Состав инструментов сессии-исполнителя (профиль облегчённого контекста её модели) — null,
+    // если резолвер/реестр не подключены (тесты) или модель не из профиля: тогда любой
+    // утёкший вызов считаем слипом формата, как раньше.
+    private Models.LightProfile? ExecutorProfile(Session session)
+    {
+        if (_providers is null) return null;
+        var persona = session.PersonaId is { } pid && session.OwnerId is { } oid ? _personas.Get(pid, oid) : null;
+        var model = _assignments?.Resolve(Llm.LocalActionCatalog.TasksExecutor, session.Model, session.OwnerId)
+            ?? session.Model;
+        return _providers.LightProfileFor(model, persona, session.FallbackSubstitution);
     }
 
     // Судьба утечек вызова в тексте только что закончившегося хода. По аналогии с
@@ -1036,6 +1078,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (!_leakThisTurn.TryRemove(sessionId, out var had) || !had)
         {
             _leakAttempts.TryRemove(sessionId, out _);
+            _leakTool.TryRemove(sessionId, out _);
             return (ExecutorStopClassifier.ToolCallLeakTurnState.None, 0);
         }
         var attempts = _leakAttempts.AddOrUpdate(sessionId, 1, (_, n) => n + 1);

@@ -339,7 +339,7 @@ GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (толь
          speed: { genPerStream?, prefillPerStream?, speculativeSpeedup? },
          kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
          gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
-         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount?, cleanStepMs?, prefillSeconds?, queueSeconds?, promptTokens? }],
+         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount?, cleanStepMs? (база шага ЭТОЙ точки: по уровню running у батч-движка, иначе общая, v2.6), prefillSeconds?, queueSeconds?, promptTokens? }],
          chats: [{ own, sessionId?, projectId?, title?, phase, genTps? }], unsupported: string[] }
      window по умолчанию 15m; белый список 5m/15m/1h, иное — 400; since — только хвост истории новее момента.
      history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).

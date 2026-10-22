@@ -35,6 +35,7 @@ public class KeepMcpToolsConfigTests
         ["watch"] = Names(WatchToolset.Tools),
         ["tests"] = Names(TestsToolset.Tools),
         ["dev"] = Names(DevToolset.Tools),
+        ["notes"] = Names(NotesToolset.CoreTools, NotesToolset.AnnotationTools),
     };
 
     private static HashSet<string> Names(params IReadOnlyList<McpToolSchema>[] sets) =>
@@ -78,10 +79,10 @@ public class KeepMcpToolsConfigTests
             "tasks_get", "tasks_update", "tasks_complete", "tasks_add_subtask", "tasks_toggle_subtask", "tasks_create");
         keep.GetSection("memory").Get<string[]>().Should().BeEquivalentTo(
             "memory_recall", "memory_search", "memory_remember", "team_memory_search");
-        keep.GetSection("codegraph").Get<string[]>().Should().BeEquivalentTo("codegraph_find");
+        keep.GetSection("codegraph").Get<string[]>().Should().BeEquivalentTo("codegraph_find", "codegraph_neighbors");
         keep.GetSection("tests").Get<string[]>().Should().BeEquivalentTo("run_tests");
         keep.GetSection("dev").Get<string[]>().Should().BeEquivalentTo("build");
-        keep.GetChildren().Select(c => c.Key).Should().BeEquivalentTo(["tasks", "memory", "codegraph", "tests", "dev"],
+        keep.GetChildren().Select(c => c.Key).Should().BeEquivalentTo(["tasks", "memory", "codegraph", "tests", "dev", "notes"],
             "websearch и watch остаются целиком");
     }
 }

@@ -23,7 +23,7 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-public class SessionManagerTests : IDisposable
+public partial class SessionManagerTests : IDisposable
 {
     private const string TestUserId = "test-user-id";
     private const string TestUsername = "test-user";
@@ -48,6 +48,21 @@ public class SessionManagerTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
     private readonly ClaudeSubscriptionPool _subPool;
     private readonly SessionManager _sut;
+    // Подставной шов графа кода: считает запросы прогрева дерева (ADR-003)
+    private readonly RecordingGraphInspector _graphInspector = new();
+
+    private sealed class RecordingGraphInspector : ClaudeHomeServer.Services.CodeGraph.ICodeGraphInspector
+    {
+        public List<string> Warmed { get; } = [];
+        public Task<ClaudeHomeServer.Services.CodeGraph.CodeGraphSnapshot?> GetSnapshotAsync(string rootPath, CancellationToken ct)
+            => Task.FromResult<ClaudeHomeServer.Services.CodeGraph.CodeGraphSnapshot?>(null);
+        public void StartRebuildIfIdle(string rootPath) { }
+        public Task WarmIfNeeded(string rootPath)
+        {
+            lock (Warmed) Warmed.Add(rootPath);
+            return Task.CompletedTask;
+        }
+    }
     private readonly TrackingBroadcaster _broadcaster;
     private readonly List<ServerMessage> _sentMessages = new();
     // Broadcast'ы из фоновых задач (OnMessageAsync запускает HandleTeamTurnEnd fire-and-forget)
@@ -194,7 +209,7 @@ public class SessionManagerTests : IDisposable
         _teamPlanning = new TeamPlanningService(personas, _plannerStub);
         // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
         // сверяет путь с «git worktree list»); остальные тесты его не трогают
-        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster);
+        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster, graphInspector: _graphInspector);
     }
 
     public void Dispose()
@@ -10097,6 +10112,125 @@ public class SessionManagerTests : IDisposable
         history.Should().BeEmpty();
     }
 
+    // --- Очередь отложенных сообщений переживает рестарт (pending.json) ---
+
+    private static object GetEntryOf(SessionManager manager, string sessionId)
+    {
+        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        return ((System.Collections.IDictionary)field.GetValue(manager)!)[sessionId]!;
+    }
+
+    private string PendingFilePath(string key) =>
+        Path.Combine(_tempDir, "sessions", key, "pending.json");
+
+    [Fact]
+    public async Task Pending_РестартСервера_ОчередьВосстановленаВТомЖеПорядке()
+    {
+        var session = await MkBusySessionAsync("persist-rt");
+        session.Name = "есть имя";
+
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад исполнителя", senderPersonaId: "exec-1",
+            silent: true, suppressTasksExecute: true, staffNote: "служебная заметка",
+            kind: SessionManager.PendingKind.Report);
+        await _sut.SendMessageAsync(session.Id, "вопрос человека", []);
+
+        File.Exists(PendingFilePath(session.Id)).Should().BeTrue("очередь записана на диск при постановке");
+
+        var restarted = BuildSecondManager();
+        var restored = restarted.GetPending(session.Id);
+
+        restored.Select(m => m.Text).Should().Equal("доклад исполнителя", "вопрос человека");
+        restored[0].Kind.Should().Be(SessionManager.PendingKind.Report);
+        restored[0].StaffNote.Should().Be("служебная заметка");
+        restored[0].Silent.Should().BeTrue();
+        restored[0].SuppressTasksExecute.Should().BeTrue();
+        restored[0].SenderPersonaId.Should().Be("exec-1");
+        restored[1].Kind.Should().Be(SessionManager.PendingKind.User);
+    }
+
+    [Fact]
+    public async Task Pending_ОчередьРазобрана_ФайлУдалён()
+    {
+        var session = await MkBusySessionAsync("persist-empty");
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад", kind: SessionManager.PendingKind.Report);
+        File.Exists(PendingFilePath(session.Id)).Should().BeTrue();
+
+        var entry = GetEntry(session.Id);
+        var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
+        pending.RemoveAt(0);
+
+        File.Exists(PendingFilePath(session.Id)).Should().BeFalse("пустая очередь — файла нет");
+    }
+
+    [Fact]
+    public async Task Pending_АвтодренажНаСтарте_ЧатБезХодаПолучаетСообщение()
+    {
+        var session = await MkBusySessionAsync("persist-drain");
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад до рестарта", kind: SessionManager.PendingKind.Report);
+
+        var restarted = BuildSecondManager();
+        var entry = GetEntryOf(restarted, session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        await restarted.DrainRestoredPendingAsync();
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(3));
+
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("доклад до рестарта")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        restarted.GetPending(session.Id).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Pending_ЗамороженнаяОчередь_ПослеРестартаНеРазбираетсяАвтоматически()
+    {
+        var session = await MkBusySessionAsync("persist-frozen");
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        await _sut.SendOrEnqueueAsync(session.Id, "ждёт возобновления", kind: SessionManager.PendingKind.Report);
+
+        _sut.Interrupt(session.Id); // «Стоп» замораживает очередь
+        await WaitForComposerRestoresAsync(1);
+
+        var restarted = BuildSecondManager();
+        var restartedEntry = GetEntryOf(restarted, session.Id);
+        restartedEntry.GetType().GetField("QueueFrozen")!.GetValue(restartedEntry).Should().Be(true);
+        var adapter = StubAdapter(restartedEntry);
+        SetProcess(restartedEntry, adapter.Object);
+
+        await restarted.DrainRestoredPendingAsync();
+        await Task.Delay(200);
+
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        restarted.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("ждёт возобновления");
+    }
+
+    [Fact]
+    public async Task Pending_СтаршеСуток_НеОживляетсяАВИсторииПлашкаНеДоставлено()
+    {
+        var session = await MkBusySessionAsync("persist-expired");
+        var old = new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), "недельной давности", null, null,
+            0, DateTime.UtcNow - TimeSpan.FromDays(7), Kind: SessionManager.PendingKind.Report);
+        _historyService.SavePending(session.Id, new PendingQueueFile(false, [old]));
+
+        var restarted = BuildSecondManager();
+        var entry = GetEntryOf(restarted, session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        restarted.GetPending(session.Id).Should().BeEmpty("просроченное не оживляем");
+        await restarted.DrainRestoredPendingAsync();
+
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        File.Exists(PendingFilePath(session.Id)).Should().BeFalse();
+        var history = await _historyService.LoadAsync(session.Id);
+        history.OfType<StoredWorkLoopStoppedMessage>()
+            .Should().ContainSingle(m => m.Reason == "pending_expired" && m.Text.Contains("Не доставлено"));
+    }
+
     // --- FreezePending и CurrentTurnSnapshot (фикс бага композера) ---
 
     [Fact]
@@ -10248,6 +10382,31 @@ public class SessionManagerTests : IDisposable
         info.WorktreePath.Should().Be(Path.GetFullPath(worktree));
         // Ветку не передавали — берётся из самого дерева
         info.WorktreeBranch.Should().Be("wt/тест");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task AttachWorktree_СуществующееДерево_ПрогреваетГрафДереваОдинРаз()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("attach-warm");
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+
+        (await _sut.AttachWorktreeAsync(session.Id, worktree)).Should().BeTrue();
+
+        _graphInspector.Warmed.Should().Equal(Path.GetFullPath(worktree));
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task AttachWorktree_ЧужаяПапка_ГрафНеПрогревается()
+    {
+        var (project, _) = await MkRepoWithWorktreeAsync("attach-warm-alien");
+        var alien = Directory.CreateDirectory(Path.Combine(_tempDir, "alien-warm")).FullName;
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits);
+
+        (await _sut.AttachWorktreeAsync(session.Id, alien)).Should().BeFalse();
+
+        _graphInspector.Warmed.Should().BeEmpty();
     }
 
     [Fact]
@@ -11747,7 +11906,7 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task Pipeline_УдалениеСессии_ДренируетОчередьДоResult()
+    public async Task Pipeline_УдалениеСессии_НеБлокируетВызывающего_ДренажВФонеДоводитResult()
     {
         var session = AddPipelineSession(executor: true);
         var acc = new TurnAccumulator(new List<StoredMessage>());
@@ -11761,18 +11920,24 @@ public class SessionManagerTests : IDisposable
         await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("x"));
         await _sut.OnMessageQueuedAsync(session.Id, acc, new ResultMessage("success", 1, 1, null, null));
 
-        var delete = _sut.DeleteAsync(session.Id);
-        await Task.WhenAny(delete, Task.Delay(300));
-        delete.IsCompleted.Should().BeFalse("удаление ждёт дренажа очереди, а наблюдатель ещё держит Result");
+        // Удаление не держит HTTP-путь на дренаже: возвращается, пока наблюдатель ещё держит Result
+        await _sut.DeleteAsync(session.Id).WaitAsync(TimeSpan.FromSeconds(5));
+        lock (seen) seen.Should().BeEmpty("наблюдатель ещё не отпущен");
 
         release.SetResult();
-        await delete.WaitAsync(TimeSpan.FromSeconds(5));
+        // Дренаж идёт в фоне и доводит Result до наблюдателя
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (seen) if (seen.Count == 2) break;
+            await Task.Delay(20);
+        }
 
         lock (seen) seen.Should().Equal(nameof(TextDeltaMessage), nameof(ResultMessage));
     }
 
     [Fact]
-    public async Task Pipeline_Переполнение_ДельтыСливаются_ToolUseИResultДоходятВПорядке()
+    public async Task Pipeline_Переполнение_ДельтыСклеиваются_ТекстНеТеряется_ToolUseИResultВПорядке()
     {
         var session = AddPipelineSession();
         var acc = new TurnAccumulator(new List<StoredMessage>());
@@ -11792,7 +11957,7 @@ public class SessionManagerTests : IDisposable
         await Task.Run(async () =>
         {
             for (var i = 1; i < 5000; i++)
-                await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage(i.ToString()));
+                await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage(i.ToString() + ","));
         }).WaitAsync(TimeSpan.FromSeconds(5));
 
         // Редкие кадры не сливаются и писателя не блокируют: кладутся даже в «полную» очередь
@@ -11805,9 +11970,10 @@ public class SessionManagerTests : IDisposable
         release.SetResult();
         await _sut.DrainPipelineAsync(session.Id);
 
-        var deltas = Sent<TextDeltaMessage>().Select(m => int.Parse(m.Text)).ToList();
-        deltas.Count.Should().BeLessThan(5000, "дельты сверх ёмкости очереди слиты");
-        deltas.Should().BeInAscendingOrder("порядок оставшихся дельт не нарушен");
+        // Ни одного символа не потеряно: слитые дельты склеены в том же порядке
+        var expected = "0" + string.Concat(Enumerable.Range(1, 4999).Select(i => i.ToString() + ","));
+        string.Concat(Sent<TextDeltaMessage>().Select(m => m.Text)).Should().Be(expected);
+        _sut.PipelineForTest(session.Id)!.Coalesced.Should().BeGreaterThan(0, "дельты сверх ёмкости слиты, а не выброшены");
         var all = Sent<ServerMessage>();
         var toolIdx = all.FindIndex(m => m is ToolUseMessage);
         var resultIdx = all.FindIndex(m => m is ResultMessage);
@@ -11834,6 +12000,7 @@ public class SessionManagerTests : IDisposable
         await _sut.OnMessageQueuedAsync(session.Id, acc, new TextDeltaMessage("3"));
         // Второй потребитель (если бы он был) разобрал бы «2» не дожидаясь «1»
         await Task.WhenAny(second.Task, Task.Delay(300));
+        second.Task.IsCompleted.Should().BeFalse("второй потребитель не разбирает «2» мимо зависшего «1»");
         release.SetResult();
         await _sut.DrainPipelineAsync(session.Id);
 

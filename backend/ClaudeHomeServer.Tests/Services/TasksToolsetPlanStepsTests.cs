@@ -140,6 +140,35 @@ public class TasksToolsetPlanStepsTests : IClassFixture<TestWebApplicationFactor
         created.GetProperty("planSteps").EnumerateArray().Count(_ => true).Should().Be(2);
     }
 
+    // ─── Контракт (Б-pr2-д, решение 4): tasks_get отдаёт planSteps (camelCase) ──────────
+    // Фront читает список шагов плана через MCP; если поле пропадёт из ответа — тест краснеет.
+    [Fact]
+    public async Task Get_ПланОтдаётPlanSteps_CamelCase()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var (epicText, _) = await CallToolAsync(sessionId, "tasks_create",
+            new { title = "эпик", role = "feature" });
+        var epicId = JsonSerializer.Deserialize<JsonElement>(epicText).GetProperty("id").GetString()!;
+
+        var (planText, planIsError) = await CallToolAsync(sessionId, "tasks_create", new
+        {
+            title = "план",
+            projectId,
+            featureId = epicId,
+            role = "plan",
+            planSteps = new[] { new { stepRef = "Б1", title = "шаг", lane = "бэк" } },
+        });
+        planIsError.Should().BeFalse($"план создан: {planText}");
+        var planId = JsonSerializer.Deserialize<JsonElement>(planText).GetProperty("id").GetString()!;
+
+        var (text, isError) = await CallToolAsync(sessionId, "tasks_get", new { id = planId });
+        isError.Should().BeFalse($"tasks_get читает задачу: {text}");
+        var got = JsonSerializer.Deserialize<JsonElement>(text);
+        var steps = got.GetProperty("planSteps").EnumerateArray().ToList();
+        steps.Should().HaveCount(1, "tasks_get обязан отдавать planSteps — иначе список нечем прочитать");
+        steps[0].GetProperty("stepRef").GetString().Should().Be("Б1");
+    }
+
     // ─── Major 1 (регресс): смена роли плана на не-план + явный НЕПУСТОЙ planSteps ───────
     // tasks_update {role:"step", planSteps:[...]} → isError (до дельты isError=false + тихая
     // потеря списка). Пустой [] со сменой роли — допустим (снимает).

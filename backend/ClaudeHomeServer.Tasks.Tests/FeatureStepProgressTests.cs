@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks.Projector;
 
@@ -485,6 +486,35 @@ public class FeatureStepProgressTests
         run.StepProgress.UnlinkedReworks.Should().BeGreaterThan(0);
         row.StepsWithdrawn.Should().Be(run.StepProgress.Withdrawn);
         row.UnlinkedReworks.Should().Be(run.StepProgress.UnlinkedReworks);
+    }
+
+    // Имена полей прогресса — контракт Ф-pr (Б-pr2-д, решение 4): переименование поля через
+    // [JsonPropertyName] или смена casing краснит тест — фронт читает ровно эти имена.
+    [Fact]
+    public void КонтрактПрогресса_ИменаПолейCamelCase()
+    {
+        var opts = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var epicM = Feature();
+        var tasks = new List<TaskItem>
+        {
+            epicM, Plan("p", 0, ("Ш1", "back")), Step("s1", "Ш1", 1),
+            Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s1"),
+            Verdict("f", TaskRoles.Final, TaskVerdicts.Accepted, 20, "s1"),
+            new() { Id = "m", FeatureId = Epic, Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
+                CreatedAt = T0.AddMinutes(30), CompletedAt = T0.AddMinutes(31) },
+        };
+        var run = FeatureProjector.Build(epicM, tasks, T0.AddDays(1));
+        var json = JsonSerializer.Serialize(run, opts);
+        json.Should().Contain("\"stepProgress\"");
+        json.Should().Contain("\"planState\"");
+        json.Should().Contain("\"stepsOpen\"");
+
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var rowJson = JsonSerializer.Serialize(row, opts);
+        rowJson.Should().Contain("\"stepsReview\"");
+        rowJson.Should().Contain("\"stepsWork\"");
+        rowJson.Should().Contain("\"stepsNotCreated\"");
+        rowJson.Should().Contain("\"planState\"");
     }
 
     [Fact]

@@ -1737,6 +1737,8 @@ describe('WorkspacePage: центр — страница фичи соседом
     mockData.chats.push(chatB);
     // холодный старт: активного чата нет; restored — активный чат восстановлен из ws:{projectId}
     if (!restored) wsState.activeSession = null;
+    if (restored) { mockSessionList.push(session); mockData.chats.push(session); } // восстановленный чат есть в списке
+    mockData.chat = chatB;
     // Ровно то, что делает App.tsx на запасном переходе: navPush-снимок (toHash: сегмент
     // feature приоритетнее chatId) + pending-канал.
     win.window.location.hash = '#/project/p1/feature/f1';
@@ -1748,6 +1750,10 @@ describe('WorkspacePage: центр — страница фичи соседом
       onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
     } as any));
     await act(async () => { vi.advanceTimersByTime(100); });
+    // ChatPanel подгружается асинхронно: ждём появления панели, а не фиксированное время
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'chat-panel'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
 
     // КЛЮЧЕВОЕ: страница фичи открыта И чат выбран — одновременно.
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'),

@@ -24,8 +24,13 @@
 2. Раскидать `scripts/ops/` с прод-копией (`/home/an/Sources/ClaudeCodeServer`
    для `AgentDir`) и подготовить relcheck (`/home/an/Sources/ClaudeCodeServer-relcheck`
    рядом — тот же репозиторий отдельным worktree, берётся для чистого
-   `git checkout --detach` без правки основного дерева). Проверить, что
-   `scripts/ops/deploy-linux.sh` исполняемый.
+   `git checkout --detach` без правки основного дерева) и **запереть его**:
+   `git worktree lock --reason "relcheck выкатки прода" <путь>`. Снаружи relcheck
+   неотличим от брошенного дерева (отсоединённый HEAD на влитом коммите, чистый,
+   без процесса внутри): 22.10.2026 его сняли вместе с 85 старыми worktree при
+   уборке `~/Sources`, и выкатка упала на первом шаге «relcheck не существует».
+   Суточная уборка `deploy/systemd/ccs-tmp-cleanup.sh` запертые деревья
+   пропускает. Проверить, что `scripts/ops/deploy-linux.sh` исполняемый.
 3. Вписать секцию `Deploy` в `appsettings.Local.json` (см. [«Секция Deploy»]
    (#секция-deploy-в-appsettingslocaljson) ниже) — **точные** имена полей и
    дефолты — в [`DeployOptions.cs`](../../backend/ClaudeHomeServer.Deploy/Services/Deploy/DeployOptions.cs).

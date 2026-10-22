@@ -633,15 +633,28 @@ describe('buildPerStreamSegments: разрыв линии на null', () => {
     ];
     const segs = buildPerStreamSegments(intervals, 0, 90_000, 20, GEOM);
     expect(segs).toHaveLength(2);
-    expect(segs[0]).toHaveLength(1);
-    expect(segs[1]).toHaveLength(1);
+    expect(segs[0]).toHaveLength(2);   // ступенька: две точки на интервал
+    expect(segs[1]).toHaveLength(2);
   });
 
   it('без null — один непрерывный сегмент на все интервалы', () => {
     const intervals = [mkIt(0, 30_000, 10), mkIt(30_000, 60_000, 12), mkIt(60_000, 90_000, 14)];
     const segs = buildPerStreamSegments(intervals, 0, 90_000, 20, GEOM);
     expect(segs).toHaveLength(1);
-    expect(segs[0]).toHaveLength(3);
+    expect(segs[0]).toHaveLength(6);
+  });
+
+  // Ступенька: линия держит значение интервала на всю ширину клетки — от левого края
+  // первой до правого края последней, без пустых полей по краям (окно 1 мин = 4 клетки).
+  it('ступенька: первая точка на левом краю поля, последняя — на правом, значение на всю клетку', () => {
+    const intervals = [mkIt(0, 30_000, 10), mkIt(30_000, 60_000, 20)];
+    const segs = buildPerStreamSegments(intervals, 0, 60_000, 20, GEOM);
+    const pts = segs[0];
+    expect(pts[0].x).toBeCloseTo(GEOM.left, 5);
+    expect(pts[pts.length - 1].x).toBeCloseTo(GEOM.width - GEOM.right, 5);
+    expect(pts[0].y).toBe(pts[1].y);                       // внутри клетки значение не меняется
+    expect(pts[1].x).toBeCloseTo(pts[2].x, 5);             // стык клеток — вертикальный переход
+    expect(pts[2].y).not.toBe(pts[1].y);
   });
 });
 
@@ -766,8 +779,8 @@ describe('buildIssuedSegments: линия «всего по стенду» (genT
     const intervals = [mkIt(0, 30_000, 5, 100), mkIt(30_000, 60_000, 5, null), mkIt(60_000, 90_000, 5, 200)];
     const segs = buildIssuedSegments(intervals, 0, 90_000, 200, GEOM);
     expect(segs).toHaveLength(2);
-    expect(segs[0]).toHaveLength(1);
-    expect(segs[1]).toHaveLength(1);
+    expect(segs[0]).toHaveLength(2);   // ступенька: две точки на интервал
+    expect(segs[1]).toHaveLength(2);
   });
 
   it('непрерывный прогон: один сегмент, y выше (меньше) для большего значения', () => {
@@ -778,10 +791,10 @@ describe('buildIssuedSegments: линия «всего по стенду» (genT
     ];
     const segs = buildIssuedSegments(intervals, 0, 90_000, 200, GEOM);
     expect(segs).toHaveLength(1);
-    expect(segs[0]).toHaveLength(3);
+    expect(segs[0]).toHaveLength(6);
     // 150 (выше) → меньший y (выше на экране), чем 50 и 100
-    expect(segs[0][1].y).toBeLessThan(segs[0][0].y);
-    expect(segs[0][1].y).toBeLessThan(segs[0][2].y);
+    expect(segs[0][2].y).toBeLessThan(segs[0][0].y);   // точки 2–3 — второй интервал
+    expect(segs[0][2].y).toBeLessThan(segs[0][4].y);
   });
 
   it('null в perStream не рвёт вторую серию: непрерывный прогон', () => {
@@ -791,7 +804,7 @@ describe('buildIssuedSegments: линия «всего по стенду» (genT
     ];
     const segs = buildIssuedSegments(intervals, 0, 60_000, 200, GEOM);
     expect(segs).toHaveLength(1);
-    expect(segs[0]).toHaveLength(2);
+    expect(segs[0]).toHaveLength(4);
   });
 });
 

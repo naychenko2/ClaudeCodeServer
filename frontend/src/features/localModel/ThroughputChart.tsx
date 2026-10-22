@@ -168,8 +168,12 @@ export function segmentsToPoints(segments: { x: number; y: number }[][]): string
   return segments.map(seg => seg.map(p => `${round1(p.x)},${round1(p.y)}`).join(' '));
 }
 
-// Общая сборка линии по интервалам: одна точка на центр каждого интервала, null — обрыв
-// (как у линий кэша): центр интервала по x, y на общей оси скорости.
+// Общая сборка линии по интервалам СТУПЕНЬКОЙ: значение интервала — среднее за всю
+// клетку, поэтому линия держит его от левого края клетки до правого (две точки на
+// интервал), а не ставит одну точку в центр. С точкой в центре линия на окне 1 мин
+// (4 клетки по 15 с) начиналась в 7,5 с от края и кончалась за 7,5 с до него —
+// по 12,5 % ширины пустоты с обеих сторон (вопрос Андрея 22.10). null — обрыв
+// (как у линий кэша); y — на общей оси скорости.
 function buildIntervalSegments(
   intervals: Interval[],
   pick: (it: Interval) => number | null,
@@ -183,8 +187,8 @@ function buildIntervalSegments(
   for (const it of intervals) {
     const v = pick(it);
     if (v == null) { if (cur.length) { segs.push(cur); cur = []; } continue; }
-    const cx = geom.left + (geom.width - geom.left - geom.right) * ((it.tStart + (it.tEnd - it.tStart) / 2 - tMin) / (tMax - tMin));
-    cur.push({ x: cx, y: yForThroughput(v, maxSeries, geom) });
+    const y = yForThroughput(v, maxSeries, geom);
+    cur.push({ x: xForTime(it.tStart, tMin, tMax, geom), y }, { x: xForTime(it.tEnd, tMin, tMax, geom), y });
   }
   if (cur.length) segs.push(cur);
   return segs;
@@ -1058,15 +1062,20 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
     return `M${round1(pts[0].x)},${round1(floor)} L${body} L${round1(pts[pts.length - 1].x)},${round1(floor)} Z`;
   }, [intervals, tMin, tMax, width]);
 
-  // Линии попаданий / из RAM: по одному полилинии на непрерывный прогон (null — обрыв).
+  // Линии попаданий / из RAM: по одному полилинии на непрерывный прогон (null — обрыв),
+  // ступенькой на всю ширину клетки — как линии скорости (buildIntervalSegments).
   const buildLine = (get: (it: Interval) => number | null): string[] => {
     const segs: { x: number; y: number }[][] = [];
     let cur: { x: number; y: number }[] = [];
+    const plotW = width - geomKv.left - geomKv.right;
     for (const it of intervals) {
       const v = get(it);
       if (v == null) { if (cur.length) { segs.push(cur); cur = []; } continue; }
-      const cx = geomKv.left + (width - geomKv.left - geomKv.right) * ((it.tStart + (it.tEnd - it.tStart) / 2 - tMin) / (tMax - tMin));
-      cur.push({ x: cx, y: yForPerc(v, geomKv) });
+      const y = yForPerc(v, geomKv);
+      cur.push(
+        { x: geomKv.left + plotW * ((it.tStart - tMin) / (tMax - tMin)), y },
+        { x: geomKv.left + plotW * ((it.tEnd - tMin) / (tMax - tMin)), y },
+      );
     }
     if (cur.length) segs.push(cur);
     return segs.map(seg => seg.map(p => `${round1(p.x)},${round1(p.y)}`).join(' '));

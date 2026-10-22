@@ -9,8 +9,9 @@
   у панели нет — только var(--cc-*) и color-mix от них.
   Данные: Open-Meteo через мост ccsPlugin.call('net.fetch', …) — состав запроса
   и разбор current/daily по §1 плана. Строки времени из ответа не превращаются
-  в Date в поясе браузера: даты разбираются руками, день недели — через Date.UTC,
-  «обновлено в» — время запроса в поясе города (utc_offset_seconds).
+  в Date в поясе браузера: даты разбираются руками, день недели — через Date.UTC.
+  Время в подвале берётся из тех же данных, что и «Сейчас» (current.time), —
+  иначе «сейчас» и «обновлено» расходятся (правка приёмки 22.10).
   Иллюстрации героя (шаг B2): шесть сцен по таблице WMO и ночной вариант по
   is_day. Фон сцены — CSS-градиенты от --cc-* через color-mix(), слой
   осадков/тумана и крупный инлайновый глиф; тема перекрашивается сообщением
@@ -20,8 +21,9 @@
   городом. Без права на геокодер — notice в режиме выбора, главный экран работает.
   Запоминание города — через операцию хоста storage (решение 22.10): без права
   storage панель работает полностью, просто не запоминает (denied/unavailable —
-  молча). Операций storage в хосте ещё нет (F2): без них правило не проверяется
-  вживую, слой данных панели к нему готов.
+  молча). Подсказка «Город запоминается в этом браузере» показывается только при
+  выданном праве storage (правка приёмки 22.10). Операций storage в хосте ещё
+  нет (F2): без них правило не проверяется вживую, слой данных панели к нему готов.
 -->
 <style>
   .wx { display: flex; flex-direction: column; gap: 12px; }
@@ -44,6 +46,9 @@
   .hero .temp { font-size: 34px; font-weight: 600; letter-spacing: -.02em; line-height: 1.05; margin-top: 8px; }
   .hero .cond { font-size: 16px; font-weight: 600; margin-top: 4px; }
   .hero .hl { font-size: 12px; color: var(--cc-fg-muted); margin-top: 2px; }
+  /* Подписи героя не заходят под иллюстрацию (.art, 132 px с выступом −10):
+     текстовый блок ограничен, длинные метки WMO переносятся (правка приёмки 22.10) */
+  .hero .when, .hero .temp, .hero .cond, .hero .hl { max-width: calc(100% - 134px); }
   .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 16px; }
   .metric { border-radius: 10px; padding: 8px; background: color-mix(in srgb, var(--cc-surface) 72%, transparent); }
   .metric .k { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--cc-fg-muted); white-space: nowrap; }
@@ -98,6 +103,8 @@
   .foot { font-size: 11px; color: var(--cc-fg-muted); text-align: center; padding: 4px 0 0; }
 
   /* Выбор города (C1): поиск, строки результатов, подсказка — по макету */
+  .wx-back { border-color: transparent; padding-left: 4px; }
+  .wx-title { font-size: 16px; font-weight: 600; }
   .search-wrap { position: relative; }
   .search-wrap .ico { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--cc-fg-muted); pointer-events: none; }
   .search-wrap .cc-input { padding-left: 36px; }
@@ -109,6 +116,7 @@
   .hint { font-size: 12px; color: var(--cc-fg-muted); padding: 0 4px; }
   .notice-row { display: flex; gap: 8px; align-items: flex-start; }
   .notice-row .ico { margin-top: 2px; }
+  .notice-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 
   /* Иконки погоды: заливки и штрихи — от токенов темы */
   .f-sun { fill: var(--cc-warning); }
@@ -263,10 +271,6 @@
     function esc(s) {
       return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
-    function hhmmInCity(utcOffsetSeconds) {
-      var t = new Date(Date.now() + (utcOffsetSeconds || 0) * 1000);
-      return String(t.getUTCHours()).padStart(2, '0') + ':' + String(t.getUTCMinutes()).padStart(2, '0');
-    }
 
     // ---------- Разметка главного экрана (состав и порядок — по макету) ----------
     var root = document.getElementById('wx');
@@ -338,18 +342,21 @@
 
     function openSearch() {
       root.setAttribute('aria-busy', 'false');
+      // Подсказка про запоминание — только когда право storage действительно выдано
+      // (правка приёмки 22.10): без него панель ничего не запоминает.
+      var hint = hasStorageRight() ? '<div class="hint">Город запоминается в этом браузере.</div>' : '';
       // Поле поиска не пересоздаётся при каждом результате: обновляется только #geo.
       root.innerHTML =
         '<div class="wx-top">' +
-          '<button class="cc-btn cc-btn--ghost cc-btn--sm" type="button" id="back" style="border-color:transparent;padding-left:4px">' + ico('back') + 'Назад</button>' +
-          '<span style="font-size:16px;font-weight:600">Выбор города</span>' +
+          '<button class="cc-btn cc-btn--ghost cc-btn--sm wx-back" type="button" id="back">' + ico('back') + 'Назад</button>' +
+          '<span class="wx-title">Выбор города</span>' +
         '</div>' +
         '<div class="search-wrap">' + ico('search') +
           '<input class="cc-input" id="q" value="' + esc(query) + '" placeholder="Город, например Ярославль" aria-label="Поиск города">' +
         '</div>' +
-        '<div id="geo"></div>' +
-        '<div class="hint">Город запоминается в этом браузере.</div>';
+        '<div id="geo"></div>' + hint;
       var input = root.querySelector('#q');
+      input.focus(); // фокус сразу в поле — не надо тапать второй раз (правка приёмки 22.10)
       input.addEventListener('input', function () {
         query = input.value;
         if (searchTimer) clearTimeout(searchTimer);
@@ -363,8 +370,11 @@
       var el = root.querySelector('#geo');
       if (!el) return;
       if (geoDenied) {
+        // Человеческий текст, ключ права — отдельным бейджем, как в карточке
+        // отказа по прогнозу (правка приёмки 22.10).
         el.innerHTML = '<div class="cc-notice cc-notice--info notice-row" role="status">' + ico('info') +
-          '<span>Поиск города недоступен: нет права net:' + GEO_HOST + '</span></div>';
+          '<div class="notice-col"><span>Поиск города недоступен — панели не выдано право на геокодер. Выдайте его в настройках плагина.</span>' +
+          '<span class="cc-badge cc-badge--warning">net:' + GEO_HOST + '</span></div></div>';
         return;
       }
       if (!found.length) {
@@ -433,6 +443,13 @@
     // Без права storage панель работает полностью, просто не запоминает:
     // denied/unavailable — молча, без ошибок и плашек.
     var CITY_KEY = 'city';
+    // Право storage в списке выданных — как net:{host}; нужен панели, чтобы
+    // честно обещать запоминание (правка приёмки 22.10).
+    function hasStorageRight() {
+      var st = ccsPlugin.state;
+      return !!(st && Array.isArray(st.granted) &&
+        st.granted.some(function (g) { return String(g).slice(0, 7) === 'storage'; }));
+    }
     function readStoredCity() {
       return ccsPlugin.call('storage.get', { key: CITY_KEY }).then(function (res) {
         var v = res && (typeof res === 'string' ? res : res.value);
@@ -496,7 +513,9 @@
         '</section>' +
         '<div class="sec"><h3>Прогноз на 7 дней</h3><span>макс / мин</span></div>' +
         '<ul class="week">' + rows + '</ul>' +
-        '<div class="foot">Данные: Open-Meteo · обновлено в ' + hhmmInCity(data.utc_offset_seconds) + '</div>';
+        // Время в подвале — из тех же данных, что и «Сейчас» в герое: две разные
+        // минуты в одном экране сбивают (правка приёмки 22.10).
+        '<div class="foot">Данные: Open-Meteo · данные на ' + cur.time.slice(11, 16) + '</div>';
     }
 
     function load() {
@@ -549,6 +568,10 @@
     function startOnce() {
       if (started) return;
       started = true;
+      // Скелетон — сразу, не дожидаясь чтения запомненного города (мелочь
+      // приёмки 22.10): при медленном хранилище панель не остаётся пустой.
+      root.setAttribute('aria-busy', 'true');
+      root.innerHTML = skeleton();
       readStoredCity().then(load);
     }
     ccsPlugin.on('init', startOnce);

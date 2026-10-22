@@ -170,7 +170,9 @@ describe('statusLineFor: 9 состояний', () => {
 describe('FeatureRunView: Ф-pr — ↺ один глиф, два смысла различаются', () => {
   it('рядом: review-корзина «R в ревью» (БЕЗ ↺) и возвраты «↺K» — оба числа видны и различаются', () => {
     const summary: FeatureSummary = { mergedAt: '2026-10-15T21:09:00Z', durationMinutes: 370, tasks: 14, steps: 9, loops: 3 };
-    const stepProgress: StepProgress = { planState: 'done', total: 5, accepted: 2, review: 2, work: 0, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 };
+    // Фикстура согласована с семантикой бэка: «готово» только при done; здесь полное
+    // принятие ещё не достигнут — cut (метки плана нет, «готово» нет).
+    const stepProgress: StepProgress = { planState: 'cut', total: 5, accepted: 2, review: 2, work: 0, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 };
     const html = render(run({ state: 'merged', summary, stepProgress }));
     // Оба числа видны: review-корзина (2) и возвраты (3).
     expect(html).toContain('2 в ревью');

@@ -1,14 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { formatStepProgress, isStepProgressDone, type StepProgress } from './featureProgress';
 
-// Образец с дефолтами: total=0, всё 0, planState='done' (без метки плана).
-// Переопределяем точечно — тесты читаются как «что меняю → что жду».
+// Образец с дефолтами: total=0, всё 0, planState='cut' (метки плана нет, «готово» нет —
+// «готово» только при явном 'done'). Переопределяем точечно — тесты читаются как
+// «что меняю → что жду».
 // Все переопределения согласованы с инвариантом бэка: total = accepted + review + work +
 // notCreated (FeatureStepAccounting.cs, «Итог: контрактные числа») — ответа с суммой
-// меньше знаменателя сервер не даёт.
+// меньше знаменателя сервер не даёт. Фикстуры с planState='done' всегда полные: бэк
+// выдаёт done только при total > 0 и полном принятии.
 function sp(over: Partial<StepProgress> = {}): StepProgress {
   return {
-    planState: 'done',
+    planState: 'cut',
     total: 0,
     accepted: 0,
     review: 0,
@@ -31,25 +33,27 @@ describe('formatStepProgress — база «принято N из T»', () => {
   });
 });
 
-describe('formatStepProgress — «готово» (условие явное)', () => {
-  it('«готово» когда accepted === total && total > 0 && planState !== pending', () => {
+describe('formatStepProgress — «готово» (решает только planState === done)', () => {
+  it('«готово» при planState === done (бэк даёт его только при total > 0 и полном принятии)', () => {
     expect(formatStepProgress(sp({ planState: 'done', total: 5, accepted: 5 }))).toBe('готово');
-    expect(formatStepProgress(sp({ planState: 'cut', total: 3, accepted: 3 }))).toBe('готово');
   });
 
-  // Мутация 7: показать «готово» при total === 0.
-  it('м7: НЕ «готово» при total === 0 (даже accepted === total)', () => {
-    expect(formatStepProgress(sp({ planState: 'done', total: 0, accepted: 0 }))).toBe('принято 0 из 0');
+  // Мутация: вернуть старое условие (accepted === total && total > 0 && planState !== 'pending')
+  // — три теста ниже краснеют: «готово» решает не полнота цифр.
+  it('м7: НЕ «готово» при cut и полном принятии (разрез плана ≠ конец работы)', () => {
+    expect(formatStepProgress(sp({ planState: 'cut', total: 3, accepted: 3 }))).toBe('принято 3 из 3');
   });
 
-  // Мутация 1: снять `accepted === total` из условия «готовности».
-  it('м1: НЕ «готово» когда accepted < total (total > 0, planState !== pending)', () => {
-    expect(formatStepProgress(sp({ planState: 'done', total: 5, accepted: 3, review: 2 }))).toBe('принято 3 из 5 · 2 в ревью');
+  it('м1: НЕ «готово» при partial и полном принятии (знаменатель может быть неполным)', () => {
+    expect(formatStepProgress(sp({ planState: 'partial', total: 2, accepted: 2 }))).toBe('принято 2 из 2 · план частично');
   });
 
-  // Мутация 2: снять `planState !== 'pending'` из условия «готовности».
-  it('м2: НЕ «готово» при planState === pending (даже accepted === total)', () => {
+  it('м2: НЕ «готово» при pending (даже accepted === total)', () => {
     expect(formatStepProgress(sp({ planState: 'pending', total: 2, accepted: 2 }))).toBe('принято 2 из 2 · план не разобран');
+  });
+
+  it('НЕ «готово» при пустом знаменателе (total === 0, planState !== done)', () => {
+    expect(formatStepProgress(sp({ planState: 'cut', total: 0, accepted: 0 }))).toBe('принято 0 из 0');
   });
 });
 
@@ -71,7 +75,9 @@ describe('formatStepProgress — корзины знаменателя (review/w
   });
 
   it('нулевые корзины не дают лишних сегментов', () => {
-    expect(formatStepProgress(sp({ total: 2, accepted: 2, review: 0, work: 0, notCreated: 0 }))).toBe('готово');
+    // Полное принятие при cut — ещё не «готово»: «готово» только при done.
+    expect(formatStepProgress(sp({ planState: 'cut', total: 2, accepted: 2, review: 0, work: 0, notCreated: 0 }))).toBe('принято 2 из 2');
+    expect(formatStepProgress(sp({ planState: 'done', total: 2, accepted: 2, review: 0, work: 0, notCreated: 0 }))).toBe('готово');
   });
 });
 
@@ -87,8 +93,9 @@ describe('formatStepProgress — метка плана (planState)', () => {
   });
 
   it('метки плана НЕТ при cut/done (там и так понятно)', () => {
+    // Фикстура 'done' согласована с бэком: done ⇒ total > 0 и всё принято.
     expect(formatStepProgress(sp({ planState: 'cut', total: 2, accepted: 1, review: 1 }))).toBe('принято 1 из 2 · 1 в ревью');
-    expect(formatStepProgress(sp({ planState: 'done', total: 2, accepted: 1, review: 1 }))).toBe('принято 1 из 2 · 1 в ревью');
+    expect(formatStepProgress(sp({ planState: 'done', total: 2, accepted: 2 }))).toBe('готово');
   });
 });
 
@@ -117,20 +124,22 @@ describe('formatStepProgress — порядок сегментов', () => {
     );
   });
 
-  it('«готово» + «план частично» (partial и всё принято)', () => {
-    expect(formatStepProgress(sp({ planState: 'partial', total: 2, accepted: 2 }))).toBe('готово · план частично');
+  // Противоречия «готово · план частично» больше нет: при partial «готово» не ставится
+  // (знаменатель может быть неполным) — см. м1 в блоке «готово».
+  it('при partial и полном принятии — «принято N из N · план частично», без «готово»', () => {
+    expect(formatStepProgress(sp({ planState: 'partial', total: 2, accepted: 2 }))).toBe('принято 2 из 2 · план частично');
   });
 });
 
 describe('isStepProgressDone — единая точка правды', () => {
-  it('true только при total > 0 && accepted === total && planState !== pending', () => {
+  it('true только при planState === done (для него бэк гарантирует total > 0 и полное принятие)', () => {
     expect(isStepProgressDone(sp({ planState: 'done', total: 5, accepted: 5 }))).toBe(true);
-    expect(isStepProgressDone(sp({ planState: 'cut', total: 3, accepted: 3 }))).toBe(true);
-    // total === 0
-    expect(isStepProgressDone(sp({ planState: 'done', total: 0, accepted: 0 }))).toBe(false);
-    // accepted < total (остаток — в ревью: 3+2 = 5)
-    expect(isStepProgressDone(sp({ planState: 'done', total: 5, accepted: 3, review: 2 }))).toBe(false);
-    // planState === pending
+    // Старое условие (accepted === total && planState !== 'pending') больше не действует:
+    // полнота цифр не означает конца — знаменатель при partial может быть неполным.
+    expect(isStepProgressDone(sp({ planState: 'cut', total: 3, accepted: 3 }))).toBe(false);
+    expect(isStepProgressDone(sp({ planState: 'partial', total: 2, accepted: 2 }))).toBe(false);
     expect(isStepProgressDone(sp({ planState: 'pending', total: 5, accepted: 5 }))).toBe(false);
+    // Пустой знаменатель — тоже не «готово».
+    expect(isStepProgressDone(sp({ planState: 'cut', total: 0, accepted: 0 }))).toBe(false);
   });
 });

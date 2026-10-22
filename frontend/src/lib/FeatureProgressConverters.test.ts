@@ -62,10 +62,13 @@ describe('stepProgressFromIndex', () => {
     expect(stepProgressFromIndex(f)).toBeNull();
   });
 
-  it('hasNew=true (stepsReview) + planState отсутствует → planState «done»', () => {
+  // Мутация: вернуть дефолт 'done' — тест красный: «готово» без данных о плане.
+  it('hasNew=true (stepsReview) + planState отсутствует → безопасный дефолт «pending» (не «готово»)', () => {
     const p = stepProgressFromIndex(idx({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2 }));
     expect(p).not.toBeNull();
-    expect(p!.planState).toBe('done');
+    expect(p!.planState).toBe('pending');
+    // Формат: без «готово», с меткой «план не разобран».
+    expect(formatStepProgress(p!)).toBe('принято 3 из 5 · 2 в ревью · план не разобран');
   });
 
   it('hasNew=true: review/work/notCreated маппятся, withdrawn/unlinkedReworks обнулены', () => {
@@ -82,7 +85,9 @@ describe('stepProgressFromIndex', () => {
 
   it('stepsWithdrawn/unlinkedReworks из индекса подтягиваются (не хардкод 0) → «X снято · Y без привязки»', () => {
     // 3+2 = 5 — знаменатель закрыт корзиной ревью (инвариант бэка).
-    const f = idx({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, stepsWork: 0, stepsNotCreated: 0, planState: 'done', stepsWithdrawn: 2, unlinkedReworks: 1 });
+    // planState='cut': полное принятие ещё не достигнут (3+2 = 5), «готово» не должна
+    // появляться — проверяется именно подтягивание withdrawn/unlinkedReworks.
+    const f = idx({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, stepsWork: 0, stepsNotCreated: 0, planState: 'cut', stepsWithdrawn: 2, unlinkedReworks: 1 });
     const p = stepProgressFromIndex(f);
     expect(p).not.toBeNull();
     expect(p!.withdrawn).toBe(2);

@@ -16,11 +16,15 @@
 //   • «· X снято» — только withdrawn > 0 (слово «снято», не «отменено»).
 //   • «· Y без привязки» — только unlinkedReworks > 0.
 //   • Склеиваем «·»; последний элемент без точки.
-//   • «готово» — ТОЛЬКО когда accepted === total && total > 0 && planState !== 'pending';
+//   • «готово» — ТОЛЬКО когда planState === 'done' (решает бэк, см. isStepProgressDone);
 //     никаких «все готово» без чисел.
-
-// Состояние плана (контракт Ф-pr): pending — план не разобран; partial — разобран
-// частично; cut/done — метку плана не показываем (разрез/итог говорят сами за себя).
+//
+// Состояние плана (контракт Ф-pr, маппинг бэка FeatureStepAccounting, шов Александра
+// 2а): учитываются задачи role=plan, кроме снятых (withdrawn). pending — таких задач
+// нет или у всех пустой список шагов; partial — списки есть только у части планов;
+// cut — списки есть у всех, но не всё принято; done — cut, total > 0 и всё принято.
+// «Готово» выводится только из done: при partial и полном принятии знаменатель может
+// быть неполным, и «готово · план частично» — противоречие.
 import type { FeatureRun } from '../types/featureRun';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 
@@ -40,10 +44,12 @@ export interface StepProgress {
   unlinkedReworks: number;
 }
 
-// «Готово»: все шаги приняты ревью, знаменатель ненулевой, план не «не разобран».
+// «Готово»: только planState === 'done' — бэк сам гарантирует для него total > 0 и
+// accepted === total (FeatureStepAccounting). Фронт НЕ выводит «готово» из цифр: при
+// partial и полном принятии вышла бы противоречивая строка «готово · план частично».
 // Единственная точка правды условия — её дублируют все шесть мест (и тесты).
 export function isStepProgressDone(p: StepProgress): boolean {
-  return p.total > 0 && p.accepted === p.total && p.planState !== 'pending';
+  return p.planState === 'done';
 }
 
 // ОДИН форматтер: строка прогресса для плашки/пилюли/попапа/индекса/«Хронологии».
@@ -87,7 +93,10 @@ export function stepProgressFromIndex(f: FeatureIndexFeature): StepProgress | nu
     || f.planState != null || f.stepsWithdrawn != null || f.unlinkedReworks != null;
   if (!hasNew) return null;
   return {
-    planState: f.planState ?? 'done',
+    // planState приходит всегда, когда есть новые поля индекса (Б-pr2-д3). Дефолт для
+    // ответа без поля — безопасный 'pending' (метка «план не разобран», не «готово»):
+    // 'done' без данных приписал бы завершенность, которой нет.
+    planState: f.planState ?? 'pending',
     total: nonNeg(f.stepsTotal),
     accepted: nonNeg(f.stepsAccepted),
     review: nonNeg(f.stepsReview ?? 0),

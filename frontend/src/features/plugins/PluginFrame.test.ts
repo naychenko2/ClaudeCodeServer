@@ -390,6 +390,49 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
   });
 });
 
+// === D2-ф-3: третий путь выдачи прав — «Права…» из панели ===
+// Диалог согласия из меню «⋯» панели обязан показывать человекочитаемое имя
+// («Погода»), а не техническое из id пакета («Weather») — как в остальных
+// путях выдачи прав. Мутация: вернуть humanizeId в toConsentData →
+// заголовок «Права «Weather»» → этот тест красный.
+describe('PluginFrame: «Права…» из панели показывает человекочитаемое имя (D2-ф-3)', () => {
+  const WEATHER: PluginInfo = {
+    id: 'local-1/weather', version: '1.0.0', sha256: 'b',
+    requested: [], granted: [], enabled: true, source: 'upload:weather', secrets: [],
+    contributes: { panels: [{ id: 'main', title: 'Погода', entry: 'panel/index.html' }] },
+  };
+  const WEATHER_PANEL: PluginPanelView = { id: 'main', title: 'Погода', entry: 'panel/index.html' };
+
+  // Кнопка меню по тексту подписи (MenuItem — <button> с label внутри)
+  function findButtonByText(root: FNode, needle: string): FNode | null {
+    const stack: FNode[] = [root];
+    while (stack.length) {
+      const n = stack.pop()!;
+      if (n.nodeType === 1 && n.nodeName === 'BUTTON' && textOf(n).includes(needle)) return n;
+      for (const c of n.childNodes) stack.push(c);
+    }
+    return null;
+  }
+
+  it('«Права…» из меню «⋯» → заголовок диалога «Права «Погода»», не «Weather»', async () => {
+    const { container } = await renderFrame(WEATHER, WEATHER_PANEL);
+    const menuBtn = findNodeByAttr(container, 'aria-label', 'Меню панели');
+    expect(menuBtn, 'кнопка «Меню панели» найдена').not.toBeNull();
+    act(() => { (reactProps(menuBtn!) as { onClick?: () => void }).onClick?.(); });
+
+    const item = findButtonByText(container, 'Права…');
+    expect(item, 'пункт «Права…» найден').not.toBeNull();
+    act(() => { (reactProps(item!) as { onClick?: (e: unknown) => void }).onClick?.({}); });
+
+    // Modal — портал в document.body (см. ConsentDialog.test): текст диалога
+    // ищем в теле документа, не в контейнере фрейма.
+    const body = (globalThis as { document: { body: FNode } }).document.body;
+    const all = textNodes(body).join(' ');
+    expect(all, 'диалог открыт с человекочитаемым именем').toContain('Права «Погода»');
+    expect(all, 'техническое имя из id в диалоге не показывается').not.toContain('Weather');
+  });
+});
+
 // R-Финал: в разметке меню «⋯» не должно быть мусорного текста. Раньше комментарий
 // «// …» стоял ВНУТРИ JSX <Menu>, и React выводил его как обычный текст (сборка и lint
 // это не ловили). Теперь — {/* … */}. Открываем меню и проверяем, что в его тексте нет

@@ -21,7 +21,7 @@ import {
 // и DraftCard). Панель — sandbox-iframe без allow-same-origin: хост читает свои
 // computed --c-* (текущая тема) и мапит в --cc-* панели.
 import { readHostTokens } from './panelTokens';
-import { humanizeId, panelDisplayName } from './panelNaming';
+import { panelDisplayName, pluginDisplayName } from './panelNaming';
 // Перехват домена storage на хосте (решение Александра, 6760e1d8 §2/§4): общая
 // реализация с эмулятором панели — hostOps/storage.js, второй копии логики нет.
 import { handleStorageCall, type StorageOp } from './hostOps/storage';
@@ -55,10 +55,13 @@ export function pluginFrameKey(plugin: PluginInfo, panel: PluginPanelView, reloa
 
 // Данные диалога «Права…» в режиме «изменить» из записи установки (та же
 // логика, что в PluginsProjectSection: вклады в DTO бэка нет, required — false).
+// Имя — человекочитаемое (pluginDisplayName: title первой панели, иначе humanizeId),
+// не технический id: третий путь выдачи прав (меню «⋯» панели) должен показывать
+// «Погода», а не «Weather» (D2-ф-3).
 function toConsentData(info: PluginInfo): PluginConsentData {
   return {
     id: info.id,
-    name: humanizeId(info.id),
+    name: pluginDisplayName(info),
     version: info.version,
     path: info.source.startsWith('upload:') ? info.source.slice('upload:'.length) : undefined,
     sha256: info.sha256 ? info.sha256.slice(0, 8) : undefined,
@@ -135,7 +138,9 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
   // часть. Хост раньше писал об этом только в журнал моста; человек об обрезке не узнавал.
   const [clamped, setClamped] = useState(false);
 
-  const name = humanizeId(plugin.id);
+  // Имя плагина для текстов (404, title iframe) — то же, что в списке и диалоге
+  // прав: title первой панели, иначе humanizeId (D2-ф-3).
+  const name = pluginDisplayName(plugin);
   // Заголовок панели: единый вывод (title из манифеста, иначе имя плагина)
   const panelTitle = panelDisplayName(plugin, panel);
 

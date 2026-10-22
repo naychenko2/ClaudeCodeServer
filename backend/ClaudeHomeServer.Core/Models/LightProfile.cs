@@ -37,13 +37,15 @@ public class LightProfile
     // репозитория — неверный контекст, лучше без карты.
     public bool ServerMapFallback { get; set; }
 
-    public static LightProfile FromProvider(LlmProviderConfig p) => new()
+    // model — запись модели провайдера: её свой состав MCP (LlmModelConfig.KeepMcpServers /
+    // KeepMcpTools) перекрывает провайдерский; null или пусто — провайдерский.
+    public static LightProfile FromProvider(LlmProviderConfig p, LlmModelConfig? model = null) => new()
     {
         Source = p.Key,
         BareMode = p.BareMode,
         TrimMcpServers = p.TrimMcpServers,
-        KeepMcpServers = p.KeepMcpServers,
-        KeepMcpTools = p.KeepMcpTools,
+        KeepMcpServers = model?.KeepMcpServers is { Length: > 0 } servers ? servers : p.KeepMcpServers,
+        KeepMcpTools = model?.KeepMcpTools is { Count: > 0 } tools ? tools : p.KeepMcpTools,
         SystemPromptFile = p.SystemPromptFile,
         BareTools = p.BareTools,
         RecallInTurnText = p.RecallInTurnText,

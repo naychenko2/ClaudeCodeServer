@@ -235,7 +235,7 @@ public class LlmProviderRegistry
         var provider = ResolveByModel(model);
         var own = provider is { BareMode: true } or { TrimMcpServers: true } or { RecallInTurnText: true }
             or { KeepMcpTools.Count: > 0 }
-            ? LightProfile.FromProvider(provider!) : null;
+            ? LightProfile.FromProvider(provider!, provider!.FindModel(model)) : null;
         if (forcedBySubstitution && own is not null && provider!.IsLocal) return own;
         if (persona is null) return own;
         return persona.LightContext == true ? own ?? _lightProfile : null;

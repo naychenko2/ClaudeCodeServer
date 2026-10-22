@@ -4,7 +4,9 @@
  * ОДИН раз: ошибка в одной копии — дыра (решение Александра, шаг F1).
  *
  * Прямого доступа к localStorage у модуля нет: хост передаёт store в форме
- * Storage. Префикс ccs.plugin.<ownerId>.<pluginId>. собирает только хост —
+ * Storage или функции-провайдера () => Storage (F-д6: одна точка получения
+ * хранилища и разбора его ошибок — и здесь же, а не в хосте и не в эмуляторе).
+ * Префикс ccs.plugin.<ownerId>.<pluginId>. собирает только хост —
  * модуль берёт ownerId и pluginId сверху, из args их не достаёт. Поля
  * сообщения панели (свои granted/pluginId/ownerId/prefix) на проверку права
  * и префикс не влияют.
@@ -64,18 +66,30 @@ function jsonUnrepresentable(value) {
 /**
  * Один вызов storage.* от панели.
  * op: get|set|remove|keys; args: {key} / {key, value} / {}.
+ * store — объект в форме Storage или провайдер () => Storage. Геттер
+ * window.localStorage бросает SecurityError при отключённом хранилище
+ * (Firefox dom.storage.enabled=false, приватный режим), поэтому провайдер
+ * разрешается внутри этого try: ошибка разбирается здесь, а не в хосте (F-д6).
+ * Функция НИКОГДА не бросает: панель всегда получает result.
  * Возвращает {ok:true, data} или {ok:false, error:{code, message}}.
  */
 export function handleStorageCall(input) {
-  // SecurityError (хранилище отключено/приватный режим) бросает любое обращение к
-  // store — get/remove/keys/length/key(i), не только setItem. Для панели это
-  // unavailable на ЛЮБОЙ операции: иначе исключение уходит в хост, а промис
-  // ccsPlugin.call висит вечно (ревью Глеба R2, инвариант 7).
   try {
-    return handleStorageCallImpl(input);
+    // Одна точка получения хранилища: провайдер здесь же, в том же try.
+    const store = typeof input.store === 'function' ? input.store() : input.store;
+    // SecurityError (хранилище отключено/приватный режим) бросает любое обращение к
+    // store — get/remove/keys/length/key(i), не только setItem. Для панели это
+    // unavailable на ЛЮБОЙ операции: иначе исключение уходит в хост, а промис
+    // ccsPlugin.call висит вечно (ревью Глеба R2, инвариант 7).
+    return handleStorageCallImpl({ ...input, store });
   } catch (e) {
+    // F-д2 (M1), F-д6: два разных случая, и оба видны — здесь, одной точкой.
+    // SecurityError — штатный тихий unavailable для панели, без лога. Всё прочее —
+    // настоящая ошибка: логируем с меткой, чтобы разработчик её видел, и не прячем
+    // под человеческий текст «Хранилище недоступно».
     if (e && e.name === 'SecurityError') return fail('unavailable', 'Хранилище недоступно');
-    throw e;
+    console.error('[plugin storage] внутренняя ошибка хранилища:', e);
+    return fail('unavailable', 'Внутренняя ошибка хранилища');
   }
 }
 

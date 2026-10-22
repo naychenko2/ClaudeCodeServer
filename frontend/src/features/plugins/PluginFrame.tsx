@@ -317,8 +317,10 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
       // не из cc_user_id в хранилище: id есть сразу после входа, независимо от
       // «запомни меня». Пустой id — fail-closed: unavailable, ни одной записи.
       const ownerId = getMeSnapshot().userId ?? '';
-      // Даже само чтение window.localStorage бросает SecurityError при отключённом
-      // хранилище — поэтому получение store внутри try: панель всегда получает result.
+      // F-д6: получение хранилища и разбор его ошибок — одна точка в модуле
+      // hostOps/storage.js: store передаётся ленивым провайдером, и бросающий
+      // геттер window.localStorage (Firefox dom.storage.enabled=false, приватный
+      // режим) встречается try внутри модуля. Панель всегда получает result.
       let res: ReturnType<typeof handleStorageCall>;
       try {
         res = handleStorageCall({
@@ -327,21 +329,15 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
           granted: p.granted,
           ownerId,
           pluginId: p.id,
-          store: localStorage,
+          // globalThis, а не window: в браузере это один объект, а тестовые
+          // подмены (withThrowingLocalStorage, fakeStorage) живут на globalThis.
+          store: () => globalThis.localStorage,
         });
       } catch (e) {
-        // Р2-д (F-д2, M1): два разных случая, один текст их прятал. SecurityError —
-        // хранилище отключено, штатный тихий «unavailable» для панели. Всё прочее —
-        // настоящая ошибка хоста: логируем в консоль, чтобы разработчик её видел,
-        // и не прячем её под текст «Хранилище недоступно».
-        // F-д3 (минор 2): тихая ветка — по name, без instanceof Error:
-        // исключение из другого realm не instanceof Error, но name тот же.
-        if ((e as { name?: string })?.name === 'SecurityError') {
-          res = { ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' } };
-        } else {
-          console.error('[plugin storage] неожиданная ошибка в handleStorageCall:', e);
-          res = { ok: false, error: { code: 'unavailable', message: 'Внутренняя ошибка хранилища' } };
-        }
+        // Защита от «модуль всё-таки бросил»: только в лог, текст для панели —
+        // модульный, нового здесь не придумывается.
+        console.error('[plugin storage] handleStorageCall unexpectedly threw:', e);
+        res = { ok: false, error: { code: 'unavailable', message: 'Внутренняя ошибка хранилища' } };
       }
       if (res.ok) {
         postToFrame(buildResultMessage(msg.id, true, res.data));

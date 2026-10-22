@@ -396,10 +396,67 @@ describe('ошибки хранилища (инв. 7)', () => {
     warn.mockRestore();
   });
 
-  it('не-SecurityError пробрасывается как раньше', () => {
+  // F-д6: handleStorageCall НИКОГДА не бросает — настоящая ошибка логируется здесь,
+  // а не уходит в хост. Мутация (убрать console.error или вернуть throw) → красный.
+  it('не-SecurityError от store → «Внутренняя ошибка хранилища», без исключения', () => {
     const store = new MapStore();
     store.getItem = () => { throw new Error('boom'); };
-    expect(() => call(store, 'get', { key: 'a' })).toThrow('boom');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = call(store, 'get', { key: 'a' });
+    spy.mockRestore();
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('unavailable');
+    expect(r.error.message).toBe('Внутренняя ошибка хранилища');
+  });
+});
+
+// --- F-д6: получение хранилища — одна точка в модуле ---
+
+describe('провайдер хранилища (F-д6)', () => {
+  const sec = () => Object.assign(new Error('sandboxed'), { name: 'SecurityError' });
+  const input = (store: unknown) => ({
+    op: 'get', args: { key: 'a' }, granted: ['storage'], ownerId: OWNER, pluginId: PLUGIN, store,
+  } as never);
+
+  it('провайдер бросит SecurityError → тихий unavailable, ни одной записи, без лога', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = handleStorageCall(input(() => { throw sec(); }));
+    const logged = spy.mock.calls.some(([first]) => String(first).includes('[plugin storage]'));
+    spy.mockRestore();
+    expect(r).toEqual({ ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' } });
+    expect(logged, 'SecurityError — тихий: console.error с меткой не зовётся').toBe(false);
+  });
+
+  it('провайдер бросит TypeError → unavailable «Внутренняя ошибка хранилища» и лог с меткой', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = handleStorageCall(input(() => { throw new TypeError('bad provider'); }));
+    const logged = spy.mock.calls.some(([first]) => String(first).includes('[plugin storage]'));
+    spy.mockRestore();
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('unavailable');
+    expect(r.error.message).toBe('Внутренняя ошибка хранилища');
+    expect(logged, 'console.error вызван с меткой [plugin storage]').toBe(true);
+  });
+
+  it('провайдер вернёт store: обычный путь работает ровно как с объектом (регрессия)', () => {
+    const store = new MapStore();
+    const set = handleStorageCall({
+      op: 'set', args: { key: 'a', value: 1 }, granted: ['storage'], ownerId: OWNER, pluginId: PLUGIN, store: () => store,
+    } as never);
+    expect(set.ok).toBe(true);
+    expect(store.getItem(keyOf('a'))).toBe('1');
+    const get = handleStorageCall(input(() => store));
+    expect(get.ok).toBe(true);
+    expect(get.data.value).toBe(1);
+  });
+
+  // «Никогда не бросает» — при любом входе, даже бессмысленном.
+  it('store не функция и не хранилище → unavailable без исключения', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const r = handleStorageCall(input(5));
+    spy.mockRestore();
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('unavailable');
   });
 });
 

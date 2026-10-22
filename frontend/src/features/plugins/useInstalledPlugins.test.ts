@@ -47,8 +47,15 @@ const store = vi.hoisted(() => ({
     railOrder: [],
   },
 }));
+// refresh() (R-Финал-2) читает раскладку не-хуковым путём: ops.forgetPlugin + getZones
+// (use() — хук, после await в refresh() дал бы «Invalid hook call»). use() оставлен для
+// хука-читателя; store — общий источник для обоих.
 vi.mock('../../pages/workspace/panelStackState', () => ({
-  wsPanels: { use: () => store },
+  wsPanels: {
+    use: () => store,
+    ops: { forgetPlugin: store.forgetPlugin },
+    getZones: () => store.zones,
+  },
 }));
 
 // Стор «установленные плагины» (pluginStore) — шпион

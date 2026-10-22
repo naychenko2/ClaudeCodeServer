@@ -101,15 +101,16 @@ async function refresh(e: Entry) {
   try {
     const list = await api.plugins.list();
     if (e.seq === seq) {
+      // Не-хуковый путь (ops/getZones): refresh() идёт ПОСЛЕ await, т.е. вне рендера,
+      // где wsPanels.use() (useSyncExternalStore) дал бы «Invalid hook call».
       // Сборка мусора по диффу УСПЕШНОЙ загрузки: плагин был в последней, а в новой
       // его нет — его ключи снимаем из раскладки. Только по УСПЕШНОМУ ответу: упавший
       // GET (ошибка/таймаут) ничего не выносит.
-      for (const p of e.lastList) if (!list.some(n => n.id === p.id)) wsPanels.use().forgetPlugin(p.id);
+      for (const p of e.lastList) if (!list.some(n => n.id === p.id)) wsPanels.ops.forgetPlugin(p.id);
       // Итерация 2: orphan-ключи. Плагин удалён вне текущей сессии (другое окно,
       // другое устройство) и никогда не был в lastList — дифф его не видит. Сканируем
       // раскладку: ключ plugin:* чьё id не в текущем списке — сносим.
-      const store = wsPanels.use();
-      const zones = store.zones;
+      const zones = wsPanels.getZones();
       const validIds = new Set(list.map(p => p.id));
       const allKeys = [
         ...zones.left.layout.flat(),
@@ -130,7 +131,7 @@ async function refresh(e: Entry) {
         const pluginId = k.slice(7, lastColon);
         if (pluginId && !validIds.has(pluginId) && !seen.has(pluginId)) {
           seen.add(pluginId);
-          store.forgetPlugin(pluginId);
+          wsPanels.ops.forgetPlugin(pluginId);
         }
       }
       e.lastList = list;

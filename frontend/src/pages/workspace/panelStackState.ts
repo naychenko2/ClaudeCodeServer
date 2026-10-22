@@ -13,7 +13,7 @@
 // чтобы откат кода вернул прежнее состояние.
 // Стор параметризован неймспейсом (createPanelZones): воркспейс и раздел «Чаты»
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
-import { useCallback, useSyncExternalStore } from 'react';
+import { useSyncExternalStore } from 'react';
 import { RAIL_GROUPS, isPluginPanelKey, keyAllowed, migrateLegacyKey, panelHome, type PanelKey, type Zone } from './panelCatalog';
 
 // Реестр панелей (ключи, мета, домашние зоны) — соседний panelCatalog.ts.
@@ -1039,7 +1039,13 @@ export interface PanelZonesApi {
   zoneKeys: Partial<Record<Zone, readonly PanelKey[]>>;
 }
 
-export type PanelZonesStore = { use: () => PanelZonesApi };
+export type PanelZonesStore = {
+  use: () => PanelZonesApi;
+  // Не-хуковый путь (refresh() вне рендера, где useSyncExternalStore дал бы
+  // «Invalid hook call»): те же операции, что в use(), плюс снимок раскладки.
+  ops: Omit<PanelZonesApi, 'zones' | 'zoneKeys'>;
+  getZones: () => PanelZones;
+};
 
 const panelZoneChannels = new Map<PanelZonesStore, { listeners: Set<() => void>; snapshot: PanelZones }>();
 
@@ -1193,86 +1199,90 @@ function createPanelZones(ns: string, opts?: {
     }
   }
 
-  function usePanelZones(): PanelZonesApi {
-    const zones = useSyncExternalStore(subscribe, () => _zones);
-    const zoneKeys = useSyncExternalStore(subscribeZoneKeys, () => _zoneKeys);
-
-    const toggle = useCallback((zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => {
+  // Операции стора — ОДИН источник: их делят хук use() (компоненты) и не-хуковый
+  // путь (refresh() вне рендера, где useSyncExternalStore дал бы «Invalid hook call»).
+  // Создаются ОДИН раз на инстанс (не на каждый mount/рендер): все закрывают общий
+  // замыкание _zones, поэтому и хук, и прямой вызов читают/пишут одно состояние.
+  // useMemo не нужен — функции стабильны по построению; use() возвращает новый
+  // объект на каждый рендер, но стабильны именно функции, а не обёртка (React это
+  // допускает: перерисовка зависит от снапшотов zones/zoneKeys, а не от ссылок ops).
+  const ops: Omit<PanelZonesApi, 'zones' | 'zoneKeys'> = {
+    toggle: (zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => {
       ensureWeight(k);
       const was = zoneOf(_zones, k);
       const next = togglePanelIn(_zones, zone, k, cap, railSeq);
       // Toggle и открывает, и закрывает: соседку зовём назад только во второй ветке
       commit(closing(next, was && !zoneOf(next, k) ? was : null));
-    }, []);
+    },
 
     // Принудительное открытие (placeHere): идемпотентно — если панель уже в зоне,
     // останется; из чужой зоны уйдёт (инвариант «панель в одной зоне»).
-    const openIn = useCallback((zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => {
+    openIn: (zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => {
       ensureWeight(k);
       commit(openPanelIn(_zones, zone, k, cap, railSeq));
-    }, []);
+    },
 
-    const close = useCallback((k: PanelKey) => { commit(closing(closePanel(_zones, k), zoneOf(_zones, k))); }, []);
+    close: (k: PanelKey) => { commit(closing(closePanel(_zones, k), zoneOf(_zones, k))); },
 
-    const closeTo = useCallback((zone: Zone, k: PanelKey) => { commit(closing(closePanelTo(_zones, zone, k), zoneOf(_zones, k))); }, []);
+    closeTo: (zone: Zone, k: PanelKey) => { commit(closing(closePanelTo(_zones, zone, k), zoneOf(_zones, k))); },
 
     // Убрать кнопку в ящик — тоже закрытие панели, сторона освобождается так же
-    const tuck = useCallback((zone: Zone, k: PanelKey) => { commit(closing(tuckPanel(_zones, zone, k), zoneOf(_zones, k))); }, []);
+    tuck: (zone: Zone, k: PanelKey) => { commit(closing(tuckPanel(_zones, zone, k), zoneOf(_zones, k))); },
 
-    const untuck = useCallback((zone: Zone, k: PanelKey) => { commit(untuckPanel(_zones, zone, k)); }, []);
+    untuck: (zone: Zone, k: PanelKey) => { commit(untuckPanel(_zones, zone, k)); },
 
-    const reorder = useCallback((keys: readonly PanelKey[], moved: PanelKey, before: PanelKey | null) => {
+    reorder: (keys: readonly PanelKey[], moved: PanelKey, before: PanelKey | null) => {
       const next = reorderRail(_zones, keys, moved, before);
       // Порядок не изменился — операция вернула то же состояние, писать нечего
       if (next !== _zones) commit(next);
-    }, []);
+    },
 
-    const evict = useCallback((zone: Zone, allowed: readonly PanelKey[]) => {
+    evict: (zone: Zone, allowed: readonly PanelKey[]) => {
       // null — выселять нечего: молчим, чтобы не будить подписчиков на каждый рендер
       const next = evictForeign(_zones, zone, allowed);
       if (next) commit(next);
-    }, []);
+    },
 
     // S7: плагин удалён из живого списка — его ключи (layout/stash/home/weights/
     // railOrder/tucked) снимаем. Без ключей (панель не открывали) commit не пишем:
     // иначе каждый uninstall дёргал бы localStorage и подписчиков зря.
-    const forgetPlugin = useCallback((pluginId: string) => {
+    forgetPlugin: (pluginId: string) => {
       if (!hasPluginKeys(_zones, pluginId)) return;
       commit(forgetPluginKeys(_zones, pluginId));
-    }, []);
+    },
 
-    const swapWith = useCallback((a: PanelKey, b: PanelKey) => {
+    swapWith: (a: PanelKey, b: PanelKey) => {
       // Вес — высота СЛОТА, а не панели: вместе с местами меняем и веса,
       // иначе панель утащила бы свою высоту и раскладка «прыгнула» бы
       const wa = _zones.weights[a] ?? 1;
       const wb = _zones.weights[b] ?? 1;
       const swapped = swapAcross(_zones, a, b);
       commit({ ...swapped, weights: { ...swapped.weights, [a]: wb, [b]: wa } });
-    }, []);
+    },
 
     // Дроп из рельсы на открытую панель: гость занимает её слот вместе с высотой —
     // вес привязан к СЛОТУ, а не к панели, поэтому переезжает к гостю (иначе
     // раскладка «прыгнула» бы на чужой высоте). Хозяин уходит закрытым, свой
     // прежний вес не теряет: откроется — вернётся с ним.
-    const replaceWith = useCallback((guest: PanelKey, host: PanelKey) => {
+    replaceWith: (guest: PanelKey, host: PanelKey) => {
       const wh = _zones.weights[host] ?? 1;
       const next = replacePanelWith(_zones, guest, host);
       commit({ ...next, weights: { ...next.weights, [guest]: wh } });
-    }, []);
+    },
 
     // Дроп в направляющую: перенос открытой панели либо открытие закрытой —
     // её тащат из рельсы, и место дропа и есть выбранное для неё место
-    const moveAt = useCallback((k: PanelKey, zone: Zone, colIdx: number, rowIdx: number) => {
+    moveAt: (k: PanelKey, zone: Zone, colIdx: number, rowIdx: number) => {
       ensureWeight(k);
       commit(moveAcrossAt(_zones, k, zone, colIdx, rowIdx));
-    }, []);
+    },
 
-    const moveToNewColumn = useCallback((k: PanelKey, zone: Zone, insertIdx: number) => {
+    moveToNewColumn: (k: PanelKey, zone: Zone, insertIdx: number) => {
       ensureWeight(k);
       commit(moveAcrossToNewColumn(_zones, k, zone, insertIdx));
-    }, []);
+    },
 
-    const setMode = useCallback((zone: Zone, m: PanelMode) => {
+    setMode: (zone: Zone, m: PanelMode) => {
       if (_zones[zone].mode === m) return;
       // Вход в solo СХЛОПЫВАЕТ раскладку зоны до одной панели (первой открытой) —
       // остальные реально закрываются; возврат в multi продолжает с текущего
@@ -1283,14 +1293,14 @@ function createPanelZones(ns: string, opts?: {
         mode: m,
         layout: m === 'solo' ? (first ? [[first]] : []) : z.layout,
       })));
-    }, []);
+    },
 
-    const setWidth = useCallback((zone: Zone, n: number) => {
+    setWidth: (zone: Zone, n: number) => {
       commit(withZone(_zones, zone, z => ({ ...z, width: Math.min(COL_MAX, Math.max(COL_MIN, Math.round(n))) })));
-    }, []);
+    },
 
     // Свернуть все панели зоны (набор прячется в stash) / вернуть его как был
-    const toggleCollapsed = useCallback((zone: Zone) => {
+    toggleCollapsed: (zone: Zone) => {
       const cur = _zones[zone];
       // Разворот stash — это возврат набора стороны, активность логически уходит
       // сюда: при exclusive отмечаем зону активной (свернёт противоположную).
@@ -1301,53 +1311,53 @@ function createPanelZones(ns: string, opts?: {
         return z;
       });
       commit(unfolding && _zones.exclusive ? markActiveSide(folded, zone) : folded);
-    }, []);
+    },
 
-    const setWeights = useCallback((next: Partial<Record<PanelKey, number>>) => {
+    setWeights: (next: Partial<Record<PanelKey, number>>) => {
       // Ресайз высот пишем БЕЗ нормализации: она бы тут же вернула перетянутую
       // границу к равным долям
       _zones = { ..._zones, weights: { ..._zones.weights, ...next } };
       persist();
       emit();
-    }, []);
+    },
 
     // Ресайз ширины между колонками: пишем массив долей напрямую, мимо commit —
     // как у весов, нормализацию длины делает commit при смене раскладки, а на
     // каждом кадре ресайза она не нужна (число колонок не меняется)
-    const setColFlex = useCallback((zone: Zone, next: number[]) => {
+    setColFlex: (zone: Zone, next: number[]) => {
       _zones = withZone(_zones, zone, z => ({ ...z, colFlex: next }));
       persist();
       emit();
-    }, []);
+    },
 
     // Эксклюзив сторон: runtime-флаг, мимо persist — в localStorage не пишем.
     // emit нужен, чтобы PanelZone перерисовался и compact-эффект среагировал.
-    const setExclusive = useCallback((on: boolean) => {
+    setExclusive: (on: boolean) => {
       if (_zones.exclusive === on) return;
       _zones = { ..._zones, exclusive: on };
       emit();
-    }, []);
+    },
 
     // Отметить сторону активной — при exclusive свернёт противоположную в stash.
-    const markActive = useCallback((side: Zone) => { commit(markActiveSide(_zones, side)); }, []);
+    markActive: (side: Zone) => { commit(markActiveSide(_zones, side)); },
 
     // Сигнал «закрыть compact-дроверы обеих зон» — счётчик версий, каждая PanelZone
     // подписана эффектом и при изменении чистит свой локальный tabletPanels. Мимо
     // commit: ничего в раскладке не меняется, persist не нужен (см. persist()).
-    const closeCompactStack = useCallback(() => {
+    closeCompactStack: () => {
       _zones = { ..._zones, closeCompactSignal: _zones.closeCompactSignal + 1 };
       emit();
-    }, []);
+    },
 
     // Сторона освободилась — активность переезжает к соседке, и та по счётчику
     // разворачивает свой compact-стек. Мимо commit по тем же основаниям, что и
     // closeCompactStack: раскладка не меняется, персистить нечего.
-    const releaseCompactSide = useCallback((side: Zone) => {
+    releaseCompactSide: (side: Zone) => {
       if (!_zones.exclusive) return;
       const other: Zone = side === 'left' ? 'right' : 'left';
       _zones = { ..._zones, activeSide: other, restoreCompactSignal: _zones.restoreCompactSignal + 1 };
       emit();
-    }, []);
+    },
 
     // Перенос панели в соседнюю зону. Открытую отдаём правилу размещения ЗОНЫ-ПРИЁМНИКА
     // (тот же путь, что у дропа на её рельсу и у внешнего показа): вместимость колонки
@@ -1355,7 +1365,7 @@ function createPanelZones(ns: string, opts?: {
     // нет — фолбэк тем же правилом по каноническому порядку, что и у revealPanel.
     // Закрытую переносить нечего: у неё переезжает только кнопка (home), а спрятанная
     // остаётся спрятанной — уже в ящике той рельсы.
-    const moveTo = useCallback((zone: Zone, k: PanelKey) => {
+    moveTo: (zone: Zone, k: PanelKey) => {
       const at = zoneOf(_zones, k);
       if (at === zone) return;
       if (at === null) {
@@ -1368,9 +1378,9 @@ function createPanelZones(ns: string, opts?: {
       if (open) { open(k); return; }
       ensureWeight(k);
       commit(markActiveSide(openPanelIn(_zones, zone, k), zone));
-    }, []);
+    },
 
-    const registerZoneKeys = useCallback((zone: Zone, keys: readonly PanelKey[]) => {
+    registerZoneKeys: (zone: Zone, keys: readonly PanelKey[]) => {
       setZoneKeys({ ..._zoneKeys, [zone]: keys });
       // Снимаем только СВОЙ набор — по той же причине, что и у открывателя: зона
       // могла перемонтироваться, и её место уже занял новый экземпляр.
@@ -1379,16 +1389,16 @@ function createPanelZones(ns: string, opts?: {
         const { [zone]: _gone, ...rest } = _zoneKeys;
         setZoneKeys(rest);
       };
-    }, []);
+    },
 
-    const registerOpener = useCallback((zone: Zone, open: (k: PanelKey) => void) => {
+    registerOpener: (zone: Zone, open: (k: PanelKey) => void) => {
       openers.set(zone, open);
       // Снимаем только СВОЙ открыватель: зона могла перемонтироваться, и её место
       // уже занял новый — стереть его отпиской старого значило бы обезоружить стор.
       return () => { if (openers.get(zone) === open) openers.delete(zone); };
-    }, []);
+    },
 
-    const reveal = useCallback((k: PanelKey) => {
+    reveal: (k: PanelKey) => {
       if (zoneOf(_zones, k)) return true;
       const home = homeOf(_zones, k);
       // Открывает ЗОНА — правило размещения одно на все входы (клик по кнопке,
@@ -1401,12 +1411,16 @@ function createPanelZones(ns: string, opts?: {
       // же отмечаем сторону активной (placeHere эту ветку не покрывает).
       commit(markActiveSide(revealPanel(_zones, k).zones, home));
       return false;
-    }, []);
+    },
+  };
 
-    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, forgetPlugin, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, releaseCompactSide, reveal, registerOpener, moveTo, registerZoneKeys, zoneKeys };
+  function usePanelZones(): PanelZonesApi {
+    const zones = useSyncExternalStore(subscribe, () => _zones);
+    const zoneKeys = useSyncExternalStore(subscribeZoneKeys, () => _zoneKeys);
+    return { zones, zoneKeys, ...ops };
   }
 
-  const api = { use: usePanelZones };
+  const api: PanelZonesStore = { use: usePanelZones, ops, getZones: () => _zones };
   // Канал внешней подписки (subscribePanelZones): снапшот сразу, не дожидаясь
   // первого emit — читающий может спросить раньше любого рендера
   panelZoneChannels.set(api, { listeners: new Set(), snapshot: _zones });

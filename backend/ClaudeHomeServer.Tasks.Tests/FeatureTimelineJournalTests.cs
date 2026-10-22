@@ -334,7 +334,40 @@ public class FeatureTimelineJournalTests
             + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
     }
 
-    // ── 3d. Эпизоды, начавшиеся за пределами окна, не считаются (замечание 3 ревью Глеба) ────
+    // ── 3d. device_wait на закрытой фиче: longestWait обрезается по `to` (находка 2 ревью Глеба) ──
+
+    // Фича закрыта в 08:30 (to = 08:30), now = 20:00. device_wait 08:00 БЕЗ device_wait_cleared:
+    // интервал sweep'ом режется к [08:00, 08:30] = 30 мин. LongestWait обязан обрезаться тем же
+    // `to` (30), а не тянуться до now (720): иначе «самое длинное ожидание» длиннее всего окна.
+    // Обрезка dEnd тестом не покрыта — эта проба её ловит: мутация «снять обрезку у dEnd» →
+    // LongestWait = 720 ≠ 30 → краснеет.
+    [Fact]
+    public void Build_ЗакрытаяФича_DeviceWait_LongestWaitОбрезанПоTo()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var closedAt = new DateTime(2026, 10, 1, 8, 30, 0);
+        var epic = Epic("epic");
+        epic.Status = TaskItemStatus.Done;
+        epic.CompletedAt = closedAt;
+        var s1 = Child("s1", "epic");
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("device_wait", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "s1"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
+
+        tl.To.Should().Be(closedAt);
+        tl.Totals.ElapsedMinutes.Should().Be(30);
+        // Ожидание по окну [08:00, 08:30] = 30 мин, посчитано один раз.
+        tl.Totals.WaitingMinutes.Should().Be(30);
+        tl.Totals.WaitingCount.Should().Be(1);
+        // Самое длинное ожидание = 30 (обрезано по to), НЕ 720 (до now).
+        tl.Totals.LongestWaitMinutes.Should().Be(30);
+        tl.Totals.LongestWaitMinutes.Should().BeLessThanOrEqualTo(tl.Totals.ElapsedMinutes);
+    }
+
+    // ── 3e. Эпизоды, начавшиеся за пределами окна, не считаются (замечание 3 ревью Глеба) ────
 
     // Ожидание, начавшееся после `to`, даёт в окне ноль минут: прежнее `e.At >= from` пропускало
     // события за окном → WaitingCount = 1 при нулевых минутах. Считаются только эпизоды с

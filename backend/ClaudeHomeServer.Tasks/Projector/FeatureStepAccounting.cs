@@ -54,7 +54,10 @@ internal static class FeatureStepAccounting
             foreach (var ps in p.PlanSteps ?? [])
             {
                 if (ps is null || string.IsNullOrWhiteSpace(ps.StepRef)) continue;
-                if (planned.TryAdd(ps.StepRef, ps)) plannedOrder.Add(ps.StepRef);
+                // Ключ шага плана тримится так же, как KeyOf (замечание 1 ревью Глеба): без трима
+                // «Б1 » в плане и «Б1» в шаге — два разных ключа, шаг считается дважды.
+                var key = ps.StepRef.Trim();
+                if (planned.TryAdd(key, ps)) plannedOrder.Add(key);
             }
         // Строки — фронтовый контракт (featureProgress.ts): pending — плана нет, partial — план без
         // planSteps, cut — план разобран на шаги; done выводится ниже, когда принято всё.

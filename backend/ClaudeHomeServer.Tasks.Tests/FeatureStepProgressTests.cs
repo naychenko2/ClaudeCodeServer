@@ -304,6 +304,27 @@ public class FeatureStepProgressTests
         run.StepChains.Single().TaskIds.Should().Equal("s");
     }
 
+    // Трим кода шага плана (замечание 1 ревью Глеба): KeyOf тримит код шага, а план добавлялся
+    // без трима — «Б1 » в плане и «Б1» в шаге дали два ключа (Total=2, NotCreated=1). Мутация
+    // «убрать трим у плана» краснит оба теста.
+    [Fact]
+    public void ТримКодаШагаПлана_ПробелВПлане_ОдинШаг()
+    {
+        var run = Run(Feature(), Plan("p", 0, ("Б1 ", "back")), Step("s", "Б1", 1));
+
+        run.StepProgress.Total.Should().Be(1, "«Б1 » в плане и «Б1» в шаге — один шаг");
+        run.StepProgress.NotCreated.Should().Be(0);
+    }
+
+    [Fact]
+    public void ТримКодаШага_ПробелУШага_ПланБезПробела_ОдинШаг()
+    {
+        var run = Run(Feature(), Plan("p", 0, ("Б1", "back")), Step("s", "Б1 ", 1));
+
+        run.StepProgress.Total.Should().Be(1, "пробел у шага не создаёт отдельный шаг");
+        run.StepProgress.NotCreated.Should().Be(0);
+    }
+
     [Fact]
     public void ДоработкаВДругомРегистре_Привязана_КаноничнымКлючом()
     {

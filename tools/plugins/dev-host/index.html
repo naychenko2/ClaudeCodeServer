@@ -37,6 +37,8 @@
   .status { font-size: 11px; color: var(--c-text-muted); font-family: monospace; }
   .stage { padding: 16px; }
   .card { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 8px; overflow: hidden; }
+  /* UA-рамка iframe (2 px) съедает ширину кадра — в хосте border:'none'. */
+  .card iframe { border: 0; }
   .notice { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--c-bg-selected); border-bottom: 1px solid var(--c-warning); color: var(--c-warning-text); font-size: 12px; }
   /* display:flex базового правила перебивает UA-стиль [hidden]; скрытие должно побеждать. */
   .notice[hidden] { display: none; }
@@ -427,8 +429,18 @@ function setTheme(theme) {
 
 function applyWidth() {
   const card = document.getElementById('card');
-  if (cfg.width === 'rail') { card.style.maxWidth = '420px'; }
-  else { card.style.width = cfg.width + 'px'; }
+  const frame = document.getElementById('frame');
+  if (cfg.width === 'rail') {
+    // Как в хосте (PluginFrame.tsx): кадр тянется на всю ширину карточки.
+    card.style.maxWidth = '420px';
+    frame.style.width = '100%';
+  } else {
+    // width= задаёт ширину панели (кадра), а не карточки: кадр ставим явно,
+    // карточку расширяем на рамку (2 px) и отступы .scroll (24 px), чтобы кадр
+    // не вылезал за неё и внешняя прокрутка не появлялась.
+    frame.style.width = cfg.width + 'px';
+    card.style.width = (Number(cfg.width) + 26) + 'px';
+  }
 }
 
 function updateStatus() {

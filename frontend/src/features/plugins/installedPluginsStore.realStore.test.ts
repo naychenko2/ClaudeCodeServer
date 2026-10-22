@@ -52,8 +52,14 @@ const P1: PluginInfo = {
   contributes: { panels: [{ id: 'main', title: 'One', entry: 'panel/index.html' }] },
 };
 
+// Значение хука нужно достать из рендера в тест. Присваивание внешней
+// переменной во время рендера — форма побочного эффекта, и правила
+// react-hooks (globals/immutability) справедливо на него ругаются. Здесь это
+// осознанный приём теста: компонент Probe — единственный источник значения,
+// а сброс переменной делается в beforeEach.
 let probe: ReturnType<typeof useInstalledPlugins> | null = null;
 function Probe({ enabled }: { enabled: boolean }) {
+  // eslint-disable-next-line react-hooks/globals -- тест достаёт значение хука из рендера
   probe = useInstalledPlugins('proj-1', enabled);
   return null;
 }
@@ -69,7 +75,6 @@ async function renderProbe(enabled = true) {
 
 // Ключ плагина в раскладке: plugin:{publisher}/{slug}:{panelId}.
 const ORPHAN_KEY = 'plugin:acme/orphan:main' as const;
-const ORPHAN_ID = 'acme/orphan';
 
 function layoutHas(key: string): boolean {
   const z = wsPanels.getZones();

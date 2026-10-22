@@ -245,9 +245,12 @@ function logLine(text) {
 }
 
 function showDenied(message) {
+  // Ключ достаём так же, как фронтовый deniedKeyOf (bridge.ts): только из формата
+  // «Нет права: {key}»; формат не совпал — показываем сырой текст отказа как есть.
   const prefix = 'Нет права: ';
-  const key = message.startsWith(prefix) ? message.slice(prefix.length) : message;
-  notice.textContent = 'Нет права ' + key;
+  const i = message.indexOf(prefix);
+  const key = i < 0 ? '' : message.slice(i + prefix.length).trim();
+  notice.textContent = key ? 'Нет права ' + key : message;
   notice.hidden = false;
 }
 
@@ -356,24 +359,28 @@ async function handleCall(id, op, args) {
       // Текст — как у сервера (PluginBridge.DispatchAsync).
       res = { ok: false, error: { code: 'unavailable', message: 'Обработчик не зарегистрирован: ' + String(op).split('.')[0] } };
     } else {
-      // Отказ по праву и тексты — ровно как у сервера (PluginBridge / PluginNetProxy).
+      // Отказ по праву и тексты — ровно как у сервера (PluginBridge.DeniedError /
+      // PluginNetProxy): сначала мост проверяет права (до валидации url в обработчике),
+      // при отказе называет хост из url аргументов, а если его не вытащить — текст по домену.
       const url = typeof args.url === 'string' ? args.url : '';
-      if (!url) {
+      const granted = cfg.grant.map(h => 'net:' + h);
+      if (granted.length === 0) {
+        // Нет ни одного net:права — отказ на уровне моста: хост из url вызова;
+        // url нечитаем — «Нет права на сетевые запросы» (не «Нет права: net:»).
+        const host = hostOf(url);
+        res = host
+          ? { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } }
+          : { ok: false, error: { code: 'denied', message: 'Нет права на сетевые запросы' } };
+      } else if (!url) {
         res = { ok: false, error: { code: 'invalid', message: 'Не задан url' } };
       } else if (!/^https?:\/\//i.test(url)) {
         res = { ok: false, error: { code: 'invalid', message: 'Некорректный url: ' + url } };
       } else {
-        const granted = cfg.grant.map(h => 'net:' + h);
-        if (granted.length === 0) {
-          // Нет ни одного net:права — отказ на уровне моста (PluginBridge): «Нет права: net:».
-          res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' } };
-        } else {
-          // Точный хост из granted — как PluginNetProxy: право net:{host} должно
-          // совпадать с хостом url (порт из права не несём).
-          const host = hostOf(url);
-          if (!granted.some(g => g.slice(4).split(':')[0] === host)) {
-            res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } };
-          }
+        // Точный хост из granted — как PluginNetProxy: право net:{host} должно
+        // совпадать с хостом url (порт из права не несём).
+        const host = hostOf(url);
+        if (!granted.some(g => g.slice(4).split(':')[0] === host)) {
+          res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } };
         }
       }
 

@@ -40,7 +40,8 @@ http://localhost:8000/tools/plugins/dev-host/index.html?panel=tools/plugins/weat
 - проверка сообщения моста: `source === 'ccs-plugin'`, `v === 1`, origin `'null'`
   (sandbox без `allow-same-origin`), сообщения только из окна панели;
 - права `net:{host}` по точному хосту; тексты отказов — дословно из сервера
-  (`PluginBridge` / `PluginNetProxy`): «Нет права: net:», «Нет права: net:{host}»,
+  (`PluginBridge.DeniedError` / `PluginNetProxy`): «Нет права: net:{host}» (хост из
+  url вызова), «Нет права на сетевые запросы» (когда хост из аргументов не вытащить),
   «Таймаут запроса», «Превышено число запросов на плагин в минуту»,
   «Обработчик не зарегистрирован: {domain}»;
 - гейты вызовов: не более 8 одновременных («Слишком много одновременных вызовов»),
@@ -98,7 +99,8 @@ http://localhost:8000/tools/plugins/dev-host/index.html?panel=tools/plugins/weat
    `ccsPlugin.call('net.fetch', {url:'https://geocoding-api.open-meteo.com/v1/search?name=%D0%AF%D1%80%D1%86&count=10&language=ru&format=json'})`
    при `grant=api.open-meteo.com` (право на геокодер не выдано) даёт `denied` с текстом
    `Нет права: net:geocoding-api.open-meteo.com` и плашку «Нет права …» над панелью;
-   при пустом `grant=` — `Нет права: net:` (отказ на уровне моста, без хоста).
+   при пустом `grant=` — `Нет права: net:{host}` (мост называет хост из url вызова),
+   а если url нечитаем — `Нет права на сетевые запросы`.
 2. **Данные.** С `fixtures=` вызовы возвращают фикстуры без сети; без него —
    реальный `fetch` хоста без куков и токена origin.
 3. **Сеть закрыта.** Прямой `fetch(...)` из консоли фрейма падает: CSP панели —

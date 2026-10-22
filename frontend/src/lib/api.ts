@@ -2363,7 +2363,7 @@ export const api = {
     // смене состояния — открывший список позже старта иначе о нём не узнает
     agentsPresence: () => request<{ agents: string[]; commands: string[] }>('/chats/agents-presence'),
     get: (id: string) => request<Session>(`/chats/${id}`),
-    create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
+    create: (mode?: string, resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
       request<Session>('/chats', {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
@@ -2390,7 +2390,7 @@ export const api = {
       request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),
     // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
     // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
-    createGroup: (personaIds: string[], mode = 'auto', name?: string) =>
+    createGroup: (personaIds: string[], mode?: string, name?: string) =>
       request<Session>('/chats/group', {
         method: 'POST',
         body: JSON.stringify({ personaIds, mode, name }),

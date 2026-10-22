@@ -195,7 +195,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     if (talking) return;
     setTalking(true);
     try {
-      const session = await api.personas.createChat(p.id, { mode: 'auto' });
+      const session = await api.personas.createChat(p.id, {});
       if (session.projectId) {
         const proj = projects.find(x => x.id === session.projectId);
         if (!proj) { showToast('Персоны', 'Проект персоны недоступен.'); return; }

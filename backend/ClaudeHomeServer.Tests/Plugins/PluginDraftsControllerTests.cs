@@ -89,13 +89,21 @@ public class PluginDraftsControllerTests : IDisposable
     // Пакет в каталоге черновика владельца (draft:<slug>): манифест ccs-plugin.json
     // (id/version/permissions) + нативный .claude-plugin/plugin.json (R10-1, name = slug)
     // + один навык (skills/a/SKILL.md — в allow-list валидатора). Возвращает метку источника (draft:<slug>).
+    // panelTitle (D2): добавить панель с title в contributes — для теста человекочитаемого
+    // имени пакета; файл panel/index.html создаётся (валидатор требует существование entry).
     private string CreateDraftPackage(string ownerId, string id, string version, List<string> requested,
-        List<(string Name, bool Required)>? secrets = null)
+        List<(string Name, bool Required)>? secrets = null, string? panelTitle = null)
     {
         var slug = id.Contains('/') ? id[(id.LastIndexOf('/') + 1)..] : id;
         var root = _store.DraftDir(ownerId, slug);
         Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
         File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+
+        if (panelTitle is not null)
+        {
+            Directory.CreateDirectory(Path.Combine(root, "panel"));
+            File.WriteAllText(Path.Combine(root, "panel", "index.html"), "<html><body>" + panelTitle + "</body></html>");
+        }
 
         var manifest = new
         {
@@ -105,6 +113,9 @@ public class PluginDraftsControllerTests : IDisposable
             contributes = new
             {
                 skills = new[] { "skills/a" },
+                panels = panelTitle is null
+                    ? null
+                    : new[] { new { id = "main", slot = "sidebar", entry = "panel/index.html", title = panelTitle } },
                 requires = secrets is null
                     ? null
                     : new { secrets = secrets.Select(s => new { name = s.Item1, required = s.Item2 }) },
@@ -515,6 +526,51 @@ public class PluginDraftsControllerTests : IDisposable
         var bad = (BadRequestObjectResult)res;
         bad.StatusCode.Should().Be(400);
         JsonSerializer.Serialize(bad.Value).Should().Contain("problems", "список проблем в ответе");
+    }
+
+    // --- Accept: человекочитаемое имя пакета (D2, находка 4c903d8e) ---
+    // Имя — title первой панели манифеста черновика (вывод — PluginDisplayName.Of, единственная
+    // точка на бэке); панелей нет → null, фронт остаётся на fallback humanizeId. Мутация:
+    // убрать строку displayName в ответе — оба теста красные.
+
+    [Fact]
+    public void Accept_ПакетСTitleПанели_ОтдаётЧеловеческоеИмя()
+    {
+        CreateDraftPackage(OwnerA, "local-952568751510/weather", "0.1.0", [], panelTitle: "Погода");
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.Accept("weather");
+        // Сравниваем разобранное значение, не подстроку: JsonSerializer экранирует кириллицу
+        // в \u-последовательности, и Contain по «Погода» не совпал бы с «По…».
+        var payload = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(ok.Value));
+        payload.GetProperty("displayName").GetString().Should().Be("Погода",
+            "в диалоге согласия — title панели, а не humanizeId(id)");
+    }
+
+    [Fact]
+    public void Accept_ПакетБезПанелей_ИмяNull()
+    {
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var payload = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(ok.Value));
+        payload.GetProperty("displayName").ValueKind.Should().Be(JsonValueKind.Null,
+            "панелей нет → null, а не пустая строка: фронт остаётся на fallback");
+    }
+
+    // --- List: сводка списка несёт то же имя (D2) ---
+
+    [Fact]
+    public void List_ЧерновикСПанелью_СводкаСодержитИмя()
+    {
+        CreateDraftPackage(OwnerA, "local-952568751510/weather", "0.1.0", [], panelTitle: "Погода");
+        CreateDraftPackage(OwnerA, "local-952568751510/plain", "1.0.0", []);
+
+        var list = _drafts.List(OwnerA);
+        list.Should().HaveCount(2);
+        list.Single(s => s.Slug == "weather").DisplayName.Should().Be("Погода");
+        list.Single(s => s.Slug == "plain").DisplayName.Should().BeNull("без панелей — null, не пустая строка");
     }
 
     // --- Accept: первая установка → granted = [], consentRequired = true, newPermissions = все Requested ---

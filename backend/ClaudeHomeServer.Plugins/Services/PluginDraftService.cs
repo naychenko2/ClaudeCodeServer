@@ -275,7 +275,7 @@ public class PluginDraftService
                     .OrderByDescending(r => r.Version, VersionComparer.Instance)
                     .FirstOrDefault();
                 result.Add(new PluginDraftSummary(
-                    slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
+                    slug, id, PluginDisplayName.Of(manifest), version, MaxFileMtimeUtc(dir), validation.Problems.Count,
                     installed.Any(r => r.Id == id && r.Version == version),
                     installedRec?.Version,
                     Rejected: false, ExpiresAt: null));
@@ -310,7 +310,7 @@ public class PluginDraftService
                     .OrderByDescending(r => r.Version, VersionComparer.Instance)
                     .FirstOrDefault();
                 result.Add(new PluginDraftSummary(
-                    slug, id, version, MaxFileMtimeUtc(dir), validation.Problems.Count,
+                    slug, id, PluginDisplayName.Of(manifest), version, MaxFileMtimeUtc(dir), validation.Problems.Count,
                     installed.Any(r => r.Id == id && r.Version == version),
                     installedRec?.Version,
                     Rejected: true, ExpiresAt: expiresAt));
@@ -580,6 +580,9 @@ public sealed class PluginDraftPreview
 public sealed record PluginDraftSummary(
     string Slug,
     string Id,
+    // Человекочитаемое имя пакета (title первой панели манифеста, D2); null — панелей нет
+    // или title пуст: фронт остаётся на fallback humanizeId. Вывод — PluginDisplayName.Of.
+    string? DisplayName,
     string Version,
     DateTime UpdatedAt,
     int Problems,

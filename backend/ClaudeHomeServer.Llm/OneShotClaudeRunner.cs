@@ -395,12 +395,14 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             // аналитика должна знать, КАКОЙ аккаунт подписки потратил токены, а не всегда "claude".
             var provider = SpendSources.NormalizeProvider(poolSubKey ?? llmProviders.ProviderKey(model));
             var usedModel = llmProviders.ResolveModelOrDefault(u.Model ?? model, provider);
+            // Локальный провайдер (IsLocal) — свой движок без подписки: его one-shot тоже бесплатный
+            var isLocal = llmProviders.GetByKey(provider)?.IsLocal == true;
             spend.Record(new SpendRecord
             {
                 OwnerId = ownerId ?? "",
                 Provider = provider,
                 Model = usedModel,
-                Source = SpendSources.IsFree(provider, usedModel)
+                Source = SpendSources.IsFree(provider, usedModel, isLocal)
                     ? SpendSources.Free : SpendSources.OneShot,
                 InputTokens = u.InputTokens,
                 OutputTokens = u.OutputTokens,

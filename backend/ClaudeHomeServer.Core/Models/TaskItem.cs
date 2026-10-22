@@ -161,8 +161,11 @@ public class TaskItem
     // задачи читаются пустыми списками, BackupSchema.Version не растёт. Закрыть задачу с
     // непустым Acceptance можно, только когда на каждый критерий есть свидетельство
     // (гейт один — AcceptanceRules, вызывается из TaskManager на переходе в Done).
-    public List<AcceptanceCriterion> Acceptance { get; set; } = [];
-    public List<AcceptanceEvidence> Evidence { get; set; } = [];
+    // Явный "acceptance": null в JSON затирал бы инициализатор — сеттер возвращает пустой список
+    public List<AcceptanceCriterion> Acceptance { get => _acceptance; set => _acceptance = value ?? []; }
+    public List<AcceptanceEvidence> Evidence { get => _evidence; set => _evidence = value ?? []; }
+    private List<AcceptanceCriterion> _acceptance = [];
+    private List<AcceptanceEvidence> _evidence = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Дата+время завершения: когда статус стал Done. null — не завершена.

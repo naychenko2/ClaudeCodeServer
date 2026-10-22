@@ -1,8 +1,12 @@
 using System.Net;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -10,23 +14,32 @@ namespace ClaudeHomeServer.Tests.Services;
 [Trait("Category", "Integration")]
 public class TasksAcceptanceGateTests : IClassFixture<TestWebApplicationFactory>
 {
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _projectDir;
 
     public TasksAcceptanceGateTests(TestWebApplicationFactory factory)
     {
+        _factory = factory;
         _client = factory.CreateAuthenticatedClient();
         _projectDir = Path.Combine(factory.TempDir, "tasks_acceptance_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(_projectDir);
     }
 
+    // Одна папка — один проект на владельца: проект заводим один раз, сессий в нём можно несколько
+    private string? _projectId;
+
     private async Task<string> CreateSessionAsync()
     {
-        var project = await _client.PostAsJsonAsync("/api/projects",
-            new { name = "TasksAcceptance", rootPath = _projectDir, createDirectory = true });
-        project.EnsureSuccessStatusCode();
-        var projectId = JsonSerializer.Deserialize<JsonElement>(await project.Content.ReadAsStringAsync())
-            .GetProperty("id").GetString()!;
+        if (_projectId is null)
+        {
+            var project = await _client.PostAsJsonAsync("/api/projects",
+                new { name = "TasksAcceptance", rootPath = _projectDir, createDirectory = true });
+            project.EnsureSuccessStatusCode();
+            _projectId = JsonSerializer.Deserialize<JsonElement>(await project.Content.ReadAsStringAsync())
+                .GetProperty("id").GetString()!;
+        }
+        var projectId = _projectId;
         var session = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
         session.EnsureSuccessStatusCode();
         return JsonSerializer.Deserialize<JsonElement>(await session.Content.ReadAsStringAsync())
@@ -105,5 +118,101 @@ public class TasksAcceptanceGateTests : IClassFixture<TestWebApplicationFactory>
             },
         });
         ok.StatusCode.Should().Be(HttpStatusCode.OK, await ok.Content.ReadAsStringAsync());
+    }
+
+    // Сессия, РЕАЛЬНО привязанная к задаче (Session.TaskId) — чат-исполнитель
+    private void BindToTask(string sessionId, string taskId) =>
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = taskId;
+
+    // Клиент с сервисным JWT того же владельца (как у окружения исполнителя, CCS_HOOK_TOKEN)
+    private HttpClient ServiceClient(string? callerSessionId)
+    {
+        var userId = new JwtSecurityTokenHandler()
+            .ReadJwtToken(_client.DefaultRequestHeaders.Authorization!.Parameter)
+            .Subject;
+        var token = _factory.Services.GetRequiredService<JwtService>().IssueServiceToken(userId);
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (callerSessionId is not null) client.DefaultRequestHeaders.Add("X-Caller-Session-Id", callerSessionId);
+        return client;
+    }
+
+    private static readonly object[] RewrittenCriteria =
+        [new { id = "c1", text = "первый" }, new { id = "c2", text = "второй" }];
+
+    [Fact]
+    public async Task Mcp_Исполнитель_НеМеняетКритерии_ПостановщикМеняет()
+    {
+        var setter = await CreateSessionAsync();
+        var executor = await CreateSessionAsync();
+        var id = await CreateTaskWithThreeCriteriaAsync(setter);
+        BindToTask(executor, id);
+
+        var (denyText, denied) = await CallToolAsync(executor, "tasks_update", new { id, acceptance = RewrittenCriteria });
+        denied.Should().BeTrue(denyText);
+        denyText.Should().Contain("acceptance");
+        var (clearText, clearDenied) = await CallToolAsync(executor, "tasks_update", new { id, acceptance = Array.Empty<object>() });
+        clearDenied.Should().BeTrue(clearText);
+
+        var (okText, isError) = await CallToolAsync(setter, "tasks_update", new { id, acceptance = RewrittenCriteria });
+        isError.Should().BeFalse(okText);
+        JsonSerializer.Deserialize<JsonElement>(okText).GetProperty("acceptance").GetArrayLength().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Rest_СервисныйТокен_ИсполнительИБезСессии_400_ПостановщикИЧеловек_200()
+    {
+        var setter = await CreateSessionAsync();
+        var executor = await CreateSessionAsync();
+        var id = await CreateTaskWithThreeCriteriaAsync(setter);
+        BindToTask(executor, id);
+        var body = new { acceptance = RewrittenCriteria };
+
+        // исполнитель: сервисный токен + сессия, привязанная к задаче
+        (await ServiceClient(executor).PutAsJsonAsync($"/api/tasks/{id}", body))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        // fail-closed: сервисный токен без заголовка и с несуществующей сессией
+        (await ServiceClient(null).PutAsJsonAsync($"/api/tasks/{id}", body))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await ServiceClient("нет-такой").PutAsJsonAsync($"/api/tasks/{id}", body))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        // постановщик: сервисный токен + сессия без привязки к задаче
+        var ok = await ServiceClient(setter).PutAsJsonAsync($"/api/tasks/{id}", body);
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, await ok.Content.ReadAsStringAsync());
+        // человек: пользовательский JWT, заголовка нет
+        var human = await _client.PutAsJsonAsync($"/api/tasks/{id}", new { acceptance = new[] { new { id = "c1", text = "первый" } } });
+        human.StatusCode.Should().Be(HttpStatusCode.OK, await human.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task СменаТекстаКритерия_СбрасываетЕгоСвидетельство()
+    {
+        var sessionId = await CreateSessionAsync();
+        var id = await CreateTaskWithThreeCriteriaAsync(sessionId);
+        var evidence = new[]
+        {
+            new { criterionId = "c1", how = "тест", result = "зелёный" },
+            new { criterionId = "c2", how = "тест", result = "зелёный" },
+            new { criterionId = "c3", how = "тест", result = "зелёный" },
+        };
+        var (e1, err1) = await CallToolAsync(sessionId, "tasks_update", new { id, evidence });
+        err1.Should().BeFalse(e1);
+
+        var (u, err2) = await CallToolAsync(sessionId, "tasks_update", new
+        {
+            id,
+            acceptance = new[]
+            {
+                new { id = "c1", text = "первый" }, new { id = "c2", text = "второй, но другой смысл" },
+                new { id = "c3", text = "третий" },
+            },
+        });
+        err2.Should().BeFalse(u);
+        JsonSerializer.Deserialize<JsonElement>(u).GetProperty("evidence").GetArrayLength().Should().Be(2);
+
+        var (denyText, isError) = await CallToolAsync(sessionId, "tasks_complete", new { id });
+        isError.Should().BeTrue();
+        denyText.Should().Contain("c2").And.NotContain("c1:").And.NotContain("c3:");
     }
 }

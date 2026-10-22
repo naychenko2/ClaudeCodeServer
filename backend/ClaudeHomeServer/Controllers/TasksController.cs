@@ -402,11 +402,18 @@ public class TasksController(
             // подделки, а разведение путей: подделанный заголовок делает правило строже.
             var isAgentCall = !string.IsNullOrEmpty(
                 Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault());
-            // Исполнитель = чат, привязанный к ЭТОЙ задаче (Session.TaskId): критерии приёмки
-            // он не меняет (TaskManager.Update); постановщик и человек — меняют
+            // Исполнитель по claim typ=svc (fail-closed, решение Александра 22.10): сервисный токен
+            // без валидной сессии-вызывающей (заголовка нет, чужая или несуществующая сессия) — исполнитель;
+            // с валидной — исполнитель, только если сессия привязана к ЭТОЙ задаче (Session.TaskId).
+            // Пользовательский JWT из логина — человек, критерии менять может. Заголовок в расчёте
+            // участвует лишь как указание сессии: его отсутствие правило не смягчает.
             var callerSessionHeader = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
-            var callerIsExecutor = callerSessionHeader is not null
-                && sessions.GetById(callerSessionHeader)?.TaskId == taskId;
+            var callerSession = callerSessionHeader is not null
+                && sessions.GetById(callerSessionHeader) is { } cs
+                && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
+            var callerIsExecutor =
+                User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
+                && (callerSession is null || callerSession.TaskId == taskId);
             updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor)
                 ?? throw new InvalidOperationException("Задача не найдена");
         }

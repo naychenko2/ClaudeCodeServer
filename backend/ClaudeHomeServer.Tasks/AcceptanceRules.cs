@@ -59,6 +59,19 @@ public static class AcceptanceRules
         return merged;
     }
 
+    // Смена текста критерия при том же Id отбрасывает его свидетельство (fail-closed, как удаление
+    // критерия): старое свидетельство не может закрыть новый смысл. Осиротевшие здесь не трогаем.
+    public static List<AcceptanceEvidence> DropStaleEvidence(
+        IReadOnlyList<AcceptanceEvidence> evidence,
+        IReadOnlyList<AcceptanceCriterion> before,
+        IReadOnlyList<AcceptanceCriterion> after) =>
+        evidence.Where(e =>
+        {
+            var was = before.FirstOrDefault(c => c.Id == e.CriterionId);
+            var now = after.FirstOrDefault(c => c.Id == e.CriterionId);
+            return was is null || now is null || was.Text == now.Text;
+        }).ToList();
+
     // Гейт закрытия: у задачи с непустым Acceptance на каждый критерий нужно свидетельство.
     // Без Acceptance — no-op (старые задачи закрываются как раньше).
     public static void EnsureClosable(

@@ -664,8 +664,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 "Свидетельства по критериям передавайте в evidence.");
         var effAcceptance = newAcceptance ?? task.Acceptance;
         var effEvidence = req.Evidence is null
-            ? task.Evidence
-            : AcceptanceRules.MergeEvidence(task.Evidence, req.Evidence, effAcceptance);
+            ? AcceptanceRules.DropStaleEvidence(task.Evidence, task.Acceptance, effAcceptance)
+            : AcceptanceRules.MergeEvidence(
+                AcceptanceRules.DropStaleEvidence(task.Evidence, task.Acceptance, effAcceptance),
+                req.Evidence, effAcceptance);
         // Критерий убрали — его свидетельство осиротело и отбрасывается
         effEvidence = effEvidence.Where(e => effAcceptance.Any(c => c.Id == e.CriterionId)).ToList();
         if (effective.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done)

@@ -203,6 +203,34 @@ public class TasksToolsetParityTests
             "значение, добавленное только в http, обязан поймать сторож парности enum");
     }
 
+    // Вложенные схемы acceptance/evidence (items.required и items.properties) — верхнеуровневый
+    // required их не видит. Сверяем с ЖИВЫМ stdio-ответом во всех инструментах, где они есть.
+    [SkippableFact]
+    public void ВложенныеСхемы_AcceptanceИEvidence_СовпадаютСоStdio()
+    {
+        var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
+        if (stdio is null) return;
+        var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
+        var checkedPairs = 0;
+
+        foreach (var tool in stdio)
+        {
+            var csharpProps = byName[tool.Name].InputSchema["properties"] as JsonObject;
+            var stdioProps = JsonNode.Parse(tool.Schema.GetRawText())!["properties"] as JsonObject;
+            foreach (var prop in new[] { "acceptance", "evidence" })
+            {
+                var inCsharp = csharpProps?[prop] is not null;
+                (stdioProps?[prop] is not null).Should().Be(inCsharp,
+                    $"{tool.Name}.{prop} должен быть в обеих ветках или ни в одной");
+                if (!inCsharp) continue;
+                checkedPairs++;
+                JsonNode.DeepEquals(csharpProps![prop], stdioProps![prop]).Should().BeTrue(
+                    $"вложенная схема {tool.Name}.{prop} разошлась между ветками");
+            }
+        }
+        checkedPairs.Should().BeGreaterThan(0, "сверка не должна проходить вакуумно");
+    }
+
     /// <summary>Хвост маршрута — та же точка правды, что у memory: форма не может разъехаться.</summary>
     [Fact]
     public void ХвостМаршрута_СтроитсяОднойФормой()

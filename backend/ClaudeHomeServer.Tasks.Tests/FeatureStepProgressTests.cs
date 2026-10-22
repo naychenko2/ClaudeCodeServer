@@ -291,6 +291,31 @@ public class FeatureStepProgressTests
         run.StepProgress.Total.Should().Be(0);
     }
 
+    // ─── Единый сравнитель кодов шагов (решение 4 ревью Александра) ────────────────────────────
+
+    [Fact]
+    public void РегистрКодаШага_ПланИШаг_ОдинШаг_ЛишнегоНеСоздаёт()
+    {
+        var run = Run(Feature(), Plan("p", 0, ("Б1", "back")), Step("s", "б1", 1));
+
+        run.StepProgress.Total.Should().Be(1, "«Б1» в плане и «б1» в шаге — один шаг");
+        run.StepProgress.NotCreated.Should().Be(0);
+        run.StepChains.Single().TaskIds.Should().Equal("s");
+    }
+
+    [Fact]
+    public void ДоработкаВДругомРегистре_Привязана_КаноничнымКлючом()
+    {
+        // Шаг заведён кодом «б1» (каноничный ключ — первое появление), доработка написана «Б1»:
+        // в набор кладется каноничный ключ группы, а не написание доработки.
+        var run = Run(Feature(), Step("s", "б1", 1), Rework("w", "Б1", 5));
+
+        run.StepProgress.Total.Should().Be(1);
+        run.StepProgress.UnlinkedReworks.Should().Be(0);
+        run.StepChains.Single().TaskIds.Should().Equal("s", "w");
+        run.StepChains.Single().StepRef.Should().Be("б1", "показ — в написании первого появления");
+    }
+
     // ─── Знаменатель: план ∪ заведённые ──────────────────────────────────────────────────────
 
     [Fact]

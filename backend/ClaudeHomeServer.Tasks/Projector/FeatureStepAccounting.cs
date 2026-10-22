@@ -26,9 +26,14 @@ internal static class FeatureStepAccounting
     private const string PlanCut = "cut";
     private const string PlanDone = "done";
 
-    // Ключ шага: stepRef, а без него — id задачи (каждая старая задача-шаг без stepRef — отдельный
-    // шаг, а не общая цепочка «»).
-    internal static string KeyOf(TaskItem t) => string.IsNullOrWhiteSpace(t.StepRef) ? t.Id : t.StepRef;
+    // Единый сравнитель кодов шагов (решение 4 ревью Александра): «Б1» и «б1» — один шаг.
+    // OrdinalIgnoreCase: детерминизм без зависимости от культуры; им пользуются ВСЕ ключи
+    // Build (план, группы, доработки, корзины) и гард дублей плана в TaskManager.
+    internal static readonly StringComparer StepKeyComparer = StringComparer.OrdinalIgnoreCase;
+
+    // Ключ шага: stepRef (после трима — для старых данных), а без него — id задачи (каждая старая
+    // задача-шаг без stepRef — отдельный шаг, а не общая цепочка «»).
+    internal static string KeyOf(TaskItem t) => string.IsNullOrWhiteSpace(t.StepRef) ? t.Id : t.StepRef.Trim();
 
     // steps — задачи role=step/rework; verdictTasks — ревью/проверки/финал; plan — задачи role=plan.
     internal static Result Build(
@@ -43,7 +48,7 @@ internal static class FeatureStepAccounting
             chatId is not null && sessionById.ContainsKey(chatId) ? chatId : null;
 
         // ─── План: структурный список шагов (объединение по всем задачам role=plan) ──────────
-        var planned = new Dictionary<string, PlannedStep>(StringComparer.Ordinal);
+        var planned = new Dictionary<string, PlannedStep>(StepKeyComparer);
         var plannedOrder = new List<string>();
         foreach (var p in plan)
             foreach (var ps in p.PlanSteps ?? [])
@@ -60,7 +65,7 @@ internal static class FeatureStepAccounting
         var reworks = steps.Where(t => t.Role == TaskRoles.Rework).ToList();
 
         var groups = new List<(string Key, List<TaskItem> Tasks)>();
-        var groupIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        var groupIndex = new Dictionary<string, int>(StepKeyComparer);
         foreach (var t in stepTasks)
         {
             var key = KeyOf(t);
@@ -82,9 +87,11 @@ internal static class FeatureStepAccounting
         // доработки). Без привязки — пустой набор (UnlinkedReworks, цепочку не заводит).
         HashSet<string> OwnerKeys(TaskItem rework, HashSet<string> path)
         {
-            var result = new HashSet<string>(StringComparer.Ordinal);
-            if (!string.IsNullOrWhiteSpace(rework.StepRef) && groupIndex.ContainsKey(rework.StepRef))
-                result.Add(rework.StepRef);
+            var result = new HashSet<string>(StepKeyComparer);
+            // В набор кладётся КАНОНИЧНЫЙ ключ группы (написание первого появления), а не
+            // написание доработки: «Б1» в плане и «б1» в шаге — один шаг.
+            if (!string.IsNullOrWhiteSpace(rework.StepRef) && groupIndex.TryGetValue(rework.StepRef.Trim(), out var gi))
+                result.Add(groups[gi].Key);
             foreach (var vid in rework.ReviewOf ?? [])
             {
                 if (!verdictById.TryGetValue(vid, out var v)) continue;
@@ -102,7 +109,7 @@ internal static class FeatureStepAccounting
             return result;
         }
 
-        var reworksByKey = new Dictionary<string, List<TaskItem>>(StringComparer.Ordinal);
+        var reworksByKey = new Dictionary<string, List<TaskItem>>(StepKeyComparer);
         int unlinked = 0;
         foreach (var r in reworks)
         {
@@ -117,9 +124,9 @@ internal static class FeatureStepAccounting
 
         // ─── Цепочки и корзины ───────────────────────────────────────────────────────────────
         var chains = new List<FeatureStepChain>(groups.Count);
-        var bucketByKey = new Dictionary<string, string>(StringComparer.Ordinal);
-        var laneByKey = new Dictionary<string, string>(StringComparer.Ordinal);
-        var returnedKeys = new HashSet<string>(StringComparer.Ordinal);
+        var bucketByKey = new Dictionary<string, string>(StepKeyComparer);
+        var laneByKey = new Dictionary<string, string>(StepKeyComparer);
+        var returnedKeys = new HashSet<string>(StepKeyComparer);
         var personasByLane = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (key, groupTasks) in groups)
         {

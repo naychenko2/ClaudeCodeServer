@@ -1442,8 +1442,9 @@ public class TaskManagerTests : IDisposable
             FeatureId: epic.Id, Role: TaskRoles.Plan,
             PlanSteps:
             [
+                // Единый сравнитель кодов шагов: «B1» и «b1» — один шаг (не два разных).
                 new PlannedStep { StepRef = "B1", Title = "а" },
-                new PlannedStep { StepRef = "B1", Title = "б" },
+                new PlannedStep { StepRef = "b1", Title = "б" },
             ]));
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*Дублируется код шага*");

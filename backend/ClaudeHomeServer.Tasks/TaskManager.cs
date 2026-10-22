@@ -604,9 +604,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             if (planSteps.Count > PlannedStep.MaxSteps)
                 throw new InvalidOperationException(
                     $"Слишком много шагов плана: {planSteps.Count} (лимит {PlannedStep.MaxSteps}).");
-            // Дубль stepRef — OrdinalIgnoreCase (после трима, минор 5): «B1»/«b1» и «Б1»/«б1» —
-            // один шаг; Ordinal (не culture) — детерминизм и скорость.
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Дубль stepRef — единый сравнитель кодов шагов (FeatureStepAccounting.StepKeyComparer,
+            // OrdinalIgnoreCase, после трима, минор 5): «B1»/«b1» и «Б1»/«б1» — один шаг.
+            var seen = new HashSet<string>(FeatureStepAccounting.StepKeyComparer);
             foreach (var step in planSteps)
             {
                 // Элемент-null из JSON (planSteps:[null]) — внятный 400, а не NRE (major 2)
@@ -624,7 +624,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 if (step.Title.Length > PlannedStep.MaxTitleLength)
                     throw new InvalidOperationException(
                         $"Название шага плана «{step.StepRef}» длиннее {PlannedStep.MaxTitleLength} символов.");
-                if (!seen.Add(step.StepRef))
+                if (!seen.Add(step.StepRef.Trim()))
                     throw new InvalidOperationException($"Дублируется код шага плана «{step.StepRef}».");
             }
         }

@@ -241,8 +241,29 @@ public record FileChangedMessage(string Path, int Added, int Removed, bool Exter
 // инструментов и ожидания подтверждений. По нему считается скорость генерации в плашке итога:
 // DurationMs для этого не годится — у хода с тул-лупом он кратно больше и занижает скорость.
 // null — CLI поля не прислал (сторонний поток) либо ход шёл мимо CLI (локальный движок).
-public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null, string? UsageModel = null, long? DurationApiMs = null)
+// PromptCache — состояние prompt cache для индикатора (фич-флаг prompt-cache); null — у
+// хода без сигнала кэша и у исторических result до этого поля.
+public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null, string? UsageModel = null, long? DurationApiMs = null, PromptCacheState? PromptCache = null)
     : ServerMessage("result");
+
+// Причина промаха prompt cache первого вызова хода — из diagnostics.cache_miss_reason.type
+// API-ответа. None — промаха не было; Unavailable — промах есть, но известная причина не
+// названа (в том числе незнакомый type). Формулировки подписей — на фронте (promptCache.ts).
+public enum PromptCacheMissReason
+{
+    None,
+    SystemChanged,    // system_changed — сменился системный промпт
+    MessagesChanged,  // messages_changed — изменилась история сообщений
+    Unavailable,      // unavailable — причина неизвестна
+}
+
+// Состояние prompt cache на конец хода (фича «Индикатор prompt cache», шаг B-1).
+// ReadTokens/WrittenTokens — cache_read_input_tokens и cache_creation_input_tokens из
+// usage result'а хода; LastWriteAtMs — серверное UTC-время (мс) прихода message_start
+// последнего вызова основного агента, который писал кэш; MissReason — diagnostics первого
+// вызова ПОСЛЕ эха нашего сообщения: вызовы до эха принадлежат ход-продолжению CLI, а не
+// нашему ходу. Поле регистрируется (шаг B-1), интерфейс фичи строится следующими шагами.
+public record PromptCacheState(int ReadTokens, int WrittenTokens, long? LastWriteAtMs, PromptCacheMissReason MissReason);
 
 // Фактически списанная стоимость генерации fal.ai. Приходит асинхронно после tool_result:
 // сервер опрашивает fal.ai billing-events по request_id (см. FalCostService).

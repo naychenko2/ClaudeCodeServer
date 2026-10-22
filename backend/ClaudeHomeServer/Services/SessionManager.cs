@@ -10127,7 +10127,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // result — последнее событие хода, и дальше файл уже не растёт до
                     // следующего. Не прочиталось — null, чат остаётся на текстовом пути.
                     await acc.OnResultAsync(m.Subtype, m.DurationMs, m.NumTurns, m.Usage, m.TotalCostUsd, m.ApiErrorStatus, m.PermissionDenials, _history, m.ContextTokens, m.UsageModel, m.DurationApiMs,
-                        entry is not null ? Llm.Claude.TranscriptProbe.LastRecordUuid(FindResumeTranscript(entry)) : null);
+                        entry is not null ? Llm.Claude.TranscriptProbe.LastRecordUuid(FindResumeTranscript(entry)) : null,
+                        m.PromptCache);
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
                     SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m);
                     break;

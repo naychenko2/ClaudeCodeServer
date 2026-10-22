@@ -58,13 +58,15 @@ public static class PluginPermission
 
     /// <summary>
     /// Разобрать право: (IsValid, Permission, Reason). <c>net:bad/host</c> → invalid;
-    /// <c>notes:read</c>/<c>tasks:read</c>/<c>net:{host}</c>/<c>secret:{name}</c> → valid.
+    /// <c>notes:read</c>/<c>tasks:read</c>/<c>storage</c>/<c>net:{host}</c>/<c>secret:{name}</c> → valid.
+    /// Набор разбираемых совпадает с <see cref="IsKnown"/>: точные права — дословно,
+    /// параметрические — по той же грамматике.
     /// </summary>
     public static (bool IsValid, string? Permission, string? Reason) Parse(string? permission)
     {
         if (string.IsNullOrEmpty(permission))
             return (false, null, "Пустое право");
-        if (permission is NotesRead or TasksRead)
+        if (permission is NotesRead or TasksRead or Storage)
             return (true, permission, null);
         if (permission.StartsWith("net:", StringComparison.Ordinal))
         {

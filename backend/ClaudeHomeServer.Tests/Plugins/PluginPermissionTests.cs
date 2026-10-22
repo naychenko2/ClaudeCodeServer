@@ -49,6 +49,7 @@ public class PluginPermissionTests
     [InlineData("net:api.linear.app")]
     [InlineData("net:localhost:8080")]
     [InlineData("secret:LINEAR_TOKEN")]
+    [InlineData("storage")]
     public void Parse_ИзвестноеПраво_Valid(string permission) =>
         PluginPermission.Parse(permission).IsValid.Should().BeTrue($"право {permission} должно быть валидно");
 

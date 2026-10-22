@@ -27,7 +27,7 @@ const TABS = Object.keys(CHIP_TEXT) as FeaturePageTab[];
 const roots: import('react-dom/client').Root[] = [];
 function render(sessionId: string) {
   installFakeDom();
-  const { root, container } = mount(createElement(FeatureBackChip, { sessionId }));
+  const { root, container } = mount(createElement(FeatureBackChip, { sessionId, projectId: 'p1' }));
   roots.push(root);
   return container;
 }
@@ -174,8 +174,20 @@ describe('FeatureBackChip: вне проекта', () => {
     click(container);
     const ev = log.find(d => d.type === 'cc-open-project-feature');
     expect(ev, 'кнопка мертва: запасной переход не отправлен').toBeDefined();
-    expect(ev!.detail).toEqual({ projectId: 'p1', featureId: 'f1' });
+    expect(ev!.detail).toEqual({ projectId: 'p1', featureId: 'f1', chatId: 'c1' });
   });
+  // Личный чат (нет проекта): вести некуда — чип не рисуем (иначе мёртвая кнопка).
+  // Мутация «рисовать чип при пустом projectId» краснит оба утверждения.
+  for (const projectId of [undefined, null, '']) {
+    it(`projectId=${JSON.stringify(projectId)} → чипа нет`, () => {
+      backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+      installFakeDom();
+      const { root, container } = mount(createElement(FeatureBackChip, { sessionId: 'c1', projectId }));
+      roots.push(root);
+      expect(findNodeByAttr(container, 'data-testid', 'feature-back-chip'), 'мёртвый чип нарисован').toBeNull();
+      expect(findNodeByAttr(container, 'role', 'button'), 'мёртвая кнопка нарисована').toBeNull();
+    });
+  }
   it('воркспейс принял событие (handled) → запасного перехода нет', () => {
     backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
     installFakeDom();

@@ -14,6 +14,7 @@ import { VideoFloat } from './features/video/VideoFloat'
 import { VideoStageFrame } from './features/video/VideoStageFrame'
 import { useVideoStage } from './lib/videoStage'
 import { UpdatePrompt } from './components/UpdatePrompt'
+import { showToast } from './lib/toast'
 import { NotificationToasts } from './components/NotificationToasts'
 import { DeployHost } from './components/DeployHost'
 import { ProductHistory } from './components/ProductHistory'
@@ -1019,20 +1020,20 @@ export default function App() {
   // при монтировании (тот же приём, что у диплинка #/project/{id}/feature/{fid}).
   useEffect(() => {
     const onOpen = (e: Event) => {
-      const d = (e as CustomEvent<{ projectId: string; featureId: string }>).detail
+      const d = (e as CustomEvent<{ projectId: string; featureId: string; chatId?: string }>).detail
       if (!d?.projectId || !d.featureId) return
       api.projects.list()
         .then(list => {
           const p = list.find(x => x.id === d.projectId)
-          if (!p) return
+          if (!p) { showToast('Фича', 'Проект фичи недоступен — возможно, он удалён.'); return }
           recordRecentProject(p.id)
           localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
           localStorage.setItem(HUB_TAB_KEY, 'projects')
-          navPush({ screen: 'project', project: p, view: 'chat', file: null, feature: d.featureId })
+          navPush({ screen: 'project', project: p, view: d.chatId ? undefined : 'chat', file: null, chatId: d.chatId, feature: d.featureId })
           setProject(p)
           setHubTab('projects')
         })
-        .catch(() => {})
+        .catch(() => { showToast('Фича', 'Не удалось открыть проект фичи.') })
     }
     window.addEventListener('cc-open-project-feature', onOpen)
     return () => window.removeEventListener('cc-open-project-feature', onOpen)

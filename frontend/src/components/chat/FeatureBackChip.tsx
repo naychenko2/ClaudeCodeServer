@@ -17,7 +17,9 @@ import { setFeaturePageTab, FEATURE_TAB_LABEL } from '../../lib/featurePage';
 // название в title/aria-label (кнопка может сжиматься: flexShrink:1 + overflow:hidden).
 export function FeatureBackChip({ sessionId, projectId, isCompact = false }: { sessionId: string; projectId?: string | null; isCompact?: boolean }) {
   const featureBack = useFeatureBackNav(sessionId);
-  if (!featureBack) return null;
+  // Личный чат (нет проекта): воркспейса нет, запасному переходу некуда вести — чип был бы
+  // мёртвым. Не рисуем.
+  if (!featureBack || !projectId) return null;
   const tabName = FEATURE_TAB_LABEL[featureBack.tab];
   // Полное название (title/aria-label): название фичи + (если есть вкладка) её имя.
   const fullLabel = `К фиче${featureBack.title ? ` «${featureBack.title}»` : ''}${featureBack.showTab ? `, вкладка «${tabName}»` : ''}`;
@@ -37,8 +39,8 @@ export function FeatureBackChip({ sessionId, projectId, isCompact = false }: { s
         window.dispatchEvent(new CustomEvent('cc-open-feature', { detail }));
         // Вне проекта (раздел «Чаты») воркспейса нет, и событие никто не принял: открываем
         // проект фичи со страницей фичи через App.
-        if (!detail.handled && projectId) {
-          window.dispatchEvent(new CustomEvent('cc-open-project-feature', { detail: { projectId, featureId: featureBack.featureId } }));
+        if (!detail.handled) {
+          window.dispatchEvent(new CustomEvent('cc-open-project-feature', { detail: { projectId, featureId: featureBack.featureId, chatId: sessionId } }));
         }
       }}
     >

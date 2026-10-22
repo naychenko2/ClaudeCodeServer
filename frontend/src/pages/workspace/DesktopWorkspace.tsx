@@ -170,6 +170,12 @@ export function centerWinner(featureOpenedAt: number, fileOpenedAt: number): 'pa
   return fileOpenedAt > featureOpenedAt ? 'file' : 'page';
 }
 
+// Страница фичи уступает центр файлу: файл открыт и событие «открыли» у него позже.
+// Общий предикат десктопной и мобильной веток (не разъезжаются при правке правила).
+export function pageYieldsCenterToFile(openFile: unknown, featureOpenedAt: number, fileOpenedAt: number): boolean {
+  return !!openFile && centerWinner(featureOpenedAt, fileOpenedAt) === 'file';
+}
+
 export function DesktopWorkspace(p: Props) {
   // Подсветка активного сплиттера: сайдбар или split чат|файл
   const [dragging, setDragging] = useState<'sidebar' | 'split' | null>(null);
@@ -251,7 +257,7 @@ export function DesktopWorkspace(p: Props) {
   // открытого файла. Файл не сбрасывается при закрытии страницы: остаётся в состоянии
   // и вернётся. Мобильная раскладка не меняется (там yielded не передаётся, FileViewer
   // вне центра).
-  const yielded = !!p.openFile && centerWinner(p.featureOpenedAt, p.fileOpenedAt) === 'file';
+  const yielded = pageYieldsCenterToFile(p.openFile, p.featureOpenedAt, p.fileOpenedAt);
 
   // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
   const handleSplitDrag = (e: ReactPointerEvent) => {

@@ -47,7 +47,7 @@ import { showArchivedToast } from '../lib/archiveToast';
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib/nav';
 import { FeatureCenter } from '../components/feature/FeatureCenter';
 import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
-import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
+import { recordBackNav, clearBackNav, getBackNav } from '../lib/featureBackNav';
 import { focusFeatureStage, setFeaturePageTab } from '../lib/featurePage';
 import { centerFingerprint as computeCenterFingerprint } from '../lib/centerOccupancy';
 import type { CenterOccupancy } from '../lib/centerOccupancy';
@@ -76,7 +76,7 @@ import { ToolsSidebar } from '../components/tools/ToolsSidebar';
 import { TerminalView } from '../components/terminal/TerminalView';
 import { PreviewView } from '../components/preview/PreviewView';
 import * as terminalApi from '../lib/terminalSignalr';
-import { DesktopWorkspace, centerWinner } from './workspace/DesktopWorkspace';
+import { DesktopWorkspace, pageYieldsCenterToFile } from './workspace/DesktopWorkspace';
 import { useProjectTerminals } from '../hooks/useProjectTerminals';
 import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
@@ -921,14 +921,15 @@ const windowWidth = useWindowWidth();
   const featurePageOpen = openFeatureId != null && featuresOn;
   // Мобила: «последнее действие выигрывает» (как на десктопе, DesktopWorkspace.yielded) —
   // файл, открытый ПОСЛЕ страницы, вытесняет её (страница остаётся смонтированной, display:none).
-  const pageYieldsToFile = featurePageOpen && !!openFile && centerWinner(featureOpenedAt, fileOpenedAt) === 'file';
+  const pageYieldsToFile = featurePageOpen && pageYieldsCenterToFile(openFile, featureOpenedAt, fileOpenedAt);
   const pageOnTop = featurePageOpen && !pageYieldsToFile;
 
   // Единая точка закрытия страницы фичи при ЯВНОМ выборе чата (handleSelectSession): чат —
   // базовый режим, не «другое окно», поэтому вычисляемым otherCenterOpen его выбор не
-  // покрывается. Указатель возврата (featureBackNav) НЕ гасим: переход «чат» из шторки/
+  // покрывается. Указатель возврата (featureBackNav) здесь НЕ гасим: переход «чат» из шторки/
   // попапа фичи записал его ровно перед выбором чата, и чип «← к фиче» живёт именно им.
-  // Осознанный уход из фичи (кнопка закрытия страницы, автоскрытие) чистит его сам.
+  // Протухший указатель (на другой чат) гасит handleSelectSession; осознанный уход из фичи
+  // (кнопка закрытия страницы, автоскрытие) чистит его сам.
   const closeFeaturePage = useCallback(() => {
     setOpenFeatureId(null);
   }, []);
@@ -1429,7 +1430,15 @@ const windowWidth = useWindowWidth();
     // с autoSelect=true, и без этого страница осталась бы поверх нового соседнего чата.
     // Исключение — холодный старт (coldAutoSelect): диплинк открыл страницу, и первый
     // чат выбирается под ней, а не вместо неё.
-    if (!coldAutoSelect) closeFeaturePage();
+    if (!coldAutoSelect) {
+      closeFeaturePage();
+      // Обычный выбор чата гасит указатель возврата («← назад», «← к фиче»), если он ведёт
+      // в ДРУГОЙ чат: иначе протухший чип всплывёт позже. Возврат, записанный для
+      // ВЫБИРАЕМОГО чата (переход из плашки/шторки фичи пишет его прямо перед выбором),
+      // не трогаем — чип «← к фиче» живёт именно им.
+      const back = getBackNav();
+      if (back && !(back.to.kind === 'chat' && back.to.id === session.id)) clearBackNav();
+    }
     if (!autoSelect) {
       // Файл, открытый В СПЛИТЕ, смену чата переживает: там чат и файл стоят рядом
       // двумя островами и друг другу не мешают — закрывать нечего. Так же ведёт себя

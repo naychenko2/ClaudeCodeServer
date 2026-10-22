@@ -6948,7 +6948,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     await _onMessage(new ToolCallLeakMessage(
                         kind,
                         hasToolUse ? lastToolName : null,
-                        BuildLeakSnippet(text, sig)));
+                        BuildLeakSnippet(text, sig),
+                        ClaudeHomeServer.Services.ToolCallLeakDetector.ExtractToolName(text)));
                 }
             }
 

@@ -70,6 +70,106 @@ public class ClaudeRuntimeSettingsTests
     }
 
     [Fact]
+    public void ДваИнстансаСРазнымСоставомХуков_НеВлияютДругНаДруга()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-settings-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            // «Старая сборка»: без хука потребителей; «новая» — с ним. Один temp-каталог на машине.
+            var oldPath = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null);
+            var oldBefore = File.ReadAllText(oldPath);
+            var newPath = ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v2", "consumers-v2");
+            // повторная запись старым инстансом (его перезапуск) не должна затронуть файл нового
+            var newBefore = File.ReadAllText(newPath);
+            ClaudeRuntimeSettings.WriteSettings(temp, true, false, "kill-v1", null);
+
+            newPath.Should().NotBe(oldPath);
+            File.ReadAllText(oldPath).Should().Be(oldBefore);
+            File.ReadAllText(newPath).Should().Be(newBefore);
+            JsonDocument.Parse(File.ReadAllText(oldPath)).RootElement.GetProperty("hooks")
+                .GetProperty("PreToolUse").GetArrayLength().Should().Be(1, "у старой сборки только Bash");
+            JsonDocument.Parse(File.ReadAllText(newPath)).RootElement.GetProperty("hooks")
+                .GetProperty("PreToolUse").EnumerateArray().Select(h => h.GetProperty("matcher").GetString())
+                .Should().Equal("Bash", "Edit|Write");
+            File.ReadAllText(Path.Combine(Path.GetDirectoryName(newPath)!, "block-process-kill.py")).Should().Be("kill-v2");
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    [Fact]
+    public void ОчисткаСостоянияХука_ЧиститКаталогиОтпечатковИПрежнийОбщий()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "ccs-cleanup-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var fresh = Path.Combine(temp, ClaudeRuntimeSettings.RuntimeDirName, "abc", ClaudeRuntimeSettings.HookStateDirName);
+            var legacy = Path.Combine(temp, ClaudeRuntimeSettings.RuntimeDirName, ClaudeRuntimeSettings.HookStateDirName);
+            Directory.CreateDirectory(fresh);
+            Directory.CreateDirectory(legacy);
+            var old1 = Path.Combine(fresh, "old"); var old2 = Path.Combine(legacy, "old"); var keep = Path.Combine(fresh, "keep");
+            foreach (var f in new[] { old1, old2, keep }) File.WriteAllText(f, "x");
+            File.SetLastWriteTimeUtc(old1, DateTime.UtcNow.AddDays(-2));
+            File.SetLastWriteTimeUtc(old2, DateTime.UtcNow.AddDays(-2));
+
+            ClaudeRuntimeSettings.CleanupHookState(temp, TimeSpan.FromDays(1));
+
+            File.Exists(old1).Should().BeFalse();
+            File.Exists(old2).Should().BeFalse();
+            File.Exists(keep).Should().BeTrue();
+        }
+        finally { try { Directory.Delete(temp, true); } catch { } }
+    }
+
+    [Fact]
+    public void ОкружениеХукаПотребителей_НеПопадаетВЛогиИСнимки()
+    {
+        // Гвард от регрессии: CCS_HOOK_TOKEN — сервисный JWT. Имена окружения хука знает только
+        // ClaudeSession (там токен подставляется после сигнатуры) и скрипт хука; ни одна строка
+        // с ними не должна быть логирующим вызовом, а env процесса — уезжать в Log*.
+        var root = RepoRoot();
+        var backend = Path.Combine(root, "backend");
+        var files = Directory.EnumerateFiles(backend, "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                && !f.Contains("Tests"))
+            .ToList();
+        var hookNames = new[] { "CCS_HOOK_", "ConsumersHookTokenEnv", "ConsumersHookTokenPlaceholder" };
+        var allowed = new[] { "ClaudeSession.cs", "ClaudeRuntimeSettings.cs" };
+        var logCall = new System.Text.RegularExpressions.Regex(@"\bLog[A-Za-z]*\(|\b_?log(ger)?\.|Console\.Write");
+        var violations = new List<string>();
+        foreach (var f in files)
+        {
+            var name = Path.GetFileName(f);
+            var lines = File.ReadAllLines(f);
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                if (hookNames.Any(line.Contains) && !allowed.Contains(name))
+                    violations.Add($"{name}:{i + 1}: имя окружения хука вне ClaudeSession/ClaudeRuntimeSettings");
+                if (hookNames.Any(line.Contains) && logCall.IsMatch(line))
+                    violations.Add($"{name}:{i + 1}: имя окружения хука в логирующем вызове");
+                if (name == "ClaudeSession.cs" && logCall.IsMatch(line)
+                    && System.Text.RegularExpressions.Regex.IsMatch(line, @"\benvOverrides\b|\bspec\.Env\b|\.Env\b"))
+                    violations.Add($"{name}:{i + 1}: env процесса в логирующем вызове");
+            }
+        }
+        violations.Should().BeEmpty();
+    }
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if ((File.Exists(Path.Combine(dir.FullName, ".git")) || Directory.Exists(Path.Combine(dir.FullName, ".git")))
+                && Directory.Exists(Path.Combine(dir.FullName, "backend"))) return dir.FullName;
+            dir = dir.Parent;
+        }
+        throw new InvalidOperationException("Корень репозитория не найден");
+    }
+
+    [Fact]
     public void РетенцияТранскриптовПродленаКлючомCleanupPeriodDays()
     {
         // Плановая уборка CLI (дефолт ~30 дней) вычищает {csid}.jsonl из-под архива чатов;

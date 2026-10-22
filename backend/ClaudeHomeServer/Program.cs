@@ -13,6 +13,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
@@ -1708,10 +1709,7 @@ if (!inspectionMode)
         try
         {
             // hook-state хука потребителей: признаки «файл уже правили» по session_id, TTL сутки
-            var hookState = Path.Combine(Path.GetTempPath(), "claude-runtime", "hook-state");
-            if (Directory.Exists(hookState))
-                foreach (var f in Directory.EnumerateFiles(hookState))
-                    try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddDays(-1)) File.Delete(f); } catch { }
+            ClaudeRuntimeSettings.CleanupHookState(Path.GetTempPath(), TimeSpan.FromDays(1));
         }
         catch { /* не критично */ }
     });

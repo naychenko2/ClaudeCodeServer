@@ -62,7 +62,10 @@ public class ConsumersHookTests
         public void Dispose() => _listener.Stop();
     }
 
-    private static Run RunHook(string? api, string session, string file, string cwd = "/work/tree",
+    // Проект уникален на тест: пауза после сбоя ключуется проектом и иначе переходила бы между тестами
+    private readonly string _project = "proj-" + Guid.NewGuid().ToString("N");
+
+    private Run RunHook(string? api, string session, string file, string cwd = "/work/tree",
         string? token = "tok")
     {
         var psi = new ProcessStartInfo("python3")
@@ -76,7 +79,7 @@ public class ConsumersHookTests
         psi.Environment.Remove("CCS_HOOK_PROJECT");
         if (api is not null) psi.Environment["CCS_HOOK_API"] = api;
         if (token is not null) psi.Environment["CCS_HOOK_TOKEN"] = token;
-        psi.Environment["CCS_HOOK_PROJECT"] = "proj1";
+        psi.Environment["CCS_HOOK_PROJECT"] = _project;
         var sw = Stopwatch.StartNew();
         using var proc = Process.Start(psi)!;
         proc.StandardInput.Write(JsonSerializer.Serialize(new
@@ -206,5 +209,54 @@ public class ConsumersHookTests
         lines[0].Should().Contain("ещё строится");
         lines.Should().Contain(l => l.Contains("src/Consumer1.tsx"));
         lines.Length.Should().BeLessThanOrEqualTo(20);
+    }
+
+    [Fact]
+    public void НеудачныйПервыйЗапрос_НеСъедаетФайл()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var status = 500;
+        using var stub = new Stub(_ => (status, status == 200 ? Neighbors(2) : "{\"message\":\"x\"}", 0));
+        var session = NewSession();
+
+        RunHook(stub.Url, session, "src/a.ts").Stdout.Should().BeEmpty("сервер отказал — молчание");
+
+        // пауза после сбоя действует 30 с; сбрасываем её, не дожидаясь, — важно только то, что файл не помечен
+        foreach (var f in Directory.EnumerateFiles(Path.Combine(Path.GetDirectoryName(ScriptPath())!, "hook-state"), "*.down"))
+            File.Delete(f);
+        status = 200;
+        Context(RunHook(stub.Url, session, "src/a.ts")).Should().Contain(l => l.Contains("Consumer1"),
+            "первый запрос не состоялся — файл не помечен, повторная правка получает контекст");
+    }
+
+    [Fact]
+    public void ПослеСбоя_ХукМолчитБезОжиданияПотолка()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var stub = new Stub(_ => (200, Neighbors(2), 7000));
+        var session = NewSession();
+
+        RunHook(stub.Url, session, "src/a.ts").Stdout.Should().BeEmpty("таймаут");
+        var second = RunHook(stub.Url, session, "src/b.ts");
+
+        second.Stdout.Should().BeEmpty();
+        second.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(1.5), "пауза после сбоя — без ожидания 3 с на каждую правку");
+        stub.Requests.Should().HaveCount(1, "второй запрос не уходил");
+    }
+
+    [Fact]
+    public void СостояниеХука_ВКаталоге0700ФайлыСПрефиксомПроекта()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var stub = new Stub(_ => (200, Neighbors(1), 0));
+        var session = NewSession();
+
+        RunHook(stub.Url, session, "src/a.ts");
+
+        var dir = Path.Combine(Path.GetDirectoryName(ScriptPath())!, "hook-state");
+        File.GetUnixFileMode(dir).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var file = Directory.EnumerateFiles(dir).Single(f => f.EndsWith("_" + session));
+        File.GetUnixFileMode(file).Should().Be(UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        Path.GetFileName(file).Should().NotBe(session, "имя несёт префикс проекта");
     }
 }

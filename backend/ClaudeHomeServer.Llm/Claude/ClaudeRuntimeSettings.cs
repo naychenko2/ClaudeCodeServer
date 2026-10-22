@@ -58,7 +58,7 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // файл вне графа, ответ дольше 3 с, ошибка авторизации — молчание и код 0. Адрес, проект и
 // токен приезжают в окружении процесса CLI (CCS_HOOK_API / CCS_HOOK_PROJECT / CCS_HOOK_TOKEN,
 // ставит ClaudeSession; токен — тот же сервисный JWT, что в заголовках MCP-конфига хода).
-// Признак «файл уже правили» — файл claude-runtime/hook-state/<session_id> рядом со скриптом.
+// Признак «файл уже правили» — файл <префикс проекта>_<session_id> в каталоге hook-state рядом со скриптом (0700, файлы 0600); пометка — только после ответа 200.
 // В песочнице и на Windows-хосте хука нет по построению (см. ниже) — для них отдельный шаг.
 //
 // Только для local-среды: в песочнице (Linux) окон нет, а путь к хостовому файлу
@@ -77,20 +77,29 @@ public static class ClaudeRuntimeSettings
 
     internal const string ConsumersHookScriptName = "edit-consumers-hook.py";
 
+    // Единые имена каталогов: хук пишет состояние, Program.cs его убирает — оба через эти константы.
+    internal const string RuntimeDirName = "claude-runtime";
+    internal const string HookStateDirName = "hook-state";
+
+    private static readonly string ConsumersHookScript = ConsumersHookScriptTemplate.Replace("__HOOK_STATE__", HookStateDirName);
+
     // Читает session_id, cwd и tool_input.file_path из stdin. Весь скрипт обёрнут так, чтобы любой
     // сбой заканчивался молчанием и кодом 0: хук не должен ни блокировать правку, ни ронять ход.
     // Общий потолок — 3 с на всё (setitimer), плюс таймаут сокета; прокси отключены явно.
-    private const string ConsumersHookScript = """
-        import json, os, re, signal, sys, time
+    private const string ConsumersHookScriptTemplate = """
+        import hashlib, json, os, re, signal, sys, time
         import urllib.error, urllib.parse, urllib.request
 
         LIMIT = 20
         TIMEOUT = 3
         STATE_TTL = 86400
+        COOLDOWN = 30
+        DOWN = {"path": None}
         BUILDING_NOTE = "Граф этого дерева ещё строится; ниже — по основному дереву проекта (ветка может отличаться)."
 
 
         def quiet(*_):
+            touch_down()
             os._exit(0)
 
 
@@ -101,27 +110,56 @@ public static class ClaudeRuntimeSettings
             return re.search(r"(Tests?\.cs|\.(test|spec)\.[jt]sx?)$", parts[-1]) is not None
 
 
-        def first_edit(session_id, rel):
-            state_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook-state")
-            os.makedirs(state_dir, exist_ok=True)
+        def state_dir():
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__HOOK_STATE__")
+            os.makedirs(path, mode=0o700, exist_ok=True)
+            try:
+                os.chmod(path, 0o700)
+            except OSError:
+                pass
+            return path
+
+
+        def cleanup(path):
             now = time.time()
-            for name in os.listdir(state_dir):
-                full = os.path.join(state_dir, name)
+            for name in os.listdir(path):
+                full = os.path.join(path, name)
                 try:
                     if now - os.path.getmtime(full) > STATE_TTL:
                         os.remove(full)
                 except OSError:
                     pass
-            path = os.path.join(state_dir, session_id)
-            seen = set()
-            if os.path.exists(path):
-                with open(path, encoding="utf-8") as f:
-                    seen = {line.rstrip("\n") for line in f}
-            if rel in seen:
+
+
+        def already_seen(path, rel):
+            if not os.path.exists(path):
                 return False
-            with open(path, "a", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
+                return rel in {line.rstrip("\n") for line in f}
+
+
+        def mark_seen(path, rel):
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(rel + "\n")
-            return True
+
+
+        def cooling_down(path):
+            try:
+                return time.time() - os.path.getmtime(path) < COOLDOWN
+            except OSError:
+                return False
+
+
+        def touch_down():
+            if not DOWN["path"]:
+                return
+            try:
+                fd = os.open(DOWN["path"], os.O_WRONLY | os.O_CREAT, 0o600)
+                os.close(fd)
+                os.utime(DOWN["path"])
+            except OSError:
+                pass
 
 
         def fetch(api, project, token, rel, root_path):
@@ -186,15 +224,27 @@ public static class ClaudeRuntimeSettings
             rel = os.path.relpath(file_path, cwd).replace(os.sep, "/")
             if rel.startswith(".."):
                 return
-            if not first_edit(session_id, rel):
+            state = state_dir()
+            cleanup(state)
+            prefix = hashlib.sha1(project.encode("utf-8")).hexdigest()[:12]
+            seen_path = os.path.join(state, prefix + "_" + session_id)
+            DOWN["path"] = os.path.join(state, prefix + ".down")
+            if already_seen(seen_path, rel) or cooling_down(DOWN["path"]):
                 return
-            status, body = fetch(api, project, token, rel, cwd)
-            note = None
-            if status == 404 and isinstance(body, dict) and body.get("building"):
-                status, body = fetch(api, project, token, rel, None)
-                note = BUILDING_NOTE
+            try:
+                status, body = fetch(api, project, token, rel, cwd)
+                note = None
+                if status == 404 and isinstance(body, dict) and body.get("building"):
+                    status, body = fetch(api, project, token, rel, None)
+                    note = BUILDING_NOTE
+            except Exception:
+                touch_down()
+                return
             if status != 200 or not isinstance(body, dict):
+                if status in (401, 403) or status >= 500:
+                    touch_down()
                 return
+            mark_seen(seen_path, rel)
             text = render(rel, body, note)
             if text:
                 sys.stdout.write(json.dumps({"hookSpecificOutput": {
@@ -273,29 +323,62 @@ public static class ClaudeRuntimeSettings
             var disableHooks = HostRequiresHooksOff;
             var cacheKey = (hostTempDir, browserEnabled, disableHooks);
             if (_cachedPaths.TryGetValue(cacheKey, out var cached) && File.Exists(cached)) return cached;
-            var dir = Path.Combine(hostTempDir, "claude-runtime");
-            Directory.CreateDirectory(dir);
-            // Имя повторяет состав файла: по нему (в cliArgs снимков промпта) читают, включены
-            // ли хуки, — содержимое там не видно. И путь различается по тем же измерениям,
-            // что ключ кэша, иначе два ключа делили бы один файл и перезаписывали друг друга.
-            var path = Path.Combine(dir,
-                $"hooks-{(disableHooks ? "off" : "on")}{(browserEnabled ? "" : "-no-browser")}.settings.json");
-            // На хосте с погашенными хуками (Windows) ни хук, ни python3 не нужны
-            var hooksJson = "";
-            if (!disableHooks)
-            {
-                var scriptPath = Path.Combine(dir, BlockKillScriptName);
-                File.WriteAllText(scriptPath, BlockKillScript);
-                var command = JsonSerializer.Serialize($"python3 -I \"{scriptPath}\"");
-                var consumersPath = Path.Combine(dir, ConsumersHookScriptName);
-                File.WriteAllText(consumersPath, ConsumersHookScript);
-                var consumersCommand = JsonSerializer.Serialize($"python3 -I \"{consumersPath}\"");
-                hooksJson = $",\"hooks\":{{\"PreToolUse\":[{{\"matcher\":\"Bash\",\"hooks\":[{{\"type\":\"command\",\"command\":{command}}}]}},{{\"matcher\":\"Edit|Write\",\"hooks\":[{{\"type\":\"command\",\"command\":{consumersCommand}}}]}}]}}";
-            }
-            File.WriteAllText(path,
-                $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays},\"syncClaudeAiSkills\":false,\"syncClaudeAiPlugins\":false{hooksJson}}}");
+            var path = WriteSettings(hostTempDir, browserEnabled, disableHooks, BlockKillScript, ConsumersHookScript);
             _cachedPaths[cacheKey] = path;
             return path;
         }
+    }
+
+    // Запись набора файлов настроек в каталог, имя которого — отпечаток состава хуков (тексты скриптов,
+    // режим, пользователь ОС). Инстансы с разной сборкой на одной машине делят temp, и общее имя по
+    // (disableHooks, browserEnabled) давало им перезаписывать файл друг друга: у работающего CLI хук
+    // Edit|Write или Bash (гейт безопасности) молча исчезал. Теперь разный состав — разный каталог, одинаковый —
+    // тот же файл с тем же содержимым. consumersScript = null — сборка без хука потребителей.
+    internal static string WriteSettings(string hostTempDir, bool browserEnabled, bool disableHooks,
+        string blockKillScript, string? consumersScript)
+    {
+        var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(string.Join('\u0001',
+                disableHooks, Environment.UserName, blockKillScript, consumersScript ?? "-"))))[..12].ToLowerInvariant();
+        var dir = Path.Combine(hostTempDir, RuntimeDirName, fingerprint);
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dir);
+        else Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        // Имя повторяет состав файла: по нему (в cliArgs снимков промпта) читают, включены
+        // ли хуки, — содержимое там не видно.
+        var path = Path.Combine(dir,
+            $"hooks-{(disableHooks ? "off" : "on")}{(browserEnabled ? "" : "-no-browser")}.settings.json");
+        // На хосте с погашенными хуками (Windows) ни хук, ни python3 не нужны
+        var hooks = new List<string>();
+        if (!disableHooks)
+        {
+            var scriptPath = Path.Combine(dir, BlockKillScriptName);
+            File.WriteAllText(scriptPath, blockKillScript);
+            var command = JsonSerializer.Serialize($"python3 -I \"{scriptPath}\"");
+            hooks.Add($"{{\"matcher\":\"Bash\",\"hooks\":[{{\"type\":\"command\",\"command\":{command}}}]}}");
+            if (consumersScript is not null)
+            {
+                var consumersPath = Path.Combine(dir, ConsumersHookScriptName);
+                File.WriteAllText(consumersPath, consumersScript);
+                var consumersCommand = JsonSerializer.Serialize($"python3 -I \"{consumersPath}\"");
+                hooks.Add($"{{\"matcher\":\"Edit|Write\",\"hooks\":[{{\"type\":\"command\",\"command\":{consumersCommand}}}]}}");
+            }
+        }
+        var hooksJson = hooks.Count == 0 ? "" : $",\"hooks\":{{\"PreToolUse\":[{string.Join(',', hooks)}]}}";
+        File.WriteAllText(path,
+            $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays},\"syncClaudeAiSkills\":false,\"syncClaudeAiPlugins\":false{hooksJson}}}");
+        return path;
+    }
+
+    // Уборка состояния хука потребителей (признаки «файл правили» и паузы после сбоев): TTL сутки.
+    // Каталог состояния лежит в каталоге отпечатка — обходим все плюс прежний общий hook-state.
+    public static void CleanupHookState(string hostTempDir, TimeSpan ttl)
+    {
+        var runtime = Path.Combine(hostTempDir, RuntimeDirName);
+        if (!Directory.Exists(runtime)) return;
+        var states = Directory.EnumerateDirectories(runtime).Select(d => Path.Combine(d, HookStateDirName))
+            .Append(Path.Combine(runtime, HookStateDirName));
+        foreach (var state in states.Where(Directory.Exists))
+            foreach (var f in Directory.EnumerateFiles(state))
+                try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow - ttl) File.Delete(f); } catch { }
     }
 }

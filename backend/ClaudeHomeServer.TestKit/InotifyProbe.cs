@@ -41,6 +41,21 @@ internal static class InotifyProbe
         return n;
     }
 
+    // Число слежек конкретного экземпляра (по номеру его дескриптора). Мера по экземпляру,
+    // а не дельта процесса: параллельные тесты сервера поднимают свои наблюдатели в том же
+    // процессе, и их открытие/закрытие попадает в окно замера дельты.
+    public static int CountWatchesOf(int fd)
+    {
+        var n = 0;
+        try
+        {
+            foreach (var line in File.ReadLines($"/proc/self/fdinfo/{fd}"))
+                if (line.StartsWith("inotify wd:", StringComparison.Ordinal)) n++;
+        }
+        catch { /* экземпляр закрылся во время чтения */ }
+        return n;
+    }
+
     // Ждём, пока число inotify-fd не опустится до limit (закрытие асинхронно — на потоке
     // чтения .NET). Возвращает последнее замеренное значение.
     public static async Task<int> WaitInotifyAtMost(int limit, TimeSpan timeout)

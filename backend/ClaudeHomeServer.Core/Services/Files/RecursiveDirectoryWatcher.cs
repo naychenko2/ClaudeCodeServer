@@ -131,6 +131,11 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
     /// FileSystemWatcher перечня нет — дерево там наблюдает ядро.</summary>
     internal IReadOnlyCollection<string> Subscribed => _backend?.Subscribed ?? [];
 
+    /// <summary>Номер inotify-дескриптора экземпляра (для тестов и диагностики): по нему
+    /// считают слежки именно этого экземпляра, не всего процесса. У не-Linux-ветки
+    /// дескриптора нет — -1.</summary>
+    internal int FdForTests => (_backend as InotifyBackend)?.FdForTests ?? -1;
+
     private void Emit(string path, DirectoryWatchKind kind)
     {
         try { _onEvent(path, kind); }

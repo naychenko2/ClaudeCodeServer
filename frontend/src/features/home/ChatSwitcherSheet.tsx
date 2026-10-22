@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import { ChevronDown, MessageCircle } from 'lucide-react';
 import type { HomeSessionInfo, Project } from '../../types';
 import { C, FONT, FS, R, SP, TB } from '../../lib/design';
-import { STATUS_COLOR, STATUS_PULSE, foldChatActivity, useChatActivity, type ActivityStatus } from '../../lib/projectActivity';
+import { STATUS_COLOR, STATUS_PULSE, foldChatActivity, useChatActivity, useRootChatActivity, type ActivityStatus } from '../../lib/projectActivity';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Modal, PressableArea } from '../../components/ui';
 import { ProjectIcon } from '../projects/ProjectIcon';
@@ -174,12 +174,13 @@ const OTHER_CHATS_STATUS_TITLE: Record<ActivityStatus, string> = {
 };
 
 // Тач-зона имени чата в мобильной шапке: имя + шеврон ▾, тап открывает шторку.
-// Точка на шевроне — свёртка активности по всем чатам, КРОМЕ открытого, с тем же
-// приоритетом и видом, что у точек рельс. Отдельный компонент — чтобы подписка на
+// Точка на шевроне — свёртка активности по корневым чатам, КРОМЕ открытого, по правилам
+// точки проекта в рельсе (дочерние не считаются, непрочитанность — с учётом фильтра
+// списка проекта), с тем же приоритетом и видом. Отдельный компонент — чтобы подписка на
 // активность чатов жила только там, где зона нарисована (мобила), а не в каждой шапке
 export function ChatSwitcherTrigger({ currentId, children }: { currentId: string; children: ReactNode }) {
   const [open, setOpen] = useState(false);
-  const other = foldChatActivity(useChatActivity(), currentId);
+  const other = foldChatActivity(useRootChatActivity(), currentId);
   const title = `Переключить чат${other ? ` — ${OTHER_CHATS_STATUS_TITLE[other]}` : ''}`;
   const show = () => setOpen(true);
   return (

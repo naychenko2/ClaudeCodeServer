@@ -72,17 +72,6 @@ public sealed record ReaderOutcome
 }
 
 /// <summary>
-/// ConnectCallback клиента "link-reader" бросает это, когда прямое (без прокси) соединение
-/// целится в приватный/loopback-адрес — резолвился заново прямо перед подключением, поэтому
-/// закрывает TOCTOU-окно между предварительной проверкой в ReaderService и реальным connect
-/// (см. ADR-005, раздел 2, «Про DNS rebinding честно»).
-/// </summary>
-public sealed class ReaderConnectBlockedException(bool dnsFailed) : Exception
-{
-    public bool DnsFailed { get; } = dnsFailed;
-}
-
-/// <summary>
 /// Исход пробы встраиваемости (docs/adr/ADR-006-reader-embed-check.md, §1):
 /// <c>embeddable</c> + машинный <c>reason</c> для телеметрии и отладки. Фронт на reason
 /// не ветвится — любой <c>embeddable: false</c> молча уходит в MD-фолбэк через /read.

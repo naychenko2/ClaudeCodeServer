@@ -52,7 +52,10 @@ public class McpServerRetryTests
         {
             var candidate = FreeTcpPort();
             var listener = new HttpListener();
-            listener.Prefixes.Add($"http://localhost:{candidate}/");
+            // Явный 127.0.0.1, а не localhost: на Linux управляемый HttpListener вешает
+            // localhost только на [::1], а fetch Node 22 идёт на 127.0.0.1 → ECONNREFUSED.
+            // Тот же адрес — в URL для MCP-сервера ниже, иначе Host не совпадёт с префиксом.
+            listener.Prefixes.Add($"http://127.0.0.1:{candidate}/");
             try
             {
                 listener.Start();
@@ -110,7 +113,7 @@ public class McpServerRetryTests
             StandardInputEncoding = new UTF8Encoding(false),
             StandardOutputEncoding = new UTF8Encoding(false),
         };
-        psi.Environment["TASKS_API_URL"] = $"http://localhost:{port}";
+        psi.Environment["TASKS_API_URL"] = $"http://127.0.0.1:{port}";
         psi.Environment["TASKS_API_TOKEN"] = "test";
         psi.Environment["TASKS_SESSION_ID"] = "session-1";
 

@@ -23,7 +23,7 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-public class SessionManagerTests : IDisposable
+public partial class SessionManagerTests : IDisposable
 {
     private const string TestUserId = "test-user-id";
     private const string TestUsername = "test-user";

@@ -2,7 +2,8 @@
 // сообщения персон по автоматизации). Слушает NotificationMessage (группа user_*) через
 // SignalR и показывает стек в правом верхнем углу. Уведомление от персоны несёт её лицо
 // (аватар) и строку «Роль (Имя) · Проект»; системное — плитку вида. Клик открывает
-// диплинк через onNavigate (SPA-переход), без обработчика — фолбэк на hash-URL.
+// диплинк только через обязательный onNavigate: url пишет и модель, а проверку своего
+// origin делает обработчик (notificationTargetUrl), своей навигации здесь нет (S7).
 // Закреплённое уведомление (sticky) не гаснет по таймеру и всплывает при каждом входе,
 // пока не прочитано: клик или ✕ помечают его прочитанным.
 
@@ -64,7 +65,7 @@ function joinUserGroup() {
   if (uid) joinUser(uid).catch(() => {});
 }
 
-export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) => void }) {
+export function NotificationToasts({ onNavigate }: { onNavigate: (url: string) => void }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   // Закреплённое снимается только явно — и тогда помечается прочитанным, иначе всплыло
@@ -78,8 +79,7 @@ export function NotificationToasts({ onNavigate }: { onNavigate?: (url: string) 
   const openToast = (t: ToastItem) => {
     if (!t.url) return;
     dismiss(t);
-    if (onNavigate) onNavigate(t.url);
-    else window.location.assign(t.url);
+    onNavigate(t.url);
   };
 
   useEffect(() => {

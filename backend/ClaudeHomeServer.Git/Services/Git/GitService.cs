@@ -42,7 +42,7 @@ public sealed class GitConflictException(string message, IReadOnlyList<string> f
 // (commit-on-plumbing): запись полного дерева, резолв рефа, чтение списка файлов и
 // содержимого, tip с автором, push. Имя ветки и идентичность коммита — на стороне
 // вызывающей вертикали (см. DossierBranch), GitService про конкретные ветки не знает.
-public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore, IGitRepoChecker, IGitWorkingTree
+public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null) : IGitRefSnapshotStore, IGitRepoChecker, IGitWorkingTree, IGitFileHistory
 {
     // Сериализация write-операций одного репозитория: git из UI, авто-коммит хода и
     // сессия Claude могут столкнуться на .git/index.lock. Чтение (status/log/diff) — без блокировки.
@@ -62,11 +62,22 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // только ради статической проверки путей. Возврат — с прямыми слэшами: git ждёт
     // POSIX-разделители, и на Linux путь с обратными молча даёт пустой вывод
     // (log --follow) вместо ошибки.
+    // Все вызывающие — однофайловые операции, поэтому путь, сводящийся к корню («»,
+    // «.», «./», «d/..»), — отказ (JoinBelowRoot): с «:(literal)» он совпадает со всем
+    // деревом, и discard одного файла откатил бы всё в обход подтверждения discard-all.
+    // Операции над целым репозиторием идут своими методами и сюда не попадают.
     private static string ValidateRel(string root, string relPath)
     {
-        SafePath.Join(root, relPath);
+        SafePath.JoinBelowRoot(root, relPath);
         return relPath.Replace('\\', '/');
     }
+
+    // Путь для pathspec-команды (add, restore, clean, checkout, ls-files, rm, diff, log,
+    // show): «:(literal)» — имя файла, а не маска. Без него «*», «?» и «[…]» в имени
+    // задевают соседей: откат «n[ab].txt» сносил чужой неотслеживаемый «na.txt» (clean -fd).
+    // Магия — только на нашем аргументе, а не глобальным флагом: тот утекал бы в хуки.
+    // blame и diff --no-index принимают путь, а не pathspec: им префикс не нужен.
+    private static string LiteralSpec(string rel) => ":(literal)" + rel;
 
     // Низкоуровневый запуск git. args передаются раздельно (ArgumentList — без shell,
     // защита от инъекций); stdin — для commit-сообщений и патчей (не через argv).
@@ -82,7 +93,10 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         {
             FileName = "git",
             // core.quotepath=false: иначе не-ASCII пути в выводе (--name-status и др.)
-            // экранируются восьмеричными последовательностями («\320\232…» вместо кириллицы)
+            // экранируются восьмеричными последовательностями («\320\232…» вместо кириллицы).
+            // Глобального --literal-pathspecs здесь нет намеренно: он выставляет
+            // GIT_LITERAL_PATHSPECS=1, его наследуют хуки пользователя (commit, push…), и хук
+            // с маской «*.cs» молча получает пустой список. Буквальность путей — LiteralSpec.
             Args = ["-c", "core.quotepath=false", .. args],
             WorkingDirectory = root,
             Env = env,
@@ -267,10 +281,10 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<string?> DiffFileAsync(string? ownerId, string root, string relPath, bool staged, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return null;
-        ValidateRel(root, relPath);
+        var spec = LiteralSpec(ValidateRel(root, relPath));
         string[] args = staged
-            ? ["diff", "--cached", "--", relPath]
-            : ["diff-files", "-p", "--", relPath];
+            ? ["diff", "--cached", "--", spec]
+            : ["diff-files", "-p", "--", spec];
         var r = await RunReadAsync(ownerId, root, args, ct: ct);
         if (r.Ok && !string.IsNullOrWhiteSpace(r.Stdout)) return r.Stdout;
         // Для нового (untracked) файла обычный diff пуст — показываем содержимое как добавление
@@ -290,10 +304,10 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<string?> DiffFileVsHeadAsync(string? ownerId, string root, string relPath, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return null;
-        ValidateRel(root, relPath);
-        var head = await RunReadAsync(ownerId, root, ["diff-index", "-p", "HEAD", "--", relPath], ct: ct);
+        var spec = LiteralSpec(ValidateRel(root, relPath));
+        var head = await RunReadAsync(ownerId, root, ["diff-index", "-p", "HEAD", "--", spec], ct: ct);
         if (head.Ok && !string.IsNullOrWhiteSpace(head.Stdout)) return head.Stdout;
-        var cached = await RunReadAsync(ownerId, root, ["diff", "--cached", "--", relPath], ct: ct);
+        var cached = await RunReadAsync(ownerId, root, ["diff", "--cached", "--", spec], ct: ct);
         return cached.Ok && !string.IsNullOrWhiteSpace(cached.Stdout) ? cached.Stdout : null;
     }
 
@@ -307,7 +321,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     {
         if (!IsGitRepo(root)) return null;
         ValidateRevision(since);
-        var validated = files.Select(f => ValidateRel(root, f)).ToArray();
+        var validated = files.Select(f => LiteralSpec(ValidateRel(root, f))).ToArray();
         var r = await RunReadAsync(ownerId, root,
             ["log", "--format=%H", "--numstat", $"{since}..HEAD", "--", .. validated], ct: ct);
         return r.Ok ? r.Stdout : null;
@@ -351,38 +365,52 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return r.Ok ? ParseLog(r.Stdout) : null;
     }
 
-    // История одного файла (--follow: переживает переименования)
+    // История одного файла (--follow: переживает переименования). Путь буквальный
+    // (LiteralSpec): «*», «?» и «[…]» не подсовывают историю чужого файла
     public async Task<IReadOnlyList<GitLogEntry>> FileLogAsync(string? ownerId, string root, string relPath, int limit = 100, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return [];
-        ValidateRel(root, relPath);
+        var spec = LiteralSpec(ValidateRel(root, relPath));
         var r = await RunReadAsync(ownerId, root,
             ["log", "--follow", "-n", limit.ToString(),
-             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "--", relPath], ct: ct);
+             "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "--", spec], ct: ct);
         return r.Ok ? ParseLog(r.Stdout) : [];
     }
 
+    public async Task<GitLogEntry?> LastCommitAsync(string? ownerId, string root, string relPath, CancellationToken ct = default) =>
+        (await FileLogAsync(ownerId, root, relPath, 1, ct)).FirstOrDefault();
+
     // Число коммитов за последние days суток — знаменатель метрики охвата паспортами
     // (GET /dossiers). Без пути — весь HEAD через rev-list --count; с путём — история
-    // одного файла через log --follow (переживает переименования, как FileLogAsync).
+    // одного файла через log --follow (переживает переименования, как FileLogAsync);
+    // путь буквальный (LiteralSpec), «[ab].txt» не считает коммиты a.txt.
     // --since фильтрует по committer date. Не-репозиторий и любой сбой git — 0:
-    // листинг паспортов не должен падать из-за метрики.
+    // листинг паспортов не должен падать из-за метрики. Сюда же — путь, который
+    // ValidateRel отвергает («.», «/», «..»): это не повод для 500 на GET /dossiers.
     public async Task<int> CountRecentCommitsAsync(
         string? ownerId, string root, int days, string? relPath = null, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return 0;
         var since = "--since=" + DateTimeOffset.UtcNow.AddDays(-days)
             .ToString("yyyy-MM-ddTHH:mm:sszzz", CultureInfo.InvariantCulture);
-        if (string.IsNullOrWhiteSpace(relPath))
+        try
         {
-            var r = await RunReadAsync(ownerId, root, ["rev-list", "--count", since, "HEAD"], ct: ct);
-            return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
+            if (string.IsNullOrWhiteSpace(relPath))
+            {
+                var r = await RunReadAsync(ownerId, root, ["rev-list", "--count", since, "HEAD"], ct: ct);
+                return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
+            }
+            var log = await RunReadAsync(ownerId, root,
+                ["log", "--follow", since, "--format=%H", "--", LiteralSpec(ValidateRel(root, relPath))], ct: ct);
+            return log.Ok
+                ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
+                : 0;
         }
-        var log = await RunReadAsync(ownerId, root,
-            ["log", "--follow", since, "--format=%H", "--", ValidateRel(root, relPath)], ct: ct);
-        return log.Ok
-            ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
-            : 0;
+        catch (Exception ex) when (ex is UnauthorizedAccessException or GitCommandException)
+        {
+            logger?.LogDebug(ex, "CountRecentCommits: путь {Path} не посчитан", relPath);
+            return 0;
+        }
     }
 
     private static List<GitLogEntry> ParseLog(string stdout)
@@ -590,9 +618,9 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task<string?> CommitFileDiffAsync(string? ownerId, string root, string sha, string relPath, CancellationToken ct = default)
     {
         if (!IsGitRepo(root) || !IsValidSha(sha)) return null;
-        ValidateRel(root, relPath);
+        var spec = LiteralSpec(ValidateRel(root, relPath));
         var r = await RunReadAsync(ownerId, root,
-            ["show", "--format=", "--first-parent", "-m", sha, "--", relPath], ct: ct);
+            ["show", "--format=", "--first-parent", "-m", sha, "--", spec], ct: ct);
         return r.Ok && !string.IsNullOrWhiteSpace(r.Stdout) ? r.Stdout : null;
     }
 
@@ -631,10 +659,10 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // ---------- Запись (под per-repo семафором) ----------
 
     public Task StageAsync(string? ownerId, string root, string relPath, CancellationToken ct = default) =>
-        WriteOp(ownerId, root, ["add", "--", ValidateRel(root, relPath)], ct: ct);
+        WriteOp(ownerId, root, ["add", "--", LiteralSpec(ValidateRel(root, relPath))], ct: ct);
 
     public Task UnstageAsync(string? ownerId, string root, string relPath, CancellationToken ct = default) =>
-        WriteOp(ownerId, root, ["restore", "--staged", "--", ValidateRel(root, relPath)], ct: ct);
+        WriteOp(ownerId, root, ["restore", "--staged", "--", LiteralSpec(ValidateRel(root, relPath))], ct: ct);
 
     public Task StageAllAsync(string? ownerId, string root, CancellationToken ct = default) =>
         WriteOp(ownerId, root, ["add", "-A"], ct: ct);
@@ -646,7 +674,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // пользователь видел лишь то, что кнопка «Отменить» ничего не делает.
     public async Task DiscardAsync(string? ownerId, string root, string relPath, CancellationToken ct = default)
     {
-        var rel = ValidateRel(root, relPath);
+        var rel = LiteralSpec(ValidateRel(root, relPath));
         var sem = LockFor(root);
         await sem.WaitAsync(ct);
         try
@@ -799,10 +827,10 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     public async Task RestoreFileFromCommitAsync(string? ownerId, string root, string sha, string relPath, CancellationToken ct = default)
     {
         if (!IsValidSha(sha)) throw new GitCommandException("Некорректный sha");
-        ValidateRel(root, relPath);
+        var spec = LiteralSpec(ValidateRel(root, relPath));
         var sem = LockFor(root);
         await sem.WaitAsync(ct);
-        try { await RunOkAsync(ownerId, root, ["checkout", sha, "--", relPath], ct: ct); }
+        try { await RunOkAsync(ownerId, root, ["checkout", sha, "--", spec], ct: ct); }
         finally { sem.Release(); }
     }
 
@@ -1341,7 +1369,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         var files = r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Select(f => f.Trim('\r')).Where(f => f.Length > 0).ToList();
         foreach (var batch in files.Chunk(50))
-            await RunAsync(ownerId, root, ["rm", "-r", "--cached", "--ignore-unmatch", "--", .. batch], ct: ct);
+            await RunAsync(ownerId, root, ["rm", "-r", "--cached", "--ignore-unmatch", "--", .. batch.Select(LiteralSpec)], ct: ct);
     }
 
     // Подключить/обновить origin (идемпотентно)

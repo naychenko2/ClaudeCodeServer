@@ -51,6 +51,10 @@ public sealed class WorkflowWatcher : IDisposable
     // Ватчер задиспозился — можно убирать из списков
     public bool IsDisposed => _disposed;
 
+    // Workflow ещё не похоронен: финал не отправлен и ватчер не задиспожен. Держит
+    // делегированность прогона после смерти процесса хода (ClaudeSession.HasLiveBgAgents)
+    public bool IsAlive => !_disposed && !_finished;
+
     // Прогон CLI, в котором запущен этот workflow (CliRun — приватный тип ClaudeSession,
     // поэтому object). Финализация прогона абортит только СВОИ ватчеры: при опоздавшей
     // финализации (>15с) замещённого прогона в списке уже могут быть ватчеры нового

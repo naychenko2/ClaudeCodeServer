@@ -67,10 +67,87 @@ public class FileServiceTests : IDisposable
         result.TrimEnd(Path.DirectorySeparatorChar).Should().Be(_root.TrimEnd(Path.DirectorySeparatorChar));
     }
 
+    // ─── JoinBelowRoot: однофайловые git-операции не принимают корень ────────
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(".")]
+    [InlineData("./")]
+    [InlineData("d/..")]
+    [InlineData("/")]
+    public void JoinBelowRoot_ПутьКорень_Отказ(string path)
+    {
+        var act = () => SafePath.JoinBelowRoot(_root, path);
+        act.Should().Throw<UnauthorizedAccessException>();
+    }
+
+    [Theory]
+    [InlineData("d/")]
+    [InlineData("a.txt")]
+    public void JoinBelowRoot_ПутьНижеКорня_Пропускает(string path) =>
+        SafePath.JoinBelowRoot(_root, path).Should().StartWith(_root);
+
+    // Фолбэк без GitService: с «:(literal)» пустой путь — всё дерево, откат «одного
+    // файла» вернул бы к HEAD все правки репозитория
+    [Theory]
+    [InlineData("")]
+    [InlineData(".")]
+    public void RevertFile_БезGitService_ПутьКорень_ПравкиЦелы(string path)
+    {
+        Git("init", "-q");
+        Git("config", "user.email", "t@t");
+        Git("config", "user.name", "t");
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "один\n");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "init");
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "правка\n");
+
+        _svc.RevertFile(_root, path).Should().BeFalse();
+        File.ReadAllText(Path.Combine(_root, "a.txt")).Should().Be("правка\n");
+    }
+
+    // Фолбэк без GitService: «[ab].txt» маской совпадает с a.txt — без «:(literal)» в
+    // дифф одного файла попали бы и правки соседа
     [Fact]
+    public async Task GetDiff_БезGitService_СкобкиВИмени_СоседНеПопадает()
+    {
+        Git("init", "-q");
+        Git("config", "user.email", "t@t");
+        Git("config", "user.name", "t");
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "один\n");
+        File.WriteAllText(Path.Combine(_root, "[ab].txt"), "скобки\n");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "init");
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "правка соседа\n");
+        File.WriteAllText(Path.Combine(_root, "[ab].txt"), "правка скобок\n");
+
+        var diff = await _svc.GetDiffAsync(_root, "[ab].txt");
+
+        diff.Should().Contain("правка скобок");
+        diff.Should().NotContain("a/a.txt").And.NotContain("правка соседа");
+    }
+
+    private void Git(params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = _root,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = System.Diagnostics.Process.Start(psi)!;
+        p.WaitForExit();
+        p.ExitCode.Should().Be(0, string.Join(' ', args));
+    }
+
+    [SkippableFact]
     public void SafeJoin_CaseInsensitive_ReEnterRootInDifferentCase_Allowed()
     {
-        // Сравнение в SafeJoin регистронезависимое (OrdinalIgnoreCase):
+        Skip.IfNot(OperatingSystem.IsWindows(),
+            "Только Windows: там ФС регистронезависима; на Linux другой регистр — другой каталог");
+        // На Windows сравнение регистронезависимое (OrdinalIgnoreCase):
         // выход из root и возврат в него же другим регистром — не traversal
         var upperName = Path.GetFileName(_root).ToUpperInvariant();
         var result = FileService.SafeJoin(_root,
@@ -78,6 +155,31 @@ public class FileServiceTests : IDisposable
 
         result.Should().EndWith("file.txt");
         result.Should().StartWithEquivalentOf(_root); // регистронезависимое сравнение префикса
+    }
+
+    [SkippableFact]
+    public void SafePath_Linux_SiblingInDifferentCase_Throws()
+    {
+        // S8 ревью F2-15: на Linux «/tmp/x/proj» — соседний каталог, а не корень «/tmp/x/Proj»
+        Skip.If(OperatingSystem.IsWindows(),
+            "Только Linux: на Windows ФС регистронезависима, и «../proj» — тот же корень");
+        var act = () => SafePath.Join("/tmp/x/Proj", "../proj/a");
+        act.Should().Throw<UnauthorizedAccessException>();
+    }
+
+    [Fact]
+    public void SafePath_DotDotOutsideRoot_ThrowsOnAnyOs()
+    {
+        var act = () => SafePath.Join(_root, "../outside/a");
+        act.Should().Throw<UnauthorizedAccessException>();
+    }
+
+    [Theory]
+    [InlineData(true, StringComparison.OrdinalIgnoreCase)]
+    [InlineData(false, StringComparison.Ordinal)]
+    public void SafePath_ComparisonFor_DependsOnOs(bool isWindows, StringComparison expected)
+    {
+        SafePath.ComparisonFor(isWindows).Should().Be(expected);
     }
 
     [Fact]
@@ -556,7 +658,12 @@ public class FileServiceTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_root))
-            Directory.Delete(_root, recursive: true);
+        if (!Directory.Exists(_root)) return;
+        // Объекты .git на Windows read-only — без сброса атрибутов удаление падает
+        var dotGit = Path.Combine(_root, ".git");
+        if (Directory.Exists(dotGit))
+            foreach (var f in Directory.EnumerateFiles(dotGit, "*", SearchOption.AllDirectories))
+                File.SetAttributes(f, FileAttributes.Normal);
+        Directory.Delete(_root, recursive: true);
     }
 }

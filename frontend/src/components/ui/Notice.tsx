@@ -9,6 +9,7 @@ import type { HTMLAttributes, ReactNode } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './icons';
+import { useIsMobile } from '../../lib/breakpoints';
 
 export type NoticeTone = 'warning' | 'danger' | 'info';
 
@@ -28,18 +29,27 @@ interface Props extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
   // Жирная первая строка; без неё плашка — одна строка текста
   title?: ReactNode;
   children?: ReactNode;
-  // Действие справа от текста (кнопка «Вернуть»); текст тогда занимает остаток строки
+  // Действие справа от текста (кнопка «Вернуть»); текст тогда занимает остаток строки,
+  // а когда ему остаётся меньше 220px — действие переносится под текст, к правому краю.
+  // На мобиле действие всегда под текстом, по левому краю текста (ревью c63c0038, п.1)
   action?: ReactNode;
 }
 
 export function Notice({ tone = 'warning', icon: Icon, title, children, action, style, ...rest }: Props) {
   const t = TONE[tone];
+  const isMobile = useIsMobile();
+  // Отступ строки действия на мобиле: под текстом, а не под иконкой
+  const actionStyle = isMobile
+    ? { flexBasis: '100%', paddingLeft: ICON_SIZE.xs + SP.sm }
+    : { marginLeft: 'auto', flexShrink: 0 };
   return (
     <div
       role="status"
       {...rest}
       style={{
-        display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+        // С действием — перенос: на узком экране (360px) кнопка уходит под текст, а не
+        // сжимает его в колонку в пару слов (ревью F2-13); на широком всё в одну строку
+        display: 'flex', alignItems: 'flex-start', gap: SP.sm, flexWrap: action ? 'wrap' : undefined,
         padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
         border: `1px solid ${t.border}`, background: t.bg, color: t.fg,
         fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.45,
@@ -47,11 +57,11 @@ export function Notice({ tone = 'warning', icon: Icon, title, children, action, 
       }}
     >
       <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: SP.xxs, color: t.icon }} />
-      <div style={action ? { minWidth: 0, flex: 1 } : { minWidth: 0 }}>
+      <div style={action ? { minWidth: 0, flex: '1 1 220px' } : { minWidth: 0 }}>
         {title && <div style={{ fontWeight: 600 }}>{title}</div>}
         {children}
       </div>
-      {action}
+      {action && <div style={actionStyle}>{action}</div>}
     </div>
   );
 }

@@ -365,15 +365,23 @@ describe('FeaturePlanReader: свёртка разделов', () => {
       const style = reactProps(n)?.style as Record<string, unknown> | undefined;
       expect(Number(style?.minHeight ?? 0), 'высота пункта оглавления на 360').toBeGreaterThanOrEqual(40);
     }
+    // сетка оглавления на 360 — одна колонка
+    const ol = items[0].parentNode!.parentNode!;
+    expect((reactProps(ol)?.style as Record<string, unknown>).gridTemplateColumns, 'колонки оглавления на 360').toBe('1fr');
   });
 
   it('на 1280 пункт «Содержания» остаётся компактной строкой (двухколоночная сетка не разъезжается)', async () => {
     const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
     await flush();
-    for (const n of allNodes(container, 'plan-reader-toc-item')) {
+    const items = allNodes(container, 'plan-reader-toc-item');
+    expect(items.length).toBe(6);
+    for (const n of items) {
       const style = reactProps(n)?.style as Record<string, unknown> | undefined;
       expect(Number(style?.minHeight ?? 0)).toBe(0);
     }
+    // две колонки на десктопе — утверждение по самой сетке оглавления
+    const ol = items[0].parentNode!.parentNode!;
+    expect((reactProps(ol)?.style as Record<string, unknown>).gridTemplateColumns, 'колонки оглавления на 1280').toBe('1fr 1fr');
   });
 
   // === 9б. Порядок «раскрыть → докрутить»: прокрука считается по уже раскрытому разделу ===

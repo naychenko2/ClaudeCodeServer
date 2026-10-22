@@ -133,7 +133,7 @@ export function TotalsCards({ totals, source, isMobile = false }: {
     label: 'Работа',
     value: (source === 'approx' ? '≈ ' : '') + formatDuration(t.workWallMinutes),
     acc: source === 'approx' ? 'ap' : 'jr',
-    hint: `агенты в сумме ≈ ${formatDuration(t.agentsSumMinutes)}`,
+    hint: `агенты в сумме ${source === 'approx' ? '≈ ' : ''}${formatDuration(t.agentsSumMinutes)}`,
   });
   // Не работали (макет: «не работали / простой» — ожидание и простой вместе) — ≈.
   cards.push({
@@ -465,7 +465,7 @@ export function Spend({ spend }: {
       {/* Доля общих чатов (уже включена в итоги) — оценка. */}
       {spend.shared && (
         <div data-testid="stats-spend-shared" style={{ fontSize: FS.xxs, color: C.textSecondary, fontFamily: FONT.sans }}>
-          в т. ч. доля общих чатов ≈ {formatTokens(spend.shared.inputTokens + spend.shared.outputTokens)} токенов (оценка, по {spend.shared.method === 'journal' ? 'журналу' : 'задакам ≈'})
+          в т. ч. доля общих чатов ≈ {formatTokens(spend.shared.inputTokens + spend.shared.outputTokens)} токенов (оценка, по {spend.shared.method === 'journal' ? 'журналу' : 'задачам ≈'})
         </div>
       )}
     </div>

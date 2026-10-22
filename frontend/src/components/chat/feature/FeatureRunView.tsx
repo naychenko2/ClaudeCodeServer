@@ -431,11 +431,11 @@ function ExecutorRow({ ex, isMobile, marks = EMPTY_NAV_MARKS, onOpenChat, onOpen
   const persona = ex.personaId ? getPersonaById(ex.personaId) : undefined;
   const name = persona?.name ?? 'Исполнитель';
   const role = roleLabel(ex.taskRole, ex.stepRef, ex.lane);
-  // Статус исполнителя: running → «идёт», waiting → «ждёт вас», stopped → «стоит», done → «готово», pending → «впереди».
+  // Статус исполнителя: running → «идёт», waiting → «ждёт вас», stopped → «стоит», done → «готово», pending → «не начат».
   const statusWord = ex.status === 'running' ? 'идёт'
     : ex.status === 'waiting' ? 'ждёт вас'
     : ex.status === 'stopped' ? 'стоит'
-    : ex.status === 'pending' ? 'впереди'
+    : ex.status === 'pending' ? 'не начат'
     : 'готово';
   const statusColor = ex.status === 'waiting' ? C.info : ex.status === 'stopped' ? C.dangerText : C.textMuted;
   return (

@@ -822,9 +822,10 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
     // тексту (там «15 ч» ловилось ещё и подписью разрыва «15 ч 35 мин»).
     const card0 = findNodeByAttr(c, 'data-testid', 'stats-card-0')!;
     expect(textNodes(card0).join(''), 'значение «Всего прошло» = 15 ч (900 мин)').toContain('15 ч');
-    // «Работа»: 300 мин → «5 ч»; «агенты в сумме ≈ 8 ч 40 мин» (520).
+    // «Работа»: 300 мин → «5 ч»; «агенты в сумме 8 ч 40 мин» (520): в журнале число точное, без «≈».
     expect(all).toContain('5 ч');
-    expect(all).toContain('агенты в сумме ≈ 8 ч 40 мин');
+    expect(all).toContain('агенты в сумме 8 ч 40 мин');
+    expect(all).not.toContain('агенты в сумме ≈');
   });
 
   it('journal: «Ожидание»/«Простой»/«Ошибки» — только если не null', () => {
@@ -1059,7 +1060,7 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
     s.spend = { ...s.spend!, shared: { ...s.spend!.shared!, method: 'approx' } };
     const c = renderTab(s);
     const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
-    expect(textNodes(shared).join('')).toContain('оценка, по задакам ≈');
+    expect(textNodes(shared).join('')).toContain('оценка, по задачам ≈');
   });
 
   // === Мажор 5: подпись метода shared — из spend.shared.method, НЕ из stats.source ===
@@ -1069,7 +1070,7 @@ describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
     const c = renderTab(s);
     const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
     // Если бы подпись бралась из source (journal) → было бы «по журналу»; из method (approx) → «по задачам ≈».
-    expect(textNodes(shared).join(''), 'метод shared — из spend.shared.method').toContain('оценка, по задакам ≈');
+    expect(textNodes(shared).join(''), 'метод shared — из spend.shared.method').toContain('оценка, по задачам ≈');
   });
 
   // === «Не работали»: значение = totals.notWorkingMinutes (600 → «10 ч»; мутация «0» красит) ===

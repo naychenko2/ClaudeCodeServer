@@ -26,7 +26,6 @@ import { NavTargetButton, NavTargetPair } from './NavTargetButton';
 import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { hhmm, dateOnly } from '../chat/feature/featureTime';
 import { api } from '../../lib/api';
-import { markdownToPlain } from '../../lib/markdownPlain';
 import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
 
 // === Роль документа: подпись + цвет значка (макет §токены) ===
@@ -88,9 +87,24 @@ function splitDoc(text: string): { preamble: string; sections: PlanSection[] } {
   const sections = heads.map((start, k) => {
     const block = lines.slice(start, k + 1 < heads.length ? heads[k + 1] : lines.length);
     const m = /^##\s+(.+?)\s*$/.exec(block[0]);
-    return { head: block[0], title: markdownToPlain((m ? m[1] : block[0]).replace(/<\/?[A-Za-z][^>]*>/g, '')), body: block.slice(1).join('\n').trim() };
+    return { head: block[0], title: headingToPlain(m ? m[1] : block[0]), body: block.slice(1).join('\n').trim() };
   });
   return { preamble: lines.slice(0, heads[0] ?? 0).join('\n').trim(), sections };
+}
+
+// Подпись раздела: только инлайн-разметка. Маркеры списка в начале не снимаем — иначе
+// «1. Введение» теряет номер и подпись расходится с видимым заголовком.
+function headingToPlain(text: string): string {
+  return text
+    .replace(/<\/?[A-Za-z][^>]*>/g, '')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/`+/g, '')
+    .replace(/\*\*|__|~~/g, '')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/(^|[^\p{L}\p{N}_])_([^_\n]+)_(?=[^\p{L}\p{N}_]|$)/gu, '$1$2')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // Значок роли: 24×24, R 7, цвет по роли (макет §токены).

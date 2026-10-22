@@ -133,6 +133,16 @@ const TEXTS = vi.hoisted(() => ({
     '## Раздел 5', 'тело 5',
     '## Раздел 6', 'тело 6',
   ].join('\n'),
+  // Номера и маркеры в начале заголовка не теряются, разметка снимается.
+  plainHeads: [
+    'Преамбула.',
+    '## 1. Введение', 'тело 1',
+    '## - Пункт', 'тело 2',
+    '## Шаг **два**', 'тело 3',
+    '## snake_case', 'тело 4',
+    '## a*b', 'тело 5',
+    '## Раздел 6', 'тело 6',
+  ].join('\n'),
   // Заголовки с разметкой — подпись переключателя без `**`.
   markup: [
     'Преамбула.',
@@ -416,6 +426,20 @@ describe('FeaturePlanReader: свёртка разделов', () => {
     const toggle = allNodes(container, 'plan-section-toggle')[0];
     expect(toggle.getAttribute('aria-label')).toBe('Свернуть раздел Шаг два');
     expect(textNodes(allNodes(container, 'plan-reader-toc-item')[0]).join(' ')).toBe('Шаг два');
+  });
+
+  it('подпись раздела сохраняет номер и маркер, снимает только инлайн-разметку', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('plainHeads'), mockups: [] }));
+    await flush();
+    const labels = allNodes(container, 'plan-section-toggle').map(n => n.getAttribute('aria-label'));
+    expect(labels.slice(0, 5)).toEqual([
+      'Свернуть раздел 1. Введение',
+      'Свернуть раздел - Пункт',
+      'Свернуть раздел Шаг два',
+      'Свернуть раздел snake_case',
+      'Свернуть раздел a*b',
+    ]);
+    expect(allNodes(container, 'plan-reader-toc-item').slice(0, 2).map(n => textNodes(n).join(' '))).toEqual(['1. Введение', '- Пункт']);
   });
 
   // === 16. Свёртка — только кнопкой-шевелоном; строка заголовка не кликабельна ===

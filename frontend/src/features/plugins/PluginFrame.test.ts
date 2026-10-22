@@ -9,7 +9,7 @@
 // useHasPanelHeader не мокаем: без PanelShell (тест монтирует фрейм голо) → false →
 // фрейм рисует СВОЙ Island (мобильный режим), что и проверяем.
 
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import type { Project } from '../../types';
 import type { PluginInfo, PluginPanelView } from '../../lib/api';
@@ -212,6 +212,128 @@ describe('PluginFrame: смена версии пересоздаёт iframe', (
     const iframe2 = findIframe(container);
     expect(iframe2, 'iframe смонтирован после обновления').not.toBeNull();
     expect(iframe2, 'фрейм пересоздан: прежний узел заменён новым').not.toBe(iframe1);
+  });
+});
+
+// === F2: перехват домена storage.* на хосте (инварианты 1 и 2 разреза 6760e1d8) ===
+// Домен storage на сервер не уходит никогда: мок api.plugins.call не должен
+// зваться вообще. Право, id плагина и владелец берутся только из состояния
+// хоста — подделанные панелью granted/pluginId/ownerId/prefix в args игнорируются.
+// Мутации: убрать перехват → storage.get уходит на сервер → тест 1 красный;
+// читать granted из args панели → «подделка права» перестаёт быть denied → красный.
+describe('PluginFrame: перехват storage.* на хосте', () => {
+  // Фейковый Storage той же формы, что у браузера (clear() модуль не зовёт).
+  function fakeStorage(initial: Record<string, string> = {}) {
+    const m = new Map(Object.entries(initial));
+    return {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => { m.set(k, v); },
+      removeItem: (k: string) => { m.delete(k); },
+      key: (i: number) => Array.from(m.keys())[i] ?? null,
+      get length() { return m.size; },
+      clear: () => m.clear(),
+    };
+  }
+
+  function findIframe(n: FNode): FNode | null {
+    if (n.nodeType === 1 && n.nodeName === 'IFRAME') return n;
+    for (const c of n.childNodes) {
+      const hit = findIframe(c);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  // Монтирует фрейм с loaded-панелью и приставляет «окно панели»: сообщения
+  // фрейма идут через window 'message' с source = frames[0] contentWindow —
+  // тот же путь, что в браузере (validateFrameMessage сверяет e.source с ним).
+  async function mountWithBridge(plugin: PluginInfo, panel: PluginPanelView, store: Record<string, string>) {
+    vi.stubGlobal('localStorage', fakeStorage(store));
+    vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {}, key: () => null, length: 0, clear: () => {} });
+    installFakeDom();
+    const { container } = mount(createElement(PluginFrame, { project: PROJECT, plugin, panel }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const iframe = findIframe(container);
+    expect(iframe, 'iframe смонтирован после загрузки html').not.toBeNull();
+    const sent: unknown[] = [];
+    const panelWin = { postMessage: (m: unknown) => { sent.push(m); } };
+    (iframe as unknown as { contentWindow: unknown }).contentWindow = { frames: [panelWin] };
+    return { container, sent, panelWin };
+  }
+
+  const dispatch = (e: { type: string; source: unknown; origin: string; data: unknown }) => {
+    act(() => { (window as unknown as { dispatchEvent: (ev: unknown) => boolean }).dispatchEvent(e); });
+  };
+  const callFromPanel = (panelWin: unknown, op: string, args: Record<string, unknown>, id = 'c1') => {
+    dispatch({ type: 'message', source: panelWin, origin: 'null', data: { source: 'ccs-plugin', v: 1, type: 'call', id, op, args } });
+  };
+
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('storage.get обрабатывает хост: api.plugins.call не вызван ни разу', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, { 'cc_user_id': 'u1' });
+    callFromPanel(panelWin, 'storage.get', { key: 'city' });
+    expect(vi.mocked(api.plugins.call).mock.calls.length, 'домен storage не уходит на сервер').toBe(0);
+    expect(sent[0], 'ответ — result с тем же id').toEqual({
+      source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: true, data: { exists: false },
+    });
+  });
+
+  it('storage.set обрабатывает хост: значение пишется с хостовым префиксом', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, { 'cc_user_id': 'u1' });
+    callFromPanel(panelWin, 'storage.set', { key: 'city', value: 'Москва' });
+    expect(vi.mocked(api.plugins.call).mock.calls.length, 'домен storage не уходит на сервер').toBe(0);
+    expect(sent[0]).toEqual({ source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: true, data: {} });
+    // Префикс собирает хост: ccs.plugin.<ownerId>.<pluginId>.<key>
+    expect((globalThis as { localStorage: { getItem: (k: string) => string | null } }).localStorage.getItem('ccs.plugin.u1.local-1/with-panel.city')).toBe('"Москва"');
+  });
+
+  // Инвариант 2: панель не может повлиять на проверку. Хостовское право есть,
+  // панель подделывает granted/ownerId/prefix — результат всё равно по хосту.
+  it('подделанные панелью granted/ownerId/prefix не меняют ни проверку, ни префикс', async () => {
+    const { sent, panelWin } = await mountWithBridge(
+      { ...P_WITH_PANEL, granted: ['storage'] },
+      PANEL_1,
+      { 'cc_user_id': 'u1', 'ccs.plugin.u1.local-1/with-panel.city': '"настоящий"' },
+    );
+    callFromPanel(panelWin, 'storage.get', { key: 'city', granted: [], pluginId: 'evil/x', ownerId: 'other', prefix: 'zzz' });
+    expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
+    expect(sent[0]).toEqual({
+      source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: true, data: { exists: true, value: 'настоящий' },
+    });
+  });
+
+  // И наоборот: панель подделывает granted=['storage'], а хостовского права нет.
+  it('подделка права панелью не выдаёт его: отказ denied доходит до панели', async () => {
+    const { sent, panelWin } = await mountWithBridge(P_WITH_PANEL /* granted: [] */, PANEL_1, { 'cc_user_id': 'u1' });
+    callFromPanel(panelWin, 'storage.get', { key: 'city', granted: ['storage'] });
+    expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
+    expect(sent[0]).toEqual({
+      source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'denied', message: 'Нет права: storage' },
+    });
+  });
+
+  // Отказ по праву ставит плашку «Нет права storage» (тот же путь, что для
+  // серверных отказов: deniedKeyOfError + bridge === 'alive').
+  it('отказ по праву — плашка «Нет права storage» на фрейме', async () => {
+    const { container, sent, panelWin } = await mountWithBridge(P_WITH_PANEL, PANEL_1, { 'cc_user_id': 'u1' });
+    // ready → bridge alive: плашка рисуется только на живом мосту (как и раньше).
+    dispatch({ type: 'message', source: panelWin, origin: 'null', data: { source: 'ccs-plugin', v: 1, type: 'ready' } });
+    callFromPanel(panelWin, 'storage.get', { key: 'city' });
+    expect(sent[sent.length - 1]).toEqual({
+      source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'denied', message: 'Нет права: storage' },
+    });
+    expect(textNodes(container).join(' ')).toContain('Нет права storage');
+  });
+
+  // Fail-closed: нет id владельца (не авторизован) — unavailable, ни одной записи.
+  it('неизвестный ownerId — unavailable и ноль записей', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {});
+    callFromPanel(panelWin, 'storage.keys', {});
+    expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
+    expect(sent[0]).toEqual({
+      source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Нет владельца: хранилище недоступно' },
+    });
   });
 });
 

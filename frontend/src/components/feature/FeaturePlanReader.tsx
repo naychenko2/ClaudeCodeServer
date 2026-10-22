@@ -416,7 +416,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                           title={expanded ? 'Свернуть раздел' : 'Развернуть раздел'}
                           onClick={() => toggleSection(i, expanded)}
                           style={{
-                            width: 34, minWidth: isMobile ? 40 : undefined, minHeight: isMobile ? 40 : 26, flexShrink: 0,
+                            width: isMobile ? 40 : 34, minHeight: isMobile ? 40 : 26, flexShrink: 0,
                             border: 'none', background: 'transparent', cursor: 'pointer',
                             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                             color: C.textSecondary,

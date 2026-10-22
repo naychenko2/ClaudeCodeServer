@@ -335,7 +335,18 @@ describe('FeaturePlanReader: свёртка разделов', () => {
       const style = props?.style as Record<string, unknown> | undefined;
       expect(Number(style?.minHeight ?? 0)).toBeGreaterThanOrEqual(40);
       // Цель меряется по обеим сторонам: ширина тоже не меньше 40.
-      expect(Math.max(Number(style?.width ?? 0), Number(style?.minWidth ?? 0))).toBeGreaterThanOrEqual(40);
+      expect(style?.width).toBe(40);
+      expect(style?.minHeight).toBe(40);
+    }
+  });
+
+  it('на десктопе кнопка-переключатель раздела 34×26', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('long'), mockups: [] }));
+    await flush();
+    for (const n of allNodes(container, 'plan-section-toggle')) {
+      const style = reactProps(n)?.style as Record<string, unknown> | undefined;
+      expect(style?.width).toBe(34);
+      expect(style?.minHeight).toBe(26);
     }
   });
 

@@ -1098,6 +1098,47 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect((page as any).style?.display, 'страница не скрыта (в)').toBe('none');
   });
 
+  // Ф-ah (мобила): страница открыта → открыли файл ПОСЛЕ неё → файл вытесняет страницу
+  // (как на десктопе); повторное «Фича →» возвращает страницу поверх файла.
+  it('Ф-ah (мобила): страница → файл после неё → файл виден, страница скрыта; «Фича →» снова — страница поверх', async () => {
+    (globalThis as any).window.innerWidth = 360;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [
+        { path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved', files: [{ path: 'docs/mockups/foo.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+      ],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Файл — последний открытый: контейнер центра скрыт, страница скрыта, файл виден.
+    // Мутация «pageYieldsToFile = false» краснит все три утверждения.
+    expect((findNodeByAttr(container, 'data-testid', 'workspace-center-container') as any).style?.display,
+      'контейнер центра не уступил файлу (мобила)').toBe('none');
+    expect((findNodeByAttr(container, 'data-testid', 'feature-center-page') as any).style?.display,
+      'страница не скрыта при открытом позже файле (мобила)').toBe('none');
+    const fileName = findNodeByAttr(container, 'data-testid', 'file-name');
+    expect(fileName, 'файл не в DOM (мобила)').not.toBeNull();
+
+    // Обратный переход: повторное открытие страницы — страница поверх файла.
+    await openFeature(container);
+    expect((findNodeByAttr(container, 'data-testid', 'feature-center-page') as any).style?.display,
+      'страница не вернулась поверх файла (мобила)').toBe('flex');
+    expect((findNodeByAttr(container, 'data-testid', 'workspace-center-container') as any).style?.display,
+      'контейнер страницы не виден (мобила)').toBe('flex');
+  });
+
   // (г) зонд A Глеба: страница A → «Открыть макет» (файл открыт, страница уступила) →
   // «Фича →» на ДРУГУЮ фичу B → страница B ВИДНА (смена фичи = новое открытие → страница
   // снова поверх файла). Старый баг: признак «свой файл» сбрасывался только при ЗАКРЫТИИ

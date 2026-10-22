@@ -76,7 +76,7 @@ import { ToolsSidebar } from '../components/tools/ToolsSidebar';
 import { TerminalView } from '../components/terminal/TerminalView';
 import { PreviewView } from '../components/preview/PreviewView';
 import * as terminalApi from '../lib/terminalSignalr';
-import { DesktopWorkspace } from './workspace/DesktopWorkspace';
+import { DesktopWorkspace, centerWinner } from './workspace/DesktopWorkspace';
 import { useProjectTerminals } from '../hooks/useProjectTerminals';
 import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
@@ -919,6 +919,10 @@ const windowWidth = useWindowWidth();
   // настоящее закрытие), а явное открытие страницы рисует её ПОВЕРХ любого окна (центр
   // display:none, чат в DOM); Esc/«Закрыть» возвращают к тому, что было под ней.
   const featurePageOpen = openFeatureId != null && featuresOn;
+  // Мобила: «последнее действие выигрывает» (как на десктопе, DesktopWorkspace.yielded) —
+  // файл, открытый ПОСЛЕ страницы, вытесняет её (страница остаётся смонтированной, display:none).
+  const pageYieldsToFile = featurePageOpen && !!openFile && centerWinner(featureOpenedAt, fileOpenedAt) === 'file';
+  const pageOnTop = featurePageOpen && !pageYieldsToFile;
 
   // Единая точка закрытия страницы фичи: сбрасываем openFeatureId и указатель возврата
   // (featureBackNav), чтобы «назад» не вёл на невидимую страницу. Вызывается при ЯВНОМ
@@ -2395,12 +2399,12 @@ const windowWidth = useWindowWidth();
             виден (FeatureCenter внутри прячет сам центр display:none и рисует страницу); при
             openFile/readerOpenMobile/mobileView='sidebar' контейнер был display:none → страница
             в DOM, но невидима (проба 360px: страница над файлом). Без страницы — прежние правила. */}
-        <div data-testid="workspace-center-container" style={{ flex: 1, display: featurePageOpen || (!openFile && !readerOpenMobile && mobileView !== 'sidebar') ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        <div data-testid="workspace-center-container" style={{ flex: 1, display: pageOnTop || (!openFile && !readerOpenMobile && mobileView !== 'sidebar') ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Центр (чат/задача/…) — СОСЕД страницы фичи, а не новая ветка тернарника:
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
               с десктопом — FeatureCenter (не копипаста). */}
-          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack} onOpenFile={handleOpenFileFromTree}>
+          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack} onOpenFile={handleOpenFileFromTree} yielded={pageYieldsToFile}>
             {leftTab === 'tools'
               ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
               : personasMode
@@ -2426,7 +2430,7 @@ const windowWidth = useWindowWidth();
             размонтирования — состояние файла/ридера сохраняется для Esc), иначе на 360
             страница и файл делили экран 50/50 (MAJOR-2). */}
         {openFile && (
-          <div style={{ flex: 1, overflow: 'hidden', display: featurePageOpen ? 'none' : 'block' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: pageOnTop ? 'none' : 'block' }}>
             <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} />
           </div>
         )}

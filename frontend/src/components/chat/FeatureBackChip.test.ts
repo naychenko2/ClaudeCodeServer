@@ -157,3 +157,37 @@ describe('FeatureBackChip: один указатель (minor 5)', () => {
     expect(textNodes(chip!).join(''), 'вкладка c2').toContain('· Статистика');
   });
 });
+
+// Ф9b-д3: вне проекта (раздел «Чаты») воркспейса нет — cc-open-feature никто не принимает
+// (handled не выставлен), и клик открывает проект фичи запасным событием для App.
+describe('FeatureBackChip: вне проекта', () => {
+  const click = (c: unknown) => {
+    const btn = findNodeByAttr(c as never, 'role', 'button')!;
+    act(() => { (reactProps(btn)!.onClick as () => void)(); });
+  };
+  it('событие не принято + есть projectId → cc-open-project-feature { projectId, featureId }', () => {
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    installFakeDom();
+    const { root, container } = mount(createElement(FeatureBackChip, { sessionId: 'c1', projectId: 'p1' }));
+    roots.push(root);
+    const log = dispatched();
+    click(container);
+    const ev = log.find(d => d.type === 'cc-open-project-feature');
+    expect(ev, 'кнопка мертва: запасной переход не отправлен').toBeDefined();
+    expect(ev!.detail).toEqual({ projectId: 'p1', featureId: 'f1' });
+  });
+  it('воркспейс принял событие (handled) → запасного перехода нет', () => {
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    installFakeDom();
+    const { root, container } = mount(createElement(FeatureBackChip, { sessionId: 'c1', projectId: 'p1' }));
+    roots.push(root);
+    const log: string[] = [];
+    (globalThis as { window: { dispatchEvent: (e: Event) => boolean } }).window.dispatchEvent = (e: Event) => {
+      log.push(e.type);
+      if (e.type === 'cc-open-feature') (e as CustomEvent).detail.handled = true;
+      return true;
+    };
+    click(container);
+    expect(log).toEqual(['cc-open-feature']);
+  });
+});

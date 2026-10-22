@@ -924,13 +924,13 @@ const windowWidth = useWindowWidth();
   const pageYieldsToFile = featurePageOpen && !!openFile && centerWinner(featureOpenedAt, fileOpenedAt) === 'file';
   const pageOnTop = featurePageOpen && !pageYieldsToFile;
 
-  // Единая точка закрытия страницы фичи: сбрасываем openFeatureId и указатель возврата
-  // (featureBackNav), чтобы «назад» не вёл на невидимую страницу. Вызывается при ЯВНОМ
-  // выборе чата (handleSelectSession): чат — базовый режим, не «другое окно», поэтому
-  // вычисляемым otherCenterOpen его выбор не покрывается.
+  // Единая точка закрытия страницы фичи при ЯВНОМ выборе чата (handleSelectSession): чат —
+  // базовый режим, не «другое окно», поэтому вычисляемым otherCenterOpen его выбор не
+  // покрывается. Указатель возврата (featureBackNav) НЕ гасим: переход «чат» из шторки/
+  // попапа фичи записал его ровно перед выбором чата, и чип «← к фиче» живёт именно им.
+  // Осознанный уход из фичи (кнопка закрытия страницы, автоскрытие) чистит его сам.
   const closeFeaturePage = useCallback(() => {
     setOpenFeatureId(null);
-    clearBackNav();
   }, []);
   // Страница не показана (флаг выключен), но openFeatureId ещё задан — указатель возврата
   // (chat → фича) не должен вести на невидимую страницу: сбрасываем. Явное закрытие
@@ -1878,8 +1878,11 @@ const windowWidth = useWindowWidth();
   // Показ страницы и запись истории — общие.
   useEffect(() => {
     const onOpenFeature = (e: Event) => {
-      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null; fromChat?: boolean; stage?: string }>).detail;
+      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null; fromChat?: boolean; stage?: string; handled?: boolean }>).detail;
       if (!d?.featureId) return;
+      // Сигнал отправителю «страницу открыл воркспейс»: иначе чип возврата вне проекта
+      // (нет WorkspacePage) уйдёт запасным путём через App.
+      d.handled = true;
       if (d.fromChat && d.fromChatId) recordBackNav(d.fromChatId, { kind: 'feature', id: d.featureId });
       else if (!d.fromChat) clearBackNav();
       setOpenFeatureId(d.featureId);

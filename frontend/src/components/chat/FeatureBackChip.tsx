@@ -15,7 +15,7 @@ import { setFeaturePageTab, FEATURE_TAB_LABEL } from '../../lib/featurePage';
 // minor 1: название вкладки — из ЕДИНОГО словаря FEATURE_TAB_LABEL (чип и полоса не разъезжаются).
 // minor 4: длинное название — обрезка с многоточием (min-width:0 + text-overflow), полное
 // название в title/aria-label (кнопка может сжиматься: flexShrink:1 + overflow:hidden).
-export function FeatureBackChip({ sessionId, isCompact = false }: { sessionId: string; isCompact?: boolean }) {
+export function FeatureBackChip({ sessionId, projectId, isCompact = false }: { sessionId: string; projectId?: string | null; isCompact?: boolean }) {
   const featureBack = useFeatureBackNav(sessionId);
   if (!featureBack) return null;
   const tabName = FEATURE_TAB_LABEL[featureBack.tab];
@@ -33,9 +33,13 @@ export function FeatureBackChip({ sessionId, isCompact = false }: { sessionId: s
         // Вернуться на ТУ ЖЕ вкладку, с которой ушли: ставим явно — вкладку могли сменить,
         // пока страница была скрыта.
         setFeaturePageTab(featureBack.tab);
-        window.dispatchEvent(new CustomEvent('cc-open-feature', {
-          detail: { featureId: featureBack.featureId, fromChat: false },
-        }));
+        const detail: { featureId: string; fromChat: boolean; handled?: boolean } = { featureId: featureBack.featureId, fromChat: false };
+        window.dispatchEvent(new CustomEvent('cc-open-feature', { detail }));
+        // Вне проекта (раздел «Чаты») воркспейса нет, и событие никто не принял: открываем
+        // проект фичи со страницей фичи через App.
+        if (!detail.handled && projectId) {
+          window.dispatchEvent(new CustomEvent('cc-open-project-feature', { detail: { projectId, featureId: featureBack.featureId } }));
+        }
       }}
     >
       <span

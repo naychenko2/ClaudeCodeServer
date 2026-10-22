@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
 import { centerWinner } from './workspace/DesktopWorkspace';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
-import { __test as backNavTest, recordBackNav } from '../lib/featureBackNav';
+import { __test as backNavTest, recordBackNav, recordFeatureReturn, featureBackNavFrom } from '../lib/featureBackNav';
 import { centerOccupiedByOther, centerFingerprint, CENTER_OCCUPANCY_KEYS, type CenterOccupancy } from '../lib/centerOccupancy';
 import { __test as indexTest } from '../lib/featuresIndex';
 import { setFeaturePageTab, __test as pageTest } from '../lib/featurePage';
@@ -1586,6 +1586,34 @@ describe('WorkspacePage: центр — страница фичи соседом
     // Адрес не содержит /feature/ (navPush в handleSelectSession записал chatId).
     expect(win.window.location.hash, 'адрес содержит /feature/ после выбора чата (мобила)')
       .not.toContain('/feature/');
+  });
+
+  // Ф9b-д3: возврат «страница фичи → чат» записывается ПЕРЕД выбором чата (шторка/попап);
+  // closeFeaturePage страницу закрывает, но указатель не гасит — иначе чипа «← к фиче» нет.
+  // Мутация (вернуть clearBackNav() в closeFeaturePage) красит тест.
+  it('выбор чата из фичи: страница закрыта, указатель возврата в фичу жив (чип)', async () => {
+    const win = globalThis as any;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chat = chatB;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    recordFeatureReturn('f1', { kind: 'chat', id: 'chatB' }, 'Моя фича', undefined, false);
+
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница не закрыта').toBeNull();
+    expect(featureBackNavFrom('chatB'), 'указатель возврата в фичу погашен выбором чата')
+      .toMatchObject({ featureId: 'f1', title: 'Моя фича' });
   });
 
   it('автоскрытие: выбор другого чата (десктоп) — страница фичи скрыта', async () => {

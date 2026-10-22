@@ -1567,7 +1567,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // кнопка возврата на страницу фичи (на ту же вкладку: стор страницы её держит).
   // Клик — cc-open-feature (fromChat=false: крошка страницы фичи ведёт в список, не в чат).
   // useFeatureBackNav — useSyncExternalStore: вызов неусловный, порядок хуков стабилен.
-  const featureBackEl = <FeatureBackChip sessionId={session.id} isCompact={isCompact} />;
+  const featureBackEl = <FeatureBackChip sessionId={session.id} projectId={session.projectId} isCompact={isCompact} />;
   // Бейдж последней запущенной механики команды (только на десктопе)
   // Видимость пилюль (индикаторов) — тем же глазиком, что и кнопки действий, но
   // только в ОБЫЧНОЙ шапке: на стене пилюль нет вовсе. По умолчанию показаны все —

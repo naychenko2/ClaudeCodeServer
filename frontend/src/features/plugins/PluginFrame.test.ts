@@ -57,6 +57,7 @@ vi.mock('../../lib/api', async (importOriginal) => {
 });
 
 const { api } = await import('../../lib/api');
+const { setMeFromServer, clearMe } = await import('../../lib/defaultPersona');
 const { installFakeDom, mount, textNodes, findNodeByAttr, reactProps, uninstallFakeDom } = await import(
   '../../components/chat/__tests__/fakeDom'
 );
@@ -247,7 +248,16 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
   // Монтирует фрейм с loaded-панелью и приставляет «окно панели»: сообщения
   // фрейма идут через window 'message' с source = frames[0] contentWindow —
   // тот же путь, что в браузере (validateFrameMessage сверяет e.source с ним).
-  async function mountWithBridge(plugin: PluginInfo, panel: PluginPanelView, store: Record<string, string>) {
+  // ownerId — состояние авторизации хоста (тот же источник, что в PluginFrame:
+  // getMeSnapshot().userId); без него — clearMe(), fail-closed.
+  async function mountWithBridge(
+    plugin: PluginInfo,
+    panel: PluginPanelView,
+    store: Record<string, string>,
+    ownerId?: string,
+  ) {
+    if (ownerId) setMeFromServer({ userId: ownerId, username: ownerId, role: 'user' });
+    else clearMe();
     vi.stubGlobal('localStorage', fakeStorage(store));
     vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {}, key: () => null, length: 0, clear: () => {} });
     installFakeDom();
@@ -271,7 +281,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
   it('storage.get обрабатывает хост: api.plugins.call не вызван ни разу', async () => {
-    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, { 'cc_user_id': 'u1' });
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
     callFromPanel(panelWin, 'storage.get', { key: 'city' });
     expect(vi.mocked(api.plugins.call).mock.calls.length, 'домен storage не уходит на сервер').toBe(0);
     expect(sent[0], 'ответ — result с тем же id').toEqual({
@@ -280,7 +290,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
   });
 
   it('storage.set обрабатывает хост: значение пишется с хостовым префиксом', async () => {
-    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, { 'cc_user_id': 'u1' });
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
     callFromPanel(panelWin, 'storage.set', { key: 'city', value: 'Москва' });
     expect(vi.mocked(api.plugins.call).mock.calls.length, 'домен storage не уходит на сервер').toBe(0);
     expect(sent[0]).toEqual({ source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: true, data: {} });
@@ -294,7 +304,8 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
     const { sent, panelWin } = await mountWithBridge(
       { ...P_WITH_PANEL, granted: ['storage'] },
       PANEL_1,
-      { 'cc_user_id': 'u1', 'ccs.plugin.u1.local-1/with-panel.city': '"настоящий"' },
+      { 'ccs.plugin.u1.local-1/with-panel.city': '"настоящий"' },
+      'u1',
     );
     callFromPanel(panelWin, 'storage.get', { key: 'city', granted: [], pluginId: 'evil/x', ownerId: 'other', prefix: 'zzz' });
     expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
@@ -305,7 +316,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
 
   // И наоборот: панель подделывает granted=['storage'], а хостовского права нет.
   it('подделка права панелью не выдаёт его: отказ denied доходит до панели', async () => {
-    const { sent, panelWin } = await mountWithBridge(P_WITH_PANEL /* granted: [] */, PANEL_1, { 'cc_user_id': 'u1' });
+    const { sent, panelWin } = await mountWithBridge(P_WITH_PANEL /* granted: [] */, PANEL_1, {}, 'u1');
     callFromPanel(panelWin, 'storage.get', { key: 'city', granted: ['storage'] });
     expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
     expect(sent[0]).toEqual({
@@ -316,7 +327,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
   // Отказ по праву ставит плашку «Нет права storage» (тот же путь, что для
   // серверных отказов: deniedKeyOfError + bridge === 'alive').
   it('отказ по праву — плашка «Нет права storage» на фрейме', async () => {
-    const { container, sent, panelWin } = await mountWithBridge(P_WITH_PANEL, PANEL_1, { 'cc_user_id': 'u1' });
+    const { container, sent, panelWin } = await mountWithBridge(P_WITH_PANEL, PANEL_1, {}, 'u1');
     // ready → bridge alive: плашка рисуется только на живом мосту (как и раньше).
     dispatch({ type: 'message', source: panelWin, origin: 'null', data: { source: 'ccs-plugin', v: 1, type: 'ready' } });
     callFromPanel(panelWin, 'storage.get', { key: 'city' });
@@ -326,9 +337,11 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
     expect(textNodes(container).join(' ')).toContain('Нет права storage');
   });
 
-  // Fail-closed: нет id владельца (не авторизован) — unavailable, ни одной записи.
-  it('неизвестный ownerId — unavailable и ноль записей', async () => {
-    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {});
+  // Fail-closed: нет id владельца в состоянии авторизации — unavailable, ни одной
+  // записи. cc_user_id в хранилище больше ни на что не влияет — источник один
+  // (getMeSnapshot), как в pluginStorageLifecycle.ts.
+  it('неизвестный ownerId — unavailable и ноль записей, даже если cc_user_id в хранилище', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, { 'cc_user_id': 'ghost' });
     callFromPanel(panelWin, 'storage.keys', {});
     expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
     expect(sent[0]).toEqual({

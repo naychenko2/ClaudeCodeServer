@@ -25,6 +25,9 @@ import { humanizeId, panelDisplayName } from './panelNaming';
 // Перехват домена storage на хосте (решение Александра, 6760e1d8 §2/§4): общая
 // реализация с эмулятором панели — hostOps/storage.js, второй копии логики нет.
 import { handleStorageCall, type StorageOp } from './hostOps/storage';
+// Владелец — из состояния авторизации хоста (ответ /auth/me), тот же источник,
+// что в pluginStorageLifecycle.ts: F2-d, единый способ в перехвате и цикле.
+import { getMeSnapshot } from '../../lib/defaultPersona';
 
 // === Панель плагина (S5): одна панель = одна карточка ===
 // Десктоп: карточка — обычная панель рельса (PanelZone рисует её через PanelShell),
@@ -305,9 +308,10 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
     // плагина и владелец берутся только из состояния хоста.
     if (msg.op.startsWith('storage.')) {
       logEvent(`← call ${msg.id} ${msg.op} (host)`);
-      // Владелец — из авторизации хоста: «запомни меня» → localStorage, иначе
-      // sessionStorage. Пустой id — fail-closed: unavailable, ни одной записи.
-      const ownerId = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id') || '';
+      // Владелец — из состояния авторизации хоста (getMeSnapshot, ответ /auth/me),
+      // не из cc_user_id в хранилище: id есть сразу после входа, независимо от
+      // «запомни меня». Пустой id — fail-closed: unavailable, ни одной записи.
+      const ownerId = getMeSnapshot().userId ?? '';
       const res = handleStorageCall({
         op: msg.op.slice('storage.'.length) as StorageOp,
         args,

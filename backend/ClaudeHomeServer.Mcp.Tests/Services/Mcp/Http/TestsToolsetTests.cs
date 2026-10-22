@@ -74,7 +74,8 @@ public class TestsToolsetTests : IDisposable
 
         var launchers = new CountingLaunchers();
         var runs = withService ? new TestRunService(launchers, new TestRunsOptions()) : null;
-        var toolset = new TestsToolset(sessions, projects, personas, runs);
+        var probe = withService ? new UiProbeService(launchers, new TestRunsOptions(), new PhasePipeline()) : null;
+        var toolset = new TestsToolset(sessions, projects, personas, runs, probe: probe);
         return new Env(toolset, new McpToolCallContext(TestUserId, session.Id, session.Id), session, project,
             personas, launchers, sessions);
     }
@@ -83,11 +84,11 @@ public class TestsToolsetTests : IDisposable
         env.Toolset.CallAsync(TestsToolset.ToolName, args ?? new JsonObject(), context ?? env.Context, default);
 
     [Fact]
-    public void СвояСессия_ОдинИнструмент_ПостоянныйСостав()
+    public void СвояСессия_ДваИнструмента_ПостоянныйСостав()
     {
         var env = Build();
 
-        env.Toolset.ToolsFor(env.Context).Select(t => t.Name).Should().Equal("run_tests");
+        env.Toolset.ToolsFor(env.Context).Select(t => t.Name).Should().Equal("run_tests", "ui_probe");
         env.Toolset.ToolsFor(env.Context).Should().BeSameAs(env.Toolset.ToolsFor(env.Context),
             "состав статичный — не зависит ни от хода, ни от вызова");
         env.Toolset.Name.Should().Be(McpEndpoints.TestsName);
@@ -692,18 +693,127 @@ public class TestsToolsetTests : IDisposable
     [Fact]
     public void Схема_ВидыИАргументы_Постоянны()
     {
-        var schema = TestsToolset.Tools.Single().InputSchema["properties"]!.AsObject();
+        var run = TestsToolset.Tools.Single(t => t.Name == TestsToolset.ToolName);
+        var schema = run.InputSchema["properties"]!.AsObject();
 
         schema.Select(p => p.Key).Should().BeEquivalentTo("kind", "target", "filter", "files", "env", "no_build");
         schema["kind"]!["enum"]!.AsArray().Select(v => v!.GetValue<string>()).Should().Equal("dotnet", "vitest", "playwright");
-        TestsToolset.Tools.Single().Description.Should().Contain("target");
+        run.Description.Should().Contain("target");
+    }
+
+    [Fact]
+    public void Схема_UiProbe_ПорогиИШириныСУмолчаниямиВОписании()
+    {
+        var probe = TestsToolset.Tools.Single(t => t.Name == TestsToolset.UiProbeName);
+        var schema = probe.InputSchema["properties"]!.AsObject();
+
+        schema.Select(p => p.Key).Should().BeEquivalentTo("url", "service", "path", "viewports", "min_size_px",
+            "selector", "target", "user", "password");
+        schema["viewports"]!["description"]!.GetValue<string>().Should().Contain("360").And.Contain("1280");
+        schema["min_size_px"]!["description"]!.GetValue<string>().Should().Contain("40");
+        probe.InputSchema["required"].Should().BeNull("url или service — одно из двух, схема это не выражает");
+        UiProbeReport.DefaultMinTargetPx.Should().Be(40);
+        UiProbeReport.DefaultViewports.Should().Equal(360, 1280);
+    }
+
+    private static Task<McpToolCallResult> Probe(Env env, JsonObject args, McpToolCallContext? context = null) =>
+        env.Toolset.CallAsync(TestsToolset.UiProbeName, args, context ?? env.Context, default);
+
+    [Fact]
+    public async Task UiProbe_ЧужаяСессия_ОтказБезСреды()
+    {
+        var env = Build();
+        var foreign = new McpToolCallContext("someone-else", env.Session.Id, env.Session.Id);
+
+        var result = await Probe(env, new JsonObject { ["url"] = "http://127.0.0.1:5559" }, foreign);
+
+        result.IsError.Should().BeTrue();
+        env.Launchers.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UiProbe_ПодсистемаВыключена_ЧестныйОтказ()
+    {
+        var env = Build(withService: false);
+
+        var result = await Probe(env, new JsonObject { ["url"] = "http://127.0.0.1:5559" });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("выключен");
+    }
+
+    [Theory]
+    [InlineData("{}", "ровно одно")]
+    [InlineData("{\"url\":\"http://127.0.0.1:5559\",\"service\":\"x\"}", "ровно одно")]
+    [InlineData("{\"url\":\"http://example.com/\"}", "только локальный стенд")]
+    [InlineData("{\"url\":\"http://127.0.0.1:5559\",\"path\":\"//evil.com\"}", "path")]
+    [InlineData("{\"url\":\"http://127.0.0.1:5559\",\"viewports\":[100]}", "viewports")]
+    [InlineData("{\"url\":\"http://127.0.0.1:5559\",\"min_size_px\":0}", "min_size_px")]
+    public async Task UiProbe_ПлохиеАргументы_ОтказДоСреды(string json, string expected)
+    {
+        var env = Build();
+        FrontendRoot(env.Project.RootPath);
+
+        var result = await Probe(env, JsonNode.Parse(json)!.AsObject());
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain(expected);
+        env.Launchers.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UiProbe_СервисБезРеестра_ОтказБезЗапуска()
+    {
+        var env = Build();
+
+        var result = await Probe(env, new JsonObject { ["service"] = "frontend-dev" });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("выключены");
+        env.Launchers.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UiProbe_ВсеГейтыПройдены_ДоходитДоСредыПроекта()
+    {
+        var env = Build();
+        FrontendRoot(env.Project.RootPath);
+
+        var result = await Probe(env, new JsonObject
+        {
+            ["url"] = "http://127.0.0.1:5559/ignored/path",
+            ["path"] = "/#/ui-kit",
+            ["viewports"] = new JsonArray(360),
+            ["target"] = "frontend",
+        });
+
+        env.Launchers.Calls.Should().Be(1);
+        result.Text.Should().Contain("Не удалось запустить замер");
+    }
+
+    [Fact]
+    public void UiProbe_РазборПутиИШирин()
+    {
+        TestsToolset.TryParsePath(null, out var def, out _).Should().BeTrue();
+        def.Should().Be("/");
+        TestsToolset.TryParsePath("/#/ui-kit", out var hash, out _).Should().BeTrue();
+        hash.Should().Be("/#/ui-kit");
+        TestsToolset.TryParsePath("ui-kit", out _, out _).Should().BeFalse();
+        TestsToolset.TryParsePath("/a b", out _, out _).Should().BeFalse();
+        TestsToolset.TryParseViewports(null, out var vp, out _).Should().BeTrue();
+        vp.Should().Equal(360, 1280);
+        TestsToolset.TryParseViewports(new JsonArray(200, 4000), out _, out _).Should().BeTrue("границы 200 и 4000 допустимы");
+        TestsToolset.TryParseViewports(new JsonArray(199), out _, out _).Should().BeFalse();
+        TestsToolset.TryParseViewports(new JsonArray(), out _, out _).Should().BeFalse("пустой список — не «по умолчанию»");
+        TestsToolset.TryParseMinSize(null, out var min, out _).Should().BeTrue();
+        min.Should().Be(40);
     }
 
     // Замечание Киры (А): пример «backend/App.slnx» модель подставляла буквально
     [Fact]
     public void Схема_ОписаниеЦели_БезВыдуманныхИмён()
     {
-        var target = TestsToolset.Tools.Single().InputSchema["properties"]!["target"]!["description"]!.GetValue<string>();
+        var target = TestsToolset.Tools.Single(t => t.Name == TestsToolset.ToolName).InputSchema["properties"]!["target"]!["description"]!.GetValue<string>();
 
         target.Should().NotContain("App.slnx").And.NotContain("например").And.Contain(".slnx");
     }

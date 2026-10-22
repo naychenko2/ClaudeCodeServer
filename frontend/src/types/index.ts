@@ -653,6 +653,9 @@ export interface Task {
   repro?: DefectRepro | null;
   // Подтверждение проверки (null — не подтверждено). Сбрасывается при уходе из Done
   verification?: TaskVerification | null;
+  // Критерии приёмки и свидетельства по ним (пусто/нет — задача без критериев)
+  acceptance?: AcceptanceCriterion[];
+  evidence?: AcceptanceEvidence[];
   // Исход дефекта: 'closedWithoutCheck' — внутренний путь закрытия без проверки
   outcome?: DefectOutcome | null;
   // Фикс-волна 4 team-blocker-honest: метки от терминального отказа хода исполнителя
@@ -758,6 +761,10 @@ export interface DefectRepro {
 // Подтверждение проверки: personaId == null означает проверку человеком (UI-форма
 // владельца задачи), не-null — конкретной персоной (чаще всего — исполнившей дефект).
 // Поле бэк подставляет из сессии, клиент его НЕ шлёт
+// Критерий приёмки задачи и свидетельство его выполнения (связь по criterionId)
+export interface AcceptanceCriterion { id: string; text: string }
+export interface AcceptanceEvidence { criterionId: string; how: string; result: string }
+
 export interface TaskVerification {
   verifiedAt: string;
   personaId?: string | null;

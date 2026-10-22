@@ -86,6 +86,25 @@ public static class SubagentPrompts
             """;
     }
 
+    /// <summary>
+    /// Вызов инструмента, которого у сессии нет (имя не из состава сессии): повторять
+    /// бессмысленно — Strata такой вызов всегда возвращает текстом (frontend.py, #3441),
+    /// а vLLM отдал бы tool_use и CLI ответил бы «No such tool available». Говорим прямо:
+    /// инструмента нет, вот что есть, иди другим путём. Попытки считаются тем же потолком,
+    /// что у повторов формата (MaxSubagentNudges), чтобы зацикливание всё равно упёрлось в терминал.
+    /// </summary>
+    public static string ResumeToolCallUnknownTool(int attempt, int max, string tool, IReadOnlyList<string> available)
+    {
+        var list = available.Count == 0 ? "(состав неизвестен — опирайся на Bash, Read, Glob, Grep)" : string.Join(", ", available);
+        return $"""
+            [СИСТЕМНАЯ ДИРЕКТИВА — ВЫЗОВ НЕСУЩЕСТВУЮЩЕГО ИНСТРУМЕНТА {attempt}/{max}]
+            Инструмента `{tool}` в этой сессии НЕТ, вызов не выполнен и выполнен не будет —
+            не повторяй его ни в каком формате. Доступные инструменты: {list}.
+            Сделай то же самое доступными средствами (файлы — Read/Glob/Grep/Bash) и продолжай задачу.
+            (попытка {attempt} из {max}).
+            """;
+    }
+
     // Выдержка ушедшего в текст вызова: в одну строку, не длиннее 120 символов,
     // чтобы директива не раздувалась.
     private static string TruncateSnippet(string text)

@@ -132,6 +132,75 @@ public class ClaudeSessionAutoModeTests
         (await pending).Should().Be("deny");
     }
 
+    // Чат с персоной в AcceptEdits работает автономно: Bash без карточки
+    [Fact]
+    public async Task ПерсонаAcceptEdits_Bash_РазрешаетБезКарточки()
+    {
+        var info = new Session { Mode = ClaudeMode.AcceptEdits, PersonaId = "p1" };
+        var (session, sent) = NewClaudeSession(info);
+        await using var _ = session;
+
+        var pending = DecideAsync(session, "req-pe1", "Bash", "dotnet build");
+        var finished = await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(5)));
+        if (finished != pending) session.RespondPermission("req-pe1", "deny");
+
+        (await pending).Should().Be("allow");
+        lock (sent) sent.Should().BeEmpty("чат с персоной не шлёт карточек согласия");
+    }
+
+    // Deny-правило проекта сильнее авто-allow персоны
+    [Fact]
+    public async Task ПерсонаAcceptEdits_DenyПравилоПроекта_Побеждает()
+    {
+        var info = new Session { Mode = ClaudeMode.AcceptEdits, PersonaId = "p1" };
+        var (session, sent) = NewClaudeSession(info,
+        [
+            new PermissionRule { Pattern = "Bash", Action = "deny" },
+        ]);
+        await using var _ = session;
+
+        var decision = await DecideAsync(session, "req-pe2", "Bash", "dotnet build");
+
+        decision.Should().Be("deny");
+        lock (sent) sent.Should().BeEmpty();
+    }
+
+    // Режимы Default/Plan у персоны выбирает человек — там спрашиваем как раньше
+    [Theory]
+    [InlineData(ClaudeMode.Default)]
+    [InlineData(ClaudeMode.Plan)]
+    public async Task ПерсонаДругойРежим_Bash_ПоказываетКарточку(ClaudeMode mode)
+    {
+        var info = new Session { Mode = mode, PersonaId = "p1" };
+        var (session, sent) = NewClaudeSession(info);
+        await using var _ = session;
+
+        var pending = DecideAsync(session, "req-pe3", "Bash", "dotnet build");
+
+        await WaitForAsync(() => { lock (sent) return sent.OfType<PermissionRequestMessage>().Any(); });
+        lock (sent) sent.OfType<PermissionRequestMessage>().Should().ContainSingle();
+
+        session.RespondPermission("req-pe3", "deny");
+        (await pending).Should().Be("deny");
+    }
+
+    // Чат без персоны в AcceptEdits — карточка, как раньше
+    [Fact]
+    public async Task БезПерсоны_AcceptEdits_Bash_ПоказываетКарточку()
+    {
+        var info = new Session { Mode = ClaudeMode.AcceptEdits };
+        var (session, sent) = NewClaudeSession(info);
+        await using var _ = session;
+
+        var pending = DecideAsync(session, "req-pe4", "Bash", "dotnet build");
+
+        await WaitForAsync(() => { lock (sent) return sent.OfType<PermissionRequestMessage>().Any(); });
+        lock (sent) sent.OfType<PermissionRequestMessage>().Should().ContainSingle();
+
+        session.RespondPermission("req-pe4", "deny");
+        (await pending).Should().Be("deny");
+    }
+
     // run_tests в «Авто» — как безопасный Bash: без карточки
     [Fact]
     public async Task Авто_RunTests_РазрешаетБезКарточки()

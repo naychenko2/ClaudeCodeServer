@@ -637,45 +637,41 @@ public class FeatureTimelineJournalTests
     private static DateTime Clamp(DateTime t, DateTime from, DateTime to) =>
         t < from ? from : (t > to ? to : t);
 
-    // ── 10. Замер: 20 000 записей журнала → сотни мс (major 3; порог с запасом, без Task.Delay) ──
+    // ── 10. Замер: 20 000 записей журнала → сотни мс (major 3; абсолютный порог — страховка,
+    // дискриминатор — относительный гейт линейности) ──
 
-    // Журнал на 20k записей (ходы + ожидания + started/stopped): sweep обязан уложиться в сотни
-    // мс (старый O(n²) давал ~4.5 с на 20k, по замеру Глеба). Порог был 1.5 с: 10 прогонов подряд
-    // на нагруженной машине — 9 зелёных, 1 падение с внутренним временем 2.0 с (замечание 6
-    // ревью Глеба). Порог поднят до 3 с: старый O(n²) (~4.5 с) по-прежнему ловится, а флук
-    // от параллельных процессов — нет. Без Task.Delay (детерминизм времени не нужен, только
-    // верхняя граница).
-    [Fact]
-    public void Build_Замер_20kЗаписей_Быстрый()
+    // Абсолютный порог (3 с) был поднят с 1.5 с после одного падения на нагруженной машине
+    // (замечание 6 ревью Глеба, Б-pr2-д2). На общей машине он хрупок: весь тест укладывается
+    // в ~187 мс (запас ≈16×), а старый O(n²) (~4.5 с) превышает его лишь в 1.5× — регрессия
+    // до ×15 не была бы замечена. Поэтому рядом с порогом — относительный гейт, не
+    // зависящий от скорости машины: время на 20k записей не больше 6× времени на 5k.
+    // Линейный алгоритм даёт ×4 (число записей), O(n²) — ×16. Прогревка (JIT) перед замером,
+    // минимум нескольких прогонов — одиночный замер шумен.
+    private static FeatureJournalReadResult ScaledJournal(int turns, int waits, int startedPairs)
     {
-        var now = new DateTime(2026, 10, 1, 20, 0, 0);
-        var epic = Epic("epic");
-        var s1 = Child("s1", "epic", startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
-            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
-
         var entries = new List<FeatureJournalEntry>();
         entries.Add(Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"));
         var rng = new Random(7);
         var baseTime = new DateTime(2026, 10, 1, 0, 0, 0);
 
-        // Ходы — основная масса журнала (~18k записей): [at, at+1..9 мин], finished/error.
-        for (var i = 0; i < 18000; i++)
+        // Ходы — основная масса журнала: [at, at+1..9 мин], finished/error.
+        for (var i = 0; i < turns; i++)
         {
             var at = baseTime.AddMinutes(rng.NextDouble() * 1440);
             var outcome = rng.Next(5) == 0 ? "error" : "finished"; // ~20% error
             entries.Add(Entry("turn", at, taskId: "s1",
                 startedAt: at, endedAt: at.AddMinutes(rng.Next(1, 10)), outcome: outcome));
         }
-        // Ожидания (~2k записей): waiting + waiting_cleared.
-        for (var i = 0; i < 1000; i++)
+        // Ожидания: waiting + waiting_cleared.
+        for (var i = 0; i < waits; i++)
         {
             var at = baseTime.AddMinutes(rng.NextDouble() * 1440);
             entries.Add(Entry("waiting", at, taskId: "s1"));
             entries.Add(Entry("waiting_cleared", at.AddMinutes(rng.Next(1, 30)), taskId: "s1"));
         }
-        // Started/stopped — пары (~20): ограниченные периоды (реалистично: задача стартует и
-        // стопится, не 5000 бесконечных started, которые взрывали CutByWaiting).
-        for (var i = 0; i < 20; i++)
+        // Started/stopped — пары: ограниченные периоды (реалистично: задача стартует и стопится,
+        // не 5000 бесконечных started, которые взрывали CutByWaiting).
+        for (var i = 0; i < startedPairs; i++)
         {
             var at = baseTime.AddMinutes(rng.NextDouble() * 1440);
             var stop = at.AddMinutes(rng.Next(30, 300));
@@ -683,14 +679,50 @@ public class FeatureTimelineJournalTests
             entries.Add(Entry("stopped", stop, taskId: "s1"));
         }
 
-        var journal = Journal(entries.ToArray());
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var tl = FeatureTimeline.Build(Run(epic, s1), journal, now);
-        sw.Stop();
+        return Journal(entries.ToArray());
+    }
 
+    // Минимум нескольких прогонов: одиночный замер шумен, минимум устойчив.
+    private static double MinBuildMs(FeatureRun run, FeatureJournalReadResult journal, DateTime now,
+        int attempts)
+    {
+        double best = double.MaxValue;
+        for (var i = 0; i < attempts; i++)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            FeatureTimeline.Build(run, journal, now);
+            sw.Stop();
+            best = Math.Min(best, sw.Elapsed.TotalMilliseconds);
+        }
+        return best;
+    }
+
+    [Fact]
+    public void Build_Замер_20kЗаписей_Быстрый()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+        var run = Run(epic, s1);
+
+        // Прогревка JIT и первых аллокаций — один прогон на большом журнале без замера.
+        FeatureTimeline.Build(run, ScaledJournal(18000, 1000, 20), now);
+
+        var ms5k = MinBuildMs(run, ScaledJournal(4500, 250, 5), now, 3);
+        var ms20k = MinBuildMs(run, ScaledJournal(18000, 1000, 20), now, 3);
+
+        // Sanity: лента реально строится и итоги заполнены.
+        var tl = FeatureTimeline.Build(run, ScaledJournal(18000, 1000, 20), now);
         tl.Totals.ElapsedMinutes.Should().BeGreaterThan(0);
-        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3.0),
-            $"sweep на 20k записей должен быть в сотнях мс, а не {sw.Elapsed.TotalMilliseconds:F0} мс");
+
+        // Абсолютный порог — грубая страховка (старый O(n²) ~4.5 с в него не влезает).
+        ms20k.Should().BeLessThan(3000.0,
+            $"sweep на 20k записей должен быть в сотнях мс, а не {ms20k:F0} мс");
+
+        // Относительный гейт линейности: линейный алгоритм даёт ×4, O(n²) — ×16; порог 6×.
+        (ms20k / ms5k).Should().BeLessOrEqualTo(6.0,
+            $"нелинейный рост: 20k — {ms20k:F0} мс, 5k — {ms5k:F0} мс (отношение {(ms20k / ms5k):F1}×)");
     }
 
     // ── 11. (а) 600 ходов + ожидание 60 мин (> 500 сегментов): итоги не обнуляются (major 1) ──

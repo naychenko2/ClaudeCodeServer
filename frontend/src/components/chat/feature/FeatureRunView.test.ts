@@ -17,7 +17,7 @@ import { FeatureRunView, statusLineFor } from './FeatureRunView';
 import { TurnPlanPill } from '../TurnPlanPill';
 import { __test } from '../../../lib/featureRuns';
 import { __test as backNav } from '../../../lib/featureBackNav';
-import { installFakeDom, mount, reactProps, uninstallFakeDom, findNodeByAttr } from '../__tests__/fakeDom';
+import { installFakeDom, mount, reactProps, uninstallFakeDom, findNodeByAttr, textNodes } from '../__tests__/fakeDom';
 
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя (PersonaAvatar/имена исполнителей).
 // ensurePersonasLoaded/usePersonasVersion — no-op: в node-окружении они тянут signalr/localStorage.

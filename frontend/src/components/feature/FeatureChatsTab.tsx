@@ -147,7 +147,9 @@ function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null, marks 
           // minor 3: ОДИН источник «в архиве» — marks.chatArchived (unified), не chat.archived.
           chatArchived={marks.chatArchived(chat.id)}
           onOpenChat={openChat}
-          chatTitle={chat.archived
+          // minor (ревью Ф9b, зам. 3): текст подсказки — из того же источника, что и
+          // индикатор рядом (marks), а не из chat.archived напрямую.
+          chatTitle={marks.chatArchived(chat.id)
             ? 'Чат в архиве — откроется для чтения. Страница фичи скроется, вернётся по плашке.'
             : 'Открыть чат. Страница фичи скроется, вернётся по плашке.'}
           showNoChat

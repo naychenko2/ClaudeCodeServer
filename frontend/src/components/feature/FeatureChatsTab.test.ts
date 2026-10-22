@@ -248,6 +248,26 @@ describe('Разделение live/archived + «в архиве»', () => {
     const liveBtn = findNodeByAttr(c2, 'data-testid', 'nav-target-chat')!;
     expect(textNodes(liveBtn).join('')).not.toContain('в архиве');
   });
+
+  // Ревью Ф9b, зам. 3: текст подсказки берёт архивность из marks (тот же источник, что
+  // индикатор), а не из chat.archived. Мутация «вернуться на chat.archived» красит тест:
+  // сам чат в снимке не архивный, но агрегат (исполнитель стадии) говорит — архивный.
+  it('подсказка «Чат в архиве» — из marks, не из chat.archived (мутация: взять chat.archived → red)', () => {
+    const c = chat({ id: 'c1', kind: 'executor', personaId: 'p-denis', archived: false });
+    const page: FeaturePage = {
+      run: {
+        featureId: 'f1',
+        epic: { id: 'f1', title: 'Фича', status: 'doing' },
+        stages: [{ key: 'prod', state: 'active', tone: null, passes: 1, taskIds: [], rounds: [],
+          executors: [{ personaId: 'p-denis', taskId: null, taskRole: null, stepRef: null, lane: null, status: 'done', chatId: 'c1', chatArchived: true, modelLabel: null, modelFull: null }] }],
+      } as unknown as FeaturePage['run'],
+      events: [], eventsTotal: 0, chats: [c],
+    };
+    const container = render({ page });
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
+    expect(btn, 'кнопка «чат»').not.toBeNull();
+    expect(String(reactProps(btn!)!.title), 'подсказка не взяла архивность из marks').toContain('Чат в архиве');
+  });
 });
 
 // ═══ 4. Навигация: «чат · задача» (taskId) ════════════════════════════════════════

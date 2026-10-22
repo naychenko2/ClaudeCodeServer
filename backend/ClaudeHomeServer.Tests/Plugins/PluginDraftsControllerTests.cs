@@ -541,6 +541,27 @@ public class PluginDraftsControllerTests : IDisposable
         record.Source.Should().Be("draft:pkg");
     }
 
+    // --- Шаг B2: право storage в requested доходит до диалога согласия целиком ---
+    // Мутация (убрать storage из requested в PluginInstaller): requested/newPermissions
+    // без storage → тест красный.
+
+    [Fact]
+    public void Accept_ЗапросСStorage_ДоходитДоДиалогаЦеликом()
+    {
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["net:api.linear.app", "storage"]);
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"requested\":[\"net:api.linear.app\",\"storage\"]",
+            "requested в ответе — полный, storage не отброшен как неизвестное");
+        json.Should().Contain("\"newPermissions\":[\"net:api.linear.app\",\"storage\"]",
+            "storage в newPermissions — человек может его выдать");
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
+        record.Requested.Should().Equal("net:api.linear.app", "storage");
+    }
+
     // --- Accept: первая установка БЕЗ прав → consentRequired = false ---
 
     [Fact]
@@ -636,6 +657,33 @@ public class PluginDraftsControllerTests : IDisposable
         var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
         record.Version.Should().Be("2.0.0");
         record.Granted.Should().Equal(new[] { "notes:read" }, "granted = старые ∩ новые: новое право не выдано");
+    }
+
+    // --- Шаг B2: bump версии — выданный storage сохраняется в granted и не считается новым ---
+    // Правило granted = старые ∩ новые ничего не special-case'ит для net:, storage не должен
+    // теряться «потому что не сетевой». Мутация (фильтр ∩ только net:-правов): тест красный.
+
+    [Fact]
+    public void Accept_ОбновлениеВерсии_StorageСохраняется_НеСчитаетсяНовым()
+    {
+        // v1: requested = [net:..., storage]; accept, человек выдал оба права.
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["net:api.linear.app", "storage"]);
+        var ctl = NewController(OwnerA);
+        ctl.Accept("pkg").Should().BeOfType<OkObjectResult>();
+        GrantDirectly(OwnerA, "local-952568751510/pkg", ["net:api.linear.app", "storage"]);
+
+        // v2: тот же id, версия 2.0.0, тот же requested (storage не новый).
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "2.0.0", ["net:api.linear.app", "storage"]);
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var json = JsonSerializer.Serialize(ok.Value);
+        json.Should().Contain("\"newPermissions\":[", "storage не появился как новое право");
+        json.Should().Contain("\"inheritedPermissions\":[\"net:api.linear.app\",\"storage\"]",
+            "storage наследуется на новую версию наравне с net:");
+
+        var record = _store.LoadInstalled(OwnerA).Single(r => r.Id == "local-952568751510/pkg");
+        record.Version.Should().Be("2.0.0");
+        record.Granted.Should().Equal(new[] { "net:api.linear.app", "storage" },
+            "granted = старые ∩ новые: storage не потерян при bump");
     }
 
     // --- Accept: bump (новая версия) кладёт пакет НОВОЙ версии на диск (defect 8565ccff) ---

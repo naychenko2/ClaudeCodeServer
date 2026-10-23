@@ -5,10 +5,11 @@
 // нейтральная строка; отклонён — «Отклонён» + «Вернуть»; установлен. «Принять…» — тот же
 // ConsentDialog, что в 4.4. Включена только под флагом plugins-build-yourself.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { C, FS } from '../../../lib/design';
 import { FLAGS, useFeature } from '../../../lib/featureFlags';
-import { api, type PluginDraftDiff } from '../../../lib/api';
+import { api } from '../../../lib/api';
+import { useDraftDiff } from '../useDraftDiff';
 import { ConsentDialog, type PluginConsentData } from '../ConsentDialog';
 import { DraftCard } from '../DraftCard';
 import { toConsentDataFromAccept } from '../draftModel';
@@ -66,15 +67,7 @@ export function DraftFeedCard({ slug, fallback, projectId, chatId }: {
 
   // Сравнение с установленной версией — по требованию (вкладка «Изменения» в окне
   // файлов), по образцу useDraftCard: идемпотентно; ошибка не блокирует просмотр файлов.
-  const [diff, setDiff] = useState<PluginDraftDiff | null>(null);
-  const [diffError, setDiffError] = useState<string | null>(null);
-  const loadDiff = useCallback(() => {
-    if (diff) return;
-    setDiffError(null);
-    api.plugins.draftDiff(slug)
-      .then(setDiff)
-      .catch((e: unknown) => setDiffError(e instanceof Error ? e.message : 'Не удалось сравнить с установленной версией'));
-  }, [diff, slug]);
+  const { diff, diffError, loadDiff } = useDraftDiff(slug, entry.revision);
 
   // Без флага — нейтральная строка (как делают соседние модули), не карточка
   if (!buildYourself) return fallback ? <NeutralLine>{fallback}</NeutralLine> : null;

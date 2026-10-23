@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onMessage } from '../../lib/signalr';
 import { api, type PluginDraftDiff, type PluginDraftPreview, type PluginDraftSummary } from '../../lib/api';
+import { useDraftDiff } from './useDraftDiff';
 
 // Сколько держать подсветку «Черновик обновлён агентом» после события, мс.
 const JUST_UPDATED_MS = 6000;
@@ -34,8 +35,9 @@ export interface DraftCardData {
 
 export function useDraftCard(summary: PluginDraftSummary): DraftCardData {
   const [preview, setPreview] = useState<PluginDraftPreview | null>(null);
-  const [diff, setDiff] = useState<PluginDraftDiff | null>(null);
-  const [diffError, setDiffError] = useState<string | null>(null);
+  // Счётчик правок агента: смена сбрасывает сравнение (useDraftDiff)
+  const [changeTick, setChangeTick] = useState(0);
+  const { diff, diffError, loadDiff } = useDraftDiff(summary.slug, changeTick);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [justUpdated, setJustUpdated] = useState(false);
@@ -64,22 +66,13 @@ export function useDraftCard(summary: PluginDraftSummary): DraftCardData {
     const off = onMessage(msg => {
       if (msg.type !== 'plugin_draft_changed' || msg.slug !== summary.slug) return;
       setJustUpdated(true);
+      setChangeTick(t => t + 1);
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => setJustUpdated(false), JUST_UPDATED_MS);
       void loadPreview();
     });
     return () => { off(); if (timer.current) clearTimeout(timer.current); };
   }, [summary.slug, loadPreview]);
-
-  // Сравнение — по требованию (вкладка «Изменения»); идемпотентно. Ошибка не блокирует
-  // просмотр файлов, но показывается в окне («diff не загружен» + «Повторить»).
-  const loadDiff = useCallback(() => {
-    if (diff) return;
-    setDiffError(null);
-    api.plugins.draftDiff(summary.slug)
-      .then(setDiff)
-      .catch((e: unknown) => setDiffError(e instanceof Error ? e.message : 'Не удалось сравнить с установленной версией'));
-  }, [diff, summary.slug]);
 
   return { preview, diff, diffError, loading, error, justUpdated, loadDiff, refresh: () => void loadPreview() };
 }

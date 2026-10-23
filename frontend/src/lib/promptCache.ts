@@ -100,7 +100,8 @@ export function liveState(state: PromptCacheState, now: number, warn?: CacheWarn
 // Подписи причин промаха (там имена snake_case, на проводе camelCase — маппинг явный).
 // Все — именными фразами одного вида («смена модели», а не «сменилась модель»): в UI
 // читаются как «промах: …». «none» подписи не имеет: промаха не было. Незнакомая
-// причина показывается как есть.
+// причина — человекочитательная «другая причина»: сырой кода в строке нет, он
+// открывается в подсказке (title) — минор ревью F-2.
 const MISS_LABELS: Record<string, string> = {
   systemChanged: 'смена системного промпта',
   messagesChanged: 'изменение истории сообщений',
@@ -111,7 +112,7 @@ const MISS_LABELS: Record<string, string> = {
 };
 
 export function missReasonLabel(reason: PromptCacheMissReason): string {
-  return MISS_LABELS[reason] ?? reason;
+  return MISS_LABELS[reason] ?? 'другая причина';
 }
 
 // TTL с провода — только «1h»/«5m», всё остальное (в том числе null) — не срок

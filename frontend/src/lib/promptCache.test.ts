@@ -176,7 +176,9 @@ describe('missReasonLabel — подписи причин', () => {
     expect(missReasonLabel('unavailable')).toBe('неизвестная причина');
   });
 
-  it('незнакомая причина показывается как есть', () => {
-    expect(missReasonLabel('systemChanged2' as never)).toBe('systemChanged2');
+  // Минор ревью F-2: сырая причина в строке не читается — человекочитательная
+  // «другая причина», сырой кода открывается в подсказке (title у ChatItemView)
+  it('незнакомая причина — человекочитательная «другая причина»', () => {
+    expect(missReasonLabel('systemChanged2' as never)).toBe('другая причина');
   });
 });

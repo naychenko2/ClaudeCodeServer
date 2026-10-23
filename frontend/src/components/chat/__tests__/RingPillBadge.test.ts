@@ -3,11 +3,34 @@
 // как соседние тесты шапки (ToolUseView.test, sphereGate.test).
 // Вторая часть — циферблат кэша промпта (F-1b): появление по данным ленты, текст на
 // десктопе и его отсутствие на мобиле, «идёт ход» без минут.
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
+// Перенос (F-4): запрос handoff идёт через offline.request — подменяем его до импорта
+// api (сети в тестах нет); переход в новый чат — через openChatById, его тоже подменяем,
+// чтобы не тянуть навигацию в тест шапки
+const handoff = vi.hoisted(() => ({ fn: () => Promise.resolve({}) }));
+const openedChats = vi.hoisted(() => [] as string[]);
+vi.mock('../../../lib/offline', () => ({
+  __esModule: true,
+  request: (url: string, opts?: { method?: string; timeoutMs?: number }) => handoff.fn(url, opts),
+  readStoredToken: () => 'tok',
+  cachedToken: () => 'tok',
+  invalidateTokenCache: () => {},
+}));
+vi.mock('../../../lib/openChat', () => ({
+  __esModule: true,
+  openChatById: (id: string) => { openedChats.push(id); return Promise.resolve(true); },
+}));
+// Хаб в тесте не поднимаем: useLocalModelLive с sessionId подписывается на signalr —
+// в node-окружении '/hubs/session' не разрешится
+vi.mock('../../../lib/signalr', () => ({
+  __esModule: true,
+  onLocalModelMessage: () => () => {},
+}));
+import { installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } from './fakeDom';
 import { CacheDialPip } from '../../ui/CacheDial';
 import type { PromptCacheState } from '../../../lib/promptCache';
 import { setAllFlags } from '../../../lib/featureFlags';
@@ -206,9 +229,147 @@ describe('ChatHeaderBar: лента кэша без нового литерал�
   it('нет `items ?? []` и копий ленты в исходнике шапки', () => {
     const src = readFileSync(fileURLToPath(new URL('../ChatHeaderBar.tsx', import.meta.url)), 'utf8');
     expect(src).not.toMatch(/items\s*\?\?\s*\[\]/);
-    // .slice()/.concat() и Array.from(items…) — та же ловушка: новая ссылка на каждый
-    // рендер, заморозка ленты уходит в цикл «Too many re-renders» (минор R3-F1b)
-    expect(src).not.toMatch(/items\s*\.(slice|concat)\(\s*\)/);
+    // .slice(…)/.concat(…) и Array.from(items…) — та же ловушка: новая ссылка на каждый
+    // рендер, заморозка ленты уходит в цикл «Too many re-renders» (минор R3-F1b).
+    // Расширение guard'а (минор ревью F-2): аргументы у slice не ограничены пустыми
+    // скобками, плюс spread-копия [...items] и .filter/.map рядом с items. Bare-форма:
+    // `dialog.items.filter(` — про список диалога, не про ленту, поэтому lookbehind
+    // отбрасывает «.items» и «xitems».
+    expect(src).not.toMatch(/(?<![.\w])items\s*\.(slice|concat|filter|map)\(/);
     expect(src).not.toMatch(/Array\.from\(\s*items\b/);
+    expect(src).not.toMatch(/(?<![.\w])\[\s*\.\.\.items\s*\]/);
+  });
+});
+
+// === Перенос в новый чат (F-4): вторая точка входа и кнопка ===
+// Мутации:
+//  • убрать строку предложения в parts (уровень danger) → первый тест краснеет;
+//  • убрать вывод handoffError → тест про 409 краснеет;
+//  • убрать проверку фич-флага у кнопки → красный негативный тест про флаг.
+const fullEstimate: ContextEstimate = { window: 200000, pct: 92, fresh: false, level: 'danger' };
+
+function renderPillWith(est: ContextEstimate, items: ChatItem[]): string {
+  return renderToStaticMarkup(createElement(RingPillBadge, {
+    estimate: est, isWaiting: false, isCompacting: false, canCompact: false, onCompact: () => {},
+    online: true, assistantName: 'Тест',
+    isCliProvider: false, providerName: 'Claude', cost, falCost, glifCost, balance, billing, windows,
+    items, sessionId: 's1',
+  }));
+}
+
+describe('RingPillBadge: предложение переноса при полном контексте (F-4, вторая точка входа)', () => {
+  it('флаг вкл, уровень danger — подсказка предлагает новый чат с запиской', () => {
+    setAllFlags({ 'prompt-cache': true });
+    const html = renderPillWith(fullEstimate, [cacheItem()]);
+    expect(ariaOf(html), 'предложение — в подсказке и aria-label пилюли').toContain('можно начать новый чат с запиской');
+  });
+
+  it('флаг выкл — предложения нет (фича за флагом)', () => {
+    setAllFlags({});
+    expect(ariaOf(renderPillWith(fullEstimate, [cacheItem()]))).not.toContain('можно начать новый чат');
+  });
+
+  it('уровень normal — предложения нет, даже с включённым флагом', () => {
+    setAllFlags({ 'prompt-cache': true });
+    expect(ariaOf(renderPillWith(estimate, [cacheItem()]))).not.toContain('можно начать новый чат');
+  });
+});
+
+describe('RingPillBadge: кнопка «Перенести в новый чат» (F-4)', () => {
+  const pendingStore: Record<string, string> = {};
+  beforeAll(() => {
+    installFakeDom();
+    // В node-окружении нет sessionStorage — заглушка под проверку префилла композера
+    (globalThis as { sessionStorage?: unknown }).sessionStorage = {
+      setItem: (k: string, v: string) => { pendingStore[k] = v; },
+      getItem: (k: string) => pendingStore[k] ?? null,
+      removeItem: (k: string) => { delete pendingStore[k]; },
+    };
+  });
+  afterAll(() => uninstallFakeDom());
+
+  const mountPill = () => mount(createElement(RingPillBadge, {
+    estimate, isWaiting: false, isCompacting: false, canCompact: false, onCompact: () => {},
+    online: true, assistantName: 'Тест',
+    isCliProvider: false, providerName: 'Claude', cost, falCost, glifCost, balance, billing, windows,
+    items: [cacheItem()], sessionId: 's1',
+  }));
+
+  type Node = { nodeType: number; nodeName: string; childNodes?: Node[] };
+  const walk = (x: Node, f: (n: Node) => void): void => {
+    if (x.nodeType === 1) f(x);
+    for (const c of x.childNodes ?? []) walk(c, f);
+  };
+  const buttonByLabel = (root: Node, label: string): Node | null => {
+    let hit: Node | null = null;
+    walk(root, (x) => {
+      if (!hit && x.nodeName === 'BUTTON' && textNodes(x as never).join('').includes(label)) hit = x;
+    });
+    return hit;
+  };
+  // Контент поповера монтируется только при открытии (open в BadgeShell) — открываем
+  // клик по самой пилюле: её кнопка — первая BUTTON в контейнере
+  const openPopover = (container: Node) => {
+    let pill: Node | null = null;
+    walk(container, (x) => { if (!pill && x.nodeName === 'BUTTON') pill = x; });
+    act(() => { (reactProps(pill as never)!.onClick as () => void)(); });
+  };
+
+  it('флаг вкл — кнопка в поповере; флаг выкл — её нет', () => {
+    setAllFlags({ 'prompt-cache': true });
+    let { root, container } = mountPill();
+    try {
+      openPopover(container);
+      expect(textNodes(container as never).join(' '), 'кнопка за включённым флагом').toContain('Перенести в новый чат');
+    } finally {
+      act(() => root.unmount());
+    }
+    setAllFlags({});
+    ({ root, container } = mountPill());
+    try {
+      openPopover(container);
+      expect(textNodes(container as never).join(' '), 'за выключенным флагом кнопки нет').not.toContain('Перенести в новый чат');
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
+  it('409: текст ошибки бэка показывается как есть, а не «сбой»', async () => {
+    setAllFlags({ 'prompt-cache': true });
+    handoff.fn = () => Promise.reject(
+      Object.assign(new Error('чат занят другим ходом: просьба о передаче поставлена в очередь'), { status: 409 }),
+    );
+    openedChats.length = 0;
+    const { root, container } = mountPill();
+    try {
+      openPopover(container);
+      const btn = buttonByLabel(container, 'Перенести в новый чат');
+      expect(btn, 'кнопка смонтирована').not.toBeNull();
+      act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      expect(textNodes(container as never).join(' ')).toContain('чат занят другим ходом');
+      expect(openedChats, 'перехода нет — преемника не создано').length === 0;
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
+  it('успех: переход в новый чат, черновик — в префилл композера', async () => {
+    setAllFlags({ 'prompt-cache': true });
+    handoff.fn = () => Promise.resolve({ chatId: 'new-chat', projectId: null, draft: 'Короткая запись о разговоре', warm: true });
+    openedChats.length = 0;
+    delete pendingStore['cc_pending_chat_prompt'];
+    const { root, container } = mountPill();
+    try {
+      openPopover(container);
+      const btn = buttonByLabel(container, 'Перенести в новый чат');
+      act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      expect(openedChats).toEqual(['new-chat']);
+      expect(pendingStore['cc_pending_chat_prompt'], 'черновик ждёт композер нового чата').toBe('Короткая запись о разговоре');
+      expect(textNodes(container as never).join(' ')).not.toContain('Переношу…');
+    } finally {
+      act(() => root.unmount());
+    }
   });
 });

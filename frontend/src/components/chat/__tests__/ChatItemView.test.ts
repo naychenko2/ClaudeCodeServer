@@ -393,7 +393,7 @@ describe('ChatItemView — обрыв хода + авто-продолжение
 // === F-2: причина промаха кэша в подвале хода (фича prompt-cache) ===
 // Мутация: убрать span «кэш не помог: …» в мета-строке case 'result' → первый тест
 // краснеет; убрать проверку фич-флага → красный и негативный про флаг.
-function renderMeta(item: ChatItem): string {
+function renderMeta(item: ChatItem, isLastResult = true): string {
   const noop = () => {};
   const tree: ReactElement = createElement(
     ChatProjectContext.Provider, { value: null },
@@ -411,7 +411,7 @@ function renderMeta(item: ChatItem): string {
                 item,
                 index: 0,
                 online: true,
-                isLastResult: true,
+                isLastResult,
                 onToggleThinking: noop,
                 onAllowPermission: noop,
                 onDenyPermission: noop,
@@ -468,12 +468,20 @@ describe('ChatItemView — причина промаха кэша в подва�
     expect(renderMeta(plainResult())).not.toContain('кэш');
   });
 
-  // Неизвестная причина: подпись остаётся сырой (так же ведёт себя missReasonLabel),
-  // подсказка — общий текст про пересборку.
-  it('незнакомая причина: показана как есть, общий успокаивающий текст', () => {
+  // Незнакомая причина (минор ревью F-2): в строке — человекочитательная «другая
+  // причина», сырой кода — в подсказке (title).
+  it('незнакомая причина: «другая причина» в строке, сырой код — в подсказке', () => {
     setAllFlags({ 'prompt-cache': true });
     const html = renderMeta(resultWithCache('weirdReason'));
-    expect(html).toContain('кэш не помог: weirdReason');
+    expect(html).toContain('кэш не помог: другая причина');
+    expect(html, 'сырой код не потерян — он в title').toContain('Причина не распознана (weirdReason)');
     expect(html).toContain('Кэш пересобирается сам');
+  });
+
+  // Минор ревью F-2: мета-строка — только у последнего хода. Не последний result с
+  // промахом — сегмента нет вовсе.
+  it('isLastResult: false и промах — сегмента «кэш не помог» нет', () => {
+    setAllFlags({ 'prompt-cache': true });
+    expect(renderMeta(resultWithCache('modelChanged'), false), 'мета только у последнего хода').not.toContain('кэш не помог');
   });
 });

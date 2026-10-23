@@ -3,6 +3,7 @@ import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
 import { api } from '../../lib/api';
+import { openChatById } from '../../lib/openChat';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName, useProviders } from '../../lib/models';
@@ -576,9 +577,33 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
 // не перерисовывает всю пилюлю, F-1b-r), доля — готовая dialFrac, не свой счёт (F-1b-r).
 // Личный порог «остывает» (F-3): здесь он нужен — статус пересчитывается на момент
 // открытия поповера и на тике своих часов, по тому же личному порогу, что и на пилюле.
-function PromptCacheSection({ state, isWaiting }: { state: PromptCacheState; isWaiting: boolean }) {
+function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCacheState; isWaiting: boolean; sessionId: string }) {
   const warn = useCacheWarnThresholds();
   const [showWarn, setShowWarn] = useState(false);
+  // Кнопка переноса — только за фич-флагом prompt-cache (F-4); остальное содержимое
+  // секции живёт по данным кэша, которые приходят ровно за включённым флагом
+  const promptCacheOn = useFeature(FLAGS.promptCache);
+  // «Перенести в новый чат» (F-4): тёплый путь — записку пишет сам чат (видимый ход до
+  // 5 мин), холодный — быстрый раннер по транскрипту. Успех: переход в новый чат,
+  // черновик — в поле ввода (префилл тот же, что у «Попросить агента исправить»,
+  // без авто-сабмита). 409/502 несут человеческий текст с бэка — показываем его,
+  // а не «сбой»; клик можно повторить
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const runHandoff = async () => {
+    setHandoffBusy(true);
+    setHandoffError(null);
+    try {
+      const r = await api.chats.handoff(sessionId);
+      if (r.draft) sessionStorage.setItem('cc_pending_chat_prompt', r.draft);
+      await openChatById(r.chatId);
+      showToast('Перенос чата', 'Новый чат открыт с передаточной запиской', 'info');
+    } catch (e) {
+      setHandoffError((e as Error).message || 'Перенос не получился — попробуйте позже');
+    } finally {
+      setHandoffBusy(false);
+    }
+  };
   // Те же часы, что у циферблата: пока поповер открыт, остаток живёт своей строкой,
   // не перерисовывая всю пилюлю (F-1b-r)
   const live = liveState(state, useLiveNow(state), warn);
@@ -610,12 +635,26 @@ function PromptCacheSection({ state, isWaiting }: { state: PromptCacheState; isW
       <BadgeRow k="Последний промах" v={miss} />
       {/* Личный порог предупреждения (F-3) — правится только за фич-флагом, секция
           и так монтируется за ним */}
-      <div style={{ marginTop: SP.sm }}>
-        <Button variant="ghost" size="xs" onClick={() => setShowWarn(true)}
+      <div style={{ marginTop: SP.sm, display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+        {promptCacheOn && (
+          <Button variant="ghost" size="xs" disabled={!sessionId || isWaiting} loading={handoffBusy}
+            onClick={() => void runHandoff()}
+            title={isWaiting ? 'Дождитесь завершения текущего хода' : 'Новый чат начнётся с короткой запиской об этом разговоре'}>
+            {handoffBusy ? 'Переношу…' : 'Перенести в новый чат'}
+          </Button>
+        )}
+        <Button variant="ghost" size="xs" onClick={() => setShowWarn(true)} style={{ marginLeft: 'auto' }}
           leftIcon={<SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
           Когда предупреждать об остывании
         </Button>
       </div>
+      {/* Ошибка переноса — текст бэка как есть (409 «чат занят…», 502 «модель не дала
+          записку»), не «сбой»: его можно прочитать и повторить клик */}
+      {promptCacheOn && handoffError && (
+        <div style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.dangerBg, color: C.dangerText, borderRadius: R.md }}>
+          {handoffError}
+        </div>
+      )}
       {showWarn && <CacheWarnDialog onClose={() => setShowWarn(false)} />}
     </>
   );
@@ -875,6 +914,9 @@ export function RingPillBadge(props: {
   // индикатора. Стор подписочный — поздний засев сам обновит циферблат.
   const warn = useCacheWarnThresholds();
   const cache = usePromptCache(usePromptCacheItems(props.items, props.isWaiting), warn);
+  // Перенос в новый чат (F-4): обе точки входа — подсказка у кольца и кнопка в поповере —
+  // только за фич-флагом prompt-cache. Это предложение, не авто-действие
+  const promptCacheOn = useFeature(FLAGS.promptCache);
 
   // Живые данные локальной модели: хвост + поповер «Локальная модель». Хуки — до раннего
   // return (правило хуков). live=null — чат не на локальной модели (событий нет). Хвост —
@@ -980,6 +1022,11 @@ export function RingPillBadge(props: {
   const ctxPip = { slot: 0 as const, level: estimate.level };
   if (isCompacting) parts.push({ text: 'Контекст: идёт сжатие', pip: ctxPip });
   else if (showCtx) parts.push({ text: estimate.pct !== undefined ? `Контекст ${estimate.pct}%` : 'Контекст сжат', pip: ctxPip });
+  // Вторая точка входа переноса (F-4): окно почти полное — в подсказке предлагаем перенос.
+  // Только предложение: само действие — кнопка в поповере, за этим же флагом
+  if (promptCacheOn && showCtx && estimate.level === 'danger') {
+    parts.push({ text: 'Контекст почти полон — можно начать новый чат с запиской' });
+  }
   // Локальная модель: живой хвост (десктоп) или слово-лицо (мобила) — озвучиваем,
   // чтобы на мобиле скринридер не читал только «Ctx 61k», а и состояние модели.
   // Нет активного состояния (idle без скорости / не локальный чат) — строки нет.
@@ -1090,7 +1137,7 @@ export function RingPillBadge(props: {
       {showCtx && <ContextActions {...props} />}
       {cache && (
         <div style={(lmActive || wfActive || showCtx || showCost) ? sectionDivider : undefined}>
-          <PromptCacheSection state={cache} isWaiting={props.isWaiting} />
+          <PromptCacheSection state={cache} isWaiting={props.isWaiting} sessionId={props.sessionId ?? ''} />
         </div>
       )}
       {hasFal && (

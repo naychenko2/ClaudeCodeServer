@@ -1755,11 +1755,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           )}
           {/* Промах кэша этого хода (F-2, фича prompt-cache): короткая причина по карте
               подписей lib/promptCache, в подсказке — что это нормально. Нет данных кэша
-              (сторонний провайдер, локальный движок) или промаха — строки нет вовсе. */}
+              (сторонний провайдер, локальный движок) или промаха — строки нет вовсе.
+              Незнакомая причина в строке — «другая причина», сырой код — в подсказке
+              (минор ревью F-2). */}
           {promptCacheOn && item.promptCache && item.promptCache.missReason !== 'none' && (
             <>
               {sep}
-              <span title={CACHE_MISS_HINT[item.promptCache.missReason] ?? 'Кэш пересобирается сам — это нормально.'}>
+              <span title={CACHE_MISS_HINT[item.promptCache.missReason]
+                ?? `Причина не распознана (${item.promptCache.missReason}). Кэш пересобирается сам — это нормально.`}>
                 кэш не помог: {missReasonLabel(item.promptCache.missReason)}
               </span>
             </>

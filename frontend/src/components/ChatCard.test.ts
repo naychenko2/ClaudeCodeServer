@@ -52,6 +52,7 @@ const KEYS: FeatureRailKey[] = ['cut', 'plan', 'prod', 'review', 'qa', 'final', 
 function rail(): FeatureRailSegment[] {
   const base: Record<FeatureRailKey, FeatureRailSegment> = {
     cut:    { key: 'cut',    state: 'done',    tone: null },
+    design: { key: 'design', state: 'pending', tone: null },
     plan:   { key: 'plan',   state: 'done',    tone: null },
     prod:   { key: 'prod',   state: 'active',  tone: 'run' },
     review: { key: 'review', state: 'pending', tone: null },

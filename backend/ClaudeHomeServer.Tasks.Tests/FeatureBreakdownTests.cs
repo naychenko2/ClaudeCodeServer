@@ -560,4 +560,25 @@ public class FeatureBreakdownTests
         // Сумма ВСЕХ групп персон = 150 (не 200): безключевая запись ни в одной группе.
         bd.Personas.Sum(g => g.Tokens ?? 0).Should().Be(150);
     }
+
+    // ── W4-DES-B: дизайн-задача в разрезе по персонам ─────────────────────────────────────────
+
+    // Идущая задача с ролью design попадает в разрез по персонам и по ролям: работа
+    // дизайнера видна (первый возврат R7a: run.Design не попадал в выборку AllTasks).
+    // Мутация «убрать Design из AllTasks» → групп «mayya» и «design» нет → тест краснеет.
+    [Fact]
+    public void Build_ИдущаяDesignЗадача_ВРазрезеПоПерсонамИРолям()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        // d1: дизайнер Майя, идёт с 10:00 (до now — 10 ч).
+        var d1 = Child("d1", "epic", personaId: "mayya", role: TaskRoles.Design,
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0));
+
+        var (bd, _) = FeatureBreakdown.Build(Run(epic, d1), null, Sessions(), null, now);
+
+        var mayya = bd.Personas.Single(g => g.Key == "mayya");
+        mayya.Minutes.Should().Be(600, "10 часов работы дизайнера в разрезе персоны");
+        bd.Roles.Single(r => r.Key == "design").Minutes.Should().Be(600);
+    }
 }

@@ -309,7 +309,8 @@ export interface FeatureRun {
   verdicts: FeatureVerdicts;
   progress: number;   // доля решённых витков, 0..1
   ready: boolean;     // финал закрыт с accepted/accepted_with_remarks
-  // Конвейер: 7 стадий в порядке жизненного цикла (cut → plan → prod → review → qa → final → merge).
+  // Конвейер: 8 стадий в порядке жизненного цикла (cut → design → plan → prod → review → qa →
+  // final → merge); design необязательна — без задач её сегмент skipped (W4-DES-B).
   stages?: FeatureStage[];
   // Цепочки шагов: по одной на шаг (stepRef) — задача шага + её доработки, по времени.
   stepChains?: FeatureStepChain[];

@@ -27,7 +27,7 @@ public static class TaskRoles
 
     // Роли, которым featureId НЕ обязателен: эпик фичи (сам эпик — FeatureId=null, он и
     // есть фича) и cut/plan (семантика без привязки к эпика). Прочие роли (step/rework/
-    // review/qa/final/merge/consult) — «висяк» без эпика, fail-closed требует featureId.
+    // design/review/qa/final/merge/consult) — «висяк» без эпика, fail-closed требует featureId.
     public static readonly IReadOnlyList<string> FeatureIdOptional = [Feature, Cut, Plan];
 }
 

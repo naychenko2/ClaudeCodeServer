@@ -26,8 +26,9 @@ export type FeatureBucket = 'attention' | 'running' | 'idle' | 'closed';
 export type FeatureRailState = 'done' | 'active' | 'pending' | 'absent';
 // Тон активной стадии (контракт: у закрытой фичи tone = null).
 export type FeatureRailTone = 'run' | 'loop' | 'wait' | 'stopped';
-// Семь стадий конвейера в порядке жизненного цикла (контракт: «ровно 7»).
-export type FeatureRailKey = 'cut' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
+// Восемь стадий конвейера в порядке жизненного цикла (контракт: «ровно 8»); design
+// необязательна — без задач её сегмент skipped (W4-DES-B).
+export type FeatureRailKey = 'cut' | 'design' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
 
 // Сегмент рельсы. У закрытой фичи `active` нет: стадия — `done` (задачи есть,
 // пройдены) или `absent` (задач нет), tone = null (не `pending` — всё завершено).
@@ -89,7 +90,7 @@ export interface FeatureIndexFeature {
   state: FeatureState;
   // null — тревоги нет.
   attention: FeatureAttention | null;
-  // Ровно 7 стадий в порядке жизненного цикла.
+  // Ровно 8 стадий в порядке жизненного цикла (design необязательна, без задач — skipped).
   rail: FeatureRailSegment[];
   chips: FeatureChip[];
   // Счётчики шагов: принятые (Done) / все.

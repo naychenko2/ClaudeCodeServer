@@ -103,7 +103,7 @@ public sealed record FeatureBreakdown(
             }
         }
 
-        // Все задачи фичи (эпик + дочерние) — та же выборка, что FeatureTimeline.AllTasks.
+        // Задачи фичи с ролью (эпик + дочерние, без безролевых) — та же выборка, что FeatureTimeline.AllTasks.
         var tasks = AllTasks(run).ToList();
 
         // Work-интервал задачи: [ClaudeStartedAt, min(CompletedAt, ExecutorStoppedAt, now));
@@ -287,7 +287,8 @@ public sealed record FeatureBreakdown(
 
     // ─── Вспомогательные ──────────────────────────────────────────────────────────────────────
 
-    // Все задачи фичи: эпик + дочерние (та же выборка, что FeatureTimeline.AllTasks).
+    // Задачи фичи с ролью: эпик + дочерние (та же выборка, что FeatureTimeline.AllTasks).
+    // Безролевые (Unroled) не входят: в метриках считаются только задачи с ролью (W4-DES-B).
     private static IEnumerable<TaskItem> AllTasks(FeatureRun run)
     {
         yield return run.Epic;
@@ -297,6 +298,7 @@ public sealed record FeatureBreakdown(
         if (run.Final is not null) yield return run.Final;
         if (run.Merge is not null) yield return run.Merge;
         foreach (var t in run.Cut) yield return t;
+        foreach (var t in run.Design) yield return t;
         foreach (var t in run.Plan) yield return t;
     }
 

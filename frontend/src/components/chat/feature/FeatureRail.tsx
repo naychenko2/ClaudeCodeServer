@@ -26,6 +26,7 @@ const SEG_ACTIVE_W = 15;
 // Имя этапа по ключу (порядок и названия — те же, что в STAGE_NAME, chatGroups.ts).
 const STAGE_NAME: Record<FeatureRailSegment['key'], string> = {
   cut: 'Разрез',
+  design: 'Дизайн',
   plan: 'План',
   prod: 'Производство',
   review: 'Ревью',

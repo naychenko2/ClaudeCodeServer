@@ -200,6 +200,66 @@ public class TaskExecutionServiceHoldTests : IDisposable
             "ClearHold пометку не гасит — иначе задача выглядела бы живой, хотя хода нет");
     }
 
+    // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванный шаг
+    // получает продолжение в ТЕ ЖЕ сессию исполнителя, а ключевой чат — карточку с числом
+    // продолженных. Мутация: убрать отправку продолжения в ResumeFeatureTurnsAfterHold —
+    // первый Verify краснеет; убрать снятие пометки — краснеет последний абзац.
+    [Fact]
+    public async Task ClearHold_ResumesInterruptedTurn_InItsOwnSession()
+    {
+        var user = _userStore.Add("hold-resume", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича с общим чатом", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec", taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        var execAdapter = SetRunningTurn(chat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, "manual");
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id);
+
+        resumed.Should().Be(1, "прерванный паузой шаг продолжен");
+        execAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжи")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "продолжение идёт в ту же сессию исполнителя, не в новый чат");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжены 1")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "ключевой чат получает карточку с числом продолженных шагов");
+        _tasks.GetById(step.Id)!.ExecutorStopReason.Should().BeNull(
+            "пометка feature_held гасится вместе с продолжением: задача снова в работе");
+    }
+
+    // W4-HOLD-D (контракт §1, п.4): пустой случай — прерванных нет (никто не был в работе),
+    // ключевой чат не будится. Мутация: убрать guard «resumed == 0» — Times.Never краснеет
+    // (карточка ушла бы с нулевым счётчиком).
+    [Fact]
+    public async Task ClearHold_NoInterruptedTurns_SendsNothing()
+    {
+        var user = _userStore.Add("hold-resume-noop", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг", Role: "step",
+            FeatureId: epic.Id));
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, "manual");
+        _tasks.ClearHold(epic.Id);
+
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id);
+        resumed.Should().Be(0, "пауза ничего не прерывала — продолжать нечего");
+        keyAdapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
+            "ничего не продолжено — оркестратор не будится пустой карточкой");
+    }
+
     // Живые сессии SessionManager. Нужны для утверждения «чат задачи не создан вовсе»
     // (R-HOLD-G, находка 4): ClaudeStartedAt == null — не доказательство, ExecuteClaimedAsync
     // создаёт чат раньше MarkClaudeStarted (:341-347), поэтому следы запуска появляются

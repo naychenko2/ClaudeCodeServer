@@ -934,6 +934,11 @@ public class TasksController(
 
         var epic = tasks.ClearHold(featureId);
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
+        // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
+        // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат. Ответ
+        // не меняется: resumed/expired — пробуждение очереди (R-HOLD-H), продолженные шаги
+        // в неё не входят (они уже в работе).
+        executor.ResumeFeatureTurnsAfterHold(featureId, UserId);
         return Ok(new { resumed, expired });
     }
 

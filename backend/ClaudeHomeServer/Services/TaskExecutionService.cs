@@ -1170,6 +1170,57 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         return stopped;
     }
 
+    // Возврат прерванных паузой ходов при её снятии (W4-HOLD-D, контракт §1 :231): продолжение
+    // идёт в ТЕ ЖЕ сессию исполнителя — контекст цел, новый чат не нужен. Кандидаты: только
+    // помеченные этой паузой (feature_held) и ещё в работе; остальные остановки (401, «Стоп»
+    // человека до паузы) пауза не отнимала — они остаются остановленными (п.2). Ключевой чат
+    // не продолжается: его ход принадлежит оркестратору, а не исполнителю задачи. Удалённый
+    // чат (TTL или человек) здесь пропускаем: пометка остаётся, шаг перезапустят штатно —
+    // ветка feature_held_expired отдельная. Возвращает число продолженных шагов; если
+    // продолжать нечего — в ключевой чат ничего не уходит (п.4, пустой случай).
+    public async Task<int> ResumeFeatureTurnsAfterHold(string featureId, string ownerId)
+    {
+        var epic = _tasks.GetById(featureId);
+        if (epic is null) return 0;
+        var featureTasks = _tasks.GetByOwner(ownerId).Where(t => t.FeatureId == featureId).ToList();
+        // Та же цепочка, что у прерывания: сессия задачи в ключевом чате не прерывалась,
+        // и продолжение ей не шлётся.
+        var keyChain = FeatureProjector.KeyChain(epic, featureTasks);
+        var resumed = 0;
+        foreach (var t in featureTasks)
+        {
+            if (t.Status != TaskItemStatus.InProgress) continue;
+            if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
+            if (t.LinkedSessionId is null || keyChain.Contains(t.LinkedSessionId)) continue;
+            if (_sessions.GetById(t.LinkedSessionId) is null) continue; // чата нет — пометка остаётся
+            var cleared = _tasks.ClearExecutorStopped(t.Id, ExecutorStopClassifier.FeatureHeldReason);
+            if (cleared is null) continue;
+            await _broadcaster.ToOwner(cleared.OwnerId!, new TaskChangedMessage("updated", cleared));
+            await _sessions.SendMessageAsync(t.LinkedSessionId, HoldResumePrompt, [], auto: true,
+                cause: SessionManager.DeliveryCause.HoldResume);
+            resumed++;
+        }
+        if (resumed == 0) return 0;
+
+        // Карточка оркестратору в ключевой чат (п.4): пока фича стояла, доклады ложились
+        // без пробуждения — снятие паузы их разбирает. Берётся первое живое звено цепочки,
+        // как в KeySession (чужой/удалённый чат пропускается).
+        var key = keyChain.FirstOrDefault(id => _sessions.GetById(id) is not null);
+        if (key is null) return resumed;
+        await _sessions.SendMessageAsync(key,
+            $"Пауза фичи снята: продолжены {resumed} прерванный{(resumed == 1 ? "" : "ы")} шаг(ов). " +
+            "Доклады, накопленные за паузу, — в лентах этих шагов; разбери их.",
+            [], auto: true, cause: SessionManager.DeliveryCause.Direct);
+        return resumed;
+    }
+
+    // Реплика-продолжение прерванного паузой хода (контракт §1 :236): текст дословно из
+    // контракта — агент сверяется с состоянием дерева, чтобы не повторить вслепую то, что
+    // могло уже выполниться за паузу.
+    private const string HoldResumePrompt =
+        "Пауза фичи снята. Ход был прерван на середине: проверь состояние рабочего дерева " +
+        "(git status) и продолжи с того места, где остановился.";
+
     // Исполнитель встал насовсем: пометка на задаче + уведомление владельцу + (если задачу
     // ставила персона) доклад ей с пробуждением. Перезапуск НЕ делаем: причина терминальная,
     // повтор упёрся бы в неё же и дал серию одинаковых уведомлений.

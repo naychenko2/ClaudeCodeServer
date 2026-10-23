@@ -375,6 +375,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         SubagentNudge,  // auto — добивание сабагента, оборвавшегося на середине
         ToolCallLeakNudge, // auto — повтор вызова инструмента, ушедшего в текст (локальная модель)
         ServerRestartResume, // auto — возобновление хода, оборванного рестартом сервера (фича turn-auto-resume)
+        HoldResume,     // auto — продолжение хода, прерванного паузой фичи (W4-HOLD-D)
         Unknown,        // auto — точка не помечена (диагностика: проставить cause)
     }
 

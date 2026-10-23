@@ -297,6 +297,23 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.NotFound, "непроверенный путь — 404, не фолбэк на main");
     }
 
+    // Хвост резолва W4-LINK-B3: асимметрия решена — правило «дерево == корень» единое. Дерево
+    // эпика — корень проекта: эпик работает в корне, читается корень (как у дерева чата), а не
+    // 404, как было до унификации. Мутация: убрать обход корня в FilesController.TreeRootForAsync
+    // — тест краснеет (предикат VerifiedFeatureTreeAsync main деревом фичи не считает).
+    [Fact]
+    public async Task GetContent_FeatureId_ЭпикНаКорне_ЧитаетRoot()
+    {
+        var (epicId, _, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("rootepic");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.WorktreePath = mainRoot;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "дерево эпика — корень: читается корень, не 404");
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from main tree");
+    }
+
     // Эпик принадлежит другому проекту — для этого проекта фичи нет: 404.
     [Fact]
     public async Task GetContent_FeatureId_ЭпикДругогоПроекта_404()
@@ -381,8 +398,8 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     // Путь задачи есть на диске, но НЕ числится в `git worktree list` проекта (чужое дерево) —
-    // отказ 404, без тихого фолбэка на main. Мутация: в FilesController.TaskTreeRootForAsync
-    // заменить `return await git.VerifiedFeatureTreeAsync(...)` на `return task.WorktreePath;` —
+    // отказ 404, без тихого фолбэка на main. Мутация: в FilesController.TreeRootForAsync
+    // заменить `return await git.VerifiedFeatureTreeAsync(...)` на `return worktreePath;` —
     // этот тест краснеет (чужая папка принялась бы как дерево задачи).
     [Fact]
     public async Task GetContent_SessionId_ЗадачаНеВWorktreeList_404()
@@ -416,8 +433,8 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
     // ─── W4-LINK-B (рев.1): «дерева нет» ≠ «дерево не проверено»; своё дерево чата — первично ───
 
     // Задача без дерева (WorktreePath пуст — норма): её исполнитель работает в корне проекта,
-    // поэтому чат с такой задачей читает main, а не 404. Мутация: убрать в TaskTreeRootForAsync
-    // строку `if (string.IsNullOrWhiteSpace(task.WorktreePath)) return project.RootPath;` —
+    // поэтому чат с такой задачей читает main, а не 404. Мутация: убрать в FilesController.TreeRootForAsync
+    // строку `if (string.IsNullOrWhiteSpace(worktreePath)) return project.RootPath;` —
     // этот тест краснеет (пустое дерево ушло бы в предикат и дал 404).
     [Fact]
     public async Task GetContent_SessionId_ЗадачаБезДерева_ЧитаетMain()
@@ -438,8 +455,8 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // Своё дерево чата (тумблер «отдельное дерево», AttachWorktreeAsync — та же проверка
     // существования и числения в worktree list): с sessionId читается оно, а не main. Мутация:
-    // убрать ветку `if (!string.IsNullOrEmpty(s.WorktreePath))` в GetContent — тест краснеет
-    // (прочитался main вместо дерева чата).
+    // убрать ветку `if (!string.IsNullOrEmpty(session.WorktreePath))` в ChatTreeRootForAsync —
+    // тест краснеет (прочитался main вместо дерева чата).
     [Fact]
     public async Task GetContent_SessionId_СвоёДеревоЧата_Читается()
     {
@@ -466,6 +483,37 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("content").GetString().Should().Be("from chat tree", "своё дерево чата — первичный источник чтения");
+    }
+
+    // Хвост резолва W4-LINK-B: «дерево есть» закреплено и отказной стороной — своё дерево чата
+    // заявлено (WorktreePath присян напрямую, минуя проверку AttachWorktreeAsync), но его нет
+    // в `git worktree list` проекта (чужая папка): 404, без фолбэка на корень. Мутация: в
+    // FilesController.TreeRootForAsync заменить `return await git.VerifiedFeatureTreeAsync(...)`
+    // на `return project.RootPath;` — этот тест краснеет (чужое дерево прочиталось бы корнем).
+    [Fact]
+    public async Task GetContent_SessionId_СвоёДеревоЧатаНеВWorktreeList_404()
+    {
+        var mainRoot = Path.Combine(_tempDir, "alienchat_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "AlienTreeProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        // Реальный репозиторий: без него worktree list пуст — закрепляем предикат, а не отсутствие git.
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+
+        var alien = Path.Combine(_tempDir, "alienchat_wt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(alien);
+        File.WriteAllText(Path.Combine(alien, "draft.md"), "from alien tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.Auto, name: "chat with unverified tree");
+        session.WorktreePath = alien;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, "заявленное дерево не в worktree list — 404, не фолбэк на корень");
     }
 
     // Хвост W4-LINK-B: приоритет двух деревьев. У чата своё дерево И задача, к которой он
@@ -517,7 +565,8 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
     // Хвост W4-LINK-B: чат привязан к корню проекта. Главное дерево числится в
     // `git worktree list`, поэтому AttachWorktreeAsync его принимает, но предикат
     // VerifiedFeatureTreeAsync main не считает деревом фичи — без обхода был бы 404.
-    // Мутация: убрать обход корня в GetContent — тест краснеет (404 вместо чтения main).
+    // Мутация: убрать обход корня в FilesController.TreeRootForAsync — тест краснеет (404
+    // вместо чтения main).
     [Fact]
     public async Task GetContent_SessionId_ДеревоЧатаРавноКорню_ЧитаетRoot()
     {

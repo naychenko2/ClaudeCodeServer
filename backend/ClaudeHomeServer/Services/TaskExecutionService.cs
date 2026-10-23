@@ -1178,9 +1178,14 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // человека до паузы) пауза не отнимала — они остаются остановленными (п.2). Ключевой чат
     // не продолжается: его ход принадлежит оркестратору, а не исполнителю задачи. Удалённый
     // чат (TTL или человек) здесь пропускаем: пометка остаётся, шаг перезапустят штатно —
-    // ветка feature_held_expired отдельная. Возвращает число продолженных шагов; если
-    // продолжать нечего — в ключевой чат ничего не уходит (п.4, пустой случай).
-    public async Task<int> ResumeFeatureTurnsAfterHold(string featureId, string ownerId)
+    // ветка feature_held_expired отдельная. Возвращает число продолженных шагов.
+    // Дефект bec00347 (контракт §1 :102-105, п.4): карточка оркестратору в ключевой чат уходит
+    // при ЛЮБОМ снятии удержания, не только когда что-то продолжено: reason=draft — «фича
+    // запущена» с ходом (прерванных ходов у черновика не бывает, будить куратора — смысл кнопки);
+    // manual/queue без продолженных — «пауза снята, запуски разрешены». Причина приходит из
+    // ручки: после ClearHold Hold эпика уже null, а по состоянию её не восстановить — manual
+    // без продолженных выглядит ровно как пустой черновик.
+    public async Task<int> ResumeFeatureTurnsAfterHold(string featureId, string ownerId, string holdReason)
     {
         var epic = _tasks.GetById(featureId);
         if (epic is null) return 0;
@@ -1213,13 +1218,25 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                     t.Id, t.LinkedSessionId, ex.Message);
             }
         }
-        if (resumed == 0) return 0;
-
-        // Карточка оркестратору в ключевой чат (п.4): пока фича стояла, доклады ложились
-        // без пробуждения — снятие паузы их разбирает. Берётся первое живое звено цепочки,
-        // как в KeySession (чужой/удалённый чат пропускается).
+        // Общий путь карточки (п.4, дефект bec00347): любое снятие будит оркестратора в ключевом
+        // чате. Берётся первое живое звено цепочки, как в KeySession (чужой/удалённый чат
+        // пропускается).
         var key = keyChain.FirstOrDefault(id => _sessions.GetById(id) is not null);
         if (key is null) return resumed;
+        if (holdReason == FeatureHoldReasons.Draft) {
+            // «Фича запущена» (контракт :103): кнопка снимает гейт, шаги по плану запускает
+            // оркестратор — будить его здесь и есть смысл запроса.
+            await _sessions.SendMessageAsync(key,
+                "Фича запущена: черновик снят, фича активна. Начни конвейер по плану.",
+                [], auto: true, cause: SessionManager.DeliveryCause.Direct);
+            return resumed; // у черновика прерванных ходов не бывает — 0
+        }
+        if (resumed == 0) {
+            await _sessions.SendMessageAsync(key,
+                "Пауза снята: прерванных шагов нет, запуски разрешены.",
+                [], auto: true, cause: SessionManager.DeliveryCause.Direct);
+            return 0;
+        }
         // R-HOLD-D (п.5): формулировка контракта §1, :249 — «пауза снята, продолжены N шагов»,
         // с согласованием: 1 — «продолжен 1 шаг», 2–4 — «продолжены N шага», 5+ — «шагов».
         var (verb, noun) = resumed == 1 ? ("продолжен", "шаг") : resumed <= 4 ? ("продолжены", "шага") : ("продолжены", "шагов");

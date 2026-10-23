@@ -221,7 +221,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
         _tasks.SetHold(epic.Id, "manual");
         _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
 
-        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
 
         resumed.Should().Be(1, "прерванный паузой шаг продолжен");
         execAdapter.Verify(a => a.SendMessageAsync(
@@ -267,7 +267,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
         _tasks.SetHold(epic.Id, "manual");
         _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
 
-        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
 
         resumed.Should().Be(1, "сбой одного чата не обрывает цикл: второй шаг продолжен");
         _tasks.GetById(broken.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
@@ -284,11 +284,12 @@ public class TaskExecutionServiceHoldTests : IDisposable
             Times.Once(), "счётчик карточки — только доставленные");
     }
 
-    // W4-HOLD-D (контракт §1, п.4): пустой случай — прерванных нет (никто не был в работе),
-    // ключевой чат не будится. Мутация: убрать guard «resumed == 0» — Times.Never краснеет
-    // (карточка ушла бы с нулевым счётчиком).
+    // W4-HOLD-K (дефект bec00347, контракт §1 :102-105, п.4): пустой случай больше не молчит —
+    // при снятии manual без прерванных ходов ключевой чат получает карточку «пауза снята,
+    // запуски разрешены» с ходом. Мутация: удалить ветку карточки без продолженных — этот
+    // Verify краснеет (карточка не ушла бы вовсе, но её текст не совпал бы).
     [Fact]
-    public async Task ClearHold_NoInterruptedTurns_SendsNothing()
+    public async Task ClearHold_NoInterruptedTurns_SendsPauseClearedCard()
     {
         var user = _userStore.Add("hold-resume-noop", "password123", "user");
         var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
@@ -298,14 +299,39 @@ public class TaskExecutionServiceHoldTests : IDisposable
             FeatureId: epic.Id));
         var keyAdapter = SetRunningTurn(keyChat.Id);
 
-        _tasks.SetHold(epic.Id, "manual");
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
         _tasks.ClearHold(epic.Id);
 
-        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
         resumed.Should().Be(0, "пауза ничего не прерывала — продолжать нечего");
-        keyAdapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
-            It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
-            "ничего не продолжено — оркестратор не будится пустой карточкой");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("запуски разрешены")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "оркестратор будится карточкой «пауза снята, запуски разрешены»");
+    }
+
+    // W4-HOLD-K (дефект bec00347, контракт §1 :103): снятие черновика — кнопка «Запустить»:
+    // в ключевой чат уходит карточка «фича запущена» с ходом, будить куратора — смысл запроса
+    // (прерванных ходов у черновика нет по гарду :880). Мутация: удалить ветку draft — Times.Once
+    // краснеет: без неё карточка уходит в общей ветке «продолжены N», а её нет.
+    [Fact]
+    public async Task ClearHold_DraftStartsFeature_SendsStartedCardToKeyChat()
+    {
+        var user = _userStore.Add("hold-draft-wake", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича в черновике", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Draft);
+        _tasks.ClearHold(epic.Id);
+
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Draft);
+        resumed.Should().Be(0, "у черновика прерванных ходов не бывает");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("Фича запущена")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "ключевой чат получает карточку «фича запущена» с ходом");
     }
 
     // Живые сессии SessionManager. Нужны для утверждения «чат задачи не создан вовсе»

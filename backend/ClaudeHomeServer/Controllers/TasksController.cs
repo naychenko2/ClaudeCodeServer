@@ -934,15 +934,19 @@ public class TasksController(
                 resumed.Add(t.Id);
         }
 
+        // Дефект bec00347: формулировка карточки зависит от причины удержания — её фиксируют
+        // ДО снятия: после ClearHold Hold эпика уже null.
+        var holdReason = run.Epic.Hold!.Reason;
         var epic = tasks.ClearHold(featureId);
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
         // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
-        // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат. Ответ
-        // не меняется: resumed/expired — пробуждение очереди (R-HOLD-H), продолженные шаги
-        // в неё не входят (они уже в работе).
+        // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
+        // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
+        // разрешены». Ответ не меняется: resumed/expired — пробуждение очереди (R-HOLD-H),
+        // продолженные шаги в неё не входят (они уже в работе).
         // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой не теряется молча —
         // логируем (конвенция FireAndForget, SessionManager.cs:10815).
-        _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId).ContinueWith(
+        _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, holdReason).ContinueWith(
             t => log.LogError("Возврат прерванных паузой ходов фичи {FeatureId}: {Message}",
                 featureId, t.Exception?.GetBaseException().Message),
             TaskContinuationOptions.OnlyOnFaulted);

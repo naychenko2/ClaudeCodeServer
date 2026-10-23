@@ -487,7 +487,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task GetFeatures_ПоСессии_ВозвращаетАгрегат()
     {
-        const string sessionId = "sess-feature-test-1";
+        // Чат реальный: с W4-CHT-B список фич чата строится по единому правилу
+        // FeatureChatMembership, оно fail-closed по снимку владельца — несуществующего
+        // чата в нём быть не может (прежня фикстура использовала синтетический id).
+        var sessionId = await CreatePersonalChatAsync(OwnerId);
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
         var epicId = epic.GetProperty("id").GetString();
         await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
@@ -1044,7 +1047,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task GetFeature_Stats_Страница_ИндексИСписокБез()
     {
-        var sessionId = "sess-stats-test-1";
+        // Чат реальный: список фич чата (W4-CHT-B) — по единому правилу FeatureChatMembership,
+        // fail-closed по снимку владельца; синтетический id в нём не резолвится.
+        var sessionId = await CreatePersonalChatAsync(OwnerId);
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
         var epicId = epic.GetProperty("id").GetString();
         await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });

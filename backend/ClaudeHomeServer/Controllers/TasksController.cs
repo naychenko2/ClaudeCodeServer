@@ -633,9 +633,9 @@ public class TasksController(
         // Б-pl: документы фичи (вкладка «Планы и макеты») — СПИСОК (без текста) по ПОЛНОМУ run
         // (до SlimRun: Slim обнуляет ResultMarkdown, а hasText/mockupPaths — из него).
         var plans = FeatureProjector.BuildPlans(run);
-        // Б4: chats[] — все чаты фичи (эпик + дочерние) из снимка владельца; только features/{id}
-        // (в SlimRun/индекс chats не входит). kind: executor — чат задачи, curator/orchestrator/key
-        // — чат эпика по признакам (BuildFeatureChats).
+        // Б4: chats[] — все чаты фичи из снимка владельца; только features/{id}
+        // (в SlimRun/индекс chats не входит). Набор и kind — единое правило FeatureChatMembership
+        // (W4-CHT-B), локальной копии по TaskId/признакам эпика нет (BuildFeatureChats).
         var allFeatureTasks = new List<TaskItem> { run.Epic };
         allFeatureTasks.AddRange(run.Steps);
         allFeatureTasks.AddRange(run.Reviews);

@@ -2816,14 +2816,16 @@ public class FeatureProjectorTests
         chats.Should().ContainSingle(c => c.Id == "chat-arch-b4d").Which.Archived.Should().BeTrue();
     }
 
-    // chats[]: чат эпика без признака curator/orchestrator → key.
+    // chats[]: чат эпика без признака curator/orchestrator — executor по единому правилу
+    // FeatureChatMembership (TaskId = эпик). Локальной копии «key» на бэке нет (W4-CHT-B):
+    // ключевой чат помечает фронт по keySessionId (FeatureChatsTab).
     [Fact]
-    public void BuildFeatureChats_Эпик_БезПризнака_Key()
+    public void BuildFeatureChats_Эпик_БезПризнака_Executor()
     {
         var epic = new TaskItem { Id = "epic-b4e", Role = TaskRoles.Feature }; // нет SourceSessionId/ExecutorLaunchedBySessionId
         var step = new TaskItem { Id = "s-b4e", FeatureId = "epic-b4e", Role = TaskRoles.Step };
         var sessions = new[] { new FeatureIndexSession("chat-epic-b4e", "epic-b4e", null, false) };
         var chats = FeatureProjector.BuildFeatureChats(epic, [epic, step], sessions, null);
-        chats.Should().ContainSingle(c => c.Id == "chat-epic-b4e").Which.Kind.Should().Be("key");
+        chats.Should().ContainSingle(c => c.Id == "chat-epic-b4e").Which.Kind.Should().Be("executor");
     }
 }

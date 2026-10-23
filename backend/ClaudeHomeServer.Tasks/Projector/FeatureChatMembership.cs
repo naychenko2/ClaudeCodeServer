@@ -2,13 +2,15 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Tasks.Projector;
 
-// ─── Б9c, шаг 2: единое правило «чат → фичи» (хозяин — проектор) ────────────────────────────
+// ─── Б9c, шаг 2 + W4-CHT-B: единое правило «чат → фичи» (хозяин — проектор) ───────────────────
 //
-// Членство чата в фичах — ЕДИНОЕ правило (решение Александра, доработка Б9c): раньше оно жило
-// в двух копиях (BuildIndexCore и ChatFeatureIds) плюс в третьей, ad-hoc, в контроллере (блок
-// keyChatId Б9b + эпик-уровневый список общих чатов Б9c). Три копии расходились: «общий чат»
-// с точки зрения Б9b (ключевой у одной фичи) и с точки зрения Б9c (эпик-уровневый список) —
-// разные наборы, и расход общего чата оседал в одной фиче (проба F Глеба).
+// Членство чата в фичах — ЕДИНОЕ правило (решение Александра, доработка Б9c; W4-CHT-B —
+// контракт §2): раньше оно жило в четырёх копиях (BuildIndexCore, ChatFeatureIds, фильтр
+// ProjectForSession по SourceSessionId/ExecutorLaunchedBySessionId эпика и TaskId-правило
+// BuildFeatureChats). Копии расходились: «общий чат» с точки зрения одной точки и другой —
+// разные наборы, и расход общего чата оседал в одной фиче (проба F Глеба). Теперь индекс
+// (BuildIndexCore), шторка (ProjectForSession) и вкладка «Чаты» (BuildFeatureChats) вызывают
+// Build/BuildDetailed — вида связи (curator/orchestrator/executor) нигде больше не определяют.
 //
 // Правило (executor ∪ curator ∪ orchestrator):
 //   executor     — Session.TaskId → задача с FeatureId == F (или сама эпик F: Role=feature);
@@ -31,9 +33,25 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // (эпики/задачи — только владельца).
 public static class FeatureChatMembership
 {
-    // chatId → множество featureId, в которые чат входит (executor ∪ curator ∪ orchestrator).
-    // Чат, не входящий ни в одну фичу, в карте не живёт.
-    public static IReadOnlyDictionary<string, HashSet<string>> Build(
+    // Запись пары «чат × фича»: сильнейший вид связи и его сила. role/stepRef/lane — только
+    // у executor (данные задачи по Session.TaskId); у curator/orchestrator — null.
+    public record Link(string Kind, int Strength, string? Role, string? StepRef, string? Lane);
+
+    // Сила связи вида: key(0) > curator(1) > orchestrator(2) > executor(3).
+    // «key» в членстве не участвует (добавит Б2, цепочка ключевого чата): ключевой чат
+    // помечает фронт по keySessionId (FeatureChatsTab), второй копии «key» на бэке нет.
+    public static int KindStrength(string kind) => kind switch
+    {
+        "key" => 0,
+        "curator" => 1,
+        "orchestrator" => 2,
+        _ => 3, // executor
+    };
+
+    // chatId → featureId → сильнейший Link (executor ∪ curator ∪ orchestrator). Чат, не
+    // входящий ни в одну фичу, в карте не живёт. Это ЕДИНАЯ реализация правила: все
+    // потребители (индекс, ProjectForSession, BuildFeatureChats) идут через неё.
+    public static IReadOnlyDictionary<string, Dictionary<string, Link>> BuildDetailed(
         IReadOnlyList<TaskItem> owner,
         IReadOnlyCollection<FeatureIndexSession> snapshot)
     {
@@ -60,29 +78,51 @@ public static class FeatureChatMembership
             if (t.FeatureId is not null && t.ExecutorLaunchedBySessionId is not null)
                 AddToSet(orchestratorBySession, t.ExecutorLaunchedBySessionId, t.FeatureId);
 
-        // chatId → featureId (множество): executor ∪ curator ∪ orchestrator.
-        var map = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        // chatId → featureId → сильнейший Link: на пару «чат × фича» держим минимальную
+        // силу (curator > orchestrator > executor).
+        var map = new Dictionary<string, Dictionary<string, Link>>(StringComparer.Ordinal);
         foreach (var s in snapshot)
         {
-            var set = new HashSet<string>(StringComparer.Ordinal);
+            var links = new Dictionary<string, Link>(StringComparer.Ordinal);
+            void AddLink(string featureId, string kind, string? role, string? stepRef, string? lane)
+            {
+                var strength = KindStrength(kind);
+                if (!links.TryGetValue(featureId, out var cur) || strength < cur.Strength)
+                    links[featureId] = new Link(kind, strength, role, stepRef, lane);
+            }
             // executor: Session.TaskId → задача → её фича (эпик — сама фича).
             if (s.TaskId is not null && byId.TryGetValue(s.TaskId, out var task))
             {
                 var featureId = task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
-                if (featureId is not null) set.Add(featureId);
+                if (featureId is not null)
+                    AddLink(featureId, "executor", task.Role, task.StepRef, task.Lane);
             }
             // curator: epic.SourceSessionId == чат.
             if (curatorBySession.TryGetValue(s.Id, out var curators))
-                set.UnionWith(curators);
+                foreach (var featureId in curators)
+                    AddLink(featureId, "curator", null, null, null);
             // orchestrator: эпик/дочерняя задача запускала исполнителя из этого чата.
             if (orchestratorBySession.TryGetValue(s.Id, out var orchestrators))
-                set.UnionWith(orchestrators);
-            if (set.Count > 0) map[s.Id] = set;
+                foreach (var featureId in orchestrators)
+                    AddLink(featureId, "orchestrator", null, null, null);
+            if (links.Count > 0) map[s.Id] = links;
         }
         return map;
     }
 
-    // chatId → featureId: добавление в множество (вспомогательное, как в BuildIndexCore).
+    // chatId → множество featureId — тонкая обёртка над BuildDetailed для потребителей,
+    // которым нужно только множество (SharedSpendSplitter, ChatFeatureIds, контроллер).
+    public static IReadOnlyDictionary<string, HashSet<string>> Build(
+        IReadOnlyList<TaskItem> owner,
+        IReadOnlyCollection<FeatureIndexSession> snapshot)
+    {
+        var result = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var (chatId, links) in BuildDetailed(owner, snapshot))
+            result[chatId] = new HashSet<string>(links.Keys, StringComparer.Ordinal);
+        return result;
+    }
+
+    // chatId → featureId: добавление в множество (вспомогательное).
     private static void AddToSet(Dictionary<string, HashSet<string>> map, string key, string value)
     {
         if (!map.TryGetValue(key, out var set))

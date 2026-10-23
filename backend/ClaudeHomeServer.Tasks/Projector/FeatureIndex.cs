@@ -8,9 +8,10 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // чата как сохранена в Session.Model (null/пусто — «Авто», слот; Б4).
 public sealed record FeatureIndexSession(string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null);
 
-// Чат фичи (GET /api/tasks/features/{id}, chats[]; Б4): один чат из снимка владельца,
-// привязанный к фиче. kind: key | curator | orchestrator | executor (те же виды, что в
-// FeatureIndexChatEntry; «key» — чат эпика/оркестратора без признака curator/orchestrator).
+// Чат фичи (GET /api/tasks/features/{id}, chats[]; Б4 + W4-CHT-B): один чат из снимка
+// владельца, состоящий в фиче по ЕДИНОМУ правилу FeatureChatMembership. kind: curator |
+// orchestrator | executor — тот же вид, что в FeatureIndexChatEntry; «key» бэк не emits:
+// ключевой чат помечает фронт по keySessionId (FeatureChatsTab).
 // modelLabel/modelFull — как у исполнителя (FeatureStageExecutor): «Авто»/короткая метка и
 // полное имя (для «Авто» — «Авто → {модель} (слот «{тир}»)»).
 public sealed record FeatureChat(
@@ -32,8 +33,10 @@ public sealed record FeatureChat(
 // (per-owner, fail-closed: наружу уходит только id, который есть во входном снимке владельца).
 public sealed class FeatureIndex
 {
-    // Чат → его фичи, упорядоченные по силе связи: key > curator > orchestrator > executor.
-    // При равенстве силы — по порядку фичи в Features. Id чата — только из входного снимка.
+    // Чат → его фичи. Порядок (W4-CHT-B, контракт §2): сначала открытые фичи, потом закрытые;
+    // внутри класса — по силе связи (curator > orchestrator > executor), при равенстве — по
+    // порядку фичи в Features. «Своя» фича чата (по TaskId) — первая внутри своего класса.
+    // Id чата — только из входного снимка.
     public Dictionary<string, List<FeatureIndexChatEntry>> Chats { get; init; } = new();
     // Строки фич (контракт С0 §1) — Б2.
     public List<FeatureIndexRow> Features { get; init; } = [];

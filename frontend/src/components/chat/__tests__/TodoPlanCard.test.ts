@@ -1,5 +1,6 @@
-// Карточка плана хода (TodoPlanView) — три вида по решению Андрея 20.10:
-// 1. Живая + фичи → короткая строка (без слов состояния фичи, есть «Подробнее»).
+// Карточка плана хода (TodoPlanView) — решение Андрея 23.10: в чате с фичей живой
+// карточки нет вовсе (статус даёт баннер), остаются только снимки прошлых планов:
+// 1. Живая + фичи → ничего.
 // 2. Живая + без фич → полный чек-лист (прежний вид).
 // 3. Прошлые → строка-снимок, раскрытие по клику (aria-expanded).
 //
@@ -69,10 +70,10 @@ function runFixture(id: string): FeatureRun {
   };
 }
 
-// ── 1. Живая + фичи: короткая строка ─────────────────────────────────────────
+// ── 1. Живая + фичи: живой карточки нет ──────────────────────────────────────
 
-describe('TodoPlanView: живая + фичи → короткая строка', () => {
-  it('содержит «План хода», «N из M», «Подробнее»; НЕ содержит слов состояния фичи', () => {
+describe('TodoPlanView: живая + фичи → ничего (решение Андрея 23.10)', () => {
+  it('с фичей живая карточка не рендерится вовсе', () => {
     runsFlag.value = [runFixture('feat-1')];
     const html = renderToStaticMarkup(
       wrap(createElement(TodoPlanViewForTest, {
@@ -82,46 +83,24 @@ describe('TodoPlanView: живая + фичи → короткая строка'
         ts: 1700000000000,
       })),
     );
-    // Есть: заголовок, прогресс, «Подробнее» (R2 minor 4: видимая подпись, не title —
-    // >Подробнее< — текстовый узел; title="Подробнее" оканчивается кавычкой, не '<').
+    // Ни заголовка, ни прогресса, ни «Подробнее» — узла нет.
+    expect(html).not.toContain('План хода');
+    expect(html).not.toContain('Подробнее');
+    expect(html).not.toContain('сейчас:');
+  });
+
+  it('прошлая карточка в том же чате с фичей остаётся снимком', () => {
+    runsFlag.value = [runFixture('feat-1')];
+    const html = renderToStaticMarkup(
+      wrap(createElement(TodoPlanViewForTest, {
+        todos: todos(),
+        isMobile: false,
+        isCurrentPlan: false,
+        ts: 1700000000000,
+      })),
+    );
     expect(html).toContain('План хода');
-    expect(html).toContain('1 из 3');
-    expect(html).toMatch(/>Подробнее</);
-    // Нет: слов состояния фичи (ModeSwitcher/FeaturePicker/FeatureCardFooter)
-    expect(html).not.toContain('Исполнение фичи');
-    expect(html).not.toContain('Задачи фичи в трекере');
-  });
-
-  it('«сейчас:» показывает in_progress пункт (activeForm)', () => {
-    runsFlag.value = [runFixture('feat-1')];
-    const html = renderToStaticMarkup(
-      wrap(createElement(TodoPlanViewForTest, {
-        todos: todos(),
-        isMobile: false,
-        isCurrentPlan: true,
-        ts: 1700000000000,
-      })),
-    );
-    expect(html).toContain('сейчас: делаю B');
-  });
-
-  it('клик по «Подробнее» вызывает openPillMenu', () => {
-    installFakeDom();
-    runsFlag.value = [runFixture('feat-1')];
-    const { root, container } = mount(
-      wrap(createElement(TodoPlanViewForTest, {
-        todos: todos(),
-        isMobile: false,
-        isCurrentPlan: true,
-        ts: 1700000000000,
-      })),
-    );
-    const btn = findNodeByAttr(container, 'title', 'Подробнее');
-    expect(btn, 'кнопка «Подробнее» найдена').not.toBeNull();
-    act(() => (reactProps(btn!)!.onClick as () => void)());
-    expect(__test.pillMenuFor(SESSION_ID), 'сигнал openPillMenu').not.toBeNull();
-    root.unmount();
-    uninstallFakeDom();
+    expect(html).toContain('снимок');
   });
 });
 

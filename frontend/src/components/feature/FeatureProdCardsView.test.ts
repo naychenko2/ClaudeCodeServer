@@ -24,6 +24,7 @@
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureProdCardsView } from './FeatureProdCardsView';
+import { buildNavMarks } from '../../lib/featureNavMarks';
 import { C, SHADOW } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound, FeatureStage } from '../../types/featureRun';
@@ -319,6 +320,29 @@ describe('код шага', () => {
     // Пункт закрывает меню и ведёт в чат — проверяем переход.
     await act(async () => { (reactProps(chatItem.children[0] as never)!.onClick as () => void)(); });
     expect(mockOpenChat.calls).toEqual(['chat-kira']);
+  });
+
+  // Минор R4e: пометки меню — только из marks, не безусловно. Мутация «показывать
+  // «в архиве»/«задача закрыта» всегда» краснит этот тест: живой чат получил бы пометку.
+  it('пометки меню: живой чат — без «в архиве»; закрытая задача — «задача закрыта»', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stages: [prodStage([{ taskId: 's1', chatId: 'chat-live' }])],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'Сделать X', personaId: 'p-kira', taskIds: ['s1'], status: 'принят', outcome: 'accepted', chatId: 'chat-live' })],
+    });
+    // Пометки — из агрегата: задача s1 done → закрыта; чат chat-live не архивирован.
+    const marks = buildNavMarks(r);
+    const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F', marks }));
+    act(() => { (reactProps(findNodeByAttr(container, 'data-testid', 'prod-code-Ш1') as never)!.onClick as () => void)(); });
+    const body = (globalThis as { document: { body: never } }).document.body as never;
+    const chatItem = findAll(body, 'data-testid', 'prod-menu-chat')[0] as never;
+    const taskItem = findAll(body, 'data-testid', 'prod-menu-task')[0] as never;
+    expect(chatItem).toBeTruthy();
+    expect(taskItem).toBeTruthy();
+    // Живой чат: пометки «в архиве» нет — иначе ложная пометка прошла бы незамеченной.
+    expect(textNodes(chatItem).join(''), 'живой чат не должен быть помечен «в архиве»').not.toContain('в архиве');
+    // Закрытая задача — помечена: пометки действительно текут из marks.
+    expect(textNodes(taskItem).join(''), 'закрытая задача должна быть помечена').toContain('задача закрыта');
   });
 });
 

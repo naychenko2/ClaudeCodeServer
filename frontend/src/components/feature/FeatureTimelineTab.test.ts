@@ -1,14 +1,14 @@
 // Вкладка «Хронология» (волна 3, Ф2a/Ф2b, макет features-overview-3-final §5).
 //
 // Чистые функции (имя/состояние/границы/«≈»/точка/линия/задачи/минуты/статус/плашка;
-// Ф2b: вердикт витка, статус/тон/модель шага, пустое состояние витков) — в node, без DOM.
+// Ф2b: статус/тон шага (stepStatusView), модель шага) — в node, без DOM.
 // Рендер-тесты (fakeDom): порядок 7 этапов, раскрытие одного этапа, исполнители
 // (roleLabel + чип модели), «чата нет», пустые состояния, тач-цель 40 на 360.
 // «Производство» (W4-2F3): лента карточек FeatureProdCardsView вместо «исполнителей/
 // шагов» — одна карточка на шаг, «сейчас» над текущей. Сироты «Производства» (фикс R4e):
 // карточек нет, но у стадии есть исполнители → прежние ExecutorRow; пустое состояние
 // «Шагов пока нет» — только когда показывать действительно некого. Чистые функции Ф2b
-// (вердикт/статус/тон/модель) остаются: их читает лента.
+// (статус/тон/модель) остаются: их читает лента.
 //
 // Мутации (в отчёте): (1) переставить этапы в run.stages → «порядок этапов» краснеет;
 // (2) убрать «≈» из stageDurationLabel → «длительность ≈» краснеет; (3) не передать run
@@ -23,7 +23,7 @@ import { FeatureTimelineTab } from './FeatureTimelineTab';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, minutesSince, executorStatus, stageStatusBadge,
-  roundVerdictView, stepStatusLabel, stepStatusTone, stepModel, roundsAreaLabel,
+  stepStatusView, stepModel,
 } from './FeatureTimelineBits';
 import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
@@ -539,46 +539,23 @@ function mkRound(over: Partial<FeatureRound> = {}): FeatureRound {
   };
 }
 
-describe('roundVerdictView', () => {
-  it('принят → success; принят с замечаниями → warning; вернул → warning; снят → muted; идёт → active', () => {
-    expect(roundVerdictView('accepted')).toEqual({ label: 'принят', tone: 'success' });
-    expect(roundVerdictView('accepted_with_remarks')).toEqual({ label: 'принят с замечаниями', tone: 'warning' });
-    expect(roundVerdictView('returned')).toEqual({ label: 'вернул', tone: 'warning' });
-    expect(roundVerdictView('withdrawn')).toEqual({ label: 'снят', tone: 'muted' });
-    expect(roundVerdictView('running')).toEqual({ label: 'идёт', tone: 'active' });
+describe('stepStatusView', () => {
+  // Обёртки stepStatusLabel/stepStatusTone удалены как мёртвый код (хвост R4e) —
+  // проверяется сам источник: label и tone всегда производятся вместе.
+  it('готовая строка бэка (chain.status) — подпись как есть, тон из неё (не из outcome)', () => {
+    expect(stepStatusView(mkChain({ status: 'ждёт ревью' }))).toEqual({ label: 'ждёт ревью', tone: 'muted' });
+    expect(stepStatusView(mkChain({ status: 'снят с выкладки' }))).toEqual({ label: 'снят с выкладки', tone: 'muted' });
+    // Мутация (в отчёте): вернуть тон из outcome → «идёт» (status) + outcome=accepted →
+    // tone success вместо active → краснеет.
+    expect(stepStatusView(mkChain({ status: 'идёт', outcome: 'accepted' }))).toEqual({ label: 'идёт', tone: 'active' });
+    expect(stepStatusView(mkChain({ status: 'принят', outcome: 'running' }))).toEqual({ label: 'принят', tone: 'success' });
   });
-});
-
-describe('stepStatusLabel', () => {
-  it('готовая строка бэка (chain.status) — как есть', () => {
-    expect(stepStatusLabel(mkChain({ status: 'ждёт ревью' }))).toBe('ждёт ревью');
-    expect(stepStatusLabel(mkChain({ status: 'снят с выкладки' }))).toBe('снят с выкладки');
-  });
-  it('status отсутствует (старый ответ) → фолбэк из outcome, без выдуманных подписей', () => {
-    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'pending' }))).toBe('ждёт ревью');
-    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'accepted' }))).toBe('принят');
-    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'running' }))).toBe('идёт');
-    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'returned' }))).toBe('закрыт без повторного ревью');
-    expect(stepStatusLabel(mkChain({ status: undefined as unknown as string, outcome: 'withdrawn' }))).toBe('снят с выкладки');
-  });
-});
-
-describe('stepStatusTone', () => {
-  it('status отсутствует (старый ответ) → тон из outcome: accepted→success; running/returned→active; pending/withdrawn→muted', () => {
-    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'accepted' }))).toBe('success');
-    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'running' }))).toBe('active');
-    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'returned' }))).toBe('active');
-    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'pending' }))).toBe('muted');
-    expect(stepStatusTone(mkChain({ status: undefined as unknown as string, outcome: 'withdrawn' }))).toBe('muted');
-  });
-  // Один источник: когда бэк дал готовую строку (chain.status), тон — из НЕЁ, а не из
-  // outcome (раньше подпись из status, тон из outcome — могли расконсистентиться).
-  // Мутация (в отчёте): вернуть тон из outcome → «идёт» (status) + outcome=accepted →
-  // tone success вместо active → краснеет.
-  it('status есть → тон из status (не из outcome): «идёт»→active, «принят»→success', () => {
-    // status='идёт' (active), но outcome=accepted (было бы success) — тон берём из status.
-    expect(stepStatusTone(mkChain({ status: 'идёт', outcome: 'accepted' }))).toBe('active');
-    expect(stepStatusTone(mkChain({ status: 'принят', outcome: 'running' }))).toBe('success');
+  it('status отсутствует (старый ответ) → фолбэк из outcome, label и tone вместе', () => {
+    expect(stepStatusView(mkChain({ status: undefined as unknown as string, outcome: 'pending' }))).toEqual({ label: 'ждёт ревью', tone: 'muted' });
+    expect(stepStatusView(mkChain({ status: undefined as unknown as string, outcome: 'accepted' }))).toEqual({ label: 'принят', tone: 'success' });
+    expect(stepStatusView(mkChain({ status: undefined as unknown as string, outcome: 'running' }))).toEqual({ label: 'идёт', tone: 'active' });
+    expect(stepStatusView(mkChain({ status: undefined as unknown as string, outcome: 'returned' }))).toEqual({ label: 'закрыт без повторного ревью', tone: 'active' });
+    expect(stepStatusView(mkChain({ status: undefined as unknown as string, outcome: 'withdrawn' }))).toEqual({ label: 'снят с выкладки', tone: 'muted' });
   });
 });
 
@@ -593,18 +570,6 @@ describe('stepModel', () => {
     expect(stepModel(execs, 'Ш2')).toEqual({ label: 'Qwen', full: null });
     expect(stepModel(execs, 'Ш3')).toBeNull();
     expect(stepModel(execs, '')).toBeNull();
-  });
-});
-
-describe('roundsAreaLabel', () => {
-  it('витков нет: есть исполнитель → «ещё не ревьюили»; нет исполнителя → «нет исполнителя»', () => {
-    expect(roundsAreaLabel(mkChain({ personaId: 'p1' }))).toBe('ещё не ревьюили');
-    expect(roundsAreaLabel(mkChain({ personaId: null }))).toBe('нет исполнителя');
-  });
-  it('последний виток идёт → «ревью идёт»; витки закрыты → null (строки рендерятся)', () => {
-    expect(roundsAreaLabel(mkChain({ rounds: [mkRound({ verdict: 'running' })] }))).toBe('ревью идёт');
-    expect(roundsAreaLabel(mkChain({ rounds: [mkRound({ verdict: 'accepted' })] }))).toBeNull();
-    expect(roundsAreaLabel(mkChain({ rounds: [mkRound({ n: 1, verdict: 'returned' }), mkRound({ n: 2, verdict: 'running' })] }))).toBe('ревью идёт');
   });
 });
 

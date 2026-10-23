@@ -12,7 +12,7 @@
 //   • «текущий» узел берётся как есть из модели: state 'cur' стоит только на активном
 //     действии (работа/доработка), рендер завершённые узлы не перетирает;
 //   • «закрыта» задача — из одного источника: статус задачи (task.status === 'done'),
-//     как в StepRow/ExecutorRow, а не outcome цепочки.
+//     как в ExecutorRow, а не outcome цепочки.
 // Пустого состояния у компонента нет: при пустой ленте он не рисует ничего —
 // существующее пустое состояние остаётся у вкладки.
 
@@ -268,7 +268,7 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, 
     boxShadow: card.isCurrent ? `inset 3px 0 0 ${C.accent}` : card.awaitingReview ? `inset 3px 0 0 ${C.info}` : undefined,
   };
 
-  // Статус — ОДНИМ источником: stepStatusView (label и tone вместе), как в StepRow.
+  // Статус — ОДНИМ источником: stepStatusView (label и tone вместе).
   const status = chain ? stepStatusView(chain) : null;
   const statusStyle: CSSProperties =
     status?.tone === 'success' ? { background: C.successBg, color: C.successText } :

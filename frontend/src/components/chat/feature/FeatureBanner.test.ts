@@ -20,7 +20,7 @@ import { createElement, act } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureBanner, featureBannerRow } from './FeatureBanner';
-import { CHAT_MAX_W } from '../../../lib/design';
+import { C, CHAT_MAX_W } from '../../../lib/design';
 import { __test } from '../../../lib/featuresIndex';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../__tests__/fakeDom';
@@ -310,6 +310,23 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     // Текущий (active) — <button> (type="button" перед data-testid).
     const b = html.indexOf('data-testid="feature-dot-prod"');
     expect(html.slice(Math.max(0, b - 40), b), 'active prod должен быть <button>').toContain('<button');
+  });
+
+  // Минор R-DES-F: skipped-точка (design без задач, W4-DES-B) — декоративная, не кликабельна.
+  // Мутация (в отчёте): удалить ветку 'skipped' в StageDotView → заливка станет
+  // progressTrack, не bgInset → краснеет; сделать её <button> → краснеет проверка тега.
+  it('design: skipped — точка <i> (не кнопка) с нейтральной заливкой C.bgInset', () => {
+    const withDesign = feat('running', {
+      rail: [{ key: 'design', state: 'skipped', tone: null }, ...rail()],
+    });
+    seedIndex(withDesign, link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const i = html.indexOf('data-testid="feature-dot-design"');
+    expect(i, 'нет точки design').not.toBe(-1);
+    // Тег-открывашка сразу перед data-testid — <i>, не <button> (некликабельна).
+    expect(html.slice(Math.max(0, i - 20), i), 'skipped design должен быть <i>').toContain('<i');
+    // Заливка — C.bgInset (var(--c-bg-inset)), не дорожка pending.
+    expect(html.slice(i, i + 200), 'skipped-точка залита C.bgInset').toContain(`background:${C.bgInset}`);
   });
 
   it('«· ещё N»: чат с двумя фичами → «· ещё 1» (порядок — от бэка)', () => {

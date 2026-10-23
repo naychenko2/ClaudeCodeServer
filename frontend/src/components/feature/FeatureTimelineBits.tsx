@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import { ChevronRight } from 'lucide-react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
-import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { STAGE_NAME } from '../../lib/chatGroups';
 import { roleLabel } from '../../lib/roleLabel';
 import { getPersonaById } from '../../lib/personas';
@@ -14,13 +12,13 @@ import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { NavTargetPair } from './NavTargetButton';
-import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureRound, FeatureRoundVerdict, FeatureTask, StageKey } from '../../types/featureRun';
+import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureTask, StageKey } from '../../types/featureRun';
 
-// Подкомпоненты вкладки «Хронология» (волна 3, Ф2a/Ф2b, макет features-overview-3-final §5):
+// Подкомпоненты вкладки «Хронология» (волна 3, Ф2a, макет features-overview-3-final §5):
 // точка/линия этапа, подпись состояния, границы «dd.mm · ЧЧ:ММ – ЧЧ:ММ», длительность «≈»,
 // исполнители (аватар, роль, чип модели, статус, время, пара «чат · задача»), плашки
-// «ждёт вас · N мин» / «стоит · N мин»; Ф2b — шаги (шапка: код, роль, исполнитель, чип модели,
-// статус, «чат · задача») и витки (ревью: кто, вердикт, находки; «чат · задача» ревью).
+// «ждёт вас · N мин» / «стоит · N мин». Строки шагов и витков (Ф2b) удалены: «Производство»
+// рисуется лентой карточек (FeatureProdCardsView), других потребителей у них нет (хвост R4e).
 // Чистые функции — в этом же файле, тестируются в FeatureTimelineTab.test.ts.
 
 // === Чистые функции (тестируются в node, без DOM) ===
@@ -177,24 +175,7 @@ export function stageStatusBadge(stage: FeatureStage, taskMap: Map<string, Featu
   return { text: max != null ? `${base} · ${max} мин` : base, tone: stage.tone === 'wait' ? 'info' : 'danger' };
 }
 
-// === Ф2b: шаги и витки (макет §5: строки шагов и витки) ===
-
-// Вердикт витка → подпись + тон (макет: «принят» — success, «вернул» — warning,
-// «идёт» — active, «снят» — muted). «Принят с замечаниями» считается возвратом (warning).
-export interface RoundVerdictView {
-  label: string;
-  tone: 'success' | 'warning' | 'active' | 'muted';
-}
-export function roundVerdictView(verdict: FeatureRoundVerdict): RoundVerdictView {
-  switch (verdict) {
-    case 'accepted': return { label: 'принят', tone: 'success' };
-    case 'accepted_with_remarks': return { label: 'принят с замечаниями', tone: 'warning' };
-    case 'returned': return { label: 'вернул', tone: 'warning' };
-    case 'withdrawn': return { label: 'снят', tone: 'muted' };
-    case 'running': return { label: 'идёт', tone: 'active' };
-    default: return { label: '', tone: 'muted' };
-  }
-}
+// === Ф2b: чистые функции статуса шага (лента карточек «Производства») ===
 
 // Тон по готовой строке статуса бэка (chain.status): одна строка — одна пара
 // (label, tone), чтобы подпись и цвет не расходились (раньше тон брался из outcome,
@@ -226,16 +207,6 @@ export function stepStatusView(chain: FeatureStepChain): { label: string; tone: 
   }
 }
 
-// Подпись статуса шага (обёртка stepStatusView: label).
-export function stepStatusLabel(chain: FeatureStepChain): string {
-  return stepStatusView(chain).label;
-}
-
-// Тон статуса шага (обёртка stepStatusView: tone).
-export function stepStatusTone(chain: FeatureStepChain): 'success' | 'active' | 'muted' {
-  return stepStatusView(chain).tone;
-}
-
 // Чип модели шага: исполнитель стадии с тем же stepRef (задача-шаг, не доработка);
 // совпадения нет → null (чипа нет, честная деградация).
 export function stepModel(executors: FeatureStageExecutor[], stepRef: string):
@@ -245,17 +216,6 @@ export function stepModel(executors: FeatureStageExecutor[], stepRef: string):
   const any = head ?? executors.find(x => x.stepRef === stepRef);
   if (!any || !any.modelLabel) return null;
   return { label: any.modelLabel, full: any.modelFull };
-}
-
-// Пустое состояние зоны витков (честная деградация, без выдуманных подписей):
-// витков нет + нет исполнителя → «нет исполнителя»; витков нет → «ещё не ревьюили»;
-// последний виток идёт → «ревью идёт»; иначе null (витки рендерятся строками).
-export function roundsAreaLabel(chain: FeatureStepChain): string | null {
-  if (chain.rounds.length === 0) {
-    return chain.personaId ? 'ещё не ревьюили' : 'нет исполнителя';
-  }
-  const last = chain.rounds[chain.rounds.length - 1]!;
-  return last.verdict === 'running' ? 'ревью идёт' : null;
 }
 
 // === Подкомпоненты ===
@@ -402,7 +362,7 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
           chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
           showNoChat
           taskId={x.taskId}
-          // «Закрыта» — ОДИН источник с StepRow: статус ЗАДАЧИ (task.status === 'done'),
+          // «Закрыта» — один источник: статус ЗАДАЧИ (task.status === 'done'),
           // не статус исполнителя (x.status) — разные поля бэка.
           taskClosed={task?.status === 'done'}
           onOpenTask={openTask}
@@ -414,260 +374,4 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
   );
 }
 
-// === Ф2b: витки и шаги (макет §5) ===
 
-// Строка витка (макет §5): «виток N» · ревью (кто, вердикт, находки, если есть в данных) ·
-// пара «чат · задача» ревью (NavTargetPair: чат = reviewChatId, задача = reviewTaskId).
-// Вердикт-чип красится по исходу; находки — Verification.Notes (reason), перенос по словам.
-export function RoundRow({ round, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false }: {
-  round: FeatureRound; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
-}) {
-  const persona = round.personaId ? getPersonaById(round.personaId) : undefined;
-  // Персона недоступна (id в данных, но не найдена) — нейтральное «персона недоступна»,
-  // не сырой UUID; без personaId — имени нет.
-  const name = persona?.name ?? (round.personaId ? 'персона недоступна' : null);
-  const verdict = roundVerdictView(round.verdict);
-  const vStyle: CSSProperties =
-    verdict.tone === 'success' ? { background: C.successBg, color: C.successText } :
-    verdict.tone === 'warning' ? { background: C.warningBg, color: C.warningText } :
-    verdict.tone === 'active' ? { background: C.bgSelected, color: C.textHeading } :
-    { background: 'transparent', color: C.textMuted, boxShadow: `inset 0 0 0 1px ${C.border}` };
-
-  // Переход в чат/задачу витка: те же пути, что у исполнителя (openChatById / openTaskInSection)
-  // + точка возврата на страницу фичи (Ф9b).
-  const openChat = () => {
-    if (!round.reviewChatId) return;
-    recordFeatureReturn(featureId, { kind: 'chat', id: round.reviewChatId }, featureTitle);
-    void openChatById(round.reviewChatId);
-  };
-  const openTask = () => {
-    if (!round.reviewTaskId) return;
-    recordFeatureReturn(featureId, { kind: 'task', id: round.reviewTaskId }, featureTitle);
-    openTaskInSection({ id: round.reviewTaskId });
-  };
-
-  return (
-    <div
-      data-testid={`feature-round-${round.n}`}
-      style={{
-        display: 'grid', gridTemplateColumns: '54px minmax(0, 1fr) auto',
-        gap: SP.sm, alignItems: 'baseline', padding: `${SP.xs}px 0`,
-        fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary,
-      }}
-    >
-      <span data-testid="feature-round-n" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
-        виток {round.n}
-      </span>
-      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: SP.sm, flexWrap: 'wrap', minWidth: 0 }}>
-        {name && (
-          <span data-testid="feature-round-who" style={{ color: C.textPrimary, whiteSpace: 'nowrap' }}>{name}</span>
-        )}
-        <span
-          data-testid="feature-round-verdict"
-          style={{ ...vStyle, fontSize: FS.xxs, fontWeight: 700, padding: `0 ${SP.xs}px`, borderRadius: R.sm, whiteSpace: 'nowrap', lineHeight: '15px' }}
-        >
-          {verdict.label}
-        </span>
-        {round.reason && (
-          <span data-testid="feature-round-reason" style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-            {round.reason}
-          </span>
-        )}
-      </span>
-      <span style={{ display: 'inline-flex', gap: SP.xs }}>
-        <NavTargetPair
-          chatId={round.reviewChatId}
-          chatArchived={marks.chatArchived(round.reviewChatId)}
-          onOpenChat={openChat}
-          chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
-          showNoChat
-          taskId={round.reviewTaskId ?? null}
-          taskClosed={marks.taskClosed(round.reviewTaskId)}
-          onOpenTask={openTask}
-          taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
-          isMobile={isMobile}
-        />
-      </span>
-    </div>
-  );
-}
-
-// Строка шага (макет §5): кнопка — шеврон, код (stepRef), название; справа — исполнитель
-// (аватар + имя), roleLabel, чип модели, статус, пара «чат · задача». Раскрыто — цепочка
-// витков (RoundRow) + строка «итого». Один шаг раскрыт за раз (состояние — у родителя).
-// Честная деградация: без stepRef кода нет; без исполнителя — «нет исполнителя»;
-// без чата — «чата нет» (NavTargetPair); без модели — чипа нет.
-export function StepRow({ chain, model, expanded, onToggle, featureId, featureTitle = null, task, marks = EMPTY_NAV_MARKS, isMobile = false }: {
-  chain: FeatureStepChain;
-  model: { label: string; full?: string | null } | null;
-  expanded: boolean;
-  onToggle: () => void;
-  featureId: string;
-  featureTitle?: string | null;
-  // Задача шага (первая в цепочке): для пометки «закрыта» (один источник с
-  // ExecutorRow: status === 'done', не outcome === 'accepted' — разные поля бэка).
-  task?: import('../../types/featureRun').FeatureTask;
-  // Пометки «в архиве»/«задача закрыта» из данных страницы (buildNavMarks).
-  marks?: NavMarks;
-  isMobile?: boolean;
-}) {
-  const persona = chain.personaId ? getPersonaById(chain.personaId) : undefined;
-  // Персона недоступна (id в данных, но не найдена) — нейтральное «персона недоступна»,
-  // не сырой UUID; без personaId — имени нет.
-  const name = persona?.name ?? (chain.personaId ? 'персона недоступна' : null);
-  const role = roleLabel('step', chain.stepRef || null, chain.lane ?? null);
-  // Статус шага — ОДИН источник: label и tone из stepStatusView (не расходятся).
-  const { label: statusLabel, tone } = stepStatusView(chain);
-  const duration = stageDurationLabel(chain.durationMinutes);
-  const areaLabel = roundsAreaLabel(chain);
-
-  const statusStyle: CSSProperties =
-    tone === 'success' ? { background: C.successBg, color: C.successText } :
-    tone === 'active' ? { background: C.bgSelected, color: C.textHeading } :
-    { background: 'transparent', color: C.textMuted, boxShadow: `inset 0 0 0 1px ${C.border}` };
-
-  // Переход в чат/задачу шага: чат = chain.chatId (fail-closed), задача = первая задача
-  // цепочки (задача-шаг); те же пути, что у исполнителя, + точка возврата.
-  const openChat = () => {
-    if (!chain.chatId) return;
-    recordFeatureReturn(featureId, { kind: 'chat', id: chain.chatId }, featureTitle);
-    void openChatById(chain.chatId);
-  };
-  const openTask = () => {
-    const taskId = chain.taskIds[0];
-    if (!taskId) return;
-    recordFeatureReturn(featureId, { kind: 'task', id: taskId }, featureTitle);
-    openTaskInSection({ id: taskId });
-  };
-
-  // Строка-кнопка (макет §5, .srow): кнопка на всю ширину + пара «чат · задача» справа
-  // в той же строке; hover — фон строки (как в макете).
-  const [hover, setHover] = useState(false);
-  return (
-    <div data-testid={`feature-step-${chain.stepRef || 'no-ref'}`}>
-      <div
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: SP.xs,
-          margin: `0 -${SP.md}px`, padding: `0 ${SP.md}px`,
-          background: hover ? C.bgSelected : 'transparent',
-          borderRadius: R.md,
-        }}
-      >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        aria-label={`${chain.stepRef ? chain.stepRef + ' ' : ''}${chain.title}: ${expanded ? 'свернуть' : 'раскрыть'} витки`}
-        data-testid={`feature-step-header-${chain.stepRef || 'no-ref'}`}
-        style={{
-          display: 'flex', alignItems: 'center', gap: SP.sm, flex: 1, minWidth: 0,
-          background: 'transparent', border: 'none', cursor: 'pointer',
-          padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.md, minHeight: isMobile ? 44 : 36,
-          fontFamily: FONT.sans, fontSize: FS.sm, color: C.textPrimary, textAlign: 'left',
-        }}
-      >
-        <ChevronRight
-          size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden
-          style={{
-            flexShrink: 0, color: C.textMuted,
-            transform: expanded ? 'rotate(90deg)' : undefined, transition: 'transform .15s',
-          }}
-        />
-        {chain.stepRef && (
-          <span data-testid="feature-step-code" style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.textHeading, flexShrink: 0 }}>
-            {chain.stepRef}
-          </span>
-        )}
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {chain.title}
-        </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0 }}>
-          <ExecutorAvatar personaId={chain.personaId ?? null} />
-          {name && (
-            <span data-testid="feature-step-executor" style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
-              {name}
-            </span>
-          )}
-          {role && (
-            <span
-              data-testid="feature-step-role"
-              style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, background: C.bgSelected, borderRadius: R.sm, padding: `0 ${SP.xs}px`, whiteSpace: 'nowrap' }}
-            >
-              {role}
-            </span>
-          )}
-          {model && <ModelChip label={model.label} full={model.full} isMobile={isMobile} />}
-          {statusLabel && (
-            <span
-              data-testid="feature-step-status"
-              style={{ ...statusStyle, fontSize: FS.xs, fontWeight: 600, padding: `0 ${SP.xs}px`, borderRadius: R.sm, whiteSpace: 'nowrap', lineHeight: '16px' }}
-            >
-              {statusLabel}
-            </span>
-          )}
-        </span>
-      </button>
-      {/* «чат · задача» шага (в той же строке, макет §5): чат = chain.chatId (fail-closed),
-          задача = задача-шаг (первая задача цепочки) */}
-      <NavTargetPair
-        chatId={chain.chatId}
-        chatArchived={marks.chatArchived(chain.chatId)}
-        onOpenChat={openChat}
-        chatTitle="Открыть чат. Страница фичи скроется, вернётся по плашке."
-        showNoChat
-        taskId={chain.taskIds[0] ?? null}
-        // «Закрыта» — ОДИН источник (major 3, ревью Ф9b): статус задачи шага
-        // (task?.status === 'done'), не `marks.taskClosed` (тот же факт из агрегата — дубль;
-        // мутация снятия дубля не краснила — проводка была мертва) и не outcome === 'accepted'
-        // (другое поле бэка: «принят» — вердикт ревью, не статус задачи). «Идёт»/«ждёт
-        // ревью»/«вернул» — задача ещё открыта.
-        taskClosed={task?.status === 'done'}
-        onOpenTask={openTask}
-        taskTitle="Открыть задачу. Страница фичи скроется, вернётся по плашке."
-        isMobile={isMobile}
-      />
-      </div>
-      {/* Раскрыто: витки (или пустое состояние) + «итого» */}
-      {expanded && (
-        <div
-          data-testid={`feature-step-tours-${chain.stepRef || 'no-ref'}`}
-          style={{ margin: `${SP.xxs}px 0 ${SP.sm}px ${SP.xl}px`, borderLeft: `1px solid ${C.divider}`, paddingLeft: SP.md }}
-        >
-          {chain.rounds.length === 0 ? (
-            <div
-              data-testid="feature-step-rounds-empty"
-              style={{ fontSize: FS.sm, color: C.textMuted, padding: `${SP.xs}px 0`, fontFamily: FONT.sans }}
-            >
-              {areaLabel}
-            </div>
-          ) : (
-            <>
-              {areaLabel && (
-                <div
-                  data-testid="feature-step-review-running"
-                  style={{ fontSize: FS.xs, fontWeight: 600, color: C.info, padding: `${SP.xs}px 0`, fontFamily: FONT.sans }}
-                >
-                  {areaLabel}
-                </div>
-              )}
-              {chain.rounds.map(r => (
-                <RoundRow key={`${chain.stepRef}-${r.n}`} round={r} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} />
-              ))}
-              <div
-                data-testid="feature-step-total"
-                style={{ display: 'grid', gridTemplateColumns: '54px minmax(0, 1fr)', gap: SP.sm, alignItems: 'baseline', padding: `${SP.xs}px 0`, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary }}
-              >
-                <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>итого</span>
-                <span style={{ minWidth: 0 }}>
-                  {name ?? '—'}{duration ? ` · ${duration}` : ' · —'}
-                </span>
-              </div>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}

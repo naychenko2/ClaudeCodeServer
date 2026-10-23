@@ -584,6 +584,93 @@ describe('FilesDrawer: окно по макету', () => {
     uninstallFakeDom();
   });
 
+  it('Major 1: каждая вкладка помнит свой файл и вид — выбор не переносится', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    // «Файлы»: выбрали файл → содержимое, без удалённой строки.
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    let text = textNodes(container).join(' ');
+    expect(text).toContain('new line');
+    expect(text).not.toContain('old line');
+    // Переход в «Изменения» → сводка, а не diff, выбранный в «Файлах».
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('Что поменялось');
+    expect(text).not.toContain('old line');
+    // «Изменения»: выбрали тот же файл → полный diff с удалённой строкой.
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('old line');
+    // Обратный переход в «Файлы» → содержимое файла, не diff.
+    expect(clickByText(container, 'Файлы')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('new line');
+    expect(text).not.toContain('old line');
+    // Возврат в «Изменения» → вкладка восстанавливает свой выбор.
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('old line');
+    uninstallFakeDom();
+  });
+
+  it('Major 1 (мобила): Back ведёт к списку, выбор вкладки сохраняется, а не сбрасывается', () => {
+    installFakeDom();
+    // installFakeDom ставит свой window с matchMedia=false — переключаем только matchMedia
+    // (целый window заменять нельзя: react-dom читает из него HTMLIFrameElement).
+    window.matchMedia = (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('new line');
+    // Back — к списку: вид файла закрыт.
+    expect(clickByAttr(container, 'aria-label', 'Назад к списку файлов')).toBe(true);
+    let text = textNodes(container).join(' ');
+    expect(text).toContain('Пакет');
+    expect(text).not.toContain('new line');
+    // Переход на другую вкладку и обратно — выбор «Файлов» восстановлен, не null.
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByText(container, 'Файлы')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('new line');
+    // Выбор в «Изменениях» не переносится в «Файлы»: там своё содержимое, не diff.
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    expect(clickByText(container, 'Файлы')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('new line');
+    expect(text).not.toContain('old line');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
+  it('Major 2: вид «Файл» изменённого файла — плашка «Показаны только изменённые строки»', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true); // изменённый файл
+    const text = textNodes(container).join(' ');
+    expect(text).toContain('Показаны только изменённые строки');
+    // Файл без строк diff — состояние «Содержимое не показано», содержимое не обещается.
+    expect(clickByAttr(container, 'data-file', 'panel/index.html')).toBe(true);
+    const text2 = textNodes(container).join(' ');
+    expect(text2).toContain('Содержимое не показано');
+    expect(text2).not.toContain('Показаны только изменённые строки');
+    uninstallFakeDom();
+  });
+
+  it('Major 3: сводка «Права» — списки добавленных и снятых прав', () => {
+    const diff: PluginDraftDiff = {
+      ...DIFF,
+      manifest: { ...DIFF.manifest!, permissionsAdded: ['net:api.example.com'], permissionsRemoved: ['notes:read'] },
+    };
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Права');
+    expect(text).toContain('+ net:api.example.com');
+    expect(text).toContain('− notes:read');
+    uninstallFakeDom();
+  });
+
   it('мобила 320: тач-цели 44px и без сайдбара 280px (двухуровневая раскладка)', () => {
     vi.stubGlobal('window', Object.assign(new EventTarget(), {
       innerWidth: 320, innerHeight: 640,

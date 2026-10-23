@@ -243,9 +243,10 @@ function PanelPreview({ slug }: { slug: string }) {
 // предпросмотр панели — отдельная вкладка.
 //
 // Что реально есть у окна: бэк отдаёт сырой текст только через diff изменённых файлов
-// (lines). Вид «Файл» собран из ctx+add строк — это содержимое новой версии; для
-// добавленных/неизменённых файлов содержимого нет — мета и прямая подсказка. «Изменения»
-// — полный diff с двумя гуттерами.
+// (lines). Вид «Файл» собран из ctx+add строк — это изменённые участки новой версии
+// (для изменённых файлов — с явным предупреждением); для добавленных/неизменённых
+// файлов содержимого нет — мета и прямая подсказка. «Изменения» — полный diff с двумя
+// гуттерами. Выбор файла и вид хранятся отдельно на каждую вкладку (макет).
 
 type ChangeMark = 'add' | 'mod' | 'del';
 
@@ -459,8 +460,14 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
 }) {
   const isMobile = useIsMobile();
   const [tab, setTab] = useState<'files' | 'changes' | 'panel'>('files');
-  const [selected, setSelected] = useState<string | null>(null);
-  const [view, setView] = useState<'file' | 'diff'>('file');
+  // Каждая вкладка помнит свой выбранный файл и вид (макет): переход между
+  // вкладками не переносит выбор, а возврат на вкладку — восстанавливает его.
+  const [selByTab, setSelByTab] = useState<Record<'files' | 'changes', { path: string | null; view: 'file' | 'diff' }>>({
+    files: { path: null, view: 'file' },
+    changes: { path: null, view: 'diff' },
+  });
+  // Мобильный Back ведёт к списку, не сбрасывая выбор вкладки — только закрывает вид.
+  const [listOpen, setListOpen] = useState(false);
   // На мобиле «Сводка» — отдельный уровень после нажатия; на десктопе она дефолт вкладки.
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -468,6 +475,10 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
   const [wrap, setWrap] = useState(isMobile);
 
   const files = preview.files.filter(f => !f.isDir);
+  // Выбор и вид — свои на каждую вкладку; «Панель» их не использует.
+  const sel = tab === 'panel' ? { path: null, view: 'file' as const } : selByTab[tab];
+  const selected = sel.path;
+  const view = sel.view;
   const selectedFile = files.find(f => f.path === selected) ?? null;
   // Запись diff о выбранном файле (любая: added/modified/removed) — источник содержимого.
   const selectedEntry = diff
@@ -483,11 +494,23 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
       if (next.has(path)) next.delete(path); else next.add(path);
       return next;
     });
-  // Каждая вкладка помнит свой вид: в «Файлах» — содержимое, в «Изменениях» — diff.
+  // Выбор пишется только в текущую вкладку: «Файлы» — содержимое, «Изменения» — diff.
   const selectFile = (path: string, asView: 'file' | 'diff') => {
-    setSelected(path);
+    if (tab === 'panel') return;
+    setSelByTab(prev => {
+      const cur = prev[tab];
+      // Повторный клик по тому же файлу — восстановить его вид; новый файл — вид вкладки.
+      return { ...prev, [tab]: cur.path === path ? { path, view: cur.view } : { path, view: asView } };
+    });
     setSummaryOpen(false);
-    setView(asView);
+    setListOpen(false);
+  };
+  const setViewForTab = (v: 'file' | 'diff') =>
+    setSelByTab(prev => (tab === 'panel' ? prev : { ...prev, [tab]: { ...prev[tab], view: v } }));
+  const changeTab = (t: 'files' | 'changes' | 'panel') => {
+    setTab(t);
+    // Возврат на вкладку на мобиле — её сохранённый вид, а не список.
+    setListOpen(false);
   };
 
   const subtitle = (
@@ -502,7 +525,7 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
   const tabs = (
     <Tabs
       value={tab}
-      onChange={setTab}
+      onChange={changeTab}
       size="md"
       isMobile={isMobile}
       ariaLabel="Разделы черновика"
@@ -537,7 +560,11 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
         <button
           data-summary
           aria-current={selected == null && (summaryOpen || !isMobile) ? 'true' : undefined}
-          onClick={() => { setSelected(null); setSummaryOpen(true); }}
+          onClick={() => {
+            setSelByTab(prev => ({ ...prev, changes: { path: null, view: prev.changes.view } }));
+            setSummaryOpen(true);
+            setListOpen(false);
+          }}
           style={{
             display: 'flex', alignItems: 'center', gap: SP.xs, height: isMobile ? 44 : 28,
             padding: '0 8px', border: 'none', borderRadius: R.md, cursor: 'pointer',
@@ -651,12 +678,17 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
               </span>
             ))}
           </div>
-          {(diff.manifest?.permissionsAdded.length ?? 0) > 0 && (
-            <Notice tone="warning" icon={AlertTriangle} title="Новые права">
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: 4 }}>
-                {diff.manifest!.permissionsAdded.map(p => <span key={p} style={{ fontFamily: FONT.mono, fontSize: FS.xs }}>+ {p}</span>)}
-              </div>
-            </Notice>
+          // Major 3 (ревью): блок «Права» с обоими списками — как в старой сводке.
+          {((diff.manifest?.permissionsAdded.length ?? 0) + (diff.manifest?.permissionsRemoved.length ?? 0)) > 0 && (
+            <>
+              <SectionLabel>Права</SectionLabel>
+              {diff.manifest!.permissionsAdded.map(p => (
+                <div key={p} style={{ fontSize: FS.xs, color: C.successText, padding: '2px 0' }}>+ {p}</div>
+              ))}
+              {diff.manifest!.permissionsRemoved.map(p => (
+                <div key={p} style={{ fontSize: FS.xs, color: C.dangerText, padding: '2px 0' }}>− {p}</div>
+              ))}
+            </>
           )}
           {(diff.manifest?.secretsAdded.length ?? 0) > 0 && (
             <Notice tone="info" icon={Key} title="Новый секрет" style={{ marginTop: SP.sm }}>
@@ -702,7 +734,11 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
           icon={<Ghost size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
           title="Файла больше нет"
           subtitle={<span>Агент обновил черновик, пока окно было открыто, и <span style={{ fontFamily: FONT.mono, fontSize: FS.xs }}>{selected}</span> из пакета убран.</span>}
-          action={<Button variant="secondary" size="sm" onClick={() => { setSelected(null); setSummaryOpen(true); }}>К сводке</Button>}
+          action={<Button variant="secondary" size="sm" onClick={() => {
+            setSelByTab(prev => ({ ...prev, [tab]: { path: null, view: prev[tab].view } }));
+            setSummaryOpen(true);
+            setListOpen(false);
+          }}>К сводке</Button>}
         />
       </div>
     );
@@ -727,7 +763,7 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
           {(selectedEntry?.lines ?? []).length > 0 && (
             <InlineSegmented
               value={view}
-              onChange={setView}
+              onChange={setViewForTab}
               isMobile={isMobile}
               size="sm"
               options={[
@@ -750,6 +786,13 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
             </>
           )}
         </div>
+        // Major 2 (ревью): вид «Файл» собран из строк diff — честно предупреждаем,
+        // что это изменённые участки, а не весь файл.
+        {view === 'file' && mark === 'mod' && (
+          <Notice tone="info" icon={List} title="Показаны только изменённые строки">
+            Контекст и новые строки из сравнения с установленной версией — весь файл сервер не отправляет.
+          </Notice>
+        )}
         {(selectedEntry?.truncated || diff?.truncated) && (
           <Notice tone="warning" icon={AlertTriangle} title="Сравнение длинное">
             Показаны строки, которые сервер успел отправить; полное содержимое файла в окно не приходит.
@@ -791,14 +834,14 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
   const body = isMobile
     ? tab === 'panel'
       ? pane
-      : selected != null || (tab === 'changes' && summaryOpen)
+      : (selected != null || (tab === 'changes' && summaryOpen)) && !listOpen
         ? (
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <div style={{
               display: 'flex', alignItems: 'center', gap: SP.xs, height: 44, padding: '0 4px',
               background: C.bgCard, borderBottom: `1px solid ${C.borderLight}`, flexShrink: 0,
             }}>
-              <BackButton onClick={() => setSelected(null)} ariaLabel={tab === 'files' ? 'Назад к списку файлов' : 'Назад к сводке'}>
+              <BackButton onClick={() => setListOpen(true)} ariaLabel={tab === 'files' ? 'Назад к списку файлов' : 'Назад к сводке'}>
                 <span style={{ fontSize: FS.base, color: C.textSecondary }}>{tab === 'files' ? 'Файлы' : 'Изменения'}</span>
               </BackButton>
               <div style={{ flex: 1 }} />

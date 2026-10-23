@@ -2213,6 +2213,8 @@ public class FeatureProjectorTests
             var run = new FeatureProjector(sut).Project(epic.Id, "u");
             run!.State.Should().Be(FeatureStates.Paused);
             run.Now.Should().BeEmpty("пауза: никто не идёт — «Сейчас» пустой");
+            run.Interrupted.Should().Contain(step.Id,
+                "прерванные — отдельным полем, а не через Now (контракт :364, W4-HOLD-D2)");
 
             // Журнал фичи: stopped с причиной feature_held (пишет существующий WriteJournalTransitions).
             journal.Read("u", epic.Id).Entries.Should().Contain(
@@ -2224,6 +2226,52 @@ public class FeatureProjectorTests
             var after = sut.GetById(step.Id);
             after!.ExecutorStoppedAt.Should().NotBeNull("ClearHold не снимает пометку feature_held");
             after!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason);
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // W4-HOLD-D2 (R-HOLE-D, находка 4): «running» — «ход идёт сейчас», а не «запускался
+    // когда-то». Задача, чей ход закончился результатом и ещё не закрыта: прерывать нечего —
+    // ни пометки feature_held, ни в interrupted. Мутация: убрать проверку ClaudeResult в
+    // FeatureProjector.IsTurnRunning — задача помечается — красное.
+    [Fact]
+    public void SetHold_CompletedTurnIsNotRunning_IsNotMarked()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_d2_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var journal = new FeatureJournalStore(Path.Combine(dir, "feature-journal"));
+        var sut = new TaskManager(config, journal: journal);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            var running = sut.Create(null, "u", new CreateTaskRequest("шаг D1",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D1", Lane: "back"));
+            sut.MarkClaudeStarted(running.Id, "sess-1", DateTime.UtcNow);
+            // Ход закончился результатом, задача не закрыта: прерывать нечего.
+            var finished = sut.Create(null, "u", new CreateTaskRequest("шаг D2",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D2", Lane: "back"));
+            sut.MarkClaudeStarted(finished.Id, "sess-2", DateTime.UtcNow);
+            sut.MarkClaudeResult(finished.Id, "success");
+
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+            sut.GetById(finished.Id)!.ExecutorStoppedAt.Should().BeNull(
+                "ход уже завершён — пауза его не помечает");
+            sut.GetById(running.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+                "идущий — прерывается");
+
+            var run = new FeatureProjector(sut).Project(epic.Id, "u");
+            run!.Interrupted.Should().Equal([running.Id], "прерванные — только те, чей ход идёт сейчас");
         }
         finally
         {

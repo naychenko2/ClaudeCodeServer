@@ -2353,15 +2353,16 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
-    // 200: draft до первого запуска шага — поле в эпике, ответ — обновлённый эпик.
+    // 200: draft до первого запуска шага. Тело по контракту :364 — { interrupted: [] }:
+    // черновик ставится до первого запуска, прерывать нечего.
     [Fact]
     public async Task PostHold_DraftDoZapuskStepa_200()
     {
         var epicId = await CreateFeatureEpicAsync();
         var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "draft" });
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var epic = await response.Content.ReadFromJsonAsync<JsonElement>();
-        epic.GetProperty("hold").GetProperty("reason").GetString().Should().Be("draft");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("interrupted").EnumerateArray().Should().BeEmpty("черновик: ходов ещё нет");
     }
 
     // 409: draft после первого запуска шага (решение 23.10: «только до первого запуска»).
@@ -2406,6 +2407,52 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var held = journal.Read(OwnerId, epicId).Entries.Where(e => e.Kind == "held").ToList();
         held.Should().HaveCount(1);
         held[0].Reason.Should().Be("manual");
+    }
+
+    // W4-HOLD-D2 (контракт :364): ответ POST hold — id прерванных этой паузой ходов. Идущий
+    // шаг (старт, без стопа/результата) попадает, уже остановленный по другой причине — нет.
+    // Мутации: вернуть Ok(epic) вместо { interrupted } — GetProperty бросит; убрать цикл
+    // пометки в SetHold — список пуст — красное.
+    [Fact]
+    public async Task PostHold_200_ReturnsInterruptedIds()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new { title = "шаг D1", featureId = epicId, role = "step", status = "inProgress" });
+        var stepId = step.GetProperty("id").GetString()!;
+        var other = await CreateTaskAsync(new { title = "шаг D2", featureId = epicId, role = "step", status = "inProgress" });
+        var otherId = other.GetProperty("id").GetString()!;
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.MarkClaudeStarted(stepId, "sess-d1", DateTime.UtcNow); // ход идёт.
+        tm.MarkClaudeStarted(otherId, "sess-d2", DateTime.UtcNow);
+        tm.MarkExecutorStopped(otherId, DateTime.UtcNow, ExecutorStopClassifier.AuthFailedReason); // уже встал.
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var interrupted = body.GetProperty("interrupted").EnumerateArray().Select(x => x.GetString()).ToList();
+
+        interrupted.Should().Contain(stepId, "идущий ход прерван — он в ответе");
+        interrupted.Should().NotContain(otherId, "уже остановленный по другой причине — не прерванный паузой");
+    }
+
+    // W4-HOLD-D2 (контракт :212): повторный hold с тем же reason идемпотентен — Since не
+    // сдвигается, в журнале ровно одна held. Мутация: убрать guard в SetHold — Since сдвинется
+    // и записей станет две — красное.
+    [Fact]
+    public async Task PostHold_PovtorTotoyReason_IdempotentSinceIDurnal()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var first = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        first.StatusCode.Should().Be(HttpStatusCode.OK);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        var since = tm.GetById(epicId)!.Hold!.Since;
+
+        var second = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        second.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        tm.GetById(epicId)!.Hold!.Since.Should().Be(since, "повторная пауза — не новая пауза: Since не двигается");
+        var journal = _factory.Services.GetRequiredService<FeatureJournalStore>();
+        journal.Read(OwnerId, epicId).Entries.Count(e => e.Kind == "held").Should().Be(1, "одна запись на паузу");
     }
 
     // 409: DELETE без удержания — снимать нечего.

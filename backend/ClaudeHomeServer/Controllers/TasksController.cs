@@ -837,7 +837,8 @@ public class TasksController(
     // пишут поле эпика и записи журнала held/hold_cleared; прерывание идущих ходов — шаг D.
     // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой/кривой id — тело как у GET),
     // 400 (неизвестный reason), 409: merged/closed/merging; draft после первого запуска шага;
-    // manual/queue поверх существующего draft; DELETE без удержания. 200 — обновлённый эпик.
+    // manual/queue поверх существующего draft; DELETE без удержания. POST 200 — тело
+    // { interrupted: [taskId] } (контракт :364, W4-HOLD-D2): прерванные этой паузой задачи.
 
     // Тело POST hold: reason — словарь FeatureHoldReasons (draft | manual | queue).
     public record FeatureHoldRequest(string? Reason);
@@ -883,7 +884,11 @@ public class TasksController(
 
         var epic = tasks.SetHold(featureId, reason);
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
-        return Ok(epic);
+        // W4-HOLD-D2 (контракт :364): ответ — прерванные этой паузой задачи. Тот же набор,
+        // что поле run.interrupted на странице («на паузе» читает его, а не пустой now), —
+        // не отдельный счёт. Повторный hold с тем же reason идемпотентен: набор не меняется.
+        var after = features.Project(featureId, UserId);
+        return Ok(new { interrupted = after?.Interrupted ?? [] });
     }
 
     [HttpDelete("features/{featureId}/hold")]

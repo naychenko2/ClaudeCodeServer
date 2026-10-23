@@ -61,6 +61,10 @@ public sealed class FeatureRun
     // «Сейчас»: все InProgress-задачи фичи, по убыванию ClaudeStartedAt. У закрытой фичи — пусто.
     // Стадия пилюли фронт берёт у первого элемента; имена — уникальные через запятую.
     public List<FeatureNow> Now { get; init; } = [];
+    // W4-HOLD-D2 (контракт §1, :364): id задач, прерванных паузой, — помеченные feature_held и
+    // не закрытые. Фронт блока «на паузе» и ответ ручки POST hold читают это поле, а не Now:
+    // на паузе Now гасится намеренно (W4-HOLD-D). Порядок — тот, в котором задачи дал вызывающий.
+    public List<string> Interrupted { get; init; } = [];
     // Состояние фичи (единая точка правды; из него выводится bucket строки индекса и порядок
     // OrderRuns — см. FeatureProjector.Bucket). 11 значений, приоритет сверху вниз (первое
     // совпавшее побеждает): merged → closed → paused → stopped → waiting → draft → merging →

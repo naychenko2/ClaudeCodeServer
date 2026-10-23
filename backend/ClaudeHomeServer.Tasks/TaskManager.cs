@@ -1233,6 +1233,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null || task.Role != TaskRoles.Feature) return null;
+        // Идемпотентность повторной паузы (W4-HOLD-D2, R-HOLE-D находка 3): тот же reason —
+        // без второй записи и без сдвига Since (контракт §1, :212: одна запись на паузу).
+        // Другой reason — новая пауза: запись и Since обновляются.
+        if (task.Hold is not null && task.Hold.Reason == reason) return task;
         var now = DateTime.UtcNow;
         task.Hold = new FeatureHold(reason, now, null, true);
         task.UpdatedAt = now;
@@ -1243,18 +1247,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             TaskId = task.Id,
             Reason = reason,
         });
-        // W4-HOLD-D (разрез §1): пауза отнимает идущие ходы. Критерий «running» тот же, что
-        // у статуса исполнителя в проекторе: старт есть, завершения/стопа/ожидания нет.
-        // Эпик в выборку не входит (FeatureId == null): ключевой чат оркестратора общий для
-        // нескольких фич и паузой не прерывается. Уже остановленные по другой причине не
-        // трогается — возвращать её пауза не должна.
+        // W4-HOLD-D (разрез §1): пауза отнимает идущие ходы. «Running» — «ход идёт сейчас»,
+        // тот же предикат, что у статуса исполнителя в проекторе (W4-HOLD-D2): «запускался
+        // когда-то» не годится — ход, закончившийся результатом, прерывать нечего. Эпик в
+        // выборку не входит (FeatureId == null): ключевой чат оркестратора общий для нескольких
+        // фич и паузой не прерывается. Уже остановленные по другой причине не трогается —
+        // возвращать её пауза не должна.
         foreach (var t in _tasks.Values)
         {
             if (t.FeatureId != task.Id) continue;
-            if (t.Status == TaskItemStatus.Done) continue;
-            if (t.ClaudeStartedAt is null) continue; // не запускался — прерывать нечего.
-            if (t.ExecutorStoppedAt is not null) continue; // уже остановлен.
-            if (t.AwaitingHumanSince is not null) continue; // ждёт человека, не идёт.
+            if (!FeatureProjector.IsTurnRunning(t)) continue;
             MarkExecutorStopped(t.Id, now, ExecutorStopClassifier.FeatureHeldReason);
         }
         ScheduleSave();

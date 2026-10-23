@@ -212,6 +212,15 @@ public sealed class FeatureProjector(TaskManager tasks)
         // «Сейчас: <исполнитель>», а Now0Of/NowPersonaIds отдавали бы прерванную задачу.
         if (featureState == FeatureStates.Paused) nowList.Clear();
 
+        // W4-HOLD-D2 (контракт §1, :364): прерванные паузой — задачи фичи с пометкой feature_held
+        // и не закрытые. Ответ ручки POST hold и блок «на паузе» читают это поле, а не Now: Now на
+        // паузе пуст. Закрытая после прервания задача из списка выпадает — её ход завершён.
+        var interrupted = featureTasks
+            .Where(t => t.Status != TaskItemStatus.Done
+                && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason)
+            .Select(t => t.Id)
+            .ToList();
+
         // Конвейер: стадии в порядке жизненного цикла. Порядок задаётся ЯВНЫМ списком,
         // а не выводится из порядка кода (W4-DES-B): «design» — необязательный этап после
         // «cut»; без дизайн-задач — состояние skipped, на готовность не влияет.
@@ -517,6 +526,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             ReturnsBySource = returnsBySource,
             Lanes = lanes,
             Now = nowList,
+            Interrupted = interrupted,
             State = featureState,
             Attention = attention,
             StepsAccepted = stepsAccepted,
@@ -784,6 +794,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         ReturnsBySource = run.ReturnsBySource,
         Lanes = run.Lanes,
         Now = run.Now,
+        Interrupted = run.Interrupted,
         State = run.State,
         Attention = run.Attention,
         StepsAccepted = run.StepsAccepted,
@@ -1014,17 +1025,27 @@ public sealed class FeatureProjector(TaskManager tasks)
         return false;
     }
 
-    // Б2: статус исполнителя из полей задачи. Приоритет: running (идёт: ClaudeStartedAt,
-    // без завершения, не остановлена, не ждёт) → waiting (AwaitingHumanSince) → stopped
-    // (ExecutorStoppedAt) → done (Done) → pending (остальное, в том числе не стартовала).
+    // «Ход идёт сейчас» (W4-HOLD-D2, R-HOLE-D находка 4): единый критерий running — его
+    // используют и статус стадии, и выборка прерывания в SetHold, чтобы «running» в двух
+    // местах не расходился. Контракт §1 (:199): «Status != Done, есть LinkedSessionId и в этой
+    // сессии сейчас идёт ход», а не «запускался когда-то»: у задачи, чей ход закончился
+    // результатом (ClaudeResult) и ещё не закрыт, прерывать нечего — feature_held рисовал бы
+    // ложный «остановлен» в ленте.
+    public static bool IsTurnRunning(TaskItem t) =>
+        t.Status == TaskItemStatus.InProgress
+        && t.ClaudeStartedAt is not null
+        && t.ExecutorStoppedAt is null
+        && t.AwaitingHumanSince is null
+        && t.ClaudeResult is null;
+
+    // Б2: статус исполнителя из полей задачи. Приоритет: running (ход идёт сейчас —
+    // IsTurnRunning) → waiting (AwaitingHumanSince) → stopped (ExecutorStoppedAt) → done (Done)
+    // → pending (остальное, в том числе не стартовала).
     // waiting/stopped — тот же guard, что у тревоги: только InProgress-задачи; закрытая
     // вручную (Done) задача со stale-пометками не «stopped»/«waiting» (тревоги по ней тоже нет).
     private static string ExecutorStatus(TaskItem t)
     {
-        if (t.ClaudeStartedAt is not null
-            && t.CompletedAt is null
-            && t.ExecutorStoppedAt is null
-            && t.AwaitingHumanSince is null)
+        if (IsTurnRunning(t))
             return "running";
         if (t.Status == TaskItemStatus.InProgress && t.AwaitingHumanSince is not null)
             return "waiting";

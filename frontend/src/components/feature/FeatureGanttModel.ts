@@ -47,8 +47,11 @@ export interface GanttNowPill {
 export interface GanttRow {
   key: StageKey;
   label: string;
-  // done | active | pending — «absent» строки не имеет (этапа не было).
+  // done | active | pending | skipped — «absent» строки не имеет (этапа нет в конвейере).
   state: StageState;
+  // skipped (W4-DES-B): необязательный этап без задач — строка «этапа не было»,
+  // без минут и полосы. Рендер читает этот флаг, а не разбирает state.
+  isSkipped: boolean;
   // Длительность этапа — approxMinutes бэка (фронт не пересчитывает).
   minutes: number;
   // Границы полосы на оси: firstStartedAt / lastCompletedAt; null — этапа нет в данных.
@@ -145,7 +148,11 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
   const rows: GanttRow[] = (run.stages ?? [])
     .filter(s => s.state !== 'absent')
     .map(s => {
-      const segments: GanttSegment[] = (tl?.segments ?? [])
+      // skipped (W4-DES-B): необязательный этап без задач. Явно обнуляем всё, чего
+      // «не было»: минуты, границы, сегменты, разбивка — рендер строит строку
+      // «этапа не было» и не должен опираться на случайные значения бэка.
+      const skipped = s.state === 'skipped';
+      const segments: GanttSegment[] = skipped ? [] : (tl?.segments ?? [])
         .filter(seg => seg.stage === s.key)
         .sort((a, b) => new Date(a.from).getTime() - new Date(b.from).getTime())
         .map(seg => ({
@@ -165,9 +172,10 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
         key: s.key,
         label: stageLabel(s.key),
         state: s.state,
-        minutes: s.approxMinutes ?? 0,
-        from: s.firstStartedAt ?? null,
-        to: s.lastCompletedAt ?? null,
+        isSkipped: skipped,
+        minutes: skipped ? 0 : (s.approxMinutes ?? 0),
+        from: skipped ? null : (s.firstStartedAt ?? null),
+        to: skipped ? null : (s.lastCompletedAt ?? null),
         segments,
         breakdown,
         isLongest: false,

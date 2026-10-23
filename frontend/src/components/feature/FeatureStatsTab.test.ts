@@ -26,6 +26,7 @@ import { clearFeatureStageFocus, __test } from '../../lib/featurePage';
 import { openTaskInSection } from '../../lib/tasks';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureStats, FeatureTimeline, FeatureBreakdown, FeatureLongestNow, FeatureSpend } from '../../types/featureStats';
+import type { FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
 
 // === Мок навигации (задача) ===
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
@@ -680,6 +681,188 @@ describe('FeatureStatsTab: рендер', () => {
     const row = (seg as unknown as { parentNode: { style: Record<string, string> } | null }).parentNode;
     expect(row, 'строка сегментов').not.toBeNull();
     expect(row!.style.height, 'высота строки сегментов на 360 = 40').toBe('40px');
+  });
+});
+
+// === Ступени Ганта (W4-4F2, макет features-overview-4 §pt4, вариант А) ===
+// run с 8 этапами: design — skipped («этапа не было»), prod — разбивка
+// «работа · ожидание · простой», review — ревью-трек, merge — текущий (отметка
+// «сейчас»). Без run (старые ответы) — прежняя полоса: её тесты выше.
+//
+// Мутации (в отчёте): (1) убрать строку этапа из рендера → «каждый этап — своя
+// строка» краснеет; (2) не обнулять minutes при skipped в модели → «этапа не было»
+// краснеет (минуты появились бы справа).
+
+function mkGanttStage(key: StageKey, state: StageState, minutes: number, over: Partial<FeatureStage> = {}): FeatureStage {
+  return {
+    key, state, passes: 0, taskIds: [], rounds: [],
+    firstStartedAt: null, lastCompletedAt: null, approxMinutes: minutes,
+    overlapsActive: false, executors: [], ...over,
+  };
+}
+
+// Конвейер из 8 этапов: cut → design(skipped) → plan → prod → review → qa → final → merge(active).
+function mkGanttRun(): FeatureRun {
+  return {
+    featureId: 'f-gantt',
+    state: 'running',
+    steps: [], reviews: [], qa: [], final: null, merge: null,
+    verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+    progress: 0,
+    ready: false,
+    closed: false,
+    stages: [
+      mkGanttStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:20:00Z', lastCompletedAt: '2026-10-19T17:55:00Z' }),
+      mkGanttStage('design', 'skipped', 0),
+      mkGanttStage('plan', 'done', 32, { firstStartedAt: '2026-10-19T17:58:00Z', lastCompletedAt: '2026-10-19T18:30:00Z' }),
+      mkGanttStage('prod', 'done', 370, { firstStartedAt: '2026-10-20T10:05:00Z', lastCompletedAt: '2026-10-20T16:15:00Z' }),
+      mkGanttStage('review', 'done', 40, { firstStartedAt: '2026-10-20T11:20:00Z', lastCompletedAt: '2026-10-20T12:00:00Z' }),
+      mkGanttStage('qa', 'done', 15, { firstStartedAt: '2026-10-20T16:20:00Z', lastCompletedAt: '2026-10-20T16:35:00Z' }),
+      mkGanttStage('final', 'done', 12, { firstStartedAt: '2026-10-20T16:40:00Z', lastCompletedAt: '2026-10-20T16:52:00Z' }),
+      mkGanttStage('merge', 'active', 4, { firstStartedAt: '2026-10-20T17:00:00Z', tone: 'run' }),
+    ],
+    now: [{ taskId: 't-merge', stage: 'merge', title: 'Мерж', startedAt: '2026-10-20T17:00:00Z' }],
+    attention: null,
+  };
+}
+
+// Таймлайн тех же этапов: prod — 250 мин работа + 80 ожидание + 40 простой; review —
+// ревью-трек; остальные — короткие рабочие куски.
+function mkGanttStats(): FeatureStats {
+  return {
+    source: 'journal',
+    truncated: false,
+    timeline: {
+      from: '2026-10-19T17:20:00Z',
+      to: '2026-10-20T17:10:00Z',
+      stages: [],
+      segments: [
+        seg('2026-10-19T17:20:00Z', '2026-10-19T17:55:00Z', 'work', 'cut', { taskId: 't-cut' }),
+        seg('2026-10-19T17:58:00Z', '2026-10-19T18:30:00Z', 'work', 'plan', { taskId: 't-plan' }),
+        seg('2026-10-20T10:05:00Z', '2026-10-20T14:15:00Z', 'work', 'prod', { taskId: 't-prod' }),
+        seg('2026-10-20T14:15:00Z', '2026-10-20T15:35:00Z', 'waiting', 'prod'),
+        seg('2026-10-20T15:35:00Z', '2026-10-20T16:15:00Z', 'idle', 'prod'),
+        seg('2026-10-20T11:20:00Z', '2026-10-20T12:00:00Z', 'work', 'review', { track: 'review', taskId: 't-review' }),
+        seg('2026-10-20T16:20:00Z', '2026-10-20T16:35:00Z', 'work', 'qa'),
+        seg('2026-10-20T16:40:00Z', '2026-10-20T16:52:00Z', 'work', 'final'),
+        seg('2026-10-20T17:00:00Z', '2026-10-20T17:04:00Z', 'work', 'merge'),
+      ],
+      current: { kind: 'waiting', since: '2026-10-20T17:10:00Z', taskId: 't-merge' },
+      totals: {
+        elapsedMinutes: 0, workWallMinutes: 0, agentsSumMinutes: 0, notWorkingMinutes: 0,
+        waitingMinutes: null, idleMinutes: null, waitingCount: null, longestWaitMinutes: null,
+        errorCount: null, errorMinutes: null,
+      },
+    },
+    breakdown: { personas: [], models: [], roles: [] },
+    longestNow: null,
+    spend: null,
+  };
+}
+
+function renderGantt(isMobile = false) {
+  installFakeDom();
+  const { container } = mount(createElement(FeatureStatsTab, { stats: mkGanttStats(), run: mkGanttRun(), isMobile }));
+  return container;
+}
+
+describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
+  beforeEach(() => {
+    mockOpenTask.calls = [];
+    clearFeatureStageFocus();
+  });
+  afterEach(() => {
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // === 1. Строка на каждый этап, минуты справа (мутация: убрать строку — краснеет) ===
+  it('каждый этап — своя строка; минуты — справа от полосы', () => {
+    const c = renderGantt();
+    for (const key of ['cut', 'design', 'plan', 'prod', 'review', 'qa', 'final', 'merge']) {
+      expect(findNodeByAttr(c, 'data-testid', `gantt-row-${key}`), `строка этапа ${key}`).not.toBeNull();
+    }
+    // prod: 370 мин → «6 ч 10 мин» справа.
+    const min = findNodeByAttr(c, 'data-testid', 'gantt-minutes-prod')!;
+    expect(textNodes(min).join('')).toBe('6 ч 10 мин');
+    // Мерж (4 мин) — тоже строка с минутами: подпись не зависит от ширины полосы.
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'gantt-minutes-merge')!).join('')).toBe('4 мин');
+  });
+
+  // === 2. skipped: «этапа не было», без минут (мутация: не обнулять minutes — краснеет) ===
+  it('skipped-этап: строка «этапа не было», без минут и без полосы', () => {
+    const c = renderGantt();
+    const row = findNodeByAttr(c, 'data-testid', 'gantt-row-design')!;
+    expect(textNodes(row).join(''), 'подпись пропущенного этапа').toContain('этапа не было');
+    expect(findNodeByAttr(row, 'data-testid', 'gantt-bar-design'), 'полосы у skipped нет').toBeNull();
+    expect(textNodes(findNodeByAttr(row, 'data-testid', 'gantt-minutes-design')!).join(''), 'минут у skipped нет').toBe('');
+  });
+
+  // === 3. Разбивка внутри строки: сегменты по видам ===
+  it('разбивка «работа · ожидание · простой» — сегменты внутри полосы этапа', () => {
+    const c = renderGantt();
+    const bar = findNodeByAttr(c, 'data-testid', 'gantt-bar-prod')!;
+    for (const kind of ['work', 'waiting', 'idle']) {
+      expect(findNodeByAttr(bar, 'data-kind', kind), `сегмент ${kind} на полосе prod`).not.toBeNull();
+    }
+    // Ревью-трек — отдельный вид на строке Ревью, а не внутри полосы prod.
+    expect(findNodeByAttr(bar, 'data-kind', 'review'), 'ревью не внутри полосы prod').toBeNull();
+    const revBar = findNodeByAttr(c, 'data-testid', 'gantt-bar-review')!;
+    expect(findNodeByAttr(revBar, 'data-kind', 'review'), 'сегмент review на строке review').not.toBeNull();
+  });
+
+  // === 4. Подсказка по касанию (360): разбивка по минутам и переход в «Хронологию» ===
+  it('касание строки на 360 открывает подсказку с разбивкой; ссылка ведёт в «Хронологию»', () => {
+    const c = renderGantt(true);
+    expect(findNodeByAttr(c, 'data-testid', 'gantt-tip'), 'подсказки нет, пока не коснулись').toBeNull();
+    const row = findNodeByAttr(c, 'data-testid', 'gantt-row-prod')!;
+    act(() => { (reactProps(row)!.onClick as () => void)(); });
+    const tip = findNodeByAttr(c, 'data-testid', 'gantt-tip');
+    expect(tip, 'подсказка по касанию').not.toBeNull();
+    const br = textNodes(findNodeByAttr(tip!, 'data-testid', 'gantt-tip-breakdown')!).join('');
+    expect(br, 'разбивка по минутам').toContain('работа 4 ч 10 мин');
+    expect(br).toContain('ожидание 1 ч 20 мин');
+    expect(br).toContain('простой 40 мин');
+    // Ссылка в подсказке — тот же путь, что плашка/панель: якорь этапа в «Хронологии».
+    const open = findNodeByAttr(c, 'data-testid', 'gantt-tip-open')!;
+    act(() => { (reactProps(open)!.onClick as () => void)(); });
+    const focus = __test.stageFocus();
+    expect(focus, 'якорь этапа после перехода').not.toBeNull();
+    expect(focus!.key).toBe('prod');
+  });
+
+  // === 5. Подсказка по наведению (десктоп) ===
+  it('наведение открывает подсказку, уход мыши — закрывает', () => {
+    const c = renderGantt();
+    const row = findNodeByAttr(c, 'data-testid', 'gantt-row-qa')!;
+    act(() => { (reactProps(row)!.onMouseEnter as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'gantt-tip'), 'подсказка по наведению').not.toBeNull();
+    act(() => { (reactProps(row)!.onMouseLeave as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'gantt-tip'), 'после ухода мыши подсказки нет').toBeNull();
+  });
+
+  // === 6. «Сейчас» — отметка на строке текущего этапа ===
+  it('«сейчас»: отметка на строке текущего этапа (merge)', () => {
+    const c = renderGantt();
+    const marker = findNodeByAttr(c, 'data-testid', 'gantt-now-marker');
+    expect(marker, 'отметка «сейчас»').not.toBeNull();
+    // Легенда обещает «сейчас», когда есть текущий этап.
+    const legend = findNodeByAttr(c, 'data-testid', 'stats-legend')!;
+    expect(textNodes(legend).join('')).toContain('сейчас');
+  });
+
+  // === 7. 360: горизонтального переполнения нет — фиксированы только колонки имени
+  // и минут (86/52), полоса берёт остаток (1fr); принудительной ширины нет. ===
+  it('на 360 строка — grid 86px 1fr 52px без принудительной ширины', () => {
+    const c = renderGantt(true);
+    const gantt = findNodeByAttr(c, 'data-testid', 'stats-gantt')!;
+    const gs = (gantt as unknown as { style: Record<string, string> }).style;
+    expect(gs.minWidth, 'нет minWidth — переполнения на 360 не будет').toBeUndefined();
+    const row = findNodeByAttr(c, 'data-testid', 'gantt-row-prod')!;
+    const rs = (row as unknown as { style: Record<string, string> }).style;
+    expect(rs.gridTemplateColumns, 'полоса — колонка 1fr, не фиксированная ширина').toBe('86px 1fr 52px');
+    // Тач-цель строки — 40 px (как в других мобильных контролах).
+    expect(rs.minHeight).toBe('40px');
   });
 });
 

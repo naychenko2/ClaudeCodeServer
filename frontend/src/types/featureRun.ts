@@ -91,7 +91,9 @@ export interface FeatureVerdicts {
 // design — необязательный этап после cut (W4-DES-B): без задач — state 'skipped'.
 export type StageKey = 'cut' | 'design' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
 // Состояние стадии (бэк: `FeatureStage.State`).
-export type StageState = 'done' | 'active' | 'pending' | 'absent';
+// `skipped` — необязательный этап, которого фича не проходила (design без задач,
+// W4-DES-B); бэк отдаёт его для этапа design (дефект a2155c1b).
+export type StageState = 'done' | 'active' | 'pending' | 'absent' | 'skipped';
 // Тон активной стадии (бэк: `FeatureStage.Tone`): run — идёт; wait — ждёт человека;
 // stopped — исполнитель встал; loop — работа вернулась (доработка идёт).
 export type StageTone = 'run' | 'wait' | 'stopped' | 'loop';

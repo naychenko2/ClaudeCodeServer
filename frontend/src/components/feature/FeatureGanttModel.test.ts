@@ -413,3 +413,38 @@ describe('пустая фича', () => {
     expect(model.hasStalled).toBe(false);
   });
 });
+
+// === Этап «пропущен» (W4-DES-B: design без задач) ===
+// Мутация: не обнулять minutes/segments при skipped (брать значения бэка как есть) —
+// краснеет «skipped — без минут, границ и сегментов».
+describe('skipped: строка «этапа не было», без минут', () => {
+  it('skipped-этап остаётся строкой, но без минут, границ, сегментов и разбивки', () => {
+    const model = buildGanttModel(
+      mkRun({
+        stages: [
+          mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z' }),
+          // Бэк может принести approxMinutes и даже границы — модель их обнуляет явно.
+          mkStage('design', 'skipped', 7, { firstStartedAt: '2026-10-19T17:36:00Z', lastCompletedAt: '2026-10-19T17:43:00Z' }),
+          mkStage('prod', 'active', 55, { firstStartedAt: '2026-10-20T10:00:00Z' }),
+        ],
+      }),
+      mkStats([
+        seg('2026-10-19T17:00:00Z', '2026-10-19T17:35:00Z', 'work', 'cut'),
+        // Сегмент stage=design не должен попасть в строку skipped-этапа.
+        seg('2026-10-19T17:36:00Z', '2026-10-19T17:43:00Z', 'work', 'design'),
+        seg('2026-10-20T10:00:00Z', '2026-10-20T10:55:00Z', 'work', 'prod'),
+      ]),
+      NOW,
+    );
+    const row = rowOf(model, 'design');
+    expect(row.isSkipped).toBe(true);
+    expect(row.minutes).toBe(0);
+    expect(row.from).toBeNull();
+    expect(row.to).toBeNull();
+    expect(row.segments).toEqual([]);
+    expect(row.breakdown).toBeNull();
+    // Обычные строки при этом не затронуты.
+    expect(rowOf(model, 'cut').isSkipped).toBe(false);
+    expect(rowOf(model, 'cut').minutes).toBe(35);
+  });
+});

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { setFeaturePageTab, focusFeatureStage } from '../../lib/featurePage';
 import { openTaskInSection } from '../../lib/tasks';
@@ -10,21 +11,27 @@ import {
   kindLabel, kindBackground, kindTextColor, nowCompressedFraction, blockWeight,
   type TimelineModel, type TimelineSegment,
 } from './FeatureStatsBits';
+import { buildGanttModel, type GanttModel, type GanttSegmentKind } from './FeatureGanttModel';
 import { TotalsCards, LongestNow, Breakdown, Spend } from './FeatureStatsBlocks';
 import type { FeatureStats } from '../../types/featureStats';
+import type { FeatureRun } from '../../types/featureRun';
 
-// Вкладка «Статистика» (волна 3, Ф7a, макет features-overview-3-final §«Статистика»).
-// БЛОК 1 — лента времени: линейка этапов (кнопки → «Хронология»), лента сегментов
-// (работа/ждёт/простой/ошибка/не работали) с СЖАТИЕМ длинных пауз (> 2 ч → «разрыв · N ч»),
-// дорожка ревью, ось времени с отметкой «сейчас», легенда и значки точности.
+// Вкладка «Статистика» (волна 3, Ф7a, макет features-overview-3-final §«Статистика»;
+// блок 1 — ступени Ганта по макету features-overview-4 §pt4, вариант А, W4-4F2).
+// БЛОК 1 — лента времени: ступени (у этапа своя строка: имя, полоса на общей оси с
+// разбивкой «работа · ожидание · простой», минуты справа), ось времени, «сейчас»,
+// легенда и значки точности. Без `run` (старые ответы) — прежняя полоса.
 // БЛОКИ 2 (карточки, «Дольше всех», разрезы, расход) — в Ф7b.
 //
-// Данные ТОЛЬКО из `stats` (features/{id}): фронт не пересчитывает, только раскладывает.
+// Данные ТОЛЬКО из `stats` и `run` (features/{id}): фронт не пересчитывает, только раскладывает.
 // Честность: нет stats (старые данные) → пустое состояние с причиной, а не нули.
 
 export interface FeatureStatsTabProps {
   // Статистика фичи (features/{id} → stats); null — бэк ещё не посчитал (старые данные).
   stats: FeatureStats | null;
+  // Конвейер фичи (features/{id} → run) — строки ступеней Ганта (W4-4F2). Без него
+  // (старые ответы) — прежняя полоса из timeline.
+  run?: FeatureRun | null;
   // Фича и её название — для точки возврата («← к фиче · Статистика»); без featureId
   // переходы работают, но чипа возврата нет.
   featureId?: string | null;
@@ -195,28 +202,8 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
       </div>
 
       {/* Ось времени: от создания до «сейчас»/закрытия (отметка «сейчас» — на ленте, выше). */}
-      <div
-        data-testid="stats-axis"
-        style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.xs, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}
-      >
-        <span>{formatDateTime(axis.from)} · создана</span>
-        <span style={{ marginLeft: 'auto' }}>{axis.endLabel}</span>
-      </div>
-
-      {/* «Сейчас»: текущее состояние (waiting/stopped/merge_pending) — отдельная строка. */}
-      {current && (
-        <div
-          data-testid="stats-current"
-          style={{
-            display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.sm,
-            background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.md,
-            padding: `${SP.xs}px ${SP.sm}px`, fontFamily: FONT.sans, fontSize: FS.xs, color: C.textSecondary,
-          }}
-        >
-          <span style={{ width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0 }} />
-          {current.label}
-        </div>
-      )}
+      <AxisLine axis={axis} />
+      <CurrentRow current={current} />
 
       {/* Легенда: виды + «⫽ — длинная пауза сжата, ширина не в масштабе». */}
       <div
@@ -240,6 +227,268 @@ function Timeline({ model, isMobile }: { model: TimelineModel; isMobile: boolean
         {hasBreak && (
           <span data-testid="stats-legend-break" style={{ color: C.textMuted }}>
             ⫽ — длинная пауза сжата, не в масштабе
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// === Ступени Ганта (W4-4F2, макет features-overview-4 §pt4, вариант А) ===
+// У каждого этапа своя строка: имя слева, полоса на общей оси (сегменты «работа ·
+// ожидание · простой» ∝ минутам), минуты справа. Подсказка — по наведению (на 360 —
+// по касанию): разбивка по минутам и переход в «Хронологию». Строка — grid с
+// колонкой 1fr: на 360 помещается без горизонтальной прокрутки. Этап со state
+// 'skipped' (W4-DES-B) — строка «этапа не было», без минут и полосы.
+
+// Ось времени: от создания до «сейчас»/закрытия. Общая для полосы и ступеней.
+function AxisLine({ axis }: { axis: { from: string; to: string; endLabel: string } }) {
+  return (
+    <div
+      data-testid="stats-axis"
+      style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.xs, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}
+    >
+      <span>{formatDateTime(axis.from)} · создана</span>
+      <span style={{ marginLeft: 'auto' }}>{axis.endLabel}</span>
+    </div>
+  );
+}
+
+// «Сейчас»: текущее состояние (waiting/stopped/merge_pending) — отдельная строка.
+function CurrentRow({ current }: { current: { kind: string; since: string; label: string } | null }) {
+  if (!current) return null;
+  return (
+    <div
+      data-testid="stats-current"
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.sm,
+        background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.md,
+        padding: `${SP.xs}px ${SP.sm}px`, fontFamily: FONT.sans, fontSize: FS.xs, color: C.textSecondary,
+      }}
+    >
+      <span style={{ width: 8, height: 8, borderRadius: R.full, background: C.accent, flexShrink: 0 }} />
+      {current.label}
+    </div>
+  );
+}
+
+function Gantt({
+  gantt,
+  axis,
+  current,
+  isMobile,
+}: {
+  gantt: GanttModel;
+  axis: { from: string; to: string; endLabel: string };
+  current: { kind: string; since: string; label: string } | null;
+  isMobile: boolean;
+}) {
+  // Открытая подсказка: наведение (десктоп) или касание (360).
+  const [tipKey, setTipKey] = useState<string | null>(null);
+
+  // Клик по ссылке подсказки → вкладка «Хронология» к этому этапу (тот же путь, что
+  // плашка/панель: setFeaturePageTab + focusFeatureStage).
+  const openStage = (key: string) => {
+    setFeaturePageTab('timeline');
+    focusFeatureStage(key);
+    setTipKey(null);
+  };
+
+  // Доля оси [0..1] по моменту; null — ось или момент невалидны.
+  const axisFrac = (iso: string | null): number | null => {
+    if (!iso) return null;
+    const a = new Date(axis.from).getTime();
+    const b = new Date(axis.to).getTime();
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(a) || Number.isNaN(b) || b <= a || Number.isNaN(t)) return null;
+    return Math.min(1, Math.max(0, (t - a) / (b - a)));
+  };
+
+  // Цвет сегмента: трековые виды — из FeatureStatsBits, ревью — C.plan (макет k-rev).
+  const segColor = (kind: GanttSegmentKind): string =>
+    kind === 'review' ? C.plan : kindBackground(kind);
+
+  // Какие виды реально есть на строках — легенда обещает только их.
+  const kinds = new Set<GanttSegmentKind>();
+  for (const r of gantt.rows) for (const s of r.segments) kinds.add(s.kind);
+
+  return (
+    <div data-testid="stats-gantt" style={{ fontFamily: FONT.sans }}>
+      {gantt.rows.map((row) => {
+        const left = axisFrac(row.from);
+        const right = axisFrac(row.to);
+        // Минимальная видимая ширина полосы (макет: min-width 3px) — чтобы этап в
+        // 4 минуты не превратился в щель.
+        const widthPct = left != null && right != null ? Math.max(0.6, (right - left) * 100) : 0;
+        const totalMin = row.segments.reduce((a, s) => a + s.minutes, 0);
+        // «Сейчас» на строке текущего этапа: по началу шага; начала нет — на краю полосы.
+        const nowFrac = row.isCurrent ? (axisFrac(row.nowPill?.startedAt ?? row.to) ?? 1) : null;
+        // Разбивка для подсказки: только ненулевые части.
+        const parts: [string, number][] = [];
+        if (row.breakdown) {
+          const b = row.breakdown;
+          if (b.work > 0) parts.push(['работа', b.work]);
+          if (b.waiting > 0) parts.push(['ожидание', b.waiting]);
+          if (b.idle > 0) parts.push(['простой', b.idle]);
+          if (b.error > 0) parts.push(['ошибка', b.error]);
+          if (b.notWorking > 0) parts.push(['не работали', b.notWorking]);
+        }
+
+        return (
+          <div key={row.key}>
+            <button
+              type="button"
+              data-testid={`gantt-row-${row.key}`}
+              data-stage={row.key}
+              aria-label={`${row.label}: ${row.isSkipped ? 'этапа не было' : formatDuration(row.minutes)} — разбивка`}
+              onMouseEnter={() => setTipKey(row.key)}
+              onMouseLeave={() => setTipKey(null)}
+              onClick={() => setTipKey(tipKey === row.key ? null : row.key)}
+              style={{
+                // Фиксированы только колонки имени и минут (86/52 на 360) — полоса
+                // берёт остаток (1fr): горизонтального переполнения на 360 нет.
+                display: 'grid',
+                gridTemplateColumns: isMobile ? '86px 1fr 52px' : '110px 1fr 70px',
+                gap: isMobile ? SP.sm : SP.md,
+                alignItems: 'center',
+                minHeight: isMobile ? 40 : 28,
+                background: 'transparent',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                fontFamily: FONT.sans,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}
+              >
+                {row.label}
+              </span>
+              <div
+                data-testid={`gantt-track-${row.key}`}
+                style={{
+                  position: 'relative', height: 16, borderRadius: R.sm,
+                  // Тики четвертей оси (макет .gtrack).
+                  background: `repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), ${C.borderLight} calc(25% - 1px) 25%)`,
+                }}
+              >
+                {row.isSkipped ? (
+                  <span
+                    data-testid="gantt-skipped"
+                    style={{
+                      position: 'absolute', left: 0, top: 0, bottom: 0,
+                      display: 'flex', alignItems: 'center',
+                      fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+                    }}
+                  >
+                    этапа не было
+                  </span>
+                ) : widthPct > 0 ? (
+                  <div
+                    data-testid={`gantt-bar-${row.key}`}
+                    style={{
+                      position: 'absolute', left: `${left}%`, width: `${widthPct}%`, top: 2, height: 12,
+                      borderRadius: R.sm, display: 'flex', overflow: 'hidden', minWidth: 3,
+                    }}
+                  >
+                    {row.segments.map((seg, i) => (
+                      <span
+                        key={i}
+                        data-testid={`gantt-seg-${row.key}-${i}`}
+                        data-kind={seg.kind}
+                        style={{
+                          width: `${totalMin > 0 ? (seg.minutes / totalMin) * 100 : 0}%`,
+                          background: segColor(seg.kind),
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {nowFrac != null && (
+                  <div
+                    data-testid="gantt-now-marker"
+                    style={{
+                      position: 'absolute', left: `${Math.round(nowFrac * 1000) / 10}%`, top: -2, bottom: -2,
+                      width: 2, background: C.accent, borderRadius: R.max, pointerEvents: 'none',
+                    }}
+                  />
+                )}
+              </div>
+              <span
+                data-testid={`gantt-minutes-${row.key}`}
+                style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, textAlign: 'right' }}
+              >
+                {row.isSkipped ? '' : formatDuration(row.minutes)}
+              </span>
+            </button>
+            {tipKey === row.key && (
+              <div
+                data-testid="gantt-tip"
+                style={{
+                  background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.md,
+                  padding: `${SP.xs}px ${SP.sm}px`, margin: `${SP.xxs}px 0 ${SP.sm}px`,
+                  fontFamily: FONT.sans, fontSize: FS.xs, color: C.textSecondary,
+                }}
+              >
+                <b style={{ color: C.textHeading, fontSize: FS.sm }}>
+                  {row.label} · {row.isSkipped ? 'этапа не было' : formatDuration(row.minutes)}
+                </b>
+                {parts.length > 0 && (
+                  <div data-testid="gantt-tip-breakdown" style={{ marginTop: SP.xxs }}>
+                    {parts.map(([name, m]) => `${name} ${formatDuration(m)}`).join(' · ')}
+                  </div>
+                )}
+                {row.from && (
+                  <div style={{ marginTop: SP.xxs, fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
+                    {formatDateTime(row.from)} – {row.isCurrent ? 'идёт' : formatClock(row.to ?? '')}
+                  </div>
+                )}
+                {!row.isSkipped && (
+                  <button
+                    type="button"
+                    data-testid="gantt-tip-open"
+                    onClick={() => openStage(row.key)}
+                    style={{
+                      marginTop: SP.xs, background: 'transparent', border: 'none', cursor: 'pointer',
+                      fontFamily: FONT.sans, fontSize: FS.xs, color: C.accent, fontWeight: 600,
+                    }}
+                  >
+                    Открыть в «Хронологии»
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <AxisLine axis={axis} />
+      <CurrentRow current={current} />
+
+      {/* Легенда: только виды, которые действительно есть на строках. */}
+      <div
+        data-testid="stats-legend"
+        style={{ display: 'flex', alignItems: 'center', gap: SP.md, flexWrap: 'wrap', marginTop: SP.sm, fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted }}
+      >
+        {(['work', 'waiting', 'idle', 'error', 'notWorking'] as const).filter(k => kinds.has(k)).map(k => (
+          <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: kindBackground(k) }} />
+            {kindLabel(k)}
+          </span>
+        ))}
+        {kinds.has('review') && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 14, height: 4, borderRadius: R.sm, background: C.plan }} />
+            ревью
+          </span>
+        )}
+        {gantt.rows.some(r => r.isCurrent) && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 2, height: 10, background: C.accent }} />
+            сейчас
           </span>
         )}
       </div>
@@ -292,7 +541,7 @@ function stageLabelShort(key: string): string {
   return names[key] ?? key;
 }
 
-export function FeatureStatsTab({ stats, featureId = null, featureTitle = null, marks, isMobile = false }: FeatureStatsTabProps) {
+export function FeatureStatsTab({ stats, run = null, featureId = null, featureTitle = null, marks, isMobile = false }: FeatureStatsTabProps) {
   const nav: FeatureNavCtx = { featureId, featureTitle, marks };
   // Пустое состояние: stats нет (старые данные) — причина, а не нули.
   if (!stats) {
@@ -326,10 +575,18 @@ export function FeatureStatsTab({ stats, featureId = null, featureTitle = null, 
   // Данные ТОЛЬКО из stats; null-поля → блока/строки нет (не выдумываем).
   const costPartial = stats.spend?.costPartial ?? false;
 
+  // Ступени Ганта (W4-4F2) — из run (конвейера). Без run или без строк (старые
+  // ответы) — прежняя полоса: честная деградация, а не пустой блок.
+  const gantt = run ? buildGanttModel(run, stats, Date.now()) : null;
+
   return (
     <div data-testid="feature-stats-tab" style={{ fontFamily: FONT.sans }}>
       <AccuracyBadges source={stats.source} truncated={stats.truncated} />
-      <Timeline model={model} isMobile={isMobile} />
+      {gantt && gantt.rows.length > 0 ? (
+        <Gantt gantt={gantt} axis={model.axis} current={model.current} isMobile={isMobile} />
+      ) : (
+        <Timeline model={model} isMobile={isMobile} />
+      )}
       <TaskButtons model={model} nav={nav} isMobile={isMobile} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, marginTop: SP.lg }}>
         <TotalsCards totals={stats.timeline.totals} source={stats.source} isMobile={isMobile} />

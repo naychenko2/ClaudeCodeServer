@@ -93,7 +93,9 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
 });
 vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
-vi.mock('../../lib/openChat', () => ({ openChatById: async () => true }));
+// Журнал openChatById: тесты чипа «ведёт» (W4-1F) проверяют, куда ведёт клик.
+const openChatCalls = vi.hoisted(() => [] as string[]);
+vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { openChatCalls.push(id); return true; } }));
 // Модели: вкладка «Статистика» (Breakdown) читает каталог — в тесте он пуст.
 vi.mock('../../lib/models', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/models')>();
@@ -225,6 +227,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockChats.clear();
+    openChatCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = pageData();
     mockGetFeature.error = null;
@@ -823,6 +826,80 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
 
 });
 
+
+// === W4-1F: чип «ведёт ·» в мета-строке шапки (макет pt1) ===
+// Чип — сам вход в ключевой чат: клик открывает keySessionId. Мутация (в отчёте):
+// убрать openChatById в обработчике чипа → вызов не попадёт в журнал → тест краснеет.
+describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    personaMap.set('p-sofya', 'Софья (локальная)');
+    mockIndex.features = [feat({ orchestratorPersonaId: 'p-sofya' })];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = pageData();
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  const reindex = (over: Partial<FeatureIndexFeature>) => {
+    mockIndex.features = [feat({ orchestratorPersonaId: 'p-sofya', ...over })];
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  };
+
+  it('клик по чипу открывает keySessionId; на чипе — «ведёт» и имя', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
+    expect(chip, 'чип «ведёт» в мета-строке').not.toBeNull();
+    const text = textNodes(chip!).join('');
+    expect(text, 'подпись «ведёт» и имя оркестратора').toContain('ведёт');
+    expect(text, 'имя оркестратора').toContain('Софья (локальная)');
+    await act(async () => { (reactProps(chip)!.onClick as () => void)(); });
+    expect(openChatCalls, 'клик ведёт в keySessionId').toEqual(['chat-key']);
+  });
+
+  it('keyArchived: чип помечен «в архиве»', async () => {
+    reindex({ keyArchived: true });
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    expect(textNodes(chip).join(''), 'пометка «в архиве»').toContain('в архиве');
+  });
+
+  it('чата нет, персона есть: чип без перехода (не кнопка, нет onClick)', async () => {
+    reindex({ keySessionId: null });
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
+    expect(chip, 'статичный чип (без ключевого чата)').not.toBeNull();
+    expect(chip!.nodeName, 'не кнопка — перехода нет').not.toBe('BUTTON');
+    expect(reactProps(chip)?.onClick, 'у статичного чипа нет обработчика клика').toBeUndefined();
+  });
+
+  it('персоны нет: элемента нет', async () => {
+    mockIndex.features = [feat()]; // дефолт без orchestratorPersonaId
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'без персоны — чипа нет').toBeNull();
+  });
+});
 
 // Тип узла fakeDom для обходов в тестах (childNodes/attributes).
 type FNodeLike = { nodeType: number; nodeName: string; childNodes: FNodeLike[]; attributes?: Record<string, string> };

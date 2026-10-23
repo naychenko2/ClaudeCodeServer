@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { GitBranch, ListChecks, MessageCircle } from 'lucide-react';
+import { ArrowRight, GitBranch, ListChecks, MessageCircle } from 'lucide-react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Button } from '../ui/Button';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { formatDuration, MERGE_PENDING_STATUS, type FeatureStatusTag } from '../../lib/chatGroups';
 import { getPersonaById } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
@@ -187,6 +188,89 @@ function StepProgressSegments({ p }: { p: StepProgress }) {
   );
 }
 
+// === Чип «ведёт ·» (макет pt1, W4-1F) ===
+//
+// Оркестратор фичи (поле индекса orchestratorPersonaId, W4-1B) — кому писать. Чип
+// сам и есть вход в ключевой чат: отдельной ссылки «Ключевой чат» нет (пункт ⋯
+// «Открыть ключевой чат» убран — переход дублировался).
+// Состояния (макет pt1): чат есть — кнопка, клик открывает keySessionId с плашкой
+// возврата к фиче (как у «чат · задача»); keyArchived — пометка «в архиве»;
+// чата нет — статичный чип (пунктирная рамка, без стрелки); персоны нет — элемента нет.
+//
+// Наведение/фокус/нажатие — классом (тот же образец инъекции <style>, что скелет
+// загрузки в FeaturePage): наведение — bgSelected + кромка accentMuted, значок
+// accent; фокус с клавиатуры — SHADOW.focus; нажатие — accentLight.
+const LEAD_CLASS = 'cc-feature-page-lead';
+const LEAD_GI_CLASS = 'cc-feature-page-lead-gi';
+if (typeof document !== 'undefined' && !document.getElementById('cc-feature-page-lead-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-feature-page-lead-style';
+  el.textContent =
+    `.${LEAD_CLASS}:hover{background:var(--c-bg-selected);border-color:var(--c-accent-muted)}` +
+    `.${LEAD_CLASS}:active{background:var(--c-accent-light)}` +
+    `.${LEAD_CLASS}:focus-visible{box-shadow:var(--shadow-focus);border-color:var(--c-accent)}` +
+    `.${LEAD_CLASS}:hover .${LEAD_GI_CLASS},.${LEAD_CLASS}:focus-visible .${LEAD_GI_CLASS}{color:var(--c-accent)}`;
+  document.head.appendChild(el);
+}
+
+function LeadChip({ feature, isMobile }: { feature: FeatureIndexFeature; isMobile: boolean }) {
+  const personaId = feature.orchestratorPersonaId ?? null;
+  const persona = personaId ? getPersonaById(personaId) : null;
+  // Персона не задана или не резолвится — элемента нет (состояние «Оркестратора нет»).
+  if (!persona) return null;
+  const keyChat = feature.keySessionId ?? null;
+  const name = persona.name;
+
+  // Каркас чипа (макет pt1): pill 24 px (на 360 — 40), поля 8/4, 12 sans.
+  const shell: CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
+    height: isMobile ? 40 : 24,
+    padding: isMobile ? `0 ${SP.md}px 0 ${SP.sm}px` : `0 ${SP.sm}px 0 ${SP.xs}px`,
+    borderRadius: R.max, fontSize: FS.sm, color: C.textPrimary, fontFamily: FONT.sans,
+  };
+
+  if (!keyChat) {
+    // Чата нет — чип не кнопка: пунктирная рамка, без значка-стрелки.
+    return (
+      <span
+        data-testid="feature-page-lead"
+        title="Ключевого чата у фичи нет"
+        style={{ ...shell, border: `1px dashed ${C.dashed}`, background: 'transparent' }}
+      >
+        <PersonaAvatar persona={persona} size={18} />
+        <span style={{ color: C.textMuted }}>ведёт</span>
+        <span>{name}</span>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      data-testid="feature-page-lead"
+      className={LEAD_CLASS}
+      aria-label={`Открыть ключевой чат${feature.keyArchived ? ' (в архиве)' : ''} · ведёт ${name}`}
+      title={`Ключевой чат фичи${feature.keyArchived ? ' · в архиве' : ''}\nклик — открыть чат`}
+      onClick={() => {
+        recordFeatureReturn(feature.featureId, { kind: 'chat', id: keyChat }, feature.title ?? null);
+        void openChatById(keyChat);
+      }}
+      style={{ ...shell, border: `1px solid ${C.border}`, background: C.bgWhite, cursor: 'pointer' }}
+    >
+      <PersonaAvatar persona={persona} size={18} />
+      <span style={{ color: C.textMuted }}>ведёт</span>
+      <span>{name}</span>
+      {feature.keyArchived && (
+        <span style={{ color: C.textMuted, fontSize: FS.xs }}>в архиве</span>
+      )}
+      <span aria-hidden className={LEAD_GI_CLASS} style={{ display: 'inline-flex', color: C.textMuted }}>
+        <MessageCircle size={12} strokeWidth={ICON_STROKE} />
+        <ArrowRight size={12} strokeWidth={ICON_STROKE} />
+      </span>
+    </button>
+  );
+}
+
 export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHeaderProps) {
   const branch = feature?.branch ?? null;
 
@@ -265,6 +349,7 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
         {branchBtn}
         {age && <span>{age}</span>}
         <span data-testid="feature-page-taskcount">{tasks}</span>
+        {feature && <LeadChip feature={feature} isMobile={isMobile} />}
       </div>
       {progress && <StepProgressSegments p={progress} />}
     </div>
@@ -348,14 +433,8 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge }: Fea
       onClick: () => openTaskInSection({ id: epic.id, projectId: epic.projectId ?? undefined }),
     });
   }
-  if (keyChat) {
-    items.push({
-      key: 'keychat',
-      icon: <MessageCircle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-      label: 'Открыть ключевой чат',
-      onClick: () => { void openChatById(keyChat); },
-    });
-  }
+  // Пункта «Открыть ключевой чат» здесь нет (W4-1F): вход в ключевой чат — чип
+  // «ведёт ·» в мета-строке, отдельная ссылка не дублируется.
 
   return (
     <>

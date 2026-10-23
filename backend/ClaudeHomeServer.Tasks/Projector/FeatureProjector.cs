@@ -61,7 +61,11 @@ public sealed class FeatureProjector(TaskManager tasks)
         var final = children.LastOrDefault(t => t.Role == TaskRoles.Final);
         var merge = children.LastOrDefault(t => t.Role == TaskRoles.Merge);
         var cut = children.Where(t => t.Role is TaskRoles.Cut or TaskRoles.Consult).ToList();
+        var design = children.Where(t => t.Role == TaskRoles.Design).ToList();
         var plan = children.Where(t => t.Role == TaskRoles.Plan).ToList();
+        // Безролевые задачи (role=null): ни в одну стадию не попадают, но обязаны быть в
+        // ленте событий (W4-DES-B: хронология — ВСЕ задачи с featureId).
+        var unroled = children.Where(t => t.Role is null).ToList();
 
         // Вердикты — только по задачам, которые их несут (ревью/проверка/финал).
         var verdictBearing = reviews.Concat(qa).Concat(final is not null ? [final] : []).ToList();
@@ -166,10 +170,13 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
-        // Конвейер: 7 стадий в порядке жизненного цикла.
+        // Конвейер: стадии в порядке жизненного цикла. Порядок задаётся ЯВНЫМ списком,
+        // а не выводится из порядка кода (W4-DES-B): «design» — необязательный этап после
+        // «cut»; без дизайн-задач — состояние skipped, на готовность не влияет.
         var stageDefs = new (string key, List<TaskItem> tasks)[]
         {
             ("cut", cut),
+            ("design", design),
             ("plan", plan),
             ("prod", steps),
             ("review", reviews),
@@ -206,6 +213,10 @@ public sealed class FeatureProjector(TaskManager tasks)
             for (int i = 0; i < stageDefs.Length; i++)
                 if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
             activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
+            // Пустая необязательная «design» не может быть активной: активность
+            // уходит на следующую стадию (W4-DES-B).
+            if (stageDefs[activeIndex].key == "design" && stageDefs[activeIndex].tasks.Count == 0)
+                activeIndex++;
         }
 
         var stages = new List<FeatureStage>(stageDefs.Length);
@@ -215,7 +226,13 @@ public sealed class FeatureProjector(TaskManager tasks)
 
             // Состояние стадии.
             string state;
-            if (i == activeIndex)
+            if (key == "design" && tasks.Count == 0)
+            {
+                // Необязательный «Дизайн» без задач: skipped — никогда не активна,
+                // на готовность фичи не влияет (W4-DES-B).
+                state = "skipped";
+            }
+            else if (i == activeIndex)
                 state = "active";
             else if (isDone[i])
                 state = "done";
@@ -462,7 +479,9 @@ public sealed class FeatureProjector(TaskManager tasks)
             Progress = progress,
             Ready = ready,
             Cut = cut,
+            Design = design,
             Plan = plan,
+            Unroled = unroled,
             Stages = stages,
             StepChains = stepChains,
             ReturnsBySource = returnsBySource,
@@ -516,7 +535,8 @@ public sealed class FeatureProjector(TaskManager tasks)
                 AddRound(r);
         int? RoundOf(TaskItem t) => roundByTask.TryGetValue(t.Id, out var n) ? n : null;
 
-        // Все задачи фичи: эпик + шаги/доработки + ревью + проверки + финал + мерж + cut + plan.
+        // Все задачи фичи: эпик + шаги/доработки + ревью + проверки + финал + мерж + cut +
+        // design + plan + безролевые (W4-DES-B: хронология — ВСЕ задачи с featureId).
         var tasks = new List<TaskItem> { run.Epic };
         tasks.AddRange(run.Steps);
         tasks.AddRange(run.Reviews);
@@ -524,7 +544,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         if (run.Final is not null) tasks.Add(run.Final);
         if (run.Merge is not null) tasks.Add(run.Merge);
         tasks.AddRange(run.Cut);
+        tasks.AddRange(run.Design);
         tasks.AddRange(run.Plan);
+        tasks.AddRange(run.Unroled);
 
         var events = new List<FeatureEvent>();
         // sessionId: LinkedSessionId задачи, наружу только если в снимке владельца (fail-closed).
@@ -723,7 +745,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         Progress = run.Progress,
         Ready = run.Ready,
         Cut = SlimAll(run.Cut),
+        Design = SlimAll(run.Design),
         Plan = SlimAll(run.Plan),
+        Unroled = SlimAll(run.Unroled),
         Stages = run.Stages,
         StepChains = run.StepChains,
         ReturnsBySource = run.ReturnsBySource,
@@ -1589,7 +1613,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             a.TaskId); // Б7: id задачи тревоги (FeatureAttention.TaskId)
     }
 
-    // Рельса: ровно 7 стадий FeatureRun.Stages → сегменты {key, state, tone}.
+    // Рельса: все стадии FeatureRun.Stages (8, с необязательной «design») → сегменты {key, state, tone}.
     // Нормализация закрытой фичи (контракт С0): у closed active нет — все стадии, кроме absent,
     // приводятся к done, tone=null (merge в том числе: «честный мерж» epic Done без merge-задачи
     // иначе даёт merge=active, tone=run). absent остаётся absent.
@@ -1599,7 +1623,9 @@ public sealed class FeatureProjector(TaskManager tasks)
             {
                 if (!run.Closed)
                     return new FeatureIndexRailSegment(s.Key, s.State, s.Tone);
-                var state = s.State == "absent" ? "absent" : "done";
+                // skipped (пустая необязательная «design») остаётся skipped: она не
+                // «пройдена», даже когда фича закрыта (W4-DES-B).
+                var state = s.State is "absent" or "skipped" ? s.State : "done";
                 return new FeatureIndexRailSegment(s.Key, state, null);
             })
             .ToList();

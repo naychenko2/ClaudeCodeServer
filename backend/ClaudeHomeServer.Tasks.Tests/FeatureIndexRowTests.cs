@@ -268,14 +268,16 @@ public class FeatureIndexRowTests
         var row = FeatureProjector.BuildRow(run, [epic, step, merge], Array.Empty<FeatureIndexSession>(), 0);
 
         row.Bucket.Should().Be("closed");
-        row.Rail.Should().HaveCount(7, "рельса — ровно 7 стадий в порядке жизненного цикла");
+        row.Rail.Should().HaveCount(8, "рельса — 8 стадий: пустая необязательная «design» добавляется (W4-DES-B)");
         row.Rail.Select(s => s.Key).Should().Equal(
-            ["cut", "plan", "prod", "review", "qa", "final", "merge"],
+            ["cut", "design", "plan", "prod", "review", "qa", "final", "merge"],
             "порядок стадий жизненного цикла");
         row.Rail.Should().OnlyContain(s => s.Tone == null,
             "у смерженной фичи active нет → tone = null у всех сегментов");
         row.Rail.Single(s => s.Key == "prod").State.Should().Be("done");
         row.Rail.Single(s => s.Key == "merge").State.Should().Be("done");
+        row.Rail.Single(s => s.Key == "design").State.Should().Be("skipped",
+            "«design» без задач — skipped, не «done»: необязательный этап не пройден (W4-DES-B)");
     }
 
     // ── 5b. rail «честного мержа»: epic Done, merge-задачи нет ─────────────────────────────────
@@ -325,8 +327,9 @@ public class FeatureIndexRowTests
         run.Now.Should().NotBeEmpty();
         row.Bucket.Should().Be("running");
 
-        // rail: ровно 7, совпадает с FeatureRun.Stages (key/state/tone).
-        row.Rail.Should().HaveCount(7);
+        // rail: ровно 8 стадий (с необязательной «design», W4-DES-B), совпадает с FeatureRun.Stages
+        // (key/state/tone).
+        row.Rail.Should().HaveCount(8);
         for (var i = 0; i < run.Stages.Count; i++)
         {
             row.Rail[i].Key.Should().Be(run.Stages[i].Key);

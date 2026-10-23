@@ -480,6 +480,7 @@ public class FeatureStepProgressTests
         {
             nameof(FeatureRun.Epic), nameof(FeatureRun.Steps), nameof(FeatureRun.Reviews), nameof(FeatureRun.Qa),
             nameof(FeatureRun.Final), nameof(FeatureRun.Merge), nameof(FeatureRun.Cut), nameof(FeatureRun.Plan),
+            nameof(FeatureRun.Design), nameof(FeatureRun.Unroled), // W4-DES-B: тоже облегчаются (SlimAll)
         };
         var src = new FeatureRun { Epic = new TaskItem { Id = "e" } };
         foreach (var prop in typeof(FeatureRun).GetProperties(BindingFlags.Public | BindingFlags.Instance))

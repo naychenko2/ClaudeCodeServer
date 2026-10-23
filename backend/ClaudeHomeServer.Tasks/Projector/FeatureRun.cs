@@ -34,9 +34,16 @@ public sealed class FeatureRun
     // Разрез (role=cut): задачи с ролью cut и FeatureId == epic.Id.
     // У роли cut featureId необязателен — задача без него честно даёт «нет в трекере».
     public List<TaskItem> Cut { get; init; } = [];
+    // Дизайн (role=design): задачи дизайнера фичи (W4-DES-B). Стадия необязательна:
+    // без них этап «design» — skipped, на готовность не влияет.
+    public List<TaskItem> Design { get; init; } = [];
     // План (role=plan): задачи с ролью plan и FeatureId == epic.Id.
     public List<TaskItem> Plan { get; init; } = [];
-    // Конвейер: 7 стадий в порядке жизненного цикла (cut → plan → prod → review → qa → final → merge).
+    // Безролевые задачи фичи (role=null): ни в одну стадию не попадают, но входят в
+    // ленту событий (W4-DES-B: хронология — ВСЕ задачи с featureId).
+    public List<TaskItem> Unroled { get; init; } = [];
+    // Конвейер: 8 стадий в явном порядке жизненного цикла (cut → design → plan → prod →
+    // review → qa → final → merge); «design» необязательна (см. FeatureProjector.BuildCore).
     // Арифметика стадий — на бэке; фронт только показывает (шаг Ф5, Кира).
     public List<FeatureStage> Stages { get; init; } = [];
     // Цепочки шагов (Б2): по одной на шаг (stepRef) — задача шага + её доработки (role=rework,
@@ -170,10 +177,11 @@ public sealed class FeatureVerdicts
 // Арифметику считает бэк (FeatureProjector.Build); фронт только показывает (шаг Ф5).
 public sealed class FeatureStage
 {
-    // Ключ стадии: cut | plan | prod | review | qa | final | merge.
+    // Ключ стадии: cut | design | plan | prod | review | qa | final | merge.
     public string Key { get; init; } = "";
     // Состояние: done — все задачи стадии закрыты; active — первая непройденная;
-    // pending — ещё не начата; absent — ноль задач, а следующая стадия уже начата.
+    // pending — ещё не начата; absent — ноль задач, а следующая стадия уже начата;
+    // skipped — необязательная стадия «design» без задач (W4-DES-B).
     public string State { get; init; } = "pending";
     // Тон (только у active, иначе null): run — идёт; wait — ждёт человека;
     // stopped — исполнитель встал; loop — работа вернулась (доработка идёт).

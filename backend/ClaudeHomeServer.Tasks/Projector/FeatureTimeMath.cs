@@ -9,10 +9,12 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 internal static class FeatureTimeMath
 {
     // Роль задачи → ключ стадии конвейера (таблица одна на весь «Обзор фич»).
-    // cut/consult → cut (Разрез); step/rework → prod; прочее → prod.
+    // cut/consult → cut (Разрез); design → design (необязательный «Дизайн», W4-DES-B);
+    // step/rework → prod; прочее → prod.
     public static string RoleToStage(string? role) => role switch
     {
         TaskRoles.Cut or TaskRoles.Consult => "cut",
+        TaskRoles.Design => "design",
         TaskRoles.Plan => "plan",
         TaskRoles.Step or TaskRoles.Rework => "prod",
         TaskRoles.Review => "review",

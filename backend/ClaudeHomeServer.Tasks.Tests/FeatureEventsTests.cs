@@ -347,6 +347,38 @@ public class FeatureEventsTests
         stopped.Reason.Should().Be("auth_failed");
     }
 
+    // ── 10. W4-DES-B: хронология — ВСЕ задачи с featureId, включая безролевые ─────────────────
+
+    // Безролевая задача (role=null) ни в одну стадию не попадает, но в ленте обязана быть:
+    // created + completed (Done без вердикта). Мутация: убрать Unroled из BuildEvents →
+    // этот тест краснеет.
+    [Fact]
+    public void BuildEvents_БезролеваяЗадачаВЛенте()
+    {
+        var epic = Epic("epic");
+        var u1 = Child("u1", "epic", role: null, status: TaskItemStatus.Done,
+            completedAt: new DateTime(2026, 10, 3, 10, 0, 0));
+
+        var events = FeatureProjector.BuildEvents(Run(epic, u1), Sessions());
+
+        Find(events, "created", "u1").At.Should().Be(T0);
+        Find(events, "completed", "u1").At.Should().Be(new DateTime(2026, 10, 3, 10, 0, 0));
+    }
+
+    // Дизайн-задача (role=design) — тоже в ленте: её created/completed видны.
+    [Fact]
+    public void BuildEvents_ДизайнЗадачаВЛенте()
+    {
+        var epic = Epic("epic");
+        var d1 = Child("d1", "epic", role: TaskRoles.Design, status: TaskItemStatus.Done,
+            completedAt: new DateTime(2026, 10, 3, 11, 0, 0));
+
+        var events = FeatureProjector.BuildEvents(Run(epic, d1), Sessions());
+
+        Find(events, "created", "d1");
+        Find(events, "completed", "d1").At.Should().Be(new DateTime(2026, 10, 3, 11, 0, 0));
+    }
+
     // ─── Truncate: кириллица (BMP) и суррогатные пары (эмодзи) ───────────────────────────────
 
     // null → null; ≤ 200 → как есть; > 200 (BMP, 1 кодовая точка = 1 единица) → ровно 200.

@@ -1318,23 +1318,27 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     // Сквозной сценарий W4-R1 (major 1+2) на НАСТОЯщем MockupCatalog и настоящем git-worktree:
-    // записка-макет лежит в обоих деревьях и в шапке перечисляет два файла — один только в
-    // дереве, другой только в main. Каталог записывает путь под tree="feature" (запись дерева
-    // побеждает), Files — объединение путей: файл только из main не исчезает (major 2), но его
-    // exists=false — читатель с ?featureId= читает ровно дерево и отдаёт 404 (major 1).
+    // записка-макет лежит в обоих деревьях и в шапке перечисляет три файла — один только в
+    // дереве, другой только в main, третий — в обоих. Каталог записывает путь под tree="feature"
+    // (запись дерева побеждает), Files — объединение путей: файл только из main не исчезает
+    // (major 2), но его exists=false — читатель с ?featureId= читает ровно дерево и отдаёт 404
+    // (major 1). Файл, есть в обоих деревьях → exists=true (минор R1B).
     // Мутация: убрать объединение Files в слиянии — этот тест краснеет (main_only пропадает).
     [Fact]
     public async Task GetFeature_Mockups_ФайлТолькоВMain_ДеревоНеОбещаетExists()
     {
         var (epicId, worktree, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
         var mainRoot = Projects.GetById(projectId)!.RootPath;
-        var note = "# Макет\n\n**Фича:** " + epicId + "\n**Файлы:** tree_only.html, main_only.html\n";
+        var note = "# Макет\n\n**Фича:** " + epicId + "\n**Файлы:** tree_only.html, main_only.html, both.html\n";
         Directory.CreateDirectory(Path.Combine(mainRoot, "docs", "mockups"));
         Directory.CreateDirectory(Path.Combine(worktree, "docs", "mockups"));
         File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "note.md"), note);
         File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "note.md"), note);
         File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "tree_only.html"), "tree only");
         File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "main_only.html"), "main only");
+        // Файл в ОБОИХ деревьях: есть и в дереве, и в main.
+        File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "both.html"), "both");
+        File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "both.html"), "both");
 
         var controller = BuildController(RealGit(),
             catalog: _factory.Services.GetRequiredService<MockupCatalog>());
@@ -1350,6 +1354,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         files["docs/mockups/main_only.html"].Should().BeFalse(
             "в дереве файла нет — exists=false, обещания читателю нет");
         files["docs/mockups/tree_only.html"].Should().BeTrue("файл в дереве — обещание честное");
+        files["docs/mockups/both.html"].Should().BeTrue(
+            "файл существует в обоих деревьях — exists=true (минор R1B)");
 
         // Читатель подтверждает контракт: по ?featureId= файла из main нет, фолбэка на main нет.
         var content = await _client.GetAsync(

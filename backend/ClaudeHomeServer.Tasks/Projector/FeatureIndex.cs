@@ -66,7 +66,8 @@ public sealed record FeatureIndexRow(
     string State,
     // Тревога; null — тревоги нет.
     FeatureIndexAttention? Attention,
-    // Рельса: ровно 7 стадий в порядке жизненного цикла.
+    // Рельса: 8 стадий в явном порядке жизненного цикла (cut → design → plan → …; «design»
+    // необязательна: без задач — skipped, W4-DES-B).
     List<FeatureIndexRailSegment> Rail,
     // Чипы-фильтры: open | waiting | stopped | merge | closed.
     List<string> Chips,

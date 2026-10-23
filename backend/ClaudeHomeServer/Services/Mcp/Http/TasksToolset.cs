@@ -1617,7 +1617,7 @@ public sealed class TasksToolset(
     {
         ["type"] = "string",
         ["enum"] = StringArray(TaskRoles.All),
-        ["description"] = "Роль в фиче: feature · cut · plan · step · rework · review · qa · final · merge (после принятого финала) · consult",
+        ["description"] = "Роль в фиче: feature · cut · design (задача дизайнера, этап необязателен) · plan · step · rework · review · qa · final · merge (после принятого финала) · consult",
     };
 
     private static JsonObject StepRefSchema() => new()

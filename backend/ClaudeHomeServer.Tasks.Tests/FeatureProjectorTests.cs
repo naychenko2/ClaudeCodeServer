@@ -197,8 +197,10 @@ public class FeatureProjectorTests
         var mergeStage = run.Stages.Single(s => s.Key == "merge");
         mergeStage.State.Should().Be("active",
             "финал зелёный, а merge-задачи нет — мерж не пройден, а активен");
-        // Все стадии до merge — done.
-        run.Stages.Where(s => s.Key != "merge").Should().OnlyContain(s => s.State == "done");
+        // Все настоящие стадии до merge — done; пустая необязательная «design» — skipped (W4-DES-B).
+        run.Stages.Where(s => s.Key is not "merge" and not "design").Should().OnlyContain(s => s.State == "done");
+        run.Stages.Single(s => s.Key == "design").State.Should().Be("skipped",
+            "дизайн-задач нет — необязательный этап skipped (W4-DES-B)");
     }
 
     // Нет cut-задачи, а план начат (имеет задачи) → cut = absent («нет в трекере»).
@@ -1610,6 +1612,79 @@ public class FeatureProjectorTests
         // Мутация (первая по CompletedAt) даст returned → краснеет.
         Stage(run, "review").Verdict.Should().Be("accepted",
             "исход стадии — последней по времени закрытой задачи, а не первой");
+    }
+
+    // ─── W4-DES-B: необязательный этап «Дизайн» и безролевые задачи в хронологии ─────────────
+
+    // Фича с дизайн-задачей: этап «Дизайн» виден — порядок стадий cut → design → plan (явный
+    // список), задача в TaskIds, идущая дизайн-задача делает стадию active.
+    [Fact]
+    public void Build_ДизайнЗадача_ЭтапДизайнВиденПослеРазреза()
+    {
+        const string epicId = "epic-des-b";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut,
+            Status = TaskItemStatus.Done,
+        };
+        var d1 = new TaskItem
+        {
+            Id = "d1", FeatureId = epicId, Role = TaskRoles.Design,
+            Status = TaskItemStatus.InProgress, PersonaId = "Майя",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut, d1]);
+
+        run.Stages.Select(s => s.Key).Should().Equal(
+            new[] { "cut", "design", "plan", "prod", "review", "qa", "final", "merge" },
+            "порядок стадий — явный список, «design» после «cut» (W4-DES-B)");
+        var design = Stage(run, "design");
+        design.TaskIds.Should().Equal(new[] { "d1" }, "дизайн-задача в этапе");
+        design.State.Should().Be("active", "идущая дизайн-задача — стадия active");
+        design.PersonaIds.Should().Equal(new[] { "Майя" }, "исполнитель дизайна");
+    }
+
+    // Без дизайн-задач: этап «design» — skipped; готовность не сдвигается (Ready — из финала).
+    // Мутация: убрать ветку skipped (пустая design → absent/pending) → State=skipped краснеет.
+    [Fact]
+    public void Build_БезДизайна_ЭтапSkipped_ГотовностьНеСдвигается()
+    {
+        const string epicId = "epic-des-none";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final]);
+
+        Stage(run, "design").State.Should().Be("skipped",
+            "дизайн-задач нет — необязательный этап skipped (W4-DES-B)");
+        run.Ready.Should().BeTrue("готовность — от финала, «design» на неё не влияет");
+    }
+
+    // Пустая «design» никогда не активна: cut закрыт, других задач нет — активность на «plan»
+    // (следующая настоящая стадия), а не на «design».
+    [Fact]
+    public void Build_ПустаяDesignНеАктивна_АктивностьНаСледующейСтадии()
+    {
+        const string epicId = "epic-des-active";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut,
+            Status = TaskItemStatus.Done,
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut]);
+
+        Stage(run, "design").State.Should().Be("skipped", "пустая необязательная стадия — skipped");
+        Stage(run, "plan").State.Should().Be("active", "фича дошла до cut — ждёт plan, не «design»");
     }
 
     // ─── Дефект: consult → стадия «Разрез», не «Мерж» ─────────────────────────────────────

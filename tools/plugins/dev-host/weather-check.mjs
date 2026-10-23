@@ -46,11 +46,11 @@
 //   17. Пустые температуры в списке городов — прочерк «—», не пустое место
 //       (правка приёмки 23.10).
 //   18. Порядок результатов: своя страна (RU) раньше чужих, внутри страны — по
-//       населению; подпись «Город · Регион, Страна» (правка приёмки 23.10).
+//       населению; подпись «Город, Регион, Страна» (правка приёмки 23.10).
 //   19. Обещание запоминания — только если операция storage реально отвечает,
 //       а не просто выдано право (правка приёмки 23.10).
 //   20. Лимит частоты (limit) — «Слишком много запросов», не «нет связи» (C5-д, MAJOR 1).
-//   21. Исключение внутри renderMain — «Что-то сломалось в панели погоды»;
+//   21. Исключение внутри renderMain — «Прогноз не удалось показать»;
 //       «Обновить данные» — self-restart: панель жива, данные запрошены заново,
 //       эмулятор не отвечает init на повторный ready (C5-д, C5-д3).
 //   22. Квоты: до 5 своих + до 2 иностранных, свои первыми; иностранный не
@@ -415,9 +415,9 @@ async function scenarioErrors(browser, base) {
   // C5-д2 (MAJOR): unavailable — про плагин, остальные коды хоста — нейтральный
   // дефолт; ни тот ни другой не «нет связи».
   for (const [failCode, wantTitle, wantText, wantBtn] of [
-    ['unavailable', 'Плагин погоды сейчас недоступен', 'Попробуйте открыть панель позже.', false],
-    ['not_found', 'Не удалось получить данные о погоде', 'Попробуйте ещё раз.', true],
-    ['invalid', 'Не удалось получить данные о погоде', 'Попробуйте ещё раз.', true],
+    ['unavailable', 'Плагин погоды сейчас недоступен', 'Обновите страницу или откройте панель позже.', false],
+    ['not_found', 'Данные о погоде получить не удалось', 'Попробуйте ещё раз.', true],
+    ['invalid', 'Данные о погоде получить не удалось', 'Попробуйте ещё раз.', true],
   ]) {
     await scenario('4g. ' + failCode + ' — «' + wantTitle + '», не «нет связи»', async (checks) => {
       const { context, page, frame } = await openEmulator(browser, base, {
@@ -1046,10 +1046,10 @@ async function scenarioEmptyTemps(browser, base) {
 }
 
 // Правка 23.10: сперва своя страна (панель ищет по-русски), внутри страны — по
-// населению; подпись «Город · Регион, Страна». Страна — из country_code, не по
+// населению; подпись «Город, Регион, Страна». Страна — из country_code, не по
 // названию: «Торонто» не встанет перед русским «Тором».
 async function scenarioCountrySort(browser, base) {
-  await scenario('18. Квоты: свои раньше иностранных, подпись «Город · Регион, Страна» (правка 23.10, C5-д2)', async (checks) => {
+  await scenario('18. Квоты: свои раньше иностранных, подпись «Город, Регион, Страна» (правка 23.10, C5-д2)', async (checks) => {
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
       fixtures: [
@@ -1068,8 +1068,8 @@ async function scenarioCountrySort(browser, base) {
       assertEq(checks, 'строк результатов', lines.length, 3);
       const first = lines[0].replace(/\n/g, ' ').trim();
       // По одному населению первым был бы Торонто (2,7 млн) — страна важнее.
-      assertTrue(checks, 'первая строка — Тор в России', first.includes('Тор ·') && first.includes('Россия'), first);
-      assertTrue(checks, 'страна читается рядом с названием', first.includes(' · Архангельская обл., Россия'), first);
+      assertTrue(checks, 'первая строка — Тор в России', first.includes('Тор,') && first.includes('Россия'), first);
+      assertTrue(checks, 'страна читается рядом с названием', first.includes(', Архангельская обл., Россия'), first);
       // Чужие страны — после своей; внутри них прежний порядок по населению.
       const second = lines[1].replace(/\n/g, ' ').trim();
       const third = lines[2].replace(/\n/g, ' ').trim();
@@ -1159,7 +1159,7 @@ async function scenarioRateLimit(browser, base) {
 // Фикстура валидна по форме, но temperature_2m_min — строка вместо массива:
 // renderMain бросает внутри панели.
 async function scenarioRenderFail(browser, base) {
-  await scenario('21. Ошибка внутри панели — «Что-то сломалось в панели погоды» (C5-д)', async (checks) => {
+  await scenario('21. Ошибка внутри панели — «Прогноз не удалось показать» (C5-д)', async (checks) => {
     const broken = '.cc-attachments/weather-check/forecast-broken-array.json';
     await mkdir(join(ROOT, '.cc-attachments', 'weather-check'), { recursive: true });
     await writeFile(join(ROOT, broken), JSON.stringify({
@@ -1178,9 +1178,9 @@ async function scenarioRenderFail(browser, base) {
     try {
       await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
       const title = (await textOf(frame, '.cc-empty__title')).trim();
-      assertEq(checks, 'заголовок ошибки панели', title, 'Что-то сломалось в панели погоды');
+      assertEq(checks, 'заголовок ошибки панели', title, 'Прогноз не удалось показать');
       const text = (await textOf(frame, '.cc-empty__text')).trim();
-      assertEq(checks, 'текст про обновление данных', text, 'Попробуйте обновить данные.');
+      assertEq(checks, 'текст про обновление данных', text, 'Нажмите «Обновить данные», чтобы загрузить его заново.');
       // «Повторить» тут тупик — вместо него «Обновить данные» (self-restart).
       assertEq(checks, 'кнопки «Повторить» нет', await frame.locator('#retry').count(), 0);
       assertEq(checks, 'кнопка «Обновить данные»', (await frame.locator('#restart').innerText().catch(() => '')).trim(), 'Обновить данные');
@@ -1236,10 +1236,10 @@ async function scenarioQuotas(browser, base) {
       assertEq(checks, 'своих ровно 5', lines.filter((l) => l.includes('Россия')).length, 5);
       assertEq(checks, 'иностранных ровно 2', lines.filter((l) => !l.includes('Россия')).length, 2);
       assertTrue(checks, 'первая — самый крупный свой (600 тыс.)',
-        lines[0].includes('Рогачёв ·') && lines[0].includes('Тверская обл., Россия'), lines[0]);
+        lines[0].includes('Рогачёв,') && lines[0].includes('Тверская обл., Россия'), lines[0]);
       // Город с country_code «ru» (нижний регистр) — своя страна, в своём блоке.
       assertTrue(checks, '«ru» нижнего регистра — своя, четвёртая',
-        lines[3].includes('Рогач ·') && lines[3].includes('Псковская обл., Россия'), lines[3]);
+        lines[3].includes('Рогач,') && lines[3].includes('Псковская обл., Россия'), lines[3]);
       // Пятая своя — Рогачи (200 тыс.): её не вытеснил ни Роттердам (2 млн), ни Розенталь.
       assertTrue(checks, 'пятая своя — Рогачи (200 тыс.), не вытеснена иностранным',
         lines[4].includes('Рогачи') && lines[4].includes('Россия'), lines[4]);
@@ -1278,10 +1278,10 @@ async function scenarioAllForeign(browser, base) {
     try {
       const lines = o.lines;
       assertEq(checks, '0 своих: все четыре иностранных, а не два', lines.length, 4);
-      assertTrue(checks, '1 — Лима, Перу (9 млн)', lines[0].includes('Лима ·') && lines[0].includes('Перу'), lines[0]);
+      assertTrue(checks, '1 — Лима, Перу (9 млн)', lines[0].includes('Лима,') && lines[0].includes('Перу'), lines[0]);
       assertTrue(checks, '2 — Лимассо, Кипр (300 тыс.)', lines[1].includes('Лимассо') && lines[1].includes('Кипр'), lines[1]);
       assertTrue(checks, '3 — Лимы, Италия (100 тыс.)', lines[2].includes('Лимы') && lines[2].includes('Италия'), lines[2]);
-      assertTrue(checks, '4 — Лима, Греция (50 тыс.)', lines[3].includes('Лима ·') && lines[3].includes('Греция'), lines[3]);
+      assertTrue(checks, '4 — Лима, Греция (50 тыс.)', lines[3].includes('Лима,') && lines[3].includes('Греция'), lines[3]);
     } catch (e) {
       await shot(o.page, 'scenario-23-all-foreign');
       throw e;
@@ -1476,9 +1476,43 @@ async function scenarioTiesAndCountryFallback(browser, base) {
       // В ответе «Тесов» стоит раньше «Тесны», население равное: решает название.
       assertTrue(checks, 'при равном населении «Тесна» раньше «Тесова»', lines[1].includes('Тесна') && lines[2].includes('Тесов'), lines[1] + ' | ' + lines[2]);
       assertTrue(checks, 'иностранный без поля country — в подписи код страны',
-        lines[3].includes('Тессин') && /· DE(\s|$)/.test(lines[3]), lines[3]);
+        lines[3].includes('Тессин') && /, DE(\s|$)/.test(lines[3]), lines[3]);
     } catch (e) {
       await shot(page, 'scenario-28-ties');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C6: одноимённые пункты без admin1 различаются; висячих разделителей нет.
+async function scenarioSameNames(browser, base) {
+  await scenario('32. Одноимённые пункты без admin1 — подписи попарно различны, без висячих разделителей (C6)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-samename.json|name=%D0%9C%D0%BE%D1%81',
+        FX + 'batch-mixed.json|latitude',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Мос');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      const lines = await frame.locator('.city .cn').allInnerTexts().then((a) => a.map((s) => s.replace(/\s+/g, ' ').trim()));
+      assertEq(checks, 'строк результатов', lines.length, 4);
+      assertEq(checks, 'подписи попарно различны', new Set(lines).size, lines.length);
+      assertTrue(checks, 'нет висячих разделителей', lines.every((l) => !/[·,]\s*$/.test(l) && !l.includes(', ,') && !l.includes('·')), lines.join(' | '));
+      const same = lines.filter((l) => l.startsWith('Москва, Туркменистан'));
+      assertEq(checks, 'три одноимённые без региона', same.length, 3);
+      assertTrue(checks, 'у одноимённых есть координаты', same.every((l) => /\(\d+,\d{2}° [NS], \d+,\d{2}° [EW]\)$/.test(l)), same.join(' | '));
+      assertTrue(checks, 'admin2 вместо пустого admin1', lines.some((l) => l === 'Москва, Кировский район, Россия'), lines.join(' | '));
+    } catch (e) {
+      await shot(page, 'scenario-32-samename');
       throw e;
     } finally {
       await context.close();
@@ -1745,6 +1779,7 @@ try {
   await scenarioHintRevoked(browser, base);
   await scenarioQuotaEdges(browser, base);
   await scenarioRestartResets(browser, base);
+  await scenarioSameNames(browser, base);
 } finally {
   await browser.close();
   server.close();

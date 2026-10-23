@@ -118,7 +118,7 @@
   .search-wrap .cc-input { padding-left: 36px; }
   .city .nm { font-weight: 600; }
   .city .rg { color: var(--cc-fg-muted); font-size: 12px; }
-  .city .cn { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .city .cn { min-width: 0; flex: 1; }
   .city .t { font-size: 12px; color: var(--cc-fg-muted); }
   .city mark { background: none; color: inherit; text-decoration: underline; text-decoration-color: var(--cc-accent); text-underline-offset: 3px; }
   .hint { font-size: 12px; color: var(--cc-fg-muted); padding: 0 4px; }
@@ -337,7 +337,7 @@
         // Плагин выключен или подсистема плагинов недоступна: не про связь и не
         // про сервис погоды (C5-д2).
         icon = 'cloudoff'; title = 'Плагин погоды сейчас недоступен';
-        text = 'Попробуйте открыть панель позже.';
+        text = 'Обновите страницу или откройте панель позже.';
         extra = '';
       } else if (kind === 'limit') {
         // Связь есть — упёрлись в частоту запросов (30 в минуту). «Проверьте
@@ -368,8 +368,8 @@
         // Простой повтор запроса не поможет — нужен перезапуск панели с чистого
         // состояния (self-restart). Перезагрузить страницу из sandbox-фрейма
         // нельзя: боевой хост на повторный ready init не шлёт (C5-д3).
-        icon = 'cloudoff'; title = 'Что-то сломалось в панели погоды';
-        text = 'Попробуйте обновить данные.';
+        icon = 'cloudoff'; title = 'Прогноз не удалось показать';
+        text = 'Нажмите «Обновить данные», чтобы загрузить его заново.';
         extra = '<button class="cc-btn cc-btn--primary" type="button" id="restart">Обновить данные</button>';
       } else if (kind === 'badstatus') {
         // Ошибочный HTTP-статус — сервис действительно «вернул ошибку».
@@ -379,7 +379,7 @@
       } else {
         // Нераспознанный код отказа (not_found, invalid, forbidden_address…):
         // причины человеку ничего не дают, «нет связи» тут было бы враньём (C5-д2).
-        icon = 'cloudoff'; title = 'Не удалось получить данные о погоде';
+        icon = 'cloudoff'; title = 'Данные о погоде получить не удалось';
         text = 'Попробуйте ещё раз.';
         extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
       }
@@ -414,13 +414,21 @@
 
     // Подпись строки результата: «Ярославская Область» → «Ярославская обл.» (§1, грабли).
     // Если геокодер не дал имени страны, код страны лучше пустоты: подпись
-    // «Город · Регион, Страна» обещает страну (minor, C5-д).
+    // «Город, Регион, Страна» обещает страну (minor, C5-д).
     function regionText(r) {
       var parts = [];
-      if (r.admin1) parts.push(String(r.admin1).replace(/\s+[Оо]бласть$/, ' обл.'));
+      // Регион — первый непустой уровень admin1…admin4: у части населённых
+      // пунктов admin1 пуст, и одноимённые строки иначе неразличимы.
+      var adm = r.admin1 || r.admin2 || r.admin3 || r.admin4;
+      if (adm) parts.push(String(adm).replace(/\s+[Оо]бласть$/, ' обл.'));
       var country = r.country || String(r.country_code || '').toUpperCase();
       if (country) parts.push(country);
       return parts.join(', ');
+    }
+    // Координаты для различения одноимённых строк: «38,12° N, 58,37° E».
+    function coordText(lat, lon) {
+      var f = function (v, p, n) { return Math.abs(v).toFixed(2).replace('.', ',') + '° ' + (v < 0 ? n : p); };
+      return f(lat, 'N', 'S') + ', ' + f(lon, 'E', 'W');
     }
     // Подсветка совпавшего начала запроса, как в макете.
     function hl(nm) {
@@ -530,11 +538,12 @@
         found.map(function (c, i) {
           var active = c.lat === city.lat && c.lon === city.lon;
           return '<li class="cc-list-item city' + (active ? ' is-active' : '') + '" role="option" tabindex="0" aria-selected="' + (active ? 'true' : 'false') + '" data-i="' + i + '">' +
-            // Подпись — «Город · Регион, Страна»: страна читается рядом с
+            // Подпись — «Город, Регион, Страна»: страна читается рядом с
             // названием, а не в конце строки (правка приёмки 23.10). Нет
             // температуры — прочерк, не пустое место (там же).
             '<span class="cn"><span class="nm">' + hl(c.name) + '</span>' +
-            (c.region ? '<span class="rg"> · ' + esc(c.region) + '</span>' : '') + '</span>' +
+            ((c.region || c.coords) ? '<span class="rg">' + (c.region ? ', ' + esc(c.region) : '') +
+              (c.coords ? ' (' + esc(c.coords) + ')' : '') + '</span>' : '') + '</span>' +
             '<span class="t">' + fmt(c.temp) + '</span>' +
             '</li>';
         }).join('') + '</ul>';
@@ -579,6 +588,12 @@
         var foreignQuota = 2 + Math.max(0, 5 - own.length);
         var foreign = all.filter(function (c) { return c.country_code !== HOME_COUNTRY; }).slice(0, foreignQuota);
         var snapshot = own.concat(foreign);
+        // Одинаковые «Город, Регион, Страна» не выбрать — добавляем координаты.
+        var seen = {};
+        snapshot.forEach(function (c) { var k = c.name + '|' + c.region; seen[k] = (seen[k] || 0) + 1; });
+        snapshot.forEach(function (c) {
+          if (seen[c.name + '|' + c.region] > 1) c.coords = coordText(c.lat, c.lon);
+        });
         found = snapshot;
         renderGeo();
         if (!snapshot.length) return;

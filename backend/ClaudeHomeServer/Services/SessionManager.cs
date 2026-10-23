@@ -3193,20 +3193,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (source.ClaudeSessionId is not string csid)
             throw new InvalidOperationException("Чат ещё не обращался к модели: ветвить нечего");
 
-        // §9.6 — групповой чат и режим штаба: их состояние волн/спикеров живёт в Session,
-        // а не в транскрипте — ветка унаследовала бы ленту без состояния
-        if (source.Participants is { Count: > 0 })
-            throw new InvalidOperationException(
-                "Групповой чат нельзя ветвить: состав спикеров живёт в чате, а не в транскрипте");
-        if (source.TeamImplement is not null)
-            throw new InvalidOperationException(
-                "Чат в режиме «Командная реализация» нельзя ветвить: состояние волн живёт в чате, а не в транскрипте");
-
-        // §9.8 — чат в отдельном worktree: скопированный контекст указывал бы на чужое
-        // дерево, которое сносится вместе с чатом-источником
-        if (source.WorktreePath is not null)
-            throw new InvalidOperationException(
-                "Чат в отдельном рабочем дереве нельзя ветвить: контекст ветки указывал бы на дерево, которое сносится вместе с чатом-источником");
+        // §9.6, §9.8 — групповой чат, штаб, отдельное worktree: отказы общие для всех
+        // способов породить из чата новый (ветвление, перенос в новый чат)
+        EnsureSuccessorAllowed(source, "ветвить", "ветки");
 
         if (include != ChatBranchInclude.Turn && include != ChatBranchInclude.BeforePrompt)
             throw new InvalidOperationException($"Неизвестное значение include: «{include}»");
@@ -3375,49 +3364,20 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             ? $"{(string.IsNullOrWhiteSpace(source.Name) ? "Чат" : source.Name)} (ветка)"
             : name.Trim();
 
-        // Создание чата штатной фабрикой (§ «Создание чата»): выбор по ProjectId/PersonaId
-        // оригинала, resumeSessionId = новый csid — StartNewSessionAsync подхватит уже
-        // подготовленные транскрипт и историю
-        var branchSession = !string.IsNullOrWhiteSpace(source.PersonaId)
-            ? await CreatePersonaChatAsync(ownerId, source.PersonaId!, source.Mode,
-                resumeSessionId: newCsid, name: branchName, contextProjectId: source.ProjectId)
-            : source.ProjectId is not null
-                ? await CreateAsync(source.ProjectId, source.Mode, resumeSessionId: newCsid,
-                    name: branchName, model: source.Model, effort: source.Effort)
-                : await CreateChatAsync(ownerId, source.Mode, resumeSessionId: newCsid,
-                    name: branchName, model: source.Model, effort: source.Effort);
-
-        // §11 — наследование полей поверх созданного чата: фабрики персоны/проекта не берут
-        // все поля параметрами (персональная фабрика вовсе подставляет модель персоны, а не
-        // оригинала), поэтому модель/провайдер/effort и остальные поля таблицы §11
-        // принудительно переписываются на значения оригинала уже ПОСЛЕ создания.
-        if (_sessions.TryGetValue(branchSession.Id, out var branchEntry))
-        {
-            var b = branchEntry.Info;
-            // Наследуем: Model/Provider/Effort/Context/VoiceMode/VoiceStyle/NotificationsMuted —
-            // тот же разговор тем же собеседником; ExcludeFromDossiers — иначе ветвление
-            // обходит явный opt-out «не сохранять решения» (Session.cs:380-382).
-            b.Model = source.Model;
-            b.Provider = source.Provider;
-            b.Effort = source.Effort;
-            b.Context = [.. source.Context.Select(c => new SessionContextEntry
-                { Type = c.Type, Id = c.Id, Title = c.Title })];
-            b.VoiceMode = source.VoiceMode;
-            b.VoiceStyle = source.VoiceStyle;
-            b.NotificationsMuted = source.NotificationsMuted;
-            b.ExcludeFromDossiers = source.ExcludeFromDossiers;
-            // Накопленный cost-state CLI: транскрипт ветки — копия префикса родителя (с его
-            // cost-state), поэтому --resume ветки восстановит накопленный итог родителя. Базой
-            // для дельты первого хода ветки берём снимок родителя, иначе он засчитал бы всю
-            // историю родителя. (См. Session.LastCostState / ClaudeSession.ComputeTurnDelta.)
-            b.LastCostState = source.LastCostState;
-            // НЕ наследуем: AutoAllowTools (человек переспросит один раз, а не тихая эскалация
-            // прав), WorktreePath/WorktreeBranch/TaskId/TaskExecution/ExpiresAfterMinutes/
-            // ArchivedAt/ArchiveBatchId/LastReadAt — фабрика их и так не выставляет.
-            b.BranchedFromSessionId = sessionId;
-            SaveSessions();
-            branchSession = b;
-        }
+        // Создание чата штатной фабрикой через общий хелпер преемника: resumeSessionId = новый
+        // csid — StartNewSessionAsync подхватит уже подготовленные транскрипт и историю.
+        // Поля, специфичные именно для ветки (снимок cost-state родителя и ссылка на источник),
+        // передаются configure.
+        var branchSession = await CreateSuccessorChatAsync(source, ownerId, branchName, newCsid,
+            b =>
+            {
+                // Накопленный cost-state CLI: транскрипт ветки — копия префикса родителя (с его
+                // cost-state), поэтому --resume ветки восстановит накопленный итог родителя. Базой
+                // для дельты первого хода ветки берём снимок родителя, иначе он засчитал бы всю
+                // историю родителя. (См. Session.LastCostState / ClaudeSession.ComputeTurnDelta.)
+                b.LastCostState = source.LastCostState;
+                b.BranchedFromSessionId = sessionId;
+            });
 
         // Подсистемы со своим состоянием по sessionId (нити редактора картинок) копируют его под
         // ветку (ADR-019 §2). Notification: сбой подписчика ветвление не роняет
@@ -3425,6 +3385,100 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             new TurnContext(branchSession.Id, ownerId, 0, 0, branchSession.ProjectId), sessionId));
 
         return new ChatBranchResult(branchSession, draft);
+    }
+
+    // Отказы, общие для всех способов породить из чата новый (ветвление, перенос в новый чат):
+    // состояние группового чата (спикеры) и штаба (волны) живёт в Session, а не в разговоре —
+    // преемник унаследовал бы ленту без состояния; worktree-чат указывал бы преемника на
+    // дерево, которое сносится вместе с чатом-источником. verb — «ветвить»/«переносить»,
+    // successor — родительный падеж преемника («ветки»/«нового чата»).
+    private static void EnsureSuccessorAllowed(Session source, string verb, string successor)
+    {
+        if (source.Participants is { Count: > 0 })
+            throw new InvalidOperationException(
+                $"Групповой чат нельзя {verb}: состав спикеров живёт в чате, а не в транскрипте");
+        if (source.TeamImplement is not null)
+            throw new InvalidOperationException(
+                $"Чат в режиме «Командная реализация» нельзя {verb}: состояние волн живёт в чате, а не в транскрипте");
+        if (source.WorktreePath is not null)
+            throw new InvalidOperationException(
+                $"Чат в отдельном рабочем дереве нельзя {verb}: контекст {successor} указывал бы на дерево, которое сносится вместе с чатом-источником");
+    }
+
+    // Новый чат-преемник штатной фабрикой (выбор по PersonaId/ProjectId источника) плюс
+    // наследование полей §11 (docs/research/chat-branching-2026-09.md). Фабрики персоны/проекта
+    // не берут все поля параметрами (персональная вовсе подставляет модель персоны, а не
+    // источника), поэтому поля §11 переписываются на значения источника уже ПОСЛЕ создания.
+    // resumeSessionId — csid заранее подложенных транскрипта и истории (ветвление) или null
+    // (перенос: чистый разговор, csid выдаст первый ход). configure — поля конкретного способа
+    // (у ветки — BranchedFromSessionId и снимок cost-state), сохраняются тем же SaveSessions.
+    private async Task<Session> CreateSuccessorChatAsync(Session source, string ownerId, string name,
+        string? resumeSessionId, Action<Session>? configure = null)
+    {
+        var successor = !string.IsNullOrWhiteSpace(source.PersonaId)
+            ? await CreatePersonaChatAsync(ownerId, source.PersonaId!, source.Mode,
+                resumeSessionId: resumeSessionId, name: name, contextProjectId: source.ProjectId)
+            : source.ProjectId is not null
+                ? await CreateAsync(source.ProjectId, source.Mode, resumeSessionId: resumeSessionId,
+                    name: name, model: source.Model, effort: source.Effort)
+                : await CreateChatAsync(ownerId, source.Mode, resumeSessionId: resumeSessionId,
+                    name: name, model: source.Model, effort: source.Effort);
+
+        if (!_sessions.TryGetValue(successor.Id, out var successorEntry)) return successor;
+        var s = successorEntry.Info;
+        // Наследуем: Model/Provider/Effort/Context/VoiceMode/VoiceStyle/NotificationsMuted —
+        // тот же разговор тем же собеседником; ExcludeFromDossiers — иначе преемник обходит
+        // явный opt-out «не сохранять решения» (Session.cs:380-382).
+        s.Model = source.Model;
+        s.Provider = source.Provider;
+        s.Effort = source.Effort;
+        s.Context = [.. source.Context.Select(c => new SessionContextEntry
+            { Type = c.Type, Id = c.Id, Title = c.Title })];
+        s.VoiceMode = source.VoiceMode;
+        s.VoiceStyle = source.VoiceStyle;
+        s.NotificationsMuted = source.NotificationsMuted;
+        s.ExcludeFromDossiers = source.ExcludeFromDossiers;
+        // НЕ наследуем: AutoAllowTools (человек переспросит один раз, а не тихая эскалация
+        // прав), WorktreePath/WorktreeBranch/TaskId/TaskExecution/ExpiresAfterMinutes/
+        // ArchivedAt/ArchiveBatchId/LastReadAt — фабрика их и так не выставляет.
+        configure?.Invoke(s);
+        SaveSessions();
+        return s;
+    }
+
+    // Проверка «из чата можно перенести разговор в новый» (холодный путь переноса, шаг B-4
+    // фичы про prompt cache) — до вызова модели, чтобы не платить за записку,
+    // которую некуда положить. Старый чат только читается.
+    public void EnsureHandoffAllowed(Session source) =>
+        EnsureSuccessorAllowed(source, "переносить", "нового чата");
+
+    // Почему тёплый перенос (передачу пишет сам чат своим ходом, читая префикс из тёплого
+    // кэша) сейчас нельзя; null — можно. Любая причина — тихий уход на холодный путь.
+    // Ход передачи не должен ни ждать в очереди, ни прерывать чужое: идущий ход, очередь,
+    // живые фоновые агенты. Группа и штаб — ход ушёл бы спикерам/координатору. Архивный чат
+    // от хода вернулся бы из архива, а офлайн-устройство припарковало бы ход до своего
+    // возвращения.
+    public string? WarmHandoffBlocker(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return "чат не найден";
+        var s = entry.Info;
+        if (s.ClaudeSessionId is null) return "разговора в CLI ещё не было";
+        if (s.Status is SessionStatus.Working or SessionStatus.Waiting || HasTurnInFlight(entry))
+            return "идёт ход или ждёт очередь";
+        if (s.WorkLoop is not null) return "цикл «до готово»";
+        if (entry.Process is { } p && (p.HasLiveBgAgents || p.HasTrackedBg)) return "живые фоновые агенты";
+        if (s.Participants is { Count: > 0 } || s.TeamImplement is not null) return "групповой чат или штаб";
+        if (s.IsArchived) return "архивный чат";
+        if (DeviceWaitGate(entry) is not null) return "устройство проекта офлайн";
+        return null;
+    }
+
+    // Новый чат для переноса: без resume (новый csid выдаст первый ход), с наследованием §11.
+    // Источник не трогается — ни UpdatedAt, ни архив.
+    public Task<Session> CreateHandoffChatAsync(Session source, string ownerId, string name)
+    {
+        EnsureHandoffAllowed(source);
+        return CreateSuccessorChatAsync(source, ownerId, name, resumeSessionId: null);
     }
 
     // Имя чата-продолжения: «<имя> · продолжение»; если имя уже кончается на «· продолжение»

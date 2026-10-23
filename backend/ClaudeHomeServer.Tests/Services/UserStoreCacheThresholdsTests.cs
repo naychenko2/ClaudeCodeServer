@@ -80,4 +80,17 @@ public class UserStoreCacheThresholdsTests : IDisposable
 
         user!.CacheWarnThresholds.Should().BeNull();
     }
+
+    [Fact]
+    public void Load_LegacySecondsAtMigrationEdge_ClampedNotNullified()
+    {
+        // Край перевода: 30 с округляются к 0 мин — вне диапазона. Раньше такая запись
+        // становилась null («не настроено»), хотя намерение человека было «предупредить
+        // сразу»: теперь нижняя граница — 1 мин. Верхняя — потолок срока (3600 с → 59 мин)
+        SeedUsersFile("""{"warn1hSec": 30, "warn5mSec": 30}""");
+        CreateStore().GetById("u-1")!.CacheWarnThresholds.Should().Be(new CacheWarnThresholds(1, 1));
+
+        SeedUsersFile("""{"warn1hSec": 3600, "warn5mSec": 300}""");
+        CreateStore().GetById("u-1")!.CacheWarnThresholds.Should().Be(new CacheWarnThresholds(59, 4));
+    }
 }

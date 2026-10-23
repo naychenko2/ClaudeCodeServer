@@ -118,8 +118,9 @@ public record ContextThresholds(int WarnPct, int DangerPct);
 // с момента записи.
 // Контракт хранилища (users.json): {"warn1hMin": 1–59, "warn5mMin": 1–4} — минуты.
 // На чтении нормализует CacheWarnThresholdsJsonConverter: старые имена origin-формата
-// в секундах (warn1hSec/warn5mSec) переводятся в минуты (round), значения вне диапазона
-// и любое несоответствующее тело — null, то есть «не настроено».
+// в секундах (warn1hSec/warn5mSec) переводятся в минуты (round) и зажимаются в диапазон,
+// прямые значения вне диапазона и любое несоответствующее тело — null, то есть
+// «не настроено».
 [JsonConverter(typeof(CacheWarnThresholdsJsonConverter))]
 public record CacheWarnThresholds(int Warn1hMin, int Warn5mMin)
 {
@@ -134,8 +135,9 @@ public record CacheWarnThresholds(int Warn1hMin, int Warn5mMin)
 
 /// <summary>
 /// Читает stored-запись порога: старые имена origin-формата в секундах (warn1hSec/warn5mSec)
-/// конвертируются в минуты (round) — настройка человека не теряется; всё остальное
-/// (вне диапазона, полпары, мусор) — null, «не настроено», фронт применит дефолты.
+/// конвертируются в минуты (round) и зажимаются в диапазон — настройка человека не теряется
+/// даже на краях перевода (30 с → 1 мин, 3600 с → 59 мин); всё остальное (прямые минуты
+/// вне диапазона, полпары, мусор) — null, «не настроено», фронт применит дефолты.
 /// Пишем всегда каноническую форму в минутах. Конвертер на самом типе, а не в опциях:
 /// users.json пишется своими JsonSerializerOptions в UserStore, а API-ответы — чужими,
 /// и разъехаться они не должны (тот же приём, что QuickPhraseJsonConverter).
@@ -162,9 +164,9 @@ public class CacheWarnThresholdsJsonConverter : JsonConverter<CacheWarnThreshold
             else if (string.Equals(name, "warn5mMin", StringComparison.OrdinalIgnoreCase))
                 min5m = ReadMinutes(reader);
             else if (string.Equals(name, "warn1hSec", StringComparison.OrdinalIgnoreCase))
-                min1h = ReadSecondsToMinutes(reader);
+                min1h = ReadSecondsToMinutes(reader, CacheWarnThresholds.Max1hMin);
             else if (string.Equals(name, "warn5mSec", StringComparison.OrdinalIgnoreCase))
-                min5m = ReadSecondsToMinutes(reader);
+                min5m = ReadSecondsToMinutes(reader, CacheWarnThresholds.Max5mMin);
             else
                 reader.Skip();
         }
@@ -179,11 +181,13 @@ public class CacheWarnThresholdsJsonConverter : JsonConverter<CacheWarnThreshold
     private static int? ReadMinutes(Utf8JsonReader reader) =>
         reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int value) ? value : null;
 
-    // 300 с → 5 мин. Нечетные секунды округляются к ближайшей минуте; результат всё
-    // равно проверяется диапазоном (3600 с → 60 мин > потолка 59 → null)
-    private static int? ReadSecondsToMinutes(Utf8JsonReader reader) =>
+    // 300 с → 5 мин. Нечетные секунды округляются к ближайшей минуте, а результат
+    // зажимается в диапазон, а не выбрасывается: край перевода 30 с → 0 мин — это
+    // намерение «предупредить сразу», а не отсутствие настройки, поэтому нижняя граница
+    // (1 мин) честнее null; верхняя — потолок срока (3600 с → 59 мин).
+    private static int? ReadSecondsToMinutes(Utf8JsonReader reader, int max) =>
         reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int seconds)
-            ? (int)Math.Round(seconds / 60.0)
+            ? Math.Clamp((int)Math.Round(seconds / 60.0), CacheWarnThresholds.MinMin, max)
             : null;
 
     public override void Write(Utf8JsonWriter writer, CacheWarnThresholds value, JsonSerializerOptions options)

@@ -192,6 +192,25 @@ public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task CacheThresholds_NonNumericValues_Returns400AndKeepsValue()
+    {
+        var authed = _factory.CreateAuthenticatedClient();
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 10, warn5mMin = 2 }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Строка вместо числа — 400, а не тихий сброс: единица — минуты, «10» — не минута
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = "10", warn5mMin = "2" }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        // Дробь — тоже 400: порог — целое число минут
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 10.5, warn5mMin = 2.5 }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        // Отвергнутый запрос не трогает сохранённую настройку
+        (await MeBody(authed)).GetProperty("cacheWarnThresholds").GetProperty("warn1hMin")
+            .GetInt32().Should().Be(10);
+    }
+
+    [Fact]
     public async Task CacheThresholds_BoundaryValues_Accepted()
     {
         var authed = _factory.CreateAuthenticatedClient();

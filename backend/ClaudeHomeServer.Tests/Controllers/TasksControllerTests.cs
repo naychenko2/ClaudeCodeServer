@@ -25,6 +25,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -154,8 +155,11 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // интеграционно достижим, а не только approx). null — подсистема журнала выключена.
     // serviceToken (W4-HOLD-B2): claim typ=svc — тот же признак, что в PluginBridgeController;
     // для проверки отказа 403 на ручках hold/clear.
+    // log (R-HOLD-D п.2): записывающий логгер — для тестов, где важен сам факт записи в логе
+    // (сбой фонового возврата не должен теряться молча). По умолчанию — NullLogger, как раньше.
     private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
-        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false)
+        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false,
+        ILogger<TasksController>? log = null)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -167,7 +171,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             bindings: _factory.Services.GetRequiredService<PersonaBindingsService>(),
             sessions: _factory.Services.GetRequiredService<SessionManager>(),
             spheres: _factory.Services.GetRequiredService<ISphereDirectory>(),
-            log: NullLogger<TasksController>.Instance,
+            log: log ?? NullLogger<TasksController>.Instance,
             noteSync: null,
             features: _factory.Services.GetRequiredService<FeatureProjector>(),
             git: git,
@@ -2493,12 +2497,14 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             holdProp.ValueKind.Should().Be(JsonValueKind.Null);
     }
 
-    // R-HOLD-D (п.4): связка «ручка → возврат» на уровне HTTP. Сервисные тесты продолжения
+    // R-HOLD-D (п.4, п.1): связка «ручка → возврат» на уровне HTTP. Сервисные тесты продолжения
     // не ловят ручки: удаление вызова из ClearFeatureHold оставляло их зелёными — связь
     // терялась. Здесь: после DELETE hold у помеченного шага пропадает пометка и в его чат
-    // уходит реплика-продолжение (стаб адаптера фиксирует доставленные). Мутации: убрать
-    // вызов в ручке — пометка не гасится, тест красный; снять пометку до доставки — тест
-    // изоляции сбоев (TaskExecutionServiceHoldTests) красный.
+    // уходит реплика-продолжение (стаб адаптера фиксирует доставленные). Ожидание — событие,
+    // а не опрос времени: карточка оркестратору в ключевой чат — последний выход продолжения
+    // (после снятия пометки), её приход будит TCS (прецедент: PluginDraftWatcherTests).
+    // Мутации: убрать вызов в ручке — пометка не гасится и карточка не уходит — красное;
+    // снять пометку до доставки — тест изоляции сбоев (TaskExecutionServiceHoldTests) красный.
     [Fact]
     public async Task ClearHold_ResumesMarkedTurn_EndsInItsChat()
     {
@@ -2509,8 +2515,16 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         });
         var stepId = step.GetProperty("id").GetString()!;
         var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        // Ключевой чат — адресат карточки: её доставка и есть событие конца цепочки возврата.
+        var keyChat = await CreatePersonalChatAsync(OwnerId);
         var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetExecutorLauncher(stepId, keyChat, null);
         tm.MarkClaudeStarted(stepId, chatId, DateTime.UtcNow); // ход идёт — пауза его прерывает.
+
+        var cardSent = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Крюк на стабе ключевого чата (его процесс поднят при создании чата): доставка будит
+        // TCS — ожидание события, а не опроса времени.
+        _factory.LlmAdapters.Adapters[keyChat].FirstMessageTcs = cardSent;
 
         var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
         set.StatusCode.Should().Be(HttpStatusCode.OK);
@@ -2521,14 +2535,58 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         // Ждём событие, а не время: продолжение — фон (fire-and-forget, R-HOLD-D п.1).
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-        while (tm.GetById(stepId)!.ExecutorStopReason is not null && DateTime.UtcNow < deadline)
-            await Task.Delay(50);
+        var winner = await Task.WhenAny(cardSent.Task, Task.Delay(5000));
+        ReferenceEquals(winner, cardSent.Task).Should().BeTrue(
+            "возврат завершился в потолок: карточка ушла в ключевой чат");
+        cardSent.Task.Result.Should().Contain("продолжен 1 шаг", "карточка считает продолженный шаг");
 
         tm.GetById(stepId)!.ExecutorStopReason.Should().BeNull(
             "снятие паузы возвращает шаг в работу: пометка гасится");
         _factory.LlmAdapters.Adapters[chatId].SentMessages.Should().Contain(
             m => m.Contains("продолжи"), "реплика-продолжение уходит в чат исполнителя");
+    }
+
+    // R-HOLD-D (п.2): сбой фонового возврата не теряется молча — ручка его логирует
+    // (ContinueWith, TasksController.cs:949). Рассылка в ключевой чат отказывает — исключение
+    // доходит до ручки мимо позадачного catch. Прецедент логгера: UnhandledExceptionHandlerTests.cs:24.
+    // Мутация: убрать ContinueWith — записи нет, ожидание краснеет.
+    [Fact]
+    public async Task ClearHold_FailedResumeIsLoggedNotLost()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new { title = "шаг без продолжения", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString()!;
+        var keyChat = await CreatePersonalChatAsync(OwnerId);
+        _factory.Services.GetRequiredService<TaskManager>().SetExecutorLauncher(stepId, keyChat, null);
+        _factory.LlmAdapters.Adapters[keyChat].FailOnSend = true;
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var logged = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var controller = BuildController(RealGit(), log: new CapturingLogger(logged));
+
+        var result = controller.ClearFeatureHold(epicId);
+        result.Should().BeOfType<OkObjectResult>(); // ответ не ждёт фон: сбой виден только в логе
+
+        var winner = await Task.WhenAny(logged.Task, Task.Delay(5000));
+        ReferenceEquals(winner, logged.Task).Should().BeTrue(
+            "сбой возврата записан в лог в потолок, а не потерян молча");
+        logged.Task.Result.Should().Contain("Возврат прерванных паузой ходов",
+            "ContinueWith ручки логирует сбой продолжения");
+    }
+
+    // Записывающий логгер (прецедент: UnhandledExceptionHandlerTests.cs:24): первая запись
+    // Warning+ будит TCS — тест ждёт событие лога, а не время.
+    private sealed class CapturingLogger(TaskCompletionSource<string> firstRecord) : ILogger<TasksController>
+    {
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => null!;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (level >= LogLevel.Warning) firstRecord.TrySetResult(formatter(state, exception));
+        }
     }
 
     // W4-HOLD-H (контракт §1, :368): ответ DELETE hold — { resumed, expired }: задачи фичи,

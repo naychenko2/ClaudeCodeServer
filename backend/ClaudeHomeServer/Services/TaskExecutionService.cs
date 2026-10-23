@@ -1226,8 +1226,18 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                     cause: SessionManager.DeliveryCause.HoldResume);
                 var cleared = _tasks.ClearExecutorStopped(t.Id, ExecutorStopClassifier.FeatureHeldReason);
                 if (cleared is null) continue;
-                await _broadcaster.ToOwner(cleared.OwnerId!, new TaskChangedMessage("updated", cleared));
+                // R-HOLD-D (п.4): шаг возвращён в работу — он продолжен независимо от доставки
+                // уведомления: сбой рассылки теряет нотификацию, а не возврат.
                 resumed++;
+                try
+                {
+                    await _broadcaster.ToOwner(cleared.OwnerId!, new TaskChangedMessage("updated", cleared));
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning("Не доставлено уведомление владельцу о продолжении задачи {TaskId}: {Message}",
+                        t.Id, ex.Message);
+                }
             }
             catch (Exception ex)
             {
@@ -1255,13 +1265,25 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             return 0;
         }
         // R-HOLD-D (п.5): формулировка контракта §1, :249 — «пауза снята, продолжены N шагов»,
-        // с согласованием: 1 — «продолжен 1 шаг», 2–4 — «продолжены N шага», 5+ — «шагов».
-        var (verb, noun) = resumed == 1 ? ("продолжен", "шаг") : resumed <= 4 ? ("продолжены", "шага") : ("продолжены", "шагов");
+        // с русским согласованием числительных (то же правило, что pluralSteps на фронте).
+        var verb = resumed == 1 ? "продолжен" : "продолжены";
         await _sessions.SendMessageAsync(key,
-            $"Пауза фичи снята: {verb} {resumed} {noun}. " +
+            $"Пауза фичи снята: {verb} {resumed} {PluralSteps(resumed)}. " +
             "Доклады, накопленные за паузу, — в лентах этих шагов; разбери их.",
             [], auto: true, cause: SessionManager.DeliveryCause.Direct);
         return resumed;
+    }
+
+    // Склонение «шаг/шага/шагов» (R-HOLD-D п.3) — то же правило, что pluralSteps на фронте
+    // (FeaturePageHeader.tsx:457): решает последняя цифра, 11 — исключение. Прежняя inline-
+    // форма согласовала только до 4: «21 шагов» вместо «21 шаг». internal — для табличного
+    // теста (InternalsVisibleTo ClaudeHomeServer.Tests).
+    internal static string PluralSteps(int n)
+    {
+        int d = n % 10, h = n % 100;
+        if (d == 1 && h != 11) return "шаг";
+        if (d >= 2 && d <= 4 && (h < 10 || h >= 20)) return "шага";
+        return "шагов";
     }
 
     // Реплика-продолжение прерванного паузой хода (контракт §1 :236): текст дословно из

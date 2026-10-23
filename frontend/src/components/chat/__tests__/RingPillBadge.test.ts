@@ -7,7 +7,7 @@ import { act, createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
 // Перенос (F-4): запрос handoff идёт через offline.request — подменяем его до импорта
 // api (сети в тестах нет); переход в новый чат — через openChatById, его тоже подменяем,
 // чтобы не тянуть навигацию в тест шапки
@@ -133,6 +133,18 @@ const ariaOf = (html: string): string => /aria-label="([^"]*)"/.exec(html)?.[1] 
 const visibleLeftText = (html: string): string | null => />(\d+ мин|остыл)</.exec(html)?.[1] ?? null;
 
 describe('RingPillBadge: циферблат кэша промпта (F-1b)', () => {
+  // Дефект QA: обвязка циферблата (сам циферблат, строка в подсказке, секция поповера)
+  // живёт за фич-флагом prompt-cache. Тесты состояний — при включённом флаге; выключенный
+  // проверяется отдельным негативным тестом.
+  beforeEach(() => setAllFlags({ 'prompt-cache': true }));
+
+  it('флаг выкл — ни циферблата, ни строки про кэш, несмотря на данные ленты', () => {
+    setAllFlags({});
+    const html = renderPill([cacheItem()]);
+    expect(html).not.toContain('<svg width="14"');
+    expect(ariaOf(html)).not.toContain('Кэш');
+  });
+
   it('до первого result’а с данными кэша — ни циферблата, ни разделителя', () => {
     const html = renderPill([plainResult()]);
     expect(html).not.toContain('<svg width="14"');
@@ -268,7 +280,9 @@ describe('ChatHeaderBar: лента кэша без нового литерал�
 //  • убрать вывод handoffError → тест про 409 краснеет;
 //  • сделать тост успеха безусловным (до ok) → тест про openChatById=false краснеет (F-4r);
 //  • убрать маппинг 404 без тела → тест про «Чат не найден или удалён» краснеет (F-4r);
-//  • убрать проверку фич-флага у кнопки → красный негативный тест про флаг.
+//  • убрать проверку фич-флага у кнопки → красный негативный тест про флаг;
+//  • убрать promptCacheOn из гейта секции/циферблата → краснеют тесты «флаг выкл»
+//    (дефект QA: обвязка циферблата без флага).
 const fullEstimate: ContextEstimate = { window: 200000, pct: 92, fresh: false, level: 'danger' };
 
 function renderPillWith(est: ContextEstimate, items: ChatItem[]): string {
@@ -359,6 +373,31 @@ describe('RingPillBadge: кнопка «Перенести в новый чат�
     try {
       openPopover(container);
       expect(textNodes(container as never).join(' '), 'за выключенным флагом кнопки нет').not.toContain('Перенести в новый чат');
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
+  // Дефект QA: кнопка порогов и вся секция «Кэш промпта» оставались при выключенном
+  // флаге — секция поповера гейтуется целиком тем же promptCacheOn, что и циферблат.
+  it('флаг вкл — в поповере секция «Кэш промпта» с кнопкой порогов; флаг выкл — ни секции, ни кнопки', () => {
+    setAllFlags({ 'prompt-cache': true });
+    let { root, container } = mountPill();
+    try {
+      openPopover(container);
+      const text = textNodes(container as never).join(' ');
+      expect(text, 'при включённом флаге секция и кнопка на месте').toContain('Кэш промпта');
+      expect(text).toContain('Когда предупреждать об остывании');
+    } finally {
+      act(() => root.unmount());
+    }
+    setAllFlags({});
+    ({ root, container } = mountPill());
+    try {
+      openPopover(container);
+      const text = textNodes(container as never).join(' ');
+      expect(text, 'за выключенным флагом ни секции, ни кнопки порогов').not.toContain('Кэш промпта');
+      expect(text).not.toContain('Когда предупреждать об остывании');
     } finally {
       act(() => root.unmount());
     }

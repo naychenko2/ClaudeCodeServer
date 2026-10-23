@@ -580,8 +580,9 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
 function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCacheState; isWaiting: boolean; sessionId: string }) {
   const warn = useCacheWarnThresholds();
   const [showWarn, setShowWarn] = useState(false);
-  // Кнопка переноса — только за фич-флагом prompt-cache (F-4); остальное содержимое
-  // секции живёт по данным кэша, которые приходят ровно за включённым флагом
+  // Вся секция монтируется только за фич-флагом prompt-cache (гейт в RingPillBadge,
+  // дефект QA) — и кнопка переноса (F-4), и кнопка порогов за ним по построению.
+  // Флаг здесь читается ещё раз как страховка самой кнопки, а не как единственный гейт.
   const promptCacheOn = useFeature(FLAGS.promptCache);
   // «Перенести в новый чат» (F-4): тёплый путь — записку пишет сам чат (видимый ход до
   // 5 мин), холодный — быстрый раннер по транскрипту. Успех: переход в новый чат,
@@ -1056,8 +1057,10 @@ export function RingPillBadge(props: {
       pip: i < RING_WINDOWS ? { slot: (i + 1) as 1 | 2, level: s.level } : undefined,
     })));
   }
-  // Тон пилюли кэш не перекрашивает — у циферблата свой цвет, строка только в подсказке
-  if (cache) parts.push({ text: cacheStaticLabel(props.isWaiting), dial: true });
+  // Тон пилюли кэш не перекрашивает — у циферблата свой цвет, строка только в подсказке.
+  // Вся обвязка кэша — за фич-флагом prompt-cache (дефект QA): бэкенд присылает
+  // promptCache независимо от флага, при выключенном ничего из этого не показывается.
+  if (promptCacheOn && cache) parts.push({ text: cacheStaticLabel(props.isWaiting), dial: true });
   const title = (parts.length > 0 ? parts.map(p => p.text).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
   const tip = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs + 1 }}>
@@ -1106,8 +1109,8 @@ export function RingPillBadge(props: {
           )}
         </span>
         {/* Циферблат кэша — справа от лица, через разделитель; сам по себе не кнопка,
-            цель клика — вся пилюля (F-1b) */}
-        {cache && <CacheDial state={cache} isWaiting={props.isWaiting} isMobile={isMobile} warnThresholds={warn} />}
+            цель клика — вся пилюля (F-1b). Только за фич-флагом prompt-cache (дефект QA) */}
+        {promptCacheOn && cache && <CacheDial state={cache} isWaiting={props.isWaiting} isMobile={isMobile} warnThresholds={warn} />}
       </>}
       isMobile={isMobile}
       isCompact={isCompact}
@@ -1149,7 +1152,9 @@ export function RingPillBadge(props: {
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
-      {cache && (
+      {/* Секция «Кэш промпта» целиком — за фич-флагом prompt-cache (дефект QA): при
+          выключенном нет ни секции, ни кнопки порогов, хотя данные кэша приходят с бэка */}
+      {promptCacheOn && cache && (
         <div style={(lmActive || wfActive || showCtx || showCost) ? sectionDivider : undefined}>
           <PromptCacheSection state={cache} isWaiting={props.isWaiting} sessionId={props.sessionId ?? ''} />
         </div>

@@ -121,9 +121,10 @@ enable/disable, uninstall, запись/удаление секрета) — п�
 
 - **`GET /api/plugins/drafts`** — список черновиков владельца: активные (`_drafts`) **и**
   отклонённые (`_rejected`, шаг 4.3c). Массив сводок (`PluginDraftSummary`): по HTTP ключи
-  **camelCase** — MVC сериализует с `JsonNamingPolicy.CamelCase` (Program.cs), тип без
-  `[JsonPropertyName]`; прямой `JsonSerializer.Serialize` (не HTTP) даёт PascalCase — контракт
-  читают по фактическому HTTP-ответу. Формат фиксирует контрактный тест
+  **camelCase** — это дефолт ASP.NET Core MVC (`JsonSerializerDefaults.Web`), а не настройка
+  Program.cs: в `AddJsonOptions` там добавлен только `JsonStringEnumConverter(CamelCase)` для
+  перечислений. Тип без `[JsonPropertyName]`; прямой `JsonSerializer.Serialize` (не HTTP) даёт
+  PascalCase — контракт читают по фактическому HTTP-ответу. Формат фиксирует контрактный тест
   `List_HttpОтвет_CamelCaseСDisplayName` (живой TestServer): смена casing или потеря поля
   красит его.
   ```json

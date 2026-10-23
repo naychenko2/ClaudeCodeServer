@@ -306,11 +306,12 @@ public class PluginDraftsControllerTests : IDisposable
 
     // --- Контракт формата HTTP-ответа (находка ревью 82b4fbfc) ---
     // Дока вертикали — контракт для фронта: сводка /api/plugins/drafts уходит по HTTP
-    // camelCase (MVC сериализует с JsonNamingPolicy.CamelCase), а не PascalCase прямой
+    // camelCase — дефолт MVC (JsonSerializerDefaults.Web), а не PascalCase прямой
     // сериализации, как проверяют тесты выше. Этот тест идёт через живой TestServer и
     // краснеет при смене casing или потере displayName — ровно то, что поймает расхождение
     // docs↔код до того, как фронт напишет код по доке.
-    // Мутация: поменять в NotContain "Slug" на "slug" → красный (camelCase в ответе есть).
+    // Мутация: поменять NotContain("Slug") на Contain("Slug") → красный (PascalCase в
+    // HTTP-ответе отсутствует).
 
     [Fact]
     public void List_HttpОтвет_CamelCaseСDisplayName()
@@ -354,6 +355,23 @@ public class PluginDraftsControllerTests : IDisposable
             File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
                 JsonSerializer.Serialize(new { name = "pkg", version = "1.0.0" }));
 
+            // Черновик БЕЗ панелей: ветка displayName=null на уровне сервиса закрыта
+            // List_ЧерновикСПанелью_СводкаСодержитИмя; здесь она закрепляется по HTTP.
+            var plainRoot = store.DraftDir(owner, "plain");
+            Directory.CreateDirectory(Path.Combine(plainRoot, "skills", "a"));
+            File.WriteAllText(Path.Combine(plainRoot, "skills", "a", "SKILL.md"), "# Skill A\n");
+            var plainManifest = new
+            {
+                name = "plain",
+                version = "1.0.0",
+                contributes = new { skills = new[] { "skills/a" } },
+                permissions = new { requested = new[] { "notes:read" } },
+            };
+            File.WriteAllText(Path.Combine(plainRoot, "ccs-plugin.json"), JsonSerializer.Serialize(plainManifest));
+            Directory.CreateDirectory(Path.Combine(plainRoot, ".claude-plugin"));
+            File.WriteAllText(Path.Combine(plainRoot, ".claude-plugin", "plugin.json"),
+                JsonSerializer.Serialize(new { name = "plain", version = "1.0.0" }));
+
             var res = client.GetAsync("/api/plugins/drafts").GetAwaiter().GetResult();
             res.StatusCode.Should().Be(HttpStatusCode.OK, "флаги включены, подсистема активна");
             var json = res.Content.ReadAsStringAsync().GetAwaiter().GetResult();
@@ -361,13 +379,18 @@ public class PluginDraftsControllerTests : IDisposable
             json.Should().Contain("\"slug\":\"pkg\"", "ключи HTTP — camelCase");
             json.Should().Contain($"\"id\":\"{derivedId}\"", "id выведен сервером (raw manifest.id не читается)");
             json.Should().Contain("\"displayName\":\"Погода\"", "D2: человекочитаемое имя = title первой панели");
+            json.Should().Contain("\"displayName\":null", "черновик без панелей — null в HTTP, а не пустая строка");
             json.Should().Contain("\"version\":\"1.0.0\"", "версия");
+            json.Should().Contain("\"updatedAt\":", "время изменения — mtime файлов черновика (пример в доке)");
             json.Should().Contain("\"problems\":0", "валидный черновик — 0 проблем");
             json.Should().Contain("\"installedSameVersion\":false", "ещё не установлена такая версия");
             json.Should().Contain("\"installedVersion\":null", "плагин не установлен → null (QA-фикс R)");
             json.Should().Contain("\"rejected\":false", "активный черновик");
             json.Should().Contain("\"expiresAt\":null", "активный — без срока");
             json.Should().NotContain("\"Slug\":", "PascalCase в HTTP-ответе — контракт docs↔код сломан");
+            json.Should().NotContain("\"DisplayName\":", "имя — только camelCase displayName");
+            json.Should().NotContain("\"Version\":", "версия — только camelCase version");
+            json.Should().NotContain("\"Problems\":", "число проблем — только camelCase problems");
         }
         finally
         {

@@ -388,8 +388,8 @@ async function scenarioErrors(browser, base) {
   });
 
   // Правка 23.10 и C5-д2: разные коды отказа хоста — разные тексты. Таймаут и
-  // upstream — настоящий сетевой обрыв на бою: «Сервис погоды не ответил».
-  for (const failCode of ['timeout', 'upstream']) {
+  // upstream и dns_failed (отказ DNS у сервера) — настоящий сетевой обрыв на бою: «Сервис погоды не ответил».
+  for (const failCode of ['timeout', 'upstream', 'dns_failed']) {
     await scenario('4d. ' + failCode + ' — «Сервис погоды не ответил», не «нет связи»', async (checks) => {
       const { context, page, frame } = await openEmulator(browser, base, {
         grant: GRANT_ALL,

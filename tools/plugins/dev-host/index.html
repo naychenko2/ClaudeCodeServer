@@ -59,6 +59,7 @@
         <option value="">нет</option>
         <option value="upstream">upstream</option>
         <option value="timeout">timeout</option>
+        <option value="dns_failed">dns_failed</option>
         <option value="limit">limit</option>
         <option value="unavailable">unavailable</option>
         <option value="not_found">not_found</option>
@@ -219,7 +220,7 @@ const cfg = {
   // неизвестное право («storageX» ≠ «storage») — так проверяется «denied» по
   // хранилищу, когда панель право видит, а хост его не даёт.
   grant: listParam('grant').map(p => p.startsWith('storage') ? p : 'net:' + p.replace(/^net:/, '').toLowerCase()),
-  fail: ['upstream', 'timeout', 'limit', 'unavailable', 'not_found', 'invalid', 'status400'].includes(params.get('fail')) ? params.get('fail') : '',
+  fail: ['upstream', 'timeout', 'dns_failed', 'limit', 'unavailable', 'not_found', 'invalid', 'status400'].includes(params.get('fail')) ? params.get('fail') : '',
   delay: Math.max(0, parseInt(params.get('delay') || '0', 10) || 0),
   // fixtures= — пути к файлам-фикстурам внутри репозитория; основной режим — фикстуры.
   // Необязательный «|match» — подстрока URL запроса: фикстура привязана к запросу,
@@ -485,6 +486,7 @@ async function handleCall(id, op, args) {
       if (!res) {
         if (cfg.fail === 'upstream') res = { ok: false, error: { code: 'upstream', message: UPSTREAM_TEXT } };
         else if (cfg.fail === 'timeout') res = { ok: false, error: { code: 'timeout', message: 'Таймаут запроса' } };
+        else if (cfg.fail === 'dns_failed') res = { ok: false, error: { code: 'dns_failed', message: 'DNS: имя не разрешилось' } };
         else if (cfg.fail === 'limit') res = { ok: false, error: { code: 'limit', message: 'Превышено число запросов на плагин в минуту' } };
         else if (cfg.fail === 'unavailable') res = { ok: false, error: { code: 'unavailable', message: 'Плагин выключен' } };
         else if (cfg.fail === 'not_found') res = { ok: false, error: { code: 'not_found', message: 'Не найдено' } };

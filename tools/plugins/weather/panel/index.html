@@ -782,7 +782,7 @@
         if (err && err.code === 'denied') renderProblem('denied');
         else if (err && err.code === 'limit') renderProblem('limit');
         else if (navigator.onLine === false) renderProblem('offline');
-        else if (err && (err.code === 'timeout' || err.code === 'upstream')) renderProblem('upstream');
+        else if (err && (err.code === 'timeout' || err.code === 'upstream' || err.code === 'dns_failed')) renderProblem('upstream');
         else if (err && err.code === 'unavailable') renderProblem('unavailable');
         else renderProblem('failed');
       });

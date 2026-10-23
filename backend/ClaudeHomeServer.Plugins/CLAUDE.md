@@ -120,20 +120,27 @@ enable/disable, uninstall, запись/удаление секрета) — п�
 собирает агент через MCP, принимает/сравнивает человек), чужой/несуществующий черновик → 404.
 
 - **`GET /api/plugins/drafts`** — список черновиков владельца: активные (`_drafts`) **и**
-  отклонённые (`_rejected`, шаг 4.3c). Массив сводок (`PluginDraftSummary`; ключи PascalCase —
-  тип без `[JsonPropertyName]`):
+  отклонённые (`_rejected`, шаг 4.3c). Массив сводок (`PluginDraftSummary`): по HTTP ключи
+  **camelCase** — MVC сериализует с `JsonNamingPolicy.CamelCase` (Program.cs), тип без
+  `[JsonPropertyName]`; прямой `JsonSerializer.Serialize` (не HTTP) даёт PascalCase — контракт
+  читают по фактическому HTTP-ответу. Формат фиксирует контрактный тест
+  `List_HttpОтвет_CamelCaseСDisplayName` (живой TestServer): смена casing или потеря поля
+  красит его.
   ```json
-  [{ "Slug": "pkg", "Id": "local-a/pkg", "Version": "1.0.0",
-     "UpdatedAt": "2026-10-19T05:24:56Z", "Problems": 0, "InstalledSameVersion": false,
-     "InstalledVersion": "0.9.0", "Rejected": false, "ExpiresAt": null }]
+  [{ "slug": "pkg", "id": "local-a/pkg", "displayName": "Погода", "version": "1.0.0",
+     "updatedAt": "2026-10-19T05:24:56Z", "problems": 0, "installedSameVersion": false,
+     "installedVersion": "0.9.0", "rejected": false, "expiresAt": null }]
   ```
-  `Problems` — число проблем последней проверки (валидатор пакета, тот же, что при установке);
-  `InstalledSameVersion` — есть ли запись `installed.json` с тем же `Id`+`Version`;
-  `InstalledVersion` — версия УСТАНОВЛЕННОГО плагина с тем же `Id` (QA-фикс R: карточка
+  `displayName` — человекочитаемое имя пакета: `title` первой панели манифеста
+  (`PluginDisplayName.Of`, единая точка вывода имени на бэке); `null` — панелей нет или title
+  пуст (фронт остаётся на fallback humanizeId).
+  `problems` — число проблем последней проверки (валидатор пакета, тот же, что при установке);
+  `installedSameVersion` — есть ли запись `installed.json` с тем же `id`+`version`;
+  `installedVersion` — версия УСТАНОВЛЕННОГО плагина с тем же `id` (QA-фикс R: карточка
   показывает «установлена версия N»/«обновление»); `null`, если плагин не установлен.
-  `Id` в обоих полях — выведенный сервером (`PluginIdentity.Resolve`), не сырой `manifest.Id`.
-  `Rejected` — `true` у отклонённых черновиков (`_rejected/{slug}`); `ExpiresAt` — дата, когда
-  отклонённый исчезнет (`rejectedAt + 30 дней`, UTC); у активных `Rejected: false`, `ExpiresAt: null`.
+  `id` в обоих полях — выведенный сервером (`PluginIdentity.Resolve`), не сырой `manifest.id`.
+  `rejected` — `true` у отклонённых черновиков (`_rejected/{slug}`); `expiresAt` — дата, когда
+  отклонённый исчезнет (`rejectedAt + 30 дней`, UTC); у активных `rejected: false`, `expiresAt: null`.
   Просроченные отклонённые (> 30 дней) удаляются лениво при этом обращении, без фонового сервиса.
 
 - **`GET /api/plugins/drafts/{slug}/preview`** — предпросмотр; ответ = `PluginDraftService.Preview`
@@ -230,9 +237,10 @@ enable/disable, uninstall, запись/удаление секрета) — п�
   Фронт по `isUpdate` открывает диалог согласия в режиме `modify` (новые права НЕ отмечены,
   выданные остаются отмеченными) при обновлении и в режиме `install` (все запрошенные отмечены)
   при первой установке — иначе новое право при обновлении приходило бы уже отмеченным.
-  Ответ (анонимный объект, ключи camelCase):
+  Ответ (анонимный объект, ключи camelCase; `displayName` — человекочитаемое имя пакета,
+  title первой панели через `PluginDisplayName.Of`, `null` — панелей нет):
   ```json
-  { "id": "local-a/pkg", "version": "2.0.0", "sha256": "…", "source": "draft:pkg",
+  { "id": "local-a/pkg", "displayName": "Погода", "version": "2.0.0", "sha256": "…", "source": "draft:pkg",
     "enabled": true, "requested": ["notes:read", "net:api.linear.app"],
     "granted": ["notes:read"], "consentRequired": true, "newPermissions": ["net:api.linear.app"],
     "inheritedPermissions": ["notes:read"],

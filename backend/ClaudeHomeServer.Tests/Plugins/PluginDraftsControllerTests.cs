@@ -1,13 +1,18 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Plugins.Controllers;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Plugins;
 
@@ -17,6 +22,11 @@ namespace ClaudeHomeServer.Tests.Plugins;
 // Гейты: Subsystems:plugins:Enabled (SubsystemGate) → 503; флаг plugins-mvp → 403;
 // флаг plugins-build-yourself → 403. На ВСЕХ ручках: сервисный JWT → 403, чужой
 // владелец → 404.
+//
+// Формат HTTP-ответа — отдельный контракт (находка ревью 82b4fbfc): unit-тесты ниже
+// проверяют прямую JsonSerializer.Serialize (PascalCase), а по HTTP MVC отдаёт camelCase.
+// Контрактный тест List_HttpОтвет_CamelCaseСDisplayName идёт через живой TestServer и
+// ловит расхождение docs↔код (casing, потеря displayName).
 //
 // Accept: установка по метке draft:<slug> (PluginInstaller — единственный арбитр).
 //   - первая установка → granted = [];
@@ -292,6 +302,77 @@ public class PluginDraftsControllerTests : IDisposable
         json.Should().Contain("\"InstalledSameVersion\":true", "после accept — установлена такая же версия");
         json.Should().Contain("\"InstalledVersion\":\"1.0.0\"", "после accept — версия установленного плагина (QA-фикс R)");
         _ = source;
+    }
+
+    // --- Контракт формата HTTP-ответа (находка ревью 82b4fbfc) ---
+    // Дока вертикали — контракт для фронта: сводка /api/plugins/drafts уходит по HTTP
+    // camelCase (MVC сериализует с JsonNamingPolicy.CamelCase), а не PascalCase прямой
+    // сериализации, как проверяют тесты выше. Этот тест идёт через живой TestServer и
+    // краснеет при смене casing или потере displayName — ровно то, что поймает расхождение
+    // docs↔код до того, как фронт напишет код по доке.
+    // Мутация: поменять в NotContain "Slug" на "slug" → красный (camelCase в ответе есть).
+
+    [Fact]
+    public void List_HttpОтвет_CamelCaseСDisplayName()
+    {
+        var factory = new TestWebApplicationFactory();
+        try
+        {
+            var client = factory.CreateAuthenticatedClient();
+            // Флаги plugins-mvp / plugins-build-yourself: дефолт off — включаем через боевой API
+            client.PutAsJsonAsync("/api/feature-flags/plugins-mvp", new { enabled = true })
+                .GetAwaiter().GetResult().EnsureSuccessStatusCode();
+            client.PutAsJsonAsync("/api/feature-flags/plugins-build-yourself", new { enabled = true })
+                .GetAwaiter().GetResult().EnsureSuccessStatusCode();
+
+            var owner = factory.Services.GetRequiredService<UserStore>()
+                .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+            var store = factory.Services.GetRequiredService<PluginStore>();
+
+            // Черновик с панелью: title первой панели — человекочитаемое имя (D2).
+            // id в манифесте НЕ задаём: его выводит сервер (PluginIdentity.Resolve),
+            // явный id обязан совпасть с выведенным — иначе bad-id.
+            var root = store.DraftDir(owner, "pkg");
+            Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
+            File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+            Directory.CreateDirectory(Path.Combine(root, "panel"));
+            File.WriteAllText(Path.Combine(root, "panel", "index.html"), "<html><body>Погода</body></html>");
+            var derivedId = PluginIdentity.DeriveId(owner, "pkg");
+            var manifest = new
+            {
+                name = "pkg",
+                version = "1.0.0",
+                contributes = new
+                {
+                    skills = new[] { "skills/a" },
+                    panels = new[] { new { id = "main", slot = "sidebar", entry = "panel/index.html", title = "Погода" } },
+                },
+                permissions = new { requested = new[] { "notes:read" } },
+            };
+            File.WriteAllText(Path.Combine(root, "ccs-plugin.json"), JsonSerializer.Serialize(manifest));
+            Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+            File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+                JsonSerializer.Serialize(new { name = "pkg", version = "1.0.0" }));
+
+            var res = client.GetAsync("/api/plugins/drafts").GetAwaiter().GetResult();
+            res.StatusCode.Should().Be(HttpStatusCode.OK, "флаги включены, подсистема активна");
+            var json = res.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+            json.Should().Contain("\"slug\":\"pkg\"", "ключи HTTP — camelCase");
+            json.Should().Contain($"\"id\":\"{derivedId}\"", "id выведен сервером (raw manifest.id не читается)");
+            json.Should().Contain("\"displayName\":\"Погода\"", "D2: человекочитаемое имя = title первой панели");
+            json.Should().Contain("\"version\":\"1.0.0\"", "версия");
+            json.Should().Contain("\"problems\":0", "валидный черновик — 0 проблем");
+            json.Should().Contain("\"installedSameVersion\":false", "ещё не установлена такая версия");
+            json.Should().Contain("\"installedVersion\":null", "плагин не установлен → null (QA-фикс R)");
+            json.Should().Contain("\"rejected\":false", "активный черновик");
+            json.Should().Contain("\"expiresAt\":null", "активный — без срока");
+            json.Should().NotContain("\"Slug\":", "PascalCase в HTTP-ответе — контракт docs↔код сломан");
+        }
+        finally
+        {
+            factory.Dispose();
+        }
     }
 
     // --- Preview: тот же PluginDraftService.Preview, что у draft_preview ---

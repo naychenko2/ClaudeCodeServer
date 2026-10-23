@@ -11,6 +11,7 @@ using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -232,6 +233,9 @@ public class TaskExecutionServiceHoldTests : IDisposable
 
         _tasks.SetHold(epic.Id, "manual");
         _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        // Реальный порядок ручки (TasksController.ClearFeatureHold): сначала ClearHold,
+        // затем фоновое продолжение — W4-HOLD-N добавил в Resume проверку текущего Hold.
+        _tasks.ClearHold(epic.Id);
 
         var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
 
@@ -278,6 +282,9 @@ public class TaskExecutionServiceHoldTests : IDisposable
 
         _tasks.SetHold(epic.Id, "manual");
         _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        // Реальный порядок ручки (TasksController.ClearFeatureHold): сначала ClearHold,
+        // затем фоновое продолжение — W4-HOLD-N добавил в Resume проверку текущего Hold.
+        _tasks.ClearHold(epic.Id);
 
         var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
 
@@ -296,8 +303,11 @@ public class TaskExecutionServiceHoldTests : IDisposable
             Times.Once(), "счётчик карточки — только доставленные");
     }
 
-    // Чат «в простое»: мок-процесс не присылает exited, поэтому статус idle ставится напрямую —
-    // ровно то состояние, в котором чат оказывается после реального конца прерванного хода.
+    // Чат «после конца хода»: в SessionStatus нет Idle — реальное состояние завершённого
+    // чата — Active (W4-HOLD-N, хвост R-HOLD-J: прежний комментарий говорил «idle», кода
+    // с таким статусом нет). Мок-процесс не присылает exited, поэтому статус ставится
+    // напрямую — ровно то состояние, в котором чат оказывается после реального конца
+    // прерванного хода.
     private void SetIdle(string sessionId)
     {
         var field = typeof(SessionManager).GetField("_sessions",
@@ -725,5 +735,145 @@ public class TaskExecutionServiceHoldTests : IDisposable
             .WithMessage("*Фича на паузе*", "повторная проверка гейта после claim'а");
         LiveSessionCount().Should().Be(0, "повторный гейт до CreateAsync: чат задачи не создан");
         step.ClaudeStartedAt.Should().BeNull("отказ не оставляет следов запуска");
+    }
+
+    // ─── W4-HOLD-N: хвосты R-HOLD-D2 / R-HOLD-J ───────────────────────────────────────────
+
+    // Лог-сборник: cause доставки наблюдаем только в строке «Доставка хода» — иначе она
+    // нигде не проявляется.
+    private sealed class CapturingLogger(List<string> sink) : ILogger<SessionManager>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null!;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => sink.Add(formatter(state, exception));
+    }
+
+    // W4-HOLD-N (хвост R-HOLD-D2, критерий c1): карточка ключевому чату уходит с причиной
+    // HoldResume, а не Direct: это продолжение цикла, прерванного паузой. Мутация: вернуть
+    // cause: Direct в DeliverKeyChatCardAsync —Contain краснеет (в логе cause=Direct).
+    [Fact]
+    public async Task ClearHold_KeyChatCard_CauseIsHoldResume()
+    {
+        var user = _userStore.Add("hold-cause", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        SetRunningTurn(keyChat.Id);
+
+        var logLines = new List<string>();
+        typeof(SessionManager).GetField("_log", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(_sessions, new CapturingLogger(logLines));
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _tasks.ClearHold(epic.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+        resumed.Should().Be(0, "ничего не прерывалось — продолжать нечего");
+        logLines.Should().Contain(
+            l => l.Contains("Доставка хода") && l.Contains("cause=HoldResume") && l.Contains("Пауза снята"),
+            "карточка снятой паузы атрибутируется как продолжение паузы, а не прямая отправка");
+    }
+
+    // W4-HOLD-N (хвост R-HOLD-J п.1, критерий c3): гонка фонового продолжения — пауза,
+    // поставленная сразу после снятия, не должна пустить шаги: текущий Hold проверяется
+    // в самом ResumeFeatureTurnsAfterHold. Мутация: убрать guard по epic.Hold — продолжение
+    // уйдёт в чат и карточка уйдёт в ключевой: оба Verify краснеют.
+    [Fact]
+    public async Task Hold_NewPauseRightAfterClear_DoesNotResume()
+    {
+        var user = _userStore.Add("hold-race-resume", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec",
+            taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        var execAdapter = SetRunningTurn(chat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        _tasks.ClearHold(epic.Id);
+        // Новая пауза встала сразу после снятия — фоновое продолжение не должно пройти.
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+        resumed.Should().Be(0, "новая пауза держится: продолжение не отправляется");
+        execAdapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
+            "шаг не продолжается, пока держится новая пауза");
+        keyAdapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()), Times.Never(),
+            "карточка «пауза снята» не уходит фиче под новой паузой");
+    }
+
+    // W4-HOLD-N (хвост R-HOLD-J п.3, критерий c2): возвращается сохранённый при заморозке
+    // срок самого чата, а не TTL задачи: при TTL задачи null временный чат не становится
+    // вечным. Мутация: вернуть ветку «if (t.ExecutionExpiresAfterMinutes is { } ttl)
+    // SetExpiry» — при отсутствии TTL задачи срок не вернулся бы: последний абзац краснеет.
+    [Fact]
+    public async Task ClearHold_RestoresChatOwnExpiry_NotTaskTtl()
+    {
+        var user = _userStore.Add("hold-own-ttl", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        // Отрицательное — бессрочно (TaskManager.cs:381): задача без TTL, срок только у чата.
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг без TTL", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: -1));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec",
+            taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(chat.Id, 10); // срок самого чата — задачи без срока
+        SetRunningTurn(chat.Id);
+
+        _tasks.SetHold(epic.Id, "manual");
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(chat.Id);
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(60));
+        _sessions.GetById(chat.Id).Should().NotBeNull("на паузе чат не истекает");
+
+        _tasks.ClearHold(epic.Id);
+        await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10,
+            "срок самого чата возвращается, хотя у задачи срока нет");
+        SetIdle(chat.Id);
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(60));
+        _sessions.GetById(chat.Id).Should().BeNull("возвращённый срок течёт от снятия: уборка сносит чат");
+    }
+
+    // W4-HOLD-N (хвост R-HOLD-D2, критерий c2): страховка необратимой заморозки — при
+    // удалении эпика на паузе его шаги больше никогда не «сняются», и их чаты остались бы
+    // вечными. Ручка удаления зовёт RestoreFrozenChatsAfterFeatureDelete до Delete; здесь —
+    // сама сервисная метода. Мутация: убрать RestoreFrozenExpiry в теле метода — краснеет
+    // абзац про срок (он не вернулся), последний — чат пережил бы уборку.
+    [Fact]
+    public async Task FeatureDelete_RestoresFrozenChatExpiry()
+    {
+        var user = _userStore.Add("hold-delete", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: 10));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec",
+            taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(chat.Id, 10); // срок, который поставил запуск исполнителя
+        SetRunningTurn(chat.Id);
+
+        _tasks.SetHold(epic.Id, "manual");
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(chat.Id);
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().BeNull("пауза заморозила срок");
+
+        _tasks.Delete(epic.Id);
+        var restored = _sut.RestoreFrozenChatsAfterFeatureDelete(epic.Id, user.Id);
+        restored.Should().Be(1, "эпик удалён на паузе: чату шага возвращён его срок");
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10,
+            "замороженный срок восстановлен — чат больше не вечный");
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(60));
+        _sessions.GetById(chat.Id).Should().BeNull("возвращённый срок течёт: уборка сносит чат");
     }
 }

@@ -1169,8 +1169,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             _sessions.Interrupt(t.LinkedSessionId);
             // W4-HOLD-J (контракт §1 :266): на паузе активности в чате нет, и не снятый срок
             // снёс бы контекст исполнителя раньше, чем пауза снимется. Заморозка: срок
-            // снимается, при снятии паузы SetExpiry ставит его заново с якорем «сейчас».
-            _sessions.SetExpiry(t.LinkedSessionId, null);
+            // снимается и сохраняется на записи чата — при снятии паузы возвращается тот же
+            // срок самого чата с якорем «сейчас» (хвост N: не срок задачи).
+            _sessions.FreezeExpiryForHold(t.LinkedSessionId);
             stopped++;
         }
         return stopped;
@@ -1194,6 +1195,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     {
         var epic = _tasks.GetById(featureId);
         if (epic is null) return 0;
+        // W4-HOLD-N (хвост R-HOLD-J п.1): продолжение — фон, и за время его пути пауза могла
+        // встать заново. Текущий Hold проверяется здесь: пока новая пауза держится, шаги не
+        // продолжаются и карточка «пауза снята» не уходит — иначе она противоречит состоянию.
+        if (epic.Hold is not null) return 0;
         var featureTasks = _tasks.GetByOwner(ownerId).Where(t => t.FeatureId == featureId).ToList();
         // Та же цепочка, что у прерывания: сессия задачи в ключевом чате не прерывалась,
         // и продолжение ей не шлётся.
@@ -1238,8 +1243,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 // W4-HOLD-J (контракт §1 :267, R-HOLD-J п.1): возвращаем замороженный паузой
                 // срок только после успешной доставки продолжения: при сбое хода чат остаётся
                 // замороженным (пауза держится — пометка на месте), повторное снятие его
-                // подхватит. SetExpiry сдвигает якорь отсчёта на «сейчас».
-                if (t.ExecutionExpiresAfterMinutes is { } ttl) _sessions.SetExpiry(t.LinkedSessionId, ttl);
+                // подхватит. Хвост R-HOLD-J п.3: возвращается сохранённый при заморозке срок
+                // самого чата, а не TTL задачи: при TTL задачи null временный чат не становился
+                // бы вечным. Якорь отсчёта — «сейчас» (SetExpiry внутри RestoreFrozenExpiry).
+                _sessions.RestoreFrozenExpiry(t.LinkedSessionId);
                 var cleared = _tasks.ClearExecutorStopped(t.Id, ExecutorStopClassifier.FeatureHeldReason);
                 if (cleared is null) continue;
                 // R-HOLD-D (п.4): шаг возвращён в работу — он продолжен независимо от доставки
@@ -1311,15 +1318,35 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         return resumed;
     }
 
+    // W4-HOLD-N (хвост R-HOLD-D2): страховка необратимой заморозки. Эпик фичи, удалённый
+    // на паузе, больше не может ни «сняться», ни «встать»: путь возврата срока (выше) для
+    // его шагов не выполнится никогда, и чат исполнителя останется «вечным» навсегда.
+    // Ручка удаления эпика зовёт это до удаления: замороженные сроки шагов с пометкой
+    // feature_held возвращаются их чатам. Возвращает число восстановленных чатов.
+    public int RestoreFrozenChatsAfterFeatureDelete(string featureId, string ownerId)
+    {
+        var restored = 0;
+        foreach (var t in _tasks.GetByOwner(ownerId))
+        {
+            if (t.FeatureId != featureId) continue;
+            if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
+            if (t.LinkedSessionId is null) continue;
+            if (_sessions.RestoreFrozenExpiry(t.LinkedSessionId) is not null) restored++;
+        }
+        return restored;
+    }
+
     // R-HOLD-K (хвост): карточка в ключевой чат — фоновая нотификация: сбой доставки
     // логируется сервисом и не всплывает до ручки — продолжение уже завершено, и отказ
     // уведомления не должен читаться как отказ возврата.
+    // W4-HOLD-N (хвост R-HOLD-D2): причина — HoldResume, не Direct: это продолжение цикла,
+    // прерванного паузой, и лог «Доставка хода» должен pinpoint'ить её именно так.
     private async Task DeliverKeyChatCardAsync(string sessionId, string text)
     {
         try
         {
             await _sessions.SendMessageAsync(sessionId, text, [], auto: true,
-                cause: SessionManager.DeliveryCause.Direct);
+                cause: SessionManager.DeliveryCause.HoldResume);
         }
         catch (Exception ex)
         {

@@ -2430,6 +2430,31 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return entry.Info;
     }
 
+    // Заморозить срок чата паузой фичи (W4-HOLD-E/J, хвост N): снимаемое значение сохраняется
+    // в HoldFrozenExpiresAfterMinutes — возврат после снятия паузы восстанавливает срок самого
+    // чата, а не задачи (R-HOLD-J п.3). Идемпотентна: повторная пауза той же записи не трогает
+    // уже снятый срок. UpdatedAt, как в SetExpiry, не двигается: настройка хранения — не активность.
+    public Session? FreezeExpiryForHold(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.HoldFrozenExpiresAfterMinutes = entry.Info.ExpiresAfterMinutes;
+        entry.Info.ExpiresAfterMinutes = null;
+        entry.Info.ExpiryAnchor = null;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Вернуть замороженный срок: якорь — «сейчас» (как SetExpiry), сохранённое значение гасится.
+    // Нечего возвращать (чат был вечным или не замораживался) — состояние не меняется.
+    public Session? RestoreFrozenExpiry(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (entry.Info.HoldFrozenExpiresAfterMinutes is null) return entry.Info;
+        var frozen = entry.Info.HoldFrozenExpiresAfterMinutes;
+        entry.Info.HoldFrozenExpiresAfterMinutes = null;
+        return SetExpiry(sessionId, frozen);
+    }
+
     // Запись модуля в ленту вне хода (ADR-019 §2, шов IChatFeed): история + живая пара
     // module_record. Активность, как тихие строки v2: UpdatedAt двигается, чат выходит из
     // архива. Timestamp ставит сервер, если модуль его не задал. false — чата нет.

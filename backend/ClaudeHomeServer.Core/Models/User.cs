@@ -26,6 +26,10 @@ public class User
     public string? ModelTierWeak { get; set; }
     // Per-user пороги индикатора заполнения контекста (проценты); null — дефолты фронта
     public ContextThresholds? ContextThresholds { get; set; }
+    // Per-user порог «кэш промпта скоро остынет» (минуты остатка до остывания); null —
+    // дефолты фронта (5 мин у часового, пятая доля срока у 5-минутного, F-1a).
+    // Nullable: старые записи users.json читаются штатно, формат стора не меняется
+    public CacheWarnThresholds? CacheWarnThresholds { get; set; }
     // Глобальный (per-user) промпт AI-генерации сообщения коммита; null/пусто — дефолт.
     // Проект может переопределить своим Project.CommitPromptOverride.
     public string? GitCommitPrompt { get; set; }
@@ -103,3 +107,19 @@ public static class ExecutionEnvironments
 
 // Пороги подсветки индикатора контекста: warn — янтарь, danger — красный
 public record ContextThresholds(int WarnPct, int DangerPct);
+
+// Порог «остывает» циферблата кэша промпта: за сколько минут остатка кэш становится
+// «остывающим» — отдельно для часового и 5-минутного срока. Дефолты живут на фронте
+// (EXPIRING_THRESHOLD_MS в frontend/src/lib/promptCache.ts), здесь — только границы
+// валидации. Порог обязан быть строго меньше срока: при ≥ TTL кэш был бы «остывающим»
+// с момента записи.
+public record CacheWarnThresholds(int Warn1hMin, int Warn5mMin)
+{
+    public const int MinMin = 1;
+    public const int Max1hMin = 59;
+    public const int Max5mMin = 4;
+
+    // Метод, а не свойство: свойство уехало бы в users.json и ответ /me
+    public static bool InRange(int warn1hMin, int warn5mMin) =>
+        warn1hMin is >= MinMin and <= Max1hMin && warn5mMin is >= MinMin and <= Max5mMin;
+}

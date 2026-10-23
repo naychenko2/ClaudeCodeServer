@@ -642,6 +642,23 @@ public class UserStore : IForgejoAccountStore, IUserStore
     }
 
     /// <summary>
+    /// Устанавливает per-user порог «кэш скоро остынет» (null — сброс к дефолтам фронта).
+    /// Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetCacheWarnThresholds(string id, CacheWarnThresholds? thresholds)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+
+            user.CacheWarnThresholds = thresholds;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Личный порог автоправила архивации чатов (флаг chat-auto-archive; null — сброс:
     /// правило для чатов вне проектов и наследуемый дефолт проектов не настроено).
     /// </summary>

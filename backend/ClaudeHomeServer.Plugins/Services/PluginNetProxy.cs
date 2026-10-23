@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
@@ -94,59 +93,17 @@ public class PluginNetProxy : IPluginCapability
     }
 
     /// <summary>
-    /// Боевой транспорт (ADR-031 §3.4, rework 12): <c>SocketsHttpHandler</c> без прокси
-    /// (egress-прокси релеит на приватные адреса, см. ADR-005) и без авто-редиректов
-    /// (редиректы разбирает сам прокси, с повторной SSRF-проверкой на каждом шаге).
-    /// <c>ConnectCallback</c> закрепляет адрес: резолвит хост прямо перед TCP-connect и
-    /// подключается к первому публичному адресу — TOCTOU-окно между предварительной
-    /// проверкой и реальным соединением (DNS rebinding) закрыто, а имя хоста в URI
-    /// остаётся исходным (заголовок Host и TLS SNI не ломаются, в отличие от подмены
-    /// URI на голый IP).
-    /// <paramref name="dnsResolver"/> — резолв хоста для <c>ConnectCallback</c>: в бою
-    /// null (системный Dns), в тестах — фейк, чтобы детерминировать DNS rebinding.
+    /// Боевой транспорт (ADR-031 §3.4): общий SSRF-примитив <see cref="SsrfSafeHandler"/> (без прокси —
+    /// egress-прокси релеит на приватные адреса, ADR-005; без авто-редиректов — их разбирает сам
+    /// прокси с повторной проверкой на каждом шаге; HTTP/3 отказывается — QUIC идёт мимо
+    /// <c>ConnectCallback</c>). Адрес закрепляется прямо перед TCP-connect (TOCTOU/DNS rebinding),
+    /// имя хоста в URI остаётся исходным (Host и TLS SNI не ломаются).
+    /// <paramref name="dnsResolver"/> — резолв для connect: в бою null (системный Dns), в тестах —
+    /// фейк, чтобы детерминировать DNS rebinding.
     /// </summary>
-    public static SocketsHttpHandler CreateHandler(
-        Func<string, CancellationToken, Task<IPAddress[]>>? dnsResolver = null) => new()
-    {
-        AllowAutoRedirect = false,
-        UseCookies = false,
-        UseProxy = false,
-        ConnectTimeout = TimeSpan.FromSeconds(10),
-        ConnectCallback = (ctx, ct) => ConnectAsync(ctx, ct, dnsResolver),
-    };
-
-    private static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken ct,
-        Func<string, CancellationToken, Task<IPAddress[]>>? dnsResolver)
-    {
-        var address = await ResolvePublicAsync(context.DnsEndPoint.Host, ct, dnsResolver)
-            ?? throw new HttpRequestException($"Адрес {context.DnsEndPoint.Host} не публичный — соединение запрещено");
-        var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-        try
-        {
-            await socket.ConnectAsync(new IPEndPoint(address, context.DnsEndPoint.Port), ct);
-            return new NetworkStream(socket, ownsSocket: true);
-        }
-        catch
-        {
-            socket.Dispose();
-            throw;
-        }
-    }
-
-    /// <summary>Адрес для соединения, если ВСЕ адреса хоста публичные; иначе null (fail-closed, как у SsrfGuard).</summary>
-    private static async Task<IPAddress?> ResolvePublicAsync(string host, CancellationToken ct,
-        Func<string, CancellationToken, Task<IPAddress[]>>? dnsResolver)
-    {
-        IPAddress[] addresses;
-        if (IPAddress.TryParse(host, out var literal)) addresses = [literal];
-        else
-        {
-            var resolver = dnsResolver ?? ((h, c) => Dns.GetHostAddressesAsync(h, c));
-            try { addresses = await resolver(host, ct); }
-            catch (SocketException) { return null; }
-        }
-        return addresses.Length > 0 && addresses.All(SsrfGuard.IsPublic) ? addresses[0] : null;
-    }
+    public static HttpMessageHandler CreateHandler(
+        Func<string, CancellationToken, Task<IPAddress[]>>? dnsResolver = null) =>
+        SsrfSafeHandler.Create(new SsrfSafeHandlerOptions { Resolve = dnsResolver });
 
     /// <inheritdoc/>
     public async Task<PluginCapabilityResult> HandleAsync(
@@ -288,11 +245,16 @@ public class PluginNetProxy : IPluginCapability
             {
                 return Err("timeout", "Таймаут запроса");
             }
+            catch (NotSupportedException ex)
+            {
+                // HTTP/3 запрещён примитивом (SsrfSafeHttpHandler): QUIC идёт мимо проверки адреса
+                return Err("upstream", ex.Message);
+            }
             catch (HttpRequestException ex)
             {
-                // ex.Message — детальный: «Адрес X не публичный — соединение запрещено»
-                // (ConnectCallback) или «Connection refused» (боевой). Не теряем хост.
-                return Err("upstream", ex.Message);
+                // Отказ примитива приходит внутренним исключением: «Адрес X не публичный —
+                // соединение запрещено»; иначе — сетевая ошибка («Connection refused»). Не теряем хост.
+                return Err("upstream", ex.InnerException is SsrfBlockedException blocked ? blocked.Message : ex.Message);
             }
 
             // 10. Ответ: статус, белый список заголовков, тело. Секрет вычищается (эхо).

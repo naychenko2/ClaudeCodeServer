@@ -93,4 +93,16 @@ public class UserStoreCacheThresholdsTests : IDisposable
         SeedUsersFile("""{"warn1hSec": 3600, "warn5mSec": 300}""");
         CreateStore().GetById("u-1")!.CacheWarnThresholds.Should().Be(new CacheWarnThresholds(59, 4));
     }
+
+    [Fact]
+    public void Load_NegativeLegacySeconds_Nullified()
+    {
+        // Отрицательные секунды — мусор, а не край перевода: их отсекаем до clamp, иначе
+        // −5 зажимались бы в 1 мин и стали валидной настройкой
+        SeedUsersFile("""{"warn1hSec": -5, "warn5mSec": 180}""");
+
+        var user = CreateStore().GetById("u-1");
+
+        user!.CacheWarnThresholds.Should().BeNull();
+    }
 }

@@ -9,6 +9,10 @@ namespace ClaudeHomeServer.Services;
 // Записка этого чата уже собирается (повторный клик) → 409 у контроллера
 public sealed class HandoffInProgressException() : Exception("Перенос этого чата уже идёт");
 
+// Тёплый ход не мог начаться: чат занят другим ходом (Busy/Queued/QueueFull) → 409 у
+// контроллера. Это не отказ модели (502): перенос не удался, потому что чат занят
+public sealed class HandoffBusyException() : Exception("чат занят другим ходом, попробуйте позже");
+
 // Модель не собрала записку (упала/таймаут/пустой ответ) → 502 у контроллера
 public sealed class HandoffGenerationException(string message) : Exception(message);
 
@@ -64,7 +68,8 @@ public class ChatHandoffService(
     /// Выполнить перенос: записка (тёплый или холодный путь) → чат-преемник без resume →
     /// черновик композера. Контракт отказов: KeyNotFoundException — 404 (чужой/несуществующий
     /// id), InvalidOperationException — 409 (группа/штаб/worktree, пустой чат, локаль места,
-    /// повторный клик), HandoffGenerationException — 502 (модель не дала записку).
+    /// повторный клик), HandoffBusyException — 409 (тёплый ход: чат занят другим ходом),
+    /// HandoffGenerationException — 502 (модель не дала записку).
     /// </summary>
     public async Task<ChatHandoffResult> HandoffAsync(string userId, string sessionId, CancellationToken ct)
     {
@@ -83,14 +88,24 @@ public class ChatHandoffService(
             var history = await sessions.GetHistoryAsync(sessionId);
 
             // Тёплый путь: кэш последнего хода ещё жив (якорь + TTL не истёк) и чат может
-            // дать ход. Любое нарушение — тихий холодный путь, без ошибки
-            if (IsCacheWarm(history, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-                && sessions.WarmHandoffBlocker(sessionId) is null)
-                return await WarmHandoffAsync(source, userId);
+            // дать ход. Любое нарушение — тихий холодный путь, без ошибки. Причину тихого
+            // отказа логируем: без неё в проде не видно, сколько переносов идёт тёплыми
+            if (IsCacheWarm(history, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
+            {
+                var blocker = sessions.WarmHandoffBlocker(sessionId);
+                if (blocker is null) return await WarmHandoffAsync(source, userId);
+                logger.LogInformation(
+                    "Тёплый путь для чата {SessionId} невозможен: {Blocker} — перенос пойдёт холодным",
+                    sessionId, blocker);
+            }
 
             if (cheap.UsesLocal(LocalActionCatalog.ChatHandoff))
                 throw new InvalidOperationException(LocalRouteRefusal);
 
+            // Гейт «1 поток на владельца» — только для холодного пути: записку пишет общий
+            // дешёвый раннер, и несколько переносов одного владельца одновременно платили бы
+            // ему лишние вызовы. Тёплый путь мимо этого гейта осознанно: там записку пишет
+            // сам чат своим ходом (его очередь), а не конкурентный раннер (минор ревью B-4).
             var gate = _ownerGates.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
             await gate.WaitAsync(ct);
             try
@@ -126,6 +141,9 @@ public class ChatHandoffService(
             finally
             {
                 gate.Release();
+                // Пустой гейт не держим: семафор нужен, пока кто-то в нём держит или ждёт.
+                // CurrentCount == 1 после Release — ни держателей, ни ожидающих, вычистить
+                if (gate.CurrentCount == 1) _ownerGates.TryRemove(userId, out _);
             }
         }
         finally
@@ -134,16 +152,20 @@ public class ChatHandoffService(
         }
     }
 
-    // Статус кэша по последнему result'у с сигналом (данные B-1): якорь — время последнего
-    // касания кэша, TTL «1h»/«5m». Пока якорь + срок не истёк, префикс лежит в кэше — ход
-    // самого чата прочитает его, а не перепишет. Порог «остывает» здесь не нужен: даже
-    // остывающий кэш ещё читается. Нет ни одного result с данными — холодный путь.
+    // Статус кэша по последнему result'у С ДАННЫМИ (данные B-1, тот же приём, что в F-1a на
+    // фронте): result'ы без якоря (сторонний провайдер, старая история) пропускаются и
+    // не гасят живой якорь более раннего хода — кэш привязан к разговору, не к провайдеру.
+    // Якорь — время последнего касания кэша, TTL «1h»/«5m». Пока якорь + срок не истёк,
+    // префикс лежит в кэше — ход самого чата прочитает его, а не перепишет. Порог «остывает»
+    // здесь не нужен: даже остывающий кэш ещё читается. Нет ни одного result с данными —
+    // холодный путь.
     internal static bool IsCacheWarm(IReadOnlyList<StoredMessage> history, long nowMs)
     {
         for (var i = history.Count - 1; i >= 0; i--)
         {
             if (history[i] is not StoredResultMessage { PromptCache: { } pc }) continue;
-            if (pc.AnchorAtMs is not long anchor) return false;
+            // Без якоря это не сигнал состояния кэша — искать дальше, а не гасить им
+            if (pc.AnchorAtMs is not long anchor) continue;
             var ttlMs = pc.Ttl switch { "1h" => 3_600_000L, "5m" => 300_000L, _ => -1L };
             return ttlMs > 0 && anchor + ttlMs > nowMs;
         }
@@ -176,7 +198,9 @@ public class ChatHandoffService(
             SendAndWaitResult.Running =>
                 throw new HandoffGenerationException(
                     $"Чат не написал передачу за {WarmTurnTimeout.TotalMinutes:0} мин — новый чат не создан, ход дорабатывает в старом"),
-            _ => throw new HandoffGenerationException("Чат занят другим ходом — попробуйте перенести позже"),
+            // Чат занят (Busy/Queued/QueueFull): не отказ модели, а временное состояние —
+            // 409, человек может повторить клик
+            _ => throw new HandoffBusyException(),
         };
 
         var successor = await sessions.CreateHandoffChatAsync(source, ownerId,

@@ -135,6 +135,24 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
         sentWarm.Should().BeTrue("записку просит сам чат, а не раннер по транскрипту");
     }
 
+    [Fact]
+    public async Task Перенос_ТёплыйКэшХодЗанят_409_Не502()
+    {
+        // «Чат занят другим ходом» — временное состояние, а не отказ модели: 409, человек
+        // может повторить клик (минор ревью B-4: раньше это была 502)
+        var id = await CreateSessionAsync(_client);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        SeedAgentTurn(id, new PromptCacheState(60_000, 0, now, "5m", null, PromptCacheMissReason.None));
+        ((Session)EntryOf(id).GetType().GetField("Info")!.GetValue(EntryOf(id))!).ClaudeSessionId = "csid-" + id;
+        _factory.Services.GetRequiredService<ChatHandoffService>().SendOverride = (_, _, _) =>
+            Task.FromResult<SendAndWaitResult>(new SendAndWaitResult.Busy(SessionStatus.Working));
+
+        var resp = await _client.PostAsync($"/api/chats/{id}/handoff", null);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("занят");
+    }
+
     // Заглушка раннера: фиксированный ответ, отказ при назначении на локаль
     private sealed class StubRunner(string answer) : ICheapTextRunner
     {

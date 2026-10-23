@@ -599,7 +599,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // Ответ — id нового чата, projectId и черновик композера (записка, которую человек может
     // поправить до первого хода). Коды: 404 — чат не найден/чужой (per-owner: брать только
     // чаты владельца, чужой id — 404, не 500); 409 — группа/штаб/worktree, пустой чат,
-    // место назначено на локаль, повторный клик; 502 — модель не дала записку.
+    // место назначено на локаль, повторный клик, чат занят другим ходом (тёплый путь);
+    // 502 — модель не дала записку.
     [HttpPost("{id}/handoff")]
     public async Task<IActionResult> Handoff(string id, CancellationToken ct,
         [FromServices] ChatHandoffService handoff)
@@ -617,6 +618,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (HandoffInProgressException ex) { return Conflict(new { error = ex.Message }); }
+        catch (HandoffBusyException ex) { return Conflict(new { error = ex.Message }); }
         catch (HandoffGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }

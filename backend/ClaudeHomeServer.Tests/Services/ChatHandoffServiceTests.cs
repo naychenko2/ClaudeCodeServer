@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -9,6 +11,7 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -117,6 +120,24 @@ public class ChatHandoffServiceTests : IDisposable
             { PromptCache = new PromptCacheState(1000, 0, null, null, null, PromptCacheMissReason.Unavailable) },
         };
         ChatHandoffService.IsCacheWarm(history, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsCacheWarm_БезЯкоряНеГаситБолееРаннийТёплыйЯкорь()
+    {
+        // Тот же приём, что в F-1a: берётся последний result С данными. newer result без
+        // якоря (сторонний провайдер, старая история) — не сигнал, живой якорь более
+        // раннего хода он не гасит: кэш привязан к разговору, не к провайдеру
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var history = new List<StoredMessage>
+        {
+            new StoredResultMessage("success", 1, 1)
+            { PromptCache = new PromptCacheState(1000, 0, now, "5m", null, PromptCacheMissReason.None) },
+            new StoredResultMessage("success", 1, 1)
+            { PromptCache = new PromptCacheState(0, 0, null, null, null, PromptCacheMissReason.Unavailable) },
+        };
+
+        ChatHandoffService.IsCacheWarm(history, now + 1000).Should().BeTrue();
     }
 
     // ─── Холодный путь ────────────────────────────────────────────────────────
@@ -256,6 +277,44 @@ public class ChatHandoffServiceTests : IDisposable
         mgr.GetAll().Count.Should().Be(before, "таймаут тёплого хода не создаёт чат");
     }
 
+    [Fact]
+    public async Task Handoff_ТёплыйКэшНоХодЗанят_HandoffBusyБезПреемника()
+    {
+        // «Чат занят» — временное состояние, а не отказ модели: отдельный отказ, у
+        // контроллера 409 (не 502), повторный клик разрешён
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var (sut, mgr, chat) = BuildSut(new CountingRunner("не должна вызываться"),
+            cache: new PromptCacheState(60_000, 0, now, "5m", null, PromptCacheMissReason.None));
+        var before = mgr.GetAll().Count;
+        sut.SendOverride = (_, _, _) => Task.FromResult<SendAndWaitResult>(
+            new SendAndWaitResult.Busy(SessionStatus.Working));
+
+        var act = () => sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        await act.Should().ThrowExactlyAsync<HandoffBusyException>()
+            .WithMessage("чат занят другим ходом, попробуйте позже");
+        mgr.GetAll().Count.Should().Be(before, "занятый чат не создаёт преемника");
+    }
+
+    [Fact]
+    public async Task Handoff_ТёплыйКэшНоБлокер_ЛогПричиныТихогоХолодногоПути()
+    {
+        // Тихий уход на холодный путь должен быть виден в логах: без причины в проде не
+        // понять, сколько переносов идёт тёплыми
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var log = new RecordingLogger();
+        var (sut, _, chat) = BuildSut(new CountingRunner("### Цель\nхолодный путь"),
+            cache: new PromptCacheState(60_000, 0, now, "5m", null, PromptCacheMissReason.None),
+            log: log);
+        chat.Status = SessionStatus.Working; // WarmHandoffBlocker: «идёт ход или ждёт очередь»
+
+        var result = await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        result.Warm.Should().BeFalse();
+        log.Lines.Should().Contain(l => l.Contains("Тёплый путь") && l.Contains("идёт ход"),
+            "причина тихого холодного пути логируется");
+    }
+
     // ─── Отказы ───────────────────────────────────────────────────────────────
 
     [Fact]
@@ -340,13 +399,28 @@ public class ChatHandoffServiceTests : IDisposable
         result.Draft.Should().Contain("Записка одного раза.");
     }
 
+    [Fact]
+    public async Task ХолодныйПуть_ГейтВладельцаВычищаетсяПослеЗавершения()
+    {
+        // Гейт «1 поток на владельца» нужен, пока в нём кто-то держит или ждёт; пустой
+        // семафор в словаре не остаётся навсегда
+        var (sut, _, chat) = BuildSut(new CountingRunner("записка"));
+        await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        var gates = (ConcurrentDictionary<string, SemaphoreSlim>)typeof(ChatHandoffService)
+            .GetField("_ownerGates", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(sut)!;
+        gates.Count.Should().Be(0, "завершённый пустой гейт вычищается");
+    }
+
     // ─── Сборка SUT ───────────────────────────────────────────────────────────
 
     private (ChatHandoffService Sut, SessionManager Manager, Session Chat) BuildSut(
-        ICheapTextRunner runner, bool withHistory = true, PromptCacheState? cache = null)
+        ICheapTextRunner runner, bool withHistory = true, PromptCacheState? cache = null,
+        ILogger<ChatHandoffService>? log = null)
     {
         var (mgr, projects, _) = BuildManager();
-        return (new ChatHandoffService(mgr, runner, NullLogger<ChatHandoffService>.Instance),
+        return (new ChatHandoffService(mgr, runner, log ?? NullLogger<ChatHandoffService>.Instance),
             mgr, NewProjectChat(mgr, projects, withHistory, cache));
     }
 
@@ -483,5 +557,17 @@ public class ChatHandoffServiceTests : IDisposable
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
             throw new NotSupportedException();
+    }
+
+    // Лог с sink: проверить причину тихого ухода на холодный путь
+    private sealed class RecordingLogger : ILogger<ChatHandoffService>
+    {
+        public readonly List<string> Lines = [];
+
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? e,
+            Func<TState, Exception?, string> formatter) => Lines.Add(formatter(state, e));
+        public bool IsEnabled(LogLevel level) => true;
+        public IDisposable BeginScope<TState>(TState state) => new NoopScope();
+        private sealed class NoopScope : IDisposable { public void Dispose() { } }
     }
 }

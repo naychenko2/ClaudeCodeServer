@@ -184,9 +184,11 @@ public class CacheWarnThresholdsJsonConverter : JsonConverter<CacheWarnThreshold
     // 300 с → 5 мин. Нечетные секунды округляются к ближайшей минуте, а результат
     // зажимается в диапазон, а не выбрасывается: край перевода 30 с → 0 мин — это
     // намерение «предупредить сразу», а не отсутствие настройки, поэтому нижняя граница
-    // (1 мин) честнее null; верхняя — потолок срока (3600 с → 59 мин).
+    // (1 мин) честнее null; верхняя — потолок срока (3600 с → 59 мин). Отрицательные
+    // секунды — мусор, а не край перевода: их отсекаем до clamp, иначе −5 с зажимались
+    // бы в 1 мин и стали валидной настройкой
     private static int? ReadSecondsToMinutes(Utf8JsonReader reader, int max) =>
-        reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int seconds)
+        reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int seconds) && seconds >= 0
             ? Math.Clamp((int)Math.Round(seconds / 60.0), CacheWarnThresholds.MinMin, max)
             : null;
 

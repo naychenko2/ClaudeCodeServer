@@ -1,0 +1,325 @@
+// Модель ступеней Ганта «Статистики» (волна 4, W4-4F1, спецификация features-overview-4-spec.md §6A).
+// Чистые функции — в node, без DOM.
+//
+// Покрытие: обычный путь (строки, длительности, разбивка, сегменты), возвраты (два возврата
+// одного шага — два флажка и счётчик; «принят» и незакрытый виток — не флажок; qa/final —
+// считаются), «зависла» (stopped — хвост есть, wait — нет), активный этап (пилюля с
+// длительностью; закрытая фича — без пилюли), пустая фича, «самый долгий» (один этап —
+// не подсвечиваем, равенство — первый по порядку).
+//
+// Мутации (в отчёте): (1) убрать «waiting» из разбивки → краснеет «обычный путь»;
+// (2) не фильтровать вердикт «accepted» → краснеет «возвраты»; (3) штриховать и при
+// «wait» → краснеет «зависла»; (4) пилюлю давать и закрытой фиче → краснеет «активный этап».
+
+import { describe, it, expect } from 'vitest';
+import { buildGanttModel, type GanttModel, type GanttRow } from './FeatureGanttModel';
+import type { FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
+import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
+
+// Фиксированное «сейчас» для детерминизма.
+const NOW = Date.parse('2026-10-20T12:00:00Z');
+
+// === Хелперы данных ===
+
+function mkRun(over: Partial<FeatureRun> = {}): FeatureRun {
+  return {
+    featureId: 'f-1',
+    state: 'running',
+    steps: [],
+    reviews: [],
+    qa: [],
+    final: null,
+    merge: null,
+    verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+    progress: 0,
+    ready: false,
+    ...over,
+  };
+}
+
+function mkStage(key: StageKey, state: StageState, minutes: number, over: Partial<FeatureStage> = {}): FeatureStage {
+  return {
+    key,
+    state,
+    passes: 0,
+    taskIds: [],
+    rounds: [],
+    firstStartedAt: null,
+    lastCompletedAt: null,
+    approxMinutes: minutes,
+    overlapsActive: false,
+    executors: [],
+    ...over,
+  };
+}
+
+type Seg = { from: string; to: string; kind: 'work' | 'waiting' | 'idle' | 'error' | 'notWorking'; track: 'main' | 'review'; stage: string; taskId: string | null };
+
+function seg(from: string, to: string, kind: Seg['kind'], stage: string, track: 'main' | 'review' = 'main'): Seg {
+  return { from, to, kind, track, stage, taskId: null };
+}
+
+function mkStats(segments: Seg[]): FeatureStats {
+  const timeline: FeatureTimeline = {
+    from: '2026-10-19T17:00:00Z',
+    to: '2026-10-20T12:00:00Z',
+    stages: [],
+    segments,
+    current: null,
+    totals: {
+      elapsedMinutes: 0, workWallMinutes: 0, agentsSumMinutes: 0, notWorkingMinutes: 0,
+      waitingMinutes: null, idleMinutes: null, waitingCount: null, longestWaitMinutes: null,
+      errorCount: null, errorMinutes: null,
+    },
+  };
+  return { source: 'approx', truncated: false, timeline, breakdown: { personas: [], models: [], roles: [] }, longestNow: null, spend: null };
+}
+
+function rowOf(model: GanttModel, key: StageKey): GanttRow {
+  const r = model.rows.find(x => x.key === key);
+  if (!r) throw new Error(`строки ${key} нет`);
+  return r;
+}
+
+// === Обычный путь ===
+
+describe('обычный путь: строки этапов, длительности, разбивка, сегменты', () => {
+  const model = buildGanttModel(
+    mkRun({
+      stages: [
+        mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z' }),
+        mkStage('plan', 'done', 32),
+        mkStage('prod', 'active', 55, { firstStartedAt: '2026-10-20T10:00:00Z', tone: 'run' }),
+        mkStage('review', 'pending', 0),
+        mkStage('merge', 'absent', 0),
+      ],
+    }),
+    mkStats([
+      seg('2026-10-19T17:00:00Z', '2026-10-19T17:35:00Z', 'work', 'cut'),
+      seg('2026-10-20T10:00:00Z', '2026-10-20T10:40:00Z', 'work', 'prod'),
+      seg('2026-10-20T10:40:00Z', '2026-10-20T10:50:00Z', 'waiting', 'prod'),
+      seg('2026-10-20T10:50:00Z', '2026-10-20T10:55:00Z', 'idle', 'prod'),
+      // Ревью-трек — отдельный вид сегмента, в разбивку «работа · ожидание · простой» не входит.
+      seg('2026-10-20T10:00:00Z', '2026-10-20T10:20:00Z', 'work', 'review', 'review'),
+    ]),
+    NOW,
+  );
+
+  it('этапа «не было» — строки нет; остальные — в порядке конвейера', () => {
+    expect(model.hasData).toBe(true);
+    expect(model.rows.map(r => r.key)).toEqual(['cut', 'plan', 'prod', 'review']);
+  });
+
+  it('разбивка «работа · ожидание · простой» по минутам main-сегментов', () => {
+    const prod = rowOf(model, 'prod');
+    expect(prod.minutes).toBe(55);
+    expect(prod.breakdown).toEqual({ work: 40, waiting: 10, idle: 5 });
+    // Сегменты полосы: main + review, в хронологическом порядке, минуты посчитаны.
+    expect(prod.segments.length).toBe(3);
+    expect(prod.segments.map(s => s.kind)).toEqual(['work', 'waiting', 'idle']);
+    expect(prod.segments[0]!.minutes).toBe(40);
+    // Этап без сегментов — разбивки нет (явный null), а не нули-фантазия.
+    expect(rowOf(model, 'plan').breakdown).toBeNull();
+  });
+
+  it('самый долгий — с максимальным approxMinutes; один этап — не подсвечиваем', () => {
+    expect(rowOf(model, 'prod').isLongest).toBe(true);
+    expect(model.rows.filter(r => r.isLongest).length).toBe(1);
+    const single = buildGanttModel(
+      mkRun({ stages: [mkStage('prod', 'active', 50)] }),
+      mkStats([]),
+      NOW,
+    );
+    expect(rowOf(single, 'prod').isLongest).toBe(false);
+  });
+
+  it('ось — из таймлайна; без stats — оси нет', () => {
+    expect(model.axis).toEqual({ from: '2026-10-19T17:00:00Z', to: '2026-10-20T12:00:00Z' });
+    const noStats = buildGanttModel(mkRun({ stages: [mkStage('prod', 'active', 10)] }), null, NOW);
+    expect(noStats.axis).toBeNull();
+    expect(noStats.hasData).toBe(true); // строки есть, позиции рендер не рисует
+  });
+});
+
+// === Возвраты ===
+
+describe('возвраты: флажки на «Производстве», счётчик и честная деградация', () => {
+  const mkRound = (n: number, verdict: 'returned' | 'accepted_with_remarks' | 'accepted', completedAt: string | null) => ({
+    n,
+    verdict,
+    personaId: 'p-gleb',
+    completedAt,
+    reason: 'не по спецификации',
+    reviewChatId: 'c-review',
+  });
+
+  it('два возврата одного шага — два флажка и счётчик 2 (тест спецификации)', () => {
+    const model = buildGanttModel(
+      mkRun({
+        stages: [mkStage('prod', 'active', 60)],
+        stepChains: [
+          {
+            stepRef: 'Ш3',
+            title: 'Модель',
+            taskIds: ['t-1', 't-2'],
+            outcome: 'running',
+            status: 'идёт',
+            durationMinutes: 60,
+            rounds: [
+              mkRound(1, 'returned', '2026-10-20T09:00:00Z'),
+              mkRound(2, 'accepted_with_remarks', '2026-10-20T10:00:00Z'),
+              mkRound(3, 'accepted', '2026-10-20T11:00:00Z'),
+              mkRound(4, 'returned', null), // незакрытый виток — не флажок
+            ],
+            chatId: null,
+          },
+        ],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    const prod = rowOf(model, 'prod');
+    expect(prod.returns.length).toBe(2);
+    expect(prod.returnCount).toBe(2);
+    expect(model.returnTotal).toBe(2);
+    // Порядок — по времени возврата; шаг и чат — из цепочки.
+    expect(prod.returns[0]!.at).toBe('2026-10-20T09:00:00Z');
+    expect(prod.returns[0]!.stepRef).toBe('Ш3');
+    expect(prod.returns[0]!.reviewChatId).toBe('c-review');
+  });
+
+  it('витки стадий qa/final считаются, других стадий — нет', () => {
+    const mkR = (n: number) => ({ n, verdict: 'returned' as const, completedAt: '2026-10-20T08:00:00Z', reviewChatId: null });
+    const model = buildGanttModel(
+      mkRun({
+        stages: [
+          mkStage('prod', 'active', 60),
+          mkStage('qa', 'active', 20, { rounds: [mkR(1)] }),
+          mkStage('review', 'active', 10, { rounds: [mkR(2)] }), // review-стадия: витки живут в цепочках
+        ],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.returnTotal).toBe(1);
+    expect(rowOf(model, 'prod').returns[0]!.stepRef).toBeNull(); // у qa-витка шага в данных нет
+  });
+
+  it('строки «Производства» нет — флажек нет, но returnTotal для легенды остаётся', () => {
+    const model = buildGanttModel(
+      mkRun({
+        stages: [mkStage('plan', 'done', 10)],
+        stepChains: [{ stepRef: 'Ш1', title: 'x', taskIds: [], outcome: 'returned', status: 'вернул', durationMinutes: 0, rounds: [{ n: 1, verdict: 'returned', completedAt: '2026-10-20T08:00:00Z', reviewChatId: null }], chatId: null }],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.returnTotal).toBe(1);
+    expect(model.rows.every(r => r.returns.length === 0)).toBe(true);
+  });
+});
+
+// === «Зависла» ===
+
+describe('зависла: штриховка только при явном stopped', () => {
+  const base = mkRun({
+    stages: [mkStage('prod', 'active', 60, { firstStartedAt: '2026-10-20T10:00:00Z' })],
+    now: [{ taskId: 't-1', stage: 'prod', stepRef: 'Ш3', title: 'Модель', startedAt: '2026-10-20T11:00:00Z', linkedSessionId: 'c-run' }],
+  });
+
+  it('attention.kind === "stopped" — хвост на строке текущего этапа (тест спецификации)', () => {
+    const model = buildGanttModel(
+      { ...base, attention: { kind: 'stopped', since: '2026-10-20T11:30:00Z', reason: 'нет времени', linkedSessionId: 'c-run' } },
+      mkStats([]),
+      NOW,
+    );
+    const prod = rowOf(model, 'prod');
+    expect(prod.stalledSince).toBe('2026-10-20T11:30:00Z');
+    expect(prod.stalledReason).toBe('нет времени');
+    expect(prod.stalledActionChatId).toBe('c-run');
+    expect(model.hasStalled).toBe(true);
+  });
+
+  it('attention.kind === "wait" — НЕ «зависла»: штриховки нет (тест спецификации)', () => {
+    const model = buildGanttModel(
+      { ...base, attention: { kind: 'wait', since: '2026-10-20T11:30:00Z' } },
+      mkStats([]),
+      NOW,
+    );
+    expect(rowOf(model, 'prod').stalledSince).toBeNull();
+    expect(model.hasStalled).toBe(false);
+  });
+
+  it('закрытой фиче — ни «сейчас», ни «зависла»; самый долгий и флажки остаются', () => {
+    const model = buildGanttModel(
+      mkRun({
+        closed: true,
+        stages: [mkStage('prod', 'done', 60)],
+        stepChains: [{ stepRef: 'Ш1', title: 'x', taskIds: [], outcome: 'accepted', status: 'принят', durationMinutes: 60, rounds: [{ n: 1, verdict: 'returned', completedAt: '2026-10-20T08:00:00Z', reviewChatId: null }], chatId: null }],
+        attention: { kind: 'stopped', since: '2026-10-20T09:00:00Z' },
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.closed).toBe(true);
+    expect(model.rows.every(r => !r.isCurrent && r.nowPill === null && r.stalledSince === null)).toBe(true);
+    expect(model.returnTotal).toBe(1);
+    expect(rowOf(model, 'prod').returns.length).toBe(1);
+  });
+});
+
+// === Активный этап ===
+
+describe('активный этап: пилюля «сейчас»', () => {
+  it('run.now есть — точка, пилюля и длительность от startedAt', () => {
+    const model = buildGanttModel(
+      mkRun({
+        stages: [mkStage('prod', 'active', 60, { tone: 'run' })],
+        now: [{ taskId: 't-1', stage: 'prod', stepRef: 'Ш3', title: 'Модель', startedAt: '2026-10-20T11:30:00Z' }],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    const prod = rowOf(model, 'prod');
+    expect(prod.isCurrent).toBe(true);
+    expect(prod.nowPill).toEqual({
+      stageKey: 'prod',
+      stepRef: 'Ш3',
+      title: 'Модель',
+      startedAt: '2026-10-20T11:30:00Z',
+      durationMinutes: 30,
+    });
+    // Без startedAt — только «{Ш3}»: длительности нет.
+    const noStart = buildGanttModel(
+      mkRun({
+        stages: [mkStage('prod', 'active', 60)],
+        now: [{ taskId: 't-1', stage: 'prod', title: 'x' }],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(rowOf(noStart, 'prod').nowPill!.durationMinutes).toBeNull();
+  });
+
+  it('run.now нет (ничего не идёт) — ни точки, ни пилюли', () => {
+    const model = buildGanttModel(
+      mkRun({ stages: [mkStage('prod', 'done', 60)] }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.rows.every(r => !r.isCurrent && r.nowPill === null)).toBe(true);
+  });
+});
+
+// === Пустая фича ===
+
+describe('пустая фича', () => {
+  it('нет этапов и нет stats — hasData false, пустое состояние вкладки', () => {
+    const model = buildGanttModel(mkRun(), null, NOW);
+    expect(model.hasData).toBe(false);
+    expect(model.rows).toEqual([]);
+    expect(model.axis).toBeNull();
+    expect(model.returnTotal).toBe(0);
+    expect(model.hasStalled).toBe(false);
+  });
+});

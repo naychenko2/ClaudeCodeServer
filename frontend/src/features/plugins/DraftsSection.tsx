@@ -35,12 +35,13 @@ function DraftCardItem({ summary, onAccept, onReject, onRestore, onEdit, onOpenI
   // Ошибка действия этого черновика (текст сервера), пока не повторят
   actionError?: string | null;
 }) {
-  const { preview, diff, loading, error, justUpdated, loadDiff } = useDraftCard(summary);
+  const { preview, diff, diffError, loading, error, justUpdated, loadDiff } = useDraftCard(summary);
   return (
     <DraftCard
       summary={summary}
       preview={preview}
       diff={diff}
+      diffError={diffError}
       loading={loading}
       error={error}
       actionError={actionError}

@@ -18,6 +18,8 @@ export interface DraftCardData {
   preview: PluginDraftPreview | null;
   // Сравнение с установленной версией. null — не запрашивали
   diff: PluginDraftDiff | null;
+  // Ошибка запроса diff (понятным текстом): состояние «diff не загружен» в окне файлов.
+  diffError: string | null;
   // Идёт загрузка предпросмотра
   loading: boolean;
   // Ошибка сервера (403/404/409) — понятным текстом
@@ -33,6 +35,7 @@ export interface DraftCardData {
 export function useDraftCard(summary: PluginDraftSummary): DraftCardData {
   const [preview, setPreview] = useState<PluginDraftPreview | null>(null);
   const [diff, setDiff] = useState<PluginDraftDiff | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [justUpdated, setJustUpdated] = useState(false);
@@ -68,13 +71,15 @@ export function useDraftCard(summary: PluginDraftSummary): DraftCardData {
     return () => { off(); if (timer.current) clearTimeout(timer.current); };
   }, [summary.slug, loadPreview]);
 
-  // Сравнение — по требованию (вкладка «Изменения»); идемпотентно.
+  // Сравнение — по требованию (вкладка «Изменения»); идемпотентно. Ошибка не блокирует
+  // просмотр файлов, но показывается в окне («diff не загружен» + «Повторить»).
   const loadDiff = useCallback(() => {
     if (diff) return;
+    setDiffError(null);
     api.plugins.draftDiff(summary.slug)
       .then(setDiff)
-      .catch(() => { /* diff — опциональный: ошибка не блокирует просмотр файлов */ });
+      .catch((e: unknown) => setDiffError(e instanceof Error ? e.message : 'Не удалось сравнить с установленной версией'));
   }, [diff, summary.slug]);
 
-  return { preview, diff, loading, error, justUpdated, loadDiff, refresh: () => void loadPreview() };
+  return { preview, diff, diffError, loading, error, justUpdated, loadDiff, refresh: () => void loadPreview() };
 }

@@ -58,10 +58,10 @@ vi.mock('../../lib/api', () => ({
 }));
 
 const { api } = await import('../../lib/api');
-const { DraftCard } = await import('./DraftCard');
+const { DraftCard, FilesDrawer } = await import('./DraftCard');
 const { ConsentDialog } = await import('./ConsentDialog');
 const { useDraftCard } = await import('./useDraftCard');
-const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
+const { findNodeByAttr, installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } = await import(
   '../../components/chat/__tests__/fakeDom'
 );
 type PluginConsentData = import('./ConsentDialog').PluginConsentData;
@@ -446,5 +446,156 @@ describe('CollapsedRow: «Вернуть» отклонённого чернов
       // onRestore не передан
     }));
     expect(html).not.toContain('Вернуть');
+  });
+});
+
+// === Окно «Файлы черновика» (FilesDrawer, макет plugin-files-window-v1) ===
+// Структура: вкладки «Файлы» | «Изменения» | «Панель», футера нет; дерево файлов с
+// метками изменений; содержимое выбранного файла реконструируется из строк diff;
+// состояния: diff не загружен, diff усечён, двоичный файл, файл удалён из пакета.
+// Клик в фейк-DOM: у элемента нет dispatchEvent — React держит пропсы на узле
+// (reactProps), поэтому вызываем onClick напрямую, внутри act().
+function clickByAttr(container: ReturnType<typeof mount>['container'], attr: string, value: string): boolean {
+  const node = findNodeByAttr(container, attr, value);
+  const props = node ? reactProps(node) : null;
+  if (typeof props?.onClick !== 'function') return false;
+  act(() => { (props!.onClick as () => void)(); });
+  return true;
+}
+
+function clickByText(container: ReturnType<typeof mount>['container'], label: string): boolean {
+  const textOf = (n: any): string => n.nodeType === 3 ? (n.nodeValue ?? '') : n.childNodes.map(textOf).join('');
+  let hit: any = null;
+  const walk = (n: any): void => {
+    if (hit) return;
+    if (n.nodeType === 1 && n.nodeName === 'BUTTON' && textOf(n).includes(label)) { hit = n; return; }
+    for (const c of n.childNodes) walk(c);
+  };
+  walk(container);
+  const props = hit ? reactProps(hit) : null;
+  if (typeof props?.onClick !== 'function') return false;
+  act(() => { (props!.onClick as () => void)(); });
+  return true;
+}
+
+describe('FilesDrawer: окно по макету', () => {
+  const drawerHtml = (preview: PluginDraftPreview, diff: PluginDraftDiff | null, diffError?: string | null) =>
+    renderToStaticMarkup(createElement(FilesDrawer, { preview, diff, diffError, onClose: () => {} }));
+
+  it('вкладки «Файлы» и «Изменения»; «Панель» — только если в пакете есть панели', () => {
+    const html = drawerHtml(PREVIEW, DIFF);
+    expect(html).toContain('Файлы');
+    expect(html).toContain('Изменения');
+    expect(html).toContain('Панель');
+    const noPanel = drawerHtml({ ...PREVIEW, panels: [] }, DIFF);
+    expect(noPanel).not.toContain('Панель');
+  });
+
+  it('футера нет: закрытие — крестик шапки, предпросмотр панели — вкладка', () => {
+    const html = drawerHtml(PREVIEW, DIFF);
+    expect(html).not.toContain('Предпросмотр панели');
+    expect(html).toContain('aria-label="Закрыть"');
+  });
+
+  it('дерево вместо плоского перечня: каталоги data-dir, файлы data-file, метки +/~/− и размеры', () => {
+    const html = drawerHtml(PREVIEW, DIFF);
+    expect(html).toContain('data-dir="panel"');
+    expect(html).toContain('data-file="panel/index.html"');
+    expect(html).toContain('data-file="commands/my-cmd.md"');
+    expect(html).toContain('aria-label="Добавлен"');
+    expect(html).toContain('aria-label="Изменён"');
+    expect(html).toContain('120 Б');
+  });
+
+  it('выбранный файл: вид «Файл» (ctx+add строки) и переключатель «Файл | Изменения»', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    const ok = clickByAttr(container, 'data-file', 'commands/my-cmd.md');
+    expect(ok).toBe(true);
+    const text = textNodes(container).join(' ');
+    expect(text).toContain('new line'); // содержимое новой версии
+    expect(text).not.toContain('old line'); // удалённая строка в виде «Файл» не показывается
+    expect(text).toContain('Файл');
+    expect(text).toContain('Изменения');
+    uninstallFakeDom();
+  });
+
+  it('вкладка «Изменения»: сводка с счётчиками; удалённый файл — в дереве', () => {
+    const withRemoved: PluginDraftDiff = {
+      ...DIFF,
+      removed: [{ path: 'panel/legacy.js', size: 300, binary: false, truncated: false, lines: null }],
+    };
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: withRemoved, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    // JSX-пробел между {label} и {n} — отдельный текстовый узел; нормализуем пробелы,
+    // чтобы проверить ровно то, что видит человек: «добавлено 1».
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Что поменялось');
+    expect(text).toContain('добавлено 1');
+    expect(text).toContain('удалено 1');
+    expect(container.querySelector('[data-file="panel/legacy.js"]')).toBeTruthy();
+    uninstallFakeDom();
+  });
+
+  it('diff не загружен (ошибка) — «Не удалось сравнить» и «Повторить», а не пустота', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, {
+      preview: PREVIEW, diff: null, diffError: 'Сервер не ответил', onClose: () => {}, onLoadDiff: () => {},
+    }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    const text = textNodes(container).join(' ');
+    expect(text).toContain('Не удалось сравнить с установленной версией');
+    expect(text).toContain('Повторить');
+    expect(text).toContain('Файлы не сравнены');
+    uninstallFakeDom();
+  });
+
+  it('усечённый diff — предупреждение «Сравнение длинное»', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: { ...DIFF, truncated: true }, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('Сравнение длинное');
+    uninstallFakeDom();
+  });
+
+  it('двоичный файл — «Двоичный файл» с размером, не сырое содержимое', () => {
+    const preview: PluginDraftPreview = { ...PREVIEW, files: [...PREVIEW.files, { path: 'assets/logo.png', isDir: false, size: 14336 }] };
+    const diff: PluginDraftDiff = { ...DIFF, added: [...DIFF.added, { path: 'assets/logo.png', size: 14336, binary: true, truncated: false, lines: null }] };
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview, diff, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'assets/logo.png')).toBe(true);
+    const text = textNodes(container).join(' ');
+    expect(text).toContain('Двоичный файл');
+    expect(text).toContain('14,0 КБ');
+    uninstallFakeDom();
+  });
+
+  it('файл удалён из пакета — состояние «Файла больше нет»', () => {
+    const diff: PluginDraftDiff = {
+      ...DIFF, added: [], modified: [],
+      removed: [{ path: 'panel/legacy.js', size: 300, binary: false, truncated: false, lines: null }],
+    };
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByAttr(container, 'data-file', 'panel/legacy.js')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('Файла больше нет');
+    uninstallFakeDom();
+  });
+
+  it('мобила 320: тач-цели 44px и без сайдбара 280px (двухуровневая раскладка)', () => {
+    vi.stubGlobal('window', Object.assign(new EventTarget(), {
+      innerWidth: 320, innerHeight: 640,
+      matchMedia: (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} }),
+    }));
+    const html = drawerHtml(PREVIEW, DIFF);
+    expect(html).toContain('height:44px');
+    expect(html).not.toContain('280px');
+    // вернуть десктоп-окружение для остальных тестов
+    vi.stubGlobal('window', Object.assign(new EventTarget(), {
+      innerWidth: 1440, innerHeight: 900,
+      matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+    }));
   });
 });

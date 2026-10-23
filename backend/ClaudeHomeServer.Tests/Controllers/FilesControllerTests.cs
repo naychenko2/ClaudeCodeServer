@@ -314,6 +314,28 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         body.GetProperty("content").GetString().Should().Be("from main tree");
     }
 
+    // Хвост резолва W4-LINK-B3: самый частый случай — эпик без заявленного дерева (пустой
+    // WorktreePath — норма большинства задач). Правило «дерева нет → корень» закреплено тестом:
+    // featureId читает корень проекта, а не 404. Мутация: убрать в FilesController.TreeRootForAsync
+    // обход `string.IsNullOrWhiteSpace(worktreePath)` — тест краснеет (пустой путь больше не
+    // попадает в корень: NormalizePath бросает, запрос роняется в 500).
+    [Fact]
+    public async Task GetContent_FeatureId_ЭпикБезДерева_ЧитаетRoot()
+    {
+        var (projectId, _) = await SetupProjectWithFileAsync("draft.md", "from main tree");
+        var taskResp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new
+        {
+            title = "epic без дерева", role = "feature",
+        });
+        taskResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var epicId = JsonSerializer.Deserialize<JsonElement>(await taskResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "дерева нет: читается корень, не 404");
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from main tree");
+    }
+
     // Эпик принадлежит другому проекту — для этого проекта фичи нет: 404.
     [Fact]
     public async Task GetContent_FeatureId_ЭпикДругогоПроекта_404()

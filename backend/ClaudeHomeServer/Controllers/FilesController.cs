@@ -20,8 +20,9 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/files")]
 public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions, INoteAccessor? notes = null,
     // W4-5B2 (п.5.2): чтение файла из проверенного дерева эпика (?featureId=). Tasks и Git —
-    // отключаемые подсистемы: нет одной из них — маршрут featureId отказывает 404 (fail-closed),
-    // маршрут без параметра работает как раньше.
+    // отключаемые подсистемы: нет Tasks — маршрут featureId отказывает 404 (fail-closed); нет
+    // Git — отказывает заявленное дерево, а отсутствие дерева читает корень (общее правило
+    // TreeRootForAsync). Маршрут без параметра работает как раньше.
     ClaudeHomeServer.Services.Tasks.TaskManager? tasks = null,
     GitService? git = null,
     // W4-LINK-B (п.14): резолв дерева задачи, к которой привязан чат (?sessionId=).
@@ -166,12 +167,14 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     // W4-5B2 (п.5.2): проверенное дерево эпика для чтения. Эпик — задача с id == featureId,
     // принадлежащая текущему владельцу и этому проекту. Дерево эпика решается общим правилом
     // TreeRootForAsync: без дерева или на корне — сам корень; заявленное, но нечислящееся —
-    // null → 404. Любой отказ (нет Tasks/Git, нет эпика, чужой, другой проект) — null → 404.
-    // Маршрут только для чтения: SaveContent featureId не принимает — запись идёт в корень
-    // проекта.
+    // null → 404. Проверка Git — только в verified-ветке TreeRootForAsync: без Git нечем
+    // сверить заявленное дерево (404), но отсутствие дерева по-прежнему читает корень —
+    // правило единое с sessionId-веткой. Любой отказ (нет Tasks, нет эпика, чужой, другой
+    // проект) — null → 404. Маршрут только для чтения: SaveContent featureId не принимает —
+    // запись идёт в корень проекта.
     private async Task<string?> FeatureTreeRootForAsync(ClaudeHomeServer.Models.Project project, string featureId)
     {
-        if (tasks is null || git is null || UserId is null) return null;
+        if (tasks is null || UserId is null) return null;
         var epic = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == featureId);
         if (epic is null || epic.ProjectId != project.Id) return null;
         return await TreeRootForAsync(project, epic.WorktreePath);

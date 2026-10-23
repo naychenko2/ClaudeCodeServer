@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services;
 
@@ -1127,6 +1128,33 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         var resumed = _tasks.ClearExecutorStopped(task.Id, ExecutorStopClassifier.InterruptedByUserReason);
         if (resumed is null) return;
         await _broadcaster.ToOwner(resumed.OwnerId!, new TaskChangedMessage("updated", resumed));
+    }
+
+    // Физическое прерывание идущих ходов фичи при постановке паузы (W4-HOLD-E, контракт §1 :208):
+    // SetHold уже отметил задачи feature_held — здесь тот же путь, что «Стоп» человека: процесс CLI
+    // гасится, очередь замораживается, WorkLoop снимается. Прерванный ход не доходит до result,
+    // поэтому ни MarkClaudeResult, ни доклад постановщику не случаются. Ключевой чат оркестратора
+    // пропускается: он общий для нескольких фич, и его ход может быть про другую фичу (контракт :200) —
+    // о паузе оркестратор узнает из карточки, а не из прерывания своего хода. Возвращает число
+    // реально прерванных сессий. Снятие паузы здесь ничего не возобновляет: возврат шагов в работу —
+    // отдельный шаг D с проверкой живости чата.
+    public int InterruptFeatureTurnsOnHold(string featureId, string ownerId)
+    {
+        var epic = _tasks.GetById(featureId);
+        if (epic is null) return 0;
+        var featureTasks = _tasks.GetByOwner(ownerId).Where(t => t.FeatureId == featureId).ToList();
+        // Та же цепочка, по которой проектор считает keySessionId: сессия задачи в ключевом чате
+        // не прерывается, даже если её ход идёт.
+        var keyChain = FeatureProjector.KeyChain(epic, featureTasks);
+        var stopped = 0;
+        foreach (var t in featureTasks)
+        {
+            if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
+            if (t.LinkedSessionId is null || keyChain.Contains(t.LinkedSessionId)) continue;
+            _sessions.Interrupt(t.LinkedSessionId);
+            stopped++;
+        }
+        return stopped;
     }
 
     // Исполнитель встал насовсем: пометка на задаче + уведомление владельцу + (если задачу

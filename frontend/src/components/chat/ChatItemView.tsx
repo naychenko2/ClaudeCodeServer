@@ -60,10 +60,24 @@ import { TeamPlanView } from './TeamPlanView';
 import { TeamEscalationView } from './TeamEscalationView';
 import { teamPlanningDoneText } from '../../lib/teamImplement';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { missReasonLabel } from '../../lib/promptCache';
 
 // K-1/n-1 (360): поле справа у строки пилюли — по тач-размеру (TB.iconHitMobile, 40 px),
 // чтобы правый край строки не заходил под плавающий аватар (FAB) на 4 px.
 const PILL_ROW_RIGHT_PAD = TB.iconHitMobile;
+
+// Подвал хода: подтверждение в подсказке к строке про промах кэша (шаг F-2, фича
+// prompt-cache). Формулировка — польза, не техника: человек понимает, что кэш
+// пересобирается сам и следующий ход снова тёплый — промах не поломка. Ключи —
+// те же причины, что в карте подписей lib/promptCache; незнакомая — общий текст.
+const CACHE_MISS_HINT: Record<string, string> = {
+  systemChanged: 'Системный промпт изменился — кэш собирается заново. Это нормально: следующий ход снова попадёт в кэш.',
+  messagesChanged: 'История сообщений изменилась — кэш пересобирается. Это нормально: следующий ход снова попадёт в кэш.',
+  previousMessageNotFound: 'Срок жизни кэша истёк — он соберётся заново на следующем ходе. Это нормально.',
+  toolsChanged: 'Набор инструментов изменился — кэш пересобирается. Это нормально: следующий ход снова попадёт в кэш.',
+  modelChanged: 'Сменилась модель — у каждой модели свой кэш. Это нормально: следующий ход соберёт его заново.',
+  unavailable: 'Причина промаха не определена. Кэш пересобирается сам — следующий ход снова тёплый.',
+};
 
 // Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
 function parseTodoWriteInput(input: unknown): TodoItem[] {
@@ -1128,6 +1142,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
+  // Причина промаха кэша в подвале хода (F-2) — только за фич-флагом prompt-cache
+  const promptCacheOn = useFeature(FLAGS.promptCache);
   // Вклад карточки изменённого файла-заметки: заметка ли это (match) и как её
   // открыть/нарисовать. Нет вклада — обычная карточка изменённого файла.
   const fileChangedNote = useSlotItem<never, ChatItemFileChangedApi>('chat-item-action', 'file-changed');
@@ -1735,6 +1751,17 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <>
               {sep}
               <span title="входные · выходные токены">↑{fmtTok(u.inputTokens)} ↓{fmtTok(u.outputTokens)}</span>
+            </>
+          )}
+          {/* Промах кэша этого хода (F-2, фича prompt-cache): короткая причина по карте
+              подписей lib/promptCache, в подсказке — что это нормально. Нет данных кэша
+              (сторонний провайдер, локальный движок) или промаха — строки нет вовсе. */}
+          {promptCacheOn && item.promptCache && item.promptCache.missReason !== 'none' && (
+            <>
+              {sep}
+              <span title={CACHE_MISS_HINT[item.promptCache.missReason] ?? 'Кэш пересобирается сам — это нормально.'}>
+                кэш не помог: {missReasonLabel(item.promptCache.missReason)}
+              </span>
             </>
           )}
           {speed !== null && (

@@ -138,14 +138,20 @@ describe('RingPillBadge: циферблат кэша промпта (F-1b)', () 
     expect(renderPill([cacheItem({ anchorAtMs: Date.now() - 55 * MIN })], true)).toContain('<svg width="14"');
   });
 
-  it('aria-label и title не несут меняющегося со временем: ни статуса, ни минут (F-1b-r2)', () => {
-    // Пилюля не тикает: любое «тёплый · 60 мин» в атрибутах через час противоречило бы циферблату
+  it('aria-label и title не несут меняющегося со времени: ни статуса, ни минут в части про кэш (F-1b-r2)', () => {
+    // Пилюля не тикает: любое «тёплый · 60 мин» в атрибутах через час противоречило бы циферблату.
+    // Запрет — только части про кэш (строка кэша идёт последней в joined-лейбле): в других
+    // строках aria-label минуты легальны — окна лимита и срок возврата (минор R3-F1b).
+    const cachePart = (s: string): string => {
+      const i = s.indexOf('Кэш');
+      return i < 0 ? '' : s.slice(i);
+    };
     for (const age of [0, 55 * MIN, 61 * MIN]) {
       const html = renderPill([cacheItem({ anchorAtMs: Date.now() - age })]);
       const a = ariaOf(html);
       expect(a).toContain('Кэш промпта');
-      expect(a).not.toMatch(/тёплый|остынет|остыл|\d+ мин/);
-      expect(/title="([^"]*)"/.exec(html)?.[1] ?? '').not.toMatch(/тёплый|остынет|остыл|\d+ мин/);
+      expect(cachePart(a)).not.toMatch(/тёплый|остынет|остыл|\d+ мин/);
+      expect(cachePart(/title="([^"]*)"/.exec(html)?.[1] ?? '')).not.toMatch(/тёплый|остынет|остыл|\d+ мин/);
     }
   });
 
@@ -197,8 +203,12 @@ describe('CacheDialPip: мини-циферблат в подсказке', () =
 // рендер, и заморозка ленты уходит в цикл «Too many re-renders». SSR цикл не воспроизводит,
 // поэтому охраняем сам исходник (F-1b-r2).
 describe('ChatHeaderBar: лента кэша без нового литерала на рендер', () => {
-  it('нет `items ?? []` в исходнике шапки', () => {
+  it('нет `items ?? []` и копий ленты в исходнике шапки', () => {
     const src = readFileSync(fileURLToPath(new URL('../ChatHeaderBar.tsx', import.meta.url)), 'utf8');
     expect(src).not.toMatch(/items\s*\?\?\s*\[\]/);
+    // .slice()/.concat() и Array.from(items…) — та же ловушка: новая ссылка на каждый
+    // рендер, заморозка ленты уходит в цикл «Too many re-renders» (минор R3-F1b)
+    expect(src).not.toMatch(/items\s*\.(slice|concat)\(\s*\)/);
+    expect(src).not.toMatch(/Array\.from\(\s*items\b/);
   });
 });

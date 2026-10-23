@@ -827,8 +827,9 @@ public class TasksController(
     //      ДО любого вызова Docs (файлы на устройстве, диск сервера не читаем);
     //   3. W4-5 (п.5.1): если у эпика есть проверенное дерево (FeatureTreePathAsync) — Find
     //      вызывается ДВАЖДЫ: по дереву эпика и по корню проекта. Слияние по относительному
-    //      пути: запись дерева побеждает (ветка свежее), exists файлов — объединение двух
-    //      деревьев. Дерева нет или проверка не прошла — только main, как раньше.
+    //      пути: запись дерева побеждает (ветка свежее), Files — объединение путей, а exists
+    //      записи дерева проверяется по дереву фичи (W4-R1: читатель с ?featureId= читает
+    //      ровно дерево). Дерева нет или проверка не прошла — только main, как раньше.
     //   4. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
     //      Docs регистрируется безусловно, тумблера нет — ветка защитная, жива в тестах).
     // TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
@@ -862,15 +863,19 @@ public class TasksController(
         {
             if (merged.TryGetValue(e.Path, out var fromTree))
             {
-                // Запись дерева побеждает; exists файла — объединение двух деревьев: файл,
-                // который есть только в main, не считается «ни в одном дереве».
-                var mainExists = e.Files.ToDictionary(f => f.Path, f => f.Exists, StringComparer.OrdinalIgnoreCase);
-                merged[e.Path] = fromTree with
-                {
-                    Files = fromTree.Files
-                        .Select(f => f with { Exists = f.Exists || mainExists.GetValueOrDefault(f.Path, false) })
-                        .ToList(),
-                };
+                // W4-R1 (вариант А): запись дерева побеждает (tree="feature"), Files —
+                // объединение путей: файл, существующий только в main, не исчезает из
+                // каталога. Для дерева фичи exists проверяется ПО дереву фичи: читатель
+                // с ?featureId= читает ровно дерево (фолбэка на main нет), поэтому
+                // exists=true обязан гарантировать, что файл откроется. Пути, лежащие
+                // только в main, остаются в списке с exists=false.
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var files = new List<MockupFile>();
+                foreach (var f in fromTree.Files)
+                    if (seen.Add(f.Path)) files.Add(f);
+                foreach (var f in e.Files)
+                    if (seen.Add(f.Path)) files.Add(f with { Exists = false });
+                merged[e.Path] = fromTree with { Files = files };
             }
             else
             {

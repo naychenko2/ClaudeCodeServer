@@ -1223,7 +1223,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // относительным путём для обоих деревьев (title — по корню). Существование файла-макета
     // он задаёт намеренно: в дереве эпика его нет (exists=false), в main — есть (exists=true).
     // Так проверяются и резолвер (какие корни вызывались), и слияние (побеждает запись дерева),
-    // и объединение exists (файл, который есть в main, не считается «ни в одном дереве»).
+    // и семантика exists: запись дерева обещает файл только если он есть в дереве (W4-R1).
     private sealed class RootsMockupCatalog : MockupCatalog
     {
         private readonly string _mainRoot;
@@ -1245,8 +1245,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // Проверенный worktree эпика (числится в `git worktree list` проекта): Find вызывается
     // дважды — сначала по дереву эпика, затем по корню; слияние по относительному пути:
-    // запись дерева побеждает (tree="feature", title по корню дерева), а exists файла —
-    // объединение двух деревьев (в дереве файла нет, в main есть → exists=true).
+    // запись дерева побеждает (tree="feature", title по корню дерева), а exists файла
+    // проверяется по дереву фичи: в дереве файла нет (есть только в main) → exists=false,
+    // иначе карточка обещала бы файл, которого читатель по ?featureId= не отдаст (W4-R1).
     [Fact]
     public async Task GetFeature_Mockups_ПроверенныйWorktree_КаталогЧитаетДеревоЭпика()
     {
@@ -1264,7 +1265,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main");
         mockup.GetProperty("title").GetString().Should().Be("mockup@" + worktree);
         mockup.GetProperty("files").EnumerateArray().Single().GetProperty("exists")
-            .GetBoolean().Should().BeTrue("exists — объединение двух деревьев");
+            .GetBoolean().Should().BeFalse("файл только в main — запись дерева его не обещает");
     }
 
     // Фолбэк: у эпика нет worktreePath — каталог вызывается один раз, по корню проекта,
@@ -1314,6 +1315,72 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         catalog.Roots.Should().Equal(mainRoot);
         var mockup = json.GetProperty("mockups").EnumerateArray().Single();
         mockup.GetProperty("tree").GetString().Should().Be("main");
+    }
+
+    // Сквозной сценарий W4-R1 (major 1+2) на НАСТОЯщем MockupCatalog и настоящем git-worktree:
+    // записка-макет лежит в обоих деревьях и в шапке перечисляет два файла — один только в
+    // дереве, другой только в main. Каталог записывает путь под tree="feature" (запись дерева
+    // побеждает), Files — объединение путей: файл только из main не исчезает (major 2), но его
+    // exists=false — читатель с ?featureId= читает ровно дерево и отдаёт 404 (major 1).
+    // Мутация: убрать объединение Files в слиянии — этот тест краснеет (main_only пропадает).
+    [Fact]
+    public async Task GetFeature_Mockups_ФайлТолькоВMain_ДеревоНеОбещаетExists()
+    {
+        var (epicId, worktree, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var mainRoot = Projects.GetById(projectId)!.RootPath;
+        var note = "# Макет\n\n**Фича:** " + epicId + "\n**Файлы:** tree_only.html, main_only.html\n";
+        Directory.CreateDirectory(Path.Combine(mainRoot, "docs", "mockups"));
+        Directory.CreateDirectory(Path.Combine(worktree, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "note.md"), note);
+        File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "note.md"), note);
+        File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "tree_only.html"), "tree only");
+        File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "main_only.html"), "main only");
+
+        var controller = BuildController(RealGit(),
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main");
+        var files = mockup.GetProperty("files").EnumerateArray()
+            .ToDictionary(f => f.GetProperty("path").GetString()!, f => f.GetProperty("exists").GetBoolean());
+        files.Keys.Should().Contain("docs/mockups/main_only.html",
+            "файл, существующий только в main, не исчезает из каталога");
+        files["docs/mockups/main_only.html"].Should().BeFalse(
+            "в дереве файла нет — exists=false, обещания читателю нет");
+        files["docs/mockups/tree_only.html"].Should().BeTrue("файл в дереве — обещание честное");
+
+        // Читатель подтверждает контракт: по ?featureId= файла из main нет, фолбэка на main нет.
+        var content = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path=docs/mockups/main_only.html&featureId={epicId}");
+        content.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Вторая половина контракта: файл макета есть только в проверенном дереве — каталог
+    // говорит exists=true, и читатель с ?featureId= отдаёт 200 (exists=true ⇒ файл откроется).
+    [Fact]
+    public async Task GetFeature_Mockups_ФайлТолькоВДереве_ExistsTrue_ЧитательОтдаёт200()
+    {
+        var (epicId, worktree, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var relPath = "docs/mockups/only_tree.html";
+        Directory.CreateDirectory(Path.Combine(worktree, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "only_tree.html"), "tree only");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.LinkedFiles = [relPath];
+
+        var controller = BuildController(RealGit(),
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("feature");
+        mockup.GetProperty("files").EnumerateArray().Single().GetProperty("exists")
+            .GetBoolean().Should().BeTrue("файл в дереве — обещание честное");
+
+        var content = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={relPath}&featureId={epicId}");
+        content.StatusCode.Should().Be(HttpStatusCode.OK, "exists=true ⇒ читатель отдаёт файл");
     }
 
     // ─── REST POST /api/tasks/features/{featureId}/merge: мерж фичи ─────────────────────────

@@ -643,7 +643,11 @@ public class TasksController(
         if (run.Final is not null) allFeatureTasks.Add(run.Final);
         if (run.Merge is not null) allFeatureTasks.Add(run.Merge);
         allFeatureTasks.AddRange(run.Cut);
+        // W4-CHT-B2: design и безролевые задачи — тоже задачи фичи: их чаты должны быть
+        // в «Чатах» так же, как в индексе (тот же состав, что FeatureTasks).
+        allFeatureTasks.AddRange(run.Design);
         allFeatureTasks.AddRange(run.Plan);
+        allFeatureTasks.AddRange(run.Unroled);
         var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
         // Б5a/Б5b: stats — график времени фичи по ПОЛНОМУ run (до SlimRun: интервалы work из
         // ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён для ответа).

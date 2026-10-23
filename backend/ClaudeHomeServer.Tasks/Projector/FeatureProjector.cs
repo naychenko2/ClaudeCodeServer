@@ -1277,10 +1277,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         var chats = new Dictionary<string, List<FeatureIndexChatEntry>>();
         foreach (var (sessionId, links) in map)
         {
+            // Порядок внутри класса задаётся сортировкой (сила, затем позиция фичи);
+            // открытый/закрытый класс даёт разбиение ниже — OrderBy по closedFeature здесь
+            // был бы мёртвым термином.
             var entries = links
                 .Where(kv => surviving.Contains(kv.Key))
-                .OrderBy(kv => closedFeature.Contains(kv.Key) ? 1 : 0)
-                .ThenBy(kv => kv.Value.Strength)
+                .OrderBy(kv => kv.Value.Strength)
                 .ThenBy(kv => featureOrder.TryGetValue(kv.Key, out var i) ? i : int.MaxValue)
                 .Select(kv => new FeatureIndexChatEntry(
                     kv.Key, kv.Value.Kind, kv.Value.Role, kv.Value.StepRef, kv.Value.Lane))

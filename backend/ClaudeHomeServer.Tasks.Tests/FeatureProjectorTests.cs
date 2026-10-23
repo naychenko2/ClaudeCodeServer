@@ -2892,4 +2892,25 @@ public class FeatureProjectorTests
         var chats = FeatureProjector.BuildFeatureChats(epic, [epic, step], sessions, null);
         chats.Should().ContainSingle(c => c.Id == "chat-epic-b4e").Which.Kind.Should().Be("executor");
     }
+
+    // W4-CHT-B2: область BuildFeatureChats = ВСЕ задачи фичи (как FeatureTasks в индексе),
+    // включая Design/Unroled: чат исполнителя design-задачи — в «Чатах» так же, как в индексе.
+    // Мутация (прежняя область без Design): второй вызов ниже без design-задачи → чат
+    // теряется → краснеет.
+    [Fact]
+    public void BuildFeatureChats_DesignЗадача_ЕёЧатВЧатах()
+    {
+        var epic = new TaskItem { Id = "epic-w4c", Role = TaskRoles.Feature };
+        var design = new TaskItem { Id = "d-w4c", FeatureId = "epic-w4c", Role = TaskRoles.Design };
+        var sessions = new[] { new FeatureIndexSession("chat-design-w4c", "d-w4c", null, false) };
+
+        var chats = FeatureProjector.BuildFeatureChats(epic, [epic, design], sessions, null);
+        chats.Should().Contain(c => c.Id == "chat-design-w4c" && c.Kind == "executor",
+            "чат исполнителя design-задачи — в «Чатах» так же, как в индексе");
+
+        // Без Design в области тот же чат не попадает — поэтому контроллер обязан её добавлять.
+        var withoutDesign = FeatureProjector.BuildFeatureChats(epic, [epic], sessions, null);
+        withoutDesign.Should().NotContain(c => c.Id == "chat-design-w4c",
+            "прежняя область (без Design) теряет чат design-задачи");
+    }
 }

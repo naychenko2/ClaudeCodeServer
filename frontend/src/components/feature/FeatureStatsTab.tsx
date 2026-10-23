@@ -316,13 +316,17 @@ function Gantt({
     <div data-testid="stats-gantt" style={{ fontFamily: FONT.sans }}>
       {gantt.rows.map((row) => {
         const left = axisFrac(row.from);
-        const right = axisFrac(row.to);
+        // Правый край: lastCompletedAt; у активного этапа конца нет — текущий момент
+        // (axis.to): полоса дотягивается до «сейчас», а не исчезает.
+        const right = axisFrac(row.to ?? (row.isCurrent ? axis.to : null));
         // Минимальная видимая ширина полосы (макет: min-width 3px) — чтобы этап в
         // 4 минуты не превратился в щель.
+        const leftPct = left != null && right != null ? left * 100 : 0;
         const widthPct = left != null && right != null ? Math.max(0.6, (right - left) * 100) : 0;
         const totalMin = row.segments.reduce((a, s) => a + s.minutes, 0);
-        // «Сейчас» на строке текущего этапа: по началу шага; начала нет — на краю полосы.
-        const nowFrac = row.isCurrent ? (axisFrac(row.nowPill?.startedAt ?? row.to) ?? 1) : null;
+        // «Сейчас» на строке текущего этапа: правый край оси (текущий момент) — тот же
+        // край, до которого дотягивается полоса выше.
+        const showNow = row.isCurrent;
         // Разбивка для подсказки: только ненулевые части.
         const parts: [string, number][] = [];
         if (row.breakdown) {
@@ -390,7 +394,7 @@ function Gantt({
                   <div
                     data-testid={`gantt-bar-${row.key}`}
                     style={{
-                      position: 'absolute', left: `${left}%`, width: `${widthPct}%`, top: 2, height: 12,
+                      position: 'absolute', left: `${leftPct}%`, width: `${widthPct}%`, top: 2, height: 12,
                       borderRadius: R.sm, display: 'flex', overflow: 'hidden', minWidth: 3,
                     }}
                   >
@@ -407,11 +411,11 @@ function Gantt({
                     ))}
                   </div>
                 ) : null}
-                {nowFrac != null && (
+                {showNow && (
                   <div
                     data-testid="gantt-now-marker"
                     style={{
-                      position: 'absolute', left: `${Math.round(nowFrac * 1000) / 10}%`, top: -2, bottom: -2,
+                      position: 'absolute', right: 0, top: -2, bottom: -2,
                       width: 2, background: C.accent, borderRadius: R.max, pointerEvents: 'none',
                     }}
                   />

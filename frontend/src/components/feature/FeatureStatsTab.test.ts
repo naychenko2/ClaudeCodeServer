@@ -22,7 +22,7 @@ import {
 import {
   formatTokens, formatUsd, sharePercent, roleGroupLabel, modelGroupLabel, personaGroupLabel,
 } from './FeatureStatsBlocks';
-import { clearFeatureStageFocus, __test } from '../../lib/featurePage';
+import { clearFeatureStageFocus, setFeaturePageTab, __test } from '../../lib/featurePage';
 import { openTaskInSection } from '../../lib/tasks';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureStats, FeatureTimeline, FeatureBreakdown, FeatureLongestNow, FeatureSpend } from '../../types/featureStats';
@@ -770,6 +770,9 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
   beforeEach(() => {
     mockOpenTask.calls = [];
     clearFeatureStageFocus();
+    // Вкладка «Статистика» — как в жизни: тест перехода должен видеть смену
+    // вкладки, а не дефолт страницы.
+    setFeaturePageTab('stats');
   });
   afterEach(() => {
     uninstallFakeDom();
@@ -811,6 +814,21 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
     expect(findNodeByAttr(revBar, 'data-kind', 'review'), 'сегмент review на строке review').not.toBeNull();
   });
 
+  // === 3b. Активный этап без lastCompletedAt: полоса до «сейчас» (мутация: убрать
+  // фолбэк right на axis.to — полоса merge исчезает, тест краснеет) ===
+  it('активный этап: полоса дотягивается до правого края оси (текущего момента)', () => {
+    const c = renderGantt();
+    const bar = findNodeByAttr(c, 'data-testid', 'gantt-bar-merge');
+    expect(bar, 'полоса активного этапа есть').not.toBeNull();
+    const s = (bar as unknown as { style: Record<string, string> }).style;
+    const left = parseFloat(s.left);
+    const width = parseFloat(s.width);
+    expect(Number.isFinite(left) && Number.isFinite(width), 'left/width числовые').toBe(true);
+    expect(width, 'ширина полосы nonzero').toBeGreaterThan(0);
+    // Правый край = конец оси: left + width = 100%.
+    expect(left + width, 'правый край полосы — конец оси').toBeCloseTo(100, 1);
+  });
+
   // === 4. Подсказка по касанию (360): разбивка по минутам и переход в «Хронологию» ===
   it('касание строки на 360 открывает подсказку с разбивкой; ссылка ведёт в «Хронологию»', () => {
     const c = renderGantt(true);
@@ -823,9 +841,12 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
     expect(br, 'разбивка по минутам').toContain('работа 4 ч 10 мин');
     expect(br).toContain('ожидание 1 ч 20 мин');
     expect(br).toContain('простой 40 мин');
-    // Ссылка в подсказке — тот же путь, что плашка/панель: якорь этапа в «Хронологии».
+    // Ссылка в подсказке — тот же путь, что плашка/панель: смена вкладки на
+    // «Хронологию» + якорь этапа. Без setFeaturePageTab('timeline') в openStage
+    // вкладка осталась бы 'stats' — тест краснеет.
     const open = findNodeByAttr(c, 'data-testid', 'gantt-tip-open')!;
     act(() => { (reactProps(open)!.onClick as () => void)(); });
+    expect(__test.tab(), 'вкладка сменилась на «Хронологию»').toBe('timeline');
     const focus = __test.stageFocus();
     expect(focus, 'якорь этапа после перехода').not.toBeNull();
     expect(focus!.key).toBe('prod');
@@ -841,11 +862,16 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
     expect(findNodeByAttr(c, 'data-testid', 'gantt-tip'), 'после ухода мыши подсказки нет').toBeNull();
   });
 
-  // === 6. «Сейчас» — отметка на строке текущего этапа ===
-  it('«сейчас»: отметка на строке текущего этапа (merge)', () => {
+  // === 6. «Сейчас» — отметка на правом краю оси (текущий момент), не на начале шага ===
+  it('«сейчас»: отметка на правом краю оси строки текущего этапа (merge)', () => {
     const c = renderGantt();
     const marker = findNodeByAttr(c, 'data-testid', 'gantt-now-marker');
     expect(marker, 'отметка «сейчас»').not.toBeNull();
+    const s = (marker as unknown as { style: Record<string, string> }).style;
+    // Правый край трека = текущий момент; «левая» позиция по startedAt (середина
+    // полосы) — краснеет.
+    expect(parseFloat(s.right), 'маркер прижат к правому краю оси').toBe(0);
+    expect(s.left, 'маркер не на начале этапа').toBeUndefined();
     // Легенда обещает «сейчас», когда есть текущий этап.
     const legend = findNodeByAttr(c, 'data-testid', 'stats-legend')!;
     expect(textNodes(legend).join('')).toContain('сейчас');

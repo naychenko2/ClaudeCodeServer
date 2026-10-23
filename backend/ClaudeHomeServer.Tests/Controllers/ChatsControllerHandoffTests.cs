@@ -179,6 +179,28 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
         runner.Hang = false;
     }
 
+    [Fact]
+    public async Task Перенос_ОтменаКлиентаНаХолодномПути_НеОтказМодели()
+    {
+        // Клиент оборвал запрос: сервис прекращает его отменой, а не HandoffGenerationException
+        // (502 «ход отменён»); преемника нет. Раннер висит и отдаёт LlmTimeoutException, как настоящий
+        var id = await CreateSessionAsync(_client);
+        SeedAgentTurn(id);
+        var manager = _factory.Services.GetRequiredService<SessionManager>();
+        var before = manager.GetAll().Count;
+        var owner = manager.ResolveOwnerId(manager.GetById(id)!);
+        var runner = (StubRunner)_factory.Services.GetRequiredService<ICheapTextRunner>();
+        runner.Hang = true;
+        var service = _factory.Services.GetRequiredService<ChatHandoffService>();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        var act = async () => await service.HandoffAsync(owner, id, cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        manager.GetAll().Count.Should().Be(before, "отмена клиента не создаёт преемника");
+        runner.Hang = false;
+    }
+
     // Заглушка раннера: фиксированный ответ, отказ при назначении на локаль. Hang — для
     // теста потолка холодного пути: вызов висит, пока его не отменят
     private sealed class StubRunner(string answer) : ICheapTextRunner
@@ -193,7 +215,16 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
         public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
         {
-            if (Hang) await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            if (Hang)
+            {
+                // Как настоящий раннер: отмену вызывающего заворачивает в LlmTimeoutException
+                // (наследник InvalidOperationException), а не отдаёт OperationCanceledException
+                try { await Task.Delay(TimeSpan.FromSeconds(2), ct); }
+                catch (OperationCanceledException)
+                {
+                    throw new LlmTimeoutException("ход отменён вызывающим после 4:00 (лимит был 0:05)");
+                }
+            }
             return answer;
         }
 

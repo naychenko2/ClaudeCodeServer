@@ -120,7 +120,8 @@ public class ChatHandoffService(
             // Потолок холодного пути считается целиком: очередь в гейте и вызов раннера.
             // Не уложились — честный 502, а не оборванный на стороне клиента запрос
             using var coldDeadline = new CancellationTokenSource(ColdPathTimeout);
-            var runCt = CancellationTokenSource.CreateLinkedTokenSource(ct, coldDeadline.Token).Token;
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, coldDeadline.Token);
+            var runCt = linked.Token;
             try
             {
                 await gate.WaitAsync(runCt);
@@ -140,7 +141,10 @@ public class ChatHandoffService(
                         note = await cheap.RunAsync(LocalActionCatalog.ChatHandoff,
                             BuildPrompt(source.Name, transcript), ownerId: userId, ct: runCt);
                     }
+                    // Отмену (клиент или наш потолок) не выдаём за отказ модели: раннер заворачивает её
+                    // в InvalidOperationException (LlmTimeoutException), поэтому смотрим на токены
                     catch (InvalidOperationException ex)
+                        when (!ct.IsCancellationRequested && !coldDeadline.IsCancellationRequested)
                     {
                         throw new HandoffGenerationException(ex.Message);
                     }
@@ -163,10 +167,13 @@ public class ChatHandoffService(
                     gate.Release();
                 }
             }
-            catch (OperationCanceledException) when (coldDeadline.IsCancellationRequested)
+            catch (Exception ex) when (ex is not HandoffGenerationException
+                && (ct.IsCancellationRequested || coldDeadline.IsCancellationRequested))
             {
-                // Отказ по нашему потолку, а не по отключению клиента: текст говорит про
-                // время, чтобы человек понял, что перенос можно повторить
+                // Клиент ушёл — просто прекращаем, преемника нет, отказа модели не изображаем
+                ct.ThrowIfCancellationRequested();
+                // Отказ по нашему потолку: текст говорит про время, чтобы человек понял,
+                // что перенос можно повторить
                 throw new HandoffGenerationException("перенос не успел завершиться, попробуйте ещё раз");
             }
         }

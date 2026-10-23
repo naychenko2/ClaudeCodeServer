@@ -161,12 +161,13 @@ public class YandexTtsEngineTests
     }
 
     [Fact]
-    public void Каталог_15ГолосовИПятьАмплуа()
+    public void Каталог_19ГолосовИПятьАмплуа()
     {
         var engine = Make(new StubHandler(_ => AudioOk()));
 
         engine.Voices.Select(v => v.Voice).Should().BeEquivalentTo(
             "alena", "marina", "jane", "omazh", "dasha", "julia", "lera", "masha",
+            "saule_ru", "zamira_ru", "zhanar_ru", "yulduz_ru",
             "zahar", "filipp", "ermil", "madi_ru", "alexander", "kirill", "anton");
         engine.Roles.Should().BeEquivalentTo("good", "evil", "friendly", "whisper", "strict");
         engine.MinSpeed.Should().Be(0.1);

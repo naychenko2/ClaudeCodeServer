@@ -5,7 +5,9 @@ namespace ClaudeHomeServer.Services.Tts;
 // Состав проверен живыми запросами 20.08.2026: каждое имя отвечает 200 на v3. Восемь
 // голосов достались от v1 (alena, jane, omazh, marina, filipp, zahar, ermil, madirus),
 // остальные живут только в v3. `alena` в публичном списке голосов документации не
-// значится, но API её принимает — держим, не закладываясь на вечность.
+// значится, но API её принимает — держим, не закладываясь на вечность (повторно проверено
+// 24.10.2026: 200 с аудио и без роли, и с good). Тогда же добавлены saule_ru, zamira_ru,
+// zhanar_ru и yulduz_ru — только v3, каждая роль проверена живым запросом.
 //
 // Подписи и пол голоса живут ЗДЕСЬ, а не на фронте: разъехавшись с белым списком, они
 // дали бы в форме выбор голоса, которого сервер не примет.
@@ -26,6 +28,7 @@ public static class TtsVoiceCatalog
     {
         "alena", "jane", "omazh", "marina", "filipp", "zahar", "ermil", "madirus", "madi_ru",
         "dasha", "julia", "lera", "masha", "alexander", "kirill", "anton",
+        "saule_ru", "zamira_ru", "zhanar_ru", "yulduz_ru",
     };
 
     // Амплуа голоса: SpeechKit отвечает 400 на роль, которую голос не тянет, поэтому
@@ -48,6 +51,11 @@ public static class TtsVoiceCatalog
         ["alexander"] = ["good"],
         ["kirill"] = ["good", "strict"],
         ["anton"] = ["good"],
+        // neutral у всех — это умолчание без роли, в карту его не пишем
+        ["saule_ru"] = ["strict", "whisper"],
+        ["zamira_ru"] = ["strict", "friendly"],
+        ["zhanar_ru"] = ["strict", "friendly"],
+        ["yulduz_ru"] = ["strict", "friendly", "whisper"],
         // filipp, madirus и madi_ru ролей не поддерживают — их здесь нет намеренно
     };
 
@@ -63,6 +71,10 @@ public static class TtsVoiceCatalog
         new("julia", "Юлия · сдержанная, строгая", Gender.Female, RolesFor("julia")),
         new("lera", "Лера · лёгкая, приветливая", Gender.Female, RolesFor("lera")),
         new("masha", "Маша · живая, с широким диапазоном", Gender.Female, RolesFor("masha")),
+        new("saule_ru", "Сауле · ровная, может шептать", Gender.Female, RolesFor("saule_ru")),
+        new("zamira_ru", "Замира · ровная, дружелюбная", Gender.Female, RolesFor("zamira_ru")),
+        new("zhanar_ru", "Жанар · сдержанная, приветливая", Gender.Female, RolesFor("zhanar_ru")),
+        new("yulduz_ru", "Юлдуз · гибкая, может шептать", Gender.Female, RolesFor("yulduz_ru")),
         new("zahar", "Захар · глубокий, уверенный", Gender.Male, RolesFor("zahar")),
         new("filipp", "Филипп · нейтральный, деловой", Gender.Male, RolesFor("filipp")),
         new("ermil", "Ермил · тёплый, неторопливый", Gender.Male, RolesFor("ermil")),
@@ -72,7 +84,7 @@ public static class TtsVoiceCatalog
         new("anton", "Антон · молодой, лёгкий", Gender.Male, RolesFor("anton")),
     ];
 
-    // Голоса для показа человеку: 15 различимых голосов, а не 16 записей белого списка —
+    // Голоса для показа человеку: 19 различимых голосов, а не 20 записей белого списка —
     // madirus и madi_ru это одно и то же, и в списке им место одно
     public static IReadOnlyList<VoiceInfo> All => Catalog;
 

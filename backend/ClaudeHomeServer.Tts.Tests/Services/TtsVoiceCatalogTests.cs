@@ -104,7 +104,8 @@ public class TtsVoiceCatalogTests
     {
         // Двусторонняя проверка: нет голоса без подписи и подписи без голоса
         foreach (var voice in new[] { "alena", "jane", "omazh", "marina", "filipp", "zahar", "ermil",
-                     "madirus", "madi_ru", "dasha", "julia", "lera", "masha", "alexander", "kirill", "anton" })
+                     "madirus", "madi_ru", "dasha", "julia", "lera", "masha", "alexander", "kirill", "anton",
+                     "saule_ru", "zamira_ru", "zhanar_ru", "yulduz_ru" })
         {
             var canonical = TtsVoiceCatalog.Canonical(voice);
             canonical.Should().NotBeNull($"{voice} есть в белом списке");
@@ -117,5 +118,19 @@ public class TtsVoiceCatalogTests
     {
         TtsVoiceCatalog.All.Single(v => v.Voice == "filipp").Roles.Should().BeEmpty();
         TtsVoiceCatalog.All.Single(v => v.Voice == "masha").Roles.Should().HaveCount(3);
+    }
+
+    // Амплуа новых голосов v3 (живые запросы 24.10.2026): лишняя роль дала бы 400 у Яндекса,
+    // недостающая — спрятала бы рабочее амплуа из формы
+    [Theory]
+    [InlineData("saule_ru", new[] { "strict", "whisper" })]
+    [InlineData("zamira_ru", new[] { "strict", "friendly" })]
+    [InlineData("zhanar_ru", new[] { "strict", "friendly" })]
+    [InlineData("yulduz_ru", new[] { "strict", "friendly", "whisper" })]
+    public void All_НовыеГолосаV3_ЖенскиеСоСвоимиАмплуа(string voice, string[] roles)
+    {
+        var info = TtsVoiceCatalog.All.Single(v => v.Voice == voice);
+        info.Gender.Should().Be(TtsVoiceCatalog.Gender.Female);
+        info.Roles.Should().BeEquivalentTo(roles);
     }
 }

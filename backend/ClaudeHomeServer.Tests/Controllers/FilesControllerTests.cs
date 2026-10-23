@@ -413,6 +413,61 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         body.GetProperty("content").GetString().Should().Be("from main tree");
     }
 
+    // ─── W4-LINK-B (рев.1): «дерева нет» ≠ «дерево не проверено»; своё дерево чата — первично ───
+
+    // Задача без дерева (WorktreePath пуст — норма): её исполнитель работает в корне проекта,
+    // поэтому чат с такой задачей читает main, а не 404. Мутация: убрать в TaskTreeRootForAsync
+    // строку `if (string.IsNullOrWhiteSpace(task.WorktreePath)) return project.RootPath;` —
+    // этот тест краснеет (пустое дерево ушло бы в предикат и дал 404).
+    [Fact]
+    public async Task GetContent_SessionId_ЗадачаБезДерева_ЧитаетMain()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("draft.md", "from main tree");
+        var taskResp = await _client.PostAsJsonAsync($"/api/projects/{id}/tasks", new { title = "task without tree" });
+        taskResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var taskId = JsonSerializer.Deserialize<JsonElement>(await taskResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(id, ClaudeMode.Auto, name: "chat with task without tree", taskId: taskId);
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "пустой WorktreePath — не отказ: дерево задачи — main");
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from main tree");
+    }
+
+    // Своё дерево чата (тумблер «отдельное дерево», AttachWorktreeAsync — та же проверка
+    // существования и числения в worktree list): с sessionId читается оно, а не main. Мутация:
+    // убрать ветку `if (!string.IsNullOrEmpty(s.WorktreePath))` в GetContent — тест краснеет
+    // (прочитался main вместо дерева чата).
+    [Fact]
+    public async Task GetContent_SessionId_СвоёДеревоЧата_Читается()
+    {
+        var mainRoot = Path.Combine(_tempDir, "ownwt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "OwnTreeProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var worktree = Path.Combine(_tempDir, "ownwt_wt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(worktree);
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+        await git.WorktreeAddAsync(null, mainRoot, worktree, "feat/own-" + Guid.NewGuid().ToString("N")[..6]);
+
+        File.WriteAllText(Path.Combine(worktree, "draft.md"), "from chat tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto, name: "chat with own tree");
+        (await sessions.AttachWorktreeAsync(session.Id, worktree)).Should().BeTrue("дерево на диске и в worktree list");
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from chat tree", "своё дерево чата — первичный источник чтения");
+    }
+
     [Fact]
     public async Task SaveContent_TextFile_Returns200()
     {

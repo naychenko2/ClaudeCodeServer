@@ -105,19 +105,26 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         {
             var p = GetProject(projectId);
             // W4-5B2 (п.5.2): ?featureId= — чтение из проверенного дерева эпика, по образцу
-            // GitController.RootFor(?sessionId=). W4-LINK-B (п.14): ?sessionId= — дерево задачи,
-            // к которой привязан чат (Session.TaskId → TaskItem.WorktreePath), с той же сверкой
-            // по git worktree list. featureId явный — он и решает; без параметров — корень
-            // проекта (прежнее поведение). Нет эпика/задачи (нет/чужой/другой проект) или дерево
-            // не проверено — 404, без тихого фолбэка на main: пользователь смотрит не то.
-            // Чат без задачи — дерева задачи нет, читается main (это и есть его дерево).
+            // GitController.RootFor(?sessionId=). W4-LINK-B (п.14, рев.1): ?sessionId= — сначала
+            // СВОЁ дерево чата (Session.WorktreePath — тот же полем, по которому EffectiveRoot
+            // подменяет cwd хода), с той же сверкой по git worktree list; цепочка по задаче
+            // (Session.TaskId → TaskItem.WorktreePath) — запасной вариант, когда у чата своего
+            // дерева нет. «Дерева нет» (пустой WorktreePath — норма для задачи) → main: исполнитель
+            // такой задачи работает в корне проекта. «Дерево есть, но не проверено» → 404 без
+            // тихого фолбэка на main: пользователь смотрит не то. featureId явный — он и решает;
+            // без параметров — корень проекта (прежнее поведение).
             string? root;
             if (!string.IsNullOrEmpty(featureId)) root = await FeatureTreeRootForAsync(p, featureId);
             else if (!string.IsNullOrEmpty(sessionId))
             {
                 var s = sessions.GetOwned(sessionId, UserId);
                 if (s is null || s.ProjectId != p.Id) return NotFound(new { error = "Чат не найден" });
-                root = s.TaskId is null ? p.RootPath : await TaskTreeRootForAsync(p, s.TaskId);
+                if (!string.IsNullOrEmpty(s.WorktreePath))
+                    // Своё дерево чата: без Git нечем сверить — fail-closed, как маршрут featureId.
+                    root = (git is null || UserId is null) ? null
+                        : await git.VerifiedFeatureTreeAsync(UserId, p.RootPath, s.WorktreePath);
+                else if (s.TaskId is not null) root = await TaskTreeRootForAsync(p, s.TaskId);
+                else root = p.RootPath;
             }
             else root = p.RootPath;
             if (root is null) return NotFound(new { error = "Дерево не найдено" });
@@ -148,16 +155,21 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, epic.WorktreePath);
     }
 
-    // W4-LINK-B (п.14): дерево задачи, к которой привязан чат, для чтения — тот же предикат,
-    // что W4-5/W4-5B2 (GitService.VerifiedFeatureTreeAsync): путь задачи существует на диске
-    // и числится в git worktree list главной репы. Задачи нет (несуществующая/чужая/другой
-    // проект) или дерево не проверено — null → 404, без фолбэка на main. Чат без задачи
-    // сюда не приходит: его дерево — корень проекта (решается в GetContent).
+    // W4-LINK-B (п.14, рев.1): запасной путь чтения — дерево задачи, к которой привязан чат,
+    // когда у самого чата своего дерева нет. «Дерева нет» (WorktreePath пуст — норма большинства
+    // задач) — это не отказ: исполнитель такой задачи работает в корне проекта, читается main.
+    // «Дерево есть» — только проверенное тем же предикатом, что W4-5/W4-5B2
+    // (GitService.VerifiedFeatureTreeAsync): путь на диске и числится в git worktree list
+    // главной репы. Задачи нет (несуществующая/чужая/другой проект) или дерево не проверено —
+    // null → 404, без фолбэка на main.
     private async Task<string?> TaskTreeRootForAsync(ClaudeHomeServer.Models.Project project, string taskId)
     {
-        if (tasks is null || git is null || UserId is null) return null;
+        if (tasks is null || UserId is null) return null;
         var task = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == taskId);
         if (task is null || task.ProjectId != project.Id) return null;
+        if (string.IsNullOrWhiteSpace(task.WorktreePath)) return project.RootPath;
+        // Дерево заявлено, а сверить нечем — fail-closed, как маршрут featureId.
+        if (git is null) return null;
         return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, task.WorktreePath);
     }
 

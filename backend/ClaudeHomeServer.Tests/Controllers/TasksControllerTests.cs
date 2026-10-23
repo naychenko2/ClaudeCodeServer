@@ -2490,6 +2490,38 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             holdProp.ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // W4-HOLD-H (контракт §1, :368): ответ DELETE hold — { resumed, expired }: задачи фичи,
+    // которым снятая пауза больше не отказывает запуск, и те, чьё ожидание устройства просрочено
+    // потолком DeviceWaitCeiling. Мутации: вернуть Ok(epic) без расчёта — GetProperty("resumed")
+    // бросит; убрать расчёт resumed — список пуст — красное; отнести просроченную в resumed —
+    // NotContain краснеет.
+    [Fact]
+    public async Task ClearHold_200_ResumedContainsDeviceWaitingTask()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetHold(epicId, "manual");
+
+        var step = await CreateTaskAsync(new { title = "шаг ждёт устройство", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString()!;
+        tm.MarkDeviceWait(stepId, DateTime.UtcNow, "устройство офлайн");
+
+        var stale = await CreateTaskAsync(new { title = "шаг с истёкшим ожиданием", featureId = epicId, role = "step" });
+        var staleId = stale.GetProperty("id").GetString()!;
+        tm.MarkDeviceWait(staleId, DateTime.UtcNow - ProjectCapabilities.DeviceWaitCeiling - TimeSpan.FromHours(1),
+            "устройство офлайн");
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var resumed = body.GetProperty("resumed").EnumerateArray().Select(x => x.GetString()).ToList();
+        var expired = body.GetProperty("expired").EnumerateArray().Select(x => x.GetString()).ToList();
+
+        resumed.Should().Contain(stepId, "снятие паузы снимает запрет гейта — ждущая задача пробуждается");
+        expired.Should().Contain(staleId, "ожидание за потолком — просроченное: в expired");
+        resumed.Should().NotContain(staleId, "просроченное ожидание не пробуждается");
+    }
+
     // Критерий c3: tasks_update с «hold» в теле поле не меняет (UpdateTaskRequest Hold не содержит,
     // лишнее поле игнорируется) — удержание остаётся manual.
     [Fact]

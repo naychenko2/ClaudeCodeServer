@@ -2283,8 +2283,9 @@ public class FeatureProjectorTests
     // W4-HOLD-D2 (R-HOLE-D, находка 1): guard идемпотентности гасит только запись Hold и
     // журнал — цикл пометки живёт на КАЖДом вызове SetHold. Ход, начатый после первой
     // паузы, помечается повторной паузой с тем же reason; стоп уже помеченного не
-    // двигается. Мутации: вернуть guard до цикла → second не помечен → красное; убрать
-    // continue по feature_held → firstStoppedAt сдвигается → красное.
+    // двигается. Мутация: вернуть guard до цикла → second не помечен → красное. Снять
+    // continue по feature_held здесь нельзя наблюдать: у уже помеченной стоит
+    // ExecutorStoppedAt, и IsTurnRunning отсекает её до пометки.
     [Fact]
     public void RepeatedHold_SameReason_MarksTurnStartedAfterFirst()
     {

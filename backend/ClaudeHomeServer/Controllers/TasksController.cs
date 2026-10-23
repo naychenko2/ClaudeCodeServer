@@ -890,7 +890,9 @@ public class TasksController(
         executor.InterruptFeatureTurnsOnHold(featureId, UserId);
         // W4-HOLD-D2 (контракт :364): ответ — прерванные этой паузой задачи. Тот же набор,
         // что поле run.interrupted на странице («на паузе» читает его, а не пустой now), —
-        // не отдельный счёт. Повторный hold с тем же reason идемпотентен: набор не меняется.
+        // не отдельный счёт. Повторный hold с тем же reason идемпотентен по записи и Since,
+        // но набор interrupted пересчитывается: guard только на записи Hold, цикл пометки
+        // живёт на каждом вызове — ходы, начатые после первой паузы, добавляются.
         var after = features.Project(featureId, UserId);
         return Ok(new { interrupted = after?.Interrupted ?? [] });
     }
@@ -912,7 +914,23 @@ public class TasksController(
 
         var epic = tasks.ClearHold(featureId);
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
-        return Ok(epic);
+        // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. resumed — задачи
+        // фичи, которым гейт паузы (FeatureHoldRefusal) после снятия больше не отказывает запуск;
+        // expired — те, чьё ожидание устройства просрочено потолком DeviceWaitCeiling (механика
+        // TaskExecutionService): им запуск уже не светит, пробуждать нечего. Форма — как у hold:
+        // списки id. Эпик в выборку не входит (FeatureId == null): его никто не запускает.
+        var now = DateTime.UtcNow;
+        var resumed = new List<string>();
+        var expired = new List<string>();
+        foreach (var t in tasks.GetByOwner(UserId))
+        {
+            if (t.FeatureId != featureId) continue;
+            if (t.DeviceWaitSince is { } since && now - since >= ProjectCapabilities.DeviceWaitCeiling)
+                expired.Add(t.Id);
+            else if (tasks.FeatureHoldRefusal(t) is null)
+                resumed.Add(t.Id);
+        }
+        return Ok(new { resumed, expired });
     }
 
     // Любая задача фичи хоть раз запускалась — «первый запуска шага» состоялся. Тот же состав

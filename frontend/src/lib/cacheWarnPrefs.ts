@@ -32,6 +32,14 @@ export function setCacheWarnThresholdsFromServer(t?: CacheWarnThresholds | null)
   emit();
 }
 
+// Сброс при logout и cc-unauthorized (F-3r2, покрытие F-4r2): пороги прежнего
+// владельца не должны жить до ответа нового /me. Отдельная функция — чтобы вызов
+// из App.tsx был охраняем тестом (CacheWarnDialog.test.ts), а не inline-строкой.
+export function resetCacheWarnOnLogout(): void {
+  _thresholds = null;
+  emit();
+}
+
 // Сохранить на сервере и применить локально. null — сброс (пустое тело `{}`).
 // 400 бэка приходит Error'ом со status и текстом — вызывающий показывает его как
 // ошибку ввода; состояние при этом не меняется.

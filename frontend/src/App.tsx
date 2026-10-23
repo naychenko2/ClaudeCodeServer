@@ -50,7 +50,7 @@ import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './feature
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
 import { useWallFocusProject, resetWallOwner } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
-import { setCacheWarnThresholdsFromServer } from './lib/cacheWarnPrefs'
+import { resetCacheWarnOnLogout, setCacheWarnThresholdsFromServer } from './lib/cacheWarnPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
@@ -562,7 +562,7 @@ export default function App() {
       clearMe()
       // Личные пороги остывания кэша (F-3r2) — тоже состояние владельца: без сброса
       // следующий вход поднял бы пороги прежнего до ответа нового /me
-      setCacheWarnThresholdsFromServer(null)
+      resetCacheWarnOnLogout()
       resetWallOwner()
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
@@ -1268,7 +1268,7 @@ export default function App() {
     invalidateTokenCache()
     idbClear() // чистим кэш при смене аккаунта/сервера
     clearMe()
-    setCacheWarnThresholdsFromServer(null) // пороги кэша прежнего владельца — см. cc-unauthorized выше
+    resetCacheWarnOnLogout() // пороги кэша прежнего владельца — см. cc-unauthorized выше
     resetWallOwner()
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки

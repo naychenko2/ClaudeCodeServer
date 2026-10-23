@@ -4,6 +4,8 @@
 // рендерится статически, как в RingPillBadge.test.ts; без личного порога работают
 // дефолты (5 мин и 1 мин). Диалог подписан на стор: поздний засев обновляет поля,
 // пока пользователь не правил их руками; числа разбираются строго («5abc» — ошибка).
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -19,7 +21,7 @@ vi.mock('../../../lib/offline', () => ({
 }));
 
 import {
-  getCacheWarnThresholds, saveCacheWarnThresholds,
+  getCacheWarnThresholds, resetCacheWarnOnLogout, saveCacheWarnThresholds,
   setCacheWarnThresholdsFromServer,
 } from '../../../lib/cacheWarnPrefs';
 import { CacheWarnDialog } from '../CacheWarnDialog';
@@ -260,12 +262,20 @@ describe('CacheWarnDialog: поля и дефолты', () => {
     root.unmount();
   });
 
-  it('logout: сброс стора — до нового /me работают дефолты (F-3r2)', () => {
+  it('logout: сброс стора — до нового /me работают дефолты (F-3r2, F-4r2)', () => {
     setCacheWarnThresholdsFromServer({ warn1hMin: 10, warn5mMin: 2 }); // прежний владелец
     // logout и cc-unauthorized в App.tsx зовут ровно это до ответа следующего /me
-    setCacheWarnThresholdsFromServer(null);
+    resetCacheWarnOnLogout();
     const { root } = openDialog();
     expect(inputValues()).toEqual(['5', '1']);
     root.unmount();
+  });
+
+  it('App.tsx вызывает resetCacheWarnOnLogout на logout и cc-unauthorized (F-4r2)', () => {
+    // Сам сброс проверяется тестом выше; здесь — wiring: удаление любого из двух
+    // вызовов из App.tsx (мутация) краснит этот тест.
+    const src = readFileSync(fileURLToPath(new URL('../../../App.tsx', import.meta.url)), 'utf8');
+    const calls = src.match(/resetCacheWarnOnLogout\(\)/g);
+    expect(calls?.length, 'вызовы сброса в App.tsx: cc-unauthorized и logout').toBe(2);
   });
 });

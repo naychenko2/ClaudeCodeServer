@@ -704,8 +704,8 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
               </span>
             ))}
           </div>
-          // Major 3 (ревью): блок «Права». Пункт 3 вердикта: добавленные права — снова
-          // warning-плашка «Новые права» (как до правки), снятые — тихие строки.
+          {/* Major 3 (ревью): блок «Права». Пункт 3 вердикта: добавленные права — снова
+            warning-плашка «Новые права» (как до правки), снятые — тихие строки. */}
           {((diff.manifest?.permissionsAdded.length ?? 0) + (diff.manifest?.permissionsRemoved.length ?? 0)) > 0 && (
             <>
               <SectionLabel>Права</SectionLabel>
@@ -814,8 +814,8 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
             </>
           )}
         </div>
-        // Major 2 (ревью): вид «Файл» собран из строк diff — честно предупреждаем,
-        // что это изменённые участки, а не весь файл.
+        {/* Major 2 (ревью): вид «Файл» собран из строк diff — честно предупреждаем,
+          что это изменённые участки, а не весь файл. */}
         {view === 'file' && mark === 'mod' && (
           <Notice tone="info" icon={List} title="Показаны только изменённые строки">
             Контекст и новые строки из сравнения с установленной версией — весь файл сервер не отправляет.
@@ -869,9 +869,9 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
               display: 'flex', alignItems: 'center', gap: SP.xs, height: 44, padding: '0 4px',
               background: C.bgCard, borderBottom: `1px solid ${C.borderLight}`, flexShrink: 0,
             }}>
-              // Пункт 1 вердикта: Back ведёт к списку (side), а не к сводке — подпись
-              // соответствует действию, а не обещает другой уровень. Пункт 4: при diffError
-              // списка изменённых файлов нет («Файлы не сравнены») — подпись не обещает его.
+              {/* Пункт 1 вердикта: Back ведёт к списку (side), а не к сводке — подпись
+                соответствует действию, а не обещает другой уровень. Пункт 4: при diffError
+                списка изменённых файлов нет («Файлы не сравнены») — подпись не обещает его. */}
               <BackButton onClick={() => setListOpen(true)} ariaLabel={tab === 'files' ? 'Назад к списку файлов' : diffError ? 'Назад к разделу «Изменения»' : 'Назад к списку изменённых файлов'}>
                 <span style={{ fontSize: FS.base, color: C.textSecondary }}>{tab === 'files' ? 'Файлы' : 'Изменения'}</span>
               </BackButton>

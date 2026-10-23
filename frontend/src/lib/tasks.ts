@@ -628,9 +628,10 @@ export function deviceWaitDuration(sinceIso: string, now: number = Date.now()): 
   return rest ? `${h} ч ${rest} мин` : `${h} ч`;
 }
 
-// Причина остановки исполнителя человеческим языком — зеркало ExecutorStopText на бэке
-// (TaskExecutionService.ExecutorStopText): тот же текст рисуется на плашке TaskCard,
+// Причина остановки исполнителя человеческим языком: текст рисуется на плашке TaskCard,
 // чтобы причина терминальной остановки была видна на карточке, а не только в уведомлении бэка.
+// Часть кейсов опережает бэк (feature_held — бэковая формулировка ещё не сверена, дефект
+// 93658efc); синхронизация с ExecutorStopText на бэке — при закрытии 93658efc.
 // Неизвестная причина (пометку поставил более новый бэк) — общая формулировка, не ключ.
 export function executorStopText(reason: string | null | undefined, deviceName?: string | null): string {
   switch (reason) {

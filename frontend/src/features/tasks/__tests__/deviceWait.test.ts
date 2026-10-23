@@ -120,6 +120,22 @@ describe('терминальная остановка исполнителя', (
     expect(html).not.toContain('feature_held');
   });
 
+  // W4-HOLD-F5 (хвост R-F4R): чип паузы размечен глифом Pause (тот же, что у кнопки
+  // «Пауза» в шапке фичи), а не Unplug — «устройство отключено» читается как поломка.
+  // Мутация: вернуть в StateChip иконку Unplug для feature_held — тест краснеет.
+  it('feature_held — чип отмечен паузой, а не «отключённым устройством»', () => {
+    const html = render(task({ executorStopReason: 'feature_held' }));
+    expect(html).toContain('lucide-pause');
+    expect(html).not.toContain('lucide-unplug');
+  });
+
+  // Ожидание устройства — действительно «связь потеряна»: там Unplug остаётся.
+  it('ожидание устройства — глиф Unplug, а не Pause', () => {
+    const html = render(task({ deviceWaitSince: new Date(Date.now() - 60000).toISOString() }));
+    expect(html).toContain('lucide-unplug');
+    expect(html).not.toContain('lucide-pause');
+  });
+
   it('feature_held_expired — причина на карточке человеческим текстом, не кодом', () => {
     const html = render(task({ executorStoppedAt: '2026-10-23T10:00:00Z', executorStopReason: 'feature_held_expired' }));
     expect(html).toContain('Чат исполнителя исчез за время паузы');

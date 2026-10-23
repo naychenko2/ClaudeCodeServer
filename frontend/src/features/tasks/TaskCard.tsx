@@ -10,7 +10,7 @@ import type { Task } from '../../types';
 // Иконки: Bug — дефект (волна 2 фичи карточек дефектов),
 // Check/SquareStack — контекстное меню «В контекст чата» (фича chat-context).
 // Объединяем импорты обеих веток.
-import { Bug, Check, Repeat, SquareStack, Unplug } from 'lucide-react';
+import { Bug, Check, Pause, Repeat, SquareStack, Unplug } from 'lucide-react';
 import { C, FONT, FS, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Badge, Menu, MenuItem } from '../../components/ui';
@@ -32,10 +32,24 @@ interface Props {
   deviceName?: string;
 }
 
-// Плашка состояния исполнителя: тон warning — «стоит и ждёт», danger — «встал насовсем»
-function StateChip({ tone, title, children }: { tone: 'warning' | 'danger'; title?: string; children: React.ReactNode }) {
+// Плашка состояния исполнителя: тон warning — «стоит и ждёт», danger — «встал насовсем».
+// Глиф по причине (W4-HOLD-F5, хвост R-F4R): штатная пауза фичи — Pause, тот же глиф,
+// что у кнопки «Пауза» в шапке фичи; «устройство отключено» (Unplug) читается как поломка,
+// а пауза — намерение, не авария.
+function StateChip({
+  tone,
+  title,
+  icon = Unplug,
+  children,
+}: {
+  tone: 'warning' | 'danger';
+  title?: string;
+  icon?: typeof Unplug;
+  children: React.ReactNode;
+}) {
+  const Icon = icon;
   return (
-    <Badge tone={tone} size="xs" title={title} icon={<Unplug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}>
+    <Badge tone={tone} size="xs" title={title} icon={<Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}>
       {children}
     </Badge>
   );
@@ -137,7 +151,11 @@ function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceNam
               // Причина — сам текст плашки, а не подсказка по ховеру: фраза переносится
               // внутри чипа (Badge обрезал бы её многоточие на узкой карточке).
               // Тон по причине: пауза фичи — предупреждение, не поломка (W4-HOLD-F4).
-              <StateChip tone={executorStopTone(task.executorStopReason)}>
+              // Глиф тоже по причине: пауза — Pause, а не «отключённое устройство» (W4-HOLD-F5).
+              <StateChip
+                tone={executorStopTone(task.executorStopReason)}
+                icon={task.executorStopReason === 'feature_held' ? Pause : Unplug}
+              >
                 <span style={{ whiteSpace: 'normal' }}>
                   {executorStopText(task.executorStopReason, deviceName)}
                 </span>

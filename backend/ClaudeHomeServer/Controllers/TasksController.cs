@@ -19,7 +19,6 @@ using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -108,7 +107,6 @@ public class TasksController(
     TaskManager tasks, ISessionBroadcaster broadcaster, TaskAiService ai, ProjectManager projects,
     PersonaManager personas, TaskExecutionService executor,
     PersonaBindingsService bindings, SessionManager sessions, ISphereDirectory spheres,
-    ILogger<TasksController> log,
     // Подсистема Notes отключаемая: null — обратная запись чекбокса в заметку-источник
     // тихо пропускается (SyncTaskToNoteAsync ниже, флаг notes-task-sync и так no-op
     // для задач не из заметки).

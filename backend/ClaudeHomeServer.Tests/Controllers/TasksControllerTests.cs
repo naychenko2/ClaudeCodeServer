@@ -155,11 +155,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // интеграционно достижим, а не только approx). null — подсистема журнала выключена.
     // serviceToken (W4-HOLD-B2): claim typ=svc — тот же признак, что в PluginBridgeController;
     // для проверки отказа 403 на ручках hold/clear.
-    // log (R-HOLD-D п.2): записывающий логгер — для тестов, где важен сам факт записи в логе
-    // (сбой фонового возврата не должен теряться молча). По умолчанию — NullLogger, как раньше.
     private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
-        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false,
-        ILogger<TasksController>? log = null)
+        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -171,7 +168,6 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             bindings: _factory.Services.GetRequiredService<PersonaBindingsService>(),
             sessions: _factory.Services.GetRequiredService<SessionManager>(),
             spheres: _factory.Services.GetRequiredService<ISphereDirectory>(),
-            log: log ?? NullLogger<TasksController>.Instance,
             noteSync: null,
             features: _factory.Services.GetRequiredService<FeatureProjector>(),
             git: git,
@@ -782,7 +778,6 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             bindings: _factory.Services.GetRequiredService<PersonaBindingsService>(),
             sessions: _factory.Services.GetRequiredService<SessionManager>(),
             spheres: _factory.Services.GetRequiredService<ISphereDirectory>(),
-            log: NullLogger<TasksController>.Instance,
             noteSync: null,
             features: _factory.Services.GetRequiredService<FeatureProjector>(),
             git: null,
@@ -876,7 +871,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
-            log: NullLogger<TasksController>.Instance, noteSync: null, features: null);
+            noteSync: null, features: null);
 
         var result = controller.GetFeatures(null);
 
@@ -947,7 +942,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
-            log: NullLogger<TasksController>.Instance, noteSync: null, features: null);
+            noteSync: null, features: null);
 
         var result = await controller.GetFeature("any", null);
 
@@ -1439,7 +1434,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
-            log: NullLogger<TasksController>.Instance, noteSync: null, features: null);
+            noteSync: null, features: null);
 
         var result = controller.MergeFeature("any").GetAwaiter().GetResult();
 
@@ -2546,7 +2541,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             m => m.Contains("продолжи"), "реплика-продолжение уходит в чат исполнителя");
     }
 
-    // R-HOLD-K (критерий c1): порядок «причина читается ДО ClearHold» (TasksController.cs:939)
+    // R-HOLD-K (критерий c1): порядок «причина читается ДО ClearHold» (TasksController.cs:940)
     // сервисные тесты не защищают — они зовут сервис напрямую, а reason передаёт сама ручка.
     // Здесь — связка на уровне HTTP: DELETE hold с reason=draft → в ключевой чат уходит
     // карточка «Фича запущена», и формулировки «Пауза снята» в ней нет (draft-ветка
@@ -2880,7 +2875,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
-            log: NullLogger<TasksController>.Instance, noteSync: null, features: null);
+            noteSync: null, features: null);
 
         var result = controller.GetFeaturesIndex(null);
 

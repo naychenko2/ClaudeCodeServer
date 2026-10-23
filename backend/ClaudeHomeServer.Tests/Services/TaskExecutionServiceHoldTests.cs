@@ -949,6 +949,68 @@ public class TaskExecutionServiceHoldTests : IDisposable
         _sessions.GetById(chat.Id).Should().BeNull("возвращённый срок течёт от снятия: уборка сносит чат");
     }
 
+    // R-HOLD-K3 (хвост вердикта): инвариант «ни один путь ResumeFeatureTurnsAfterHold не
+    // выходит наружу» — ручка зовёт сервис без обёртки (TasksController.cs:953), опираясь
+    // на обхват всех сбойных веток внутри сервиса. Здесь один вызов проходит через все
+    // четыре catch метода: рассылку в expired-ветке (:1228), сбой продолжения (:1242),
+    // рассылку об успешном продолжении (:1258) и карточку в ключевой чат (:1349).
+    // Мутация: убрать try/catch expired-ветки (:1228) — исключение доходит до теста, он
+    // краснеет. Внутренний catch (:1258) вложен во внешний (:1242): его снятие утечки не
+    // даёт — outer ловит, проверено мутацией.
+    [Fact]
+    public async Task ResumeFeatureTurnsAfterHold_NoInternalFailureEscapes()
+    {
+        var user = _userStore.Add("hold-no-escape", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var gone = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг с исчезнувшим чатом", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var broken = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг со сбоем продолжения", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var ok = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг, который продолжится", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var goneChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "gone",
+            taskId: gone.Id);
+        var brokenChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "broken",
+            taskId: broken.Id);
+        var okChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "ok",
+            taskId: ok.Id);
+        _tasks.MarkClaudeStarted(gone.Id, goneChat.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeStarted(broken.Id, brokenChat.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeStarted(ok.Id, okChat.Id, DateTime.UtcNow);
+        var brokenAdapter = SetRunningTurn(brokenChat.Id);
+        brokenAdapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>())).Throws(new InvalidOperationException("чат оборван"));
+        SetRunningTurn(okChat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+        keyAdapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>())).Throws(new InvalidOperationException("ключевой чат недоступен"));
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        await _sessions.DeleteAsync(goneChat.Id); // чат исчез за паузу
+
+        // Рассылка владельцу отказывает на каждом вызове: оба catch рассылки отработаны.
+        var failing = new Mock<ISessionBroadcaster>();
+        failing.Setup(b => b.ToOwner(It.IsAny<string>(), It.IsAny<ServerMessage>()))
+            .Throws(new InvalidOperationException("рассылка недоступна"));
+        var sut = new TaskExecutionService(_tasks, _sessions, _personas, failing.Object, _push, _notif,
+            NullLogger<TaskExecutionService>.Instance, _config, kb: _notesKb);
+
+        _tasks.ClearHold(epic.Id);
+        // Без обёртки: если любая ветка выпустит exception — тест умрёт, это и есть проверка.
+        var resumed = await sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+
+        resumed.Should().Be(1, "сбой одного шага не обрывает цикл: здоровый шаг продолжен");
+        _tasks.GetById(gone.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldExpiredReason,
+            "терминальная пометка поставлена, несмотря на сбой рассылки");
+        _tasks.GetById(broken.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+            "продолжение сорвалось — пометка остаётся, шаг не возвращён");
+        _tasks.GetById(ok.Id)!.ExecutorStopReason.Should().BeNull(
+            "пометка гасится, несмотря на сбой уведомления: шаг возвращён в работу");
+    }
+
     // W4-HOLD-N (хвост R-HOLD-D2, критерий c2): страховка необратимой заморозки — при
     // удалении эпика на паузе его шаги больше никогда не «сняются», и их чаты остались бы
     // вечными. Ручка удаления зовёт RestoreFrozenChatsAfterFeatureDelete до Delete; здесь —

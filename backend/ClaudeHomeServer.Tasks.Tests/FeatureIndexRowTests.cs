@@ -579,4 +579,62 @@ public class FeatureIndexRowTests
         var row = Row(epic, [epic], [Session("chat-live", personaId: "p-live")]);
         row.OrchestratorPersonaId.Should().Be("p-created", "нет запустившей → создатель эпика");
     }
+
+    // Первое звено цепочки чужое (не в снимке) → ключевое — второе живое; персона берётся
+    // из него, а не из полей эпика. Мутация: передать в OrchestratorOf сырое первое звено
+    // вместо найденного key (отдельный расчёт) → ключа в снимке нет → фолбэк на "p-launched"
+    // ≠ "p-live" → краснеет.
+    [Fact]
+    public void OrchestratorOf_ПервоеЗвеноЧужое_КлючевоеВторое()
+    {
+        var epic = Epic("epic-orch-chain", sourceSessionId: "chat-foreign", executorLaunchedBy: "chat-live");
+        epic.ExecutorLaunchedByPersonaId = "p-launched";
+        epic.CreatedByPersonaId = "p-created";
+        var row = Row(epic, [epic], [Session("chat-live", personaId: "p-live")]);
+        row.KeySessionId.Should().Be("chat-live", "первое звено чужое → ключевое — второе живое");
+        row.OrchestratorPersonaId.Should().Be("p-live", "персона найденного ключевого, не поля эпика");
+    }
+
+    // Ключевой чат в архиве, но в снимке владельца — живый (то же правило, что у KeySession:
+    // решает присутствие в снимке, флаг архива его не исключает).
+    [Fact]
+    public void OrchestratorOf_ЖивойКлючевойВАрхиве()
+    {
+        var epic = Epic("epic-orch-arch", sourceSessionId: "chat-arch");
+        epic.ExecutorLaunchedByPersonaId = "p-launched";
+        var row = Row(epic, [epic], [Session("chat-arch", archived: true, personaId: "p-arch")]);
+        row.KeySessionId.Should().Be("chat-arch", "архивный ключевой в снимке — всё равно ключевой");
+        row.KeyArchived.Should().BeTrue();
+        row.OrchestratorPersonaId.Should().Be("p-arch", "персона архивного ключевого — первое звено");
+    }
+
+    // Контракт: OrchestratorOf получает уже найденный в BuildRow key и не пересчитывает его
+    // сам. Прямой вызов: передан живой "chat-extra" (не из цепочки) — функция верит аргументу.
+    // Мутация (игнорировать параметр, пересчитать своё звено): "chat-live" → "p-live"
+    // ≠ "p-extra" → краснеет.
+    [Fact]
+    public void OrchestratorOf_ИспользуетПереданныйKey_БезПересчёта()
+    {
+        var epic = Epic("epic-orch-pass", sourceSessionId: "chat-foreign", executorLaunchedBy: "chat-live");
+        epic.ExecutorLaunchedByPersonaId = "p-launched";
+        epic.CreatedByPersonaId = "p-created";
+        var orchestrator = FeatureProjector.OrchestratorOf(
+            epic,
+            [Session("chat-live", personaId: "p-live"), Session("chat-extra", personaId: "p-extra")],
+            "chat-extra");
+        orchestrator.Should().Be("p-extra", "переданный key — точка правды, не пересчитанный");
+    }
+
+    // Звенья цепочки проверяются одинаково: пустое/пробельное пропускается (раньше поля эпика
+    // шли через ?? — пустая строка выходила наружу). Мутация: вернуть ?? на полях эпика →
+    // "" вместо "p-created" → краснеет.
+    [Fact]
+    public void OrchestratorOf_ПустоеЗвеноЦепочки_Пропускается()
+    {
+        var epic = Epic("epic-orch-empty");
+        epic.ExecutorLaunchedByPersonaId = "";
+        epic.CreatedByPersonaId = "p-created";
+        Row(epic, [epic]).OrchestratorPersonaId.Should().Be("p-created",
+            "пустое звено пропускается — та же проверка, что у ключевого чата");
+    }
 }

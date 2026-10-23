@@ -1392,7 +1392,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             key,
             keySession?.Archived ?? false,
             keySession?.ProjectId,
-            OrchestratorOf(run.Epic, featureTasks, sessions),
+            OrchestratorOf(run.Epic, sessions, key),
             chatCount,
             run.Epic.WorktreeBranch,
             run.Epic.CreatedAt,
@@ -1437,21 +1437,23 @@ public sealed class FeatureProjector(TaskManager tasks)
         return chain.Distinct().ToList();
     }
 
-    // Оркестратор фичи (W4-1B): персона, ведущая фичу. Цепочка звеньев: персона ключевого
-    // чата — только если он в снимке владельца (тот же fail-closed, что у KeySession:
-    // чужой/удалённый ключевой чат пропускается) → персона, запустившая исполнителя эпика
-    // (ExecutorLaunchedByPersonaId) → персона, создавшая эпик (CreatedByPersonaId).
-    // Ничего нет → null. Чистая функция — на ней тесты (FeatureIndexRowTests).
-    internal static string? OrchestratorOf(TaskItem epic, IReadOnlyList<TaskItem> featureTasks,
-        IReadOnlyCollection<FeatureIndexSession> sessions)
+    // Оркестратор фичи (W4-1B): персона, ведущая фичу. Ключевой чат приходит готовым из
+    // BuildRow (одна точка правды: здесь он не пересчитывается — KeySession уже отфильтровал
+    // чужой/удалённый по снимку владельца). Цепочка звеньев: персона ключевого чата →
+    // персона, запустившая исполнителя эпика (ExecutorLaunchedByPersonaId) → персона,
+    // создавшая эпик (CreatedByPersonaId). Каждое звено проверяется одинаково: пустое/пробельное
+    // пропускается. Ничего нет → null. Чистая функция — на ней тесты (FeatureIndexRowTests).
+    internal static string? OrchestratorOf(TaskItem epic,
+        IReadOnlyCollection<FeatureIndexSession> sessions, string? key)
     {
-        var key = KeySession(epic, featureTasks, sessions);
         if (key is not null)
         {
             var persona = sessions.FirstOrDefault(s => s.Id == key)?.PersonaId;
             if (!string.IsNullOrWhiteSpace(persona)) return persona;
         }
-        return epic.ExecutorLaunchedByPersonaId ?? epic.CreatedByPersonaId;
+        if (!string.IsNullOrWhiteSpace(epic.ExecutorLaunchedByPersonaId)) return epic.ExecutorLaunchedByPersonaId;
+        if (!string.IsNullOrWhiteSpace(epic.CreatedByPersonaId)) return epic.CreatedByPersonaId;
+        return null;
     }
 
     // «Финал принят»: задача финала ЗАКРЫТА (Done) и вердикт accepted/accepted_with_remarks.

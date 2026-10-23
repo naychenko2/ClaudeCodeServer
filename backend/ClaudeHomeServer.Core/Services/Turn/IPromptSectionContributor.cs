@@ -86,7 +86,7 @@ public sealed record PromptSessionContext(
     // Живого человека у хода нет — см. TurnAudience.IsUnattended
     bool Unattended = false,
     // Хук PreToolUse «потребители правленого файла» реально доедет до CLI хода (local-владелец на Linux, http-адрес).
-    // false — у container-владельца и на Windows-хосте хука нет, потребителей несёт ConsumersTailContributor
+    // Только диагностика: хвост первого хода ConsumersTailContributor идёт независимо от признака (правки через Bash хук не видит)
     bool ConsumersHookActive = false);
 
 public static class TurnAudience

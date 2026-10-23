@@ -105,12 +105,13 @@ public class ConsumersTailContributorTests
     }
 
     [Fact]
-    public async Task ХукЕсть_ИлиНеИсполнитель_ИлиНеПервыйХод_СекцияВыключена()
+    public async Task НеИсполнительИлиНеПервыйХод_СекцияВыключена_ХукНеВлияет()
     {
         var (sut, dir, data) = await Prepare(consumers: 3);
         try
         {
-            sut.IsEnabled(Ctx(dir, hookActive: true)).Should().BeFalse("хук работает — дубля нет");
+            sut.IsEnabled(Ctx(dir, hookActive: true)).Should().BeTrue(
+                "у local-владельца на Linux хук есть, но правки через Bash он не видит — хвост едет всем");
             sut.IsEnabled(Ctx(dir, task: false)).Should().BeFalse();
             sut.IsEnabled(Ctx(dir, messages: 2)).Should().BeFalse();
         }
@@ -151,5 +152,77 @@ public class ConsumersTailContributorTests
             (await sut.BuildAsync(Ctx(dir), TaskText)).Should().BeNull();
         }
         finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task ИмяФайлаБезКаталога_НаходитсяОбходомДерева()
+    {
+        var (sut, dir, data) = await Prepare(consumers: 3);
+        try
+        {
+            var text = (await sut.BuildAsync(Ctx(dir), "Читать: Lib.cs:12"))!.Sections.Single().Text;
+
+            text.Should().Contain("Потребители src/Lib.cs ");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task ИмяФайлаБезКаталога_НеоднозначноеИлиВСлужебномКаталоге_Молчание()
+    {
+        var (sut, dir, data) = await Prepare(consumers: 3);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "other"));
+            File.WriteAllText(Path.Combine(dir, "other", "Lib.cs"), "class Lib {}");
+            (await sut.BuildAsync(Ctx(dir), "Читать: Lib.cs")).Should().BeNull("два файла с таким именем");
+
+            Directory.CreateDirectory(Path.Combine(dir, "node_modules", "pkg"));
+            File.WriteAllText(Path.Combine(dir, "node_modules", "pkg", "Dep.ts"), "x");
+            ConsumersTailContributor.ExtractFiles("Dep.ts", dir).Should().BeEmpty("служебные каталоги не обходим");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task ФайлыИзТекста_БерутсяПоПорядкуПоявленияНеБольшеЛимита()
+    {
+        var (sut, dir, data) = await Prepare(consumers: 1);
+        try
+        {
+            foreach (var n in new[] { "A", "B", "C", "D" })
+                File.WriteAllText(Path.Combine(dir, "src", n + ".cs"), "class X {}");
+
+            var files = ConsumersTailContributor.ExtractFiles(
+                "Описание: src/B.cs, src/A.cs, src/Lib.cs. Правила: src/D.cs, src/C.cs", dir);
+
+            files.Should().Equal("src/B.cs", "src/A.cs", "src/Lib.cs");
+            files.Count.Should().Be(ConsumersTailContributor.MaxFiles);
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task ГрафДерева_НеПостроен_ОтвечаетПоОсновномуДеревуСПометкой()
+    {
+        var (sut, mainDir, data) = await Prepare(consumers: 3);
+        var worktree = Path.Combine(Path.GetTempPath(), "cgtail_wt_" + Guid.NewGuid().ToString("N")[..10]);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(worktree, "src"));
+            File.WriteAllText(Path.Combine(worktree, "src", "Lib.cs"), "class Lib {}");
+            var ctx = new PromptSessionContext(new Session { TaskExecution = true, MessageCount = 1 }, "owner", null,
+                worktree, mainDir, ConsumersHookActive: false);
+
+            var text = (await sut.BuildAsync(ctx, TaskText))!.Sections.Single().Text;
+
+            text.Should().Contain(ConsumersTailContributor.BuildingNote);
+            text.Should().Contain("Потребители src/Lib.cs (файлов: 3");
+        }
+        finally
+        {
+            Cleanup(mainDir, data);
+            if (Directory.Exists(worktree)) Directory.Delete(worktree, true);
+        }
     }
 }

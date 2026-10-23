@@ -386,8 +386,7 @@ public class TasksController(
                     // Дефект a7b3b85d: verdict терялся при PUT (MCP tasks_complete его копировал,
                     // REST — нет) — через REST нельзя было закрыть review/qa/final фичи с вердиктом.
                     Verdict = req.Verification.Verdict,
-                    ReturnReason = string.IsNullOrWhiteSpace(req.Verification.ReturnReason)
-                        ? null : req.Verification.ReturnReason.Trim(),
+                    ReturnReason = req.Verification.ReturnReason, // санирует TaskManager
                 },
             };
         }

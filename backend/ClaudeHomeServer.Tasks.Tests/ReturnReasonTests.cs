@@ -83,6 +83,38 @@ public class ReturnReasonTests : IDisposable
         _sut.GetById(task.Id)!.Verification!.ReturnReason.Should().BeNull();
     }
 
+    [Fact]
+    public void Returned_ПричинаСПробелами_СохраняетсяБезПробелов()
+    {
+        var task = NewTask();
+
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Verification: V(TaskVerdicts.Returned, " size ")));
+
+        _sut.GetById(task.Id)!.Verification!.ReturnReason.Should().Be("size",
+            "санирование в TaskManager: REST и MCP получают один исход");
+    }
+
+    [Theory]
+    [InlineData(TaskVerdicts.Returned)]
+    [InlineData(TaskVerdicts.Accepted)]
+    public void ПричинаИзОдногоПробела_ВСторНеПопадает_ХранитсяNull(string verdict)
+    {
+        var task = NewTask();
+
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Verification: V(verdict, "   ")));
+
+        _sut.GetById(task.Id)!.Verification!.ReturnReason.Should().BeNull();
+    }
+
+    [Fact]
+    public void Создание_ПричинаСПробелами_СохраняетсяБезПробелов()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("t",
+            Verification: V(TaskVerdicts.Returned, " quality ")));
+
+        task.Verification!.ReturnReason.Should().Be("quality");
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("  ")]

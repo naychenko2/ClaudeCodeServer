@@ -1,6 +1,5 @@
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Composition;
-using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Turn;
 using Microsoft.Extensions.Logging;
 
@@ -11,8 +10,9 @@ namespace ClaudeHomeServer.Services.CodeGraph;
 // Windows-хосте и не видит правок через Bash; здесь сервер сам берёт файлы, названные в тексте
 // первого хода, и спрашивает граф тем же режимом «по файлу» (NeighborsByFileAsync).
 //
-// Только там, где хука нет (PromptSessionContext.ConsumersHookActive = false): у local-владельца
-// на Linux хук держит правку сам, а дубль потребовал бы общего состояния между хуком и сервером.
+// Секция идёт по ВСЕМ владельцам, в том числе там, где хук работает (local на Linux): правка через
+// Bash (printf >> file) хук Edit|Write не видит. Дубль «хук + хвост» принят: ≤ 20 строк, один раз
+// на первом ходе, только файлы постановки; срабатывают они в разные моменты.
 // Агент ничего не спрашивает; нет графа, файл вне графа, ответ дольше 3 с, сбой — молчание.
 // Секция едет InTurnTail: нестабильный текст не должен попадать в системный блок.
 public sealed class ConsumersTailContributor : IPromptSectionContributor
@@ -25,10 +25,17 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     public const string BuildingNote =
         "Граф этого дерева ещё строится; ниже — по основному дереву проекта (ветка может отличаться).";
 
-    // Путь с каталогом и расширением файла, который понимают провайдеры графа; хвост «:123» — номер строки
+    // Путь (с каталогом или bare-имя) с расширением файла, который понимают провайдеры графа;
+    // хвост «:123» — номер строки
     private static readonly Regex FilePattern = new(
-        @"(?<![\w/.\-])(/?(?:[\w.\-]+/)+[\w.\-]+\.(?:cs|tsx?))(?::\d+)?(?![\w/])",
+        @"(?<![\w/.\-])(/?(?:[\w.\-]+/)*[\w.\-]+\.(?:cs|tsx?))(?::\d+)?(?![\w/])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    // Bare-имя ищем обходом не глубже BareSearchDepth, без служебных каталогов; неоднозначное — молчание
+    private const int BareSearchDepth = 6;
+    private const int BareSearchDirLimit = 5000;
+    private static readonly HashSet<string> SkipDirs = new(StringComparer.OrdinalIgnoreCase)
+        { "node_modules", "bin", "obj", "dist", "packages" };
 
     private readonly CodeGraphService _graphs;
     private readonly CodeGraphQueryService _queries;
@@ -54,7 +61,6 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.Session.TaskExecution
         && sessionContext.Session.MessageCount <= 1
-        && !sessionContext.ConsumersHookActive
         && sessionContext.ServerContent
         && !string.IsNullOrWhiteSpace(sessionContext.RootPath)
         && _toolGate.IsServerToolEnabled(sessionContext.OwnerId, sessionContext.Persona, "codegraph");
@@ -66,9 +72,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         if (string.IsNullOrWhiteSpace(turnText) || string.IsNullOrWhiteSpace(root)) return null;
         try
         {
-            var files = ExtractFiles(turnText, root);
-            if (files.Count == 0) return null;
-            var text = await BuildTextAsync(files, root, sessionContext.MainRootPath)
+            var text = await BuildTextAsync(turnText, root, sessionContext.MainRootPath)
                 .WaitAsync(_timeout);
             return text is null
                 ? null
@@ -82,10 +86,13 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         }
     }
 
-    private async Task<string?> BuildTextAsync(IReadOnlyList<string> files, string root, string? mainRoot)
+    private async Task<string?> BuildTextAsync(string turnText, string root, string? mainRoot)
     {
-        // Не даём работе завершиться синхронно: потолок WaitAsync обязан действовать и на быстрый граф
+        // Не даём работе завершиться синхронно: потолок WaitAsync обязан действовать и на быстрый граф,
+        // и на обход дерева при поиске bare-имён
         await Task.Yield();
+        var files = ExtractFiles(turnText, root);
+        if (files.Count == 0) return null;
         var blocks = new List<string>();
         foreach (var file in files)
         {
@@ -112,26 +119,76 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         return fallback.HasGraph ? (fallback.Result, BuildingNote) : (null, null);
     }
 
-    // Файлы постановки, существующие в дереве: путь от корня дерева, без «..», не больше MaxFiles
+    // Файлы постановки, существующие в дереве: путь от корня дерева, без «..», не больше MaxFiles.
+    // Файлы берутся из всего текста хода по порядку появления (описание задачи идёт раньше правил,
+    // а MaxFiles ограничивает вклад хвоста) — порядок и лимит зафиксированы тестом.
     internal static IReadOnlyList<string> ExtractFiles(string turnText, string root)
     {
         var rootFull = Path.GetFullPath(root);
         var found = new List<string>();
+        Dictionary<string, List<string>>? byName = null;
         foreach (Match m in FilePattern.Matches(turnText))
         {
             var raw = m.Groups[1].Value;
-            var rel = raw.StartsWith('/')
-                ? (raw.StartsWith(rootFull.TrimEnd('/') + "/", StringComparison.Ordinal)
-                    ? raw[(rootFull.TrimEnd('/').Length + 1)..] : null)
-                : raw;
-            if (rel is null || rel.Split('/').Any(s => s is ".." or "." or "")) continue;
-            var full = Path.GetFullPath(Path.Combine(rootFull, rel));
-            if (!full.StartsWith(rootFull.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
-                    StringComparison.Ordinal) || !File.Exists(full)) continue;
+            string? rel;
+            if (!raw.Contains('/'))
+            {
+                byName ??= ScanByName(rootFull, BareNames(turnText));
+                rel = byName.TryGetValue(raw, out var hits) && hits.Count == 1 ? hits[0] : null;
+            }
+            else
+            {
+                rel = raw.StartsWith('/')
+                    ? (raw.StartsWith(rootFull.TrimEnd('/') + "/", StringComparison.Ordinal)
+                        ? raw[(rootFull.TrimEnd('/').Length + 1)..] : null)
+                    : raw;
+                if (rel is null || rel.Split('/').Any(s => s is ".." or "." or "")) continue;
+                var full = Path.GetFullPath(Path.Combine(rootFull, rel));
+                if (!full.StartsWith(rootFull.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+                        StringComparison.Ordinal) || !File.Exists(full)) continue;
+            }
+            if (rel is null) continue;
             if (!found.Contains(rel, StringComparer.Ordinal)) found.Add(rel);
             if (found.Count == MaxFiles) break;
         }
         return found;
+    }
+
+    private static HashSet<string> BareNames(string turnText) =>
+        FilePattern.Matches(turnText).Select(m => m.Groups[1].Value)
+            .Where(v => !v.Contains('/')).ToHashSet(StringComparer.Ordinal);
+
+    // Один обход дерева на ход: имя → пути от корня (по всем совпавшим, чтобы видеть неоднозначность)
+    private static Dictionary<string, List<string>> ScanByName(string rootFull, HashSet<string> names)
+    {
+        var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        var queue = new Queue<(string Dir, string Rel, int Depth)>();
+        queue.Enqueue((rootFull, "", 0));
+        var dirs = 0;
+        while (queue.Count > 0 && dirs++ < BareSearchDirLimit)
+        {
+            var (dir, rel, depth) = queue.Dequeue();
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(dir))
+                {
+                    var name = Path.GetFileName(file);
+                    if (!names.Contains(name)) continue;
+                    if (!result.TryGetValue(name, out var list)) result[name] = list = [];
+                    list.Add(rel.Length == 0 ? name : rel + "/" + name);
+                }
+                if (depth >= BareSearchDepth) continue;
+                foreach (var sub in Directory.EnumerateDirectories(dir))
+                {
+                    var name = Path.GetFileName(sub);
+                    if (name.StartsWith('.') || SkipDirs.Contains(name)) continue;
+                    if (new DirectoryInfo(sub).Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+                    queue.Enqueue((sub, rel.Length == 0 ? name : rel + "/" + name, depth + 1));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return result;
     }
 
     private static bool IsTest(string path)

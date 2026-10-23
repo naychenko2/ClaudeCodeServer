@@ -477,10 +477,14 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // по нему сверяются ВСЕ ссылки (эпик и reviewOf), иначе чужой владелец читал бы разметку.
     // Бросает InvalidOperationException с внятным текстом — вызывающая сторона превращает в 400.
     // Тихо отбрасывать неверное значение нельзя: агент не узнает, что разметка не легла.
-    // Причина возврата проверяется только у присланного вердикта: хранимый уже прошёл проверку при записи
+    // Причина возврата проверяется только у присланного вердикта: хранимый уже прошёл проверку при записи.
+    // Санирование (trim, пусто → null) — здесь, единственная точка для REST и MCP: пробелы вокруг
+    // допустимого значения не должны давать разный исход у двух дверей, а «   » — попадать в стор
     private static void EnsureReturnReason(TaskVerification? verification)
     {
         if (verification is null) return;
+        verification.ReturnReason = string.IsNullOrWhiteSpace(verification.ReturnReason)
+            ? null : verification.ReturnReason.Trim();
         TaskReturnReasons.Validate(verification.Verdict, verification.ReturnReason, verification.Notes);
     }
 

@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { Task } from '../../../types';
-import { deviceWaitDuration, executorStopText, isDeviceWaiting } from '../../../lib/tasks';
+import { deviceWaitDuration, executorStopText, isDeviceWaiting, isTerminalStop } from '../../../lib/tasks';
 import { TaskCard } from '../TaskCard';
 
 function task(over: Partial<Task> = {}): Task {
@@ -70,5 +70,47 @@ describe('карточка задачи', () => {
     const html = render(task());
     expect(html).not.toContain('Ждёт');
     expect(html).not.toContain('Не запускалась');
+  });
+});
+
+// W4-HOLD-F4 (R-HOLD-J2): причина ЛЮБОЙ терминальной остановки — на карточке,
+// а не только в уведомлении бэка. Мутация: удалить строку причины в словаре —
+// тест краснеет (текст уходит в общую формулировку).
+describe('терминальная остановка исполнителя', () => {
+  it('зеркало классификатора: восстановимые обрывы — не терминальные', () => {
+    expect(isTerminalStop(null)).toBe(false);
+    expect(isTerminalStop('subagent_truncated')).toBe(false);
+    expect(isTerminalStop('tool_call_leaked')).toBe(false);
+    expect(isTerminalStop('feature_held_expired')).toBe(true);
+    expect(isTerminalStop('auth_failed')).toBe(true);
+  });
+
+  it('feature_held_expired — причина на карточке человеческим текстом, не кодом', () => {
+    const html = render(task({ executorStoppedAt: '2026-10-23T10:00:00Z', executorStopReason: 'feature_held_expired' }));
+    expect(html).toContain('Чат исполнителя исчез за время паузы');
+    expect(html).not.toContain('feature_held_expired');
+  });
+
+  it('auth_failed и subagent_stuck — своя формулировка, не общая', () => {
+    expect(render(task({ executorStopReason: 'auth_failed' })))
+      .toContain('Не удалось авторизоваться у провайдера модели');
+    expect(render(task({ executorStopReason: 'subagent_stuck' })))
+      .toContain('Сабагент раз за разом обрывается');
+  });
+
+  it('неизвестная причина — общая формулировка, служебный ключ не светится', () => {
+    const html = render(task({ executorStopReason: 'something_new' }));
+    expect(html).toContain('Исполнение прервано');
+    expect(html).not.toContain('something_new');
+  });
+
+  it('восстановимый обрыв карточку не помечает', () => {
+    const html = render(task({ executorStopReason: 'subagent_truncated' }));
+    expect(html).not.toContain('Исполнение прервано');
+  });
+
+  it('завершённая задача плашки остановки не получает', () => {
+    const html = render(task({ status: 'done', executorStopReason: 'feature_held_expired' }));
+    expect(html).not.toContain('Чат исполнителя');
   });
 });

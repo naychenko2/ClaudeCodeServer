@@ -628,7 +628,9 @@ export function deviceWaitDuration(sinceIso: string, now: number = Date.now()): 
   return rest ? `${h} ч ${rest} мин` : `${h} ч`;
 }
 
-// Причина остановки исполнителя человеческим языком — зеркало ExecutorStopText на бэке.
+// Причина остановки исполнителя человеческим языком — зеркало ExecutorStopText на бэке
+// (TaskExecutionService.ExecutorStopText): тот же текст рисуется на плашке TaskCard,
+// чтобы причина терминальной остановки была видна на карточке, а не только в уведомлении бэка.
 // Неизвестная причина (пометку поставил более новый бэк) — общая формулировка, не ключ.
 export function executorStopText(reason: string | null | undefined, deviceName?: string | null): string {
   switch (reason) {
@@ -638,11 +640,20 @@ export function executorStopText(reason: string | null | undefined, deviceName?:
       return 'Не удалось авторизоваться у провайдера модели';
     case 'subagent_stuck':
       return 'Сабагент раз за разом обрывается посреди работы, добить его не удалось';
+    case 'tool_call_leak_stuck':
+      return 'Вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось';
     case 'feature_held_expired':
       return 'Чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить';
     default:
       return 'Исполнение прервано';
   }
+}
+
+// Терминальная ли остановка: работа встала насовсем и ждёт человека. Зеркало
+// ExecutorStopClassifier.IsTerminal на бэке: восстановимые остановки (subagent_truncated,
+// tool_call_leaked) лечатся добиванием/повтором сами — плашку на карточке давать не за что.
+export function isTerminalStop(reason: string | null | undefined): boolean {
+  return !!reason && reason !== 'subagent_truncated' && reason !== 'tool_call_leaked';
 }
 
 // Role == "review" у колонки доски — триггер правила «дефект в ревью без шагов = отказ».

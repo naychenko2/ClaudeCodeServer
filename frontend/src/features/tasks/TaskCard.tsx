@@ -15,7 +15,7 @@ import { C, FONT, FS, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Badge, Menu, MenuItem } from '../../components/ui';
 import { useLongPress } from '../../hooks/useLongPress';
-import { deviceWaitDuration, executorStopText, isDeviceWaiting, projectColor } from '../../lib/tasks';
+import { deviceWaitDuration, executorStopText, isDeviceWaiting, isTerminalStop, projectColor } from '../../lib/tasks';
 import { useContextButton } from '../chatContext/useContextButton';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
@@ -51,6 +51,9 @@ function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceNam
   // Исполнитель ждёт устройство (запуска ещё не было) либо так его и не дождался
   const deviceWaiting = isDeviceWaiting(task);
   const deviceWaitExpired = !done && task.executorStopReason === 'device_wait_expired';
+  // Любая другая терминальная остановка — причина на карточке, а не только в уведомлении бэка
+  // (R-HOLD-J2): восстановимые обрывы (сабагент/утечки в пути) сюда не попадают.
+  const executorStopped = !done && isTerminalStop(task.executorStopReason) && !deviceWaitExpired;
 
   // «В контекст чата» (фича chat-context) — контекстным меню карточки: hover-иконку
   // сюда не поставить, правый верхний угол занят значком исполнителя. Меню
@@ -117,7 +120,7 @@ function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceNam
 
         {/* Нижняя строка: чипы + доп. плашка «Закрыт без проверки» для дефектов,
             снятых по Outcome=closedWithoutCheck (без отдельного Verification) */}
-        {(task.personaId || task.dueDate || closedWithoutCheck || deviceWaiting || deviceWaitExpired || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName) && (
+        {(task.personaId || task.dueDate || closedWithoutCheck || deviceWaiting || deviceWaitExpired || executorStopped || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
             {task.personaId && <TaskPersonaBadge personaId={task.personaId} />}
             {deviceWaiting && (
@@ -128,6 +131,15 @@ function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceNam
             {deviceWaitExpired && (
               <StateChip tone="danger" title={executorStopText(task.executorStopReason, deviceName)}>
                 Не запускалась: устройство не в сети
+              </StateChip>
+            )}
+            {executorStopped && (
+              // Причина — сам текст плашки, а не подсказка по ховеру: фраза переносится
+              // внутри чипа (Badge обрезал бы её многоточие на узкой карточке).
+              <StateChip tone="danger">
+                <span style={{ whiteSpace: 'normal' }}>
+                  {executorStopText(task.executorStopReason, deviceName)}
+                </span>
               </StateChip>
             )}
             <DueChip task={task} />

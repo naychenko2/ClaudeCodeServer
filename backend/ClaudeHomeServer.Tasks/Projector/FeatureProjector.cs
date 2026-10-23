@@ -1375,6 +1375,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             key,
             keySession?.Archived ?? false,
             keySession?.ProjectId,
+            OrchestratorOf(run.Epic, featureTasks, sessions),
             chatCount,
             run.Epic.WorktreeBranch,
             run.Epic.CreatedAt,
@@ -1416,6 +1417,23 @@ public sealed class FeatureProjector(TaskManager tasks)
             .FirstOrDefault();
         if (mostFrequent is not null) chain.Add(mostFrequent);
         return chain.Distinct().ToList();
+    }
+
+    // Оркестратор фичи (W4-1B): персона, ведущая фичу. Цепочка звеньев: персона ключевого
+    // чата — только если он в снимке владельца (тот же fail-closed, что у KeySession:
+    // чужой/удалённый ключевой чат пропускается) → персона, запустившая исполнителя эпика
+    // (ExecutorLaunchedByPersonaId) → персона, создавшая эпик (CreatedByPersonaId).
+    // Ничего нет → null. Чистая функция — на ней тесты (FeatureIndexRowTests).
+    internal static string? OrchestratorOf(TaskItem epic, IReadOnlyList<TaskItem> featureTasks,
+        IReadOnlyCollection<FeatureIndexSession> sessions)
+    {
+        var key = KeySession(epic, featureTasks, sessions);
+        if (key is not null)
+        {
+            var persona = sessions.FirstOrDefault(s => s.Id == key)?.PersonaId;
+            if (!string.IsNullOrWhiteSpace(persona)) return persona;
+        }
+        return epic.ExecutorLaunchedByPersonaId ?? epic.CreatedByPersonaId;
     }
 
     // «Финал принят»: задача финала ЗАКРЫТА (Done) и вердикт accepted/accepted_with_remarks.

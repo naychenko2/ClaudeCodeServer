@@ -527,13 +527,13 @@ public class TasksController(
         return Ok(features.BuildIndex(UserId, SessionSnapshot(), projectId));
     }
 
-    // Узкий снимок сессий владельца (id, taskId, projectId, archived, model) — единый источник
-    // для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/удалённые
-    // id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
-    // Session.Model (null/пусто — «Авто», слот; Б4).
+    // Узкий снимок сессий владельца (id, taskId, projectId, archived, model, personaId) — единый
+    // источник для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/
+    // удалённые id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
+    // Session.Model (null/пусто — «Авто», слот; Б4). PersonaId — Session.PersonaId (W4-1B, оркестратор).
     private List<FeatureIndexSession> SessionSnapshot() =>
         sessions.GetAllOwnedBy(UserId)
-            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model))
+            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId))
             .ToList();
 
     // Б4/Б5b: готовая функция модели чата (label/full) для проекции фичи. Явная модель

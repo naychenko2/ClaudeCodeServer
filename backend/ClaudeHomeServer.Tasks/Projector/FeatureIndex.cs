@@ -5,8 +5,11 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // сессии владельца (SessionManager.GetAllOwnedBy) и маппит в эту запись. Id — id чата;
 // TaskId — Session.TaskId (задача-владелец чата-исполнителя); ProjectId — проект чата
 // (null — чат вне проектов); Archived — чат в архиве (Session.IsArchived); Model — модель
-// чата как сохранена в Session.Model (null/пусто — «Авто», слот; Б4).
-public sealed record FeatureIndexSession(string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null);
+// чата как сохранена в Session.Model (null/пусто — «Авто», слот; Б4). PersonaId — персона
+// чата (Session.PersonaId, W4-1B): оркестратор фичи берётся только от сессий этого снимка
+// (чужой/удалённый ключевой чат в него не попадает → запасная цепочка по полям эпика).
+public sealed record FeatureIndexSession(
+    string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null, string? PersonaId = null);
 
 // Чат фичи (GET /api/tasks/features/{id}, chats[]; Б4 + W4-CHT-B): один чат из снимка
 // владельца, состоящий в фиче по ЕДИНОМУ правилу FeatureChatMembership. kind: curator |
@@ -91,6 +94,10 @@ public sealed record FeatureIndexRow(
     bool KeyArchived,
     // Проект ключевого чата; null — чат вне проектов.
     string? KeyProjectId,
+    // Оркестратор фичи (W4-1B): персона ключевого чата из снимка владельца; иначе —
+    // персона, запустившая исполнителя эпика; иначе — создавшая эпик; null — никого нет.
+    // Только в строке индекса: в features/{id} (FeatureRun) не дублируется.
+    string? OrchestratorPersonaId,
     // Чатов фичи в этом ответе (архивные включены).
     int ChatCount,
     // Аддитивные (волна 2, без хранения — вычисляются из эпика/задач/«сейчас»):

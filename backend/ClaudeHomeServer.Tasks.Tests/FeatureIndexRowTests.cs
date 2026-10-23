@@ -53,9 +53,10 @@ public class FeatureIndexRowTests
         Status = status,
     };
 
-    // Живой чат владельца (снимок FeatureIndexSession): id + опционально taskId/projectId/archived.
+    // Живой чат владельца (снимок FeatureIndexSession): id + опционально taskId/projectId/archived/personaId.
     private static FeatureIndexSession Session(string id, string? taskId = null,
-        string? projectId = null, bool archived = false) => new(id, taskId, projectId, archived);
+        string? projectId = null, bool archived = false, string? personaId = null) =>
+        new(id, taskId, projectId, archived, null, personaId);
 
     // ── 1. bucket: каждое из четырёх значений ────────────────────────────────────────────────
 
@@ -521,5 +522,61 @@ public class FeatureIndexRowTests
         var rowA = Row(epicA, [epicA, stopped]);
         rowA.Bucket.Should().Be("attention");
         rowA.Chips.Should().Equal(["open", "stopped"], "у тревоги (stopped) running не появляется");
+    }
+
+    // ── 9. оркестратор фичи (W4-1B) ────────────────────────────────────────────────────────
+
+    // Цепочка: персона ключевого чата (если он в снимке владельца) → персона, запустившая
+    // исполнителя эпика → персона, создавшая эпик; ничего нет → null.
+    // (a) живой ключевой чат с персоной — именно она, поля эпика ниже по приоритету;
+    // (b) ключевой чат жив, но без персоны — следующее звено;
+    // (c) ни звеньев, ни полей эпика — null.
+    [Fact]
+    public void OrchestratorOf_KeySessionPersona_ThenEpicFields()
+    {
+        // (a) персона ключевого чата приоритетнее полей эпика.
+        var epicA = Epic("epic-orch-a", sourceSessionId: "chat-key");
+        epicA.ExecutorLaunchedByPersonaId = "p-launched";
+        epicA.CreatedByPersonaId = "p-created";
+        var rowA = Row(epicA, [epicA], [Session("chat-key", personaId: "p-key")]);
+        rowA.KeySessionId.Should().Be("chat-key");
+        rowA.OrchestratorPersonaId.Should().Be("p-key", "персона ключевого чата — первое звено");
+
+        // (b) ключевой чат жив, но персоны нет — цепочка идёт к запустившей.
+        var epicB = Epic("epic-orch-b", sourceSessionId: "chat-key");
+        epicB.ExecutorLaunchedByPersonaId = "p-launched";
+        epicB.CreatedByPersonaId = "p-created";
+        var rowB = Row(epicB, [epicB], [Session("chat-key")]);
+        rowB.OrchestratorPersonaId.Should().Be("p-launched", "у ключевого чата нет персоны → следующее звено");
+
+        // (c) ни ключевого чата, ни полей эпика — null.
+        var epicC = Epic("epic-orch-c");
+        Row(epicC, [epicC]).OrchestratorPersonaId.Should().BeNull("цепочка пуста → null");
+    }
+
+    // Чужой/удалённый ключевой чат — не в снимке владельца: персона из него не берётся,
+    // работает запасная цепочка (запустившая исполнителя эпика). Мутация: убрать сверку
+    // ключевого чата с снимком (брать первого живого чата) → "p-live" ≠ "p-launched" → краснеет.
+    [Fact]
+    public void OrchestratorOf_ForeignKeySession_FallsBackToLaunchedByPersona()
+    {
+        var epic = Epic("epic-orch-foreign", sourceSessionId: "chat-foreign");
+        epic.ExecutorLaunchedByPersonaId = "p-launched";
+        epic.CreatedByPersonaId = "p-created";
+        // В снимке другой чат владельца (с персоной) — он не ключевой.
+        var row = Row(epic, [epic], [Session("chat-live", personaId: "p-live")]);
+        row.KeySessionId.Should().BeNull("ключевой чат не в снимке → ключа нет");
+        row.OrchestratorPersonaId.Should().Be("p-launched",
+            "чужой ключевой чат → запасная цепочка, не персона первого чата снимка");
+    }
+
+    // Последний запас: никто не запускал исполнителя — создатель эпика.
+    [Fact]
+    public void OrchestratorOf_NoLaunchedBy_CreatedByPersona()
+    {
+        var epic = Epic("epic-orch-created", sourceSessionId: "chat-foreign");
+        epic.CreatedByPersonaId = "p-created";
+        var row = Row(epic, [epic], [Session("chat-live", personaId: "p-live")]);
+        row.OrchestratorPersonaId.Should().Be("p-created", "нет запустившей → создатель эпика");
     }
 }

@@ -483,6 +483,111 @@ public class TaskExecutionServiceHoldTests : IDisposable
         resumed.Should().Be(1, "сбой рассылки не отнимает возврат живого шага");
     }
 
+    // R-HOLD-J2 (п.1, критерий c1): смешанный случай с разными счётчиками — «1+1» их не
+    // различает (оба равны 1), здесь два живых шага и один expired: текст карточки сверяется
+    // дословно — «продолжены 2 шага» и «1 шаг не продолжен». Мутация: переставить счётчики
+    // (resumed++ в expired-ветке, expired++ в живой) — оба Verify краснеют: карточка
+    // строится из фактических resumed/expired.
+    [Fact]
+    public async Task ClearHold_MixedTwoLiveOneExpired_CountsSeparately()
+    {
+        var user = _userStore.Add("hold-mixed-2-1", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var live1 = _tasks.Create(null, user.Id, new CreateTaskRequest("Живой шаг 1", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var live2 = _tasks.Create(null, user.Id, new CreateTaskRequest("Живой шаг 2", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var gone = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг без чата", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var c1 = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec1", taskId: live1.Id);
+        var c2 = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec2", taskId: live2.Id);
+        var goneChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "gone",
+            taskId: gone.Id);
+        _tasks.MarkClaudeStarted(live1.Id, c1.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeStarted(live2.Id, c2.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeStarted(gone.Id, goneChat.Id, DateTime.UtcNow);
+        var a1 = SetRunningTurn(c1.Id);
+        var a2 = SetRunningTurn(c2.Id);
+        SetRunningTurn(goneChat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, "manual");
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        await _sessions.DeleteAsync(goneChat.Id); // чат исчез за паузу
+
+        _tasks.ClearHold(epic.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+
+        resumed.Should().Be(2, "оба живых шага продолжены");
+        a1.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжи")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "первый живой шаг продолжается");
+        a2.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжи")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "второй живой шаг продолжается");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжены 2 шага") && t.Contains("1 шаг не продолжен")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()),
+            Times.Once(), "карточка считает живых и expired отдельно: 2 продолжено, 1 — нет");
+    }
+
+    // R-HOLD-J2 (п.2, критерий c2): expired считается только при фактической смене пометки.
+    // Если задачу удалили между снимком и вызовом (человек удалил, пока цикл продолжал
+    // живой шаг), MarkExecutorStopExpired возвращает null — карточка не должна обещать
+    // перезапуск несуществующего шага. Мутация: вернуть expired++ вне if (как было) —
+    // последний Verify краснеет: в карточке появился бы «1 шаг не продолжен».
+    [Fact]
+    public async Task ClearHold_TaskDeletedDuringResumeLoop_NoPhantomRestartPromised()
+    {
+        var user = _userStore.Add("hold-deleted-during-loop", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var live = _tasks.Create(null, user.Id, new CreateTaskRequest("Живой шаг", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var gone = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг без чата", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var liveChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "live",
+            taskId: live.Id);
+        var goneChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "gone",
+            taskId: gone.Id);
+        _tasks.MarkClaudeStarted(live.Id, liveChat.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeStarted(gone.Id, goneChat.Id, DateTime.UtcNow);
+        SetRunningTurn(liveChat.Id);
+        SetRunningTurn(goneChat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, "manual");
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        await _sessions.DeleteAsync(goneChat.Id); // чат исчез за паузу
+
+        // Человек удаляет expired-задачу в момент, когда цикл продолжает живой шаг:
+        // удаление — в callback рассылки о первом продолженном шаге.
+        var deleting = new Mock<ISessionBroadcaster>();
+        deleting.Setup(b => b.ToOwner(It.IsAny<string>(), It.IsAny<ServerMessage>()))
+            .Returns(() =>
+            {
+                _tasks.Delete(gone.Id);
+                return Task.CompletedTask;
+            });
+        var sut = new TaskExecutionService(_tasks, _sessions, _personas, deleting.Object, _push, _notif,
+            NullLogger<TaskExecutionService>.Instance, _config, kb: _notesKb);
+
+        _tasks.ClearHold(epic.Id);
+        var resumed = await sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+
+        resumed.Should().Be(1, "живой шаг продолжен");
+        _tasks.GetById(gone.Id).Should().BeNull("задача удалена человеком посреди цикла");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжен 1 шаг") && !t.Contains("не продолжен")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()),
+            Times.Once(), "карточка не обещает перезапуск удалённой задачи");
+    }
+
     // R-HOLD-J (п.5, критерий c3): терминальная причина имеет человеческий текст, а не
     // общую формулировку. Мутация: удалить строку в ExecutorStopText — красное.
     [Fact]

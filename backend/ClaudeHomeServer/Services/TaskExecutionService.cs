@@ -1217,20 +1217,23 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 // Ветка feature_held_expired (контракт §1 :241): чат исполнителя удалён
                 // (TTL или человек) — пометку не снимаем, а меняем на терминальную:
                 // продолжения нет, шаг перезапустит штатный tasks_run_executor.
+                // R-HOLD-J2 (п.2): expired считается только при фактической смене пометки:
+                // если задачу удалили между снимком и вызовом, карточка не должна обещать
+                // перезапуск несуществующего шага.
+                var marked = _tasks.MarkExecutorStopExpired(t.Id);
+                if (marked is null) continue;
+                expired++;
                 // R-HOLD-J (п.2): сбой рассылки не обрывает цикл: пометка уже сменена,
                 // остальные шаги продолжают, карточка оркестратору уходит.
                 try
                 {
-                    var marked = _tasks.MarkExecutorStopExpired(t.Id);
-                    if (marked is not null)
-                        await _broadcaster.ToOwner(marked.OwnerId!, new TaskChangedMessage("updated", marked));
+                    await _broadcaster.ToOwner(marked.OwnerId!, new TaskChangedMessage("updated", marked));
                 }
                 catch (Exception ex)
                 {
                     _log.LogWarning("Не доставлено уведомление владельцу о терминальной пометке {TaskId}: {Message}",
                         t.Id, ex.Message);
                 }
-                expired++;
                 continue;
             }
             // R-HOLD-D (п.3): сбой одного чата не обрывает цикл — каждая задача ловится отдельно,

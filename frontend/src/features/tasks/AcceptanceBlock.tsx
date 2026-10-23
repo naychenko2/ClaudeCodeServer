@@ -3,6 +3,7 @@
 
 import type { Task } from '../../types';
 import { C, FONT, FS, R } from '../../lib/design';
+import { Badge } from '../../components/ui/Badge';
 
 export function AcceptanceBlock({ task }: { task: Pick<Task, 'acceptance' | 'evidence'> }) {
   const criteria = task.acceptance ?? [];
@@ -34,19 +35,12 @@ export function AcceptanceBlock({ task }: { task: Pick<Task, 'acceptance' | 'evi
               {c.text}
             </div>
             {items.length === 0 ? (
-              <span
-                data-testid="acceptance-missing"
-                style={{
-                  alignSelf: 'flex-start', fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600,
-                  background: C.warningBg, color: C.warningText,
-                  borderRadius: R.md, padding: '2px 8px',
-                }}
-              >
-                Нет свидетельства
-              </span>
-            ) : items.map((e, j) => (
+              <div data-testid="acceptance-missing" style={{ alignSelf: 'flex-start', maxWidth: '100%' }}>
+                <Badge tone="warning" size="xs">Нет свидетельства</Badge>
+              </div>
+            ) : items.map(e => (
               <div
-                key={j}
+                key={`${c.id}:${e.how}`}
                 data-testid="acceptance-evidence"
                 style={{
                   fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary,

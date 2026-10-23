@@ -7,6 +7,10 @@ import type { Task } from '../../../types';
 const { window: win, document: doc } = parseHTML('<!doctype html><html><body><div id="root"></div></body></html>');
 vi.stubGlobal('window', win);
 vi.stubGlobal('document', doc);
+// Badge читает useIsMobile → matchMedia
+(win as unknown as { matchMedia: unknown }).matchMedia = () => ({
+  matches: false, addEventListener() {}, removeEventListener() {},
+});
 vi.stubGlobal('navigator', { language: 'ru-RU', onLine: true, userAgent: 'node' });
 vi.stubGlobal('HTMLElement', win.HTMLElement);
 vi.stubGlobal('Node', win.Node);

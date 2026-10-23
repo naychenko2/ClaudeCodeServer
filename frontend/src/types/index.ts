@@ -758,13 +758,13 @@ export interface DefectRepro {
   actual?: string;
 }
 
-// Подтверждение проверки: personaId == null означает проверку человеком (UI-форма
-// владельца задачи), не-null — конкретной персоной (чаще всего — исполнившей дефект).
-// Поле бэк подставляет из сессии, клиент его НЕ шлёт
 // Критерий приёмки задачи и свидетельство его выполнения (связь по criterionId)
 export interface AcceptanceCriterion { id: string; text: string }
 export interface AcceptanceEvidence { criterionId: string; how: string; result: string }
 
+// Подтверждение проверки: personaId == null означает проверку человеком (UI-форма
+// владельца задачи), не-null — конкретной персоной (чаще всего — исполнившей дефект).
+// Поле бэк подставляет из сессии, клиент его НЕ шлёт
 export interface TaskVerification {
   verifiedAt: string;
   personaId?: string | null;

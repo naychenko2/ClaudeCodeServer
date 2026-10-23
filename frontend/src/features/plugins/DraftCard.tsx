@@ -14,6 +14,7 @@ import {
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { BackButton, Badge, Button, EmptyState, IconButton, InlineSegmented, Modal, Notice, Tabs } from '../../components/ui';
 import { showToast } from '../../lib/toast';
+import { copyMarkdown } from '../../lib/selectionScope';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { getEffectiveTheme, subscribeThemeMode } from '../../lib/themeMode';
@@ -331,7 +332,7 @@ function TreeRows({ node, depth, isMobile, selected, onSelect, collapsed, toggle
     rows.push(
       <Button
         key={child.path}
-        dataTestId={child.path}
+        dataTestId={`dir:${child.path}`}
         ariaExpanded={!isCollapsed}
         ariaLabel={`Каталог ${name}`}
         variant="ghost"
@@ -482,6 +483,7 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
   // Минор ревью: дефолт пересчитывается при смене ширины (resize/поворот), а не
   // фиксируется один раз при монтировании; ручное переключение живёт до следующей смены ширины.
   const [wrap, setWrap] = useState(isMobile);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- перенос строк: дефолт синхронизируется с сменой ширины (matchMedia), а не фиксируется при монтировании
   useEffect(() => { setWrap(isMobile); }, [isMobile]);
 
   const files = preview.files.filter(f => !f.isDir);
@@ -526,15 +528,15 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
     setSummaryOpen(false);
   };
 
-  // «Копировать»: видимая реакция, когда у браузера нет буфера обмена (минор ревью) —
-  // тост, а не молчание. Общая для десктопной и мобильной шапки файла.
+  // «Копировать»: видимая реакция и успеха, и отказа (минор ревью) — общий хелпер
+  // copyMarkdown даёт честный boolean, тосты по конвенции FileExplorer/CodeCopyButton.
+  // Общая для десктопной и мобильной шапки файла.
   const copySelected = () => {
     const text = (selectedEntry?.lines ?? []).filter(l => l.kind !== 'del').map(l => l.text).join('\n');
-    if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      void navigator.clipboard.writeText(text);
-    } else {
-      showToast('Копирование недоступно', 'Браузер не даёт доступ к буферу обмена', 'error');
-    }
+    void copyMarkdown(text).then(ok => {
+      if (ok) showToast('Скопировано', 'Содержимое файла скопировано');
+      else showToast('Копирование недоступно', 'Браузер не даёт доступ к буферу обмена', 'error');
+    });
   };
 
   const subtitle = (
@@ -868,8 +870,9 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
               background: C.bgCard, borderBottom: `1px solid ${C.borderLight}`, flexShrink: 0,
             }}>
               // Пункт 1 вердикта: Back ведёт к списку (side), а не к сводке — подпись
-              // соответствует действию, а не обещает другой уровень.
-              <BackButton onClick={() => setListOpen(true)} ariaLabel={tab === 'files' ? 'Назад к списку файлов' : 'Назад к списку изменённых файлов'}>
+              // соответствует действию, а не обещает другой уровень. Пункт 4: при diffError
+              // списка изменённых файлов нет («Файлы не сравнены») — подпись не обещает его.
+              <BackButton onClick={() => setListOpen(true)} ariaLabel={tab === 'files' ? 'Назад к списку файлов' : diffError ? 'Назад к разделу «Изменения»' : 'Назад к списку изменённых файлов'}>
                 <span style={{ fontSize: FS.base, color: C.textSecondary }}>{tab === 'files' ? 'Файлы' : 'Изменения'}</span>
               </BackButton>
               <div style={{ flex: 1 }} />

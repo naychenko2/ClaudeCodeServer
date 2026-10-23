@@ -500,7 +500,8 @@ describe('FilesDrawer: окно по макету', () => {
 
   it('дерево вместо плоского перечня: каталоги — Button из ui-кита с aria-expanded, файлы data-file, метки +/~/− и размеры', () => {
     const html = drawerHtml(PREVIEW, DIFF);
-    expect(html).toContain('data-testid="panel"');
+    // Хвост ревью: testid каталога — с префиксом dir:, боевой путь не маскируется под контрол.
+    expect(html).toContain('data-testid="dir:panel"');
     expect(html).toContain('aria-expanded="true"');
     expect(html).toContain('data-file="panel/index.html"');
     expect(html).toContain('data-file="commands/my-cmd.md"');
@@ -717,17 +718,35 @@ describe('FilesDrawer: окно по макету', () => {
     uninstallFakeDom();
   });
 
+  it('пункт 4 (мобила, diffError): Back не обещает список, которого нет', () => {
+    installFakeDom();
+    window.matchMedia = (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: null, diffError: 'Сервер не ответил', onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    // Сводка — единственный уровень «Изменений» при diffError; из неё Back ведёт обратно к панели.
+    expect(clickByText(container, 'Сводка')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('Не удалось сравнить с установленной версией');
+    // Подпись не обещает список изменённых файлов — его нет («Файлы не сравнены»).
+    expect(findNodeByAttr(container, 'aria-label', 'Назад к списку изменённых файлов')).toBeNull();
+    expect(findNodeByAttr(container, 'aria-label', 'Назад к разделу «Изменения»')).toBeTruthy();
+    expect(clickByAttr(container, 'aria-label', 'Назад к разделу «Изменения»')).toBe(true);
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Файлы не сравнены');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
   it('дерево: кнопка каталога сворачивает ветку и сообщает об этом через aria-expanded', () => {
     installFakeDom();
     const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
-    const dir = () => findNodeByAttr(container, 'data-testid', 'panel');
+    const dir = () => findNodeByAttr(container, 'data-testid', 'dir:panel');
     expect(dir()).toBeTruthy();
     expect(dir()!.getAttribute('aria-expanded')).toBe('true');
-    expect(clickByAttr(container, 'data-testid', 'panel')).toBe(true);
+    expect(clickByAttr(container, 'data-testid', 'dir:panel')).toBe(true);
     expect(container.querySelector('[data-file="panel/index.html"]')).toBeNull();
     expect(dir()!.getAttribute('aria-expanded')).toBe('false');
     // Раскрыть обратно.
-    expect(clickByAttr(container, 'data-testid', 'panel')).toBe(true);
+    expect(clickByAttr(container, 'data-testid', 'dir:panel')).toBe(true);
     expect(container.querySelector('[data-file="panel/index.html"]')).toBeTruthy();
     expect(dir()!.getAttribute('aria-expanded')).toBe('true');
     uninstallFakeDom();
@@ -763,16 +782,24 @@ describe('FilesDrawer: окно по макету', () => {
     uninstallFakeDom();
   });
 
-  it('«Копировать» без clipboard — видимая реакция (тост), а не молчание', () => {
+  it('«Копировать» через copyMarkdown: тост и на успех, и на отказ (минор ревью)', async () => {
     installFakeDom();
-    vi.stubGlobal('navigator', { clipboard: undefined });
     const toasts: { title: string }[] = [];
     window.addEventListener('cc-local-toast', (e: { detail: { title: string } }) => toasts.push(e.detail));
+    // Успех: clipboard есть — реакция «Скопировано», а не тишь.
+    vi.stubGlobal('navigator', { clipboard: { writeText: async () => {} } });
     const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
     expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
     expect(clickByAttr(container, 'aria-label', 'Копировать содержимое')).toBe(true);
+    await new Promise(r => setTimeout(r, 0));
     expect(toasts.length).toBe(1);
-    expect(toasts[0].title).toContain('Копирование');
+    expect(toasts[0].title).toBe('Скопировано');
+    // Отказ: буфера нет — тост «Копирование недоступно», а не молчание.
+    vi.stubGlobal('navigator', { clipboard: undefined });
+    expect(clickByAttr(container, 'aria-label', 'Копировать содержимое')).toBe(true);
+    await new Promise(r => setTimeout(r, 0));
+    expect(toasts.length).toBe(2);
+    expect(toasts[1].title).toBe('Копирование недоступно');
     vi.unstubAllGlobals();
     uninstallFakeDom();
   });

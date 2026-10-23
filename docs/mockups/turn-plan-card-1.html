@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · карточка «План хода» в ленте чата с фичей — 3 варианта</title>
+<!--
+  Макет: редизайн живой карточки «План хода» в ленте чата, к которому привязана фича
+  (сейчас — ChatItemView.tsx, TodoPlanView, вид 1 «живая + есть фичи»).
+  Привязка: эпик ba38ba28-d8a6-489d-a23a-1d6f153456a2 (волна 4 «Обзор фич»), п.15;
+  stepRef шага реализации появится в плане Егора после выбора варианта.
+  Записка: turn-plan-card-1.md, токены: turn-plan-card-1-tokens.md.
+  Файл самодостаточный: без внешних ресурсов. Сырые цвета живут ТОЛЬКО в блоке
+  переменных ниже (копия theme.css); вся вёрстка — через var(--c-*).
+-->
+<style>
+/* ===== Токены: копия frontend/src/lib/theme.css (светлая/тёмная).
+   Единственное место с сырыми значениями; ниже — только var(--c-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --c-msg-bg:rgba(251,248,242,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-sheet:0 -8px 28px rgba(60,50,35,.18);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --font-sans:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-serif:'PT Serif',Georgia,serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A2E26;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-nav-ink:#EDE6DB; --c-on-nav-ink:#201C18;
+  --c-msg-bg:rgba(46,42,37,.42);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-modal:0 24px 60px rgba(0,0,0,.6);
+  --shadow-sheet:0 -10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+
+* { box-sizing:border-box; }
+html, body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary); font:13px/1.45 var(--font-sans); overflow-x:hidden; }
+button { font:inherit; color:inherit; background:none; border:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible, [tabindex]:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:var(--font-mono); }
+
+/* ===== Пульт макета (не часть продукта) ===== */
+.mk { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; padding:10px 14px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); position:sticky; top:0; z-index:5; }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); width:100%; }
+.mk .grp { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 9px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.note { padding:10px 14px 0; font-size:12.5px; color:var(--c-text-secondary); max-width:980px; }
+.note b { color:var(--c-text-heading); }
+
+/* ===== Сцена: колонка ленты. Десктоп — CHAT_MAX_W урезан до 640 для обзора;
+   360 — CSS-ширина телефона, поле ленты CHAT_GUTTER_MOBILE 16 с каждой стороны. ===== */
+#stage { padding:14px; display:grid; gap:18px; }
+.vrow { display:grid; gap:6px; }
+.vhead { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+.vhead b { font:700 14px/1.3 var(--font-serif); color:var(--c-text-heading); }
+.vhead span { font-size:12px; color:var(--c-text-muted); }
+.frame { background:var(--c-bg-main); border:1px dashed var(--c-dashed); border-radius:14px; padding:12px 16px; width:672px; max-width:100%; }
+#stage.w360 .frame { width:360px; }
+.msgline { font-size:12px; color:var(--c-text-muted); margin:0 0 8px; }
+.msgline.after { margin:8px 0 0; }
+
+/* ===== КАРТОЧКА (общая оболочка всех вариантов) =====
+   C.bgWhite, 1px C.borderLight, R.xl (12), SHADOW.card — как у нынешней карточки. */
+.card { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:12px; box-shadow:var(--shadow-card); overflow:hidden; }
+.card.hit { display:block; width:100%; }
+.card.hit:hover { border-color:var(--c-border); }
+.card.hit:active { background:var(--c-bg-card); }
+.row { display:flex; align-items:center; gap:6px; min-width:0; }
+.h { font:700 14px/1.3 var(--font-serif); color:var(--c-text-heading); white-space:nowrap; }
+.sub { font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.mut { font-size:12px; color:var(--c-text-muted); white-space:nowrap; }
+.sep { color:var(--c-text-muted); }
+.chev { margin-left:auto; color:var(--c-text-muted); display:inline-flex; flex-shrink:0; }
+.card.hit:hover .chev { color:var(--c-accent); }
+.ell { overflow:hidden; text-overflow:ellipsis; min-width:0; }
+
+/* Мини-рельс этапов: 7 (или K) сегментов 6×4, R.sm/2; пройден — C.success,
+   текущий — 14×4 цветом тона, впереди — C.progressTrack, нет в трекере — пунктир C.dashed. */
+.rail { display:inline-flex; gap:2px; align-items:center; flex-shrink:0; }
+.rail i { display:block; width:6px; height:4px; border-radius:2px; background:var(--c-progress-track); }
+.rail i.done { background:var(--c-success); }
+.rail i.active { width:14px; }
+.rail i.absent { background:none; border:1px dashed var(--c-dashed); height:4px; }
+.t-run { background:var(--c-accent) !important; } .t-wait { background:var(--c-info) !important; }
+.t-stopped { background:var(--c-danger) !important; } .t-loop { background:var(--c-warning) !important; }
+
+/* Аватары активных: 20 px (на 360 — 22), кольцо 2px C.bgWhite, наезд −6. */
+.avs { display:inline-flex; align-items:center; flex-shrink:0; }
+.avs .a { width:20px; height:20px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;
+  font-size:10px; font-weight:700; background:var(--c-accent-light); color:var(--c-accent); box-shadow:0 0 0 2px var(--c-bg-white); }
+.avs .a + .a { margin-left:-6px; }
+.avs .a.more { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.avs .a.stop { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.avs .a.wait { background:var(--c-info-bg); color:var(--c-info); }
+#stage.w360 .avs .a { width:22px; height:22px; }
+
+/* Чип проблемы: FS.xs 600, R.sm, тон — пара *Bg/*Text. */
+.chip { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:6px; padding:1px 7px; white-space:nowrap; flex-shrink:0; }
+.chip.wait { background:var(--c-info-bg); color:var(--c-info); }
+.chip.stop { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.chip.loop { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.chip.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.chip.quiet { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.chip .need { font-weight:400; opacity:.8; }
+
+/* Полоса шагов (вариант В): высота 6, R 3, сегменты по корзинам stepProgress. */
+.bar { display:flex; height:6px; border-radius:3px; overflow:hidden; background:var(--c-progress-track); gap:1px; }
+.bar span { display:block; height:100%; }
+.b-acc { background:var(--c-success); } .b-rev { background:var(--c-info); } .b-work { background:var(--c-accent); }
+.b-none { background:transparent; }
+.legend i.b-none { background:var(--c-progress-track); }
+.legend { display:flex; flex-wrap:wrap; gap:2px 10px; font-size:11px; color:var(--c-text-secondary); }
+.legend i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
+
+/* Полоса проблемы (вариант В): фон *Bg, левый край 3px цветом тона. */
+.band { display:flex; align-items:center; gap:8px; padding:8px 13px; border-bottom:1px solid var(--c-divider); }
+.band.wait { background:var(--c-info-bg); box-shadow:inset 3px 0 0 var(--c-info); }
+.band.stop { background:var(--c-danger-bg); box-shadow:inset 3px 0 0 var(--c-danger); }
+.band.loop { background:var(--c-warning-bg); box-shadow:inset 3px 0 0 var(--c-warning); }
+.band .bt { font-size:12px; color:var(--c-text-primary); min-width:0; flex:1; }
+.band .bt b { color:var(--c-text-heading); }
+.band .bt .why { color:var(--c-text-secondary); }
+.act { flex-shrink:0; font-size:12px; font-weight:600; color:var(--c-accent); padding:4px 10px; border-radius:8px; border:1px solid var(--c-border); background:var(--c-bg-white); white-space:nowrap; }
+.act:hover { border-color:var(--c-accent); }
+#stage.w360 .act { min-height:40px; padding:0 12px; }
+.lnk { font-size:12px; font-weight:600; color:var(--c-accent); white-space:nowrap; display:inline-flex; align-items:center; gap:2px; flex-shrink:0; }
+#stage.w360 .lnk { min-height:40px; }
+
+/* Глиф состояния 14 px (как FeatureGlyph): цвет по тону. */
+.g { display:inline-flex; flex-shrink:0; }
+.g.run { color:var(--c-accent); } .g.wait { color:var(--c-info); } .g.stop { color:var(--c-danger); }
+.g.loop { color:var(--c-warning); } .g.done { color:var(--c-success); } .g.quiet { color:var(--c-text-muted); }
+
+/* «Было»: нынешняя строка (для сравнения). */
+.old .row { padding:10px 13px; flex-wrap:wrap; row-gap:4px; }
+.old .now { font-size:12px; color:var(--c-text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px; }
+#stage.w360 .old .now { order:6; flex:1 1 0; max-width:100%; }
+#stage.w360 .old .brk { display:block; flex-basis:100%; height:0; order:5; }
+.old .brk { display:none; }
+#stage.w360 .old .lnk { order:7; }
+.pbar { display:inline-block; width:44px; height:4px; border-radius:2px; background:var(--c-border-light); overflow:hidden; flex-shrink:0; }
+.pbar span { display:block; height:100%; background:var(--c-accent); }
+
+/* ===== Вариант А «Сводка в две строки» ===== */
+.va { padding:9px 13px 10px; display:grid; gap:4px; }
+#stage.w360 .va { padding:10px 13px 11px; min-height:40px; }
+
+/* ===== Вариант Б «Одна строка» ===== */
+.vb { padding:10px 13px; display:flex; align-items:center; gap:7px; flex-wrap:wrap; row-gap:6px; min-height:40px; }
+.vb .brk { display:none; }
+#stage.w360 .vb .brk { display:block; flex-basis:100%; height:0; }
+/* На 360 рельс уходит: номер этапа «3/7» уже есть, а чип проблемы обязан влезть в первую строку. */
+#stage.w360 .vb .rail { display:none; }
+
+/* ===== Вариант В «Сначала проблема» ===== */
+.vc .body { padding:9px 13px 10px; display:grid; gap:6px; }
+.vc .foot { display:flex; align-items:center; gap:8px; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>Карточка «План хода» в ленте чата с фичей — три варианта (п.15 волны 4)</h1>
+  <div class="grp"><span class="lbl">Тема</span><span class="pills" id="pTheme"></span></div>
+  <div class="grp"><span class="lbl">Ширина</span><span class="pills" id="pWidth"></span></div>
+  <div class="grp"><span class="lbl">Ситуация</span><span class="pills" id="pCase"></span></div>
+</div>
+<div class="note" id="caseNote"></div>
+<div id="stage"></div>
+
+<script>
+// ===== Данные: ровно поля FeatureRun (GET /api/tasks/features?sessionId=…), которые
+// карточка уже получает через useFeatureRunsSnapshot. Поля с пометкой «НЕТ В ДАННЫХ» —
+// чего не хватает (см. записку §4).
+const P = { kira:{n:'Кира',i:'К'}, denis:{n:'Денис',i:'Д'}, gleb:{n:'Глеб',i:'Г'}, kuzma:{n:'Кузьма',i:'К'}, timur:{n:'Тимур',i:'Т'}, vera:{n:'Вера',i:'В'} };
+const KEYS = ['cut','plan','prod','review','qa','final','merge'];
+const NAME = { cut:'Разрез', plan:'План', prod:'Производство', review:'Ревью', qa:'Проверка', final:'Финальное ревью', merge:'Мерж' };
+function stages(activeKey, tone, absent){ // done до активной, pending после
+  const ai = KEYS.indexOf(activeKey);
+  return KEYS.map((k,i) => ({ key:k, state: (absent||[]).includes(k) ? 'absent' : ai<0 ? 'done' : i<ai ? 'done' : i===ai ? 'active' : 'pending', tone: i===ai ? tone : null }));
+}
+const CASES = {
+  run: { label:'Идёт', note:'Обычный ход: двое пишут код, всё спокойно. Карточка должна быть тихой.',
+    run:{ state:'running', title:'Обзор фич · волна 4', stages:stages('prod','run'),
+      sp:{planState:'cut', total:19, accepted:7, review:2, work:4, notCreated:6, withdrawn:0},
+      now:['kira','denis'], attention:null, loops:1, openReturns:0, quietMin:4 },
+    todo:{ done:7, total:19, now:'Жду Киру и Дениса по W4-6 и W4-CHT-B' } },
+  wait: { label:'Ждёт вас', note:'Ревьюер задал вопрос человеку. Главное в карточке — «от вас что-то нужно» и куда идти отвечать.',
+    run:{ state:'waiting', title:'Обзор фич · волна 4', stages:stages('review','wait'),
+      sp:{planState:'cut', total:19, accepted:11, review:3, work:1, notCreated:4, withdrawn:0},
+      now:['gleb'], attention:{kind:'wait', who:'gleb', min:40, reason:'нужно решение по формату API паузы'}, loops:2, openReturns:0, quietMin:40 },
+    todo:{ done:9, total:19, now:'Жду ответа Андрея на вопрос Глеба по API паузы' } },
+  stop: { label:'Стоит', note:'Исполнитель встал (упала сборка). Тревога сильнее всего остального.',
+    run:{ state:'stopped', title:'Обзор фич · волна 4', stages:stages('prod','stopped'),
+      sp:{planState:'cut', total:19, accepted:7, review:2, work:4, notCreated:6, withdrawn:0},
+      now:['kira'], attention:{kind:'stopped', who:'denis', min:25, reason:'сборка упала: CS0246 в FeatureProjector'}, loops:1, openReturns:0, quietMin:25 },
+    todo:{ done:7, total:19, now:'Разбираю остановку Дениса на W4-CHT-B' } },
+  loop: { label:'Возвраты', note:'Ревью вернуло работу: 2 доработки ещё открыты. Сигнал «есть правки», не тревога.',
+    run:{ state:'running', title:'Обзор фич · волна 4', stages:stages('prod','loop'),
+      sp:{planState:'cut', total:19, accepted:9, review:1, work:5, notCreated:4, withdrawn:1},
+      now:['kira','denis','kuzma','timur'], attention:null, loops:4, openReturns:2, quietMin:2 },
+    todo:{ done:12, total:19, now:'Запускаю доработки по возвратам Глеба (R1-a, R1-b)' } },
+  stale: { label:'Тихо 3 ч', note:'Формально «идёт», но 3 часа нет активности. Сигнала «зависла» в данных НЕТ — показан, как выглядел бы с новым полем (записка §4, п.1).',
+    run:{ state:'running', title:'Обзор фич · волна 4', stages:stages('prod','run'),
+      sp:{planState:'partial', total:19, accepted:7, review:0, work:3, notCreated:9, withdrawn:0},
+      now:['kuzma'], attention:null, loops:0, openReturns:0, quietMin:190, staleNeedsField:true },
+    todo:{ done:7, total:19, now:'Жду Кузьму по W4-DES-B' } },
+  merge: { label:'К мержу', note:'Все шаги приняты, финал принят — ждут согласия на мерж.',
+    run:{ state:'merge_pending', title:'Обзор фич · волна 4', stages:stages('merge','wait'),
+      sp:{planState:'done', total:19, accepted:19, review:0, work:0, notCreated:0, withdrawn:1},
+      now:[], attention:{kind:'merge', who:null, min:15, reason:'мерж'}, loops:5, openReturns:0, quietMin:15 },
+    todo:{ done:18, total:19, now:'Жду согласия Андрея на мерж' } },
+  multi: { label:'Две фичи', note:'Чат ведёт две фичи. Карточка показывает выбранную (как попап), «+1 фича» — счётчик, переключение в попапе.',
+    run:{ state:'running', title:'Обзор фич · волна 4', stages:stages('review','run'),
+      sp:{planState:'cut', total:19, accepted:12, review:4, work:1, notCreated:2, withdrawn:0},
+      now:['gleb','vera'], attention:null, loops:1, openReturns:0, quietMin:6, more:1 },
+    todo:{ done:14, total:22, now:'Веду две фичи: ревью волны 4 и разрез плагинов' } },
+};
+let theme='light', width='desk', cs='run';
+
+// ===== Слова (общие у вариантов) =====
+const svg = (p, s=14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const I = {
+  run:'<circle cx="12" cy="12" r="4" fill="currentColor"/>',
+  wait:'<path d="M12 3l9 9-9 9-9-9z"/>', stop:'<rect x="5" y="5" width="14" height="14" rx="2"/>',
+  loop:'<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>', done:'<path d="M20 6L9 17l-5-5"/>',
+  chev:'<path d="M9 18l6-6-6-6"/>', quiet:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+};
+const dur = m => m < 60 ? `${m} мин` : `${Math.floor(m/60)} ч${m%60 ? ' ' + (m%60) + ' мин' : ''}`;
+const plural = (n, a, b, c) => { const n10=n%10, n100=n%100; return n10===1&&n100!==11 ? a : n10>=2&&n10<=4&&(n100<12||n100>14) ? b : c; };
+const activeIdx = r => r.stages.findIndex(s => s.state==='active');
+// «этап N из K»: K — длина рельса (сейчас 7; после W4-DES — 8). «из 12» в данных нет.
+const stageNo = r => { const i = activeIdx(r); return i < 0 ? '' : `этап ${i+1} из ${r.stages.length}`; };
+const stageName = r => { const i = activeIdx(r); return i < 0 ? '—' : NAME[r.stages[i].key]; };
+const left = r => r.sp.total - r.sp.accepted;
+// Проблема — ОДНА, по приоритету: стоит → ждёт вас → к мержу → открытые возвраты → тихо.
+function problem(r){
+  const a = r.attention;
+  if (a && a.kind==='stopped') return { tone:'stop', glyph:'stop', chip:`стоит ${dur(a.min)}`, band:`<b>${P[a.who].n}</b> встал${P[a.who].n.endsWith('а')?'а':''} ${dur(a.min)} назад`, why:a.reason, act:'Открыть чат' };
+  if (a && a.kind==='wait') return { tone:'wait', glyph:'wait', chip:`ждёт вас · ${dur(a.min)}`, band:`<b>${P[a.who].n}</b> ждёт вас ${dur(a.min)}`, why:a.reason, act:'Ответить' };
+  if (a && a.kind==='merge') return { tone:'wait', glyph:'wait', chip:'ждёт согласия на мерж', band:'<b>Готово к мержу</b> — нужно ваше согласие', why:`финал принят ${dur(a.min)} назад`, act:'Открыть' };
+  if (r.openReturns > 0) return { tone:'loop', glyph:'loop', chip:`↺ ${r.openReturns} ${plural(r.openReturns,'доработка','доработки','доработок')}`, band:`<b>Ревью вернуло работу:</b> ${r.openReturns} ${plural(r.openReturns,'доработка открыта','доработки открыты','доработок открыто')}`, why:`всего возвратов ${r.loops}`, act:'Что вернули' };
+  if (r.staleNeedsField && r.quietMin >= 120) return { tone:'loop', glyph:'quiet', chip:`тихо ${dur(r.quietMin)}`, band:`<b>Тихо ${dur(r.quietMin)}</b> — ни одного события по фиче`, why:'идёт формально, но никто не отчитывался', act:'Открыть чат', need:true };
+  return null;
+}
+const glyphFor = r => { const p = problem(r); if (p) return p.glyph; if (r.state==='merge_pending') return 'wait'; return activeIdx(r) >= 0 && r.stages[activeIdx(r)].tone==='loop' ? 'loop' : 'run'; };
+const toneClass = g => ({run:'run',wait:'wait',stop:'stop',loop:'loop',done:'done',quiet:'quiet'})[g];
+function rail(r){ return `<span class="rail" aria-hidden="true">${r.stages.map(s => `<i class="${s.state}${s.state==='active' ? ' t-' + (s.tone||'run') : ''}"></i>`).join('')}</span>`; }
+// Аватары: только активные (now[] + упавший из тревоги), ≤ N, дальше «+K». title — имена.
+function avatars(r, max){
+  const ids = [...r.now]; const a = r.attention;
+  if (a && a.who && !ids.includes(a.who)) ids.unshift(a.who);
+  if (!ids.length) return '';
+  const shown = ids.slice(0, max), rest = ids.length - shown.length;
+  const cls = id => a && a.who===id ? (a.kind==='stopped' ? ' stop' : ' wait') : '';
+  return `<span class="avs" title="Сейчас: ${ids.map(i=>P[i].n).join(', ')}">${shown.map(i => `<span class="a${cls(i)}">${P[i].i}</span>`).join('')}${rest>0 ? `<span class="a more">+${rest}</span>` : ''}</span>`;
+}
+const chipHtml = p => p ? `<span class="chip ${p.tone}">${p.chip}${p.need ? ' <span class="need">· нет поля</span>' : ''}</span>` : '';
+const chev = `<span class="chev">${svg(I.chev, 16)}</span>`;
+function leftText(r, short){
+  if (r.sp.planState==='done') return 'все шаги приняты';
+  const l = left(r);
+  const parts = [`осталось ${l} из ${r.sp.total}`];
+  if (!short) { if (r.sp.work) parts.push(`${r.sp.work} в работе`); if (r.sp.review) parts.push(`${r.sp.review} в ревью`); }
+  if (r.sp.planState==='partial') parts.push('план частично');
+  return parts.join(' · ');
+}
+const more = r => r.more ? `<span class="chip quiet">+${r.more} ${plural(r.more,'фича','фичи','фич')}</span>` : '';
+
+// ===== Было =====
+function vOld(c){
+  const t = c.todo, pct = Math.round(t.done / t.total * 100);
+  return `<div class="card old"><div class="row">
+    <span class="g run">${svg('<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12l3 3 5-6"/>', 15)}</span>
+    <span class="h">План хода</span>
+    <span class="now">· сейчас: ${t.now}</span>
+    <span class="pbar"><span style="width:${pct}%"></span></span>
+    <span class="mut mono" style="font-size:11px">${t.done} из ${t.total}</span>
+    <span class="brk"></span>
+    <span class="lnk" style="margin-left:auto">Подробнее ›</span>
+  </div></div>`;
+}
+// ===== А · Сводка в две строки =====
+function vA(c){
+  const r = c.run, p = problem(r), g = glyphFor(r);
+  return `<button class="card hit" title="Открыть исполнение фичи"><div class="va">
+    <div class="row">
+      <span class="g ${toneClass(g)}">${svg(I[g])}</span>
+      <span class="h">${stageName(r)}</span>
+      <span class="mut">${stageNo(r)}</span>
+      ${rail(r)}
+      ${more(r)}
+      ${chev}
+    </div>
+    <div class="row">
+      <span class="sub ell">${leftText(r, width==='m')}</span>
+      <span style="margin-left:auto"></span>
+      ${chipHtml(p)}
+      ${avatars(r, 3)}
+    </div>
+  </div></button>`;
+}
+// ===== Б · Одна строка =====
+function vB(c){
+  const r = c.run, p = problem(r), g = glyphFor(r);
+  const i = activeIdx(r);
+  return `<button class="card hit" title="Открыть исполнение фичи"><div class="vb">
+    ${rail(r)}
+    <span class="h">${stageName(r)}</span>
+    <span class="mut mono" style="font-size:11px">${i<0?'':(i+1)+'/'+r.stages.length}</span>
+    ${chipHtml(p)}
+    <span class="brk"></span>
+    <span class="sub ell">${r.sp.planState==='done' ? 'все шаги приняты' : `осталось ${left(r)} ${plural(left(r),'шаг','шага','шагов')}`}</span>
+    ${more(r)}
+    <span style="margin-left:auto"></span>
+    ${avatars(r, 2)}
+    <span class="chev" style="margin-left:0">${svg(I.chev, 16)}</span>
+  </div></button>`;
+}
+// ===== В · Сначала проблема =====
+function vC(c){
+  const r = c.run, p = problem(r), sp = r.sp;
+  const w = n => `${(n / sp.total * 100).toFixed(1)}%`;
+  const band = p ? `<div class="band ${p.tone}">
+      <span class="g ${toneClass(p.glyph)}">${svg(I[p.glyph])}</span>
+      <span class="bt">${p.band}${width==='m' ? '<br>' : ' · '}<span class="why">${p.why}</span>${p.need ? ' <span class="chip quiet">нет поля</span>' : ''}</span>
+      <button class="act">${p.act}</button>
+    </div>` : '';
+  const legend = [
+    sp.accepted ? `<span><i class="b-acc"></i>${sp.accepted} принято</span>` : '',
+    sp.review ? `<span><i class="b-rev"></i>${sp.review} в ревью</span>` : '',
+    sp.work ? `<span><i class="b-work"></i>${sp.work} в работе</span>` : '',
+    sp.notCreated ? `<span><i class="b-none"></i>${sp.notCreated} не заведено</span>` : '',
+  ].join('');
+  return `<div class="card vc">${band}<div class="body">
+      <div class="row">
+        <span class="h">${stageName(r)}</span>
+        <span class="mut">${stageNo(r)}</span>
+        ${more(r)}
+        <span style="margin-left:auto"></span>
+        ${avatars(r, 3)}
+      </div>
+      <div class="bar" role="img" aria-label="${sp.accepted} из ${sp.total} шагов принято">
+        <span class="b-acc" style="width:${w(sp.accepted)}"></span><span class="b-rev" style="width:${w(sp.review)}"></span><span class="b-work" style="width:${w(sp.work)}"></span><span class="b-none" style="flex:1"></span>
+      </div>
+      <div class="foot"><span class="legend">${sp.planState==='done' ? `<span><i class="b-acc"></i>все ${sp.total} шагов приняты</span>` : legend}</span>
+        <button class="lnk" style="margin-left:auto">Подробнее ›</button></div>
+    </div></div>`;
+}
+
+const VARIANTS = [
+  ['Было', 'нынешняя строка: чек-лист агента, а не фича', vOld],
+  ['А · Сводка в две строки', 'вся карточка — одна тач-цель; 1-я строка «где», 2-я «сколько · проблема · кто»', vA],
+  ['Б · Одна строка', 'минимум высоты; на 360 — две строки по 40 px', vB],
+  ['В · Сначала проблема', 'тихая, когда всё хорошо; при тревоге сверху полоса с действием', vC],
+];
+function render(){
+  document.documentElement.setAttribute('data-theme', theme);
+  const st = document.getElementById('stage');
+  st.className = width==='m' ? 'w360' : '';
+  const c = CASES[cs];
+  document.getElementById('caseNote').innerHTML = `<b>${c.label}.</b> ${c.note}`;
+  st.innerHTML = VARIANTS.map(([t, d, f]) => `<div class="vrow"><div class="vhead"><b>${t}</b><span>${d}</span></div>
+    <div class="frame"><p class="msgline">Софья: Запустила Киру на W4-6, Денис ждёт слота…</p>${f(c)}<p class="msgline after">▸ tasks_run_executor · W4-CHT-B</p></div></div>`).join('');
+}
+function pills(id, opts, get, set){
+  const el = document.getElementById(id);
+  const draw = () => { el.innerHTML = opts.map(([v,l]) => `<button class="${get()===v?'on':''}" data-v="${v}">${l}</button>`).join(''); };
+  el.onclick = e => { const v = e.target.closest('button')?.dataset.v; if (v) { set(v); draw(); render(); } };
+  draw();
+}
+pills('pTheme', [['light','Светлая'],['dark','Тёмная']], () => theme, v => theme = v);
+pills('pWidth', [['desk','Десктоп'],['m','360']], () => width, v => width = v);
+pills('pCase', Object.entries(CASES).map(([k,v]) => [k, v.label]), () => cs, v => cs = v);
+if (window.innerWidth < 720) width = 'm';
+pills('pWidth', [['desk','Десктоп'],['m','360']], () => width, v => width = v);
+render();
+</script>
+</body>
+</html>

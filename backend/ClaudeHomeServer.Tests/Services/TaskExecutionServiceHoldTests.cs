@@ -387,10 +387,19 @@ public class TaskExecutionServiceHoldTests : IDisposable
 
         var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
         resumed.Should().Be(0, "пауза ничего не прерывала — продолжать нечего");
+        // R-HOLD-K (п.2): текст содержит указание разобрать доклады, накопленные за паузу
+        // (мотив по контракту §1, :249-251). Мутация: вернуть прежнюю формулировку без
+        // «разбери доклады» — этот Verify краснеет.
         keyAdapter.Verify(a => a.SendMessageAsync(
-            It.Is<string>(t => t.Contains("запуски разрешены")),
-            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
-            Times.Once(), "оркестратор будится карточкой «пауза снята, запуски разрешены»");
+            It.Is<string>(t => t.Contains("запуски разрешены") && t.Contains("разбери доклады, накопленные за паузу")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()),
+            Times.Once(), "оркестратор будится карточкой «пауза снята, запуски разрешены» с разбором докладов");
+        // R-HOLD-K (п.3): ровно одна карточка — в ключевой чат не уходит ничего кроме неё.
+        // Мутация: добавить вторую нотификацию в ветке — Times.Once краснеет.
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(),
+            It.IsAny<string>()),
+            Times.Once(), "в ключевой чат уходит ровно одна доставка");
     }
 
     // W4-HOLD-K (дефект bec00347, контракт §1 :103): снятие черновика — кнопка «Запустить»:
@@ -411,10 +420,19 @@ public class TaskExecutionServiceHoldTests : IDisposable
 
         var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Draft);
         resumed.Should().Be(0, "у черновика прерванных ходов не бывает");
+        // R-HOLD-K (п.2, п.3): текст содержит указание разобрать доклады за паузу; параметры
+        // доставки фиксированы, а не It.IsAny: карточка — пробуждение, а не реакция на доклад,
+        // поэтому suppressTasksExecute обязан быть false. Мутации: передать suppressTasksExecute:
+        // true в DeliverKeyChatCardAsync — краснеет первый Verify; убрать ветку draft — краснеет
+        // и первый, и второй (карточка ушла бы в общую ветку).
         keyAdapter.Verify(a => a.SendMessageAsync(
-            It.Is<string>(t => t.Contains("Фича запущена")),
-            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
-            Times.Once(), "ключевой чат получает карточку «фича запущена» с ходом");
+            It.Is<string>(t => t.Contains("Фича запущена") && t.Contains("разбери доклады, накопленные за паузу")),
+            It.IsAny<IReadOnlyList<string>>(), 0, false, It.IsAny<string>()),
+            Times.Once(), "ключевой чат получает карточку «фича запущена» с ходом и без подавления действий");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(),
+            It.IsAny<string>()),
+            Times.Once(), "в ключевой чат уходит ровно одна карточка");
     }
 
     // R-HOLD-D (п.3, критерий c3): согласование числительных со «шаг» — то же правило, что

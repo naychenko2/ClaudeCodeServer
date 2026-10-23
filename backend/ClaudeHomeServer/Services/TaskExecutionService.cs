@@ -1252,26 +1252,46 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (key is null) return resumed;
         if (holdReason == FeatureHoldReasons.Draft) {
             // «Фича запущена» (контракт :103): кнопка снимает гейт, шаги по плану запускает
-            // оркестратор — будить его здесь и есть смысл запроса.
-            await _sessions.SendMessageAsync(key,
-                "Фича запущена: черновик снят, фича активна. Начни конвейер по плану.",
-                [], auto: true, cause: SessionManager.DeliveryCause.Direct);
+            // оркестратор — будить его здесь и есть смысл запроса. Пока фича стояла под
+            // гейтом, доклады ложились карточками без пробуждения (контракт §1, :249-251) —
+            // их надо разобрать и при снятии черновика.
+            await DeliverKeyChatCardAsync(key,
+                "Фича запущена: черновик снят, фича активна. Начни конвейер по плану; " +
+                "разбери доклады, накопленные за паузу.");
             return resumed; // у черновика прерванных ходов не бывает — 0
         }
         if (resumed == 0) {
-            await _sessions.SendMessageAsync(key,
-                "Пауза снята: прерванных шагов нет, запуски разрешены.",
-                [], auto: true, cause: SessionManager.DeliveryCause.Direct);
+            // R-HOLD-K (п.2): тот же мотив контракта §1, :249-251: доклады за паузу
+            // накопились и здесь — оркестратору надо их разобрать, а не только знать,
+            // что запуски разрешены.
+            await DeliverKeyChatCardAsync(key,
+                "Пауза снята: прерванных шагов нет, запуски разрешены; " +
+                "разбери доклады, накопленные за паузу.");
             return 0;
         }
         // R-HOLD-D (п.5): формулировка контракта §1, :249 — «пауза снята, продолжены N шагов»,
         // с русским согласованием числительных (то же правило, что pluralSteps на фронте).
         var verb = resumed == 1 ? "продолжен" : "продолжены";
-        await _sessions.SendMessageAsync(key,
+        await DeliverKeyChatCardAsync(key,
             $"Пауза фичи снята: {verb} {resumed} {PluralSteps(resumed)}. " +
-            "Доклады, накопленные за паузу, — в лентах этих шагов; разбери их.",
-            [], auto: true, cause: SessionManager.DeliveryCause.Direct);
+            "Доклады, накопленные за паузу, — в лентах этих шагов; разбери их.");
         return resumed;
+    }
+
+    // R-HOLD-K (хвост): карточка в ключевой чат — фоновая нотификация: сбой доставки
+    // логируется сервисом и не всплывает до ручки — продолжение уже завершено, и отказ
+    // уведомления не должен читаться как отказ возврата.
+    private async Task DeliverKeyChatCardAsync(string sessionId, string text)
+    {
+        try
+        {
+            await _sessions.SendMessageAsync(sessionId, text, [], auto: true,
+                cause: SessionManager.DeliveryCause.Direct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("Карточка в ключевой чат {Session} не доставлена: {Message}", sessionId, ex.Message);
+        }
     }
 
     // Склонение «шаг/шага/шагов» (R-HOLD-D п.3) — то же правило, что pluralSteps на фронте

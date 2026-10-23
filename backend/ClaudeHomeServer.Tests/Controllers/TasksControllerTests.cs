@@ -2546,12 +2546,51 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             m => m.Contains("продолжи"), "реплика-продолжение уходит в чат исполнителя");
     }
 
-    // R-HOLD-D (п.2): сбой фонового возврата не теряется молча — ручка его логирует
-    // (ContinueWith, TasksController.cs:949). Рассылка в ключевой чат отказывает — исключение
-    // доходит до ручки мимо позадачного catch. Прецедент логгера: UnhandledExceptionHandlerTests.cs:24.
-    // Мутация: убрать ContinueWith — записи нет, ожидание краснеет.
+    // R-HOLD-K (критерий c1): порядок «причина читается ДО ClearHold» (TasksController.cs:939)
+    // сервисные тесты не защищают — они зовут сервис напрямую, а reason передаёт сама ручка.
+        // Здесь — связка на уровне HTTP: DELETE hold с reason=draft → в ключевой чат уходит
+    // карточка «Фича запущена», и формулировки «Пауза снята» в ней нет (draft-ветка
+    // возвращается до общей). Мутация:
+    // перенести чтение причины после ClearHold (перечитать эпик) — Hold уже null, ручка бросает,
+    // карточка не уходит — ожидание краснеет.
     [Fact]
-    public async Task ClearHold_FailedResumeIsLoggedNotLost()
+    public async Task ClearHold_DraftReason_WakesKeyChatWithStartedCard()
+    {
+        var keyChat = await CreatePersonalChatAsync(OwnerId);
+        var epic = await CreateTaskAsync(new
+        {
+            title = "фича в черновике", role = "feature", sourceSessionId = keyChat,
+        });
+        var epicId = epic.GetProperty("id").GetString()!;
+
+        var cardSent = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _factory.LlmAdapters.Adapters[keyChat].FirstMessageTcs = cardSent;
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "draft" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Возврат — фон (fire-and-forget): ждём событие доставки, не время.
+        var winner = await Task.WhenAny(cardSent.Task, Task.Delay(5000));
+        ReferenceEquals(winner, cardSent.Task).Should().BeTrue(
+            "карточка дошла до ключевского чата в потолок");
+        var text = cardSent.Task.Result;
+        text.Should().Contain("Фича запущена", "снятие черновика будит оркестратора карточкой «фича запущена»");
+        text.Should().NotContain("Пауза снята", "draft не даёт формулировку «пауза снята»");
+        _factory.LlmAdapters.Adapters[keyChat].SentMessages.Count.Should().Be(1,
+            "в ключевой чат уходит ровно одна карточка");
+    }
+
+    // R-HOLD-D (п.2) + R-HOLD-K (хвост): сбой доставки карточки не теряется молча — его логирует
+    // сервис (try/catch вокруг карточки, TaskExecutionService.DeliverKeyChatCardAsync), а ручка
+    // больше не сообщает о отказе возврата: продолжение удалось, отказала только нотификация.
+    // Прецедент логгера: UnhandledExceptionHandlerTests.cs:24. Мутация: убрать try/catch в
+    // DeliverKeyChatCardAsync — исключение уйдёт до ручки, лог сервиса пуст — первое ожидание
+    // краснеет.
+    [Fact]
+    public async Task ClearHold_FailedCardDeliveryIsLoggedByServiceNotHandle()
     {
         var epicId = await CreateFeatureEpicAsync();
         var step = await CreateTaskAsync(new { title = "шаг без продолжения", featureId = epicId, role = "step" });
@@ -2560,25 +2599,39 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         _factory.Services.GetRequiredService<TaskManager>().SetExecutorLauncher(stepId, keyChat, null);
         _factory.LlmAdapters.Adapters[keyChat].FailOnSend = true;
 
-        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
-        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        var serviceLogged = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handleLogged = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Логгер сервиса подменяем точечно (прецедент: рефлексивная подмена состояния в
+        // TaskExecutionServiceHoldTests.SetRunningTurn) и возвращаем в finally — тест не
+        // оставляет следов на singletonе фабрики для остальных тестов.
+        var service = _factory.Services.GetRequiredService<TaskExecutionService>();
+        var logField = typeof(TaskExecutionService).GetField("_log",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var originalLog = logField.GetValue(service);
+        logField.SetValue(service, new CapturingLogger<TaskExecutionService>(serviceLogged));
+        try {
+            var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+            set.StatusCode.Should().Be(HttpStatusCode.OK);
 
-        var logged = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var controller = BuildController(RealGit(), log: new CapturingLogger(logged));
+            var controller = BuildController(RealGit(), log: new CapturingLogger<TasksController>(handleLogged));
+            var result = controller.ClearFeatureHold(epicId);
+            result.Should().BeOfType<OkObjectResult>(); // ответ не ждёт фон: сбой карточки локализован в сервисе
 
-        var result = controller.ClearFeatureHold(epicId);
-        result.Should().BeOfType<OkObjectResult>(); // ответ не ждёт фон: сбой виден только в логе
-
-        var winner = await Task.WhenAny(logged.Task, Task.Delay(5000));
-        ReferenceEquals(winner, logged.Task).Should().BeTrue(
-            "сбой возврата записан в лог в потолок, а не потерян молча");
-        logged.Task.Result.Should().Contain("Возврат прерванных паузой ходов",
-            "ContinueWith ручки логирует сбой продолжения");
+            var winner = await Task.WhenAny(serviceLogged.Task, Task.Delay(5000));
+            ReferenceEquals(winner, serviceLogged.Task).Should().BeTrue(
+                "сбой карточки записан в лог сервиса в потолок, а не потерян молча");
+            serviceLogged.Task.Result.Should().Contain("Карточка в ключевой чат",
+                "catch карточки логирует отказ доставки");
+            handleLogged.Task.IsCompleted.Should().BeFalse(
+                "сбой карточки не всплывает отказом возврата на ручке: продолжение удалось");
+        } finally {
+            logField.SetValue(service, originalLog);
+        }
     }
 
     // Записывающий логгер (прецедент: UnhandledExceptionHandlerTests.cs:24): первая запись
     // Warning+ будит TCS — тест ждёт событие лога, а не время.
-    private sealed class CapturingLogger(TaskCompletionSource<string> firstRecord) : ILogger<TasksController>
+    private sealed class CapturingLogger<T>(TaskCompletionSource<string> firstRecord) : ILogger<T>
     {
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => null!;
         public bool IsEnabled(LogLevel logLevel) => true;

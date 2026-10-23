@@ -1204,6 +1204,22 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return task;
     }
 
+    // W4-HOLD-J (контракт §1 :241): чат прерванного паузой исполнителя исчез (TTL или
+    // человек) — пометку feature_held не снимаем, а меняем на терминальную
+    // feature_held_expired. ExecutorStoppedAt не двигается: по нему таймлайн паузы
+    // scoped'ит interrupted, а шаг перезапускается штатным tasks_run_executor.
+    public TaskItem? MarkExecutorStopExpired(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) return null;
+        var before = Capture(task);
+        task.ExecutorStopReason = ExecutorStopClassifier.FeatureHeldExpiredReason;
+        task.UpdatedAt = DateTime.UtcNow;
+        WriteJournalTransitions(task, before);
+        ScheduleSave();
+        return task;
+    }
+
     // Снятие ожидания человека (аналог ClearExecutorStopped): единственная точка клира
     // AwaitingHumanSince/Reason. В Update null = «без изменения», явного клира там нет;
     // боевые вызовы — старт исполнителя (MarkClaudeStarted) и переход в Done (Update),

@@ -1167,6 +1167,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
             if (t.LinkedSessionId is null || keyChain.Contains(t.LinkedSessionId)) continue;
             _sessions.Interrupt(t.LinkedSessionId);
+            // W4-HOLD-J (контракт §1 :266): на паузе активности в чате нет, и не снятый срок
+            // снёс бы контекст исполнителя раньше, чем пауза снимется. Заморозка: срок
+            // снимается, при снятии паузы SetExpiry ставит его заново с якорем «сейчас».
+            _sessions.SetExpiry(t.LinkedSessionId, null);
             stopped++;
         }
         return stopped;
@@ -1177,8 +1181,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // помеченные этой паузой (feature_held) и ещё в работе; остальные остановки (401, «Стоп»
     // человека до паузы) пауза не отнимала — они остаются остановленными (п.2). Ключевой чат
     // не продолжается: его ход принадлежит оркестратору, а не исполнителю задачи. Удалённый
-    // чат (TTL или человек) здесь пропускаем: пометка остаётся, шаг перезапустят штатно —
-    // ветка feature_held_expired отдельная. Возвращает число продолженных шагов.
+    // чат (TTL или человек) получает терминальную пометку feature_held_expired (W4-HOLD-J,
+    // контракт §1 :241): продолжения не будет, шаг перезапускают штатно. Возвращает число
+    // продолженных шагов.
     // Дефект bec00347 (контракт §1 :102-105, п.4): карточка оркестратору в ключевой чат уходит
     // при ЛЮБОМ снятии удержания, не только когда что-то продолжено: reason=draft — «фича
     // запущена» с ходом (прерванных ходов у черновика не бывает, будить куратора — смысл кнопки);
@@ -1199,12 +1204,24 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             if (t.Status != TaskItemStatus.InProgress) continue;
             if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
             if (t.LinkedSessionId is null || keyChain.Contains(t.LinkedSessionId)) continue;
-            if (_sessions.GetById(t.LinkedSessionId) is null) continue; // чата нет — пометка остаётся
+            if (_sessions.GetById(t.LinkedSessionId) is null)
+            {
+                // Ветка feature_held_expired (контракт §1 :241): чат исполнителя удалён
+                // (TTL или человек) — пометку не снимаем, а меняем на терминальную:
+                // продолжения нет, шаг перезапустит штатный tasks_run_executor.
+                var expired = _tasks.MarkExecutorStopExpired(t.Id);
+                if (expired is not null)
+                    await _broadcaster.ToOwner(expired.OwnerId!, new TaskChangedMessage("updated", expired));
+                continue;
+            }
             // R-HOLD-D (п.3): сбой одного чата не обрывает цикл — каждая задача ловится отдельно,
             // остальные продолжают. Р-HOLD-D (п.2): пометка снимается только после успешной
             // доставки: при сбое задача остаётся «на паузе» и повторное снятие её подхватит.
             try
             {
+                // W4-HOLD-J (контракт §1 :267): возвращаем замороженный паузой срок —
+                // SetExpiry сдвигает якорь отсчёта на «сейчас».
+                if (t.ExecutionExpiresAfterMinutes is { } ttl) _sessions.SetExpiry(t.LinkedSessionId, ttl);
                 await _sessions.SendMessageAsync(t.LinkedSessionId, HoldResumePrompt, [], auto: true,
                     cause: SessionManager.DeliveryCause.HoldResume);
                 var cleared = _tasks.ClearExecutorStopped(t.Id, ExecutorStopClassifier.FeatureHeldReason);

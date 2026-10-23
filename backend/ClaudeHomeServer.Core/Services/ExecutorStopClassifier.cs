@@ -63,6 +63,14 @@ public static class ExecutorStopClassifier
     public const string FeatureHeldReason = "feature_held";
 
     /// <summary>
+    /// Фичу сняли с паузы, но чат прерванного исполнителя к этому моменту уже удалён (истёк
+    /// TTL или его удалил человек; W4-HOLD-J, контракт §1 :241). Терминальная причина:
+    /// продолжения нет — шаг перезапускают штатным tasks_run_executor, который снимает
+    /// пометку сам (MarkClaudeStarted).
+    /// </summary>
+    public const string FeatureHeldExpiredReason = "feature_held_expired";
+
+    /// <summary>
     /// Сабагенты хода: None — обрывов не было; Truncated — оборвался, добивание в пути;
     /// Stuck — обрывается раз за разом, попытки добивания исчерпаны.
     /// </summary>

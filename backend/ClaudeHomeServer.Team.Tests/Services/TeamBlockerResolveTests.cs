@@ -103,11 +103,13 @@ public class TeamBlockerResolveTests : IDisposable
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var history = new ChatHistoryService(config);
         var planning = new TeamPlanningService(_personas, new StubPlanner(() => "{}"));
+        // Реестр задач подключён (W4-HOLD-I): ReportBlockerAsync читает паузу фичи задачи
+        // докладчика — без реестра пробуждения шли бы как раньше.
         return new SessionManager(_projects, history, config, adapters, falCost, usage,
             appSettings, userStore, jwt, server.Object, llmProviders, flags, _personas,
             bindings, subPool, NullLogger<SessionManager>.Instance,
             TestLauncherFactory.Instance, sandbox, teamPlanning: planning,
-            broadcaster: _broadcaster);
+            tasks: _tasks, broadcaster: _broadcaster);
     }
 
     // Хелпер для тестов: достать словарь _sessions у SessionManager (нужен доступ к
@@ -793,6 +795,33 @@ public class TeamBlockerResolveTests : IDisposable
         var blocker = await PublishBlockerAsync(stab, "missing-task-id");
 
         blocker.TaskTitle.Should().BeNull("удалённая задача — null, не пустой title");
+    }
+
+    // W4-HOLD-I (контракт §1 :183): блокер по задаче удержанной фичи — карточка в штабе
+    // остаётся, координатор не будится: пробуждение во время паузы пустое, квота не
+    // расходуется. Мутация: убрать paused-ветку в ReportBlockerAsync — первое утверждение
+    // краснеет (квота будет списана).
+    [Fact]
+    public async Task ReportBlocker_HoldFeature_КоординаторНеПробуждается()
+    {
+        var (stab, _) = await MakeStabAsync("blocker-hold");
+        var epic = _tasks.Create(stab.ProjectId, UserId,
+            new CreateTaskRequest("Фича на паузе", Role: TaskRoles.Feature));
+        var step = _tasks.Create(stab.ProjectId, UserId,
+            new CreateTaskRequest("Шаг удержанной фичи", Role: TaskRoles.Step, FeatureId: epic.Id));
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+        var child = await _sessions.CreateAsync(stab.ProjectId!, ClaudeMode.Auto,
+            name: "Задача: шаг", taskId: step.Id);
+        _sessions.SetParent(child.Id, stab.Id, UserId);
+
+        var r = await _sessions.ReportBlockerAsync(child.Id, "застрял на паузе", UserId);
+
+        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        _sessions.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(0,
+            "фича на паузе — координатор не будится, платное пробуждение не расходуется");
+        (await _sessions.GetHistoryAsync(stab.Id)).OfType<Protocol.StoredUserMessage>().Should()
+            .Contain(m => m.Text.Contains("застрял на паузе"), "сам доклад терять нельзя");
     }
 
     // Заглушка планировщика: тесты не вызывают планирование, но SessionManager требует

@@ -244,8 +244,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // Фича на паузе (W4-HOLD-G, контракт §1 :174): здесь сходятся и tasks_run_executor, и
         // автоматика (автозапуск ждающей задачи идёт через этот же ExecuteAsync) — поэтому гейт
         // один и стоит до claim'а и до подъёма процесса. Формула — TaskManager.FeatureHoldRefusal.
+        // Тип отказа — FeatureHoldException: планировщик отличает отказ по источнику, а не
+        // пересчётом гейта (W4-HOLD-I).
         if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
-            throw new InvalidOperationException(holdRefusal);
+            throw new TaskManager.FeatureHoldException(holdRefusal);
 
         // Claim ДО гарда «одна сессия на задачу»: сам гард читает LinkedSessionId, который
         // этот же метод выставит только через несколько строк ниже (после подъёма CLI-процесса)
@@ -286,7 +288,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // вовсе (он здесь поднимается раньше MarkClaudeStarted, поэтому одной отметки
         // «не запущена» для доказательства мало).
         if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
-            throw new InvalidOperationException(holdRefusal);
+            throw new TaskManager.FeatureHoldException(holdRefusal);
 
         // Не более одной живой сессии на задачу
         if (task.LinkedSessionId is not null &&
@@ -1376,14 +1378,20 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // живого CLI. Порог передаётся параметром — тот же и для тишины после напоминания.
     // hasOpenBlocker (волна 2 team-blocker-honest): есть ли по этой задаче открытая карточка
     // блокера в чате-штабе (SourceSessionId → TeamEscalation c TaskId=task.Id и Kind=Blocker).
-    // Резолв идёт на стороне вызывающего — ClassifyStall остаётся чистой функцией, как и
-    // раньше. true переключает исход Alert/Nudge на AlertWaitingForBlocker (отдельный текст
+    // true переключает исход Alert/Nudge на AlertWaitingForBlocker (отдельный текст
     // окрика + отдельная подпись плашки в CheckStalledExecutorAsync).
+    // featurePaused (W4-HOLD-I, контракт §1 :179): фича задачи на паузе — ничего не делается:
+    // ни оклик исполнителя, ни зов человека. Резолв идёт на стороне вызывающего — ClassifyStall
+    // остаётся чистой функцией, как и раньше.
     internal static ExecutorStallAction ClassifyStall(TaskItem task, Session? session,
-        DateTime nowUtc, TimeSpan staleAfter, bool hasOpenBlocker = false)
+        DateTime nowUtc, TimeSpan staleAfter, bool hasOpenBlocker = false, bool featurePaused = false)
     {
         if (task.CompletionDelivered) return ExecutorStallAction.None;
         if (task.Status == TaskItemStatus.Done) return ClassifyUndeliveredDone(task, session, nowUtc, staleAfter);
+        // Фича на паузе (W4-HOLD-I, контракт §1 :179): причина тишины — сама пауза, оклик и
+        // зов человека будят оркестатора во время остановки. Закрытая задача осталась выше:
+        // её доклад — карточка без хода (подавление внутри ReportToDelegatorAsync).
+        if (featurePaused) return ExecutorStallAction.None;
         // Исполнителя не запускали, ход ещё идёт (ClaudeResult null) либо он провалился:
         // провал уведомляет сам (BuildResultNotification), дублировать его не надо
         if (task.ClaudeStartedAt is null || task.ClaudeResult != "success") return ExecutorStallAction.None;
@@ -1466,7 +1474,11 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 _log.LogError(ex, "Резолв открытого блокера по задаче {TaskId} не удался", task.Id);
             }
         }
-        switch (ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker))
+        // Фича задачи на паузе (W4-HOLD-I, контракт §1 :179): та же сфера, что у гейта запуска
+        // (TaskManager.FeatureIsPaused) — задач удержанной фичи сторож не окликает и человека
+        // не зовёт: их тишина — сама пауза, а не брошенная работа.
+        var featurePaused = _tasks.FeatureIsPaused(task);
+        switch (ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker, featurePaused))
         {
             case ExecutorStallAction.Nudge:
                 await NudgeExecutorAsync(task, session!, nowUtc);
@@ -1913,6 +1925,15 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             && _sessions.GetById(creatorId) is { } creatorSession
             && _sessions.ResolveOwnerId(creatorSession) == task.OwnerId)
             await AppendReportCardAsync(creatorId);
+
+        // Фича задачи на паузе (W4-HOLD-I, контракт §1 :183): карточка доклада остаётся —
+        // человек её видит, — но ход постановщика не поднимается: причина молчания — пауза,
+        // платный ход во время остановки пустой.
+        if (_tasks.FeatureIsPaused(task))
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: фича на паузе — карточка положена, ход постановщика не поднят", task.Id);
+            return;
+        }
 
         // ШАГ 2 (платный авто-ход постановщика) — только при живом постановщике-персоне.
         // Задачу мог поставить человек из обычного чата (без персоны): тогда ход не от чьего

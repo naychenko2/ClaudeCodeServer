@@ -1291,28 +1291,48 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return task;
     }
 
+    // Отказ гейта паузы (W4-HOLD-I): отдельный тип — планировщик отличает отказ по источнику,
+    // а не пересчётом предиката: plain InvalidOperationException («У задачи нет владельца») рядом
+    // с удержанной фичей — не отказ по правилу, и не должен попадать в тихую ветку автозапуска.
+    // База — InvalidOperationException: существующие catch вызывающих не меняются.
+    public class FeatureHoldException : InvalidOperationException
+    {
+        public FeatureHoldException(string message) : base(message) { }
+    }
+
+    // Эпик фичи задачи — сфера гейта паузы (контракт §1 :170): без фичи, висячий FeatureId
+    // (эпик не найден), чужой эпик — null, задача проходит как «без фичи». Owner учитывается
+    // только когда его задал вызывающий (ExecuteAsync проверяет владельца до гейта); при
+    // неизвестном сфера — по самой ссылке FeatureId.
+    private TaskItem? FeatureEpicOf(TaskItem task)
+    {
+        if (string.IsNullOrEmpty(task.FeatureId)) return null;
+        var epic = _tasks.GetValueOrDefault(task.FeatureId);
+        if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        if (task.OwnerId is not null && epic.OwnerId != task.OwnerId) return null;
+        return epic;
+    }
+
     // FeatureHoldGate (W4-HOLD-G, контракт §1 :170): единственный гейт паузы на сервере — отказ
     // запуска исполнителя по задачам фичи с активным Hold. Само правило — в FeatureProjector
     // (HoldAllows/IsPaused, W4-HOLD-G): здесь только текст отказа по причине. Задача без фичи
     // проходит всегда; висячий FeatureId (эпик не найден) — тоже, как задача без фичи: это
     // отдельный дефект трекера, блокировать из-за него работу не надо.
-    // Эпик берётся в сфере владельца задачи (контракт :170 называет Allows(task, owner), ср.
-    // TaskExecutionService.InterruptFeatureTurnsOnHold по GetByOwner): чужой эпик — не фича
-    // этой задачи, трактуется как висячий FeatureId — пропускаем.
     // Возвращает null — запуск разрешён; иначе текст отказа для точки запуска (контракт :175).
     public string? FeatureHoldRefusal(TaskItem task)
     {
-        if (string.IsNullOrEmpty(task.FeatureId)) return null;
-        var epic = _tasks.GetValueOrDefault(task.FeatureId);
-        if (epic is null || epic.Role != TaskRoles.Feature) return null;
-        // Owner известен только когда его задал вызывающий (ExecuteAsync проверяет владельца
-        // до гейта); при неизвестном гейт работает как раньше — по самой ссылке FeatureId.
-        if (task.OwnerId is not null && epic.OwnerId != task.OwnerId) return null;
-        if (FeatureProjector.HoldAllows(task, epic)) return null;
+        var epic = FeatureEpicOf(task);
+        if (epic is null || FeatureProjector.HoldAllows(task, epic)) return null;
         return FeatureProjector.IsPaused(epic)
             ? "Фича на паузе, снимите паузу на странице фичи."
             : "Фича — черновик, запустите её на странице фичи.";
     }
+
+    // «Фича задачи на паузе» — та же сфера, что у гейта запуска (W4-HOLD-I, контракт §1 :179,
+    // :183): сторож зависших и пробуждения по докладам читают это перед действием. Черновик —
+    // не пауза: его задачи подготовки живут как раньше.
+    public bool FeatureIsPaused(TaskItem task) =>
+        FeatureEpicOf(task) is { } epic && FeatureProjector.IsPaused(epic);
 
     // Пометка снятия человеком по карточке блокера (волна 1 team-blocker-honest, дефект
     // f3965801): ставится штабом в DropSubtaskAsync после Update(Status=Done). С этого

@@ -1509,11 +1509,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         && IsAcceptance(final.Verification?.Verdict);
 
     // ─── Пауза фичи (W4-HOLD-G, R-HOLD-G2) — единая точка правды ───────────────────────────
-    // «Пауза» — явное удержание человека (manual/queue): фичу не вести. Формула одна и для
-    // гейта запуска (TaskManager.FeatureHoldRefusal), и для состояния (ComputeState). Явный
-    // список причин, а не «любой не-draft»: словарь FeatureHoldReasons закрыт (ручка REST
-    // валидирует), и «неизвестная причина = пауза» больше не подразумевается.
-    // Причина вне словаря (старые/битые данные, SetHold его не фильтрует) трактуется как
+    // «Пауза» — явное удержание человека (manual/queue): фичу не вести. Формула одна — для
+    // гейта запуска (TaskManager.FeatureHoldRefusal), состояния (ComputeState), сторожа
+    // зависших и пробуждений по докладам (TaskManager.FeatureIsPaused, W4-HOLD-I). Явный
+    // список причин, а не «любой не-draft»: словарь FeatureHoldReasons закрыт (reason
+    // валидирует ручка REST, сам SetHold его не фильтрует), и «неизвестная причина = пауза»
+    // больше не подразумевается. Причина вне словаря (старые/битые данные) трактуется как
     // черновик — IsDraft ниже. Так состояние и гейт говорят одно и то же: рабочие роли
     // закрыты, подготовка разрешена (R-HOLD-G2 находка 2).
     public static bool IsPaused(TaskItem epic) =>
@@ -1528,8 +1529,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         [TaskRoles.Cut, TaskRoles.Design, TaskRoles.Plan, TaskRoles.Consult];
 
     // «Запуск разрешён»: Hold нет — разрешён; пауза (manual/queue) — ничего; draft — только
-    // подготовка. Гейт зовёт этот предикат, ComputeState — IsPaused; второго выражения
-    // правила быть не должно (ср. IsFinalAccepted).
+    // подготовка. Гейт зовёт этот предикат; состояние — IsPaused/IsDraft; сторож зависших и
+    // пробуждения по докладам — IsPaused через TaskManager.FeatureIsPaused (та же сфера,
+    // W4-HOLD-I). Второго выражения правила быть не должно (ср. IsFinalAccepted).
     public static bool HoldAllows(TaskItem task, TaskItem epic)
     {
         if (epic.Hold is null) return true;

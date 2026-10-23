@@ -910,7 +910,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // рецепту, что у _teamDecision/_teamBudget. Подписчик turn/completed переехал в
         // вертикаль — шинная подписка ниже регистрирует делегат на метод TeamTurnCompletionService.
         _teamTurnCompletion = new TeamTurnCompletionService(this, this, this, this, _teamDecision,
-            loggerFactory?.CreateLogger<TeamTurnCompletionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamTurnCompletionService>.Instance);
+            loggerFactory?.CreateLogger<TeamTurnCompletionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamTurnCompletionService>.Instance,
+            tasks);
         // Включение и переключение режима «Командная реализация» (волна Ж): SetTeamImplementAsync
         // и SetTeamImplementAutoAsync. Owning-паттерн по тому же рецепту, что и _teamBudget.
         _teamEnable = new TeamEnableService(this, this, this, this, _teamState,

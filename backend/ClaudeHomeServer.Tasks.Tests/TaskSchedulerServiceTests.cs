@@ -1,8 +1,11 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -125,13 +128,14 @@ public class TaskSchedulerServiceTests
         TaskSchedulerService.ShouldAutoStart(done, Utc, Now).Should().BeFalse();
     }
 
-    // ─── IsHoldRefusal (R-HOLD-G, находка 6) ─────────────────────────────────
-    // Планировщик обязан отличать отказ по паузе (тихий лог Info, без трейса) от падения
-    // автозапуска (Warning с трейсом). Предикат — тот же гейт, что и точка запуска.
-    // Мутация: оставить в предикате только проверку типа исключения (без обращения к гейту) —
-    // второй кейс краснеет.
+    // ─── Отказ автозапуска по паузе (R-HOLD-G находка 6; W4-HOLD-I) ─────────────
+    // Планировщик обязан отличать отказ по паузе (тихий Info без трейса) от падения
+    // автозапуска (Warning с трейсом) — по ИСТОЧНИКИ исключения, а не пересчётом гейта:
+    // plain InvalidOperationException («У задачи нет владельца») рядом с удержанной фичей
+    // — не отказ по правилу. Мутация: вернуть в IsHoldRefusal пересчёт гейта — последний
+    // абзац краснеет (отказ без владельца уйдёт в тихую ветку).
     [Fact]
-    public void AutoStart_HoldRefusal_DistinguishedFromFailure()
+    public async Task AutoStart_HoldRefusal_QuietInfo_OtherFailureWarningWithTrace()
     {
         var dir = Path.Combine(Path.GetTempPath(), "sched_hold_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -144,29 +148,55 @@ public class TaskSchedulerServiceTests
         try
         {
             var epic = tasks.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
-            var step = tasks.Create(null, "u", new CreateTaskRequest("шаг",
-                FeatureId: epic.Id, Role: TaskRoles.Step));
             tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+            // Обе задачи срочные и на удержанной фиче: первую гейт отказывает, вторая падает
+            // по несвязанной причине — тихая ветка не должна её проглотить.
+            var held = tasks.Create(null, "u", new CreateTaskRequest("шаг",
+                FeatureId: epic.Id, Role: TaskRoles.Step, Assignee: TaskItemAssignee.Claude,
+                DueDate: "2026-07-03", DueTime: "12:00"));
+            var ownerless = tasks.Create(null, "u", new CreateTaskRequest("шаг без владельца",
+                FeatureId: epic.Id, Role: TaskRoles.Step, Assignee: TaskItemAssignee.Claude,
+                DueDate: "2026-07-03", DueTime: "12:00"));
 
-            TaskSchedulerService.IsHoldRefusal(tasks, step,
-                new InvalidOperationException("Фича на паузе, снимите паузу на странице фичи."))
-                .Should().BeTrue("отказ по паузе — не поломка, тихий лог");
+            var logs = new List<(LogLevel Level, string Text, Exception? Ex)>();
+            var scheduler = new TaskSchedulerService(
+                tasks,
+                MockedUsers(),
+                new Mock<ISessionBroadcaster>().Object,
+                new ThrowingExecutor(new()
+                {
+                    [held.Id] = new TaskManager.FeatureHoldException("Фича на паузе, снимите паузу на странице фичи."),
+                    [ownerless.Id] = new InvalidOperationException("У задачи нет владельца"),
+                }),
+                new Mock<IDailyBriefingRunner>().Object,
+                new Mock<IPersonaAutomationRunner>().Object,
+                new Mock<ITaskNotificationDispatcher>().Object,
+                new RecordingLogger<TaskSchedulerService>(logs));
 
-            // Сбой не по гейту: удержания нет — обычная тревога.
-            tasks.ClearHold(epic.Id);
-            TaskSchedulerService.IsHoldRefusal(tasks, step, new InvalidOperationException("устройство офлайн"))
-                .Should().BeFalse("Hold нет — это падение запуска, не отказ");
+            await scheduler.TickAsync(Now);
 
-            // Задача без фичи никогда не «отказ по паузе».
-            var plain = tasks.Create(null, "u", new CreateTaskRequest("обычная"));
-            TaskSchedulerService.IsHoldRefusal(tasks, plain, new InvalidOperationException("boom"))
-                .Should().BeFalse();
+            var quiet = logs.Where(l => l.Level == LogLevel.Information).ToList();
+            quiet.Should().ContainSingle("отказ по паузе — правило, а не поломка: тихий лог")
+                .Which.Text.Should().Contain("пропущен по паузе фичи");
+            quiet[0].Ex.Should().BeNull("в тихой ветке нет трейса");
+
+            var alarm = logs.Where(l => l.Level == LogLevel.Warning).ToList();
+            alarm.Should().ContainSingle("сбой не по гейту — тревога, даже если фича удержана")
+                .Which.Ex.Should().BeOfType<InvalidOperationException>()
+                .Which.Message.Should().Contain("У задачи нет владельца");
         }
         finally
         {
             tasks.Dispose();
             Directory.Delete(dir, recursive: true);
         }
+    }
+
+    private static IUserStore MockedUsers()
+    {
+        var users = new Mock<IUserStore>();
+        users.Setup(u => u.GetAll()).Returns(new List<User> { new User { Id = "u", Username = "u" } });
+        return users.Object;
     }
 
     // ─── TaskUrl ─────────────────────────────────────────────────────────────
@@ -180,4 +210,23 @@ public class TaskSchedulerServiceTests
         var project = new TaskItem { Title = "t", ProjectId = "p1" };
         TaskUrl.Of(project).Should().Be($"/project/p1/task/{project.Id}");
     }
+}
+
+// Подставной исполнитель: бросает заданный тестом исключение — важен источник отказа,
+// не внутренности запуска. Вне класса тестов: локальный хелпер Task(...) тенит тип Task.
+internal sealed class ThrowingExecutor(Dictionary<string, Exception> byTask) : ITaskExecutor
+{
+    public Task ExecuteAsync(TaskItem task, bool auto) => throw byTask[task.Id];
+    public Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc) => Task.CompletedTask;
+}
+
+// Логгер с захватом уровня/текста/трейса — утверждения о логике логирования, а не о
+// предикате (тот же приём, что в других вертикалях).
+internal sealed class RecordingLogger<T>(List<(LogLevel Level, string Text, Exception? Ex)> sink) : ILogger<T>
+{
+    public IDisposable BeginScope<TState>(TState state) => new Noop();
+    public bool IsEnabled(LogLevel logLevel) => true;
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState message, Exception? exception,
+        Func<TState, Exception?, string> formatter) => sink.Add((logLevel, formatter(message, exception), exception));
+    private sealed class Noop : IDisposable { public void Dispose() { } }
 }

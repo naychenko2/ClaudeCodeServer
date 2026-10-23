@@ -98,10 +98,11 @@ export type StageState = 'done' | 'active' | 'pending' | 'absent' | 'skipped';
 // stopped — исполнитель встал; loop — работа вернулась (доработка идёт).
 export type StageTone = 'run' | 'wait' | 'stopped' | 'loop';
 
-// Состояние фичи (бэк: `FeatureRun.State`, константы `FeatureStates`; 9 значений,
+// Состояние фичи (бэк: `FeatureRun.State`, константы `FeatureStates`; 11 значений,
 // camelCase как в JSON). Единая точка правды: из неё бэк выводит bucket строки
 // индекса и порядок OrderRuns. Приоритет (первое совпавшее побеждает):
-// merged → closed → stopped → waiting → merging → merge_pending → running → not_started → idle.
+// merged → closed → paused → stopped → waiting → draft → merging → merge_pending →
+// running → not_started → idle (W4-HOLD-B1).
 export type FeatureState =
   | 'not_started'
   | 'running'
@@ -111,7 +112,9 @@ export type FeatureState =
   | 'merging'
   | 'merged'
   | 'closed'
-  | 'idle';
+  | 'idle'
+  | 'paused'
+  | 'draft';
 
 // Исполнитель стадии (бэк: `FeatureStageExecutor`): одна запись на задачу стадии.
 // Бэк отдаёт сырые данные (TaskRole/StepRef/Lane, статус, исполнителя) — подпись роли
@@ -288,6 +291,14 @@ export interface FeatureSummary {
   loops: number;
 }
 
+// Удержание фичи (бэк: `FeatureRun.Hold`, W4-HOLD-B1): копия поля эпика. reason —
+// 'draft' | 'manual' | 'queue' (FeatureHoldReasons); since — момент постановки
+// удержания (FeatureHold.Since). null/undefined — удержания нет, работа разрешена.
+export interface FeatureHold {
+  reason: string;
+  since?: string | null;
+}
+
 // Агрегат фичи — зеркало бэкового `FeatureRun`. `epic`/`steps`/`reviews`/`qa`/
 // `final`/`merge` — задачи трекера, сгруппированные проектором по роли;
 // `verdicts`/`progress`/`ready` вычисляет бэк, фронт только показывает.
@@ -298,9 +309,11 @@ export interface FeatureSummary {
 // nullable-терпимые: опциональны, UI обязан пережить их отсутствие (старые данные).
 export interface FeatureRun {
   featureId: string;
-  // Состояние фичи (бэк: `FeatureRun.State`, 9 значений, всегда отдаётся).
+  // Состояние фичи (бэк: `FeatureRun.State`, 11 значений, всегда отдаётся).
   // Единая точка правды: из неё выводится bucket строки индекса и порядок OrderRuns.
   state: FeatureState;
+  // Удержание фичи (W4-HOLD-B1): null/undefined — удержания нет.
+  hold?: FeatureHold | null;
   // p.32: nullable-терпимо (опционально), как и остальные новые поля — UI обязан
   // пережить отсутствие epic (защита в taskCounters: run.epic ? [run.epic] : []).
   epic?: FeatureTask;

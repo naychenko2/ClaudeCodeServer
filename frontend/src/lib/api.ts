@@ -1784,6 +1784,15 @@ export const api = {
     // открытая merge-задача → вернуть её (повторный вызов — та же задача, вторую не заводим).
     mergeFeature: (fid: string) =>
       request<Task>(`/tasks/features/${encodeURIComponent(fid)}/merge`, { method: 'POST' }),
+    // Пауза/черновик фичи (W4-HOLD-F2, ручки W4-HOLD-B2): POST hold {reason} —
+    // удержание (reason: 'manual' — пауза человека, 'draft' — черновик), DELETE — снять.
+    // Fail-closed: 403 (сервисный токен — удержание ставит только человек), 404, 409
+    // (merged/closed/merging; draft после запуска шага; manual поверх draft; снятие без
+    // удержания) — причина в body.error. 200 — обновлённый эпик.
+    setFeatureHold: (fid: string, reason: string) =>
+      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    clearFeatureHold: (fid: string) =>
+      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'DELETE' }),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),

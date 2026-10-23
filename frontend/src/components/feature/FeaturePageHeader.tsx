@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { ArrowRight, GitBranch, ListChecks, MessageCircle } from 'lucide-react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { ArrowRight, GitBranch, ListChecks, MessageCircle, Pause, Play } from 'lucide-react';
+import { C, R, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Button } from '../ui/Button';
+import { Modal } from '../ui/Modal';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { formatDuration, MERGE_PENDING_STATUS, type FeatureStatusTag } from '../../lib/chatGroups';
@@ -15,20 +16,24 @@ import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { showToast } from '../../lib/toast';
-import type { FeatureRun, FeatureState, FeatureAttention } from '../../types/featureRun';
+import type { FeatureRun, FeatureState, FeatureAttention, FeatureNow } from '../../types/featureRun';
+import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { taskCounters } from './featurePageBody';
 import { NavTargetButton } from './NavTargetButton';
 
 // === Тег статуса (макет §3) ===
 //
-// Единая точка правды — run.state (9 значений, бэк Б1): из него бэк выводит bucket
-// строки индекса и порядок, тег не расходится.
+// Единая точка правды — run.state (11 значений, бэк Б1 + W4-HOLD-B1): из него бэк
+// выводит bucket строки индекса и порядок; тег с ними не расходится.
 // Таблица макета — 8 подписей: `idle` («ничего не идёт, не ждёт, не закрыта»)
 // показывается как `not_started` — для пользователя фича ещё не началась.
 // `stageName` — имя активной стадии (тег «идёт · {этап}»); null — просто «идёт».
 // Тон `loop` («Доработка») run.state не возвращает — только фолбэк по индексу.
-export type FeatureRunTagTone = 'notStarted' | 'run' | 'wait' | 'stop' | 'merge' | 'loop' | 'merged' | 'closed';
+// `paused`/`draft` (W4-HOLD-F2, feature-hold-1.md §«Теги»): при паузе тон активной
+// стадии на бэке остаётся «run» — тег обязан показать «на паузе», а не «идёт»
+// (пункт вердикта ревью); тон hold — bgInset + кромка border, НЕ тревожный.
+export type FeatureRunTagTone = 'notStarted' | 'run' | 'wait' | 'stop' | 'merge' | 'loop' | 'merged' | 'closed' | 'hold' | 'draft';
 export interface FeatureRunTag {
   label: string;
   tone: FeatureRunTagTone;
@@ -47,6 +52,12 @@ export function featureRunStatusTag(state: FeatureState, stageName?: string | nu
       return { label: 'ждёт вас', tone: 'wait', dot: true };
     case 'stopped':
       return { label: 'стоит', tone: 'stop' };
+    case 'paused':
+      // Тон активной стадии при паузе на бэке остаётся «run» — stageName сюда не
+      // подмешиваем: при паузе нет «идёт», есть «на паузе» (вердикт ревью W4-HOLD-F2).
+      return { label: 'на паузе', tone: 'hold' };
+    case 'draft':
+      return { label: 'черновик', tone: 'draft' };
     case 'merge_pending':
       return { label: MERGE_PENDING_STATUS, tone: 'merge', dot: true };
     case 'merging':
@@ -67,7 +78,9 @@ export function toRunTag(t: FeatureStatusTag): FeatureRunTag {
 // Тон → вид (макет §3): не начата/закрыта — bgSelected/textSecondary; идёт —
 // bgSelected/textHeading; ждёт/мерж — infoBg/textPrimary (+точка); стоит —
 // dangerBg/dangerText + inset-кромка; доработка — warningBg/warningText;
-// смержена — successBg/successText.
+// смержена — successBg/successText. «На паузе» — bgInset + inset-кромка border
+// (плашка «утоплена», не тревожная); «черновик» — прозрачный фон, пунктир
+// textMuted (не C.dashed: в тёмной теме сливается с фоном, замечание M1).
 const TAG_STYLE: Record<FeatureRunTagTone, CSSProperties> = {
   notStarted: { background: C.bgSelected, color: C.textSecondary },
   run:      { background: C.bgSelected, color: C.textHeading },
@@ -77,9 +90,13 @@ const TAG_STYLE: Record<FeatureRunTagTone, CSSProperties> = {
   loop:     { background: C.warningBg, color: C.warningText },
   merged:   { background: C.successBg, color: C.successText },
   closed:   { background: C.bgSelected, color: C.textSecondary },
+  hold:     { background: C.bgInset, color: C.textPrimary, boxShadow: `inset 0 0 0 1px ${C.border}` },
+  draft:    { background: 'transparent', color: C.textSecondary, border: `1px dashed ${C.textMuted}` },
 };
 
 // Тег: 11/600, поля 1 7, R.sm, строка 16 (макет §1). Точка — у «ждёт вас»/«к мержу».
+// «На паузе» — глиф «‖» 10 px currentColor перед подписью (макет feature-hold-1);
+// «черновик» — поля 0 6: пунктирная рамка занимает место, её компенсируют полем.
 export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string }) {
   return (
     <span
@@ -87,10 +104,16 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
       style={{
         display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
         fontSize: FS.xs, fontWeight: 600, fontFamily: FONT.sans, lineHeight: '16px',
-        padding: `${SP.xxs}px ${SP.xs}px`, borderRadius: R.sm, whiteSpace: 'nowrap',
+        ...(tag.tone === 'draft' ? { padding: `0 6px` } : { padding: `${SP.xxs}px ${SP.xs}px` }),
+        borderRadius: R.sm, whiteSpace: 'nowrap',
         ...TAG_STYLE[tag.tone],
       }}
     >
+      {tag.tone === 'hold' && (
+        <span aria-hidden style={{ display: 'inline-flex', color: 'currentColor' }}>
+          <Pause size={10} strokeWidth={ICON_STROKE} />
+        </span>
+      )}
       {tag.dot && (
         <span aria-hidden style={{ width: 6, height: 6, borderRadius: R.full, background: C.info, flexShrink: 0 }} />
       )}
@@ -296,6 +319,13 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
       if (run?.state === 'merged' || run?.state === 'closed') {
         const d = run?.summary?.durationMinutes;
         age = d != null ? `шла ${formatDuration(d)}` : null;
+      } else if (run?.state === 'paused' || run?.state === 'draft') {
+        // Пауза/черновик: «идёт» — неправда, работа стоит по решению человека
+        // (feature-hold-1.md): возраст — от Hold.Since, не от создания.
+        const since = run?.hold?.since ? new Date(run.hold.since).getTime() : NaN;
+        age = Number.isFinite(since)
+          ? `${run.state === 'paused' ? 'на паузе' : 'черновик'} ${formatDuration(Math.max(1, Math.round((Date.now() - since) / 60000)))}`
+          : null;
       } else if (run?.state === 'not_started' || run?.state === 'idle') {
         age = `создана ${formatDuration(Math.max(1, Math.round((Date.now() - created) / 60000)))} назад`;
       } else {
@@ -364,7 +394,109 @@ export function pluralTasks(n: number): string {
   return 'задач';
 }
 
-// === Шапка (Toolbar): тег (1280) · главное действие (1280) · меню ⋯ ===
+// === Пауза и черновик (W4-HOLD-F2, макет feature-hold-1) ===
+//
+// Ручки бэка: POST/DELETE /api/tasks/features/{id}/hold (W4-HOLD-B2). Кнопка «Пауза»
+// разрешена при состояниях работы; «где кнопки нет»: merging, merged, closed, draft,
+// paused. Пункт «Вернуть в черновик» — только когда бэк отдаёт признак «шагов не
+// запускалось»; до него пункта нет. Страница обновляется событием агрегата (стор
+// featurePage слушает taskChanged) — оптимистично тег не меняем.
+const HOLD_ALLOWED: ReadonlySet<FeatureState> = new Set(['running', 'waiting', 'stopped', 'merge_pending', 'not_started', 'idle']);
+
+// Текст тоста 409: причина из ответа бэка (body.error); пустая — фолбэк из спецификации.
+function holdErrorText(e: unknown, state: FeatureState): string {
+  const err = e as Error & { status?: number; body?: unknown };
+  if (err.status === 409) {
+    const body = err.body as { error?: string } | undefined;
+    if (body?.error) return body.error;
+    if (state === 'merging') return 'Мерж уже идёт — его не останавливают посреди';
+    if (state === 'draft') return 'У фичи уже запускались шаги — в черновик не вернуть';
+    return 'Состояние фичи изменилось — удержание не поставилось';
+  }
+  return `Не получилось: ${err.message || 'сервер не ответил'}`;
+}
+
+// Склонение «шаг/шага/шагов».
+function pluralSteps(n: number): string {
+  const d = n % 10, h = n % 100;
+  if (d === 1 && h !== 11) return 'шаг';
+  if (d >= 2 && d <= 4 && (h < 10 || h >= 20)) return 'шага';
+  return 'шагов';
+}
+
+// Подсказка пункта ⋯ (макет): «Прервёт N идущих шагов»; для одного — «1 идущий шаг».
+function runningHint(n: number): string {
+  return n === 1 ? 'Прервёт 1 идущий шаг' : `Прервёт ${n} идущих ${pluralSteps(n)}`;
+}
+
+// Строка «{Персона} · {stepRef}» из run.now — единственный доступный источник
+// идущих/прерванных шагов: отдельный список прерванных бэк ещё не отдаёт (макет §«Чего нет в API»).
+function nowLine(n: FeatureNow): string {
+  const name = n.personaId ? getPersonaById(n.personaId)?.name ?? null : null;
+  if (name && n.stepRef) return `${name} · ${n.stepRef}`;
+  return name ?? n.stepRef ?? n.title;
+}
+
+// Постановка паузы (reason manual — пауза человека; «черновик» фронтом не ставится).
+async function doHoldPause(fid: string, state: FeatureState, nowCount: number): Promise<void> {
+  try {
+    await api.tasks.setFeatureHold(fid, 'manual');
+    showToast('Фича на паузе', nowCount > 0 ? `Прервано ${nowCount} ${pluralSteps(nowCount)}. Снять паузу — на странице фичи.` : 'Снять паузу — на странице фичи.');
+  } catch (e) {
+    showToast('Не получилось', holdErrorText(e, state));
+  }
+}
+
+// Снятие удержания: «Снять паузу» (paused) и «Запустить фичу» (draft) — обе ручки
+// DELETE hold, без подтверждения (макет: «Снять паузу» и «Запустить фичу» — без модалки).
+async function doHoldClear(fid: string, state: FeatureState, nowCount: number): Promise<void> {
+  try {
+    await api.tasks.clearFeatureHold(fid);
+    if (state === 'draft') {
+      showToast('Фича запущена', 'Куратор начинает конвейер.');
+    } else {
+      showToast('Пауза снята', nowCount > 0 ? `Продолжены ${nowCount} ${pluralSteps(nowCount)}, куратор в курсе.` : 'Куратор в курсе.');
+    }
+  } catch (e) {
+    showToast('Не получилось', holdErrorText(e, state));
+  }
+}
+
+// Модалка подтверждения паузы (макет §«Подтверждение паузы»): MODAL_W.confirm,
+// кнопки ghost «Отмена» + primary «Поставить на паузу» (не danger: действие обратимо).
+// Фокус при открытии — на «Отмена»; Esc закрывает (штатно у Modal).
+function HoldConfirmModal({ now, busy, onClose, onConfirm }: { now: FeatureNow[]; busy: boolean; onClose: () => void; onConfirm: () => void }) {
+  useEffect(() => {
+    const el = typeof document !== 'undefined' ? document.querySelector('[data-testid="feature-page-hold-cancel"]') : null;
+    (el as { focus?: () => void } | null)?.focus?.();
+  }, []);
+  return (
+    <Modal
+      width={MODAL_W.confirm}
+      title="Поставить фичу на паузу?"
+      onClose={onClose}
+      footer={
+        <span style={{ display: 'flex', gap: SP.xs }}>
+          <Button size="sm" variant="ghost" dataTestId="feature-page-hold-cancel" onClick={onClose}>Отмена</Button>
+          <Button size="sm" variant="primary" loading={busy} dataTestId="feature-page-hold-confirm" onClick={onConfirm}>
+            {busy ? 'Ставлю паузу…' : 'Поставить на паузу'}
+          </Button>
+        </span>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+        <div style={{ fontSize: FS.base, color: C.textPrimary }}>
+          Идущие шаги прервутся сразу: <b>{now.map(nowLine).join(' и ')}</b>
+        </div>
+        <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
+          Файлы в worktree останутся как есть. Новые шаги не запустятся, пока вы не снимете паузу, — тогда прерванные продолжатся с того же места.
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// === Шапка (Toolbar): тег (1280) · «Пауза» (1280) · главное действие (1280) · меню ⋯ ===
 //
 // На 360 в шапке только ⋯ (40): тег уходит в мету, главное действие — в блок
 // тревоги (макет §11). ⋯ — общий ToolbarOverflowMenu (десктоп — дропдаун,
@@ -394,16 +526,52 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge }: Fea
     showToast('Ветка скопирована', branch);
   };
 
+  // Пауза (W4-HOLD-F2): «Пауза» — при состояниях работы; при paused главное действие
+  // — «Снять паузу»; при draft — «Запустить фичу» (та же DELETE-ручка). На 360
+  // «Пауза» — первый пункт шторки ⋯, а не кнопка в ряду (макет A).
+  const state = run?.state;
+  const fid = run?.featureId ?? feature?.featureId ?? '';
+  const now = run?.now ?? [];
+  const canPause = state != null && HOLD_ALLOWED.has(state);
+  const paused = state === 'paused';
+  const draft = state === 'draft';
+  const [holdBusy, setHoldBusy] = useState(false);
+  const [holdModal, setHoldModal] = useState(false);
+
+  const runPause = () => {
+    setHoldBusy(true);
+    void doHoldPause(fid, state!, now.length).finally(() => {
+      setHoldBusy(false);
+      setHoldModal(false);
+    });
+  };
+  const pauseClick = () => {
+    if (holdBusy) return;
+    // Идущие ходы — сначала подтверждение (макет §«Подтверждение паузы»); их нет —
+    // сразу запрос и тост.
+    if (now.length > 0) { setHoldModal(true); return; }
+    runPause();
+  };
+  const clearClick = () => {
+    if (holdBusy) return;
+    setHoldBusy(true);
+    void doHoldClear(fid, state!, now.length).finally(() => setHoldBusy(false));
+  };
+
   // Главное действие: wait/stopped → в чат исполнителя; merge → «Мерж…» (Ф6: общая
   // модалка, POST /merge); не начата → «Открыть ключевой чат» (ghost, макет §1).
+  // При паузе/черновике главное действие — снятие удержания: тревогу бэк гасит, но
+  // старыми данными UI обязан пережить и то, и другое — hold важнее.
   const attention = run?.attention ?? null;
   const primary = featurePrimaryAction(attention, attentionPersonaName(attention));
   const notStarted = run?.state === 'not_started';
   // «Мерж…» — только когда state === 'merge_pending'; никогда при merging/merged/closed.
   const mergePending = run?.state === 'merge_pending';
   const effectivePrimary = (primary?.kind === 'merge' && !mergePending) ? null : primary;
-  const showPrimary = !isMobile && (effectivePrimary != null || (notStarted && keyChat != null));
+  const holdAction: 'unpause' | 'start' | null = paused ? 'unpause' : draft ? 'start' : null;
+  const showPrimary = !isMobile && (holdAction != null || effectivePrimary != null || (notStarted && keyChat != null));
   const onPrimary = () => {
+    if (holdAction) { clearClick(); return; }
     if (effectivePrimary?.kind === 'chat' && effectivePrimary.chatId) {
       void openChatById(effectivePrimary.chatId);
       return;
@@ -417,6 +585,17 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge }: Fea
 
   // Пункты ⋯: только существующие (ветки/эпика/ключевого чата нет — пункта нет).
   const items: OverflowItem[] = [];
+  if (isMobile && canPause) {
+    // «Поставить на паузу…» — первый пункт шторки (макет A); подсказка про идущие
+    // шаги — только если что-то идёт (N = 0 — строки нет).
+    items.push({
+      key: 'hold',
+      icon: <Pause size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+      label: 'Поставить на паузу…',
+      sublabel: now.length > 0 ? runningHint(now.length) : undefined,
+      onClick: pauseClick,
+    });
+  }
   if (branch) {
     items.push({
       key: 'branch',
@@ -439,14 +618,34 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge }: Fea
   return (
     <>
       {!isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
+      {canPause && !isMobile && (
+        <span data-testid="feature-page-pause-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
+          <Button
+            size="sm"
+            variant="secondary"
+            leftIcon={<Pause size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            loading={holdBusy}
+            dataTestId="feature-page-pause"
+            title="Остановить идущие шаги фичи"
+            onClick={pauseClick}
+          >
+            {holdBusy ? 'Ставлю паузу…' : 'Пауза'}
+          </Button>
+        </span>
+      )}
       {showPrimary && (
         <span data-testid="feature-page-main-action" style={{ display: 'inline-flex', flexShrink: 0 }}>
           <Button
             size="sm"
-            variant={effectivePrimary ? 'primary' : 'ghost'}
+            variant={holdAction ? 'primary' : effectivePrimary ? 'primary' : 'ghost'}
+            leftIcon={holdAction ? <Play size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : undefined}
+            loading={holdBusy}
+            dataTestId={holdAction ? 'feature-page-unpause' : undefined}
             onClick={onPrimary}
           >
-            {effectivePrimary ? effectivePrimary.label : 'Открыть ключевой чат'}
+            {holdAction === 'unpause' ? (holdBusy ? 'Снимаю паузу…' : 'Снять паузу')
+              : holdAction === 'start' ? (holdBusy ? 'Запускаю…' : 'Запустить фичу')
+              : effectivePrimary ? effectivePrimary.label : 'Открыть ключевой чат'}
           </Button>
         </span>
       )}
@@ -456,6 +655,9 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge }: Fea
           title="Ещё"
           items={items}
         />
+      )}
+      {holdModal && (
+        <HoldConfirmModal now={now} busy={holdBusy} onClose={() => setHoldModal(false)} onConfirm={runPause} />
       )}
     </>
   );
@@ -481,7 +683,108 @@ export interface FeaturePageAlertProps {
   marks?: NavMarks;
 }
 
+// Глифы «hold» и «draft» (макет feature-hold-1, §«Глифы»): пауза — круг с двумя
+// брусками, черновик — пунктирное кольцо. Обводка textMuted: в тёмной теме C.dashed
+// сливается с фоном (та же причина, что у глифа absent, замечание M1).
+function HoldGlyph({ kind, size }: { kind: 'hold' | 'draft'; size: number }) {
+  const v = { width: size, height: size, viewBox: '0 0 16 16', 'aria-hidden': true as const };
+  if (kind === 'hold') {
+    return (
+      <svg {...v}>
+        <circle cx="8" cy="8" r="7" fill={C.bgInset} stroke={C.textMuted} strokeWidth="1" />
+        <rect x="5.3" y="4.6" width="1.9" height="6.8" rx="0.6" fill={C.textSecondary} />
+        <rect x="8.8" y="4.6" width="1.9" height="6.8" rx="0.6" fill={C.textSecondary} />
+      </svg>
+    );
+  }
+  return (
+    <svg {...v}>
+      <circle cx="8" cy="8" r="6.2" fill="none" stroke={C.textMuted} strokeWidth="1.5" strokeDasharray="2.4 2" />
+    </svg>
+  );
+}
+
+// Блок состояния «на паузе»/«черновик» (макет §«Блок состояния»): не тревога —
+// bgInset + рамка border / прозрачный + пунктир. Список прерванных шагов — из
+// run.now (списка прерванных бэк не отдаёт): N = 0 — строки нет. На 360 главное
+// действие («Снять паузу»/«Запустить фичу») — здесь, на 1280 — в шапке.
+function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: FeatureIndexFeature | null; isMobile: boolean }) {
+  const fid = run.featureId ?? feature?.featureId ?? '';
+  const now = run.now ?? [];
+  const paused = run.state === 'paused';
+  const since = run.hold?.since ? new Date(run.hold.since).getTime() : NaN;
+  const dur = Number.isFinite(since) ? formatDuration(Math.max(0, Math.round((Date.now() - since) / 60000))) : null;
+  const [busy, setBusy] = useState(false);
+  const act = () => {
+    if (busy) return;
+    setBusy(true);
+    void doHoldClear(fid, run.state, now.length).finally(() => setBusy(false));
+  };
+  const keyChat = feature?.keySessionId ?? run.epic?.linkedSessionId ?? null;
+
+  return (
+    <div
+      data-testid="feature-page-alarm"
+      data-tone={paused ? 'hold' : 'draft'}
+      role="status"
+      aria-live="polite"
+      style={{
+        display: 'flex', gap: SP.sm, alignItems: 'flex-start',
+        marginTop: SP.md, padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg,
+        background: paused ? C.bgInset : 'transparent',
+        border: paused ? `1px solid ${C.border}` : `1px dashed ${C.textMuted}`,
+        fontSize: FS.base, fontFamily: FONT.sans, color: C.textPrimary,
+      }}
+    >
+      <span style={{ paddingTop: SP.xxs, display: 'inline-flex', flexShrink: 0 }}>
+        <HoldGlyph kind={paused ? 'hold' : 'draft'} size={14} />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div>
+          <b>{paused ? `Фича на паузе${dur ? ` ${dur}` : ''}.` : 'Черновик.'}</b>
+          <span> {paused ? 'Поставили вы. Новые шаги не запускаются.' : 'Шаги не запускаются — разрез, план и дизайн идут как обычно. Запустите фичу, когда план готов: куратор начнёт конвейер.'}</span>
+        </div>
+        {paused && now.length > 0 && (
+          <div style={{ marginTop: SP.sm, fontSize: FS.sm, color: C.textSecondary }}>
+            <div>Прервано {now.length} {pluralSteps(now.length)} — продолжатся с того же места после снятия паузы:</div>
+            {now.map(n => <div key={n.taskId}>{nowLine(n)}</div>)}
+          </div>
+        )}
+        {isMobile && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: SP.sm }}>
+            <Button
+              size="xs"
+              variant="primary"
+              style={{ background: C.bgWhite, minHeight: 40 }}
+              loading={busy}
+              dataTestId="feature-page-unpause"
+              onClick={act}
+            >
+              {paused ? 'Снять паузу' : 'Запустить фичу'}
+            </Button>
+            {!paused && keyChat && (
+              <Button
+                size="xs"
+                variant="ghost"
+                style={{ background: C.bgWhite, minHeight: 40 }}
+                onClick={() => { void openChatById(keyChat); }}
+              >
+                Открыть ключевой чат
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marksProp }: FeaturePageAlertProps) {
+  // Пауза и черновик — блок состояния вместо тревоги: при paused тревога не рисуется
+  // (paused стоит выше stopped и waiting в приоритете бэка, W4-HOLD-B1).
+  if (run?.state === 'paused' || run?.state === 'draft') {
+    return <HoldStateBlock run={run} feature={feature} isMobile={isMobile} />;
+  }
   const a = run?.attention ?? null;
   const marks = marksProp ?? buildNavMarks(run);
   const notStarted = run?.state === 'not_started';

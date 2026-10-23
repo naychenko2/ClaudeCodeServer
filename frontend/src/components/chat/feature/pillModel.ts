@@ -75,6 +75,9 @@ export function statusPhrase(
   switch (state) {
     case 'not_started': return { bold: 'Не начата', post: '' };
     case 'idle': return { bold: 'Простаивает', post: '' };
+    // Пауза/черновик (W4-HOLD-B1): не тревога — нейтральная подпись по состоянию.
+    case 'paused': return { bold: 'На паузе', post: '' };
+    case 'draft': return { bold: 'Черновик', post: '' };
     case 'running': return { bold: stage ?? 'Разрез', post: names.running ? ` · ${names.running}` : '' };
     case 'waiting': return { bold: stage ?? 'Разрез', post: ' · ждёт вас' };
     case 'stopped': return { bold: 'стоит', post: names.stopped ? ` · ${names.stopped}` : '' };

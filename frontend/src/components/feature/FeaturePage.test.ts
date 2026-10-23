@@ -15,7 +15,7 @@ import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { pluralTasks } from './FeaturePageHeader';
+import { pluralTasks, featureRunStatusTag } from './FeaturePageHeader';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
@@ -25,6 +25,7 @@ import { api } from '../../lib/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { FeaturePage as FeaturePageData } from '../../types/featureIndex';
+import type { FeatureState } from '../../types/featureRun';
 import type { Session, Task } from '../../types';
 
 // Управляемый индекс фич (useFeaturesIndex → этот срез).
@@ -55,6 +56,15 @@ const mockMergeFeature = vi.hoisted(() => ({
   error: null as (Error & { status?: number; body?: unknown }) | null,
   calls: [] as string[],
 }));
+// Управляемые ответы api.tasks.setFeatureHold/clearFeatureHold (W4-HOLD-F2): calls —
+// журнал (fid + метод + reason), pending (запрос в полёте), error (409/сбой).
+const mockHold = vi.hoisted(() => ({
+  calls: [] as { fid: string; method: 'POST' | 'DELETE'; reason?: string }[],
+  pending: false,
+  error: null as (Error & { status?: number; body?: unknown }) | null,
+}));
+// Журнал тостов (W4-HOLD-F2: текст 409 и успех — проверяются по нему).
+const toasts = vi.hoisted(() => [] as [string, string | undefined][]);
 
 vi.mock('../../lib/api', () => ({
   api: {
@@ -76,6 +86,18 @@ vi.mock('../../lib/api', () => ({
         if (mockMergeFeature.error) return Promise.reject(mockMergeFeature.error);
         return Promise.resolve(mockMergeFeature.result!);
       },
+      setFeatureHold: (fid: string, reason: string) => {
+        mockHold.calls.push({ fid, method: 'POST', reason });
+        if (mockHold.pending) return new Promise<Task>(() => {});
+        if (mockHold.error) return Promise.reject(mockHold.error);
+        return Promise.resolve({} as Task);
+      },
+      clearFeatureHold: (fid: string) => {
+        mockHold.calls.push({ fid, method: 'DELETE' });
+        if (mockHold.pending) return new Promise<Task>(() => {});
+        if (mockHold.error) return Promise.reject(mockHold.error);
+        return Promise.resolve({} as Task);
+      },
     },
   },
 }));
@@ -92,7 +114,8 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/signalr')>();
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
 });
-vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
+// Тосты пишутся в журнал toasts: тексты успеха и 409 (W4-HOLD-F2) проверяются по нему.
+vi.mock('../../lib/toast', () => ({ showToast: (title: string, detail?: string) => { toasts.push([title, detail]); } }));
 // Журнал openChatById: тесты чипа «ведёт» (W4-1F) проверяют, куда ведёт клик.
 const openChatCalls = vi.hoisted(() => [] as string[]);
 vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { openChatCalls.push(id); return true; } }));
@@ -156,6 +179,9 @@ function render(props: { featureId?: string; projectId?: string | null; isMobile
     win.__winListeners = listeners;
   }
   if (!doc.querySelector) doc.querySelector = () => null;
+  // ToolbarOverflowMenu при открынении слушает прокручиваемых предков через
+  // getComputedStyle — в fakeDom его нет; все зоны «visible» (прокрутки нет).
+  if (!(globalThis as any).getComputedStyle) (globalThis as any).getComputedStyle = () => ({ overflowY: 'visible' });
   const { container } = mount(createElement(FeaturePage, {
     featureId: props.featureId ?? 'f1',
     projectId: props.projectId ?? 'p1',
@@ -237,6 +263,10 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     mockMergeFeature.result = null;
     mockMergeFeature.error = null;
     mockMergeFeature.calls = [];
+    mockHold.calls = [];
+    mockHold.pending = false;
+    mockHold.error = null;
+    toasts.length = 0;
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
   });
   afterEach(() => {
@@ -981,5 +1011,162 @@ describe('pluralTasks: склонение «задача/задачи/задач
     expect(pluralTasks(5)).toBe('задач');
     expect(pluralTasks(11)).toBe('задач');
     expect(pluralTasks(21)).toBe('задача');
+  });
+});
+
+// === W4-HOLD-F2: кнопка «Пауза» и блок состояния «на паузе»/«черновик» (feature-hold-1.md) ===
+// Мутации (в отчёте): (1) убрать ветку 'paused' в featureRunStatusTag → тест тега
+// краснеет; (2) убрать api.tasks.setFeatureHold в doHoldPause → «клик Паузы» краснеет;
+// (3) убрать ранний return paused в FeaturePageAlert → блок «на паузе» не появится.
+describe('W4-HOLD-F2: пауза и черновик в шапке и блоке состояния', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    personaMap.set('p-kira', 'Кира');
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    mockHold.calls = [];
+    mockHold.pending = false;
+    mockHold.error = null;
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // run страницы с состоянием: та же форма, что pageData, плюс state/hold/now.
+  const holdPage = (state: FeatureState, over: Record<string, unknown> = {}) => {
+    const pd = pageData();
+    pd.run = { ...pd.run, state, ...over } as never;
+    mockGetFeature.result = pd;
+  };
+
+  it('тег: paused → «на паузе» (тон hold), draft → «черновик» — даже с stageName', () => {
+    expect(featureRunStatusTag('paused', 'Продукт')).toEqual({ label: 'на паузе', tone: 'hold' });
+    expect(featureRunStatusTag('draft', 'Продукт')).toEqual({ label: 'черновик', tone: 'draft' });
+  });
+
+  it('paused на десктопе: тег «на паузе» без «идёт» и без тревожного тона; блок — «Фича на паузе»', async () => {
+    holdPage('paused', {
+      hold: { reason: 'manual', since: '2026-10-19T10:00:00Z' },
+      now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }],
+    });
+    const c = render({});
+    await settle();
+    const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
+    expect(tag, 'тег на месте').not.toBeNull();
+    const tagText = textNodes(tag!).join('');
+    expect(tagText, 'тег «на паузе»').toContain('на паузе');
+    expect(tagText, 'нет «идёт» (тон активной стадии на бэке — run)').not.toContain('идёт');
+    expect((tag as unknown as { style: Record<string, string> }).style.background, 'тон не тревожный').toBe('var(--c-bg-inset)');
+    const block = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(block, 'блок состояния на месте').not.toBeNull();
+    expect((block as unknown as { attributes: Record<string, string> }).attributes['data-tone'], 'тон hold').toBe('hold');
+    const blockText = textNodes(block!).join('');
+    expect(blockText).toContain('Фича на паузе');
+    expect(blockText).toContain('Прервано 1 шаг');
+    expect(blockText).toContain('Кира · W2-A');
+    expect(blockText, 'нет тревоги «ждёт вас»').not.toContain('ждёт вас');
+    expect((block as unknown as { style: Record<string, string> }).style.background, 'фон блока — bgInset, не dangerBg').toBe('var(--c-bg-inset)');
+  });
+
+  it('клик «Пауза» с идущими ходами: модалка; подтверждение — POST hold', async () => {
+    holdPage('running', { now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
+    const c = render({});
+    await settle();
+    const pause = findNodeByAttr(c, 'data-testid', 'feature-page-pause');
+    expect(pause, 'кнопка «Пауза» в тулбаре').not.toBeNull();
+    await act(async () => { (reactProps(pause)!.onClick as () => void)(); });
+    const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-hold-confirm');
+    expect(confirm, 'модалка подтверждения').not.toBeNull();
+    const modalText = textNodes((globalThis as any).document.body).join(' ');
+    expect(modalText).toContain('Поставить фичу на паузу?');
+    expect(modalText).toContain('Кира · W2-A');
+    await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
+    expect(mockHold.calls, 'POST hold reason manual').toEqual([{ fid: 'f1', method: 'POST', reason: 'manual' }]);
+  });
+
+  it('идущих ходов нет: сразу POST без модалки', async () => {
+    holdPage('running', { now: [] });
+    const c = render({});
+    await settle();
+    const pause = findNodeByAttr(c, 'data-testid', 'feature-page-pause')!;
+    await act(async () => { (reactProps(pause)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'POST', reason: 'manual' }]);
+    expect(findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-hold-confirm'), 'модалки нет').toBeNull();
+  });
+
+  it('при paused: «Снять паузу» — DELETE hold', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [] });
+    const c = render({});
+    await settle();
+    const unpause = findNodeByAttr(c, 'data-testid', 'feature-page-unpause');
+    expect(unpause, 'главное действие «Снять паузу»').not.toBeNull();
+    expect(textNodes(unpause!).join('')).toContain('Снять паузу');
+    await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
+    expect(mockHold.calls, 'DELETE hold').toEqual([{ fid: 'f1', method: 'DELETE' }]);
+  });
+
+  it('360: кнопки «Пауза» в ряду нет — первый пункт шторки ⋯ с подсказкой', async () => {
+    holdPage('running', { now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
+    const c = render({ isMobile: true });
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-pause'), 'на мобиле кнопки в ряду нет').toBeNull();
+    const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
+    expect(trigger, 'триггер ⋯').not.toBeNull();
+    await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
+    const item = findNodeByAttr((globalThis as any).document.body, 'role', 'menuitem');
+    expect(item, 'пункт шторки').not.toBeNull();
+    const itemText = textNodes(item!).join('');
+    expect(itemText).toContain('Поставить на паузу');
+    expect(itemText).toContain('Прервёт 1 идущий шаг');
+  });
+
+  it('409: тост с причиной из ответа, страница не падает', async () => {
+    holdPage('running', { now: [] });
+    mockHold.error = Object.assign(new Error('Conflict'), { status: 409, body: { error: 'Мерж уже идёт — его не останавливают посреди' } });
+    const c = render({});
+    await settle();
+    const pause = findNodeByAttr(c, 'data-testid', 'feature-page-pause')!;
+    await act(async () => { (reactProps(pause)!.onClick as () => void)(); });
+    expect(mockHold.calls.length, 'POST был попытан').toBe(1);
+    const last = toasts[toasts.length - 1];
+    expect(last[1], 'тост — причина из ответа').toContain('Мерж уже идёт');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница жива после 409').not.toBeNull();
+  });
+
+  it('draft: блок «Черновик», кнопки «Пауза» нет; «Запустить фичу» — DELETE', async () => {
+    holdPage('draft', { hold: { reason: 'draft', since: '2026-10-19T11:00:00Z' } });
+    const c = render({});
+    await settle();
+    const block = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(block, 'блок черновика').not.toBeNull();
+    expect((block as unknown as { attributes: Record<string, string> }).attributes['data-tone'], 'тон draft').toBe('draft');
+    expect(textNodes(block!).join('')).toContain('Черновик.');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-pause'), 'в черновике паузы нет').toBeNull();
+    const start = findNodeByAttr(c, 'data-testid', 'feature-page-unpause');
+    expect(start, 'главное действие «Запустить фичу»').not.toBeNull();
+    expect(textNodes(start!).join('')).toContain('Запустить фичу');
+    await act(async () => { (reactProps(start)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'DELETE' }]);
   });
 });

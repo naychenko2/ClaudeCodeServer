@@ -2548,11 +2548,12 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // R-HOLD-K (критерий c1): порядок «причина читается ДО ClearHold» (TasksController.cs:939)
     // сервисные тесты не защищают — они зовут сервис напрямую, а reason передаёт сама ручка.
-        // Здесь — связка на уровне HTTP: DELETE hold с reason=draft → в ключевой чат уходит
+    // Здесь — связка на уровне HTTP: DELETE hold с reason=draft → в ключевой чат уходит
     // карточка «Фича запущена», и формулировки «Пауза снята» в ней нет (draft-ветка
-    // возвращается до общей). Мутация:
-    // перенести чтение причины после ClearHold (перечитать эпик) — Hold уже null, ручка бросает,
-    // карточка не уходит — ожидание краснеет.
+    // возвращается до общей). Мутация (R-HOLD-K2 п.2): читать причину из живого эпика после
+    // ClearHold (tasks.GetById), а не из снимка run — Hold уже null, ручка бросает, карточка
+    // не уходит — ожидание краснеет. Перестановка строки holdReason внутри снимка ничего не
+    // меняет: run — снимок, тест ловит живое перечитывание причины.
     [Fact]
     public async Task ClearHold_DraftReason_WakesKeyChatWithStartedCard()
     {
@@ -2584,13 +2585,12 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     // R-HOLD-D (п.2) + R-HOLD-K (хвост): сбой доставки карточки не теряется молча — его логирует
-    // сервис (try/catch вокруг карточки, TaskExecutionService.DeliverKeyChatCardAsync), а ручка
-    // больше не сообщает о отказе возврата: продолжение удалось, отказала только нотификация.
+    // сервис (try/catch вокруг карточки, TaskExecutionService.DeliverKeyChatCardAsync). Ручка
+    // вызов не оборачивает: сбой локализован в сервисе и до ответа не доходит (R-HOLD-K2 п.1).
     // Прецедент логгера: UnhandledExceptionHandlerTests.cs:24. Мутация: убрать try/catch в
-    // DeliverKeyChatCardAsync — исключение уйдёт до ручки, лог сервиса пуст — первое ожидание
-    // краснеет.
+    // DeliverKeyChatCardAsync — лог сервиса пуст — первое ожидание краснеет.
     [Fact]
-    public async Task ClearHold_FailedCardDeliveryIsLoggedByServiceNotHandle()
+    public async Task ClearHold_FailedCardDeliveryIsLoggedByService()
     {
         var epicId = await CreateFeatureEpicAsync();
         var step = await CreateTaskAsync(new { title = "шаг без продолжения", featureId = epicId, role = "step" });
@@ -2600,7 +2600,6 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         _factory.LlmAdapters.Adapters[keyChat].FailOnSend = true;
 
         var serviceLogged = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var handleLogged = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         // Логгер сервиса подменяем точечно (прецедент: рефлексивная подмена состояния в
         // TaskExecutionServiceHoldTests.SetRunningTurn) и возвращаем в finally — тест не
         // оставляет следов на singletonе фабрики для остальных тестов.
@@ -2613,7 +2612,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
             set.StatusCode.Should().Be(HttpStatusCode.OK);
 
-            var controller = BuildController(RealGit(), log: new CapturingLogger<TasksController>(handleLogged));
+            var controller = BuildController(RealGit());
             var result = controller.ClearFeatureHold(epicId);
             result.Should().BeOfType<OkObjectResult>(); // ответ не ждёт фон: сбой карточки локализован в сервисе
 
@@ -2622,8 +2621,6 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
                 "сбой карточки записан в лог сервиса в потолок, а не потерян молча");
             serviceLogged.Task.Result.Should().Contain("Карточка в ключевой чат",
                 "catch карточки логирует отказ доставки");
-            handleLogged.Task.IsCompleted.Should().BeFalse(
-                "сбой карточки не всплывает отказом возврата на ручке: продолжение удалось");
         } finally {
             logField.SetValue(service, originalLog);
         }

@@ -934,8 +934,9 @@ public class TasksController(
                 resumed.Add(t.Id);
         }
 
-        // Дефект bec00347: формулировка карточки зависит от причины удержания — её фиксируют
-        // ДО снятия: после ClearHold Hold эпика уже null.
+        // Дефект bec00347: формулировка карточки зависит от причины удержания — её берут из
+        // снимка run, собранного проектором до ClearHold (:912): у живого эпика после снятия
+        // Hold уже null.
         var holdReason = run.Epic.Hold!.Reason;
         var epic = tasks.ClearHold(featureId);
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
@@ -944,12 +945,12 @@ public class TasksController(
         // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
         // разрешены». Ответ не меняется: resumed/expired — пробуждение очереди (R-HOLD-H),
         // продолженные шаги в неё не входят (они уже в работе).
-        // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой не теряется молча —
-        // логируем (конвенция FireAndForget, SessionManager.cs:10815).
-        _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, holdReason).ContinueWith(
-            t => log.LogError("Возврат прерванных паузой ходов фичи {FeatureId}: {Message}",
-                featureId, t.Exception?.GetBaseException().Message),
-            TaskContinuationOptions.OnlyOnFaulted);
+        // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой локализован в сервисе:
+        // каждая ветка продолжения обёртана и логируется там (TaskExecutionService.cs:1217,
+        // :1248, :1258, DeliverKeyChatCardAsync :1319), поэтому ручка вызов не оборачивает:
+        // после W4-HOLD-J сервис на известных путях не бросает, обёртка ручки была мёртвым
+        // покрытием (R-HOLD-K2 п.1).
+        _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, holdReason);
         return Ok(new { resumed, expired });
     }
 

@@ -33,13 +33,14 @@ import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { getPersonaById } from '../../lib/personas';
 import type { FeatureRun, FeatureStepChain, FeatureStageExecutor } from '../../types/featureRun';
 
-// 360 (возврат R4d): зона касания узла — 40 px на самой кнопке: видимая капсула
-// остаётся 20 px по раскладке, поле выступает на ±10 px. Чтобы зоны соседних
-// строк переноса не соприкасались, вертикальный зазор цепочки — 2×OVERHANG;
-// отступ цепочки от шапки — больше выступа.
+// 360 (возврат R4d): зона касания узла — 40 px на самой кнопке. Видимая капсула
+// по факту 26 px (lineHeight 20 + поля 2×2 + рамка 1×2), реальный вылет — (40−26)/2
+// = 7 px; OVERHANG = 10 — раскладочная константа (отступы и зазор считаются от неё),
+// она больше фактического вылета — зоны соседних строк переноса не соприкасаются
+// с запасом. Отступ цепочки от шапки (12 px) тоже больше фактического вылета.
 const TOUCH_H = 40;
-const NODE_H = 20;
-const OVERHANG = (TOUCH_H - NODE_H) / 2;
+const NODE_H = 20; // раскладочная высота узла (отступы компенсируют вылет)
+const OVERHANG = (TOUCH_H - NODE_H) / 2; // 10 — раскладочный, фактический вылет 7
 
 // «Цикл» по числу: 1 — цикл, 2–4 — цикла, 5+ — циклов.
 function cycleWord(n: number): string {
@@ -106,6 +107,9 @@ function ProdNodeChip({ node, featureId, featureTitle, isMobile }: {
     onMouseLeave: () => { setHover(false); setPressed(false); },
     onPointerDown: () => setPressed(true),
     onPointerUp: () => setPressed(false),
+    // Сход пальца с узла: pointerup вне узла, браузер посылает узлу pointercancel —
+    // без него pressed залипает (минор R4f).
+    onPointerCancel: () => setPressed(false),
     onFocus: (e: FocusEvent<HTMLButtonElement>) => setFocused(e.currentTarget.matches(':focus-visible')),
     onBlur: () => setFocused(false),
   };
@@ -316,8 +320,10 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, 
         )}
       </div>
 
-      {/* 360: строки цепочки не наезжают зонами касания — вертикальный зазор 2×выступа
-          (20 px), отступ от шапки больше выступа (12 > 10). На десктопе зоны не выступают. */}
+      {/* 360: строки цепочки не наезжают зонами касания — вертикальный зазор
+          2×OVERHANG = 20 px, фактический вылет капсулы 7 px (зазор с запасом);
+          отступ от шапки 12 px — тоже больше фактического вылета. На десктопе зоны
+          не выступают. */}
       <div data-testid="prod-chain" style={{ display: 'flex', alignItems: 'center', gap: isMobile ? `${OVERHANG * 2}px ${SP.xs}px` : SP.xs, flexWrap: 'wrap', marginTop: isMobile ? SP.md : SP.sm }}>
         {card.nodes.map((node, i) => (
           <span key={`${card.stepRef}-${i}`} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>

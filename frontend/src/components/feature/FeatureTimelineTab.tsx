@@ -144,9 +144,24 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
           )}
           {showProd ? (
             /* W4-2F3: «Производство» — одна лента карточек (шаг — карточка, порядок
-               по старту даёт модель). Пустая лента (нет stepChains) — существующее
-               пустое состояние вкладки, без карточек. */
-            FeatureProdCardsView({ run, featureId, featureTitle, marks, isMobile }) ?? (
+               по старту даёт модель). Сироты «Производства» (фикс R4e): если карточек
+               нет, но у стадии есть исполнители — прежние ExecutorRow, задача не
+               исчезает из вкладки. Пустое состояние остаётся только когда показывать
+               действительно некого. */
+            FeatureProdCardsView({ run, featureId, featureTitle, marks, isMobile }) ?? (stage.executors.length > 0 ? (
+              stage.executors.map((x, i) => (
+                <ExecutorRow
+                  key={`${x.taskId}-${i}`}
+                  x={x}
+                  task={x.taskId ? taskMap.get(x.taskId) : undefined}
+                  now={now}
+                  featureId={featureId}
+                  featureTitle={featureTitle}
+                  marks={marks}
+                  isMobile={isMobile}
+                />
+              ))
+            ) : (
               <div data-testid="feature-steps-empty" style={{ fontFamily: FONT.sans }}>
                 <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, padding: `${SP.xs}px 0` }}>
                   Шагов пока нет
@@ -155,7 +170,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                   Появятся, когда Егор составит план.
                 </div>
               </div>
-            )
+            ))
           ) : stage.executors.length > 0 ? (
             stage.executors.map((x, i) => (
               <ExecutorRow

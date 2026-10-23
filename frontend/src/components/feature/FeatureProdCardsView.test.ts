@@ -17,7 +17,9 @@
 //   (3) cycles < 2 красить предупреждением → краснеет «2 цикла — предупреждение,
 //       1 цикл — нет»;
 //   (4) 40 px вернуть некликабельной обёртке (кнопка без minHeight) → краснеет
-//       «зона касания 40 px — на самой кнопке».
+//       «зона касания 40 px — на самой кнопке»;
+//   (5) убрать onPointerCancel из обработчиков → краснеет
+//       «pointercancel снимает pressed».
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -352,5 +354,26 @@ describe('360', () => {
     const header = findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!.children[0];
     const title = header.children[1];
     expect(styleOf(title as never).flex).toBe('1 1 100%');
+  });
+
+  // Минор R4f: сход пальца с узла — pointerup вне узла, браузер посылает узлу
+  // pointercancel. Без него pressed залипает. Здесь вызываем обработчик узла
+  // напрямую: fakeDom не синтезирует pointercancel из pointerup на другом элементе.
+  it('pointercancel (палец сошёл с узла) снимает pressed — залипания нет', () => {
+    const r = run({
+      steps: [task({ id: 's2', status: 'inProgress', stepRef: 'Ш2', claudeStartedAt: '2026-10-21T09:00:00Z' })],
+      stepChains: [chain({ stepRef: 'Ш2', title: 'Идущий', personaId: 'p-kira', taskIds: ['s2'], status: 'идёт', outcome: 'running', chatId: 'chat-kira' })],
+    });
+    const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F', isMobile: true }));
+    const node = findNodeByAttr(container, 'data-testid', 'prod-node')!;
+    const pill = (node as { childNodes: unknown[] }).childNodes[0];
+    const handlers = reactProps(node)!;
+    // Нажатие: «текущий» узел подсвечен (bgSelected).
+    act(() => { (handlers.onPointerDown as () => void)(); });
+    expect(styleOf(pill).background).toBe(C.bgSelected);
+    // Палец сошёл: pointerup не на узле — узел получает pointercancel.
+    act(() => { (handlers.onPointerCancel as () => void)(); });
+    // Залипания нет: капсула вернулась в свой тон.
+    expect(styleOf(pill).background).toBe(C.bgWhite);
   });
 });

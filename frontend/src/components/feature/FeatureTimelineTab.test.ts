@@ -5,14 +5,16 @@
 // Рендер-тесты (fakeDom): порядок 7 этапов, раскрытие одного этапа, исполнители
 // (roleLabel + чип модели), «чата нет», пустые состояния, тач-цель 40 на 360.
 // «Производство» (W4-2F3): лента карточек FeatureProdCardsView вместо «исполнителей/
-// шагов» — одна карточка на шаг, «сейчас» над текущей; при пустой ленте — существующее
-// пустое состояние «Шагов пока нет». Чистые функции Ф2b (вердикт/статус/тон/модель)
-// остаются: их читает лента.
+// шагов» — одна карточка на шаг, «сейчас» над текущей. Сироты «Производства» (фикс R4e):
+// карточек нет, но у стадии есть исполнители → прежние ExecutorRow; пустое состояние
+// «Шагов пока нет» — только когда показывать действительно некого. Чистые функции Ф2b
+// (вердикт/статус/тон/модель) остаются: их читает лента.
 //
 // Мутации (в отчёте): (1) переставить этапы в run.stages → «порядок этапов» краснеет;
 // (2) убрать «≈» из stageDurationLabel → «длительность ≈» краснеет; (3) не передать run
 // в FeatureProdCardsView (не дать stepChains) → «карточка Ш1» краснеет; (4) не передать
-// isMobile в ленту → «360: поле касания 40» краснеет.
+// isMobile в ленту → «360: поле касания 40» краснеет; (5) убрать фолбэк на ExecutorRow
+// при пустой ленте → «сироты не исчезают» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -658,18 +660,36 @@ describe('FeatureTimelineTab: лента «Производства»', () => {
     expect(findNodeByAttr(findNodeByAttr(plain, 'data-testid', 'timeline-stage-body-prod')!, 'data-testid', 'prod-nowline'), 'без run.now строки нет').toBeNull();
   });
 
-  // === 3. Пустая лента — существующее пустое состояние вкладки ===
-  it('шагов нет (stepChains пуст) → «Шагов пока нет», ленты нет', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [] }));
+  // === 3. Пустая лента и никого на ней — существующее пустое состояние вкладки ===
+  it('шагов нет и исполнителей нет (stepChains пуст) → «Шагов пока нет», ленты нет', () => {
+    const stages = fullStages();
+    stages[2]!.executors = [];
+    const c = renderTab(mkRun(stages, { stepChains: [] }));
     const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
     const empty = findNodeByAttr(body, 'data-testid', 'feature-steps-empty');
     expect(empty, 'пустое состояние «Шагов пока нет»').not.toBeNull();
     expect(textNodes(empty!).join('')).toContain('Шагов пока нет');
     expect(findNodeByAttr(body, 'data-testid', 'prod-lane'), 'ленты нет').toBeNull();
+    expect(findNodeByAttr(body, 'data-testid', 'timeline-executor'), 'строк исполнителей нет').toBeNull();
   });
 
-  it('stepChains нет в данных (старая фича) → «Шагов пока нет» (честная деградация)', () => {
-    const c = renderTab(mkRun(fullStages()));
+  // === 3b. Сироты «Производства» (фикс R4e): задачи без цепочки не исчезают из вкладки ===
+  it('у prod есть исполнители, stepChains пуст → строка исполнителя, а не «Шагов пока нет»', () => {
+    const c = renderTab(mkRun(fullStages(), { stepChains: [] }));
+    const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
+    const row = findNodeByAttr(body, 'data-testid', 'timeline-executor');
+    expect(row, 'доработка-сирота — прежняя строка исполнителя').not.toBeNull();
+    expect(textNodes(row!).join('')).toContain('Денис');
+    expect(findNodeByAttr(body, 'data-testid', 'feature-steps-empty'), 'пустого состояния нет').toBeNull();
+    expect(findNodeByAttr(body, 'data-testid', 'prod-lane'), 'ленты нет').toBeNull();
+  });
+
+  // Мутация (в отчёте): убрать фолбэк на ExecutorRow при пустой ленте → этот тест краснеет.
+
+  it('stepChains нет в данных, исполнителей нет (старая фича) → «Шагов пока нет» (честная деградация)', () => {
+    const stages = fullStages();
+    stages[2]!.executors = [];
+    const c = renderTab(mkRun(stages));
     const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
     const empty = findNodeByAttr(body, 'data-testid', 'feature-steps-empty');
     expect(empty, 'пустое состояние «Шагов пока нет»').not.toBeNull();

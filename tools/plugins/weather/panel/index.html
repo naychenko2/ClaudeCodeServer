@@ -21,9 +21,13 @@
   городом. Без права на геокодер — notice в режиме выбора, главный экран работает.
   Запоминание города — через операцию хоста storage (решение 22.10): без права
   storage панель работает полностью, просто не запоминает (denied/unavailable —
-  молча). Подсказка «Город запоминается в этом браузере» показывается только при
-  выданном праве storage (правка приёмки 22.10). Операций storage в хосте ещё
-  нет (F2): без них правило не проверяется вживую, слой данных панели к нему готов.
+  молча). Подсказка «Город запоминается в этом браузере» показывается только если
+  операция storage реально отвечает: панель пробует storage.get при открытии режима
+  (правка приёмки 23.10: одного права мало — операций в хосте ещё нет).
+  Состояния отказов (C2, правка приёмки 23.10): нет связи — «Нет связи с сервисом
+  погоды»; успешный ответ без прогноза — «Сервис погоды не прислал прогноз»;
+  ответ не разобрался — «Не удалось прочитать ответ сервиса погоды»; HTTP-ошибка —
+  «Сервис погоды не ответил».
 -->
 <style>
   .wx { display: flex; flex-direction: column; gap: 12px; }
@@ -307,6 +311,9 @@
     // Состояния ошибок (C2): карточка, как в макете (.cc-card > .cc-empty).
     // Право на прогноз — ключ net:{хост}, собранный из своего URL: в тексте
     // отказа хост приходит без префикса (§1, п. 2).
+    // Разные отказы — разные тексты (правка приёмки 23.10): одна плашка
+    // «вернул ошибку» звучала и когда связи нет, и когда сервис ответил
+    // успешно без прогноза — это неверно. Каждый случай назван по факту.
     var offlineShown = false;
     function renderProblem(kind) {
       root.setAttribute('aria-busy', 'false');
@@ -320,7 +327,23 @@
         icon = 'wifioff'; title = 'Нет подключения к интернету';
         text = 'Погода обновится, как только связь вернётся.';
         extra = '<button class="cc-btn cc-btn--ghost" type="button" id="retry">Повторить</button>';
+      } else if (kind === 'noconn') {
+        // Запрос не дошёл до сервиса: сетевой сбой или таймаут (правка приёмки 23.10).
+        icon = 'wifioff'; title = 'Нет связи с сервисом погоды';
+        text = 'Проверьте подключение и попробуйте ещё раз.';
+        extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
+      } else if (kind === 'nodata') {
+        // Сервис ответил успешно, но дневного блока в ответе нет.
+        icon = 'cloudoff'; title = 'Сервис погоды не прислал прогноз';
+        text = 'Попробуйте ещё раз через минуту.';
+        extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
+      } else if (kind === 'badbody') {
+        // Ответ пришёл, но не читается как JSON.
+        icon = 'cloudoff'; title = 'Не удалось прочитать ответ сервиса погоды';
+        text = 'Попробуйте ещё раз.';
+        extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
       } else {
+        // kind === 'badstatus': ошибочный HTTP-статус — сервис действительно «вернул ошибку».
         icon = 'cloudoff'; title = 'Сервис погоды не ответил';
         text = 'Open-Meteo вернул ошибку. Обычно это проходит за минуту.';
         extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
@@ -330,10 +353,11 @@
         '<div class="cc-empty__title">' + title + '</div>' +
         '<div class="cc-empty__text">' + text + '</div>' + extra + '</div></div>';
     }
-    function renderError() { renderProblem('upstream'); }
 
     // ---------- Выбор города (C1) ----------
     var query = '', found = [], geoDenied = false, searchTimer = 0, searchSeq = 0;
+    // Домашняя страна локали: поиск идёт с language=ru (правка приёмки 23.10).
+    var HOME_COUNTRY = 'RU';
 
     // Право на net-хост — из состояния хоста, формат «net:{host}» (M5, ревью R2-д).
     // Сравнение — по правилу боевого прокси (PluginNetProxy.HostOf): хост права
@@ -389,9 +413,10 @@
       // при открытии проверяем его заново: с правом плашка снимается, без права — остаётся.
       geoDenied = !hasNetRight(GEO_HOST);
       root.setAttribute('aria-busy', 'false');
-      // Подсказка про запоминание — только когда право storage действительно выдано
-      // (правка приёмки 22.10): без него панель ничего не запоминает.
-      var hint = hasStorageRight() ? '<div class="hint">Город запоминается в этом браузере.</div>' : '';
+      // Подсказка про запоминание — не по выданному праву, а по факту ответа
+      // (правка приёмки 23.10): права может быть, а операций storage в хосте
+      // ещё нет — обещать запоминание тогда нечестно. Пустой слот под подсказку
+      // заполняется только после успешной пробы.
       // Поле поиска не пересоздаётся при каждом результате: обновляется только #geo.
       root.innerHTML =
         '<div class="wx-top">' +
@@ -401,7 +426,7 @@
         '<div class="search-wrap">' + ico('search') +
           '<input class="cc-input" id="q" value="' + esc(query) + '" placeholder="Город, например Ярославль" aria-label="Поиск города">' +
         '</div>' +
-        '<div id="geo"></div>' + hint;
+        '<div id="geo"></div><div id="hint-slot"></div>';
       var input = root.querySelector('#q');
       input.focus(); // фокус сразу в поле — не надо тапать второй раз (правка приёмки 22.10)
       input.addEventListener('input', function () {
@@ -418,6 +443,15 @@
         searchTimer = setTimeout(function () { searchCity(query); }, 400);
       });
       renderGeo();
+      // Проба операции storage: подсказка — только если хост реально отвечает.
+      if (hasStorageRight()) {
+        ccsPlugin.call('storage.get', { key: CITY_KEY })
+          .then(function () {
+            var slot = root.querySelector('#hint-slot');
+            if (slot) slot.innerHTML = '<div class="hint">Город запоминается в этом браузере.</div>';
+          })
+          .catch(function () { /* denied/unavailable — обещания нет */ });
+      }
     }
 
     function renderGeo() {
@@ -443,8 +477,12 @@
         found.map(function (c, i) {
           var active = c.lat === city.lat && c.lon === city.lon;
           return '<li class="cc-list-item city' + (active ? ' is-active' : '') + '" role="option" tabindex="0" aria-selected="' + (active ? 'true' : 'false') + '" data-i="' + i + '">' +
-            '<span class="cn"><span class="nm">' + hl(c.name) + '</span><span class="rg">' + esc(c.region) + '</span></span>' +
-            (c.temp === null ? '' : '<span class="t">' + fmt(c.temp) + '</span>') +
+            // Подпись — «Город · Регион, Страна»: страна читается рядом с
+            // названием, а не в конце строки (правка приёмки 23.10). Нет
+            // температуры — прочерк, не пустое место (там же).
+            '<span class="cn"><span class="nm">' + hl(c.name) + '</span>' +
+            (c.region ? '<span class="rg"> · ' + esc(c.region) + '</span>' : '') + '</span>' +
+            '<span class="t">' + fmt(c.temp) + '</span>' +
             '</li>';
         }).join('') + '</ul>';
     }
@@ -462,7 +500,16 @@
         var data;
         try { data = JSON.parse(res.body); } catch (e) { found = []; renderGeo(); return; }
         var list = (data && data.results) || []; // при пустом ответе ключа results нет вовсе (§1)
-        list.sort(function (a, b) { return (b.population || 0) - (a.population || 0); }); // без населения — в конец
+        // Порядок (правка приёмки 23.10): сперва своя страна — панель ищет на
+        // русском, домашняя страна RU; внутри своей — по населению. Страна
+        // берётся из country_code ответа геокодера, а не угадывается по названию:
+        // «Москва, Айдахо» не должна вставать рядом с «Москва, Россия».
+        list.sort(function (a, b) {
+          var ah = a.country_code === HOME_COUNTRY ? 1 : 0;
+          var bh = b.country_code === HOME_COUNTRY ? 1 : 0;
+          if (ah !== bh) return bh - ah;
+          return (b.population || 0) - (a.population || 0); // без населения — в конец
+        });
         // Снимок списка на момент запроса: пакетные температуры применяются
         // только к нему, а не к тому, что будет в `found` к моменту ответа.
         var snapshot = list.slice(0, 6).map(function (r) {
@@ -509,8 +556,8 @@
     // Без права storage панель работает полностью, просто не запоминает:
     // denied/unavailable — молча, без ошибок и плашек.
     var CITY_KEY = 'city';
-    // Право storage в списке выданных — как net:{host}; нужен панели, чтобы
-    // честно обещать запоминание (правка приёмки 22.10).
+    // Право storage в списке выданных — как net:{host}; нужно лишь чтобы начать
+    // пробу: обещание запоминания даёт факт ответа, а не право (правка приёмки 23.10).
     function hasStorageRight() {
       var st = ccsPlugin.state;
       return !!(st && Array.isArray(st.granted) &&
@@ -606,18 +653,20 @@
       // status (§1) — смотрим status, а не только catch. Отказ по правам —
       // отклонение с кодом denied, его не путаем с сетевым сбоем.
       ccsPlugin.call('net.fetch', { url: forecastUrl(city.lat, city.lon) }).then(function (res) {
-        if (!res || res.status !== 200) { renderError(); return; }
+        if (!res || res.status !== 200) { renderProblem('badstatus'); return; }
         var data;
-        try { data = JSON.parse(res.body); } catch (e) { renderError(); return; }
+        try { data = JSON.parse(res.body); } catch (e) { renderProblem('badbody'); return; }
+        // Ответ успешен, но прогноза в нём нет: это не «сервис вернул ошибку» —
+        // он ответил. Отдельный текст (правка приёмки 23.10).
         if (!data || !data.current || !data.daily || !data.daily.time || !data.daily.time.length) {
-          renderError();
+          renderProblem('nodata');
           return;
         }
-        try { renderMain(data); } catch (e) { renderError(); }
+        try { renderMain(data); } catch (e) { renderProblem('badbody'); }
       }).catch(function (err) {
         if (err && err.code === 'denied') renderProblem('denied');
         else if (navigator.onLine === false) renderProblem('offline');
-        else renderError();
+        else renderProblem('noconn'); // запрос не дошёл до сервиса (сбой/таймаут)
       });
     }
 

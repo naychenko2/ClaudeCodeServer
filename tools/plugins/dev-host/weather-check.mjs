@@ -4,8 +4,12 @@
 // Прогоняет сценарии Playwright'ом против хост-эмулятора
 // (tools/plugins/dev-host/) на фикстурах из tools/plugins/dev-host/fixtures/.
 //
+// Лежит рядом с эмулятором, а не в папке пакета: пакет «Погода» устанавливается
+// «папкой» целиком, а check-файл в allow-list пакета не входит (дефект 203422c3,
+// правка C5).
+//
 // Запуск из корня репозитория:
-//   node tools/plugins/weather/check.mjs
+//   node tools/plugins/dev-host/weather-check.mjs
 //
 // Скрипт сам поднимает статический сервер над корнем репозитория (эмулятор
 // раздаёт панель, кит и токены темы по HTTP), запускает chromium из
@@ -20,6 +24,8 @@
 //   3. Нет горизонтальной прокрутки на ширинах 320 и 390.
 //   4. denied (нет права на прогноз), status400 и неполный ответ — каждый
 //      даёт свой кадр; неполный ответ — прочерки, не выдуманная погода (R3).
+//      4d–4f: три разных отказа — три текста: нет связи, ответ без прогноза,
+//      ответ не разобрался (правка приёмки 23.10).
 //   5. Поиск «Ярц» — сортировка по населению (Ярцево Смоленское первым);
 //      повторное открытие режима выбора — чистое (R3).
 //   6. Пустой поиск — пустое состояние.
@@ -37,6 +43,12 @@
 //       открытии — липкая плашка отказа снимается (minor M5).
 //   14. Хранилище отключено: эмулятор отвечает «unavailable», а не роняет
 //       обработчик (minor M2, ревью R2-д).
+//   17. Пустые температуры в списке городов — прочерк «—», не пустое место
+//       (правка приёмки 23.10).
+//   18. Порядок результатов: своя страна (RU) раньше чужих, внутри страны — по
+//       населению; подпись «Город · Регион, Страна» (правка приёмки 23.10).
+//   19. Обещание запоминания — только если операция storage реально отвечает,
+//       а не просто выдано право (правка приёмки 23.10).
 
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
@@ -45,7 +57,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, extname, sep } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(HERE, '..', '..', '..'); // tools/plugins/weather → корень репозитория
+const ROOT = join(HERE, '..', '..', '..'); // tools/plugins/dev-host → корень репозитория
 const require = createRequire(join(ROOT, 'frontend', 'package.json'));
 const { chromium } = require('playwright');
 
@@ -357,6 +369,81 @@ async function scenarioErrors(browser, base) {
       await context.close();
     }
   });
+
+  // Правка приёмки 23.10: три разных отказа — три разных текста.
+  await scenario('4d. Сетевой сбой (таймаут) — «Нет связи с сервисом погоды»', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fail: 'timeout',
+    });
+    try {
+      await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
+      const title = (await textOf(frame, '.cc-empty__title')).trim();
+      assertEq(checks, 'заголовок нет связи', title, 'Нет связи с сервисом погоды');
+      const text = (await textOf(frame, '.cc-empty__text')).trim();
+      assertEq(checks, 'текст про подключение', text, 'Проверьте подключение и попробуйте ещё раз.');
+      const btn = await frame.locator('#retry').innerText().catch(() => '');
+      assertEq(checks, 'кнопка «Повторить»', btn.trim(), 'Повторить');
+    } catch (e) {
+      await shot(page, 'scenario-4d-noconn');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+
+  await scenario('4e. Ответ без прогноза — «Сервис погоды не прислал прогноз»', async (checks) => {
+    // Синтетическая фикстура: current есть, daily нет — сервис ответил успешно,
+    // «вернул ошибку» про этот случай неверно (правка 23.10).
+    const nodata = '.cc-attachments/weather-check/forecast-no-daily.json';
+    await mkdir(join(ROOT, '.cc-attachments', 'weather-check'), { recursive: true });
+    await writeFile(join(ROOT, nodata), JSON.stringify({
+      latitude: 57.63, longitude: 39.87, utc_offset_seconds: 10800, timezone: 'Europe/Moscow',
+      current: { time: '2026-10-22T15:45', temperature_2m: 10, weather_code: 1 },
+    }));
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: nodata,
+    });
+    try {
+      await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
+      const title = (await textOf(frame, '.cc-empty__title')).trim();
+      assertEq(checks, 'заголовок без прогноза', title, 'Сервис погоды не прислал прогноз');
+      const text = (await textOf(frame, '.cc-empty__text')).trim();
+      assertEq(checks, 'текст через минуту', text, 'Попробуйте ещё раз через минуту.');
+      const btn = await frame.locator('#retry').innerText().catch(() => '');
+      assertEq(checks, 'кнопка «Повторить»', btn.trim(), 'Повторить');
+    } catch (e) {
+      await shot(page, 'scenario-4e-no-data');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+
+  await scenario('4f. Ответ не разбирается — «Не удалось прочитать ответ сервиса погоды»', async (checks) => {
+    const badbody = '.cc-attachments/weather-check/forecast-not-json.json';
+    await writeFile(join(ROOT, badbody), '<html>это не JSON</html>');
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: badbody,
+    });
+    try {
+      await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
+      const title = (await textOf(frame, '.cc-empty__title')).trim();
+      assertEq(checks, 'заголовок не разобрался', title, 'Не удалось прочитать ответ сервиса погоды');
+      const text = (await textOf(frame, '.cc-empty__text')).trim();
+      assertEq(checks, 'текст повтори', text, 'Попробуйте ещё раз.');
+      const btn = await frame.locator('#retry').innerText().catch(() => '');
+      assertEq(checks, 'кнопка «Повторить»', btn.trim(), 'Повторить');
+    } catch (e) {
+      await shot(page, 'scenario-4f-bad-body');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+
 }
 
 async function scenarioSearchSort(browser, base) {
@@ -468,7 +555,7 @@ async function scenarioRace(browser, base) {
 }
 
 // Сценарии инвариантов storage (C3-д): значение в хранилище — объект; чтение
-// принимает и старую строку; подсказка — только при выданном праве.
+// принимает и старую строку.
 async function scenarioStorageCity(browser, base) {
   await scenario('8. Город в storage — объект; повторное открытие читает его', async (checks) => {
     const grant = GRANT_ALL + ',storage';
@@ -535,8 +622,11 @@ async function scenarioStorageCity(browser, base) {
   });
 }
 
+// Сценарии инвариантов storage (C3-д): значение в хранилище — объект; чтение
+// принимает и старую строку; подсказка — только если операция реально отвечает
+// (правка приёмки 23.10: одного права storage мало).
 async function scenarioHint(browser, base) {
-  await scenario('9. Подсказка про запоминание — только при выданном storage', async (checks) => {
+  await scenario('9. Подсказка про запоминание — только при работающем storage', async (checks) => {
     const fixtures = [FX + 'forecast-yaroslavl.json', FX + 'geocode-arts.json', FX + 'forecast-batch.json'].join(',');
     for (const [grant, expect] of [[GRANT_ALL, false], [GRANT_ALL + ',storage', true]]) {
       const { context, page, frame } = await openEmulator(browser, base, { grant, fixtures });
@@ -544,11 +634,15 @@ async function scenarioHint(browser, base) {
         await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
         await frame.locator('#citybtn').click();
         await frame.locator('#q').waitFor({ timeout: 5000 });
-        const n = await frame.locator('.hint').count();
-        assertEq(checks, 'подсказок при ' + (grant.includes('storage') ? 'storage выдан' : 'без storage'), n, expect ? 1 : 0);
         if (expect) {
+          // Подсказка появляется после пробы операции — ждём её, а не стенку времени.
+          await frame.locator('.hint').waitFor({ timeout: 5000 });
+          assertEq(checks, 'подсказка при работающем storage', await frame.locator('.hint').count(), 1);
           const t = (await textOf(frame, '.hint')).trim();
           assertEq(checks, 'текст подсказки', t, 'Город запоминается в этом браузере.');
+        } else {
+          // Без права пробы не будет вовсе: плашки нет сразу.
+          assertEq(checks, 'подсказок без права storage нет', await frame.locator('.hint').count(), 0);
         }
       } catch (e) {
         await shot(page, 'scenario-9-hint-' + (expect ? 'on' : 'off'));
@@ -863,6 +957,123 @@ async function scenarioStorageOff(browser, base) {
   });
 }
 
+// Правка 23.10: если геокодер ответил, а пакетный прогноз не пришёл, в строке
+// — прочерк, а не пустое место.
+async function scenarioEmptyTemps(browser, base) {
+  await scenario('17. Пустые температуры в списке — «—», не пустое место (правка 23.10)', async (checks) => {
+    // Синтетический пакет без current: геокодер ответил, температур нет.
+    const batchEmpty = '.cc-attachments/weather-check/batch-no-current.json';
+    await mkdir(join(ROOT, '.cc-attachments', 'weather-check'), { recursive: true });
+    await writeFile(join(ROOT, batchEmpty), '[]');
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        batchEmpty + '|latitude',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Ярц');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      // Пакет пуст: на каждой строке есть место температуры, и везде прочерк.
+      const count = await frame.locator('.city').count();
+      const temps = await frame.locator('.city .t').allInnerTexts();
+      assertEq(checks, 'места температуры на каждой строке', temps.length, count);
+      assertEq(checks, 'все температуры — прочерки', temps.map((t) => t.trim()).join(' '), Array(count).fill('—').join(' '));
+    } catch (e) {
+      await shot(page, 'scenario-17-empty-temps');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// Правка 23.10: сперва своя страна (панель ищет по-русски), внутри страны — по
+// населению; подпись «Город · Регион, Страна». Страна — из country_code, не по
+// названию: «Торонто» не встанет перед русским «Тором».
+async function scenarioCountrySort(browser, base) {
+  await scenario('18. Порядок: своя страна раньше, подпись «Город · Регион, Страна» (правка 23.10)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-tor.json|name=%D0%A2%D0%BE%D1%80',
+        FX + 'batch-tor.json|latitude',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Тор');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      const lines = await frame.locator('.city').allInnerTexts();
+      assertEq(checks, 'строк результатов', lines.length, 3);
+      const first = lines[0].replace(/\n/g, ' ').trim();
+      // По одному населению первым был бы Торонто (2,7 млн) — страна важнее.
+      assertTrue(checks, 'первая строка — Тор в России', first.includes('Тор ·') && first.includes('Россия'), first);
+      assertTrue(checks, 'страна читается рядом с названием', first.includes(' · Архангельская обл., Россия'), first);
+      // Чужие страны — после своей; внутри них прежний порядок по населению.
+      const second = lines[1].replace(/\n/g, ' ').trim();
+      const third = lines[2].replace(/\n/g, ' ').trim();
+      assertTrue(checks, 'вторая строка — Канада (население больше германского Тора)', second.includes('Канада'), second);
+      assertTrue(checks, 'третья строка — Германия', third.includes('Германия'), third);
+    } catch (e) {
+      await shot(page, 'scenario-18-country-sort');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// Правка 23.10: обещание «город запоминается» — только если операция storage
+// реально отвечает. Выданное право при недоступных операциях — не повод обещать.
+async function scenarioStorageUnavailable(browser, base) {
+  await scenario('19. Хранилище недоступно: обещания запоминания нет (правка 23.10)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL + ',storage',
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      // «Отключаем» хранилище: геттер бросает — хост отвечает unavailable.
+      await page.evaluate(() => {
+        Object.defineProperty(window, 'localStorage', {
+          configurable: true,
+          get: function () { throw new Error('storage disabled'); },
+        });
+      });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      // Ждём факт пробы: в логе эмулятора — ответ unavailable.
+      await page.waitForFunction(() => {
+        const lines = Array.from(document.querySelectorAll('#log p'));
+        return lines.some((p) => p.textContent.includes('← unavailable: Хранилище недоступно'));
+      }, { timeout: 15000 });
+      assertEq(checks, 'подсказки про запоминание нет', await frame.locator('.hint').count(), 0);
+      // Сам поиск работает: результаты есть — и обещания всё равно нет.
+      await frame.locator('#q').fill('Ярц');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      assertEq(checks, 'подсказки нет и при результатах', await frame.locator('.hint').count(), 0);
+    } catch (e) {
+      await shot(page, 'scenario-19-storage-unavailable');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 // ---------- Запуск ----------
 
 const { server, base } = await startServer();
@@ -884,6 +1095,9 @@ try {
   await scenarioStorageOff(browser, base);
   await scenarioGeoRightWithPort(browser, base);
   await scenarioOnlineClosesSearch(browser, base);
+  await scenarioEmptyTemps(browser, base);
+  await scenarioCountrySort(browser, base);
+  await scenarioStorageUnavailable(browser, base);
 } finally {
   await browser.close();
   server.close();

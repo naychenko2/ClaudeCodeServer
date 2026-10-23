@@ -5,7 +5,7 @@ import { Modal, Button, Checkbox, Badge } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import {
-  isNetPermission, netHostOf, permissionLabel, NET_PERMISSION_WARNING,
+  isNetPermission, netHostOf, permissionLabel, permissionHint, NET_PERMISSION_WARNING,
 } from './permissionLabels';
 
 // === Данные диалога согласия (экран 2 макетов, ADR-031 §4) ===
@@ -420,6 +420,9 @@ export function ConsentDialog({ data, mode, onClose, onSubmit, onSaveSecret, new
                     <div style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>{key}</div>
                     {net && (
                       <div style={{ fontSize: FS.sm, color: C.warningText, marginTop: 2 }}>{NET_PERMISSION_WARNING}</div>
+                    )}
+                    {permissionHint(key) && (
+                      <div style={{ fontSize: FS.sm, color: C.textMuted, marginTop: 2, lineHeight: 1.5 }}>{permissionHint(key)}</div>
                     )}
                   </div>
                 </div>

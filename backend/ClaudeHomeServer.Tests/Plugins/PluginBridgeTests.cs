@@ -37,6 +37,20 @@ public class PluginBridgeTests
         result.Error.Message.Should().Contain("notes");
     }
 
+    // --- Диспетчер: operations storage (шаг B1) — обработчика на сервере нет → unavailable, не исключение ---
+
+    [Fact]
+    public async Task Dispatch_StorageGet_ОтдаётUnavailable()
+    {
+        var bridge = new PluginBridge([]);
+        var ctx = new PluginCallContext("owner-a", "local-a/pkg", null, null);
+        var result = await bridge.DispatchAsync(ctx, "storage.get", null, ["storage"], CancellationToken.None);
+
+        result.Ok.Should().BeFalse();
+        result.Error!.Code.Should().Be("unavailable");
+        result.Error.Message.Should().Contain("Обработчик не зарегистрирован");
+    }
+
     // --- Диспетчер: нет права в granted → denied (403) ---
 
     [Fact]

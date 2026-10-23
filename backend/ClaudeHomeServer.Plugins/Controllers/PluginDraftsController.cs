@@ -266,6 +266,10 @@ public class PluginDraftsController(
         return Ok(new
         {
             id = record.Id,
+            // Человекочитаемое имя пакета для диалога согласия (D2, находка 4c903d8e): title
+            // первой панели манифеста черновика; панелей нет → null (фронт остаётся на
+            // fallback humanizeId). Вывод — в PluginDisplayName.Of, единственной точке на бэке.
+            displayName = PluginDisplayName.Of(manifest),
             version = record.Version,
             sha256 = record.Sha256,
             source = record.Source,

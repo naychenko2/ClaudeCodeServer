@@ -20,7 +20,7 @@ import { onMessage } from '../../lib/signalr';
 import { api } from '../../lib/api';
 import { isNetPermission, permissionLabel, NET_PERMISSION_WARNING } from './permissionLabels';
 import {
-  acceptDisabledReason, buildFixReply, diffFileLabel, draftContributions, isRejectedExpired, problemCount,
+  acceptDisabledReason, buildFixReply, diffFileLabel, draftContributions, draftDisplayName, isRejectedExpired, problemCount,
   type DraftContribution,
 } from './draftModel';
 import { buildInitMessage, buildPanelSrcdoc, validateFrameMessage, panelWindowOf, MAX_PANEL_FILE_BYTES, clampContentHeight, PANEL_MAX_HEIGHT, PANEL_MAX_HEIGHT_MOBILE } from './bridge';
@@ -458,7 +458,7 @@ export function DraftCard(props: DraftCardProps) {
         rejected={rejected}
         installed={installed}
         stale={stale}
-        name={preview?.name ?? summary.id}
+        name={draftDisplayName(summary.displayName, preview?.name ?? summary.id)}
         version={summary.version}
         expiresAt={summary.expiresAt}
         actionError={actionError}
@@ -494,6 +494,8 @@ export function DraftCard(props: DraftCardProps) {
 
   if (!preview) return null;
 
+  // Имя в шапке и в репликах агенту — человекочитаемое («Погода»), а не slug манифеста
+  const cardName = draftDisplayName(summary.displayName, preview.name);
   const problems = preview.validation.problems;
   const acceptBlocked = acceptDisabledReason(preview);
   const contributions = draftContributions(preview);
@@ -506,7 +508,7 @@ export function DraftCard(props: DraftCardProps) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
             <span style={{ fontWeight: 600, fontSize: FS.base, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {preview.name}
+              {cardName}
             </span>
             <Badge tone="plan" size="xs">Черновик</Badge>
           </div>
@@ -575,8 +577,8 @@ export function DraftCard(props: DraftCardProps) {
           Посмотреть файлы
         </Button>
         {preview.validation.isValid
-          ? <Button variant="ghost" size="sm" leftIcon={<Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={() => onEdit?.(`Поправь плагин «${preview.name}»: `)}>Править</Button>
-          : <Button variant="secondary" size="sm" leftIcon={<Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={() => onEdit?.(buildFixReply(preview.name, problems))}>Попросить агента исправить</Button>}
+          ? <Button variant="ghost" size="sm" leftIcon={<Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={() => onEdit?.(`Поправь плагин «${cardName}»: `)}>Править</Button>
+          : <Button variant="secondary" size="sm" leftIcon={<Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={() => onEdit?.(buildFixReply(cardName, problems))}>Попросить агента исправить</Button>}
         <div style={{ flex: 1 }} />
         <Button
           variant="ghost" size="sm"

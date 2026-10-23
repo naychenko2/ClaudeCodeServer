@@ -37,6 +37,8 @@ vi.mock('../../lib/api', () => ({
 
 // pluginStore — шпион (side-effect setInstalledPlugins не важен для проверки error/plugins/раскладки)
 vi.mock('./pluginStore', () => ({ setInstalledPlugins: vi.fn() }));
+const gc = vi.hoisted(() => ({ collect: vi.fn() }));
+vi.mock('./pluginStorageLifecycle', () => ({ collectOnListLoaded: gc.collect }));
 
 const { installFakeDom, mount, uninstallFakeDom } = await import(
   '../../components/chat/__tests__/fakeDom'
@@ -121,6 +123,31 @@ describe('refresh() вне рендера (R-Финал-2, CRITICAL)', () => {
     // Второй refresh (по событию) тоже вне рендера: error не появляется, список актуален.
     expect(probe?.error).toBeNull();
     expect(probe?.plugins).toEqual([P1]);
+  });
+});
+
+describe('сборка мусора storage.*', () => {
+  // F-д4. Мутация: убрать try/catch вокруг collectOnListLoaded в refresh() → error станет текстом.
+  it('сбой сборки мусора не отменяет успешный список — логом', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    gc.collect.mockImplementationOnce(() => { throw new TypeError('геттер сломан'); });
+    m.list.mockResolvedValue([P1]);
+    await renderProbe();
+    expect(probe?.error).toBeNull();
+    expect(probe?.plugins).toEqual([P1]);
+    expect(spy.mock.calls[0][0]).toContain('[plugin storage]');
+    spy.mockRestore();
+  });
+
+  it('успешный список запускает сборку, ошибка списка — нет', async () => {
+    gc.collect.mockClear();
+    m.list.mockRejectedValue(new Error('offline'));
+    await renderProbe();
+    expect(gc.collect).not.toHaveBeenCalled();
+    m.list.mockResolvedValue([P1]);
+    act(() => { subs.reconnected.forEach(h => h()); });
+    await flush();
+    expect(gc.collect).toHaveBeenCalledWith(['acme/one']);
   });
 });
 

@@ -132,6 +132,34 @@ public class PluginUninstallTests : IDisposable
         after.Should().BeEmpty("granted и секреты ушли вместе с записью");
     }
 
+    // --- Шаг B2: удаление установки с выданным storage — хвостов в записях прав нет ---
+    // Права живут только в записи installed.json (отдельного хранилища прав в сторе нет —
+    // проверено по коду). Мутация (не удалять запись в PluginUninstall): after непустой →
+    // тест красный.
+
+    [Fact]
+    public void Uninstall_ВыданныйStorage_УходитСЗаписьюБезХвостов()
+    {
+        _store.SaveInstalled(Owner,
+        [
+            new PluginInstall
+            {
+                Id = Id,
+                Version = Version,
+                Sha256 = "abc123",
+                Requested = ["net:api.linear.app", "storage"],
+                Granted = ["net:api.linear.app", "storage"],
+                Enabled = true,
+                Source = "draft",
+            },
+        ]);
+
+        _sut.Uninstall(Owner, Id).Should().BeTrue();
+
+        var after = _store.LoadInstalled(Owner);
+        after.Should().BeEmpty("запись с granted storage удалена целиком, хвостов нет");
+    }
+
     [Fact]
     public void Uninstall_СнимаетВнешниеСсылкиЧерезШов()
     {

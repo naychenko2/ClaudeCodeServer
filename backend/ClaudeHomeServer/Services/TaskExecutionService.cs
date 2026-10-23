@@ -1199,6 +1199,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // и продолжение ей не шлётся.
         var keyChain = FeatureProjector.KeyChain(epic, featureTasks);
         var resumed = 0;
+        // R-HOLD-J (п.3): шаги, чей чат исчез за паузу: их не продолжить, но в карточке
+        // их считают отдельно — оркестратор должен знать, что их перезапускают штатно.
+        var expired = 0;
         foreach (var t in featureTasks)
         {
             if (t.Status != TaskItemStatus.InProgress) continue;
@@ -1209,9 +1212,20 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 // Ветка feature_held_expired (контракт §1 :241): чат исполнителя удалён
                 // (TTL или человек) — пометку не снимаем, а меняем на терминальную:
                 // продолжения нет, шаг перезапустит штатный tasks_run_executor.
-                var expired = _tasks.MarkExecutorStopExpired(t.Id);
-                if (expired is not null)
-                    await _broadcaster.ToOwner(expired.OwnerId!, new TaskChangedMessage("updated", expired));
+                // R-HOLD-J (п.2): сбой рассылки не обрывает цикл: пометка уже сменена,
+                // остальные шаги продолжают, карточка оркестратору уходит.
+                try
+                {
+                    var marked = _tasks.MarkExecutorStopExpired(t.Id);
+                    if (marked is not null)
+                        await _broadcaster.ToOwner(marked.OwnerId!, new TaskChangedMessage("updated", marked));
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning("Не доставлено уведомление владельцу о терминальной пометке {TaskId}: {Message}",
+                        t.Id, ex.Message);
+                }
+                expired++;
                 continue;
             }
             // R-HOLD-D (п.3): сбой одного чата не обрывает цикл — каждая задача ловится отдельно,
@@ -1219,11 +1233,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             // доставки: при сбое задача остаётся «на паузе» и повторное снятие её подхватит.
             try
             {
-                // W4-HOLD-J (контракт §1 :267): возвращаем замороженный паузой срок —
-                // SetExpiry сдвигает якорь отсчёта на «сейчас».
-                if (t.ExecutionExpiresAfterMinutes is { } ttl) _sessions.SetExpiry(t.LinkedSessionId, ttl);
                 await _sessions.SendMessageAsync(t.LinkedSessionId, HoldResumePrompt, [], auto: true,
                     cause: SessionManager.DeliveryCause.HoldResume);
+                // W4-HOLD-J (контракт §1 :267, R-HOLD-J п.1): возвращаем замороженный паузой
+                // срок только после успешной доставки продолжения: при сбое хода чат остаётся
+                // замороженным (пауза держится — пометка на месте), повторное снятие его
+                // подхватит. SetExpiry сдвигает якорь отсчёта на «сейчас».
+                if (t.ExecutionExpiresAfterMinutes is { } ttl) _sessions.SetExpiry(t.LinkedSessionId, ttl);
                 var cleared = _tasks.ClearExecutorStopped(t.Id, ExecutorStopClassifier.FeatureHeldReason);
                 if (cleared is null) continue;
                 // R-HOLD-D (п.4): шаг возвращён в работу — он продолжен независимо от доставки
@@ -1261,6 +1277,18 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             return resumed; // у черновика прерванных ходов не бывает — 0
         }
         if (resumed == 0) {
+            if (expired > 0) {
+                // R-HOLD-J (п.3): «прерванных шагов нет» — неправда: чат expired-шага
+                // исчез, его не продолжить. Считаем их отдельно: эти шаги перезапускают
+                // штатным исполнителем.
+                var ev = expired == 1 ? "продолжен" : "продолжены";
+                var obj = expired == 1 ? "его" : "их";
+                await DeliverKeyChatCardAsync(key,
+                    $"Пауза снята: {expired} {PluralSteps(expired)} не {ev} — чат исполнителя исчез, " +
+                    $"{obj} нужно перезапустить штатным tasks_run_executor. " +
+                    "Разбери доклады, накопленные за паузу.");
+                return 0;
+            }
             // R-HOLD-K (п.2): тот же мотив контракта §1, :249-251: доклады за паузу
             // накопились и здесь — оркестратору надо их разобрать, а не только знать,
             // что запуски разрешены.
@@ -1271,9 +1299,14 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
         // R-HOLD-D (п.5): формулировка контракта §1, :249 — «пауза снята, продолжены N шагов»,
         // с русским согласованием числительных (то же правило, что pluralSteps на фронте).
+        // R-HOLD-J (п.3): expired-шаги названы отдельно: их не продолжить, их перезапускают.
         var verb = resumed == 1 ? "продолжен" : "продолжены";
+        var expiredPart = expired > 0
+            ? $"{expired} {PluralSteps(expired)} не {(expired == 1 ? "продолжен" : "продолжены")} — " +
+              $"чат исполнителя исчез, {(expired == 1 ? "его" : "их")} нужно перезапустить. "
+            : "";
         await DeliverKeyChatCardAsync(key,
-            $"Пауза фичи снята: {verb} {resumed} {PluralSteps(resumed)}. " +
+            $"Пауза фичи снята: {verb} {resumed} {PluralSteps(resumed)}. {expiredPart}" +
             "Доклады, накопленные за паузу, — в лентах этих шагов; разбери их.");
         return resumed;
     }
@@ -1365,6 +1398,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             "вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось",
         ExecutorStopClassifier.DeviceWaitExpiredReason =>
             "устройство локального проекта так и не стало доступно — исполнитель не запускался",
+        ExecutorStopClassifier.FeatureHeldExpiredReason =>
+            "чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить",
         _ => "исполнение прервано",
     };
 

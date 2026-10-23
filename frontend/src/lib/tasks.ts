@@ -638,6 +638,8 @@ export function executorStopText(reason: string | null | undefined, deviceName?:
       return 'Не удалось авторизоваться у провайдера модели';
     case 'subagent_stuck':
       return 'Сабагент раз за разом обрывается посреди работы, добить его не удалось';
+    case 'feature_held_expired':
+      return 'Чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить';
     default:
       return 'Исполнение прервано';
   }

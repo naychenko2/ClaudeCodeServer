@@ -30,6 +30,13 @@ public class TaskExecutionServiceHoldTests : IDisposable
     private readonly TaskExecutionService _sut;
     private readonly SessionManager _sessions;
     private readonly UserStore _userStore;
+    // Части конструктора _sut: тест c2 собирает TaskExecutionService с моком broadcaster,
+    // остальные зависимости те же.
+    private readonly IConfiguration _config;
+    private readonly PersonaManager _personas;
+    private readonly PushService _push;
+    private readonly NotificationService _notif;
+    private readonly NotesKnowledgeService _notesKb;
 
     public TaskExecutionServiceHoldTests()
     {
@@ -42,6 +49,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
                 ["DefaultProjectsPath"] = Path.Combine(_dir, "homes"),
             })
             .Build();
+        _config = config;
 
         var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(),
             NullLogger<UserStore>.Instance);
@@ -49,6 +57,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
         var appSettings = new AppSettingsService(config);
         var projectManager = new ProjectManager(config, userStore, appSettings);
         var personas = new PersonaManager(config);
+        _personas = personas;
         _tasks = new TaskManager(config, personas: personas);
 
         var broadcaster = new TestSessionBroadcaster();
@@ -56,9 +65,11 @@ public class TaskExecutionServiceHoldTests : IDisposable
         var pushStore = new PushSubscriptionStore(config);
         var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
         var push = new PushService(config, pushStore, jwt, NullLogger<PushService>.Instance);
+        _push = push;
         _notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
         var notif = new NotificationService(_notifStore, broadcaster, push, personas, projectManager,
             NullLogger<NotificationService>.Instance);
+        _notif = notif;
 
         var wkStore = new WorkspaceKnowledgeStore(config);
         var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
@@ -66,6 +77,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
         var notesSvc = new NotesService(projectManager, config, NullLogger<NotesService>.Instance);
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
             NullLogger<NotesKnowledgeService>.Instance);
+        _notesKb = notesKb;
 
         var sessions = _sessions = CreateSessionManager(config, projectManager, userStore, appSettings,
             personas, knowledge, notesKb, broadcaster);
@@ -350,6 +362,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
         var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec", taskId: step.Id);
         _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
         SetRunningTurn(chat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
 
         _tasks.SetHold(epic.Id, "manual");
         _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
@@ -365,6 +378,108 @@ public class TaskExecutionServiceHoldTests : IDisposable
             "пометка не снимается, а меняется на терминальную: шаг перезапустят штатно");
         after.ExecutorStoppedAt.Should().Be(stoppedAt,
             "момент стопа не двигается: по нему таймлайн паузы scoped'ит interrupted");
+        // R-HOLD-J (п.3, критерий c3): карточка различает expired-шаги — не «прерванных
+        // шагов нет», а «1 шаг не продолжен — чат исполнителя исчез, его нужно перезапустить».
+        // Мутация: вернуть прежнюю формулировку «прерванных шагов нет» — этот Verify краснеет.
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("1 шаг не продолжен") && t.Contains("перезапустить")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()),
+            Times.Once(), "оркестратор получает карточку с expired-шагом, а не «прерванных нет»");
+    }
+
+    // R-HOLD-J (п.1, критерий c1): срок возвращается только после успешной доставки
+    // продолжения: при сбое хода чат остаётся замороженным — пауза держится, контекст
+    // не теряется. Мутации: вернуть SetExpiry ДО SendMessageAsync (порядок до правки) —
+    // первый абзац краснеет (срок вернулся бы, хотя продолжение не доставлено);
+    // убрать возврат срока вовсе — краснеет второй абзац (чат не пережил бы уборку).
+    [Fact]
+    public async Task Hold_FailedDeliveryKeepsChatFrozen()
+    {
+        var user = _userStore.Add("hold-ttl-fail", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг с боем доставки", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: 10));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec", taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(chat.Id, 10);
+        var adapter = SetRunningTurn(chat.Id);
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>())).Throws(new InvalidOperationException("чат оборван"));
+
+        _tasks.SetHold(epic.Id, "manual");
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(chat.Id);
+
+        _tasks.ClearHold(epic.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+
+        resumed.Should().Be(0, "доставка упала — шаг не продолжен");
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().BeNull(
+            "сбой продолжения: срок остаётся снятым — пауза держится, чат не должен истечь");
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(60));
+        _sessions.GetById(chat.Id).Should().NotBeNull("замороженный чат жив, пока шаг не продолжен");
+    }
+
+    // R-HOLD-J (п.2, критерий c2): сбой рассылки в expired-ветке не обрывает цикл: пометка
+    // сменена, живой шаг продолжен, карточка оркестратору уходит. Мутация: убрать try/catch
+    // в expired-ветке — исключение из ToOwner выбивает из метода: второй шаг не продолжен,
+    // карточки нет — первые два абзаца краснеют.
+    [Fact]
+    public async Task ClearHold_BroadcastFailureInExpiredBranch_DoesNotBreakLoop()
+    {
+        var user = _userStore.Add("hold-expired-broadcast", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var gone = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг без чата", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var live = _tasks.Create(null, user.Id, new CreateTaskRequest("Живой шаг", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var goneChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "gone",
+            taskId: gone.Id);
+        var liveChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "live",
+            taskId: live.Id);
+        _tasks.MarkClaudeStarted(gone.Id, goneChat.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeStarted(live.Id, liveChat.Id, DateTime.UtcNow);
+        SetRunningTurn(goneChat.Id);
+        var liveAdapter = SetRunningTurn(liveChat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, "manual");
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        await _sessions.DeleteAsync(goneChat.Id); // чат исчез за паузу
+
+        // Рассылка отказывает — именно она раньше обрывала цикл в expired-ветке.
+        var failing = new Mock<ISessionBroadcaster>();
+        failing.Setup(b => b.ToOwner(It.IsAny<string>(), It.IsAny<ServerMessage>()))
+            .Throws(new InvalidOperationException("рассылка недоступна"));
+        var sut = new TaskExecutionService(_tasks, _sessions, _personas, failing.Object, _push, _notif,
+            NullLogger<TaskExecutionService>.Instance, _config, kb: _notesKb);
+
+        _tasks.ClearHold(epic.Id);
+        var resumed = await sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+
+        _tasks.GetById(gone.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldExpiredReason,
+            "сбой рассылки не отменяет смену пометки: шаг помечен терминально");
+        liveAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжи")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "второй шаг продолжается, несмотря на сбой рассылки в первом");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжен 1 шаг") && t.Contains("1 шаг не продолжен")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()),
+            Times.Once(), "карточка уходит: продолжен один, один — expired");
+        resumed.Should().Be(1, "сбой рассылки не отнимает возврат живого шага");
+    }
+
+    // R-HOLD-J (п.5, критерий c3): терминальная причина имеет человеческий текст, а не
+    // общую формулировку. Мутация: удалить строку в ExecutorStopText — красное.
+    [Fact]
+    public void ExecutorStopText_FeatureHeldExpired_SvojaFormulirovka()
+    {
+        TaskExecutionService.ExecutorStopText(ExecutorStopClassifier.FeatureHeldExpiredReason)
+            .Should().Contain("перезапустить");
     }
 
     // W4-HOLD-K (дефект bec00347, контракт §1 :102-105, п.4): пустой случай больше не молчит —

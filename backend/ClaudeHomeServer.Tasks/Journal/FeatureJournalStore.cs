@@ -15,8 +15,8 @@ namespace ClaudeHomeServer.Services.Tasks.Journal;
 // - ownerId/featureId сверяются с белым списком ^[A-Za-z0-9_-]{1,128}$:
 //   кривой id («..», слэш) не доходит до диска — отказ без исключения наружу.
 // - Потолок 20 000 строк: при переполнении записи kind=turn больше не пишутся,
-//   переходы (created/started/stopped/stop_cleared/waiting/waiting_cleared/device_wait/
-//   device_wait_cleared/status/verdict/dropped) пишутся всегда — они редки (по числу
+//   переходы (created/started/stopped/stop_cleared/stop_expired/waiting/waiting_cleared/
+//   device_wait/device_wait_cleared/status/verdict/dropped) пишутся всегда — они редки (по числу
 //   мутаций, не по числу ходов); чтение возвращает truncated=true (lines >= MaxLines).
 // - Дедуп строк turn по (sessionId, turnSeq) при чтении; у turnSeq<=0 — по startedAt,
 //   а если startedAt==null — по endedAt, затем по outcome (уникальность хода).
@@ -52,8 +52,10 @@ public sealed record FeatureJournalEntry
     public DateTime At { get; init; }
 
     /// <summary>
-    /// Вид события: created | started | stopped | stop_cleared | waiting |
+    /// Вид события: created | started | stopped | stop_cleared | stop_expired | waiting |
     /// waiting_cleared | device_wait | device_wait_cleared | status | verdict | dropped | turn.
+    /// stop_expired — смена причины стопа на терминальную без движения метки (W4-HOLD-J);
+    /// таймлайн его не читает, это запись причины для журнала.
     /// device_wait/device_wait_cleared — ожидание устройства локального проекта
     /// (DeviceWaitSince; добавлено в v:1, пока формат не застыл — рекомендация Александра).
     /// </summary>

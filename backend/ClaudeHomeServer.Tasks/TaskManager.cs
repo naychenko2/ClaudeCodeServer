@@ -186,6 +186,21 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 });
         }
 
+        // stop_expired: причина стопа меняется на терминальную БЕЗ движения метки стопа
+        // (W4-HOLD-J, R-HOLD-J п.4, контракт §1 :278): момент тот же — таймлайн этот вид
+        // не читает, двойного счёта ошибки нет; причина в журнале обязана быть. Единственный
+        // мутатор, меняющий причину без движения метки, — MarkExecutorStopExpired
+        // (feature_held → feature_held_expired).
+        if (before.ExecutorStoppedAt == task.ExecutorStoppedAt && task.ExecutorStoppedAt is not null
+            && before.ExecutorStopReason != task.ExecutorStopReason)
+            AppendJournal(ownerId, featureId, new FeatureJournalEntry
+            {
+                At = now,
+                Kind = "stop_expired",
+                TaskId = task.Id,
+                Reason = task.ExecutorStopReason,
+            });
+
         // waiting / waiting_cleared: AwaitingHumanSince задан или снят.
         if (before.AwaitingHumanSince != task.AwaitingHumanSince)
         {
@@ -1208,6 +1223,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // человек) — пометку feature_held не снимаем, а меняем на терминальную
     // feature_held_expired. ExecutorStoppedAt не двигается: по нему таймлайн паузы
     // scoped'ит interrupted, а шаг перезапускается штатным tasks_run_executor.
+    // В журнал фичи пишется stop_expired с новой причиной (R-HOLD-J п.4, контракт §1 :278):
+    // момент стопа тот же, дублирующего «stopped» нет.
     public TaskItem? MarkExecutorStopExpired(string id)
     {
         var task = _tasks.GetValueOrDefault(id);

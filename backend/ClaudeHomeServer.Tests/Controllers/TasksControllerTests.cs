@@ -2520,6 +2520,62 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         resumed.Should().Contain(stepId, "снятие паузы снимает запрет гейта — ждущая задача пробуждается");
         expired.Should().Contain(staleId, "ожидание за потолком — просроченное: в expired");
         resumed.Should().NotContain(staleId, "просроченное ожидание не пробуждается");
+        // W4-HOLD-H (R-HOLD-H находка 4): эпик в выборку не входит — его никто не запускает.
+        resumed.Should().NotContain(epicId, "эпик — не шаг: его не пробуждают");
+        expired.Should().NotContain(epicId, "эпик — не задача ожидания устройства");
+    }
+
+    // W4-HOLD-H (R-HOLD-H находка 1): состав считается ДО ClearHold — resumed только те, кому
+    // пауза отказывает прямо сейчас. Подготовка на черновике гейтом пропускается: её снятие
+    // «не пробуждает» — она и так могла идти. Мутации: вернуть расчёт после ClearHold или
+    // заменить условие на безусловный Add — prep попадёт в resumed, NotContain краснеет.
+    [Fact]
+    public async Task ClearHold_200_ResumedТолькоОтказанныеПаузой()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetHold(epicId, "draft");
+
+        var prep = await CreateTaskAsync(new { title = "нарезка", featureId = epicId, role = "cut" });
+        var prepId = prep.GetProperty("id").GetString()!;
+        var step = await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString()!;
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var resumed = body.GetProperty("resumed").EnumerateArray().Select(x => x.GetString()).ToList();
+        var expired = body.GetProperty("expired").EnumerateArray().Select(x => x.GetString()).ToList();
+
+        resumed.Should().Contain(stepId, "пауза блокировала шаг — снятие открывает ему запуск");
+        resumed.Should().NotContain(prepId, "подготовка не блокировалась паузой — пробуждать нечего");
+        expired.Should().BeEmpty("ожидания устройства нет");
+    }
+
+    // W4-HOLD-H (R-HOLD-H находка 3): закрытые не пробуждаются — как GetDeviceWaiting исключает
+    // Done, так и ответ снятия паузы. Мутация: снять гард Status == Done — closed попадёт в
+    // expired (просроченное ожидание), NotContain краснеет.
+    [Fact]
+    public async Task ClearHold_200_ClosedНеВResumedИНеВExpired()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetHold(epicId, "manual");
+
+        var closed = await CreateTaskAsync(new { title = "закрытый шаг", featureId = epicId, role = "step" });
+        var closedId = closed.GetProperty("id").GetString()!;
+        await _client.PutAsJsonAsync($"/api/tasks/{closedId}", new { status = "done" });
+        tm.MarkDeviceWait(closedId, DateTime.UtcNow - ProjectCapabilities.DeviceWaitCeiling - TimeSpan.FromHours(1),
+            "устройство офлайн");
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var resumed = body.GetProperty("resumed").EnumerateArray().Select(x => x.GetString()).ToList();
+        var expired = body.GetProperty("expired").EnumerateArray().Select(x => x.GetString()).ToList();
+
+        resumed.Should().NotContain(closedId, "закрытая задача не встаёт в очередь");
+        expired.Should().NotContain(closedId, "закрытая не участвует в механике ожидания (GetDeviceWaiting)");
     }
 
     // Критерий c3: tasks_update с «hold» в теле поле не меняет (UpdateTaskRequest Hold не содержит,

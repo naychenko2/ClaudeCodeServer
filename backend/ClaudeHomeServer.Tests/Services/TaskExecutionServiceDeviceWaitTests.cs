@@ -148,6 +148,25 @@ public class TaskExecutionServiceDeviceWaitTests : IDisposable
         notLaunched.Should().NotBeNull("под-задача штаба получает карточку, а не тишину");
     }
 
+    // W4-HOLD-H (R-HOLD-H находка 2): единый предикат просрочки — одна формула для sweep
+    // исполнителя и ответа снятия паузы. Half-open окно [Since, Since+Ceiling): ровно на потолке
+    // — просрочено, на такт раньше — ещё нет; без отметки — никогда. Мутация: inline-формула
+    // вместо предиката — граница ведёт себя иначе, тест красный.
+    [Fact]
+    public void DeviceWaitExpired_ГраницаHalfOpenБезОтметкиНеПросрочено()
+    {
+        var since = new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
+        var unmarked = new TaskItem { Id = "без-отметки", Title = "не ждёт" };
+        ProjectCapabilities.DeviceWaitExpired(unmarked, since + ProjectCapabilities.DeviceWaitCeiling)
+            .Should().BeFalse("без отметки ожидания просрочки нет");
+
+        var waiting = new TaskItem { Id = "ждёт", Title = "ждёт устройство", DeviceWaitSince = since };
+        ProjectCapabilities.DeviceWaitExpired(waiting, since + ProjectCapabilities.DeviceWaitCeiling - TimeSpan.FromSeconds(1))
+            .Should().BeFalse("на такт до потолка — ещё ждём");
+        ProjectCapabilities.DeviceWaitExpired(waiting, since + ProjectCapabilities.DeviceWaitCeiling)
+            .Should().BeTrue("ровно на потолке — просрочено");
+    }
+
     [Fact]
     public async Task Sweep_УстройствоВернулосьБезСобытия_ДогоняетЗапуск()
     {

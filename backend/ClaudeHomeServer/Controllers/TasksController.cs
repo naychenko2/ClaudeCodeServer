@@ -912,24 +912,28 @@ public class TasksController(
         if (run.Epic.Hold is null)
             return Conflict(new { error = "Фича не удержана: снимать нечего" });
 
-        var epic = tasks.ClearHold(featureId);
-        if (epic is null) return NotFound(new { error = "Фича не найдена" });
-        // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. resumed — задачи
-        // фичи, которым гейт паузы (FeatureHoldRefusal) после снятия больше не отказывает запуск;
-        // expired — те, чьё ожидание устройства просрочено потолком DeviceWaitCeiling (механика
-        // TaskExecutionService): им запуск уже не светит, пробуждать нечего. Форма — как у hold:
-        // списки id. Эпик в выборку не входит (FeatureId == null): его никто не запускает.
+        // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. Состав считается
+        // ДО снятия паузы (находка R-HOLD-H): пока Hold активен, FeatureHoldRefusal не-null ровно
+        // для задач, которым запуск блокирует пауза — это и есть те, кому снятие открывает запуск.
+        // После ClearHold гейт тавтологически «разрешает» и предикат перестал бы фильтровать.
+        // expired — те, чьё ожидание устройства просрочено потолком (общий предикат
+        // ProjectCapabilities.DeviceWaitExpired, как в sweep TaskExecutionService); закрытые не
+        // пробуждаются — как в GetDeviceWaiting. Форма — как у hold: списки id. Эпик в выборку
+        // не входит (FeatureId == null): его никто не запускает.
         var now = DateTime.UtcNow;
         var resumed = new List<string>();
         var expired = new List<string>();
         foreach (var t in tasks.GetByOwner(UserId))
         {
-            if (t.FeatureId != featureId) continue;
-            if (t.DeviceWaitSince is { } since && now - since >= ProjectCapabilities.DeviceWaitCeiling)
+            if (t.FeatureId != featureId || t.Status == TaskItemStatus.Done) continue;
+            if (ProjectCapabilities.DeviceWaitExpired(t, now))
                 expired.Add(t.Id);
-            else if (tasks.FeatureHoldRefusal(t) is null)
+            else if (tasks.FeatureHoldRefusal(t) is not null)
                 resumed.Add(t.Id);
         }
+
+        var epic = tasks.ClearHold(featureId);
+        if (epic is null) return NotFound(new { error = "Фича не найдена" });
         return Ok(new { resumed, expired });
     }
 

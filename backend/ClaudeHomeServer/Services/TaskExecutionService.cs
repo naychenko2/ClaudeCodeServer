@@ -446,7 +446,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     {
         try
         {
-            if (task.DeviceWaitSince is { } since && nowUtc - since >= ProjectCapabilities.DeviceWaitCeiling)
+            if (ProjectCapabilities.DeviceWaitExpired(task, nowUtc))
             {
                 await ExpireDeviceWaitAsync(task);
                 return;

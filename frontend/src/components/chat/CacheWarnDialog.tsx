@@ -4,12 +4,12 @@
 // и 5-минутного срока. Шкала — бэковая (1..59 и 1..4): за неё бэк отвечает 400, поэтому
 // диалог проверяет сам, а текст 400 показывает как ошибку ввода, не как сбой.
 // Сброс — пустое тело: индикатор возвращается к дефолтам (5 мин и 1 мин).
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { C, FONT, MODAL_W } from '../../lib/design';
 import { Modal, ModalActions, Field, TextField } from '../ui';
 import { EXPIRING_THRESHOLD_MS } from '../../lib/promptCache';
 import {
-  getCacheWarnThresholds, saveCacheWarnThresholds, ensureCacheWarnLoaded,
+  saveCacheWarnThresholds, useCacheWarnThresholds,
   WARN1H_MAX, WARN5M_MAX,
 } from '../../lib/cacheWarnPrefs';
 
@@ -22,20 +22,31 @@ const inputError = (e: unknown, fallback: string): string =>
   e instanceof Error && (e as Error & { status?: number }).status === 400 ? e.message : fallback;
 
 export function CacheWarnDialog({ onClose }: { onClose: () => void }) {
-  // Репаранс на случай, пока /me не дошёл (обычно сидировано ещё монтированием пилюли)
-  useEffect(() => { void ensureCacheWarnLoaded(); }, []);
-  // Текущие значения — из стора, сидированного ответом /auth/me; не настроено — дефолты
-  const current = getCacheWarnThresholds();
-  const [warn1h, setWarn1h] = useState(String(current?.warn1hMin ?? DEF_1H));
-  const [warn5m, setWarn5m] = useState(String(current?.warn5mMin ?? DEF_5M));
+  // Подписка на стор (M2): если /auth/me дошёл после открытия диалога — поля
+  // обновляются; как только пользователь правил их руками, пересев прекращается,
+  // чтобы поздний засев не затёр его ввод.
+  const server = useCacheWarnThresholds();
+  const [warn1h, setWarn1h] = useState(String(server?.warn1hMin ?? DEF_1H));
+  const [warn5m, setWarn5m] = useState(String(server?.warn5mMin ?? DEF_5M));
+  const edited = useRef(false); // «правил сам» — с первой ручной правки поля не пересевать
+  useEffect(() => {
+    if (edited.current) return;
+    setWarn1h(String(server?.warn1hMin ?? DEF_1H));
+    setWarn5m(String(server?.warn5mMin ?? DEF_5M));
+  }, [server]);
+  const setManual1h = (v: string) => { edited.current = true; setWarn1h(v); };
+  const setManual5m = (v: string) => { edited.current = true; setWarn5m(v); };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const n1h = parseInt(warn1h, 10);
-  const n5m = parseInt(warn5m, 10);
+  // Строгий разбор (T1): только цифры. parseInt('5abc') — 5, и такая строка прошла бы
+  // локальную проверку, а бэк ответил бы 400; локально «5abc» невалидна.
+  const parseMin = (s: string): number | null => /^\d+$/.test(s.trim()) ? Number(s) : null;
 
   const validate = (): string | null => {
-    if (!Number.isInteger(n1h) || !Number.isInteger(n5m)) return 'Введите целые числа в минутах';
+    const n1h = parseMin(warn1h);
+    const n5m = parseMin(warn5m);
+    if (n1h === null || n5m === null) return 'Введите целые числа в минутах';
     if (n1h < 1 || n1h > WARN1H_MAX || n5m < 1 || n5m > WARN5M_MAX) {
       return `Порог часового кэша — 1–${WARN1H_MAX} мин, 5-минутного — 1–${WARN5M_MAX} мин`;
     }
@@ -48,7 +59,7 @@ export function CacheWarnDialog({ onClose }: { onClose: () => void }) {
     setLoading(true);
     setError(null);
     try {
-      await saveCacheWarnThresholds({ warn1hMin: n1h, warn5mMin: n5m });
+      await saveCacheWarnThresholds({ warn1hMin: parseMin(warn1h)!, warn5mMin: parseMin(warn5m)! });
       onClose();
     } catch (e) {
       // 400 — бэк не принял значения: это текст об ошибке ввода, а не сетевой сбой
@@ -92,11 +103,11 @@ export function CacheWarnDialog({ onClose }: { onClose: () => void }) {
       </div>
 
       <Field label="Часовой кэш, мин" hint={`1–${WARN1H_MAX} мин. По умолчанию ${DEF_1H} мин.`}>
-        <TextField value={warn1h} onChange={setWarn1h} onEnter={handleSave} />
+        <TextField value={warn1h} onChange={setManual1h} onEnter={handleSave} />
       </Field>
 
       <Field label="5-минутный кэш, мин" hint={`1–${WARN5M_MAX} мин. По умолчанию ${DEF_5M} мин.`}>
-        <TextField value={warn5m} onChange={setWarn5m} onEnter={handleSave} />
+        <TextField value={warn5m} onChange={setManual5m} onEnter={handleSave} />
       </Field>
 
       <div>

@@ -1,8 +1,10 @@
 // Личные пороги «кэш скоро остынет» (фича «Индикатор prompt cache и перенос в новый
-// чат», шаг F-3). Две части: стор cacheWarnPrefs (чтение /me, сохранение, сброс, 400)
-// и применение порога к индикатору — RingPillBadge рендерится статически, как в
-// RingPillBadge.test.ts; без личного порога работают дефолты (5 мин и 1 мин).
-import { createElement } from 'react';
+// чат», шаг F-3 и доработка F-3r). Две части: стор cacheWarnPrefs (засев из /me
+// внешним, сохранение, сброс, 400) и применение порога к индикатору — RingPillBadge
+// рендерится статически, как в RingPillBadge.test.ts; без личного порога работают
+// дефолты (5 мин и 1 мин). Диалог подписан на стор: поздний засев обновляет поля,
+// пока пользователь не правил их руками; числа разбираются строго («5abc» — ошибка).
+import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 // Диалог — Modal на портале: серверный рендер порталы не поддерживает,
@@ -17,7 +19,7 @@ vi.mock('../../../lib/offline', () => ({
 }));
 
 import {
-  ensureCacheWarnLoaded, getCacheWarnThresholds, saveCacheWarnThresholds,
+  getCacheWarnThresholds, saveCacheWarnThresholds,
   setCacheWarnThresholdsFromServer,
 } from '../../../lib/cacheWarnPrefs';
 import { CacheWarnDialog } from '../CacheWarnDialog';
@@ -98,14 +100,12 @@ describe('cacheWarnPrefs: чтение /me, сохранение, сброс', (
     expect(getCacheWarnThresholds()).toEqual({ warn1hMin: 10, warn5mMin: 2 });
   });
 
-  it('ensureCacheWarnLoaded читает /me однажды и применяет поле', async () => {
-    let count = 0;
-    mockRequest = () => { count++; return Promise.resolve({ cacheWarnThresholds: { warn1hMin: 7, warn5mMin: 3 } }); };
-    await ensureCacheWarnLoaded();
-    await ensureCacheWarnLoaded();
-    expect(count).toBe(1);
-    expect(getCacheWarnThresholds()).toEqual({ warn1hMin: 7, warn5mMin: 3 });
+  it('смена владельца: повторный засев с null — пороги прежнего не применяются (M1)', () => {
+    setCacheWarnThresholdsFromServer({ warn1hMin: 10, warn5mMin: 2 }); // первый владелец
+    setCacheWarnThresholdsFromServer(null); // /me второго пользователя — не настроено
+    expect(getCacheWarnThresholds()).toBeNull();
   });
+
 });
 
 describe('Применение личного порога к индикатору (F-3)', () => {
@@ -136,15 +136,35 @@ describe('CacheWarnDialog: поля и дефолты', () => {
   afterAll(() => uninstallFakeDom());
   // Диалог — портал в document.body: поля ищем обходом body, не контейнером mount
   const openDialog = () => mount(createElement(CacheWarnDialog, { onClose: () => {} }));
+  const body = () => (globalThis as { document: { body: unknown } }).document.body as never;
+  const walk = (x: { nodeType: number; nodeName: string; childNodes?: unknown[] }, f: (n: never) => void) => {
+    if (x.nodeType === 1) f(x as never);
+    for (const c of x.childNodes ?? []) walk(c as never, f);
+  };
   const inputValues = (): string[] => {
     const out: string[] = [];
-    const walk = (x: { nodeType: number; nodeName: string; childNodes?: unknown[] }) => {
-      if (x.nodeType === 1 && x.nodeName === 'INPUT') out.push(String(reactProps(x as never)?.value ?? ''));
-      for (const c of x.childNodes ?? []) walk(c as never);
-    };
-    walk((globalThis as { document: { body: unknown } }).document.body as never);
+    walk(body(), (x) => {
+      if ((x as { nodeName: string }).nodeName === 'INPUT') out.push(String(reactProps(x)?.value ?? ''));
+    });
     return out;
   };
+  const firstInput = (): never => {
+    let hit: never | null = null;
+    walk(body(), (x) => { if (!hit && (x as { nodeName: string }).nodeName === 'INPUT') hit = x; });
+    return hit!;
+  };
+  const buttonByLabel = (label: string): never => {
+    let hit: never | null = null;
+    walk(body(), (x) => {
+      if (!hit && (x as { nodeName: string }).nodeName === 'BUTTON' && textNodes(x).join('').includes(label)) hit = x;
+    });
+    return hit!;
+  };
+  const typeInto = (v: string) => {
+    const props = reactProps(firstInput());
+    (props!.onChange as (e: { target: { value: string } }) => void)({ target: { value: v } });
+  };
+  const visibleText = (): string => textNodes(body()).join(' ');
 
   it('не настроено — поля с дефолтами индикатора (5 мин и 1 мин)', () => {
     setCacheWarnThresholdsFromServer(null);
@@ -162,11 +182,63 @@ describe('CacheWarnDialog: поля и дефолты', () => {
 
   it('заголовок и кнопка сброса на месте', () => {
     setCacheWarnThresholdsFromServer(null);
-    const { root, container } = openDialog();
-    const body = (globalThis as { document: { body: unknown } }).document.body;
-    const text = [...textNodes(container), ...textNodes(body as never)].join(' ');
+    const { root } = openDialog();
+    const text = visibleText();
     expect(text).toContain('Когда предупреждать об остывании кэша');
     expect(text).toContain('Сбросить к дефолту');
+    root.unmount();
+  });
+
+  it('стор сам не подгружает /me: без внешнего посева — дефолты (M1)', async () => {
+    setCacheWarnThresholdsFromServer(null);
+    // Старый ensureCacheWarnLoaded сходил бы на /me сам и применил эти значения;
+    // теперь засев только снаружи (App.tsx), внутреннего запроса у стора нет.
+    mockRequest = () => Promise.resolve({ cacheWarnThresholds: { warn1hMin: 10, warn5mMin: 2 } });
+    const { root } = openDialog();
+    await act(async () => {});
+    expect(inputValues()).toEqual(['5', '1']);
+    root.unmount();
+  });
+
+  it('поздний засев стора — диалог показывает реальные значения до первого сохранения (M2)', () => {
+    setCacheWarnThresholdsFromServer(null);
+    const { root } = openDialog();
+    expect(inputValues()).toEqual(['5', '1']);
+    act(() => setCacheWarnThresholdsFromServer({ warn1hMin: 7, warn5mMin: 3 }));
+    expect(inputValues()).toEqual(['7', '3']);
+    root.unmount();
+  });
+
+  it('ручная правка поля — поздний засев её не затирает (флаг «правил сам»)', () => {
+    setCacheWarnThresholdsFromServer(null);
+    const { root } = openDialog();
+    act(() => typeInto('12'));
+    act(() => setCacheWarnThresholdsFromServer({ warn1hMin: 7, warn5mMin: 3 }));
+    expect(inputValues()).toEqual(['12', '1']);
+    root.unmount();
+  });
+
+  it('«5abc» не проходит локальную проверку: текст ошибки, PUT нет (T1)', async () => {
+    setCacheWarnThresholdsFromServer(null);
+    const calls: string[] = [];
+    mockRequest = (url) => { calls.push(url); return Promise.resolve({}); };
+    const { root } = openDialog();
+    act(() => typeInto('5abc'));
+    await act(async () => { (reactProps(buttonByLabel('Сохранить'))!.onClick as () => void)(); });
+    expect(visibleText()).toContain('Введите целые числа в минутах');
+    expect(calls.length).toBe(0);
+    root.unmount();
+  });
+
+  it('400 бэка: в диалоге виден текст ошибки ввода, а не общий сбой (T2)', async () => {
+    setCacheWarnThresholdsFromServer(null);
+    mockRequest = () => Promise.reject(
+      Object.assign(new Error('Порог часового кэша — 1–59 мин, 5-минутного — 1–4 мин'), { status: 400 }),
+    );
+    const { root } = openDialog();
+    await act(async () => { (reactProps(buttonByLabel('Сохранить'))!.onClick as () => void)(); });
+    expect(visibleText()).toContain('1–59');
+    expect(visibleText()).not.toContain('Не удалось сохранить');
     root.unmount();
   });
 });

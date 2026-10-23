@@ -50,6 +50,7 @@ import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './feature
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
 import { useWallFocusProject, resetWallOwner } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
+import { setCacheWarnThresholdsFromServer } from './lib/cacheWarnPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
@@ -497,6 +498,9 @@ export default function App() {
         // стор пуст и useSubsystem возвращает false (fail-closed по умолчанию).
         if (me.subsystems) setAllSubsystems(me.subsystems)
         setCtxThresholdsFromServer(me?.contextThresholds)
+        // Личные пороги предупреждения об остывании кэша (F-3) — тем же ответом /me:
+        // при смене пользователя старый набор перезаписывается, а null — сброс.
+        setCacheWarnThresholdsFromServer(me?.cacheWarnThresholds)
         // Стор дефолт-персоны/онбординга — от него живут приглашение первого входа
         // и резолвер аватаров
         if (me) setMeFromServer(me)

@@ -1,9 +1,11 @@
 // Личные per-user пороги «кэш промпта скоро остынет» (фича «Индикатор prompt cache и
-// перенос в новый чат», шаг F-3). Значения приходят с бэка через GET /api/auth/me
+// перенос в новый чат», шаг F-3). Значения сидирует App.tsx из ответа GET /api/auth/me
 // (поле cacheWarnThresholds, минуты; null — не настроено, применяются дефолты
-// EXPIRING_THRESHOLD_MS), сохраняются через PUT /api/auth/cache-thresholds
-// (пустое тело — сброс). Паттерн — contextPrefs.ts: модульное состояние +
-// подписки + useSyncExternalStore.
+// EXPIRING_THRESHOLD_MS) — тем же потоком, что и contextThresholds, поэтому смена
+// пользователя перезаписывает набор, а не оставляет старый. Собственного GET /me у
+// стора нет: модульный `_loaded` переживал бы logout и тянул пороги первого владельца.
+// Сохранение — PUT /api/auth/cache-thresholds (пустое тело — сброс). Паттерн —
+// contextPrefs.ts: модульное состояние + подписки + useSyncExternalStore.
 
 import { useSyncExternalStore } from 'react';
 import { request } from './offline';
@@ -28,21 +30,6 @@ function emit() {
 export function setCacheWarnThresholdsFromServer(t?: CacheWarnThresholds | null): void {
   _thresholds = t ?? null;
   emit();
-}
-
-// Прочитать /me однажды: индикатору порог нужен с холодного старта, до открытия
-// диалога. Флаг ставится до await — параллельных дублей запроса нет; при провале
-// (сеть) состояние остаётся дефолтным и следующая попыка повторит.
-let _loaded = false;
-export async function ensureCacheWarnLoaded(): Promise<void> {
-  if (_loaded) return;
-  _loaded = true;
-  try {
-    const me = await request<{ cacheWarnThresholds?: CacheWarnThresholds | null }>('/auth/me', { live: true });
-    setCacheWarnThresholdsFromServer(me?.cacheWarnThresholds ?? null);
-  } catch {
-    _loaded = false;
-  }
 }
 
 // Сохранить на сервере и применить локально. null — сброс (пустое тело `{}`).

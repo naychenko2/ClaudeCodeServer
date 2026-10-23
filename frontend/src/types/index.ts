@@ -2379,6 +2379,10 @@ export interface Me {
   // пришло в me-ответе. Контрактный сторож — subsystems.contract.test.ts.
   subsystems?: string[];
   contextThresholds?: { warnPct: number; dangerPct: number } | null;
+  // Личные пороги предупреждения об остывании prompt cache (фича «Индикатор prompt
+  // cache и перенос в новый чат», F-3): минуты; null — не настроено, работают
+  // дефолты индикатора. Сидирует App.tsx в тот же момент, что и contextThresholds.
+  cacheWarnThresholds?: { warn1hMin: number; warn5mMin: number } | null;
   defaultPersonaId?: string | null;
   needsOnboarding?: boolean;
   onboardingSessionId?: string | null;

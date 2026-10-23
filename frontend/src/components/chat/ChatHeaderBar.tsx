@@ -57,7 +57,7 @@ import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache'
 import { CacheDial, CacheDialPip, CacheSpokenText, cacheLeftText, cacheStaticLabel, dialFrac } from '../ui/CacheDial';
 import { useLiveNow } from '../../hooks/useLiveNow';
 import { liveState, type PromptCacheState } from '../../lib/promptCache';
-import { ensureCacheWarnLoaded, useCacheWarnThresholds } from '../../lib/cacheWarnPrefs';
+import { useCacheWarnThresholds } from '../../lib/cacheWarnPrefs';
 import { CacheWarnDialog } from './CacheWarnDialog';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
@@ -871,10 +871,9 @@ export function RingPillBadge(props: {
   // Кэш промпта (F-1b): состояние — целиком из хука F-1a, здесь ничего не пересчитывается.
   // Во время хода лента заморожена: якорь двигает только result. До первого result'а с
   // данными кэша state=null — циферблата и разделителя нет вовсе.
-  // Личный порог «остывает» (F-3): читается из /me однажды; не настроен — дефолты индикатора.
+  // Личный порог «остывает» (F-3): сидируется App.tsx из /auth/me; не настроен — дефолты
+  // индикатора. Стор подписочный — поздний засев сам обновит циферблат.
   const warn = useCacheWarnThresholds();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- загрузка однократна, стор сам сигналит изменение
-  useEffect(() => { void ensureCacheWarnLoaded(); }, []);
   const cache = usePromptCache(usePromptCacheItems(props.items, props.isWaiting), warn);
 
   // Живые данные локальной модели: хвост + поповер «Локальная модель». Хуки — до раннего

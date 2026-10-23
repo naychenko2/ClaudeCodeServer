@@ -168,3 +168,32 @@ public record DocsScopeInfo(
     // Роли, которыми можно красить значения выбора. Отдаёт сервер (как TypeGroups выше),
     // чтобы редактор типов строил палитру из ответа, а не хардкодом
     IReadOnlyList<string>? PropertyColors = null);
+
+// ---------- макеты фичи (каталог MockupCatalog, вертикаль Docs) ----------
+
+// Статус макета из шапки записки «**Статус:** …». Сериализуется строкой (camelCase):
+// "draft" | "approved" | "rejected". null — шапки нет или значение не распознано.
+public enum MockupStatus { Draft, Approved, Rejected }
+
+// Источник записи макета: шапка записки .md (Header) или linkedFiles задачи (LinkedFiles).
+// Сериализуется строкой: "header" | "linkedFiles". Шапка главнее: linkedFiles, уже
+// покрытый шапкой, не дублируется.
+public enum MockupSource { Header, LinkedFiles }
+
+// Файл макета (прототип .html, -tokens.md, …). Exists=false — «не в master»: путь пришёл
+// из linkedFiles, но файла на диске (основного дерева) ещё нет.
+public record MockupFile(string Path, bool Exists);
+
+// Запись каталога макетов фичи (MockupCatalog.Find). Path — записка .md (Source=Header)
+// или сам файл (Source=LinkedFiles). Title — H1 записки; у LinkedFiles — имя файла без
+// расширения. TaskId/AuthorPersonaId ставит контроллер (Main) — каталог их не знает.
+// ModifiedAt=null, если файла на диске нет.
+public record MockupEntry(
+    string Path,
+    string Title,
+    MockupStatus? Status,
+    IReadOnlyList<MockupFile> Files,
+    MockupSource Source,
+    DateTime? ModifiedAt,
+    string? TaskId = null,
+    string? AuthorPersonaId = null);

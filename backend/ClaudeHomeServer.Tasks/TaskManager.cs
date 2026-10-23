@@ -3,6 +3,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks.Journal;
+using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.Tasks;
@@ -391,9 +392,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             StepRef = Trimmed(req.StepRef),
             Lane = Trimmed(req.Lane),
             ReviewOf = req.ReviewOf,
+            PlanSteps = NormalizePlanStepsForRole(NormalizePlanSteps(req.PlanSteps), Trimmed(req.Role)),
             AwaitingHumanSince = req.AwaitingHumanSince,
             AwaitingHumanReason = Trimmed(req.AwaitingHumanReason),
             Verification = req.Verification,
+            Acceptance = AcceptanceRules.Normalize(req.Acceptance),
         };
         // Серия регулярной задачи начинается с её первого экземпляра
         if (task.Recurrence is not null) task.SeriesId = task.Id;
@@ -424,10 +427,25 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // review-признак резолвится вызывающей стороной (BoardColumnHelper.IsReview).
         DefectRules.EnsureNotClosedAtCreate(task, targetColumn);
         DefectRules.EnsureReproOnReview(task, targetColumn);
-        // Фича: fail-closed валидация featureId/role/verdict/reviewOf (до вставки в словарь,
-        // чтобы при отказе состояние менеджера не изменилось)
+        // Критерии приёмки: создать сразу закрытой задачу с критериями нельзя — свидетельств ещё нет
+        if (task.Status == TaskItemStatus.Done || targetColumn is { Category: TaskItemStatus.Done })
+            AcceptanceRules.EnsureClosable(task.Acceptance, task.Evidence);
+        // Фича: fail-closed валидация featureId/role/verdict/reviewOf/planSteps (до вставки в
+        // словарь, чтобы при отказе состояние менеджера не изменилось). При создании связь
+        // доработки с ревью (enforceReworkReviewOf) проверяется всегда.
         ValidateFeatureFields(task.FeatureId, task.Role, task.Verification?.Verdict,
-            task.ReviewOf, task.PersonaId, ownerId);
+            task.ReviewOf, task.PersonaId, ownerId,
+            planSteps: task.PlanSteps, enforceReworkReviewOf: true);
+        EnsureReturnReason(task.Verification);
+        // Инвариант (шов Александра 63a69b77 п.1, замечание 7): вердикт и исход дефекта — только
+        // у закрытой задачи, по образцу Update (при уходе из Done обнуляются и они, и CompletedAt).
+        // Без этого незакрытая задача получила бы вердикт, и опора «без CompletedAt остаются только
+        // идущие витки» (FeatureStepAccounting, порядок витков) перестала бы быть правдой.
+        if (task.Status != TaskItemStatus.Done)
+        {
+            task.Verification = null;
+            task.Outcome = null;
+        }
         _tasks[task.Id] = task;
         // created: эпик фичи — первая запись её журнала (журнал точный, только если
         // начинается с created; дочерние задачи фичи created не пишут).
@@ -466,15 +484,64 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     private static string? Trimmed(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    // Нормализация списка шагов плана (миноры 5+6): КОПИЯ (входной список не мутируем —
+    // вызывающий мог удержать ссылку) + трим StepRef/Title. Trim: «Б1» и « Б1» — один код, не
+    // дубль. Дубль stepRef — OrdinalIgnoreCase (после трима) в ValidateFeatureFields: «B1»/«b1»
+    // и «Б1»/«б1» — один шаг; Ordinal (не culture) — детерминизм и скорость.
+    // null в StepRef/Title оставляем null (не «»): валидатор их ловит (пустой stepRef, null
+    // title → 400, а не NRE). null — «не задано» (не менять); пустой список — «снять список».
+    private static List<PlannedStep>? NormalizePlanSteps(List<PlannedStep>? steps)
+    {
+        if (steps is null) return null;
+        var copy = new List<PlannedStep>(steps.Count);
+        foreach (var s in steps)
+        {
+            if (s is null) { copy.Add(null!); continue; }
+            copy.Add(new PlannedStep
+            {
+                StepRef = s.StepRef?.Trim(),
+                Title = s.Title?.Trim(),
+                Lane = s.Lane,
+            });
+        }
+        return copy;
+    }
+
+    // Инвариант «PlanSteps только у role=plan»: пустой список у НЕ-плана — артефакт (снят/не
+    // задан), нормализуем в null, чтобы не держать пустой список там, где его не ждём (без
+    // исключений). У плана пустой список — легитимный «снять список» (тест
+    // Update_ПланСЯвнымПустымСписком), оставляем не-null.
+    private static List<PlannedStep>? NormalizePlanStepsForRole(List<PlannedStep>? steps, string? role) =>
+        steps is { Count: 0 } && role != TaskRoles.Plan ? null : steps;
+
     // Валидация полей фичи (fail-closed, режим «Исполнение фичи»). Проверяет ЭФФЕКТИВНОЕ
     // состояние — то, что окажется на задаче после операции: Create передаёт только что
     // заполненную task, Update — слияние req и текущего состояния. ownerId — владелец задачи;
     // по нему сверяются ВСЕ ссылки (эпик и reviewOf), иначе чужой владелец читал бы разметку.
-    // Бросает InvalidOperationException с внятным текстом — вызывающая сторона превращает в 400.
+    // planSteps — эффективный список шагов плана (только у role=plan); enforceReworkReviewOf —
+    // проверять ли обязательную связь доработки с ревью (Create — всегда, Update — только если
+    // поле reviewOf меняют). roleBefore — роль ДО операции (Create — null, Update — текущая
+    // роль задачи); featureIdBefore — фича ДО операции (Create — null, Update — текущая фича
+    // задачи): гард role=merge срабатывает при СМЕНЕ роли на merge ИЛИ при переносе merge-задачи
+    // в другую фичу. Бросает InvalidOperationException с внятным текстом — вызывающая сторона
+    // превращает в 400.
     // Тихо отбрасывать неверное значение нельзя: агент не узнает, что разметка не легла.
+    // Причина возврата проверяется только у присланного вердикта: хранимый уже прошёл проверку при записи.
+    // Санирование (trim, пусто → null) — здесь, единственная точка для REST и MCP: пробелы вокруг
+    // допустимого значения не должны давать разный исход у двух дверей, а «   » — попадать в стор
+    private static void EnsureReturnReason(TaskVerification? verification)
+    {
+        if (verification is null) return;
+        verification.ReturnReason = string.IsNullOrWhiteSpace(verification.ReturnReason)
+            ? null : verification.ReturnReason.Trim();
+        TaskReturnReasons.Validate(verification.Verdict, verification.ReturnReason, verification.Notes);
+    }
+
     private void ValidateFeatureFields(
         string? featureId, string? role, string? verdict,
-        List<string>? reviewOf, string? personaId, string ownerId)
+        List<string>? reviewOf, string? personaId, string ownerId,
+        List<PlannedStep>? planSteps = null, bool enforceReworkReviewOf = false,
+        string? roleBefore = null, string? featureIdBefore = null)
     {
         // role — только из списка TaskRoles
         if (role is not null && !TaskRoles.All.Contains(role))
@@ -508,6 +575,27 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 throw new InvalidOperationException("Эпик принадлежит другому владельцу.");
             if (epic.Role != TaskRoles.Feature)
                 throw new InvalidOperationException($"Это не эпик фичи: у задачи «{featureId}» роль ≠ feature.");
+
+            // role=merge: фича обязана быть Ready — финал принят (тот же хелпер, что в проекторе).
+            // Гард Ready — для СОЗДАНИЯ и СМЕНЫ роли на merge (roleBefore != merge).
+            // Перенос уже существующей merge-задачи в другую фичу запрещён целиком: Done-merge
+            // из A в Ready-фичу B объявлял бы B смерженной чужой задачей (MergedAt чужой), а перенос
+            // в смерженную тихо открывал её (merged → merge_pending); штатных сценариев переноса нет.
+            // Частичный мерж/выкатка куска — без роли, с featureId эпика; «полный мерж без финала»
+            // человек оформляет закрытием эпика (правило закрытия даёт merged). Flag обхода не заводим.
+            // Update merge-задачи без смены роли И фичи (roleBefore == merge, featureId == featureIdBefore)
+            // — гард молчит.
+            var becameMerge = roleBefore is null || roleBefore != TaskRoles.Merge;
+            var mergeMoved = roleBefore == TaskRoles.Merge && featureId != featureIdBefore;
+            if (role == TaskRoles.Merge && mergeMoved)
+                throw new InvalidOperationException(
+                    "Роль merge привязана к своей фиче: перенос merge-задачи в другую фичу запрещён. "
+                    + "Завершённый или частичный мерж оформляйте новой задачей (без роли для куска работы) в нужной фиче.");
+            if (role == TaskRoles.Merge && becameMerge
+                && !FeatureProjector.IsFinalAccepted(FeatureFinal(featureId, ownerId)))
+                throw new InvalidOperationException(
+                    "Фича ещё не готова к мержу: финал не принят. Кусок работы (частичный мерж, выкатка части) "
+                    + "заводите без роли, с featureId эпика. Закрыть фичу без финала может человек — закрытием эпика.");
         }
 
         // reviewOf: каждая ссылка — на задачу той же фичи (featureId) и того же владельца
@@ -522,6 +610,67 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                     throw new InvalidOperationException($"reviewOf: задача «{refId}» принадлежит другому владельцу.");
                 if (target.FeatureId != featureId)
                     throw new InvalidOperationException($"reviewOf: задача «{refId}» из другой фичи.");
+            }
+        }
+
+        // PlanSteps: допустимы ТОЛЬКО у role=plan (у прочих ролей — 400); у плана — лимиты
+        // числа шагов, длины stepRef/title и уникальность stepRef (разрез §2, честный прогресс).
+        // Тупик роли (major 3): «role != plan → 400» срабатывал на ЛЮБОМ непустом списке, даже
+        // пустом [] — а [] ≠ null, и null в update значит «не менять», поэтому план со списком
+        // нельзя было ни перевести в step/rework, ни снять список. Правило: 400 только когда
+        // список НЕПУСТОЙ и роль не plan; пустой список — «снять список» (у плана — очищает,
+        // у не-плана — no-op). Смена роли с плана разрешена: при переводе на не-план список
+        // очищается (см. Update) — иначе план с planSteps застревал бы навсегда.
+        if (planSteps is not null && planSteps.Count > 0 && role != TaskRoles.Plan)
+            throw new InvalidOperationException(
+                "PlanSteps допустимы только у задачи-плана (role=plan).");
+        if (planSteps is not null)
+        {
+            if (planSteps.Count > PlannedStep.MaxSteps)
+                throw new InvalidOperationException(
+                    $"Слишком много шагов плана: {planSteps.Count} (лимит {PlannedStep.MaxSteps}).");
+            // Дубль stepRef — единый сравнитель кодов шагов (FeatureStepAccounting.StepKeyComparer,
+            // OrdinalIgnoreCase, после трима, минор 5): «B1»/«b1» и «Б1»/«б1» — один шаг.
+            var seen = new HashSet<string>(FeatureStepAccounting.StepKeyComparer);
+            foreach (var step in planSteps)
+            {
+                // Элемент-null из JSON (planSteps:[null]) — внятный 400, а не NRE (major 2)
+                if (step is null)
+                    throw new InvalidOperationException(
+                        "Шаг плана (planSteps) — null: ожидался объект {stepRef, title, lane}.");
+                if (string.IsNullOrWhiteSpace(step.StepRef))
+                    throw new InvalidOperationException("Код шага плана (stepRef) не может быть пустым.");
+                if (step.StepRef.Length > PlannedStep.MaxStepRefLength)
+                    throw new InvalidOperationException(
+                        $"Код шага плана «{step.StepRef}» длиннее {PlannedStep.MaxStepRefLength} символов.");
+                // Title — non-nullable string, но JSON кладёт null; null-title — 400, а не NRE (major 2)
+                if (step.Title is null)
+                    throw new InvalidOperationException("Название шага плана (title) не может быть null.");
+                if (step.Title.Length > PlannedStep.MaxTitleLength)
+                    throw new InvalidOperationException(
+                        $"Название шага плана «{step.StepRef}» длиннее {PlannedStep.MaxTitleLength} символов.");
+                if (!seen.Add(step.StepRef.Trim()))
+                    throw new InvalidOperationException($"Дублируется код шага плана «{step.StepRef}».");
+            }
+        }
+
+        // Rework: обязательная связь с ревью/проверкой/финалом той же фичи (fail-closed, §1).
+        // Create — всегда; Update — только если поле reviewOf меняют (старые доработки без
+        // reviewOf можно править, не трогая связь, и можно привязывать). Цикл reviewOf выше
+        // уже проверил существование/владельца/фичу каждой ссылки — здесь только роль цели.
+        if (enforceReworkReviewOf && role == TaskRoles.Rework)
+        {
+            if (reviewOf is null || reviewOf.Count == 0)
+                throw new InvalidOperationException(
+                    "Доработка (role=rework) обязана ссылаться на ревью/проверку/финал (reviewOf) той же фичи.");
+            foreach (var refId in reviewOf)
+            {
+                var target = GetById(refId);
+                if (target is not null
+                    && target.Role is not (TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final))
+                    throw new InvalidOperationException(
+                        $"Доработка (role=rework) ссылается на задачу «{refId}» с ролью «{target.Role}» — "
+                        + "ожидался review/qa/final той же фичи.");
             }
         }
     }
@@ -556,6 +705,14 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return candidate.Role == TaskRoles.Feature ? candidate : null;
     }
 
+    // Финал фичи: тот же выбор, что в проекторе (FeatureProjector.BuildCore:
+    // children.LastOrDefault(role=final)) в порядке GetByOwner. null — финала нет.
+    // Единая точка правды для гарда role=merge (ValidateFeatureFields) и ComputeState.
+    private TaskItem? FeatureFinal(string featureId, string ownerId) =>
+        GetByOwner(ownerId)
+            .Where(t => t.FeatureId == featureId)
+            .LastOrDefault(t => t.Role == TaskRoles.Final);
+
     // Следующее значение Order для новой задачи владельца — в конец глобального порядка.
     // Внутри колонки относительный порядок сохраняется (сортировка на доске по Order).
     private double NextOrder(string ownerId) =>
@@ -574,7 +731,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // в работу и снять пометку, а агенту мы обязаны отказать внятно — иначе «200 OK и
     // ничего не изменилось» (находка фикс-волны 4, мутация в TaskManagerTests).
     public TaskItem? Update(string id, UpdateTaskRequest req, BoardColumn? effectiveColumn = null,
-        bool isAgentCall = false)
+        bool isAgentCall = false, bool callerIsExecutor = false)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
@@ -649,6 +806,26 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         DefectRules.EnsureVerificationOnClose(effective);
         DefectRules.EnsureReproOnReview(effective, effectiveColumn);
 
+        // Критерии приёмки и свидетельства: эффективное состояние считаем до мутации (как гейты
+        // выше). Чат-исполнитель своей задачи критерии не меняет — иначе гейт обходится удалением
+        // критерия; постановщик и человек меняют свободно. Свидетельства добавляют все.
+        var newAcceptance = req.Acceptance is null ? null : AcceptanceRules.Normalize(req.Acceptance);
+        if (callerIsExecutor && newAcceptance is not null
+            && !AcceptanceRules.SameCriteria(newAcceptance, task.Acceptance))
+            throw new InvalidOperationException(
+                "Исполнитель не может менять критерии приёмки (acceptance): их задаёт постановщик. " +
+                "Свидетельства по критериям передавайте в evidence.");
+        var effAcceptance = newAcceptance ?? task.Acceptance;
+        var effEvidence = req.Evidence is null
+            ? AcceptanceRules.DropStaleEvidence(task.Evidence, task.Acceptance, effAcceptance)
+            : AcceptanceRules.MergeEvidence(
+                AcceptanceRules.DropStaleEvidence(task.Evidence, task.Acceptance, effAcceptance),
+                req.Evidence, effAcceptance);
+        // Критерий убрали — его свидетельство осиротело и отбрасывается
+        effEvidence = effEvidence.Where(e => effAcceptance.Any(c => c.Id == e.CriterionId)).ToList();
+        if (effective.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done)
+            AcceptanceRules.EnsureClosable(effAcceptance, effEvidence);
+
         // Фича: fail-closed валидация на ЭФФЕКТИВНОМ состоянии (req ?? task), до мутации.
         // null в req = не менять (берём из task), "" = сбросить (null) — та же семантика,
         // что и при применении полей ниже.
@@ -657,7 +834,32 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var effVerdict = (req.Verification ?? task.Verification)?.Verdict;
         var effReviewOf = req.ReviewOf is null ? task.ReviewOf : req.ReviewOf;
         var effPersonaId = req.PersonaId is null ? task.PersonaId : (req.PersonaId == "" ? null : req.PersonaId);
-        ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "");
+        var effPlanSteps = req.PlanSteps is null ? task.PlanSteps : NormalizePlanSteps(req.PlanSteps);
+        // Тупик роли (major 3): перевод плана на не-план очищает список — эффективный список
+        // считаем null, иначе валидатор видел бы «planSteps ≠ null + role ≠ plan» → ложный 400.
+        if (task.Role == TaskRoles.Plan && effRole != TaskRoles.Plan)
+            effPlanSteps = null;
+        // Смена роли плана на не-план И явный НЕПУСТОЙ planSteps в одном запросе — несовместимы:
+        // перевод очищает список (выше), поэтому присланный список исчезнет молча (тихая потеря;
+        // регресс: до дельты этот ход давал 400 «PlanSteps только у плана»). Отказываем внятным 400:
+        // сначала переведите задачу, потом задайте список, либо снимите список пустым []. Пустой []
+        // со сменой роли — допустим (снимает), поэтому проверка — только на непустой.
+        if (task.Role == TaskRoles.Plan && effRole != TaskRoles.Plan
+            && req.PlanSteps is not null && req.PlanSteps.Count > 0)
+            throw new InvalidOperationException(
+                "Смена роли на не-план и задание planSteps в одном запросе несовместимы: "
+                + "сначала переведите задачу, потом задайте список, либо снимите список пустым массивом.");
+        // Связь доработки с ревью (enforceReworkReviewOf) проверяем, когда: (а) меняют поле
+        // reviewOf, или (б) эффективная роль ТОЛЬКО СЕЙЧАС стала rework (задача раньше не была
+        // rework) — иначе агент создаёт step и tasks_update {role:"rework"} обходит гейт (major 1
+        // ревью): роль менялась свободно, а гейт срабатывал только при явном reviewOf. Старые
+        // доработки без reviewOf можно править, не трогая связь, и можно привязывать: role уже
+        // rework и reviewOf не меняют → enforce=false.
+        var enforceReworkReviewOf = req.ReviewOf is not null
+            || (effRole == TaskRoles.Rework && task.Role != TaskRoles.Rework);
+        ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "",
+            planSteps: effPlanSteps, enforceReworkReviewOf, roleBefore: task.Role, featureIdBefore: task.FeatureId);
+        EnsureReturnReason(req.Verification);
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
@@ -718,13 +920,24 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.Repro is not null) task.Repro = req.Repro;
         if (req.Verification is not null) task.Verification = req.Verification;
         if (req.Outcome is not null) task.Outcome = req.Outcome;
+        task.Acceptance = effAcceptance;
+        task.Evidence = effEvidence;
         // Фича (режим «Исполнение фичи»): null = не менять, "" = сбросить (строки);
         // ReviewOf — null = не менять, список = задать целиком; AwaitingHuman* — null = не менять
+        var roleBefore = task.Role;
         if (req.FeatureId is not null) task.FeatureId = Trimmed(req.FeatureId);
         if (req.Role is not null) task.Role = Trimmed(req.Role);
         if (req.StepRef is not null) task.StepRef = Trimmed(req.StepRef);
         if (req.Lane is not null) task.Lane = Trimmed(req.Lane);
         if (req.ReviewOf is not null) task.ReviewOf = req.ReviewOf;
+        // effPlanSteps уже нормализован (копия + трим) — храним его, не пере-нормализуем;
+        // пустой список у не-плана нормализуем в null (инвариант «PlanSteps только у role=plan»).
+        if (req.PlanSteps is not null) task.PlanSteps = NormalizePlanStepsForRole(effPlanSteps, effRole);
+        // Тупик роли (major 3): перевод плана на не-план очищает список шагов — иначе план с
+        // planSteps нельзя было бы перевести в step/rework (валидатор: «PlanSteps только у плана»).
+        // Снятие списка явным [] при сохранении роли plan — выше: остаётся пустым списком (не null).
+        if (roleBefore == TaskRoles.Plan && effRole != TaskRoles.Plan)
+            task.PlanSteps = null;
         if (req.AwaitingHumanSince is not null) task.AwaitingHumanSince = req.AwaitingHumanSince;
         if (req.AwaitingHumanReason is not null) task.AwaitingHumanReason = Trimmed(req.AwaitingHumanReason);
 
@@ -1276,12 +1489,16 @@ public record CreateTaskRequest(
     string? Lane = null,
     // Id задач, которые оценивает это ревью/проверка/финал; null — не задано
     List<string>? ReviewOf = null,
+    // Структурный список шагов плана (только у role=plan); null — не задано
+    List<PlannedStep>? PlanSteps = null,
     // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика
     DateTime? AwaitingHumanSince = null,
     string? AwaitingHumanReason = null,
     // Вердикт (TaskVerification.Verdict): accepted · accepted_with_remarks · returned · withdrawn;
     // null = старая семантика «проверено»
-    TaskVerification? Verification = null);
+    TaskVerification? Verification = null,
+    // Критерии приёмки (измеримые); пустой Id получает «cN». См. AcceptanceRules
+    List<AcceptanceCriterion>? Acceptance = null);
 
 public record CreateSubtaskRequest(string Title);
 
@@ -1343,8 +1560,15 @@ public record UpdateTaskRequest(
     string? Lane = null,
     // Id задач, которые оценивает это ревью/проверка/финал; null = не менять, список = задать целиком
     List<string>? ReviewOf = null,
+    // Структурный список шагов плана (только у role=plan); null = не менять, список = задать целиком
+    List<PlannedStep>? PlanSteps = null,
     // «Ждёт вас»: null = не менять, значение = задать
     DateTime? AwaitingHumanSince = null,
-    string? AwaitingHumanReason = null);
+    string? AwaitingHumanReason = null,
+    // Критерии приёмки: null = не менять, список = задать целиком (пустой — снять все).
+    // Исполнитель-чат своей задачи критерии не меняет (TaskManager.Update, callerIsExecutor)
+    List<AcceptanceCriterion>? Acceptance = null,
+    // Свидетельства: null = не менять, список = добавить/заменить по criterionId
+    List<AcceptanceEvidence>? Evidence = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

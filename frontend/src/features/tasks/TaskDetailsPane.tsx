@@ -27,6 +27,7 @@ import {
 } from './bits';
 import { useContextButton } from '../chatContext/useContextButton';
 import { TaskEditForm } from './TaskEditForm';
+import { AcceptanceBlock } from './AcceptanceBlock';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
 import { ensurePersonasLoaded, getPersonaById, personaLabel } from '../../lib/personas';
 
@@ -615,6 +616,14 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
         <div style={{ marginBottom: 26 }}>
           <SectionLabel style={{ marginBottom: 10 }}>Вердикт проверки</SectionLabel>
           <DefectVerificationBlock task={task} />
+        </div>
+      )}
+
+      {/* Критерии приёмки: без acceptance секции нет */}
+      {(task.acceptance?.length ?? 0) > 0 && (
+        <div style={{ marginBottom: 26 }}>
+          <SectionLabel style={{ marginBottom: 10 }}>Критерии приёмки</SectionLabel>
+          <AcceptanceBlock task={task} />
         </div>
       )}
 

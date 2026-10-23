@@ -1018,14 +1018,40 @@ public class TaskManagerTests : IDisposable
         var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
             FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
 
+        // Вердик живёт только у закрытой задачи (инвариант Create, шов 63a69b77 п.1) —
+        // поэтому закрытое ревью создаём сразу Done.
         var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
             FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [step.Id],
+            Status: TaskItemStatus.Done,
             Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted, Notes = "принято" }));
 
         review.FeatureId.Should().Be(epic.Id);
         review.Role.Should().Be(TaskRoles.Review);
         review.ReviewOf.Should().BeEquivalentTo([step.Id]);
         review.Verification!.Verdict.Should().Be(TaskVerdicts.Accepted);
+    }
+
+    // Инвариант (шов Александра 63a69b77 п.1, замечание 7): вердикт — только у закрытой задачи.
+    // Update при уходе из Done уже обнуляет Verification/Outcome; Create не должен принимать
+    // вердикт при статусе ≠ Done. Мутация «убрать обнуление» краснит этот тест.
+    [Fact]
+    public void Create_ВердиктПриНеЗакрытойЗадаче_Обнуляется()
+    {
+        var open = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            Status: TaskItemStatus.InProgress,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted, Notes = "проверка" }));
+
+        open.Status.Should().Be(TaskItemStatus.InProgress);
+        open.Verification.Should().BeNull();
+        open.Outcome.Should().BeNull();
+
+        // Другая половина инварианта: закрытая при создании — вердик сохранён (см.
+        // Create_ПоляФичиВалидны_Принята), CompletedAt зафиксирован.
+        var closed = _sut.Create(null, "u", new CreateTaskRequest("финал",
+            Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        closed.Verification!.Verdict.Should().Be(TaskVerdicts.Accepted);
+        closed.CompletedAt.Should().NotBeNull();
     }
 
     // Роли, привязанные к фиче (featureId обязателен): всё, кроме feature/cut/plan.
@@ -1053,12 +1079,214 @@ public class TaskManagerTests : IDisposable
     public void Create_ПривязаннаяРольСFeatureId_Принята()
     {
         var epic = CreateEpic("u");
+        // rework требует reviewOf (fail-closed, §1): создаём ревью той же фичи, на которое
+        // доработка будет ссылаться; прочие роли reviewOf не требуют (null).
+        var review = _sut.Create(null, "u", new CreateTaskRequest("t",
+            FeatureId: epic.Id, Role: TaskRoles.Review));
         foreach (var role in BoundRoles)
         {
-            var task = _sut.Create(null, "u", new CreateTaskRequest("t", FeatureId: epic.Id, Role: role));
+            List<string>? reviewOf = role == TaskRoles.Rework ? [review.Id] : null;
+            // merge-роль (Б-cl) требует принятого финала: финал в цикле создаём принятым
+            // (Done + accepted) — он последний, поэтому гард merge (LastOrDefault) его видит.
+            var req = new CreateTaskRequest("t",
+                FeatureId: epic.Id, Role: role, ReviewOf: reviewOf);
+            if (role == TaskRoles.Final)
+                req = req with { Status = TaskItemStatus.Done,
+                    Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted } };
+            var task = _sut.Create(null, "u", req);
             task.FeatureId.Should().Be(epic.Id);
             task.Role.Should().Be(role);
         }
+    }
+
+    // ─── Б-cl: гард role=merge (финал принят) ─────────────────────────────────────────────────
+    // role=merge (создание; update — только при СМЕНЕ роли на merge) при фиче НЕ Ready
+    // (финал не принят) → 400. Update merge-задачи без смены роли — гард не срабатывает.
+
+    // 7a. tasks_create role=merge, финал НЕ принят ⇒ 400 с текстом.
+    [Fact]
+    public void Create_Merge_ФиналНеПринят_400()
+    {
+        var epic = CreateEpic("u");
+        // Финал есть, но returned (не принят).
+        _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Returned }));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Фича ещё не готова к мержу*")
+            .WithMessage("*финал не принят*");
+    }
+
+    // 7b. tasks_create role=merge, финал принят ⇒ ок.
+    [Fact]
+    public void Create_Merge_ФиналПринят_Ок()
+    {
+        var epic = CreateEpic("u");
+        _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+
+        var task = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        task.Role.Should().Be(TaskRoles.Merge);
+        task.FeatureId.Should().Be(epic.Id);
+    }
+
+    // 7c. update: смена роли НА merge при непринятом финале ⇒ гард.
+    [Fact]
+    public void Update_РольНаMerge_Гард()
+    {
+        var epic = CreateEpic("u");
+        // Обычная задача фичи (роль step), финала нет.
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "Ш1"));
+
+        var act = () => _sut.Update(step.Id, new UpdateTaskRequest(Role: TaskRoles.Merge));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Фича ещё не готова к мержу*");
+    }
+
+    // 7d. update merge-задачи БЕЗ смены роли И фичи ⇒ гард молчит, даже если финал НЕ принят.
+    //     Мутация «гард на любом update merge» (убрать becameMerge/mergeMoved) красит: финал
+    //     разпринят, а гард всё равно сработал бы.
+    [Fact]
+    public void Update_Merge_БезСменыРольИФичи_ГардМолчит()
+    {
+        var epic = CreateEpic("u");
+        // Финал принят → merge-задачу можно создать.
+        var final = _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        // «Разпринимаем» финал (verdict → returned): Status=Done, но вердикт не accepted → не принят.
+        _sut.Update(final.Id, new UpdateTaskRequest(
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Returned }));
+
+        // Update merge-задачи БЕЗ смены роли и фичи (только заголовок) — гард молчит,
+        // хотя финал уже не принят: роль не стала merge, фича не перенесена.
+        var updated = _sut.Update(merge.Id, new UpdateTaskRequest(Title: "мерж (правка)"));
+
+        updated.Role.Should().Be(TaskRoles.Merge);
+        updated.FeatureId.Should().Be(epic.Id);
+    }
+
+    // 7e. update merge-задачи: ПЕРЕНОС в другую фичу запрещён (целевая фича не Ready) ⇒ 400.
+    [Fact]
+    public void Update_Merge_ПереносВДругуюФичу_ФиналНеПринят_400()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        _sut.Create(null, "u", new CreateTaskRequest("финал A",
+            FeatureId: epicA.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epicA.Id, Role: TaskRoles.Merge));
+
+        var act = () => _sut.Update(merge.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Роль merge привязана к своей фиче*");
+    }
+
+    // 7f (П5). перенос merge-задачи в Ready-фичу тоже запрещён: иначе Done-merge из A объявил бы B
+    //     смерженной чужой задачей. Мутация «снять запрет (mergeMoved)» красит.
+    [Fact]
+    public void Update_Merge_ПереносВReadyФичу_400()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        _sut.Create(null, "u", new CreateTaskRequest("финал A",
+            FeatureId: epicA.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        _sut.Create(null, "u", new CreateTaskRequest("финал B",
+            FeatureId: epicB.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epicA.Id, Role: TaskRoles.Merge));
+
+        var act = () => _sut.Update(merge.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Роль merge привязана к своей фиче*");
+        _sut.GetById(merge.Id)!.FeatureId.Should().Be(epicA.Id, "отказ не меняет фичу задачи");
+    }
+
+    // 7f2 (П9). перенос merge-задачи в уже смерженную фичу ⇒ 400 (иначе merged → merge_pending).
+    [Fact]
+    public void Update_Merge_ПереносВСмерженнуюФичу_400()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        foreach (var epic in new[] { epicA, epicB })
+            _sut.Create(null, "u", new CreateTaskRequest("финал",
+                FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+                Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        _sut.Create(null, "u", new CreateTaskRequest("мерж B",
+            FeatureId: epicB.Id, Role: TaskRoles.Merge, Status: TaskItemStatus.Done));
+        var mergeA = _sut.Create(null, "u", new CreateTaskRequest("мерж A",
+            FeatureId: epicA.Id, Role: TaskRoles.Merge));
+
+        var act = () => _sut.Update(mergeA.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Роль merge привязана к своей фиче*");
+    }
+
+    // 7f3. отвязка merge-задачи (featureId:"") ⇒ 400 (роль требует featureId).
+    [Fact]
+    public void Update_Merge_Отвязка_400()
+    {
+        var epic = CreateEpic("u");
+        _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.Done,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+        var merge = _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        var act = () => _sut.Update(merge.Id, new UpdateTaskRequest(FeatureId: ""));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*требует featureId*");
+    }
+
+    // 7f4. перенос НЕ-merge задачи между фичами — как раньше, ок.
+    [Fact]
+    public void Update_НеMerge_ПереносВДругуюФичу_Ок()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epicA.Id, Role: TaskRoles.Step, StepRef: "Ш1"));
+
+        var updated = _sut.Update(step.Id, new UpdateTaskRequest(FeatureId: epicB.Id));
+
+        updated!.FeatureId.Should().Be(epicB.Id);
+    }
+
+    // 7g. гард (4-й потребитель «правды о принятии»): финал Status != Done (InProgress) +
+    //     вердикт accepted ⇒ «не принят» (IsFinalAccepted) ⇒ гард срабатывает. Мутация
+    //     «гард без проверки Status == Done» (принят по вердикту) красит.
+    [Fact]
+    public void Create_Merge_ФиналInProgress_ПринятыйВердикт_Гард()
+    {
+        var epic = CreateEpic("u");
+        // Финал: вердикт accepted, но статус InProgress (не Done) → по единой правде «не принят».
+        _sut.Create(null, "u", new CreateTaskRequest("финал",
+            FeatureId: epic.Id, Role: TaskRoles.Final, Status: TaskItemStatus.InProgress,
+            Verification: new TaskVerification { Verdict = TaskVerdicts.Accepted }));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("мерж",
+            FeatureId: epic.Id, Role: TaskRoles.Merge));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Фича ещё не готова к мержу*");
     }
 
     [Fact]
@@ -1195,5 +1423,377 @@ public class TaskManagerTests : IDisposable
 
         updated.FeatureId.Should().Be(epic.Id, "featureId не пересчитывается при Update");
         updated.Role.Should().Be(TaskRoles.Step, "role тоже не меняется");
+    }
+
+    // ─── PlanSteps: структурный список шагов плана (честный прогресс фичи) ─────────
+    // PlanSteps — только у role=plan; stepRef непуст/уникален, лимиты числа шагов и длины.
+    // null = не менять, список = задать целиком (как у reviewOf).
+
+    [Fact]
+    public void Create_PlanStepsУНеПлана_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "шаг" }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*только у задачи-плана*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsУПлана_Принята()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "бэк-шаг", Lane = "бэк" },
+                new PlannedStep { StepRef = "F1", Title = "фронт-шаг", Lane = "фронт" },
+            ]));
+
+        plan.PlanSteps.Should().HaveCount(2);
+        plan.PlanSteps![0].StepRef.Should().Be("B1");
+        plan.PlanSteps[0].Title.Should().Be("бэк-шаг");
+        plan.PlanSteps[0].Lane.Should().Be("бэк");
+        plan.PlanSteps[1].StepRef.Should().Be("F1");
+        plan.PlanSteps[1].Lane.Should().Be("фронт");
+    }
+
+    [Fact]
+    public void Create_PlanStepsДубльStepRef_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                // Единый сравнитель кодов шагов: «B1» и «b1» — один шаг (не два разных).
+                new PlannedStep { StepRef = "B1", Title = "а" },
+                new PlannedStep { StepRef = "b1", Title = "б" },
+            ]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Дублируется код шага*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsСлишкомМного_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var steps = Enumerable.Range(0, PlannedStep.MaxSteps + 1)
+            .Select(i => new PlannedStep { StepRef = $"S{i}", Title = "t" }).ToList();
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan, PlanSteps: steps));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*Слишком много шагов*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsДлинныйStepRef_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = new string('x', PlannedStep.MaxStepRefLength + 1), Title = "t" }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage($"*длиннее {PlannedStep.MaxStepRefLength}*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsДлинныйTitle_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = new string('x', PlannedStep.MaxTitleLength + 1) }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage($"*длиннее {PlannedStep.MaxTitleLength}*");
+    }
+
+    [Fact]
+    public void Create_PlanStepsПустойStepRef_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "", Title = "t" }]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*stepRef) не может быть пустым*");
+    }
+
+    [Fact]
+    public void Update_PlanStepsNullНеМеняет_СписокЗадаёт()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "а" }]));
+
+        // null = не менять: список остаётся
+        var unchanged = _sut.Update(plan.Id, new UpdateTaskRequest(Title: "переименовали"))!;
+        unchanged.PlanSteps.Should().HaveCount(1);
+        unchanged.PlanSteps![0].StepRef.Should().Be("B1");
+
+        // список = задать целиком
+        var set = _sut.Update(plan.Id, new UpdateTaskRequest(
+            PlanSteps: [new PlannedStep { StepRef = "F1", Title = "б", Lane = "фронт" }]))!;
+        set.PlanSteps.Should().HaveCount(1);
+        set.PlanSteps![0].StepRef.Should().Be("F1");
+        set.PlanSteps[0].Title.Should().Be("б");
+        set.PlanSteps[0].Lane.Should().Be("фронт");
+    }
+
+    [Fact]
+    public void Персистентность_PlanSteps_ПереживаетСохранениеИЧтение()
+    {
+        var epic = _sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "бэк", Lane = "бэк" },
+                new PlannedStep { StepRef = "F1", Title = "фронт", Lane = "фронт" },
+            ]));
+        _sut.Flush();
+
+        var reloaded = new TaskManager(BuildConfig(_dir)).GetById(plan.Id)!;
+
+        reloaded.PlanSteps.Should().HaveCount(2);
+        reloaded.PlanSteps![0].StepRef.Should().Be("B1");
+        reloaded.PlanSteps[0].Title.Should().Be("бэк");
+        reloaded.PlanSteps[0].Lane.Should().Be("бэк");
+        reloaded.PlanSteps[1].StepRef.Should().Be("F1");
+        reloaded.PlanSteps[1].Lane.Should().Be("фронт");
+    }
+
+    [Fact]
+    public void Персистентность_СтараяЗадачаБезPlanSteps_ЧитаетсяСNull()
+    {
+        var task = _sut.Create(null, "u", new CreateTaskRequest("старая"));
+        _sut.Flush();
+
+        var reloaded = new TaskManager(BuildConfig(_dir)).GetById(task.Id)!;
+        reloaded.PlanSteps.Should().BeNull();
+    }
+
+    // ─── Rework ⇒ reviewOf: обязательная связь доработки с review/qa/final той же фичи ──
+    // Fail-closed: при создании — всегда; при update — только если поле reviewOf меняют
+    // (старые доработки без reviewOf можно править, не трогая связь, и можно привязывать).
+
+    [Fact]
+    public void Create_ReworkБезReviewOf_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epic.Id, Role: TaskRoles.Rework));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*reviewOf*");
+    }
+
+    [Fact]
+    public void Create_ReworkСReviewOfНаReviewТойЖеФичи_Принята()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [step.Id]));
+
+        var rework = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epic.Id, Role: TaskRoles.Rework, ReviewOf: [review.Id]));
+
+        rework.ReviewOf.Should().BeEquivalentTo([review.Id]);
+    }
+
+    [Fact]
+    public void Create_ReworkСReviewOfНаStep_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epic.Id, Role: TaskRoles.Rework, ReviewOf: [step.Id]));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*review/qa/final*");
+    }
+
+    [Fact]
+    public void Create_ReworkСReviewOfДругойФичи_Отказ()
+    {
+        var epicA = CreateEpic("u", "фича A");
+        var epicB = CreateEpic("u", "фича B");
+        var reviewB = _sut.Create(null, "u", new CreateTaskRequest("ревью B",
+            FeatureId: epicB.Id, Role: TaskRoles.Review));
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epicA.Id, Role: TaskRoles.Rework, ReviewOf: [reviewB.Id]));
+
+        // reviewOf из другой фичи — 400 (общая проверка reviewOf, не только роль цели)
+        act.Should().Throw<InvalidOperationException>().WithMessage("*из другой фичи*");
+    }
+
+    [Fact]
+    public void Update_ReworkБезИзмененияReviewOf_Ок()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [step.Id]));
+        var rework = _sut.Create(null, "u", new CreateTaskRequest("доработка",
+            FeatureId: epic.Id, Role: TaskRoles.Rework, ReviewOf: [review.Id]));
+
+        // Правим только заголовок, reviewOf не трогаем — 400 быть не должно
+        var updated = _sut.Update(rework.Id, new UpdateTaskRequest(Title: "доработка v2"))!;
+        updated.ReviewOf.Should().BeEquivalentTo([review.Id]);
+    }
+
+    [Fact]
+    public void Update_ReworkСПривязкойReviewOf_Ок()
+    {
+        var epic = CreateEpic("u");
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review));
+        // Старая доработка без reviewOf: создаём как step (role не требует связи) и меняем
+        // роль на rework, не трогая reviewOf — имитация задачи, заведённой до правила.
+        var orphan = _sut.Create(null, "u", new CreateTaskRequest("сирота",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+        orphan.Role = TaskRoles.Rework;
+
+        // Привязываем reviewOf — связь валидна, 400 быть не должно
+        var linked = _sut.Update(orphan.Id, new UpdateTaskRequest(ReviewOf: [review.Id]))!;
+        linked.Role.Should().Be(TaskRoles.Rework);
+        linked.ReviewOf.Should().BeEquivalentTo([review.Id]);
+    }
+
+    // ─── Major 1: обход fail-closed через смену роли ──────────────────────────────
+    // Агент создаёт step, затем tasks_update {role:"rework"} — доработка без связи. Гейт
+    // срабатывает, когда эффективная роль ТОЛЬКО СЕЙЧАС стала rework (задача раньше не была
+    // rework) ИЛИ меняют reviewOf. Старая rework (role уже rework, reviewOf не трогаем) — ок.
+
+    [Fact]
+    public void Update_ReworkЧерезСменуРоли_БезReviewOf_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+
+        // step → rework без reviewOf: раньше гейт не срабатывал (role менялся свободно,
+        // enforce зависел только от явного reviewOf) — теперь 400
+        var act = () => _sut.Update(step.Id, new UpdateTaskRequest(Role: TaskRoles.Rework));
+
+        act.Should().Throw<InvalidOperationException>().WithMessage("*reviewOf*");
+    }
+
+    [Fact]
+    public void Update_ReworkЧерезСменуРоли_СReviewOf_Ок()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "B1", Lane: "бэк"));
+        var review = _sut.Create(null, "u", new CreateTaskRequest("ревью",
+            FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [step.Id]));
+
+        // step → rework с reviewOf на review той же фичи: связь валидна, 400 быть не должно
+        var rework = _sut.Update(step.Id, new UpdateTaskRequest(
+            Role: TaskRoles.Rework, ReviewOf: [review.Id]))!;
+        rework.Role.Should().Be(TaskRoles.Rework);
+        rework.ReviewOf.Should().BeEquivalentTo([review.Id]);
+    }
+
+    [Fact]
+    public void Update_СтараяRework_ПравкаДругогоПоля_Ок()
+    {
+        var epic = CreateEpic("u");
+        // Старая доработка без reviewOf (создана до правила): имитируем прямым полем
+        var orphan = _sut.Create(null, "u", new CreateTaskRequest("сирота",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+        orphan.Role = TaskRoles.Rework;
+
+        // Правим только заголовок: role уже rework, reviewOf не трогаем → 400 быть не должно
+        var updated = _sut.Update(orphan.Id, new UpdateTaskRequest(Title: "доработка v2"))!;
+        updated.Role.Should().Be(TaskRoles.Rework);
+        updated.ReviewOf.Should().BeNull();
+    }
+
+    // ─── Major 3: тупик роли у плана ────────────────────────────────────────────────
+    // План с planSteps: (а) перевод на не-план разрешён и очищает список; (б) явный []
+    // снимает список при сохранении роли plan.
+
+    [Fact]
+    public void Update_ПланНаStep_СписокОчищается_Ок()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "бэк" }]));
+
+        // план → step: раньше 400 «PlanSteps только у плана» (список ≠ null); теперь ок,
+        // список очищается (иначе план с planSteps застревал бы навсегда)
+        var step = _sut.Update(plan.Id, new UpdateTaskRequest(Role: TaskRoles.Step))!;
+        step.Role.Should().Be(TaskRoles.Step);
+        step.PlanSteps.Should().BeNull();
+    }
+
+    [Fact]
+    public void Update_ПланСЯвнымПустымСписком_СнимаетСписок_Ок()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "бэк" }]));
+
+        // Явный [] (не null) при сохранении роли plan — «снять список»: 400 быть не должно
+        var cleared = _sut.Update(plan.Id, new UpdateTaskRequest(PlanSteps: []))!;
+        cleared.Role.Should().Be(TaskRoles.Plan);
+        cleared.PlanSteps.Should().BeEmpty();
+    }
+
+    // ─── Major 1 (регресс): смена роли плана на не-план + явный НЕПУСТОЙ planSteps ───────
+    // До дельты этот ход давал 400; дельта убрала отказ, и присланный список исчезал молча
+    // (200, planSteps=null). Теперь — внятный 400: сначала переведите, потом задайте список,
+    // либо снимите список пустым [].
+    [Fact]
+    public void Update_ПланНаStep_СЯвнымСписком_Отказ()
+    {
+        var epic = CreateEpic("u");
+        var plan = _sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "бэк" }]));
+
+        // план → step + явный непустой planSteps: несовместимо — 400, список не теряется молча
+        var act = () => _sut.Update(plan.Id, new UpdateTaskRequest(
+            Role: TaskRoles.Step,
+            PlanSteps: [new PlannedStep { StepRef = "B2", Title = "новый шаг" }]));
+
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Смена роли на не-план*");
+    }
+
+    // ─── Минор: пустой PlanSteps=[] у не-плана нормализуется в null ───────────────────────
+    // Инвариант «PlanSteps только у role=plan» без исключений: пустой список у не-плана —
+    // артефакт (снят/не задан), храним null, а не пустой список.
+    [Fact]
+    public void Create_ПустойPlanStepsУНеПлана_НормализуетсяВNull()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step,
+            PlanSteps: []));
+
+        step.PlanSteps.Should().BeNull("пустой список у не-плана — null, а не []");
+    }
+
+    [Fact]
+    public void Update_НеПланСЯвнымПустымСписком_НормализуетсяВNull()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+
+        // не-план + явный [] (роль не меняется) — список снимается в null, не остаётся []
+        var updated = _sut.Update(step.Id, new UpdateTaskRequest(PlanSteps: []))!;
+        updated.PlanSteps.Should().BeNull("пустой список у не-плана — null, а не []");
     }
 }

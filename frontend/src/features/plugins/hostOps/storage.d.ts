@@ -21,13 +21,15 @@ export type StorageCallResult =
   | { ok: true; data: Record<string, unknown> }
   | { ok: false; error: { code: StorageErrorCode; message: string } };
 
+// store — готовый Storage или провайдер (): хост передаёт ленивый getter, чтобы
+// бросающий геттер window.localStorage разбирался внутри модуля (F-д6).
 export interface StorageCallInput {
   op: StorageOp;
   args: Record<string, unknown>;
   granted: string[];
   ownerId: string;
   pluginId: string;
-  store: StorageLike;
+  store: StorageLike | (() => StorageLike);
 }
 
 export function handleStorageCall(input: StorageCallInput): StorageCallResult;

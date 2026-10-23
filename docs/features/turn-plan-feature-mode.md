@@ -76,7 +76,13 @@
 - `StepsAccepted`, `StepsTotal` — счётчик шагов: принятые (`Done`) / все (из `StepChains`).
 - `LastActivityAt` — последняя активность: максимум по `CompletedAt`/`ClaudeStartedAt` задач фичи
   (время мержа — это `CompletedAt` merge-задачи, уже учтено).
-- `Closed` — закрыта: merge-задача `Done` или эпик `Done`.
+- `Closed` — закрыта: `State` = `merged` или `closed`, где `merged ⇔ merge Done ∧ (финал принят ∨ эпик Done)`,
+  `closed ⇔ эпик Done ∧ ¬merged`. Частичный мерж (merge `Done`, финал не принят, эпик открыт) фичу
+  НЕ закрывает (инцидент 21.10) — это задача без роли `merge`-гарда, а не «смержена».
+  Гард записи (`TaskManager.ValidateFeatureFields`, REST и MCP, ошибка → 400): `role=merge` ставится только
+  при `Ready` фичи (финал принят); перенос merge-задачи в другую фичу запрещён («Роль merge привязана к своей
+  фиче»), иначе чужой Done-merge смерживал бы Ready-фичу или открывал смерженную; частичный мерж/выкатка
+  куска — задача без роли с `featureId` эпика. Подробнее — ADR-031, §«POST …/merge».
 - `Summary` — итог смерженной фичи: только у закрытой, иначе `null` (`MergedAt`,
   `DurationMinutes`, `Tasks`, `Steps`, `Loops`).
 

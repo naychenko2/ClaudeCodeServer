@@ -420,6 +420,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // toolUseId вызовов Agent/Task c run_in_background и Workflow — ждём их tool_result,
         // чтобы достать id фоновой задачи
         public readonly HashSet<string> BgLaunchCandidates = [];
+        // toolUseId вызовов основного агента, которые вообще умеют запустить фоновую задачу
+        // (Agent/Task/SendMessage/Workflow). Текстовые маркеры запуска ищем только в ИХ
+        // tool_result: в выводе Bash/PowerShell/Read те же строки бывают просто текстом
+        // (дамп чужого транскрипта) и давали ложный pending на весь прогон (бой, 15.10).
+        // Доступ под lock (PendingBg)
+        public readonly HashSet<string> BgCapableToolUses = [];
         // toolUseId фоновых задач, которые и правда АГЕНТЫ: сюда пишет запуск Agent/Task с
         // run_in_background и Workflow (HandleAssistantToolsAsync), распознанный маркер запуска
         // в tool_result (TrackBgLaunch) и task_started с непустым subagent_type. Только по этому
@@ -435,6 +441,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // контент после TurnDone означает, что продолжение началось. Его result не должен
         // завершать пользовательский ход (см. SkipResults)
         public volatile bool ContinuationActive;
+        // result хода отдан, но stdin оставлен открытым: в очереди CLI лежит не впитанная
+        // ходом доставка (уведомление/отчёт субагента), и CLI сейчас начнёт с неё
+        // ход-продолжение (MainTranscriptTailer.HasQueuedDeliveries). Ход при этом не ждёт
+        // смерти процесса — как при доживающих фоновых агентах
+        public volatile bool HeldForQueuedDelivery;
         // uuid user-сообщения, записанного в stdin, эхо которого (--replay-user-messages) ещё не
         // пришло. Пока оно не null, любой result — чужой: на resume CLI сначала доигрывает
         // «осиротевший» task-notification прошлой сессии и выдаёт на него result (numTurns=0),
@@ -544,6 +555,27 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
 
+        // Живы ли фоновые агенты прогона (см. ILlmSessionAdapter.HasLiveBgAgents) — тот же учёт,
+        // что у HasTrackedBg, но fail-closed: нераспознанный запуск (PendingBgUnknown) считается
+        // агентом. Плюс ход-продолжение: идущее (ContinuationActive) или ещё возможное — агенты
+        // в прогоне были, ход закончен, а stdin открыт (CLI ответит на task_notification
+        // завершившегося агента ходом, которого мы не подавали). Закрытый stdin (продолжение
+        // отыграно) или смерть процесса снимают признак.
+        public bool HasLiveBgAgents
+        {
+            get
+            {
+                lock (PendingBg)
+                {
+                    var agents = !BgTasksEmptySnapshot
+                        && (PendingBgUnknown || PendingBg.Any(kv => AgenticBgToolUses.Contains(kv.Value)));
+                    var continuation = ContinuationActive
+                        || (TurnDone && !StdinClosed && AgenticBgToolUses.Count > 0);
+                    return agents || continuation;
+                }
+            }
+        }
+
         // Последнее опубликованное наружу присутствие фона — гейт события bg_agents_presence:
         // список чатов интересует только СМЕНА состояния, а не каждая задача. Битовая пара
         // (1 — агенты, 2 — фоновая команда), поле (а не свойство) — читается-пишется через
@@ -609,6 +641,21 @@ public class ClaudeSession : ILlmSessionAdapter
     public bool HasPendingBg
     {
         get { var run = _run; return run is not null && run.HasPendingBg; }
+    }
+
+    // Живые фоновые агенты прогона — держат делегированность прогона (см. ILlmSessionAdapter.HasLiveBgAgents).
+    // Workflow-агенты — независимые процессы и переживают смерть CLI (NoteOwnerProcessGone): после
+    // финализации прогона _run пуст, а они продолжают ходить в MCP с заголовком этого чата. Поэтому
+    // живой ватчер Workflow держит признак и без прогона — иначе делегированность прогона снялась бы
+    // смертью процесса, и агенты делегированного хода пошли бы в admin-ручки с глубиной 0 (ревью F1-10, B1)
+    public bool HasLiveBgAgents
+    {
+        get
+        {
+            var run = _run;
+            if (run is not null && run.HasLiveBgAgents) return true;
+            lock (_workflowWatchers) return _workflowWatchers.Any(w => w.IsAlive);
+        }
     }
 
     // Процесс завершил ход (result), но намеренно держат живым с открытым stdin: CLI ведёт
@@ -1001,6 +1048,26 @@ public class ClaudeSession : ILlmSessionAdapter
                 provider.Key);
         return false;
     }
+
+    // Имена окружения хука потребителей (читает скрипт в ClaudeRuntimeSettings). Префикс CCS_ вне
+    // списка ANTHROPIC_*/CLAUDE_*, который сервер вычищает на запуске.
+    internal const string ConsumersHookApiEnv = "CCS_HOOK_API";
+    internal const string ConsumersHookProjectEnv = "CCS_HOOK_PROJECT";
+    internal const string ConsumersHookTokenEnv = "CCS_HOOK_TOKEN";
+    internal const string ConsumersHookTokenPlaceholder = "ccs-hook-token-placeholder";
+
+    // Настоящий сервисный токен вместо заглушки — уже после сигнатуры, только новому процессу.
+    private void BindConsumersHookToken(IDictionary<string, string> env)
+    {
+        if (_codeGraphMcp is null || !env.ContainsKey(ConsumersHookTokenEnv)) return;
+        env[ConsumersHookTokenEnv] = _codeGraphMcp.TokenFactory();
+    }
+
+    // Хук потребителей доедет до процесса CLI: хост не гасит хуки, не песочница и есть http-адрес API
+    // (те же условия, что у env хука в RunTurnAsync). Иначе потребителей несёт хвост первого хода.
+    private bool ConsumersHookDelivered =>
+        ClaudeRuntimeSettings.ConsumersHookRuns(_launcher)
+        && _codeGraphMcp is { } g && g.ApiUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase);
 
     private string GatewayBaseUrl(string turnId) => $"{_llmGatewayApiUrl!.TrimEnd('/')}/gw/t/{turnId}/llm";
 
@@ -2983,12 +3050,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // _stdinLock: между внешней проверкой и закрытием мог проскочить TrySubmitTurn
     // (TurnDone=false), и безусловное закрытие оставило бы свежий ход с мёртвым stdin
     // (permission-ответы не записать, ход умер бы по часовому IdleTimeout)
+    // Недоставленное в очереди CLI (поставлено посреди продолжения) — следующее продолжение
+    // начнётся сразу за этим result, ему тоже нужен stdin
     private void CloseStdinIfIdle(CliRun run)
     {
+        var queued = _transcriptTailer?.HasQueuedDeliveries() == true;
         _stdinLock.Wait();
         try
         {
-            if (!run.TurnDone || run.HasPendingBg || run.StdinClosed) return;
+            if (!run.TurnDone || run.HasPendingBg || queued || run.StdinClosed) return;
             run.StdinClosed = true;
             run.Process.StandardInput.Close();
         }
@@ -3032,6 +3102,7 @@ public class ClaudeSession : ILlmSessionAdapter
             Interlocked.Exchange(ref run.LastTurnSeq, turnSeq);
             run.TurnTcs = CliRun.NewTcs();
             run.TurnDone = false;
+            run.HeldForQueuedDelivery = false;
             run.TurnGotEvent = false;       // новый ход — событий прогона ещё не было
             // Факт внутренних повторов CLI — per-turn: паспорт хода отражает только ЭТОТ ход,
             // а не накопленное с момента старта процесса (new-process стартует с нулями сам)
@@ -3230,12 +3301,17 @@ public class ClaudeSession : ILlmSessionAdapter
         // Режим прав у claude CLI задаётся флагом --permission-mode (значения: default,
         // acceptEdits, plan, auto, dontAsk, bypassPermissions), а НЕ --mode (такого флага нет).
         // После одобрения плана один ход выполняем без plan, чтобы Claude реализовал, а не планировал заново.
+        // Делегированный ход (agentDepth >= 1: chats_send, ход процесса flow:*) этим ходом не
+        // бывает: он идёт с явным режимом чата (для процесса — режимом блока) и признак не
+        // тратит — «реализуй одобренный план», обогнанный им, получит его следом. Без флага
+        // CLI взял бы defaultMode из .claude/settings*.json проекта, а там может стоять bypass.
+        var forceNonPlan = _forceNonPlanNextTurn && agentDepth < 1;
         if (handsActive)
         {
             // Ход с руками идёт с явным режимом всегда: без флага CLI взял бы defaultMode из
             // .claude/settings*.json проекта, а там может стоять bypassPermissions
-            var mode = _forceNonPlanNextTurn && Info.Mode == ClaudeMode.Plan ? ClaudeMode.Default : Info.Mode;
-            _forceNonPlanNextTurn = false;
+            var mode = forceNonPlan && Info.Mode == ClaudeMode.Plan ? ClaudeMode.Default : Info.Mode;
+            if (forceNonPlan) _forceNonPlanNextTurn = false;
             args.AddRange(["--permission-mode", HandsPermissionMode(mode).ToCliFlag()]);
             if (mode != ClaudeMode.Bypass) _bypassDowngradeNoticed = false;
             else if (!_bypassDowngradeNoticed)
@@ -3244,7 +3320,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 await _onMessage(new HandsNoticeMessage(HandsTurnRules.BypassDowngradedText));
             }
         }
-        else if (_forceNonPlanNextTurn)
+        else if (forceNonPlan)
             _forceNonPlanNextTurn = false;
         else
             args.AddRange(["--permission-mode", Info.Mode.ToCliFlag()]);
@@ -3584,7 +3660,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasDevMcp: _testsMcp is not null && McpDelivered(McpEndpoints.DevName),
                     HasAudioEditorMcp: _audioEditorMcp is not null && McpDelivered(McpEndpoints.AudioEditorName),
                     HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
-                    Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth));
+                    Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth),
+                    ConsumersHookActive: ConsumersHookDelivered);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try
@@ -4241,6 +4318,13 @@ public class ClaudeSession : ILlmSessionAdapter
         // исполнителю задачи план-тулы всё равно закрыты через --disallowedTools.
         envOverrides["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1";
 
+        // Подсказка следующего сообщения: с CLI 2.1.300 одного --prompt-suggestions мало —
+        // без переменной CLI в -p выключает подсказки как non_interactive (гейт найден в
+        // бинарнике 2.1.300; замер: без неё prompt_suggestion не приходит вовсе). Переменная
+        // заодно снимает back-off CLI после 20 неиспользованных подсказок подряд.
+        if (promptSuggestionsActive)
+            envOverrides["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] = "1";
+
         // Потолки внутренних повторов CLI (429/529): владелец фолбэка — наша цепочка (ADR-007 §4),
         // CLI получает только короткий внутренний backoff, чтобы отказ доходил до TurnErrorClassifier
         // за десятки секунд, а не минуты (с 2.1.246 headless-сессии сами дотягивают оборванный
@@ -4253,6 +4337,19 @@ public class ClaudeSession : ILlmSessionAdapter
 
         foreach (var (k, v) in PlaywrightMcpEnv(_browserEnabled, _launcher.IsSandboxed, _rootPath))
             envOverrides[k] = v;
+
+        // Хук PreToolUse «потребители правленого файла» (ClaudeRuntimeSettings): адрес, проект и
+        // токен берёт из окружения процесса. Токен — заглушка до сигнатуры (как у шлюза): JWT
+        // выдаётся заново на каждую сборку и мерцал бы в сигнатуре; настоящий ставит
+        // BindConsumersHookToken новому процессу. Только http на хосте: в песочнице хука нет,
+        // https CLI всё равно не отдаст (ADR-012). Значения не логируем и в снимки не пишем.
+        if (_codeGraphMcp is { } hookGraph && !_launcher.IsSandboxed
+            && hookGraph.ApiUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+        {
+            envOverrides[ConsumersHookApiEnv] = hookGraph.ApiUrl;
+            envOverrides[ConsumersHookProjectEnv] = hookGraph.ProjectId;
+            envOverrides[ConsumersHookTokenEnv] = ConsumersHookTokenPlaceholder;
+        }
 
         // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
         // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели
@@ -4512,6 +4609,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Ход через шлюз LLM идёт новым процессом — только теперь выдаём ему настоящий токен:
         // сигнатура посчитана по заглушкам, живому процессу ход отдан выше с его токеном
         var (gatewayTurnId, gatewayToken) = viaGateway ? BindGatewayTurn(envOverrides) : default((string?, string?));
+        BindConsumersHookToken(envOverrides);
 
         // ArgumentList/Args экранирует каждый аргумент корректно (важно для многострочного
         // системного промпта); env-оверрайды собраны выше — они входят в сигнатуру прогона.
@@ -4667,7 +4765,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // Без живых фоновых задач сохраняем прежнюю семантику хода: возвращаемся, когда процесс
         // умер и финализирован (ExitedMessage послан до release _turnLock). С ними — сразу:
         // прогон доживает, чат остаётся Active, ExitedMessage пошлёт финализация.
-        if (!run.HasPendingBg && run.ReaderTask is { } reader)
+        // То же при stdin, оставленном под ход-продолжение из очереди CLI (HeldForQueuedDelivery).
+        if (!run.HasPendingBg && !run.HeldForQueuedDelivery && run.ReaderTask is { } reader)
             await reader.WaitAsync(ct);
     }
 
@@ -6082,6 +6181,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     CorrTrace("continuation-start(stream_event)", Info.Id, run, root);
                     run.ContinuationActive = true;
+                    _transcriptTailer?.ClearQueuedDeliveries();   // очередь доставлена этим ходом
                 }
                 await HandleStreamEventAsync(root);
                 break;
@@ -6092,9 +6192,15 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     CorrTrace("continuation-start(assistant)", Info.Id, run, root);
                     run.ContinuationActive = true;
+                    _transcriptTailer?.ClearQueuedDeliveries();
                 }
                 if (await AbortOnToolUseAfterStdinClosedAsync(run, root)) break;
                 TrackContextTokens(root);
+                // Живое заполнение контекста — клиенту сразу, не дожидаясь result (кольцо в шапке
+                // чата). Только основной агент: у субагентов свой контекст (TrackContextTokens их
+                // и так пропускает, но _lastContextTokens хранит прошлое значение — не шлём его повторно).
+                if (!HasParentToolUseId(root) && _lastContextTokens > 0)
+                    await _onMessage(new ContextUsageMessage(_lastContextTokens));
                 await HandleAssistantToolsAsync(run, root);
                 break;
 
@@ -6258,11 +6364,14 @@ public class ClaudeSession : ILlmSessionAdapter
                 // прогон доживает (агенты работают внутри процесса) и готов принять
                 // следующий совместимый ход. Result'ы ходов-продолжений CLI сюда не доходят —
                 // отфильтрованы корреляцией выше.
+                // Фоновая задача, завершившаяся посреди хода, уже вычеркнута из pending, но её
+                // уведомление (или отчёт субагента) могло осесть в очереди CLI не впитанным —
+                // тогда CLI доставит его ходом-продолжением сразу после этого result, и закрытый
+                // stdin уронил бы продолжение вторым контуром (инцидент 15.10.2026, SubagentHandback)
                 {
                     var doneRun = run;
                     doneRun.TurnDone = true;
-                    if (!doneRun.HasPendingBg) CloseStdin(doneRun);
-                    else
+                    if (doneRun.HasPendingBg)
                     {
                         int pendingCount;
                         lock (doneRun.PendingBg) pendingCount = doneRun.PendingBg.Count;
@@ -6270,6 +6379,14 @@ public class ClaudeSession : ILlmSessionAdapter
                             $"[ClaudeSession] Ход завершён, прогон доживает: фоновых задач {pendingCount}"
                             + (doneRun.PendingBgUnknown ? " (+неучтённые)" : ""));
                     }
+                    else if (_transcriptTailer?.HasQueuedDeliveries() == true)
+                    {
+                        // Окно старта продолжения — ContinuationStartGrace (stdin открыт); не
+                        // начнётся — ватчдог погасит процесс молча
+                        doneRun.HeldForQueuedDelivery = true;
+                        Console.WriteLine("[ClaudeSession] Ход завершён, stdin держим: в очереди CLI недоставленное уведомление");
+                    }
+                    else CloseStdin(doneRun);
                     doneRun.TurnTcs.TrySetResult();
                 }
                 // Гарантия исполнения одобренного плана: если ход завершился, а Claude так и не
@@ -6296,6 +6413,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     run.PreEchoResultLine = null;
                     Volatile.Write(ref run.SkipResults, 0);
                     run.ContinuationActive = false;
+                    // CLI взялся за наш ход — поставленное до него он доставит в этом же ходе
+                    _transcriptTailer?.ClearQueuedDeliveries();
                     break;
                 }
                 await HandleUserMessageAsync(run, root);
@@ -6557,18 +6676,29 @@ public class ClaudeSession : ILlmSessionAdapter
     // workflow — «runId: wf_…». Структурный кандидат (run_in_background/Workflow из
     // HandleAssistantToolsAsync) без распарсенного id → PendingBgUnknown: точный учёт
     // потерян, доживание прогона ограничится только потолком BgLingerTimeout.
+    internal static bool IsBgCapableTool(string toolName) =>
+        toolName is "Agent" or "Task" or "SendMessage" or "Workflow";
+
+    internal static bool HasBgLaunchMarker(string content) =>
+        content.Contains("Async agent launched", StringComparison.Ordinal)
+        || content.Contains("resumed from transcript in the background", StringComparison.Ordinal)
+        || content.Contains("Transcript dir:", StringComparison.Ordinal);
+
     private void TrackBgLaunch(CliRun run, string toolUseId, string content, bool isError)
     {
-        bool candidate;
-        lock (run.PendingBg) candidate = run.BgLaunchCandidates.Remove(toolUseId);
+        bool candidate, bgCapable;
+        lock (run.PendingBg)
+        {
+            candidate = run.BgLaunchCandidates.Remove(toolUseId);
+            bgCapable = run.BgCapableToolUses.Remove(toolUseId);
+        }
         if (isError) return;
 
         // Гейт по маркерам запуска: без него агентский id пришлось бы искать в любом
-        // tool_result (Bash с логами нашего же продукта дал бы ложный pending навсегда)
-        var launchLike = candidate
-            || content.Contains("Async agent launched", StringComparison.Ordinal)
-            || content.Contains("resumed from transcript in the background", StringComparison.Ordinal)
-            || content.Contains("Transcript dir:", StringComparison.Ordinal);
+        // tool_result (Bash с логами нашего же продукта дал бы ложный pending навсегда).
+        // Маркеры — только в результате инструмента, умеющего запускать фон: дамп чужого
+        // транскрипта PowerShell'ом несёт ту же строку «Async agent launched … agentId:»
+        var launchLike = candidate || (bgCapable && HasBgLaunchMarker(content));
         if (!launchLike) return;
 
         var m = BgAgentIdRe.Match(content);
@@ -6856,6 +6986,20 @@ public class ClaudeSession : ILlmSessionAdapter
         var eventType = et.GetString();
         var index = evt.TryGetProperty("index", out var ix) && ix.TryGetInt32(out var ixv) ? ixv : -1;
 
+        // Заполнение контекста из message_delta. Anthropic кладёт входные токены и кэш уже в
+        // message_start, и строка assistant на stdout их несёт; Strata (локальный стенд) шлёт в
+        // message_start нули, а настоящие input/cache_read/cache_creation — только здесь, в
+        // конце ответа. Строку assistant CLI собирает раньше, с нулями, и TrackContextTokens их
+        // отбрасывал: у локальных ходов result.ContextTokens всегда был пуст, кольцо контекста в
+        // шапке молчало (22.10.2026). Берём цифру из дельты — она одинаково верна для обоих.
+        if (eventType == "message_delta" && evt.TryGetProperty("usage", out var deltaUsage)
+            && deltaUsage.ValueKind == JsonValueKind.Object)
+        {
+            if (TrackContextUsage(deltaUsage) is { } ctx)
+                await _onMessage(new ContextUsageMessage(ctx));
+            return;
+        }
+
         // Начало блока tool_use — показываем карточку сразу (до прихода полного assistant-сообщения)
         if (eventType == "content_block_start")
         {
@@ -7002,6 +7146,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     run.BgLaunchCandidates.Add(toolId);
                     run.AgenticBgToolUses.Add(toolId);
                 }
+            // Agent без run_in_background CLI тоже может увести в фон — кандидатом его не
+            // назвать, но маркер запуска в его результате искать обязаны
+            if (parentId is null && toolId.Length > 0 && IsBgCapableTool(toolName))
+                lock (run.PendingBg) run.BgCapableToolUses.Add(toolId);
 
             await _onMessage(new ToolUseMessage(toolId, toolName, toolInput, parentId));
         }
@@ -7090,16 +7238,25 @@ public class ClaudeSession : ILlmSessionAdapter
     // основной сессии отношения не имеющий.
     // internal (а не private) ради теста одноразовости BareMode-сторожа: он подаёт
     // assistant-сообщение с usage напрямую, минуя запуск настоящего CLI.
+    // Сумма входных токенов usage (input + cache_read + cache_creation) = текущее заполнение
+    // окна; > 0 — запоминаем и возвращаем, иначе null (нули message_start у Strata, пустой usage).
+    internal int? TrackContextUsage(JsonElement usage)
+    {
+        var tokens = IntProp(usage, "input_tokens")
+            + IntProp(usage, "cache_read_input_tokens")
+            + IntProp(usage, "cache_creation_input_tokens");
+        if (tokens <= 0) return null;
+        _lastContextTokens = tokens;
+        return tokens;
+    }
+
     internal void TrackContextTokens(JsonElement root)
     {
         if (HasParentToolUseId(root)) return;
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("usage", out var u)) return;
 
-        var tokens = IntProp(u, "input_tokens")
-            + IntProp(u, "cache_read_input_tokens")
-            + IntProp(u, "cache_creation_input_tokens");
-        if (tokens > 0) _lastContextTokens = tokens;
+        var tokens = TrackContextUsage(u) ?? 0;
 
         // Сторож на пропажу CLAUDE_CODE_DISABLE_CLAUDE_MDS: переменная не в claude --help,
         // в любом обновлении CLI она может исчезнуть/сменить имя. На первом ходу BareMode

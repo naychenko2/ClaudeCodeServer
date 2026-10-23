@@ -60,6 +60,10 @@ public sealed class NotificationsToolset(
                 var body = StringArg(arguments, "body").Trim();
                 if (title.Length == 0 || body.Length == 0)
                     return Deny("Нужны title и body — заголовок и текст уведомления");
+                // url пишет модель: чужой адрес — отказ, а не тихое обнуление, чтобы модель
+                // увидела ошибку и пересоздала уведомление с путём приложения (S7)
+                if (OptionalArg(arguments, "url") is { } rawUrl && !NotificationUrls.IsAppRelative(rawUrl))
+                    return Deny(NotificationUrls.RejectReason);
                 // Лицо персоны: как stdio-ветка — персона СЕССИИ подставляется, только если
                 // модель не указала personaId явно. Резолв живой, из сессии на момент вызова
                 var req = new CreateNotificationRequest

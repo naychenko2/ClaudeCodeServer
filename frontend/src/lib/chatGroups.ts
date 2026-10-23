@@ -296,8 +296,10 @@ export function groupByFeatures(
 // === Заголовок группы фичи (макет features-overview.html, .fgh) ===
 
 // Имя стадии конвейера по ключу — для статуса «{этап} · доработка/идёт».
-// Порядок и названия — те же, что в PipelineFlow/FeatureRail (STAGE_NAME).
-const STAGE_NAME: Record<FeatureRailKey, string> = {
+// Порядок и названия — те же, что в FeatureRail (STAGE_NAME).
+// Экспортируется: страница фичи (волна 3) строит тег «идёт · {этап}» по run.state
+// и активной стадии — имя стадии берётся отсюда, не дублируется.
+export const STAGE_NAME: Record<FeatureRailKey, string> = {
   cut: 'Разрез', plan: 'План', prod: 'Производство', review: 'Ревью',
   qa: 'Проверка', final: 'Финальное ревью', merge: 'Мерж',
 };
@@ -333,6 +335,11 @@ export function formatDuration(minutes: number): string {
   return rh ? `${d} дн ${rh} ч` : `${d} дн`;
 }
 
+// Единая формулировка состояния merge_pending (макет feature-banner-1): «ждёт согласия на мерж».
+// Используется в плашке фичи, шапке группы, карточке чата и теге страницы — одно место,
+// чтобы не разъезжалась (ревью фронта 1, major 1).
+export const MERGE_PENDING_STATUS = 'ждёт согласия на мерж';
+
 // enrich — необязательное «кто · сколько» (макет: «стоит · Денис · 25 мин»):
 //   personaName — имя персоны (attention.personaId / now0.personaId, резолвит вызывающий);
 //   now         — «сейчас» в мс (для стабильных тестов; не задано — Date.now()).
@@ -355,10 +362,20 @@ export function featureDisplayState(
     const merged = f.summary?.mergedAt != null;
     return { kind: merged ? 'done' : 'closed', alarm: null, status: merged ? 'смержена' : 'закрыта' };
   }
-  // Тревога: упала (stopped) или ждёт человека (wait/merge) — «кто · сколько».
+  // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «ждёт согласия на мерж»,
+  // merging → «идёт», waiting → «ждёт вас», stopped → «стоит». Без state (старые данные/кеш)
+  // — запасной путь по attention (attention.kind), чтобы существующие тесты не упали.
+  if (f.state) {
+    if (f.state === 'stopped') return { kind: 'stopped', alarm: 'stop', status: join('стоит', who, dur) };
+    if (f.state === 'merge_pending') return { kind: 'wait', alarm: 'wait', status: join(MERGE_PENDING_STATUS, null, dur) };
+    if (f.state === 'waiting') return { kind: 'wait', alarm: 'wait', status: join('ждёт вас', who, dur) };
+    if (f.state === 'merging') return { kind: 'run', alarm: null, status: join('Мерж идёт', who, null) };
+    // merged/closed — bucket выше; running/not_started/idle — «идёт» (ветка ниже).
+  }
+  // Запасной путь: state в данных нет (кеш/моки) — прежний признак (attention).
   if (f.attention) {
     if (f.attention.kind === 'stopped') return { kind: 'stopped', alarm: 'stop', status: join('стоит', who, dur) };
-    if (f.attention.kind === 'merge') return { kind: 'wait', alarm: 'wait', status: join('ждёт вас · мерж', null, dur) };
+    if (f.attention.kind === 'merge') return { kind: 'wait', alarm: 'wait', status: join(MERGE_PENDING_STATUS, null, dur) };
     return { kind: 'wait', alarm: 'wait', status: join('ждёт вас', who, dur) };
   }
   // Идёт: по активной стадии рельсы — доработка (loop) или работа (run). «Кто» —
@@ -383,6 +400,17 @@ export function featureStatusTag(f: FeatureIndexFeature): FeatureStatusTag {
       ? { label: 'Смержена', tone: 'merged' }
       : { label: 'Без мержа', tone: 'closed' };
   }
+  // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «К мержу», merging → «Идёт»,
+  // waiting → «Ждёт вас», stopped → «Стоит». Без state (старые данные/кеш) — запасной путь
+  // по attention (attention.kind), чтобы существующие тесты не упали.
+  if (f.state) {
+    if (f.state === 'stopped') return { label: 'Стоит', tone: 'stop' };
+    if (f.state === 'merge_pending') return { label: 'К мержу', tone: 'merge' };
+    if (f.state === 'waiting') return { label: 'Ждёт вас', tone: 'wait' };
+    if (f.state === 'merging') return { label: 'Идёт', tone: 'run' };
+    // merged/closed — bucket выше; running/not_started/idle — «Идёт» (ветка ниже).
+  }
+  // Запасной путь: state в данных нет (кеш/моки) — прежний признак (attention).
   if (f.attention) {
     if (f.attention.kind === 'stopped') return { label: 'Стоит', tone: 'stop' };
     if (f.attention.kind === 'merge') return { label: 'К мержу', tone: 'merge' };
@@ -600,8 +628,19 @@ export const KEY_SESSION_TOOLTIP = 'Здесь управляют фичей: з
 //   иначе (идёт/стоит)      → 'Ключевой чат' (только если ключевой чат найден), иначе null.
 export function featureQuickAction(f: FeatureIndexFeature): string | null {
   if (f.chips.includes('closed')) return null;
-  if (f.attention?.kind === 'merge') return 'К мержу';
-  if (f.attention?.kind === 'wait') return 'Ответить';
+  // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «К мержу», waiting → «Ответить»,
+  // merging/running → «Ключевой чат». Без state (старые данные/кеш) — запасной путь
+  // по attention.kind, чтобы существующие тесты не упали.
+  let kind: 'merge' | 'wait' | null = null;
+  if (f.state) {
+    if (f.state === 'merge_pending') kind = 'merge';
+    else if (f.state === 'waiting') kind = 'wait';
+  } else if (f.attention) {
+    if (f.attention.kind === 'merge') kind = 'merge';
+    else if (f.attention.kind === 'wait') kind = 'wait';
+  }
+  if (kind === 'merge') return 'К мержу';
+  if (kind === 'wait') return 'Ответить';
   return f.keySessionId ? 'Ключевой чат' : null;
 }
 

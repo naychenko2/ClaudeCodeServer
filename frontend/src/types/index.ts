@@ -653,6 +653,9 @@ export interface Task {
   repro?: DefectRepro | null;
   // Подтверждение проверки (null — не подтверждено). Сбрасывается при уходе из Done
   verification?: TaskVerification | null;
+  // Критерии приёмки и свидетельства по ним (пусто/нет — задача без критериев)
+  acceptance?: AcceptanceCriterion[];
+  evidence?: AcceptanceEvidence[];
   // Исход дефекта: 'closedWithoutCheck' — внутренний путь закрытия без проверки
   outcome?: DefectOutcome | null;
   // Фикс-волна 4 team-blocker-honest: метки от терминального отказа хода исполнителя
@@ -754,6 +757,10 @@ export interface DefectRepro {
   expected?: string;
   actual?: string;
 }
+
+// Критерий приёмки задачи и свидетельство его выполнения (связь по criterionId)
+export interface AcceptanceCriterion { id: string; text: string }
+export interface AcceptanceEvidence { criterionId: string; how: string; result: string }
 
 // Подтверждение проверки: personaId == null означает проверку человеком (UI-форма
 // владельца задачи), не-null — конкретной персоной (чаще всего — исполнившей дефект).
@@ -1291,6 +1298,9 @@ export type ServerMessage = { sessionId: string } & (
       imageBlocks?: number; imageTokens?: number;
     }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
+  // Живое заполнение контекста посреди хода (после каждого ответа модели основного агента);
+  // транзитное, в историю не попадает — итог хода несёт result.contextTokens
+  | { type: 'context_usage'; contextTokens: number }
   // Записи ленты чата картинки (ADR-018 §1, §2): живые копии StoredImageLaunchMessage и
   // StoredImageFileMovedMessage. Рисует их модуль редактора через слот chat-item-tool
   | ({ type: 'image_launch' } & ImageLaunchFields)

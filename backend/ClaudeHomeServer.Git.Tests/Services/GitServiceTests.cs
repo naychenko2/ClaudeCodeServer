@@ -199,6 +199,23 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
             .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
     }
 
+    // ---------- История файла: путь — не маска ----------
+
+    [Fact]
+    public async Task LastCommit_СкобкиВИмени_ПутьБуквальный_ЧужойФайлНеПодсовывается()
+    {
+        // «[ab].txt» маской совпадает и с a.txt: без «:(literal)» последним стал бы коммит a.txt
+        await File.WriteAllTextAsync(Path.Combine(_repo, "[ab].txt"), "скобки\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "файл со скобками");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "правка a");
+
+        (await _git.LastCommitAsync(null, _repo, "[ab].txt"))!.Subject.Should().Be("файл со скобками");
+        (await _git.FileLogAsync(null, _repo, "[ab].txt")).Should().ContainSingle();
+    }
+
     // ---------- Метрика охвата паспортов: CountRecentCommitsAsync (GET /dossiers) ----------
 
     // Обе даты коммита в прошлом: --since фильтрует по committer date, поэтому сдвигаем
@@ -229,6 +246,32 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         await _git.CommitAsync(null, _repo, "переименовали a в c");
         (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "c.txt"))
             .Should().Be(3, "история c.txt включает и коммиты a.txt до переименования");
+    }
+
+    [Fact]
+    public async Task CountRecentCommits_СкобкиВИмени_ПутьБуквальный_ЧужиеКоммитыНеСчитаются()
+    {
+        // «[ab].txt» маской совпадает с a.txt и b.txt: без «:(literal)» в счёт вошли бы их коммиты
+        await File.WriteAllTextAsync(Path.Combine(_repo, "[ab].txt"), "скобки\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "файл со скобками");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "правка a");
+
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "[ab].txt")).Should().Be(1);
+    }
+
+    // GET /dossiers?file=. отвечал 500: ValidateRel бросал UnauthorizedAccessException
+    // мимо обещания «любой сбой — 0»
+    [Theory]
+    [InlineData(".")]
+    [InlineData("./")]
+    [InlineData("/")]
+    [InlineData("..")]
+    public async Task CountRecentCommits_ПутьКореньИлиВыше_Ноль_БезИсключения(string relPath)
+    {
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, relPath)).Should().Be(0);
     }
 
     // Отдельное репо с монотонной историей: корень датирован в прошлое, tip — сейчас.
@@ -363,6 +406,147 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "мусор\n");
         await _git.DiscardAsync(null, _repo, "a.txt");
         Norm(await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).Should().Be(before);
+    }
+
+    // ---------- Путь — не маска: запись (LiteralSpec, «:(literal)» к пути) ----------
+    // «n[ab].txt» маской pathspec совпадает и с «na.txt». Без флага откат нового файла
+    // шёл через clean -fd по маске и безвозвратно сносил соседний неотслеживаемый файл.
+
+    [Fact]
+    public async Task Discard_СкобкиВИмени_ЧужойНеотслеживаемыйФайлЦел()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "n[ab].txt"), "скобки\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед\n");
+
+        await _git.DiscardAsync(null, _repo, "n[ab].txt");
+
+        File.Exists(Path.Combine(_repo, "n[ab].txt")).Should().BeFalse();
+        File.Exists(Path.Combine(_repo, "na.txt")).Should().BeTrue();
+    }
+
+    // add раскрывает маску, когда буквального пути уже нет (файл удалили, а список в
+    // интерфейсе устарел): без флага в индекс молча уезжал сосед «na.txt»
+    [Fact]
+    public async Task Stage_СкобкиВИмени_ПутиНет_СоседНеПопадаетВИндекс()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед\n");
+
+        try { await _git.StageAsync(null, _repo, "n[ab].txt"); }
+        catch (GitCommandException) { /* «pathspec did not match» — честный отказ */ }
+
+        var st = await _git.StatusAsync(null, _repo);
+        st.Staged.Should().BeEmpty();
+        st.Untracked.Should().ContainSingle(f => f.Path == "na.txt");
+    }
+
+    // restore --staged раскрывает маску по индексу: без флага снималась и правка соседа
+    [Fact]
+    public async Task Unstage_СкобкиВИмени_СоседОстаётсяВИндексе()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "n[ab].txt"), "скобки\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "скобки и сосед");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "n[ab].txt"), "скобки 2\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед 2\n");
+        await _git.StageAllAsync(null, _repo);
+
+        await _git.UnstageAsync(null, _repo, "n[ab].txt");
+
+        var st = await _git.StatusAsync(null, _repo);
+        st.Staged.Select(f => f.Path).Should().BeEquivalentTo(["na.txt"]);
+        st.Unstaged.Should().ContainSingle(f => f.Path == "n[ab].txt");
+    }
+
+    // Ветка отслеживаемого файла: «n[ab].txt» в индексе, но его нет в HEAD. Совпади путь
+    // буквально с файлом HEAD, git сам не раскрыл бы маску. Здесь совпадения нет, и
+    // checkout HEAD -- по маске молча (код 0) откатывал правку соседа «na.txt».
+    // С «:(literal)» git честно отказывает: в HEAD такого файла нет.
+    [Fact]
+    public async Task Discard_СкобкиВИмени_ВИндексеНоНеВHead_ПравкаСоседаЦела()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "сосед");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "n[ab].txt"), "скобки\n");
+        await _git.StageAsync(null, _repo, "n[ab].txt");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "na.txt"), "сосед 2\n");
+
+        try { await _git.DiscardAsync(null, _repo, "n[ab].txt"); }
+        catch (GitCommandException) { /* «pathspec did not match» — честный отказ */ }
+
+        (await File.ReadAllTextAsync(Path.Combine(_repo, "na.txt"))).ReplaceLineEndings("\n").Should().Be("сосед 2\n");
+    }
+
+    // ---------- Однофайловая операция не принимает корень ----------
+    // С «:(literal)» пустой путь (и «.») совпадает со всем деревом: discard {path:""}
+    // откатил бы всё в обход подтверждения discard-all. Отказ — до запуска git.
+
+    public static TheoryData<string> КорневыеПути => ["", ".", "./", "d/..", "/"];
+
+    [Theory]
+    [MemberData(nameof(КорневыеПути))]
+    public async Task Discard_ПутьКорень_Отказ_ПравкиЦелы(string path)
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "new.txt"), "новый\n");
+
+        var act = () => _git.DiscardAsync(null, _repo, path);
+
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+        (await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).ReplaceLineEndings("\n").Should().Be("правка\n");
+        File.Exists(Path.Combine(_repo, "new.txt")).Should().BeTrue();
+    }
+
+    [Theory]
+    [MemberData(nameof(КорневыеПути))]
+    public async Task StageUnstageRestore_ПутьКорень_Отказ(string path)
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        var sha = (await _git.LogAsync(null, _repo, 1))[0].Sha;
+
+        await FluentActions.Awaiting(() => _git.StageAsync(null, _repo, path))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+        await FluentActions.Awaiting(() => _git.UnstageAsync(null, _repo, path))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+        await FluentActions.Awaiting(() => _git.RestoreFileFromCommitAsync(null, _repo, sha, path))
+            .Should().ThrowAsync<UnauthorizedAccessException>();
+
+        (await _git.StatusAsync(null, _repo)).Staged.Should().BeEmpty();
+        (await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).ReplaceLineEndings("\n").Should().Be("правка\n");
+    }
+
+    // Каталог — не корень: откат новой папки «d/» по-прежнему работает
+    [Fact]
+    public async Task Discard_Каталог_Работает()
+    {
+        Directory.CreateDirectory(Path.Combine(_repo, "d"));
+        await File.WriteAllTextAsync(Path.Combine(_repo, "d", "x.txt"), "новый\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+
+        await _git.DiscardAsync(null, _repo, "d/");
+
+        Directory.Exists(Path.Combine(_repo, "d")).Should().BeFalse();
+        (await File.ReadAllTextAsync(Path.Combine(_repo, "a.txt"))).ReplaceLineEndings("\n").Should().Be("правка\n");
+    }
+
+    // Буквальность путей не утекает в хуки: глобальный --literal-pathspecs выставлял
+    // GIT_LITERAL_PATHSPECS=1, хук наследовал его, и маска «*.cs» молча давала пустой список
+    [Fact]
+    public async Task Commit_ХукСМаской_ВидитФайл()
+    {
+        var hook = Path.Combine(_repo, ".git", "hooks", "pre-commit");
+        Directory.CreateDirectory(Path.GetDirectoryName(hook)!);
+        await File.WriteAllTextAsync(hook,
+            "#!/bin/sh\ngit diff --cached --name-only -- \"*.cs\" > .git/hook-seen.txt\n");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.cs"), "class A {}\n");
+        await _git.StageAsync(null, _repo, "a.cs");
+
+        await _git.CommitAsync(null, _repo, "файл для хука");
+
+        (await File.ReadAllTextAsync(Path.Combine(_repo, ".git", "hook-seen.txt"))).ReplaceLineEndings("\n").Should().Be("a.cs\n");
     }
 
     // Без origin «неопубликовано» = вся история ветки: иначе кнопка публикации не появилась

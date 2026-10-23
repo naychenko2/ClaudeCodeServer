@@ -373,6 +373,40 @@ const VERIFICATION_SCHEMA = {
       enum: ['accepted', 'accepted_with_remarks', 'returned', 'withdrawn'],
       description: 'Исход витка: accepted · accepted_with_remarks · returned · withdrawn',
     },
+    returnReason: {
+      type: 'string',
+      enum: ['size', 'side-effect', 'contract', 'robustness', 'quality', 'other'],
+      description: 'Причина возврата (только при verdict=returned; other — с текстом в notes): ' +
+        'size · side-effect · contract · robustness · quality · other',
+    },
+  },
+};
+
+// Критерии приёмки и свидетельства. Парные AcceptanceSchema/EvidenceSchema http-ветки TasksToolset.cs.
+const ACCEPTANCE_SCHEMA = {
+  type: 'array',
+  description: 'Критерии приёмки (измеримые): заменяют список целиком; исполнитель задачи их не меняет',
+  items: {
+    type: 'object',
+    required: ['text'],
+    properties: {
+      id: { type: 'string', description: 'Id критерия (пусто — присвоится c1, c2…)' },
+      text: { type: 'string', description: 'Измеримая формулировка критерия' },
+    },
+  },
+};
+
+const EVIDENCE_SCHEMA = {
+  type: 'array',
+  description: 'Свидетельства по критериям приёмки: добавляются к имеющимся; закрытие задачи требует свидетельство на каждый критерий',
+  items: {
+    type: 'object',
+    required: ['criterionId', 'how', 'result'],
+    properties: {
+      criterionId: { type: 'string', description: 'Id критерия' },
+      how: { type: 'string', description: 'Чем проверено (команда, замер)' },
+      result: { type: 'string', description: 'Что получилось (вывод, цифры)' },
+    },
   },
 };
 
@@ -411,13 +445,28 @@ const LANE_SCHEMA = {
 const REVIEW_OF_SCHEMA = {
   type: 'array',
   items: { type: 'string' },
-  description: 'Id задач, которые оценивает это ревью/проверка/финал',
+  description: 'Id задач, которые оценивает это ревью/проверка/финал; у role=rework — обязательная связь с review/qa/final той же фичи',
+};
+
+// Структурный список шагов плана (честный прогресс фичи): массив {stepRef, title, lane}.
+// Допустим только у role=plan; stepRef непуст и уникален, лимиты — в TaskManager.
+const PLAN_STEPS_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      stepRef: { type: 'string', description: 'Код шага (уникален, непуст)' },
+      title: { type: 'string', description: 'Название шага' },
+      lane: { type: 'string', description: 'Линия (бэк/фронт)' },
+    },
+  },
+  description: 'Структурный список шагов плана: планировщик (role=plan) заполняет знаменатель «сколько всего»; stepRef непуст и уникален',
 };
 
 // Ссылки через свойства объектов в inputSchema линтер TS на .js не всегда видит —
 // явное использование убирает ложные ворнинги «declared but never read».
 void KIND_SCHEMA; void REPRO_SCHEMA; void VERIFICATION_SCHEMA; void OUTCOME_SCHEMA;
-void FEATURE_ID_SCHEMA; void ROLE_SCHEMA; void STEP_REF_SCHEMA; void LANE_SCHEMA; void REVIEW_OF_SCHEMA;
+void FEATURE_ID_SCHEMA; void ROLE_SCHEMA; void STEP_REF_SCHEMA; void LANE_SCHEMA; void REVIEW_OF_SCHEMA; void PLAN_STEPS_SCHEMA;
 
 // Справочник сервера (поле instructions ответа initialize): клиент кладёт его в контекст один
 // раз на сервер, тогда как повторённый в схемах текст оплачивается в каждой из них — правило
@@ -450,6 +499,11 @@ const INSTRUCTIONS = [
   '',
   'ОЧИСТКА в tasks_update: "" в dueDate/dueTime убирает срок, -1 в reminderMinutes — снимает',
   '  напоминание, -1 в executionExpiresAfterMinutes — делает чат бессрочным.',
+  '',
+  'ПЛАН (planSteps): задача role=plan заполняет planSteps — структурный список шагов',
+  '  [{stepRef, title, lane}]; stepRef непуст и уникален. Markdown плана — проза, знаменатель',
+  '  «сколько всего» берётся из planSteps. Доработка (role=rework) ОБЯЗАНА ссылаться на',
+  '  review/qa/final той же фичи через reviewOf — иначе 400 (связь обязательна при создании).',
 ].join('\n');
 
 const TOOLS = [
@@ -525,6 +579,8 @@ const TOOLS = [
         stepRef: STEP_REF_SCHEMA,
         lane: LANE_SCHEMA,
         reviewOf: REVIEW_OF_SCHEMA,
+        acceptance: ACCEPTANCE_SCHEMA,
+        planSteps: PLAN_STEPS_SCHEMA,
         projectId: { type: 'string', description: 'Проект задачи, если не текущий (см. tasks_list_projects; нужен полный доступ)' },
       },
     },
@@ -563,6 +619,9 @@ const TOOLS = [
         stepRef: STEP_REF_SCHEMA,
         lane: LANE_SCHEMA,
         reviewOf: REVIEW_OF_SCHEMA,
+        acceptance: ACCEPTANCE_SCHEMA,
+        evidence: EVIDENCE_SCHEMA,
+        planSteps: PLAN_STEPS_SCHEMA,
         verification: VERIFICATION_SCHEMA,
         outcome: OUTCOME_SCHEMA,
         projectId: { type: 'string', description: 'Перенести в другой проект (см. tasks_list_projects) или "" — сделать личной' },
@@ -587,6 +646,7 @@ const TOOLS = [
         id: { type: 'string', description: 'ID задачи' },
         resultMarkdown: { ...RESULT_MARKDOWN_SCHEMA, description: 'Короткий итог сделанного (markdown)' },
         linkedFiles: { ...LINKED_FILES_SCHEMA, description: 'Итоговые файлы проекта (пути от корня, через /)' },
+        evidence: EVIDENCE_SCHEMA,
         verification: VERIFICATION_SCHEMA,
         outcome: OUTCOME_SCHEMA,
       },
@@ -732,7 +792,7 @@ async function callTool(name, args) {
 
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'modelTier', 'worktreePath', 'worktreeBranch', 'labels', 'columnId', 'executionExpiresAfterMinutes', 'kind', 'repro'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'modelTier', 'worktreePath', 'worktreeBranch', 'labels', 'columnId', 'executionExpiresAfterMinutes', 'kind', 'repro', 'acceptance'])
         if (args[k] !== undefined) body[k] = args[k];
       // Происхождение задачи из окружения хода: персона-постановщик (если ход шёл от её лица)
       // и чат-источник. Чат-источник — факт «задача рождена в этом чате», он не зависит от того,
@@ -771,6 +831,7 @@ async function callTool(name, args) {
       // не подставляет автора вердикта — бэкенд берёт personaId из сессии вызова
       // (X-Caller-Session-Id) сам, иначе мы бы затирали фактического автора дефолтом чата.
       if (args.verification !== undefined) body.verification = args.verification;
+      if (args.evidence !== undefined) body.evidence = args.evidence;
       if (args.outcome !== undefined) body.outcome = args.outcome;
       const task = await api(`/api/tasks/${args.id}`, { method: 'PUT', body: JSON.stringify(body) });
       // Мягкое предупреждение (паритет с CompleteResponse http-ветки): ревью/проверку/финал

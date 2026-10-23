@@ -21,10 +21,9 @@ import {
 // и DraftCard). Панель — sandbox-iframe без allow-same-origin: хост читает свои
 // computed --c-* (текущая тема) и мапит в --cc-* панели.
 import { readHostTokens } from './panelTokens';
-import { humanizeId, panelDisplayName } from './panelNaming';
-// Перехват домена storage на хосте (решение Александра, 6760e1d8 §2/§4): этот же
-// модуль hostOps/storage.js подключает и хост-эмулятор панели (tools/plugins/dev-host)
-// — второй копии логики нигде нет, result хоста и эмулятора совпадают по построению (C3-д).
+import { panelDisplayName, pluginDisplayName } from './panelNaming';
+// Перехват домена storage на хосте (решение Александра, 6760e1d8 §2/§4): общая
+// реализация с эмулятором панели — hostOps/storage.js, второй копии логики нет.
 import { handleStorageCall, type StorageOp } from './hostOps/storage';
 // Владелец — из состояния авторизации хоста (ответ /auth/me), тот же источник,
 // что в pluginStorageLifecycle.ts: F2-d, единый способ в перехвате и цикле.
@@ -56,10 +55,13 @@ export function pluginFrameKey(plugin: PluginInfo, panel: PluginPanelView, reloa
 
 // Данные диалога «Права…» в режиме «изменить» из записи установки (та же
 // логика, что в PluginsProjectSection: вклады в DTO бэка нет, required — false).
+// Имя — человекочитаемое (pluginDisplayName: title первой панели, иначе humanizeId),
+// не технический id: третий путь выдачи прав (меню «⋯» панели) должен показывать
+// «Погода», а не «Weather» (D2-ф-3).
 function toConsentData(info: PluginInfo): PluginConsentData {
   return {
     id: info.id,
-    name: humanizeId(info.id),
+    name: pluginDisplayName(info),
     version: info.version,
     path: info.source.startsWith('upload:') ? info.source.slice('upload:'.length) : undefined,
     sha256: info.sha256 ? info.sha256.slice(0, 8) : undefined,
@@ -136,7 +138,9 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
   // часть. Хост раньше писал об этом только в журнал моста; человек об обрезке не узнавал.
   const [clamped, setClamped] = useState(false);
 
-  const name = humanizeId(plugin.id);
+  // Имя плагина для текстов (404, title iframe) — то же, что в списке и диалоге
+  // прав: title первой панели, иначе humanizeId (D2-ф-3).
+  const name = pluginDisplayName(plugin);
   // Заголовок панели: единый вывод (title из манифеста, иначе имя плагина)
   const panelTitle = panelDisplayName(plugin, panel);
 
@@ -313,13 +317,22 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
       // не из cc_user_id в хранилище: id есть сразу после входа, независимо от
       // «запомни меня». Пустой id — fail-closed: unavailable, ни одной записи.
       const ownerId = getMeSnapshot().userId ?? '';
+      // F-д6: получение хранилища и разбор его ошибок — одна точка в модуле
+      // hostOps/storage.js: store передаётся ленивым провайдером, и бросающий
+      // геттер window.localStorage (Firefox dom.storage.enabled=false, приватный
+      // режим) встречается try внутри модуля. Панель всегда получает result.
+      // handleStorageCall не бросает никогда (F-д6): провайдер и разбор ошибок
+      // внутри try модуля, панель всегда получает result. Своего catch здесь нет —
+      // текст отказа существует только в hostOps/storage.js.
       const res = handleStorageCall({
         op: msg.op.slice('storage.'.length) as StorageOp,
         args,
         granted: p.granted,
         ownerId,
         pluginId: p.id,
-        store: localStorage,
+        // globalThis, а не window: в браузере это один объект, а тестовые
+        // подмены (withThrowingLocalStorage, fakeStorage) живут на globalThis.
+        store: () => globalThis.localStorage,
       });
       if (res.ok) {
         postToFrame(buildResultMessage(msg.id, true, res.data));

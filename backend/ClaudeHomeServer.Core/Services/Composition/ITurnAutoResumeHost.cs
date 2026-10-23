@@ -36,5 +36,11 @@ public interface ITurnAutoResumeHost
     bool LastTurnWasDeployOrRollback(Session session, Project? project);
 
     Task<TurnResumeSendResult> ResumeAsync(string sessionId);
+
+    /// <summary>
+    /// Разобрать очереди отложенных сообщений, восстановленные с диска, у чатов без живого хода
+    /// (после цикла возобновления: возобновлённый ход разберёт очередь по своему концу).
+    /// </summary>
+    Task DrainRestoredQueuesAsync();
 }
 

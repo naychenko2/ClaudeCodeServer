@@ -41,6 +41,8 @@ public sealed class GitSubsystem : IAppSubsystem
         services.AddSingleton<IGitRepoChecker>(sp => sp.GetRequiredService<GitService>());
         // IGitWorkingTree — шов для вертикали Files (git-статус дерева, дифф и откат файла).
         services.AddSingleton<IGitWorkingTree>(sp => sp.GetRequiredService<GitService>());
+        // IGitFileHistory — шов для вертикали Flows (последний коммит файла процесса проекта).
+        services.AddSingleton<IGitFileHistory>(sp => sp.GetRequiredService<GitService>());
         services.AddSingleton<GitServerService>();
 
         services.AddSingleton<GitAiService>();

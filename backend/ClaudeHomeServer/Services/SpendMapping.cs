@@ -66,6 +66,9 @@ internal static class SpendMapping
             // модель сессии; пустой результат резолвится в дефолт подписки, чтобы SpendRecord
             // никогда не оставался без модели (иначе в аналитике копилась «Модель по умолчанию»).
             var model = llmProviders.ResolveModelOrDefault(m.UsageModel ?? s.Model, provider);
+            // Локальный провайдер (IsLocal в конфиге) — свой движок, подписки за ним нет:
+            // его ходы бесплатные независимо от ключа (напр. "local-qwen")
+            var isLocal = llmProviders.GetByKey(provider)?.IsLocal == true;
             spend.Record(new SpendRecord
             {
                 OwnerId = resolveOwnerId(s) ?? "",
@@ -75,7 +78,7 @@ internal static class SpendMapping
                 PersonaId = s.PersonaId,
                 Provider = provider,
                 Model = model,
-                Source = SpendSources.IsFree(provider, model) ? SpendSources.Free : SpendSources.ChatTurn,
+                Source = SpendSources.IsFree(provider, model, isLocal) ? SpendSources.Free : SpendSources.ChatTurn,
                 InputTokens = m.Usage.InputTokens,
                 OutputTokens = m.Usage.OutputTokens,
                 CacheReadTokens = m.Usage.CacheReadTokens,

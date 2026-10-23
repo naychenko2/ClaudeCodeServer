@@ -1,0 +1,1 @@
+UIPROBE-RESULT {"reach":"ok","auth":"cached","viewports":[{"settled":true,"width":360,"status":200,"finalUrl":"http://127.0.0.1:5559/#/ui-kit","console":[],"failed":[{"url":"http://127.0.0.1:5559/api/me","status":401}],"interactive":[{"s":"button.a","w":44,"h":44,"named":true}],"containers":[],"clipped":[],"pageInteractive":1,"doc":{"scrollWidth":360,"clientWidth":360}}]}

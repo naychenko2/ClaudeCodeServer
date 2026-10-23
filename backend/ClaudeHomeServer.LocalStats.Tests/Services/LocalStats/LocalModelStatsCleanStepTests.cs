@@ -34,6 +34,39 @@ public class LocalModelStatsCleanStepTests
     private static List<(double? Seconds, long? Count)> AsSteps((double Seconds, long Count)[] pairs) =>
         pairs.Select(p => ((double?)p.Seconds, (long?)p.Count)).ToList();
 
+    // База по числу потоков (батч-движок): уровни с достаточной выборкой получают свой
+    // перцентиль, скудные — не публикуются; точки без running и с малыми дельтами не входят.
+    [Fact]
+    public void ComputeBaseByRunning_PerLevelPercentile_SkipsThinLevels()
+    {
+        var steps = new List<(double? Seconds, long? Count, int? Running)>();
+        for (var i = 0; i < 12; i++) steps.Add((0.8 + i * 0.01, 100, 1));   // 1 поток: ~8 мс/шаг
+        for (var i = 0; i < 12; i++) steps.Add((2.5 + i * 0.05, 100, 3));   // 3 потока: ~25 мс/шаг
+        for (var i = 0; i < 4; i++) steps.Add((4.0, 100, 6));                // 6 потоков: мало точек
+        steps.Add((9.0, 100, null));                                          // без running — не входит
+        steps.Add((0.01, 2, 1));                                              // меньше MinItlCount — не входит
+
+        var by = LocalModelStatsCleanStep.ComputeBaseByRunning(steps);
+
+        by.Should().ContainKey(1).And.ContainKey(3).And.NotContainKey(6);
+        by[1].Should().BeApproximately(8.1, 0.01, "10-й перцентиль уровня 1");
+        by[3].Should().BeApproximately(25.5, 0.01, "10-й перцентиль уровня 3");
+    }
+
+    // Гистерезис по уровням: малое отличие не двигает базу уровня, исчезнувший уровень снимается.
+    [Fact]
+    public void ApplyHysteresisByRunning_PerLevel()
+    {
+        var current = new Dictionary<int, double> { [1] = 8.0, [3] = 25.0 };
+        var candidate = new Dictionary<int, double> { [1] = 8.5, [2] = 15.0 };
+
+        var next = LocalModelStatsCleanStep.ApplyHysteresisByRunning(current, candidate);
+
+        next[1].Should().Be(8.0, "отличие < 10 % — базу уровня не трогаем");
+        next[2].Should().Be(15.0, "новый уровень публикуется сразу");
+        next.Should().NotContainKey(3, "уровень без кандидата снимается");
+    }
+
     // (1) Живая фикстура: база = 10-й перцентиль шагов (≈58 мс), а не среднее по «прыжкам».
     // Мутация: заменить перцентиль на среднее — тест краснеет (среднее ≈ 190 мс).
     [Fact]

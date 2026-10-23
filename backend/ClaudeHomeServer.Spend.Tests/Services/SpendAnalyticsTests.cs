@@ -327,6 +327,10 @@ public class SpendAnalyticsTests : IDisposable
         Assert.True(SpendSources.IsFree("freellmapi-direct", "auto:fast"));
         Assert.True(SpendSources.IsFree("openrouter", "nvidia/nemotron:free"));
         Assert.False(SpendSources.IsFree("claude", "opus"));
+        // Локальный провайдер из конфига (IsLocal) — бесплатный по определению: ключ
+        // машин-specific ("local-qwen"), в перечислении его нет
+        Assert.True(SpendSources.IsFree("local-qwen", "qwen3.8-27b", isLocal: true));
+        Assert.False(SpendSources.IsFree("local-qwen", "qwen3.8-27b"));
         Assert.Equal("claude", SpendSources.NormalizeProvider("sub-work"));
         Assert.Equal("deepseek", SpendSources.NormalizeProvider("deepseek"));
     }

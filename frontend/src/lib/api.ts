@@ -94,6 +94,8 @@ export interface LocalModelStats {
     genTokens?: number | null;
     itlSeconds?: number | null;
     itlCount?: number | null;
+    // База шага (мс) для этой точки: по числу потоков в ней у батч-движка, иначе общая база стенда.
+    cleanStepMs?: number | null;
     // Полоса «Куда уходит время агентов» (ADR-029, v2.3): prefillSeconds/queueSeconds —
     // приращения гистограмм (сек), promptTokens — прочитанный промпт (токены).
     // null — нет прошлой точки/рестарт (см. api.md)
@@ -653,6 +655,9 @@ export interface PluginDraftSummary {
   rejected: boolean;
   // Когда отклонённый исчезнет (rejectedAt + 30 дней); у активных null
   expiresAt: string | null;
+  // Человекочитаемое имя пакета («Погода»): title первой панели манифеста. null/нет —
+  // панелей нет или title пуст (старый сервер поле не отдаёт): фронт берёт запасное имя.
+  displayName?: string | null;
 }
 // Панель в предпросмотре (PluginDraftPanel)
 export interface PluginDraftPanelView {
@@ -741,6 +746,9 @@ export interface PluginDraftDiff {
 // Ответ «Принять» (POST /api/plugins/drafts/{slug}/accept)
 export interface PluginDraftAcceptResult {
   id: string;
+  // Человекочитаемое имя пакета для диалога согласия (title первой панели манифеста);
+  // null/нет — панелей нет или старый сервер: имя выводится из id (humanizeId).
+  displayName?: string | null;
   version: string;
   sha256: string;
   source: string;

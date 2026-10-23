@@ -17,30 +17,12 @@ import { ProjectFeature, type Project } from '../../types';
 import { onMessage } from '../../lib/signalr';
 import {
   api,
-  type PluginDraftAcceptResult, type PluginDraftSummary,
+  type PluginDraftSummary,
 } from '../../lib/api';
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import { DraftCard } from './DraftCard';
 import { useDraftCard } from './useDraftCard';
-import { humanizeId } from './panelNaming';
-
-// Результат «Принять» → данные существующего диалога согласия. Имя — из общей
-// цепочки panelNaming; в PluginDraftAcceptResult панелей нет (бэк их не отдаёт),
-// поэтому здесь всегда fallback humanizeId. Режим «установить»:
-// права по умолчанию — все, кроме net:* (решение В1); consentRequired → newPermissions.
-function toConsentDataFromAccept(res: PluginDraftAcceptResult): PluginConsentData {
-  return {
-    id: res.id,
-    name: humanizeId(res.id),
-    version: res.version,
-    path: res.source.startsWith('upload:') ? res.source.slice('upload:'.length) : undefined,
-    sha256: res.sha256 ? res.sha256.slice(0, 8) : undefined,
-    contributions: [],
-    requested: res.requested,
-    secrets: res.secrets.map(s => ({ name: s.name, required: true, set: s.set, setAt: s.updatedAt ?? null })),
-    granted: res.granted,
-  };
-}
+import { toConsentDataFromAccept } from './draftModel';
 
 // Одна карточка черновика: данные из useDraftCard, действия — колбэки секции.
 function DraftCardItem({ summary, onAccept, onReject, onRestore, onEdit, onOpenInPlugins, actionError }: {

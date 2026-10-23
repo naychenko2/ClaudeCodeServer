@@ -154,8 +154,28 @@ interface Props {
   // страница рисуется соседом (FeatureCenter). Исполнитель «← назад» — от WorkspacePage.
   openFeatureId: string | null;
   onFeatureBack: (t: import('../../components/feature/FeaturePage').FeaturePageBackTarget) => void;
+  // seq события «открыли страницу фичи» (монотонный счётчик WorkspacePage): 0 — страница
+  // не открыта. Порядок «кто выигрывает центр» — по seq, см. centerWinner.
+  featureOpenedAt: number;
+  // seq события «открыли файл» (тот же счётчик): 0 — файл не открыт (холодный старт:
+  // файл «восстановлен» из сохранённого состояния, а не открыт действием).
+  fileOpenedAt: number;
   // Итерация 2: мета панелей плагинов (заголовок + иконка) — пропсом в PanelZone.
   pluginPanelMeta?: Record<import('./panelCatalog').PluginPanelKey, { title: string; Icon: import('lucide-react').LucideIcon }>;
+}
+
+// Кто выигрывает центр: страница фичи или файл — тот, чьё событие «открыли»
+// ПОЗЖЕ (больший seq монотонного счётчика WorkspacePage). 0 = не открыто:
+// восстановленный файл при холодном старте и закрытая страница. Чистая функция —
+// порядок определяется в момент действия, а не выводом из сравнения значений.
+export function centerWinner(featureOpenedAt: number, fileOpenedAt: number): 'page' | 'file' {
+  return fileOpenedAt > featureOpenedAt ? 'file' : 'page';
+}
+
+// Страница фичи уступает центр файлу: файл открыт и событие «открыли» у него позже.
+// Общий предикат десктопной и мобильной веток (не разъезжаются при правке правила).
+export function pageYieldsCenterToFile(openFile: unknown, featureOpenedAt: number, fileOpenedAt: number): boolean {
+  return !!openFile && centerWinner(featureOpenedAt, fileOpenedAt) === 'file';
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -228,6 +248,18 @@ export function DesktopWorkspace(p: Props) {
     // closeCompactStack стабилен (useCallback в сторе) — в deps не нужен
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.isTablet, p.activeSession?.id]);
+
+  // «Последнее действие выигрывает» (продуктовое правило, Софья): центр показывает
+  // то, что открыто ПОСЛЕДНИМ — страницу фичи или файл. Порядок — по seq событий
+  // «открыли» (монотонный счётчик WorkspacePage, ставится в момент действия — повторное
+  // открытие того же файла/той же фичи тоже событие, а не вывод из сравнения значений):
+  // страница уступает центр файлу, открытому ПОСЛЕ неё (свой макет или любой другой:
+  // «Открыть макет», панель «Файлы», ссылка из чата, карточка задачи), а открытие
+  // страницы — вкл. повторное «Фича →» на ту же фичу — возвращает её поверх ранее
+  // открытого файла. Файл не сбрасывается при закрытии страницы: остаётся в состоянии
+  // и вернётся. Мобильная раскладка не меняется (там yielded не передаётся, FileViewer
+  // вне центра).
+  const yielded = pageYieldsCenterToFile(p.openFile, p.featureOpenedAt, p.fileOpenedAt);
 
   // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
   const handleSplitDrag = (e: ReactPointerEvent) => {
@@ -499,8 +531,12 @@ export function DesktopWorkspace(p: Props) {
       {/* === Центр: коммит → задача → персона → доска → файл/ридер (split/fullscreen) → чат ===
           Страница фичи (Ф2.3/C1) — СОСЕД центра: при открытой (openFeatureId) весь центр
           прячется display:none (не размонтируется), страница рисуется рядом. FeatureCenter —
-          общий паттерн с мобильной веткой. */}
-      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack}>
+          общий паттерн с мобильной веткой.
+          «Последнее действие выигрывает»: страница уступает центр файлу, открытому ПОСЛЕ неё
+          (свой макет или любой другой), а открытие страницы (вкл. смена фичи) возвращает её
+          поверх ранее открытого файла. Страница остаётся смонтированной (display:none):
+          закрыл файл — вернулась с прежним состоянием; файл при закрытии страницы не сбрасывается. */}
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree} yielded={yielded}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />

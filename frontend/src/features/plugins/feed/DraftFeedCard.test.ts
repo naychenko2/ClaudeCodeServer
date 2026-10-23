@@ -417,6 +417,55 @@ describe('DraftFeedCard: «Принять…» (диалог согласия)',
   });
 });
 
+// === D2-ф-д: человекочитаемое имя пакета в ленте ===
+// У карточки в ленте была СВОЯ копия humanizeId: даже когда бэк присылал displayName
+// («Погода»), диалог согласия из ленты показывал «Weather». Теперь имя берётся из
+// общей draftModel.toConsentDataFromAccept — тот же вывод, что в секции «Черновики».
+// Мутация: вернуть в общей функции name: humanizeId(res.id) → первый тест краснеет.
+describe('DraftFeedCard: человекочитаемое имя пакета (D2-ф-д)', () => {
+  const WEATHER_SUMMARY: PluginDraftSummary = { ...SUMMARY, slug: 'weather', id: 'local-1/weather' };
+  const WEATHER_ACCEPT = {
+    id: 'local-1/weather', version: '1.0.0', sha256: 'abc12345', source: 'upload:weather',
+    enabled: true, requested: ['notes:read'], granted: [], consentRequired: true,
+    newPermissions: [], secrets: [],
+  };
+  const bodyOf = () => (globalThis as { document: { body: FNode } }).document.body;
+
+  async function acceptWeather(accept: object, summary: PluginDraftSummary) {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([summary]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue({ ...PREVIEW, slug: 'weather', name: 'Weather' });
+    vi.mocked(api.plugins.draftAccept).mockResolvedValue(accept as never);
+    const { container, text } = await renderAnchor(recordItem({ slug: 'weather' }));
+    const b = bodyOf();
+    for (const c of [...b.childNodes]) b.removeChild(c);
+    const acceptBtn = findButton(container, 'Принять…');
+    expect(acceptBtn, 'кнопка «Принять…» не найдена').not.toBeNull();
+    await act(async () => { acceptBtn!.onClick(); await flushDrafts('weather'); });
+    return { cardText: text(), dialogText: textOf(b) };
+  }
+
+  it('displayName «Погода» → карточка в ленте и диалог согласия из ленты — «Погода», а не «Weather»', async () => {
+    const { cardText, dialogText } = await acceptWeather(
+      { ...WEATHER_ACCEPT, displayName: 'Погода' },
+      { ...WEATHER_SUMMARY, displayName: 'Погода' },
+    );
+    expect(cardText).toContain('Погода');
+    expect(cardText).not.toContain('Weather');
+    expect(dialogText).toContain('Погода');
+    expect(dialogText).not.toContain('Weather');
+  });
+
+  it('без displayName (пакет без панелей) → прежний запасной вариант: humanizeId(id) = «Weather»', async () => {
+    const { dialogText } = await acceptWeather(
+      { ...WEATHER_ACCEPT, displayName: null },
+      { ...WEATHER_SUMMARY, displayName: null },
+    );
+    expect(dialogText).toContain('Weather');
+    expect(dialogText).not.toContain('Погода');
+  });
+});
+
 describe('DraftFeedCard: «Установлен» → ссылка «Открыть в «Плагинах»»', () => {
   it('установлен той же версией → свёрнутая строка со ссылкой на экран плагинов', async () => {
     setFlagLocal('plugins-build-yourself', true);

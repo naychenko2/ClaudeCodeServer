@@ -109,5 +109,13 @@ export function migrateRingPillHidden(hidden: string[]): string[] {
   return hidden.filter(k => k !== 'context' && (k !== 'cost' || keepCost));
 }
 
+// Перевод сохранённого набора плитки: кнопка «Тема» появилась позже, и у тех, кто
+// успел тронуть глазик, её ключа в наборе нет — новая кнопка вылезала в ряд, хотя
+// по дефолту (CARD_ACTIONS_HIDDEN_BY_DEFAULT) она в меню. Прячем её один раз;
+// вернуть в ряд можно тем же глазиком, повторно миграция не сработает (маркер)
+export function migrateCardSubjectHidden(hidden: string[]): string[] {
+  return hidden.includes('subject') ? hidden : [...hidden, 'subject'];
+}
+
 // Пилюли по умолчанию показаны все — они и есть сводка состояния чата;
 // прятать их имеет смысл только осознанно (в HIDDEN-наборах их нет)

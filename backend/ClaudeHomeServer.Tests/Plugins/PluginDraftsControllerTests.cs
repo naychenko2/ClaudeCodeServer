@@ -1,13 +1,18 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Plugins.Controllers;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Plugins;
 
@@ -17,6 +22,11 @@ namespace ClaudeHomeServer.Tests.Plugins;
 // Гейты: Subsystems:plugins:Enabled (SubsystemGate) → 503; флаг plugins-mvp → 403;
 // флаг plugins-build-yourself → 403. На ВСЕХ ручках: сервисный JWT → 403, чужой
 // владелец → 404.
+//
+// Формат HTTP-ответа — отдельный контракт (находка ревью 82b4fbfc): unit-тесты ниже
+// проверяют прямую JsonSerializer.Serialize (PascalCase), а по HTTP MVC отдаёт camelCase.
+// Контрактный тест List_HttpОтвет_CamelCaseСDisplayName идёт через живой TestServer и
+// ловит расхождение docs↔код (casing, потеря displayName).
 //
 // Accept: установка по метке draft:<slug> (PluginInstaller — единственный арбитр).
 //   - первая установка → granted = [];
@@ -89,13 +99,21 @@ public class PluginDraftsControllerTests : IDisposable
     // Пакет в каталоге черновика владельца (draft:<slug>): манифест ccs-plugin.json
     // (id/version/permissions) + нативный .claude-plugin/plugin.json (R10-1, name = slug)
     // + один навык (skills/a/SKILL.md — в allow-list валидатора). Возвращает метку источника (draft:<slug>).
+    // panelTitle (D2): добавить панель с title в contributes — для теста человекочитаемого
+    // имени пакета; файл panel/index.html создаётся (валидатор требует существование entry).
     private string CreateDraftPackage(string ownerId, string id, string version, List<string> requested,
-        List<(string Name, bool Required)>? secrets = null)
+        List<(string Name, bool Required)>? secrets = null, string? panelTitle = null)
     {
         var slug = id.Contains('/') ? id[(id.LastIndexOf('/') + 1)..] : id;
         var root = _store.DraftDir(ownerId, slug);
         Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
         File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+
+        if (panelTitle is not null)
+        {
+            Directory.CreateDirectory(Path.Combine(root, "panel"));
+            File.WriteAllText(Path.Combine(root, "panel", "index.html"), "<html><body>" + panelTitle + "</body></html>");
+        }
 
         var manifest = new
         {
@@ -105,6 +123,9 @@ public class PluginDraftsControllerTests : IDisposable
             contributes = new
             {
                 skills = new[] { "skills/a" },
+                panels = panelTitle is null
+                    ? null
+                    : new[] { new { id = "main", slot = "sidebar", entry = "panel/index.html", title = panelTitle } },
                 requires = secrets is null
                     ? null
                     : new { secrets = secrets.Select(s => new { name = s.Item1, required = s.Item2 }) },
@@ -281,6 +302,100 @@ public class PluginDraftsControllerTests : IDisposable
         json.Should().Contain("\"InstalledSameVersion\":true", "после accept — установлена такая же версия");
         json.Should().Contain("\"InstalledVersion\":\"1.0.0\"", "после accept — версия установленного плагина (QA-фикс R)");
         _ = source;
+    }
+
+    // --- Контракт формата HTTP-ответа (находка ревью 82b4fbfc) ---
+    // Дока вертикали — контракт для фронта: сводка /api/plugins/drafts уходит по HTTP
+    // camelCase — дефолт MVC (JsonSerializerDefaults.Web), а не PascalCase прямой
+    // сериализации, как проверяют тесты выше. Этот тест идёт через живой TestServer и
+    // краснеет при смене casing или потере displayName — ровно то, что поймает расхождение
+    // docs↔код до того, как фронт напишет код по доке.
+    // Мутация: поменять NotContain("Slug") на Contain("Slug") → красный (PascalCase в
+    // HTTP-ответе отсутствует).
+
+    [Fact]
+    public void List_HttpОтвет_CamelCaseСDisplayName()
+    {
+        var factory = new TestWebApplicationFactory();
+        try
+        {
+            var client = factory.CreateAuthenticatedClient();
+            // Флаги plugins-mvp / plugins-build-yourself: дефолт off — включаем через боевой API
+            client.PutAsJsonAsync("/api/feature-flags/plugins-mvp", new { enabled = true })
+                .GetAwaiter().GetResult().EnsureSuccessStatusCode();
+            client.PutAsJsonAsync("/api/feature-flags/plugins-build-yourself", new { enabled = true })
+                .GetAwaiter().GetResult().EnsureSuccessStatusCode();
+
+            var owner = factory.Services.GetRequiredService<UserStore>()
+                .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+            var store = factory.Services.GetRequiredService<PluginStore>();
+
+            // Черновик с панелью: title первой панели — человекочитаемое имя (D2).
+            // id в манифесте НЕ задаём: его выводит сервер (PluginIdentity.Resolve),
+            // явный id обязан совпасть с выведенным — иначе bad-id.
+            var root = store.DraftDir(owner, "pkg");
+            Directory.CreateDirectory(Path.Combine(root, "skills", "a"));
+            File.WriteAllText(Path.Combine(root, "skills", "a", "SKILL.md"), "# Skill A\n");
+            Directory.CreateDirectory(Path.Combine(root, "panel"));
+            File.WriteAllText(Path.Combine(root, "panel", "index.html"), "<html><body>Погода</body></html>");
+            var derivedId = PluginIdentity.DeriveId(owner, "pkg");
+            var manifest = new
+            {
+                name = "pkg",
+                version = "1.0.0",
+                contributes = new
+                {
+                    skills = new[] { "skills/a" },
+                    panels = new[] { new { id = "main", slot = "sidebar", entry = "panel/index.html", title = "Погода" } },
+                },
+                permissions = new { requested = new[] { "notes:read" } },
+            };
+            File.WriteAllText(Path.Combine(root, "ccs-plugin.json"), JsonSerializer.Serialize(manifest));
+            Directory.CreateDirectory(Path.Combine(root, ".claude-plugin"));
+            File.WriteAllText(Path.Combine(root, ".claude-plugin", "plugin.json"),
+                JsonSerializer.Serialize(new { name = "pkg", version = "1.0.0" }));
+
+            // Черновик БЕЗ панелей: ветка displayName=null на уровне сервиса закрыта
+            // List_ЧерновикСПанелью_СводкаСодержитИмя; здесь она закрепляется по HTTP.
+            var plainRoot = store.DraftDir(owner, "plain");
+            Directory.CreateDirectory(Path.Combine(plainRoot, "skills", "a"));
+            File.WriteAllText(Path.Combine(plainRoot, "skills", "a", "SKILL.md"), "# Skill A\n");
+            var plainManifest = new
+            {
+                name = "plain",
+                version = "1.0.0",
+                contributes = new { skills = new[] { "skills/a" } },
+                permissions = new { requested = new[] { "notes:read" } },
+            };
+            File.WriteAllText(Path.Combine(plainRoot, "ccs-plugin.json"), JsonSerializer.Serialize(plainManifest));
+            Directory.CreateDirectory(Path.Combine(plainRoot, ".claude-plugin"));
+            File.WriteAllText(Path.Combine(plainRoot, ".claude-plugin", "plugin.json"),
+                JsonSerializer.Serialize(new { name = "plain", version = "1.0.0" }));
+
+            var res = client.GetAsync("/api/plugins/drafts").GetAwaiter().GetResult();
+            res.StatusCode.Should().Be(HttpStatusCode.OK, "флаги включены, подсистема активна");
+            var json = res.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+            json.Should().Contain("\"slug\":\"pkg\"", "ключи HTTP — camelCase");
+            json.Should().Contain($"\"id\":\"{derivedId}\"", "id выведен сервером (raw manifest.id не читается)");
+            json.Should().Contain("\"displayName\":\"Погода\"", "D2: человекочитаемое имя = title первой панели");
+            json.Should().Contain("\"displayName\":null", "черновик без панелей — null в HTTP, а не пустая строка");
+            json.Should().Contain("\"version\":\"1.0.0\"", "версия");
+            json.Should().Contain("\"updatedAt\":", "время изменения — mtime файлов черновика (пример в доке)");
+            json.Should().Contain("\"problems\":0", "валидный черновик — 0 проблем");
+            json.Should().Contain("\"installedSameVersion\":false", "ещё не установлена такая версия");
+            json.Should().Contain("\"installedVersion\":null", "плагин не установлен → null (QA-фикс R)");
+            json.Should().Contain("\"rejected\":false", "активный черновик");
+            json.Should().Contain("\"expiresAt\":null", "активный — без срока");
+            json.Should().NotContain("\"Slug\":", "PascalCase в HTTP-ответе — контракт docs↔код сломан");
+            json.Should().NotContain("\"DisplayName\":", "имя — только camelCase displayName");
+            json.Should().NotContain("\"Version\":", "версия — только camelCase version");
+            json.Should().NotContain("\"Problems\":", "число проблем — только camelCase problems");
+        }
+        finally
+        {
+            factory.Dispose();
+        }
     }
 
     // --- Preview: тот же PluginDraftService.Preview, что у draft_preview ---
@@ -515,6 +630,51 @@ public class PluginDraftsControllerTests : IDisposable
         var bad = (BadRequestObjectResult)res;
         bad.StatusCode.Should().Be(400);
         JsonSerializer.Serialize(bad.Value).Should().Contain("problems", "список проблем в ответе");
+    }
+
+    // --- Accept: человекочитаемое имя пакета (D2, находка 4c903d8e) ---
+    // Имя — title первой панели манифеста черновика (вывод — PluginDisplayName.Of, единственная
+    // точка на бэке); панелей нет → null, фронт остаётся на fallback humanizeId. Мутация:
+    // убрать строку displayName в ответе — оба теста красные.
+
+    [Fact]
+    public void Accept_ПакетСTitleПанели_ОтдаётЧеловеческоеИмя()
+    {
+        CreateDraftPackage(OwnerA, "local-952568751510/weather", "0.1.0", [], panelTitle: "Погода");
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.Accept("weather");
+        // Сравниваем разобранное значение, не подстроку: JsonSerializer экранирует кириллицу
+        // в \u-последовательности, и Contain по «Погода» не совпал бы с «По…».
+        var payload = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(ok.Value));
+        payload.GetProperty("displayName").GetString().Should().Be("Погода",
+            "в диалоге согласия — title панели, а не humanizeId(id)");
+    }
+
+    [Fact]
+    public void Accept_ПакетБезПанелей_ИмяNull()
+    {
+        CreateDraftPackage(OwnerA, "local-952568751510/pkg", "1.0.0", ["notes:read"]);
+        var ctl = NewController(OwnerA);
+
+        var ok = (OkObjectResult)ctl.Accept("pkg");
+        var payload = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(ok.Value));
+        payload.GetProperty("displayName").ValueKind.Should().Be(JsonValueKind.Null,
+            "панелей нет → null, а не пустая строка: фронт остаётся на fallback");
+    }
+
+    // --- List: сводка списка несёт то же имя (D2) ---
+
+    [Fact]
+    public void List_ЧерновикСПанелью_СводкаСодержитИмя()
+    {
+        CreateDraftPackage(OwnerA, "local-952568751510/weather", "0.1.0", [], panelTitle: "Погода");
+        CreateDraftPackage(OwnerA, "local-952568751510/plain", "1.0.0", []);
+
+        var list = _drafts.List(OwnerA);
+        list.Should().HaveCount(2);
+        list.Single(s => s.Slug == "weather").DisplayName.Should().Be("Погода");
+        list.Single(s => s.Slug == "plain").DisplayName.Should().BeNull("без панелей — null, не пустая строка");
     }
 
     // --- Accept: первая установка → granted = [], consentRequired = true, newPermissions = все Requested ---

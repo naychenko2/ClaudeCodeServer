@@ -111,21 +111,26 @@ public class FileWatcherSubscriptionTests : IDisposable
         Skip.If(root is null, "тест идёт на настоящем дереве репозитория");
 
         var (svc, projectId) = Build(root!, []);
-        var watchesBefore = InotifyProbe.CountWatches();
-        var instancesBefore = InotifyProbe.CountInotifyFds();
 
         svc.Watch(projectId, "conn-budget").Should().BeTrue("наблюдатель поднят впервые");
-        var own = InotifyProbe.CountWatches() - watchesBefore;
-        var ownInstances = InotifyProbe.CountInotifyFds() - instancesBefore;
-        svc.Unwatch(projectId, "conn-budget");
+        // Мера по экземпляру наблюдателя, а не дельтой процесса: параллельные коллекции
+        // поднимают свои inotify-экземпляры в том же процессе (тесты сервера через
+        // TestWebApplicationFactory), и их открытие/закрытие попадало в окно замера —
+        // регрессия краснела, когда чужой экземпляр гасился между двумя снимками.
+        var watcher = svc.WatcherFor(projectId);
+        watcher.Should().NotBeNull("наблюдатель поднят и жив");
+        var own = watcher!.WatchCount;
 
         own.Should().BeGreaterThan(0, "наблюдение обязано реально встать, иначе замер пустой");
         own.Should().BeLessThan(WatchBudget,
             $"открытый проект не должен выедать бюджет inotify (замерено {own})");
         // Свойство конструкции, а не замер: разбиение дерева на поддеревья с отдельным
         // FileSystemWatcher на каждое дало бы на этом репозитории 178 экземпляров при
-        // дефолтном потолке ядра 128.
-        ownInstances.Should().Be(1, "наблюдатель проекта держит ровно один экземпляр inotify");
+        // дефолтном потолке ядра 128. Все подписки наблюдателя — на одном экземпляре.
+        InotifyProbe.CountWatchesOf(watcher!.FdForTests).Should().Be(own,
+            "наблюдатель проекта держит ровно один экземпляр inotify");
+
+        svc.Unwatch(projectId, "conn-budget");
     }
 
     [SkippableFact]
@@ -141,9 +146,10 @@ public class FileWatcherSubscriptionTests : IDisposable
 
         svc.Watch(projectId, "conn-tree");
         // Каталог, созданный уже ПОСЛЕ старта наблюдения: дерево файлов в UI обновляется
-        // именно по его событию, а файл внутри него — по подписке, встающей на лету.
+        // именно по его событию, а файл внутри него — по подписке, встающей на лету:
+        // при появлении каталога наблюдатель подписывается на него и обходит его, уже
+        // возможно заполненный (emitExistingFiles), поэтому файл доезжает и без паузы.
         Directory.CreateDirectory(Path.Combine(root, "src", "fresh"));
-        await Task.Delay(300);
         File.WriteAllText(Path.Combine(root, "src", "fresh", "a.txt"), "x");
         // Служебный каталог не подписан вовсе — его правка до клиента доехать не может.
         File.WriteAllText(Path.Combine(root, "node_modules", "pkg", "index.js"), "x");
@@ -170,11 +176,13 @@ public class FileWatcherSubscriptionTests : IDisposable
         var sent = new List<JsonElement>();
         var (svc, projectId) = Build(root, sent);
 
-        var watchesBefore = InotifyProbe.CountWatches();
         svc.Watch(projectId, "conn-omc");
-        var own = InotifyProbe.CountWatches() - watchesBefore;
         // Корень и src/ — всё; 50 каталогов сессий под `.omc` дали бы полсотни слежек сверху.
-        own.Should().Be(2, "под `.omc` слежки не ставятся");
+        // Мера по экземпляру, а не дельтой процесса: чужой наблюдатель параллельной
+        // коллекции искал бы дельту (флака регрессии).
+        var watcher = svc.WatcherFor(projectId);
+        watcher.Should().NotBeNull("наблюдатель поднят");
+        watcher!.WatchCount.Should().Be(2, "под `.omc` слежки не ставятся");
 
         File.WriteAllText(Path.Combine(root, ".omc", "state", "sessions", "s0", "a.json"), "{}");
         File.WriteAllText(Path.Combine(root, "src", "a.txt"), "x");

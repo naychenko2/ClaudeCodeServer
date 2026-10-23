@@ -129,6 +129,11 @@ public class TaskItem
     public string? Lane { get; set; }
     // Id задач, которые оценивает это ревью/проверка/финал. Пусто/у final,qa — вся фича.
     public List<string>? ReviewOf { get; set; }
+    // Структурный список шагов плана (честный прогресс фичи, разрез Александра §2): знаменатель
+    // «сколько всего» берётся из PlanSteps задач role=plan, а не из markdown-плана. Аддитивное
+    // nullable-поле: допустимо ТОЛЬКО у role=plan (валидация — TaskManager), у прочих ролей и в
+    // старых задачах — null. BackupSchema.Version не растёт (прецедент ReviewOf).
+    public List<PlannedStep>? PlanSteps { get; set; }
     // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика.
     public DateTime? AwaitingHumanSince { get; set; }
     public string? AwaitingHumanReason { get; set; }
@@ -157,6 +162,15 @@ public class TaskItem
     // заметки, снятие волной), которые не оставляют системного Verification. Прочие значения
     // ставит человек/персона. Сбрасывается при уходе из Done.
     public DefectOutcome? Outcome { get; set; }
+    // Критерии приёмки (измеримые) и свидетельства их выполнения. Аддитивные поля: старые
+    // задачи читаются пустыми списками, BackupSchema.Version не растёт. Закрыть задачу с
+    // непустым Acceptance можно, только когда на каждый критерий есть свидетельство
+    // (гейт один — AcceptanceRules, вызывается из TaskManager на переходе в Done).
+    // Явный "acceptance": null в JSON затирал бы инициализатор — сеттер возвращает пустой список
+    public List<AcceptanceCriterion> Acceptance { get => _acceptance; set => _acceptance = value ?? []; }
+    public List<AcceptanceEvidence> Evidence { get => _evidence; set => _evidence = value ?? []; }
+    private List<AcceptanceCriterion> _acceptance = [];
+    private List<AcceptanceEvidence> _evidence = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Дата+время завершения: когда статус стал Done. null — не завершена.
@@ -165,11 +179,35 @@ public class TaskItem
     public DateTime? CompletedAt { get; set; }
 }
 
+// Критерий приёмки задачи: Id стабилен (на него ссылается свидетельство), Text — измеримая формулировка.
+public record AcceptanceCriterion(string Id, string Text);
+
+// Свидетельство по критерию: How — чем проверено, Result — что получилось (вывод, цифры).
+public record AcceptanceEvidence(string CriterionId, string How, string Result);
+
 public class TaskSubtask
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
     public string Title { get; set; } = "";
     public bool IsDone { get; set; }
+}
+
+// Шаг плана (TaskItem.PlanSteps): код шага (StepRef), его название (Title) и линия (Lane).
+// StepRef — ключ шага (тот же, что у step/rework): непуст и уникален внутри задачи.
+// Title — человекочитаемое название шага; Lane — линия (бэк/фронт), как у шагов.
+// Лимиты — константы (единая точка для валидации в TaskManager и для тестов).
+public class PlannedStep
+{
+    // Потолок числа шагов плана на задачу: план — не таблица на тысячу строк.
+    public const int MaxSteps = 200;
+    // Максимальная длина кода шага (StepRef) и названия (Title). Длина — в UTF-16 code units
+    // (string.Length): эмодзи/суперскрипты съедают по 2 единицы (минор 8, оговорено).
+    public const int MaxStepRefLength = 40;
+    public const int MaxTitleLength = 200;
+
+    public string StepRef { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string? Lane { get; set; }
 }
 
 public enum TaskItemStatus { Todo, InProgress, Done }

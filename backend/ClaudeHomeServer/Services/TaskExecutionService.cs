@@ -599,8 +599,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         string? rulesTemplate = null)
     {
         if (persona is not null)
-            return BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath,
-                rulesTemplate);
+            return ToLf(BuildPersonaPrompt(task, aliases ?? ModelTierAliases.None, categoryProfilesPath,
+                rulesTemplate));
 
         var sb = new StringBuilder();
         sb.AppendLine($"Выполни задачу из трекера (id задачи: {task.Id}).");
@@ -639,8 +639,14 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // Тот же канал эскалации, что и у персоны (см. комментарий в BuildPersonaPrompt)
         sb.AppendLine("- Застрял или выполнить невозможно — не завершай задачу: эскалируй через " +
                       "chats_report_up тому, кто её поставил (blocker: true — работа встала).");
-        return sb.ToString();
+        return ToLf(sb.ToString());
     }
+
+    // Постановка уходит в CLI с единым концом строки LF на любой ОС. AppendLine пишет
+    // Environment.NewLine, и на Windows обвязка шла с CRLF, а тело шаблона — с LF.
+    // Меняем именно "\r\n", а не Environment.NewLine: CRLF приходит и из пользовательского
+    // текста (описание, repro, заметки), и на Linux он иначе остался бы как есть.
+    private static string ToLf(string text) => text.Replace("\r\n", "\n");
 
     // 6-секционный контракт постановки для персоны-исполнителя. Характер персоны
     // инжектится системным промптом сессии (персона-слой) — здесь только постановка.
@@ -880,7 +886,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             sb.AppendLine($"### {h.Title} ({h.SourceLabel})");
             sb.AppendLine(h.Snippet.Trim());
         }
-        return sb.ToString();
+        return ToLf(sb.ToString());
     }
 
     // Наблюдатель сообщений всех сессий: реагируем только на сессии, привязанные к задачам.
@@ -1912,7 +1918,23 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
     // Текст гостевой реплики B: маркер + пустая строка + итог задачи
     internal static string BuildDelegationReportText(TaskItem task) =>
-        $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task)}";
+        $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task)}{DelegationReportAcceptance(task)}";
+
+    // Таблица «критерий → свидетельство» для задач с критериями приёмки; без критериев — пусто.
+    // Критерий без свидетельства (задачу закрыли мимо гейта, например человек через UI) —
+    // явная пометка, а не пропуск строки.
+    private static string DelegationReportAcceptance(TaskItem task)
+    {
+        if (task.Acceptance.Count == 0) return "";
+        static string Cell(string v) => v.Replace("|", "\\|").Replace("\r", "").Replace("\n", " ");
+        var rows = task.Acceptance.Select(c =>
+        {
+            var e = task.Evidence.FirstOrDefault(x => x.CriterionId == c.Id);
+            var proof = e is null ? "_нет свидетельства_" : $"{Cell(e.How)} — {Cell(e.Result)}";
+            return $"| {Cell(c.Id)}. {Cell(c.Text)} | {proof} |";
+        });
+        return "\n\n**Критерии приёмки**\n\n| Критерий | Свидетельство |\n|---|---|\n" + string.Join("\n", rows);
+    }
 
     // Промпт авто-хода постановщика A: выжимка (id/название) + просьба отреагировать.
     // MINOR 1: полное тело resultMarkdown сюда НЕ дублируем — оно уже перед этим ходом

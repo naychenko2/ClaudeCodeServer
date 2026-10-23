@@ -13,6 +13,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
@@ -546,6 +547,9 @@ builder.Services.AddSingleton<SessionContextResolver>();
 // Документация проекта (README + docs/) для панели «Доки»: индекс, связи, поиск.
 // Кеш живёт внутри сервиса и ключуется корнем папки, поэтому singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>();
+// Каталог макетов фичи (волна 3, Б-mk-a): записки docs/mockups + linkedFiles. Stateless
+// singleton, как DocsIndexService, — корпус читает через него, своего кеша/обхода нет.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.MockupCatalog>();
 // Гигиена карты проекта (CLAUDE.md): детерминированный сканер без модели, пороги —
 // из секции ProjectMap конфигурации. Состояния нет, читает файлы по запросу
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapScanner>();
@@ -1705,6 +1709,12 @@ if (!inspectionMode)
                     try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
         }
         catch { /* нет доступа к temp — не критично */ }
+        try
+        {
+            // хук потребителей: признаки «файл уже правили» (<префикс проекта>_<session_id>) и каталоги отпечатков прежних сборок, TTL сутки
+            ClaudeRuntimeSettings.CleanupHookState(Path.GetTempPath(), TimeSpan.FromDays(1));
+        }
+        catch { /* не критично */ }
     });
 
 // Однократная миграция: переносим DifyDatasetId/DocumentTags из старых Project-записей в WorkspaceKnowledge

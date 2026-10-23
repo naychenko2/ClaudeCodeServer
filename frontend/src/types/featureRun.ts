@@ -13,6 +13,8 @@
 // Задача в агрегате фичи: подмножество `TaskItem` бэка (camelCase), которое
 // использует карточка. Все поля аддитивны и nullable — UI обязан пережить
 // отсутствие любого (старые задачи без разметки не несут feature-полей).
+import type { StepProgress } from '../lib/featureProgress';
+
 export interface FeatureTask {
   id: string;
   title: string;
@@ -55,6 +57,9 @@ export type FeatureRoundVerdict =
 
 // Один виток ревью/проверки/финала (бэк: `FeatureRound`). Живёт в цепочке шагов
 // (`FeatureStepChain.rounds`) и в стадиях qa/final (`FeatureStage.rounds`).
+// Порядок витков в цепочке даёт бэк — по завершению (CompletedAt, при равенстве —
+// по старту задачи); `startedAt` здесь только для показа, по нему НЕ сортировать
+// (решение Александра, шов 2б: старты внутри цепочки могут идти не по возрастанию).
 export interface FeatureRound {
   n: number;
   verdict: FeatureRoundVerdict;
@@ -68,6 +73,8 @@ export interface FeatureRound {
   completedAt?: string | null;
   // Причина: Verification.Notes.
   reason?: string | null;
+  // Б7: чат витка (LinkedSessionId задачи ревью/проверки/финала, fail-closed); null — нет.
+  reviewChatId: string | null;
 }
 
 // Счётчики исходов витков (бэк: `FeatureVerdicts`). `loops` — СЧЁТЧИК
@@ -87,6 +94,48 @@ export type StageState = 'done' | 'active' | 'pending' | 'absent';
 // Тон активной стадии (бэк: `FeatureStage.Tone`): run — идёт; wait — ждёт человека;
 // stopped — исполнитель встал; loop — работа вернулась (доработка идёт).
 export type StageTone = 'run' | 'wait' | 'stopped' | 'loop';
+
+// Состояние фичи (бэк: `FeatureRun.State`, константы `FeatureStates`; 9 значений,
+// camelCase как в JSON). Единая точка правды: из неё бэк выводит bucket строки
+// индекса и порядок OrderRuns. Приоритет (первое совпавшее побеждает):
+// merged → closed → stopped → waiting → merging → merge_pending → running → not_started → idle.
+export type FeatureState =
+  | 'not_started'
+  | 'running'
+  | 'waiting'
+  | 'stopped'
+  | 'merge_pending'
+  | 'merging'
+  | 'merged'
+  | 'closed'
+  | 'idle';
+
+// Исполнитель стадии (бэк: `FeatureStageExecutor`): одна запись на задачу стадии.
+// Бэк отдаёт сырые данные (TaskRole/StepRef/Lane, статус, исполнителя) — подпись роли
+// (roleLabel) строит фронт. Статус выведен из полей задачи: running — идёт; waiting — ждёт
+// человека; stopped — исполнитель встал; done — закрыта; pending — не стартовала.
+export interface FeatureStageExecutor {
+  // Исполнитель (PersonaId задачи); null — нет.
+  personaId: string | null;
+  // Id задачи.
+  taskId: string;
+  // Роль задачи как есть (step/rework/review/qa/final/merge/cut/plan/consult); null — нет.
+  taskRole: string | null;
+  // Код шага (у step/rework); null — нет.
+  stepRef: string | null;
+  // Линия как есть (back/front/…); null — нет.
+  lane: string | null;
+  // Статус: running | waiting | stopped | done | pending.
+  status: 'running' | 'waiting' | 'stopped' | 'done' | 'pending';
+  // Чат исполнителя (LinkedSessionId, fail-closed); null — нет.
+  chatId: string | null;
+  // true — чат исполнителя в архиве.
+  chatArchived: boolean;
+  // Короткая подпись модели; null — нет.
+  modelLabel: string | null;
+  // Полное имя модели; null — нет.
+  modelFull: string | null;
+}
 
 // Стадия конвейера фичи (бэк: `FeatureStage`). Арифметику считает бэк, фронт
 // только показывает (шаг Ф5).
@@ -112,6 +161,19 @@ export interface FeatureStage {
   personaIds?: string[];
   taskCount?: number;
   verdict?: FeatureRoundVerdict | null;
+  // Б2: начало стадии (мин. ClaudeStartedAt задач стадии); null — ни одна не стартовала.
+  firstStartedAt: string | null;
+  // Б2: конец стадии (макс. CompletedAt); null — стадия ещё не завершилась (не все Done).
+  lastCompletedAt: string | null;
+  // Б2: длительность по часам стены (минуты): объединение интервалов задач стадии
+  // (параллельные не складываются); пустая стадия → 0.
+  approxMinutes: number;
+  // Б2: пересекается ли стадия с идущей (интервалы пересекаются с задачами ДРУГОЙ стадии,
+  // которая ещё идёт); стадия без интервалов → false.
+  overlapsActive: boolean;
+  // Б2: исполнители стадии (по одному на задачу стадии, в порядке, в котором задачи дал
+  // вызывающий). Сырые данные — подпись роли строит фронт (roleLabel).
+  executors: FeatureStageExecutor[];
 }
 
 // Цепочка шага (бэк: `FeatureStepChain`): задача шага + её доработки, в порядке времени.
@@ -138,6 +200,8 @@ export interface FeatureStepChain {
   loops: number;
   // Витки цепочки: ревью/проверки/финалы, связанные через ReviewOf, в порядке времени.
   rounds: FeatureRound[];
+  // Б7: чат исполнителя шага (LinkedSessionId, fail-closed); null — нет.
+  chatId: string | null;
 }
 
 // Возвраты одного источника (ревью/проверка/финал) (бэк: `FeatureSourceReturns`).
@@ -188,8 +252,8 @@ export interface FeatureNow {
 // Тревога фичи (бэк: `FeatureAttention`): один элемент либо null.
 // Приоритет: stopped → wait явный → wait «мерж».
 export interface FeatureAttention {
-  // wait | stopped.
-  kind: string;
+  // wait | stopped | merge (merge — только пока merge-задачи нет, финал принят).
+  kind: 'wait' | 'stopped' | 'merge';
   // Id задачи, к которой относится тревога (у «мерж» — финал).
   taskId?: string | null;
   // С какого момента: ExecutorStoppedAt / AwaitingHumanSince / CompletedAt финала.
@@ -220,12 +284,15 @@ export interface FeatureSummary {
 // `final`/`merge` — задачи трекера, сгруппированные проектором по роли;
 // `verdicts`/`progress`/`ready` вычисляет бэк, фронт только показывает.
 // Старые поля (epic/steps/reviews/qa/final/merge/verdicts/progress/ready) пока
-// использует `PipelineFlow` (его переделает Ф5) — не удалять.
+// использует `FeatureRunView` (страница фичи) — не удалять.
 // Новые поля (cut/plan/stages/stepChains/now/attention/returnsBySource/lanes/
 // stepsAccepted/stepsTotal/lastActivityAt/closed/summary) — аддитивные и
 // nullable-терпимые: опциональны, UI обязан пережить их отсутствие (старые данные).
 export interface FeatureRun {
   featureId: string;
+  // Состояние фичи (бэк: `FeatureRun.State`, 9 значений, всегда отдаётся).
+  // Единая точка правды: из неё выводится bucket строки индекса и порядок OrderRuns.
+  state: FeatureState;
   // p.32: nullable-терпимо (опционально), как и остальные новые поля — UI обязан
   // пережить отсутствие epic (защита в taskCounters: run.epic ? [run.epic] : []).
   epic?: FeatureTask;
@@ -257,6 +324,9 @@ export interface FeatureRun {
   // Счётчик шагов: принятые (Done) / все (из StepChains).
   stepsAccepted?: number;
   stepsTotal?: number;
+  // Честный прогресс по шагам (волна 3, Ф-pr): planState/total/accepted/review/work/
+  // notCreated/withdrawn/unlinkedReworks. Аддитивное: старые ответы не несут.
+  stepProgress?: StepProgress;
   // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
   lastActivityAt?: string | null;
   // Закрыта: merge-задача Done или эпик Done.

@@ -55,6 +55,8 @@ public class TurnAutoResumeServiceTests
         public bool IsEnabledFor(Session session) => FlagOn(session.OwnerId ?? "");
         public bool IsDeviceOnline(Project project) => true;
         public bool LastTurnWasDeployOrRollback(Session session, Project? project) => false;
+        public int DrainRestoredCalls;
+        public Task DrainRestoredQueuesAsync() { DrainRestoredCalls++; return Task.CompletedTask; }
         public Task<TurnResumeSendResult> ResumeAsync(string sessionId)
         {
             lock (Log) Log.Add("send:" + sessionId);

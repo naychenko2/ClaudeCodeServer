@@ -4,7 +4,9 @@
  * ОДИН раз: ошибка в одной копии — дыра (решение Александра, шаг F1).
  *
  * Прямого доступа к localStorage у модуля нет: хост передаёт store в форме
- * Storage. Префикс ccs.plugin.<ownerId>.<pluginId>. собирает только хост —
+ * Storage или функции-провайдера () => Storage (F-д6: одна точка получения
+ * хранилища и разбора его ошибок — и здесь же, а не в хосте и не в эмуляторе).
+ * Префикс ccs.plugin.<ownerId>.<pluginId>. собирает только хост —
  * модуль берёт ownerId и pluginId сверху, из args их не достаёт. Поля
  * сообщения панели (свои granted/pluginId/ownerId/prefix) на проверку права
  * и префикс не влияют.
@@ -64,9 +66,34 @@ function jsonUnrepresentable(value) {
 /**
  * Один вызов storage.* от панели.
  * op: get|set|remove|keys; args: {key} / {key, value} / {}.
+ * store — объект в форме Storage или провайдер () => Storage. Геттер
+ * window.localStorage бросает SecurityError при отключённом хранилище
+ * (Firefox dom.storage.enabled=false, приватный режим), поэтому провайдер
+ * разрешается внутри этого try: ошибка разбирается здесь, а не в хосте (F-д6).
+ * Функция НИКОГДА не бросает: панель всегда получает result.
  * Возвращает {ok:true, data} или {ok:false, error:{code, message}}.
  */
-export function handleStorageCall({ op, args, granted, ownerId, pluginId, store }) {
+export function handleStorageCall(input) {
+  try {
+    // Одна точка получения хранилища: провайдер здесь же, в том же try.
+    const store = typeof input.store === 'function' ? input.store() : input.store;
+    // SecurityError (хранилище отключено/приватный режим) бросает любое обращение к
+    // store — get/remove/keys/length/key(i), не только setItem. Для панели это
+    // unavailable на ЛЮБОЙ операции: иначе исключение уходит в хост, а промис
+    // ccsPlugin.call висит вечно (ревью Глеба R2, инвариант 7).
+    return handleStorageCallImpl({ ...input, store });
+  } catch (e) {
+    // F-д2 (M1), F-д6: два разных случая, и оба видны — здесь, одной точкой.
+    // SecurityError — штатный тихий unavailable для панели, без лога. Всё прочее —
+    // настоящая ошибка: логируем с меткой, чтобы разработчик её видел, и не прячем
+    // под человеческий текст «Хранилище недоступно».
+    if (e && e.name === 'SecurityError') return fail('unavailable', 'Хранилище недоступно');
+    console.error('[plugin storage] внутренняя ошибка хранилища:', e);
+    return fail('unavailable', 'Внутренняя ошибка хранилища');
+  }
+}
+
+function handleStorageCallImpl({ op, args, granted, ownerId, pluginId, store }) {
   // 1. Право — только по granted состояния хоста (п.2).
   if (!Array.isArray(granted) || !granted.includes('storage')) {
     return fail('denied', 'Нет права: storage');
@@ -126,12 +153,15 @@ export function handleStorageCall({ op, args, granted, ownerId, pluginId, store 
         return fail('limit', 'Больше 100 ключей на плагин');
       }
       const ownBytes = ownKeys.reduce((sum, k) => sum + keyBytes(store, k), 0);
-      const newOwnBytes = ownBytes - (oldRaw === null ? 0 : oldRaw.length) + raw.length;
+      // Объём — по той же мере, что keyBytes/storage.keys: длина ключа + длина значения.
+      const oldBytes = oldRaw === null ? 0 : fullKey.length + oldRaw.length;
+      const newBytes = fullKey.length + raw.length;
+      const newOwnBytes = ownBytes - oldBytes + newBytes;
       if (newOwnBytes > PLUGIN_BYTES_MAX) return fail('limit', 'Больше 128 КиБ на плагин');
 
       const originKeys = allKeys(store).filter(k => k.startsWith(STORAGE_PREFIX));
       const originBytes = originKeys.reduce((sum, k) => sum + keyBytes(store, k), 0);
-      const newOriginBytes = originBytes - (oldRaw === null ? 0 : oldRaw.length) + raw.length;
+      const newOriginBytes = originBytes - oldBytes + newBytes;
       if (newOriginBytes > ORIGIN_BYTES_MAX) return fail('limit', 'Хранилище плагинов больше 1 МиБ');
 
       try {
@@ -166,6 +196,11 @@ export function handleStorageCall({ op, args, granted, ownerId, pluginId, store 
   }
 }
 
+// Частичное стирание (хранилище отключилось в середине цикла) не молчит.
+function logPartial(what, removed) {
+  console.warn('[plugin storage] ' + what + ' прервано SecurityError: удалено ключей ' + removed + ', остальные остались');
+}
+
 /**
  * Стереть ровно свой префикс. clear() не вызывается никогда: он гасит токен
  * и шлёт событие storage с key === null во всех вкладках (offline.ts:75-77).
@@ -177,8 +212,19 @@ export function removePluginStorage({ ownerId, pluginId, store }) {
   let removed = 0;
   for (const k of allKeys(store)) {
     if (k.startsWith(prefix)) {
-      store.removeItem(k);
-      removed++;
+      try {
+        store.removeItem(k);
+        removed++;
+      } catch (e) {
+        // F-д3 (минор 5): хранилище отключилось в середине цикла — часть ключей
+        // уже удалена, счётчик возвращаем честный (фактически удалённое), цикл
+        // останавливаем. Настоящая ошибка — вверх, как раньше.
+        if (e && e.name === 'SecurityError') {
+          logPartial('стирание плагина', removed);
+          break;
+        }
+        throw e;
+      }
     }
   }
   return removed;
@@ -200,8 +246,17 @@ export function collectStorageGarbage({ ownerId, keepPluginIds, store }) {
     // (грамматика publisher/slug), первая точка — граница.
     const pluginId = k.slice(ownerPrefix.length).split('.')[0];
     if (!keep.has(pluginId)) {
-      store.removeItem(k);
-      removed++;
+      try {
+        store.removeItem(k);
+        removed++;
+      } catch (e) {
+        // F-д3 (минор 5): частичный сбой — счётчик по фактически удалённому.
+        if (e && e.name === 'SecurityError') {
+          logPartial('сборка мусора', removed);
+          break;
+        }
+        throw e;
+      }
     }
   }
   return removed;

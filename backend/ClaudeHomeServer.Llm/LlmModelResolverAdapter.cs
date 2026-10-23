@@ -11,4 +11,7 @@ public sealed class LlmModelResolverAdapter(LlmProviderRegistry inner) : IModelR
 {
     public string ResolveModelOrDefault(string? model, string? providerKey)
         => inner.ResolveModelOrDefault(model, providerKey);
+
+    public bool IsLocal(string? providerKey)
+        => inner.GetByKey(providerKey)?.IsLocal == true;
 }

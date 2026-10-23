@@ -1,0 +1,7 @@
+{
+  "name": "widgets-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP-сервер виджетов ClaudeHomeServer (stdio, без зависимостей)",
+  "type": "module",
+  "main": "index.js"
+}

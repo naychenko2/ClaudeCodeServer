@@ -179,13 +179,30 @@ public class SafeMediaDownloaderTests
     [InlineData("10.0.0.1")]
     public async Task АдресСоединения_ВнутреннийНеРазрешён(string host)
     {
-        (await SafeMediaDownloader.ResolvePublicAsync(host, default)).Should().BeNull();
+        var act = () => SsrfSafeHandler.ResolvePublicAsync(host, (h, ct) => Dns.GetHostAddressesAsync(h, ct), default);
+        await act.Should().ThrowAsync<SsrfBlockedException>();
     }
 
     [Fact]
     public async Task АдресСоединения_ПубличныйЛитерал_Разрешён()
     {
-        (await SafeMediaDownloader.ResolvePublicAsync("8.8.8.8", default)).Should().Be(IPAddress.Parse("8.8.8.8"));
+        (await SsrfSafeHandler.ResolvePublicAsync("8.8.8.8", (h, ct) => Dns.GetHostAddressesAsync(h, ct), default))
+            .Should().Equal(IPAddress.Parse("8.8.8.8"));
+    }
+
+    [Fact]
+    public async Task БоевойТранспорт_ИмяСПубличнымИПриватнымАдресом_Отказ()
+    {
+        // Смешанный DNS: правило «все адреса публичные» (а не «первый публичный») режет имя целиком.
+        // Публичный адрес — 8.8.8.8 (TEST-NET сам не публичный): при поломке правила транспорт пошёл бы туда
+        using var handler = SafeMediaDownloader.CreateHandler((_, _) =>
+            Task.FromResult(new[] { IPAddress.Parse("8.8.8.8"), IPAddress.Loopback }));
+        var downloader = new SafeMediaDownloader(handler, (_, _) => Task.FromResult(SsrfGuard.AddressCheck.Public))
+            { Timeout = TimeSpan.FromSeconds(5) };
+
+        var result = await downloader.DownloadAsync("https://mixed.example/a.png", Max, default);
+
+        result.Error.Should().Be("private-address");
     }
 
     [Fact]
@@ -201,7 +218,7 @@ public class SafeMediaDownloaderTests
 
         var result = await downloader.DownloadAsync($"https://127.0.0.1:{port}/a.png", Max, default);
 
-        result.Error.Should().Be("network");
+        result.Error.Should().Be("private-address", "отказ в момент соединения — тот же код, что у проверки до запроса");
         listener.Pending().Should().BeFalse("до цели не должно дойти ни одного соединения");
     }
 
@@ -266,7 +283,7 @@ public class SafeMediaDownloaderTests
 
         var error = await downloader.UploadAsync($"https://127.0.0.1:{port}/ref.wav", [1, 2, 3], "audio/wav", default);
 
-        error.Should().Be("network");
+        error.Should().Be("private-address", "отказ в момент соединения — тот же код, что у проверки до запроса");
         listener.Pending().Should().BeFalse("до цели не должно дойти ни одного соединения");
     }
 }

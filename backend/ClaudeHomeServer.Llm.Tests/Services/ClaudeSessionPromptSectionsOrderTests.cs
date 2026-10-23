@@ -255,7 +255,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             ["LlmProviders:test-local:RecallInTurnText"] = enabled ? "true" : "false",
             ["LlmProviders:test-local:Models:0:Id"] = "qwen-test-27b",
             ["LlmProviders:test-local:Models:0:DisplayName"] = "Qwen Test",
-        }).Build();
+        }).AddInMemoryCollection(IsolatedProfiles()).Build();
 
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -716,6 +716,44 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         section.Should().BeNull($"{why}: video_* у хода нет («No such tool available»)");
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task ПризнакХукаПотребителей_ХостБезПесочницыСHttpГрафом_ТогдаИТолькоТогдаTrue(bool httpGraph, bool expected)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        bool? seen = null;
+        await RunTailTurnAsync(false, "x", bus => bus.OnFilter<PromptAssembling>(200, (e, next) =>
+        {
+            seen = e.Session.ConsumersHookActive;
+            return next();
+        }, "Test.HookFlag"), tweak: httpGraph
+            ? c => c with { CodeGraphMcp = new CodeGraphMcpContext("http://localhost:5999", () => "tok", "proj1") }
+            : null);
+
+        seen.Should().Be(expected, "хук доезжает до CLI только на хосте без песочницы и при http-адресе графа");
+    }
+
+    [Fact]
+    public void ХукПотребителей_ВПесочницеНеЗапускается()
+    {
+        ClaudeRuntimeSettings.ConsumersHookRuns(new SandboxedLauncher()).Should().BeFalse(
+            "у container-владельца --settings не передаётся — потребителей несёт хвост первого хода");
+    }
+
+    private sealed class SandboxedLauncher : IProcessLauncher
+    {
+        public bool IsSandboxed => true;
+        public bool TargetIsWindows => false;
+        public IPathMapper Paths => IdentityPathMapper.Instance;
+        public string ClaudeCliCommand => "fake-claude";
+        public string HostTempDir => Path.GetTempPath();
+        public string? McpApiUrlOverride => null;
+        public Process Start(ProcessSpec spec) => throw new NotSupportedException();
+        public void Kill(Process process, string? turnId = null) { }
+        public int EstimateCommandLineLength(ProcessSpec spec) => 0;
+    }
+
     private async Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTailTurnAsync(
         bool recallInTurnText, string stateText, Action<TurnEventBus>? extra = null, Session? info = null,
         Func<LlmSessionContext, LlmSessionContext>? tweak = null, Dictionary<string, string?>? providerConfig = null,
@@ -748,7 +786,7 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             ["LlmProviders:test-local:RecallInTurnText"] = recallInTurnText ? "true" : "false",
             ["LlmProviders:test-local:Models:0:Id"] = "qwen-test-27b",
             ["LlmProviders:test-local:Models:0:DisplayName"] = "Qwen Test",
-        }).AddInMemoryCollection(providerConfig ?? []).Build();
+        }).AddInMemoryCollection(IsolatedProfiles()).AddInMemoryCollection(providerConfig ?? []).Build();
 
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -768,12 +806,12 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             await using var _ = session;
             await session.SendMessageAsync("привет", agentDepth: agentDepth);
 
-            // Потолок ожидания события с запасом: под параллельной сборкой старт fake-CLI
-            // не укладывался в 15 с, а зелёный прогон дольше от этого не становится
-            var args = await WhenAnyAsync(argsCaptured.Task, TimeSpan.FromSeconds(60));
+            // Потолок — лишь страховка от зависания: старт задерживал синк настоящего ~/.claude,
+            // с изолированным профилем (IsolatedProfiles) он укладывается в доли секунды
+            var args = await WhenAnyAsync(argsCaptured.Task, TimeSpan.FromSeconds(15));
             var idx = args.ToList().IndexOf("--append-system-prompt");
             idx.Should().BeGreaterThanOrEqualTo(0, "стабильная секция непустая — аргумент обязан присутствовать");
-            var done = await Task.WhenAny(snapshot.Task, Task.Delay(TimeSpan.FromSeconds(60)));
+            var done = await Task.WhenAny(snapshot.Task, Task.Delay(TimeSpan.FromSeconds(15)));
             done.Should().Be(snapshot.Task, "снимок промпта хода обязан быть опубликован");
             return (args[idx + 1], await snapshot.Task);
         }
@@ -786,6 +824,17 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
             }
         }
     }
+
+    // Профили CLI — в папке теста, пользовательский ~/.claude — несуществующий каталог.
+    // Без этого каждый новый LlmProviderRegistry на первом ходе синхронно синкал НАСТОЯЩИЙ
+    // ~/.claude (десятки тысяч файлов plugins/) в общий профиль bin/data/claude-profiles и
+    // переписывал его манифест в несколько МБ — секунды до старта fake-CLI на каждый тест,
+    // а под параллельными классами (тот же профиль) старт не укладывался в потолок ожидания
+    private Dictionary<string, string?> IsolatedProfiles() => new()
+    {
+        ["DataPath"] = Path.Combine(_root, "data", "projects.json"),
+        ["ClaudeUserProfileDir"] = Path.Combine(_root, "no-user-claude"),
+    };
 
     private static async Task<IReadOnlyList<string>> WhenAnyAsync(
         Task<IReadOnlyList<string>> task, TimeSpan timeout)

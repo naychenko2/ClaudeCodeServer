@@ -610,6 +610,15 @@ public class FileWatcherService : IDisposable
             return _entries.TryGetValue(key, out var e) ? (e, e.Watcher is not null || e.Poll is not null) : null;
     }
 
+    // internal для тестов (InternalsVisibleTo): живой наблюдатель ключа — для прямой меры его
+    // подписок. Дельта по процессу (InotifyProbe до/после) для этого не годится: тесты сервера
+    // поднимают свои наблюдатели в том же процессе, и их открытие/закрытие попадает в окно
+    // замера (флака регрессий бюджета).
+    internal RecursiveDirectoryWatcher? WatcherFor(string key)
+    {
+        lock (_lock) return _entries.TryGetValue(key, out var e) ? e.Watcher : null;
+    }
+
     // internal для тестов: гасит watcher и заказ пересоздания, оставляя саму запись, —
     // состояние «запись жива, наблюдения нет», которое штатные пути сейчас не порождают.
     internal void DropWatcherKeepEntry(string key)

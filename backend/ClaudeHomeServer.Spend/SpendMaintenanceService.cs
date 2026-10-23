@@ -42,6 +42,17 @@ public sealed class SpendMaintenanceService(SpendStore store, ISessionDirectory 
         {
             try { store.RollupOlderThan(store.WindowStart); }
             catch (Exception ex) { log.LogError(ex, "spend: rollup не удался"); }
+
+            // «Локальный = бесплатный»: пересчитать записи, оставшиеся chat-turn/one-shot
+            // после того, как их провайдер стал локальным (или до учёта признака IsLocal).
+            // Идемпотентно: без перевёрнутых записей — без обращения к диску.
+            try
+            {
+                var flipped = store.ReclassifyLocalAsFree(llm.IsLocal);
+                if (flipped > 0) log.LogInformation("spend: переклассифицировано в бесплатные: {Count}", flipped);
+            }
+            catch (Exception ex) { log.LogError(ex, "spend: переклассификация не удалась"); }
+
             await Task.Delay(TimeSpan.FromHours(1), ct);
         }
     }
@@ -90,7 +101,7 @@ public sealed class SpendMaintenanceService(SpendStore store, ISessionDirectory 
                     PersonaId = session.PersonaId,
                     Provider = provider,
                     Model = llm.ResolveModelOrDefault(session.Model, provider),
-                    Source = SpendSources.IsFree(provider, session.Model)
+                    Source = SpendSources.IsFree(provider, session.Model, llm.IsLocal(provider))
                         ? SpendSources.Free : SpendSources.ChatTurn,
                     InputTokens = u.InputTokens,
                     OutputTokens = u.OutputTokens,

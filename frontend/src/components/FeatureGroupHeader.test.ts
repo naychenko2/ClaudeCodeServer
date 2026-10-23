@@ -12,7 +12,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { FeatureGroupHeader, featureGroupChevronClick } from './FeatureGroupHeader';
-import { featureDisplayState, featureGroupChats, featureGroupByOptions, featureQuickAction, featureAvatarPersonaIds } from '../lib/chatGroups';
+import { featureDisplayState, featureGroupChats, featureGroupByOptions, featureQuickAction, featureAvatarPersonaIds, featureStatusTag } from '../lib/chatGroups';
 import type { FeatureAttention, FeatureIndexFeature, FeatureRailSegment, FeatureRailKey } from '../types/featureIndex';
 import type { Session, Persona } from '../types';
 
@@ -134,12 +134,12 @@ describe('FeatureGroupHeader: тона', () => {
     expect(html.includes('border-left-color:var(--c-info)')).toBe(true);
   });
 
-  it('ждёт вас · мерж (merge): кромка info, статус «ждёт вас · мерж»', () => {
+  it('ждёт согласия на мерж (merge, attention): кромка info, статус «ждёт согласия на мерж»', () => {
     const f = feat({ bucket: 'attention', attention: attention('merge') });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('wait');
     expect(st.alarm).toBe('wait');
-    expect(st.status).toBe('ждёт вас · мерж');
+    expect(st.status).toBe('ждёт согласия на мерж');
     expect(renderHeader(f).includes('border-left-width:3px')).toBe(true);
     expect(renderHeader(f).includes('border-left-color:var(--c-info)')).toBe(true);
   });
@@ -172,6 +172,45 @@ describe('FeatureGroupHeader: тона', () => {
     expect(st.alarm).toBeNull();
     expect(st.status).toBe('смержена');
     expect(renderHeader(f).includes('data-feature-state="done"')).toBe(true);
+  });
+});
+
+// === state (бэк Б1a/Б1b): источник правды — f.state, не attention ===
+// Мутация «тон по attention.kind вместо state» красит: f без attention, но с state=merge_pending.
+
+describe('FeatureGroupHeader: state (merge_pending / merging)', () => {
+  it('merge_pending → wait, кромка info, статус «ждёт согласия на мерж»; тег «К мержу»', () => {
+    const f = feat({ bucket: 'attention', state: 'merge_pending', attention: null });
+    const st = featureDisplayState(f);
+    expect(st.kind).toBe('wait');
+    expect(st.alarm).toBe('wait');
+    expect(st.status).toBe('ждёт согласия на мерж');
+    expect(featureStatusTag(f)).toEqual({ label: 'К мержу', tone: 'merge' });
+    expect(featureQuickAction(f)).toBe('К мержу');
+  });
+
+  it('merging → run (нейтрально, НЕ «ждёт вас»), статус «Мерж идёт»; тег «Идёт»', () => {
+    const f = feat({ bucket: 'running', state: 'merging', attention: null });
+    const st = featureDisplayState(f);
+    expect(st.kind).toBe('run');
+    expect(st.alarm).toBeNull();
+    expect(st.status).toBe('Мерж идёт');
+    expect(featureStatusTag(f)).toEqual({ label: 'Идёт', tone: 'run' });
+  });
+
+  it('waiting (не мерж) → wait, «ждёт вас»; тег «Ждёт вас», быстрое «Ответить»', () => {
+    const f = feat({ bucket: 'attention', state: 'waiting', attention: null });
+    const st = featureDisplayState(f);
+    expect(st.kind).toBe('wait');
+    expect(st.status).toBe('ждёт вас');
+    expect(featureStatusTag(f)).toEqual({ label: 'Ждёт вас', tone: 'wait' });
+    expect(featureQuickAction(f)).toBe('Ответить');
+  });
+
+  it('запасной путь: state нет, attention.kind=merge → «ждёт согласия на мерж» (старый признак)', () => {
+    const f = feat({ bucket: 'attention', attention: attention('merge') });
+    const st = featureDisplayState(f);
+    expect(st.status).toBe('ждёт согласия на мерж');
   });
 });
 
@@ -378,5 +417,31 @@ describe('FeatureGroupHeader: m2 поля тела по состоянию', () 
   it('обычная на 360: minHeight 52 нет (только у закрытой)', () => {
     const html = renderHeader(feat(), { isMobile: true });
     expect(html).not.toContain('min-height:52px');
+  });
+});
+
+// === Ф-pr: мёртвый фолбэк «N/M» убран (один формат «принято N из T») ===
+// Бэк всегда даёт данные (stepProgress non-nullable, новые поля индекса безусловные),
+// поэтому ветка «${stepsAccepted}/${stepsTotal} ↺loops» недостижима; а голое «N/M»
+// (без слов) запрещено ТЗ. Убрана → progress-нода либо «принято N из T», либо пуста.
+describe('FeatureGroupHeader: Ф-pr — мёртвый фолбэк «N/M» убран', () => {
+  it('старый ответ (no new fields) → progress-нода БЕЗ «N/M» (голое «3/5» не возвращается)', () => {
+    // stepsAccepted/stepsTotal есть, новых полей (stepsReview/stepsWork/stepsNotCreated/planState)
+    // нет → stepProgressFromIndex = null. Мёртвый фолбэк «3/5» (убран) не должен возвращаться.
+    const f = feat({ stepsAccepted: 3, stepsTotal: 5 });
+    const html = renderHeader(f);
+    const m = html.match(/<span data-testid="feature-group-progress"[^>]*>([\s\S]*?)<\/span>/);
+    expect(m, 'progress-нода не найдена').not.toBeNull();
+    expect(m![1], 'текст прогресса не должен содержать «N/M»').not.toMatch(/\d+\s*\/\s*\d+/);
+  });
+
+  it('новые поля есть → progress-нода = «принято N из T» (форматтер, не «N/M»)', () => {
+    const f = feat({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, planState: 'partial' });
+    const html = renderHeader(f);
+    const m = html.match(/<span data-testid="feature-group-progress"[^>]*>([\s\S]*?)<\/span>/);
+    expect(m, 'progress-нода не найдена').not.toBeNull();
+    // Форматтер: «принято 3 из 5 · 2 в ревью · план частично» — без голого «3/5».
+    expect(m![1]).toContain('принято 3 из 5');
+    expect(m![1]).not.toMatch(/\d+\s*\/\s*\d+/);
   });
 });

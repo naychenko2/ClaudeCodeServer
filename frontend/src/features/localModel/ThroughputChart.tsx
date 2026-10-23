@@ -42,6 +42,9 @@ export interface ThroughputSample {
   genTokens: number | null;
   itlSeconds: number | null;
   itlCount: number | null;
+  // База шага (мс) этой точки по числу потоков в ней (батч-движок: шаг растёт с числом строк);
+  // null — берётся общая база стенда (параметр buildIntervals).
+  cleanStepMs: number | null;
   // Полоса «Куда уходит время агентов» (ADR-029, v2.3): prefillSeconds/queueSeconds —
   // приращения гистограмм (сек). null — разрыв.
   prefillSeconds: number | null;
@@ -165,8 +168,12 @@ export function segmentsToPoints(segments: { x: number; y: number }[][]): string
   return segments.map(seg => seg.map(p => `${round1(p.x)},${round1(p.y)}`).join(' '));
 }
 
-// Общая сборка линии по интервалам: одна точка на центр каждого интервала, null — обрыв
-// (как у линий кэша): центр интервала по x, y на общей оси скорости.
+// Общая сборка линии по интервалам СТУПЕНЬКОЙ: значение интервала — среднее за всю
+// клетку, поэтому линия держит его от левого края клетки до правого (две точки на
+// интервал), а не ставит одну точку в центр. С точкой в центре линия на окне 1 мин
+// (4 клетки по 15 с) начиналась в 7,5 с от края и кончалась за 7,5 с до него —
+// по 12,5 % ширины пустоты с обеих сторон (вопрос Андрея 22.10). null — обрыв
+// (как у линий кэша); y — на общей оси скорости.
 function buildIntervalSegments(
   intervals: Interval[],
   pick: (it: Interval) => number | null,
@@ -180,8 +187,8 @@ function buildIntervalSegments(
   for (const it of intervals) {
     const v = pick(it);
     if (v == null) { if (cur.length) { segs.push(cur); cur = []; } continue; }
-    const cx = geom.left + (geom.width - geom.left - geom.right) * ((it.tStart + (it.tEnd - it.tStart) / 2 - tMin) / (tMax - tMin));
-    cur.push({ x: cx, y: yForThroughput(v, maxSeries, geom) });
+    const y = yForThroughput(v, maxSeries, geom);
+    cur.push({ x: xForTime(it.tStart, tMin, tMax, geom), y }, { x: xForTime(it.tEnd, tMin, tMax, geom), y });
   }
   if (cur.length) segs.push(cur);
   return segs;
@@ -471,6 +478,7 @@ function toSamples(history: LocalModelStats['history'], windowMs: number, now: n
       genTokens: h.genTokens ?? null,
       itlSeconds: h.itlSeconds ?? null,
       itlCount: h.itlCount ?? null,
+      cleanStepMs: h.cleanStepMs ?? null,
       prefillSeconds: h.prefillSeconds ?? null,
       queueSeconds: h.queueSeconds ?? null,
     });
@@ -515,7 +523,9 @@ export function intervalGrid(tMin: number, tMax: number, intervalMs: number): [n
 // запрос ждал в очереди. Все четыре — из уже собираемых счётчиков vLLM.
 //
 // БАЗА ШАГА (базовая длительность прохода модели без помех) приходит с БЭКЕНДА:
-// stats.cleanStepMs — одна величина на весь стенд, НЕ зависящая от окна графика.
+// stats.cleanStepMs — общая на стенд, НЕ зависящая от окна графика; у точки истории
+// может быть СВОЯ база (sample.cleanStepMs — по числу потоков, работавших в ней,
+// v2.6: у батч-движка шаг растёт с числом потоков, и это не «ждёт соседа»).
 // Раньше база считалась на фронте по окну (перцентиль 10 шага в «чистых» интервалах),
 // и критерий «чистоты» был инвертирован: prompt_tokens растёт при ЗАВЕРШЕНИИ prefill,
 // поэтому prompt == 0 — это интервалы ОСТАНОВКИ декодирования (шаг 500–1000 мс), а не
@@ -535,6 +545,8 @@ interface RawInterval {
   sumGen: number; sumItl: number; hasStream: boolean;
   // «Куда уходит время»: шаги (itl), prefill/очередь (гистограммы).
   sumItlSec: number; sumItlCnt: number; hasStep: boolean;
+  // «генерирует» по базе каждой точки (ΣitlCnt×база точки, с); hasBase — база была хоть у одной точки
+  sumGenBase: number; hasBase: boolean;
   sumPrefillSec: number; hasPrefillSec: boolean;
   sumQueueSec: number; hasQueueSec: boolean;
   // Движок отвечал в интервале: хотя бы одна non-null из itlSeconds/itlCount/prefillSeconds/
@@ -543,8 +555,9 @@ interface RawInterval {
 }
 
 // Состояние «куда уходит время» интервала (ADR-029, v2.4).
-// База шага (с) — из ответа бэкенда (stats.cleanStepMs): gen = ΣitlCnt × база,
-// wait = max(0, ΣitlSec − gen); prefill/queue — приращения гистограмм.
+// База шага (с) — из ответа бэкенда: у каждой точки своя (по числу потоков) либо
+// общая stats.cleanStepMs: gen = Σ(itlCnt × база точки), wait = max(0, ΣitlSec − gen);
+// prefill/queue — приращения гистограмм.
 // Базы нет (null) — разделить «генерирует» и «ждёт соседа» нечем: всё измеренное
 // время декодирования относится к «генерирует», а «ждёт соседа» остаётся неразделенным
 // (wait = null в доле — «—», не ноль). База с фронта НЕ считается: любая оценка по
@@ -553,8 +566,12 @@ interface RawInterval {
 // Сумма > 0 → shares (доли, сумма 1). Сумма = 0 → idle (движок отвечал)
 // или break (молчал): простой ≠ нет данных (null = разрыв).
 function timeSharesOf(r: RawInterval, base: number | null): TimeState {
-  const gen = r.hasStep ? (base != null ? r.sumItlCnt * base : r.sumItlSec) : 0;
-  const wait = base != null ? Math.max(0, r.sumItlSec - gen) : null;
+  // «генерирует» — по базе каждой точки (ΣitlCnt×база точки); wait — превышение над ней.
+  // База точки учитывает число потоков (батч-движок), так что параллельный декод — это
+  // «генерирует», а «ждёт соседа» — только настоящие задержки (чужой prefill, подкачка слотов).
+  const hasBase = r.hasBase || base != null;
+  const gen = r.hasStep ? (hasBase ? r.sumGenBase : r.sumItlSec) : 0;
+  const wait = hasBase ? Math.max(0, r.sumItlSec - gen) : null;
   const prefill = r.hasPrefillSec ? r.sumPrefillSec : 0;
   const queue = r.hasQueueSec ? r.sumQueueSec : 0;
   const total = gen + (wait ?? 0) + prefill + queue;
@@ -578,8 +595,8 @@ function timeSharesOf(r: RawInterval, base: number | null): TimeState {
 // отдал, но запросов не было (Σ queries = 0) — несётся предыдущее значение:
 // линия не рвётся и новое значение не выдумывается (решение по «рваному» кэшу).
 // «Куда уходит время» — база шага приходит СНАРУЖИ (cleanStepMs, мс, из ответа
-// бэкенда): она одна на весь стенд и не зависит от окна, поэтому доли интервалов
-// соизмеримы между собой и между окнами. null — базы нет: «ждёт соседа» не
+// бэкенда): общая на стенд либо своя у точки (по числу потоков), и не зависит от
+// окна, поэтому доли интервалов соизмеримы между собой и между окнами. null — базы нет: «ждёт соседа» не
 // выделяется (доля «—»), всё измеренное время декодирования — «генерирует».
 export function buildIntervals(
   samples: ThroughputSample[],
@@ -589,6 +606,7 @@ export function buildIntervals(
   cleanStepMs: number | null = null,
 ): Interval[] {
   const raw: RawInterval[] = [];
+  const globalBase = cleanStepMs != null && cleanStepMs > 0 ? cleanStepMs / 1000 : null;
   for (const [tStart, tEnd] of intervalGrid(tMin, tMax, intervalMs)) {
     let sumTp = 0, nTp = 0;
     let maxKv: number | null = null;
@@ -598,6 +616,7 @@ export function buildIntervals(
     let sumGen = 0, sumItl = 0, hasStream = false;
     // «Куда уходит время»: шаги (itl), prefill/очередь (гистограммы), прочитанный промпт.
     let sumItlSec = 0, sumItlCnt = 0, hasStep = false;
+    let sumGenBase = 0, hasBase = false;
     let sumPrefillSec = 0, hasPrefillSec = false;
     let sumQueueSec = 0, hasQueueSec = false;
     let hasAnyTime = false;
@@ -610,7 +629,14 @@ export function buildIntervals(
       if (s.preemptions != null) { sumPre += s.preemptions; hasPre = true; }
       // скорость на поток: только когда ОБА приращения точки на месте (иначе дробь не честная)
       if (s.genTokens != null && s.itlSeconds != null) { sumGen += s.genTokens; sumItl += s.itlSeconds; hasStream = true; }
-      if (s.itlSeconds != null && s.itlCount != null) { sumItlSec += s.itlSeconds; sumItlCnt += s.itlCount; hasStep = true; }
+      if (s.itlSeconds != null && s.itlCount != null) {
+        sumItlSec += s.itlSeconds; sumItlCnt += s.itlCount; hasStep = true;
+        // база точки — по числу потоков в ней (батч-движок), иначе общая; без базы шаги точки —
+        // целиком «генерирует» (ждёт соседа не выделяется)
+        const base = s.cleanStepMs != null && s.cleanStepMs > 0 ? s.cleanStepMs / 1000 : globalBase;
+        if (base != null) { sumGenBase += s.itlCount * base; hasBase = true; }
+        else sumGenBase += s.itlSeconds;
+      }
       if (s.prefillSeconds != null) { sumPrefillSec += s.prefillSeconds; hasPrefillSec = true; }
       if (s.queueSeconds != null) { sumQueueSec += s.queueSeconds; hasQueueSec = true; }
       // «Движок отвечал»: хотя бы одна non-null из четырёх серий поля (0 — ответ, null — молчание).
@@ -624,12 +650,14 @@ export function buildIntervals(
       sumPre, hasPre,
       sumGen, sumItl, hasStream,
       sumItlSec, sumItlCnt, hasStep,
+      sumGenBase, hasBase,
       sumPrefillSec, hasPrefillSec,
       sumQueueSec, hasQueueSec,
       hasAnyTime,
     });
   }
-  // Второй проход: база шага (одна на стенд, из ответа бэкенда), из неё — доли.
+  // Второй проход: общая база шага (из ответа бэкенда) — для интервалов, где ни одна
+  // точка не принесла свою; из базы — доли.
   const base = cleanStepMs != null && cleanStepMs > 0 ? cleanStepMs / 1000 : null;
   const out: Interval[] = [];
   let prevPrefix: number | null = null;
@@ -1034,15 +1062,20 @@ function CardBody({ samples, intervals, window, width, engine, grid }: {
     return `M${round1(pts[0].x)},${round1(floor)} L${body} L${round1(pts[pts.length - 1].x)},${round1(floor)} Z`;
   }, [intervals, tMin, tMax, width]);
 
-  // Линии попаданий / из RAM: по одному полилинии на непрерывный прогон (null — обрыв).
+  // Линии попаданий / из RAM: по одному полилинии на непрерывный прогон (null — обрыв),
+  // ступенькой на всю ширину клетки — как линии скорости (buildIntervalSegments).
   const buildLine = (get: (it: Interval) => number | null): string[] => {
     const segs: { x: number; y: number }[][] = [];
     let cur: { x: number; y: number }[] = [];
+    const plotW = width - geomKv.left - geomKv.right;
     for (const it of intervals) {
       const v = get(it);
       if (v == null) { if (cur.length) { segs.push(cur); cur = []; } continue; }
-      const cx = geomKv.left + (width - geomKv.left - geomKv.right) * ((it.tStart + (it.tEnd - it.tStart) / 2 - tMin) / (tMax - tMin));
-      cur.push({ x: cx, y: yForPerc(v, geomKv) });
+      const y = yForPerc(v, geomKv);
+      cur.push(
+        { x: geomKv.left + plotW * ((it.tStart - tMin) / (tMax - tMin)), y },
+        { x: geomKv.left + plotW * ((it.tEnd - tMin) / (tMax - tMin)), y },
+      );
     }
     if (cur.length) segs.push(cur);
     return segs.map(seg => seg.map(p => `${round1(p.x)},${round1(p.y)}`).join(' '));

@@ -13,6 +13,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { act, createElement } from 'react';
 import type { Project } from '../../types';
 import type { PluginInfo, PluginPanelView } from '../../lib/api';
+import { withThrowingLocalStorage } from './testing/withThrowingLocalStorage';
 
 // useIsMobile — false (десктоп); прочие экспорты модуля — оригинал
 vi.mock('../../lib/breakpoints', async (importOriginal) => {
@@ -359,6 +360,81 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
     expect(textNodes(container).join(' ')).toContain('Нет права net:example.com');
   });
 
+  // Хранилище отключено (Firefox dom.storage.enabled=false, приватный режим): уже
+  // чтение window.localStorage бросает SecurityError. Панель обязана получить
+  // result unavailable, а не висеть (инвариант 7).
+  for (const op of ['storage.get', 'storage.set', 'storage.remove', 'storage.keys']) {
+    it(`localStorage бросает SecurityError → ${op} отвечает unavailable`, async () => {
+      const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+      await withThrowingLocalStorage(() => { throw Object.assign(new Error('denied'), { name: 'SecurityError' }); }, async () => {
+        callFromPanel(panelWin, op, { key: 'city', value: 1 });
+        expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
+        expect(sent[0]).toEqual({
+          source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' },
+        });
+      });
+    });
+  }
+
+  // R2-д (F-д2, M1): настоящая ошибка хоста не должна прятаться под текст для
+  // человека. Мутации: убрать логирование или объединить ветки (любая ошибка →
+  // «Хранилище недоступно») — этот тест красный.
+  it('настоящая ошибка хоста — логируется, не прячется под «Хранилище недоступно»', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await withThrowingLocalStorage(() => { throw new Error('boom'); }, async () => {
+        callFromPanel(panelWin, 'storage.get', { key: 'city' });
+        expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(0);
+        expect(sent[0]).toEqual({
+          source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Внутренняя ошибка хранилища' },
+        });
+        // F-д3 (минор 4): лог привязан к метке [plugin storage] — посторонний
+        // console.error (например, от React) этот тест не проходит.
+        const logged = spy.mock.calls.some(([first]) => String(first).includes('[plugin storage]'));
+        expect(logged, 'console.error вызван с меткой [plugin storage]').toBe(true);
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // SecurityError остаётся тихим: в консоль ничего не пишется.
+  it('SecurityError — тихый unavailable, console.error не зовётся', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await withThrowingLocalStorage(() => { throw Object.assign(new Error('denied'), { name: 'SecurityError' }); }, async () => {
+        callFromPanel(panelWin, 'storage.get', { key: 'city' });
+        expect(sent[0]).toEqual({
+          source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' },
+        });
+        expect(spy).not.toHaveBeenCalled();
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // F-д3 (минор 2): тихая ветка keyed по name, не по instanceof Error:
+  // исключение из другого realm — объект не instanceof Error, но name тот же.
+  // Мутация (б): вернуть в PluginFrame `e instanceof Error &&` — этот тест красный.
+  it('SecurityError не экземпляр Error (другой realm) — тоже тихый unavailable', async () => {
+    const { sent, panelWin } = await mountWithBridge({ ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, {}, 'u1');
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await withThrowingLocalStorage(() => { throw { name: 'SecurityError', message: 'cross-realm' }; }, async () => {
+        callFromPanel(panelWin, 'storage.get', { key: 'city' });
+        expect(sent[0]).toEqual({
+          source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' },
+        });
+        expect(spy).not.toHaveBeenCalled();
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   // Fail-closed: нет id владельца в состоянии авторизации — unavailable, ни одной
   // записи. cc_user_id в хранилище больше ни на что не влияет — источник один
   // (getMeSnapshot), как в pluginStorageLifecycle.ts.
@@ -369,6 +445,49 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
     expect(sent[0]).toEqual({
       source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: { code: 'unavailable', message: 'Нет владельца: хранилище недоступно' },
     });
+  });
+});
+
+// === D2-ф-3: третий путь выдачи прав — «Права…» из панели ===
+// Диалог согласия из меню «⋯» панели обязан показывать человекочитаемое имя
+// («Погода»), а не техническое из id пакета («Weather») — как в остальных
+// путях выдачи прав. Мутация: вернуть humanizeId в toConsentData →
+// заголовок «Права «Weather»» → этот тест красный.
+describe('PluginFrame: «Права…» из панели показывает человекочитаемое имя (D2-ф-3)', () => {
+  const WEATHER: PluginInfo = {
+    id: 'local-1/weather', version: '1.0.0', sha256: 'b',
+    requested: [], granted: [], enabled: true, source: 'upload:weather', secrets: [],
+    contributes: { panels: [{ id: 'main', title: 'Погода', entry: 'panel/index.html' }] },
+  };
+  const WEATHER_PANEL: PluginPanelView = { id: 'main', title: 'Погода', entry: 'panel/index.html' };
+
+  // Кнопка меню по тексту подписи (MenuItem — <button> с label внутри)
+  function findButtonByText(root: FNode, needle: string): FNode | null {
+    const stack: FNode[] = [root];
+    while (stack.length) {
+      const n = stack.pop()!;
+      if (n.nodeType === 1 && n.nodeName === 'BUTTON' && textOf(n).includes(needle)) return n;
+      for (const c of n.childNodes) stack.push(c);
+    }
+    return null;
+  }
+
+  it('«Права…» из меню «⋯» → заголовок диалога «Права «Погода»», не «Weather»', async () => {
+    const { container } = await renderFrame(WEATHER, WEATHER_PANEL);
+    const menuBtn = findNodeByAttr(container, 'aria-label', 'Меню панели');
+    expect(menuBtn, 'кнопка «Меню панели» найдена').not.toBeNull();
+    act(() => { (reactProps(menuBtn!) as { onClick?: () => void }).onClick?.(); });
+
+    const item = findButtonByText(container, 'Права…');
+    expect(item, 'пункт «Права…» найден').not.toBeNull();
+    act(() => { (reactProps(item!) as { onClick?: (e: unknown) => void }).onClick?.({}); });
+
+    // Modal — портал в document.body (см. ConsentDialog.test): текст диалога
+    // ищем в теле документа, не в контейнере фрейма.
+    const body = (globalThis as { document: { body: FNode } }).document.body;
+    const all = textNodes(body).join(' ');
+    expect(all, 'диалог открыт с человекочитаемым именем').toContain('Права «Погода»');
+    expect(all, 'техническое имя из id в диалоге не показывается').not.toContain('Weather');
   });
 });
 

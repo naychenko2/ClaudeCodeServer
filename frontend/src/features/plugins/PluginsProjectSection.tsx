@@ -13,7 +13,7 @@ import { useProjectFeature } from '../../lib/projectCapabilities';
 import { ProjectFeature, type Project } from '../../types';
 import { api, type PluginInfo } from '../../lib/api';
 import { useInstalledPlugins } from './useInstalledPlugins';
-import { eraseOnUninstall } from './pluginStorageLifecycle';
+import { uninstallPlugin } from './pluginStorageLifecycle';
 import { ConsentDialog, type PluginConsentData } from './ConsentDialog';
 import { DraftsSection } from './DraftsSection';
 import { pluginDisplayName } from './panelNaming';
@@ -22,10 +22,12 @@ import { pluginDisplayName } from './panelNaming';
 // Самодостаточная: сама грузит список (useInstalledPlugins), сама ведёт установку/удаление/
 // выдачу прав. По образцу McpProjectSection: возвращает null, когда фича выключена.
 
-// Данные диалога согласия из записи установки. Вклады (contributes) в DTO бэка нет —
-// не показываем. Флаг «обязательный» (В2) DTO тоже не отдаёт (только {name, set, updatedAt}),
-// поэтому считаем ВСЕ секреты обязательными — строгое чтение В2: пока любой не задан,
-// «Установить» заблокирован. (Открытый вопрос: бэку стоит выводить required из манифеста.)
+// Данные диалога согласия из записи установки. Имя — общее для списка и диалога
+// (pluginDisplayName: title первой панели, иначе humanizeId). Вклады (contributes) в
+// DTO бэка нет — не показываем. Флаг «обязательный» (В2) DTO тоже не отдаёт (только
+// {name, set, updatedAt}), поэтому считаем ВСЕ секреты обязательными — строгое чтение В2:
+// пока любой не задан, «Установить» заблокирован. (Открытый вопрос: бэку стоит выводить
+// required из манифеста.)
 function toConsentData(info: PluginInfo, mode: 'install' | 'modify'): PluginConsentData {
   return {
     id: info.id,
@@ -93,7 +95,6 @@ function PluginRow({ plugin, isMobile, onToggle, onOpenConsent, onDelete, onRefr
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const status = rowStatus(plugin);
-  // Human-readable имя: title объявленной панели, иначе humanizeId (panelNaming — один источник)
   const name = pluginDisplayName(plugin);
   const isDev = plugin.version === 'dev';
 
@@ -415,7 +416,7 @@ export function PluginsProjectSection({ project, onUpdated, onEdit }: {
           onConfirm={() => {
             const d = deleting;
             setDeleting(null);
-            api.plugins.uninstall(d.id).then(() => { eraseOnUninstall(d.id); void refresh(); onUpdated?.(project); }).catch(() => {});
+            void uninstallPlugin(d.id, api.plugins.uninstall, () => { void refresh(); onUpdated?.(project); });
           }}
           onCancel={() => setDeleting(null)}
         />

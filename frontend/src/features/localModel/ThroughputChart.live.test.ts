@@ -72,6 +72,7 @@ function samplesInWindow(tMax: number, windowMs: number): ThroughputSample[] {
       genTokens: null,
       itlSeconds: p.itlSeconds,
       itlCount: p.itlCount,
+      cleanStepMs: null,
       prefillSeconds: p.prefillSeconds,
       queueSeconds: p.queueSeconds,
     }));

@@ -24,13 +24,13 @@ export function panelDisplayName(plugin: PluginInfo, panel: PluginPanelView): st
   return panel.title || humanizeId(plugin.id);
 }
 
-// Human-readable имя плагина в карточке раздела «Плагины»: title первой объявленной
-// панели (для «Погоды» — «Погода», а не «Weather»), иначе — humanizeId. Та же цепочка,
-// что у panelDisplayName, только без аргумента панели: у плагина без панелей или с
-// пустым title поведение остаётся прежним.
+// Имя УСТАНОВЛЕННОГО пакета для людей: title первой панели манифеста, иначе humanizeId
+// — то же правило, что на бэке (PluginDisplayName.Of: первая панель, иначе null →
+// запасное имя). Бэк имени установленному пакету не отдаёт (PluginResponse), поэтому
+// это единственная точка вывода имени в списке плагинов и его диалоге согласия.
 export function pluginDisplayName(plugin: PluginInfo): string {
-  const title = plugin.contributes?.panels?.find(p => p.title)?.title;
-  return title || humanizeId(plugin.id);
+  const title = plugin.contributes?.panels?.[0]?.title;
+  return title?.trim() || humanizeId(plugin.id);
 }
 
 // Набор иконок для карточек плагинов. Манифест пакета (PluginPanel) несёт только

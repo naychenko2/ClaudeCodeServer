@@ -1,49 +1,31 @@
-// Имя плагина в карточке раздела «Плагины»: человеческое (title объявленной панели),
-// а не технический slug. Мутация: заменить pluginDisplayName на humanizeId — первый
-// тест красный («Weather» вместо «Погода»).
-
-import { describe, it, expect } from 'vitest';
-import { humanizeId, panelDisplayName, pluginDisplayName } from './panelNaming';
+// Человекочитаемое имя УСТАНОВЛЕННОГО пакета (D2-ф-д): title первой панели манифеста,
+// иначе humanizeId — то же правило, что на бэке (PluginDisplayName.Of). Список плагинов
+// и его диалог согласия берут это имя из одной функции. Мутация: свести
+// pluginDisplayName к humanizeId → первый тест краснеет.
+import { describe, expect, it } from 'vitest';
 import type { PluginInfo } from '../../lib/api';
+import { pluginDisplayName } from './panelNaming';
 
-function plugin(id: string, panels?: { id: string; title: string; entry: string }[]): PluginInfo {
-  return {
-    id, version: '1.0.0', sha256: '', requested: [], granted: [], enabled: true,
-    source: `upload:${id}`, secrets: [],
-    ...(panels ? { contributes: { panels } } : {}),
-  };
-}
+const BASE: PluginInfo = {
+  id: 'local-1/weather', version: '1.0.0', sha256: '', requested: [], granted: [],
+  enabled: true, source: 'upload:weather', secrets: [],
+};
 
-describe('Имя плагина в карточке (pluginDisplayName)', () => {
-  it('Панель «Погода»: карточка показывает «Погода», а не «Weather»', () => {
-    const p = plugin('weather', [{ id: 'main', title: 'Погода', entry: 'panel/index.html' }]);
+describe('pluginDisplayName: имя установленного пакета', () => {
+  it('title первой панели → «Погода», а не humanizeId(id)', () => {
+    const p: PluginInfo = {
+      ...BASE,
+      contributes: { panels: [{ id: 'p1', title: 'Погода', entry: 'panel/index.html' }] },
+    };
     expect(pluginDisplayName(p)).toBe('Погода');
   });
 
-  it('Плагин без панелей — прежнее поведение: humanizeId', () => {
-    expect(pluginDisplayName(plugin('notes-tasks'))).toBe('Notes Tasks');
-  });
-
-  it('Панель с пустым title — откат к humanizeId', () => {
-    const p = plugin('weather', [{ id: 'main', title: '', entry: 'panel/index.html' }]);
-    expect(pluginDisplayName(p)).toBe('Weather');
-  });
-
-  it('Несколько панелей — берётся первая с непустым title', () => {
-    const p = plugin('weather', [
-      { id: 'a', title: '', entry: 'a.html' },
-      { id: 'b', title: 'Прогноз', entry: 'b.html' },
-    ]);
-    expect(pluginDisplayName(p)).toBe('Прогноз');
-  });
-
-  it('humanizeId из {publisher}/{slug} — по slug (общая логика, не копия в компоненте)', () => {
-    expect(humanizeId('acme/weather')).toBe('Weather');
-  });
-
-  it('panelDisplayName: title панели, иначе имя плагина', () => {
-    const p = plugin('weather');
-    expect(panelDisplayName(p, { id: 'main', title: 'Погода', entry: 'x' })).toBe('Погода');
-    expect(panelDisplayName(p, { id: 'main', title: '', entry: 'x' })).toBe('Weather');
+  it('панелей нет или title пуст → прежний запасной вариант humanizeId(id) = «Weather»', () => {
+    expect(pluginDisplayName(BASE)).toBe('Weather');
+    const blankTitle: PluginInfo = {
+      ...BASE,
+      contributes: { panels: [{ id: 'p1', title: '   ', entry: 'panel/index.html' }] },
+    };
+    expect(pluginDisplayName(blankTitle)).toBe('Weather');
   });
 });

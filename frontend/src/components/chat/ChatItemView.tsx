@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
+import { memo, useState, useCallback, useContext, useEffect, type ReactNode, type CSSProperties } from 'react';
 import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, MessageSquareShare, Camera, MonitorSmartphone } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
@@ -11,8 +11,7 @@ import { api } from '../../lib/api';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
-import { FeatureModeBody } from './feature/FeatureModeBody';
-import { useFeatureRunsSnapshot } from '../../lib/featureRuns';
+import { useFeatureRunsSnapshot, openPillMenu } from '../../lib/featureRuns';
 import { C, FONT, SHADOW, R, FS, SP, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useSpheres } from '../../lib/useSpheres';
@@ -71,74 +70,148 @@ function parseTodoWriteInput(input: unknown): TodoItem[] {
   return Array.isArray(t) ? (t as TodoItem[]) : [];
 }
 
-// Карточка плана задач — закрепленный чек-лист с прогрессом. Источник списка:
-// input TodoWrite либо агрегат TaskCreate/TaskUpdate (computeTodos).
-//
-// Текущая карточка плана (isCurrentPlan) — ЖИВАЯ: общее тело FeatureModeBody (то же, что
-// в меню пилюли) — переключатель «План хода / Исполнение фичи» + выбор фичи + тело
-// (FeatureRunView/TodoList); режим и выбор — из стора Ф1, общий с меню. Прошлые карточки —
-// снимок TodoList, как раньше (решение Майи: раскрытое «Производство» большой фичи тонет
-// в N копиях в ленте, живое — только на последней).
-function TodoPlanView({ todos, isMobile, isCurrentPlan }: {
+// Карточка плана задач. Три вида:
+// 1. Живая (isCurrentPlan) + есть фичи → КОРОТКАЯ строка: значок · «План хода» ·
+//    «· сейчас: {in_progress}» · прогресс 44×4 · «N из M» · «Подробнее ›» → openPillMenu.
+//    БЕЗ состояния фичи в самой карточке (оно в панели А и в попапе).
+// 2. Живая (isCurrentPlan) + без фич → полный чек-лист (прежний вид, байт-в-байт).
+// 3. Прошлые (!isCurrentPlan) → строка-снимок «› ☑ План хода N/M · HH:MM · снимок»,
+//    раскрытие по клику (локальный state, aria-expanded), тело — TodoList того хода.
+function TodoPlanView({ todos, isMobile, isCurrentPlan, ts }: {
   todos: TodoItem[];
   isMobile: boolean;
   isCurrentPlan: boolean;
+  ts?: number;
 }) {
   const sessionId = useContext(ChatSessionContext);
   const runs = useFeatureRunsSnapshot(sessionId);
+  const [expanded, setExpanded] = useState(false);
   if (todos.length === 0) return null;
   const done = todos.filter(t => t.status === 'completed').length;
   const hasFeatures = runs.length > 0;
+  const inProgress = todos.find(t => t.status === 'in_progress');
 
-  // Живое тело (общее с меню пилюли) — только на ТЕКУЩЕЙ карточке плана, когда есть фичи.
-  // Без фич — прежняя разметка (байт-в-байт); прошлые карточки — снимок TodoList.
+  // 1. Живая + фичи: короткая строка (решение Андрея 20.10).
   if (isCurrentPlan && hasFeatures) {
-    // Заголовок: SquareCheck + «План хода» (на 360 px слово скрыто, остаются значок,
-    // переключатель и счётчик).
-    const title = (
-      <>
-        <SquareCheck size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
-        {!isMobile && (
-          <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План хода</span>
-        )}
-      </>
-    );
+    const progress = todos.length > 0 ? done / todos.length : 0;
+    // R2 minor 6: на 360 «сейчас: …» и «Подробнее» — на ВТОРОЙ строке (макет .fcp):
+    // full-width «перенос» (order 5) + order 6/7; на десктопе — одна строка (DOM-порядок).
+    const brk: CSSProperties = isMobile
+      ? { display: 'block', flexBasis: '100%', height: 0, order: 5 }
+      : { display: 'none' };
     return (
       <div style={{
         border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
         overflow: 'hidden', boxShadow: SHADOW.card,
       }}>
-        <FeatureModeBody
-          sessionId={sessionId}
-          todos={todos}
-          runs={runs}
-          isMobile={isMobile}
-          variant="card"
-          headerPad="10px 13px"
-          bodyPad="7px 13px 10px"
-          headerBorder={`1px solid ${C.divider}`}
-          title={title}
-        />
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          flexWrap: 'wrap', rowGap: 4,
+          padding: '10px 13px',
+          minHeight: isMobile ? TB.iconHitMobile : undefined,
+        }}>
+          <SquareCheck size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap' }}>
+            План хода
+          </span>
+          {inProgress && (
+            <span style={{
+              fontSize: FS.sm, color: C.textMuted,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              maxWidth: isMobile ? '100%' : 180,
+              ...(isMobile ? { order: 6, flex: '1 1 0' } : {}),
+            }}>
+              · сейчас: {inProgress.activeForm ?? inProgress.content}
+            </span>
+          )}
+          {/* Прогресс-бар 44×4 */}
+          <span style={{ display: 'inline-block', width: 44, height: 4, borderRadius: 2, background: C.borderLight, overflow: 'hidden', flexShrink: 0 }}>
+            <span style={{ display: 'block', width: `${progress * 100}%`, height: '100%', borderRadius: 2, background: C.accent }} />
+          </span>
+          <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
+            {done} из {todos.length}
+          </span>
+          <span style={brk} />
+          <button
+            onClick={() => { if (sessionId) openPillMenu(sessionId); }}
+            title="Подробнее"
+            style={{
+              marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 2,
+              border: 'none', background: 'transparent', cursor: 'pointer',
+              fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
+              padding: 0, minHeight: isMobile ? TB.iconHitMobile : undefined,
+              ...(isMobile ? { order: 7 } : {}),
+            }}
+          >
+            Подробнее
+            <span style={{ display: 'inline-flex', transform: 'translateX(1px)' }}>›</span>
+          </button>
+        </div>
       </div>
     );
   }
 
-  // Без фич или прошлая карточка — снимок TodoList, как раньше (байт-в-байт).
+  // 2. Живая + без фич: прежний полный чек-лист (байт-в-байт).
+  if (isCurrentPlan) {
+    return (
+      <div style={{
+        border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
+        overflow: 'hidden', boxShadow: SHADOW.card,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: `1px solid ${C.divider}` }}>
+          <SquareCheck size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План хода</span>
+          <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
+            {done}/{todos.length}
+          </span>
+        </div>
+        <div style={{ padding: '7px 13px 10px' }}>
+          <TodoList todos={todos} />
+        </div>
+      </div>
+    );
+  }
+
+  // 3. Прошлая карточка: строка-снимок, раскрытие по клику.
+  const timeLabel = ts
+    ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    : '';
   return (
     <div style={{
       border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
       overflow: 'hidden', boxShadow: SHADOW.card,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: `1px solid ${C.divider}` }}>
+      <button
+        onClick={() => setExpanded(e => !e)}
+        aria-expanded={expanded}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+          padding: '10px 13px', border: 'none', background: 'transparent', cursor: 'pointer',
+          minHeight: isMobile ? TB.iconHitMobile : undefined,
+        }}
+      >
+        <span style={{ fontSize: 14, color: C.textMuted, flexShrink: 0 }}>›</span>
         <SquareCheck size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
-        <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План хода</span>
-        <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
+        <span style={{ fontFamily: FONT.serif, fontSize: 13, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap' }}>
+          План хода
+        </span>
+        <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
           {done}/{todos.length}
         </span>
-      </div>
-      <div style={{ padding: '7px 13px 10px' }}>
-        <TodoList todos={todos} />
-      </div>
+        {timeLabel && (
+          <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
+            · {timeLabel}
+          </span>
+        )}
+        <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
+          · снимок
+        </span>
+      </button>
+      {expanded && (
+        <div style={{ padding: '7px 13px 10px', borderTop: `1px solid ${C.divider}` }}>
+          <TodoList todos={todos} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1503,8 +1576,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // в своем input, для инкрементальных TaskCreate/TaskUpdate агрегат (taskPlan)
       // прокидывает ChatPanel — только на последний task-вызов ленты. Линию-коннектор для
       // дочерних вызовов субагента (parentToolUseId) рисует renderItems — единой полосой.
-      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} isMobile={isMobile} isCurrentPlan={!!isCurrentPlan} />;
-      if (taskPlan) return <TodoPlanView todos={taskPlan} isMobile={isMobile} isCurrentPlan={!!isCurrentPlan} />;
+      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} isMobile={isMobile} isCurrentPlan={!!isCurrentPlan} ts={item.startedAt} />;
+      if (taskPlan) return <TodoPlanView todos={taskPlan} isMobile={isMobile} isCurrentPlan={!!isCurrentPlan} ts={item.startedAt} />;
       // Вопрос другой персоне (persona_ask) — фирменная карточка с идентичностью персоны
       if (isPersonaAsk(item.name)) return <PersonaAskView item={item} />;
       // HTML-виджет (widget_show) — рендер в sandbox-iframe
@@ -2453,3 +2526,6 @@ function formatErrorGroupDate(dayStart: number): string {
   const month = months[d.getMonth()];
   return sameYear ? `${day} ${month}` : `${day}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
+
+// Экспорт для тестов (TodoPlanCard.test.ts).
+export { TodoPlanView as TodoPlanViewForTest };

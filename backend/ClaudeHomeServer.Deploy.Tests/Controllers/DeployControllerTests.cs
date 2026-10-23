@@ -79,10 +79,14 @@ public class DeployControllerTests(TestWebApplicationFactory factory) : IClassFi
     // Заявка приходит из ЧАТА, а ход ходит в API сервисным токеном MCP — тот выдаётся с ролью
     // "user" всегда. С [Authorize(Roles = "admin")] все три инструмента deploy_* получали 403,
     // то есть фича не работала вовсе. Роль проверяем по стору владельца токена.
+    //
+    // Ход, а не просто токен (ADR-025, F1-5): MCP шлёт заголовок чата-вызывателя, и ручка
+    // доступна только с обычного (не делегированного) хода этого чата.
     [Fact]
     public async Task Сервисный_токен_админа_принимается()
     {
         var mcp = ServiceTokenClient(TestWebApplicationFactory.TestUsername);
+        mcp.DefaultRequestHeaders.Add(McpEndpoints.CallerSessionHeader, await CreateChatAsync());
 
         var status = await mcp.GetAsync("/api/deploy/status");
         var start = await mcp.PostAsJsonAsync("/api/deploy/start", new { @ref = "master" });
@@ -90,6 +94,31 @@ public class DeployControllerTests(TestWebApplicationFactory factory) : IClassFi
         status.StatusCode.Should().Be(HttpStatusCode.OK);
         // Контур в тестовой среде не настроен — но это отказ ПО СУЩЕСТВУ, а не по правам
         start.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+    }
+
+    // Гейт делегирования fail-closed: сервисный токен без чата-вызывателя — не ход человека
+    [Fact]
+    public async Task Сервисный_токен_админа_без_вызывателя_403()
+    {
+        var mcp = ServiceTokenClient(TestWebApplicationFactory.TestUsername);
+
+        (await mcp.GetAsync("/api/deploy/status")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await mcp.PostAsJsonAsync("/api/deploy/start", new { @ref = "master" }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // Чат админа — вызыватель для сервисного токена
+    private async Task<string> CreateChatAsync()
+    {
+        var client = factory.CreateAuthenticatedClient();
+        var project = await client.PostAsJsonAsync("/api/projects", new { name = $"deploy-{Guid.NewGuid():N}" });
+        project.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(
+            await project.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        var session = await client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "default" });
+        session.EnsureSuccessStatusCode();
+        return JsonSerializer.Deserialize<JsonElement>(
+            await session.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
     }
 
     [Fact]

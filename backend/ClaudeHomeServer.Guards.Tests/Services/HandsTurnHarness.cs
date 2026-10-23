@@ -86,11 +86,11 @@ internal sealed class HandsTurnHarness : IDisposable
 
     private static TaskCompletionSource NewTcs() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public async Task<Turn> RunTurnAsync(string text = "ход")
+    public async Task<Turn> RunTurnAsync(string text = "ход", int agentDepth = 0)
     {
         _exited = NewTcs();
         var started = _launcher.Arm();
-        await Session.SendMessageAsync(text);
+        await Session.SendMessageAsync(text, agentDepth: agentDepth);
         var done = await Task.WhenAny(started, Task.Delay(TimeSpan.FromSeconds(15)));
         done.Should().Be(started, "процесс хода обязан стартовать");
         var turn = new Turn(_launcher.Args!, _launcher.McpServers, Session.LastLaunchSignature);

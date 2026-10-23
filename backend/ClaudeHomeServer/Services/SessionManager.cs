@@ -180,12 +180,33 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Агентские (chats_send) прерывают обычный ход — ждущий их агент упрётся в таймаут, —
         // но ход в цикле «до готово» и в штабе не рушат: там они ждут конца цикла и штатного
         // конца хода соответственно. Явный перебой по кнопке — PreemptForPending.
-        // Только в памяти — при рестарте сессия и так становится Orphaned, доставлять
-        // накопленное в умерший контекст незачем. QueueFrozen — «Стоп» заморозил разбор:
-        // автодоставки нет до возобновления пользователем (новое сообщение).
-        public readonly List<QueuedMessage> Pending = [];
+        // Переживает рестарт: каждая мутация пишется в data/sessions/{ключ}/pending.json
+        // (PendingQueue.Changed → PersistPending; смена QueueFrozen — явным PersistPending),
+        // на старте очередь поднимается с диска, а чаты
+        // без живого хода разбираются штатным DrainNextPendingAsync (DrainRestoredPendingAsync).
+        // QueueFrozen — «Стоп» заморозил разбор: автодоставки нет до возобновления пользователем
+        // (новое сообщение); заморозка тоже переживает рестарт.
+        public readonly PendingQueue Pending = new();
         public readonly Lock PendingLock = new();
+        // Меняется только через PersistPending-места (FreezePending, возобновление человеком)
         public volatile bool QueueFrozen;
+        // Сообщения старше срока годности, не оживлённые при загрузке: карточку «не доставлено»
+        // в историю пишет DrainRestoredPendingAsync (на загрузке брокера и истории ещё нет).
+        public List<QueuedMessage>? ExpiredOnRestore;
+        // Очередь поднята с диска — чат кандидат на автодренаж после старта.
+        public bool PendingRestored;
+        // Делегированность ПРОГОНА: глубина и «ход доклада» подач, чьи фоновые агенты ещё
+        // живы. Признак хода у адаптера гаснет вместе с _turnLock, а фоновые агенты
+        // делегированного хода (Agent run_in_background, Workflow) живут после result и ходят
+        // в MCP с заголовком этого чата — по признаку хода они выглядели бы человеком. Поэтому
+        // гейт берёт максимум из хода и прогона. Снимается, что раньше: подачей человека или
+        // когда у прогона не осталось живых фоновых агентов (ILlmSessionAdapter.HasLiveBgAgents);
+        // без фоновых действует ровно ход. Адаптера нет — живость не узнать, признак держится
+        // (fail-closed). SubmitDelegation — собственный признак последней подачи: пока её ход
+        // в полёте, он делегирован и тогда, когда адаптер ещё не взвёл свой признак.
+        // Под PendingLock: читают его потоки MCP-вызовов.
+        public TurnDelegationState RunDelegation;
+        public TurnDelegationState SubmitDelegation;
         // Прогон, в котором идёт сворачивание контекста (/compact). Обычный ход, но обёртка
         // фолбэка его не оркеструет, а exited убитой компакции глотает — поэтому прерывать
         // компакцию нельзя (чат залип бы в Working навсегда). Хранится идентификатор прогона,
@@ -1039,8 +1060,19 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         var addr = addresses?.FirstOrDefault(a => a.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
                    ?? addresses?.FirstOrDefault();
         if (string.IsNullOrEmpty(addr)) return "http://localhost:5000";
-        return addr.Replace("0.0.0.0", "localhost").Replace("[::]", "localhost").TrimEnd('/');
+        return LoopbackApiUrl(addr);
     }
+
+    // Wildcard-хост адреса прослушивания → localhost. Kestrel и хост отдают в
+    // IServerAddressesFeature и сырые формы конфига: ASPNETCORE_HTTP_PORTS/URLS дают
+    // http://*:порт или http://+:порт, а такой адрес не разбирается в Uri (UriFormatException
+    // у шлюза MCP и у всех MCP-конфигов хода).
+    private static readonly Regex WildcardHost =
+        new(@"^(?<scheme>[a-z][a-z0-9+.-]*://)(?:\*|\+|0\.0\.0\.0|\[::\])(?=[:/]|$)",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static string LoopbackApiUrl(string address) =>
+        WildcardHost.Replace(address, "${scheme}localhost").TrimEnd('/');
 
     // tasks-MCP доступен, когда разрешён персоной (Persona.Tools/привязки), ЛИБО сессия
     // является исполнителем задачи — тогда tasks-MCP форсируется: исполнитель обязан
@@ -1481,13 +1513,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             // раньше («только последний рестарт»).
             if (originalStatus == SessionStatus.Working)
                 _restartResumeCandidates.Add(session.Id);
-            _sessions[session.Id] = new SessionEntry { Info = session };
+            var restoredEntry = new SessionEntry { Info = session };
+            RestorePending(restoredEntry);
+            _sessions[session.Id] = restoredEntry;
         }
         // Значок темы переехал из имени в Session.Topic — переносим старые эмодзи-имена.
         // Идемпотентно: на уже перенесённых сессиях это no-op. Один SaveSessions покрывает
         // обе миграции: перенос темы + сохранение Orphaned (залипший Working, см. выше).
         var migratedTopics = Llm.ChatTopicMigration.Apply(list);
-        if (migratedTopics || anyLiveOrphaned) SaveSessions();
+        var migratedModes = MigratePersonaChatMode(list);
+        if (migratedModes > 0)
+            Console.WriteLine($"[SessionManager] Миграция режима: {migratedModes} чатов персон переведены из Auto в AcceptEdits");
+        if (migratedTopics || migratedModes > 0 || anyLiveOrphaned) SaveSessions();
         // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт.
         // Task храним в AbortMarkersWritten (не fire-and-forget): B2 дождётся его перед
         // запуском resume, чтобы маркер не обогнал снимок.
@@ -1501,6 +1538,121 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                         Console.Error.WriteLine($"[SessionManager] Маркер обрыва хода ({csid}) не записан: {ex.Message}");
                     }
             });
+    }
+
+    // Чаты одной персоны в Auto гоняют классификатор разрешений на каждый вызов инструмента
+    // (отдельный запрос к модели чата — до минуты на медленных прокси). Решение владельца:
+    // персоны работают в AcceptEdits. Идемпотентно; UpdatedAt не двигаем (сортировка/архив).
+    // Групповые чаты и чаты штаба (режим навязывает TeamImplement) не трогаем.
+    internal static int MigratePersonaChatMode(IEnumerable<Session> sessions)
+    {
+        var migrated = 0;
+        foreach (var s in sessions)
+        {
+            if (s.PersonaId is null || s.Mode != ClaudeMode.Auto) continue;
+            if (s.Participants is { Count: > 1 } || s.TeamImplement is not null) continue;
+            s.Mode = ClaudeMode.AcceptEdits;
+            migrated++;
+        }
+        return migrated;
+    }
+
+    // --- Персистентность очереди отложенных сообщений (pending.json) ---
+
+    // Срок годности восстановленного сообщения: старше — не оживляем, чтобы не будить чаты
+    // недельной давности (в историю ложится плашка «не доставлено»).
+    internal static readonly TimeSpan PendingRestoreMaxAge = TimeSpan.FromHours(24);
+
+    private void AttachPendingPersistence(SessionEntry entry) =>
+        entry.Pending.Changed = () => PersistPending(entry);
+
+    // Запись очереди и заморозки. Берёт PendingLock сам (замок реентерабелен): QueueFrozen
+    // пишется и вне замка, а две параллельные записи одного файла не должны разъезжаться.
+    private void PersistPending(SessionEntry entry)
+    {
+        try
+        {
+            lock (entry.PendingLock)
+            {
+                var key = HistoryKeyOf(entry.Info);
+                _history.SavePending(key, new PendingQueueFile(entry.QueueFrozen, entry.Pending.ToList()));
+                // Чат получил ClaudeSessionId уже после первой записи — файл под id чата устарел
+                if (key != entry.Info.Id) _history.SavePending(entry.Info.Id, new PendingQueueFile(false, []));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Очередь чата {entry.Info.Id} не записана: {ex.Message}");
+        }
+    }
+
+    // Загрузка очереди на старте: свежие сообщения — в Pending (в том же порядке), старше срока —
+    // в ExpiredOnRestore (плашку пишет DrainRestoredPendingAsync). Файл читаем ДО подключения
+    // Changed: восстановление не должно писать диск, пока не отсеяли просроченное.
+    private void RestorePending(SessionEntry entry)
+    {
+        try
+        {
+            var state = _history.LoadPending(HistoryKeyOf(entry.Info))
+                ?? (entry.Info.ClaudeSessionId is not null ? _history.LoadPending(entry.Info.Id) : null);
+            if (state is { Items.Count: > 0 })
+            {
+                var now = DateTime.UtcNow;
+                var fresh = state.Items.Where(m => now - m.EnqueuedAt <= PendingRestoreMaxAge).ToList();
+                var expired = state.Items.Where(m => now - m.EnqueuedAt > PendingRestoreMaxAge).ToList();
+                entry.Pending.Restore(fresh);
+                entry.QueueFrozen = state.Frozen;
+                entry.PendingRestored = fresh.Count > 0;
+                if (expired.Count > 0) entry.ExpiredOnRestore = expired;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SessionManager] Очередь чата {entry.Info.Id} не прочитана: {ex.Message}");
+        }
+        AttachPendingPersistence(entry);
+        if (entry.ExpiredOnRestore is not null) PersistPending(entry);
+    }
+
+    // После того как авто-возобновление отработало: чаты без живого хода с восстановленной
+    // незамороженной очередью разбираются штатным DrainNextPendingAsync; просроченные
+    // сообщения получают плашку «не доставлено». Чат с возобновлённым ходом (Working/Waiting/
+    // Starting) не трогаем — очередь разберёт его конец. Идемпотентно: PendingRestored гасится.
+    public async Task DrainRestoredPendingAsync()
+    {
+        foreach (var (sessionId, entry) in _sessions.ToArray())
+        {
+            try
+            {
+                var expired = entry.ExpiredOnRestore;
+                if (expired is not null)
+                {
+                    entry.ExpiredOnRestore = null;
+                    await AppendPendingExpiredCardAsync(sessionId, entry, expired);
+                }
+
+                if (!entry.PendingRestored) continue;
+                if (entry.Info.Status is SessionStatus.Working or SessionStatus.Starting or SessionStatus.Waiting)
+                    continue;
+                entry.PendingRestored = false;
+                if (entry.QueueFrozen || !HasPending(entry)) continue;
+                await DrainNextPendingAsync(sessionId);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Автодренаж очереди ({sessionId}) после рестарта: {ex.Message}");
+            }
+        }
+    }
+
+    private async Task AppendPendingExpiredCardAsync(string sessionId, SessionEntry entry, List<QueuedMessage> expired)
+    {
+        const string reason = "pending_expired";
+        var text = expired.Count == 1
+            ? "Не доставлено: сервер перезапускался, а сообщение в очереди устарело (старше 24 ч)"
+            : $"Не доставлено: сервер перезапускался, а {expired.Count} сообщений в очереди устарели (старше 24 ч)";
+        await AppendStoredAsync(sessionId, new StoredWorkLoopStoppedMessage(reason, text),
+            new WorkLoopStoppedMessage(reason, text));
     }
 
     // Выдача кандидатов на auto-resume: возвращает захваченный LoadSessions список и
@@ -1566,7 +1718,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     }
 
     // Тестовый хук: наполнить стор сессиями без полного CreateAsync (бенчмарк MarkRead).
-    internal void AddSessionForTest(Session info) => _sessions[info.Id] = new SessionEntry { Info = info };
+    internal void AddSessionForTest(Session info)
+    {
+        var entry = new SessionEntry { Info = info };
+        AttachPendingPersistence(entry);
+        _sessions[info.Id] = entry;
+    }
 
     // Публичный (волна В): TeamPlanService сохраняет каталог сессий после правки PlanCardId/
     // PlanVersion/Replanning — через тот же канал, что и TeamWaveService.
@@ -3368,12 +3525,57 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Session.OwnerId равен null, владелец живёт у проекта. Прямое сравнение с этим полем молча
     // отключало запрет, и делегированный ход спокойно запускал исполнителя — поймано live-тестом,
     // юнит-тесты такое не видят. Один способ резолва владельца на весь класс.
-    public TurnDelegationState GetActiveTurnDelegation(string sessionId, string ownerId) =>
-        GetOwned(sessionId, ownerId) is not null
-            && _sessions.TryGetValue(sessionId, out var entry)
-            && entry.Process is { } adapter
-            ? new TurnDelegationState(adapter.CurrentTurnAgentDepth, adapter.CurrentTurnSuppressTasksExecute)
-            : new TurnDelegationState(0, false);
+    // Признак хода складывается с делегированностью прогона (SessionEntry.RunDelegation):
+    // фоновый агент делегированного хода после его result остаётся делегированным, пока он
+    // жив и пока не подаст ход человек. RunOnly — делегированность держится только прогоном, а
+    // текущий ход сам по себе глубины 0 (на этой «липкой» части разрешён отчёт наверх).
+    public TurnDelegationState GetActiveTurnDelegation(string sessionId, string ownerId)
+    {
+        if (GetOwned(sessionId, ownerId) is null || !_sessions.TryGetValue(sessionId, out var entry))
+            return new TurnDelegationState(0, false);
+        var adapter = entry.Process;
+        // Ход в полёте (подан и не дошёл до терминала): его собственный признак — от подачи
+        var inFlight = entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting;
+        TurnDelegationState run, submit;
+        lock (entry.PendingLock)
+        {
+            if (!inFlight && entry.RunDelegation != default && !RunAgentsAlive(adapter))
+                entry.RunDelegation = entry.SubmitDelegation = default;
+            run = entry.RunDelegation;
+            submit = inFlight ? entry.SubmitDelegation : default;
+        }
+        var own = new TurnDelegationState(
+            Math.Max(adapter?.CurrentTurnAgentDepth ?? 0, submit.AgentDepth),
+            (adapter?.CurrentTurnSuppressTasksExecute ?? false) || submit.ExecutorSuppressed);
+        return new TurnDelegationState(Math.Max(own.AgentDepth, run.AgentDepth),
+            own.ExecutorSuppressed || run.ExecutorSuppressed,
+            RunOnly: own.AgentDepth == 0 && run.AgentDepth >= 1);
+    }
+
+    // Живы ли фоновые агенты прогона. Адаптера нет — узнать нечем: считаем живыми (fail-closed)
+    private static bool RunAgentsAlive(ILlmSessionAdapter? adapter) => adapter is null || adapter.HasLiveBgAgents;
+
+    // Подача хода в процесс отмечает делегированность прогона ДО передачи адаптеру: фоновые
+    // агенты этого хода не должны застать окно, где он ещё «человеческий». Подача человека
+    // (не авто, не директива, глубина 0, не доклад) прогон сбрасывает — с неё начинается
+    // новая ответственность. Любая другая подача добавляет свой признак к прогону, если у
+    // того ещё живы фоновые агенты (авто-ход глубины 0 их делегированность не обнуляет), а
+    // без живых агентов прошлое забывается — действует только признак этой подачи.
+    private static void NoteRunDelegation(SessionEntry entry, int agentDepth, bool suppressTasksExecute,
+        bool fromHuman)
+    {
+        var human = fromHuman && agentDepth == 0 && !suppressTasksExecute;
+        var keep = !human && RunAgentsAlive(entry.Process);
+        lock (entry.PendingLock)
+        {
+            var prev = keep ? entry.RunDelegation : default;
+            entry.SubmitDelegation = human ? default : new TurnDelegationState(agentDepth, suppressTasksExecute);
+            entry.RunDelegation = human
+                ? default
+                : new TurnDelegationState(Math.Max(prev.AgentDepth, agentDepth),
+                    prev.ExecutorSuppressed || suppressTasksExecute);
+        }
+    }
 
     // Активен ли цикл «до готово» в чате-вызывателе: гейт анти-рекурсии (DelegatedTurnGate.Decide)
     // спрашивает это, чтобы разрешить ход-реакцию на доклад при активном цикле (единственная точка,
@@ -4546,6 +4748,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var accumulator = new TurnAccumulator(await _history.LoadAsync(historyKey), historyKey);
 
         var entry = new SessionEntry { Info = session, Accumulator = accumulator };
+        AttachPendingPersistence(entry);
         _sessions[session.Id] = entry;
 
         var ownerId = ResolveOwnerId(session);
@@ -4730,7 +4933,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
                 // Пользователь возобновил разговор — заморозка «Стоп» снимается ДО постановки,
                 // иначе форсаж dispatchNow и разбор по концу хода упёрлись бы в QueueFrozen
-                entry.QueueFrozen = false;
+                if (entry.QueueFrozen) { entry.QueueFrozen = false; PersistPending(entry); }
                 var enqueued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
                     agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode);
                 if (enqueued is SendAndWaitResult.QueueFull f)
@@ -4778,7 +4981,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             {
                 if (entry.Pending.Count > 0)
                 {
-                    entry.QueueFrozen = false;
+                    if (entry.QueueFrozen) { entry.QueueFrozen = false; PersistPending(entry); }
                     head = entry.Pending[0];
                     entry.Pending.RemoveAt(0);
                     // Потолок не пробивается: голова изъята до добавления
@@ -5007,6 +5210,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // не адресован (MINOR B-п.5) — в карточке остаётся то, что он видел последним.
         if (!systemDirective)
             entry.Info.LastMessage = ChatPreview(text);
+        NoteRunDelegation(entry, agentDepth, suppressTasksExecute, fromHuman: !auto && !systemDirective);
         // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
         // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
         // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
@@ -5409,6 +5613,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.TeamTurnFromHuman = false; // ход поднят агентом (chats_send), не человеком (M7)
         // Превью чата — сообщением агента: адаптер его больше не выставляет (см. ChatPreview)
         entry.Info.LastMessage = ChatPreview(text);
+        NoteRunDelegation(entry, agentDepth, suppressTasksExecute: false, fromHuman: false);
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
@@ -5710,6 +5915,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         lock (entry.PendingLock)
         {
             entry.QueueFrozen = true;
+            PersistPending(entry);
             hadAny = entry.Pending.Count > 0;
             // Последнее пользовательское изымаем — оно вернётся в композер для правки/повтора.
             // Агентские и более ранние пользовательские остаются ждать возобновления.
@@ -5928,6 +6134,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
                     senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser);
             else
+                // Глубина сообщения едет в ход: агентское из очереди так же делегированное,
+                // как поданное сразу (иначе chats_send, отстоявший очередь, получил бы
+                // возможности хода человека)
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
                     suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote,
@@ -9415,8 +9624,20 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             await entry.Process.DisposeAsync();
         // Дренаж очереди сессии до конца: ResultMessage последнего хода обязан дойти до всех
         // наблюдателей (иначе TaskExecutionService не закроет задачу исполнителя)
+        // HTTP-путь удаления не ждёт зависшего наблюдателя: дренаж идёт в фоне, исход — в лог
         if (entry.Pipeline is { } pipeline)
-            await pipeline.CompleteAsync(TimeSpan.FromSeconds(30));
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await pipeline.CompleteAsync(TimeSpan.FromSeconds(30));
+                    _log.LogDebug("Очередь удалённой сессии {SessionId} разобрана", sessionId);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Дренаж очереди удалённой сессии {SessionId} упал", sessionId);
+                }
+            });
 
         // Дочищаем историю на диске — иначе data/sessions/{id} копится мусором
         if (entry.Info.ClaudeSessionId is string csid)
@@ -9619,6 +9840,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         await DrainPipelineAsync(sessionId);
     }
 
+    internal SessionMessagePipeline? PipelineForTest(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry) ? entry.Pipeline : null;
+
     // Дожидается разбора всего, что легло в очередь сессии (тесты и точки, которым нужны
     // отработавшие наблюдатели)
     internal Task DrainPipelineAsync(string sessionId) =>
@@ -9762,6 +9986,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     msg = m;
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError, m.FinishedAt);
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
+                    // Продолженный после рестарта ход дошёл до результата инструмента — это уже не
+                    // crash-loop, а живая работа: счётчик auto-resume обнуляем, чтобы СЛЕДУЮЩИЙ
+                    // рестарт (вечер 22.10: девять выкаток подряд, долгие ходы исполнителей не
+                    // успевали дойти до result) снова мог продолжить этот ход. До первого
+                    // tool_result счётчик стоит: ход, падающий сразу после --resume, не зациклится.
+                    if (entry is not null && entry.Info.RestartResumeAttempts > 0)
+                    {
+                        entry.Info.RestartResumeAttempts = 0;
+                        SaveSessions();
+                    }
                     TryTrackFalCost(sessionId, m.Content); // fire-and-forget: стоимость придёт позже
                     TryTrackGlifCost(sessionId, m.Content); // синхронно: кредиты уже в tool_result
                     break;
@@ -10277,12 +10511,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             },
             msg, entry.Info,
             Droppable: SessionMessagePipeline.IsDroppable(msg),
-            EnqueuedAt: Stopwatch.GetTimestamp()));
+            EnqueuedAt: Stopwatch.GetTimestamp(),
+            // Слитой дельте очередь пересобирает рассылку по новому тексту (кадр без показа не рассылается)
+            WorkFor: broadcastMsg ? merged => () => BroadcastAsync(sessionId, merged) : null));
     }
 
     private SessionMessagePipeline GetPipeline(SessionEntry entry) =>
         LazyInitializer.EnsureInitialized(ref entry.Pipeline,
-            () => new SessionMessagePipeline(item => ProcessPipelineItemAsync(entry, item)));
+            () => new SessionMessagePipeline(item => ProcessPipelineItemAsync(entry, item),
+                sessionId: entry.Info.Id, sessionKind: () => entry.Info.TaskId is null ? "human" : "executor",
+                log: _log));
 
     // Работа без сообщения для наблюдателей (догоняющая дельта, presence, смена статуса)
     private ValueTask EnqueueWorkAsync(SessionEntry entry, Func<Task> work) =>
@@ -10317,7 +10555,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             }
             ServerMetrics.RecordSessionObserverDuration(
                 Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                observer.Target?.GetType().Name ?? observer.Method.DeclaringType?.Name ?? "unknown", kind);
+                observer.Method.DeclaringType?.Name ?? observer.Target?.GetType().Name ?? "unknown", kind);
         }
     }
 

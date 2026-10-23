@@ -21,11 +21,14 @@ public static class SpendSources
     // в рейтингах «по токенам» им делать нечего (иначе они вечно висят внизу с нулём).
     public static bool IsTokenless(string source) => source is Fal or Glif or Tts or Higgsfield;
 
-    // Бесплатный исполнитель: локальная модель (Ollama или llama-server), прямой
-    // адаптер любого OpenAI-совместимого источника (провайдер заканчивается на "-direct")
-    // или модель ":free" через CLI.
-    public static bool IsFree(string provider, string? model) =>
-        provider is "ollama" or "llama-server"
+    // Бесплатный исполнитель: локальный провайдер (флаг IsLocal в конфиге — свой движок
+    // на своей машине), локальная модель (Ollama или llama-server), прямой адаптер любого
+    // OpenAI-совместимого источника (провайдер заканчивается на "-direct") или модель
+    // ":free" через CLI. Ключи локальных провайдеров машин-specific (напр. "local-qwen"),
+    // поэтому признак берётся из конфига, а не из перечисления здесь.
+    public static bool IsFree(string provider, string? model, bool isLocal = false) =>
+        isLocal
+        || provider is "ollama" or "llama-server"
         || provider.EndsWith("-direct", StringComparison.OrdinalIgnoreCase)
         || (model is not null && model.EndsWith(":free", StringComparison.OrdinalIgnoreCase));
 
@@ -56,7 +59,9 @@ public sealed class SpendRecord
     public string? PersonaId { get; init; }
     public string Provider { get; init; } = "claude";
     public string? Model { get; init; }
-    public string Source { get; init; } = SpendSources.ChatTurn;
+    // set (не init): проход переклассификации в SpendStore меняет источник записей,
+    // записанных до учёта признака IsLocal (см. ReclassifyLocalAsFree)
+    public string Source { get; set; } = SpendSources.ChatTurn;
     public long InputTokens { get; init; }
     public long OutputTokens { get; init; }
     public long CacheReadTokens { get; init; }
@@ -99,7 +104,8 @@ public sealed class DailySpendRow
     public string? PersonaId { get; init; }
     public string Provider { get; init; } = "";
     public string? Model { get; init; }
-    public string Source { get; init; } = "";
+    // set (не init): проход переклассификации в SpendStore меняет источник агрегата
+    public string Source { get; set; } = "";
     public long InputTokens { get; set; }
     public long OutputTokens { get; set; }
     public long CacheReadTokens { get; set; }

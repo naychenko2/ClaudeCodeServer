@@ -95,6 +95,41 @@ public class TasksToolsetScopesTests : IDisposable
     }
 
     /// <summary>
+    /// Б-cl: перенос merge-задачи в другую фичу (tasks_update featureId), финал целевой фичи
+    /// не принят ⇒ isError (400); перенос запрещён в любую фичу. C#/REST-аналоги — TaskManagerTests / TasksControllerTests.
+    /// </summary>
+    [Fact]
+    public async Task Update_Merge_ПереносВДругуюФичу_ФиналНеПринят_IsError()
+    {
+        var project = await CreateProjectAsync(Client, "merge-move");
+        var sessionId = await CreateSessionAsync(Client, project);
+
+        // Фича A: эпик + финал (Done + accepted) + merge.
+        var epicA = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "эпик A", role = "feature" });
+        var epicAId = epicA.GetProperty("id").GetString()!;
+        var finalA = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "финал A", featureId = epicAId, role = "final" });
+        var finalAId = finalA.GetProperty("id").GetString()!;
+        await ToolJsonAsync(Client, "tasks", sessionId, "tasks_update",
+            new { id = finalAId, status = "done", verification = new { verdict = "accepted" } });
+        var mergeA = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "мерж A", featureId = epicAId, role = "merge" });
+        var mergeAId = mergeA.GetProperty("id").GetString()!;
+
+        // Фича B: только эпик (финала нет → не Ready).
+        var epicB = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "эпик B", role = "feature" });
+        var epicBId = epicB.GetProperty("id").GetString()!;
+
+        // Перенос merge-задачи в B ⇒ isError (финал B не принят).
+        var answer = await CallToolAsync(Client, "tasks", sessionId, "tasks_update",
+            new { id = mergeAId, featureId = epicBId });
+        answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
+        ToolText(answer).Should().Contain("Роль merge привязана к своей фиче");
+    }
+
+    /// <summary>
     /// Ось 3: исполнитель задачи чужого (непривязанного) проекта стартует в его рабочем
     /// каталоге — запуск обязан отказывать так же, как tasks_update по этой задаче.
     /// У stdio проверки не было вовсе; закрываем вместе с дырой записи (блокер 2.1).

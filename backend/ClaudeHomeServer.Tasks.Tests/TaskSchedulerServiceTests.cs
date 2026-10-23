@@ -2,10 +2,11 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Тесты извлечённых предикатов планировщика (ShouldRemind / ShouldAutoStart)
+// Тесты извлечённых предикатов планировщика (ShouldRemind / ShouldAutoStart / IsHoldRefusal)
 public class TaskSchedulerServiceTests
 {
     private static readonly TimeZoneInfo Utc = TimeZoneInfo.Utc;
@@ -122,6 +123,50 @@ public class TaskSchedulerServiceTests
         var done = Task(dueTime: "11:00", assignee: TaskItemAssignee.Claude,
             status: TaskItemStatus.Done);
         TaskSchedulerService.ShouldAutoStart(done, Utc, Now).Should().BeFalse();
+    }
+
+    // ─── IsHoldRefusal (R-HOLD-G, находка 6) ─────────────────────────────────
+    // Планировщик обязан отличать отказ по паузе (тихий лог Info, без трейса) от падения
+    // автозапуска (Warning с трейсом). Предикат — тот же гейт, что и точка запуска.
+    // Мутация: оставить в предикате только проверку типа исключения (без обращения к гейту) —
+    // второй кейс краснеет.
+    [Fact]
+    public void AutoStart_HoldRefusal_DistinguishedFromFailure()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "sched_hold_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var tasks = new TaskManager(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build());
+        try
+        {
+            var epic = tasks.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            var step = tasks.Create(null, "u", new CreateTaskRequest("шаг",
+                FeatureId: epic.Id, Role: TaskRoles.Step));
+            tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+            TaskSchedulerService.IsHoldRefusal(tasks, step,
+                new InvalidOperationException("Фича на паузе, снимите паузу на странице фичи."))
+                .Should().BeTrue("отказ по паузе — не поломка, тихий лог");
+
+            // Сбой не по гейту: удержания нет — обычная тревога.
+            tasks.ClearHold(epic.Id);
+            TaskSchedulerService.IsHoldRefusal(tasks, step, new InvalidOperationException("устройство офлайн"))
+                .Should().BeFalse("Hold нет — это падение запуска, не отказ");
+
+            // Задача без фичи никогда не «отказ по паузе».
+            var plain = tasks.Create(null, "u", new CreateTaskRequest("обычная"));
+            TaskSchedulerService.IsHoldRefusal(tasks, plain, new InvalidOperationException("boom"))
+                .Should().BeFalse();
+        }
+        finally
+        {
+            tasks.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     // ─── TaskUrl ─────────────────────────────────────────────────────────────

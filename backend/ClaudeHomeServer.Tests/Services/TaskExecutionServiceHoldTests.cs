@@ -200,10 +200,22 @@ public class TaskExecutionServiceHoldTests : IDisposable
             "ClearHold пометку не гасит — иначе задача выглядела бы живой, хотя хода нет");
     }
 
+    // Живые сессии SessionManager. Нужны для утверждения «чат задачи не создан вовсе»
+    // (R-HOLD-G, находка 4): ClaudeStartedAt == null — не доказательство, ExecuteClaimedAsync
+    // создаёт чат раньше MarkClaudeStarted (:341-347), поэтому следы запуска появляются
+    // одновременно с чатом, а отказанная задача не должна порождать ни того, ни другого.
+    private int LiveSessionCount()
+    {
+        var field = typeof(SessionManager).GetField("_sessions",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        return ((System.Collections.IDictionary)field.GetValue(_sessions)!).Count;
+    }
+
     // Критерий W4-HOLD-G (контракт §1 :174): tasks_run_executor и автоматика проходят через
     // ExecuteAsync — гейт стоит там, до claim'а и подъёма процесса. Мутация: убрать вызов
-    // FeatureHoldRefusal в ExecuteAsync — первый абзац краснеет (запуск проходит). Снятие
-    // паузы разрешает запуск — второй абзац ловит обратную сторону гейта.
+    // FeatureHoldRefusal в ExecuteAsync — первый абзац краснеет (запуск проходит). Перенести
+    // гейт за создания сессии — краснеет проверка LiveSessionCount (чат создан до отказа).
+    // Снятие паузы разрешает запуск — последний абзац ловит обратную сторону гейта.
     [Fact]
     public async Task Hold_RefusesExecutorLaunch_ClearingPauseAllowsStart()
     {
@@ -218,6 +230,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
             .WithMessage("*Фича на паузе, снимите паузу на странице фичи*",
                 "запуск исполнителя по удержанной фиче отказан до подъёма процесса");
         step.ClaudeStartedAt.Should().BeNull("отказ не оставляет следов запуска");
+        LiveSessionCount().Should().Be(0, "отказ до claim'а: чат задачи не создан вовсе");
 
         // Абзац на queue (W4-HOLD-G, R-HOLD-G находка 1): гейт отказывает по правилу, а не по
         // одной причине — queue та же пауза (FeatureProjector.IsPaused). Мутация: сузить
@@ -226,9 +239,35 @@ public class TaskExecutionServiceHoldTests : IDisposable
         await start.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Фича на паузе, снимите паузу на странице фичи*",
                 "queue — та же пауза: отказ до claim'а и до подъёма процесса");
+        LiveSessionCount().Should().Be(0, "и на queue — чата нет");
 
         _tasks.ClearHold(epic.Id);
         var started = await _sut.ExecuteAsync(step, auto: false);
         started.ClaudeStartedAt.Should().NotBeNull("снятие паузы разрешает запуск");
+    }
+
+    // R-HOLD-G (находка 5): гонка «пауза между гейтом и стартом». Claim уже взят, пауза
+    // встала после первого гейта — повторная проверка того же гейта в ExecuteClaimedAsync
+    // обязана отказать до первого хода, и чат не создаётся. Мутация: убрать повторную
+    // проверку в ExecuteClaimedAsync — чат поднимется, тест покраснеет.
+    [Fact]
+    public async Task Hold_RecheckAfterClaim_RefusesBeforeFirstTurn()
+    {
+        var user = _userStore.Add("hold-race", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг фичи", Role: "step",
+            FeatureId: epic.Id));
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+        // Прямой вызов claimed-пути — ровно то состояние, в которое попадает гонка: claim
+        // уже взят, первый гейт пройден, пауза поставлена между ними.
+        var claimed = typeof(TaskExecutionService).GetMethod("ExecuteClaimedAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Func<Task<TaskItem>> call = async () => await (Task<TaskItem>)
+            claimed.Invoke(_sut, new object[] { step, false, null })!;
+        await call.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Фича на паузе*", "повторная проверка гейта после claim'а");
+        LiveSessionCount().Should().Be(0, "повторный гейт до CreateAsync: чат задачи не создан");
+        step.ClaudeStartedAt.Should().BeNull("отказ не оставляет следов запуска");
     }
 }

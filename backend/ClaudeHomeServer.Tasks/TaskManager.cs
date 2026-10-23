@@ -1296,12 +1296,18 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // (HoldAllows/IsPaused, W4-HOLD-G): здесь только текст отказа по причине. Задача без фичи
     // проходит всегда; висячий FeatureId (эпик не найден) — тоже, как задача без фичи: это
     // отдельный дефект трекера, блокировать из-за него работу не надо.
+    // Эпик берётся в сфере владельца задачи (контракт :170 называет Allows(task, owner), ср.
+    // TaskExecutionService.InterruptFeatureTurnsOnHold по GetByOwner): чужой эпик — не фича
+    // этой задачи, трактуется как висячий FeatureId — пропускаем.
     // Возвращает null — запуск разрешён; иначе текст отказа для точки запуска (контракт :175).
     public string? FeatureHoldRefusal(TaskItem task)
     {
         if (string.IsNullOrEmpty(task.FeatureId)) return null;
         var epic = _tasks.GetValueOrDefault(task.FeatureId);
         if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        // Owner известен только когда его задал вызывающий (ExecuteAsync проверяет владельца
+        // до гейта); при неизвестном гейт работает как раньше — по самой ссылке FeatureId.
+        if (task.OwnerId is not null && epic.OwnerId != task.OwnerId) return null;
         if (FeatureProjector.HoldAllows(task, epic)) return null;
         return FeatureProjector.IsPaused(epic)
             ? "Фича на паузе, снимите паузу на странице фичи."

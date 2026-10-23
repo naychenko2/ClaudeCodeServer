@@ -1508,13 +1508,20 @@ public sealed class FeatureProjector(TaskManager tasks)
         && final.Status == TaskItemStatus.Done
         && IsAcceptance(final.Verification?.Verdict);
 
-    // ─── Пауза фичи (W4-HOLD-G, R-HOLD-G находка 2) — единая точка правды ───────────────────
+    // ─── Пауза фичи (W4-HOLD-G, R-HOLD-G2) — единая точка правды ───────────────────────────
     // «Пауза» — явное удержание человека (manual/queue): фичу не вести. Формула одна и для
     // гейта запуска (TaskManager.FeatureHoldRefusal), и для состояния (ComputeState). Явный
     // список причин, а не «любой не-draft»: словарь FeatureHoldReasons закрыт (ручка REST
     // валидирует), и «неизвестная причина = пауза» больше не подразумевается.
+    // Причина вне словаря (старые/битые данные, SetHold его не фильтрует) трактуется как
+    // черновик — IsDraft ниже. Так состояние и гейт говорят одно и то же: рабочие роли
+    // закрыты, подготовка разрешена (R-HOLD-G2 находка 2).
     public static bool IsPaused(TaskItem epic) =>
         epic.Hold is not null && epic.Hold.Reason is FeatureHoldReasons.Manual or FeatureHoldReasons.Queue;
+
+    // «Черновик»: любое удержание, не пауза — включая причину вне словаря (фоллбэк). Гейт для
+    // такого Hold ведёт себя идентично: пропускает только роли подготовки (HoldPrepRoles).
+    public static bool IsDraft(TaskItem epic) => epic.Hold is not null && !IsPaused(epic);
 
     // Роли, разрешённые на черновике: только подготовка (cut/design/plan/consult), рабочие — нет.
     public static readonly IReadOnlyList<string> HoldPrepRoles =
@@ -1569,10 +1576,11 @@ public sealed class FeatureProjector(TaskManager tasks)
         if (hasStopped) return FeatureStates.Stopped;
         // 5. waiting: явное ожидание человека (как тревога kind=wait, КРОМЕ «мерж»).
         if (hasExplicitWait) return FeatureStates.Waiting;
-        // 6. draft: черновик (Reason draft): фичу готовят, исполнять шаги нельзя — даже если
-        //    разрез или план идут (nowCount > 0): человеку важнее «фича ещё не запущена».
+        // 6. draft: черновик — любое удержание, не пауза (Reason draft или фоллбэк вне
+        //    словаря, IsDraft): фичу готовят, исполнять шаги нельзя — даже если разрез или
+        //    план идут (nowCount > 0): человеку важнее «фича ещё не запущена».
         //    Тревоги stopped/waiting уже отсеются выше.
-        if (epic.Hold is not null && epic.Hold.Reason == FeatureHoldReasons.Draft) return FeatureStates.Draft;
+        if (IsDraft(epic)) return FeatureStates.Draft;
         // 7. merging: merge-задача запущена (InProgress) — мерж идёт.
         if (merge is not null && merge.Status == TaskItemStatus.InProgress) return FeatureStates.Merging;
         // 8. merge_pending: финал принят, merge-задачи нет ИЛИ она создана, но не запущена

@@ -280,6 +280,14 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (task.OwnerId is null)
             throw new InvalidOperationException("У задачи нет владельца");
 
+        // Гонка «пауза между гейтом и стартом» (W4-HOLD-G, R-HOLD-G находка 5): пауза может
+        // встать после первого гейта, до или во время claim'а. Повторная проверка того же
+        // гейта после claim'а, до первого хода: если эпик удержан — чат задачи не создаётся
+        // вовсе (он здесь поднимается раньше MarkClaudeStarted, поэтому одной отметки
+        // «не запущена» для доказательства мало).
+        if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
+            throw new InvalidOperationException(holdRefusal);
+
         // Не более одной живой сессии на задачу
         if (task.LinkedSessionId is not null &&
             _sessions.GetById(task.LinkedSessionId) is { } linked &&

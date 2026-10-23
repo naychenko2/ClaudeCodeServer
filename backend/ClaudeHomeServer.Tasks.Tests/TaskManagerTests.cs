@@ -1870,4 +1870,42 @@ public class TaskManagerTests : IDisposable
         _sut.ClearHold(epic.Id);
         _sut.FeatureHoldRefusal(step).Should().BeNull("снятие паузы снимает и запрет запуска");
     }
+
+    // R-HOLD-G (находка 3): контракт §1 :170 — Allows(task, owner): эпик берётся в сфере
+    // владельца задачи. Чужой эпик — не фича этой задачи, как висячий FeatureId: пропускаем.
+    // Мутация: убрать сверку владельца в FeatureHoldRefusal — чужой эпик заблокирует → красное.
+    [Fact]
+    public void FeatureHoldRefusal_ЧужойЭпик_НеГейт()
+    {
+        var foreign = CreateEpic("u2"); // эпик другого владельца
+        _sut.SetHold(foreign.Id, FeatureHoldReasons.Manual);
+        // Ссылка на чужой эпик возможна только старыми данными: Create'а владелец сверяет
+        // и такую ссылку отвергает (ValidateFeatureFields).
+        var task = new TaskItem { Title = "чужая фича", FeatureId = foreign.Id, Role = TaskRoles.Step,
+            OwnerId = "u" };
+        _sut.FeatureHoldRefusal(task).Should().BeNull(
+            "гейт по владельцу: чужой эпик — не фича этой задачи, не блокируем");
+
+        // Свой эпик того же владельца — гейт работает (граница проверки):
+        var own = CreateEpic("u");
+        _sut.SetHold(own.Id, FeatureHoldReasons.Manual);
+        var ownTask = new TaskItem { Title = "свой шаг", FeatureId = own.Id, Role = TaskRoles.Step,
+            OwnerId = "u" };
+        _sut.FeatureHoldRefusal(ownTask).Should().NotBeNull("свой эпик на паузе — отказ как раньше");
+    }
+
+    // R-HOLD-G2 (находка 2): причина вне словаря — фоллбэк как черновик: текст отказа
+    // «черновик», подготовка разрешена, рабочие роли закрыты. Мутация: сузить IsDraft до
+    // Reason == Draft — текст стал бы «пауза» при не-паузе → красное.
+    [Fact]
+    public void FeatureHoldRefusal_НеизвестнаяПричина_КакЧерновик()
+    {
+        var epic = CreateEpic("u");
+        _sut.SetHold(epic.Id, "нет-в-словаре"); // словарь фильтрует REST, не SetHold
+        _sut.FeatureHoldRefusal(new TaskItem { Title = "шаг", FeatureId = epic.Id, Role = TaskRoles.Step })
+            .Should().Be("Фича — черновик, запустите её на странице фичи.",
+                "вне словаря — не пауза: текст отказа по фоллбэку «черновик»");
+        _sut.FeatureHoldRefusal(new TaskItem { Title = "план", FeatureId = epic.Id, Role = TaskRoles.Plan })
+            .Should().BeNull("подготовка разрешена, как при черновике");
+    }
 }

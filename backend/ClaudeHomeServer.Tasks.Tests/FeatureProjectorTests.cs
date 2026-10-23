@@ -2213,6 +2213,56 @@ public class FeatureProjectorTests
         }
     }
 
+    // R-HOLD-G2 (находка 1): таблица «причина × роль» по контракту §1 :171 — ожидания
+    // выписаны ИЗ КОНТРАКТА, а не из реализации: сверка «гейт == предикат» тавтологична и
+    // ничего не доказывает. Мутация: добавить review в HoldPrepRoles — строка «draft ×
+    // review» краснеет.
+    [Fact]
+    public void HoldTable_ReasonByRole_MatchesContract()
+    {
+        var t = new DateTime(2026, 10, 23);
+        string[] prep = [TaskRoles.Cut, TaskRoles.Design, TaskRoles.Plan, TaskRoles.Consult];
+        var table = new[]
+        {
+            (reason: (string?)null, allowed: TaskRoles.All.ToArray()),          // Hold нет — всё
+            (reason: FeatureHoldReasons.Manual, allowed: Array.Empty<string>()), // пауза — ничего
+            (reason: FeatureHoldReasons.Queue, allowed: Array.Empty<string>()),  // queue — та же пауза
+            (reason: FeatureHoldReasons.Draft, allowed: prep),                  // черновик — подготовка
+        };
+        foreach (var (reason, allowed) in table)
+        {
+            var epic = new TaskItem { Id = "e-" + (reason ?? "none"), Role = TaskRoles.Feature, CreatedAt = t,
+                Hold = reason is null ? null : Hold(reason, t) };
+            foreach (var role in TaskRoles.All)
+            {
+                var task = new TaskItem { Title = "задача", FeatureId = epic.Id, Role = role };
+                FeatureProjector.HoldAllows(task, epic).Should().Be(allowed.Contains(role),
+                    $"контракт §1 :171: причина «{reason}», роль «{role}» — " +
+                    $"{(allowed.Contains(role) ? "разрешено" : "отказано")}");
+            }
+        }
+    }
+
+    // R-HOLD-G2 (находка 2): причина вне словаря (SetHold его не фильтрует, фильтрует REST) —
+    // фоллбэк как черновик: состояние NOT «ни paused, ни draft», а draft; гейт ведёт себя
+    // идентично черновику. Мутация: сузить IsDraft до Reason == Draft — state перестанет
+    // быть draft при неизвестной причине → красное.
+    [Fact]
+    public void UnknownReasonHold_FallbackAsDraft_StateAndGateAgree()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-unknown", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold("нет-в-словаре", t) };
+        var run = FeatureProjector.Build(epic, [epic]);
+        run.State.Should().Be(FeatureStates.Draft,
+            "вне словаря — черновик: состояние и гейт говорят одно, а не «ни paused, ни draft»");
+
+        var step = new TaskItem { Title = "шаг", FeatureId = epic.Id, Role = TaskRoles.Step };
+        var plan = new TaskItem { Title = "план", FeatureId = epic.Id, Role = TaskRoles.Plan };
+        FeatureProjector.HoldAllows(step, epic).Should().BeFalse("рабочая роль закрыта, как при черновике");
+        FeatureProjector.HoldAllows(plan, epic).Should().BeTrue("подготовка разрешена, как при черновике");
+    }
+
     // ─── W4-HOLD-D: пауза прерывает идущие ходы (контракт §1) ──────────────────────────────
     // Сквозной: TaskManager.SetHold → проектор. Идущий исполнитель помечается feature_held
     // (статус не трогается), «Сейчас» пустой, журнал задачи содержит «stopped» с причиной

@@ -462,13 +462,17 @@ async function doHoldPause(fid: string, state: FeatureState, nowCount: number): 
 
 // Снятие удержания: «Снять паузу» (paused) и «Запустить фичу» (draft) — обе ручки
 // DELETE hold, без подтверждения (макет: «Снять паузу» и «Запустить фичу» — без модалки).
-async function doHoldClear(fid: string, state: FeatureState, nowCount: number): Promise<void> {
+// Ответ — {resumed, expired} (вердикт R-HOLD-H): resumed — задачи, которым пауза разрешала
+// запуск (не очередь автостарта), их и называем, без числа (R-HOLD-H2); expired не показываем.
+async function doHoldClear(fid: string, state: FeatureState): Promise<void> {
   try {
-    await api.tasks.clearFeatureHold(fid);
+    const { resumed } = await api.tasks.clearFeatureHold(fid);
     if (state === 'draft') {
       showToast('Фича запущена', 'Куратор начинает конвейер.');
+    } else if (resumed.length > 0) {
+      showToast('Фича снята с паузы', 'Задачи, которым пауза мешала, снова в работе.');
     } else {
-      showToast('Пауза снята', nowCount > 0 ? `Продолжены ${nowCount} ${pluralSteps(nowCount)}, куратор в курсе.` : 'Куратор в курсе.');
+      showToast('Пауза снята', '');
     }
   } catch (e) {
     showToast('Не получилось', holdErrorText(e, state));
@@ -568,7 +572,7 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge }: Fea
   const clearClick = () => {
     if (holdBusy) return;
     setHoldBusy(true);
-    void doHoldClear(fid, state!, now.length).finally(() => setHoldBusy(false));
+    void doHoldClear(fid, state!).finally(() => setHoldBusy(false));
   };
 
   // Главное действие: wait/stopped → в чат исполнителя; merge → «Мерж…» (Ф6: общая
@@ -731,7 +735,7 @@ function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: 
   const act = () => {
     if (busy) return;
     setBusy(true);
-    void doHoldClear(fid, run.state, now.length).finally(() => setBusy(false));
+    void doHoldClear(fid, run.state).finally(() => setBusy(false));
   };
   const keyChat = feature?.keySessionId ?? run.epic?.linkedSessionId ?? null;
 

@@ -1792,8 +1792,11 @@ export const api = {
     // { interrupted: [taskId] } (контракт §1, :364).
     setFeatureHold: (fid: string, reason: string) =>
       request<{ interrupted: string[] }>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    // Снятие паузы (W4-HOLD-F2, хвост R-HOLD-H): 200 — { resumed: [taskId], expired: [taskId] }:
+    // resumed — задачи, которым пауза разрешала запуск (не очередь автостарта), expired — те,
+    // чьё ожидание истекло (фронтом не показывается).
     clearFeatureHold: (fid: string) =>
-      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'DELETE' }),
+      request<{ resumed: string[]; expired: string[] }>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'DELETE' }),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),

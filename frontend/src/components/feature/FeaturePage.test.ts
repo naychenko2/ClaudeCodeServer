@@ -59,10 +59,14 @@ const mockMergeFeature = vi.hoisted(() => ({
 }));
 // Управляемые ответы api.tasks.setFeatureHold/clearFeatureHold (W4-HOLD-F2): calls —
 // журнал (fid + метод + reason), pending (запрос в полёте), error (409/сбой).
+// Ответ DELETE hold — {resumed, expired} (вердикт R-HOLD-H): resumed/expired — управления
+// для теста тоста снятия паузы (W4-HOLD-F3 хвост).
 const mockHold = vi.hoisted(() => ({
   calls: [] as { fid: string; method: 'POST' | 'DELETE'; reason?: string }[],
   pending: false,
   error: null as (Error & { status?: number; body?: unknown }) | null,
+  resumed: [] as string[],
+  expired: [] as string[],
 }));
 // Журнал тостов (W4-HOLD-F2: текст 409 и успех — проверяются по нему).
 const toasts = vi.hoisted(() => [] as [string, string | undefined][]);
@@ -95,9 +99,9 @@ vi.mock('../../lib/api', () => ({
       },
       clearFeatureHold: (fid: string) => {
         mockHold.calls.push({ fid, method: 'DELETE' });
-        if (mockHold.pending) return new Promise<Task>(() => {});
+        if (mockHold.pending) return new Promise<{ resumed: string[]; expired: string[] }>(() => {});
         if (mockHold.error) return Promise.reject(mockHold.error);
-        return Promise.resolve({} as Task);
+        return Promise.resolve({ resumed: mockHold.resumed, expired: mockHold.expired });
       },
     },
   },
@@ -1071,7 +1075,9 @@ describe('pluralTasks: склонение «задача/задачи/задач
 // === W4-HOLD-F2: кнопка «Пауза» и блок состояния «на паузе»/«черновик» (feature-hold-1.md) ===
 // Мутации (в отчёте): (1) убрать ветку 'paused' в featureRunStatusTag → тест тега
 // краснеет; (2) убрать api.tasks.setFeatureHold в doHoldPause → «клик Паузы» краснеет;
-// (3) убрать ранний return paused в FeaturePageAlert → блок «на паузе» не появится.
+// (3) убрать ранний return paused в FeaturePageAlert → блок «на паузе» не появится;
+// (4) убрать разбор ответа в doHoldClear (всегда «Пауза снята») → тест «снятие с resumed»
+// краснеет: заголовок не «Фича снята с паузы».
 describe('W4-HOLD-F2: пауза и черновик в шапке и блоке состояния', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -1098,6 +1104,8 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     mockHold.calls = [];
     mockHold.pending = false;
     mockHold.error = null;
+    mockHold.resumed = [];
+    mockHold.expired = [];
     toasts.length = 0;
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
   });
@@ -1178,6 +1186,34 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     expect(textNodes(unpause!).join('')).toContain('Снять паузу');
     await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
     expect(mockHold.calls, 'DELETE hold').toEqual([{ fid: 'f1', method: 'DELETE' }]);
+  });
+
+  // Хвост R-HOLD-H2: ответ DELETE hold — {resumed, expired}. resumed не пустой → тост
+  // «Фича снята с паузы» без числа; пустой → просто «Пауза снята». expired не показывается.
+  it('снятие паузы с resumed: тост «Фича снята с паузы», без числа; expired не упоминается', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [] });
+    mockHold.resumed = ['t1', 't2'];
+    mockHold.expired = ['t3'];
+    const c = render({});
+    await settle();
+    const unpause = findNodeByAttr(c, 'data-testid', 'feature-page-unpause')!;
+    await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
+    const last = toasts[toasts.length - 1];
+    expect(last[0], 'заголовок — «Фича снята с паузы»').toBe('Фича снята с паузы');
+    expect((last[1] ?? ''), 'в тексте нет числа').not.toMatch(/\d/);
+    expect((last[1] ?? ''), 'expired не показывается').not.toMatch(/просрочен|expired/i);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница жива').not.toBeNull();
+  });
+
+  it('снятие паузы с пустым resumed: просто «Пауза снята», без «продолжено N»', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
+    const c = render({});
+    await settle();
+    const unpause = findNodeByAttr(c, 'data-testid', 'feature-page-unpause')!;
+    await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
+    const last = toasts[toasts.length - 1];
+    expect(last[0], 'заголовок — «Пауза снята»').toBe('Пауза снята');
+    expect(last[1] ?? '', 'деталей про продолженные шаги нет').toBe('');
   });
 
   it('360: кнопки «Пауза» в ряду нет — первый пункт шторки ⋯ с подсказкой', async () => {

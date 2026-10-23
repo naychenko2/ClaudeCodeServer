@@ -75,7 +75,7 @@ describe('useDraftDiff', () => {
     expect(latest.diff).toEqual(diffOf('fresh'));
   });
 
-  it('ошибка сбрасывается на смену версии; двойной вызов в полёте — один запрос', async () => {
+  it('двойной вызов в полёте — один запрос; после загрузки повторный — тоже', async () => {
     const pending = deferred();
     vi.mocked(api.plugins.draftDiff).mockReturnValueOnce(pending.promise);
     render(1);
@@ -84,5 +84,19 @@ describe('useDraftDiff', () => {
     await act(async () => { pending.resolve(diffOf('x')); });
     await act(async () => { latest.loadDiff(); });
     expect(api.plugins.draftDiff).toHaveBeenCalledTimes(1);
+  });
+
+  it('была ошибка → агент правит (смена версии) → ошибка сброшена, запрос повторный', async () => {
+    vi.mocked(api.plugins.draftDiff)
+      .mockRejectedValueOnce(new Error('сбой'))
+      .mockResolvedValueOnce(diffOf('fresh'));
+    const root = render(1);
+    await act(async () => { latest.loadDiff(); });
+    expect(latest.diffError).toBe('сбой');
+
+    await act(async () => { root.render(createElement(Probe, { version: 2 })); });
+    expect(api.plugins.draftDiff).toHaveBeenCalledTimes(2);
+    expect(latest.diffError).toBeNull();
+    expect(latest.diff).toEqual(diffOf('fresh'));
   });
 });

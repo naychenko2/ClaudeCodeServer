@@ -122,7 +122,10 @@ public sealed record FeatureIndexRow(
     int UnlinkedReworks,
     // Причина удержания эпика (W4-HOLD-B1): draft | manual | queue; null — удержания нет.
     // Только сигнал для фронта (тон «на паузе»/«черновик»); сам факт состояния — в State.
-    string? HoldReason);
+    string? HoldReason,
+    // Момент постановки удержания (FeatureHold.Since, R-HOLD-B1): длительность «на паузе · {dur}»
+    // в макете (блокер фронта HOLE-F2). Аддитивное поле: null — удержания нет.
+    DateTime? HoldSince);
 
 // Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
 // нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя

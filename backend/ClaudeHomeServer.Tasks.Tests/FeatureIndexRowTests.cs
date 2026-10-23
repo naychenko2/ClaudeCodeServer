@@ -217,6 +217,23 @@ public class FeatureIndexRowTests
             "явный wait → чип «waiting» (не «wait»: словарь чипов ≠ словарь attention.kind)");
     }
 
+    // ── 3b. удержание (W4-HOLD-B1, R-HOLD-B1): строка несёт HoldSince ────────────────────────
+    // Мутация: убрать `run.Hold?.Since` в BuildRow — HoldSince null, тест красный.
+    [Fact]
+    public void Строка_HoldSince_ИзHoldЭпика()
+    {
+        const string epicId = "epic-hold-since";
+        var since = new DateTime(2026, 10, 23, 10, 0, 0);
+        var epic = Epic(epicId);
+        epic.Hold = new FeatureHold(FeatureHoldReasons.Manual, since, null, true);
+        var step = Child("s1", epicId, status: TaskItemStatus.InProgress);
+
+        var row = Row(epic, [epic, step]);
+
+        row.HoldReason.Should().Be(FeatureHoldReasons.Manual, "причина удержания — как раньше");
+        row.HoldSince.Should().Be(since, "момент постановки удержания — для «на паузе · {dur}»");
+    }
+
     // ── 4. цепочка ключевого чата: первое ЖИВОЕ звено ────────────────────────────────────────
 
     // Ключевой чат — первое живое звено цепочки: 1) epic.SourceSessionId;

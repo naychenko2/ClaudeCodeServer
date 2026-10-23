@@ -2123,6 +2123,31 @@ public class FeatureProjectorTests
         };
         var run = FeatureProjector.Build(epic, [epic, step]);
         run.State.Should().Be(FeatureStates.Stopped, "даже в черновике остановленный исполнитель — тревога");
+        run.Attention.Should().NotBeNull("для draft тревога НЕ гасится: упавший исполнитель виден");
+    }
+
+    // R-HOLD-B1: пауза гасит тревогу. Мутация: убрать `if (featureState == FeatureStates.Paused)
+    // attention = null;` — Attention остаётся "stopped", чипы ["open","stopped"], тон "stopped" → красное.
+    [Fact]
+    public void PausedHold_AttentionSuppressed_NoStoppedChipsOrTone()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-paused-att", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold(FeatureHoldReasons.Manual, t) };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "e-paused-att", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+            ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed",
+        };
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        run.State.Should().Be(FeatureStates.Paused);
+        run.Attention.Should().BeNull("пауза — решение человека, а не тревога: stopped не показывается");
+        FeatureProjector.ChipsOf(run).Should().Equal(["open"],
+            "фича на паузе: только open — ни stopped, ни running");
+        var active = run.Stages.First(s => s.State == "active");
+        active.Tone.Should().NotBe("stopped", "тон стадии выводится из Attention — тревога погашена");
     }
 
     // closed ДО paused: эпик Done + удержание → closed, не paused.

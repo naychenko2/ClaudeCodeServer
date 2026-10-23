@@ -170,6 +170,43 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
+        // «Сейчас»: все InProgress-задачи фичи (эпик + дочерние), по убыванию ClaudeStartedAt.
+        // Эпик — контейнер фичи, не стадия конвейера: идущий эпик в «Сейчас» не показываем.
+        // У закрытой фичи список пуст (ни одна задача не InProgress). Вынесено до цикла стадий:
+        // nowCount нужен для ComputeState, а state — для гашения тревоги при паузе (R-HOLD-B1).
+        var nowList = featureTasks
+            .Where(t => t.Status == TaskItemStatus.InProgress && !ReferenceEquals(t, epic))
+            .OrderByDescending(t => t.ClaudeStartedAt ?? t.CreatedAt)
+            .Select(t => new FeatureNow
+            {
+                TaskId = t.Id,
+                Stage = FeatureTimeMath.RoleToStage(t.Role),
+                PersonaId = t.PersonaId,
+                StepRef = t.StepRef,
+                Title = t.Title,
+                StartedAt = t.ClaudeStartedAt,
+                LinkedSessionId = LiveSession(t.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
+            })
+            .ToList();
+
+        // Состояние фичи (единая точка правды; из него bucket строки и порядок OrderRuns —
+        // см. FeatureStates). Приоритет: merged → closed → paused → stopped → waiting → merging →
+        // merge_pending → running → not_started → idle. finalAccepted/waitTask — выше (scope метода).
+        // Считается ДО цикла стадий: тон активной стадии — производное от Attention, а пауза гасит
+        // Attention — значит state должен быть известен раньше тона (R-HOLD-B1).
+        string featureState = ComputeState(
+            epic, merge, finalAccepted,
+            hasStopped: stoppedTask is not null,
+            hasExplicitWait: waitTask is not null,
+            nowCount: nowList.Count,
+            anyStarted: featureTasks.Any(t => t.ClaudeStartedAt is not null));
+
+        // W4-HOLD-B1 (R-HOLD-B1): пауза — решение человека («фичу не вести»), а не тревога: при
+        // state=paused Attention гасится — иначе фича на паузе показывает «stopped» (тон, чипы,
+        // тревога). Для draft не гасим: state=draft только когда остановленных задач нет (stopped
+        // стоит выше), и упавший исполнитель разреза в черновике должен быть виден.
+        if (featureState == FeatureStates.Paused) attention = null;
+
         // Конвейер: стадии в порядке жизненного цикла. Порядок задаётся ЯВНЫМ списком,
         // а не выводится из порядка кода (W4-DES-B): «design» — необязательный этап после
         // «cut»; без дизайн-задач — состояние skipped, на готовность не влияет.
@@ -391,25 +428,9 @@ public sealed class FeatureProjector(TaskManager tasks)
             });
         }
 
-        // ─── Б3: «Сейчас», итог ─────────────────────────────────────────────────────────────
-
-        // «Сейчас»: все InProgress-задачи фичи (эпик + дочерние), по убыванию ClaudeStartedAt.
-        // Эпик — контейнер фичи, не стадия конвейера: идущий эпик в «Сейчас» не показываем.
-        // У закрытой фичи список пуст (ни одна задача не InProgress).
-        var nowList = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress && !ReferenceEquals(t, epic))
-            .OrderByDescending(t => t.ClaudeStartedAt ?? t.CreatedAt)
-            .Select(t => new FeatureNow
-            {
-                TaskId = t.Id,
-                Stage = FeatureTimeMath.RoleToStage(t.Role),
-                PersonaId = t.PersonaId,
-                StepRef = t.StepRef,
-                Title = t.Title,
-                StartedAt = t.ClaudeStartedAt,
-                LinkedSessionId = LiveSession(t.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
-            })
-            .ToList();
+        // ─── Б3: итог ────────────────────────────────────────────────────────────────────────
+        // «Сейчас» (nowList) и featureState — выше, до цикла стадий (R-HOLD-B1: тон стадии выводится
+        // из Attention, а пауза гасит Attention — state нужен раньше тона).
 
         // Счётчик шагов: принятые ревью / знаменатель (план ∪ заведённые) — из StepProgress.
         var stepProgress = accounting.Progress;
@@ -426,16 +447,6 @@ public sealed class FeatureProjector(TaskManager tasks)
             if (t.ClaudeStartedAt is not null && (lastActivityAt is null || t.ClaudeStartedAt > lastActivityAt))
                 lastActivityAt = t.ClaudeStartedAt;
         }
-
-        // Состояние фичи (единая точка правды; из него bucket строки и порядок OrderRuns —
-        // см. FeatureStates). Приоритет: merged → closed → stopped → waiting → merging →
-        // merge_pending → running → not_started → idle. finalAccepted/waitTask — выше (scope метода).
-        string featureState = ComputeState(
-            epic, merge, finalAccepted,
-            hasStopped: stoppedTask is not null,
-            hasExplicitWait: waitTask is not null,
-            nowCount: nowList.Count,
-            anyStarted: featureTasks.Any(t => t.ClaudeStartedAt is not null));
 
         // Закрыта: выводится из State (единая точка правды, §1 разреза «момент закрытия фичи»):
         // merged или closed. Старое «merge Done || epic Done» — вторая точка правды: частичный
@@ -1404,7 +1415,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.StepProgress.PlanState,
             run.StepProgress.Withdrawn,
             run.StepProgress.UnlinkedReworks,
-            run.Hold?.Reason);
+            run.Hold?.Reason,
+            run.Hold?.Since);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
@@ -1566,9 +1578,10 @@ public sealed class FeatureProjector(TaskManager tasks)
                 };
                 chips.Add(chip);
             }
-            else if (run.Now.Count > 0)
+            else if (Bucket(run) == "running")
             {
-                // bucket = running (идёт, без тревоги) → чип «running».
+                // bucket = running (идёт, без тревоги) → чип «running». Выводится из bucket, а не из Now:
+                // у фичи на паузе (bucket = idle) могут остаться InProgress-задачи — она не идёт (R-HOLD-B1).
                 chips.Add("running");
             }
         }

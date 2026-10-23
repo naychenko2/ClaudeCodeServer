@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Окно «Файлы черновика» плагина · макет v1</title>
+<!--
+  Макет окна «Файлы черновика» (DraftCard.tsx → FilesDrawer). Задача 2759944e.
+  Только макет: код не тронут. Спецификация для исполнителя — в отчёте задачи и в блоке «Спека» внизу страницы.
+
+  Устройство файла:
+    1) ТЕМА: дословная копия frontend/src/lib/theme.css (сырой hex живёт только там).
+       Селектор тёмной темы расширен до [data-theme="dark"], чтобы на доске жили кадры обеих тем.
+    2) ОКНО: стили только var(--c-*), var(--shadow-*); размеры — шкалы FS / SP / R / ISLAND.headerH.
+       Комментарий у каждого правила называет токен C.* и контрол из components/ui/.
+
+  Адресация кадра:
+    plugin-files-window-v1.html#theme=dark&w=320&state=changes&screen=file
+    state:  files | files-long | files-binary | files-gone | files-loading | files-error |
+            changes | changes-summary | changes-loading | changes-error | changes-new | changes-truncated |
+            panel | panel-error
+    w:      desktop | 320
+    screen: list | file   (только мобила: уровень «список» или «файл»)
+    view=board — доска: деск и мобила, обе темы.
+-->
+<style>
+/*
+ * Тема приложения через CSS custom properties.
+ * Источник правды по семантике токенов — объект C в lib/design.ts (там ключи
+ * ссылаются на эти переменные). Здесь — конкретные значения для светлой и
+ * тёмной тем.
+ *
+ * Светлая тема (:root) = РОВНО текущие исторические значения C (визуально
+ * ничего не меняется). Тёмная (:root[data-theme="dark"]) — тёплый тёмный
+ * в духе Claude/Anthropic: тёмные тёплые нейтрали, тот же accent, off-white
+ * текст. Значение data-theme проставляет lib/themeMode.ts (и inline-скрипт
+ * в index.html до рендера, чтобы не мигало).
+ */
+
+:root, [data-theme="light"] {
+  /* Фоны */
+  --c-bg-main:     #F4F0E8;
+  --c-bg-panel:    #EDE7DC;
+  --c-bg-card:     #FBF8F2;
+  --c-bg-white:    #FFFFFF;
+  --c-bg-selected: #E8E1D4;
+  --c-bg-inset:    #E7E0D2;
+  /* Полупрозрачный утопленный тон: ниша на дудл-холсте, сквозь которую паттерн
+     чуть просвечивает (git-бар над композером) */
+  --c-bg-inset-soft: rgba(231, 224, 210, 0.55);
+
+  /* Текст */
+  --c-text-heading:   #2A251F;
+  --c-text-primary:   #39332B;
+  --c-text-secondary: #756B5E;
+  --c-text-muted:     #9A8F7E;
+  --c-on-accent:      #FBF8F2;
+  /* Текст/иконка поверх подложки, которая НЕ меняется с темой: лайтбокс медиа,
+     надписи поверх фото, инициалы на цветных кружках из палитр. Одинаков в обеих
+     темах — иначе в тёмной теме такой текст ушёл бы в тёмный на тёмном */
+  --c-on-dark:        #FFFFFF;
+
+  /* Акцент */
+  --c-accent:       #D97757;
+  --c-accent-light: #F4ECE1;
+  --c-accent-muted: #EAD3C5;
+  --c-accent-soft:  #E8A990;
+
+  /* Границы */
+  --c-border:       #E0D7C8;
+  --c-border-light: #E8E1D4;
+  --c-divider:      #DDD4C4;
+  --c-dashed:       #D0C6B4;
+  --c-track:        #D8CFBE;
+  --c-progress-track: #D8CFBE;  /* дорожка тонкой полосы и кольцо спиннера карточки инструмента */
+  --c-smoke:        #B4A899;  /* дымок значка ожидания */
+  --c-fab-smoke:    rgba(45, 35, 28, .7);  /* дым из трубы FAB — тёмный на светлом фоне */
+
+  /* Оверлей модалок */
+  --c-overlay: rgba(23, 19, 15, 0.42);
+
+  /* Стекло — подложка под текст поверх картинки (карточки чатов с лицом собеседника) */
+  --c-glass: rgba(255, 255, 255, 0.74);
+  /* Сильное стекло — колонки чатов «Стены»: дудл-фон холста читается сквозь них,
+     иначе ряд плотных карточек превращает экран в сплошную заливку */
+  --c-glass-strong: rgba(255, 255, 255, 0.22);
+
+  /* Плашка поверх ЧУЖОЙ картинки (значок на обложке канала, метка на превью).
+     От темы НЕ зависит намеренно: под ней логотип телеканала любого цвета, и светлая
+     подложка со светлой иконкой на белом логотипе исчезала бы совсем — как и чёрные
+     поля вокруг кадра, это свойство медиа, а не оформления интерфейса. */
+  --c-media-scrim: rgba(0, 0, 0, 0.55);
+  /* Поля вокруг кадра с другим соотношением сторон — тоже свойство медиа, а не темы */
+  --c-media-backdrop: #000000;
+
+  /* Подложка ответа ассистента: полупрозрачный «лист» поверх дудл-фона страницы */
+  --c-msg-bg: rgba(251, 248, 242, 0.42);
+
+  /* Статусы */
+  --c-success:      #5E8B4E;
+  --c-success-bg:   #E9F1E8;
+  --c-success-text: #3F7A4F;
+  --c-warning:      #C9923E;
+  --c-warning-bg:   #FBEFE0;
+  --c-warning-text: #8A6A28;
+  /* Текст/цифры поверх сплошного warning-фона: тёмный в ОБЕИХ темах — жёлтый
+     сам по себе светлый, светлый текст на нём не читается */
+  --c-on-warning:   #201C18;
+  --c-danger:        #B4452F;
+  --c-danger-bg:     #FBF1EC;
+  --c-danger-text:   #B4452F;
+  --c-danger-border: #F5C6BF;
+  --c-info:    #3E7CA6;
+  --c-info-bg: #E7EFF5;
+
+  /* Режим «План» */
+  --c-plan:        #6C5CB0;
+  --c-plan-light:  #EEEBF8;
+  --c-plan-text:   #4E4196;
+  --c-plan-border: #D6CFEF;
+
+  /* Хаб-навигатор (верхний уровень) — своя «чернильная» гамма мимо accent:
+     тёмная плашка активного раздела в светлой теме, кремовый текст на ней */
+  --c-nav-ink:    #2A251F;
+  --c-on-nav-ink: #F4ECE1;
+  /* Активная вкладка таббара хаба. В светлой — та же чернильная плашка; в тёмной
+     своя пара (не инверсия nav-ink: светлая плашка там ярче главной кнопки) */
+  --c-nav-active:    #2A251F;
+  --c-on-nav-active: #F4ECE1;
+  --c-nav-active-edge: #2A251F; /* кромка плашки; в светлой сливается с ней */
+
+  /* Diff */
+  --c-diff-add-bg:   #E8F5E9;
+  --c-diff-add-text: #1B5E20;
+  --c-diff-rem-bg:   #FFEBEE;
+  --c-diff-rem-text: #B71C1C;
+
+  /* Вывод инструментов */
+  --c-term-bg:      #2A251F;
+  --c-term-text:    #D8CFC0;
+  --c-term-error:   #F0B8AC;
+  --c-output-bg:    #FFFFFF;
+  --c-output-border:#DED4C2;
+
+  /* Тени (rgba построены под светлый фон) */
+  --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+  /* Мягкое danger-свечение для фокуса ошибочного поля — той же геометрии, что
+     shadow-focus, но цветом C.danger: поле подсвечено, но читается как «ошибка»,
+     а не «активный ввод» (макет docs/mockups/model-route-error-state.html) */
+  --shadow-focus-danger: 0 0 0 3px rgba(180, 69, 47, 0.14);
+  --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+  --shadow-selected: 0 0 0 3px var(--c-accent-light);
+  /* Панели-острова (Islands): заметнее карточной — контактная тень + мягкий разлёт,
+     чтобы остров читался «приподнятым» над холстом */
+  --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+  /* Та же тень острова, но как filter: повторяет КОНТУР фигуры, а не её рамку —
+     для прозрачных картинок и SVG (логотип на форме входа), где box-shadow
+     обвёл бы прямоугольник вокруг рисунка */
+  --drop-island:     drop-shadow(0 1px 2px rgba(60, 50, 35, 0.06)) drop-shadow(0 6px 20px rgba(60, 50, 35, 0.10));
+  /* Та же высота, что у острова, но разлёт ВВЕРХ: для элементов, стоящих на самой
+     кромке холста (композер с губой) — там нижнюю половину обычной тени срезает край */
+  --shadow-lift:     0 -1px 2px rgba(60, 50, 35, 0.06), 0 -6px 20px rgba(60, 50, 35, 0.10);
+  /* Мягкий подъём вверх — верхняя губа композера: над ней узкий зазор и лента */
+  --shadow-lift-soft: 0 -1px 2px rgba(60, 50, 35, 0.06), 0 -3px 10px rgba(60, 50, 35, 0.08);
+  --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+  --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);
+  /* Попап-превью панели: остров, поднятый НАД раскладкой. Один размытый слой
+     читается как дымка, поэтому тень двойная — плотная контактная у самой кромки
+     плюс широкий разлёт: он и создаёт ощущение высоты над соседними панелями */
+  --shadow-peek:     0 2px 6px rgba(60, 50, 35, 0.14), 0 20px 48px rgba(23, 19, 15, 0.32);
+  --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+  --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
+  /* Индиго-ореол основной кнопки плана — та же геометрия, что у shadow-button,
+     но цветом C.plan (визуально кнопка «Одобрить и выполнить» принадлежит
+     своему режиму, а не общему accent — гайд дизайн-системы) */
+  --shadow-plan-button: 0 4px 14px rgba(108, 92, 176, 0.30);
+  --shadow-fab:      0 6px 18px rgba(217, 119, 87, 0.42);
+  /* Та же геометрия свечения, но нейтральная — для FAB без accent-заливки
+     (кнопка-логотип AI-хаба): ореол должен быть в цвет самой кнопки, а не accent */
+  --shadow-fab-neutral: 0 6px 18px rgba(60, 50, 35, 0.22);
+  /* Янтарный ореол «нужен ответ» (FAB): статичная подсветка при prefers-reduced-motion,
+     в обычном режиме кадры задаёт анимация cc-fab-alert. Тот же нейтральный контактный
+     слой, что у fab-neutral, плюс цветное кольцо цвета предупреждения. */
+  --shadow-alert:    0 0 0 4px rgba(201, 146, 62, 0.26), 0 6px 18px rgba(60, 50, 35, 0.22);
+  --shadow-thumb:    0 1px 3px rgba(42, 37, 31, 0.12);
+  /* Прожатие карточки под пальцем/курсором: тень уходит ВНУТРЬ — вместо подъёма
+     над фоном элемент проваливается в него. Держим слабой: это отклик на 150мс,
+     а не состояние, и плотная внутренняя тень читалась бы как выключенный контрол */
+  --shadow-press:    inset 0 1px 3px rgba(60, 50, 35, 0.12);
+
+  /* Скроллбар (index.css) */
+  --c-scrollbar-thumb:       #D4CFC4;
+  --c-scrollbar-thumb-hover: #BDB7AC;
+
+  /* === Фон-холст под островами (CanvasBackdrop) ===
+     ink — rgb-триплет «туши» дудл-паттерна (альфу задаёт слой),
+     glow — accent-тепло сверху, прохлада снизу. ВАЖНО: градиент симметричен
+     по горизонтали — иначе стеклянные панели у левого и правого краёв
+     подкрашиваются в разные тона */
+  --canvas-ink: 42, 37, 31;
+  --canvas-glow:
+    radial-gradient(140% 70% at 50% 0%, rgba(217, 119, 87, .13), transparent 55%),
+    radial-gradient(120% 60% at 50% 110%, rgba(110, 140, 120, .10), transparent 60%);
+
+  /* Ручки паттерна (общие для тем; значения подобраны вручную) */
+  --canvas-alpha:  0.05;  /* непрозрачность нейтральной туши дудл-паттерна */
+  --canvas-tile:   220px; /* размер тайла паттерна */
+
+  /* === Aurora-сияние в композере (режим разговора) ===
+     Свет над верхней кромкой карточки: ленты задаются ярко, мягкое затухание
+     наружу даёт filter: blur (index.css, .cc-aurora). Значения — rgba-центры
+     градиентов лент ДО размытия; финальная плотность света = эта альфа ×
+     прозрачность слоя.
+     Фазы: «я говорю» — accent (rgb совпадает с --c-accent, альфу сюда копируем:
+     ссылка на var() не даёт альфу); «AI отвечает» — цвет говорящей персоны, иначе цвет
+     проекта (auroraColorHex, альфу накладывает Composer), а без них — тоже accent. */
+  --c-aurora-user: rgba(217, 119, 87, 1);
+
+  /* Альфа ЦВЕТНОЙ (проектной) туши в themed-режиме (фича project-backgrounds).
+     Отдельна от --canvas-alpha: цвет-на-цвете даёт меньше контраста, чем тёмная
+     тушь на светлом, поэтому цветные дудлы требуют заметно плотнее — 0.07 против
+     0.05. Подобрано по макету docs/mockups/project-background-ink-final.html
+     (полный workspace с реальной геометрией пузырей и длинной перепиской, не мелкие
+     ячейки матрицы). Найденный потолок видимости — 0.14: выше муть, ниже паттерн
+     худших цветов (янтарный #F39C12 на кремовом, кофейный #8A6A28 на тёмном)
+     теряется в зазорах между пузырями. 0.07 — заметно бледнее потолка: паттерн
+     еле читается, худшие цвета почти теряются, но проектный цвет доносится нимбом
+     и dot в хабе; текст под полупрозрачными msgBg читаем. Кофейный на тёмном —
+     предельный случай (тёмная тушь на тёмном): паттерн слаб. Едино для обеих тем —
+     проверено раздельно. Чтобы увести тёмную тему плотнее/слабее, переопределить
+     тут же в :root[data-theme="dark"]. */
+  --canvas-project-alpha: 0.07;
+}
+
+/*
+ * === Тёмная тема ===
+ * Иерархия светлоты сохранена как в светлой, но инвертирована: bgMain — самый
+ * тёмный, панели чуть светлее, карточки ещё светлее (читаются как «поднятые»
+ * поверхности). Всё в тёплых коричнево-серых, не в холодном сине-чёрном.
+ */
+[data-theme="dark"] {
+  /* Фоны: тёплые тёмные нейтрали, восходящая светлота от main к card */
+  --c-bg-main:     #201C18;  /* самый тёмный — фон страниц */
+  --c-bg-panel:    #272320;  /* боковые панели, тулбары */
+  --c-bg-card:     #2E2A25;  /* карточки/поднятые поверхности */
+  --c-bg-white:    #2E2A25;  /* «белые» поля ввода → карточный тон */
+  --c-bg-selected: #38332D;  /* выбранная строка/hover */
+  --c-bg-inset:    #1B1815;  /* утопленные зоны/футеры — темнее main */
+  --c-bg-inset-soft: rgba(27, 24, 21, 0.55);  /* см. светлую тему */
+
+  /* Текст: тёплый off-white для основного, приглушённые для остального.
+     Основной #EDE6DB на #201C18 ≈ 12.6:1, secondary #B3A897 ≈ 6.8:1 — AA+ */
+  --c-text-heading:   #F2ECE1;
+  --c-text-primary:   #EDE6DB;
+  --c-text-secondary: #B3A897;
+  --c-text-muted:     #8A8072;
+  --c-on-accent:      #201C18;  /* тёмный текст поверх яркого accent */
+  --c-on-dark:        #FFFFFF;  /* см. светлую тему: подложка от темы не зависит — и цвет тоже */
+
+  /* Акцент: чуть ярче для контраста на тёмном */
+  --c-accent:       #E38A6A;
+  --c-accent-light: #3A2E27;  /* тёмный тёплый фон для accent-подсветок */
+  --c-accent-muted: #4A362C;
+  --c-accent-soft:  #9A5E48;  /* disabled/loading accent-кнопки */
+
+  /* Границы: чуть светлее фона, мягкие */
+  --c-border:       #3D3830;
+  --c-border-light: #34302A;
+  --c-divider:      #454037;
+  --c-dashed:       #4A443B;
+  --c-track:        #453F37;  /* дорожка выключенного тумблера */
+  /* Дорожка тонкой полосы и кольцо спиннера: светлее --c-track — на тёмном фоне 2–3 px
+     полосы и кольцо цвета границы почти не читались (дизайн-заход Веры) */
+  --c-progress-track: #5C544A;
+  --c-smoke:        #7E7566;  /* дымок значка ожидания */
+  --c-fab-smoke:    rgba(240, 235, 228, .78);  /* дым из трубы FAB — светлый на тёмном фоне */
+
+  /* Оверлей — плотнее, чтобы модалка читалась над тёмным фоном */
+  --c-overlay: rgba(0, 0, 0, 0.62);
+
+  /* Стекло — в тон карточного фона тёмной темы */
+  --c-glass: rgba(46, 42, 37, 0.74);
+  --c-glass-strong: rgba(46, 42, 37, 0.28);
+  --c-media-scrim: rgba(0, 0, 0, 0.55);  /* см. светлую тему: от темы не зависит */
+  --c-media-backdrop: #000000;           /* см. светлую тему */
+
+  /* Подложка ответа ассистента — в тон карточного фона */
+  --c-msg-bg: rgba(46, 42, 37, 0.38);
+
+  /* Статусы: приглушённые тёмные фоны, светлые читаемые тексты */
+  --c-success:      #7CB86A;
+  --c-success-bg:   #232E20;
+  --c-success-text: #8FCB79;
+  --c-warning:      #E0AC5A;
+  --c-warning-bg:   #322717;
+  --c-warning-text: #E7B96E;
+  --c-on-warning:   #201C18;
+  --c-danger:        #E8785E;
+  --c-danger-bg:     #331F1B;
+  --c-danger-text:   #EE8A72;
+  --c-danger-border: #5A302A;
+  --c-info:    #5FA0CC;
+  --c-info-bg: #1E2A33;
+
+  /* Режим «План» (индиго) */
+  --c-plan:        #9385D8;
+  --c-plan-light:  #2A2540;
+  --c-plan-text:   #B0A4E6;
+  --c-plan-border: #45406A;
+
+  /* Хаб-навигатор: в тёмной теме инверсия — светлая приподнятая плашка на
+     тёмной шапке, тёмный текст на ней (та же логика «выделен контрастом») */
+  --c-nav-ink:    #EDE6DB;
+  --c-on-nav-ink: #201C18;
+  /* Активная вкладка хаба: приподнятая поверхность на ступень выше bg-selected
+     (hover соседей), а не светлое пятно — навигация не спорит с акцентом */
+  --c-nav-active:    #463F37;
+  --c-on-nav-active: #F2ECE1;
+  /* Волосяная кромка на ступень светлее: край плашки держится на узорном фоне */
+  --c-nav-active-edge: #5A5148;
+
+  /* Diff: тёмные подложки, яркие тексты */
+  --c-diff-add-bg:   #1E2E1E;
+  --c-diff-add-text: #8FCB79;
+  --c-diff-rem-bg:   #33201E;
+  --c-diff-rem-text: #EE8A72;
+
+  /* Вывод инструментов: терминал уже тёмный — оставляем почти как есть.
+     Светлая «панель вывода» → карточный тёмный тон */
+  --c-term-bg:      #17140F;
+  --c-term-text:    #C9C0B0;
+  --c-term-error:   #F0B8AC;
+  --c-output-bg:    #262320;
+  --c-output-border:#3D3830;
+
+  /* Тени: на тёмном усилены (плотнее чёрный, больше blur).
+     Accent-свечения кнопок оставлены выразительными */
+  --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+  --shadow-focus-danger: 0 0 0 3px rgba(232, 120, 94, 0.26);
+  --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-selected: 0 0 0 3px var(--c-accent-light);
+  --shadow-island:   0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --drop-island:     drop-shadow(0 1px 2px rgba(0, 0, 0, 0.30)) drop-shadow(0 8px 24px rgba(0, 0, 0, 0.45));
+  --shadow-lift:     0 -1px 2px rgba(0, 0, 0, 0.30), 0 -8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lift-soft: 0 -1px 2px rgba(0, 0, 0, 0.30), 0 -4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
+  --shadow-modal:    0 28px 70px rgba(0, 0, 0, 0.65);
+  --shadow-peek:     0 2px 8px rgba(0, 0, 0, 0.50), 0 24px 56px rgba(0, 0, 0, 0.68);
+  --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+  --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
+  /* В тёмной теме C.plan ярче (#9385D8), ореол — от него */
+  --shadow-plan-button: 0 4px 16px rgba(147, 133, 216, 0.34);
+  --shadow-fab:      0 6px 20px rgba(227, 138, 106, 0.46);
+  --shadow-fab-neutral: 0 6px 20px rgba(0, 0, 0, 0.50);
+  --shadow-alert:    0 0 0 4px rgba(224, 172, 90, 0.30), 0 6px 20px rgba(0, 0, 0, 0.50);
+  --shadow-thumb:    0 1px 3px rgba(0, 0, 0, 0.45);
+  /* На тёмном «провал» плотнее: чёрная внутренняя тень на тёмном фоне даёт
+     меньше контраста, чем та же на кремовом */
+  --shadow-press:    inset 0 1px 4px rgba(0, 0, 0, 0.38);
+
+  /* Скроллбар */
+  --c-scrollbar-thumb:       #45403A;
+  --c-scrollbar-thumb-hover: #57514A;
+
+  /* Фон-холст: светлая тушь на тёмном; нимб — те же цвета, чуть глубже.
+     Симметрия по горизонтали — как в светлой (панели у краёв в один тон) */
+  --canvas-ink: 237, 230, 219;
+  --canvas-glow:
+    radial-gradient(140% 70% at 50% 0%, rgba(227, 138, 106, .11), transparent 55%),
+    radial-gradient(120% 60% at 50% 110%, rgba(110, 140, 120, .08), transparent 60%);
+
+  /* Aurora-сияние в композере — accent плотнее для контраста на тёмном
+     (см. светлую тему: rgb — от тёмных --c-accent светлой темы, но ярче
+     под тёмный фон) */
+  --c-aurora-user: rgba(227, 138, 106, 1);
+
+}
+
+/* ===== Обвязка макета (не часть окна) ===== */
+* { box-sizing:border-box; }
+html, body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size:13px; }
+.mk-bar { position:sticky; top:0; z-index:20; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:12px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk-bar b { font-family:'PT Serif', Georgia, serif; font-size:16px; color:var(--c-text-heading); margin-right:8px; }
+.mk-bar label { display:flex; gap:6px; align-items:center; font-size:12px; color:var(--c-text-secondary); }
+.mk-bar select { font:inherit; font-size:12px; padding:4px 6px; border-radius:8px; border:1px solid var(--c-border);
+  background:var(--c-bg-card); color:var(--c-text-primary); }
+.mk-stage { padding:24px; display:flex; flex-wrap:wrap; gap:24px; align-items:flex-start; }
+.mk-cap { font-size:12px; color:var(--c-text-muted); margin:0 0 8px; }
+.mk-spec { max-width:920px; margin:8px 24px 48px; padding:16px 24px; background:var(--c-bg-card);
+  border:1px solid var(--c-border-light); border-radius:14px; line-height:1.55; font-size:13px; color:var(--c-text-primary); }
+.mk-spec h2 { font-family:'PT Serif', Georgia, serif; font-size:18px; color:var(--c-text-heading); margin:16px 0 8px; }
+.mk-spec h3 { font-size:14px; color:var(--c-text-heading); margin:16px 0 4px; }
+.mk-spec code { font-family:'JetBrains Mono', monospace; font-size:11px; background:var(--c-bg-inset); padding:1px 4px; border-radius:6px; }
+.mk-spec table { border-collapse:collapse; width:100%; font-size:12px; }
+.mk-spec td, .mk-spec th { border:1px solid var(--c-border-light); padding:4px 8px; text-align:left; vertical-align:top; }
+
+/* ===== Кадр: тема и ширина ===== */
+.frame { position:relative; overflow:hidden; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size:13px;
+  border-radius:12px; border:1px solid var(--c-border); }
+.frame.desk { width:1180px; height:720px; }
+.frame.mob  { width:320px;  height:640px; }
+
+/* Подложка Modal: C.overlay; fullscreen-модалка с полями SP.xl */
+.ovl { position:absolute; inset:0; background:var(--c-overlay); padding:24px; display:flex; }
+.mob .ovl { padding:0; padding-top:24px; }
+
+/* Modal size="fullscreen": C.bgCard, R.modal, SHADOW.modal; на мобиле — шторка R.sheet сверху */
+.modal { flex:1; min-width:0; display:flex; flex-direction:column; background:var(--c-bg-card);
+  border-radius:20px; box-shadow:var(--shadow-modal); overflow:hidden; }
+.mob .modal { border-radius:22px 22px 0 0; }
+
+/* Шапка: заголовок FS.lg serif C.textHeading, подзаголовок FS.sm C.textMuted, IconButton «Закрыть» */
+.mh { display:flex; align-items:flex-start; gap:12px; padding:16px 16px 12px 24px; }
+.mob .mh { padding:12px 8px 8px 16px; }
+.mh-t { font-family:'PT Serif', Georgia, serif; font-size:16px; font-weight:600; color:var(--c-text-heading); }
+.mh-s { font-size:12px; color:var(--c-text-muted); margin-top:2px; display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+.mh-s .mono { font-family:'JetBrains Mono', monospace; font-size:11px; }
+.mh .grow { flex:1; min-width:0; }
+
+/* ui/Tabs size="md": 38 (мобила 44), подложка C.bgInset, нижняя граница C.borderLight, активная — черта C.accent 2px */
+.tabs { display:flex; gap:2px; padding:4px 16px 0; background:var(--c-bg-inset); border-bottom:1px solid var(--c-border-light);
+  border-top:1px solid var(--c-border-light); overflow-x:auto; scrollbar-width:none; }
+.mob .tabs { padding:4px 8px 0; }
+.tab { height:38px; padding:0 10px; display:flex; align-items:center; gap:6px; border:none; background:transparent;
+  font:inherit; font-size:13px; color:var(--c-text-secondary); cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; }
+.mob .tab { height:44px; padding:0 12px; }
+.tab:hover { color:var(--c-text-primary); }
+.tab.on { color:var(--c-text-heading); font-weight:600; border-bottom-color:var(--c-accent); }
+.tab .cnt { font-family:'JetBrains Mono', monospace; font-size:10px; padding:1px 6px; border-radius:999px;
+  background:var(--c-bg-selected); color:var(--c-text-secondary); font-weight:500; }
+.tab .cnt.warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.tab .cnt.new { background:var(--c-success-bg); color:var(--c-success-text); }
+
+/* Тело: сайдбар 280 + область просмотра */
+.body { flex:1; min-height:0; display:grid; grid-template-columns:280px 1fr; }
+.mob .body { display:flex; flex-direction:column; }
+
+/* Сайдбар-дерево: C.bgPanel, правая граница C.divider */
+.side { background:var(--c-bg-panel); border-right:1px solid var(--c-divider); overflow:auto; padding:8px; min-height:0; }
+.mob .side { border-right:none; flex:1; padding:4px 8px 16px; }
+.side-h { display:flex; align-items:center; justify-content:space-between; padding:4px 8px 8px; font-size:10px;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); font-weight:600; }
+.side-h .mono { font-family:'JetBrains Mono', monospace; letter-spacing:0; text-transform:none; font-weight:400; }
+
+/* Строка дерева: 28 (мобила 44 — тач-цель), R.md, отступ уровня SP.md, имя FS.base sans,
+   выбранная — C.bgSelected + C.textHeading + вес 600, hover — C.bgInset, focus-visible — SHADOW.focus */
+.row { display:flex; align-items:center; gap:8px; height:28px; padding-right:8px; border-radius:8px; cursor:pointer;
+  color:var(--c-text-primary); font-size:13px; user-select:none; }
+.mob .row { height:44px; font-size:14px; }
+.row:hover { background:var(--c-bg-inset); }
+.row.sel { background:var(--c-bg-selected); color:var(--c-text-heading); font-weight:600; }
+.row.dir { color:var(--c-text-secondary); }
+.row.gone { color:var(--c-text-muted); text-decoration:line-through; }
+.row .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.row .sz { font-family:'JetBrains Mono', monospace; font-size:10px; color:var(--c-text-muted); font-weight:400; flex-shrink:0; }
+.row svg { flex-shrink:0; color:var(--c-text-muted); }
+.row.sel svg { color:var(--c-text-heading); }
+.row .chev { width:12px; display:flex; justify-content:center; }
+.row.summary { margin-bottom:4px; }
+.sep { height:1px; background:var(--c-border-light); margin:4px 8px 8px; }
+
+/* Метка изменения: 16×16, R.sm, FS.xxs mono 700; + C.successBg/successText, ~ C.warningBg/warningText, − C.dangerBg/dangerText */
+.mk { width:16px; height:16px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center;
+  font-family:'JetBrains Mono', monospace; font-size:10px; font-weight:700; flex-shrink:0; }
+.mk.add { background:var(--c-success-bg); color:var(--c-success-text); }
+.mk.mod { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.mk.del { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.mk.dot { width:6px; height:6px; border-radius:50%; background:var(--c-warning); }
+
+/* Область просмотра */
+.pane { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--c-output-bg); }
+.mob .pane { flex:1; }
+
+/* Шапка файла: высота ISLAND.headerH (40), C.bgInset, граница C.borderLight */
+.fh { display:flex; align-items:center; gap:12px; min-height:40px; padding:0 8px 0 16px; background:var(--c-bg-inset);
+  border-bottom:1px solid var(--c-border-light); flex-shrink:0; }
+.fh .path { flex:1; min-width:0; font-family:'JetBrains Mono', monospace; font-size:12px; color:var(--c-text-muted);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.fh .path b { color:var(--c-text-heading); font-weight:600; }
+.fh .meta { font-size:11px; color:var(--c-text-muted); white-space:nowrap; }
+.mob .fh { flex-wrap:wrap; padding:8px 16px; gap:8px; }
+
+/* Мобильная строка «Назад»: BackButton + имя файла, высота 44 */
+.back { display:flex; align-items:center; gap:4px; height:44px; padding:0 4px 0 4px; background:var(--c-bg-card);
+  border-bottom:1px solid var(--c-border-light); flex-shrink:0; }
+.back .bb { display:flex; align-items:center; gap:4px; height:40px; padding:0 8px; border-radius:8px; color:var(--c-text-secondary);
+  font-size:13px; cursor:pointer; }
+.back .bb:hover { background:var(--c-bg-inset); }
+.back .grow { flex:1; }
+
+/* ui/Segmented: подложка C.bgInset R.lg, сегмент 28 (мобила 36) R.md, активный — C.bgCard + SHADOW.card + C.textHeading */
+.seg { display:inline-flex; padding:2px; gap:2px; background:var(--c-bg-selected); border-radius:10px; flex-shrink:0; }
+.seg > span { height:28px; padding:0 10px; display:inline-flex; align-items:center; gap:6px; border-radius:8px; font-size:12px;
+  color:var(--c-text-secondary); cursor:pointer; white-space:nowrap; }
+.seg > span.on { background:var(--c-bg-card); color:var(--c-text-heading); box-shadow:var(--shadow-card); font-weight:600; }
+.mob .seg { display:flex; width:100%; }
+.mob .seg > span { flex:1; justify-content:center; height:36px; }
+
+/* ui/IconButton: 28 (мобила 40), R.md, иконка C.textSecondary, hover C.bgSelected */
+.ib { width:28px; height:28px; border-radius:8px; display:inline-flex; align-items:center; justify-content:center;
+  color:var(--c-text-secondary); cursor:pointer; flex-shrink:0; }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.ib.on { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.mob .ib { width:40px; height:40px; }
+
+/* ui/Button: ghost и secondary, sm 28 / md 36, R.lg */
+.btn { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 12px; border-radius:10px; font:inherit; font-size:12px;
+  border:1px solid var(--c-border); background:var(--c-bg-card); color:var(--c-text-primary); cursor:pointer; white-space:nowrap; }
+.btn.ghost { border-color:transparent; background:transparent; color:var(--c-text-secondary); }
+.btn:hover { background:var(--c-bg-inset); }
+.mob .btn { height:40px; }
+
+/* Код: C.outputBg, гуттер номеров FS.xs mono C.textMuted на C.bgInset, строка FS.sm mono, высота 20 (мобила FS.xs, 18) */
+.code { flex:1; overflow:auto; min-height:0; font-family:'JetBrains Mono', monospace; font-size:12px; line-height:20px; }
+.mob .code { font-size:11px; line-height:18px; }
+.code table { border-collapse:collapse; min-width:100%; }
+.code td { padding:0; vertical-align:top; }
+.code .g { position:sticky; left:0; width:44px; min-width:44px; max-width:44px; padding:0 8px; text-align:right; color:var(--c-text-muted); background:var(--c-bg-inset);
+  user-select:none; border-right:1px solid var(--c-border-light); font-size:11px; }
+.mob .code .g { width:32px; min-width:32px; max-width:32px; padding:0 4px; font-size:10px; }
+.code .g2 { left:44px; }
+.mob .code .g2 { left:32px; }
+.code .s { width:16px; text-align:center; user-select:none; color:var(--c-text-muted); }
+.code .c { padding:0 16px 0 8px; white-space:pre; color:var(--c-text-primary); }
+.code.wrap .c { white-space:pre-wrap; word-break:break-all; }
+/* Diff: C.diffAddBg / C.diffRemBg на строке, знак C.diffAddText / C.diffRemText */
+.code tr.add td.c, .code tr.add td.s { background:var(--c-diff-add-bg); }
+.code tr.del td.c, .code tr.del td.s { background:var(--c-diff-rem-bg); }
+.code tr.add td.s { color:var(--c-diff-add-text); font-weight:700; }
+.code tr.del td.s { color:var(--c-diff-rem-text); font-weight:700; }
+/* Свёрнутый неизменённый кусок: C.bgInset, FS.xs C.textSecondary, кликабелен */
+.code tr.hunk td { background:var(--c-bg-inset); color:var(--c-text-secondary); font-family:'Hanken Grotesk', sans-serif; font-size:11px;
+  padding:4px 8px; cursor:pointer; border-top:1px solid var(--c-border-light); border-bottom:1px solid var(--c-border-light); }
+.code tr.hunk td:hover { color:var(--c-accent); }
+/* Подсветка (в коде — SyntaxHighlighter из FileViewer, oneLight/oneDark; тут — приближение токенами) */
+.t-k { color:var(--c-plan-text); } .t-s { color:var(--c-success-text); } .t-n { color:var(--c-warning-text); }
+.t-c { color:var(--c-text-muted); font-style:italic; } .t-p { color:var(--c-info); } .t-h { color:var(--c-text-heading); font-weight:700; }
+
+/* Хвост длинного файла: C.bgInset, по центру Button secondary */
+.more { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:8px 12px; padding:12px 16px; background:var(--c-bg-inset);
+  border-top:1px solid var(--c-border-light); font-family:'Hanken Grotesk', sans-serif; font-size:12px; color:var(--c-text-secondary); }
+
+/* ui/Notice: tone warning / danger / info — фон C.*Bg, рамка, текст C.*Text, R.lg, FS.sm */
+.notice { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; padding:8px 12px; border-radius:10px; font-size:12px; line-height:1.5;
+  border:1px solid var(--c-border-light); margin:12px 16px 0; }
+.notice .nt { font-weight:600; }
+.notice .na { margin-left:auto; }
+.mob .notice .na { margin-left:24px; flex-basis:100%; }
+.notice.warning { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.notice.danger { background:var(--c-danger-bg); color:var(--c-danger-text); border-color:var(--c-danger-border); }
+.notice.info { background:var(--c-info-bg); color:var(--c-text-primary); }
+.notice ul { margin:4px 0 0; padding-left:16px; font-family:'JetBrains Mono', monospace; font-size:11px; }
+
+/* ui/EmptyState compact: плитка 44 C.bgSelected / C.textMuted, заголовок serif FS.lg, подпись FS.sm C.textSecondary */
+.empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:8px; padding:24px; }
+.empty .ic { width:44px; height:44px; border-radius:16px; background:var(--c-bg-selected); color:var(--c-text-muted);
+  display:flex; align-items:center; justify-content:center; margin-bottom:4px; }
+.empty .et { font-family:'PT Serif', Georgia, serif; font-size:16px; font-weight:500; color:var(--c-text-heading); }
+.empty .es { font-size:12px; color:var(--c-text-secondary); max-width:340px; line-height:1.5; }
+.empty .es .mono { font-family:'JetBrains Mono', monospace; font-size:11px; }
+
+/* Скелет загрузки: полосы C.bgSelected, пульс opacity */
+.skel { padding:16px; display:flex; flex-direction:column; gap:8px; }
+.skel i { display:block; height:12px; border-radius:6px; background:var(--c-bg-selected); animation:pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity:.45; } }
+@media (prefers-reduced-motion: reduce) { .skel i { animation:none; } }
+
+/* Сводка изменений */
+.sum { flex:1; overflow:auto; padding:24px 32px; background:var(--c-bg-card); }
+.mob .sum { padding:16px; }
+.sum h3 { font-family:'PT Serif', Georgia, serif; font-size:18px; font-weight:500; color:var(--c-text-heading); margin:0 0 4px; }
+.sum .sub { font-size:12px; color:var(--c-text-muted); margin-bottom:16px; }
+.sum .chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
+.chip { display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 8px; border-radius:999px; font-size:12px; border:1px solid var(--c-border-light); background:var(--c-bg-white); }
+.sum .notice { margin:0 0 16px; }
+.sum .lab { font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); font-weight:600; margin:16px 0 4px; }
+.sum .row { padding-left:8px; }
+
+/* Вид «Панель»: полоса настроек 40 (C.bgInset) + холст C.bgMain с островом панели */
+.pv-bar { display:flex; align-items:center; gap:12px; min-height:40px; padding:0 8px 0 16px; background:var(--c-bg-inset); border-bottom:1px solid var(--c-border-light); }
+.pv-bar .grow { flex:1; font-size:12px; color:var(--c-text-secondary); }
+.mob .pv-bar { padding:4px 8px 4px 16px; }
+.pv { flex:1; overflow:auto; background:var(--c-bg-main); padding:24px; display:flex; flex-direction:column; align-items:center; gap:12px; }
+.mob .pv { padding:12px; }
+/* Остров панели: C.bgPanel, R.xxl, рамка C.borderLight, SHADOW.island, шапка 40 C.bgInset */
+.island { width:360px; max-width:100%; background:var(--c-bg-panel); border-radius:14px; border:1px solid var(--c-border-light);
+  box-shadow:var(--shadow-island); overflow:hidden; }
+.island.wide { width:640px; }
+.island .ih { height:40px; display:flex; align-items:center; gap:8px; padding:0 12px; background:var(--c-bg-inset); font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.island .ib2 { padding:16px; }
+.wx-city { font-size:12px; color:var(--c-text-secondary); }
+.wx-t { font-family:'PT Serif', Georgia, serif; font-size:34px; color:var(--c-text-heading); line-height:1.1; margin:4px 0; }
+.wx-row { display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid var(--c-border-light); font-size:12px; }
+.pv-note { font-size:11px; color:var(--c-text-muted); text-align:center; max-width:420px; line-height:1.5; }
+</style>
+</head>
+<body>
+<div class="mk-bar">
+  <b>Файлы черновика · v1</b>
+  <label>Вид <select id="s-view"><option value="one">Один кадр</option><option value="board">Доска</option></select></label>
+  <label>Тема <select id="s-theme"><option value="light">Светлая</option><option value="dark">Тёмная</option></select></label>
+  <label>Ширина <select id="s-w"><option value="desktop">Десктоп</option><option value="320">Мобила 320</option></select></label>
+  <label>Состояние <select id="s-state">
+    <optgroup label="Файлы">
+      <option value="files">Файл выбран (изменён)</option>
+      <option value="files-long">Длинный файл 60 КБ</option>
+      <option value="files-binary">Двоичный файл</option>
+      <option value="files-gone">Файла больше нет</option>
+      <option value="files-loading">Файл грузится</option>
+      <option value="files-error">Файл не открылся</option>
+    </optgroup>
+    <optgroup label="Изменения">
+      <option value="changes-summary">Сводка</option>
+      <option value="changes">Diff файла</option>
+      <option value="changes-truncated">Diff усечён</option>
+      <option value="changes-loading">Сравнение грузится</option>
+      <option value="changes-error">Сравнение не загрузилось</option>
+      <option value="changes-new">Первая установка</option>
+    </optgroup>
+    <optgroup label="Панель">
+      <option value="panel">Предпросмотр панели</option>
+      <option value="panel-error">Панель не загрузилась</option>
+    </optgroup>
+  </select></label>
+  <label>Экран (мобила) <select id="s-screen"><option value="list">Список</option><option value="file">Файл</option></select></label>
+</div>
+<div class="mk-stage" id="stage"></div>
+
+<div class="mk-spec">
+  <h2>Спека для реализации (кратко; полная — в отчёте задачи)</h2>
+  <p><b>Сценарий.</b> Перед «Принять» человек отвечает себе на три вопроса: что в пакете, что в конкретном файле, что поменялось против установленной версии. Плюс четвёртый — как будет выглядеть панель. Всё — в одном окне, переключение одним тапом, без футера.</p>
+  <h3>Структура</h3>
+  <table>
+    <tr><th>Зона</th><th>Деск</th><th>Мобила 320</th></tr>
+    <tr><td>Окно</td><td><code>Modal size="fullscreen"</code>, футера нет; закрытие — крестик шапки и Esc</td><td>Шторка на весь экран (Modal сам)</td></tr>
+    <tr><td>Шапка</td><td>«Файлы черновика», подзаголовок «Погода · <code>0.2.0</code> · обновляет <code>0.1.0</code>» (или «новый плагин»)</td><td>То же, подзаголовок переносится</td></tr>
+    <tr><td>Навигация</td><td><code>ui/Tabs size="md"</code> под шапкой: «Файлы N» · «Изменения N» · «Панель»</td><td><code>Tabs size="md" isMobile</code> (44)</td></tr>
+    <tr><td>Тело</td><td>Сайдбар-дерево 280 + область просмотра</td><td>Два уровня: список → файл (BackButton «Файлы»/«Изменения»)</td></tr>
+  </table>
+  <h3>Вкладки</h3>
+  <p>Каждая вкладка помнит свой выбранный файл. «Файлы» — дерево всего пакета с метками изменений (+ ~), справа код. «Изменения» — дерево только изменённых, первой строкой «Сводка» (права, секреты, счётчики); удалённые — зачёркнутые. Изменённый файл в «Файлах» показывает переключатель «Файл | Изменения» — один клик до diff без смены вкладки. «Панель» — живой предпросмотр в рамке острова; вкладки нет, если в пакете нет панелей.</p>
+</div>
+
+<script>
+// ===== Данные: пакет «Погода» 0.2.0 против установленной 0.1.0 =====
+const FILES = [
+  { p:'.claude-plugin/plugin.json', size:412, lang:'json' },
+  { p:'README.md', size:1830, lang:'md' },
+  { p:'ccs-plugin.json', size:1240, ch:'mod', lang:'json' },
+  { p:'commands/forecast.md', size:640, ch:'add', lang:'md' },
+  { p:'panels/weather/app.js', size:61750, ch:'add', lang:'js', lines:1612 },
+  { p:'panels/weather/bg.png', size:14336, ch:'add', bin:true },
+  { p:'panels/weather/index.html', size:8602, ch:'mod', lang:'html' },
+  { p:'skills/weather-brief/SKILL.md', size:2150, ch:'mod', lang:'md' },
+];
+const REMOVED = [ { p:'panels/weather/legacy.js', size:3100, ch:'del' } ];
+const kb = n => n < 1024 ? n + ' Б' : (n/1024).toFixed(1).replace('.', ',') + ' КБ';
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+const SRC = {
+  'ccs-plugin.json': `{
+  "id": "weather",
+  "version": "0.2.0",
+  "title": "Погода",
+  "panels": [
+    { "id": "weather", "title": "Погода", "entry": "panels/weather/index.html", "slot": "rail" }
+  ],
+  "commands": ["commands/forecast.md"],
+  "skills": ["skills/weather-brief"],
+  "permissions": [
+    "net:api.open-meteo.com",
+    "net:geocoding-api.open-meteo.com",
+    "storage"
+  ],
+  "secrets": [
+    { "name": "OPENMETEO_KEY", "required": false }
+  ]
+}`,
+  'panels/weather/index.html': `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <!-- Панель «Погода»: город, сейчас, прогноз на 3 дня -->
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header class="wx-head">
+    <input class="cc-input" id="city" placeholder="Город" autocomplete="off">
+    <button class="cc-btn cc-btn--ghost cc-btn--sm" id="geo">Где я</button>
+  </header>
+  <section class="cc-card" id="now">
+    <div class="wx-city" id="place">—</div>
+    <div class="wx-t" id="temp">—</div>
+    <div class="wx-desc" id="desc"></div>
+  </section>
+  <ul class="cc-list" id="days"></ul>
+  <div class="cc-empty" id="empty" hidden>
+    <div class="cc-empty__title">Город не найден</div>
+    <div class="cc-empty__text">Проверьте название или нажмите «Где я»</div>
+  </div>
+  <script src="./app.js"><\/script>
+</body>
+</html>`,
+};
+// Длинный app.js: 1612 строк, показываем первые 400
+const APP_SRC = (() => {
+  const blk = [
+    `// Панель «Погода»: запрос к open-meteo через ccsPlugin.call('net.fetch')`,
+    `const API = 'https://api.open-meteo.com/v1/forecast';`,
+    `const GEO = 'https://geocoding-api.open-meteo.com/v1/search';`,
+    ``,
+    `async function loadForecast(lat, lon) {`,
+    `  const url = API + '?latitude=' + lat + '&longitude=' + lon + '&daily=temperature_2m_max';`,
+    `  const res = await ccsPlugin.call('net.fetch', { url, timeoutMs: 8000 });`,
+    `  if (res.status !== 200) throw new Error('upstream ' + res.status);`,
+    `  return JSON.parse(res.body);`,
+    `}`,
+    ``,
+    `function renderDays(days) {`,
+    `  const list = document.getElementById('days');`,
+    `  list.replaceChildren(...days.slice(0, 3).map(dayRow));`,
+    `}`,
+    ``,
+  ];
+  const out = [];
+  for (let i = 0; i < 400; i++) out.push(blk[i % blk.length]);
+  return out.join('\n');
+})();
+SRC['panels/weather/app.js'] = APP_SRC;
+
+// Diff ccs-plugin.json: 0.1.0 → 0.2.0
+const DIFF = {
+  'ccs-plugin.json': [
+    ['ctx',1,1,'{'], ['ctx',2,2,'  "id": "weather",'],
+    ['del',3,0,'  "version": "0.1.0",'], ['add',0,3,'  "version": "0.2.0",'],
+    ['ctx',4,4,'  "title": "Погода",'],
+    ['hunk','4 строки без изменений'],
+    ['ctx',9,9,'  "commands": ["commands/forecast.md"],'],
+    ['ctx',10,10,'  "skills": ["skills/weather-brief"],'],
+    ['ctx',11,11,'  "permissions": ['],
+    ['del',12,0,'    "net:api.open-meteo.com"'],
+    ['add',0,12,'    "net:api.open-meteo.com",'],
+    ['add',0,13,'    "net:geocoding-api.open-meteo.com",'],
+    ['add',0,14,'    "storage"'],
+    ['ctx',13,15,'  ],'],
+    ['add',0,16,'  "secrets": ['],
+    ['add',0,17,'    { "name": "OPENMETEO_KEY", "required": false }'],
+    ['add',0,18,'  ]'],
+    ['ctx',14,19,'}'],
+  ],
+  'panels/weather/index.html': [
+    ['ctx',1,1,'<!doctype html>'], ['hunk','6 строк без изменений'],
+    ['ctx',8,8,'  <header class="wx-head">'],
+    ['del',9,0,'    <input id="city" placeholder="Город">'],
+    ['add',0,9,'    <input class="cc-input" id="city" placeholder="Город" autocomplete="off">'],
+    ['add',0,10,'    <button class="cc-btn cc-btn--ghost cc-btn--sm" id="geo">Где я</button>'],
+    ['ctx',10,11,'  </header>'],
+    ['del',11,0,'  <section id="now">'],
+    ['add',0,12,'  <section class="cc-card" id="now">'],
+    ['hunk','5 строк без изменений'],
+    ['ctx',17,18,'  <ul class="cc-list" id="days"></ul>'],
+    ['add',0,19,'  <div class="cc-empty" id="empty" hidden>'],
+    ['add',0,20,'    <div class="cc-empty__title">Город не найден</div>'],
+    ['add',0,21,'    <div class="cc-empty__text">Проверьте название или нажмите «Где я»</div>'],
+    ['add',0,22,'  </div>'],
+    ['del',18,0,'  <script src="./legacy.js"><\/script>'],
+    ['ctx',19,23,'  <script src="./app.js"><\/script>'],
+    ['hunk','2 строки без изменений'],
+  ],
+};
+
+// ===== Подсветка (приближение) =====
+function hl(line, lang) {
+  if (lang === 'md') return /^#/.test(line) ? `<span class="t-h">${esc(line)}</span>` : esc(line);
+  let re;
+  if (lang === 'html') re = /(<!--.*?-->)|(<\/?[a-zA-Z][\w-]*|\/?>)|(\s[\w-]+=)|("[^"]*")/g;
+  else if (lang === 'json') re = /()()("(?:[^"\\]|\\.)*"(?=\s*:))|("(?:[^"\\]|\\.)*")|\b(\d+(?:\.\d+)?|true|false|null)\b/g;
+  else re = /(\/\/.*$)|\b(const|let|var|function|return|if|else|async|await|new|throw|for|of)\b|()('(?:[^'\\]|\\.)*'|`[^`]*`)|\b(\d+)\b/g;
+  let out = '', last = 0, m;
+  while ((m = re.exec(line))) {
+    out += esc(line.slice(last, m.index));
+    const t = m[0];
+    let cls = 't-s';
+    if (lang === 'html') cls = m[1] ? 't-c' : m[2] ? 't-k' : m[3] ? 't-p' : 't-s';
+    else if (lang === 'json') cls = m[3] ? 't-p' : m[4] ? 't-s' : 't-n';
+    else cls = m[1] ? 't-c' : m[2] ? 't-k' : m[4] ? 't-s' : 't-n';
+    out += `<span class="${cls}">${esc(t)}</span>`;
+    last = m.index + t.length;
+    if (t.length === 0) re.lastIndex++;
+  }
+  return out + esc(line.slice(last));
+}
+const langOf = p => (FILES.find(f => f.p === p) || {}).lang || 'js';
+
+// ===== Иконки (lucide, stroke 1.75) =====
+const I = (d, s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const IC = {
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  chevR: '<path d="m9 18 6-6-6-6"/>', chevD: '<path d="m6 9 6 6 6-6"/>', chevL: '<path d="m15 18-6-6 6-6"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  code: '<path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/>',
+  img: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  copy: '<rect x="8" y="8" width="14" height="14" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  wrap: '<path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><path d="m16 16-2 2 2 2"/><path d="M3 18h7"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  ghost: '<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>',
+  list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/>',
+  pkg: '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.703 4.734a2 2 0 0 0 2.004 0L20.7 7"/>',
+};
+const MK = { add:'+', mod:'~', del:'−' };
+const mark = ch => ch ? `<span class="mk ${ch}" title="${ch === 'add' ? 'Добавлен' : ch === 'mod' ? 'Изменён' : 'Удалён'}">${MK[ch]}</span>` : '';
+const fileIcon = f => f.bin ? IC.img : /\.(js|html|json|css)$/.test(f.p) ? IC.code : IC.file;
+
+// ===== Дерево =====
+function buildTree(list) {
+  const root = { dirs:{}, files:[] };
+  for (const f of list) {
+    const parts = f.p.split('/'); let n = root;
+    for (let i = 0; i < parts.length - 1; i++) { n = n.dirs[parts[i]] ??= { dirs:{}, files:[], path: parts.slice(0, i+1).join('/') }; }
+    n.files.push(f);
+  }
+  return root;
+}
+function treeRows(node, depth, ctx) {
+  let h = '';
+  for (const name of Object.keys(node.dirs).sort()) {
+    const d = node.dirs[name];
+    const collapsed = ctx.collapsed.includes(d.path);
+    h += `<div class="row dir" style="padding-left:${8 + depth*12}px"><span class="chev">${I(collapsed ? IC.chevR : IC.chevD, 12)}</span>${I(IC.folder)}<span class="nm">${name}</span></div>`;
+    if (!collapsed) h += treeRows(d, depth + 1, ctx);
+  }
+  for (const f of node.files.sort((a,b) => a.p.localeCompare(b.p))) {
+    const name = f.p.split('/').pop();
+    const sel = f.p === ctx.sel ? ' sel' : '';
+    const gone = f.ch === 'del' ? ' gone' : '';
+    h += `<div class="row${sel}${gone}" style="padding-left:${8 + depth*12}px"><span class="chev"></span>${I(fileIcon(f))}<span class="nm">${name}</span>${mark(f.ch)}<span class="sz">${kb(f.size)}</span></div>`;
+  }
+  return h;
+}
+
+// ===== Сборка кадра =====
+function codeTable(src, lang, wrap, tail = '') {
+  const lines = src.split('\n');
+  return `<div class="code${wrap ? ' wrap' : ''}"><table>${lines.map((l, i) =>
+    `<tr><td class="g">${i+1}</td><td class="c">${hl(l, lang) || ' '}</td></tr>`).join('')}</table>${tail}</div>`;
+}
+function diffTable(rows, lang, wrap) {
+  return `<div class="code${wrap ? ' wrap' : ''}"><table>${rows.map(r => {
+    if (r[0] === 'hunk') return `<tr class="hunk"><td colspan="4">⋯ ${r[1]} · показать</td></tr>`;
+    const [k, o, n, t] = r;
+    return `<tr class="${k === 'ctx' ? '' : k}"><td class="g">${o || ''}</td><td class="g g2">${n || ''}</td><td class="s">${k === 'add' ? '+' : k === 'del' ? '−' : ''}</td><td class="c">${hl(t, lang) || ' '}</td></tr>`;
+  }).join('')}</table></div>`;
+}
+const skel = n => `<div class="skel">${Array.from({length:n}, (_, i) => `<i style="width:${[72,48,88,64,36,80,56,92,40,68][i%10]}%"></i>`).join('')}</div>`;
+
+function render(o) {
+  const mob = o.w === '320';
+  const st = o.state;
+  const tab = st.startsWith('changes') ? 'changes' : st.startsWith('panel') ? 'panel' : 'files';
+  const isNew = st === 'changes-new';
+
+  const subtitle = isNew
+    ? `Погода · <span class="mono">0.2.0</span> · новый плагин`
+    : `Погода · <span class="mono">0.2.0</span> · обновляет установленную <span class="mono">0.1.0</span>`;
+  const head = `<div class="mh"><div class="grow"><div class="mh-t">Файлы черновика</div><div class="mh-s">${subtitle}</div></div>
+    <span class="ib" title="Закрыть (Esc)">${I(IC.x, 16)}</span></div>`;
+
+  const chCount = st === 'changes-loading' ? '<span class="cnt">…</span>'
+    : st === 'changes-error' ? '' : isNew ? '<span class="cnt new">новый</span>' : '<span class="cnt warn">7</span>';
+  const tabs = `<div class="tabs" role="tablist">
+    <button class="tab${tab==='files'?' on':''}">Файлы <span class="cnt">8</span></button>
+    <button class="tab${tab==='changes'?' on':''}">Изменения ${chCount}</button>
+    <button class="tab${tab==='panel'?' on':''}">Панель</button></div>`;
+
+  // --- сайдбар ---
+  let selPath = {
+    'files':'panels/weather/index.html', 'files-long':'panels/weather/app.js', 'files-binary':'panels/weather/bg.png',
+    'files-gone':null, 'files-loading':'panels/weather/index.html', 'files-error':'panels/weather/index.html',
+    'changes':'ccs-plugin.json', 'changes-truncated':'panels/weather/index.html',
+  }[st] ?? null;
+  const summarySel = ['changes-summary','changes-new','changes-error'].includes(st);
+
+  let side = '';
+  if (tab === 'files') {
+    side = `<div class="side-h"><span>Пакет</span><span class="mono">8 файлов · ${kb(FILES.reduce((s,f)=>s+f.size,0))}</span></div>`
+      + treeRows(buildTree(FILES), 0, { sel: selPath, collapsed: ['.claude-plugin'] });
+  } else if (tab === 'changes') {
+    side = `<div class="row summary${summarySel ? ' sel' : ''}" style="padding-left:8px"><span class="chev"></span>${I(IC.list)}<span class="nm">Сводка</span></div><div class="sep"></div>`;
+    if (st === 'changes-loading') side += skel(6);
+    else if (st === 'changes-error') side += `<div class="side-h"><span>Файлы не сравнены</span></div>`;
+    else {
+      const list = isNew ? FILES.map(f => ({ ...f, ch:'add' })) : FILES.filter(f => f.ch).concat(REMOVED);
+      side += `<div class="side-h"><span>${isNew ? 'Все файлы новые' : 'Изменённые файлы'}</span><span class="mono">${list.length}</span></div>`
+        + treeRows(buildTree(list), 0, { sel: selPath, collapsed: [] });
+    }
+  }
+
+  // --- область просмотра ---
+  const wrapOn = mob;
+  const fileHeader = (p, extra, seg) => {
+    const f = FILES.find(x => x.p === p) || REMOVED.find(x => x.p === p);
+    const parts = p.split('/'); const name = parts.pop();
+    const dirs = parts.length ? parts.join(' / ') + ' / ' : '';
+    const meta = f.bin ? `${kb(f.size)} · двоичный` : f.lines ? `${kb(f.size)} · ${f.lines.toLocaleString('ru-RU')} строк` : `${kb(f.size)} · ${(SRC[p]||'').split('\n').length || '—'} строк`;
+    const segH = seg ? `<div class="seg"><span class="${seg==='file'?'on':''}">Файл</span><span class="${seg==='diff'?'on':''}">Изменения ${mark('mod')}</span></div>` : '';
+    const tools = f.bin ? '' : `<span class="ib${wrapOn?' on':''}" title="Перенос строк">${I(IC.wrap)}</span><span class="ib" title="Копировать содержимое">${I(IC.copy)}</span>`;
+    if (mob) return `<div class="fh"><div class="path" style="flex-basis:100%">${dirs}<b>${name}</b></div><span class="meta">${meta}</span>${extra||''}${segH}</div>`;
+    return `<div class="fh"><div class="path">${dirs}<b>${name}</b></div>${extra||''}<span class="meta">${meta}</span>${segH}${tools}</div>`;
+  };
+  const backRow = (label, tools) => `<div class="back"><span class="bb">${I(IC.chevL, 16)} ${label}</span><span class="grow"></span>
+     ${tools ? `<span class="ib${wrapOn?' on':''}" title="Перенос строк">${I(IC.wrap)}</span><span class="ib" title="Копировать">${I(IC.copy)}</span>` : ''}</div>`;
+
+  let pane = '';
+  if (st === 'files') pane = fileHeader(selPath, '', 'file') + codeTable(SRC[selPath], 'html', wrapOn);
+  else if (st === 'files-long') pane = fileHeader(selPath, mark('add')) + codeTable(SRC[selPath], 'js', wrapOn,
+      `<div class="more">Показаны первые 400 строк из 1 612 <button class="btn">Показать весь файл</button></div>`);
+  else if (st === 'files-binary') pane = fileHeader(selPath, mark('add'))
+      + `<div class="empty"><div class="ic">${I(IC.img, 20)}</div><div class="et">Двоичный файл</div><div class="es">Картинки и другие двоичные файлы здесь не показываем. <span class="mono">bg.png · 14,0 КБ</span></div></div>`;
+  else if (st === 'files-gone') pane = `<div class="empty"><div class="ic">${I(IC.ghost, 20)}</div><div class="et">Файла больше нет</div>
+      <div class="es">Агент обновил черновик, пока окно было открыто, и <span class="mono">panels/weather/legacy.js</span> из пакета убран. Что ещё поменялось — во вкладке «Изменения».</div>
+      <button class="btn">Открыть изменения</button></div>`;
+  else if (st === 'files-loading') pane = fileHeader(selPath, '', 'file') + skel(12);
+  else if (st === 'files-error') pane = fileHeader(selPath, '', 'file')
+      + `<div class="notice danger">${I(IC.alert)}<span><span class="nt">Не удалось открыть файл.</span> Сервер не ответил — попробуйте ещё раз.</span><button class="btn na">Повторить</button></div><div class="empty"></div>`;
+  else if (st === 'changes') pane = fileHeader(selPath, mark('mod'), 'diff') + diffTable(DIFF[selPath], 'json', wrapOn);
+  else if (st === 'changes-truncated') pane = fileHeader(selPath, mark('mod'), 'diff')
+      + `<div class="notice warning">${I(IC.alert)}<span><span class="nt">Сравнение длинное.</span> Показаны первые 1 000 строк изменений; файл целиком — переключателем «Файл».</span></div>`
+      + diffTable(DIFF[selPath], 'html', wrapOn);
+  else if (st === 'changes-loading') pane = skel(14);
+  else if (st === 'changes-error') pane = `<div class="sum"><div class="notice danger">${I(IC.alert)}<span><span class="nt">Не удалось сравнить с установленной версией.</span> Файлы пакета по-прежнему можно посмотреть во вкладке «Файлы».</span><button class="btn na">Повторить</button></div></div>`;
+  else if (st === 'changes-summary' || st === 'changes-new') {
+    const rows = (list) => list.map(f => `<div class="row${f.ch==='del'?' gone':''}"><span class="chev"></span>${mark(f.ch)}<span class="nm" style="font-family:'JetBrains Mono',monospace;font-size:12px">${f.p}</span><span class="sz">${kb(f.size)}</span></div>`).join('');
+    if (isNew) pane = `<div class="sum"><h3>Новый плагин</h3><div class="sub">Установленной версии нет — сравнивать не с чем, всё в пакете новое.</div>
+      <div class="notice info">${I(IC.pkg)}<span><span class="nt">Пакет попросит права:</span><ul><li>net:api.open-meteo.com</li><li>net:geocoding-api.open-meteo.com</li><li>storage</li></ul></span></div>
+      <div class="lab">Файлы · 8</div>${rows(FILES.map(f => ({...f, ch:'add'})))}</div>`;
+    else pane = `<div class="sum"><h3>Что поменялось</h3><div class="sub">Черновик <b>0.2.0</b> против установленной <b>0.1.0</b></div>
+      <div class="chips"><span class="chip">${mark('add')} добавлено 3</span><span class="chip">${mark('mod')} изменено 3</span><span class="chip">${mark('del')} удалено 1</span></div>
+      <div class="notice warning">${I(IC.alert)}<span><span class="nt">Новые права:</span><ul><li>+ net:geocoding-api.open-meteo.com</li><li>+ storage</li></ul></span></div>
+      <div class="notice info">${I(IC.pkg)}<span><span class="nt">Новый секрет:</span> <span style="font-family:'JetBrains Mono',monospace;font-size:11px">OPENMETEO_KEY</span> · необязательный</span></div>
+      <div class="lab">Изменено · 3</div>${rows(FILES.filter(f => f.ch==='mod'))}
+      <div class="lab">Добавлено · 3</div>${rows(FILES.filter(f => f.ch==='add'))}
+      <div class="lab">Удалено · 1</div>${rows(REMOVED)}</div>`;
+  }
+  else if (tab === 'panel') {
+    const bar = `<div class="pv-bar"><span class="grow">Так панель увидит человек — с правами черновика</span>${mob ? '' : '<div class="seg"><span class="on">Рельс · 360</span><span>Остров · 640</span></div>'}<span class="ib" title="Перезапустить панель">${I(IC.refresh)}</span></div>`;
+    const island = st === 'panel-error'
+      ? `<div class="island"><div class="ih">${I(IC.sun)} Погода</div><div class="notice danger" style="margin:12px">${I(IC.alert)}<span><span class="nt">Не удалось загрузить панель.</span> index.html не найден по пути из манифеста.</span><button class="btn na">Повторить</button></div><div style="height:12px"></div></div>`
+      : `<div class="island"><div class="ih">${I(IC.sun)} Погода</div><div class="ib2"><div class="wx-city">Москва · сейчас</div><div class="wx-t">+7°</div>
+          <div class="wx-city" style="margin-bottom:12px">Облачно, ветер 4 м/с</div>
+          <div class="wx-row"><span>Сб</span><span>+9° / +3°</span></div><div class="wx-row"><span>Вс</span><span>+6° / +1°</span></div><div class="wx-row"><span>Пн</span><span>+4° / −1°</span></div></div></div>`;
+    pane = bar + `<div class="pv">${island}<div class="pv-note">Песочница: net:api.open-meteo.com, net:geocoding-api.open-meteo.com, storage. Данные storage черновика не смешиваются с установленной версией.</div></div>`;
+  }
+
+  // --- раскладка ---
+  let body;
+  if (!mob) body = tab === 'panel' ? `<div class="body" style="grid-template-columns:1fr"><div class="pane">${pane}</div></div>`
+                                   : `<div class="body"><div class="side">${side}</div><div class="pane">${pane}</div></div>`;
+  else {
+    const fileLevel = o.screen === 'file' && tab !== 'panel';
+    if (tab === 'panel') body = `<div class="body"><div class="pane">${pane}</div></div>`;
+    else if (fileLevel) body = `<div class="body">${backRow(tab === 'files' ? 'Файлы' : 'Изменения', !!selPath && st !== 'files-binary' && st !== 'changes-loading')}<div class="pane">${pane}</div></div>`;
+    else body = `<div class="body"><div class="side">${side}</div></div>`;
+  }
+  return `<div class="frame ${mob ? 'mob' : 'desk'}" data-theme="${o.theme}"><div class="ovl"><div class="modal">${head}${tabs}${body}</div></div></div>`;
+}
+
+// ===== Управление =====
+const $ = id => document.getElementById(id);
+function readHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  return { view: p.get('view') || 'one', theme: p.get('theme') || 'light', w: p.get('w') || 'desktop',
+           state: p.get('state') || 'files', screen: p.get('screen') || 'list' };
+}
+function draw() {
+  const o = readHash();
+  $('s-view').value = o.view; $('s-theme').value = o.theme; $('s-w').value = o.w; $('s-state').value = o.state; $('s-screen').value = o.screen;
+  document.documentElement.dataset.theme = o.theme;
+  const fr = (cap, x) => `<div><p class="mk-cap">${cap}</p>${render(x)}</div>`;
+  if (o.view === 'board') {
+    $('stage').innerHTML = [
+      fr('Деск · светлая · Файлы', { theme:'light', w:'desktop', state:'files' }),
+      fr('Деск · тёмная · Изменения, diff файла', { theme:'dark', w:'desktop', state:'changes' }),
+      fr('Деск · светлая · Сводка изменений', { theme:'light', w:'desktop', state:'changes-summary' }),
+      fr('Деск · тёмная · Панель', { theme:'dark', w:'desktop', state:'panel' }),
+      fr('320 · светлая · список файлов', { theme:'light', w:'320', state:'files', screen:'list' }),
+      fr('320 · светлая · файл', { theme:'light', w:'320', state:'files', screen:'file' }),
+      fr('320 · тёмная · список изменений', { theme:'dark', w:'320', state:'changes', screen:'list' }),
+      fr('320 · тёмная · diff файла', { theme:'dark', w:'320', state:'changes', screen:'file' }),
+      fr('320 · светлая · длинный файл', { theme:'light', w:'320', state:'files-long', screen:'file' }),
+      fr('320 · тёмная · сводка', { theme:'dark', w:'320', state:'changes-summary', screen:'file' }),
+      fr('320 · светлая · файла нет', { theme:'light', w:'320', state:'files-gone', screen:'file' }),
+      fr('320 · тёмная · панель', { theme:'dark', w:'320', state:'panel' }),
+    ].join('');
+  } else $('stage').innerHTML = render(o);
+}
+['s-view','s-theme','s-w','s-state','s-screen'].forEach(id => $(id).addEventListener('change', () => {
+  const p = new URLSearchParams({ view:$('s-view').value, theme:$('s-theme').value, w:$('s-w').value, state:$('s-state').value, screen:$('s-screen').value });
+  location.hash = p.toString();
+}));
+window.addEventListener('hashchange', draw);
+draw();
+</script>
+</body>
+</html>

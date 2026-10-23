@@ -228,6 +228,47 @@ public class ConsumersTailContributorTests
     }
 
     [Fact]
+    public async Task БюджетBareИмён_ОбщийСПутями_ИмяСверхБюджетаНеИщется()
+    {
+        var (_, dir, data) = await Prepare(consumers: 1);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, "src", "Lib2.cs"), "class Lib2 {}");
+
+            // A1, A2 и src/Lib.cs уже набрали три: Lib2.cs за бюджетом, обход дерева ради него не нужен
+            ConsumersTailContributor.ExtractFiles("A1.cs A2.cs src/Lib.cs Lib2.cs", dir).Should().Equal("src/Lib.cs");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task ИмяФайлаСКириллицейПослеРасширения_Распознаётся()
+    {
+        var (_, dir, data) = await Prepare(consumers: 1);
+        try
+        {
+            ConsumersTailContributor.ExtractFiles("Смотри Lib.cs.Текст", dir).Should().Equal("src/Lib.cs");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task ПокинутаяПослеПотолкаЗадача_ЗавершаетсяБезИсключения()
+    {
+        var (sut, dir, data) = await Prepare(consumers: 1);
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var text = await sut.BuildTextAsync("Правь Lib.cs", dir, null, cts.Token);
+
+            text.Should().BeNull("отмена после потолка — молчание, а не OperationCanceledException из покинутой задачи");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
     public async Task ИмяФайлаБезКаталога_НаходитсяОбходомДерева()
     {
         var (sut, dir, data) = await Prepare(consumers: 3);

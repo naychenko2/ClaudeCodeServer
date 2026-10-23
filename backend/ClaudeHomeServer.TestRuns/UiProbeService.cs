@@ -175,9 +175,10 @@ public sealed class UiProbeService
             }
             finally
             {
+                // Семафор не удаляем и при неудачном входе: ждущий на нём ещё не проснулся, и CurrentCount == 1
+                // не отличает «никого нет» от «кто-то вот-вот войдёт» — второй семафор дал бы два параллельных входа.
+                // Чистка — только вместе с истёкшим токеном (SweepExpired, CachedTokenFor)
                 flight?.Release();
-                // Вход не удался (токена в кэше нет) — семафор не копим
-                if (key is { } done && !_tokens.ContainsKey(done)) TrimLogin(done);
             }
         }
     }
@@ -243,8 +244,8 @@ public sealed class UiProbeService
             if (cached.ExpiresAt <= now && _tokens.TryRemove(key, out _)) TrimLogin(key);
     }
 
-    // Семафор входа ключа без токена в кэше и без ожидающих больше не нужен: словарь не растёт по числу ключей.
-    // Занятый (идёт вход или ждут) не трогаем — иначе параллельные вызовы пошли бы на два входа
+    // Семафор входа ключа с истёкшим токеном больше не нужен: словарь не растёт по числу ключей.
+    // Занятый (идёт вход) не трогаем — иначе параллельные вызовы пошли бы на два входа
     private void TrimLogin(TokenKey key)
     {
         if (_logins.TryGetValue(key, out var sem) && sem.CurrentCount == 1)

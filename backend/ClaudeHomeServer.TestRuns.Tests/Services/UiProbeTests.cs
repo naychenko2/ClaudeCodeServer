@@ -504,6 +504,19 @@ public class UiProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task НеудачныйВход_СемафорНеУдаляется_ЖдущийИНовыйВызовНеИдутДвумяВходами()
+    {
+        var launcher = new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-empty-page.txt");
+        var service = Service(launcher, new BuildConcurrencyGate(1));
+        var logins = (System.Collections.IDictionary)typeof(UiProbeService)
+            .GetField("_logins", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(service)!;
+
+        await service.RunAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        logins.Count.Should().Be(1, "токена нет, но ждущий мог ещё не проснуться: семафор живёт до истечения токена, иначе второй вызов создаст свой");
+    }
+
+    [Fact]
     public async Task ТокенОтклонён401_ОдинПовторныйВход()
     {
         var factory = new SwitchFactory(new DotnetBuildServiceTests.FakeLauncher(_processes, "ui-probe-output.txt"));
@@ -655,6 +668,14 @@ public class UiProbeTests : IDisposable
         // Никогда не устаканивается: кнопка каждые 100 мс
         "never" => "<body>" + Buttons(0, 3)
             + "<script>let n=3;setInterval(()=>{const e=document.createElement('button');e.textContent='n'+(n++);document.body.appendChild(e)},100)</script></body>",
+        // Две кнопки без имени: имена (aria-label) приходят через 2 и 4 с — паузы меньше окна в 3 с, число и размеры не меняются
+        "late-label" => "<body><button id=\"a\" style=\"height:50px;width:80px\"></button><button id=\"b\" style=\"height:50px;width:80px\"></button>"
+            + "<script>setTimeout(()=>document.getElementById('a').setAttribute('aria-label','А'),2000);"
+            + "setTimeout(()=>document.getElementById('b').setAttribute('aria-label','Б'),4000)</script></body>",
+        // Контейнер 200 px; внутренний блок растёт на 40 px каждые 400 мс до 1000 px (около 8 с): число контейнеров не меняется
+        "overflow-grow" => "<body><div id=\"c\" style=\"width:200px;overflow-x:auto\"><div id=\"in\" style=\"width:240px;height:10px\"></div></div>"
+            + "<button style=\"height:50px;width:80px\">ok</button>"
+            + "<script>let w=240;const t=setInterval(()=>{w+=40;document.getElementById('in').style.width=w+'px';if(w>=1000)clearInterval(t)},400)</script></body>",
         // Экран входа: форма из двух полей и кнопка
         "login" => "<body><input type=\"text\" autocomplete=\"username\"><input type=\"password\" autocomplete=\"current-password\"><button>Войти</button></body>",
         _ => "<body>ok</body>",
@@ -756,6 +777,29 @@ public class UiProbeTests : IDisposable
         expected["counts"]!["smallTargets"]!.GetValue<int>().Should().Be(0, "эталон — кнопки 50 px выше порога 40");
         actual["counts"]!.ToJsonString().Should().Be(expected["counts"]!.ToJsonString(),
             "число элементов не менялось, но размеры — признак картины: ждём последнего изменения, а не первого простоя");
+    }
+
+    [SkippableFact]
+    public async Task ПоздноеИмяКнопки_ЗамерЖдётЛейбла_БезЛожнойНаходки()
+    {
+        var late = await ProbeRealAsync("late-label");
+
+        late.Refusal.Should().BeNull();
+        var vp = JsonNode.Parse(late.Json!)!["viewports"]![0]!;
+        vp["counts"]!["unnamedInteractive"]!.GetValue<int>().Should().Be(0,
+            "имена приходят ступенями с паузой меньше окна: признак «именован» входит в сигнатуру, замер ждёт его");
+    }
+
+    [SkippableFact]
+    public async Task РостПереполненияПриТомЖеЧислеКонтейнеров_ЗамерЖдётПоследнегоЗначения()
+    {
+        var grow = await ProbeRealAsync("overflow-grow");
+
+        grow.Refusal.Should().BeNull();
+        var vp = JsonNode.Parse(grow.Json!)!["viewports"]![0]!;
+        vp["counts"]!["horizontalOverflow"]!.GetValue<int>().Should().Be(1);
+        vp["horizontalOverflow"]!["containers"]!.AsArray().Single()!["scrollWidth"]!.GetValue<int>().Should().BeGreaterOrEqualTo(1000,
+            "величина scrollWidth входит в сигнатуру: замер ждёт, пока рост остановится");
     }
 
     [SkippableFact]

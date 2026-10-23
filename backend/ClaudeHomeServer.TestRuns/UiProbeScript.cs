@@ -120,7 +120,7 @@ internal static class UiProbeScript
 
         // SPA дорисовывается ступенями, и между ступенями бывают паузы: меряем, пока картина не простоит неизменной
         // stableMs подряд. В картину входит всё, по чему выдаются находки: число видимых интерактивных элементов,
-        // их размеры, счётчики переполнения и обрезки, размеры документа, экран входа. Ноль элементов за
+        // их размеры и признак «именован», величины переполнения и обрезки, размеры документа, экран входа. Ноль элементов за
         // устойчивость не считается до потолка: пустой первый кадр — не итог. Не устоялась за потолок —
         // settled=false, и сервер откажет, а не отдаст заниженные числа. Предел метода: ступень с паузой дольше
         // stableMs не поймать
@@ -129,7 +129,10 @@ internal static class UiProbeScript
           let prev = null, since = Date.now();
           for (;;) {
             const m = await page.evaluate(measure, args);
-            const sig = [m.pageInteractive, m.interactive.map((i) => i.w + 'x' + i.h).join(','), m.containers.length, m.clipped.length,
+            // Размер и признак «именован» по каждому интерактивному, величины (не только числа) переполнения и обрезки
+            const sig = [m.pageInteractive, m.interactive.map((i) => i.w + 'x' + i.h + (i.named ? 'n' : 'u')).join(','),
+              m.containers.map((c) => c.scrollWidth + '/' + c.clientWidth).join(','),
+              m.clipped.map((c) => c.scrollWidth + '/' + c.clientWidth + '/' + c.scrollHeight + '/' + c.clientHeight).join(','),
               m.truncated.join(','), m.doc.scrollWidth, m.doc.scrollHeight, m.loginForm].join('|');
             const now = Date.now();
             if (sig !== prev) { prev = sig; since = now; }

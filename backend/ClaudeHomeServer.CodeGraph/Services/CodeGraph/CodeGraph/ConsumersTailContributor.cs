@@ -11,8 +11,8 @@ namespace ClaudeHomeServer.Services.CodeGraph;
 // первого хода, и спрашивает граф тем же режимом «по файлу» (NeighborsByFileAsync).
 //
 // Секция идёт по ВСЕМ владельцам, в том числе там, где хук работает (local на Linux): правка через
-// Bash (printf >> file) хук Edit|Write не видит. Дубль «хук + хвост» принят: ≤ 20 строк на файл (до 3 файлов — ≤ 60 строк
-// на секцию), один раз на первом ходе, только файлы постановки; срабатывают они в разные моменты.
+// Bash (printf >> file) хук Edit|Write не видит. Дубль «хук + хвост» принят: ≤ 20 строк на файл (до 3 файлов — ≤ 61 строки
+// на секцию: заголовок плюс 3 блока по 20), один раз на первом ходе, только файлы постановки; срабатывают они в разные моменты.
 // Агент ничего не спрашивает; нет графа, файл вне графа, ответ дольше 3 с, сбой — молчание.
 // Секция едет InTurnTail: нестабильный текст не должен попадать в системный блок.
 public sealed class ConsumersTailContributor : IPromptSectionContributor
@@ -28,7 +28,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     // Путь (с каталогом или bare-имя) с расширением файла, который понимают провайдеры графа;
     // хвост «:123» — номер строки
     private static readonly Regex FilePattern = new(
-        @"(?<![\w/.\\\-])(/?(?:[\w.\-]+/)*[\w.\-]+\.(?:cs|tsx?))(?::\d+)?(?![\w/]|\.\w)",
+        @"(?<![\w/.\\\-])(/?(?:[\w.\-]+/)*[\w.\-]+\.(?:cs|tsx?))(?::\d+)?(?![\w/]|\.[A-Za-z0-9_])",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Bare-имя ищем обходом не глубже BareSearchDepth, без служебных каталогов; неоднозначное — молчание
@@ -101,22 +101,27 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         }
     }
 
-    private async Task<string?> BuildTextAsync(string turnText, string root, string? mainRoot, CancellationToken ct)
+    internal async Task<string?> BuildTextAsync(string turnText, string root, string? mainRoot, CancellationToken ct)
     {
         // Не даём работе завершиться синхронно: потолок WaitAsync обязан действовать и на быстрый граф,
         // и на обход дерева при поиске bare-имён
         await Task.Yield();
-        var files = ExtractFiles(turnText, root, ct);
-        if (files.Count == 0) return null;
-        var blocks = new List<string>();
-        foreach (var file in files)
+        try
         {
-            var (result, note) = await QueryAsync(file, root, mainRoot, ct);
-            if (result is { Total: > 0 } && Render(file, result, note) is { } block) blocks.Add(block);
+            var files = ExtractFiles(turnText, root, ct);
+            if (files.Count == 0) return null;
+            var blocks = new List<string>();
+            foreach (var file in files)
+            {
+                var (result, note) = await QueryAsync(file, root, mainRoot, ct);
+                if (result is { Total: > 0 } && Render(file, result, note) is { } block) blocks.Add(block);
+            }
+            return blocks.Count == 0
+                ? null
+                : "## Потребители файлов из постановки (по графу кода)\n" + string.Join("\n\n", blocks);
         }
-        return blocks.Count == 0
-            ? null
-            : "## Потребители файлов из постановки (по графу кода)\n" + string.Join("\n\n", blocks);
+        // Покинутая после потолка задача завершается отменой: её никто не ждёт, исключение не должно оставаться ненаблюдаемым
+        catch (OperationCanceledException) { return null; }
     }
 
     private async Task<(CodeGraphNeighborsResultDto? Result, string? Note)> QueryAsync(
@@ -141,28 +146,29 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         string turnText, string root, CancellationToken ct = default)
     {
         var rootFull = Path.GetFullPath(root);
+        var matches = FilePattern.Matches(turnText).Select(m => m.Groups[1].Value).ToList();
+        // Общий бюджет MaxFiles на путь и bare-имя по порядку появления: имя сверх бюджета в ответ не попадёт,
+        // и обход дерева ради него не нужен. Путь с каталогом проверяется дёшево, bare-имя занимает место до обхода
+        var bare = new HashSet<string>(StringComparer.Ordinal);
+        var taken = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var raw in matches)
+        {
+            if (taken.Count == MaxFiles) break;
+            if (raw.Contains('/') ? ResolvePath(raw, rootFull) is not null : bare.Add(raw)) taken.Add(raw);
+        }
+        bare.IntersectWith(taken);
         var found = new List<string>();
         Dictionary<string, List<string>>? byName = null;
-        foreach (Match m in FilePattern.Matches(turnText))
+        foreach (var raw in matches)
         {
-            var raw = m.Groups[1].Value;
             string? rel;
             if (!raw.Contains('/'))
             {
-                byName ??= ScanByName(rootFull, BareNames(turnText), ct);
+                if (!bare.Contains(raw)) continue;
+                byName ??= ScanByName(rootFull, bare, ct);
                 rel = byName.TryGetValue(raw, out var hits) && hits.Count == 1 ? hits[0] : null;
             }
-            else
-            {
-                rel = raw.StartsWith('/')
-                    ? (raw.StartsWith(rootFull.TrimEnd('/') + "/", StringComparison.Ordinal)
-                        ? raw[(rootFull.TrimEnd('/').Length + 1)..] : null)
-                    : raw;
-                if (rel is null || rel.Split('/').Any(s => s is ".." or "." or "")) continue;
-                var full = Path.GetFullPath(Path.Combine(rootFull, rel));
-                if (!full.StartsWith(rootFull.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
-                        StringComparison.Ordinal) || !File.Exists(full)) continue;
-            }
+            else rel = ResolvePath(raw, rootFull);
             if (rel is null) continue;
             if (!found.Contains(rel, StringComparer.Ordinal)) found.Add(rel);
             if (found.Count == MaxFiles) break;
@@ -170,11 +176,18 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         return found;
     }
 
-    // Не больше MaxFiles имён: остальные в ответ всё равно не попадут, обход дерева ради них не нужен
-    private static HashSet<string> BareNames(string turnText) =>
-        FilePattern.Matches(turnText).Select(m => m.Groups[1].Value)
-            .Where(v => !v.Contains('/')).Distinct(StringComparer.Ordinal).Take(MaxFiles)
-            .ToHashSet(StringComparer.Ordinal);
+    // Путь с каталогом → путь от корня дерева; null — вне дерева, с «..» или файла нет
+    private static string? ResolvePath(string raw, string rootFull)
+    {
+        var rel = raw.StartsWith('/')
+            ? (raw.StartsWith(rootFull.TrimEnd('/') + "/", StringComparison.Ordinal)
+                ? raw[(rootFull.TrimEnd('/').Length + 1)..] : null)
+            : raw;
+        if (rel is null || rel.Split('/').Any(s => s is ".." or "." or "")) return null;
+        var full = Path.GetFullPath(Path.Combine(rootFull, rel));
+        return full.StartsWith(rootFull.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+            StringComparison.Ordinal) && File.Exists(full) ? rel : null;
+    }
 
     // Один обход дерева на ход: имя → пути от корня (по всем совпавшим, чтобы видеть неоднозначность)
     private static Dictionary<string, List<string>> ScanByName(

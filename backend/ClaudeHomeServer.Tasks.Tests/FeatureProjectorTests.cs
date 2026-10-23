@@ -2164,6 +2164,55 @@ public class FeatureProjectorTests
         run.State.Should().Be(FeatureStates.Closed, "закрытая фича закрыта, даже если удержание не сняли");
     }
 
+    // W4-HOLD-G (R-HOLD-G находка 2): одна точка правды. Гейт (TaskManager.FeatureHoldRefusal)
+    // и состояние (ComputeState) зовут один предикат FeatureProjector.HoldAllows/IsPaused — тест
+    // сверяет оба выражения на всех причинах и всех ролях. Мутация: инлайн-формула в гейте,
+    // сузённая до manual (предикат не зовётся) — расхождение на reason «queue» → красное.
+    [Fact]
+    public void HoldPredicate_GateAndState_SingleSourceOfTruth()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_g_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var sut = new TaskManager(config);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            foreach (var reason in new[] { FeatureHoldReasons.Draft, FeatureHoldReasons.Manual,
+                FeatureHoldReasons.Queue })
+            {
+                sut.SetHold(epic.Id, reason);
+                var held = sut.GetById(epic.Id)!;
+
+                // Задачи собраны напрямую: гейт — чистая функция от FeatureId/Role, валидация
+                // Create'а (rework требует reviewOf) здесь не нужна и только мешала бы.
+                foreach (var role in TaskRoles.All)
+                {
+                    var task = new TaskItem { Title = "задача", FeatureId = epic.Id, Role = role };
+                    (sut.FeatureHoldRefusal(task) is null)
+                        .Should().Be(FeatureProjector.HoldAllows(task, held),
+                            $"гейт и предикат расходятся: reason «{reason}», роль «{role}»");
+                }
+
+                var run = FeatureProjector.Build(held, [held]);
+                if (FeatureProjector.IsPaused(held))
+                    run.State.Should().Be(FeatureStates.Paused, $"«{reason}» — пауза по предикату: state paused");
+                else
+                    run.State.Should().Be(FeatureStates.Draft, $"«{reason}» — не пауза: state draft");
+            }
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     // ─── W4-HOLD-D: пауза прерывает идущие ходы (контракт §1) ──────────────────────────────
     // Сквозной: TaskManager.SetHold → проектор. Идущий исполнитель помечается feature_held
     // (статус не трогается), «Сейчас» пустой, журнал задачи содержит «stopped» с причиной

@@ -1838,6 +1838,26 @@ public class TaskManagerTests : IDisposable
             .Should().Be("Фича — черновик, запустите её на странице фичи.");
     }
 
+    // queue — та же пауза, что manual (W4-HOLD-G, R-HOLD-G находка 1): правило в
+    // FeatureProjector.HoldAllows/IsPaused, здесь проверяется гейт на живой ветке. Мутация
+    // «сузить формулу до manual»: step получил бы текст «черновик», plan прошёл бы → красное.
+    [Fact]
+    public void FeatureHoldRefusal_QueueHold_ОтказываетРабочуюИПодготовку()
+    {
+        var epic = CreateEpic("u");
+        _sut.SetHold(epic.Id, FeatureHoldReasons.Queue);
+
+        _sut.FeatureHoldRefusal(_sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step)))
+            .Should().Be("Фича на паузе, снимите паузу на странице фичи.",
+                "queue — пауза: рабочая роль отказана, как при manual");
+
+        _sut.FeatureHoldRefusal(_sut.Create(null, "u", new CreateTaskRequest("план",
+            FeatureId: epic.Id, Role: TaskRoles.Plan)))
+            .Should().Be("Фича на паузе, снимите паузу на странице фичи.",
+                "queue — не черновик: подготовка тоже отказана");
+    }
+
     [Fact]
     public void FeatureHoldRefusal_СнятиеПаузыРазрешаетЗапуск()
     {

@@ -1508,6 +1508,28 @@ public sealed class FeatureProjector(TaskManager tasks)
         && final.Status == TaskItemStatus.Done
         && IsAcceptance(final.Verification?.Verdict);
 
+    // ─── Пауза фичи (W4-HOLD-G, R-HOLD-G находка 2) — единая точка правды ───────────────────
+    // «Пауза» — явное удержание человека (manual/queue): фичу не вести. Формула одна и для
+    // гейта запуска (TaskManager.FeatureHoldRefusal), и для состояния (ComputeState). Явный
+    // список причин, а не «любой не-draft»: словарь FeatureHoldReasons закрыт (ручка REST
+    // валидирует), и «неизвестная причина = пауза» больше не подразумевается.
+    public static bool IsPaused(TaskItem epic) =>
+        epic.Hold is not null && epic.Hold.Reason is FeatureHoldReasons.Manual or FeatureHoldReasons.Queue;
+
+    // Роли, разрешённые на черновике: только подготовка (cut/design/plan/consult), рабочие — нет.
+    public static readonly IReadOnlyList<string> HoldPrepRoles =
+        [TaskRoles.Cut, TaskRoles.Design, TaskRoles.Plan, TaskRoles.Consult];
+
+    // «Запуск разрешён»: Hold нет — разрешён; пауза (manual/queue) — ничего; draft — только
+    // подготовка. Гейт зовёт этот предикат, ComputeState — IsPaused; второго выражения
+    // правила быть не должно (ср. IsFinalAccepted).
+    public static bool HoldAllows(TaskItem task, TaskItem epic)
+    {
+        if (epic.Hold is null) return true;
+        if (IsPaused(epic)) return false;
+        return HoldPrepRoles.Contains(task.Role);
+    }
+
     // «Принятие» — ОДИН предикат о вердикте: accepted ИЛИ accepted_with_remarks. На нём Ready,
     // merge_pending/merged, гард role=merge и «шаг принят» (FeatureStepAccounting): две правды о
     // принятии недопустимы. Счётчик петель ↺ (IsReturn: returned/awr) — отдельная ось «сколько раз
@@ -1539,11 +1561,10 @@ public sealed class FeatureProjector(TaskManager tasks)
         //    Эпик Done — решение человека «фича закончена»: даже если работа ещё идёт
         //    (running/stopped/waiting) — фича закрыта (старое «и нет активной работы» убрано).
         if (epic.Status == TaskItemStatus.Done) return FeatureStates.Closed;
-        // 3. paused: явное удержание человека (Reason manual/queue) — «фичу не вести», решение
-        //    человека, а не тревога. Стоит ДО stopped: пауза, прервавшая исполнителей, не должна
-        //    показывать «ждёт вас» (W4-HOLD-B1). Не-draft здесь: queue — та же пауза с другой
-        //    причиной (сейчас не ставится, поведение совпадает).
-        if (epic.Hold is not null && epic.Hold.Reason != FeatureHoldReasons.Draft) return FeatureStates.Paused;
+        // 3. paused: явное удержание человека — формула в FeatureProjector.IsPaused (общая с
+        //    гейтом): «фичу не вести», решение человека, а не тревога. Стоит ДО stopped: пауза,
+        //    прервавшая исполнителей, не должна показывать «ждёт вас» (W4-HOLD-B1).
+        if (IsPaused(epic)) return FeatureStates.Paused;
         // 4. stopped: есть остановленная задача (как тревога kind=stopped).
         if (hasStopped) return FeatureStates.Stopped;
         // 5. waiting: явное ожидание человека (как тревога kind=wait, КРОМЕ «мерж»).

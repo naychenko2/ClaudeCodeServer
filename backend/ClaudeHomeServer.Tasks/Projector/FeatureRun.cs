@@ -396,17 +396,19 @@ public static class FeatureStates
     // Эпик Done и не merged — фича закрыта: решение человека «фича закончена»
     // (даже если работа ещё идёт; без мержа — «честный мерж»).
     public const string Closed = "closed";
-    // Удержание человека (Hold.Reason manual или queue): «фичу не вести». Стоит после closed
-    // (закрытая фича закрыта, даже если удержание не сняли) и перед stopped: пауза, прервавшая
-    // исполнителей, — решение человека, а не тревога «ждёт вас» (W4-HOLD-B1).
+    // Удержание человека — по общему предикату FeatureProjector.IsPaused (FeatureHoldReasons
+    // manual/queue): «фичу не вести». Стоит после closed (закрытая фича закрыта, даже если
+    // удержание не сняли) и перед stopped: пауза, прервавшая исполнителей, — решение человека,
+    // а не тревога «ждёт вас» (W4-HOLD-B1).
     public const string Paused = "paused";
     // Есть остановленная задача (тревога kind=stopped).
     public const string Stopped = "stopped";
     // Явное ожидание человека (тревога kind=wait, КРОМЕ ожидания «мерж»).
     public const string Waiting = "waiting";
-    // Черновик (Hold.Reason draft): фичу готовят, работа не разрешена. После stopped/waiting:
-    // тревоги подготовки (упавший исполнитель, ожидание ответа) остаются видны. «Очередь»
-    // (queue) позже станет подписью на paused, а не третьим значением.
+    // Черновик (Hold есть, FeatureProjector.IsPaused false — reason draft): фичу готовят,
+    // работа не разрешена (роли подготовки пропускает FeatureProjector.HoldAllows). После
+    // stopped/waiting: тревоги подготовки (упавший исполнитель, ожидание ответа) остаются видны.
+    // «Очередь» (queue) — не третье значение: по IsPaused это та же пауза (W4-HOLD-G).
     public const string Draft = "draft";
     // merge-задача запущена (InProgress) — мерж идёт.
     public const string Merging = "merging";

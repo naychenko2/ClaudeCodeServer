@@ -219,6 +219,14 @@ public class TaskExecutionServiceHoldTests : IDisposable
                 "запуск исполнителя по удержанной фиче отказан до подъёма процесса");
         step.ClaudeStartedAt.Should().BeNull("отказ не оставляет следов запуска");
 
+        // Абзац на queue (W4-HOLD-G, R-HOLD-G находка 1): гейт отказывает по правилу, а не по
+        // одной причине — queue та же пауза (FeatureProjector.IsPaused). Мутация: сузить
+        // IsPaused до manual → запуск проходит, абзац краснеет.
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+        await start.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Фича на паузе, снимите паузу на странице фичи*",
+                "queue — та же пауза: отказ до claim'а и до подъёма процесса");
+
         _tasks.ClearHold(epic.Id);
         var started = await _sut.ExecuteAsync(step, auto: false);
         started.ClaudeStartedAt.Should().NotBeNull("снятие паузы разрешает запуск");

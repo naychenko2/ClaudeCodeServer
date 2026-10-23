@@ -36,6 +36,7 @@ public sealed class IncidentDossierService(
             ["Ходы массово встали"] = ("ccs.llm.duration.count", "provider"),
             ["Лимиты провайдера жмут"] = ("ccs.llm.rate_limit_hits", "provider"),
             ["Пульс телеметрии пропал"] = ("ccs.telemetry.heartbeat", "deployment.environment"),
+            ["Кэш промпта рвётся при живом TTL"] = ("ccs.prompt_cache.turns", "reason"),
         };
 
     private static readonly (string Metric, string Tag) DefaultBreakdown = ("ccs.llm.errors", "error_type");

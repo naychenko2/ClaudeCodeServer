@@ -65,6 +65,11 @@ public static class FeatureFlagKeys
     // «Авто-возобновление ходов»: после рестарта сервера прерванные активные ходы
     // дотягиваются через Claude CLI resume. Dark launch, выключено по умолчанию.
     public const string TurnAutoResume = "turn-auto-resume";
+
+    // «Индикатор prompt cache и перенос в новый чат» (эпик e5c8168a): состояние prompt cache
+    // в result хода — шаг B-1. Регистрация флага, сама фича обвязывается следующими шагами.
+    // Dark launch, выключено по умолчанию.
+    public const string PromptCache = "prompt-cache";
 }
 
 /// <summary>
@@ -171,6 +176,16 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.TurnAutoResume,
             Title: "Продолжать ходы после перезапуска сервера",
             Description: "Автоматически дотягивать прерванные активные ходы через Claude CLI resume после рестарта. Default false, per-owner.",
+            Default: false,
+            Stage: "dev"),
+
+        // «Индикатор prompt cache и перенос в новый чат» (эпик e5c8168a): шаг B-1 — только
+        // регистрация флага и состояние кэша в result хода; тумблер и интерфейс фичи —
+        // следующие шаги. Dark launch, выключено по умолчанию.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.PromptCache,
+            Title: "Индикатор prompt cache",
+            Description: "В шапке чата: сколько ещё держится тёплый prompt cache, почему он остыл, и подсказка перенести контекст в новый чат.",
             Default: false,
             Stage: "dev"),
     ];

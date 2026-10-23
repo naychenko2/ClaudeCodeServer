@@ -3250,6 +3250,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // прогона, тогда тег перезапишется на реальную модель; см. HandleStreamJson.
         _turnActivity = turnActivity;
         _turnCliModel = null;
+        // Состояние prompt cache хода (см. TrackPromptCache): этот сброс — единственный для
+        // прогонов без эха; при эхе он будет сброшен ещё раз на самом эхе.
+        ResetTurnPromptCacheMiss();
 
         // Ход на ЛОКАЛЬНОМ провайдере занимает KV-бюджет движка целиком — на это время
         // фоновые one-shot действия к локали не пускаем (LocalEngineBusyTracker, правило
@@ -6201,6 +6204,17 @@ public class ClaudeSession : ILlmSessionAdapter
                 // и так пропускает, но _lastContextTokens хранит прошлое значение — не шлём его повторно).
                 if (!HasParentToolUseId(root) && _lastContextTokens > 0)
                     await _onMessage(new ContextUsageMessage(_lastContextTokens));
+                // Страховка диагностики prompt cache: если message_start не принёс diagnostics,
+                // причина промаха берётся из строки assistant того же вызова (см. TrackPromptCacheMissFromAssistant).
+                // TTL — тоже отсюда: в реальной форме потока ephemeral_* есть только в usage
+                // строки assistant (см. TrackPromptCacheTtl).
+                if (!HasParentToolUseId(root) && root.TryGetProperty("message", out var asstMsg)
+                    && asstMsg.ValueKind == JsonValueKind.Object)
+                {
+                    if (asstMsg.TryGetProperty("usage", out var asstUsage) && asstUsage.ValueKind == JsonValueKind.Object)
+                        TrackPromptCacheTtl(asstUsage);
+                    TrackPromptCacheMissFromAssistant(asstMsg);
+                }
                 await HandleAssistantToolsAsync(run, root);
                 break;
 
@@ -6344,8 +6358,10 @@ public class ClaudeSession : ILlmSessionAdapter
                 }
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
+                var promptCache = BuildPromptCacheState(usage);
                 // usage/totalCost/usageModel — дельта хода (см. выше), не накопленный итог
-                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, usageModel, durationApiMs));
+                await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, usageModel, durationApiMs,
+                    promptCache));
                 // OTel: метрика длительности хода (duration_ms из самого CLI — не пересчитываем)
                 // и счётчик ошибок. Оба признака отказа сводит IsTurnFailure: без is_error
                 // отказы провайдера (429) уходили в метрику как outcome=success — счётчик
@@ -6359,6 +6375,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     isSandboxed: _launcher.IsSandboxed);
                 // Тот же исход — на спан: иначе в трейсах отказной ход неотличим от успешного
                 TurnTelemetry.MarkTurnOutcome(_turnActivity, turnFailed, apiErr);
+                // Сторож регресса prompt cache (ccs.prompt_cache.turns): причина промаха первого
+                // вызова хода. Только родной Claude (promptCache != null) и только если первый
+                // вызов в этом ходу был: TTL и якорь живут через ходы, и без проверки ход, упавший
+                // до модели, ушёл бы в метрику «без промаха» и разбавил долю холодных стартов
+                if (promptCache is not null && _turnFirstCallSeen)
+                    TurnTelemetry.RecordPromptCacheTurn(promptCache.MissReason);
                 // Ход завершён. Без живых фоновых задач закрываем stdin — CLI выйдет сам,
                 // дальше ждём его не дольше ResultExitGrace. С ними stdin держим открытым:
                 // прогон доживает (агенты работают внутри процесса) и готов принять
@@ -6415,6 +6437,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     run.ContinuationActive = false;
                     // CLI взялся за наш ход — поставленное до него он доставит в этом же ходе
                     _transcriptTailer?.ClearQueuedDeliveries();
+                    // Вызовы модели до эха — ход-продолжение CLI, а не наш ход: его диагностика
+                    // промаха про паузу между ходами ничего не говорит. Первый вызов нашего хода
+                    // — после эха (сброс на старте хода остаётся для прогонов без эха).
+                    ResetTurnPromptCacheMiss();
                     break;
                 }
                 await HandleUserMessageAsync(run, root);
@@ -7000,6 +7026,15 @@ public class ClaudeSession : ILlmSessionAdapter
             return;
         }
 
+        // Начало вызова основного агента: якорь последней записи кэша и — если это первый
+        // вызов нашего хода — причина промаха из diagnostics (см. TrackPromptCache).
+        if (eventType == "message_start" && evt.TryGetProperty("message", out var startMsg)
+            && startMsg.ValueKind == JsonValueKind.Object)
+        {
+            TrackPromptCache(startMsg);
+            return;
+        }
+
         // Начало блока tool_use — показываем карточку сразу (до прихода полного assistant-сообщения)
         if (eventType == "content_block_start")
         {
@@ -7279,6 +7314,122 @@ public class ClaudeSession : ILlmSessionAdapter
                     $"раздувает контекст локальной модели");
             }
         }
+    }
+
+    // ── Состояние prompt cache для индикатора (фича «Индикатор prompt cache», шаг B-1) ──
+    // Прочитанные/записанные токены — из usage result'а хода (ParseUsage уже их берёт);
+    // якорь последней записи, TTL и причина промаха — по стриму основного агента. Причина — только
+    // у ПЕРВОГО вызова после эха: вызовы до эха принадлежат ход-продолжению CLI (см. эхо-ветку
+    // в HandleStreamJson), а дальнейшие вызовы того же хода уже греют префикс им же.
+    private long? _promptCacheAnchorMs;
+    private string? _promptCacheTtl;
+    private bool _turnFirstCallSeen;
+    private string? _turnFirstCallId;
+    private PromptCacheMissReason _turnMissReason;
+    private int? _turnMissedTokens;
+
+    // Часы якоря: сервер ставит их по своим часам, в тестах подменяются ручными.
+    internal TimeProvider PromptCacheClock { get; set; } = TimeProvider.System;
+
+    // Сброс диагностики промаха хода — не всего состояния: якорь записи и TTL живут через
+    // ходы, запись продолжения настоящая (отсюда и имя: сбрасывается только miss).
+    private void ResetTurnPromptCacheMiss()
+    {
+        _turnFirstCallSeen = false;
+        _turnFirstCallId = null;
+        _turnMissReason = PromptCacheMissReason.None;
+        _turnMissedTokens = null;
+    }
+
+    // message — объект message из stream_event/message_start основного агента (сабагентов
+    // отсекает HandleStreamEventAsync: у них свой кэш). Якорь — время прихода message_start
+    // вызова, который ЧИТАЛ или ПИСАЛ кэш: API продлевает TTL записи и при попадании в чтение,
+    // поэтому отсчёт идёт от последнего касания. Это ближайшая к началу запроса точка, которую
+    // видит сервер. Строку assistant якорь не двигает: она приходит после генерации и
+    // сдвинула бы отсчёт на время ответа (для неё — TTL и страховка причины ниже).
+    private void TrackPromptCache(JsonElement message)
+    {
+        if (message.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object)
+        {
+            if (IntProp(u, "cache_creation_input_tokens") > 0 || IntProp(u, "cache_read_input_tokens") > 0)
+                _promptCacheAnchorMs = PromptCacheClock.GetUtcNow().ToUnixTimeMilliseconds();
+            TrackPromptCacheTtl(u);
+        }
+
+        if (_turnFirstCallSeen) return;
+        _turnFirstCallSeen = true;
+        _turnFirstCallId = message.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String
+            ? id.GetString() : null;
+        var (reason, missed) = ParseCacheMissReason(message);
+        _turnMissReason = reason;
+        _turnMissedTokens = missed;
+    }
+
+    // TTL последней записи: вызов, который только читал, наследует его — ephemeral_* в его
+    // usage описывает используемую запись кэша. Разбивка может прийти и в message_start, и
+    // только в строке assistant — поэтому зовётся с обеих сторон.
+    private void TrackPromptCacheTtl(JsonElement usage)
+    {
+        if (!usage.TryGetProperty("cache_creation", out var cc) || cc.ValueKind != JsonValueKind.Object) return;
+        if (IntProp(cc, "ephemeral_1h_input_tokens") > 0) _promptCacheTtl = "1h";
+        else if (IntProp(cc, "ephemeral_5m_input_tokens") > 0) _promptCacheTtl = "5m";
+    }
+
+    // Второй источник диагностики (страховка, дешёвая): если message_start не принёс
+    // diagnostics, причина промаха берётся из строки assistant ТОГО ЖЕ вызова — по id
+    // сообщения, чтобы промах последующего вызова хода (его уже греет тул-луп) не считался
+    // промахом между ходами. Якорь здесь не двигается; TTL — заботится вызывающий (case
+    // "assistant" выше), здесь только причина.
+    private void TrackPromptCacheMissFromAssistant(JsonElement message)
+    {
+        if (!_turnFirstCallSeen || _turnMissReason != PromptCacheMissReason.None) return;
+        var id = message.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
+            ? idEl.GetString() : null;
+        if (id != _turnFirstCallId) return;
+        var (reason, missed) = ParseCacheMissReason(message);
+        if (reason == PromptCacheMissReason.None) return;
+        _turnMissReason = reason;
+        _turnMissedTokens = missed;
+    }
+
+    // diagnostics.cache_miss_reason.type и cache_missed_input_tokens: известные причины —
+    // по формулировкам origin (bdf2c9bbd); незнакомый type — «причина неизвестна», а не
+    // потеря (осознанно: новый тип API не приравнивается к известным); diagnostics нет —
+    // промаха не было.
+    private static (PromptCacheMissReason Reason, int? MissedTokens) ParseCacheMissReason(JsonElement message)
+    {
+        if (!message.TryGetProperty("diagnostics", out var d) || d.ValueKind != JsonValueKind.Object)
+            return (PromptCacheMissReason.None, null);
+        if (!d.TryGetProperty("cache_miss_reason", out var r) || r.ValueKind != JsonValueKind.Object)
+            return (PromptCacheMissReason.None, null);
+        var type = r.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+        int? missed = IntProp(r, "cache_missed_input_tokens") is > 0 and var m ? m : null;
+        return type switch
+        {
+            "system_changed" => (PromptCacheMissReason.SystemChanged, missed),
+            "messages_changed" => (PromptCacheMissReason.MessagesChanged, missed),
+            "previous_message_not_found" => (PromptCacheMissReason.PreviousMessageNotFound, missed),
+            "model_changed" => (PromptCacheMissReason.ModelChanged, missed),
+            "tools_changed" => (PromptCacheMissReason.ToolsChanged, missed),
+            "unavailable" => (PromptCacheMissReason.Unavailable, missed),
+            null or "" => (PromptCacheMissReason.None, null),
+            _ => (PromptCacheMissReason.Unavailable, missed),
+        };
+    }
+
+    // Поле PromptCache для result хода: null, если сигнала кэша нет вовсе — такое result
+    // остаётся без поля (не пустой объект). Явный null-гвард для не-claude провайдеров:
+    // у сторонних своя семантика кэша без TTL, а ephemeral_* в их потоке — эхо CLI (образец —
+    // BuildPromptCacheInfo в origin, dcf876821); локальный движок идёт мимо ClaudeSession.
+    private PromptCacheState? BuildPromptCacheState(UsageInfo? usage)
+    {
+        if (_providers?.ResolveByModel(EffectiveModel) is not null) return null;
+        int read = usage?.CacheReadTokens ?? 0;
+        int written = usage?.CacheCreationTokens ?? 0;
+        if (read == 0 && written == 0 && _promptCacheAnchorMs is null && _promptCacheTtl is null
+            && _turnMissReason == PromptCacheMissReason.None && _turnMissedTokens is null)
+            return null;
+        return new PromptCacheState(read, written, _promptCacheAnchorMs, _promptCacheTtl, _turnMissedTokens, _turnMissReason);
     }
 
     // Оценка токенов по объёму текста. Грубость намеренная: сторож ловит РАЗНИЦУ

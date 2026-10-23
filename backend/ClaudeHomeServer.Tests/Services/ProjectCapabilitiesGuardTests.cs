@@ -45,6 +45,10 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/LocalEndpointProbe.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LlmSessionContext.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (7, "LLM-провайдер"),
+        // Адаптер шва IModelResolver и one-shot-раннер: IsLocal — признак локального
+        // LLM-провайдера для классификации расхода (Spend), не локальность проекта.
+        ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (2, "LLM-провайдер"),
         // +1 (5) на ветке local-model-stats: UseServerGateway спрашивает provider.IsLocal
         // (локальный LLM-провайдер), не локальность проекта.
         ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (5, "LLM-провайдер"),
@@ -66,6 +70,13 @@ public class ProjectCapabilitiesGuardTests
         // Тестовый хелпер шлюза: IsLocal — признак локального LLM-провайдера (vLLM), не проекта.
         // Жил в ClaudeHomeServer.Tests (сторож его пропускал как .Tests); переехал в TestKit.Host (шаг 3.3).
         ["backend/ClaudeHomeServer.TestKit.Host/GatewayTestKit.cs"] = (2, "LLM-провайдер"),
+        // Учёт расхода: «бесплатный» определяется по IsLocal провайдера (LlmProviderConfig),
+        // не по локальности проекта — вертикаль Spend и её швы.
+        ["backend/ClaudeHomeServer.Core/Services/Llm/IModelResolver.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Core/Models/SpendRecord.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Spend/SpendStore.cs"] = (1, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer/Services/SpendMapping.cs"] = (2, "LLM-провайдер"),
     };
 
     private static string RepoRoot()

@@ -1,5 +1,6 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -42,6 +43,7 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         // Пороги индикатора контекста: override юзера или null (фронт применит дефолты)
         var me = userId is null ? null : users.GetById(userId);
         var contextThresholds = me?.ContextThresholds;
+        var cacheWarnThresholds = me?.CacheWarnThresholds;
         var executionEnvironment = me?.ExecutionEnvironment ?? ExecutionEnvironments.Local;
         // Дефолт-персона. Нормализация сироты на чтении:
         // DefaultPersonaId с несуществующей персоной отдаём как null — тогда онбординг-гейт
@@ -69,7 +71,7 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         return Ok(new
         {
             userId, username, displayName = me?.DisplayName, role, featureFlags,
-            contextThresholds, executionEnvironment,
+            contextThresholds, cacheWarnThresholds, executionEnvironment,
             defaultPersonaId, needsOnboarding, onboardingSessionId = me?.OnboardingSessionId,
             subsystems = subsystems.ActiveKeys(),
         });
@@ -112,6 +114,55 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
 
         if (!users.SetContextThresholds(userId, thresholds)) return Unauthorized();
         return Ok(new { contextThresholds = thresholds });
+    }
+
+    // Порог «кэш промпта скоро остынет» (per-user, минуты остатка). Менять может только
+    // свой профиль: userId берётся из токена. Контракт тела: сброс — только пустое тело
+    // `{}` (или оба поля null); любое имя, кроме warn1hMin/warn5mMin, — 400, а не тихий
+    // сброс: опечатка или чужая единица (секунды) не должна молча выключать настройку.
+    [Authorize]
+    [HttpPut("cache-thresholds")]
+    public IActionResult SetCacheWarnThresholds([FromBody] JsonElement body)
+    {
+        var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (userId is null) return Unauthorized();
+
+        // null-тело — тот же сброс, что `{}`: «оба поля null». Всё, что не объект, — 400
+        if (body.ValueKind is not (JsonValueKind.Object or JsonValueKind.Null))
+            return BadRequest(new { error = "Тело — объект {\"warn1hMin\": ..., \"warn5mMin\": ...} в минутах или {} для сброса" });
+
+        CacheWarnThresholds? thresholds = null;
+        if (body.ValueKind == JsonValueKind.Object)
+        {
+            int? warn1h = null, warn5m = null;
+            foreach (var prop in body.EnumerateObject())
+            {
+                if (prop.Value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Number)
+                    || (prop.Value.ValueKind == JsonValueKind.Number && !prop.Value.TryGetInt32(out _)))
+                    return BadRequest(new { error = "Пороги — целые числа в минутах или null" });
+
+                if (string.Equals(prop.Name, "warn1hMin", StringComparison.OrdinalIgnoreCase))
+                    warn1h = prop.Value.ValueKind == JsonValueKind.Null ? null : prop.Value.GetInt32();
+                else if (string.Equals(prop.Name, "warn5mMin", StringComparison.OrdinalIgnoreCase))
+                    warn5m = prop.Value.ValueKind == JsonValueKind.Null ? null : prop.Value.GetInt32();
+                else
+                    return BadRequest(new { error = $"Неизвестное поле \"{prop.Name}\" — допустимы только warn1hMin и warn5mMin (минуты)" });
+            }
+
+            if (warn1h is not null || warn5m is not null)
+            {
+                if (warn1h is not { } a || warn5m is not { } b || !CacheWarnThresholds.InRange(a, b))
+                    return BadRequest(new
+                    {
+                        error = $"Порог часового кэша — {CacheWarnThresholds.MinMin}–{CacheWarnThresholds.Max1hMin} мин, " +
+                              $"5-минутного — {CacheWarnThresholds.MinMin}–{CacheWarnThresholds.Max5mMin} мин",
+                    });
+                thresholds = new CacheWarnThresholds(a, b);
+            }
+        }
+
+        if (!users.SetCacheWarnThresholds(userId, thresholds)) return Unauthorized();
+        return Ok(new { cacheWarnThresholds = thresholds });
     }
 
     [Authorize]

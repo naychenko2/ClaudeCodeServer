@@ -7,11 +7,12 @@ import type { LocalModelLiveState } from '../features/localModel/useLocalModelLi
 import type { ContextEstimate } from '../lib/context';
 import type { GlifGenStats } from '../components/chat/glifStats';
 import { toRateWindows, type RateWindow } from '../lib/rateLimit';
-import type { RateLimitInfo } from '../types';
+import type { ChatItem, RateLimitInfo } from '../types';
 
 // Витрина кольцевой пилюли шапки чата (вариант C2): все состояния спецификации §5 —
-// заметка «Шапка чата — пилюля «кольца» (C2), спецификация». Тема — общим переключателем
-// страницы; поповеры живые (клик по пилюле), сжатие в них ничего не делает.
+// заметка «Шапка чата — пилюля «кольца» (C2), спецификация» — и циферблат кэша промпта
+// (блок «Кэш»). Тема — общим переключателем страницы; поповеры живые (клик по пилюле),
+// сжатие в них ничего не делает.
 
 const noop = () => {};
 const NO_COST: CostStats = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, turns: 0, results: 0 };
@@ -31,6 +32,20 @@ const wins = (u: Record<string, number | undefined>, over: Record<string, Partia
   toRateWindows(Object.fromEntries(Object.entries(u).map(([k, v]) =>
     [k, { limitType: k, utilization: v, status: 'allowed', resetsAt: RESET, ...over[k] }])));
 
+// Фикстуры для циферблата кэша: лента с одним ходом родного Claude, якорь сдвинут от
+// «сейчас» витрины так, чтобы часовой кэш был тёплым, остывающим или остывшим.
+// «Идёт ход» — тот же тёплый фикстур с isWaiting: во время хода остаток не показывается.
+const NOW = Date.now();
+const cacheFeed = (agoMin: number): ChatItem[] => [{
+  kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1, contextTokens: 120_000,
+  promptCache: { readTokens: 118_000, writtenTokens: 4_000, anchorAtMs: NOW - agoMin * 60_000, ttl: '1h', missReason: 'none' },
+}];
+const CACHE: Record<'warm' | 'cooling' | 'cold', ChatItem[]> = {
+  warm: cacheFeed(12),    // 48 мин до истечения — тёплый
+  cooling: cacheFeed(56), // 4 мин — остывает (порог 5 мин)
+  cold: cacheFeed(130),   // срок прошёл — холодный
+};
+
 interface Sample {
   caption: string;
   estimate?: ContextEstimate;
@@ -45,9 +60,20 @@ interface Sample {
   reducedMotion?: boolean;
   empty?: boolean;                      // пилюли нет: на её месте — пояснение
   localModel?: LocalModelLiveState;    // форсированное состояние локальной модели
+  cache?: keyof typeof CACHE;           // фикстур ленты для циферблата кэша
+  waiting?: boolean;                    // идёт ход: стрелка крутится, остаток не показан
 }
 
 const DS_OK: ProviderBalance = { available: true, currency: 'USD', totalBalance: '4.20' };
+
+// Блок «Кэш»: состояния циферблата (F-1c) — тёплый, остывает, остыл, идёт ход
+const CACHE_SAMPLES: Sample[] = [
+  { caption: 'кэш тёплый (1h)', estimate: ctx(30), windows: wins({ five_hour: 0.2, seven_day: 0.12 }), cache: 'warm' },
+  { caption: 'кэш остывает — «4 мин»', estimate: ctx(40), windows: wins({ five_hour: 0.81, seven_day: 0.3 }), cache: 'cooling' },
+  { caption: 'кэш остыл — «остыл»', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold' },
+  { caption: 'кэш остыл (мобила — без подписи)', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold', compact: true },
+  { caption: 'идёт ход — стрелка крутится', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'warm', waiting: true },
+];
 
 const SAMPLES: Sample[] = [
   { caption: '5.1 обычное — худшее окно', estimate: ctx(62), windows: wins({ five_hour: 0.81, seven_day: 0.34, seven_day_opus: 0.12 }) },
@@ -87,7 +113,7 @@ function RingSample({ s }: { s: Sample }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, alignItems: 'flex-start' }}>
       <div style={{ fontSize: FS.sm, color: C.textMuted }}>{s.caption}</div>
       <RingPillBadge
-        estimate={s.estimate ?? NO_CTX} isWaiting={false} isCompacting={!!s.compacting}
+        estimate={s.estimate ?? NO_CTX} isWaiting={!!s.waiting} isCompacting={!!s.compacting}
         canCompact compactNote={undefined} onCompact={noop} online assistantName={s.provider?.name ?? 'Claude'}
         isCliProvider={!!s.provider} providerName={s.provider?.name ?? 'Claude'}
         cost={s.cost ?? NO_COST} falCost={s.fal ?? NO_FAL} glifCost={NO_GLIF}
@@ -95,6 +121,7 @@ function RingSample({ s }: { s: Sample }) {
         activeWorkflow={s.workflow} isMobile={s.compact} isCompact={s.compact} resetKey={s.caption}
         forceReducedMotion={s.reducedMotion}
         forceLocalModel={s.localModel}
+        items={s.cache ? CACHE[s.cache] : undefined}
       />
       {s.empty && <div style={{ fontSize: FS.sm, color: C.textMuted }}>(компонент вернул null)</div>}
     </div>
@@ -116,7 +143,7 @@ function HeaderRowSample() {
           isCliProvider={false} providerName="Claude"
           cost={NO_COST} falCost={NO_FAL} glifCost={NO_GLIF}
           balance={null} billing="subscription" windows={wins({ five_hour: 0.81, seven_day: 0.34 })}
-          resetKey="header-row"
+          resetKey="header-row" items={CACHE.warm}
         />
         <FalCostBadge stats={FAL} resetKey="header-row" />
         <GlifCostBadge stats={GLIF} resetKey="header-row" />
@@ -138,6 +165,8 @@ export function RingPillKitSection() {
         display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: ISLAND.gap,
       }}>
         <HeaderRowSample />
+        <div style={{ gridColumn: '1 / -1', fontSize: FS.sm, color: C.textMuted }}>циферблат кэша промпта — состояния</div>
+        {CACHE_SAMPLES.map(s => <RingSample key={s.caption} s={s} />)}
         {SAMPLES.map(s => <RingSample key={s.caption} s={s} />)}
       </div>
     </Island>

@@ -11,7 +11,7 @@
 // Окружение node (без jsdom): fakeDom (mount) + управляемые сторы (featurePage,
 // featuresIndex, featureBackNav) и mock api (chats.get, tasks.getFeature).
 
-import { act } from 'react';
+import { act, useSyncExternalStore } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
@@ -21,6 +21,7 @@ import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
 import { KEY_SESSION_TOOLTIP } from '../../lib/chatGroups';
+import { C } from '../../lib/design';
 import { api } from '../../lib/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
@@ -102,12 +103,25 @@ vi.mock('../../lib/api', () => ({
   },
 }));
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя (аватары 18 в строках
-// чатов/шагов, таблица §5.5). Компоненту нужен только .name.
-const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
+// чатов/шагов, таблица §5.5). Компоненту нужен только .name. usePersonasVersion —
+// настоящий useSyncExternalStore: тест может «догрузить стор» (добавить персону и
+// поднять версию) и проверить, что чип перерисовывается (W4-1F, реактивность).
+const personaStore = vi.hoisted(() => ({
+  map: new Map<string, string>(),
+  version: 0,
+  listeners: new Set<() => void>(),
+  ensureCalls: 0,
+}));
+const personaMap = personaStore.map;
 vi.mock('../../lib/personas', () => ({
   getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
-  usePersonasVersion: () => 0,
+  usePersonasVersion: () => useSyncExternalStore(
+    (fn: () => void) => { personaStore.listeners.add(fn); return () => personaStore.listeners.delete(fn); },
+    () => personaStore.version,
+    () => personaStore.version,
+  ),
   usePersonas: () => [],
+  ensurePersonasLoaded: () => { personaStore.ensureCalls++; return Promise.resolve(); },
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
 vi.mock('../../lib/signalr', async (importOriginal) => {
@@ -928,6 +942,46 @@ describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
     const c = render({});
     await settle();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'без персоны — чипа нет').toBeNull();
+  });
+
+  // Состояния чипа на наведении (возврат R-1): базовые фон/рамка инлайном — класс их
+  // не перебивает, поэтому hover/active живут JS-обработчиками. Мутация (в отчёте):
+  // убрать onMouseEnter у кнопки → обработчика нет в reactProps → тест краснеет.
+  it('наведение: фон и рамка меняются (JS-обработчики, не класс)', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    expect(chip.style.background, 'базовый фон чипа').toBe(C.bgWhite);
+    const props = reactProps(chip) ?? {};
+    const enter = props.onMouseEnter as ((e: { currentTarget: FNodeLike }) => void) | undefined;
+    const leave = props.onMouseLeave as ((e: { currentTarget: FNodeLike }) => void) | undefined;
+    expect(enter && leave, 'на чипе обработчики наведения').toBeTruthy();
+    act(() => { enter!({ currentTarget: chip as never }); });
+    expect(chip.style.background, 'фон на наведении').toBe(C.bgSelected);
+    expect(chip.style.borderColor, 'рамка на наведении').toBe(C.accentMuted);
+    act(() => { leave!({ currentTarget: chip as never }); });
+    expect(chip.style.background, 'фон возвращается после наведения').toBe(C.bgWhite);
+    expect(chip.style.borderColor, 'рамка возвращается после наведения').toBe(C.border);
+  });
+
+  // Реактивность стора персон (возврат R-2): getPersonaById сам по себе не реактивен
+  // (lib/personas.ts:75) — чип подписывается на версию стора и просит загрузку.
+  // Мутация (в отчёте): убрать usePersonasVersion() в LeadChip → подъём версии не
+  // перерисовывает чип → тест краснеет.
+  it('стор персон не догружен: чипа нет; после догрузки — появляется', async () => {
+    personaMap.clear(); // оркестратор в индексе есть, в сторе — пока нет
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'пока стор не догружен — чипа нет').toBeNull();
+    expect(personaStore.ensureCalls, 'чип запросил загрузку стора персон').toBeGreaterThan(0);
+    act(() => {
+      personaMap.set('p-sofya', 'Софья (локальная)');
+      personaStore.version++;
+      for (const fn of [...personaStore.listeners]) fn();
+    });
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
+    expect(chip, 'чип появляется после догрузки стора').not.toBeNull();
+    expect(textNodes(chip!).join(''), 'имя оркестратора после догрузки').toContain('Софья (локальная)');
   });
 });
 

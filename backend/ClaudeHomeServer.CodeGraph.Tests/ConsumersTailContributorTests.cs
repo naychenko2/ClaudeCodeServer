@@ -32,7 +32,8 @@ public class ConsumersTailContributorTests
 
     // Дерево с файлом src/Lib.cs и графом, где у него consumers потребителей (первые tests — тесты)
     private static async Task<(ConsumersTailContributor Sut, string Dir, string Data)> Prepare(
-        int consumers, bool saveGraph = true, TimeSpan? timeout = null)
+        int consumers, bool saveGraph = true, TimeSpan? timeout = null,
+        Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? neighbors = null)
     {
         var dir = Path.Combine(Path.GetTempPath(), "cgtail_" + Guid.NewGuid().ToString("N")[..10]);
         var data = Path.Combine(Path.GetTempPath(), "cgtail_data_" + Guid.NewGuid().ToString("N")[..10]);
@@ -55,7 +56,7 @@ public class ConsumersTailContributorTests
             await persistence.SaveAsync(dir, new CodeGraph { Nodes = nodes, Edges = edges }, CancellationToken.None);
         }
         var sut = new ConsumersTailContributor(graphs, new CodeGraphQueryService(graphs), new OpenGate(),
-            NullLogger<ConsumersTailContributor>.Instance, timeout);
+            NullLogger<ConsumersTailContributor>.Instance, timeout, neighbors);
         return (sut, dir, data);
     }
 
@@ -144,12 +145,84 @@ public class ConsumersTailContributorTests
     }
 
     [Fact]
-    public async Task ОтветДольшеТаймаута_Молчание()
+    public async Task ОтветДольшеТаймаута_Молчание_ИОтменаДоходитДоИсточника()
     {
-        var (sut, dir, data) = await Prepare(consumers: 3, timeout: TimeSpan.Zero);
+        // Граф «молчит», пока тест его не освободит: потолок проверяется без гонки с таймером
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (sut, dir, data) = await Prepare(consumers: 3, timeout: TimeSpan.FromMilliseconds(50),
+            neighbors: async (_, _, ct) =>
+            {
+                ct.Register(() => cancelled.TrySetResult());
+                await release.Task;
+                return new CodeGraphNeighborsOutcome(false, null, []);
+            });
         try
         {
-            (await sut.BuildAsync(Ctx(dir), TaskText)).Should().BeNull();
+            // страховка от зависания при сломанном потолке: тест краснеет, а не висит
+            (await sut.BuildAsync(Ctx(dir), TaskText).WaitAsync(TimeSpan.FromSeconds(10))).Should().BeNull();
+
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            release.TrySetResult();
+            Cleanup(dir, data);
+        }
+    }
+
+    [Fact]
+    public async Task ОтветВоВремя_СекцияВозвращается()
+    {
+        var (sut, dir, data) = await Prepare(consumers: 3, timeout: TimeSpan.FromSeconds(30));
+        try
+        {
+            (await sut.BuildAsync(Ctx(dir), TaskText)).Should().NotBeNull();
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task WindowsПутьИИмяСДопРасширением_BareНеСчитается()
+    {
+        var (_, dir, data) = await Prepare(consumers: 1);
+        try
+        {
+            ConsumersTailContributor.ExtractFiles(@"Правь C:\src\Lib.cs и src\Lib.cs", dir)
+                .Should().BeEmpty("после обратной косой имя не bare");
+            ConsumersTailContributor.ExtractFiles("Смотри Lib.cs.bak и Lib.cs.old", dir)
+                .Should().BeEmpty("после расширения идёт ещё одно");
+            ConsumersTailContributor.ExtractFiles("Правь Lib.cs.", dir)
+                .Should().Equal("src/Lib.cs");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task ОбходДерева_ОтменяетсяПоТокену()
+    {
+        var (_, dir, data) = await Prepare(consumers: 1);
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            var act = () => ConsumersTailContributor.ExtractFiles("Читать: Lib.cs", dir, cts.Token);
+
+            act.Should().Throw<OperationCanceledException>();
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task BareИмена_ДляОбходаБерутсяНеБольшеЛимита()
+    {
+        var (_, dir, data) = await Prepare(consumers: 1);
+        try
+        {
+            // три первых имени не находятся, четвёртое — за лимитом: ради него дерево не обходим
+            ConsumersTailContributor.ExtractFiles("A1.cs A2.cs A3.cs Lib.cs", dir).Should().BeEmpty();
+            ConsumersTailContributor.ExtractFiles("A1.cs A2.cs Lib.cs", dir).Should().Equal("src/Lib.cs");
         }
         finally { Cleanup(dir, data); }
     }

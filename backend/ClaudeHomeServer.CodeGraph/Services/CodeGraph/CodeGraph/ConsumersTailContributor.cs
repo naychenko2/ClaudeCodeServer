@@ -11,8 +11,8 @@ namespace ClaudeHomeServer.Services.CodeGraph;
 // первого хода, и спрашивает граф тем же режимом «по файлу» (NeighborsByFileAsync).
 //
 // Секция идёт по ВСЕМ владельцам, в том числе там, где хук работает (local на Linux): правка через
-// Bash (printf >> file) хук Edit|Write не видит. Дубль «хук + хвост» принят: ≤ 20 строк, один раз
-// на первом ходе, только файлы постановки; срабатывают они в разные моменты.
+// Bash (printf >> file) хук Edit|Write не видит. Дубль «хук + хвост» принят: ≤ 20 строк на файл (до 3 файлов — ≤ 60 строк
+// на секцию), один раз на первом ходе, только файлы постановки; срабатывают они в разные моменты.
 // Агент ничего не спрашивает; нет графа, файл вне графа, ответ дольше 3 с, сбой — молчание.
 // Секция едет InTurnTail: нестабильный текст не должен попадать в системный блок.
 public sealed class ConsumersTailContributor : IPromptSectionContributor
@@ -28,7 +28,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     // Путь (с каталогом или bare-имя) с расширением файла, который понимают провайдеры графа;
     // хвост «:123» — номер строки
     private static readonly Regex FilePattern = new(
-        @"(?<![\w/.\-])(/?(?:[\w.\-]+/)*[\w.\-]+\.(?:cs|tsx?))(?::\d+)?(?![\w/])",
+        @"(?<![\w/.\\\-])(/?(?:[\w.\-]+/)*[\w.\-]+\.(?:cs|tsx?))(?::\d+)?(?![\w/]|\.\w)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     // Bare-имя ищем обходом не глубже BareSearchDepth, без служебных каталогов; неоднозначное — молчание
@@ -38,19 +38,28 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         { "node_modules", "bin", "obj", "dist", "packages" };
 
     private readonly CodeGraphService _graphs;
-    private readonly CodeGraphQueryService _queries;
     private readonly IPersonaServerToolGate _toolGate;
     private readonly ILogger<ConsumersTailContributor> _log;
     private readonly TimeSpan _timeout;
+    private readonly Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>> _neighbors;
 
     public ConsumersTailContributor(CodeGraphService graphs, CodeGraphQueryService queries,
         IPersonaServerToolGate toolGate, ILogger<ConsumersTailContributor> log, TimeSpan? timeout = null)
+        : this(graphs, queries, toolGate, log, timeout, null)
+    {
+    }
+
+    // Шов для тестов: источник ответа графа подменяется, чтобы проверять потолок без гонок с таймером
+    internal ConsumersTailContributor(CodeGraphService graphs, CodeGraphQueryService queries,
+        IPersonaServerToolGate toolGate, ILogger<ConsumersTailContributor> log, TimeSpan? timeout,
+        Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? neighbors)
     {
         _timeout = timeout ?? DefaultTimeout;
         _graphs = graphs;
-        _queries = queries;
         _toolGate = toolGate;
         _log = log;
+        _neighbors = neighbors
+            ?? ((root, file, ct) => queries.NeighborsByFileAsync(root, file, CodeGraphQueryService.MaxLimit, ct));
     }
 
     public string Key => SectionKey;
@@ -70,9 +79,11 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     {
         var root = sessionContext.RootPath;
         if (string.IsNullOrWhiteSpace(turnText) || string.IsNullOrWhiteSpace(root)) return null;
+        // Токен отменяется по выходу: обход дерева и запросы к графу не должны крутиться в фоне после потолка
+        using var cts = new CancellationTokenSource();
         try
         {
-            var text = await BuildTextAsync(turnText, root, sessionContext.MainRootPath)
+            var text = await BuildTextAsync(turnText, root, sessionContext.MainRootPath, cts.Token)
                 .WaitAsync(_timeout);
             return text is null
                 ? null
@@ -84,19 +95,23 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
             _log.LogDebug(ex, "Потребители файлов задачи не получены");
             return null;
         }
+        finally
+        {
+            cts.Cancel();
+        }
     }
 
-    private async Task<string?> BuildTextAsync(string turnText, string root, string? mainRoot)
+    private async Task<string?> BuildTextAsync(string turnText, string root, string? mainRoot, CancellationToken ct)
     {
         // Не даём работе завершиться синхронно: потолок WaitAsync обязан действовать и на быстрый граф,
         // и на обход дерева при поиске bare-имён
         await Task.Yield();
-        var files = ExtractFiles(turnText, root);
+        var files = ExtractFiles(turnText, root, ct);
         if (files.Count == 0) return null;
         var blocks = new List<string>();
         foreach (var file in files)
         {
-            var (result, note) = await QueryAsync(file, root, mainRoot);
+            var (result, note) = await QueryAsync(file, root, mainRoot, ct);
             if (result is { Total: > 0 } && Render(file, result, note) is { } block) blocks.Add(block);
         }
         return blocks.Count == 0
@@ -105,9 +120,9 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     }
 
     private async Task<(CodeGraphNeighborsResultDto? Result, string? Note)> QueryAsync(
-        string file, string root, string? mainRoot)
+        string file, string root, string? mainRoot, CancellationToken ct)
     {
-        var outcome = await _queries.NeighborsByFileAsync(root, file, CodeGraphQueryService.MaxLimit, CancellationToken.None);
+        var outcome = await _neighbors(root, file, ct);
         if (outcome.HasGraph) return (outcome.Result, null);
 
         // Граф дерева ещё не построен: просим постройку и пока отвечаем по основному дереву с пометкой
@@ -115,14 +130,15 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         if (string.IsNullOrWhiteSpace(mainRoot)
             || PathNormalizer.NormalizePath(mainRoot) == PathNormalizer.NormalizePath(root))
             return (null, null);
-        var fallback = await _queries.NeighborsByFileAsync(mainRoot, file, CodeGraphQueryService.MaxLimit, CancellationToken.None);
+        var fallback = await _neighbors(mainRoot, file, ct);
         return fallback.HasGraph ? (fallback.Result, BuildingNote) : (null, null);
     }
 
     // Файлы постановки, существующие в дереве: путь от корня дерева, без «..», не больше MaxFiles.
     // Файлы берутся из всего текста хода по порядку появления (описание задачи идёт раньше правил,
     // а MaxFiles ограничивает вклад хвоста) — порядок и лимит зафиксированы тестом.
-    internal static IReadOnlyList<string> ExtractFiles(string turnText, string root)
+    internal static IReadOnlyList<string> ExtractFiles(
+        string turnText, string root, CancellationToken ct = default)
     {
         var rootFull = Path.GetFullPath(root);
         var found = new List<string>();
@@ -133,7 +149,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
             string? rel;
             if (!raw.Contains('/'))
             {
-                byName ??= ScanByName(rootFull, BareNames(turnText));
+                byName ??= ScanByName(rootFull, BareNames(turnText), ct);
                 rel = byName.TryGetValue(raw, out var hits) && hits.Count == 1 ? hits[0] : null;
             }
             else
@@ -154,12 +170,15 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         return found;
     }
 
+    // Не больше MaxFiles имён: остальные в ответ всё равно не попадут, обход дерева ради них не нужен
     private static HashSet<string> BareNames(string turnText) =>
         FilePattern.Matches(turnText).Select(m => m.Groups[1].Value)
-            .Where(v => !v.Contains('/')).ToHashSet(StringComparer.Ordinal);
+            .Where(v => !v.Contains('/')).Distinct(StringComparer.Ordinal).Take(MaxFiles)
+            .ToHashSet(StringComparer.Ordinal);
 
     // Один обход дерева на ход: имя → пути от корня (по всем совпавшим, чтобы видеть неоднозначность)
-    private static Dictionary<string, List<string>> ScanByName(string rootFull, HashSet<string> names)
+    private static Dictionary<string, List<string>> ScanByName(
+        string rootFull, HashSet<string> names, CancellationToken ct)
     {
         var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         var queue = new Queue<(string Dir, string Rel, int Depth)>();
@@ -167,6 +186,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         var dirs = 0;
         while (queue.Count > 0 && dirs++ < BareSearchDirLimit)
         {
+            ct.ThrowIfCancellationRequested();
             var (dir, rel, depth) = queue.Dequeue();
             try
             {

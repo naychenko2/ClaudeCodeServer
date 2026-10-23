@@ -18,7 +18,7 @@ import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
-  deleteTask, deviceWaitDuration, dueLabel, executorStopText, isDeviceWaiting, projectColor, projectInitial,
+  deleteTask, deviceWaitDuration, dueLabel, executorStopVisual, isDeviceWaiting, projectColor, projectInitial,
   recurrenceLabel, reminderLabel, updateTask, useEnsureFullTask, useTasks,
 } from '../../lib/tasks';
 import {
@@ -445,7 +445,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
           icon={Unplug}
           title={deviceWaiting
             ? <>{deviceName ? `Ждёт устройство «${deviceName}»` : 'Ждёт устройство проекта'} · {deviceWaitDuration(task.deviceWaitSince!)}</>
-            : executorStopText(task.executorStopReason, deviceName)}
+            : executorStopVisual(task.executorStopReason, deviceName).text}
           style={{ marginBottom: SP.md }}
         >
           {deviceWaiting && (

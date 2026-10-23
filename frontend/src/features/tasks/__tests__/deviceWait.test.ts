@@ -4,8 +4,9 @@
 import { describe, it, expect } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { LucideIcon } from 'lucide-react';
 import type { Task } from '../../../types';
-import { deviceWaitDuration, executorStopText, executorStopTone, isDeviceWaiting, isTerminalStop } from '../../../lib/tasks';
+import { deviceWaitDuration, executorStopVisual, isDeviceWaiting, isTerminalStop } from '../../../lib/tasks';
 import { TaskCard } from '../TaskCard';
 
 function task(over: Partial<Task> = {}): Task {
@@ -36,34 +37,34 @@ describe('словарь ожидания устройства', () => {
   });
 
   it('device_wait_expired — человеческий текст с именем устройства, не код', () => {
-    expect(executorStopText('device_wait_expired', 'Ноутбук'))
+    expect(executorStopVisual('device_wait_expired', 'Ноутбук').text)
       .toBe('Устройство «Ноутбук» не вышло на связь за 24 часа — задача не запускалась');
-    expect(executorStopText('device_wait_expired'))
+    expect(executorStopVisual('device_wait_expired').text)
       .toBe('Устройство проекта не вышло на связь за 24 часа — задача не запускалась');
-    expect(executorStopText('something_new')).toBe('Исполнение прервано');
+    expect(executorStopVisual('something_new').text).toBe('Исполнение прервано');
   });
 
   // W4-HOLD-J (R-HOLD-J п.5): терминальная причина «чат исполнителя исчез» переведена
   // на фронте так же, как на бэке, а не сводится к общему «Исполнение прервано».
   it('feature_held_expired — чат исчез, шаг перезапускают', () => {
-    expect(executorStopText('feature_held_expired'))
+    expect(executorStopVisual('feature_held_expired').text)
       .toBe('Чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить');
   });
 
   // W4-HOLD-F4 (возврат R-F4): feature_held — штатная пауза фичи, не авария: своя
   // формулировка и предупреждающий тон, а не красная «Исполнение прервано».
-  // Мутация: удалить кейс 'feature_held' в executorStopText — тест краснеет.
+  // Мутация: удалить кейс 'feature_held' в executorStopVisual — тест краснеет.
   it('feature_held — пауза названа паузой, тон warning, не danger', () => {
-    expect(executorStopText('feature_held')).toBe('Фичу удержали на паузе — шаг ждёт снятия паузы');
-    expect(executorStopTone('feature_held')).toBe('warning');
+    expect(executorStopVisual('feature_held').text).toBe('Фичу удержали на паузе — шаг ждёт снятия паузы');
+    expect(executorStopVisual('feature_held').tone).toBe('warning');
     // остальные терминальные остановки — настоящая беда
-    expect(executorStopTone('auth_failed')).toBe('danger');
-    expect(executorStopTone('device_wait_expired')).toBe('danger');
+    expect(executorStopVisual('auth_failed').tone).toBe('danger');
+    expect(executorStopVisual('device_wait_expired').tone).toBe('danger');
   });
 
   // Хвост R-F4 п.1: формулировка tool_call_leak_stuck была добавлена без теста.
   it('tool_call_leak_stuck — своя формулировка и терминальность', () => {
-    expect(executorStopText('tool_call_leak_stuck'))
+    expect(executorStopVisual('tool_call_leak_stuck').text)
       .toBe('Вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось');
     expect(isTerminalStop('tool_call_leak_stuck')).toBe(true);
   });
@@ -112,7 +113,7 @@ describe('терминальная остановка исполнителя', (
   });
 
   // Хвост R-F4 п.2: feature_held — самая частая причина на карточке в волне (пауза).
-  // Мутация: удалить кейс 'feature_held' в executorStopText — тест краснеет.
+  // Мутация: удалить кейс 'feature_held' в executorStopVisual — тест краснеет.
   it('feature_held — карточка называет паузу, а не поломку', () => {
     const html = render(task({ executorStoppedAt: '2026-10-23T10:00:00Z', executorStopReason: 'feature_held' }));
     expect(html).toContain('Фичу удержали на паузе');
@@ -126,6 +127,32 @@ describe('терминальная остановка исполнителя', (
   it('feature_held — чип отмечен паузой, а не «отключённым устройством»', () => {
     const html = render(task({ executorStopReason: 'feature_held' }));
     expect(html).toContain('lucide-pause');
+    expect(html).not.toContain('lucide-unplug');
+  });
+
+  // W4-HOLD-F5 (п.2 R-F5): карточка не собирает чип сама — текст, тон и глиф приходят
+  // из одного триплета executorStopVisual. Мутация: зафиксировать что-то из трёх
+  // параллельно в карточке — тест краснеет.
+  const iconClass = (icon: LucideIcon) =>
+    /lucide-[a-z0-9-]+/.exec(renderToStaticMarkup(createElement(icon, { size: 16 })))![0];
+
+  it('единый источник: карточка повторяет текст, тон и глиф функции', () => {
+    for (const reason of ['feature_held', 'feature_held_expired', 'auth_failed', 'device_wait_expired']) {
+      const v = executorStopVisual(reason);
+      const html = render(task({ executorStopReason: reason }));
+      expect(html).toContain(v.text);
+      expect(html).toContain(iconClass(v.icon));
+      // Тон чипа — цвет соответствующего Badge
+      expect(html).toContain(v.tone === 'warning' ? 'var(--c-warning-bg)' : 'var(--c-danger-bg)');
+    }
+  });
+
+  // W4-HOLD-F5 (п.1 R-F5): featureHeldExpired — про исчезнувший чат паузы, а не про
+  // оборванную связь: свой глиф MessageSquareOff, а не Unplug.
+  // Мутация: заменить MessageSquareOff на Unplug в executorStopVisual — тест краснеет.
+  it('feature_held_expired — отмечен исчезнувшим чатом, а не «отключённым устройством»', () => {
+    const html = render(task({ executorStopReason: 'feature_held_expired' }));
+    expect(html).toContain('lucide-message-square-off');
     expect(html).not.toContain('lucide-unplug');
   });
 
@@ -164,7 +191,7 @@ describe('терминальная остановка исполнителя', (
   // одной подстроки — плашка с другой фразой раньше прошла бы.
   it('завершённая задача плашки остановки не получает', () => {
     const html = render(task({ status: 'done', executorStopReason: 'feature_held_expired' }));
-    expect(html).not.toContain(executorStopText('feature_held_expired'));
+    expect(html).not.toContain(executorStopVisual('feature_held_expired').text);
     expect(html).not.toContain('Исполнение прервано');
   });
 });

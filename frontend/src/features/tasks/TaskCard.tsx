@@ -10,12 +10,12 @@ import type { Task } from '../../types';
 // Иконки: Bug — дефект (волна 2 фичи карточек дефектов),
 // Check/SquareStack — контекстное меню «В контекст чата» (фича chat-context).
 // Объединяем импорты обеих веток.
-import { Bug, Check, Pause, Repeat, SquareStack, Unplug } from 'lucide-react';
+import { Bug, Check, Repeat, SquareStack, Unplug, type LucideIcon } from 'lucide-react';
 import { C, FONT, FS, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Badge, Menu, MenuItem } from '../../components/ui';
 import { useLongPress } from '../../hooks/useLongPress';
-import { deviceWaitDuration, executorStopText, executorStopTone, isDeviceWaiting, isTerminalStop, projectColor } from '../../lib/tasks';
+import { deviceWaitDuration, executorStopVisual, isDeviceWaiting, isTerminalStop, projectColor } from '../../lib/tasks';
 import { useContextButton } from '../chatContext/useContextButton';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
@@ -33,9 +33,9 @@ interface Props {
 }
 
 // Плашка состояния исполнителя: тон warning — «стоит и ждёт», danger — «встал насовсем».
-// Глиф по причине (W4-HOLD-F5, хвост R-F4R): штатная пауза фичи — Pause, тот же глиф,
-// что у кнопки «Пауза» в шапке фичи; «устройство отключено» (Unplug) читается как поломка,
-// а пауза — намерение, не авария.
+// Тон, текст и глиф для терминальной остановки приходят из executorStopVisual (W4-HOLD-F5)
+// — здесь только рендер триплета. Глиф по умолчанию Unplug — «связь не поднята», он
+// уместен для ожидания устройства; для остановки его явный передаёт функция.
 function StateChip({
   tone,
   title,
@@ -44,7 +44,7 @@ function StateChip({
 }: {
   tone: 'warning' | 'danger';
   title?: string;
-  icon?: typeof Unplug;
+  icon?: LucideIcon;
   children: React.ReactNode;
 }) {
   const Icon = icon;
@@ -68,6 +68,11 @@ function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceNam
   // Любая другая терминальная остановка — причина на карточке, а не только в уведомлении бэка
   // (R-HOLD-J2): восстановимые обрывы (сабагент/утечки в пути) сюда не попадают.
   const executorStopped = !done && isTerminalStop(task.executorStopReason) && !deviceWaitExpired;
+  // Вид плашки остановки (текст, тон, глиф) — из одной функции (W4-HOLD-F5), а не из
+  // параллельных веток: и «не дождалась устройства», и «встал насовсем» берут один триплет.
+  const stopVisual = (deviceWaitExpired || executorStopped)
+    ? executorStopVisual(task.executorStopReason, deviceName)
+    : null;
 
   // «В контекст чата» (фича chat-context) — контекстным меню карточки: hover-иконку
   // сюда не поставить, правый верхний угол занят значком исполнителя. Меню
@@ -143,21 +148,18 @@ function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceNam
               </StateChip>
             )}
             {deviceWaitExpired && (
-              <StateChip tone="danger" title={executorStopText(task.executorStopReason, deviceName)}>
+              <StateChip tone={stopVisual!.tone} icon={stopVisual!.icon} title={stopVisual!.text}>
                 Не запускалась: устройство не в сети
               </StateChip>
             )}
             {executorStopped && (
               // Причина — сам текст плашки, а не подсказка по ховеру: фраза переносится
               // внутри чипа (Badge обрезал бы её многоточие на узкой карточке).
-              // Тон по причине: пауза фичи — предупреждение, не поломка (W4-HOLD-F4).
-              // Глиф тоже по причине: пауза — Pause, а не «отключённое устройство» (W4-HOLD-F5).
-              <StateChip
-                tone={executorStopTone(task.executorStopReason)}
-                icon={task.executorStopReason === 'feature_held' ? Pause : Unplug}
-              >
+              // Тон, текст и глиф — из executorStopVisual: пауза фичи — предупреждение
+              // и глиф Pause (W4-HOLD-F4/F5), остальное — danger и глиф по причине.
+              <StateChip tone={stopVisual!.tone} icon={stopVisual!.icon}>
                 <span style={{ whiteSpace: 'normal' }}>
-                  {executorStopText(task.executorStopReason, deviceName)}
+                  {stopVisual!.text}
                 </span>
               </StateChip>
             )}

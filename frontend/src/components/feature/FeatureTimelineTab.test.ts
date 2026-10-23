@@ -676,17 +676,18 @@ describe('FeatureTimelineTab: лента «Производства»', () => {
     expect(findNodeByAttr(body, 'data-testid', 'prod-lane'), 'ленты нет').toBeNull();
   });
 
-  // === 4. 360: isMobile доходит до ленты — поле касания узла 40 px ===
-  it('360: узел ленты — невидимое поле касания 40 px, видимая высота 20 px', () => {
+  // === 4. 360: isMobile доходит до ленты — зона касания 40 px на самой кнопке ===
+  it('360: узел ленты — кнопка сама 40 px по вертикали, видимая капсула 20 px', () => {
     const c = renderTab(prodRun(), true);
     const node = findNodeByAttr(c, 'data-testid', 'prod-node');
     expect(node, 'узел-кнопка с чатом').not.toBeNull();
     const st = (reactProps(node as never)!.style ?? {}) as Record<string, string>;
-    expect(st.lineHeight).toBe('20px');
-    // Обёртка-поле: 40 px высоты, отрицательные отступы — раскладка не смещается.
-    const wrap = (node as { parentNode: never }).parentNode;
-    const ws = (reactProps(wrap)!.style ?? {}) as Record<string, string>;
-    expect(ws.height).toBe(40);
-    expect(ws.margin).toBe('-10px 0');
+    // Кнопка сама — поле касания: 40 px, отрицательные отступы — раскладка не смещается.
+    expect(st.minHeight).toBe(40);
+    expect(st.margin).toBe('-10px 0');
+    // Видимая капсула — внутренний span: высота узла, как на десктопе.
+    const pill = (node as { childNodes: unknown[] }).childNodes[0];
+    const ps = (reactProps(pill as never)!.style ?? {}) as Record<string, string>;
+    expect(ps.lineHeight).toBe('20px');
   });
 });

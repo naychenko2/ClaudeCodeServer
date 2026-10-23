@@ -15,7 +15,9 @@
 //   (2) узел игнорирует chatId (не кнопка) → краснеет «клик по узлу возврата
 //       открывает чат этого витка»;
 //   (3) cycles < 2 красить предупреждением → краснеет «2 цикла — предупреждение,
-//       1 цикл — нет».
+//       1 цикл — нет»;
+//   (4) 40 px вернуть некликабельной обёртке (кнопка без minHeight) → краснеет
+//       «зона касания 40 px — на самой кнопке».
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -122,7 +124,8 @@ describe('обычный цикл', () => {
     const card = findNodeByAttr(container, 'data-testid', 'prod-card-Ш1');
     expect(card).not.toBeNull();
     expect(findAll(container, 'data-testid', 'prod-card-Ш1').length).toBe(1);
-    expect(chainLabels(card!)).toEqual(['работа', '→', 'принят']);
+    // Имя в подписи — из единого резолвера ленты (дефолт — getPersonaById).
+    expect(chainLabels(card!)).toEqual(['работа', '→', 'Глеб: принят']);
     // «старт» живёт только в меню кода шага, не строкой карточки.
     expect(textNodes(card!).some(t => t === 'старт')).toBe(false);
     // Статус — из stepStatusView: подпись и тон одной парой (successBg/successText).
@@ -174,7 +177,7 @@ describe('возврат и доработка', () => {
   it('цепочка «работа → вернул → доработка», причина возврата — строкой под цепочкой', () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: returnedRun(1), featureId: 'F' }));
     const card = findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!;
-    expect(chainLabels(card)).toEqual(['работа', '→', 'вернул', '→', 'доработка']);
+    expect(chainLabels(card)).toEqual(['работа', '→', 'Глеб: вернул', '→', 'доработка']);
     const reason = findNodeByAttr(card, 'data-testid', 'prod-reason')!;
     expect(textNodes(reason)[0]).toBe('нет пустого состояния');
     expect(styleOf(reason).borderLeft).toBe(`2px solid ${C.warning}`);
@@ -183,7 +186,7 @@ describe('возврат и доработка', () => {
 
   it('клик по узлу возврата открывает reviewChatId этого витка', async () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: returnedRun(1), featureId: 'F' }));
-    const node = findNodeByAttr(container, 'aria-label', 'Открыть чат витка: вернул');
+    const node = findNodeByAttr(container, 'aria-label', 'Открыть чат витка: Глеб: вернул');
     expect(node).not.toBeNull();
     expect(node!.nodeName).toBe('BUTTON');
     await act(async () => { (reactProps(node!)!.onClick as () => void)(); });
@@ -320,7 +323,7 @@ describe('код шага', () => {
 // === Мобильная ширина (360) ===
 
 describe('360', () => {
-  it('у узла-кнопки невидимое поле касания 40 px по вертикали, видимая высота не раздувается', () => {
+  it('зона касания 40 px — на самой кнопке; видимая капсула остаётся 20 px, строки не наезжают', () => {
     const r = run({
       steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
       stepChains: [chain({
@@ -332,13 +335,19 @@ describe('360', () => {
     const nodes = findAll(container, 'data-testid', 'prod-node');
     expect(nodes.length).toBe(2);
     for (const n of nodes) {
-      // Обёртка-поле: 40 px высоты, отрицательные отступы — раскладка не смещается.
-      const wrap = (n as { parentNode: { nodeType: number; getAttribute: (a: string) => string | null } }).parentNode;
-      expect(wrap.nodeType).toBe(1);
-      expect(styleOf(wrap as never).height).toBe(40);
-      expect(styleOf(wrap as never).margin).toBe('-10px 0');
-      expect(styleOf(n as never).lineHeight).toBe('20px');
+      // Кнопка сама — поле касания: 40 px, отрицательные отступы — раскладка не смещается.
+      const st = styleOf(n as never);
+      expect(st.minHeight).toBe(40);
+      expect(st.margin).toBe('-10px 0');
+      // Видимая капсула — внутренний span: тон и высота узла, как на десктопе.
+      const pill = (n as { childNodes: unknown[] }).childNodes[0];
+      expect(styleOf(pill as never).lineHeight).toBe('20px');
     }
+    // Перенос цепочки: вертикальный зазор строк 20 px = 2×выступа 10 px — зоны
+    // соседних строк не соприкасаются; отступ от шапки 12 px > выступа.
+    const chainEl = findNodeByAttr(container, 'data-testid', 'prod-chain')!;
+    expect(styleOf(chainEl as never).gap).toBe('20px 4px');
+    expect(styleOf(chainEl as never).marginTop).toBe(12);
     // Название уходит на вторую строку шапки (flexBasis 100%).
     const header = findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!.children[0];
     const title = header.children[1];

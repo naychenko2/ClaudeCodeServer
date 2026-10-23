@@ -17,7 +17,7 @@
 // существующее пустое состояние остаётся у вкладки.
 
 import { Fragment, useRef, useState } from 'react';
-import type { CSSProperties, ReactElement } from 'react';
+import type { CSSProperties, FocusEvent, ReactElement } from 'react';
 import { MessageCircle, FileText } from 'lucide-react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -32,6 +32,14 @@ import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { getPersonaById } from '../../lib/personas';
 import type { FeatureRun, FeatureStepChain, FeatureStageExecutor } from '../../types/featureRun';
+
+// 360 (возврат R4d): зона касания узла — 40 px на самой кнопке: видимая капсула
+// остаётся 20 px по раскладке, поле выступает на ±10 px. Чтобы зоны соседних
+// строк переноса не соприкасались, вертикальный зазор цепочки — 2×OVERHANG;
+// отступ цепочки от шапки — больше выступа.
+const TOUCH_H = 40;
+const NODE_H = 20;
+const OVERHANG = (TOUCH_H - NODE_H) / 2;
 
 // «Цикл» по числу: 1 — цикл, 2–4 — цикла, 5+ — циклов.
 function cycleWord(n: number): string {
@@ -90,44 +98,59 @@ function ProdNodeChip({ node, featureId, featureTitle, isMobile }: {
     return <span data-testid="prod-node-plain" style={style}>{node.label}</span>;
   }
 
-  const chip = (
-    <button
-      type="button"
-      data-testid="prod-node"
-      aria-label={`Открыть чат витка: ${node.label}`}
-      onClick={open}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => { setHover(false); setPressed(false); }}
-      onMouseDown={() => setPressed(true)}
-      onMouseUp={() => setPressed(false)}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-      style={{ ...style, cursor: 'pointer' }}
-    >
-      {node.label}
-    </button>
-  );
+  // Общие обработчики: нажатие — по pointer-событиям (тач и мышь дают их одинаково),
+  // фокус — по :focus-visible (кольцо только с клавиатуры, не после тапа).
+  const handlers = {
+    onClick: open,
+    onMouseEnter: () => setHover(true),
+    onMouseLeave: () => { setHover(false); setPressed(false); },
+    onPointerDown: () => setPressed(true),
+    onPointerUp: () => setPressed(false),
+    onFocus: (e: FocusEvent<HTMLButtonElement>) => setFocused(e.currentTarget.matches(':focus-visible')),
+    onBlur: () => setFocused(false),
+  };
 
-  // 360: видимая высота остаётся 20 px, поле касания — невидимое, 40 px по вертикали
-  // (обёртка с отрицательными отступами: раскладка не смещается, ширина поля — ширина
-  // узла, соседние узлы его не перекрывают).
+  // 360: поле касания 40 px — на самой кнопке (minHeight + отрицательные отступы:
+  // раскладка остаётся 20 px), видимая капсула — внутренний span с тоном узла.
   if (isMobile) {
     return (
-      // aria-hidden здесь был бы ошибкой: внутри кнопка, её должен слышать скринридер.
-      <span style={{ display: 'inline-flex', alignItems: 'center', height: 40, margin: '-10px 0' }}>
-        {chip}
-      </span>
+      <button
+        type="button"
+        data-testid="prod-node"
+        aria-label={`Открыть чат витка: ${node.label}`}
+        {...handlers}
+        style={{
+          display: 'inline-flex', alignItems: 'center',
+          minHeight: TOUCH_H, margin: `-${OVERHANG}px 0`,
+          background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
+        }}
+      >
+        <span style={style}>{node.label}</span>
+      </button>
     );
   }
-  return <Tooltip content="Открыть чат витка" focused={focused}>{chip}</Tooltip>;
+  return (
+    <Tooltip content="Открыть чат витка" focused={focused}>
+      <button
+        type="button"
+        data-testid="prod-node"
+        aria-label={`Открыть чат витка: ${node.label}`}
+        {...handlers}
+        style={{ ...style, cursor: 'pointer' }}
+      >
+        {node.label}
+      </button>
+    </Tooltip>
+  );
 }
 
 // === Код шага: триггер меню «старт · чат · задача» ===
 
 // Нет данных шага (не начат: ни старта, ни чата, ни задачи) — код остаётся обычным
 // текстом без рамки, не кнопкой: открывать нечего.
-function StepCode({ card, chain, featureId, featureTitle, marks, isMobile }: {
+function StepCode({ card, chain, featureId, featureTitle, marks, isMobile, nameOf }: {
   card: ProdCard; chain: FeatureStepChain | undefined; featureId: string; featureTitle?: string | null; marks: NavMarks; isMobile: boolean;
+  nameOf: (id: string) => string | null;
 }) {
   const plain: CSSProperties = {
     fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary, flexShrink: 0,
@@ -144,8 +167,8 @@ function StepCode({ card, chain, featureId, featureTitle, marks, isMobile }: {
   // Подпись пункта «чат»: последний узел-действие цепочки — работа или доработка.
   const lastAction = [...card.nodes].reverse().find(n => n.kind === 'work' || n.kind === 'rework');
   const actionWord = lastAction?.kind === 'rework' ? 'доработка' : 'работа';
-  const persona = card.personaId ? getPersonaById(card.personaId) : undefined;
-  const who = persona?.name ?? (card.personaId ? 'персона недоступна' : '');
+  // Имя — через тот же резолвер, что и подписи узлов (единый источник, R4d-минор).
+  const who = card.personaId ? nameOf(card.personaId) ?? 'персона недоступна' : '';
   const taskId = chain.taskIds[0] ?? null;
 
   const style: CSSProperties = {
@@ -226,9 +249,10 @@ function StepCode({ card, chain, featureId, featureTitle, marks, isMobile }: {
 
 // === Карточка шага ===
 
-function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, isMobile }: {
+function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, isMobile, nameOf }: {
   card: ProdCard; chain: FeatureStepChain | undefined; executors: FeatureStageExecutor[];
   featureId: string; featureTitle?: string | null; marks: NavMarks; isMobile: boolean;
+  nameOf: (id: string) => string | null;
 }) {
   const style: CSSProperties = {
     background: C.bgCard,
@@ -247,14 +271,14 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, 
     status?.tone === 'active' ? { background: C.bgSelected, color: C.textHeading } :
     { background: 'transparent', color: C.textMuted, boxShadow: `inset 0 0 0 1px ${C.border}` };
 
-  const persona = card.personaId ? getPersonaById(card.personaId) : undefined;
-  const name = persona?.name ?? (card.personaId ? 'персона недоступна' : null);
+  // Имя — через тот же резолвер, что и подписи узлов (единый источник, R4d-минор).
+  const name = card.personaId ? nameOf(card.personaId) ?? 'персона недоступна' : null;
   const model = stepModel(executors, card.stepRef);
 
   return (
     <div data-testid={`prod-card-${card.stepRef || 'no-ref'}`} style={style}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-        <StepCode card={card} chain={chain} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} />
+        <StepCode card={card} chain={chain} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} nameOf={nameOf} />
         {/* На 360 название уходит на вторую строку (flexBasis 100%), код остаётся первым. */}
         <span
           style={{
@@ -292,7 +316,9 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, 
         )}
       </div>
 
-      <div data-testid="prod-chain" style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap', marginTop: SP.sm }}>
+      {/* 360: строки цепочки не наезжают зонами касания — вертикальный зазор 2×выступа
+          (20 px), отступ от шапки больше выступа (12 > 10). На десктопе зоны не выступают. */}
+      <div data-testid="prod-chain" style={{ display: 'flex', alignItems: 'center', gap: isMobile ? `${OVERHANG * 2}px ${SP.xs}px` : SP.xs, flexWrap: 'wrap', marginTop: isMobile ? SP.md : SP.sm }}>
         {card.nodes.map((node, i) => (
           <span key={`${card.stepRef}-${i}`} style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs }}>
             <ProdNodeChip node={node} featureId={featureId} featureTitle={featureTitle} isMobile={isMobile} />
@@ -323,7 +349,10 @@ export function FeatureProdCardsView({
   marks?: NavMarks;
   isMobile?: boolean;
 }): ReactElement | null {
-  const cards = buildProdCards(run, personaName);
+  // Имя персоны — один источник для всей ленты: резолвер, который получает
+  // buildProdCards (по умолчанию — getPersonaById). Шапка и меню зовут его же.
+  const nameOf = personaName ?? ((id: string) => getPersonaById(id)?.name ?? null);
+  const cards = buildProdCards(run, nameOf);
   if (cards.length === 0) return null;
 
   // Цепочка по коду шага — для статуса (stepStatusView) и пункта меню «задача».
@@ -343,7 +372,7 @@ export function FeatureProdCardsView({
                 <span style={{ flex: 1, height: 1, background: C.accentMuted }} />
               </div>
             )}
-            <ProdCardView card={card} chain={chain} executors={prodExecutors} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} />
+            <ProdCardView card={card} chain={chain} executors={prodExecutors} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} nameOf={nameOf} />
           </Fragment>
         );
       })}

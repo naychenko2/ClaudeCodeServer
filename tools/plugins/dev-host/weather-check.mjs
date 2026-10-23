@@ -1486,6 +1486,10 @@ async function scenarioTiesAndCountryFallback(browser, base) {
   });
 }
 
+// Координаты в ТЕКСТЕ подписи: десятичное число или знак градуса. Код страны
+// (US, SE) и приписка «ещё N» под это не попадают.
+const COORD_IN_CAPTION = /\d+[.,]\d+|°/;
+
 // C6: одноимённые пункты без admin1 различаются; висячих разделителей нет.
 async function scenarioSameNames(browser, base) {
   await scenario('32. Одноимённые пункты: без координат в подписи, дедуп, приписка и подсказки, admin1 приоритетнее admin2 (C6)', async (checks) => {
@@ -1507,7 +1511,7 @@ async function scenarioSameNames(browser, base) {
       const titles = await frame.locator('.city').evaluateAll((els) => els.map((e) => e.getAttribute('title')));
       // Дубль геокодера (идентичные координаты) схлопнут: 8 записей → 7 строк.
       assertEq(checks, 'строк результатов (дубль схлопнут)', lines.length, 7);
-      assertTrue(checks, 'координат в подписи нет', lines.every((l) => !/\d°|[NSEW]\b|\(/.test(l)), lines.join(' | '));
+      assertTrue(checks, 'координат в подписи нет', lines.every((l) => !COORD_IN_CAPTION.test(l)), lines.join(' | '));
       assertTrue(checks, 'нет висячих разделителей', lines.every((l) => !/[·,]\s*$/.test(l) && !l.includes(', ,') && !l.includes('·')), lines.join(' | '));
       const tm = lines.map((l, i) => i).filter((i) => lines[i].startsWith('Москва, Туркменистан'));
       const br = lines.map((l, i) => i).filter((i) => lines[i].startsWith('Москва, Бразилия'));
@@ -1517,12 +1521,14 @@ async function scenarioSameNames(browser, base) {
       assertEq(checks, 'приписка у первой строки группы TM', lines[tm[0]], 'Москва, Туркменистан ещё 2 с похожим названием');
       assertTrue(checks, 'у остальных TM приписки нет', tm.slice(1).every((i) => lines[i] === 'Москва, Туркменистан'), lines.join(' | '));
       assertEq(checks, 'приписка у первой строки группы BR', lines[br[0]], 'Москва, Бразилия ещё 1 с похожим названием');
-      // Конкретные значения подсказок: ≈ 300 м разницы (37,900/58,100 и 37,904/58,104) различимы,
+      // Подсказка — у КОНКРЕТНОЙ строки: порядок внутри группы известен (при равном
+      // населении — по широте), поэтому проверяем пары «строка ↔ её координаты»,
+      // а не набор. ≈ 300 м разницы (37,900/58,100 и 37,904/58,104) различимы,
       // знаки S/W выводятся верно, широта и долгота не перепутаны.
-      assertEq(checks, 'подсказки TM', tm.map((i) => titles[i]).sort().join(' | '),
+      assertEq(checks, 'подсказки TM по строкам', tm.map((i) => titles[i]).join(' | '),
         ['37,5000° N, 58,3700° E', '37,9000° N, 58,1000° E', '37,9040° N, 58,1040° E'].join(' | '));
-      assertEq(checks, 'подсказки BR (южная широта, западная долгота)', br.map((i) => titles[i]).sort().join(' | '),
-        ['12,3456° S, 45,6789° W', '12,9000° S, 45,1000° W'].join(' | '));
+      assertEq(checks, 'подсказки BR по строкам (южная широта, западная долгота)', br.map((i) => titles[i]).join(' | '),
+        ['12,9000° S, 45,1000° W', '12,3456° S, 45,6789° W'].join(' | '));
       assertEq(checks, 'подсказки попарно различны', new Set(titles.filter(Boolean)).size, 5);
       // Регион различает сам: подсказок и приписок у не-групп нет.
       const kir = lines.findIndex((l) => l === 'Москва, Кировский район, Россия');
@@ -1532,6 +1538,53 @@ async function scenarioSameNames(browser, base) {
       assertTrue(checks, 'при admin1 и admin2 — только admin1', lines.includes('Москва, Тверская обл., Россия') && !lines.some((l) => l.includes('Московская')), lines.join(' | '));
     } catch (e) {
       await shot(page, 'scenario-32-samename');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C6-д3: дедуп по расстоянию (≤ 50 м), а не по ячейке сетки округления.
+async function scenarioDedupDistance(browser, base) {
+  await scenario('33. Дедуп по расстоянию: дубль в ≈22 м через границу ячейки склеен, точки в ≈78 м — нет; код страны не координата (C6-д3)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-samename-dist.json|name=%D0%97%D0%B0',
+        FX + 'batch-mixed.json|latitude',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('За');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      const lines = await frame.locator('.city .cn').allInnerTexts().then((a) => a.map((s) => s.replace(/\s+/g, ' ').trim()));
+      const titles = await frame.locator('.city').evaluateAll((els) => els.map((e) => e.getAttribute('title')));
+      const zarya = lines.map((l, i) => i).filter((i) => lines[i].startsWith('Заря'));
+      const lug = lines.map((l, i) => i).filter((i) => lines[i].startsWith('Луг'));
+      // 55,0004 и 55,0006: ≈ 22 м, но round(…, 3) даёт разные ячейки — раньше не склеивались.
+      assertEq(checks, 'дубль в ≈22 м через границу ячейки склеен', zarya.length, 1);
+      assertEq(checks, 'осталась первая — с большим населением', titles[zarya[0]], null);
+      // 56,00055 и 56,00125: ≈ 78 м, одна ячейка round(…, 3) — раньше сливались.
+      assertEq(checks, 'две разные точки в ≈78 м остались разными', lug.length, 2);
+      assertEq(checks, 'подсказки Луг по строкам', lug.map((i) => titles[i]).join(' | '),
+        ['56,0012° N, 37,5000° E', '56,0005° N, 37,5000° E'].join(' | '));
+      assertEq(checks, 'приписка у первой строки Луг', lines[lug[0]], 'Луг, Тверская обл., Россия ещё 1 с похожим названием');
+      assertEq(checks, 'у второй строки Луг приписки нет', lines[lug[1]], 'Луг, Тверская обл., Россия');
+      // Страна без поля country: в подписи код (US, SE) — это не координаты.
+      const sp = lines.map((l, i) => i).filter((i) => lines[i].startsWith('Спрингфилд'));
+      assertEq(checks, 'Спрингфилд — две строки с кодом страны', sp.length, 2);
+      assertTrue(checks, 'в подписях код страны US и SE', lines.some((l) => /, US(\s|$)/.test(l)) && lines.some((l) => /^Лунд, SE$/.test(l)), lines.join(' | '));
+      assertTrue(checks, 'код страны не принят за координаты', lines.every((l) => !COORD_IN_CAPTION.test(l)), lines.join(' | '));
+      assertEq(checks, 'подсказки Спрингфилд по строкам', sp.map((i) => titles[i]).join(' | '),
+        ['39,8000° N, 89,6000° W', '37,2000° N, 93,3000° W'].join(' | '));
+      assertEq(checks, 'всего строк', lines.length, 6);
+    } catch (e) {
+      await shot(page, 'scenario-33-dedup-distance');
       throw e;
     } finally {
       await context.close();
@@ -1799,6 +1852,7 @@ try {
   await scenarioQuotaEdges(browser, base);
   await scenarioRestartResets(browser, base);
   await scenarioSameNames(browser, base);
+  await scenarioDedupDistance(browser, base);
 } finally {
   await browser.close();
   server.close();

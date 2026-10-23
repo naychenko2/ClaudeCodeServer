@@ -426,6 +426,15 @@
       if (country) parts.push(country);
       return parts.join(', ');
     }
+    // Две точки ближе этого расстояния (в метрах) и с одной подписью — один пункт.
+    var DEDUP_METERS = 50;
+    // Расстояние между точками по формуле гаверсинусов, метры.
+    function distanceMeters(lat1, lon1, lat2, lon2) {
+      var rad = Math.PI / 180, dLat = (lat2 - lat1) * rad, dLon = (lon2 - lon1) * rad;
+      var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      return 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h)));
+    }
     // Координаты для title-подсказки одноимённых строк: «38,1200° N, 58,3700° E».
     // Четыре знака (≈ 10 м): три знака не различают дубли геокодера в сотнях метров.
     function coordText(lat, lon) {
@@ -584,14 +593,18 @@
             String(a.name).localeCompare(String(b.name), 'ru') ||
             (a.lat - b.lat) || (a.lon - b.lon);
         });
-        // Дубли одного пункта (одинаковые подпись и координаты с точностью ≈ 100 м)
-        // схлопываются в одну строку, остаётся первая — с большим населением.
-        var dedup = {};
+        // Дубли одного пункта схлопываются в одну строку, остаётся первая — с большим
+        // населением: совпадают название и подпись региона, а точки ближе
+        // DEDUP_METERS друг к другу. Округление координат тут не годится — оно
+        // задаёт ячейку сетки, а не близость. Дедуп идёт до квот.
+        var kept = [];
         all = all.filter(function (c) {
-          var k = c.name + '|' + c.region + '|' + Number(c.lat).toFixed(3) + '|' + Number(c.lon).toFixed(3);
-          if (dedup[k]) return false;
-          dedup[k] = true;
-          return true;
+          var dup = kept.some(function (k) {
+            return k.name === c.name && k.region === c.region &&
+              distanceMeters(k.lat, k.lon, c.lat, c.lon) <= DEDUP_METERS;
+          });
+          if (!dup) kept.push(c);
+          return !dup;
         });
         // До 5 своих; иностранных — 2 плюс свободные места своих (5 − N_своих).
         // Потолок — 7 строк (C5-д3).

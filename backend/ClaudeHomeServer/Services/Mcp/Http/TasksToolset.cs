@@ -226,6 +226,10 @@ public sealed class TasksToolset(
 
                 // Outcome при создании не передаём — у CreateTaskRequest такого поля нет вовсе
                 // (исход дефекта принадлежит только UpdateTaskRequest)
+                // planSteps — пред-извлекаем: кривой вход (не-массив/не-объект) → Deny, не NRE (major 4)
+                List<PlannedStep>? planSteps;
+                try { planSteps = PlanStepsArg(arguments); }
+                catch (InvalidOperationException ex) { return Deny(ex.Message); }
                 var req = new CreateTaskRequest(
                     Title: title,
                     // Пустая строка едет как есть (паритет со stdio): OptionalArg превратил
@@ -260,6 +264,7 @@ public sealed class TasksToolset(
                     StepRef: OptionalArg(arguments, "stepRef"),
                     Lane: OptionalArg(arguments, "lane"),
                     ReviewOf: LabelsArg(arguments, "reviewOf"),
+                    PlanSteps: planSteps,
                     ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId),
                     Acceptance: AcceptanceArg(arguments));
                 TaskItem created;
@@ -343,6 +348,10 @@ public sealed class TasksToolset(
                 var outcomeArg = kindEffective == TaskKind.Defect ? OutcomeArg(arguments) : null;
 
                 var wasDone = existing.Status == TaskItemStatus.Done;
+                // planSteps — пред-извлекаем: кривой вход (не-массив/не-объект) → Deny, не NRE (major 4)
+                List<PlannedStep>? planSteps;
+                try { planSteps = arguments.ContainsKey("planSteps") ? PlanStepsArg(arguments) : null; }
+                catch (InvalidOperationException ex) { return Deny(ex.Message); }
                 var req = new UpdateTaskRequest(
                     Title: OptionalArg(arguments, "title"),
                     // Пустая строка = ОЧИСТИТЬ (семантика UpdateTaskRequest), null = не менять;
@@ -382,7 +391,8 @@ public sealed class TasksToolset(
                     // Критерии приёмки и свидетельства: null = не менять. Гейт закрытия и запрет
                     // исполнителю менять критерии — в TaskManager.Update (здесь только разбор)
                     Acceptance: AcceptanceArg(arguments),
-                    Evidence: EvidenceArg(arguments));
+                    Evidence: EvidenceArg(arguments),
+                    PlanSteps: planSteps);
                 TaskItem updated;
                 try
                 {
@@ -959,6 +969,35 @@ public sealed class TasksToolset(
             : arr.Where(t => t is JsonValue v && v.TryGetValue<string>(out _))
                 .Select(t => t!.GetValue<string>()).ToList();
 
+    // Структурный список шагов плана: null — ключа нет (не менять), массив = задать целиком
+    // (даже пустой = очистить). Элемент — объект {stepRef, title, lane}. Major 4: знаменатель
+    // не должен молчать — не-массив (ключ есть, но не массив) и не-объект в массиве → явный
+    // отказ (InvalidOperationException → Deny), а не тихий «не менять»/пустой список:
+    // planSteps:["B1","F1"] раньше давал пустой список без isError, planSteps:{...} — «не менять».
+    private static List<PlannedStep>? PlanStepsArg(JsonObject arguments)
+    {
+        if (arguments["planSteps"] is not JsonArray arr)
+        {
+            // null — ключа нет (не менять); прочее (объект/строка/число) — кривой вход
+            if (arguments["planSteps"] is null) return null;
+            throw new InvalidOperationException("planSteps: ожидался массив шагов {stepRef, title, lane}.");
+        }
+        var result = new List<PlannedStep>();
+        foreach (var node in arr)
+        {
+            // Не-объект в массиве (строка/число/null) — отказ, а не тихий пропуск (major 4)
+            if (node is not JsonObject obj)
+                throw new InvalidOperationException("planSteps: каждый шаг — объект {stepRef, title, lane}.");
+            result.Add(new PlannedStep
+            {
+                StepRef = StringArg(obj, "stepRef"),
+                Title = StringArg(obj, "title"),
+                Lane = OptionalArg(obj, "lane"),
+            });
+        }
+        return result;
+    }
+
     private static List<CreateSubtaskRequest>? SubtasksArg(JsonObject arguments) =>
         arguments["subtasks"] is JsonArray arr && arr.Count > 0
             ? arr.Select(t => new CreateSubtaskRequest(t?.GetValue<string>() ?? "")).ToList()
@@ -1187,6 +1226,7 @@ public sealed class TasksToolset(
                     ["lane"] = LaneSchema(),
                     ["reviewOf"] = ReviewOfSchema(),
                     ["acceptance"] = AcceptanceSchema(),
+                    ["planSteps"] = PlanStepsSchema(),
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
@@ -1255,6 +1295,7 @@ public sealed class TasksToolset(
                     ["reviewOf"] = ReviewOfSchema(),
                     ["acceptance"] = AcceptanceSchema(),
                     ["evidence"] = EvidenceSchema(),
+                    ["planSteps"] = PlanStepsSchema(),
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject
@@ -1569,14 +1610,14 @@ public sealed class TasksToolset(
     private static JsonObject FeatureIdSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Id задачи-эпика фичи (см. инструкции сервера tasks)",
+        ["description"] = "Id задачи-эпика фичи; без роли — частичный мерж (см. инструкции сервера tasks)",
     };
 
     private static JsonObject RoleSchema() => new()
     {
         ["type"] = "string",
         ["enum"] = StringArray(TaskRoles.All),
-        ["description"] = "Роль в фиче: feature · cut · plan · step · rework · review · qa · final · merge · consult",
+        ["description"] = "Роль в фиче: feature · cut · plan · step · rework · review · qa · final · merge (после принятого финала) · consult",
     };
 
     private static JsonObject StepRefSchema() => new()
@@ -1595,7 +1636,30 @@ public sealed class TasksToolset(
     {
         ["type"] = "array",
         ["items"] = new JsonObject { ["type"] = "string" },
-        ["description"] = "Id задач, которые оценивает это ревью/проверка/финал",
+        ["description"] = "Id задач, которые оценивает это ревью/проверка/финал; у role=rework — обязательная связь с review/qa/final той же фичи",
+    };
+
+    // Структурный список шагов плана (честный прогресс фичи): массив {stepRef, title, lane}.
+    // Допустим только у role=plan; stepRef непуст и уникален, лимиты — в TaskManager.
+    private static JsonObject PlanStepsSchema() => new()
+    {
+        ["type"] = "array",
+        ["items"] = new JsonObject
+        {
+            ["type"] = "object",
+            ["properties"] = new JsonObject
+            {
+                ["stepRef"] = new JsonObject { ["type"] = "string", ["description"] = "Код шага (уникален, непуст)" },
+                ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Название шага" },
+                ["lane"] = new JsonObject { ["type"] = "string", ["description"] = "Линия (бэк/фронт)" },
+            },
+        },
+        // Инструкция (минор 7, паритет со stdio-веткой mcp/tasks-server/index.js): планировщик
+        // заполняет planSteps, а доработка (role=rework) обязана ссылаться на review/qa/final.
+        ["description"] = "ПЛАН: задача role=plan заполняет planSteps — структурный список шагов "
+            + "[{stepRef, title, lane}]; stepRef непуст и уникален. Markdown плана — проза, "
+            + "знаменатель «сколько всего» берётся из planSteps. Доработка (role=rework) ОБЯЗАНА "
+            + "ссылаться на review/qa/final той же фичи через reviewOf — иначе 400 (связь обязательна).",
     };
 
     private static McpToolSchema Tool(string name, string description, JsonObject schema) =>

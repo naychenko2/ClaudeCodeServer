@@ -18,14 +18,29 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Project/ProjectAll/ProjectForSession/BuildIndexCore). Полный (необлегчённый) run —
     // BuildCore: страница фичи (GetFeature) считает на нём ленту событий (BuildEvents:
     // reason вердикта = Verification.Notes, который Slim обнуляет) и облегчает run для ответа.
-    public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null)
-        => SlimRun(BuildCore(epic, featureTasks, now));
+    // sessions — снимок сессий владельца (Б7): LinkedSessionId наружу (chatId/reviewChatId)
+    // только если в нём (fail-closed); null — снимка нет, все чаты null (как в BuildIndexCore).
+    public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver));
 
-    internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null)
+    internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var nowUtc = now ?? DateTime.UtcNow;
         ArgumentNullException.ThrowIfNull(epic);
         ArgumentNullException.ThrowIfNull(featureTasks);
+
+        // Б7: снимок сессий владельца → lookup по id: LinkedSessionId наружу (chatId/reviewChatId)
+        // только если в снимке (fail-closed, как SessionOf/KeySession: чужой/удалённый/неизвестный
+        // чат → null). sessions null → пустой lookup (все чаты null).
+        var sessionById = sessions is null
+            ? new Dictionary<string, FeatureIndexSession>()
+            : sessions.ToDictionary(s => s.Id);
+        FeatureIndexSession? LiveSession(string? chatId) =>
+            chatId is not null && sessionById.TryGetValue(chatId, out var s) ? s : null;
 
         // Вход обещает «эпик + дочерние»: дочерние обязаны иметь FeatureId == epic.Id.
         // Эпик сам — единственный, у кого FeatureId может отличаться (у него null: он и есть фича).
@@ -62,11 +77,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         int decided = verdictBearing.Count(t => !string.IsNullOrEmpty(t.Verification?.Verdict));
         double progress = total == 0 ? 0 : Math.Round((double)decided / total, 4);
 
-        // Ready: финал ЗАКРЫТ (Done) и принят (accepted/accepted_with_remarks).
-        // Согласовано с Attention «мерж» (блок ниже в Build): и там, и тут «финал принят» = Done + accepted/awr.
-        bool ready = final is not null
-            && final.Status == TaskItemStatus.Done
-            && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
+        // Ready: финал ЗАКРЫТ (Done) и принят (accepted/accepted_with_remarks) — единый хелпер
+        // IsFinalAccepted (тот же, что у merge_pending/merged и гарда role=merge в TaskManager).
+        bool ready = IsFinalAccepted(final);
 
         // ─── Б2: цепочки шагов, источники возврата, линии ─────────────────────────────────
         // Задачи, несущие вердикт витка (ревью/проверка/финал) — для витков и возвратов.
@@ -74,20 +87,30 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // Цепочки: по одной на шаг (stepRef). Шаг = stepRef; в цепочку входят задача шага
         // (role=step) и её доработки (role=rework, тот же stepRef), в порядке времени.
-        var stepChains = BuildStepChains(steps, verdictTasks, nowUtc);
+        var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, nowUtc, sessions);
+        var stepChains = accounting.Chains;
 
         // Возвраты по источникам (ревью/проверка/финал): число возвратов и сколько открыто.
         var returnsBySource = BuildReturnsBySource(reviews, qa, final, steps);
 
         // Линии (back/front/прочее): исполнители и счётчики.
-        var lanes = BuildLanes(steps, verdictTasks);
+        var lanes = accounting.Lanes;
 
         // ─── Б3: «Сейчас», тревоги, итог ───────────────────────────────────────────────────
         // Attention вычисляется ДО цикла стадий: тон активной стадии — производное от него
         // (MAJOR-1 финального ревью: тон и Attention не должны расхождаться).
 
-        // Тревога: приоритет stopped → wait явный → wait «мерж».
+        // Тревога: приоритет stopped → wait явный → merge.
         FeatureAttention? attention = null;
+
+        // waitTask — явный wait (AwaitingHumanSince, ждущий дольше всех); finalAccepted —
+        // для merge (attention) и для state (merge_pending/merged). Вынесены в scope метода:
+        // используются и в attention, и в расчёте state.
+        var waitTask = featureTasks
+            .Where(t => t.AwaitingHumanSince is not null)
+            .OrderBy(t => t.AwaitingHumanSince)
+            .FirstOrDefault();
+        bool finalAccepted = IsFinalAccepted(final);
 
         // 1. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
         //    Guard «позже ClaudeStartedAt» — защита от stale-пометки: если исполнитель
@@ -108,51 +131,39 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Since = stoppedTask.ExecutorStoppedAt,
                 Reason = stoppedTask.ExecutorStopReason,
                 PersonaId = stoppedTask.PersonaId,
-                LinkedSessionId = stoppedTask.LinkedSessionId,
+                LinkedSessionId = LiveSession(stoppedTask.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
             };
         }
 
         // 2. wait явный: AwaitingHumanSince у эпика или задачи (ждущий дольше всех).
-        if (attention is null)
+        if (attention is null && waitTask is not null)
         {
-            var waitTask = featureTasks
-                .Where(t => t.AwaitingHumanSince is not null)
-                .OrderBy(t => t.AwaitingHumanSince)
-                .FirstOrDefault();
-            if (waitTask is not null)
+            attention = new FeatureAttention
             {
-                attention = new FeatureAttention
-                {
-                    Kind = "wait",
-                    TaskId = waitTask.Id,
-                    Since = waitTask.AwaitingHumanSince,
-                    Reason = waitTask.AwaitingHumanReason,
-                    PersonaId = waitTask.PersonaId,
-                    LinkedSessionId = waitTask.LinkedSessionId,
-                };
-            }
+                Kind = "wait",
+                TaskId = waitTask.Id,
+                Since = waitTask.AwaitingHumanSince,
+                Reason = waitTask.AwaitingHumanReason,
+                PersonaId = waitTask.PersonaId,
+                LinkedSessionId = LiveSession(waitTask.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
+            };
         }
 
-        // 3. wait «мерж» — вычисляется, не хранится: финал принят (accepted/awr, закрыт),
-        //    а merge-задачи нет или она не Done. since = CompletedAt финала.
-        if (attention is null)
+        // 3. merge — вычисляется, не хранится: финал принят (accepted/awr, закрыт), а
+        //    merge-задачи НЕТ или она создана, но не запущена (Todo, merge_pending).
+        //    since = CompletedAt финала. У идущего мержа (merge-задача InProgress) тревоги нет:
+        //    state = merging.
+        if (attention is null && finalAccepted && (merge is null || merge.Status == TaskItemStatus.Todo))
         {
-            bool finalAccepted = final is not null
-                && final.Status == TaskItemStatus.Done
-                && final.Verification?.Verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
-            bool mergeNotDone = merge is null || merge.Status != TaskItemStatus.Done;
-            if (finalAccepted && mergeNotDone)
+            attention = new FeatureAttention
             {
-                attention = new FeatureAttention
-                {
-                    Kind = "wait",
-                    TaskId = final!.Id,
-                    Since = final.CompletedAt,
-                    Reason = "мерж",
-                    PersonaId = final.PersonaId,
-                    LinkedSessionId = final.LinkedSessionId,
-                };
-            }
+                Kind = "merge",
+                TaskId = final!.Id,
+                Since = final.CompletedAt,
+                Reason = "мерж",
+                PersonaId = final.PersonaId,
+                LinkedSessionId = LiveSession(final.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
+            };
         }
 
         // Конвейер: 7 стадий в порядке жизненного цикла.
@@ -236,7 +247,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                         || qa.Any(t => t.Verification?.Verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks));
 
                 if (attention is not null && attention.Kind == "stopped") tone = "stopped";
-                else if (attention is not null && attention.Kind == "wait") tone = "wait";
+                else if (attention is not null && attention.Kind is "wait" or "merge") tone = "wait";
                 else if (isLoop) tone = "loop";
                 else tone = "run";
             }
@@ -290,12 +301,42 @@ public sealed class FeatureProjector(TaskManager tasks)
                     Verdict = RoundVerdict(t),
                     ReviewTaskId = t.Id,
                     PersonaId = t.PersonaId,
+                    ReviewChatId = LiveSession(t.LinkedSessionId)?.Id, // Б7: чат витка (fail-closed)
                     StartedAt = TaskStart(t),
                     CompletedAt = t.CompletedAt,
                     Reason = t.Verification?.Notes,
                 }).ToList()
                 : [];
             string? longestStepRef = key == "review" ? LongestStepRef(stepChains) : null;
+
+            // Б2: границы, длительность, пересечение с идущим, исполнители.
+            var firstStartedAt = StageFirstStartedAt(tasks);
+            var lastCompletedAt = StageLastCompletedAt(tasks);
+            var approxMinutes = StageApproxMinutes(tasks, nowUtc, lastCompletedAt);
+            var overlapsActive = StageOverlapsActive(i, stageDefs, nowUtc);
+            var executors = tasks.Select(t =>
+            {
+                var chat = LiveSession(t.LinkedSessionId); // Б7: чат исполнителя (fail-closed)
+                // Б4: модель чата (label/full) — готовая функция от контроллера: резолв слота
+                // «Авто» — только UserModelTierResolver (инвариант CLAUDE.md), проектор в Main не
+                // лезет. chat null (чужой/удалённый) или modelResolver null (тесты) → null.
+                (string? label, string? full) = (null, null);
+                if (chat is not null && modelResolver is not null)
+                    (label, full) = modelResolver(chat);
+                return new FeatureStageExecutor
+                {
+                    PersonaId = t.PersonaId,
+                    TaskId = t.Id,
+                    TaskRole = t.Role,
+                    StepRef = t.StepRef,
+                    Lane = t.Lane,
+                    Status = ExecutorStatus(t),
+                    ChatId = chat?.Id,               // Б7: LinkedSessionId, только если в снимке владельца (иначе null)
+                    ChatArchived = chat?.Archived ?? false, // Б7: чат исполнителя в архиве
+                    ModelLabel = label,    // Б4
+                    ModelFull = full,    // Б4
+                };
+            }).ToList();
 
             stages.Add(new FeatureStage
             {
@@ -311,6 +352,12 @@ public sealed class FeatureProjector(TaskManager tasks)
                 PersonaIds = StagePersonaIds(tasks),
                 TaskCount = tasks.Count,
                 Verdict = StageVerdict(tasks),
+                // Б2: границы, длительность (объединение интервалов), пересечение, исполнители.
+                FirstStartedAt = firstStartedAt,
+                LastCompletedAt = lastCompletedAt,
+                ApproxMinutes = approxMinutes,
+                OverlapsActive = overlapsActive,
+                Executors = executors,
             });
         }
 
@@ -325,18 +372,19 @@ public sealed class FeatureProjector(TaskManager tasks)
             .Select(t => new FeatureNow
             {
                 TaskId = t.Id,
-                Stage = RoleToStage(t.Role),
+                Stage = FeatureTimeMath.RoleToStage(t.Role),
                 PersonaId = t.PersonaId,
                 StepRef = t.StepRef,
                 Title = t.Title,
                 StartedAt = t.ClaudeStartedAt,
-                LinkedSessionId = t.LinkedSessionId,
+                LinkedSessionId = LiveSession(t.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
             })
             .ToList();
 
-        // Счётчик шагов: принятые (outcome=accepted) / все (из StepChains).
-        int stepsTotal = stepChains.Count;
-        int stepsAccepted = stepChains.Count(c => c.Outcome == "accepted");
+        // Счётчик шагов: принятые ревью / знаменатель (план ∪ заведённые) — из StepProgress.
+        var stepProgress = accounting.Progress;
+        int stepsTotal = stepProgress.Total;
+        int stepsAccepted = stepProgress.Accepted;
 
         // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи
         // (время мержа — это CompletedAt merge-задачи, уже учтено).
@@ -349,20 +397,32 @@ public sealed class FeatureProjector(TaskManager tasks)
                 lastActivityAt = t.ClaudeStartedAt;
         }
 
-        // Закрыта: merge-задача Done или эпик Done.
-        bool closed = (merge is not null && merge.Status == TaskItemStatus.Done)
-            || epic.Status == TaskItemStatus.Done;
+        // Состояние фичи (единая точка правды; из него bucket строки и порядок OrderRuns —
+        // см. FeatureStates). Приоритет: merged → closed → stopped → waiting → merging →
+        // merge_pending → running → not_started → idle. finalAccepted/waitTask — выше (scope метода).
+        string featureState = ComputeState(
+            epic, merge, finalAccepted,
+            hasStopped: stoppedTask is not null,
+            hasExplicitWait: waitTask is not null,
+            nowCount: nowList.Count,
+            anyStarted: featureTasks.Any(t => t.ClaudeStartedAt is not null));
+
+        // Закрыта: выводится из State (единая точка правды, §1 разреза «момент закрытия фичи»):
+        // merged или closed. Старое «merge Done || epic Done» — вторая точка правды: частичный
+        // мерж (merge Done, финал не принят, эпик открыт) закрывал фичу (инцидент 21.10).
+        bool closed = featureState is FeatureStates.Merged or FeatureStates.Closed;
 
         // Итог смерженной фичи: только у закрытой, иначе null.
         FeatureSummary? summary = null;
         if (closed)
         {
-            // МergedAt: CompletedAt merge-задачи; только когда merge-задача ЗАКРЫТА (Done).
-            // Закрытая эпиком БЕЗ merge-задачи (эпик Done, мержа нет) → mergedAt = null:
-            // фронт читает «закрыта» (bucket=closed && mergedAt=null), а не «смержена».
-            // (Раньше сюда падал CompletedAt эпика — дефект n4: закрытая без мержа
-            // показывалась «смержена <дата закрытия эпика>».)
-            var mergedAt = merge is not null && merge.Status == TaskItemStatus.Done
+            // MergedAt: CompletedAt merge-задачи — только когда State == merged (полный мерж
+            // после принятого финала, либо мерж через epic Done). Закрытая эпиком Done БЕЗ
+            // смерженной merge-задачи («честный мерж») → mergedAt = null: фронт читает «закрыта»
+            // (bucket=closed && mergedAt=null), а не «смержена». (Раньше сюда падал CompletedAt
+            // эпика — дефект n4: закрытая без мержа показывалась «смержена <дата закрытия эпика>».)
+            var mergedAt = featureState == FeatureStates.Merged
+                && merge is not null && merge.Status == TaskItemStatus.Done
                 ? merge.CompletedAt
                 : null;
             // Длительность: от старта первой задачи (ClaudeStartedAt, иначе CreatedAt) до mergedAt.
@@ -376,6 +436,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 DurationMinutes = duration,
                 Tasks = featureTasks.Count(),
                 Steps = stepsTotal,
+                StepsOpen = stepsTotal - stepsAccepted,
                 Loops = verdicts.Loops,
             };
         }
@@ -407,9 +468,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             ReturnsBySource = returnsBySource,
             Lanes = lanes,
             Now = nowList,
+            State = featureState,
             Attention = attention,
             StepsAccepted = stepsAccepted,
             StepsTotal = stepsTotal,
+            StepProgress = stepProgress,
             LastActivityAt = lastActivityAt,
             Closed = closed,
             Summary = summary,
@@ -511,8 +574,11 @@ public sealed class FeatureProjector(TaskManager tasks)
                 {
                     Add(t, verdict, t.CompletedAt.Value, Truncate(t.Verification!.Notes), RoundOf(t));
                 }
-                else if (t.Role == TaskRoles.Merge)
+                else if (t.Role == TaskRoles.Merge && run.State == FeatureStates.Merged)
                 {
+                    // «merged» — только когда фича реально смержена (State == merged). Частичный
+                    // мерж (merge Done, финал не принят, эпик открыт) — не «merged», а обычное
+                    // завершение задачи (else → completed): фича ещё открыта.
                     Add(t, "merged", t.CompletedAt.Value, null);
                 }
                 else if (t.Role == TaskRoles.Feature)
@@ -532,6 +598,74 @@ public sealed class FeatureProjector(TaskManager tasks)
             .ThenBy(e => e.TaskId)
             .ToList();
     }
+
+    // ─── Б-pl: документы фичи (волна 3 «Обзор фич», вкладка «Планы и макеты») ────────────────
+    // Чистая проекция FeatureRun → List<FeaturePlan> БЕЗ хранилища: разрез (cut), план (plan) и
+    // консультация (consult) фичи — СПИСОК документов вкладки, без текста. Text (ResultMarkdown)
+    // в ответ НЕ попадает: вкладка берёт список, текст подгружает по клику (GET /api/tasks/{id}).
+    // Считается по ПОЛНОМУ (необлегчённому) run ДО SlimRun: Slim обнуляет ResultMarkdown, а
+    // hasText/mockupPaths — из него.
+    //
+    // Источник: run.Cut (несёт cut И consult) + run.Plan (plan). Роль — из TaskItem.Role как есть
+    // (step в документы не попадает, догадок по заголовку нет). hasText — ResultMarkdown не пуст
+    // после Trim; mockupPaths — пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct,
+    // порядок появления, ≤ 20, пути с «..» отброшены.
+    //
+    // Порядок списка: роль (cut → plan → consult), внутри роли — по CreatedAt.
+    public static List<FeaturePlan> BuildPlans(FeatureRun run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+
+        // cut/consult — из run.Cut (там обе роли); plan — из run.Plan. Роль — из TaskItem.Role
+        // как есть (у задач run.Cut/run.Plan она всегда non-null: cut/consult/plan).
+        var cut = run.Cut.Where(t => t.Role == TaskRoles.Cut).ToList();
+        var consult = run.Cut.Where(t => t.Role == TaskRoles.Consult).ToList();
+        var plan = run.Plan.Where(t => t.Role == TaskRoles.Plan).ToList();
+
+        // Порядок: cut → plan → consult; внутри роли — по CreatedAt (OrderBy стабилен: равные
+        // CreatedAt сохраняют порядок, в котором задачи дал вызывающий).
+        var ordered = new List<TaskItem>();
+        ordered.AddRange(cut.OrderBy(t => t.CreatedAt));
+        ordered.AddRange(plan.OrderBy(t => t.CreatedAt));
+        ordered.AddRange(consult.OrderBy(t => t.CreatedAt));
+
+        return ordered
+            .Select(t => new FeaturePlan(
+                t.Id,
+                t.Role ?? "",
+                t.Title,
+                t.PersonaId,
+                t.CreatedAt,
+                t.CompletedAt,
+                HasText(t),
+                MockupPaths(t)))
+            .ToList();
+    }
+
+    // hasText: ResultMarkdown не пуст после Trim (null/""/пробелы → false).
+    private static bool HasText(TaskItem t) => !string.IsNullOrWhiteSpace(t.ResultMarkdown);
+
+    // Пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct, порядок появления,
+    // ≤ 20, пути с «..» отброшены. null/пусто → [].
+    private static List<string> MockupPaths(TaskItem t)
+    {
+        var text = t.ResultMarkdown;
+        if (string.IsNullOrEmpty(text)) return [];
+        var paths = new List<string>();
+        foreach (System.Text.RegularExpressions.Match m in MockupPathRegex.Matches(text))
+        {
+            var p = m.Value;
+            // «..» — выход за docs/mockups (pathtraversal) → отбрасываем.
+            if (p.Contains("..")) continue;
+            if (!paths.Contains(p)) paths.Add(p);
+            if (paths.Count >= 20) break;
+        }
+        return paths;
+    }
+
+    // docs/mockups/ + путь из [A-Za-z0-9._/-] + «.html»/«.md».
+    private static readonly System.Text.RegularExpressions.Regex MockupPathRegex =
+        new(@"docs/mockups/[A-Za-z0-9._/-]+\.(html|md)", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     // reason ≤ 200 символов (обрезка по кодовым позициям; null — как есть). internal — для золотого
     // теста (ClaudeHomeServer.Tasks.Tests): кириллица (1 кодовая точка = 1 UTF-16-единица) и
@@ -595,9 +729,11 @@ public sealed class FeatureProjector(TaskManager tasks)
         ReturnsBySource = run.ReturnsBySource,
         Lanes = run.Lanes,
         Now = run.Now,
+        State = run.State,
         Attention = run.Attention,
         StepsAccepted = run.StepsAccepted,
         StepsTotal = run.StepsTotal,
+        StepProgress = run.StepProgress,
         LastActivityAt = run.LastActivityAt,
         Closed = run.Closed,
         Summary = run.Summary,
@@ -606,10 +742,10 @@ public sealed class FeatureProjector(TaskManager tasks)
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 
     // Старт задачи: ClaudeStartedAt (запуск исполнителя), иначе CreatedAt.
-    private static DateTime TaskStart(TaskItem t) => t.ClaudeStartedAt ?? t.CreatedAt;
+    internal static DateTime TaskStart(TaskItem t) => t.ClaudeStartedAt ?? t.CreatedAt;
 
     // Исход витка: вердикт задачи, если он один из четырёх; иначе «running» (открыт, вердикта нет).
-    private static string RoundVerdict(TaskItem t)
+    internal static string RoundVerdict(TaskItem t)
     {
         var v = t.Verification?.Verdict;
         return v is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks
@@ -619,11 +755,11 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Виток-возврат: returned или accepted_with_remarks (работа вернулась к исполнителю).
-    private static bool IsReturn(string verdict) =>
+    internal static bool IsReturn(string verdict) =>
         verdict is TaskVerdicts.Returned or TaskVerdicts.AcceptedWithRemarks;
 
     // Источник возврата: роль задачи → review | qa | final; прочее → null.
-    private static string? RoleToSource(string? role) => role switch
+    internal static string? RoleToSource(string? role) => role switch
     {
         TaskRoles.Review => "review",
         TaskRoles.Qa => "qa",
@@ -633,7 +769,7 @@ public sealed class FeatureProjector(TaskManager tasks)
 
     // Нормализация линии как laneOf во фронтовом PipelineFlow.tsx:
     // back/backend/бэк/бэкенд → back; front/frontend/фронт/фронтенд → front; прочее → other.
-    private static string NormalizeLane(string? lane)
+    internal static string NormalizeLane(string? lane)
     {
         var l = (lane ?? "").Trim().ToLowerInvariant();
         if (l is "back" or "backend" or "бэк" or "бэкенд") return "back";
@@ -641,149 +777,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         return "other";
     }
 
-    // Роль задачи → ключ стадии конвейера (для блока «Сейчас»).
-    // cut/consult → cut (Разрез); step/rework → prod; прочее → prod.
-    // Эпик (feature) сюда не доходит: он контейнер фичи и исключён из Now (см. «Сейчас» в Build).
-    private static string RoleToStage(string? role) => role switch
-    {
-        TaskRoles.Cut or TaskRoles.Consult => "cut",
-        TaskRoles.Plan => "plan",
-        TaskRoles.Step or TaskRoles.Rework => "prod",
-        TaskRoles.Review => "review",
-        TaskRoles.Qa => "qa",
-        TaskRoles.Final => "final",
-        TaskRoles.Merge => "merge",
-        _ => "prod",
-    };
-
-    // Цепочки шагов: группировка steps (role=step/rework) по stepRef. Порядок групп — по первому
-    // появлению (порядок вызывающего); внутри группы — по времени (стабильная сортировка: равные
-    // старты сохраняют порядок вызывающего).
-    private static List<FeatureStepChain> BuildStepChains(
-        List<TaskItem> steps, List<TaskItem> verdictTasks, DateTime nowUtc)
-    {
-        var groups = new List<(string Key, List<TaskItem> Tasks)>();
-        var index = new Dictionary<string, int>();
-        foreach (var t in steps)
-        {
-            var key = t.StepRef ?? "";
-            if (!index.TryGetValue(key, out var i))
-            {
-                index[key] = i = groups.Count;
-                groups.Add((key, []));
-            }
-            groups[i].Tasks.Add(t);
-        }
-
-        var chains = new List<FeatureStepChain>(groups.Count);
-        foreach (var (key, groupTasks) in groups)
-        {
-            var ordered = groupTasks.OrderBy(t => TaskStart(t)).ToList();
-            // Шапка цепочки — задача шага (role=step); если её нет (только доработки) — первая.
-            var head = ordered.FirstOrDefault(t => t.Role == TaskRoles.Step) ?? ordered[0];
-            var idSet = new HashSet<string>(ordered.Select(t => t.Id));
-
-            // Витки: ревью/проверки/финалы, связанные с цепочкой через ReviewOf, в порядке времени.
-            // Одно ревью на два шага попадает в обе цепочки (связка многие-ко-многие).
-            var rounds = verdictTasks
-                .Where(t => t.ReviewOf is not null && t.ReviewOf.Any(id => idSet.Contains(id)))
-                .OrderBy(t => TaskStart(t))
-                .ToList();
-            var featureRounds = rounds.Select((t, i) => new FeatureRound
-            {
-                N = i + 1,
-                Verdict = RoundVerdict(t),
-                ReviewTaskId = t.Id,
-                PersonaId = t.PersonaId,
-                StartedAt = TaskStart(t),
-                CompletedAt = t.CompletedAt,
-                Reason = t.Verification?.Notes,
-            }).ToList();
-            int loops = featureRounds.Count(r => IsReturn(r.Verdict));
-
-            // Источник возврата: ближайшая (последняя по времени) связанная задача-возврат;
-            // роль → review/qa/final. Связи нет — null (догадок не делаем).
-            var returnTasks = rounds.Where(t => IsReturn(RoundVerdict(t))).ToList();
-            string? source = returnTasks.Count > 0 ? RoleToSource(returnTasks[^1].Role) : null;
-
-            // Исход и шапка.
-            string outcome, status;
-            bool withdrawn = ordered.Any(t => t.Verification?.Verdict == TaskVerdicts.Withdrawn);
-            if (withdrawn)
-            {
-                outcome = "withdrawn";
-                status = "снят с выкладки";
-            }
-            else if (featureRounds.Count > 0)
-            {
-                var last = featureRounds[^1];
-                if (last.Verdict == TaskVerdicts.Accepted)
-                {
-                    outcome = "accepted";
-                    status = "принят";
-                }
-                else if (IsReturn(last.Verdict))
-                {
-                    // Вернули: доработка ещё идёт → «идёт»; закрыто без повторного ревью → «закрыт…».
-                    bool reworkOpen = ordered.Any(t => t.Role == TaskRoles.Rework && t.Status != TaskItemStatus.Done);
-                    if (reworkOpen)
-                    {
-                        outcome = "running";
-                        status = "идёт";
-                    }
-                    else
-                    {
-                        outcome = "returned";
-                        status = "закрыт без повторного ревью";
-                    }
-                }
-                else
-                {
-                    // Виток открыт (running) или снят (withdrawn) без вердикта на задаче.
-                    outcome = "running";
-                    status = "идёт";
-                }
-            }
-            else
-            {
-                // Витков нет: шаг закрыт, но ревью ещё не было → «ждёт ревью»; иначе «идёт».
-                bool allDone = ordered.All(t => t.Status == TaskItemStatus.Done);
-                if (allDone)
-                {
-                    outcome = "pending";
-                    status = "ждёт ревью";
-                }
-                else
-                {
-                    outcome = "running";
-                    status = "идёт";
-                }
-            }
-
-            // Длительность: от старта первой задачи до закрытия последней; у идущей — до сейчас.
-            var first = ordered[0];
-            var lastTask = ordered[^1];
-            var start = TaskStart(first);
-            var end = lastTask.CompletedAt ?? nowUtc;
-            var duration = Math.Max(0, Math.Round((end - start).TotalMinutes));
-
-            chains.Add(new FeatureStepChain
-            {
-                StepRef = key,
-                Lane = head.Lane,
-                Title = head.Title,
-                PersonaId = head.PersonaId,
-                TaskIds = ordered.Select(t => t.Id).ToList(),
-                Outcome = outcome,
-                Status = status,
-                DurationMinutes = duration,
-                Source = source,
-                Loops = loops,
-                Rounds = featureRounds,
-            });
-        }
-        return chains;
-    }
+    // (Роль → ключ стадии — общий FeatureTimeMath.RoleToStage, дедуп с FeatureTimeline, минор 8.
+    // Эпик (feature) в «Сейчас» не доходит: он контейнер фичи и исключён из Now, см. Build.)
 
     // Возвраты по источникам: для каждого источника (ревью/проверка/финал) — число возвратов
     // (уникальные задачи с returned/accepted_with_remarks) и сколько из них открыто (их доработка
@@ -812,53 +807,6 @@ public sealed class FeatureProjector(TaskManager tasks)
             Qa = Count(qa),
             Final = Count(finalList),
         };
-    }
-
-    // Линии (back/front/прочее): исполнители (уникальные, по первому появлению) и счётчики.
-    // Считаем по задачам-шагам (role=step): доработка — часть цепочки шага, а не отдельная
-    // позиция линии. total — шаги линии; accepted — Done; returns — шаги с возвратом.
-    private static List<FeatureLane> BuildLanes(List<TaskItem> steps, List<TaskItem> verdictTasks)
-    {
-        var stepTasks = steps.Where(t => t.Role == TaskRoles.Step).ToList();
-        var groups = new List<(string Lane, List<TaskItem> Tasks)>();
-        var index = new Dictionary<string, int>();
-        foreach (var t in stepTasks)
-        {
-            var lane = NormalizeLane(t.Lane);
-            if (!index.TryGetValue(lane, out var i))
-            {
-                index[lane] = i = groups.Count;
-                groups.Add((lane, []));
-            }
-            groups[i].Tasks.Add(t);
-        }
-
-        // Шаги с возвратом: есть связанный (ReviewOf ∩ id шага) виток-возврат.
-        var returnedIds = new HashSet<string>();
-        foreach (var v in verdictTasks)
-        {
-            if (!IsReturn(RoundVerdict(v)) || v.ReviewOf is null) continue;
-            foreach (var id in v.ReviewOf)
-                returnedIds.Add(id);
-        }
-
-        var lanes = new List<FeatureLane>(groups.Count);
-        foreach (var (lane, tasks) in groups)
-        {
-            var personaIds = new List<string>();
-            foreach (var t in tasks)
-                if (t.PersonaId is not null && !personaIds.Contains(t.PersonaId))
-                    personaIds.Add(t.PersonaId);
-            lanes.Add(new FeatureLane
-            {
-                Lane = lane,
-                PersonaIds = personaIds,
-                Total = tasks.Count,
-                Accepted = tasks.Count(t => t.Status == TaskItemStatus.Done),
-                Returns = tasks.Count(t => returnedIds.Contains(t.Id)),
-            });
-        }
-        return lanes;
     }
 
     // Шаг с наибольшим числом витков (для стадии review: строка «дольше всех D1c»).
@@ -914,6 +862,124 @@ public sealed class FeatureProjector(TaskManager tasks)
             : null;
     }
 
+    // ─── Б2: границы, длительность, пересечение, исполнители стадий ───────────────────────────
+
+    // Б2: начало стадии — минимальный ClaudeStartedAt задач стадии; null — ни одна не стартовала.
+    private static DateTime? StageFirstStartedAt(List<TaskItem> tasks)
+        => tasks.Where(t => t.ClaudeStartedAt is not null).Min(t => t.ClaudeStartedAt);
+
+    // Б2: конец стадии — максимальный CompletedAt, ТОЛЬКО если все задачи стадии закрыты (Done),
+    // иначе null. Done-задача без CompletedAt (аномалия данных) в max не входит (ранее
+    // подставлялся CreatedAt — конец мог оказаться позже реального: новая задача, созданная
+    // позже закрытия старой).
+    private static DateTime? StageLastCompletedAt(List<TaskItem> tasks)
+    {
+        if (tasks.Count == 0 || !tasks.All(t => t.Status == TaskItemStatus.Done))
+            return null;
+        var completed = tasks
+            .Where(t => t.CompletedAt is not null)
+            .Select(t => t.CompletedAt!.Value)
+            .ToList();
+        return completed.Count > 0 ? completed.Max() : null;
+    }
+
+    // Б2: интервал задачи: [ClaudeStartedAt, конец]. Не стартовала (нет ClaudeStartedAt) →
+    // интервала нет. Конец: CompletedAt; если его нет — now (задача идёт) или конец стадии
+    // (stageEnd: Done-задача без CompletedAt в закрытой стадии не растягивает интервал до now,
+    // иначе длительность закрытой стадии росла со временем). Конец раньше начала (аномалия)
+    // → нулевая длительность.
+    private static (DateTime start, DateTime end)? IntervalOf(TaskItem t, DateTime now, DateTime? stageEnd = null)
+    {
+        if (t.ClaudeStartedAt is null) return null;
+        var end = t.CompletedAt ?? (t.Status == TaskItemStatus.Done ? stageEnd : null) ?? now;
+        return (t.ClaudeStartedAt.Value, end < t.ClaudeStartedAt.Value ? t.ClaudeStartedAt.Value : end);
+    }
+
+    // Б2: длительность по часам стены (минуты): ОБЪЕДИНЕНИЕ интервалов задач стадии —
+    // параллельные задачи не складываются (объединение, не сумма). Округление вверх до минуты;
+    // стадия без интервалов → 0. stageEnd (конец стадии, null — стадия не закрыта) — конец
+    // интервала Done-задачи без CompletedAt (не растягивается до now).
+    private static int StageApproxMinutes(List<TaskItem> tasks, DateTime now, DateTime? stageEnd = null)
+    {
+        var intervals = tasks
+            .Select(t => IntervalOf(t, now, stageEnd))
+            .Where(iv => iv is not null)
+            .Select(iv => iv!.Value)
+            .OrderBy(iv => iv.start)
+            .ToList();
+        if (intervals.Count == 0)
+            return 0;
+
+        var total = TimeSpan.Zero;
+        var (curStart, curEnd) = intervals[0];
+        foreach (var (start, end) in intervals.Skip(1))
+        {
+            if (start <= curEnd)
+            {
+                if (end > curEnd) curEnd = end;
+            }
+            else
+            {
+                total += curEnd - curStart;
+                (curStart, curEnd) = (start, end);
+            }
+        }
+        total += curEnd - curStart;
+        return (int)Math.Ceiling(total.TotalMinutes);
+    }
+
+    // Б2: пересечение с идущим — интервалы стадии пересекаются с интервалами задач ДРУГОЙ стадии,
+    // которая ещё идёт (имеет ≥1 задачу, не все Done). Стадия без интервалов → false.
+    // Пересечение строгое (положительный нахлёст): касание «подряд» (конец одного = старт
+    // другого) пересечением не считается.
+    private static bool StageOverlapsActive(
+        int index, (string key, List<TaskItem> tasks)[] stageDefs, DateTime now)
+    {
+        var selfEnd = StageLastCompletedAt(stageDefs[index].tasks);
+        var selfIntervals = stageDefs[index].tasks
+            .Select(t => IntervalOf(t, now, selfEnd))
+            .Where(iv => iv is not null)
+            .Select(iv => iv!.Value)
+            .ToList();
+        if (selfIntervals.Count == 0)
+            return false;
+
+        for (int j = 0; j < stageDefs.Length; j++)
+        {
+            if (j == index) continue;
+            var other = stageDefs[j].tasks;
+            // «Ещё идёт»: задачи есть и хотя бы одна не закрыта (Done).
+            if (other.Count == 0 || other.All(t => t.Status == TaskItemStatus.Done))
+                continue;
+            if (other.Any(t =>
+                    IntervalOf(t, now, StageLastCompletedAt(other)) is { } o
+                    && selfIntervals.Any(iv => iv.start < o.end && o.start < iv.end)))
+                return true;
+        }
+        return false;
+    }
+
+    // Б2: статус исполнителя из полей задачи. Приоритет: running (идёт: ClaudeStartedAt,
+    // без завершения, не остановлена, не ждёт) → waiting (AwaitingHumanSince) → stopped
+    // (ExecutorStoppedAt) → done (Done) → pending (остальное, в том числе не стартовала).
+    // waiting/stopped — тот же guard, что у тревоги: только InProgress-задачи; закрытая
+    // вручную (Done) задача со stale-пометками не «stopped»/«waiting» (тревоги по ней тоже нет).
+    private static string ExecutorStatus(TaskItem t)
+    {
+        if (t.ClaudeStartedAt is not null
+            && t.CompletedAt is null
+            && t.ExecutorStoppedAt is null
+            && t.AwaitingHumanSince is null)
+            return "running";
+        if (t.Status == TaskItemStatus.InProgress && t.AwaitingHumanSince is not null)
+            return "waiting";
+        if (t.Status == TaskItemStatus.InProgress && t.ExecutorStoppedAt is not null)
+            return "stopped";
+        if (t.Status == TaskItemStatus.Done)
+            return "done";
+        return "pending";
+    }
+
     // Одна фича по id эпика (владельца ownerId). null — эпика нет.
     public FeatureRun? Project(string featureId, string ownerId)
     {
@@ -926,20 +992,29 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Лента событий (BuildEvents) считается по полным задачам (reason вердикта =
     // Verification.Notes, который Slim обнуляет для списков/ответа); run для ответа
     // облегчается отдельно (SlimRun, контракт master). null — эпика нет (как у Project).
-    public FeatureRun? ProjectFull(string featureId, string ownerId)
+    // modelResolver (Б4) — готовая функция модели чата от контроллера: исполнители получают
+    // modelLabel/modelFull (оба маршрута GetFeatures/GetFeature — одна и та же функция).
+    public FeatureRun? ProjectFull(string featureId, string ownerId,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner));
+        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver);
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
-    public IReadOnlyList<FeatureRun> ProjectAll(string ownerId)
+    // sessions (Б7) — снимок сессий владельца: исполнители (chatId/chatArchived) fail-closed,
+    // как в ProjectForSession/ProjectFull — все ветвления GetFeatures дают одинаковых исполнителей.
+    // modelResolver (Б4) — как в ProjectFull: одинаковые modelLabel/modelFull во всех ветвлениях.
+    public IReadOnlyList<FeatureRun> ProjectAll(string ownerId,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         return owner
             .Where(t => t.Role == TaskRoles.Feature)
-            .Select(epic => Build(epic, FeatureTasks(epic, owner)))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
             .ToList();
     }
 
@@ -949,15 +1024,21 @@ public sealed class FeatureProjector(TaskManager tasks)
     // 2) не закрытые идущие — по max ClaudeStartedAt descending; 3) не закрытые прочие —
     // по LastActivityAt descending; 4) закрытые — по LastActivityAt descending.
     // Пилюля показывает runs[0], поэтому порядок определяет бэк, фронт его не пересортирует.
-    public IReadOnlyList<FeatureRun> ProjectForSession(string sessionId, string ownerId)
+    public IReadOnlyList<FeatureRun> ProjectForSession(string sessionId, string ownerId,
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature
                 && (t.SourceSessionId == sessionId || t.ExecutorLaunchedBySessionId == sessionId))
-            .Select(epic => Build(epic, FeatureTasks(epic, owner)))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
             .ToList();
-        return OrderRuns(runs);
+        var ordered = OrderRuns(runs);
+        // Фича, чья задача — TaskId чата, первой (общий сортировщик, не две копии).
+        var byId = owner.ToDictionary(t => t.Id);
+        var own = OwnFeatureId(sessionId, sessions ?? Array.Empty<FeatureIndexSession>(), byId);
+        return PreferFirst(ordered, r => r.FeatureId, own);
     }
 
     // Порядок фич (правило v2): 4 группы, внутри каждой — свой ключ сортировки.
@@ -975,9 +1056,15 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // 2. Не закрытые идущие (Now не пуст, Attention null): по max ClaudeStartedAt descending.
         //    Now[0] — задача с самым поздним ClaudeStartedAt (Now отсортирован по убыванию).
+        //    Guard: Now пуст — один «отравленный» run не должен ронять весь список/индекс
+        //    (до фикса машины состояний так попадал merge-задача в Todo: state=merging →
+        //    bucket=running, Now пуст → r.Now[0] падал → 500). Пустой Now → последняя
+        //    активность, затем MinValue.
         var running = runs
             .Where(r => Bucket(r) == "running")
-            .OrderByDescending(r => r.Now[0].StartedAt ?? DateTime.MinValue)
+            .OrderByDescending(r => r.Now.Count > 0
+                ? r.Now[0].StartedAt ?? DateTime.MinValue
+                : r.LastActivityAt ?? DateTime.MinValue)
             .ToList();
 
         // 3. Не закрытые прочие (без Attention, не идут): по LastActivityAt descending.
@@ -997,6 +1084,40 @@ public sealed class FeatureProjector(TaskManager tasks)
         result.AddRange(running);
         result.AddRange(other);
         result.AddRange(closed);
+        return result;
+    }
+
+    // Фича, чья задача — TaskId чата (executor-членство): FeatureId задачи или id эпика.
+    // null — чат не исполнитель задачи фичи (оркестратор/куратор/нет TaskId) → прежний порядок.
+    // internal — для тестов (InternalsVisibleTo ClaudeHomeServer.Tasks.Tests).
+    internal static string? OwnFeatureId(
+        string sessionId,
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        IReadOnlyDictionary<string, TaskItem> byId)
+    {
+        var session = sessions.FirstOrDefault(s => s.Id == sessionId);
+        if (session?.TaskId is null) return null;
+        if (!byId.TryGetValue(session.TaskId, out var task)) return null;
+        return task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
+    }
+
+    // Общий сортировщик «своя фича первой»: элемент с preferredId — первым, остальное —
+    // в исходном порядке. preferredId == null или не найден → исходный список.
+    // internal — для тестов; используется и ProjectForSession, и BuildIndexCore (не две копии).
+    internal static IReadOnlyList<T> PreferFirst<T>(
+        IReadOnlyList<T> items,
+        Func<T, string> featureIdOf,
+        string? preferredId)
+    {
+        if (preferredId is null) return items;
+        var idx = -1;
+        for (var i = 0; i < items.Count; i++)
+            if (featureIdOf(items[i]) == preferredId) { idx = i; break; }
+        if (idx < 0) return items;
+        var result = new List<T>(items.Count);
+        result.Add(items[idx]);
+        for (var i = 0; i < items.Count; i++)
+            if (i != idx) result.Add(items[i]);
         return result;
     }
 
@@ -1075,36 +1196,43 @@ public sealed class FeatureProjector(TaskManager tasks)
             if (t.FeatureId is not null && t.ExecutorLaunchedBySessionId is not null)
                 AddToSet(orchestratorBySession, t.ExecutorLaunchedBySessionId, t.FeatureId);
 
-        // Область: сессии проекта (или все, если projectId не задан).
-        var inScope = projectId is null
+        // Область: сессии проекта (или все, если projectId не задан). Материализуем (List):
+        // FeatureChatMembership.Build ожидает IReadOnlyCollection, а .Where даёт IEnumerable.
+        var inScope = (projectId is null
             ? sessions
-            : sessions.Where(s => s.ProjectId == projectId);
+            : sessions.Where(s => s.ProjectId == projectId)).ToList();
 
         // sessionId → featureId → (сила, вид, role, stepRef, lane); на пару «чат × фича» —
         // сильнейший вид (Add держит минимум по Strength).
         var map = new Dictionary<string,
             Dictionary<string, (int Strength, string Kind, string? Role, string? StepRef, string? Lane)>>();
 
-        foreach (var s in inScope)
+        // Доработка Б9c: правило «чат → фичи» (executor ∪ curator ∪ orchestrator) — единая
+        // точка правды FeatureChatMembership (не две копии: здесь и в ChatFeatureIds). Вид
+        // (executor/curator/orchestrator) для отображения определяется по осям; Add держит
+        // сильнейший (curator > orchestrator > executor).
+        var membership = FeatureChatMembership.Build(owner, inScope);
+        var sessionById = inScope.ToDictionary(s => s.Id);
+        foreach (var (chatId, features) in membership)
         {
-            // executor: Session.TaskId → задача с FeatureId == F (или сама эпик F).
-            if (s.TaskId is not null && byId.TryGetValue(s.TaskId, out var task))
+            var s = sessionById.TryGetValue(chatId, out var sess) ? sess : null;
+            foreach (var featureId in features)
             {
-                var featureId = task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
-                if (featureId is not null)
-                    Add(map, s.Id, featureId, KindStrength("executor"), "executor",
-                        task.Role, task.StepRef, task.Lane);
+                // executor: Session.TaskId → задача с FeatureId == F (или сама эпик F).
+                if (s is not null && s.TaskId is not null && byId.TryGetValue(s.TaskId, out var task))
+                {
+                    var fid = task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
+                    if (fid == featureId)
+                        Add(map, chatId, featureId, KindStrength("executor"), "executor",
+                            task.Role, task.StepRef, task.Lane);
+                }
+                // curator: epic.SourceSessionId == чат.
+                if (curatorBySession.TryGetValue(chatId, out var curators) && curators.Contains(featureId))
+                    Add(map, chatId, featureId, KindStrength("curator"), "curator", null, null, null);
+                // orchestrator: эпик/дочерняя задача запускала исполнителя из этого чата.
+                if (orchestratorBySession.TryGetValue(chatId, out var orchestrators) && orchestrators.Contains(featureId))
+                    Add(map, chatId, featureId, KindStrength("orchestrator"), "orchestrator", null, null, null);
             }
-
-            // curator: epic.SourceSessionId == чат.
-            if (curatorBySession.TryGetValue(s.Id, out var curators))
-                foreach (var f in curators)
-                    Add(map, s.Id, f, KindStrength("curator"), "curator", null, null, null);
-
-            // orchestrator: эпик/дочерняя задача запускала исполнителя из этого чата.
-            if (orchestratorBySession.TryGetValue(s.Id, out var orchestrators))
-                foreach (var f in orchestrators)
-                    Add(map, s.Id, f, KindStrength("orchestrator"), "orchestrator", null, null, null);
         }
 
         // Строки-заготовки фич (Features). Область фич: эпик в проекте ИЛИ хотя бы один чат
@@ -1126,8 +1254,10 @@ public sealed class FeatureProjector(TaskManager tasks)
             .Where(e => e is not null)
             .Cast<TaskItem>()
             .ToList();
+        // Снимок — и в Build (fail-closed полей run: now/attention/исполнители), и в BuildRow
+        // (строка): один снимок — одна семантика, живые чаты не теряются, чужие не попадают.
         var runs = survivingEpics
-            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now))
+            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now, sessions))
             .ToList();
         var rows = OrderRuns(runs)
             .Select(run => BuildRow(run, FeatureTasks(run.Epic, byFeature), sessions,
@@ -1140,6 +1270,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Chats: sessionId → записи, упорядоченные по силе связи (key > curator > orchestrator
         // > executor); при равенстве — по порядку фичи в Features. Членство в фичу, чей эпик
         // исчез (удалён), не показываем — фича «исчезает целиком», чат за ней не тянется.
+        // Фича, чья задача — TaskId чата, первой (общий сортировщик PreferFirst, не две копии).
         var surviving = new HashSet<string>(rows.Select(r => r.FeatureId));
         var chats = new Dictionary<string, List<FeatureIndexChatEntry>>();
         foreach (var (sessionId, feats) in map)
@@ -1151,11 +1282,52 @@ public sealed class FeatureProjector(TaskManager tasks)
                 .Select(kv => new FeatureIndexChatEntry(
                     kv.Key, kv.Value.Kind, kv.Value.Role, kv.Value.StepRef, kv.Value.Lane))
                 .ToList();
+            // Фича, чья задача — TaskId чата, первой (общий сортировщик, не две копии).
+            var own = OwnFeatureId(sessionId, sessions, byId);
+            entries = PreferFirst(entries, e => e.FeatureId, own).ToList();
             if (entries.Count > 0)
                 chats[sessionId] = entries;
         }
 
         return new FeatureIndex { Chats = chats, Features = rows };
+    }
+
+    // Чаты фичи (GET /api/tasks/features/{id}, chats[]; Б4): все чаты фичи из снимка владельца.
+    // Чат задачи фичи (Session.TaskId = задача) → executor; чат эпика (Session.TaskId = эпик) →
+    // curator (создал эпик, SourceSessionId) → orchestrator (запустил исполнителя эпика,
+    // ExecutorLaunchedBySessionId) → key (без признака). Чужой/удалённый чат не в снимке
+    // (fail-closed, как исполнители). modelLabel/modelFull — из modelResolver (как у исполнителей).
+    // Только для features/{id}: в SlimRun/индекс chats не входит.
+    internal static List<FeatureChat> BuildFeatureChats(
+        TaskItem epic,
+        IReadOnlyList<TaskItem> allFeatureTasks,
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+    {
+        // taskId → задача фичи (эпик + дочерние). Чужая задача (не в списке) → чат не в фиче.
+        var byTaskId = new Dictionary<string, TaskItem> { [epic.Id] = epic };
+        foreach (var t in allFeatureTasks)
+            if (!ReferenceEquals(t, epic))
+                byTaskId[t.Id] = t;
+
+        var chats = new List<FeatureChat>();
+        foreach (var s in sessions)
+        {
+            if (s.TaskId is null || !byTaskId.TryGetValue(s.TaskId, out var task)) continue;
+            // kind: чат эпика — по признакам (curator/orchestrator), иначе key; чат задачи — executor.
+            var kind = ReferenceEquals(task, epic)
+                ? (epic.SourceSessionId == s.Id ? "curator"
+                    : epic.ExecutorLaunchedBySessionId == s.Id ? "orchestrator"
+                    : "key")
+                : "executor";
+            (string? label, string? full) = (null, null);
+            if (modelResolver is not null) (label, full) = modelResolver(s);
+            chats.Add(new FeatureChat(
+                s.Id, kind, s.TaskId, s.Archived,
+                task.PersonaId, task.Role, task.StepRef, task.Lane,
+                label, full));
+        }
+        return chats;
     }
 
     // Сила связи вида: key(0) > curator(1) > orchestrator(2) > executor(3).
@@ -1188,6 +1360,21 @@ public sealed class FeatureProjector(TaskManager tasks)
         set.Add(value);
     }
 
+    // Фичи, в которые входит чат (те же правила членства, что BuildIndexCore: executor/curator/
+    // orchestrator). Для ключевого чата фичи: |set| == 1 и set == {эта фича} → чат исключителен
+    // (его расход целиком фичи, Б9b); иначе общий (деление — Б9c). internal — для золотых тестов.
+    // Доработка Б9c: правило вынесено в FeatureChatMembership (единая точка правды) — здесь
+    // только lookup по чату, чтобы правило не жило в двух копиях.
+    internal static HashSet<string> ChatFeatureIds(string chatId, IReadOnlyList<TaskItem> owner,
+        IReadOnlyCollection<FeatureIndexSession> sessions)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(chatId)) return result;
+        if (FeatureChatMembership.Build(owner, sessions).TryGetValue(chatId, out var features))
+            result.UnionWith(features);
+        return result;
+    }
+
     // ─── Б2: строка фичи (контракт «Контракт индекса фич — утверждён») ─────────────────────
     // Значения bucket/rail/chips/attention/now0/summary/lastActivityAt/loops/steps* берутся
     // из FeatureRun (тон выводится из Attention, MAJOR-1) — проектор не пересчитывает.
@@ -1210,6 +1397,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.Epic.Title,
             run.Epic.ProjectId,
             Bucket(run),
+            run.State,
             AttentionOf(run, sessions),
             RailOf(run),
             ChipsOf(run),
@@ -1226,7 +1414,13 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.Epic.WorktreeBranch,
             run.Epic.CreatedAt,
             featureTasks.Count,
-            NowPersonaIdsOf(run));
+            NowPersonaIdsOf(run),
+            run.StepProgress.Review,
+            run.StepProgress.Work,
+            run.StepProgress.NotCreated,
+            run.StepProgress.PlanState,
+            run.StepProgress.Withdrawn,
+            run.StepProgress.UnlinkedReworks);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
@@ -1259,18 +1453,79 @@ public sealed class FeatureProjector(TaskManager tasks)
         return chain.Distinct().ToList();
     }
 
-    // Группа фичи (контракт §1, план С0 §2 — единая точка правды: bucket строки и порядок
-    // OrderRuns выведены из неё, не расходятся): closed → attention → running → idle.
-    internal static string Bucket(FeatureRun run)
+    // «Финал принят»: задача финала ЗАКРЫТА (Done) и вердикт accepted/accepted_with_remarks.
+    // Единая точка правды для Ready, merge_pending, merged (ComputeState) и гарда role=merge
+    // (TaskManager.ValidateFeatureFields) — без копий условия «принят/принят с замечаниями».
+    public static bool IsFinalAccepted(TaskItem? final) =>
+        final is not null
+        && final.Status == TaskItemStatus.Done
+        && IsAcceptance(final.Verification?.Verdict);
+
+    // «Принятие» — ОДИН предикат о вердикте: accepted ИЛИ accepted_with_remarks. На нём Ready,
+    // merge_pending/merged, гард role=merge и «шаг принят» (FeatureStepAccounting): две правды о
+    // принятии недопустимы. Счётчик петель ↺ (IsReturn: returned/awr) — отдельная ось «сколько раз
+    // возвращали», она принятие не определяет.
+    public static bool IsAcceptance(string? verdict) =>
+        verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
+
+    // Состояние фичи (9 значений, приоритет сверху вниз; первое совпавшее побеждает):
+    // merged → closed → stopped → waiting → merging → merge_pending → running → not_started → idle.
+    // Чистая функция от полей эпика/merge/тревог/«сейчас» — на ней золотые тесты (FeatureProjectorTests).
+    // hasExplicitWait — явный wait (AwaitingHumanSince), КРОМЕ вычисленного «мерж» (тот → merge_pending).
+    internal static string ComputeState(
+        TaskItem epic,
+        TaskItem? merge,
+        bool finalAccepted,
+        bool hasStopped,
+        bool hasExplicitWait,
+        int nowCount,
+        bool anyStarted)
     {
-        if (run.Closed) return "closed";
-        if (run.Attention is not null) return "attention";
-        if (run.Now.Count > 0) return "running";
-        return "idle";
+        // 1. merged: merge-задача Done И (финал принят ИЛИ эпик Done).
+        //    Частичный мерж (merge Done, финал не принят, эпик открыт) фичу НЕ закрывает:
+        //    инцидент 21.10 — фича с двенадцатью шагами в работе стала «смержена».
+        if (merge is not null && merge.Status == TaskItemStatus.Done
+            && (finalAccepted || epic.Status == TaskItemStatus.Done)) return FeatureStates.Merged;
+        // 2. closed: эпик Done и не merged (merged уже отфильтрован выше).
+        //    Эпик Done — решение человека «фича закончена»: даже если работа ещё идёт
+        //    (running/stopped/waiting) — фича закрыта (старое «и нет активной работы» убрано).
+        if (epic.Status == TaskItemStatus.Done) return FeatureStates.Closed;
+        // 3. stopped: есть остановленная задача (как тревога kind=stopped).
+        if (hasStopped) return FeatureStates.Stopped;
+        // 4. waiting: явное ожидание человека (как тревога kind=wait, КРОМЕ «мерж»).
+        if (hasExplicitWait) return FeatureStates.Waiting;
+        // 5. merging: merge-задача запущена (InProgress) — мерж идёт.
+        if (merge is not null && merge.Status == TaskItemStatus.InProgress) return FeatureStates.Merging;
+        // 6. merge_pending: финал принят, merge-задачи нет ИЛИ она создана, но не запущена
+        //    (Todo) — ждёт согласия/запуска (тревога «мерж», как и у merge is null).
+        if (finalAccepted && (merge is null || merge.Status == TaskItemStatus.Todo)) return FeatureStates.MergePending;
+        // 7. running: Now не пуст (идут задачи).
+        if (nowCount > 0) return FeatureStates.Running;
+        // 8. not_started: ни одна задача фичи не стартовала.
+        if (!anyStarted) return FeatureStates.NotStarted;
+        // 9. idle: иначе (ничего не идёт, ничего не ждёт, фича не закрыта).
+        return FeatureStates.Idle;
     }
 
+    // Группа фичи (контракт §1, план С0 §2 — единая точка правды: bucket строки и порядок
+    // OrderRuns выведены из state, не расходятся): closed → attention → running → idle.
+    // Изменение против старой версии: merging (идёт мерж) → running, а не attention —
+    // «мерж идёт» теперь не «ждёт вас» (merge_pending — ждёт, merging — идёт).
+    internal static string Bucket(FeatureRun run) => run.State switch
+    {
+        FeatureStates.Merged => "closed",
+        FeatureStates.Closed => "closed",
+        FeatureStates.Stopped => "attention",
+        FeatureStates.Waiting => "attention",
+        FeatureStates.MergePending => "attention",
+        FeatureStates.Merging => "running",
+        FeatureStates.Running => "running",
+        FeatureStates.NotStarted => "idle",
+        _ => "idle", // idle
+    };
+
     // Чипы-фильтры (контракт §1): open = bucket ≠ closed; closed = bucket = closed;
-    // у тревоги — чип по attention: stopped → stopped, wait/«мерж» → merge, wait (явный) → waiting;
+    // у тревоги — чип по attention: stopped → stopped, merge → merge, wait (явный) → waiting;
     // bucket = running (идёт, без тревоги) → чип «running».
     // (Чип «waiting» ≠ attention.kind «wait»: словарь чипов и словарь kind различаются.)
     internal static List<string> ChipsOf(FeatureRun run)
@@ -1288,8 +1543,8 @@ public sealed class FeatureProjector(TaskManager tasks)
                 string chip = run.Attention.Kind switch
                 {
                     "stopped" => "stopped",
-                    // wait: «мерж» → merge, явный wait → waiting.
-                    _ => run.Attention.Reason == "мерж" ? "merge" : "waiting",
+                    "merge" => "merge",
+                    _ => "waiting",
                 };
                 chips.Add(chip);
             }
@@ -1314,14 +1569,14 @@ public sealed class FeatureProjector(TaskManager tasks)
         return ids;
     }
 
-    // Тревога строки: из FeatureRun.Attention; kind «wait»+«мерж» → merge; reason у merge — null;
+    // Тревога строки: из FeatureRun.Attention; kind=merge → merge (reason у merge — null);
     // sessionId — LinkedSessionId, прошедший по снимку живых сессий владельца (иначе null,
     // как в KeySession: мёртвый/чужой чат наружу не уходит).
     internal static FeatureIndexAttention? AttentionOf(FeatureRun run, IReadOnlyCollection<FeatureIndexSession> sessions)
     {
         var a = run.Attention;
         if (a is null) return null;
-        bool isMerge = a.Kind == "wait" && a.Reason == "мерж";
+        bool isMerge = a.Kind == "merge";
         var live = new HashSet<string>(sessions.Select(s => s.Id));
         string? sessionId = a.LinkedSessionId is not null && live.Contains(a.LinkedSessionId)
             ? a.LinkedSessionId : null;
@@ -1330,7 +1585,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             a.Since,
             isMerge ? null : a.Reason,
             a.PersonaId,
-            sessionId);
+            sessionId,
+            a.TaskId); // Б7: id задачи тревоги (FeatureAttention.TaskId)
     }
 
     // Рельса: ровно 7 стадий FeatureRun.Stages → сегменты {key, state, tone}.
@@ -1361,7 +1617,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var s = run.Summary;
         if (s is null) return null;
-        return new FeatureIndexSummary(s.MergedAt, s.DurationMinutes);
+        return new FeatureIndexSummary(s.MergedAt, s.DurationMinutes, s.StepsOpen);
     }
 
     // Чатов фичи в этом ответе: число сессий в map, чья карта фич содержит featureId.

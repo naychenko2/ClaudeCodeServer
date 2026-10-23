@@ -52,18 +52,54 @@ public sealed class FeatureRun
     // «Сейчас»: все InProgress-задачи фичи, по убыванию ClaudeStartedAt. У закрытой фичи — пусто.
     // Стадия пилюли фронт берёт у первого элемента; имена — уникальные через запятую.
     public List<FeatureNow> Now { get; init; } = [];
-    // Тревога: stopped → wait явный → wait «мерж»; один элемент либо null.
+    // Состояние фичи (единая точка правды; из него выводится bucket строки индекса и порядок
+    // OrderRuns — см. FeatureProjector.Bucket). 9 значений, приоритет сверху вниз (первое
+    // совпавшее побеждает): merged → closed → stopped → waiting → merging → merge_pending →
+    // running → not_started → idle. Значения — константы FeatureStates (camelCase, как в JSON).
+    public string State { get; init; } = FeatureStates.Idle;
+    // Тревога: stopped → wait явный → merge; один элемент либо null.
     public FeatureAttention? Attention { get; init; }
-    // Счётчик шагов: принятые (Done) / все (из StepChains).
+    // Счётчик шагов: принятые ревью / знаменатель (= StepProgress.Accepted / Total). Семантика
+    // изменена сознательно (честный прогресс): «принят» — не «сдан исполнителем (Done)», а
+    // «последний виток ревью/проверки/финала — accepted/accepted_with_remarks и доработок не осталось»;
+    // знаменатель — шаги плана (planSteps) ∪ заведённые шаги, а не только заведённые.
     public int StepsAccepted { get; init; }
     public int StepsTotal { get; init; }
+    // Честный прогресс по шагам: корзины accepted/review/work/notCreated (сумма = Total),
+    // вне знаменателя — withdrawn и unlinkedReworks. Вся арифметика на бэке.
+    public FeatureStepProgress StepProgress { get; init; } = new();
     // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
     public DateTime? LastActivityAt { get; init; }
-    // Закрыта: merge-задача Done или эпик Done.
+    // Закрыта: выводится из State (merged или closed) — единая точка правды
+    // (старое «merge Done || epic Done» — вторая точка, закрывало фичу частичным мержем).
     public bool Closed { get; init; }
     // Итог смерженной фичи: только у закрытой, иначе null.
     public FeatureSummary? Summary { get; init; }
 }
+
+// Документ фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»): разрез (cut), план (plan)
+// или консультация (consult) — СПИСОК из GET features/{id}, без текста. Текст (ResultMarkdown)
+// в ответ не попадает: вкладка берёт список, а текст подгружает по клику (GET /api/tasks/{id}).
+// role — из TaskItem.Role как есть (cut/plan/consult; step сюда не попадает). hasText — есть ли
+// ResultMarkdown (после Trim); mockupPaths — пути макетов из ResultMarkdown (docs/mockups/….{html,md}).
+public sealed record FeaturePlan(
+    // Id задачи-документа.
+    string TaskId,
+    // Роль как есть: cut | plan | consult.
+    string Role,
+    // Название задачи.
+    string Title,
+    // Автор (PersonaId задачи); null — без персоны.
+    string? AuthorPersonaId,
+    // Момент создания задачи.
+    DateTime CreatedAt,
+    // Момент закрытия задачи; null — ещё не закрыта.
+    DateTime? CompletedAt,
+    // Есть ли текст (ResultMarkdown не пуст после Trim).
+    bool HasText,
+    // Пути макетов (docs/mockups/….{html,md}) из ResultMarkdown: distinct, порядок появления,
+    // ≤ 20, пути с «..» отброшены.
+    List<string> MockupPaths);
 
 // «Сейчас»: одна InProgress-задача фичи (кто и что делает, сколько идёт).
 public sealed class FeatureNow
@@ -84,10 +120,10 @@ public sealed class FeatureNow
     public string? LinkedSessionId { get; init; }
 }
 
-// Тревога фичи: один элемент либо null. Приоритет: stopped → wait явный → wait «мерж».
+// Тревога фичи: один элемент либо null. Приоритет: stopped → wait явный → merge.
 public sealed class FeatureAttention
 {
-    // wait | stopped.
+    // wait | stopped | merge.
     public string Kind { get; init; } = "";
     // Id задачи, к которой относится тревога (у «мерж» — финал).
     public string? TaskId { get; init; }
@@ -110,8 +146,11 @@ public sealed class FeatureSummary
     public double DurationMinutes { get; init; }
     // Число задач фичи (эпик + дочерние).
     public int Tasks { get; init; }
-    // Число шагов (из StepChains).
+    // Число шагов (знаменатель StepProgress.Total).
     public int Steps { get; init; }
+    // Шагов не принято: Total − Accepted (снятые withdrawn уже вне Total). Заполняется у merged и
+    // closed: «закрыта вручную с непринятыми шагами» = State == closed ∧ StepsOpen > 0.
+    public int StepsOpen { get; init; }
     // Число возвратов (Loops).
     public int Loops { get; init; }
 }
@@ -164,6 +203,50 @@ public sealed class FeatureStage
     // вердикта (у стадий без вердиктов cut/plan/merge/prod — null, кроме случая, когда у задачи
     // есть Verification.Verdict — тогда он же). Значения строго из пяти, как у rounds[].verdict.
     public string? Verdict { get; init; }
+    // Начало стадии (Б2): минимальный ClaudeStartedAt задач стадии; null — ни одна не стартовала.
+    public DateTime? FirstStartedAt { get; init; }
+    // Конец стадии (Б2): максимальный CompletedAt — ТОЛЬКО если все задачи стадии закрыты (Done),
+    // иначе null (стадия ещё не завершилась).
+    public DateTime? LastCompletedAt { get; init; }
+    // Длительность по часам стены (Б2, минуты): ОБЪЕДИНЕНИЕ интервалов [ClaudeStartedAt,
+    // CompletedAt ?? now] задач стадии — параллельные задачи не складываются; округление вверх
+    // до минуты. Пустая стадия (ни одна задача не стартовала) → 0.
+    public int ApproxMinutes { get; init; }
+    // Пересечение с идущим (Б2): интервалы стадии пересекаются с интервалами задач ДРУГОЙ стадии,
+    // которая ещё идёт (имеет ≥1 задачу, не все Done). Стадия без интервалов — false.
+    public bool OverlapsActive { get; init; }
+    // Исполнители стадии (Б2): по одному на задачу стадии, в порядке, в котором задачи дал
+    // вызывающий. Бэк отдаёт сырые данные (TaskRole/StepRef/Lane, статус, исполнителя) —
+    // подпись роли (roleLabel) строит фронт.
+    public List<FeatureStageExecutor> Executors { get; init; } = [];
+}
+
+// Исполнитель стадии (Б2): одна запись на задачу стадии. Сырые данные для подписи:
+// роль/код шага/линия как есть (подпись строит фронт), статус выведен из полей задачи:
+// running — идёт (ClaudeStartedAt, без завершения, не остановлена, не ждёт); waiting — ждёт
+// человека (AwaitingHumanSince); stopped — исполнитель встал (ExecutorStoppedAt); done — закрыта;
+// pending — не стартовала (остальное).
+public sealed class FeatureStageExecutor
+{
+    // Исполнитель (PersonaId задачи).
+    public string? PersonaId { get; init; }
+    // Id задачи.
+    public string TaskId { get; init; } = "";
+    // Роль задачи как есть (step/rework/review/qa/final/merge/cut/plan/consult).
+    public string? TaskRole { get; init; }
+    // Код шага (у step/rework).
+    public string? StepRef { get; init; }
+    // Линия как есть (back/front/…).
+    public string? Lane { get; init; }
+    // Статус: running | waiting | stopped | done | pending.
+    public string Status { get; init; } = "pending";
+    // Чат исполнителя (Б7: LinkedSessionId, fail-closed, как остальной агрегат); пока null.
+    public string? ChatId { get; init; }
+    // Чат исполнителя архивирован (Б7); пока false.
+    public bool ChatArchived { get; init; }
+    // Модель исполнителя (Б4: короткая подпись и полное имя); пока null.
+    public string? ModelLabel { get; init; }
+    public string? ModelFull { get; init; }
 }
 
 // Виток: один круг ревью/проверки/финала. Живёт в цепочке шагов (FeatureStepChain.Rounds)
@@ -181,6 +264,9 @@ public sealed class FeatureRound
     public string? ReviewTaskId { get; init; }
     // Исполнитель витка (PersonaId задачи ревью/проверки/финала).
     public string? PersonaId { get; init; }
+    // Чат витка (Б7: LinkedSessionId задачи ревью/проверки/финала, fail-closed: наружу только
+    // если в снимке сессий владельца; чужой/удалённый/неизвестный чат → null).
+    public string? ReviewChatId { get; init; }
     // Старт витка: ClaudeStartedAt задачи, иначе CreatedAt.
     public DateTime? StartedAt { get; init; }
     // Закрытие витка: CompletedAt задачи; null — ещё идёт.
@@ -201,6 +287,9 @@ public sealed class FeatureStepChain
     public string Title { get; init; } = "";
     // Исполнитель шага (PersonaId первой задачи цепочки).
     public string? PersonaId { get; init; }
+    // Чат шага (Б7: LinkedSessionId задачи-шага, fail-closed: наружу только если в снимке
+    // сессий владельца; чужой/удалённый/неизвестный чат → null).
+    public string? ChatId { get; init; }
     // Задачи цепочки (шаг + доработки) в порядке времени.
     public List<string> TaskIds { get; init; } = [];
     // Исход: accepted | withdrawn | returned | running | pending.
@@ -244,10 +333,64 @@ public sealed class FeatureLane
     public string Lane { get; init; } = "other";
     // Исполнители (уникальные, в порядке первого появления).
     public List<string> PersonaIds { get; init; } = [];
-    // Всего шагов в линии.
+    // Знаменатель линии: шаги плана ∪ заведённые шаги линии (снятые withdrawn не входят).
     public int Total { get; init; }
-    // Принятые (Done) шаги.
+    // Принятые ревью шаги (не «Done»: сдан ≠ принят).
     public int Accepted { get; init; }
+    // Сдан, ждёт ревью (все задачи цепочки Done, витка нет или он идёт).
+    public int Review { get; init; }
+    // В работе (задача идёт/не начата либо последний виток returned).
+    public int Work { get; init; }
+    // Шаг есть в плане, задачи нет.
+    public int NotCreated { get; init; }
     // Шаги с возвратом (их ревью/проверка/финал вернул: returned/accepted_with_remarks).
     public int Returns { get; init; }
+}
+
+// Честный прогресс фичи по шагам (единица учёта — шаг, код stepRef; ключ шага без stepRef — id
+// задачи). Корзины взаимоисключающие: Total = Accepted + Review + Work + NotCreated. Вне знаменателя:
+// Withdrawn (шаг снят ревью с выкладки) и UnlinkedReworks (доработки без привязки к шагу —
+// ни stepRef, ни reviewOf; новую цепочку не заводят).
+public sealed class FeatureStepProgress
+{
+    // pending — задач role=plan нет, или у всех пустой planSteps; partial — списки есть только у
+    // части планов; cut — у всех; done — cut, total > 0 и все шаги приняты. Снятые (withdrawn)
+    // планы в маппинг не входят.
+    public string PlanState { get; init; } = "pending";
+    public int Total { get; init; }
+    public int Accepted { get; init; }
+    public int Review { get; init; }
+    public int Work { get; init; }
+    public int NotCreated { get; init; }
+    public int Withdrawn { get; init; }
+    public int UnlinkedReworks { get; init; }
+}
+
+// Состояния фичи (FeatureRun.State) — единая точка правды: 9 значений, camelCase (как в JSON).
+// Приоритет расчёта (первое совпавшее побеждает): merged → closed → stopped → waiting → merging →
+// merge_pending → running → not_started → idle. Из state выводится bucket строки индекса
+// (FeatureProjector.Bucket) и порядок OrderRuns — они не расходятся.
+public static class FeatureStates
+{
+    // merge-задача Done И (финал принят ИЛИ эпик Done) — фича смержена. Частичный мерж
+    // (merge Done, финал не принят, эпик открыт) фичу не смерживает (инцидент 21.10).
+    public const string Merged = "merged";
+    // Эпик Done и не merged — фича закрыта: решение человека «фича закончена»
+    // (даже если работа ещё идёт; без мержа — «честный мерж»).
+    public const string Closed = "closed";
+    // Есть остановленная задача (тревога kind=stopped).
+    public const string Stopped = "stopped";
+    // Явное ожидание человека (тревога kind=wait, КРОМЕ ожидания «мерж»).
+    public const string Waiting = "waiting";
+    // merge-задача запущена (InProgress) — мерж идёт.
+    public const string Merging = "merging";
+    // Финал принят, merge-задачи нет ИЛИ она создана, но не запущена (Todo) — ждём
+    // согласия/запуска мержа (тревога «мерж»).
+    public const string MergePending = "merge_pending";
+    // Now не пуст — идут задачи.
+    public const string Running = "running";
+    // Ни одна задача фичи не стартовала (нет ни одного ClaudeStartedAt).
+    public const string NotStarted = "not_started";
+    // Иначе: ничего не идёт, ничего не ждёт, фича не закрыта.
+    public const string Idle = "idle";
 }

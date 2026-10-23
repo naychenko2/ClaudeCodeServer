@@ -69,7 +69,7 @@ import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
-import { useFeatureRuns, setHasPlanCard } from '../lib/featureRuns';
+import { useFeatureRuns } from '../lib/featureRuns';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -253,6 +253,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // (embedded): там курсор забирает только активная колонка, сигналом composerFocusSignal.
   const isTouch = useIsTouch();
   const [emptyChatFocus, setEmptyChatFocus] = useState(0);
+  // M2: главное действие плашки фичи, когда ждут В ЭТОМ чате — фокус в композер
+  // (ответ пишут здесь, не на странице фичи). Счётчик монотонен, как emptyChatFocus.
+  const [composerFocusBump, setComposerFocusBump] = useState(0);
   const focusDecidedFor = useRef<string | null>(null);
   useEffect(() => {
     if (isMobile || isTouch || embedded || isHistoryLoading) return;
@@ -1771,14 +1774,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   const featureRuns = useFeatureRuns(session.id, featureMode);
 
-  // F9: чип «Шаг N фичи» (TaskCreatedView) должен знать, есть ли в ленте живая карточка
-  // плана (стор Ф1, per chat): есть — сигнал фокуса потребляется в ней, нет — чип открывает
-  // меню пилюли. Живая карточка — только на последней пачке (lastPlanIndex ≥ 0) и только
-  // когда у чата есть фичи (иначе там снимок TodoList, а не FeatureModeBody).
-  useEffect(() => {
-    if (session.id) setHasPlanCard(session.id, lastPlanIndex >= 0 && featureRuns.length > 0);
-  }, [session.id, lastPlanIndex, featureRuns]);
-
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
   // своего snapshotId нет — он лежит на сообщении, которым начался ход, а contextTokens
@@ -2085,7 +2080,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       streaming={isWaiting && i === items.length - 1}
       isLastResult={i === lastResultIndex}
       planPill={!showWaiting && i === lastResultIndex && (taskTodos.length > 0 || featureRuns.length > 0)
-        ? <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} />
+        ? <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} chatTaskId={session.taskId ?? null} />
         : undefined}
       canRetryInterrupted={i === retryInterruptedIdx}
       hideAbortBanner={shouldHideAbortBanner(item, items[i + 1])}
@@ -2799,10 +2794,18 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         </div>
       )}
 
-      {/* Плашка фичи: чат принадлежит фиче (индекс фич) — где фича, её статус и
+      {/* Плашка фичи: чат принадлежит фиче (индекс фич) — где фичи, её статус и
           куда вернуться в ключевой чат. Под двумя флагами (режим «Исполнение фичи»
-          + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null). */}
-      <FeatureBanner sessionId={session.id} projectId={session.projectId ?? null} isMobile={!!isMobile} />
+          + «Обзор фич»); чат без фичи — плашки нет (FeatureBanner сам отдаёт null).
+          Центрирование по колонке чата (CHAT_MAX_W, как у ленты) — ВНУТРИ баннера. */}
+      <FeatureBanner
+        sessionId={session.id}
+        projectId={session.projectId ?? null}
+        isMobile={!!isMobile}
+        chatTaskId={session.taskId ?? null}
+        // Ждут В ЭТОМ чате (waiting/stopped) — фокус в композер (M2), не страница фичи.
+        onFocusComposer={() => setComposerFocusBump(b => b + 1)}
+      />
 
       {/* Сообщения (нижний отступ = высота плавающего composer + зазор).
           Прокручивается НЕ вся ширина области, а колонка сообщений: иначе полоса
@@ -2943,7 +2946,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 индикатора не оставалось места даже под аватар и время. Половина — потолок,
                 а не ширина: на широкой колонке пилюля упирается в свой maxWidth раньше */}
             <div style={{ marginLeft: 'auto', minWidth: 0, maxWidth: '50%', display: 'flex' }}>
-              <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} />
+              <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} chatTaskId={session.taskId ?? null} />
             </div>
           </div>
         )}
@@ -3214,10 +3217,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             rateWindow={worstRate}
             restore={composerRestore}
             onReplaceAttachments={onAttachedFilesChange}
-            // Два источника «поставь курсор в поле»: колонка стены стала активной и
-            // открылся пустой чат. Оба счётчика монотонны, поэтому сумма растёт от любого
-            // из них; 0 = сигнала не было (Composer такое значение игнорирует).
-            focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus}
+            // Три источника «поставь курсор в поле»: колонка стены стала активной,
+            // открылся пустой чат, главное действие плашки фичи (ждут в этом чате, M2).
+            // Счётчики монотонны, поэтому сумма растёт от любого из них; 0 = сигнала не
+            // было (Composer такое значение игнорирует).
+            focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus + composerFocusBump}
             // Цвет сияния при озвучке: сперва цвет говорящей персоны (тот же, что у кольца
             // её аватара в ленте), иначе фирменный цвет проекта — «голос проекта»;
             // ни того, ни другого нет — оранжевый токен внутри композера

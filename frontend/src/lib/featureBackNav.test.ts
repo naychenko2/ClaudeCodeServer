@@ -8,7 +8,7 @@ beforeEach(() => __test.reset());
 describe('featureBackNav', () => {
   it('recordBackNav: записывает from→to; backNavFrom(to) = from, backNavFrom(другой) = null', () => {
     recordBackNav('chat-exec', 'chat-key');
-    expect(getBackNav()).toEqual({ from: 'chat-exec', to: { kind: 'chat', id: 'chat-key' } });
+    expect(getBackNav()).toEqual({ from: 'chat-exec', fromKind: 'chat', to: { kind: 'chat', id: 'chat-key' } });
     expect(backNavFrom('chat-key')).toBe('chat-exec');
     expect(backNavFrom('other')).toBeNull();
     expect(backNavFrom(null)).toBeNull();
@@ -48,7 +48,7 @@ describe('featureBackNav', () => {
   it('recordBackNav поверх прежнего — заменяет указатель (один «← назад»)', () => {
     recordBackNav('chat-a', 'chat-key');
     recordBackNav('chat-b', 'chat-key');
-    expect(getBackNav()).toEqual({ from: 'chat-b', to: { kind: 'chat', id: 'chat-key' } });
+    expect(getBackNav()).toEqual({ from: 'chat-b', fromKind: 'chat', to: { kind: 'chat', id: 'chat-key' } });
     expect(backNavFrom('chat-key')).toBe('chat-b');
   });
 
@@ -72,7 +72,7 @@ describe('featureBackNav: цель перехода (chat | feature) и норм
 
   it('recordBackNav с целем-фичей: to = { kind: feature, id }; backNavFrom(чата) = null', () => {
     recordBackNav('chat-exec', { kind: 'feature', id: 'f1' });
-    expect(getBackNav()).toEqual({ from: 'chat-exec', to: { kind: 'feature', id: 'f1' } });
+    expect(getBackNav()).toEqual({ from: 'chat-exec', fromKind: 'chat', to: { kind: 'feature', id: 'f1' } });
     // Страница фичи — не чат: «← назад» по chat-id не совпадает (backNavFrom ищет to-чат).
     expect(backNavFrom('f1')).toBeNull();
     expect(backNavFrom('chat-exec')).toBeNull();
@@ -85,6 +85,6 @@ describe('featureBackNav: цель перехода (chat | feature) и норм
 
   it('«чат → фича с тем же id» — переход (разные поверхности, guard не срабатывает)', () => {
     recordBackNav('f1', { kind: 'feature', id: 'f1' });
-    expect(getBackNav()).toEqual({ from: 'f1', to: { kind: 'feature', id: 'f1' } });
+    expect(getBackNav()).toEqual({ from: 'f1', fromKind: 'chat', to: { kind: 'feature', id: 'f1' } });
   });
 });

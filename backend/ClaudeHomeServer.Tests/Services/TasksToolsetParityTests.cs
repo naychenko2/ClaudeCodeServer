@@ -233,4 +233,21 @@ public class TasksToolsetParityTests
         TasksToolset.EndpointFor("http://localhost:5000", "sess-1")
             .Should().Be("http://localhost:5000/mcp/tasks/sess-1");
     }
+
+    /// <summary>
+    /// Честный прогресс фичи: аргумент planSteps (структурный список шагов плана) обязан быть
+    /// в схемах tasks_create/tasks_update http-ветки — иначе планировщик не заполнит знаменатель
+    /// «сколько всего». Статично, от хода не зависит (McpToolsetStabilityTests).
+    /// </summary>
+    [Fact]
+    public void PlanSteps_АргументВСхемахCreateAndUpdate()
+    {
+        var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
+        foreach (var toolName in new[] { "tasks_create", "tasks_update" })
+        {
+            var schema = byName[toolName].InputSchema;
+            var hasPlanSteps = schema["properties"] is JsonObject props && props["planSteps"] is not null;
+            hasPlanSteps.Should().BeTrue($"{toolName}: аргумент planSteps обязан быть в схеме");
+        }
+    }
 }

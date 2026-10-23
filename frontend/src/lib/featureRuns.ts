@@ -43,6 +43,23 @@ let _runsBySession = new Map<string, FeatureRun[]>();
 const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
 
+// F-pop-a: состояния запроса по sessionId — загрузка (скелет) и ошибка («Повторить»).
+// Отдельные Map (не в FeatureRun[]): срез runs — стабильная ссылка, а loading/error
+// меняются при каждом fetch. Сбой live-перезапроса НЕ затирает ошибку первичной загрузки.
+let _loadingBySession = new Map<string, boolean>();
+let _errorBySession = new Map<string, string | null>();
+
+function setLoading(sessionId: string, loading: boolean) {
+  _loadingBySession = new Map(_loadingBySession);
+  _loadingBySession.set(sessionId, loading);
+  emit();
+}
+function setError(sessionId: string, error: string | null) {
+  _errorBySession = new Map(_errorBySession);
+  _errorBySession.set(sessionId, error);
+  emit();
+}
+
 // M2: «активные» сессии — у них смонтирован useFeatureRuns(enabled=true). Для них
 // task_changed перезапрашивает агрегат; чужие (неактивные) не трогаем.
 const _active = new Set<string>();
@@ -98,11 +115,16 @@ function snapshotFor(sessionId: string | null): FeatureRun[] {
 // F1: режим чата. Явный выбор (setTurnPlanMode) — в приоритете; иначе умолчание:
 // есть хотя бы одна фича у этого чата → feature, нет → plan (макет v1, решение 1).
 // Умолчание пересчитывается, когда меняется срез фич (setRuns → emit → re-snapshot).
+// F-pop-b (ревью фронта 2, major 4): умолчание учитывает ещё и загрузку/ошибку списка
+// фич — пока фичи в полёте или запрос упал, тело — скелет/«Повторить» (режим feature),
+// а не чек-лист плана. Иначе состояния «загрузка»/«ошибка» из макета недостижимы:
+// runs пуст → mode='plan', переключателя нет (hasFeatures=false) → переключиться нечем.
 function modeFor(sessionId: string | null): TurnPlanMode {
   if (!sessionId) return 'plan';
   const explicit = _modeBySession.get(sessionId);
   if (explicit) return explicit;
-  return snapshotFor(sessionId).length > 0 ? 'feature' : 'plan';
+  const has = snapshotFor(sessionId).length > 0 || loadingFor(sessionId) || errorFor(sessionId) != null;
+  return has ? 'feature' : 'plan';
 }
 
 export function getTurnPlanMode(sessionId: string | null): TurnPlanMode {
@@ -177,38 +199,9 @@ export function useFeatureStepFocus(sessionId: string | null): FeatureStepFocus 
   );
 }
 
-// F9: «в ленте есть живая карточка плана» (per chat): ChatPanel пишет (карточка живая
-// только на последней пачке и только когда есть фичи), чип «Шаг N фичи» (TaskCreatedView)
-// читает: есть — сигнал фокуса потребляется в ленте, нет — чип открывает меню пилюли.
-let _planCardBySession = new Map<string, boolean>();
-
-function planCardFor(sessionId: string | null): boolean {
-  if (!sessionId) return false;
-  return _planCardBySession.get(sessionId) ?? false;
-}
-
-export function setHasPlanCard(sessionId: string, has: boolean) {
-  if (!sessionId) return;
-  _planCardBySession = new Map(_planCardBySession);
-  _planCardBySession.set(sessionId, has);
-  emit();
-}
-
-// Хук: есть ли в ленте чата живая карточка плана (false, пока ChatPanel не написал).
-export function useHasPlanCard(sessionId: string | null): boolean {
-  return useSyncExternalStore(
-    subscribeRuns,
-    () => planCardFor(sessionId),
-    () => planCardFor(sessionId),
-  );
-}
-
-// F9: прочитать флаг «живая карточка плана» императивно (не из stale-значения хука):
-// чип «Шаг N фичи» (TaskCreatedView) решает, открывать ли меню пилюли, на следующем кадре
-// ПОСЛЕ клика — когда эффект ChatPanel уже отработал (Глеб: гонка ремоунта).
-export function getHasPlanCard(sessionId: string | null): boolean {
-  return planCardFor(sessionId);
-}
+// F9: флаг «живая карточка плана» (setHasPlanCard/getHasPlanCard/planCardFor) убран
+// (решение Андрея 20.10): чип «Шаг N фичи» теперь ВСЕГДА открывает меню пилюли,
+// короткая карточка плана не потребляет сигнал фокуса сама.
 
 // F9: одноразовый сигнал «открыть меню пилюли» (per chat): чип «Шаг N фичи» открывает
 // меню, когда живой карточки плана в ленте нет. `seq` — монотонный счётчик: повторное
@@ -248,6 +241,24 @@ export function useFeatureRunsSnapshot(sessionId: string | null): FeatureRun[] {
     () => snapshotFor(sessionId),
     () => snapshotFor(sessionId),
   );
+}
+
+// F-pop-a: загрузка фич чата (true — запрос в полёте, срез ещё EMPTY).
+function loadingFor(sessionId: string | null): boolean {
+  if (!sessionId) return false;
+  return _loadingBySession.get(sessionId) ?? false;
+}
+export function useFeatureRunsLoading(sessionId: string | null): boolean {
+  return useSyncExternalStore(subscribeRuns, () => loadingFor(sessionId), () => loadingFor(sessionId));
+}
+
+// F-pop-a: ошибка запроса фич (текст причины); null — ошибки нет.
+function errorFor(sessionId: string | null): string | null {
+  if (!sessionId) return null;
+  return _errorBySession.get(sessionId) ?? null;
+}
+export function useFeatureRunsError(sessionId: string | null): string | null {
+  return useSyncExternalStore(subscribeRuns, () => errorFor(sessionId), () => errorFor(sessionId));
 }
 
 // M2: дебаунс ~500 мс на сессию + троттлинг: не чаще одного запроса на сессию за
@@ -335,15 +346,28 @@ export function useFeatureRuns(sessionId: string | null, enabled: boolean): Feat
     }
     _active.add(sessionId);
     let cancelled = false;
+    // F-pop-a: загрузка — до ответа; ошибка — текст причины (сбой live-перезапроса не
+    // затирает: он не сбрасывает error, только не ставит новую).
+    setLoading(sessionId, true);
     void fetchRuns(sessionId)
-      .then(list => { if (!cancelled) setRuns(sessionId, list); })
-      .catch(() => { if (!cancelled) setRuns(sessionId, EMPTY); });
+      .then(list => { if (cancelled) return; setLoading(sessionId, false); setError(sessionId, null); setRuns(sessionId, list); })
+      .catch((e: unknown) => { if (cancelled) return; setLoading(sessionId, false); setError(sessionId, e instanceof Error ? e.message : 'Сервер не ответил'); setRuns(sessionId, EMPTY); });
     return () => {
       cancelled = true;
       _active.delete(sessionId);
     };
   }, [sessionId, enabled]);
   return runs;
+}
+
+// F-pop-a: «Повторить» — явный перезапрос фич чата (обходит троттлинг live-режима:
+// это deliberate-действие пользователя). Загрузка до ответа, ошибка — текст причины.
+export function refetchFeatureRuns(sessionId: string) {
+  if (!sessionId) return;
+  setLoading(sessionId, true);
+  void fetchRuns(sessionId)
+    .then(list => { setLoading(sessionId, false); setError(sessionId, null); setRuns(sessionId, list); })
+    .catch((e: unknown) => { setLoading(sessionId, false); setError(sessionId, e instanceof Error ? e.message : 'Сервер не ответил'); setRuns(sessionId, EMPTY); });
 }
 
 // Тестовые швы (не публичное API): сброс стора + прямой доступ к внутреннему состоянию.
@@ -354,9 +378,10 @@ export const __test = {
     _selectedFeatureBySession = new Map();
     _focusBySession = new Map();
     _focusSeq = 0;
-    _planCardBySession = new Map();
     _pillMenuBySession = new Map();
     _pillMenuSeq = 0;
+    _loadingBySession = new Map();
+    _errorBySession = new Map();
     _active.clear();
     _pending.forEach(t => clearTimeout(t));
     _pending.clear();
@@ -378,9 +403,12 @@ export const __test = {
   modeFor,
   selectedFeatureIdFor,
   focusFor,
-  // F9: прямой доступ к срезам «живая карточка плана» и «открыть меню пилюли».
-  setHasPlanCard,
-  planCardFor,
+  // F9: прямой доступ к срезам «открыть меню пилюли».
   openPillMenu,
   pillMenuFor,
+  // F-pop-a: прямой доступ к срезам загрузки/ошибки.
+  setLoading,
+  setError,
+  loadingFor,
+  errorFor,
 };

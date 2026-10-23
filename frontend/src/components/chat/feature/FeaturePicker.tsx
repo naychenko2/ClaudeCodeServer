@@ -6,14 +6,30 @@ import { FeatureGlyph, type FeatureGlyph as FeatureGlyphKind } from './FeatureGl
 
 // Выбор фичи, когда в чате их несколько (≥ 2): секция «Фичи чата · N» + горизонтальный
 // ряд чипов. Каждый чип — глиф состояния (12 px, общий с пилюлей) + имя фичи; выбранная
-// подсвечена. Точка `●` (C.accent) — у фичи, которую показывает пилюля (runs[0]).
+// подсвечена. Точки `●` «эту фичу показывает пилюля» больше нет (F-pop-a): порядок фич
+// задаёт бэк, первая — фича шага этого чата.
 // На мобиле (360 px) ряд — одна строка с горизонтальной прокруткой (скроллбар скрыт).
 //
 // Роль: role="radiogroup" (группа) + role="radio" (чип), aria-checked — выбранный.
 
-// Состояние фичи для глифа: из полей бэкового агрегата. Приоритет:
-// wait (ждёт) → stopped (упал) → closed (закрыта) → done (пройдено) → run (идёт).
+// Состояние фичи для глифа. Источник правды — run.state (бэк Б1a/Б1b):
+// merge_pending/waiting → wait (ромб), stopped → stopped (квадрат), merged → done (галочка),
+// closed → closed, merging/running/not_started/idle → run (кольцо).
+// Без state (старые данные/кеш/моки) — запасной путь по прежнему признаку
+// (attention.kind / closed / ready), чтобы существующие тесты не упали.
 function pickerGlyph(run: FeatureRun): FeatureGlyphKind {
+  if (run.state) {
+    switch (run.state) {
+      case 'stopped': return 'stopped';
+      case 'waiting':
+      case 'merge_pending': return 'wait';
+      case 'merged': return 'done';
+      case 'closed': return 'closed';
+      // not_started, running, merging, idle → run.
+      default: return 'run';
+    }
+  }
+  // Запасной путь: state в данных нет (кеш/моки) — прежний признак.
   const att = run.attention;
   if (att && att.kind === 'wait') return 'wait';
   if (att && att.kind === 'stopped') return 'stopped';
@@ -34,11 +50,11 @@ function SectionLabel({ children }: { children: ReactNode }) {
   );
 }
 
-// Один чип фичи: глиф состояния + имя (многоточие, title = полное название) + точка `●` (runs[0]).
-function FeatureChip({ run, on, isPill, isMobile, inMenu, onPick }: {
+// Один чип фичи: глиф состояния + имя (многоточие, title = полное название).
+// F-pop-a: точка `●` «эту фичу показывает пилюля» убрана (порядок фич — с бэка).
+function FeatureChip({ run, on, isMobile, inMenu, onPick }: {
   run: FeatureRun;
   on: boolean;
-  isPill: boolean;
   isMobile: boolean;
   inMenu: boolean;
   onPick: () => void;
@@ -68,7 +84,7 @@ function FeatureChip({ run, on, isPill, isMobile, inMenu, onPick }: {
         color: on ? C.textHeading : C.textSecondary,
         borderRadius: R.md, padding: '2px 8px',
         // M-1: у <button> браузер не наследует font-family → без inherit чипы были Arial
-        // среди Hanken Grotesk; ● унаследует сам.
+        // среди Hanken Grotesk.
         fontFamily: 'inherit',
         minHeight: isMobile ? 40 : 26, fontSize: FS.sm,
         cursor: 'pointer', fontWeight: on ? 600 : 400,
@@ -79,12 +95,6 @@ function FeatureChip({ run, on, isPill, isMobile, inMenu, onPick }: {
       <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>
         {run.epic?.title}
       </span>
-      {isPill && (
-        <span
-          title="Эту фичу показывает пилюля"
-          style={{ fontSize: FS.xxs, fontWeight: 700, color: C.accent, flexShrink: 0 }}
-        >●</span>
-      )}
     </button>
   );
 }
@@ -123,7 +133,6 @@ export function FeaturePicker({ runs, selected, onSelect, isMobile = false, inMe
             key={run.featureId}
             run={run}
             on={i === selected}
-            isPill={i === 0}
             isMobile={isMobile}
             inMenu={inMenu}
             onPick={() => onSelect(i)}

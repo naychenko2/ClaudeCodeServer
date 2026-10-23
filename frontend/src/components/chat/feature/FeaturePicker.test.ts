@@ -1,5 +1,6 @@
 // Выбор фичи (FeaturePicker): только при ≥ 2 фичах; секция «Фичи чата · N»;
-// role="radiogroup"/"radio"; точка `●` (C.accent) — у фичи, которую показывает пилюля (runs[0]).
+// role="radiogroup"/"radio". F-pop-a: точка `●` «эту фичу показывает пилюля» убрана
+// (порядок фич — с бэка).
 // Рендер — renderToStaticMarkup (паттерн соседних тестов; окружение node, useState — initial).
 
 import { createElement } from 'react';
@@ -40,11 +41,11 @@ describe('FeaturePicker', () => {
     expect(html).toContain('role="radio"');
   });
 
-  it('точка ● — у runs[0] (её показывает пилюля), с title «Эту фичу показывает пилюля»', () => {
+  it('F-pop-a: точки ● «эту фичу показывает пилюля» больше нет (порядок — с бэка)', () => {
     const html = render([run('a', 'Фича A'), run('b', 'Фича B')], 0);
-    // ● (U+25CF) присутствует ровно один раз — у runs[0].
-    expect((html.match(/●/g) ?? []).length).toBe(1);
-    expect(html).toContain('Эту фичу показывает пилюля');
+    // ● (U+25CF) отсутствует; и title-подсказки тоже.
+    expect(html.match(/●/g) ?? []).toHaveLength(0);
+    expect(html).not.toContain('Эту фичу показывает пилюля');
   });
 
   it('выбранный чип: aria-checked=true, рамка accentMuted, 600', () => {
@@ -97,5 +98,22 @@ describe('FeaturePicker', () => {
     expect(html).toContain('M8 1.5 14.5 8 8 14.5 1.5 8Z');
     // Круг с чертой (closed): circle + path d="M5 8h6".
     expect(html).toContain('M5 8h6');
+  });
+
+  // state (бэк Б1a/Б1b) — источник правды глифа: merge_pending → ромб (wait),
+  // merging → кольцо (run), merged → галочка (done). Мутация «глиф по attention.kind
+  // вместо state» краснит: runs без attention, но с state=merge_pending.
+  it('глиф по state: merge_pending → ромб, merging → кольцо, merged → галочка', () => {
+    const html = render([
+      run('a', 'Фича A', { state: 'merge_pending' }),
+      run('b', 'Фича B', { state: 'merging' }),
+      run('c', 'Фича C', { state: 'merged' }),
+    ], 0);
+    // Ромб (wait, merge_pending): path d="M8 1.5 14.5 8 8 14.5 1.5 8Z".
+    expect(html).toContain('M8 1.5 14.5 8 8 14.5 1.5 8Z');
+    // Кольцо (run, merging): два circle (r 6.5 stroke + r 3.5 fill).
+    expect(html).toContain('r="3.5"');
+    // Галочка (done, merged): path d="M4.8 8.2 7 10.3l4.3-4.6".
+    expect(html).toContain('M4.8 8.2 7 10.3l4.3-4.6');
   });
 });

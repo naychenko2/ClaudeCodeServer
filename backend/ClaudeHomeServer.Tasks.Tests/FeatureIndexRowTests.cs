@@ -14,12 +14,14 @@ public class FeatureIndexRowTests
     // ── Хелперы сборки ──────────────────────────────────────────────────────────────────────
 
     // Строка из эпика + дочерних: Build → BuildRow (sessions/chatCount — опционально).
+    // Снимок — и в Build (fail-closed полей run: now/attention/исполнители), и в BuildRow
+    // (строка) — как в продуктовом маршруте BuildIndexCore: один снимок, одна семантика.
     private static FeatureIndexRow Row(
         TaskItem epic, List<TaskItem> tasks,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null, int chatCount = 0)
     {
         sessions ??= Array.Empty<FeatureIndexSession>();
-        var run = FeatureProjector.Build(epic, tasks);
+        var run = FeatureProjector.Build(epic, tasks, null, sessions);
         return FeatureProjector.BuildRow(run, tasks, sessions, chatCount);
     }
 
@@ -84,6 +86,65 @@ public class FeatureIndexRowTests
         var epicC = Epic("epic-c");
         epicC.Status = TaskItemStatus.Done;
         Row(epicC, [epicC]).Bucket.Should().Be("closed");
+    }
+
+    // ── 1b. state: поле строки индекса (единая точка правда bucket) ───────────────────────────
+
+    // Строка несёт state (FeatureRun.State); bucket выводится из него. Проверяем: state
+    // присутствует в строке и согласован с bucket (merging → running, merge_pending → attention,
+    // merged/closed → closed, running → running, not_started/idle → idle).
+    [Fact]
+    public void Строка_State_ПрисутствуетИСогласованСBucket()
+    {
+        var t = new DateTime(2026, 10, 17);
+
+        // merging: merge-задача InProgress → state=merging, bucket=running.
+        var epicM = Epic("epic-state-merging");
+        var merge = Child("m1", "epic-state-merging", role: TaskRoles.Merge, status: TaskItemStatus.InProgress);
+        var rowM = Row(epicM, [epicM, merge]);
+        rowM.State.Should().Be(FeatureStates.Merging, "merge InProgress → state=merging");
+        rowM.Bucket.Should().Be("running", "merging → bucket=running (не «ждёт вас»)");
+
+        // merge_pending: финал принят, мержа нет → state=merge_pending, bucket=attention.
+        var epicP = Epic("epic-state-pending");
+        var final = Child("f1", "epic-state-pending", role: TaskRoles.Final, status: TaskItemStatus.Done);
+        final.CompletedAt = t;
+        final.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted };
+        var rowP = Row(epicP, [epicP, final]);
+        rowP.State.Should().Be(FeatureStates.MergePending, "финал принят, мержа нет → state=merge_pending");
+        rowP.Bucket.Should().Be("attention", "merge_pending → bucket=attention (ждёт мержа)");
+
+        // merged: merge Done + финал принят → state=merged, bucket=closed.
+        var epicMg = Epic("epic-state-merged");
+        var finalMg = Child("f1", "epic-state-merged", role: TaskRoles.Final, status: TaskItemStatus.Done);
+        finalMg.CompletedAt = t;
+        finalMg.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted };
+        var mergeDone = Child("m1", "epic-state-merged", role: TaskRoles.Merge, status: TaskItemStatus.Done);
+        var rowMg = Row(epicMg, [epicMg, finalMg, mergeDone]);
+        rowMg.State.Should().Be(FeatureStates.Merged, "merge Done + финал принят → state=merged");
+        rowMg.Bucket.Should().Be("closed", "merged → bucket=closed");
+
+        // closed: эпик Done, мержа нет → state=closed, bucket=closed.
+        var epicC = Epic("epic-state-closed");
+        epicC.Status = TaskItemStatus.Done;
+        var rowC = Row(epicC, [epicC]);
+        rowC.State.Should().Be(FeatureStates.Closed, "эпик Done, мержа нет → state=closed");
+        rowC.Bucket.Should().Be("closed", "closed → bucket=closed");
+
+        // running: идёт задача, без тревоги → state=running, bucket=running.
+        var epicR = Epic("epic-state-running");
+        var running = Child("r1", "epic-state-running", status: TaskItemStatus.InProgress);
+        running.ClaudeStartedAt = t;
+        var rowR = Row(epicR, [epicR, running]);
+        rowR.State.Should().Be(FeatureStates.Running, "идёт задача → state=running");
+        rowR.Bucket.Should().Be("running", "running → bucket=running");
+
+        // not_started: ни одна задача не стартовала → state=not_started, bucket=idle.
+        var epicN = Epic("epic-state-notstarted");
+        var todo = Child("s1", "epic-state-notstarted");
+        var rowN = Row(epicN, [epicN, todo]);
+        rowN.State.Should().Be(FeatureStates.NotStarted, "ничего не стартовало → state=not_started");
+        rowN.Bucket.Should().Be("idle", "not_started → bucket=idle");
     }
 
     // ── 2. «готова ≠ закрыта» ─────────────────────────────────────────────────────────────────
@@ -353,6 +414,25 @@ public class FeatureIndexRowTests
         row2.Attention.Should().NotBeNull();
         row2.Attention!.SessionId.Should().Be("chat-live",
             "живой чат (в снимке) → sessionId = id");
+    }
+
+    // Б7: id задачи тревоги (FeatureIndexAttention.TaskId) — из FeatureRun.Attention.TaskId
+    // (та же задача, к которой относится тревога). Мутация: AttentionOf не копирует TaskId →
+    // taskId = null → тест краснеет.
+    [Fact]
+    public void Attention_TaskId_ИзRun()
+    {
+        const string epicId = "epic-att-taskid";
+        var epic = Epic(epicId);
+        var stopped = Child("a1", epicId, status: TaskItemStatus.InProgress);
+        stopped.ClaudeStartedAt = new DateTime(2026, 10, 17, 8, 0, 0);
+        stopped.ExecutorStoppedAt = new DateTime(2026, 10, 17, 8, 30, 0);
+        stopped.ExecutorStopReason = "auth_failed";
+
+        var row = Row(epic, [epic, stopped], Array.Empty<FeatureIndexSession>());
+        row.Attention.Should().NotBeNull("исполнитель встал — тревога есть");
+        row.Attention!.Kind.Should().Be("stopped");
+        row.Attention.TaskId.Should().Be("a1", "id задачи тревоги = id остановленной задачи");
     }
 
     // ── 8. аддитивные поля (волна 2, без хранения) ───────────────────────────────────────────

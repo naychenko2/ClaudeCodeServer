@@ -47,7 +47,8 @@ import { showArchivedToast } from '../lib/archiveToast';
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from '../lib/nav';
 import { FeatureCenter } from '../components/feature/FeatureCenter';
 import type { FeaturePageBackTarget } from '../components/feature/FeaturePage';
-import { recordBackNav, clearBackNav } from '../lib/featureBackNav';
+import { recordBackNav, clearBackNav, getBackNav } from '../lib/featureBackNav';
+import { focusFeatureStage, setFeaturePageTab } from '../lib/featurePage';
 import { centerFingerprint as computeCenterFingerprint } from '../lib/centerOccupancy';
 import type { CenterOccupancy } from '../lib/centerOccupancy';
 import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
@@ -75,7 +76,7 @@ import { ToolsSidebar } from '../components/tools/ToolsSidebar';
 import { TerminalView } from '../components/terminal/TerminalView';
 import { PreviewView } from '../components/preview/PreviewView';
 import * as terminalApi from '../lib/terminalSignalr';
-import { DesktopWorkspace } from './workspace/DesktopWorkspace';
+import { DesktopWorkspace, pageYieldsCenterToFile } from './workspace/DesktopWorkspace';
 import { useProjectTerminals } from '../hooks/useProjectTerminals';
 import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
@@ -452,6 +453,19 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     return () => window.removeEventListener('cc-draft-reply', onDraftReply);
   }, [project.id]);
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
+  // Монотонный счётчик событий «открыли» (страница фичи / файл) — владелец порядка
+  // «последнее действие выигрывает». Счётчик — ref (не состояние): порядок определяется
+  // в МОМЕНТ действия (повторное открытие того же файла/той же фичи — тоже событие),
+  // а не выводом из сравнения текущих и предыдущих значений.
+  const openSeqRef = useRef(0);
+  // seq события «открыли страницу фичи»: ставится в момент открытия (из любого
+  // источника, вкл. повторное открытие той же фичи) и обнуляется при закрытии.
+  // 0 — страница не открыта (холодный старт: файл «восстановлен», а не открыт).
+  const [featureOpenedAt, setFeatureOpenedAt] = useState(0);
+  // seq события «открыли файл»: та же модель, что featureOpenedAt.
+  const [fileOpenedAt, setFileOpenedAt] = useState(0);
+  // Бамп счётчика и возврат новой seq — вызывается в момент действия «открыли».
+  const bumpOpenSeq = () => ++openSeqRef.current;
   // Файл открыт из git-панели «Изменения» → FileViewer стартует на вкладке Diff
   const [openFileDiffMode, setOpenFileDiffMode] = useState(false);
   // Путь unstaged-файла из git-«Изменений» — включает зернистый stage хунков в diff-вкладке
@@ -496,6 +510,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // занимается эффект «привести к проекту один раз» (ниже, рядом с handleFeatureBack).
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const flagsLoaded = useFlagsLoaded();
+  // Холодный старт: страница открыта при монтировании из хэша/снимка (диплинк) — её seq
+  // ставится при монтировании. Восстановленный файл (openFile из workspaceState) событием
+  // «открыли» не является (fileOpenedAt = 0), поэтому страница выигрывает.
+  useEffect(() => {
+    if (openFeatureId != null) setFeatureOpenedAt(bumpOpenSeq());
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- исполняется только при монтировании
+  }, []);
   // «Архитектура» — MF-remote (modules/architecture): панель рельсы и документ центра
   // приходят вкладами слотов, ноль прямых импортов фичи. Гейт — только наличие ОБОИХ
   // вкладов (remote не загрузился / подсистема выключена — раздела нет целиком);
@@ -717,6 +738,7 @@ const windowWidth = useWindowWidth();
   // filePath — открыть diff сразу на этом файле (клик по файлу коммита), иначе первый
   const handleOpenCommit = useCallback((sha: string, filePath?: string) => {
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
@@ -898,14 +920,19 @@ const windowWidth = useWindowWidth();
   // настоящее закрытие), а явное открытие страницы рисует её ПОВЕРХ любого окна (центр
   // display:none, чат в DOM); Esc/«Закрыть» возвращают к тому, что было под ней.
   const featurePageOpen = openFeatureId != null && featuresOn;
+  // Мобила: «последнее действие выигрывает» (как на десктопе, DesktopWorkspace.yielded) —
+  // файл, открытый ПОСЛЕ страницы, вытесняет её (страница остаётся смонтированной, display:none).
+  const pageYieldsToFile = featurePageOpen && pageYieldsCenterToFile(openFile, featureOpenedAt, fileOpenedAt);
+  const pageOnTop = featurePageOpen && !pageYieldsToFile;
 
-  // Единая точка закрытия страницы фичи: сбрасываем openFeatureId и указатель возврата
-  // (featureBackNav), чтобы «назад» не вёл на невидимую страницу. Вызывается при ЯВНОМ
-  // выборе чата (handleSelectSession): чат — базовый режим, не «другое окно», поэтому
-  // вычисляемым otherCenterOpen его выбор не покрывается.
+  // Единая точка закрытия страницы фичи при ЯВНОМ выборе чата (handleSelectSession): чат —
+  // базовый режим, не «другое окно», поэтому вычисляемым otherCenterOpen его выбор не
+  // покрывается. Указатель возврата (featureBackNav) здесь НЕ гасим: переход «чат» из шторки/
+  // попапа фичи записал его ровно перед выбором чата, и чип «← к фиче» живёт именно им.
+  // Протухший указатель (на другой чат) гасит handleSelectSession; осознанный уход из фичи
+  // (кнопка закрытия страницы, автоскрытие) чистит его сам.
   const closeFeaturePage = useCallback(() => {
     setOpenFeatureId(null);
-    clearBackNav();
   }, []);
   // Страница не показана (флаг выключен), но openFeatureId ещё задан — указатель возврата
   // (chat → фича) не должен вести на невидимую страницу: сбрасываем. Явное закрытие
@@ -945,18 +972,23 @@ const windowWidth = useWindowWidth();
     terminalMobile: activeTerminalId ?? '',
     videoCenter: videoCenter ?? '',
   };
-  const centerFingerprint = computeCenterFingerprint(centerOccupancy, windowIdentity);
-  const prevFingerprintRef = useRef(centerFingerprint);
+  // Отпечаток занятости БЕЗ файла: арбитраж «страница ↔ файл» ведёт волна 3 по seq событий
+  // «открыли» (файл открыт позже страницы → файл поверх, страница остаётся смонтированной
+  // и уступает центр — см. DesktopWorkspace.centerWinner, fileOpenedAt/featureOpenedAt).
+  // Остальные окна (задача/коммит/граф/доска/превью/персона/…) закрывают страницу
+  // по-настоящему — их смена окна видна по этому отпечатку.
+  const centerFingerprintNoFile = computeCenterFingerprint({ ...centerOccupancy, file: false }, windowIdentity);
+  const prevFingerprintRef = useRef(centerFingerprintNoFile);
   const prevOpenFeatureIdRef = useRef(openFeatureId);
   // Окно открылось/сменилось (отпечаток изменился и теперь не пуст) → штамп окна.
   useEffect(() => {
     const prev = prevFingerprintRef.current;
-    prevFingerprintRef.current = centerFingerprint;
-    if (centerFingerprint !== prev && centerFingerprint !== '') {
+    prevFingerprintRef.current = centerFingerprintNoFile;
+    if (centerFingerprintNoFile !== prev && centerFingerprintNoFile !== '') {
       stampCounterRef.current += 1;
       windowStampRef.current = stampCounterRef.current;
     }
-  }, [centerFingerprint]);
+  }, [centerFingerprintNoFile]);
   // Страница открылась/сменилась (openFeatureId null→id или id→другой id) → штамп страницы.
   useEffect(() => {
     const prev = prevOpenFeatureIdRef.current;
@@ -989,7 +1021,7 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на
     // «окно позже страницы»; project/mobileView/activeSessionId в замыкании — текущие,
     // deps плодили бы лишние записи истории
-  }, [openFeatureId, flagsLoaded, featuresOn, centerFingerprint]);
+  }, [openFeatureId, flagsLoaded, featuresOn, centerFingerprintNoFile]);
 
   // Мобила (MAJOR-2): уход в список/сайдбар (mobileView='sidebar') при открытой странице
   // закрывает её ПО-НАСТОЯЩЕМУ (сброс openFeatureId, адрес без /feature/), а не гасит
@@ -1063,6 +1095,7 @@ const windowWidth = useWindowWidth();
     setAutoEditTaskId(autoEdit ? task.id : null);
     // Открытый файл и граф уступают место карточке задачи
     setOpenFile(null);
+    setFileOpenedAt(0);
     setGraphOpen(false);
     if (isMobile) {
       setMobileView('chat');
@@ -1244,6 +1277,7 @@ const windowWidth = useWindowWidth();
     sessionStorage.removeItem('cc_pending_file');
     // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое потребление диплинка из sessionStorage
     setOpenFile(path);
+    setFileOpenedAt(bumpOpenSeq());
     setFileFullscreen(loadFileFullscreenPref());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1267,6 +1301,7 @@ const windowWidth = useWindowWidth();
       if (edit) setAutoEditTaskId(pending);
       // Открытый файл уступает место карточке задачи
       setOpenFile(null);
+      setFileOpenedAt(0);
       // Пишем запись истории с задачей — hash-URL сохраняет /task/… и после перезагрузки
       if (window.matchMedia(MOBILE_QUERY).matches) {
         setMobileView('chat');
@@ -1298,6 +1333,7 @@ const windowWidth = useWindowWidth();
       setPersonaCreating(false);
       setPendingPersonaView(view === 'automation' ? 'automation' : null);
       setOpenFile(null);
+      setFileOpenedAt(0);
       if (window.matchMedia(MOBILE_QUERY).matches) {
         setMobileView('chat');
         navPush({ screen: 'project', project, view: 'chat', file: null, task: null, persona: pending });
@@ -1351,6 +1387,7 @@ const windowWidth = useWindowWidth();
   const ensureGraphOpen = useCallback(() => {
     setGraphOpen(true);
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setOpenCommitSha(null);
@@ -1374,13 +1411,16 @@ const windowWidth = useWindowWidth();
 
   // replaceNav — перезаписать текущую запись истории вместо новой: её уже положил переход
   // в проект с chatId (openProject из диплинка), вторая запись сломала бы «назад»
-  const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean, replaceNav?: boolean) => {
+  // keepFeaturePage — выбор по pending-каналу под открытой страницей фичи (запасный переход
+  // «чип ← к фиче»): гасит ТОЛЬКО закрытие страницы; мобильный показ чата и запись истории
+  // (с feature из снимка) выполняются как при явном выборе
+  const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean, replaceNav?: boolean, keepFeaturePage?: boolean) => {
     // Стартовый автовыбор первого чата (activeSession ещё null: холодный вход/диплинк)
     // страницу НЕ закрывает: она только что открыта по диплинку (M1, регрессия c3ae97728 —
     // вызов closeFeaturePage вынесли из-под if (!autoSelect) ради MAJOR-3, и стартовый
     // автовыбор SessionList её закрывал). Автовыбор ПОСЛЕ ухода из чата (архивация/
     // удаление активного, activeSession ≠ null) — закрывает (MAJOR-3).
-    const coldAutoSelect = !!autoSelect && activeSession == null;
+    const coldAutoSelect = (!!autoSelect && activeSession == null) || !!keepFeaturePage;
     setActiveSession(session);
     setPendingMessage(firstMessage);
     // Открытый чат — прочитанный. Отмечаем и при autoSelect (восстановление чата
@@ -1394,7 +1434,15 @@ const windowWidth = useWindowWidth();
     // с autoSelect=true, и без этого страница осталась бы поверх нового соседнего чата.
     // Исключение — холодный старт (coldAutoSelect): диплинк открыл страницу, и первый
     // чат выбирается под ней, а не вместо неё.
-    if (!coldAutoSelect) closeFeaturePage();
+    if (!coldAutoSelect) {
+      closeFeaturePage();
+      // Обычный выбор чата гасит указатель возврата («← назад», «← к фиче»), если он ведёт
+      // в ДРУГОЙ чат: иначе протухший чип всплывёт позже. Возврат, записанный для
+      // ВЫБИРАЕМОГО чата (переход из плашки/шторки фичи пишет его прямо перед выбором),
+      // не трогаем — чип «← к фиче» живёт именно им.
+      const back = getBackNav();
+      if (back && !(back.to.kind === 'chat' && back.to.id === session.id)) clearBackNav();
+    }
     if (!autoSelect) {
       // Файл, открытый В СПЛИТЕ, смену чата переживает: там чат и файл стоят рядом
       // двумя островами и друг другу не мешают — закрывать нечего. Так же ведёт себя
@@ -1407,6 +1455,7 @@ const windowWidth = useWindowWidth();
       // и граф, показываем чат во весь экран
       if (!keepSplitFile) {
         setOpenFile(null);
+        setFileOpenedAt(0);
         setOpenFileDiffMode(false);
       }
       setOpenCommitSha(null);
@@ -1419,11 +1468,13 @@ const windowWidth = useWindowWidth();
       // вернул бы чат без файла, который с экрана не уходил.
       const file = keepSplitFile ? openFile : null;
       const nav = replaceNav ? navReplace : navPush;
+      // Под сохранённой страницей фичи запись несёт feature: без него адрес потерял бы страницу
+      const feature = keepFeaturePage ? getNav()?.feature ?? null : null;
       if (isMobile) {
         setMobileView('chat');
-        nav({ screen: 'project', project, view: 'chat', file, chatId: session.id });
+        nav({ screen: 'project', project, view: 'chat', file, chatId: session.id, feature });
       } else {
-        nav({ screen: 'project', project, view: 'sidebar', file, chatId: session.id });
+        nav({ screen: 'project', project, view: 'sidebar', file, chatId: session.id, feature });
       }
     }
   };
@@ -1516,7 +1567,7 @@ const windowWidth = useWindowWidth();
     const consumePendingProjectChat = async () => {
       const raw = sessionStorage.getItem('cc_pending_project_chat');
       if (!raw) return;
-      const { pid, chatId, view } = parsePendingChat(raw, project.id);
+      const { pid, chatId, view, keepFeature } = parsePendingChat(raw, project.id);
       if (pid !== project.id) return;
       sessionStorage.removeItem('cc_pending_project_chat');
       const gen = guard.next();
@@ -1535,17 +1586,25 @@ const windowWidth = useWindowWidth();
           // Переход из чужого проекта уже положил запись с этим chatId (openProject) —
           // перезаписываем её. Диплинк внутри того же проекта пишет новую, «назад» вернёт в прежний чат
           const replace = getNav()?.chatId === s.id;
-          handleSelectSession(s, undefined, false, replace);
+          // Запасный переход «← к фиче»: страница пришла из снимка, чат выбирается под ней —
+          // coldAutoSelect, иначе closeFeaturePage закрыл бы страницу сразу за выбором
+          // (регрессия c84677f3c). Намерение несёт сам канал (метка keepFeature), а не запись
+          // истории: та хранит feature при любом выборе чата из открытой фичи, и «ждёт ответа»,
+          // уведомление или инцидент оставляли бы страницу поверх чата. Без метки страница закрывается.
+          const keepFeaturePage = keepFeature;
+          handleSelectSession(s, undefined, false, replace, keepFeaturePage);
           if (view) {
             // «Назад» на снимок (с перемонтажом или внутри проекта): файл и задача — из
             // снимка, а не из сохранённого состояния проекта или замыкания первого рендера.
             // Запись, только что записанную выбором чата, перезаписываем — новой не кладём.
             // Снимок «чат + файл» бывает только из сплита — полноэкранный файл снимаем всегда
             setOpenFile(view.file);
+            if (view.file) setFileOpenedAt(bumpOpenSeq()); else setFileOpenedAt(0);
             setOpenFileDiffMode(false);
             setFileFullscreen(false);
             setSelectedTaskId(view.task);
-            navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: view.file, task: view.task, chatId: s.id });
+            // Страницу фичи из снимка запись несёт дальше (метка канала), иначе адрес потерял бы /feature/
+            navReplace({ screen: 'project', project, view: isMobile ? 'chat' : 'sidebar', file: view.file, task: view.task, chatId: s.id, feature: keepFeature ? getNav()?.feature ?? null : null });
           }
         }
       } catch {
@@ -1802,6 +1861,10 @@ const windowWidth = useWindowWidth();
       // Страница фичи из снимка: «назад/вперёд» открывает/закрывает её (чат под ней
       // остаётся смонтированным, центр лишь переключает, что видно).
       setOpenFeatureId(s.feature ?? null);
+      // seq событий «открыли»: страница ПЕРВЫМ, файл ПОСЛЕ — если снимок несёт оба,
+      // файл выигрывает (как раньше: на снимке с обоими файл показывался поверх страницы).
+      if (s.feature) setFeatureOpenedAt(bumpOpenSeq()); else setFeatureOpenedAt(0);
+      if (f) setFileOpenedAt(bumpOpenSeq()); else setFileOpenedAt(0);
       // Персона / командный центр (вкладка «Команда») — восстанавливаем, если снимок несёт
       if (s.persona !== undefined) {
         setLeftTab('personas');
@@ -1813,10 +1876,11 @@ const windowWidth = useWindowWidth();
       // Снимок с уже открытым чатом пропускаем: так «назад» снимает запись шторки чатов,
       // и восстановление гонялось бы с переходом, который шторка запускает следом.
       // Файл и задача снимка едут вместе с чатом: обработчик pending держит замыкание
-      // первого рендера, и выбор чата там закрыл бы файл, восстановленный выше
+      // первого рендера, и выбор чата там закрыл бы файл, восстановленный выше.
+      // Метка keepFeature — из снимка: страница фичи, восстановленная выше, переживёт выбор чата
       const restoreChatId = chatToRestore(s.chatId, activeSessionRef.current?.id);
       if (restoreChatId) {
-        sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, restoreChatId, { file: f, task: s.task ?? null }));
+        sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(project.id, restoreChatId, { file: f, task: s.task ?? null }, !!s.feature));
         window.dispatchEvent(new Event('cc-pending-project-chat'));
       }
     };
@@ -1837,11 +1901,27 @@ const windowWidth = useWindowWidth();
   // Показ страницы и запись истории — общие.
   useEffect(() => {
     const onOpenFeature = (e: Event) => {
-      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null; fromChat?: boolean }>).detail;
+      const d = (e as CustomEvent<{ featureId: string; fromChatId: string | null; fromChat?: boolean; stage?: string; handled?: boolean }>).detail;
       if (!d?.featureId) return;
+      // Сигнал отправителю «страницу открыл воркспейс»: иначе чип возврата вне проекта
+      // (нет WorkspacePage) уйдёт запасным путём через App.
+      d.handled = true;
       if (d.fromChat && d.fromChatId) recordBackNav(d.fromChatId, { kind: 'feature', id: d.featureId });
       else if (!d.fromChat) clearBackNav();
       setOpenFeatureId(d.featureId);
+      // Якорь этапа (Ф-pl-b, M4): клик по точке на плашке чата открывает «Хронологию»,
+      // раскрытую/прокрученную на этом этапе. Вкладка ставится ЯВНО: setPage(fid) сбрасывает
+      // _tab только при смене fid, а страница, уже открытая на другой вкладке (например
+      // «Чатах»), от повторного клика по точке её бы не сменила. One-shot: вкладка прочитает
+      // якорь и сбросит (clearFeatureStageFocus) — следующее открытие без stage старый
+      // этап не раскроет.
+      if (d.stage) {
+        setFeaturePageTab('timeline');
+        focusFeatureStage(d.stage);
+      }
+      // «Открыли» — в момент действия, даже повторное открытие той же фичи (seq, не вывод
+      // из сравнения id): повторный «Фича →» возвращает страницу поверх ранее открытого файла.
+      setFeatureOpenedAt(bumpOpenSeq());
       if (isMobileRef.current) setMobileView('chat');
       // Снимок ДО navPush = предыдущая запись (список/чат, с которого открыли страницу)
       featurePrevStateRef.current = getNav();
@@ -1853,11 +1933,15 @@ const windowWidth = useWindowWidth();
   }, []);
 
   // Смена проекта: WorkspacePage перемонтируется (key={project.id} в App), но указатель
-  // «← назад» (featureBackNav) — module-level и живёт до конца вкладки. Сбрасываем его,
-  // чтобы указатель из старого проекта (chat → фича/чат) не применился к новому, если
-  // id чата совпали (MINOR: «← назад» не должен перескакивать через границу проекта).
+  // «← назад» (featureBackNav) — module-level и живёт до конца вкладки. Сбрасываем только
+  // указатели fromKind === 'chat': «чат → чат» локален для проекта и не должен
+  // перескакивать через границу проекта (MINOR). Возврат из фичи (fromKind='feature')
+  // остаётся — сузено по решению Александра (шов 2д-2): переход «фича → чат другого
+  // проекта» настоящий, чип сверяет to.id с id чата (id — GUID, между проектами не
+  // совпадут), без projectId чип не рисуется (FeatureBackChip.tsx:21), а протухший
+  // указатель гасит следующий обычный выбор чата (handleSelectSession, :1440).
   useEffect(() => {
-    clearBackNav();
+    if (getBackNav()?.fromKind === 'chat') clearBackNav();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- по key={project.id} эффект
     // исполняется ровно на перемонтировании (смену проекта); [project.id] дублирует это
   }, []);
@@ -1873,6 +1957,7 @@ const windowWidth = useWindowWidth();
     // восстановит снимок (feature: null) — setOpenFeatureId(null) дублирует его синхронно.
     if (target.kind === 'chat' && target.chatId === activeSessionRef.current?.id) {
       setOpenFeatureId(null);
+      setFeatureOpenedAt(0);
       window.history.back();
       return;
     }
@@ -1884,11 +1969,13 @@ const windowWidth = useWindowWidth();
       const prev = featurePrevStateRef.current;
       if (prev && prev.screen === 'project' && prev.project?.id === project.id && !prev.feature) {
         setOpenFeatureId(null);
+        setFeatureOpenedAt(0);
         window.history.back();
         return;
       }
     }
     setOpenFeatureId(null);
+    setFeatureOpenedAt(0);
     // Синхронизация URL с состоянием (крошка и история — в одно место, разрез §4): крошка
     // закрывала страницу, но URL #/project/{pid}/feature/{fid} оставался — системное
     // «назад» (popstate) уводило не туда. navReplace на снимок БЕЗ feature: адрес схлопывается
@@ -1922,6 +2009,7 @@ const windowWidth = useWindowWidth();
     if (isMobile && mobileView === 'chat') setMobileView('sidebar');
     navReplace({ screen: 'project', project, view, file: null, task: null, chatId: chatShown ? (activeSessionId ?? undefined) : undefined, feature: null });
     setOpenFeatureId(null);
+    setFeatureOpenedAt(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на переход
     // в «загружено и выключено»; project/mobileView/activeSessionId в замыкании — текущие
   }, [flagsLoaded, featuresOn, openFeatureId]);
@@ -1940,6 +2028,7 @@ const windowWidth = useWindowWidth();
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(loadFileFullscreenPref());
@@ -1963,6 +2052,7 @@ const windowWidth = useWindowWidth();
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setGraphOpen(false);
@@ -1978,6 +2068,7 @@ const windowWidth = useWindowWidth();
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(isMobile || isTablet ? true : loadFileFullscreenPref());
@@ -1992,6 +2083,7 @@ const windowWidth = useWindowWidth();
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(true);
     setGitStagePath(staged ? null : filePath);
     setFileFullscreen(true);
@@ -2006,6 +2098,7 @@ const windowWidth = useWindowWidth();
   // иначе каждая навигация плодила бы копии и кнопка «вперёд» обрезалась бы.
   const applyHistEntry = (e: FileHistoryEntry) => {
     setOpenFile(e.path);
+    setFileOpenedAt(bumpOpenSeq());
     setOpenFileDiffMode(!!e.diffMode);
     setGitStagePath(e.gitStagePath ?? null);
     setScrollToLine(e.line);
@@ -2029,6 +2122,7 @@ const windowWidth = useWindowWidth();
   // файла: вытесняет открытый файл, ридер занимает то же место в центре
   const handleOpenReader = (url: string) => {
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
@@ -2047,6 +2141,7 @@ const windowWidth = useWindowWidth();
   const clearCenterToChat = () => {
     if (!openFile && !openCommitSha && !selectedTaskId) return;  // уже чат — ничего не делаем
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
@@ -2062,11 +2157,15 @@ const windowWidth = useWindowWidth();
   // история браузера пуста, и history.back() ничего не делает. Всегда ведём на уровень выше.
   const backFromFile = () => {
     setOpenFile(null);
+    setFileOpenedAt(0);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
     if (isMobile) setMobileView('sidebar');
-    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: selectedTaskId ?? null });
+    // feature: openFeatureId — файл, открытый СО СТРАНИЦЫ ФИЧИ, при закрытии возвращает
+    // адрес к сегменту фичи (иначе navReplace схлопнул бы его и «назад» вёл мимо).
+    // Вне страницы фичи openFeatureId=null — поведение не меняется.
+    navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: selectedTaskId ?? null, feature: openFeatureId ?? null });
   };
   const backFromTask = () => {
     setSelectedTaskId(null);
@@ -2330,12 +2429,12 @@ const windowWidth = useWindowWidth();
             виден (FeatureCenter внутри прячет сам центр display:none и рисует страницу); при
             openFile/readerOpenMobile/mobileView='sidebar' контейнер был display:none → страница
             в DOM, но невидима (проба 360px: страница над файлом). Без страницы — прежние правила. */}
-        <div data-testid="workspace-center-container" style={{ flex: 1, display: featurePageOpen || (!openFile && !readerOpenMobile && mobileView !== 'sidebar') ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
+        <div data-testid="workspace-center-container" style={{ flex: 1, display: pageOnTop || (!openFile && !readerOpenMobile && mobileView !== 'sidebar') ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Центр (чат/задача/…) — СОСЕД страницы фичи, а не новая ветка тернарника:
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
               с десктопом — FeatureCenter (не копипаста). */}
-          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack}>
+          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} isMobile={isMobile} onBack={handleFeatureBack} onOpenFile={handleOpenFileFromTree} yielded={pageYieldsToFile}>
             {leftTab === 'tools'
               ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
               : personasMode
@@ -2361,7 +2460,7 @@ const windowWidth = useWindowWidth();
             размонтирования — состояние файла/ридера сохраняется для Esc), иначе на 360
             страница и файл делили экран 50/50 (MAJOR-2). */}
         {openFile && (
-          <div style={{ flex: 1, overflow: 'hidden', display: featurePageOpen ? 'none' : 'block' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: pageOnTop ? 'none' : 'block' }}>
             <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} />
           </div>
         )}
@@ -2442,6 +2541,10 @@ const windowWidth = useWindowWidth();
           // Показ страницы гейтится по флагу: при выключенном передаём null (open=false),
           // чтобы DesktopWorkspace/FeatureCenter не рисовали страницу (dark launch).
           openFeatureId={featurePageOpen ? openFeatureId : null}
+          // seq событий «открыли» (монотонный счётчик этой страницы): центр показывает
+          // то, что открыто последним — страницу фичи или файл (DesktopWorkspace).
+          featureOpenedAt={featureOpenedAt}
+          fileOpenedAt={fileOpenedAt}
           onFeatureBack={handleFeatureBack}
           project={project}
           projectForEdit={projectForEdit}

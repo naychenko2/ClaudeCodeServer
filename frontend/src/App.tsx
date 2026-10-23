@@ -14,6 +14,7 @@ import { VideoFloat } from './features/video/VideoFloat'
 import { VideoStageFrame } from './features/video/VideoStageFrame'
 import { useVideoStage } from './lib/videoStage'
 import { UpdatePrompt } from './components/UpdatePrompt'
+import { showToast } from './lib/toast'
 import { NotificationToasts } from './components/NotificationToasts'
 import { DeployHost } from './components/DeployHost'
 import { ProductHistory } from './components/ProductHistory'
@@ -36,7 +37,7 @@ import { resetAgentHubs } from './lib/agentHub'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
-import { pendingChatOnPop } from './lib/pendingProjectChat'
+import { pendingChatOnPop, encodePendingChat } from './lib/pendingProjectChat'
 import { requestOpenModelsSpend } from './lib/modelProvidersNav'
 import { api } from './lib/api'
 import { notificationTargetUrl } from './swPush'
@@ -1014,6 +1015,33 @@ export default function App() {
   // обработчик там живёт дольше рендера и обязан звать свежие версии
   useEffect(() => { openProjectFromHomeRef.current = openProjectFromHome })
   useEffect(() => { switchHubTabRef.current = switchHubTab })
+
+  // Чип «← к фиче» в разделе «Чаты» (воркспейса нет, cc-open-feature никто не принял):
+  // открываем проект фичи сразу со страницей фичи — снимок с feature читает WorkspacePage
+  // при монтировании (тот же приём, что у диплинка #/project/{id}/feature/{fid}).
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<{ projectId: string; featureId: string; chatId?: string }>).detail
+      if (!d?.projectId || !d.featureId) return
+      api.projects.list()
+        .then(list => {
+          const p = list.find(x => x.id === d.projectId)
+          if (!p) { showToast('Фича', 'Проект фичи недоступен — возможно, он удалён.'); return }
+          // minor (ревью Ф9b-д4, зам. 1): чат запасного перехода выбирается тем же каналом,
+          // что и диплинк: WorkspacePage читает cc_pending_project_chat при монтировании.
+          if (d.chatId) sessionStorage.setItem('cc_pending_project_chat', encodePendingChat(d.projectId, d.chatId, undefined, true))
+          recordRecentProject(p.id)
+          localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
+          localStorage.setItem(HUB_TAB_KEY, 'projects')
+          navPush({ screen: 'project', project: p, view: d.chatId ? undefined : 'chat', file: null, chatId: d.chatId, feature: d.featureId })
+          setProject(p)
+          setHubTab('projects')
+        })
+        .catch(() => { showToast('Фича', 'Не удалось открыть проект фичи.') })
+    }
+    window.addEventListener('cc-open-project-feature', onOpen)
+    return () => window.removeEventListener('cc-open-project-feature', onOpen)
+  }, [])
 
   // Из календаря: открыть задачу во вкладке «Задачи» её проекта.
   // Задача передаётся через sessionStorage — WorkspacePage подхватывает при монтировании.

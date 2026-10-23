@@ -8,10 +8,14 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -114,7 +118,22 @@ public class TasksController(
     // Git-вертикаль (опционально, как в SessionManager): гард мержа проверяет, что worktree
     // фичи числится в `git worktree list` проекта (тот же предикат, что AttachWorktreeAsync).
     // null — подсистема Git выключена → мерж fail-closed (иначе исполнитель стартует в корне).
-    GitService? git = null) : ControllerBase
+    GitService? git = null,
+    // Б5b (минор 4): боевой резолвер модели исполнителя (ModelAssignmentResolver.ExecutorModel) —
+    // та же модель, что реально едет в чат (матрицы персоны, дефолт места «исполнитель» = Strong,
+    // явная модель персоны). null — подсистема Llm выключена → «Авто» без разворота (не 500).
+    ModelAssignmentResolver? assignments = null,
+    // Б5b: журнал событий фичи (волна 3): точный режим stats.timeline (work/waiting/error/idle)
+    // и модели breakdown из журнала. null — подсистема Tasks выключена (как features) →
+    // stats.source=approx, не 500.
+    FeatureJournalStore? journal = null,
+    // Б-mk-b: каталог макетов фичи (Docs): null — подсистема Docs выключена → mockups: []
+    // (без флага, не 500). Склейка в GetFeature, не в FeatureProjector (ADR-031 «Макеты фичи»).
+    MockupCatalog? catalog = null,
+    // Б9b: шов расхода фичи (Core, ISpendFeatureReader): null — подсистема Spend выключена
+    // (гейт Subsystems:spend:Enabled) → stats.spend = null, не 500 (решение Андрея 20.10).
+    // Вертикаль Tasks Spend не видит напрямую — только через этот шов (SubsystemBoundaryTests).
+    ISpendFeatureReader? spend = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -480,9 +499,15 @@ public class TasksController(
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
         // Связь фичи с чатом: эпик через SourceSessionId/ExecutorLaunchedBySessionId (разрез §2:
         // «фича переезжает за оркестратором»). sessionId — id сессии (GUID-строка).
+        // Б7: снимок сессий владельца в оба ветвления — исполнители (chatId/chatArchived)
+        // одинаковы для features?sessionId= и features/{id} (ProjectFull); fail-closed.
+        // Б4: одна и та же функция модели чата (ChatModelResolver) в оба ветвления —
+        // modelLabel/modelFull исполнителей одинаковы, что в списке, что на странице.
+        var snapshot = SessionSnapshot();
+        var resolver = ChatModelResolver();
         var runs = sessionId is null
-            ? features.ProjectAll(UserId)
-            : features.ProjectForSession(sessionId, UserId);
+            ? features.ProjectAll(UserId, snapshot, resolver)
+            : features.ProjectForSession(sessionId, UserId, snapshot, resolver);
         return Ok(runs);
     }
 
@@ -502,13 +527,68 @@ public class TasksController(
         return Ok(features.BuildIndex(UserId, SessionSnapshot(), projectId));
     }
 
-    // Узкий снимок сессий владельца (id, taskId, projectId, archived) — единый источник для
-    // индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/удалённые
-    // id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца).
+    // Узкий снимок сессий владельца (id, taskId, projectId, archived, model) — единый источник
+    // для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/удалённые
+    // id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
+    // Session.Model (null/пусто — «Авто», слот; Б4).
     private List<FeatureIndexSession> SessionSnapshot() =>
         sessions.GetAllOwnedBy(UserId)
-            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived))
+            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model))
             .ToList();
+
+    // Б4/Б5b: готовая функция модели чата (label/full) для проекции фичи. Явная модель
+    // (Session.Model) — её имя/метка. «Авто» — боевой резолвер ModelAssignmentResolver.ExecutorModel
+    // (минор 4): та же модель, что реально едет в чат (уровень задачи → матрицы персоны → дефолт
+    // места «исполнитель» = Strong → UserModelTierResolver.ModelFor, единственная точка, инвариант
+    // CLAUDE.md). assignments null (Llm выключена) → null (без разворота). Функцию передаём
+    // в проектор: он в Main не лезет (инвариант изоляции вертикалей).
+    // internal — тестовый хук (минор 5): сверка owner-check задачи (чужая задача → «без задачи»).
+    internal Func<FeatureIndexSession, (string? Label, string? Full)>? ChatModelResolver()
+    {
+        if (assignments is null) return null;
+        return s =>
+        {
+            // Явная модель чата: имя + короткая метка.
+            if (!string.IsNullOrWhiteSpace(s.Model))
+                return (ModelShortLabel(s.Model), ModelDisplayName(s.Model));
+            // «Авто»: боевой резолвер. tasks.GetById — общий словарь, поэтому проверяем владельца
+            // (fail-closed, минор 5): чужая задача → как без задачи (резолв по персоне/месту).
+            var task = s.TaskId is not null ? tasks.GetById(s.TaskId) : null;
+            if (task is not null && task.OwnerId != UserId) task = null;
+            var persona = task?.PersonaId is not null ? personas.Get(task.PersonaId, UserId) : null;
+            // (минор 8) assignments здесь не null (null-случай — Llm выключена — обработан выше,
+            // функция не создаётся) → мёртвая проверка убрана.
+            string? model = task is not null
+                // Слот задачи: уровень задачи (постановщик) → PersonaModel (модель персоны → уровень).
+                ? assignments.ExecutorModel(task, persona, UserId)
+                // Задачи нет (или чужая): модель персоны; у персоны без явной модели/уровня
+                // подхватывается дефолт места «исполнитель» (Strong) — PersonaModel(placeDefaultTier:
+                // Strong). Персоны нет (null) → null: «Авто» без модели (в контексте фичи места нет).
+                : assignments.PersonaModel(persona, UserId,
+                    LocalActionCatalog.DefaultTierOf(LocalActionCatalog.TasksExecutor));
+            var full = model is null ? "Авто" : $"Авто → {ModelDisplayName(model)}";
+            return ("Авто", full);
+        };
+    }
+
+    // Полное имя модели для чипа: Claude → «Claude {Семейство}», иначе id модели как есть.
+    // internal — для сверки «Авто» с боевым резолвером (тест минора 4).
+    internal static string? ModelDisplayName(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        if (ClaudeModelFamily.Resolve(model) is { } family)
+            return $"Claude {family.DisplayName}";
+        return model;
+    }
+
+    // Короткая метка модели: Claude → семейство («Opus»), иначе первое слово id («Qwen»).
+    private static string? ModelShortLabel(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        if (ClaudeModelFamily.Resolve(model) is { } family)
+            return family.DisplayName;
+        return model.Split(' ')[0];
+    }
 
     // Одна фича по id эпика (волна 2 «Обзор фич», GET /api/tasks/features/{featureId}):
     // обёртка { run, events, eventsTotal } — агрегат (Project, без новой арифметики) + лента
@@ -535,17 +615,311 @@ public class TasksController(
         // ProjectFull: ПОЛНЫЙ (необлегчённый) run — null, если эпика нет (нет/чужой/удалён —
         // один 404, см. выше). Тело совпадает с 404 POST merge: { error: "Фича не найдена" }
         // (фронт читает error).
-        var run = features.ProjectFull(featureId, UserId);
+        // Б7: снимок сессий владельца → исполнители/шаги/витки (chatId/reviewChatId) fail-closed,
+        // как sessionId события ниже; одинаковые исполнители, что в features?sessionId= (ProjectForSession).
+        // Б4: chats[] — все чаты фичи из снимка владельца (fail-closed); modelLabel/modelFull — та же
+        // функция (ChatModelResolver), что у исполнителей: список и страница дают одинаковые.
+        var snapshot = SessionSnapshot();
+        var resolver = ChatModelResolver();
+        var run = features.ProjectFull(featureId, UserId, snapshot, resolver);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
         // Снимок сессий владельца — как для индекса (SessionSnapshot): sessionId события наружу
         // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по
         // ПОЛНОМУ run: reason вердикта = Verification.Notes, который Slim обнуляет для
         // списков/ответа (контракт master). run в ответе облегчён (SlimRun) — тот же контракт.
-        var all = FeatureProjector.BuildEvents(run, SessionSnapshot());
+        var all = FeatureProjector.BuildEvents(run, snapshot);
         var eventsTotal = all.Count;
         var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
-        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal });
+        // Б-pl: документы фичи (вкладка «Планы и макеты») — СПИСОК (без текста) по ПОЛНОМУ run
+        // (до SlimRun: Slim обнуляет ResultMarkdown, а hasText/mockupPaths — из него).
+        var plans = FeatureProjector.BuildPlans(run);
+        // Б4: chats[] — все чаты фичи (эпик + дочерние) из снимка владельца; только features/{id}
+        // (в SlimRun/индекс chats не входит). kind: executor — чат задачи, curator/orchestrator/key
+        // — чат эпика по признакам (BuildFeatureChats).
+        var allFeatureTasks = new List<TaskItem> { run.Epic };
+        allFeatureTasks.AddRange(run.Steps);
+        allFeatureTasks.AddRange(run.Reviews);
+        allFeatureTasks.AddRange(run.Qa);
+        if (run.Final is not null) allFeatureTasks.Add(run.Final);
+        if (run.Merge is not null) allFeatureTasks.Add(run.Merge);
+        allFeatureTasks.AddRange(run.Cut);
+        allFeatureTasks.AddRange(run.Plan);
+        var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
+        // Б5a/Б5b: stats — график времени фичи по ПОЛНОМУ run (до SlimRun: интервалы work из
+        // ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён для ответа).
+        // Индекс/список stats НЕ несут (лёгкий путь) — только страница фичи: чтение журнала
+        // (FeatureJournalStore.Read) — ТОЛЬКО здесь, не в индексе/списке.
+        // Б5b: журнал фичи (опционально — null, если подсистема Tasks выключена): полный
+        // (StartsWithCreated && !Truncated) → timeline в точном режиме (work/waiting/error/idle)
+        // и модели breakdown из журнала; иначе approx (по задачам). Выключенный журнал →
+        // source=approx, не 500 (Read сам не бросает: fail-closed на кривой id/отсутствие файла).
+        var journalResult = journal?.Read(UserId, featureId);
+        var journalComplete = journalResult is { StartsWithCreated: true, Truncated: false };
+        // Б6: breakdown (разрезы по персонам/моделям/ролям) + longestNow («дольше всех сейчас») —
+        // тоже по ПОЛНОМУ run, на том же снимке владельца (fail-closed) и now. Журнал полный →
+        // модели из журнала (turn.model), иначе из снимка через resolver (резолв «Авто» — Б4).
+        var now = DateTime.UtcNow;
+        // Б9b/Б9c: расход фичи (stats.spend). Атрибуция (единое правило членства,
+        // FeatureChatMembership — доработка Б9c): задачи фичи (id) + сессии (LinkedSessionId) +
+        // чаты, состоящие ТОЛЬКО в этой фиче (M[c] = {F}); ОБЩИЕ чаты (M[c] ⊇ {F}, |M[c]| ≥ 2)
+        // вычитаются из прямого среза (exclude) и делятся поровну (shared). Шов опционален:
+        // null (Spend выключен) → spend = null, не 500.
+        var taskIds = allFeatureTasks
+            .Select(t => t.Id)
+            .Where(id => id is not null)
+            .Select(id => id!)
+            .ToHashSet(StringComparer.Ordinal);
+        var F = run.Epic.Id;
+        var owner = tasks.GetByOwner(UserId).ToList();
+        // Единое правило «чат → фичи» (executor ∪ curator ∪ orchestrator), без фильтра по проекту.
+        var membership = FeatureChatMembership.Build(owner, snapshot);
+        // Общие чаты фичи: входят в 2+ фичи (F ∈ M[c], |M[c]| ≥ 2). Исключение главнее обеих осей.
+        var sharedChatIds = membership
+            .Where(kv => kv.Value.Contains(F) && kv.Value.Count >= 2)
+            .Select(kv => kv.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        // sessionIds: LinkedSessionId задач + чаты, состоящие ТОЛЬКО в этой фиче (M[c] = {F}),
+        // минус общие (они — в долю, не в прямой срез).
+        var sessionIds = allFeatureTasks
+            .Select(t => t.LinkedSessionId)
+            .Where(id => id is not null)
+            .Select(id => id!)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var (chatId, feats) in membership)
+            if (feats.Count == 1 && feats.Contains(F))
+                sessionIds.Add(chatId);
+        sessionIds.ExceptWith(sharedChatIds);
+        // Один проход (Slice): итог и записи из одного набора — без окна рассогласования между
+        // двумя отдельными сканами стора (минор доработки Б9b). spend null (Spend выключен) →
+        // оба null, как раньше (spend?.Totals / spend?.Records).
+        FeatureSpendTotals? spendTotals = null;
+        IReadOnlyList<FeatureSpendRecord>? spendRecords = null;
+        if (spend is not null)
+            (spendTotals, spendRecords) = spend.Slice(UserId, taskIds, sessionIds, sharedChatIds, from: run.Epic.CreatedAt);
+
+        // Б9c: доля ОБЩИХ (оркестраторских) чатов фичи. «Общий чат» — чат, входящий в 2+ фичи
+        // владельца (единое правило FeatureChatMembership: executor ∪ curator ∪ orchestrator
+        // эпика и дочерних задач). Их расход делится ПОРОВНУ (1/N) между фичами, активными на
+        // момент хода (state ∈ {running, waiting, merging}). Доля текущей фичи → stats.spend.shared
+        // + ВКЛЮЧЕНА в итоги. Нет общих чатов или Spend выключен (spendTotals null) → shared: null.
+        FeatureSpendShared? shared = null;
+        bool sharedCostPartial = false;
+        var sharedHidden = new List<string>();
+        if (spendTotals is not null && sharedChatIds.Count > 0)
+        {
+            // (1) Карта chatId → M[c] (состав каждого общего чата фичи) — знаменатель записи.
+            //     M[c] = membership[c]: множество фич, в которые чат входит (FeatureChatMembership).
+            var chatParticipants = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var chatId in sharedChatIds)
+                chatParticipants[chatId] = membership[chatId];
+
+            // (2) Кэш журнала на запрос (решение Александра, п.в): featureId → FeatureJournalReadResult?,
+            //     Read один раз на фичу, включая текущую (journalResult уже прочитан выше) —
+            //     глобального кэша нет. journal null (подсистема выключена) → null, не 500.
+            var journalCache = new Dictionary<string, FeatureJournalReadResult?>(StringComparer.Ordinal)
+            {
+                [run.Epic.Id] = journalResult,
+            };
+            FeatureJournalReadResult? ReadJournal(string fid)
+            {
+                if (!journalCache.TryGetValue(fid, out var jr))
+                {
+                    jr = journal?.Read(UserId, fid);
+                    journalCache[fid] = jr;
+                }
+                return jr;
+            }
+            // Журнал фичи полный: StartsWithCreated && !Truncated (единый предикат, как в п.4).
+            bool JournalComplete(string fid) =>
+                ReadJournal(fid) is { StartsWithCreated: true, Truncated: false };
+
+            // (3) Участницы = объединение M[c] по общим чатам фичи (для интервалов и minCreated).
+            var participants = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var chatId in sharedChatIds)
+                foreach (var fid in membership[chatId])
+                    participants.Add(fid);
+
+            // (4) ОДИН проход по участницам (решение Александра, п.8: один ProjectFull на
+            // участницу): ProjectFull даёт и интервалы, и Epic.CreatedAt — для границы окна (from)
+            // и для clipFrom journal-интервалов (знаменатели режимов однородны: оба обрезаются по
+            // epic.CreatedAt, минор 3). Источник интервалов выбирается ПО УЧАСТНИЦЕ: полный
+            // журнал участницы → её интервалы из её журнала, иначе approx. Так интервалы фичи
+            // не зависят от того, чьё состояние запрашивают (глобальный выбор по объединению
+            // давал F+H ≠ расход чата: у F в запросе от F approx, в запросе от H журнал).
+            var activities = new List<FeatureActivity>();
+            var minCreated = DateTime.MaxValue;
+            foreach (var fid in participants)
+            {
+                var p = features!.ProjectFull(fid, UserId, snapshot, resolver);
+                var intervals = JournalComplete(fid)
+                    ? SharedSpendSplitter.JournalActivity(ReadJournal(fid)!, now, p?.Epic.CreatedAt)
+                    : SharedSpendSplitter.ApproxActivity(p, now);
+                activities.Add(new FeatureActivity(fid, intervals));
+                if (p is not null && p.Epic.CreatedAt < minCreated)
+                    minCreated = p.Epic.CreatedAt;
+            }
+            if (minCreated == DateTime.MaxValue) minCreated = run.Epic.CreatedAt;
+
+            // (5) Записи ВСЕХ общих чатов — ОДИН Records (from = min CreatedAt участниц).
+            var sharedRecords = spend!.Records(UserId, [], sharedChatIds, [], from: minCreated);
+
+            // (6) Метод каждого общего чата: journal, если (a) журналы ВСЕХ M[c] полные И
+            //     (b) среди записей чата в окне нет дневных строк; иначе approx. Дневная строка
+            //     понижает метку независимо от активных (п.5). Итог фичи: journal, только если
+            //     ВСЕ её общие чаты journal (смысл метки — комментарий у FeatureSpendShared.Method).
+            var method = "journal";
+            foreach (var (chatId, m) in chatParticipants)
+            {
+                var complete = m.All(JournalComplete);
+                var hasDaily = sharedRecords.Any(r => r.SessionId == chatId && r.IsDaily);
+                if (!(complete && !hasDaily)) { method = "approx"; break; }
+            }
+
+            // (7) Деление: знаменатель = M[rec.SessionId] (состав чата), не объединение участниц.
+            var (share, shareCostPartial, shareHidden) =
+                SharedSpendSplitter.Split(sharedRecords, activities, chatParticipants, run.Epic.Id, method);
+            sharedCostPartial |= shareCostPartial;
+            sharedHidden.AddRange(shareHidden);
+            if (share.Turns > 0 || share.InputTokens > 0 || share.OutputTokens > 0
+                || share.CacheReadTokens > 0 || share.CacheCreationTokens > 0 || share.CostUsd > 0)
+                shared = share;
+        }
+        sharedHidden = sharedHidden.Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal).ToList();
+
+        // FeatureSpendTotals + доля общего чата → FeatureSpend (camelCase в JSON). Итоги
+        // (токены/цена/costPartial/hiddenCostModels) ВКЛЮЧАЮТ долю: токены и цена складываются,
+        // costPartial/hiddenCostModels — объединяются (та же логика надёжности цены, что в срезе).
+        var allHidden = spendTotals is null
+            ? sharedHidden
+            : spendTotals.HiddenCostModels.Concat(sharedHidden)
+                .Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal).ToList();
+        FeatureSpend? featureSpend = spendTotals is null ? null : new FeatureSpend(
+            InputTokens: spendTotals.InputTokens + (shared?.InputTokens ?? 0),
+            OutputTokens: spendTotals.OutputTokens + (shared?.OutputTokens ?? 0),
+            CacheReadTokens: spendTotals.CacheReadTokens + (shared?.CacheReadTokens ?? 0),
+            CacheCreationTokens: spendTotals.CacheCreationTokens + (shared?.CacheCreationTokens ?? 0),
+            CostUsd: spendTotals.CostUsd + (shared?.CostUsd ?? 0),
+            CostPartial: spendTotals.CostPartial || sharedCostPartial,
+            HiddenCostModels: allHidden,
+            // from — контракт string (не null, TS featureStats.ts): срез пуст (записей нет) →
+            // дата начала фичи (создание эпика), не null (решение по минору Б9b: не правим TS-тип).
+            From: (spendTotals.From ?? DateOnly.FromDateTime(run.Epic.CreatedAt)).ToString("yyyy-MM-dd"),
+            Shared: shared);
+        var (breakdown, longestNow) = FeatureBreakdown.Build(run, journalResult, snapshot, resolver, now, spendRecords);
+        var stats = new FeatureStats(
+            Source: journalComplete ? "journal" : "approx",
+            Truncated: journalResult?.Truncated ?? false,
+            Timeline: FeatureTimeline.Build(run, journalResult, now),
+            Breakdown: breakdown,
+            LongestNow: longestNow,
+            Spend: featureSpend);
+        // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
+        // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
+        var (mockups, mockupsUnavailable) = BuildMockups(run, catalog);
+        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
+            mockups, mockupsUnavailable });
     }
+
+    // Б-mk-b: склейка макетов фичи (ADR-031 «Макеты фичи»). Порядок (fail-closed, сторож G10):
+    //   1. эпик → его проект: только если принадлежит текущему владельцу (GetByOwner);
+    //      чужой/нет → mockups: [] (файлы чужого проекта не трогаем);
+    //   2. локальный проект (ProjectCapabilities.FilesOnServer=false) → [] + "device"
+    //      ДО любого вызова Docs (файлы на устройстве, диск сервера не читаем);
+    //   3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
+    //      Docs регистрируется безусловно, тумблера нет — ветка защитная, жива в тестах).
+    // TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
+    // которой есть path макета или любой из его files; иначе null. Сортировка: ModifiedAt
+    // убыв., null в конце (детерминизм — путь).
+    private (IReadOnlyList<MockupEntry> Mockups, string? Unavailable) BuildMockups(FeatureRun run, MockupCatalog? catalog)
+    {
+        // 1. Проект эпика: только если он принадлежит текущему владельцу (GetByOwner, fail-closed).
+        var project = run.Epic.ProjectId is { } pid
+            ? projects.GetByOwner(UserId).FirstOrDefault(p => p.Id == pid)
+            : null;
+        if (project is null) return ([], null);
+
+        // 2. Локальный проект (файлы на устройстве) → [] + "device" ДО Docs (G10).
+        if (!ProjectCapabilities.FilesOnServer(project))
+            return ([], "device");
+
+        // 3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага). linkedPaths —
+        //    linkedFiles всех задач ПОЛНОГО run (эпик + шаги + ревью + qa + финал + мерж +
+        //    разрез + план), только из проекта эпика (см. AllLinkedFiles).
+        var linkedPaths = AllLinkedFiles(run);
+        var found = catalog?.Find(project.RootPath, run.FeatureId, linkedPaths) ?? [];
+
+        // 4. TaskId/AuthorPersonaId — по первой (по CreatedAt) задаче, в linkedFiles которой есть
+        //    path макета или любой из его files; иначе null.
+        var attributed = found
+            .Select(e =>
+            {
+                var owner = OwnerTask(run, e);
+                return e with { TaskId = owner?.Id, AuthorPersonaId = owner?.PersonaId };
+            })
+            .ToList();
+
+        // 5. Сортировка: ModifiedAt убыв., null в конце; детерминизм — путь.
+        attributed = attributed
+            .OrderBy(e => e.ModifiedAt is null)
+            .ThenByDescending(e => e.ModifiedAt ?? DateTime.MinValue)
+            .ThenBy(e => e.Path)
+            .ToList();
+
+        return (attributed, null);
+    }
+
+    // Все задачи ПОЛНОГО run в одном списке: эпик + шаги + ревью + qa + финал + мерж +
+    // разрез + план. Единый хелпер (не две копии): новая роль в run не должна молча отстать
+    // в одном из мест (автор макета / linkedFiles) — обе точки берут список отсюда.
+    private static List<TaskItem> AllRunTasks(FeatureRun run)
+    {
+        var all = new List<TaskItem> { run.Epic };
+        all.AddRange(run.Steps);
+        all.AddRange(run.Reviews);
+        all.AddRange(run.Qa);
+        if (run.Final is not null) all.Add(run.Final);
+        if (run.Merge is not null) all.Add(run.Merge);
+        all.AddRange(run.Cut);
+        all.AddRange(run.Plan);
+        return all;
+    }
+
+    // linkedFiles всех задач ПОЛНОГО run. Резолв идёт от RootPath проекта эпика, поэтому
+    // берём linkedFiles только из задач того же проекта (иначе файл чужого проекта дал бы
+    // exists:false-шум в списке макетов). Фильтр по ProjectId применяется ВСЕГДА: эпик без
+    // проекта (ProjectId=null) → проходят только задачи тоже без проекта (ветка недостижима —
+    // без проекта эпика BuildMockups каталог не вызывает, см. шаг 1).
+    private static List<string> AllLinkedFiles(FeatureRun run)
+    {
+        var epicProject = run.Epic.ProjectId;
+        return AllRunTasks(run)
+            .Where(t => t.ProjectId == epicProject)
+            .SelectMany(t => t.LinkedFiles)
+            .ToList();
+    }
+
+    // Первая (по CreatedAt) задача фичи, в linkedFiles которой есть path макета или любой из его
+    // files; иначе null. Пути нормализуем (регистр/разделители): linkedFiles в сторе может
+    // отличаться от пути каталога регистром или обратным слэшем. Фильтр по проекту эпика —
+    // как в AllLinkedFiles: иначе макет (из проекта эпика) мог бы получить taskId/authorPersonaId
+    // задачи ДРУГОГО проекта.
+    private static TaskItem? OwnerTask(FeatureRun run, MockupEntry entry)
+    {
+        var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Path };
+        foreach (var f in entry.Files) targets.Add(f.Path);
+        var epicProject = run.Epic.ProjectId;
+        return AllRunTasks(run)
+            .Where(t => t.ProjectId == epicProject)
+            .Where(t => t.LinkedFiles.Any(p => targets.Contains(NormalizeLinkedPath(p))))
+            .OrderBy(t => t.CreatedAt)
+            .FirstOrDefault();
+    }
+
+    // Нормализация пути linkedFiles для сравнения с путями каталога: прямые слэши, без
+    // ведущего «/», регистр в нижний (Windows-диск регистронезависим, Linux — нет, но
+    // сравнение делаем нечувствительным, чтобы не терять совпадение).
+    private static string NormalizeLinkedPath(string? p) =>
+        (p ?? "").Replace('\\', '/').TrimStart('/').ToLowerInvariant();
 
     // ?eventsLimit= : не задан (null) → 100; строка «0» или «all» → все (int.MaxValue) — «0»
     // читается как «без лимита», а не как числовой ноль (отдельного числового 0 на wire нет:
@@ -581,9 +955,11 @@ public class TasksController(
         // 404 с телом: фича чужая/удалена — то же тело, что у GET features/{id} (фронт читает error).
         if (run is null) return NotFound(new { error = "Фича не найдена" });
 
-        // «Уже смержена» (merge-задача Done) и «закрыта» (эпик Done) — ПЕРЕД «финал не принят»:
-        // у закрытой фичи без принятого финала причина — «закрыта», а не «финал не принят» (п.5).
-        if (run.Merge is { Status: TaskItemStatus.Done })
+        // «Уже смержена» (State == merged: merge Done ∧ (финал принят ∨ эпик Done)) и «закрыта»
+        // (State == closed) — ПЕРЕД «финал не принят»: у закрытой фичи без принятого финала
+        // причина — «закрыта», а не «финал не принят» (п.5). Частичный мерж (merge Done, финал не
+        // принят, эпик открыт) → State != merged: верхний гард НЕ срабатывает (инцидент 21.10).
+        if (run.State == FeatureStates.Merged)
             return Conflict(new { error = "Фича уже смержена" });
         if (run.Closed)
             return Conflict(new { error = "Фича закрыта" });
@@ -631,12 +1007,16 @@ public class TasksController(
         try
         {
             // Идемпотентность: merge-задача уже есть (свежий снимок — после gate).
-            var existing = features.Project(featureId, UserId)?.Merge;
+            var freshRun = features.Project(featureId, UserId);
+            var existing = freshRun?.Merge;
             if (existing is not null)
             {
                 // п.2/п.73: merge-задача закрыта (Done) в окне между снимком и гейтом → 409: дубль
                 // не проходит (верхний гард смотрел на устаревший снимок). Текст отличен от верхнего
                 // гарда («Фича уже смержена»), чтобы тест гонки различал, какая ветка сработала.
+                // Частичный мерж (merge Done при State != merged) сюда не доходит: верхний гард
+                // «!run.Ready → Финал не принят» (921) отсекает его раньше (§7.8) — ветка «создать
+                // новую» была мёртвой и убрана, чтобы код не обещал несуществующую обработку.
                 if (existing.Status == TaskItemStatus.Done)
                     return Conflict(new { error = "Фича смержена во время мержа" });
                 // Открыта (todo/inProgress): если todo — запускаем исполнителя; возвращаем

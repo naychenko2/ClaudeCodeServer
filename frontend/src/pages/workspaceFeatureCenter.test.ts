@@ -14,10 +14,14 @@ import { createElement } from 'react';
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WorkspacePage } from './WorkspacePage';
+import { getNav } from '../lib/nav';
+import { encodePendingChat } from '../lib/pendingProjectChat';
+import { centerWinner } from './workspace/DesktopWorkspace';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
-import { __test as backNavTest, recordBackNav } from '../lib/featureBackNav';
+import { __test as backNavTest, recordBackNav, recordFeatureReturn, featureBackNavFrom, backNavFrom, getBackNav } from '../lib/featureBackNav';
 import { centerOccupiedByOther, centerFingerprint, CENTER_OCCUPANCY_KEYS, type CenterOccupancy } from '../lib/centerOccupancy';
 import { __test as indexTest } from '../lib/featuresIndex';
+import { setFeaturePageTab, __test as pageTest } from '../lib/featurePage';
 import type { FeatureIndexFeature, FeaturesIndex } from '../types/featureIndex';
 import type { Project, Session } from '../types';
 import {
@@ -59,13 +63,13 @@ const { store, sstore } = vi.hoisted(() => {
   return { store, sstore };
 });
 
-// ── workspaceState: activeSession задаётся из хранилища (инициализатор WorkspacePage) ──
-const wsState = vi.hoisted(() => ({ activeSession: null as unknown, leftTab: undefined as string | undefined }));
+// ── workspaceState: activeSession, openFile и leftTab задаются из хранилища (инициализатор WorkspacePage) ──
+const wsState = vi.hoisted(() => ({ activeSession: null as unknown, openFile: null as string | null, leftTab: undefined as string | undefined }));
 vi.mock('../lib/workspaceState', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/workspaceState')>();
   return {
     ...orig,
-    loadWorkspaceState: () => ({ activeSession: wsState.activeSession, leftTab: wsState.leftTab }),
+    loadWorkspaceState: () => ({ activeSession: wsState.activeSession, openFile: wsState.openFile, leftTab: wsState.leftTab }),
     saveWorkspaceState: () => {},
     loadFileFullscreenPref: () => false, saveFileFullscreenPref: () => {},
     isLeftTab: (t: string) => ['sessions', 'changes', 'tasks', 'personas', 'skills', 'tools', 'knowledge'].includes(t),
@@ -237,11 +241,12 @@ vi.mock('../features/personas/ProjectPersonasPanel', async (importOriginal) => {
 });
 
 // ── useFeaturePage: состояние страницы (run.epic.title) — no-op api отдаёт null ──
+// page — mockData.featurePage (динамически): тесты «Планы и макеты» задают plans/mockups.
 vi.mock('../lib/featurePage', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/featurePage')>();
   return {
     ...orig,
-    useFeaturePage: () => ({ status: 'ok', page: { run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0 } }),
+    useFeaturePage: () => ({ status: 'ok', page: mockData.featurePage ?? { run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0 } }),
   };
 });
 
@@ -375,6 +380,10 @@ describe('WorkspacePage: центр — страница фичи соседом
     (globalThis as any).window.innerWidth = 360;
     // PanelZone читает document.documentElement.style — в fake-DOM documentElement null
     (globalThis as any).document.documentElement = { style: { setProperty: () => {}, removeProperty: () => {} } };
+    // FeatureTimelineTab (якорь этапа, M4) читает document.querySelector — FDoc его не
+    // имеет: заглушка (тот же приём, что в FeaturePage.test.ts).
+    const doc0 = (globalThis as any).document;
+    if (!doc0.querySelector) doc0.querySelector = () => null;
     (globalThis as any).window.innerHeight = 800;
     (globalThis as any).window.location = { hash: '', href: 'http://x/', origin: 'http://x', protocol: 'http:', host: 'x', pathname: '/', search: '' };
     (globalThis as any).window.history = { state: null, pushState: () => {}, replaceState: () => {}, back: () => {}, go: () => {}, forward: () => {}, length: 1 };
@@ -417,6 +426,7 @@ describe('WorkspacePage: центр — страница фичи соседом
     mockData.chat = session;
     mockData.chats.length = 0;
     wsState.activeSession = session;
+    wsState.openFile = null;
     wsState.leftTab = undefined;
   });
   afterEach(() => {
@@ -483,6 +493,58 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect((reactProps(taAfterReturn!) as any).value, 'черновик композера не пережил возврат').toBe(draft);
   });
 
+  // M4: страница открыта на «Чатах» → клик по точке (cc-open-feature с stage) → вкладка
+  // ЯВНО «Хронология» (setPage сбрасывает _tab только при смене fid — повторный клик по
+  // точке на уже открытой фиче вкладку бы не сменил) + якорь этапа; вкладка «Хронология»
+  // читает якорь и ГАСИТ его (clearFeatureStageFocus) — «Фича →» без stage старый этап
+  // не раскроет. Мутации: убрать setFeaturePageTab('timeline') → вкладка «chats» → red;
+  // убрать clearFeatureStageFocus → stageFocus() не null → red.
+  it('M4: страница на «Чатах» → точка (stage) → «Хронология» + якорь гашен; «Фича →» без stage → якоря нет', async () => {
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // 1. Открыть страницу фичи из чата (без stage): вкладка — дефолт «Хронология».
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(pageTest.tab(), 'дефолтная вкладка — «Хронология»').toBe('timeline');
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница фичи не открыта').not.toBeNull();
+
+    // 2. Пользователь на вкладке «Чаты».
+    setFeaturePageTab('chats');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(pageTest.tab()).toBe('chats');
+
+    // 3. Клик по точке: cc-open-feature с stage.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true, stage: 'prod' },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // 4. Вкладка ЯВНО «Хронология» (не «Чаты» — старый дефект).
+    expect(pageTest.tab(), 'клик по точке не переключил на «Хронологию»').toBe('timeline');
+    // 5. «Хронология» смонтирована и ГАСИТ якорь (clearFeatureStageFocus после прочтения).
+    expect(pageTest.stageFocus(), 'якорь этапа не гашен вкладкой «Хронология»').toBeNull();
+
+    // 6. «Фича →» без stage: якорь не ставится заново (старый этап не раскроется).
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(pageTest.stageFocus(), '«Фича →» без stage не должна ставить якорь').toBeNull();
+    expect(pageTest.tab(), 'вкладка осталась «Хронология»').toBe('timeline');
+  });
+
   it('системное «назад» (popstate): setOpenFeatureId по снимку — в исходнике центра', () => {
     // Страница слишком велика для полного прогона popstate без DOM-истории; связку
     // «назад → закрытие страницы» проверяем по исходнику (паттерн workspaceLeaveActiveChat).
@@ -491,8 +553,9 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(src, 'popstate не выставляет openFeatureId').toContain('setOpenFeatureId(s.feature ?? null)');
     // Обёртка центра (FeatureCenter) прячет ChatPanel display:none (не размонтирует) при
     // открытой странице: общий паттерн мобильной и десктопной раскладки.
+    // centerHidden = open && !yielded: страница открыта и не уступила файл → центр скрыт.
     const centerSrc = readFileSync(new URL('../components/feature/FeatureCenter.tsx', import.meta.url), 'utf8');
-    expect(centerSrc, 'центр не прячет ChatPanel display:none').toContain("display: open ? 'none' : 'flex'");
+    expect(centerSrc, 'центр не прячет ChatPanel display:none').toContain("display: centerHidden ? 'none' : 'flex'");
   });
 
   it('диплинк #/project/p1/feature/f1: страница открывается при первом монтировании (чат в DOM, «Закрыть»)', async () => {
@@ -860,6 +923,552 @@ describe('WorkspacePage: центр — страница фичи соседом
     void container;
   });
 
+  // === «Последнее действие выигрывает» — сквозная защита на НАСТОЯЩЕЙ десктопной
+  // раскладке (DesktopWorkspace + FeatureCenter с реальными children, не заглушкой).
+  // Центр показывает то, что открыто ПОСЛЕДНИМ: страницу фичи или файл. Открыли страницу
+  // (вкл. смена фичи A→B) — она поверх ранее открытого файла; открыли файл (любой источник)
+  // при открытой странице — файл поверх, страница смонтирована и скрыта; закрыли файл —
+  // страница вернулась, закрыли страницу — файл/чат как до. Мутации: «yielded={false}»
+  // (страница никогда не уступает) краснеет в (б); «yielded={!!p.openFile}» (уступает
+  // ЛЮБОЙ файл — исходный баг) краснеет в (а); «lastOpened сбрасывается только при
+  // закрытии страницы» (частный сброс, не на смене) краснеет в (г).
+
+  // Клик по узлу по data-testid (+ опц. title): reactProps.onClick в act().
+  function clickNode(container: any, testId: string, title?: string): void {
+    let node: any = null;
+    const walk = (x: any): void => {
+      if (node) return;
+      if (x.nodeType === 1 && x.getAttribute?.('data-testid') === testId && (title === undefined || x.getAttribute?.('title') === title)) { node = x; return; }
+      for (const c of x.childNodes ?? []) walk(c);
+    };
+    walk(container);
+    expect(node, `узел ${testId}${title ? ` (title=${title})` : ''} не найден`).not.toBeNull();
+    const props = reactProps(node);
+    expect(props?.onClick, `onClick у ${testId}`).toBeTruthy();
+    act(() => { (props!.onClick as () => void)(); });
+  }
+
+  // Закрыть файл в центре: крестик FileViewer — это кнопка CenterViewShell (title «Закрыть»,
+  // родитель SPAN — обёртка closeTestId). Ищем ВНУТРИ feature-center-center (страница фичи —
+  // в feature-center-page). Другая кнопка «Закрыть» в FileViewer (parent DIV) — не та.
+  function clickFileClose(container: any): void {
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect(center, 'центр (feature-center-center) не найден').not.toBeNull();
+    let node: any = null;
+    const walk = (x: any): void => {
+      if (node) return;
+      if (x.nodeType === 1 && x.getAttribute?.('title') === 'Закрыть' && x.parentNode?.nodeType === 1 && x.parentNode?.nodeName === 'SPAN') { node = x; return; }
+      for (const c of x.childNodes ?? []) walk(c);
+    };
+    walk(center);
+    expect(node, 'крестик закрытия файла (CenterViewShell, parent SPAN) не найден в центре').not.toBeNull();
+    const props = reactProps(node);
+    expect(props?.onClick, 'onClick у крестика закрытия файла').toBeTruthy();
+    act(() => { (props!.onClick as () => void)(); });
+  }
+
+  // (а) файл открыт ДО страницы (из дерева) → «Фича →» → страница ВИДНА (центр скрыт):
+  // страница открыта ПОСЛЕ файла → последнее действие (страница) выигрывает.
+  it('major(а): файл открыт (из дерева) → «Фича →» → страница видна, центр (файл) скрыт', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    // Файл открыт ДО страницы (из дерева): wsState.openFile задаёт инициализатор openFile.
+    wsState.openFile = 'docs/mockups/foo.html';
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Открываем страницу фичи из чата.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница фичи смонтирована.
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect(page, 'обёртка страницы фичи не смонтирована').not.toBeNull();
+    // КЛЮЧЕВОЕ (major а): страница ВИДНА (display:flex) — «чужой» файл её не вытеснил.
+    expect((page as any).style?.display, 'страница скрыта «чужим» (файл из дерева) (major а)').toBe('flex');
+    // Центр (файл) скрыт (display:none): страница показана поверх.
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл) не скрыт (major а)').toBe('none');
+  });
+
+  // (б) со страницы «Открыть макет» → файл ВИДИМ, страница СКРЫТА; закрыл файл → страница вернулась.
+  it('major(б): «Открыть макет» → файл виден, страница скрыта; закрыл файл → страница вернулась', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    // Страница фичи с макетом (existing html) + вкладка «Планы и макеты».
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Открываем страницу фичи.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Выбрать макет (строка) → карточка деталей.
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Клик «Открыть макет» → onOpenFile (onOpenFileFromFeature) → файл открыт.
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (major б): файл ВИДИМ (центр display:flex), страница СКРЫТА (display:none).
+    // Мутация «yielded={false}» (буквальный возврат исходного бага) краснеет: страница
+    // осталась бы видной (display:flex), а файл — в скрытом центре (display:none).
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл) не виден (major б)').toBe('flex');
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не скрыта (major б)').toBe('none');
+
+    // Закрыл файл (крестик) → страница вернулась (display:flex), центр (чат) скрыт:
+    // файл не сбрасывался при открытии страницы, а закрытие файла возвращает страницу.
+    clickFileClose(container);
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const pageAfterClose = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((pageAfterClose as any).style?.display, 'страница не вернулась после закрытия файла (major б)').toBe('flex');
+    const centerAfterClose = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((centerAfterClose as any).style?.display, 'центр не скрыт после закрытия файла (major б)').toBe('none');
+  });
+
+  // (в) страница открыта → открыли файл (любой источник; правило «последнее действие
+  // выигрывает» не различает «свой макет» и «чужой файл» — старый критерий «только свой
+  // файл» убран) → файл ВИДИМ, страница скрыта. Два макета: первый открыт, затем второй
+  // (другой путь) — последний (чужой) выигрывает.
+  it('(в): страница открыта → открыли файл (любой источник) → файл виден, страница скрыта', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [
+        { path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved', files: [{ path: 'docs/mockups/foo.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+        { path: 'docs/mockups/bar.html', title: 'Bar', status: 'approved', files: [{ path: 'docs/mockups/bar.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+      ],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Открываем страницу фичи.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Открываем первый макет (foo.html) — файл после страницы.
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Открываем ВТОРОЙ, другой макет (bar.html) — «чужой» файл, тоже после страницы.
+    clickNode(container, 'mockup-row', 'docs/mockups/bar.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (в): файл (последний открытый) ВИДИМ (центр display:flex), страница СКРЫТА.
+    // Мутация «yielded={false}» (страница никогда не уступает) краснеет: страница осталась
+    // бы видной, а файл — в скрытом центре.
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл) не виден (в)').toBe('flex');
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не скрыта (в)').toBe('none');
+  });
+
+  // Ф-ah (мобила): страница открыта → открыли файл ПОСЛЕ неё → файл вытесняет страницу
+  // (как на десктопе); повторное «Фича →» возвращает страницу поверх файла.
+  it('Ф-ah (мобила): страница → файл после неё → файл виден, страница скрыта; «Фича →» снова — страница поверх', async () => {
+    (globalThis as any).window.innerWidth = 360;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [
+        { path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved', files: [{ path: 'docs/mockups/foo.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+      ],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Файл — последний открытый: контейнер центра скрыт, страница скрыта, файл виден.
+    // Мутация «pageYieldsToFile = false» краснит все три утверждения.
+    expect((findNodeByAttr(container, 'data-testid', 'workspace-center-container') as any).style?.display,
+      'контейнер центра не уступил файлу (мобила)').toBe('none');
+    expect((findNodeByAttr(container, 'data-testid', 'feature-center-page') as any).style?.display,
+      'страница не скрыта при открытом позже файле (мобила)').toBe('none');
+    const fileName = findNodeByAttr(container, 'data-testid', 'file-name');
+    expect(fileName, 'файл не в DOM (мобила)').not.toBeNull();
+    // Не только в DOM, но и ВИДЕН: мутации «обёртка файла display:none» и
+    // «featurePageOpen ? none : block» (поведение до дельты) краснят это утверждение.
+    expect(hasHiddenAncestor(fileName!), 'файл СКРЫТ при уступке страницы (мобила)').toBe(false);
+
+    // Обратный переход: повторное открытие страницы — страница поверх файла.
+    await openFeature(container);
+    expect((findNodeByAttr(container, 'data-testid', 'feature-center-page') as any).style?.display,
+      'страница не вернулась поверх файла (мобила)').toBe('flex');
+    expect((findNodeByAttr(container, 'data-testid', 'workspace-center-container') as any).style?.display,
+      'контейнер страницы не виден (мобила)').toBe('flex');
+  });
+
+  // (г) зонд A Глеба: страница A → «Открыть макет» (файл открыт, страница уступила) →
+  // «Фича →» на ДРУГУЮ фичу B → страница B ВИДНА (смена фичи = новое открытие → страница
+  // снова поверх файла). Старый баг: признак «свой файл» сбрасывался только при ЗАКРЫТИИ
+  // страницы, а не при СМЕНЕ → страница B монтировалась, но оставалась display:none.
+  it('(г): страница A → «Открыть макет» → «Фича →» на B → страница B видна (зонд A)', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    // Две фичи в индексе: A (f1) и B (f2).
+    const idx = {
+      features: [feat(), feat({ featureId: 'f2', title: 'Вторая фича' })],
+      chats: {},
+    } as FeaturesIndex;
+    indexTest.setIndex('p1', idx);
+    mockData.index = idx;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Страница A (f1).
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // «Открыть макет» → файл открыт, страница A уступила (скрыта).
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const centerBefore = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((centerBefore as any).style?.display, 'файл не виден после «Открыть макет» (г)').toBe('flex');
+
+    // «Фича →» на ДРУГУЮ фичу B (f2): смена фичи = новое открытие страницы.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f2', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (г, зонд A): страница B ВИДНА (display:flex), центр (файл A) скрыт.
+    // Мутация «lastOpened сбрасывается только при закрытии страницы» (частный сброс)
+    // краснеет: страница B смонтирована, но осталась бы display:none (файл A виден).
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect(page, 'страница B не смонтирована (г)').not.toBeNull();
+    expect((page as any).style?.display, 'страница B скрыта (утечка: файл A поверх) (г)').toBe('flex');
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл A) не скрыт при открытой странице B (г)').toBe('none');
+  });
+
+  // (д) три под-сценария: (1) два файла подряд — последний выигрывает; (2) быстрый
+  // повторный клик «Открыть макет» — файл остаётся видим (нет сброса/мигания); (3)
+  // закрыли страницу при открытом файле — файл виден (страница не удерживает центр).
+  it('(д): два файла подряд → последний; быстрый повторный клик → файл; закрыли страницу при открытом файле → файл', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [
+        { path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved', files: [{ path: 'docs/mockups/foo.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+        { path: 'docs/mockups/bar.html', title: 'Bar', status: 'approved', files: [{ path: 'docs/mockups/bar.html', exists: true }], source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null },
+      ],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Страница.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // (1) Два файла подряд: foo.html, затем bar.html → последний (bar) выигрывает.
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-row', 'docs/mockups/bar.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    let center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'последний (второй) файл не виден (д.1)').toBe('flex');
+
+    // (2) Быстрый повторный клик «Открыть макет» (тот же bar.html): файл остаётся
+    // победителем — файл виден, страница скрыта (не размонтирована). Подшаг краснеет при
+    // мутации yielded={false}: тогда страница осталась бы видимой (flex), а файл — в
+    // скрытом центре (none).
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после повторного клика (д.2)').toBe('flex');
+    const pageAfterRepeat = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((pageAfterRepeat as any).style?.display, 'страница не скрыта после повторного клика (д.2: файл должен остаться победителем)').toBe('none');
+
+    // (3) Закрыли страницу (крестик «Закрыть» страницы) при открытом файле → файл виден.
+    const pageClose = findNodeByAttr(container, 'data-testid', 'feature-page-close');
+    expect(pageClose, '«Закрыть» страницы не найдено (д.3)').not.toBeNull();
+    act(() => { (reactProps(pageClose!.childNodes[0]) as any).onClick(); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Страница закрыта (не смонтирована), центр (файл) виден.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-center-page'), 'страница не закрыта (д.3)').toBeNull();
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после закрытия страницы (д.3)').toBe('flex');
+  });
+
+  // === П1: файл открыт ДО страницы (диплинк = действие, не «восстановление») → страница →
+  // повторное открытие ТОГО ЖЕ файла → файл виден. Повторное открытие того же файла —
+  // событие (seq), а не вывод из сравнения значений: файл снова «позже» страницы и выигрывает.
+  // Старая логика (prevFileRef): openFile не изменился → события нет → страница осталась бы
+  // видимой → тест краснеет.
+  it('П1: файл (диплинк) → страница → повторное открытие ТОГО ЖЕ файла → файл виден', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    // Макет на странице — для «Открыть макет» (тот же файл, что в диплинке).
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    // Диплинк файла (cc_pending_file): файл открывается действием при монтировании.
+    sstore.set('cc_pending_file', 'p1|docs/mockups/foo.html');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Файл открыт (центр виден).
+    let center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после диплинка (П1)').toBe('flex');
+
+    // Страница: открыта ПОСЛЕ файла → страница видна, файл скрыт.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    let page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не видна после открытия (П1)').toBe('flex');
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не скрыт под страницей (П1)').toBe('none');
+
+    // Повторное открытие ТОГО ЖЕ файла («Открыть макет», тот же путь): событие →
+    // файл снова «позже» страницы → файл виден, страница скрыта.
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после повторного открытия того же файла (П1)').toBe('flex');
+    page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не скрыта после повторного открытия того же файла (П1)').toBe('none');
+  });
+
+  // === П2: страница → «Открыть макет» → «Фича →» на ТУ ЖЕ фичу → страница видна.
+  // Повторное «Фича →» на ту же фичу — событие (seq), а не вывод из сравнения id:
+  // страница снова «позже» файла и выигрывает. Старая логика (prevFeatureRef):
+  // openFeatureId не изменился → события нет → файл остался бы победителем → тест краснеет.
+  it('П2: страница → «Открыть макет» → «Фича →» на ТУ ЖЕ фичу → страница видна', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Страница.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // «Открыть макет» → файл победитель (страница скрыта).
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    let center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не виден после «Открыть макет» (П2)').toBe('flex');
+
+    // «Фича →» на ТУ ЖЕ фичу (f1): повторное открытие = событие → страница победитель.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (П2): страница ВИДНА (display:flex), центр (файл) скрыт.
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не видна после повторного «Фича →» на ту же фичу (П2)').toBe('flex');
+    center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'центр (файл) не скрыт при повторном «Фича →» (П2)').toBe('none');
+  });
+
+  // === П3: два события «открыли» в ОДНОМ коммите (popstate восстанавливает файл и страницу
+  // одним снимком) — порядок по seq, не по совпадению в одном эффекте.
+  // (а) файл, затем страница → страница; (б) страница, затем файл (в одном коммите) → файл.
+  it('П3(а): файл (диплинк), затем страница → страница выигрывает', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    sstore.set('cc_pending_file', 'p1|docs/mockups/foo.html');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница открыта ПОСЛЕ файла → страница выигрывает.
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не выиграла (П3а)').toBe('flex');
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не скрыт (П3а)').toBe('none');
+  });
+
+  it('П3(б): страница, затем файл в ОДНОМ коммите (popstate) → файл выигрывает', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [{
+        path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved',
+        files: [{ path: 'docs/mockups/foo.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
+      }],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+
+    // Страница открыта (seq 1).
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // popstate: снимок несёт И файл, И страницу — оба «открытия» в одном коммите.
+    // Обработчик ставит seq страницы, затем seq файла → файл «позже» → файл выигрывает.
+    (globalThis as any).window.dispatchEvent({
+      type: 'popstate',
+      state: { screen: 'project', project, view: 'sidebar', file: 'docs/mockups/foo.html', feature: 'f1' },
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // КЛЮЧЕВОЕ (П3б): файл (последнее событие) ВИДИМ, страница скрыта.
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не выиграл при popstate с обоими (П3б)').toBe('flex');
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect((page as any).style?.display, 'страница не скрыта при popstate с обоими (П3б)').toBe('none');
+  });
+
+  // === П4: холодный старт — хэш фичи + сохранённый openFile → страница.
+  // Страница открыта при монтировании из хэша (seq ставится при монтировании);
+  // сохранённый файл — «восстановлен», а не «открыт» (fileOpenedAt = 0) → страница
+  // выигрывает.
+  it('П4: холодный старт: хэш фичи + сохранённый файл → страница', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
+    (globalThis as any).window.history.state = null;
+    // Сохранённый файл (workspaceState): «восстановлен», а не «открыт» — fileOpenedAt = 0.
+    wsState.openFile = 'docs/mockups/foo.html';
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    // Страница смонтирована и ВИДНА (победитель холодного старта).
+    const page = findNodeByAttr(container, 'data-testid', 'feature-center-page');
+    expect(page, 'страница не смонтирована (П4)').not.toBeNull();
+    expect((page as any).style?.display, 'страница не видна при холодном старте (П4)').toBe('flex');
+    // Восстановленный файл не вытесняет страницу (он «не позже» по seq).
+    const center = findNodeByAttr(container, 'data-testid', 'feature-center-center');
+    expect((center as any).style?.display, 'файл не скрыт при холодном старте (П4)').toBe('none');
+  });
   // ═══════════════════════════════════════════════════════════════════════════
   // Автоскрытие (дефект 20.10): страница фичи уступает центр любому другому окну
   // (файл/задача/граф/…) и при явном выборе чата. Единый источник — otherCenterOpen
@@ -984,6 +1593,107 @@ describe('WorkspacePage: центр — страница фичи соседом
       .not.toContain('/feature/');
   });
 
+  // Ф9b-д3: возврат «страница фичи → чат» записывается ПЕРЕД выбором чата (шторка/попап);
+  // closeFeaturePage страницу закрывает, но указатель не гасит — иначе чипа «← к фиче» нет.
+  // Мутация (вернуть clearBackNav() в closeFeaturePage) красит тест.
+  it('выбор чата из фичи: страница закрыта, указатель возврата в фичу жив (чип)', async () => {
+    const win = globalThis as any;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chat = chatB;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    recordFeatureReturn('f1', { kind: 'chat', id: 'chatB' }, 'Моя фича', undefined, false);
+
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница не закрыта').toBeNull();
+    expect(featureBackNavFrom('chatB'), 'указатель возврата в фичу погашен выбором чата')
+      .toMatchObject({ featureId: 'f1', title: 'Моя фича' });
+  });
+
+  // Ф9b-д4: ОБЫЧНЫЙ выбор другого чата гасит указатель возврата, записанный для чата chatB
+  // (иначе позже в chatB всплывёт протухший чип «← к фиче»). Мутация «снять сброс в
+  // handleSelectSession» краснит тест; парный выше (цель = выбираемый чат) — не краснит.
+  it('выбор ДРУГОГО чата гасит указатель возврата (фича → chatB)', async () => {
+    const win = globalThis as any;
+    const chatC: Session = { id: 'chatC', name: 'Чат Ц', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatC);
+    mockData.chat = chatC;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    recordFeatureReturn('f1', { kind: 'chat', id: 'chatB' }, 'Моя фича', undefined, false);
+    expect(featureBackNavFrom('chatB'), 'указатель не записан (предусловие)').not.toBeNull();
+
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatC');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+
+    expect(featureBackNavFrom('chatB'), 'указатель «фича → chatB» пережил обычный выбор другого чата').toBeNull();
+  });
+
+  // Ф-ал (шов Александра 2д-2): эффект монтирования воркспейса гасит ТОЛЬКО указатели
+  // fromKind='chat' («чат → чат» локальны для проекта). Возврат из фичи остаётся: переход
+  // «фича → чат другого проекта» настоящий, чип должен появиться. Мутация: вернуть
+  // безусловный clearBackNav() в эффекте — первый тест красный; снять fromKind-проверку
+  // совсем (никогда не гасить) — красный второй тест.
+  it('монтирование другого воркспейса: возврат «фича → чат» не гасится, чип виден (2д-2)', async () => {
+    const win = globalThis as any;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chat = chatB;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    // Переход с страницы фичи записан ДО монтирования нового воркспейса (другое
+    // пространство: фича в одном проекте, её ключевой чат — в другом).
+    recordFeatureReturn('f1', { kind: 'chat', id: 'chatB' }, 'Моя фича', undefined, false);
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Указатель пережил монтирование нового воркспейса.
+    expect(featureBackNavFrom('chatB'), 'указатель «фича → chatB» погашен монтированием воркспейса').not.toBeNull();
+    // Выбор chatB — чип «← к фиче» в шапке чата.
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-back-chip'),
+      'чип «← к фиче» не показан после перехода «фича → чат другого проекта»').not.toBeNull();
+  });
+
+  it('монтирование другого воркспейса: указатель «чат → чат» гасится (2д-2, парный)', async () => {
+    const win = globalThis as any;
+    win.window.location.hash = '';
+    win.window.history.state = null;
+    // «Чат → чат» из предыдущего проекта: локальный указатель, должен быть снят.
+    recordBackNav('chatOld', 'chatB');
+    expect(backNavFrom('chatB'), 'предусловие: указатель «чат → чат» записан').not.toBeNull();
+    mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(getBackNav(), 'указатель «чат → чат» пережил монтирование другого воркспейса').toBeNull();
+  });
+
   it('автоскрытие: выбор другого чата (десктоп) — страница фичи скрыта', async () => {
     const win = globalThis as any;
     win.window.innerWidth = 1280;
@@ -1013,6 +1723,256 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(win.window.location.hash, 'адрес содержит /feature/ после выбора чата (десктоп)')
       .not.toContain('/feature/');
   });
+
+  // Ф-хв-д (возврат ревью Ф-хв, п.1): запасный переход «чип ← к фиче» из раздела «Чаты».
+  // App.tsx пишет снимок с feature + chatId и канал cc_pending_project_chat; WorkspacePage
+  // открывает страницу фичи из снимка, а чат выбирается холодным автовыбором — страница
+  // НЕ закрывается (регрессия c84677f3c: closeFeaturePage в handleSelectSession закрывала
+  // её сразу за выбором). Мутации: вернуть false третьим аргументом в consumePendingProjectChat
+  // → красный; снять feature из снимка в App.tsx → красный (тест в App.deeplink.test.ts);
+  // снять запись канала → красный (тот же тест).
+  const runFallbackTransition = async (mobile: boolean, restored = false) => {
+    const win = globalThis as any;
+    if (!mobile) win.window.innerWidth = 1280;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chats.push(chatB);
+    // холодный старт: активного чата нет; restored — активный чат восстановлен из ws:{projectId}
+    if (!restored) wsState.activeSession = null;
+    if (restored) { mockSessionList.push(session); mockData.chats.push(session); } // восстановленный чат есть в списке
+    mockData.chat = chatB;
+    // Ровно то, что делает App.tsx на запасном переходе: navPush-снимок (toHash: сегмент
+    // feature приоритетнее chatId) + pending-канал.
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.sessionStorage.setItem('cc_pending_project_chat', encodePendingChat('p1', 'chatB', undefined, true));
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // ChatPanel подгружается асинхронно: ждём появления панели, а не фиксированное время
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'chat-panel'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+
+    // КЛЮЧЕВОЕ: страница фичи открыта И чат выбран — одновременно.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи не открылась из снимка (запасный переход)').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'на странице фичи нет «Закрыть» (запасный переход)').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'чат не выбран (запасный переход)').not.toBeNull();
+    // Pending-канал потреблён эффектом.
+    expect(win.sessionStorage.getItem('cc_pending_project_chat'),
+      'pending-канал не очищен (запасный переход)').toBeNull();
+    if (restored) {
+      expect(win.window.location.hash, 'адрес потерял /feature/ (восстановленный активный чат)')
+        .toContain('/feature/');
+    }
+  };
+  it('запасный переход: снимок + канал — страница фичи остаётся, чат выбран (мобила 360)', () => runFallbackTransition(true));
+  it('запасный переход: снимок + канал — страница фичи остаётся, чат выбран (десктоп 1280)', () => runFallbackTransition(false));
+
+  // M1 финального ревью: «оставить страницу» несёт сам канал (метка запасного перехода), а не
+  // запись истории. Другие писатели (AiLauncher «ждёт ответа», уведомление, инцидент) метку не
+  // ставят: событие для чата, из которого открыта страница, закрывает её и выбирает чат.
+  // Мутации: вернуть вывод признака из getNav() → красный; снять запись метки в App.tsx →
+  // красный тест «запасный переход».
+  const runNoMarkSameChat = async (mobile: boolean) => {
+    const win = globalThis as any;
+    if (!mobile) win.window.innerWidth = 1280;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chats.push(chatB);
+    mockData.chat = chatB;
+    wsState.activeSession = null;
+    // страница открыта из снимка «фича + чат B», канала при монтировании нет
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница не открыта (предусловие)').not.toBeNull();
+    // «ждёт ответа» из чата B: канал БЕЗ метки
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'chat-panel'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'переход к чату без метки не закрыл страницу фичи').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'чат не выбран').not.toBeNull();
+  };
+  it('M1: событие для чата под страницей БЕЗ метки — страница закрыта, чат выбран (десктоп 1280)', () => runNoMarkSameChat(false));
+  it('M1: событие для чата под страницей БЕЗ метки — страница закрыта, чат выбран (мобила 360)', () => runNoMarkSameChat(true));
+
+  // Дефект Ф-хв (второй возврат): активный чат восстановлен из ws:{projectId}, затем pending-канал
+  // на чат B со снимком feature — страница остаётся, адрес с /feature/. Мутация: вернуть
+  // проверку activeSessionRef.current == null вместо признака из снимка → красный.
+  it('запасный переход при восстановленном активном чате — страница остаётся (мобила 360)', () => runFallbackTransition(true, true));
+  it('запасный переход при восстановленном активном чате — страница остаётся (десктоп 1280)', () => runFallbackTransition(false, true));
+
+  // Находка MINOR (ревью 0fe2753c): строка feature в записи навигации при запасном переходе
+  // не была покрыта — в beforeEach pushState/replaceState no-op, и проверки hash проходили
+  // по нему, а не по реальному снимку. Здесь история пишет state и hash (как recordHistory),
+  // поэтому проверяется и запись, и адрес. Мутация: feature = null в WorkspacePage.tsx
+  // (строка 1471) → красный.
+  it('запасный переход: запись истории несёт feature, адрес — с /feature/ (десктоп 1280)', async () => {
+    const win = globalThis as any;
+    recordHistory();
+    // счётчик записей: запись навигации обязана быть реально сделана, а не унаследована от входного снимка
+    const writes = { push: 0, replace: 0 };
+    const hist = win.window.history;
+    const push0 = hist.pushState, replace0 = hist.replaceState;
+    hist.pushState = (...a: any[]) => { writes.push++; return push0(...a); };
+    hist.replaceState = (...a: any[]) => { writes.replace++; return replace0(...a); };
+    win.window.innerWidth = 1280;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chats.push(chatB);
+    wsState.activeSession = null;
+    // Снимок, который кладёт App.tsx на запасном переходе: feature + chatId.
+    const inputSnap = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.window.history.state = inputSnap;
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.sessionStorage.setItem('cc_pending_project_chat', encodePendingChat('p1', 'chatB', undefined, true));
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'chat-panel'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+    // Выбор чата под открытой страницей: новая запись истории сохраняет feature страницы.
+    expect(writes.push + writes.replace, 'запись навигации не сделана (запасный переход)').toBeGreaterThan(0);
+    expect(getNav(), 'запись навигации совпала с входным снимком по ссылке').not.toBe(inputSnap);
+    expect(getNav()?.feature, 'запись навигации потеряла feature (запасный переход)').toBe('f1');
+    expect(getNav()?.chatId, 'запись навигации потеряла chatId (запасный переход)').toBe('chatB');
+    expect(win.window.location.hash, 'адрес потерял /feature/ (запасный переход)').toContain('/feature/');
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи закрылась при запасном переходе').not.toBeNull();
+  });
+
+  // Парный: тот же холодный переход, затем ЯВНЫЙ выбор ДРУГОГО чата (тот же канал, что в
+  // тестах автоскрытия выше) — автоскрытие работает, страница закрыта. Мутация «вернуть
+  // false третьим аргументом» (то есть закрыть и холодный выбор) краснит предыдущий тест.
+  it('парный: после запасного перехода явный выбор другого чата закрывает страницу', async () => {
+    const win = globalThis as any;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    const chatC: Session = { id: 'chatC', name: 'Чат Ц', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB, chatC);
+    mockData.chats.push(chatB, chatC);
+    wsState.activeSession = null;
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.sessionStorage.setItem('cc_pending_project_chat', encodePendingChat('p1', 'chatB', undefined, true));
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Предусловие: холодный выбор chatB — страница открыта.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница не открыта перед явным выбором (предусловие)').not.toBeNull();
+    // Явный выбор другого чата — тот же путь, что в тестах автоскрытия: канал + событие.
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatC');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Автоскрытие: страница закрыта, выбранный чат в DOM.
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'явный выбор другого чата не закрыл страницу').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'),
+      'выбранный чат не в DOM').not.toBeNull();
+  });
+
+  // Дефект Ф-хв (третий возврат): запасный переход не должен подавлять навигацию и мобильный
+  // показ чата — keepFeaturePage гасит только closeFeaturePage. Мутация: вернуть третьим
+  // аргументом handleSelectSession `activeSessionRef.current == null || keepFeaturePage` →
+  // красные тесты холодного чата (адрес, display:flex) и явного выбора без активного чата.
+  const mountPending = async (mobile: boolean, withFeature: boolean) => {
+    const win = globalThis as any;
+    if (!mobile) win.window.innerWidth = 1280;
+    const chatA: Session = { id: 'chatA', name: 'Чат А', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatA, chatB);
+    mockData.chats.push(chatA, chatB);
+    mockData.chat = chatA;
+    wsState.activeSession = null;
+    // фейк-история пишет снимок и адрес (в beforeEach pushState/replaceState — no-op)
+    win.window.history = {
+      state: null, back: () => {}, go: () => {}, forward: () => {}, length: 1,
+      pushState: (st: any, _t: string, h: string) => { win.window.history.state = st; win.window.location.hash = h; },
+      replaceState: (st: any, _t: string, h: string) => { win.window.history.state = st; win.window.location.hash = h; },
+    };
+    win.window.location.hash = withFeature ? '#/project/p1/feature/f1' : '#/project/p1';
+    win.window.history.state = { screen: 'project', project, file: null, chatId: withFeature ? 'chatB' : undefined, feature: withFeature ? 'f1' : undefined };
+    win.sessionStorage.setItem('cc_pending_project_chat', withFeature ? encodePendingChat('p1', 'chatB', undefined, true) : 'p1|chatA');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'chat-panel'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+    return { win, container };
+  };
+  const runColdPendingNoFeature = async (mobile: boolean) => {
+    const { win, container } = await mountPending(mobile, false);
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'чат не виден (холодный pending-чат)').not.toBeNull();
+    expect(getNav()?.chatId, 'запись навигации без chatId (холодный pending-чат)').toBe('chatA');
+    if (mobile) {
+      expect((findNodeByAttr(container, 'data-testid', 'workspace-center-container') as any).style?.display,
+        'центр скрыт на мобиле (холодный pending-чат)').toBe('flex');
+    }
+  };
+  it('холодный pending-чат без страницы фичи: чат виден, адрес /chat/{id} (десктоп 1280)', () => runColdPendingNoFeature(false));
+  it('холодный pending-чат без страницы фичи: чат виден, адрес /chat/{id}, центр display:flex (мобила 360)', () => runColdPendingNoFeature(true));
+
+  // M1′: системное «назад» на снимок страницы фичи из чата A в чат B — восстановление идёт
+  // через pending-канал, и писатель popstate обязан нести метку keepFeature из снимка.
+  // Мутация: убрать `!!s.feature` в писателе popstate (WorkspacePage) → страница закрывается.
+  it('popstate на снимок со страницей фичи и другим чатом: страница остаётся (десктоп 1280)', async () => {
+    const { win, container } = await mountPending(false, false);
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'чат А не активен (предусловие)').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница открыта до popstate (предусловие)').toBeNull();
+    const snap = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.window.history.state = snap;
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.dispatchEvent({ type: 'popstate', state: snap });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'feature-page'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи закрылась при popstate на снимок с feature (M1′)').not.toBeNull();
+    expect(win.window.location.hash, 'адрес потерял /feature/ при popstate (M1′)').toContain('/feature/');
+  });
+
+  // Страница фичи открыта, активного чата нет, явный выбор ДРУГОГО чата — страница закрыта.
+  const runExplicitOtherChat = async (mobile: boolean) => {
+    const { win, container } = await mountPending(mobile, true);
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница не открыта (предусловие)').not.toBeNull();
+    // снимок указывал на chatB, но активный чат так и не выбран; явно выбираем chatA
+    wsState.activeSession = null;
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatA');
+    act(() => { win.window.dispatchEvent(new Event('cc-pending-project-chat')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'явный выбор другого чата без активного не закрыл страницу').toBeNull();
+  };
+  it('страница фичи, активного чата нет, явный выбор другого чата — страница закрыта (десктоп 1280)', () => runExplicitOtherChat(false));
+  it('страница фичи, активного чата нет, явный выбор другого чата — страница закрыта (мобила 360)', () => runExplicitOtherChat(true));
 
   // M2 (мобила): задача открыта, явное открытие страницы рисует её ПОВЕРХ; «Закрыть» → задача.
   it('M2: задача в центре (мобила) → страница ПОВЕРХ (адрес /feature/), «Закрыть» → задача видна', async () => {
@@ -1225,7 +2185,7 @@ describe('WorkspacePage: центр — страница фичи соседом
       'страница фичи не уступила доске (M2, десктоп)').toBeNull();
     expect(win.window.location.hash, 'адрес содержит /feature/ после доски (M2, десктоп)')
       .not.toContain('/feature/');
-  });
+  }, 20000);
 
   // (7) Параметризованный: каждое окно центра — одно «верхнее» (единый источник otherCenterOpen).
   // Побеждает ПОСЛЕДНЕЕ открытое:
@@ -1607,6 +2567,44 @@ describe('WorkspacePage: центр — страница фичи соседом
     const hash = (globalThis as any).window.location.hash;
     expect(hash, `адрес не содержит задачу после перехода (m2, адрес=${hash})`)
       .toContain('/task/task1');
+  });
+});
+
+// === centerWinner: чистая функция «кто выигрывает центр» — табличная проверка ===
+// Порядок определяется seq событий «открыли» (монотонный счётчик WorkspacePage), а не
+// выводом из сравнения значений: файл выигрывает, только если его seq БОЛЬШЕ seq страницы.
+// 0 = не открыто (восстановленный файл при холодном старте, закрытая страница).
+describe('centerWinner: файл выигрывает, только если его seq > seq страницы', () => {
+  it('таблица: (featureOpenedAt, fileOpenedAt) → победитель', () => {
+    // [featureOpenedAt, fileOpenedAt, ожидаемый победитель]: файл выигрывает, только
+    // если его seq БОЛЬШЕ seq страницы (открыт позже).
+    const rows: Array<[number, number, 'page' | 'file']> = [
+      // Ничего не открыто (0,0) — страница (центр по умолчанию чат, файл не открыт).
+      [0, 0, 'page'],
+      // Только страница открыта (1,0) — страница.
+      [1, 0, 'page'],
+      // Только файл открыт (0,1) — файл.
+      [0, 1, 'file'],
+      // Файл (seq 1) открыт ДО страницы (seq 2) → страница позже → страница.
+      [2, 1, 'page'],
+      // Страница (seq 1) открыта ДО файла (seq 2) → файл позже → файл.
+      [1, 2, 'file'],
+      // Повторное открытие той же фичи: страница seq 3, файл seq 2 → страница позже → страница.
+      [3, 2, 'page'],
+      // Повторное открытие того же файла: файл seq 3, страница seq 2 → файл позже → файл.
+      [2, 3, 'file'],
+      // Равные seq невозможны (счётчик строго растёт), но при равенстве — страница
+      // (файл выигрывает строго при >, не при >=).
+      [2, 2, 'page'],
+    ];
+    for (const [f, fl, expected] of rows) {
+      expect(centerWinner(f, fl), `centerWinner(${f}, ${fl})`).toBe(expected);
+    }
+  });
+  it('файл выигрывает строго при fileOpenedAt > featureOpenedAt (граница)', () => {
+    // Граница: файл seq ровно на 1 больше → файл; ровно на 1 меньше → страница.
+    expect(centerWinner(5, 6)).toBe('file');
+    expect(centerWinner(6, 5)).toBe('page');
   });
 });
 

@@ -547,6 +547,9 @@ builder.Services.AddSingleton<SessionContextResolver>();
 // Документация проекта (README + docs/) для панели «Доки»: индекс, связи, поиск.
 // Кеш живёт внутри сервиса и ключуется корнем папки, поэтому singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>();
+// Каталог макетов фичи (волна 3, Б-mk-a): записки docs/mockups + linkedFiles. Stateless
+// singleton, как DocsIndexService, — корпус читает через него, своего кеша/обхода нет.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.MockupCatalog>();
 // Гигиена карты проекта (CLAUDE.md): детерминированный сканер без модели, пороги —
 // из секции ProjectMap конфигурации. Состояния нет, читает файлы по запросу
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapScanner>();

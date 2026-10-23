@@ -3,7 +3,6 @@
 // рантайм использует только счётчики задач; остальное (чаты/шаги/лента) — замороженные
 // блоки, их чистые функции оставлены для тестов. Все функции чистые: тестируются в node.
 
-import type { FeatureIndexFeature } from '../../types/featureIndex';
 import type { FeatureRun } from '../../types/featureRun';
 
 // === Задачи ===
@@ -39,11 +38,4 @@ export function taskCounters(run: FeatureRun): TaskCounters {
     else pending++;
   }
   return { done, inProgress, pending, total: all.length };
-}
-
-// Число задач фичи — ОДИН фолбэк (индекс → иначе сумма по шагам): taskCount из индекса
-// имеет приоритет; фичи нет в индексе (null) — фолбэк на taskCounters(run).total.
-export function featureTaskTotal(feature: FeatureIndexFeature | null, run: FeatureRun): number {
-  if (feature?.taskCount != null) return feature.taskCount;
-  return taskCounters(run).total;
 }

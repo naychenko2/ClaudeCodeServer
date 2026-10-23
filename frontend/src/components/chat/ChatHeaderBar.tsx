@@ -38,6 +38,7 @@ import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoin
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip } from '../ui';
+import { FeatureBackChip } from './FeatureBackChip';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
@@ -1562,6 +1563,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       <ChatSwitcherTrigger currentId={session.id}>{titleBlock}</ChatSwitcherTrigger>
     </div>
   ) : titleBlock;
+  // «← к фиче {название}» (Ф-pl-b): чат открыт переходом ИЗ страницы фичи — в шапке
+  // кнопка возврата на страницу фичи (на ту же вкладку: стор страницы её держит).
+  // Клик — cc-open-feature (fromChat=false: крошка страницы фичи ведёт в список, не в чат).
+  // useFeatureBackNav — useSyncExternalStore: вызов неусловный, порядок хуков стабилен.
+  const featureBackEl = <FeatureBackChip sessionId={session.id} projectId={session.projectId} isCompact={isCompact} />;
   // Бейдж последней запущенной механики команды (только на десктопе)
   // Видимость пилюль (индикаторов) — тем же глазиком, что и кнопки действий, но
   // только в ОБЫЧНОЙ шапке: на стене пилюль нет вовсе. По умолчанию показаны все —
@@ -2191,6 +2197,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           }}
           style={{ position: 'relative', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: TB.gap, padding: '12px 18px 10px' }}>
           {openBtn}
+          {featureBackEl}
           {heroTitle}
           {rightCluster}
         </div>
@@ -2228,7 +2235,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         // Узкий десктоп: фиксированную высоту отпускаем, кластер переносится второй строкой
         ...(isCompact ? null : { flexWrap: 'wrap' as const, height: 'auto', minHeight: TB.heightDesktop, padding: `6px ${TB.padX}px` }),
       }}>
-      {openBtn}{titleEl}{rightCluster}
+      {openBtn}{featureBackEl}{titleEl}{rightCluster}
       {tagMenuEl}
       {ctxMenuEl}
       {ctxExpiryMenuEl}

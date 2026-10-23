@@ -58,6 +58,8 @@
 //   23. Свободные места своих достаются иностранным: 2 + (5 − N_своих), потолок 7 (C5-д3).
 //   29. Два открытия режима во время пробы — один storage.get (C5-д3).
 //   30. Право storage отозвано после успешной пробы — подсказки нет (C5-д3).
+//   31. Крайние квоты: 5 своих + 5 иностранных → 5 + 2; 0 своих + 7 иностранных → 7 (C5-м).
+//   32. Self-restart сбрасывает storageOk/offlineShown; online — один load() (C5-м).
 //   24. Температура 0 — «0°», а не прочерк (C5-д, minor).
 //   25. storage «denied»: при отказе хранилища подсказки о запоминании нет (C5-д, minor).
 //   4g. unavailable / not_found / invalid — свои тексты, не «нет связи» (C5-д2).
@@ -1193,7 +1195,7 @@ async function scenarioRenderFail(browser, base) {
       assertEq(checks, 'герой есть', await frame.locator('.hero').count(), 1);
       assertEq(checks, 'в неделе 7 строк', await frame.locator('.week .day').count(), 7);
       assertTrue(checks, 'state.plugin не null', await frame.evaluate(() => !!(window.ccsPlugin.state && window.ccsPlugin.state.plugin)));
-      assertTrue(checks, 'данные запрошены заново (net.fetch вырос)', (await count()) > before, before + ' → ' + (await count()));
+      assertEq(checks, 'запрос ровно один', (await count()) - before, 1);
       // Боевой гейт эмулятора: повторный ready остаётся без init.
       assertEq(checks, 'init хост отправил один раз', await page.evaluate(() => window.__emulator.initCount), 1);
       await frame.evaluate(() => window.ccsPlugin.ready());
@@ -1484,6 +1486,149 @@ async function scenarioTiesAndCountryFallback(browser, base) {
   });
 }
 
+// C5-м: крайние квоты. 5 своих + 5 иностранных: иностранных ровно 2 (отсечение),
+// всего 7. 0 своих + 7 иностранных: потолок 7 добирается, порядок по населению.
+async function scenarioQuotaEdges(browser, base) {
+  await scenario('31. Крайние квоты: 5 своих + 5 иностранных → 5 + 2; 0 своих + 7 иностранных → 7 (C5-м)', async (checks) => {
+    const open = async (geo) => {
+      const o = await openEmulator(browser, base, {
+        grant: GRANT_ALL,
+        fixtures: [FX + 'forecast-yaroslavl.json|apparent_temperature', FX + geo + '|name=%D0%A2%D0%B5%D1%81%D1%82', FX + 'batch-seven.json|latitude'].join(','),
+      });
+      await o.frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await o.frame.locator('#citybtn').click();
+      await o.frame.locator('#q').waitFor({ timeout: 5000 });
+      await o.frame.locator('#q').fill('Тест');
+      await o.frame.locator('.city').first().waitFor({ timeout: 15000 });
+      o.lines = await o.frame.locator('.city').allInnerTexts().then((a) => a.map((s) => s.replace(/\n/g, ' ').trim()));
+      return o;
+    };
+    let o = await open('geocode-own5f5.json');
+    try {
+      const own = o.lines.filter((l) => l.includes('Россия')).length;
+      assertEq(checks, '5 своих: свои все пять', own, 5);
+      assertEq(checks, '5 своих: иностранных ровно 2', o.lines.length - own, 2);
+      assertEq(checks, '5 своих: всего 7', o.lines.length, 7);
+      assertTrue(checks, 'иностранные — самые крупные (Тестбург, Тестлунд)',
+        o.lines[5].includes('Тестбург') && o.lines[6].includes('Тестлунд'), o.lines.slice(5).join(' | '));
+    } catch (e) {
+      await shot(o.page, 'scenario-31-own5');
+      throw e;
+    } finally {
+      await o.context.close();
+    }
+    o = await open('geocode-foreign7.json');
+    try {
+      assertEq(checks, '0 своих: иностранных ровно 7', o.lines.length, 7);
+      assertTrue(checks, '0 своих: ни одного своего', !o.lines.some((l) => l.includes('Россия')), o.lines.join(' | '));
+      const names = ['Тестбург', 'Тестлунд', 'Тестхейм', 'Тестополь', 'Тествиль', 'Теставан', 'Тестград'];
+      assertTrue(checks, '0 своих: порядок по населению', names.every((n, i) => o.lines[i].includes(n)), o.lines.join(' | '));
+    } catch (e) {
+      await shot(o.page, 'scenario-31-foreign7');
+      throw e;
+    } finally {
+      await o.context.close();
+    }
+  });
+}
+
+// C5-м: self-restart действительно сбрасывает состояние. storageOk сброшен —
+// после restart проба storage.get идёт заново; offlineShown сброшен — после
+// restart событие `online` не перезапускает load() и панель показывает обычный
+// экран. Дубль подписки `online` — одно событие, один load().
+async function scenarioRestartResets(browser, base) {
+  await scenario('32. Self-restart сбрасывает storageOk и offlineShown; online обрабатывается один раз (C5-м)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL + ',storage',
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json',
+      ].join(','),
+    });
+    const logCount = (needle) => page.evaluate((n) =>
+      Array.from(document.querySelectorAll('#log p')).filter((p) => p.textContent.includes(n)).length, needle);
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      // Проба storage сделана и закэширована: повторное открытие режима её не повторяет.
+      await frame.locator('#citybtn').click();
+      await frame.locator('.hint').waitFor({ timeout: 8000 });
+      await frame.locator('#back').click();
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      const gets0 = await logCount('→ storage.get');
+      await frame.locator('#citybtn').click();
+      await frame.locator('.hint').waitFor({ timeout: 8000 });
+      await frame.locator('#back').click();
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      assertEq(checks, 'без restart проба не повторяется (storageOk закэширован)', (await logCount('→ storage.get')) - gets0, 0);
+      // Подписки на `online` считаем вызовами addEventListener: слушатель модульного
+      // уровня не должен переезжать в startOnce (тогда каждый restart плодил бы подписки).
+      await frame.evaluate(() => {
+        window.__onlineAdds = 0;
+        const orig = window.addEventListener;
+        window.addEventListener = function (type) {
+          if (type === 'online') window.__onlineAdds++;
+          return orig.apply(this, arguments);
+        };
+      });
+      // Три self-restart подряд (кнопка «Обновить данные» живёт на экране сбоя панели,
+      // поэтому вызываем тот же обработчик клика через разметку).
+      for (let i = 0; i < 3; i++) {
+        await frame.evaluate(() => {
+          const b = document.createElement('button');
+          b.id = 'restart';
+          document.getElementById('wx').appendChild(b);
+          b.click();
+        });
+        await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      }
+      assertEq(checks, 'restart не добавляет подписок на online', await frame.evaluate(() => window.__onlineAdds), 0);
+      // storageOk сброшен: после restart открытие режима снова пробует storage.get.
+      const gets1 = await logCount('→ storage.get');
+      await frame.locator('#citybtn').click();
+      await frame.locator('.hint').waitFor({ timeout: 8000 });
+      assertTrue(checks, 'после restart проба storage.get сделана заново', (await logCount('→ storage.get')) > gets1,
+        gets1 + ' → ' + (await logCount('→ storage.get')));
+      await frame.locator('#back').click();
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      // offlineShown сброшен: уходим в офлайн, чиним панель restart'ом, а затем
+      // online не должен перезапускать load() — панель на обычном экране.
+      await context.setOffline(true);
+      await frame.locator('#refresh').click();
+      await frame.locator('#retry').waitFor({ timeout: 5000 });
+      // Чтение запомненного города замедляем: пока оно в полёте, приходит `online`.
+      // offlineShown сброшен — событие не должно запускать преждевременный load().
+      await page.evaluate(() => { window.__emulator.cfg.delay = 1200; });
+      const fetches0 = await logCount('→ net.fetch https://api.open-meteo');
+      await frame.evaluate(() => {
+        const b = document.createElement('button');
+        b.id = 'restart';
+        document.getElementById('wx').appendChild(b);
+        b.click();
+      });
+      await context.setOffline(false);
+      await page.evaluate(() => { window.__emulator.cfg.delay = 0; });
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      // Ждём дольше задержки чтения города (1200 мс): отложенный load() тоже успел бы дать запрос.
+      await page.waitForTimeout(2000);
+      assertEq(checks, 'online после нескольких restart — ровно один load()',
+        (await logCount('→ net.fetch https://api.open-meteo')) - fetches0, 1);
+      // Панель на нормальном экране, а не на офлайн-состоянии.
+      assertEq(checks, 'офлайн-кнопки нет', await frame.locator('#retry').count(), 0);
+      // Теперь online на здоровой панели (offlineShown сброшен успешным load) ничего не делает.
+      const fetches1 = await logCount('→ net.fetch https://api.open-meteo');
+      await frame.evaluate(() => window.dispatchEvent(new Event('online')));
+      await page.waitForTimeout(500);
+      assertEq(checks, 'online на обычном экране запросов не порождает', (await logCount('→ net.fetch https://api.open-meteo')) - fetches1, 0);
+    } catch (e) {
+      await shot(page, 'scenario-32-restart-resets');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 // C5-д3 (minor): guard `!storageProbing` — два открытия режима выбора подряд ВО
 // ВРЕМЯ идущей пробы дают ровно один storage.get. Проба замедляется задержкой
 // хоста, выставленной после загрузки главного экрана.
@@ -1598,6 +1743,8 @@ try {
   await scenarioTiesAndCountryFallback(browser, base);
   await scenarioProbeGuard(browser, base);
   await scenarioHintRevoked(browser, base);
+  await scenarioQuotaEdges(browser, base);
+  await scenarioRestartResets(browser, base);
 } finally {
   await browser.close();
   server.close();

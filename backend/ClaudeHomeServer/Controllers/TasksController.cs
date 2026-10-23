@@ -933,7 +933,7 @@ public class TasksController(
         }
 
         // Дефект bec00347: формулировка карточки зависит от причины удержания — её берут из
-        // снимка run, собранного проектором до ClearHold (:912): у живого эпика после снятия
+        // снимка run, собранного проектором до ClearHold (:910): у живого эпика после снятия
         // Hold уже null.
         var holdReason = run.Epic.Hold!.Reason;
         var epic = tasks.ClearHold(featureId);
@@ -944,8 +944,8 @@ public class TasksController(
         // разрешены». Ответ не меняется: resumed/expired — пробуждение очереди (R-HOLD-H),
         // продолженные шаги в неё не входят (они уже в работе).
         // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой локализован в сервисе:
-        // каждая ветка продолжения обёртана и логируется там (TaskExecutionService.cs:1217,
-        // :1248, :1258, DeliverKeyChatCardAsync :1319), поэтому ручка вызов не оборачивает:
+        // каждая ветка продолжения обёртана и логируется там (TaskExecutionService.cs:1233,
+        // :1247, :1263, DeliverKeyChatCardAsync :1374), поэтому ручка вызов не оборачивает:
         // после W4-HOLD-J сервис на известных путях не бросает, обёртка ручки была мёртвым
         // покрытием (R-HOLD-K2 п.1).
         _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, holdReason);

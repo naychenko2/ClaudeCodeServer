@@ -26,7 +26,6 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -2541,7 +2540,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             m => m.Contains("продолжи"), "реплика-продолжение уходит в чат исполнителя");
     }
 
-    // R-HOLD-K (критерий c1): порядок «причина читается ДО ClearHold» (TasksController.cs:940)
+    // R-HOLD-K (критерий c1): порядок «причина читается ДО ClearHold» (TasksController.cs:938)
     // сервисные тесты не защищают — они зовут сервис напрямую, а reason передаёт сама ручка.
     // Здесь — связка на уровне HTTP: DELETE hold с reason=draft → в ключевой чат уходит
     // карточка «Фича запущена», и формулировки «Пауза снята» в ней нет (draft-ветка

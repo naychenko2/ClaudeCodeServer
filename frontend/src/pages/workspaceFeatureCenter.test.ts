@@ -1939,6 +1939,46 @@ describe('WorkspacePage: центр — страница фичи соседом
   it('холодный pending-чат без страницы фичи: чат виден, адрес /chat/{id} (десктоп 1280)', () => runColdPendingNoFeature(false));
   it('холодный pending-чат без страницы фичи: чат виден, адрес /chat/{id}, центр display:flex (мобила 360)', () => runColdPendingNoFeature(true));
 
+  // W4-6: открытие чата фичи (уведомление, «ждёт ответа», старт чата) монтирует воркспейс,
+  // пока снимок/хэш ещё несут feature прошлой страницы. Канал БЕЗ метки keepFeature —
+  // страница не всплывает ни на первом кадре, ни после выбора чата; адрес — /chat/{id}.
+  // Мутация: убрать проверку канала в инициализаторе openFeatureId (WorkspacePage) → красный.
+  const runColdChatNoMarkStaleFeature = async (mobile: boolean) => {
+    const win = globalThis as any;
+    if (!mobile) win.window.innerWidth = 1280;
+    const chatB: Session = { id: 'chatB', name: 'Чат Б', projectId: 'p1', mode: 'default', status: 'active', messageCount: 0, createdAt: '', updatedAt: '' } as Session;
+    mockSessionList.push(chatB);
+    mockData.chats.push(chatB);
+    mockData.chat = chatB;
+    wsState.activeSession = null;
+    win.window.history = {
+      state: null, back: () => {}, go: () => {}, forward: () => {}, length: 1,
+      pushState: (st: any, _t: string, h: string) => { win.window.history.state = st; win.window.location.hash = h; },
+      replaceState: (st: any, _t: string, h: string) => { win.window.history.state = st; win.window.location.hash = h; },
+    };
+    win.window.location.hash = '#/project/p1/feature/f1';
+    win.window.history.state = { screen: 'project', project, file: null, chatId: 'chatB', feature: 'f1' };
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatB');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи всплыла на первом кадре (канал без метки)').toBeNull();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    for (let i = 0; i < 20 && !findNodeByAttr(container, 'data-testid', 'chat-panel'); i++) {
+      await act(async () => { vi.advanceTimersByTime(100); });
+    }
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page'),
+      'страница фичи открыта при выборе чата без метки').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'чат не выбран').not.toBeNull();
+    expect(getNav()?.feature ?? null, 'снимок перенёс feature старой страницы').toBeNull();
+    expect(win.window.location.hash, 'адрес остался на /feature/').not.toContain('/feature/');
+  };
+  it('W4-6: чат фичи по каналу без метки при старом снимке с feature — страница не всплывает (десктоп 1280)', () => runColdChatNoMarkStaleFeature(false));
+  it('W4-6: чат фичи по каналу без метки при старом снимке с feature — страница не всплывает (мобила 360)', () => runColdChatNoMarkStaleFeature(true));
+
   // M1′: системное «назад» на снимок страницы фичи из чата A в чат B — восстановление идёт
   // через pending-канал, и писатель popstate обязан нести метку keepFeature из снимка.
   // Мутация: убрать `!!s.feature` в писателе popstate (WorkspacePage) → страница закрывается.

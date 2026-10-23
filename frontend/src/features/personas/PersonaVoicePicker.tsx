@@ -287,7 +287,7 @@ function SegmentRow({ label, isMobile, children }: {
   );
 }
 
-// Строки списка: группировка по полу — 15 голосов подряд читаются хуже, чем два блока
+// Строки списка: группировка по полу — два десятка голосов подряд читаются хуже, чем два блока
 function VoiceRows({ catalog, selected, playing, configured, isMobile, onPick, onListen }: {
   catalog: TtsVoiceInfo[];
   selected?: string;

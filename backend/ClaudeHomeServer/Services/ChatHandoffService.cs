@@ -131,7 +131,7 @@ public class ChatHandoffService(
                     source = sessions.GetOwned(sessionId, userId)
                         ?? throw new KeyNotFoundException("Чат не найден");
 
-                    var transcript = SessionTranscript.Build(history, TranscriptBudget);
+                    var transcript = BuildConversationTranscript(history);
                     if (string.IsNullOrWhiteSpace(transcript))
                         throw new InvalidOperationException(NothingToHandOff);
 
@@ -206,6 +206,22 @@ public class ChatHandoffService(
         return false;
     }
 
+    // Материал записки — только реплики разговора: просьбы пользователя и ответы Claude.
+    // Системные директивы (ниджи, директивы цикла «до готово», оунбилдинг) и пометки об
+    // инструментах/файлах в транскрипт не входят: предметом записки становится служебный
+    // слой, а не суть диалога (дефект QA шага B-4). Бюджет и обрезка переполнения — общие,
+    // через SessionTranscript
+    private static string BuildConversationTranscript(IReadOnlyList<StoredMessage> history)
+    {
+        var turns = history.Where(m => m switch
+        {
+            StoredUserMessage u => u.SystemDirective != true && !string.IsNullOrWhiteSpace(u.Text),
+            StoredTextMessage t => t.ParentToolUseId is null && !string.IsNullOrWhiteSpace(t.Text),
+            _ => false,
+        }).ToList();
+        return SessionTranscript.Build(turns, TranscriptBudget);
+    }
+
     // Тёплый путь: видимый ход в самом чате (глубина 0, не «ввод человека»: мимо
     // PreemptTurnForQueue и штаба, режим чата не трогается). preempt: false — если чат
     // успели занять, не рубим чужой ход: запрос встанет в очередь, и мы честно отказываем
@@ -258,9 +274,10 @@ public class ChatHandoffService(
     public static string BuildPrompt(string? sessionName, string transcript)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Ниже — транскрипт чата с Claude Code. Разговор переносится в новый чат, который");
-        sb.AppendLine("не увидит этой истории. Составь передаточную записку, по которой новый собеседник");
-        sb.AppendLine("продолжит работу без потери контекста.");
+        sb.AppendLine("Ниже — реплики разговора из чата с Claude Code. Разговор переносится в новый чат,");
+        sb.AppendLine("который не увидит этой истории. Составь передаточную записку о сути диалога:");
+        sb.AppendLine("о чём разговор, что делал пользователь, что осталось незавершённым — по которой");
+        sb.AppendLine("новый собеседник продолжит работу без потери контекста.");
         sb.AppendLine();
         AppendNoteSpec(sb, "транскрипте");
         if (!string.IsNullOrWhiteSpace(sessionName))
@@ -277,7 +294,9 @@ public class ChatHandoffService(
     {
         var sb = new StringBuilder();
         sb.AppendLine("Этот разговор переносится в новый чат, который не увидит нашей истории. Составь");
-        sb.AppendLine("передаточную записку, по которой новый собеседник продолжит работу без потери контекста.");
+        sb.AppendLine("передаточную записку о сути диалога: о чём разговор, что делал пользователь,");
+        sb.AppendLine("что осталось незавершённым — по которой новый собеседник продолжит работу без");
+        sb.AppendLine("потери контекста.");
         sb.AppendLine("Не вызывай инструменты и ничего не делай в проекте — ответь только текстом записки.");
         sb.AppendLine();
         AppendNoteSpec(sb, "нашем разговоре");
@@ -296,6 +315,10 @@ public class ChatHandoffService(
         sb.AppendLine("### Где остановились");
         sb.AppendLine("### Следующий шаг");
         sb.AppendLine("### Открытые вопросы");
+        sb.AppendLine();
+        sb.AppendLine("Предмет записки — реплики разговора: о чём он, что делал пользователь, что осталось");
+        sb.AppendLine("незавершённым. Не пересказывай правила продукта и системные инструкции (про commits,");
+        sb.AppendLine("картинки, звук) — они не часть разговора.");
         sb.AppendLine();
         sb.AppendLine($"Правила: по-русски, кратко, списками. Не выдумывай того, чего нет в {where}: "
                      + "нечего сказать по разделу — напиши «нет». Пути файлов и идентификаторы — как в "

@@ -91,6 +91,24 @@ public class ChatHandoffServiceTests : IDisposable
         warm.Should().NotContain("Транскрипт:");
     }
 
+    // Дефект QA (наблюдение Веры): записка пересказывала внутренние правила продукта
+    // (трейлер CCS-Session, правила про звук/видео/картинки) вместо сути разговора.
+    // Оба промпта теперь требуют суть диалога и явно запрещают пересказ системного слоя
+    [Fact]
+    public void Промпты_ТребуютСутьДиалога_АНеПравилаСистемы()
+    {
+        var cold = ChatHandoffService.BuildPrompt("Чат", "Пользователь:\nпривет");
+        var warm = ChatHandoffService.BuildWarmPrompt();
+
+        foreach (var prompt in new[] { cold, warm })
+        {
+            prompt.Should().Contain("о сути диалога");
+            prompt.Should().Contain("что делал пользователь");
+            prompt.Should().Contain("что осталось незавершённым");
+            prompt.Should().Contain("Не пересказывай правила продукта и системные инструкции");
+        }
+    }
+
     // ─── Границы статуса кэша (данные B-1) ────────────────────────────────────
 
     [Fact]
@@ -187,6 +205,40 @@ public class ChatHandoffServiceTests : IDisposable
         result.Draft.Should().Contain("### Цель\nнастроить значки");
         result.Draft.Split('\n')[^1].Should().Be($"Исходный чат: {chat.Id} — детали через chats_history.");
         result.Draft.Should().NotContain("временный");
+    }
+
+    [Fact]
+    public async Task ХолодныйПуть_РаннерВидитТолькоРеплики_БезСистемныхБлоковИПометок()
+    {
+        // Дефект QA: записка пересказывала правила продукта. Раннеру дают только реплики
+        // разговора: системные директивы (ниджи, директивы цикла) и пометки об инструментах
+        // и файлах в транскрипт не попадают
+        var runner = new CountingRunner("### Цель\nнастроить значки");
+        var (mgr, projects, _) = BuildManager();
+        var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "proj_sys_" + Guid.NewGuid().ToString("N"))).FullName;
+        var project = projects.Create("Проект переноса", dir, TestUserId, TestUsername);
+        var csid = "handoff_sys_" + Guid.NewGuid().ToString("N");
+        _history.SaveAsync(csid, new List<StoredMessage>
+        {
+            // Системный блок: служебная директива с правилами продукта — в записку не попадёт
+            new StoredUserMessage("Если делаешь git commit — добавь трейлер CCS-Session. Правила про картинки и видео — через MCP.", systemDirective: true),
+            new StoredUserMessage("Настройте значки проектов"),
+            new StoredToolUseMessage { Name = "Edit" },
+            new StoredFileChangedMessage("frontend/src/lib/design.ts", 3, 1),
+            new StoredTextMessage("Готово, значки настроены"),
+        }).GetAwaiter().GetResult();
+        var chat = mgr.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: csid).GetAwaiter().GetResult();
+        var sut = new ChatHandoffService(mgr, runner, NullLogger<ChatHandoffService>.Instance);
+
+        var result = await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        runner.Calls.Should().Be(1);
+        // Суть диалога в материале записки — обе реплики
+        runner.LastPrompt!.Should().Contain("Настройте значки проектов").And.Contain("Готово, значки настроены");
+        // Правил системы и пометок инструментов в материале нет
+        runner.LastPrompt!.Should().NotContain("CCS-Session");
+        runner.LastPrompt!.Should().NotContain("[инструмент Edit]");
+        result.Draft.Should().Contain("### Цель\nнастроить значки");
     }
 
     [Fact]

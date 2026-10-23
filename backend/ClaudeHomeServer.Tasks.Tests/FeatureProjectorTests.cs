@@ -2489,6 +2489,70 @@ public class FeatureProjectorTests
         prod.Executors[0].ModelFull.Should().BeNull();
     }
 
+    // W4-3B: связь «оценивает →» у исполнителя стадии: ReviewOf — task.ReviewOf,
+    // отфильтрованный по задачам этого run. Висящие (задачи нет) и чужие id наружу не
+    // выходят — их число в ReviewOfOutside. У задачи без ReviewOf — пустой список и нуль.
+    [Fact]
+    public void StageExecutor_ReviewOf_ТолькоЗадачиЭтогоRun()
+    {
+        const string epicId = "epic-w4-3b-reviewof";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done, PersonaId = "Денис",
+        };
+        // r1 оценивает s1 (в run) и два id вне run: висящий «x-dangling» и чужой «x-foreign»
+        // (задача другой фичи — в Build не попадает, в run её нет).
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            ReviewOf = ["s1", "x-dangling", "x-foreign"],
+        };
+        var r2 = new TaskItem
+        {
+            Id = "r2", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, r1, r2]);
+
+        var review = Stage(run, "review");
+        var e1 = review.Executors.Single(e => e.TaskId == "r1");
+        e1.ReviewOf.Should().BeEquivalentTo(["s1"], "оцениваются только задачи этого run");
+        e1.ReviewOfOutside.Should().Be(2, "висящий и чужой id наружу не выходят, но считаются");
+        var e2 = review.Executors.Single(e => e.TaskId == "r2");
+        e2.ReviewOf.Should().BeEmpty("без ReviewOf — пустой список");
+        e2.ReviewOfOutside.Should().Be(0);
+    }
+
+    // Мутация: убрать фильтр по run (давать t.ReviewOf как есть) — «x-foreign» выйдет в
+    // ReviewOf → этот тест краснеет.
+    [Fact]
+    public void StageExecutor_ReviewOfForeignTask_CountedOutsideNotExposed()
+    {
+        const string epicId = "epic-w4-3b-foreign";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done, PersonaId = "Денис",
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            ReviewOf = ["x-foreign"],
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, r1]);
+
+        var e1 = Stage(run, "review").Executors.Single(e => e.TaskId == "r1");
+        e1.ReviewOf.Should().BeEmpty("чужой id наружу не выходит");
+        e1.ReviewOfOutside.Should().Be(1, "чужой id считается в ReviewOfOutside");
+    }
+
     // Конец стадии (LastCompletedAt) — max ТОЛЬКО по CompletedAt: Done-задача без CompletedAt
     // (аномалия) не подставляет CreatedAt (ранее конец мог оказаться позже реального: новая
     // задача, созданная позже закрытия старой). Мутация: вернуть `?? t.CreatedAt` → 12:00 →

@@ -219,6 +219,11 @@ public sealed class FeatureProjector(TaskManager tasks)
                 activeIndex++;
         }
 
+        // W4-3B: множество id этого run — фильтр связи «оценивает →» у исполнителей стадии.
+        // В Build попадают только задачи фичи (чужой эпик — throw выше), поэтому всё, чего
+        // нет здесь, — висящий или чужой id: наружу не выходит, считается в ReviewOfOutside.
+        var runIds = new HashSet<string>(featureTasks.Select(t => t.Id));
+
         var stages = new List<FeatureStage>(stageDefs.Length);
         for (int i = 0; i < stageDefs.Length; i++)
         {
@@ -340,6 +345,12 @@ public sealed class FeatureProjector(TaskManager tasks)
                 (string? label, string? full) = (null, null);
                 if (chat is not null && modelResolver is not null)
                     (label, full) = modelResolver(chat);
+                // W4-3B: «оценивает →»: ReviewOf только по задачам этого run; висящие и чужие
+                // id наружу не выходят, их число — ReviewOfOutside.
+                List<string> reviewOf = t.ReviewOf is null
+                    ? []
+                    : t.ReviewOf.Where(id => runIds.Contains(id)).ToList();
+                int reviewOfOutside = t.ReviewOf is null ? 0 : t.ReviewOf.Count(id => !runIds.Contains(id));
                 return new FeatureStageExecutor
                 {
                     PersonaId = t.PersonaId,
@@ -352,6 +363,8 @@ public sealed class FeatureProjector(TaskManager tasks)
                     ChatArchived = chat?.Archived ?? false, // Б7: чат исполнителя в архиве
                     ModelLabel = label,    // Б4
                     ModelFull = full,    // Б4
+                    ReviewOf = reviewOf,   // W4-3B
+                    ReviewOfOutside = reviewOfOutside, // W4-3B
                 };
             }).ToList();
 

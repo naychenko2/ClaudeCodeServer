@@ -255,6 +255,10 @@ public sealed class FeatureStageExecutor
     // Модель исполнителя (Б4: короткая подпись и полное имя); пока null.
     public string? ModelLabel { get; init; }
     public string? ModelFull { get; init; }
+    // W4-3B: связь «оценивает →»: task.ReviewOf, отфильтрованный по задачам этого run.
+    // Висящие (задачи нет) и чужие id наружу не выходят — их число в ReviewOfOutside.
+    public List<string> ReviewOf { get; init; } = [];
+    public int ReviewOfOutside { get; init; }
 }
 
 // Виток: один круг ревью/проверки/финала. Живёт в цепочке шагов (FeatureStepChain.Rounds)

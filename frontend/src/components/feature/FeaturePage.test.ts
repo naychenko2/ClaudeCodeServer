@@ -910,7 +910,10 @@ describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
   };
 
-  it('клик по чипу открывает keySessionId; на чипе — «ведёт» и имя', async () => {
+  // Клик чипа — переход с записью возврата (плашка Ф9b): recordFeatureReturn пишет
+  // указатель {from: фича, to: ключевой чат}. Мутация: убрать вызов recordFeatureReturn
+  // в onClick → getBackNav() пуст → тест краснеет (хвост R-1F-T, п.3).
+  it('клик по чипу открывает keySessionId и записывает возврат к фиче; на чипе — «ведёт» и имя', async () => {
     const c = render({});
     await settle();
     const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
@@ -920,6 +923,11 @@ describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
     expect(text, 'имя оркестратора').toContain('Софья (локальная)');
     await act(async () => { (reactProps(chip)!.onClick as () => void)(); });
     expect(openChatCalls, 'клик ведёт в keySessionId').toEqual(['chat-key']);
+    const nav = backNavTest.getBackNav();
+    expect(nav?.from, 'запись возврата — из фичы f1').toBe('f1');
+    expect(nav?.fromKind, 'дискриминатор — feature').toBe('feature');
+    expect(nav?.to, 'цель возврата — ключевой чат').toEqual({ kind: 'chat', id: 'chat-key' });
+    expect(nav?.fromTitle, 'название фичи для плашки').toBe('Моя фича');
   });
 
   it('keyArchived: чип помечен «в архиве»', async () => {
@@ -948,16 +956,22 @@ describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'без персоны — чипа нет').toBeNull();
   });
 
-  // Состояния чипа (хвосты R-1F-R): контрол — ui.Button, состояния — React-состояние
-  // LeadChip, обработчики на обёртке (ui.Button их не форвардит, прецедент
-  // TaskCreatedView). Мутации (в отчёте): убрать onMouseDown на обёртке → тест
-  // нажатия краснеет; убрать boxShadow/рамку фокуса в стиле → тест фокуса краснеет.
-  it('наведение: фон и рамка меняются, с наведения — обратно', async () => {
+  // Состояния чипа (хвосты R-1F-R/R-1F-T): контрол — ui.Button, состояния —
+  // React-состояние LeadChip, обработчики на обёртке (ui.Button их не форвардит,
+  // прецедент TaskCreatedView). Нажатие — pointer-события (тач и мышь дают их
+  // одинаково), фокус — :focus-visible (кольцо только с клавиатуры), глиф-стрелка
+  // красится только по наведению. Мутации (в отчёте): убрать onPointerDown на
+  // обёртке → тест нажатия краснеет; вернуть setFocused(true) без :focus-visible →
+  // тест фокуса краснеет; убрать recordFeatureReturn в onClick → тест записи возврата
+  // краснеет; убрать textOverflow у спана имени → тест ellipsis краснеет.
+  it('наведение: фон и рамка меняются, глиф красится только здесь; с наведения — обратно', async () => {
     const c = render({});
     await settle();
     const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    const icon = findNodeByAttr(c, 'data-testid', 'feature-page-lead-icon')!;
     expect(chip.nodeName, 'контрол — кнопка из ui.Button').toBe('BUTTON');
     expect(chip.style.background, 'базовый фон чипа').toBe(C.bgWhite);
+    expect(icon.style.color, 'глиф без наведения — тихий').toBe(C.textMuted);
     const wrap = reactProps(chip!.parentNode as never) ?? {};
     const enter = wrap.onMouseEnter as (() => void) | undefined;
     const leave = wrap.onMouseLeave as (() => void) | undefined;
@@ -965,41 +979,69 @@ describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
     act(() => { enter!(); });
     expect(chip.style.background, 'фон на наведении').toBe(C.bgSelected);
     expect(chip.style.borderColor, 'рамка на наведении').toBe(C.accentMuted);
+    expect(icon.style.color, 'глиф на наведении — accent').toBe(C.accent);
     act(() => { leave!(); });
     expect(chip.style.background, 'фон возвращается после наведения').toBe(C.bgWhite);
     expect(chip.style.borderColor, 'рамка возвращается после наведения').toBe(C.border);
+    expect(icon.style.color, 'глиф после наведения — тихий').toBe(C.textMuted);
   });
 
-  it('нажатие: фон accentLight, после отпускания — снова фон наведения', async () => {
+  it('нажатие: фон accentLight; отпускание и pointercancel — снова фон наведения', async () => {
     const c = render({});
     await settle();
     const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
     const wrap = reactProps(chip!.parentNode as never) ?? {};
     const enter = wrap.onMouseEnter as (() => void) | undefined;
-    const down = wrap.onMouseDown as (() => void) | undefined;
-    const up = wrap.onMouseUp as (() => void) | undefined;
-    expect(down && up, 'на обёртке обработчики нажатия').toBeTruthy();
+    const down = wrap.onPointerDown as (() => void) | undefined;
+    const up = wrap.onPointerUp as (() => void) | undefined;
+    const cancel = wrap.onPointerCancel as (() => void) | undefined;
+    expect(down && up && cancel, 'нажатие — по pointer-событиям (не mouse)').toBeTruthy();
     act(() => { enter!(); });
     act(() => { down!(); });
     expect(chip.style.background, 'фон на нажатии').toBe(C.accentLight);
     act(() => { up!(); });
     expect(chip.style.background, 'после отпускания — фон наведения').toBe(C.bgSelected);
+    // Сход пальца (pointercancel без pointerup): нажатие должно сниматься.
+    act(() => { down!(); });
+    act(() => { cancel!(); });
+    expect(chip.style.background, 'pointercancel — нажатие снято').toBe(C.bgSelected);
   });
 
-  it('фокус: кольцо SHADOW.focus + accent-рамка (макет pt1); blur — обратно', async () => {
+  it('фокус с клавиатуры: кольцо и accent-рамка; фокус после мыши (:focus-visible false) — нет', async () => {
     const c = render({});
     await settle();
     const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    const wrap = reactProps(chip!.parentNode as never) ?? {};
-    const focus = wrap.onFocus as (() => void) | undefined;
+    const icon = findNodeByAttr(c, 'data-testid', 'feature-page-lead-icon')!;
+    const wrapNode = chip!.parentNode as unknown as { focusVisible: boolean };
+    const wrap = reactProps(wrapNode as never) ?? {};
+    const focus = wrap.onFocus as ((e: unknown) => void) | undefined;
     const blur = wrap.onBlur as (() => void) | undefined;
     expect(focus && blur, 'на обёртке обработчики фокуса').toBeTruthy();
-    act(() => { focus!(); });
-    expect(chip.style.boxShadow, 'фокус — кольцо').toBe(SHADOW.focus);
-    expect(chip.style.borderColor, 'фокус — accent-рамка').toBe(C.accent);
+    // Tab: :focus-visible = true → кольцо + accent-рамка (макет pt1).
+    wrapNode.focusVisible = true;
+    act(() => { focus!({ currentTarget: wrapNode }); });
+    expect(chip.style.boxShadow, 'фокус с клавиатуры — кольцо').toBe(SHADOW.focus);
+    expect(chip.style.borderColor, 'фокус с клавиатуры — accent-рамка').toBe(C.accent);
+    expect(icon.style.color, 'глиф по фокусу не красится (только по наведению)').toBe(C.textMuted);
+    // Мышь/тап: :focus-visible = false → рамка и кольцо не залипают (хвост R-1F-T).
+    act(() => { blur!(); });
+    wrapNode.focusVisible = false;
+    act(() => { focus!({ currentTarget: wrapNode }); });
+    expect(chip.style.boxShadow, 'фокус после мыши — без кольца').toBe('none');
+    expect(chip.style.borderColor, 'фокус после мыши — базовая рамка').toBe(C.border);
     act(() => { blur!(); });
     expect(chip.style.boxShadow, 'blur — без кольца').toBe('none');
     expect(chip.style.borderColor, 'blur — базовая рамка').toBe(C.border);
+  });
+
+  it('длинное имя: спан имени с ellipsis (чип не лезет за 360)', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    const nameSpan = (chip!.childNodes as FNodeLike[]).find((n) => textNodes(n as never).join('') === 'Софья (локальная)');
+    expect(nameSpan, 'спан с именем оркестратора').not.toBeUndefined();
+    expect(nameSpan!.style.textOverflow, 'имя реется многоточием').toBe('ellipsis');
+    expect(nameSpan!.style.overflow, 'overflow скрыт').toBe('hidden');
   });
 
   // Реактивность стора персон (возврат R-2): getPersonaById сам по себе не реактивен

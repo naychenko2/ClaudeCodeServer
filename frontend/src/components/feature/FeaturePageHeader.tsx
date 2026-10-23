@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, FocusEvent, ReactNode } from 'react';
 import { ArrowRight, GitBranch, ListChecks, MessageCircle, Pause, Play } from 'lucide-react';
 import { C, R, SHADOW, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
@@ -235,10 +235,11 @@ function LeadChip({ feature, isMobile }: { feature: FeatureIndexFeature; isMobil
   usePersonasVersion();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   // Состояния (макет pt1): наведение — bgSelected + кромка accentMuted; нажатие —
-  // accentLight; фокус — кольцо + accent-рамка. Значок-стрелка красится вместе с
-  // наведением/фокусом. Состояние — локальное React-состояние (до ранних return:
-  // порядок хуков не должен плыть), стиль ui.Button считается от него; обработчики
-  // — на обёртке, потому что ui.Button их не форвардит.
+  // accentLight; фокус — кольцо + accent-рамка, только с клавиатуры (:focus-visible),
+  // иначе рамка залипает после тапа. Значок-стрелка красится только по наведению.
+  // Состояние — локальное React-состояние (до ранних return: порядок хуков не должен
+  // плыть), стиль ui.Button считается от него; обработчики — на обёртке, потому что
+  // ui.Button их не форвардит.
   const [hover, setHover] = useState(false);
   const [pressed, setPressed] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -248,12 +249,15 @@ function LeadChip({ feature, isMobile }: { feature: FeatureIndexFeature; isMobil
   const keyChat = feature.keySessionId ?? null;
   const name = persona.name;
 
-  // Каркас чипа (макет pt1): pill 24 px (на 360 — 40), поля 8/4, 12 sans. fontWeight
-  // и выравнивание перебивают дефолты ui.Button: чип — подпись, не кнопка с центровкой.
+  // Каркас чипа (макет pt1): pill 24 px (на 360 — 40), поля 8/3 (десктоп) и 12/8
+  // (мобила), gap 6, 12 sans — числа по макету .who, вне 4px-шкалы. Ширину не
+  // фиксируем: если чип длиннее строки, он сжимается, а имя реется (ellipsis) —
+  // длинное имя не лезет за 360. fontWeight и выравнивание перебивают дефолты
+  // ui.Button: чип — подпись, не кнопка с центровкой.
   const shell: CSSProperties = {
-    display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', gap: 6,
     height: isMobile ? 40 : 24,
-    padding: isMobile ? `0 ${SP.md}px 0 ${SP.sm}px` : `0 ${SP.sm}px 0 ${SP.xs}px`,
+    padding: isMobile ? `0 ${SP.md}px 0 ${SP.sm}px` : `0 ${SP.sm}px 0 3px`,
     borderRadius: R.max, fontSize: FS.sm, color: C.textPrimary, fontFamily: FONT.sans,
     fontWeight: 400, justifyContent: 'flex-start',
   };
@@ -267,20 +271,28 @@ function LeadChip({ feature, isMobile }: { feature: FeatureIndexFeature; isMobil
         style={{ ...shell, border: `1px dashed ${C.dashed}`, background: 'transparent' }}
       >
         <PersonaAvatar persona={persona} size={18} />
-        <span style={{ color: C.textMuted }}>ведёт</span>
-        <span>{name}</span>
+        <span style={{ color: C.textMuted, flexShrink: 0 }}>ведёт</span>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
       </span>
     );
   }
 
   return (
+    // Обёртка — flex-контейнер без фиксации ширины: если чип длиннее строки, он
+    // сжимается, и имя уходит в ellipsis (прецедент: FeatureProdCardsView).
     <span
-      style={{ flexShrink: 0 }}
+      style={{ display: 'inline-flex', minWidth: 0 }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => { setHover(false); setPressed(false); }}
-      onMouseDown={() => setPressed(true)}
-      onMouseUp={() => setPressed(false)}
-      onFocus={() => setFocused(true)}
+      // Нажатие — по pointer-событиям: тач и мышь дают их одинаково, на тапе
+      // состояние видно сразу (прецедент: FeatureProdCardsView, ResizeHandle).
+      onPointerDown={() => setPressed(true)}
+      onPointerUp={() => setPressed(false)}
+      // Сход пальца с чипа: браузер посылает pointercancel — без него pressed залипает.
+      onPointerCancel={() => setPressed(false)}
+      // Фокус — только с клавиатуры (:focus-visible): после клика/тапа рамка и кольцо
+      // не залипают (прецедент: FeatureProdCardsView:113).
+      onFocus={(e: FocusEvent<HTMLSpanElement>) => setFocused(e.currentTarget.matches(':focus-visible'))}
       onBlur={() => setFocused(false)}
     >
       <Button
@@ -305,12 +317,12 @@ function LeadChip({ feature, isMobile }: { feature: FeatureIndexFeature; isMobil
         }}
       >
         <PersonaAvatar persona={persona} size={18} />
-        <span style={{ color: C.textMuted }}>ведёт</span>
-        <span>{name}</span>
+        <span style={{ color: C.textMuted, flexShrink: 0 }}>ведёт</span>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
         {feature.keyArchived && (
-          <span style={{ color: C.textMuted, fontSize: FS.xs }}>в архиве</span>
+          <span style={{ color: C.textMuted, fontSize: FS.xs, flexShrink: 0 }}>в архиве</span>
         )}
-        <span aria-hidden style={{ display: 'inline-flex', color: hover || focused ? C.accent : C.textMuted }}>
+        <span aria-hidden data-testid="feature-page-lead-icon" style={{ display: 'inline-flex', flexShrink: 0, color: hover ? C.accent : C.textMuted }}>
           <MessageCircle size={12} strokeWidth={ICON_STROKE} />
           <ArrowRight size={12} strokeWidth={ICON_STROKE} />
         </span>

@@ -10,8 +10,11 @@ namespace ClaudeHomeServer.Services;
 public sealed class HandoffInProgressException() : Exception("Перенос этого чата уже идёт");
 
 // Тёплый ход не мог начаться: чат занят другим ходом (Busy/Queued/QueueFull) → 409 у
-// контроллера. Это не отказ модели (502): перенос не удался, потому что чат занят
-public sealed class HandoffBusyException() : Exception("чат занят другим ходом, попробуйте позже");
+// контроллера. Это не отказ модели (502): перенос не удался, потому что чат занят.
+// Текст различает «ничего не поставлено» (Busy/QueueFull) и «просьба о записке уже ушла в
+// старый чат» (Queued): во втором случае человеку честно говорим, что она там выполнится
+public sealed class HandoffBusyException(string message = "чат занят другим ходом, попробуйте позже")
+    : Exception(message);
 
 // Модель не собрала записку (упала/таймаут/пустой ответ) → 502 у контроллера
 public sealed class HandoffGenerationException(string message) : Exception(message);
@@ -68,7 +71,8 @@ public class ChatHandoffService(
     /// Выполнить перенос: записка (тёплый или холодный путь) → чат-преемник без resume →
     /// черновик композера. Контракт отказов: KeyNotFoundException — 404 (чужой/несуществующий
     /// id), InvalidOperationException — 409 (группа/штаб/worktree, пустой чат, локаль места,
-    /// повторный клик), HandoffBusyException — 409 (тёплый ход: чат занят другим ходом),
+    /// повторный клик), HandoffBusyException — 409 (тёплый ход: чат занят другим ходом;
+    /// если просьба о записке уже поставлена в старый чат — текст об этом говорит),
     /// HandoffGenerationException — 502 (модель не дала записку).
     /// </summary>
     public async Task<ChatHandoffResult> HandoffAsync(string userId, string sessionId, CancellationToken ct)
@@ -140,10 +144,11 @@ public class ChatHandoffService(
             }
             finally
             {
+                // Гейт из словаря не вычищаем: Release → проверка → TryRemove неатомарны, и
+                // снятый «пустой» семафор пока в него входит другой перенос того же владельца
+                // порождал второй — «1 поток на владельца» переставал быть правдой. Запись на
+                // владельца — копейки
                 gate.Release();
-                // Пустой гейт не держим: семафор нужен, пока кто-то в нём держит или ждёт.
-                // CurrentCount == 1 после Release — ни держателей, ни ожидающих, вычистить
-                if (gate.CurrentCount == 1) _ownerGates.TryRemove(userId, out _);
             }
         }
         finally
@@ -167,7 +172,10 @@ public class ChatHandoffService(
             // Без якоря это не сигнал состояния кэша — искать дальше, а не гасить им
             if (pc.AnchorAtMs is not long anchor) continue;
             var ttlMs = pc.Ttl switch { "1h" => 3_600_000L, "5m" => 300_000L, _ => -1L };
-            return ttlMs > 0 && anchor + ttlMs > nowMs;
+            // Якорь без валидного TTL — тоже не сигнал (как у фронта, promptCacheState):
+            // искать дальше, а не гасить им более ранний живой якорь
+            if (ttlMs <= 0) continue;
+            return anchor + ttlMs > nowMs;
         }
         return false;
     }
@@ -198,8 +206,15 @@ public class ChatHandoffService(
             SendAndWaitResult.Running =>
                 throw new HandoffGenerationException(
                     $"Чат не написал передачу за {WarmTurnTimeout.TotalMinutes:0} мин — новый чат не создан, ход дорабатывает в старом"),
-            // Чат занят (Busy/Queued/QueueFull): не отказ модели, а временное состояние —
-            // 409, человек может повторить клик
+            // Просьба о записке УЖЕ в старом чате (в очереди или ушла ходом сразу): отменить
+            // постановку нельзя, преемник не создаётся — честно говорим об этом в 409
+            SendAndWaitResult.Queued { Dispatched: true } => throw new HandoffBusyException(
+                "чат освободился в момент переноса: просьба о передаче ушла в старый чат "
+                + "(ответ появится в его ленте), новый чат не создан — повторите перенос"),
+            SendAndWaitResult.Queued => throw new HandoffBusyException(
+                "чат занят другим ходом: просьба о передаче поставлена в очередь старого чата "
+                + "и выполнится там, новый чат не создан — повторите перенос позже"),
+            // Busy/QueueFull: ничего не поставлено — временное состояние, 409, клик можно повторить
             _ => throw new HandoffBusyException(),
         };
 

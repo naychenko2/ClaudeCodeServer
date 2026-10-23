@@ -140,6 +140,27 @@ public class ChatHandoffServiceTests : IDisposable
         ChatHandoffService.IsCacheWarm(history, now + 1000).Should().BeTrue();
     }
 
+    [Fact]
+    public void IsCacheWarm_ЯкорьБезВалидногоTTL_ПропускаетсяКакУФронта()
+    {
+        // Расхождение с promptCacheState (promptCache.ts): result с якорем, но без валидного
+        // ttl, не гасит более ранний живой якорь — идём дальше, а не отвечаем «холодный»
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var history = new List<StoredMessage>
+        {
+            new StoredResultMessage("success", 1, 1)
+            { PromptCache = new PromptCacheState(1000, 0, now, "5m", null, PromptCacheMissReason.None) },
+            new StoredResultMessage("success", 1, 1)
+            { PromptCache = new PromptCacheState(1000, 0, now, null, null, PromptCacheMissReason.None) },
+            new StoredResultMessage("success", 1, 1)
+            { PromptCache = new PromptCacheState(1000, 0, now, "2d", null, PromptCacheMissReason.None) },
+        };
+
+        ChatHandoffService.IsCacheWarm(history, now + 1000).Should().BeTrue();
+        // Единственный result без валидного TTL — по-прежнему холодный
+        ChatHandoffService.IsCacheWarm([history[1]], now + 1000).Should().BeFalse();
+    }
+
     // ─── Холодный путь ────────────────────────────────────────────────────────
 
     [Fact]
@@ -296,6 +317,26 @@ public class ChatHandoffServiceTests : IDisposable
         mgr.GetAll().Count.Should().Be(before, "занятый чат не создаёт преемника");
     }
 
+    [Theory]
+    [InlineData(false, "*поставлена в очередь старого чата*")]
+    [InlineData(true, "*ушла в старый чат*")]
+    public async Task Handoff_ТёплыйКэшПросьбаУжеВСтаромЧате_409СЧестнымТекстом(bool dispatched, string message)
+    {
+        // Queued: записка уже заказана у старого чата, отменить постановку нельзя, преемник
+        // не создаётся — текст 409 говорит об этом, а не просто «чат занят»
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var (sut, mgr, chat) = BuildSut(new CountingRunner("не должна вызываться"),
+            cache: new PromptCacheState(60_000, 0, now, "5m", null, PromptCacheMissReason.None));
+        var before = mgr.GetAll().Count;
+        sut.SendOverride = (_, _, _) => Task.FromResult<SendAndWaitResult>(
+            new SendAndWaitResult.Queued(1, false, dispatched));
+
+        var act = () => sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        await act.Should().ThrowExactlyAsync<HandoffBusyException>().WithMessage(message);
+        mgr.GetAll().Count.Should().Be(before);
+    }
+
     [Fact]
     public async Task Handoff_ТёплыйКэшНоБлокер_ЛогПричиныТихогоХолодногоПути()
     {
@@ -400,17 +441,24 @@ public class ChatHandoffServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ХолодныйПуть_ГейтВладельцаВычищаетсяПослеЗавершения()
+    public async Task ХолодныйПуть_ГейтВладельцаОдинНаВладельца_НеВычищаетсяИПереиспользуется()
     {
-        // Гейт «1 поток на владельца» нужен, пока в нём кто-то держит или ждёт; пустой
-        // семафор в словаре не остаётся навсегда
-        var (sut, _, chat) = BuildSut(new CountingRunner("записка"));
-        await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
-
+        // Вычистка пустого гейта (Release → CurrentCount → TryRemove) неатомарна: снимала живой
+        // семафор, в который уже входил другой перенос, и следующий создавал второй. Гейт
+        // остаётся в словаре — один и тот же экземпляр на всех переносах владельца
+        var (sut, mgr, chat) = BuildSut(new CountingRunner("записка"));
         var gates = (ConcurrentDictionary<string, SemaphoreSlim>)typeof(ChatHandoffService)
             .GetField("_ownerGates", BindingFlags.NonPublic | BindingFlags.Instance)!
             .GetValue(sut)!;
-        gates.Count.Should().Be(0, "завершённый пустой гейт вычищается");
+
+        await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+        var first = gates.Should().ContainSingle().Which.Value;
+        first.CurrentCount.Should().Be(1, "после переноса гейт свободен");
+
+        await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        gates.Should().ContainSingle();
+        gates[TestUserId].Should().BeSameAs(first, "второй перенос входит в тот же семафор");
     }
 
     // ─── Сборка SUT ───────────────────────────────────────────────────────────

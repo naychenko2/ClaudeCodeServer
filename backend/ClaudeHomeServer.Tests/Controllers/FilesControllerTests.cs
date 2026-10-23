@@ -2,6 +2,8 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
@@ -321,6 +323,94 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
 
         File.ReadAllText(Path.Combine(mainRoot, "draft.md")).Should().Be("written to main");
         File.ReadAllText(Path.Combine(worktree, "draft.md")).Should().Be("from feature tree", "запись мимо дерева: featureId игнорируется");
+    }
+
+    // ─── W4-LINK-B (п.14): GET /api/projects/{id}/files/content?sessionId= — чтение из дерева задачи, к которой привязан чат ───
+
+    // Тот же приём, что CreateEpicWithVerifiedWorktreeAsync: реальный git-worktree проекта,
+    // задача с этим деревом и чат, привязанный к задаче (Session.TaskId). Возвращает
+    // (sessionId, worktree, projectId, mainRoot).
+    private async Task<(string SessionId, string Worktree, string ProjectId, string MainRoot)>
+        CreateChatWithTaskWorktreeAsync(string tag)
+    {
+        var mainRoot = Path.Combine(_tempDir, "link_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "LinkProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var worktree = Path.Combine(_tempDir, "link_wt_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(worktree);
+        var branch = "feat/" + tag + "-" + Guid.NewGuid().ToString("N")[..6];
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+        await git.WorktreeAddAsync(null, mainRoot, worktree, branch);
+
+        var taskResp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new
+        {
+            title = "task " + tag, role = "feature",
+            worktreePath = worktree, worktreeBranch = branch,
+        });
+        taskResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var taskId = JsonSerializer.Deserialize<JsonElement>(await taskResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.Auto, name: "chat " + tag, taskId: taskId);
+        return (session.Id, worktree, projectId, mainRoot);
+    }
+
+    // Файл с одинаковым относительным путём есть и в дереве задачи, и в main: с sessionId —
+    // читается дерево задачи (тот же предикат, что featureId); без параметра — main (прежнее
+    // поведение).
+    [Fact]
+    public async Task GetContent_SessionId_ЧитаетИзДереваЗадачи()
+    {
+        var (sessionId, worktree, projectId, mainRoot) = await CreateChatWithTaskWorktreeAsync("read");
+        File.WriteAllText(Path.Combine(worktree, "draft.md"), "from task tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var withChat = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={sessionId}");
+        withChat.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyChat = JsonSerializer.Deserialize<JsonElement>(await withChat.Content.ReadAsStringAsync());
+        bodyChat.GetProperty("content").GetString().Should().Be("from task tree", "sessionId — читает проверенное дерево задачи чата");
+
+        var withoutChat = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md");
+        withoutChat.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyMain = JsonSerializer.Deserialize<JsonElement>(await withoutChat.Content.ReadAsStringAsync());
+        bodyMain.GetProperty("content").GetString().Should().Be("from main tree", "без параметра — корень проекта, как раньше");
+    }
+
+    // Путь задачи есть на диске, но НЕ числится в `git worktree list` проекта (чужое дерево) —
+    // отказ 404, без тихого фолбэка на main. Мутация: в FilesController.TaskTreeRootForAsync
+    // заменить `return await git.VerifiedFeatureTreeAsync(...)` на `return task.WorktreePath;` —
+    // этот тест краснеет (чужая папка принялась бы как дерево задачи).
+    [Fact]
+    public async Task GetContent_SessionId_ЗадачаНеВWorktreeList_404()
+    {
+        var (sessionId, _, projectId, mainRoot) = await CreateChatWithTaskWorktreeAsync("alien");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+        var alien = Path.Combine(_tempDir, "link_alien_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(alien);
+        File.WriteAllText(Path.Combine(alien, "draft.md"), "from alien dir");
+        var taskId = _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId!;
+        _factory.Services.GetRequiredService<TaskManager>().GetById(taskId)!.WorktreePath = alien;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={sessionId}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, "непроверенное дерево — 404, не фолбэк на main");
+    }
+
+    // Чат без задачи — дерева задачи нет, его дерево корень проекта: читается main, как раньше.
+    [Fact]
+    public async Task GetContent_SessionId_ЧатБезЗадачи_ЧитаетMain()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("draft.md", "from main tree");
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(id, ClaudeMode.Auto, name: "chat without task");
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from main tree");
     }
 
     [Fact]

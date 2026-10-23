@@ -23,7 +23,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     // отключаемые подсистемы: нет одной из них — маршрут featureId отказывает 404 (fail-closed),
     // маршрут без параметра работает как раньше.
     ClaudeHomeServer.Services.Tasks.TaskManager? tasks = null,
-    GitService? git = null) : ControllerBase
+    GitService? git = null,
+    // W4-LINK-B (п.14): резолв дерева задачи, к которой привязан чат (?sessionId=).
+    SessionManager sessions = null!) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -97,17 +99,28 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpGet("content")]
-    public async Task<IActionResult> GetContent(string projectId, [FromQuery] string path, [FromQuery] string? featureId = null)
+    public async Task<IActionResult> GetContent(string projectId, [FromQuery] string path, [FromQuery] string? featureId = null, [FromQuery] string? sessionId = null)
     {
         try
         {
             var p = GetProject(projectId);
             // W4-5B2 (п.5.2): ?featureId= — чтение из проверенного дерева эпика, по образцу
-            // GitController.RootFor(?sessionId=). Без параметра — корень проекта (прежнее
-            // поведение). Нет эпика (нет/чужой/другой проект) или дерево не проверено — 404,
-            // без тихого фолбэка на main: пользователь должен понять, что смотрит не то.
-            var root = string.IsNullOrEmpty(featureId) ? p.RootPath : await FeatureTreeRootForAsync(p, featureId);
-            if (root is null) return NotFound(new { error = "Дерево фичи не найдено" });
+            // GitController.RootFor(?sessionId=). W4-LINK-B (п.14): ?sessionId= — дерево задачи,
+            // к которой привязан чат (Session.TaskId → TaskItem.WorktreePath), с той же сверкой
+            // по git worktree list. featureId явный — он и решает; без параметров — корень
+            // проекта (прежнее поведение). Нет эпика/задачи (нет/чужой/другой проект) или дерево
+            // не проверено — 404, без тихого фолбэка на main: пользователь смотрит не то.
+            // Чат без задачи — дерева задачи нет, читается main (это и есть его дерево).
+            string? root;
+            if (!string.IsNullOrEmpty(featureId)) root = await FeatureTreeRootForAsync(p, featureId);
+            else if (!string.IsNullOrEmpty(sessionId))
+            {
+                var s = sessions.GetOwned(sessionId, UserId);
+                if (s is null || s.ProjectId != p.Id) return NotFound(new { error = "Чат не найден" });
+                root = s.TaskId is null ? p.RootPath : await TaskTreeRootForAsync(p, s.TaskId);
+            }
+            else root = p.RootPath;
+            if (root is null) return NotFound(new { error = "Дерево не найдено" });
 
             if (IsDirectoryPath(root, path)) return NotFound();
 
@@ -133,6 +146,19 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         var epic = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == featureId);
         if (epic is null || epic.ProjectId != project.Id) return null;
         return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, epic.WorktreePath);
+    }
+
+    // W4-LINK-B (п.14): дерево задачи, к которой привязан чат, для чтения — тот же предикат,
+    // что W4-5/W4-5B2 (GitService.VerifiedFeatureTreeAsync): путь задачи существует на диске
+    // и числится в git worktree list главной репы. Задачи нет (несуществующая/чужая/другой
+    // проект) или дерево не проверено — null → 404, без фолбэка на main. Чат без задачи
+    // сюда не приходит: его дерево — корень проекта (решается в GetContent).
+    private async Task<string?> TaskTreeRootForAsync(ClaudeHomeServer.Models.Project project, string taskId)
+    {
+        if (tasks is null || git is null || UserId is null) return null;
+        var task = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == taskId);
+        if (task is null || task.ProjectId != project.Id) return null;
+        return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, task.WorktreePath);
     }
 
     // Абсолютный путь документа с проверкой, что это просматриваемый документ (pdf/docx/xlsx/pptx).

@@ -107,6 +107,16 @@ export const MediaVisibilityContext = createContext<Map<string, import('./MediaB
 // null — озвучки нет либо говорит голос инстанса (лицо не резолвится, подсвечивать нечего).
 export const SpeakingItemContext = createContext<{ index: number; color: string } | null>(null);
 
+// Читалка документов фичи (W4-LINK-F): ссылки между документами фичи. openFile — открыть
+// файл дерева фичи (чтение через резолв featureId, W4-5B2); openDocument — открыть другой
+// документ фичи в той же читалке. null — вне читалки: поведение ссылок как раньше.
+export const FeatureLinkContext = createContext<{
+  featureId: string;
+  projectId: string;
+  openFile: (path: string) => void;
+  openDocument: (taskId: string) => void;
+} | null>(null);
+
 // Какие карточки инструментов без результата идут в живом ходе, а какие оборваны
 // (lib/toolTiming.ts, toolLiveness). Таймер «идёт M:SS» тикает только живым: у оборванного
 // хода (Стоп, падение процесса) результата не будет никогда, и без этого гейта на старой

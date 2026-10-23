@@ -42,6 +42,10 @@ export interface FeaturePlansTabProps {
   marks?: NavMarks;
   // «Открыть ключевой чат» (общее пустое).
   onOpenKeyChat?: () => void;
+  // Фича (W4-LINK-F): резолв featureId для чтения файлов дерева фичи (W4-5B2) и
+  // проект — область запроса. Без них ссылки между документами не оживают.
+  featureId?: string | null;
+  projectId?: string | null;
 }
 
 // Колонки сетки: 3 на десктопе, 1 на 360 (вариант 5В: «на 360 карточки в одну колонку»).
@@ -106,7 +110,7 @@ function GroupHeader({ label, count, isMobile }: { label: string; count: number;
   );
 }
 
-export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat, marks: marksProp }: FeaturePlansTabProps) {
+export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat, marks: marksProp, featureId = null, projectId = null }: FeaturePlansTabProps) {
   const marks = useMemo(() => marksProp ?? buildNavMarks(page.run, page.chats), [marksProp, page]);
   // Документы: порядок cut → plan → consult (макет). Дедуп планов (решение Андрея):
   // переписанный план — показываем ПОСЛЕДНИЙ по createdAt; разрезы и консультации — все.
@@ -155,7 +159,7 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
           Все документы
         </Button>
         {selectedPlan
-          ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile={isMobile} onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} marks={marks} />
+          ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile={isMobile} onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} marks={marks} featureId={featureId} projectId={projectId} documents={plans} onOpenDocument={id => setSelected({ kind: 'plan', id })} />
           : <MockupCard mockup={selectedMockup!} plans={plans} onOpenFile={onOpenFile} isMobile={isMobile} replaced={selectedMockupReplaced} marks={marks} />}
       </div>
     );

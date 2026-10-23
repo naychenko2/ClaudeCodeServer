@@ -2788,8 +2788,9 @@ export const api = {
       projectRequest<FileEntry[]>(`/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}${showHidden ? '&showHidden=true' : ''}`),
     search: (projectId: string, q: string) =>
       projectRequest<FileEntry[]>(`/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`),
-    getContent: (projectId: string, path: string) =>
-      projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`),
+    // featureId (W4-5B2): читать из проверенного дерева эпика; без него — корень проекта.
+    getContent: (projectId: string, path: string, featureId?: string) =>
+      projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}`),
     saveContent: (projectId: string, path: string, content: string) =>
       projectRequest<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
         method: 'PUT',

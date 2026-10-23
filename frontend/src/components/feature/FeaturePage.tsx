@@ -298,7 +298,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
               <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} />
             </>
           ) : tab === 'plans' ? (
-            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} />
+            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} featureId={featureId} projectId={projectId} />
           ) : tab === 'chats' ? (
             <FeatureChatsTab page={page.page} keySessionId={keyChat} featureId={featureId} marks={marks} isMobile={isMobile} />
           ) : tab === 'tasks' ? (

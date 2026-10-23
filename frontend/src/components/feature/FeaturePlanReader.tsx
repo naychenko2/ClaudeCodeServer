@@ -13,13 +13,21 @@
 // Длинный документ (6 и больше `##`): «Содержание · N» — на 1280 раскрыто, на 360 свёрнуто;
 // каждый `##`-раздел сворачивается отдельно, «Свернуть все / Развернуть все» в панели
 // оглавления. Короткий документ — сплошной текст без свёртки (байт в байт).
+//
+// Ссылки между документами фичи (W4-LINK-F): [[wikilinks]] и относительные пути внутри
+// дерева фичи — кликабельны, открывают цель одним кликом. [[Заголовок]] резолвится по
+// спискам документов фичи, путь — через резолв featureId (W4-5B2), не своей логикой:
+// цель читается тем же эндпоинтом файлов. Внешние http-ссылки — как раньше (ReaderLinkWrap
+// в общем рендере). Битые ссылки не роняют читалку: открытие само показывает «не найдено».
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, FileText, RotateCw, Scissors, MessageCircle, ChevronDown, type LucideIcon } from 'lucide-react';
 import { C, R, FS, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Button } from '../ui/Button';
 import { MarkdownContent } from '../chat/MarkdownContent';
+import { FeatureLinkContext } from '../chat/contexts';
+import { FILE_LIKE_MENTION } from '../../lib/projectFileIndex';
 import { getPersonaById } from '../../lib/personas';
 import { openTaskInSection } from '../../lib/tasks';
 import { NavTargetButton, NavTargetPair } from './NavTargetButton';
@@ -107,6 +115,42 @@ function headingToPlain(text: string): string {
     .trim();
 }
 
+// W4-LINK-F: [[X]] в тексте документа — ссылка между документами фичи. Совпал
+// заголовок другого документа → featuredoc: (откроется в этой же читалке); похоже на
+// путь внутри дерева фичи → featurelink: (читается через резолв featureId, W4-5B2).
+// Всё остальное остаётся текстом — битая ссылка ничего не роняет. Внутри код-заборов
+// не трогаем: там цитата, а не ссылка (тот же сканер заборов, что у splitDoc).
+const normTitle = (s: string) => s.toLowerCase().trim();
+// Похоже на путь внутри дерева фичи: с разделителем или с расширением файла.
+const isTreePath = (s: string) => s.includes('/') || FILE_LIKE_MENTION.test(s);
+
+function linkifyFeatureRefs(text: string, docs: FeaturePlan[]): string {
+  const byTitle = new Map<string, string>();
+  for (const d of docs) byTitle.set(normTitle(d.title), d.taskId);
+  const lines = text.split('\n');
+  let fence: string | null = null;
+  let fenceLen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[i]);
+    if (m) {
+      const run = m[1];
+      if (fence === null) { fence = run[0]; fenceLen = run.length; }
+      else if (run[0] === fence && run.length >= fenceLen && m[2].trim() === '') fence = null;
+      continue;
+    }
+    if (fence) continue;
+    lines[i] = lines[i].replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (full, target, label) => {
+      const t = String(target).trim();
+      if (!t) return full;
+      const id = byTitle.get(normTitle(t));
+      if (id) return `[${label ?? target}](featuredoc:${encodeURIComponent(id)})`;
+      if (isTreePath(t)) return `[${label ?? target}](featurelink:${encodeURIComponent(t)})`;
+      return full;
+    });
+  }
+  return lines.join('\n');
+}
+
 // Значок роли: 24×24, R 7, цвет по роли (макет §токены).
 export function RoleGlyph({ role }: { role: FeaturePlan['role'] }) {
   const { bg, fg, Icon } = PLAN_ROLE_STYLE[role];
@@ -138,13 +182,42 @@ export interface FeaturePlanReaderProps {
   onOpenTask?: (taskId: string) => void;
   // Пометка «задача закрыта» для задачи документа (из данных страницы).
   marks?: NavMarks;
+  // Фича документа (W4-LINK-F): резолв featureId для чтения файлов дерева фичи (W4-5B2)
+  // и проект — область запроса. Без них ссылки между документами не оживают.
+  featureId?: string | null;
+  projectId?: string | null;
+  // Другие документы фичи — для резолва [[wikilinks]] по заголовку.
+  documents?: FeaturePlan[];
+  // Открыть другой документ фичи в этой же читалке.
+  onOpenDocument?: (taskId: string) => void;
 }
 
-export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMockup, onOpenTask, marks = EMPTY_NAV_MARKS }: FeaturePlanReaderProps) {
+export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMockup, onOpenTask, marks = EMPTY_NAV_MARKS, featureId = null, projectId = null, documents = [], onOpenDocument }: FeaturePlanReaderProps) {
   const [state, setState] = useState<TextState>(() => _textCache.get(textCacheKey(plan)) ?? { status: 'loading' });
   const [reload, setReload] = useState(0);
+  // Открытый по ссылке целевой документ (W4-LINK-F): текст читается через резолв
+  // featureId (W4-5B2), при отказе — корень проекта (после мержа worktree нет, документ
+  // в main). Оба отказа — честный «документа нет», читалка не роняется.
+  const [openDoc, setOpenDoc] = useState<{ path: string; status: 'loading' | 'error' | 'ok'; text?: string; isBinary?: boolean } | null>(null);
   // «Содержание · N» — раскрыто на 1280, свёрнуто на 360.
   const [tocOpen, setTocOpen] = useState(!isMobile);
+
+  // Обвязка общего рендера (W4-LINK-F): распознавание ссылок — то же, что в чате
+  // (FileLink + resolveFileMention в MarkdownContent), расширенное схемами читалки.
+  // Без featureId/projectId — null: поведение ссылок как раньше.
+  const linkCtx = useMemo(() => {
+    if (!featureId || !projectId) return null;
+    const openFile = (path: string) => {
+      setOpenDoc({ path, status: 'loading' });
+      const read = (fid?: string) => api.files.getContent(projectId, path, fid);
+      read(featureId)
+        .then(r => setOpenDoc({ path, status: 'ok', text: r.content ?? '', isBinary: r.isBinary }))
+        .catch(() => read()
+          .then(r => setOpenDoc({ path, status: 'ok', text: r.content ?? '', isBinary: r.isBinary }))
+          .catch(() => setOpenDoc({ path, status: 'error' })));
+    };
+    return { featureId, projectId, openFile, openDocument: (id: string) => onOpenDocument?.(id) };
+  }, [featureId, projectId, onOpenDocument]);
   // Свёрнутые `##`-разделы длинного документа: по умолчанию пустое — все раскрыты.
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
   // Корень тела — для скролла к `##`-секции по пункту «Содержание» (под липкие вкладки).
@@ -189,6 +262,8 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
     if (!plan.hasText) return; // «Текста пока нет» — запрос не идёт
     // Новый документ (или повтор) — свёртка начинается заново: все разделы раскрыты.
     setCollapsed(new Set());
+    // Открытый по ссылке документ относится к прежнему тексту — с новым он не показан.
+    setOpenDoc(null);
     const key = textCacheKey(plan);
     // Повтор (reload > 0): сбросить кэш (в т.ч. ошибку), чтобы тянуть заново.
     if (reload > 0) _textCache.delete(key);
@@ -219,7 +294,11 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
     plan.mockupPaths.some(p => p === m.path || m.files.some(f => f.path === p))
   );
 
-  const doc = state.status === 'ok' ? splitDoc(state.text) : null;
+  // Ссылки между документами оживляются только при резолве фичи (linkCtx): без него
+  // текст рендерится как раньше — [[…]] остаётся текстом. Текст один раз: и сканер
+  // разделов, и рендер видят обработанный текст (короткий документ рендерится целиком).
+  const docText = state.status === 'ok' ? (linkCtx ? linkifyFeatureRefs(state.text, documents) : state.text) : '';
+  const doc = state.status === 'ok' ? splitDoc(docText) : null;
   const h2 = doc ? doc.sections.map(s => s.title) : [];
   const longDoc = h2.length >= 6;
   // Кнопки свёртки: не показываем обе активными, когда делать нечего.
@@ -227,6 +306,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
   const allExpanded = !longDoc || collapsed.size === 0;
 
   return (
+    <FeatureLinkContext.Provider value={linkCtx}>
     <div data-testid="plan-reader" style={{ display: 'flex', flexDirection: 'column', gap: SP.md, fontFamily: FONT.sans }}>
       {/* Шапка: роль · заголовок · автор · время */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
@@ -289,8 +369,10 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
         </div>
       )}
 
-      {/* «Содержание · N» — длинный документ (6+ `##`): 1280 раскрыто, 360 свёрнуто. */}
-      {longDoc && (
+      {/* «Содержание · N» — длинный документ (6+ `##`): 1280 раскрыто, 360 свёрнуто.
+          При открытом по ссылке целевом документе оглавание текущего не показывается:
+          скролл к разделам закрытого текста не имеет цели. */}
+      {longDoc && !openDoc && (
         <div data-testid="plan-reader-toc" style={{ border: `1px solid ${C.borderLight}`, borderRadius: R.md, background: C.bgCard }}>
           <button
             type="button"
@@ -397,10 +479,40 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
         </div>
       ) : (
         <>
-          <div ref={bodyRef} data-testid="plan-reader-body" style={{ fontSize: FS.base, lineHeight: 1.6, color: C.textPrimary }}>
+          {openDoc ? (
+            /* Открытый по ссылке целевой документ (W4-LINK-F): тот же общий рендер,
+               возврат — кнопкой, состояние загрузки/отказа честное. */
+            <div data-testid="plan-open-doc" style={{ border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgCard, padding: `${SP.md}px ${SP.md}px` }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginBottom: SP.sm }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: C.textHeading, fontSize: FS.sm, fontFamily: FONT.mono, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <FileText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                  {openDoc.path}
+                </span>
+                <Button size={isMobile ? 'md' : 'xs'} variant="ghost" dataTestId="plan-open-doc-close" onClick={() => setOpenDoc(null)}>
+                  К текущему документу
+                </Button>
+              </div>
+              {openDoc.status === 'loading' ? (
+                <div data-testid="plan-open-doc-loading" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {[70, 92, 84, 60].map((w, i) => (
+                    <div key={i} style={{ height: 12, width: `${w}%`, background: C.bgSelected, borderRadius: R.sm }} />
+                  ))}
+                </div>
+              ) : openDoc.status === 'error' ? (
+                <span data-testid="plan-open-doc-missing" style={{ fontSize: FS.sm, color: C.textMuted }}>Документа нет — он не найден ни в дереве фичи, ни в проекте</span>
+              ) : openDoc.isBinary ? (
+                <span data-testid="plan-open-doc-binary" style={{ fontSize: FS.sm, color: C.textMuted }}>Файл не текстовый — открыть его можно в просмотре файлов.</span>
+              ) : (
+                <div data-testid="plan-open-doc-body" style={{ fontSize: FS.base, lineHeight: 1.6, color: C.textPrimary }}>
+                  <MarkdownContent text={openDoc.text ?? ''} />
+                </div>
+              )}
+            </div>
+          ) : (
+            <div ref={bodyRef} data-testid="plan-reader-body" style={{ fontSize: FS.base, lineHeight: 1.6, color: C.textPrimary }}>
             {!longDoc ? (
               // Короткий документ — сплошной текст, без свёртки (как раньше).
-              <MarkdownContent text={state.text} />
+              <MarkdownContent text={docText} />
             ) : (
               // Длинный: преамбула и каждый `##`-раздел — отдельным вызовом общего рендера.
               // Свёрнутый раздел отдаёт рендеру только строку заголовка: тело скрыто.
@@ -444,7 +556,8 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                 })}
               </>
             )}
-          </div>
+            </div>
+          )}
           {/* Подвал: текст — итог задачи, здесь только чтение (макет). */}
           <div data-testid="plan-reader-footer" style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: SP.md, paddingTop: SP.sm, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>
             Текст — итог задачи. Здесь только чтение; правка — в задаче.
@@ -452,5 +565,6 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
         </>
       )}
     </div>
+    </FeatureLinkContext.Provider>
   );
 }

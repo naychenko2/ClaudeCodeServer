@@ -8,10 +8,11 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
-  stageDotStyle, stageLineStyle, buildTaskMap, stageStatusBadge, ExecutorRow,
+  stageDotStyle, stageLineStyle, buildTaskMap, stageStatusBadge, ExecutorRow, buildExecutorIndex,
 } from './FeatureTimelineBits';
+import type { StepProgress } from '../../lib/featureProgress';
 import { FeatureProdCardsView } from './FeatureProdCardsView';
-import type { FeatureRun, FeatureStage, StageKey } from '../../types/featureRun';
+import type { FeatureRun, FeatureStage, FeatureStageExecutor, StageKey } from '../../types/featureRun';
 
 // Вкладка «Хронология» (волна 3, Ф2a, макет features-overview-3-final §5): поясняющая
 // строка + вертикальный список 7 этапов в порядке жизненного цикла (cut → plan → prod →
@@ -46,13 +47,16 @@ function TimelineNote() {
 // карточка с плашкой состояния; у «Производство» — лента карточек (W4-2F3), у других
 // этапов — исполнители. Клик по заголовку — раскрыть/схлопнуть.
 function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, featureTitle = null,
-  run, showProd = false, marks = EMPTY_NAV_MARKS, isMobile = false }: {
+  run, showProd = false, marks = EMPTY_NAV_MARKS, isMobile = false,
+  execIndex = new Map<string, FeatureStageExecutor>(), progress = null }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
   now: number; featureId: string; featureTitle?: string | null;
   run: FeatureRun; showProd?: boolean;
   marks?: NavMarks;
   isMobile?: boolean;
+  execIndex?: Map<string, FeatureStageExecutor>;
+  progress?: StepProgress | null;
 }) {
   const status = stageStatusLabel(stage);
   const bounds = stageBoundsLabel(stage);
@@ -159,6 +163,9 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                   featureTitle={featureTitle}
                   marks={marks}
                   isMobile={isMobile}
+                  taskMap={taskMap}
+                  execIndex={execIndex}
+                  progress={progress}
                 />
               ))
             ) : (
@@ -182,6 +189,9 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                 featureTitle={featureTitle}
                 marks={marks}
                 isMobile={isMobile}
+                taskMap={taskMap}
+                execIndex={execIndex}
+                progress={progress}
               />
             ))
           ) : (
@@ -203,6 +213,9 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
   // Честный прогресс (Ф-pr): из run.stepProgress; null — старые ответы (строки нет).
   const progress = stepProgressFromRun(run);
   const taskMap = useMemo(() => buildTaskMap(run), [run]);
+  // W4-3F: индекс исполнителей по taskId — статус чипов «оценивает →» берётся только из
+  // stages[].executors[] (бэк W4-3B уже отфильтровал связь по задачам этого run).
+  const execIndex = useMemo(() => buildExecutorIndex(stages), [stages]);
   // Пометки «в архиве»/«задача закрыта»: страница даёт полные (с чатами), без пропа —
   // из самого агрегата (исполнители стадий + задачи).
   const marks = useMemo(() => marksProp ?? buildNavMarks(run), [marksProp, run]);
@@ -264,6 +277,8 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
           showProd={stage.key === 'prod'}
           marks={marks}
           isMobile={isMobile}
+          execIndex={execIndex}
+          progress={progress}
         />
       ))}
     </div>

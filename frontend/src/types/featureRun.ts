@@ -138,6 +138,11 @@ export interface FeatureStageExecutor {
   modelLabel: string | null;
   // Полное имя модели; null — нет.
   modelFull: string | null;
+  // W4-3B: связь «оценивает →»: task.reviewOf, отфильтрованный по задачам этого run.
+  // Висящие (задачи нет) и чужые id наружу не выходят — их число в reviewOfOutside.
+  // Аддитивное: старые ответы их не несут — UI обязан пережить отсутствие.
+  reviewOf?: string[] | null;
+  reviewOfOutside?: number;
 }
 
 // Стадия конвейера фичи (бэк: `FeatureStage`). Арифметику считает бэк, фронт

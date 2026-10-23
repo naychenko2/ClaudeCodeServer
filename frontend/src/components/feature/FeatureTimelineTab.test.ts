@@ -14,7 +14,8 @@
 // (2) убрать «≈» из stageDurationLabel → «длительность ≈» краснеет; (3) не передать run
 // в FeatureProdCardsView (не дать stepChains) → «карточка Ш1» краснеет; (4) не передать
 // isMobile в ленту → «360: поле касания 40» краснеет; (5) убрать фолбэк на ExecutorRow
-// при пустой ленте → «сироты не исчезают» краснеет.
+// при пустой ленте → «сироты не исчезают» краснеет; (6) убрать ветку outside из рендера
+// «оценивает →» → «reviewOfOutside > 0 даёт нейтральную подпись» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -23,8 +24,9 @@ import { FeatureTimelineTab } from './FeatureTimelineTab';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, minutesSince, executorStatus, stageStatusBadge,
-  stepStatusView, stepModel,
+  stepStatusView, stepModel, buildExecutorIndex, evaluatedLine, outsideLinksLabel,
 } from './FeatureTimelineBits';
+import type { StepProgress } from '../../lib/featureProgress';
 import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureRound, FeatureTask, StageKey } from '../../types/featureRun';
@@ -89,6 +91,8 @@ function mkExec(over: Partial<FeatureStageExecutor> = {}): FeatureStageExecutor 
     chatArchived: false,
     modelLabel: null,
     modelFull: null,
+    reviewOf: [],
+    reviewOfOutside: 0,
     ...over,
   };
 }
@@ -674,5 +678,154 @@ describe('FeatureTimelineTab: лента «Производства»', () => {
     const pill = (node as { childNodes: unknown[] }).childNodes[0];
     const ps = (reactProps(pill as never)!.style ?? {}) as Record<string, string>;
     expect(ps.lineHeight).toBe('20px');
+  });
+});
+
+// === W4-3F: строка «оценивает →» ===
+
+describe('buildExecutorIndex / evaluatedLine (W4-3F)', () => {
+  it('индекс — по taskId из stages[].executors[] (единственный источник статуса)', () => {
+    const idx = buildExecutorIndex([
+      mkStage({ executors: [mkExec({ taskId: 't-s1', status: 'done' })] }),
+      mkStage({ key: 'review', executors: [mkExec({ taskId: 't-r1', taskRole: 'review' })] }),
+    ]);
+    expect(idx.get('t-s1')?.status).toBe('done');
+    expect(idx.get('нет')).toBeUndefined();
+  });
+
+  it('review/qa — чипы оцениваемых задач: заголовок из taskMap, статус из исполнителя стадии', () => {
+    const execIndex = buildExecutorIndex([mkStage({ executors: [mkExec({ taskId: 't-s1', status: 'done' })] })]);
+    const taskMap = new Map<string, FeatureTask>([['t-s1', { id: 't-s1', title: 'Модель шаблона' } as FeatureTask]]);
+    const line = evaluatedLine(
+      mkExec({ taskId: 't-r1', taskRole: 'review', reviewOf: ['t-s1'], reviewOfOutside: 0 }),
+      taskMap, execIndex, null, NOW);
+    expect(line).toEqual({
+      targets: [{ taskId: 't-s1', title: 'Модель шаблона', statusLabel: 'готово', tone: 'success' }],
+      outside: 0,
+      scopeLabel: null,
+    });
+  });
+
+  it('reviewOfOutside > 0 — нейтральная подпись; ни целей, ни outside — строки нет', () => {
+    const line = evaluatedLine(mkExec({ taskRole: 'review', reviewOf: [], reviewOfOutside: 2 }), new Map(), new Map(), null, NOW);
+    expect(line).toEqual({ targets: [], outside: 2, scopeLabel: null });
+    expect(evaluatedLine(mkExec({ taskRole: 'review', reviewOf: [], reviewOfOutside: 0 }), new Map(), new Map(), null, NOW)).toBeNull();
+  });
+
+  it('у step и rework строки нет: ReviewOf доработки — «откуда», а не «что оценивает»', () => {
+    expect(evaluatedLine(mkExec({ taskRole: 'step', reviewOf: ['t-r1'] }), new Map(), new Map(), null, NOW)).toBeNull();
+    expect(evaluatedLine(mkExec({ taskRole: 'rework', reviewOf: ['t-r1'] }), new Map(), new Map(), null, NOW)).toBeNull();
+  });
+
+  it('final — «фичу целиком: N из M принято» из stepProgress; прогресса нет — null', () => {
+    const p: StepProgress = { planState: 'partial', total: 5, accepted: 3, review: 1, work: 1, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 };
+    expect(evaluatedLine(mkExec({ taskRole: 'final' }), new Map(), new Map(), p, NOW)?.scopeLabel)
+      .toBe('фичу целиком: 3 из 5 принято');
+    expect(evaluatedLine(mkExec({ taskRole: 'final' }), new Map(), new Map(), null, NOW)).toBeNull();
+  });
+
+  it('plan — «по разрезу», cut — «по эпику»', () => {
+    expect(evaluatedLine(mkExec({ taskRole: 'plan' }), new Map(), new Map(), null, NOW)?.scopeLabel).toBe('по разрезу');
+    expect(evaluatedLine(mkExec({ taskRole: 'cut' }), new Map(), new Map(), null, NOW)?.scopeLabel).toBe('по эпику');
+  });
+
+  it('склонение «N связей не найдено»: 1/2/5 — по русским правилам', () => {
+    expect(outsideLinksLabel(0)).toBe('');
+    expect(outsideLinksLabel(1)).toBe('1 связь не найдена');
+    expect(outsideLinksLabel(2)).toBe('2 связи не найдены');
+    expect(outsideLinksLabel(5)).toBe('5 связей не найдено');
+  });
+});
+
+describe('FeatureTimelineTab: строка «оценивает →» (рендер)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    personaMap.set('p2', 'Глеб');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  function openStage2(c: FNodeLike, key: string): FNodeLike {
+    const header = findNodeByAttr(c, 'data-testid', `timeline-stage-header-${key}`)!;
+    act(() => { (reactProps(header)!.onClick as () => void)(); });
+    return findNodeByAttr(c, 'data-testid', `timeline-stage-body-${key}`)!;
+  }
+
+  // Мутация (в отчёте): убрать ветку timeline-eval-outside из рендера → этот тест краснеет.
+  it('reviewOfOutside > 0 → нейтральная подпись «2 связи не найдены» (не «вне фичи»)', () => {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ personaId: 'p1', taskId: 't-rev', taskRole: 'review', status: 'done', reviewOf: [], reviewOfOutside: 2 })];
+    const c = renderTab(mkRun(stages, { reviews: [{ id: 't-rev', title: 'Ревью', status: 'done' }] }));
+    const body = openStage2(c, 'review');
+    const outside = findNodeByAttr(body, 'data-testid', 'timeline-eval-outside');
+    expect(outside, 'нейтральная подпись о висящих связях').not.toBeNull();
+    expect(textNodes(outside!).join('')).toBe('2 связи не найдены');
+    const all = textNodes(body).join('');
+    expect(all).not.toContain('вне фичи');
+    // Само ревью при этом виден: строка «оценивает →» есть.
+    expect(findNodeByAttr(body, 'data-testid', 'timeline-eval-line')).not.toBeNull();
+  });
+
+  it('чипы оцениваемых задач у review: заголовок и статус из stages[].executors[]', () => {
+    const stages = fullStages();
+    // Исполнитель шага Ш1 закрыт (done) — статус чипа берётся из его записи в стадии.
+    stages[2]!.executors = [mkExec({ personaId: 'p1', taskId: 't-s1', taskRole: 'step', stepRef: 'Ш1', status: 'done' })];
+    stages[3]!.executors = [mkExec({ personaId: 'p2', taskId: 't-rev', taskRole: 'review', status: 'done', reviewOf: ['t-s1'] })];
+    const c = renderTab(mkRun(stages, { steps: [{ id: 't-s1', title: 'Модель шаблона', status: 'done' } as FeatureTask] }));
+    const body = openStage2(c, 'review');
+    const target = findNodeByAttr(body, 'data-testid', 'timeline-eval-target');
+    expect(target, 'чип оцениваемой задачи').not.toBeNull();
+    const t = textNodes(target!).join('');
+    expect(t).toContain('Модель шаблона');
+    expect(t).toContain('готово');
+  });
+
+  it('сырой reviewOf задачи — не источник: у исполнителя связи нет, строки нет', () => {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ personaId: 'p1', taskId: 't-rev', taskRole: 'review', status: 'done' })];
+    // reviewOf есть только в сырой FeatureTask — из неё связь не берётся.
+    const c = renderTab(mkRun(stages, { reviews: [{ id: 't-rev', title: 'Ревью', status: 'done', reviewOf: ['t-s1'] } as FeatureTask] }));
+    const body = openStage2(c, 'review');
+    expect(findNodeByAttr(body, 'data-testid', 'timeline-eval-line'), 'строки «оценивает →» нет').toBeNull();
+  });
+
+  it('у rework чипов «оценивает →» нет (ReviewOf — «откуда вернулась»)', () => {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ personaId: 'p1', taskId: 't-rw', taskRole: 'rework', stepRef: 'Ш1', status: 'running', reviewOf: ['t-rev'], reviewOfOutside: 1 })];
+    const c = renderTab(mkRun(stages, { reviews: [{ id: 't-rev', title: 'Ревью', status: 'done' }] }));
+    const body = openStage2(c, 'review');
+    expect(findNodeByAttr(body, 'data-testid', 'timeline-eval-target')).toBeNull();
+    expect(findNodeByAttr(body, 'data-testid', 'timeline-eval-outside')).toBeNull();
+  });
+
+  it('final — «фичу целиком: 3 из 5 принято» из stepProgress', () => {
+    const stages = fullStages();
+    stages[5]!.executors = [mkExec({ personaId: 'p2', taskId: 't-fin', taskRole: 'final', status: 'done' })];
+    const c = renderTab(mkRun(stages, {
+      final: { id: 't-fin', title: 'Финальное ревью', status: 'done' } as FeatureTask,
+      stepProgress: { planState: 'partial', total: 5, accepted: 3, review: 1, work: 1, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 },
+    }));
+    const body = openStage2(c, 'final');
+    const scope = findNodeByAttr(body, 'data-testid', 'timeline-eval-scope');
+    expect(scope, 'подпись финала по всей фиче').not.toBeNull();
+    expect(textNodes(scope!).join('')).toBe('фичу целиком: 3 из 5 принято');
+  });
+
+  it('план — «по разрезу», разрез — «по эпику»', () => {
+    const stages = fullStages();
+    stages[0]!.executors = [mkExec({ personaId: 'p2', taskId: 't-cut', taskRole: 'cut', status: 'done' })];
+    stages[1]!.executors = [mkExec({ personaId: 'p2', taskId: 't-plan', taskRole: 'plan', status: 'done' })];
+    const c = renderTab(mkRun(stages, {
+      cut: [{ id: 't-cut', title: 'Разрез' } as FeatureTask],
+      plan: [{ id: 't-plan', title: 'План' } as FeatureTask],
+    }));
+    expect(textNodes(findNodeByAttr(openStage2(c, 'cut'), 'data-testid', 'timeline-eval-scope')!).join('')).toBe('по эпику');
+    expect(textNodes(findNodeByAttr(openStage2(c, 'plan'), 'data-testid', 'timeline-eval-scope')!).join('')).toBe('по разрезу');
   });
 });

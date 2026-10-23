@@ -12,6 +12,7 @@ import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { NavTargetPair } from './NavTargetButton';
+import type { StepProgress } from '../../lib/featureProgress';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureTask, StageKey } from '../../types/featureRun';
 
 // Подкомпоненты вкладки «Хронология» (волна 3, Ф2a, макет features-overview-3-final §5):
@@ -218,6 +219,81 @@ export function stepModel(executors: FeatureStageExecutor[], stepRef: string):
   return { label: any.modelLabel, full: any.modelFull };
 }
 
+// === W4-3F: строка «оценивает →» ===
+
+// Индекс исполнителей по taskId: единственный источник статуса для чипов «оценивает →» —
+// stages[].executors[] (бэк W4-3B уже отфильтровал связь по задачам этого run). Сырой
+// FeatureTask.reviewOf не используется: он не фильтрован и не является источником правды.
+export function buildExecutorIndex(stages: FeatureStage[]): Map<string, FeatureStageExecutor> {
+  const idx = new Map<string, FeatureStageExecutor>();
+  for (const s of stages) {
+    for (const x of s.executors) {
+      if (x.taskId) idx.set(x.taskId, x);
+    }
+  }
+  return idx;
+}
+
+// Оцениваемая задача: заголовок из taskMap, статус — из исполнителя задачи в
+// stages[].executors[]; исполнителя нет (например, эпик) — статус не выдумывается.
+export interface EvalTarget {
+  taskId: string;
+  title: string;
+  statusLabel: string;
+  tone: 'muted' | 'info' | 'danger' | 'success';
+}
+
+// «N связей не найдено» — с правильным склонением числа (нейтрально: не «вне фичи»).
+export function outsideLinksLabel(n: number): string {
+  if (n <= 0) return '';
+  if (n === 1) return '1 связь не найдена';
+  if (n <= 4) return `${n} связи не найдены`;
+  return `${n} связей не найдено`;
+}
+
+// Строка «оценивает →» исполнителя. Ролевая граница (вариант 3А):
+// • review/qa — чипы оцениваемых задач (только эти роли оценивают конкретные задачи;
+//   у rework ReviewOf означает «откуда вернулась», а не «что оценивает» — чипов нет);
+// • final — «фичу целиком: N из M принято» из stepProgress (прогресса нет — строки нет);
+// • plan — «по разрезу», cut — «по эпику» (эти роли оценируют целое, а не задачи);
+// • остальные роли — null.
+export interface EvaluatedLine {
+  targets: EvalTarget[];
+  outside: number;
+  scopeLabel: string | null;
+}
+export function evaluatedLine(
+  x: FeatureStageExecutor,
+  taskMap: Map<string, FeatureTask>,
+  execIndex: Map<string, FeatureStageExecutor>,
+  progress: StepProgress | null,
+  now: number,
+): EvaluatedLine | null {
+  if (x.taskRole === 'review' || x.taskRole === 'qa') {
+    const targets = (x.reviewOf ?? []).map((id) => {
+      const ex = execIndex.get(id);
+      const task = taskMap.get(id);
+      const st = ex ? executorStatus(ex, task, now) : null;
+      return {
+        taskId: id,
+        title: task?.title ?? id,
+        statusLabel: st ? st.label : '',
+        tone: st ? st.tone : 'muted',
+      };
+    });
+    const outside = x.reviewOfOutside ?? 0;
+    if (!targets.length && !outside) return null;
+    return { targets, outside, scopeLabel: null };
+  }
+  if (x.taskRole === 'final') {
+    if (!progress) return null;
+    return { targets: [], outside: 0, scopeLabel: `фичу целиком: ${progress.accepted} из ${progress.total} принято` };
+  }
+  if (x.taskRole === 'plan') return { targets: [], outside: 0, scopeLabel: 'по разрезу' };
+  if (x.taskRole === 'cut') return { targets: [], outside: 0, scopeLabel: 'по эпику' };
+  return null;
+}
+
 // === Подкомпоненты ===
 
 // Чип модели (макет §5/§7): mono 10, «Opus»/«Sonnet»/«Qwen»/«Авто»; «Авто» раскрывается —
@@ -289,8 +365,10 @@ export function ExecutorAvatar({ personaId }: { personaId: string | null }) {
 // chatId == null → «чата нет» (без мёртвой ссылки); чат в архиве → «· архив».
 // Навигация (Ф9a): чат — openChatById, задача — openTaskInSection; точка возврата
 // «страница фичи → чат/задача» — recordFeatureReturn (чип возврата — Ф9b).
-export function ExecutorRow({ x, task, now, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false }: {
+export function ExecutorRow({ x, task, now, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false,
+  taskMap = new Map<string, FeatureTask>(), execIndex = new Map<string, FeatureStageExecutor>(), progress = null }: {
   x: FeatureStageExecutor; task?: FeatureTask; now: number; featureId: string; featureTitle?: string | null; marks?: NavMarks; isMobile?: boolean;
+  taskMap?: Map<string, FeatureTask>; execIndex?: Map<string, FeatureStageExecutor>; progress?: StepProgress | null;
 }) {
   const persona = x.personaId ? getPersonaById(x.personaId) : undefined;
   // Персона в данных, но не найдена (недоступна) — нейтральное «персона недоступна»,
@@ -299,12 +377,17 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
   const role = roleLabel(x.taskRole, x.stepRef, x.lane);
   const st = executorStatus(x, task, now);
   const time = st.minutes != null ? `${st.minutes} мин` : null;
+  // W4-3F: строка «оценивает →» (чипы только у review/qa; финал — по всей фиче; план/разрез —
+  // «по разрезу»/«по эпику»). Связь — только из stages[].executors[], сырой reviewOf не берём.
+  const ev = evaluatedLine(x, taskMap, execIndex, progress, now);
 
   const statusColor =
     st.tone === 'info' ? C.info :
     st.tone === 'danger' ? C.dangerText :
     st.tone === 'success' ? C.successText :
     C.textMuted;
+  const toneColor = (t: 'muted' | 'info' | 'danger' | 'success') =>
+    t === 'info' ? C.info : t === 'danger' ? C.dangerText : t === 'success' ? C.successText : C.textMuted;
 
   // Переход в чат исполнителя: openChatById (тот же путь, что плашка FeatureBanner)
   // + точка возврата на страницу фичи (Ф9b).
@@ -351,6 +434,39 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
       {time && (
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
           {time}
+        </span>
+      )}
+      {ev && (
+        <span
+          data-testid="timeline-eval-line"
+          style={{ display: 'inline-flex', gap: SP.xs, alignItems: 'center', flexWrap: 'wrap' }}
+        >
+          <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>оценивает →</span>
+          {ev.targets.map((t) => (
+            <span
+              key={t.taskId}
+              data-testid="timeline-eval-target"
+              style={{
+                fontSize: FS.xs, color: C.textSecondary, background: C.bgSelected,
+                borderRadius: R.sm, padding: `0 ${SP.xs}px`, whiteSpace: 'nowrap', flexShrink: 0,
+              }}
+            >
+              {t.title}
+              {t.statusLabel && (
+                <span style={{ color: toneColor(t.tone), fontWeight: 600 }}> · {t.statusLabel}</span>
+              )}
+            </span>
+          ))}
+          {ev.outside > 0 && (
+            <span data-testid="timeline-eval-outside" style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
+              {outsideLinksLabel(ev.outside)}
+            </span>
+          )}
+          {ev.scopeLabel && (
+            <span data-testid="timeline-eval-scope" style={{ fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap' }}>
+              {ev.scopeLabel}
+            </span>
+          )}
         </span>
       )}
       <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: SP.xs }}>

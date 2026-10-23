@@ -6,7 +6,8 @@
 // сам, своим таймером (F-1b-r): тик перерисовывает блок циферблата, а не всю пилюлю.
 // Своей кнопки нет: цель клика — вся пилюля (BadgeShell). Нет состояния — не рисуется ни
 // циферблат, ни разделитель: блок появляется и исчезает целиком.
-import { useEffect, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { useLiveNow } from '../../hooks/useLiveNow';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { C, FONT, FS, SP } from '../../lib/design';
 import { ICON_SIZE } from './icons';
@@ -41,27 +42,18 @@ export function cacheSpoken(state: PromptCacheState, isWaiting: boolean): string
   return `${state.status === 'cooling' ? 'Кэш скоро остынет' : 'Кэш тёплый'} · ${cacheLeftText(state.remainingMs)}`;
 }
 
+// Нейтральная строка кэша для title/aria-label пилюли: пилюля не тикает, поэтому в ней
+// нет ничего, что меняется со временем (статус и минуты), — живые детали в подсказке
+// (CacheSpokenText) и на циферблате. Идёт ход — от props, пилюля перерисуется сама.
+export function cacheStaticLabel(isWaiting: boolean): string {
+  return isWaiting ? 'Кэш · идёт ход' : 'Кэш промпта';
+}
+
 // Доля оставшегося срока: remainingMs / (expiresAt − anchorAtMs). Единая для циферблата
 // и полоски поповера — здесь, а не пересчитывается в каждом месте (F-1b-r).
 export function dialFrac(state: PromptCacheState): number {
   const total = Math.max(1, state.expiresAt - state.anchorAtMs);
   return Math.min(1, Math.max(0, state.remainingMs / total));
-}
-
-// Часы циферблата (и живых строк рядом с ним): тик ровно на смену показываемой минуты
-// (остаток округляется вверх, порог «остывает» — целые минуты), поэтому перерисовок
-// раз в минуту и не чаще; у остывшего и пустого состояния таймера нет. Держит их
-// компонент циферблата, не хук: тик не перерисовывает всю пилюлю (F-1b-r).
-export function useLiveNow(state: PromptCacheState | null): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!state) return;
-    const remaining = state.expiresAt - now;
-    if (remaining <= 0) return;
-    const t = window.setTimeout(() => setNow(Date.now()), (remaining % 60_000 || 60_000) + 50);
-    return () => window.clearTimeout(t);
-  }, [now, state]);
-  return now;
 }
 
 // Цвета — только через style: C.* — это var(--…), а в SVG-атрибутах CSS-переменные не резолвятся.

@@ -54,7 +54,8 @@ import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
-import { CacheDial, CacheDialPip, CacheSpokenText, cacheLeftText, cacheSpoken, dialFrac, useLiveNow } from '../ui/CacheDial';
+import { CacheDial, CacheDialPip, CacheSpokenText, cacheLeftText, cacheStaticLabel, dialFrac } from '../ui/CacheDial';
+import { useLiveNow } from '../../hooks/useLiveNow';
 import { liveState, type PromptCacheState } from '../../lib/promptCache';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
@@ -979,7 +980,7 @@ export function RingPillBadge(props: {
     })));
   }
   // Тон пилюли кэш не перекрашивает — у циферблата свой цвет, строка только в подсказке
-  if (cache) parts.push({ text: cacheSpoken(cache, props.isWaiting), dial: true });
+  if (cache) parts.push({ text: cacheStaticLabel(props.isWaiting), dial: true });
   const title = (parts.length > 0 ? parts.map(p => p.text).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
   const tip = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs + 1 }}>

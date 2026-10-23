@@ -4,6 +4,8 @@
 // Вторая часть — циферблат кэша промпта (F-1b): появление по данным ленты, текст на
 // десктопе и его отсутствие на мобиле, «идёт ход» без минут.
 import { createElement } from 'react';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CacheDialPip } from '../../ui/CacheDial';
@@ -112,13 +114,13 @@ describe('RingPillBadge: циферблат кэша промпта (F-1b)', () 
     const html = renderPill([cacheItem()]);
     expect(html).toContain('<svg width="14"');
     expect(visibleLeftText(html)).toBeNull();
-    expect(ariaOf(html)).toContain('Кэш тёплый · 60 мин');
+    expect(ariaOf(html)).toContain('Кэш промпта');
   });
 
   it('остывает: минуты на десктопе, «дыхание» на секторе', () => {
     const html = renderPill([cacheItem({ anchorAtMs: Date.now() - 55 * MIN })]);
     expect(visibleLeftText(html)).toBe('5 мин');
-    expect(ariaOf(html)).toContain('Кэш скоро остынет');
+    expect(ariaOf(html)).toContain('Кэш промпта');
     expect(html).toContain('cc-cache-breathe');
   });
 
@@ -126,15 +128,25 @@ describe('RingPillBadge: циферблат кэша промпта (F-1b)', () 
     const html = renderPill([cacheItem({ anchorAtMs: Date.now() - 61 * MIN })]);
     expect(html).toContain('stroke-dasharray="3 2.2"');
     expect(visibleLeftText(html)).toBe('остыл');
-    expect(ariaOf(html)).toContain('Кэш остыл');
+    expect(ariaOf(html)).toContain('Кэш промпта');
   });
 
   it('мобила: циферблат есть, текста у него нет ни в каком состоянии', () => {
     expect(visibleLeftText(renderPill([cacheItem({ anchorAtMs: Date.now() - 55 * MIN })], true))).toBeNull();
     expect(visibleLeftText(renderPill([cacheItem({ anchorAtMs: Date.now() - 61 * MIN })], true))).toBeNull();
-    // сам циферблат и минуты в aria-label при этом остаются
+    // сам циферблат остаётся
     expect(renderPill([cacheItem({ anchorAtMs: Date.now() - 55 * MIN })], true)).toContain('<svg width="14"');
-    expect(ariaOf(renderPill([cacheItem({ anchorAtMs: Date.now() - 55 * MIN })], true))).toContain('5 мин');
+  });
+
+  it('aria-label и title не несут меняющегося со временем: ни статуса, ни минут (F-1b-r2)', () => {
+    // Пилюля не тикает: любое «тёплый · 60 мин» в атрибутах через час противоречило бы циферблату
+    for (const age of [0, 55 * MIN, 61 * MIN]) {
+      const html = renderPill([cacheItem({ anchorAtMs: Date.now() - age })]);
+      const a = ariaOf(html);
+      expect(a).toContain('Кэш промпта');
+      expect(a).not.toMatch(/тёплый|остынет|остыл|\d+ мин/);
+      expect(/title="([^"]*)"/.exec(html)?.[1] ?? '').not.toMatch(/тёплый|остынет|остыл|\d+ мин/);
+    }
   });
 
   it('идёт ход: показывается, но не как статус — без минут', () => {
@@ -178,5 +190,15 @@ describe('CacheDialPip: мини-циферблат в подсказке', () =
   it('идёт ход: пип серый, без сектора', () => {
     const html = renderToStaticMarkup(createElement(CacheDialPip, { state: state(), isWaiting: true }));
     expect(html).not.toContain('fill-opacity');
+  });
+});
+
+// Лента шапки передаётся как есть: литерал `props.items ?? []` даёт новую ссылку на каждый
+// рендер, и заморозка ленты уходит в цикл «Too many re-renders». SSR цикл не воспроизводит,
+// поэтому охраняем сам исходник (F-1b-r2).
+describe('ChatHeaderBar: лента кэша без нового литерала на рендер', () => {
+  it('нет `items ?? []` в исходнике шапки', () => {
+    const src = readFileSync(fileURLToPath(new URL('../ChatHeaderBar.tsx', import.meta.url)), 'utf8');
+    expect(src).not.toMatch(/items\s*\?\?\s*\[\]/);
   });
 });

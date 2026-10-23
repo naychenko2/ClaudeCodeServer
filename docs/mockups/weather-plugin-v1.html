@@ -238,7 +238,8 @@ body {
 .search-wrap .cc-input { padding-left:36px; }
 .city .nm { font-weight:600; }
 .city .rg { color:var(--cc-fg-muted); font-size:12px; }
-.city .cn { display:flex; flex-direction:column; min-width:0; flex:1; }
+.city .cn { min-width:0; flex:1; }
+.city .more { display:block; }
 .city .t { font-size:12px; color:var(--cc-fg-muted); }
 .city mark { background:none; color:inherit; text-decoration:underline; text-decoration-color:var(--cc-accent); text-underline-offset:3px; }
 .geo { width:100%; justify-content:flex-start; }
@@ -404,7 +405,7 @@ function searchView({ q = 'Яр', results = CITIES, geo = 'idle', empty = false 
     ? `<div class="cc-empty"><div class="cc-empty__title">Город не найден</div>
         <div class="cc-empty__text">Проверьте написание или введите название по-английски — например, Yaroslavl.</div></div>`
     : `<ul class="cc-list" role="listbox" aria-label="Найденные города">${results.map(c => `<li class="cc-list-item city${c.active ? ' is-active' : ''}" role="option" tabindex="0" aria-selected="${!!c.active}">
-        <span class="cn"><span class="nm">${hl(c.nm)}</span><span class="rg">${c.rg}</span></span><span class="t">${c.t}</span></li>`).join('')}</ul>`;
+        <span class="cn"><span class="nm">${hl(c.nm)}</span><span class="rg">, ${c.rg}</span>${c.more ? `<span class="rg more">ещё ${c.more} с похожим названием</span>` : ''}</span><span class="t">${c.t}</span></li>`).join('')}</ul>`;
   return `<div class="wx">
     <div class="wx-top"><button class="cc-btn cc-btn--ghost cc-btn--sm" type="button" style="border-color:transparent;padding-left:4px">${ico('back')}Назад</button>
       <span style="font-size:16px;font-weight:600">Выбор города</span></div>

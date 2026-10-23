@@ -415,7 +415,7 @@ async function scenarioErrors(browser, base) {
   // C5-д2 (MAJOR): unavailable — про плагин, остальные коды хоста — нейтральный
   // дефолт; ни тот ни другой не «нет связи».
   for (const [failCode, wantTitle, wantText, wantBtn] of [
-    ['unavailable', 'Плагин погоды сейчас недоступен', 'Обновите страницу или откройте панель позже.', false],
+    ['unavailable', 'Плагин погоды сейчас недоступен', 'Включите плагин в разделе «Плагины» и откройте панель снова.', false],
     ['not_found', 'Данные о погоде получить не удалось', 'Попробуйте ещё раз.', true],
     ['invalid', 'Данные о погоде получить не удалось', 'Попробуйте ещё раз.', true],
   ]) {
@@ -1488,7 +1488,7 @@ async function scenarioTiesAndCountryFallback(browser, base) {
 
 // C6: одноимённые пункты без admin1 различаются; висячих разделителей нет.
 async function scenarioSameNames(browser, base) {
-  await scenario('32. Одноимённые пункты без admin1 — подписи попарно различны, без висячих разделителей (C6)', async (checks) => {
+  await scenario('32. Одноимённые пункты: без координат в подписи, дедуп, приписка и подсказки, admin1 приоритетнее admin2 (C6)', async (checks) => {
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
       fixtures: [
@@ -1504,13 +1504,32 @@ async function scenarioSameNames(browser, base) {
       await frame.locator('#q').fill('Мос');
       await frame.locator('.city').first().waitFor({ timeout: 15000 });
       const lines = await frame.locator('.city .cn').allInnerTexts().then((a) => a.map((s) => s.replace(/\s+/g, ' ').trim()));
-      assertEq(checks, 'строк результатов', lines.length, 4);
-      assertEq(checks, 'подписи попарно различны', new Set(lines).size, lines.length);
+      const titles = await frame.locator('.city').evaluateAll((els) => els.map((e) => e.getAttribute('title')));
+      // Дубль геокодера (идентичные координаты) схлопнут: 8 записей → 7 строк.
+      assertEq(checks, 'строк результатов (дубль схлопнут)', lines.length, 7);
+      assertTrue(checks, 'координат в подписи нет', lines.every((l) => !/\d°|[NSEW]\b|\(/.test(l)), lines.join(' | '));
       assertTrue(checks, 'нет висячих разделителей', lines.every((l) => !/[·,]\s*$/.test(l) && !l.includes(', ,') && !l.includes('·')), lines.join(' | '));
-      const same = lines.filter((l) => l.startsWith('Москва, Туркменистан'));
-      assertEq(checks, 'три одноимённые без региона', same.length, 3);
-      assertTrue(checks, 'у одноимённых есть координаты', same.every((l) => /\(\d+,\d{2}° [NS], \d+,\d{2}° [EW]\)$/.test(l)), same.join(' | '));
-      assertTrue(checks, 'admin2 вместо пустого admin1', lines.some((l) => l === 'Москва, Кировский район, Россия'), lines.join(' | '));
+      const tm = lines.map((l, i) => i).filter((i) => lines[i].startsWith('Москва, Туркменистан'));
+      const br = lines.map((l, i) => i).filter((i) => lines[i].startsWith('Москва, Бразилия'));
+      assertEq(checks, 'три одноимённые Туркменистана (дубль схлопнут)', tm.length, 3);
+      assertEq(checks, 'две одноимённые Бразилии', br.length, 2);
+      // Приписка — только у первой строки группы.
+      assertEq(checks, 'приписка у первой строки группы TM', lines[tm[0]], 'Москва, Туркменистан ещё 2 с похожим названием');
+      assertTrue(checks, 'у остальных TM приписки нет', tm.slice(1).every((i) => lines[i] === 'Москва, Туркменистан'), lines.join(' | '));
+      assertEq(checks, 'приписка у первой строки группы BR', lines[br[0]], 'Москва, Бразилия ещё 1 с похожим названием');
+      // Конкретные значения подсказок: ≈ 300 м разницы (37,900/58,100 и 37,904/58,104) различимы,
+      // знаки S/W выводятся верно, широта и долгота не перепутаны.
+      assertEq(checks, 'подсказки TM', tm.map((i) => titles[i]).sort().join(' | '),
+        ['37,5000° N, 58,3700° E', '37,9000° N, 58,1000° E', '37,9040° N, 58,1040° E'].join(' | '));
+      assertEq(checks, 'подсказки BR (южная широта, западная долгота)', br.map((i) => titles[i]).sort().join(' | '),
+        ['12,3456° S, 45,6789° W', '12,9000° S, 45,1000° W'].join(' | '));
+      assertEq(checks, 'подсказки попарно различны', new Set(titles.filter(Boolean)).size, 5);
+      // Регион различает сам: подсказок и приписок у не-групп нет.
+      const kir = lines.findIndex((l) => l === 'Москва, Кировский район, Россия');
+      assertTrue(checks, 'admin2 вместо пустого admin1', kir >= 0, lines.join(' | '));
+      assertEq(checks, 'у строки с регионом нет подсказки', titles[kir], null);
+      // Есть и admin1, и admin2: показывается только admin1.
+      assertTrue(checks, 'при admin1 и admin2 — только admin1', lines.includes('Москва, Тверская обл., Россия') && !lines.some((l) => l.includes('Московская')), lines.join(' | '));
     } catch (e) {
       await shot(page, 'scenario-32-samename');
       throw e;

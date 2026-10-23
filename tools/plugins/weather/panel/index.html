@@ -119,6 +119,7 @@
   .city .nm { font-weight: 600; }
   .city .rg { color: var(--cc-fg-muted); font-size: 12px; }
   .city .cn { min-width: 0; flex: 1; }
+  .city .more { display: block; }
   .city .t { font-size: 12px; color: var(--cc-fg-muted); }
   .city mark { background: none; color: inherit; text-decoration: underline; text-decoration-color: var(--cc-accent); text-underline-offset: 3px; }
   .hint { font-size: 12px; color: var(--cc-fg-muted); padding: 0 4px; }
@@ -337,7 +338,7 @@
         // Плагин выключен или подсистема плагинов недоступна: не про связь и не
         // про сервис погоды (C5-д2).
         icon = 'cloudoff'; title = 'Плагин погоды сейчас недоступен';
-        text = 'Обновите страницу или откройте панель позже.';
+        text = 'Включите плагин в разделе «Плагины» и откройте панель снова.';
         extra = '';
       } else if (kind === 'limit') {
         // Связь есть — упёрлись в частоту запросов (30 в минуту). «Проверьте
@@ -425,9 +426,10 @@
       if (country) parts.push(country);
       return parts.join(', ');
     }
-    // Координаты для различения одноимённых строк: «38,12° N, 58,37° E».
+    // Координаты для title-подсказки одноимённых строк: «38,1200° N, 58,3700° E».
+    // Четыре знака (≈ 10 м): три знака не различают дубли геокодера в сотнях метров.
     function coordText(lat, lon) {
-      var f = function (v, p, n) { return Math.abs(v).toFixed(2).replace('.', ',') + '° ' + (v < 0 ? n : p); };
+      var f = function (v, p, n) { return Math.abs(v).toFixed(4).replace('.', ',') + '° ' + (v < 0 ? n : p); };
       return f(lat, 'N', 'S') + ', ' + f(lon, 'E', 'W');
     }
     // Подсветка совпавшего начала запроса, как в макете.
@@ -537,13 +539,13 @@
         '<ul class="cc-list" role="listbox" aria-label="Найденные города">' +
         found.map(function (c, i) {
           var active = c.lat === city.lat && c.lon === city.lon;
-          return '<li class="cc-list-item city' + (active ? ' is-active' : '') + '" role="option" tabindex="0" aria-selected="' + (active ? 'true' : 'false') + '" data-i="' + i + '">' +
+          return '<li class="cc-list-item city' + (active ? ' is-active' : '') + '"' + (c.coords ? ' title="' + esc(c.coords) + '"' : '') + ' role="option" tabindex="0" aria-selected="' + (active ? 'true' : 'false') + '" data-i="' + i + '">' +
             // Подпись — «Город, Регион, Страна»: страна читается рядом с
             // названием, а не в конце строки (правка приёмки 23.10). Нет
             // температуры — прочерк, не пустое место (там же).
             '<span class="cn"><span class="nm">' + hl(c.name) + '</span>' +
-            ((c.region || c.coords) ? '<span class="rg">' + (c.region ? ', ' + esc(c.region) : '') +
-              (c.coords ? ' (' + esc(c.coords) + ')' : '') + '</span>' : '') + '</span>' +
+            (c.region ? '<span class="rg">, ' + esc(c.region) + '</span>' : '') +
+            (c.more ? '<span class="rg more">ещё ' + c.more + ' с похожим названием</span>' : '') + '</span>' +
             '<span class="t">' + fmt(c.temp) + '</span>' +
             '</li>';
         }).join('') + '</ul>';
@@ -582,17 +584,31 @@
             String(a.name).localeCompare(String(b.name), 'ru') ||
             (a.lat - b.lat) || (a.lon - b.lon);
         });
+        // Дубли одного пункта (одинаковые подпись и координаты с точностью ≈ 100 м)
+        // схлопываются в одну строку, остаётся первая — с большим населением.
+        var dedup = {};
+        all = all.filter(function (c) {
+          var k = c.name + '|' + c.region + '|' + Number(c.lat).toFixed(3) + '|' + Number(c.lon).toFixed(3);
+          if (dedup[k]) return false;
+          dedup[k] = true;
+          return true;
+        });
         // До 5 своих; иностранных — 2 плюс свободные места своих (5 − N_своих).
         // Потолок — 7 строк (C5-д3).
         var own = all.filter(function (c) { return c.country_code === HOME_COUNTRY; }).slice(0, 5);
         var foreignQuota = 2 + Math.max(0, 5 - own.length);
         var foreign = all.filter(function (c) { return c.country_code !== HOME_COUNTRY; }).slice(0, foreignQuota);
         var snapshot = own.concat(foreign);
-        // Одинаковые «Город, Регион, Страна» не выбрать — добавляем координаты.
-        var seen = {};
+        // Одинаковые «Город, Регион, Страна» различаем без координат в подписи:
+        // координаты — в title-подсказке, у первой строки группы — приписка
+        // «ещё N с похожим названием».
+        var seen = {}, first = {};
         snapshot.forEach(function (c) { var k = c.name + '|' + c.region; seen[k] = (seen[k] || 0) + 1; });
         snapshot.forEach(function (c) {
-          if (seen[c.name + '|' + c.region] > 1) c.coords = coordText(c.lat, c.lon);
+          var k = c.name + '|' + c.region;
+          if (seen[k] < 2) return;
+          c.coords = coordText(c.lat, c.lon);
+          if (!first[k]) { first[k] = true; c.more = seen[k] - 1; }
         });
         found = snapshot;
         renderGeo();

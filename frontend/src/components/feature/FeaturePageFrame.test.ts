@@ -71,6 +71,8 @@ vi.mock('../../lib/api', () => ({
   },
 }));
 vi.mock('../../lib/personas', () => ({
+  // ensurePersonasLoaded — no-op: в node-окружении тянет signalr/localStorage.
+  ensurePersonasLoaded: () => Promise.resolve(),
   getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
   usePersonasVersion: () => 0,
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),

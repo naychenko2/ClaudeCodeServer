@@ -604,7 +604,7 @@ public class TasksController(
         new(@"^[A-Za-z0-9_-]{1,128}$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     [HttpGet("features/{featureId}")]
-    public IActionResult GetFeature(string featureId, [FromQuery] string? eventsLimit = null)
+    public async Task<IActionResult> GetFeature(string featureId, [FromQuery] string? eventsLimit = null)
     {
         if (features is null)
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
@@ -815,7 +815,7 @@ public class TasksController(
             Spend: featureSpend);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
-        var (mockups, mockupsUnavailable) = BuildMockups(run, catalog);
+        var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
         return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
             mockups, mockupsUnavailable });
     }
@@ -825,12 +825,16 @@ public class TasksController(
     //      чужой/нет → mockups: [] (файлы чужого проекта не трогаем);
     //   2. локальный проект (ProjectCapabilities.FilesOnServer=false) → [] + "device"
     //      ДО любого вызова Docs (файлы на устройстве, диск сервера не читаем);
-    //   3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
+    //   3. W4-5 (п.5.1): если у эпика есть проверенное дерево (FeatureTreePathAsync) — Find
+    //      вызывается ДВАЖДЫ: по дереву эпика и по корню проекта. Слияние по относительному
+    //      пути: запись дерева побеждает (ветка свежее), exists файлов — объединение двух
+    //      деревьев. Дерева нет или проверка не прошла — только main, как раньше.
+    //   4. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
     //      Docs регистрируется безусловно, тумблера нет — ветка защитная, жива в тестах).
     // TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
     // которой есть path макета или любой из его files; иначе null. Сортировка: ModifiedAt
     // убыв., null в конце (детерминизм — путь).
-    private (IReadOnlyList<MockupEntry> Mockups, string? Unavailable) BuildMockups(FeatureRun run, MockupCatalog? catalog)
+    private async Task<(IReadOnlyList<MockupEntry> Mockups, string? Unavailable)> BuildMockups(FeatureRun run, MockupCatalog? catalog)
     {
         // 1. Проект эпика: только если он принадлежит текущему владельцу (GetByOwner, fail-closed).
         var project = run.Epic.ProjectId is { } pid
@@ -846,7 +850,34 @@ public class TasksController(
         //    linkedFiles всех задач ПОЛНОГО run (эпик + шаги + ревью + qa + финал + мерж +
         //    разрез + план), только из проекта эпика (см. AllLinkedFiles).
         var linkedPaths = AllLinkedFiles(run);
-        var found = catalog?.Find(project.RootPath, run.FeatureId, linkedPaths) ?? [];
+
+        // W4-5: каталог читает проверенное дерево эпика и main; слияние по относительному
+        // пути. Кэш DocsIndexService ключуется корнем — дерево получает свой слот без правок.
+        var featureRoot = await FeatureTreePathAsync(run.Epic, project);
+        var merged = new Dictionary<string, MockupEntry>(StringComparer.OrdinalIgnoreCase);
+        if (featureRoot is not null)
+            foreach (var e in catalog?.Find(featureRoot, run.FeatureId, linkedPaths) ?? [])
+                merged[e.Path] = e with { Tree = MockupTree.Feature };
+        foreach (var e in catalog?.Find(project.RootPath, run.FeatureId, linkedPaths) ?? [])
+        {
+            if (merged.TryGetValue(e.Path, out var fromTree))
+            {
+                // Запись дерева побеждает; exists файла — объединение двух деревьев: файл,
+                // который есть только в main, не считается «ни в одном дереве».
+                var mainExists = e.Files.ToDictionary(f => f.Path, f => f.Exists, StringComparer.OrdinalIgnoreCase);
+                merged[e.Path] = fromTree with
+                {
+                    Files = fromTree.Files
+                        .Select(f => f with { Exists = f.Exists || mainExists.GetValueOrDefault(f.Path, false) })
+                        .ToList(),
+                };
+            }
+            else
+            {
+                merged[e.Path] = e with { Tree = MockupTree.Main };
+            }
+        }
+        var found = merged.Values;
 
         // 4. TaskId/AuthorPersonaId — по первой (по CreatedAt) задаче, в linkedFiles которой есть
         //    path макета или любой из его files; иначе null.
@@ -1130,6 +1161,42 @@ public class TasksController(
         if (!list.Any(w => PathNormalizer.NormalizePath(w.Path) == wanted))
             return (false, "Worktree фичи не найден");
         return (false, null);
+    }
+
+    // W4-5 (п.5.1): проверенное дерево эпика для чтения каталога макетов. Тот же предикат,
+    // что FeatureWorktreeErrorAsync/AttachWorktreeAsync: путь непустой, на диске и числится
+    // в `git worktree list` проекта. Не прошёл проверку — дерева нет (null): каталог читает
+    // main, как раньше. В отличие от гарда мержа — не 409: отсутствие дерева здесь фолбэк,
+    // а не ошибка. Ветка эпика не требуется: для чтения дерева она не нужна. Git выключен
+    // (null) или сбой git — fail-closed, main (не 500).
+    private async Task<string?> FeatureTreePathAsync(TaskItem epic, Project project)
+    {
+        if (string.IsNullOrWhiteSpace(epic.WorktreePath)) return null;
+        string path;
+        try
+        {
+            path = Path.GetFullPath(epic.WorktreePath.Trim());
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        if (!Directory.Exists(path)) return null;
+        // Само основное дерево — не «дерево фичи»: второй вызов каталога был бы дублем.
+        if (PathNormalizer.NormalizePath(path) == PathNormalizer.NormalizePath(project.RootPath))
+            return null;
+        if (git is null) return null;
+        IReadOnlyList<GitWorktreeInfo> list;
+        try
+        {
+            list = await git.WorktreeListAsync(UserId, project.RootPath);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        var wanted = PathNormalizer.NormalizePath(path);
+        return list.Any(w => PathNormalizer.NormalizePath(w.Path) == wanted) ? path : null;
     }
 
     // m1: основная ветка проекта — текущая ветка корня (git symbolic-ref). null — git выключен,

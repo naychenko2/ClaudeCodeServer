@@ -903,14 +903,14 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // 503: подсистема Tasks выключена (FeatureProjector не зарегистрирован) — прямой сборкой контроллера.
     [Fact]
-    public void GetFeature_ПодсистемаВыключена_503()
+    public async Task GetFeature_ПодсистемаВыключена_503()
     {
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
             noteSync: null, features: null);
 
-        var result = controller.GetFeature("any", null);
+        var result = await controller.GetFeature("any", null);
 
         result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>()
             .Which.StatusCode.Should().Be(503);
@@ -1093,7 +1093,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var epicId = epic.GetProperty("id").GetString();
 
         var controller = BuildController(git: null); // journal = null (дефолт)
-        var result = controller.GetFeature(epicId, null); // GetFeature — синхронный (IActionResult)
+        var result = await controller.GetFeature(epicId, null);
 
         result.Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>();
         var body = (result as Microsoft.AspNetCore.Mvc.OkObjectResult)!.Value!;
@@ -1152,7 +1152,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var counting = new CountingMockupCatalog();
         var controller = BuildController(git: null, catalog: counting);
-        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
         json.GetProperty("mockups").GetArrayLength().Should().Be(0, "локальный проект → []");
@@ -1173,7 +1173,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
 
         var controller = BuildController(git: null, catalog: null); // каталога нет в DI
-        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
         json.GetProperty("mockups").GetArrayLength().Should().Be(0, "каталога нет в DI → []");
@@ -1209,12 +1209,111 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             Files: [new MockupFile("docs/mockups/mine.html", true)],
             Source: MockupSource.LinkedFiles, ModifiedAt: null));
         var controller = BuildController(git: null, catalog: catalog);
-        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
         var mockup = json.GetProperty("mockups").EnumerateArray().Single();
         mockup.GetProperty("taskId").GetString().Should().Be(stepId, "taskId — по задаче, в linkedFiles которой path");
         mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-mk");
+    }
+
+    // ─── W4-5: каталог читает проверенное worktree эпика (п.5.1) ────────────────────────────
+
+    // Каталог, запоминающий корень каждого вызова Find и возвращающий маркерную запись с ОДНИМ
+    // относительным путём для обоих деревьев (title — по корню). Существование файла-макета
+    // он задаёт намеренно: в дереве эпика его нет (exists=false), в main — есть (exists=true).
+    // Так проверяются и резолвер (какие корни вызывались), и слияние (побеждает запись дерева),
+    // и объединение exists (файл, который есть в main, не считается «ни в одном дереве»).
+    private sealed class RootsMockupCatalog : MockupCatalog
+    {
+        private readonly string _mainRoot;
+        public readonly List<string> Roots = [];
+        public RootsMockupCatalog(string mainRoot) : base(new DocsIndexService())
+        {
+            _mainRoot = mainRoot;
+        }
+        public override IReadOnlyList<MockupEntry> Find(string rootPath, string featureId,
+            IReadOnlyCollection<string> linkedPaths)
+        {
+            Roots.Add(rootPath);
+            return [new MockupEntry(
+                Path: "docs/mockups/x.md", Title: "mockup@" + rootPath, Status: null,
+                Files: [new MockupFile("docs/mockups/x.html", rootPath == _mainRoot)],
+                Source: MockupSource.Header, ModifiedAt: null)];
+        }
+    }
+
+    // Проверенный worktree эпика (числится в `git worktree list` проекта): Find вызывается
+    // дважды — сначала по дереву эпика, затем по корню; слияние по относительному пути:
+    // запись дерева побеждает (tree="feature", title по корню дерева), а exists файла —
+    // объединение двух деревьев (в дереве файла нет, в main есть → exists=true).
+    [Fact]
+    public async Task GetFeature_Mockups_ПроверенныйWorktree_КаталогЧитаетДеревоЭпика()
+    {
+        var (epicId, worktree, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var mainRoot = Projects.GetById(projectId)!.RootPath;
+
+        var catalog = new RootsMockupCatalog(mainRoot);
+        var controller = BuildController(RealGit(), catalog: catalog);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        // Сначала дерево эпика, потом main — слияние по относительному пути.
+        catalog.Roots.Should().Equal(worktree, mainRoot);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main");
+        mockup.GetProperty("title").GetString().Should().Be("mockup@" + worktree);
+        mockup.GetProperty("files").EnumerateArray().Single().GetProperty("exists")
+            .GetBoolean().Should().BeTrue("exists — объединение двух деревьев");
+    }
+
+    // Фолбэк: у эпика нет worktreePath — каталог вызывается один раз, по корню проекта,
+    // запись помечена tree="main".
+    [Fact]
+    public async Task GetFeature_Mockups_БезWorktree_ФолбэкНаMainTree()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var dir = Path.Combine(_factory.TempDir, "mk_notree_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = Projects.Create("mk-notree-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
+
+        var catalog = new RootsMockupCatalog(project.RootPath);
+        var controller = BuildController(RealGit(), catalog: catalog);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        // Дерева нет — только main.
+        catalog.Roots.Should().Equal(project.RootPath);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("main");
+        mockup.GetProperty("title").GetString().Should().Be("mockup@" + project.RootPath);
+    }
+
+    // Путь задачи есть на диске, но НЕ числится в `git worktree list` этого проекта (реальный
+    // git-репозиторий, папка просто рядом) — отказ: каталог читает только main.
+    // Мутация: в FeatureTreePathAsync заменить `list.Any(...)` на unconditional return path
+    // — этот тест краснеет (чужая папка принялась бы как дерево эпика).
+    [Fact]
+    public async Task GetFeature_Mockups_ПутьНеВWorktreeList_ОтказФолбэкНаMain()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var mainRoot = Projects.GetById(projectId)!.RootPath;
+        // Эпик получает путь реальной папки, которой нет в `git worktree list` проекта.
+        var alien = Path.Combine(_factory.TempDir, "mk_alien_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(alien);
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.WorktreePath = alien;
+
+        var catalog = new RootsMockupCatalog(mainRoot);
+        var controller = BuildController(RealGit(), catalog: catalog);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        // Непроверенный путь — только main.
+        catalog.Roots.Should().Equal(mainRoot);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("main");
     }
 
     // ─── REST POST /api/tasks/features/{featureId}/merge: мерж фичи ─────────────────────────
@@ -2303,11 +2402,11 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     };
 
     // Страница фичи через BuildController (spend — шов, journal — реальный журнал) → stats.
-    private JsonElement GetFeatureStats(ISpendFeatureReader? spend, string epicId,
+    private async Task<JsonElement> GetFeatureStats(ISpendFeatureReader? spend, string epicId,
         FeatureJournalStore? journal = null)
     {
         var controller = BuildController(null, null, spend, journal);
-        var result = (ObjectResult)controller.GetFeature(epicId)!;
+        var result = (ObjectResult)(await controller.GetFeature(epicId))!;
         // CamelCase — как wire-формат приложения (SystemTextJson): FeatureStats.Spend → spend.
         return JsonSerializer.SerializeToElement(result.Value!,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
@@ -2332,7 +2431,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     {
         var (epicId, _, _) = await MakeFeature("sp-off");
 
-        var stats = GetFeatureStats(null, epicId);
+        var stats = await GetFeatureStats(null, epicId);
 
         var spendAbsent = !stats.TryGetProperty("spend", out var spend) || spend.ValueKind == JsonValueKind.Null;
         spendAbsent.Should().BeTrue("Spend выключен → stats.spend = null, не 500");
@@ -2386,7 +2485,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (epicId, stepId, _) = await MakeFeature("sp-cost");
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "claude-opus-4", 100, 50, 1.5));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.ValueKind.Should().NotBe(JsonValueKind.Null);
         spend.GetProperty("inputTokens").GetInt64().Should().Be(100);
@@ -2404,7 +2503,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (epicId, stepId, _) = await MakeFeature("sp-deepseek");
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "deepseek-chat", 100, 50, 2.0));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("inputTokens").GetInt64().Should().Be(100, "токены ненадёжной модели в сумме");
         spend.GetProperty("costUsd").GetDouble().Should().Be(0, "стоимость ненадёжной модели не в сумме");
@@ -2420,7 +2519,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (epicId, stepId, _) = await MakeFeature("sp-free");
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "llama-3", 100, 50, 0, source: "free"));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("inputTokens").GetInt64().Should().Be(100);
         spend.GetProperty("costUsd").GetDouble().Should().Be(0, "free → честный 0");
@@ -2435,7 +2534,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // Запись с taskId фичи, но владелец = SecondOwner → фильтр OwnerId == owner отсекает.
         var (_, reader) = SpendStoreWith(SpendRecord(SecondOwnerId, stepId, null, "claude-opus-4", 100, 50, 1.5));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("inputTokens").GetInt64().Should().Be(0,
             "чужая запись (OwnerId=SecondOwner) не входит в расход фичи");
@@ -2458,7 +2557,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // Запись расхода: без taskId, но sessionId = ключевой чат фичи.
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, null, keyChat, "claude-opus-4", 100, 50, 1.5));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("inputTokens").GetInt64().Should().Be(100,
             "ключевой чат (сессия с TaskId = id эпика) входит в срез → запись расхода учитывается");
@@ -2486,12 +2585,12 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, null, chatC, "claude-opus-4", 100, 50, 1.5));
 
         // Срез A: ключевой чат не исключителен (входит ещё в B) → запись не входит.
-        var spendA = GetFeatureStats(reader, epicAId).GetProperty("spend");
+        var spendA = (await GetFeatureStats(reader, epicAId)).GetProperty("spend");
         spendA.GetProperty("inputTokens").GetInt64().Should().Be(0,
             "чат в двух фичах не входит в срез A (двойного счёта нет)");
 
         // Срез B: чат C — не ключевой чат B (TaskId = id эпика A) и не сессия задачи B → тоже нет.
-        var spendB = GetFeatureStats(reader, epicBId).GetProperty("spend");
+        var spendB = (await GetFeatureStats(reader, epicBId)).GetProperty("spend");
         spendB.GetProperty("inputTokens").GetInt64().Should().Be(0,
             "чат C не сессия задачи B и не её ключевой чат → не входит в срез B");
     }
@@ -2515,7 +2614,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         };
         var (_, reader) = SpendStoreWith(rec);
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("from").GetString().Should().Be(
             DateTime.UtcNow.ToString("yyyy-MM-dd"),
@@ -2544,7 +2643,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             SpendRecord(OwnerId, stepId, null, "gpt-4o", 100, 50, null),
             SpendRecord(OwnerId, stepId, null, "glm-local:8b", 100, 50, 5.0, source: "free"));
 
-        var stats = GetFeatureStats(reader, epicId);
+        var stats = await GetFeatureStats(reader, epicId);
         var spend = stats.GetProperty("spend");
         var roles = stats.GetProperty("breakdown").GetProperty("roles");
 
@@ -2621,7 +2720,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (_, reader) = SpendStoreWith(rec);
 
         // Срез A: общий чат C исключён из среза (0 токенов), доля A = 1/2 (A и B активны) = 50.
-        var spendA = GetFeatureStats(reader, epicAId).GetProperty("spend");
+        var spendA = (await GetFeatureStats(reader, epicAId)).GetProperty("spend");
         spendA.GetProperty("shared").GetProperty("inputTokens").GetInt64().Should().Be(50,
             "общий чат делится поровну: A и B активны → 1/2");
         spendA.GetProperty("shared").GetProperty("method").GetString().Should().Be("approx",
@@ -2630,7 +2729,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         spendA.GetProperty("inputTokens").GetInt64().Should().Be(50, "итог включает долю общего чата");
 
         // Срез B: симметрично, доля B = 50.
-        var spendB = GetFeatureStats(reader, epicBId).GetProperty("spend");
+        var spendB = (await GetFeatureStats(reader, epicBId)).GetProperty("spend");
         spendB.GetProperty("shared").GetProperty("inputTokens").GetInt64().Should().Be(50);
         spendB.GetProperty("inputTokens").GetInt64().Should().Be(50);
     }
@@ -2670,13 +2769,13 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (_, reader) = SpendStoreWith(rec);
 
         // A активна, B нет → знаменатель = 1 → A получает целиком (100), не 50.
-        var spendA = GetFeatureStats(reader, epicAId).GetProperty("spend");
+        var spendA = (await GetFeatureStats(reader, epicAId)).GetProperty("spend");
         spendA.GetProperty("shared").GetProperty("inputTokens").GetInt64().Should().Be(100,
             "только A активна → доля = 1/1 = целиком (знаменатель = активные, не все фичи чата)");
         spendA.GetProperty("inputTokens").GetInt64().Should().Be(100);
 
         // B не активна → её доля 0 → shared: null (вклада в расход фичи нет); итог B без доли.
-        var spendB = GetFeatureStats(reader, epicBId).GetProperty("spend");
+        var spendB = (await GetFeatureStats(reader, epicBId)).GetProperty("spend");
         spendB.GetProperty("shared").ValueKind.Should().Be(JsonValueKind.Null,
             "B не активна на момент хода → её доля 0 → shared: null");
         spendB.GetProperty("inputTokens").GetInt64().Should().Be(0, "B не активна → итог без доли");
@@ -2690,7 +2789,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // Запись расхода задачи фичи (надёжная цена) → расход есть, но общих чатов нет.
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "claude-opus-4", 100, 50, 1.5));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.ValueKind.Should().NotBe(JsonValueKind.Null, "расход фичи есть");
         spend.GetProperty("shared").ValueKind.Should().Be(JsonValueKind.Null,
@@ -2790,7 +2889,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var reader = new SpendFeatureReader(coldStore);
         var swWarm = Stopwatch.StartNew();
         for (var i = 0; i < warmIters; i++)
-            GetFeatureStats(reader, epicIds[0]);
+            await GetFeatureStats(reader, epicIds[0]);
         swWarm.Stop();
 
         Console.WriteLine($"[B9c bench] записей={totalRecords}, фич={featureCount}, общий чат в {featureCount} фичах");
@@ -2999,9 +3098,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         store.RollupOlderThan(store.WindowStart);
 
         // ── Сценарий (a): все журналы полные → method=journal ──
-        var statsA = GetFeatureStats(reader, epicAId, journal);
-        var statsB = GetFeatureStats(reader, epicBId, journal);
-        var statsC = GetFeatureStats(reader, epicCId, journal);
+        var statsA = await GetFeatureStats(reader, epicAId, journal);
+        var statsB = await GetFeatureStats(reader, epicBId, journal);
+        var statsC = await GetFeatureStats(reader, epicCId, journal);
 
         statsA.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
             .Should().Be("approx",
@@ -3027,9 +3126,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         // ── Сценарий (b): журнал B (соседки) удалён → method=approx (у всех) ──
         journal.Delete(OwnerId, epicBId);
-        var statsA2 = GetFeatureStats(reader, epicAId, journal);
-        var statsB2 = GetFeatureStats(reader, epicBId, journal);
-        var statsC2 = GetFeatureStats(reader, epicCId, journal);
+        var statsA2 = await GetFeatureStats(reader, epicAId, journal);
+        var statsB2 = await GetFeatureStats(reader, epicBId, journal);
+        var statsC2 = await GetFeatureStats(reader, epicCId, journal);
 
         statsA2.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
             .Should().Be("approx", "журнала соседки B нет → method=approx");
@@ -3089,9 +3188,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1));
 
-        var statsA = GetFeatureStats(reader, epicAId);
-        var statsB = GetFeatureStats(reader, epicBId);
-        var statsC = GetFeatureStats(reader, epicCId);
+        var statsA = await GetFeatureStats(reader, epicAId);
+        var statsB = await GetFeatureStats(reader, epicBId);
+        var statsC = await GetFeatureStats(reader, epicCId);
 
         // Наибольший остаток 100/3: сумма 34+33+33=100 (input), 17+17+16=50 (output).
         // Индивидуальные значения зависят от порядка id (GUID, idx) → проверяем сумму и диапазон.
@@ -3155,9 +3254,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, c1, stepFId, "claude-opus-4", 90, 44, 1.0, t1));
 
-        var statsF = GetFeatureStats(reader, epicFId);
-        var statsG = GetFeatureStats(reader, epicGId);
-        var statsH = GetFeatureStats(reader, epicHId);
+        var statsF = await GetFeatureStats(reader, epicFId);
+        var statsG = await GetFeatureStats(reader, epicGId);
+        var statsH = await GetFeatureStats(reader, epicHId);
 
         // Знаменатель = M[c1] = {F, G}: F и G по 45 (input), по 22 (output), H (не в c1) — 0.
         AssertShared(statsF, 45, 22, 0.5);
@@ -3226,8 +3325,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, c2, stepHId, "claude-opus-4", 90, 44, 1.0, t1));
 
-        var statsF = GetFeatureStats(reader, epicFId, journal);
-        var statsH = GetFeatureStats(reader, epicHId, journal);
+        var statsF = await GetFeatureStats(reader, epicFId, journal);
+        var statsH = await GetFeatureStats(reader, epicHId, journal);
 
         // Нулевая доля приходит как shared: null — читаем её как 0, а не падаем на разборе.
         long InputOrZero(JsonElement st) =>
@@ -3274,8 +3373,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1));
 
-        var statsA = GetFeatureStats(reader, epicAId);
-        var statsB = GetFeatureStats(reader, epicBId);
+        var statsA = await GetFeatureStats(reader, epicAId);
+        var statsB = await GetFeatureStats(reader, epicBId);
 
         // Ход до создания B: A активна, B нет (клип) → ход целиком у A (100), B — 0.
         AssertShared(statsA, 100, 50, 1.0);
@@ -3327,7 +3426,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1));
 
-        var statsA = GetFeatureStats(reader, epicAId, journal);
+        var statsA = await GetFeatureStats(reader, epicAId, journal);
 
         statsA.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
             .Should().Be("journal", "все журналы полные и нет дневных строк → method=journal");

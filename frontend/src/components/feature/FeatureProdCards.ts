@@ -15,7 +15,7 @@
 //   • имя в подписи возврата — через необязательный резолвер personaName; без него
 //     подпись остаётся без имени («вернул»), сырой UUID не показывается.
 
-import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound } from '../types/featureRun';
+import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound } from '../../types/featureRun';
 
 // Состояние узла цепочки (тон задаёт рендер по таблице спецификации):
 // ok — сделано, ret — возврат, cur — текущий (обведён акцентом), pend — впереди (пунктир).
@@ -151,7 +151,11 @@ function chainNodes(
         chatId: round.reviewChatId ?? null,
       });
     } else if (round.verdict === 'running') {
-      // Ревью впереди: пунктирный узел, никуда не ведёт.
+      // Ревью впереди: пунктирный узел, никуда не ведёт. Метку «текущий» ставим на
+      // последний узел-действие цепочки (работа или доработка), а не на давно завершённую
+      // работу: пунктирный «ревью» — не узел-действие.
+      const active = [...nodes].reverse().find(n => n.kind === 'work' || n.kind === 'rework');
+      (active ?? nodes[0]!).state = 'cur';
       nodes.push({ kind: 'review', label: 'ревью', state: 'pend', chatId: null });
     }
     // withdrawn — узла нет: снятый виток цепочки не строит.
@@ -160,11 +164,13 @@ function chainNodes(
   return nodes;
 }
 
-// Причина последнего возврата: последний виток с вердиктом возврата и непустой reason.
+// Причина последнего возврата: причина ПОСЛЕДНЕГО витка-возврата. Если у него причины
+// нет — null, а не подстановка из более раннего возврата (человек читает причину
+// текущего состояния, а не историю).
 function lastReturnReason(chain: FeatureStepChain): string | null {
   for (let i = (chain.rounds ?? []).length - 1; i >= 0; i--) {
     const r = chain.rounds[i];
-    if ((r.verdict === 'returned' || r.verdict === 'accepted_with_remarks') && r.reason) return r.reason;
+    if (r.verdict === 'returned' || r.verdict === 'accepted_with_remarks') return r.reason ?? null;
   }
   return null;
 }

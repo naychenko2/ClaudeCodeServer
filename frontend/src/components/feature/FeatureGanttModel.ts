@@ -246,9 +246,9 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
   return {
     rows,
     axis,
-    // hasData — наличие данных таймлайна (ось или сегменты), как в FeatureStatsBits:
-    // строки без таймлайна — не «данные», рендер на них ничего не рисует.
-    hasData: axis !== null || (tl?.segments?.length ?? 0) > 0,
+    // hasData — та же семантика, что в FeatureStatsBits: сегменты таймлайна или текущее
+    // состояние (у закрытой фичи current не считается). Одна ось без сегментов — не данные.
+    hasData: (tl?.segments?.length ?? 0) > 0 || (!closed && tl?.current != null),
     returnTotal: flags.length,
     hasStalled,
     closed,

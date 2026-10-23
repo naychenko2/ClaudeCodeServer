@@ -5,8 +5,8 @@
 // «сейчас»-строка (текущая карточка), краевые (не начат, старые данные без rounds).
 
 import { describe, it, expect } from 'vitest';
-import { buildProdCards } from './featureProdCards';
-import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound, FeatureStage } from '../types/featureRun';
+import { buildProdCards } from './FeatureProdCards';
+import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound, FeatureStage } from '../../types/featureRun';
 
 // ── Фикстуры ───────────────────────────────────────────────────────────────────
 
@@ -178,6 +178,24 @@ describe('два возврата', () => {
     // «принят с замечаниями» тоже возврат: тон ret.
     expect(c.nodes[3].state).toBe('ret');
   });
+
+  it('последний возврат без причины: returnReason = null, а не причина более раннего', () => {
+    const r = run({
+      steps: [
+        task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }),
+        task({ id: 's2', status: 'done', role: 'rework', stepRef: 'Ш1' }),
+      ],
+      stepChains: [chain({
+        stepRef: 'Ш1', taskIds: ['s1', 's2'], outcome: 'returned', loops: 2,
+        rounds: [
+          round({ n: 1, verdict: 'returned', reason: 'первый' }),
+          round({ n: 2, verdict: 'returned' }), // последний виток — без причины
+        ],
+      })],
+    });
+    const c = buildProdCards(r)[0];
+    expect(c.returnReason).toBe(null);
+  });
 });
 
 // ── Активная задача и «сейчас» ──────────────────────────────────────────────────
@@ -193,6 +211,42 @@ describe('активная задача', () => {
     expect(c.isCurrent).toBe(true);
     expect(c.nodes[0].state).toBe('cur');
     expect(c.awaitingReview).toBe(false);
+  });
+
+  it('идущий виток ревью: метка «текущий» на узле «работа», «ревью» — пунктирный', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      now: [{ taskId: 's1', stage: 'review', title: 'Ревью', stepRef: 'Ш1' }],
+      stepChains: [chain({
+        stepRef: 'Ш1', taskIds: ['s1'], status: 'ждёт ревью', outcome: 'pending',
+        rounds: [round({ n: 1, verdict: 'running' })],
+      })],
+    });
+    const c = buildProdCards(r)[0];
+    expect(c.isCurrent).toBe(true);
+    expect(c.nodes[0]).toEqual({ kind: 'work', label: 'работа', state: 'cur', chatId: null });
+    expect(c.nodes[1]).toEqual({ kind: 'review', label: 'ревью', state: 'pend', chatId: null });
+  });
+
+  it('идущий второй виток ревью после доработки: «текущий» на доработке, а не на давней работе', () => {
+    const r = run({
+      steps: [
+        task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }),
+        task({ id: 'r1', status: 'done', stepRef: 'Ш1' }),
+      ],
+      now: [{ taskId: 'r1', stage: 'review', title: 'Ревью', stepRef: 'Ш1' }],
+      stepChains: [chain({
+        stepRef: 'Ш1', taskIds: ['s1', 'r1'], status: 'ждёт ревью', outcome: 'pending',
+        rounds: [
+          round({ n: 1, verdict: 'returned', reason: 'нет тестов' }),
+          round({ n: 2, verdict: 'running' }),
+        ],
+      })],
+    });
+    const c = buildProdCards(r)[0];
+    expect(c.nodes.map(n => [n.kind, n.state])).toEqual([
+      ['work', 'ok'], ['return', 'ret'], ['rework', 'cur'], ['review', 'pend'],
+    ]);
   });
 
   it('ждёт ревью: awaitingReview=true по статусу бэка; узел работы — ok', () => {

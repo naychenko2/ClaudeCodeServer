@@ -159,12 +159,17 @@ describe('обычный путь: строки этапов, длительно
     expect(model.axis).toEqual({ from: '2026-10-19T17:00:00Z', to: '2026-10-20T12:00:00Z' });
     const noStats = buildGanttModel(mkRun({ stages: [mkStage('prod', 'active', 10)] }), null, NOW);
     expect(noStats.axis).toBeNull();
-    // hasData — по данным таймлайна (ось или сегменты), а не по строкам run.stages:
-    // строки без таймлайна — существующее пустое состояние вкладки.
+    // hasData — та же семантика, что у Stats (сегменты или current), а не по строкам run.stages.
     expect(noStats.hasData).toBe(false);
-    // Ось есть, сегментов нет — данные всё равно есть.
+    // Одна ось без сегментов и без current — данных нет (как blocks=[] && current=null в Stats).
     const onlyAxis = buildGanttModel(mkRun({ stages: [mkStage('prod', 'active', 10)] }), mkStats([]), NOW);
-    expect(onlyAxis.hasData).toBe(true);
+    expect(onlyAxis.hasData).toBe(false);
+    // Есть current при пустых сегментах — данные есть; у закрытой фичи current не считается.
+    const withCur = mkStats([]);
+    withCur.timeline.current = { kind: 'waiting', since: '2026-10-20T11:00:00Z', taskId: null };
+    const stages = [mkStage('prod', 'active', 10)];
+    expect(buildGanttModel(mkRun({ stages }), withCur, NOW).hasData).toBe(true);
+    expect(buildGanttModel(mkRun({ stages, closed: true }), withCur, NOW).hasData).toBe(false);
   });
 });
 

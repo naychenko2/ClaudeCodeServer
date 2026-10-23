@@ -488,6 +488,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             Merge = merge,
             AwaitingHumanSince = epic.AwaitingHumanSince,
             AwaitingHumanReason = epic.AwaitingHumanReason,
+            Hold = epic.Hold,
             Verdicts = verdicts,
             Progress = progress,
             Ready = ready,
@@ -754,6 +755,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         Merge = run.Merge is null ? null : Slim(run.Merge),
         AwaitingHumanSince = run.AwaitingHumanSince,
         AwaitingHumanReason = run.AwaitingHumanReason,
+        Hold = run.Hold,
         Verdicts = run.Verdicts,
         Progress = run.Progress,
         Ready = run.Ready,
@@ -1401,7 +1403,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.StepProgress.NotCreated,
             run.StepProgress.PlanState,
             run.StepProgress.Withdrawn,
-            run.StepProgress.UnlinkedReworks);
+            run.StepProgress.UnlinkedReworks,
+            run.Hold?.Reason);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
@@ -1466,10 +1469,12 @@ public sealed class FeatureProjector(TaskManager tasks)
     public static bool IsAcceptance(string? verdict) =>
         verdict is TaskVerdicts.Accepted or TaskVerdicts.AcceptedWithRemarks;
 
-    // Состояние фичи (9 значений, приоритет сверху вниз; первое совпавшее побеждает):
-    // merged → closed → stopped → waiting → merging → merge_pending → running → not_started → idle.
-    // Чистая функция от полей эпика/merge/тревог/«сейчас» — на ней золотые тесты (FeatureProjectorTests).
-    // hasExplicitWait — явный wait (AwaitingHumanSince), КРОМЕ вычисленного «мерж» (тот → merge_pending).
+    // Состояние фичи (11 значений, приоритет сверху вниз; первое совпавшее побеждает):
+    // merged → closed → paused → stopped → waiting → draft → merging → merge_pending → running →
+    // not_started → idle (W4-HOLD-B1, разрез §1).
+    // Чистая функция от полей эпика (в т.ч. Hold)/merge/тревог/«сейчас» — на ней золотые тесты
+    // (FeatureProjectorTests). hasExplicitWait — явный wait (AwaitingHumanSince), КРОМЕ вычисленного
+    // «мерж» (тот → merge_pending).
     internal static string ComputeState(
         TaskItem epic,
         TaskItem? merge,
@@ -1488,20 +1493,29 @@ public sealed class FeatureProjector(TaskManager tasks)
         //    Эпик Done — решение человека «фича закончена»: даже если работа ещё идёт
         //    (running/stopped/waiting) — фича закрыта (старое «и нет активной работы» убрано).
         if (epic.Status == TaskItemStatus.Done) return FeatureStates.Closed;
-        // 3. stopped: есть остановленная задача (как тревога kind=stopped).
+        // 3. paused: явное удержание человека (Reason manual/queue) — «фичу не вести», решение
+        //    человека, а не тревога. Стоит ДО stopped: пауза, прервавшая исполнителей, не должна
+        //    показывать «ждёт вас» (W4-HOLD-B1). Не-draft здесь: queue — та же пауза с другой
+        //    причиной (сейчас не ставится, поведение совпадает).
+        if (epic.Hold is not null && epic.Hold.Reason != FeatureHoldReasons.Draft) return FeatureStates.Paused;
+        // 4. stopped: есть остановленная задача (как тревога kind=stopped).
         if (hasStopped) return FeatureStates.Stopped;
-        // 4. waiting: явное ожидание человека (как тревога kind=wait, КРОМЕ «мерж»).
+        // 5. waiting: явное ожидание человека (как тревога kind=wait, КРОМЕ «мерж»).
         if (hasExplicitWait) return FeatureStates.Waiting;
-        // 5. merging: merge-задача запущена (InProgress) — мерж идёт.
+        // 6. draft: черновик (Reason draft): фичу готовят, исполнять шаги нельзя — даже если
+        //    разрез или план идут (nowCount > 0): человеку важнее «фича ещё не запущена».
+        //    Тревоги stopped/waiting уже отсеются выше.
+        if (epic.Hold is not null && epic.Hold.Reason == FeatureHoldReasons.Draft) return FeatureStates.Draft;
+        // 7. merging: merge-задача запущена (InProgress) — мерж идёт.
         if (merge is not null && merge.Status == TaskItemStatus.InProgress) return FeatureStates.Merging;
-        // 6. merge_pending: финал принят, merge-задачи нет ИЛИ она создана, но не запущена
+        // 8. merge_pending: финал принят, merge-задачи нет ИЛИ она создана, но не запущена
         //    (Todo) — ждёт согласия/запуска (тревога «мерж», как и у merge is null).
         if (finalAccepted && (merge is null || merge.Status == TaskItemStatus.Todo)) return FeatureStates.MergePending;
-        // 7. running: Now не пуст (идут задачи).
+        // 9. running: Now не пуст (идут задачи).
         if (nowCount > 0) return FeatureStates.Running;
-        // 8. not_started: ни одна задача фичи не стартовала.
+        // 10. not_started: ни одна задача фичи не стартовала.
         if (!anyStarted) return FeatureStates.NotStarted;
-        // 9. idle: иначе (ничего не идёт, ничего не ждёт, фича не закрыта).
+        // 11. idle: иначе (ничего не идёт, ничего не ждёт, фича не закрыта).
         return FeatureStates.Idle;
     }
 
@@ -1513,13 +1527,17 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         FeatureStates.Merged => "closed",
         FeatureStates.Closed => "closed",
+        // paused и draft — не идут и внимания не требуют (W4-HOLD-B1): обе в idle.
+        FeatureStates.Paused => "idle",
         FeatureStates.Stopped => "attention",
         FeatureStates.Waiting => "attention",
+        FeatureStates.Draft => "idle",
         FeatureStates.MergePending => "attention",
         FeatureStates.Merging => "running",
         FeatureStates.Running => "running",
         FeatureStates.NotStarted => "idle",
-        _ => "idle", // idle
+        FeatureStates.Idle => "idle",
+        _ => "idle", // неизвестное значение — как idle (фоллбэк не ронит индекс)
     };
 
     // Чипы-фильтры (контракт §1): open = bucket ≠ closed; closed = bucket = closed;

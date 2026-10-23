@@ -31,6 +31,16 @@ public static class TaskRoles
     public static readonly IReadOnlyList<string> FeatureIdOptional = [Feature, Cut, Plan];
 }
 
+// Причина удержания фичи (TaskItem.Hold.Reason, волна 4 §1): draft — начальная стадия (фичу готовят,
+// шаги не запускать), manual — пауза человека, queue — задел под очередь (поведение паузы, сейчас
+// не ставится). Строки, а не enum — тот же урок, что у TaskRoles.
+public static class FeatureHoldReasons
+{
+    public const string Draft = "draft";
+    public const string Manual = "manual";
+    public const string Queue = "queue";
+}
+
 // Исход витка (вердикт) ревью/проверки/финала.
 public static class TaskVerdicts
 {

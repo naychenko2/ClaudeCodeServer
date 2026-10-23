@@ -67,8 +67,8 @@ public sealed record FeatureIndexRow(
     // Группа фичи: attention — требует внимания; running — идёт; idle — стоит; closed — закрыта.
     // Выводится из State (единая точка правда, FeatureProjector.Bucket) — bucket и state не расходятся.
     string Bucket,
-    // Состояние фичи (FeatureRun.State; 9 значений, см. FeatureStates): merged · closed · stopped ·
-    // waiting · merging · merge_pending · running · not_started · idle.
+    // Состояние фичи (FeatureRun.State; 11 значений, см. FeatureStates): merged · closed · paused ·
+    // stopped · waiting · draft · merging · merge_pending · running · not_started · idle.
     string State,
     // Тревога; null — тревоги нет.
     FeatureIndexAttention? Attention,
@@ -119,7 +119,10 @@ public sealed record FeatureIndexRow(
     // Вне знаменателя (как в FeatureStepProgress): шаги, снятые ревью с выкладки, и доработки без
     // привязки к шагу — индекс отдаёт те же числа, что страница фичи.
     int StepsWithdrawn,
-    int UnlinkedReworks);
+    int UnlinkedReworks,
+    // Причина удержания эпика (W4-HOLD-B1): draft | manual | queue; null — удержания нет.
+    // Только сигнал для фронта (тон «на паузе»/«черновик»); сам факт состояния — в State.
+    string? HoldReason);
 
 // Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
 // нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя

@@ -137,6 +137,10 @@ public class TaskItem
     // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика.
     public DateTime? AwaitingHumanSince { get; set; }
     public string? AwaitingHumanReason { get; set; }
+    // Удержание фичи (волна 4, разрез §1): null — работа разрешена; иначе — причина (FeatureHoldReasons).
+    // Ставится только на эпике (role=feature) и только человеком. Аддитивное nullable-поле: старый
+    // tasks.json без «hold» читается как null, BackupSchema.Version не растёт.
+    public FeatureHold? Hold { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
     // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /
@@ -178,6 +182,12 @@ public class TaskItem
     // экземпляр регулярной задачи (как ClaudeResult/ResultMarkdown — серия начинается заново).
     public DateTime? CompletedAt { get; set; }
 }
+
+// Удержание фичи (TaskItem.Hold, волна 4 §1): Reason — словарь FeatureHoldReasons (draft | manual |
+// queue), Since — момент постановки, BySessionId — чат постановки (null — из UI без чата), ByUser —
+// ставил человек (оркестратор только предлагает). Позиционная запись — как AcceptanceCriterion:
+// round-trip через JSON без конвертера.
+public record FeatureHold(string Reason, DateTime Since, string? BySessionId, bool ByUser);
 
 // Критерий приёмки задачи: Id стабилен (на него ссылается свидетельство), Text — измеримая формулировка.
 public record AcceptanceCriterion(string Id, string Text);

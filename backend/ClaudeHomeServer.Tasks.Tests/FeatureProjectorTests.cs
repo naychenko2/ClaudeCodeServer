@@ -1939,7 +1939,9 @@ public class FeatureProjectorTests
             $"до {before} симв. (сырые задачи), после {after} симв. (агрегат; Reason витков остаётся)");
     }
 
-    // ─── Б1a: состояние фичи (state) — 9 значений, приоритет сверху вниз ──────────────────────
+    // ─── Б1a: состояние фичи (state) — 11 значений, приоритет сверху вниз ─────────────────────
+    // W4-HOLD-B1 добавляет paused и draft: их место в приоритете (merged → closed → paused →
+    // stopped → waiting → draft → …) закрепляют тесты ComputeState_* ниже.
 
     // Каждое из 9 состояний: фикстура → Build → сверка run.State. Приоритет (первое совпавшее
     // побеждает): merged → closed → stopped → waiting → merging → merge_pending → running →
@@ -2064,12 +2066,133 @@ public class FeatureProjectorTests
         }
     }
 
-    // Все 9 состояний ЛИТЕРАЛАМИ (не константами) + JSON-сериализация: смена значения константы
+    // ─── W4-HOLD-B1: удержание (paused/draft) — приоритет и bucket ──────────────────────────────
+    // Порядок merged → closed → paused → stopped → waiting → draft → … (разрез §1). Конструктор
+    // удержания — общий, чтобы не повторять запись в каждом кейсе.
+    private static FeatureHold Hold(string reason, DateTime since) => new FeatureHold(reason, since, null, true);
+
+    // paused ДО stopped: ручное удержание + остановленный исполнитель → paused, а не stopped.
+    // Мутация: поменять местами правила paused/stopped в ComputeState — тест краснеет.
+    [Fact]
+    public void ComputeState_ManualHoldWithStoppedExecutor_IsPausedNotStopped()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-paused", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold(FeatureHoldReasons.Manual, t) };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "e-paused", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+            ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed",
+        };
+        var run = FeatureProjector.Build(epic, [epic, step]);
+        run.State.Should().Be(FeatureStates.Paused, "manual-удержание + остановленный исполнитель → paused, не stopped");
+        run.Hold.Should().NotBeNull("FeatureRun несёт копию Hold эпика");
+        FeatureProjector.Bucket(run).Should().Be("idle", "paused → idle: не идёт и внимания не требует");
+    }
+
+    // draft ДО running: hold=draft + идущий разрез → draft, не running (важнее «фича не запущена»).
+    [Fact]
+    public void ComputeState_DraftHoldWithRunningCut_IsDraftNotRunning()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-draft", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold(FeatureHoldReasons.Draft, t) };
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = "e-draft", Role = TaskRoles.Cut,
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+        };
+        var run = FeatureProjector.Build(epic, [epic, cut]);
+        run.State.Should().Be(FeatureStates.Draft, "draft + идущий разрез → draft: фича ещё не запущена");
+        FeatureProjector.Bucket(run).Should().Be("idle", "draft → idle");
+    }
+
+    // stopped ДО draft: hold=draft + упавший исполнитель → stopped: тревога подготовки видна.
+    [Fact]
+    public void ComputeState_DraftHoldWithStoppedExecutor_IsStoppedNotDraft()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-draft-stopped", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold(FeatureHoldReasons.Draft, t) };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "e-draft-stopped", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+            ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed",
+        };
+        var run = FeatureProjector.Build(epic, [epic, step]);
+        run.State.Should().Be(FeatureStates.Stopped, "даже в черновике остановленный исполнитель — тревога");
+    }
+
+    // closed ДО paused: эпик Done + удержание → closed, не paused.
+    [Fact]
+    public void ComputeState_DoneEpicWithHold_IsClosedNotPaused()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-done-held", Role = TaskRoles.Feature, Status = TaskItemStatus.Done,
+            CreatedAt = t, CompletedAt = t, Hold = Hold(FeatureHoldReasons.Manual, t) };
+        var run = FeatureProjector.Build(epic, [epic]);
+        run.State.Should().Be(FeatureStates.Closed, "закрытая фича закрыта, даже если удержание не сняли");
+    }
+
+    // Каждое значение FeatureStates имеет явную ветку Bucket: тест перебирает константы
+    // FeatureStates рефлексией и сверяет с явной таблицей ожиданий. Новый state без правки
+    // таблицы краснит тест — фоллбэк не пряжет пробел.
+    [Fact]
+    public void Bucket_EveryFeatureState_HasExplicitBranch()
+    {
+        var expected = new Dictionary<string, string>
+        {
+            [FeatureStates.Merged] = "closed",
+            [FeatureStates.Closed] = "closed",
+            [FeatureStates.Paused] = "idle",
+            [FeatureStates.Stopped] = "attention",
+            [FeatureStates.Waiting] = "attention",
+            [FeatureStates.Draft] = "idle",
+            [FeatureStates.MergePending] = "attention",
+            [FeatureStates.Merging] = "running",
+            [FeatureStates.Running] = "running",
+            [FeatureStates.NotStarted] = "idle",
+            [FeatureStates.Idle] = "idle",
+        };
+        var states = typeof(FeatureStates)
+            .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetValue(null)!)
+            .ToList();
+        states.Should().HaveCount(expected.Count, "таблица обязана покрывать все константы FeatureStates");
+        foreach (var state in states)
+        {
+            expected.ContainsKey(state).Should().BeTrue($"для state '{state}' нет явного ожидания");
+            FeatureProjector.Bucket(new FeatureRun { State = state }).Should().Be(expected[state],
+                $"Bucket('{state}') берётся из таблицы, а не из фоллбэка");
+        }
+        FeatureProjector.Bucket(new FeatureRun { State = FeatureStates.Paused })
+            .Should().Be(FeatureProjector.Bucket(new FeatureRun { State = FeatureStates.Draft }),
+                "paused и draft — одна группа: idle");
+    }
+
+    // Обратная совместимость: старый tasks.json без поля «hold» читается как null, поведение
+    // не меняется (нет удержания — не paused и не draft).
+    [Fact]
+    public void TaskItem_LegacyJsonWithoutHold_ReadsAsNull()
+    {
+        var json = """{"id":"e-old","title":"старая фича","role":"feature","createdAt":"2026-10-01T00:00:00Z"}""";
+        var epic = System.Text.Json.JsonSerializer.Deserialize<TaskItem>(
+            json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        epic.Hold.Should().BeNull("поля в JSON нет — Hold остаётся null");
+        var run = FeatureProjector.Build(epic, [epic]);
+        run.State.Should().Be(FeatureStates.NotStarted, "старый эпик без удержания ведёт себя как раньше");
+        FeatureProjector.Bucket(run).Should().Be("idle");
+    }
+
+    // Все 11 состояний ЛИТЕРАЛАМИ (не константами) + JSON-сериализация: смена значения константы
     // (например, "merged" → "merged_v2") оставила бы набор зелёным, а фронт получил бы незнакомый
     // state. Мутация: поменять значение ЛЮБОЙ константы FeatureStates → соответствующий подкейс
-    // краснеет. Сценарии — те же, что в Build_State_ДевятьСостояний.
+    // краснеет. Сценарии — те же, что в Build_State_ДевятьСостояний, плюс paused/draft (W4-HOLD-B1).
     [Fact]
-    public void State_Литералы_ВсеДевять_ИJson()
+    public void State_Литералы_ВсеОдинадцать_ИJson()
     {
         var t = new DateTime(2026, 10, 17);
 
@@ -2093,6 +2216,12 @@ public class FeatureProjectorTests
             ("closed", () =>
             {
                 var epic = new TaskItem { Id = "e-lit-2", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+                return FeatureProjector.Build(epic, [epic]);
+            }),
+            ("paused", () =>
+            {
+                var epic = new TaskItem { Id = "e-lit-2b", Role = TaskRoles.Feature, CreatedAt = t,
+                    Hold = new FeatureHold("manual", t, null, true) };
                 return FeatureProjector.Build(epic, [epic]);
             }),
             ("stopped", () =>
@@ -2119,6 +2248,14 @@ public class FeatureProjectorTests
                     AwaitingHumanReason = "ждём решения",
                 };
                 return FeatureProjector.Build(epic, [epic, step]);
+            }),
+            ("draft", () =>
+            {
+                var epic = new TaskItem { Id = "e-lit-4b", Role = TaskRoles.Feature, CreatedAt = t,
+                    Hold = new FeatureHold("draft", t, null, true) };
+                var cut = new TaskItem { Id = "c1", FeatureId = "e-lit-4b", Role = TaskRoles.Cut,
+                    Status = TaskItemStatus.InProgress, ClaudeStartedAt = t };
+                return FeatureProjector.Build(epic, [epic, cut]);
             }),
             ("merging", () =>
             {
@@ -2174,7 +2311,7 @@ public class FeatureProjectorTests
 
         // JSON: сериализованный ответ несёт литерал (camelCase, как в MVC).
         var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
-        var json = System.Text.Json.JsonSerializer.Serialize(cases[5].Build(), options);
+        var json = System.Text.Json.JsonSerializer.Serialize(cases[7].Build(), options); // merge_pending
         json.Should().Contain("\"state\":\"merge_pending\"", "JSON-ответ несёт литерал state, а не переименованную константу");
     }
 

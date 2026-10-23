@@ -102,10 +102,10 @@ public class TtsVoiceCatalogTests
     [Fact]
     public void Canonical_ЛюбоеИмяБелогоСписка_ЕстьВКаталоге()
     {
-        // Двусторонняя проверка: нет голоса без подписи и подписи без голоса
-        foreach (var voice in new[] { "alena", "jane", "omazh", "marina", "filipp", "zahar", "ermil",
-                     "madirus", "madi_ru", "dasha", "julia", "lera", "masha", "alexander", "kirill", "anton",
-                     "saule_ru", "zamira_ru", "zhanar_ru", "yulduz_ru" })
+        // Двусторонняя проверка: нет голоса без подписи и подписи без голоса. Перебираем сам
+        // белый список, а не его копию: иначе голос, добавленный без подписи, тест не заметит
+        TtsVoiceCatalog.KnownNames.Should().NotBeEmpty();
+        foreach (var voice in TtsVoiceCatalog.KnownNames)
         {
             var canonical = TtsVoiceCatalog.Canonical(voice);
             canonical.Should().NotBeNull($"{voice} есть в белом списке");

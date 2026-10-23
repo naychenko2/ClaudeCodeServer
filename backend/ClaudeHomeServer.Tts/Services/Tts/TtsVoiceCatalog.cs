@@ -88,6 +88,10 @@ public static class TtsVoiceCatalog
     // madirus и madi_ru это одно и то же, и в списке им место одно
     public static IReadOnlyList<VoiceInfo> All => Catalog;
 
+    // Сам белый список — для теста «у каждого имени есть подпись»: перебор копии списка
+    // пропустил бы голос, добавленный сюда без строки в Catalog
+    internal static IReadOnlyCollection<string> KnownNames => Known;
+
     public static bool IsKnown(string? voice) =>
         !string.IsNullOrWhiteSpace(voice) && Known.Contains(voice.Trim());
 

@@ -2280,6 +2280,103 @@ public class FeatureProjectorTests
         }
     }
 
+    // W4-HOLD-D2 (R-HOLE-D, находка 1): guard идемпотентности гасит только запись Hold и
+    // журнал — цикл пометки живёт на КАЖДом вызове SetHold. Ход, начатый после первой
+    // паузы, помечается повторной паузой с тем же reason; стоп уже помеченного не
+    // двигается. Мутации: вернуть guard до цикла → second не помечен → красное; убрать
+    // continue по feature_held → firstStoppedAt сдвигается → красное.
+    [Fact]
+    public void RepeatedHold_SameReason_MarksTurnStartedAfterFirst()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_d3_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var journal = new FeatureJournalStore(Path.Combine(dir, "feature-journal"));
+        var sut = new TaskManager(config, journal: journal);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            var firstStep = sut.Create(null, "u", new CreateTaskRequest("шаг D1",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D1", Lane: "back"));
+            sut.MarkClaudeStarted(firstStep.Id, "sess-1", DateTime.UtcNow);
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+            var firstStoppedAt = sut.GetById(firstStep.Id)!.ExecutorStoppedAt;
+
+            // Ход, начатый после первой паузы: его обязана поймать повторная пауза.
+            var secondStep = sut.Create(null, "u", new CreateTaskRequest("шаг D2",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D2", Lane: "back"));
+            sut.MarkClaudeStarted(secondStep.Id, "sess-2", DateTime.UtcNow);
+
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+            sut.GetById(secondStep.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+                "повторная пауза с тем же reason помечает ход, начатый после первой");
+            sut.GetById(firstStep.Id)!.ExecutorStoppedAt.Should().Be(firstStoppedAt,
+                "стоп уже помеченной задачи не двигается");
+            journal.Read("u", epic.Id).Entries.Count(e => e.Kind == "held").Should().Be(1,
+                "запись held в журнале — одна на паузу, даже при повторном вызове");
+
+            var run = new FeatureProjector(sut).Project(epic.Id, "u");
+            run!.Interrupted.Should().Contain(secondStep.Id,
+                "помеченный повторной паузой ход — в interrupted текущей паузы");
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // W4-HOLD-D2 (R-HOLE-D, находка 2): interrupted — прерванные текущей паузой, а не
+    // «все когда-либо помеченные». Старая пометка feature_held со стопом раньше Since
+    // действующего удержания в текущую паузу не входит. Мутации: убрать сравнение с
+    // epic.Hold!.Since → старая пометка попадает → красное; вернуть «все когда-либо»
+    // без scope → красное.
+    [Fact]
+    public void Interrupted_ScopedToCurrentHold_OldMarkIsNotIncluded()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_d4_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var journal = new FeatureJournalStore(Path.Combine(dir, "feature-journal"));
+        var sut = new TaskManager(config, journal: journal);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            var oldDay = DateTime.UtcNow.AddDays(-1);
+            // «Старая» пометка: feature_held со стопом до начала текущей паузы.
+            var oldStep = sut.Create(null, "u", new CreateTaskRequest("шаг D1",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D1", Lane: "back"));
+            sut.MarkClaudeStarted(oldStep.Id, "sess-old", oldDay);
+            sut.MarkExecutorStopped(oldStep.Id, oldDay, ExecutorStopClassifier.FeatureHeldReason);
+            // Идущий сейчас: прерывается этой паузой.
+            var curStep = sut.Create(null, "u", new CreateTaskRequest("шаг D2",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D2", Lane: "back"));
+            sut.MarkClaudeStarted(curStep.Id, "sess-cur", DateTime.UtcNow);
+
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+            var run = new FeatureProjector(sut).Project(epic.Id, "u");
+            run!.Interrupted.Should().Equal([curStep.Id],
+                "прерванные текущей паузой — только те, чей стоп внутри её интервала");
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     // Каждое значение FeatureStates имеет явную ветку Bucket: тест перебирает константы
     // FeatureStates рефлексией и сверяет с явной таблицей ожиданий. Новый state без правки
     // таблицы краснит тест — фоллбэк не пряжет пробел.

@@ -212,14 +212,20 @@ public sealed class FeatureProjector(TaskManager tasks)
         // «Сейчас: <исполнитель>», а Now0Of/NowPersonaIds отдавали бы прерванную задачу.
         if (featureState == FeatureStates.Paused) nowList.Clear();
 
-        // W4-HOLD-D2 (контракт §1, :364): прерванные паузой — задачи фичи с пометкой feature_held
-        // и не закрытые. Ответ ручки POST hold и блок «на паузе» читают это поле, а не Now: Now на
-        // паузе пуст. Закрытая после прервания задача из списка выпадает — её ход завершён.
-        var interrupted = featureTasks
-            .Where(t => t.Status != TaskItemStatus.Done
-                && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason)
-            .Select(t => t.Id)
-            .ToList();
+        // W4-HOLD-D2 (контракт §1, :364): прерванные ИМЕННО текущей паузой (R-HOLE-D находка 2):
+        // пометка feature_held и стоп не раньше начала действующего удержания — «все когда-либо
+        // помеченные» не годится: после ClearHold и новой паузы старые пометки — не прерванные
+        // этой паузой. Без Hold поля нет вовсе. Ответ ручки POST hold и блок «на паузе» читают
+        // это поле, а не Now: Now на паузе пуст. Закрытая после прервания задача из списка
+        // выпадает — её ход завершён.
+        var interrupted = epic.Hold is null
+            ? new List<string>()
+            : featureTasks
+                .Where(t => t.Status != TaskItemStatus.Done
+                    && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason
+                    && t.ExecutorStoppedAt >= epic.Hold!.Since)
+                .Select(t => t.Id)
+                .ToList();
 
         // Конвейер: стадии в порядке жизненного цикла. Порядок задаётся ЯВНЫМ списком,
         // а не выводится из порядка кода (W4-DES-B): «design» — необязательный этап после

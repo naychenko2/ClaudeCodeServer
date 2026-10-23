@@ -1788,9 +1788,10 @@ export const api = {
     // удержание (reason: 'manual' — пауза человека, 'draft' — черновик), DELETE — снять.
     // Fail-closed: 403 (сервисный токен — удержание ставит только человек), 404, 409
     // (merged/closed/merging; draft после запуска шага; manual поверх draft; снятие без
-    // удержания) — причина в body.error. 200 — обновлённый эпик.
+    // удержания) — причина в body.error. 200 — ходы, прерванные этой паузой:
+    // { interrupted: [taskId] } (контракт §1, :364).
     setFeatureHold: (fid: string, reason: string) =>
-      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'POST', body: JSON.stringify({ reason }) }),
+      request<{ interrupted: string[] }>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'POST', body: JSON.stringify({ reason }) }),
     clearFeatureHold: (fid: string) =>
       request<Task>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'DELETE' }),
     // projectId === null → личная задача (вне проекта)

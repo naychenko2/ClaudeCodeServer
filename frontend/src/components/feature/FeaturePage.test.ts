@@ -89,9 +89,9 @@ vi.mock('../../lib/api', () => ({
       },
       setFeatureHold: (fid: string, reason: string) => {
         mockHold.calls.push({ fid, method: 'POST', reason });
-        if (mockHold.pending) return new Promise<Task>(() => {});
+        if (mockHold.pending) return new Promise<{ interrupted: string[] }>(() => {});
         if (mockHold.error) return Promise.reject(mockHold.error);
-        return Promise.resolve({} as Task);
+        return Promise.resolve({ interrupted: [] as string[] });
       },
       clearFeatureHold: (fid: string) => {
         mockHold.calls.push({ fid, method: 'DELETE' });

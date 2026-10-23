@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
-import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
+import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
 import { api } from '../../lib/api';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';
@@ -53,6 +53,9 @@ import { projectDeviceBadge } from '../../lib/projectCapabilities';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
+import { CacheDial, CacheDialPip, cacheLeftText, cacheSpoken } from '../ui/CacheDial';
+import type { PromptCacheState } from '../../lib/promptCache';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
 import { chatFilterScope, leaveChatArchiveView } from '../../lib/chatFilters';
@@ -563,6 +566,43 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
   );
 }
 
+// Секция «Кэш промпта» в поповере кольцевой пилюли (шаг F-1b): после контекста и его
+// действий, перед fal/glif — порядок секций по макету prompt-cache-dial-v1. Состояние
+// берётся из хука usePromptCache, здесь только тексты и полоска. Личный порог «остывает»
+// (B-3) — точка расширения в promptCacheState/usePromptCache; здесь не нужен: статус
+// приходит уже посчитанным.
+function PromptCacheSection({ state, isWaiting }: { state: PromptCacheState; isWaiting: boolean }) {
+  const st = isWaiting ? 'turn' : state.status;
+  const ttlText = state.ttl === '1h' ? '1 час' : '5 минут';
+  const total = Math.max(1, state.expiresAt - state.anchorAtMs);
+  const frac = Math.min(1, Math.max(0, state.remainingMs / total));
+  const val = st === 'turn' ? 'идёт ход' : st === 'cold' ? 'остыл' : cacheLeftText(state.remainingMs);
+  const valColor = st === 'turn' ? C.textMuted : st === 'cold' ? C.dangerText : st === 'cooling' ? C.warningText : C.textSecondary;
+  // Цена перезаписи кэша по фронту не известна (тарифов нет) — по предложению макета
+  // без цены sub холодный сокращается до короткой фразы
+  const sub = st === 'warm' ? `Срок ${ttlText}, каждый ход продлевает его заново.`
+    : st === 'cooling' ? `Ответьте до ${new Date(state.expiresAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} — иначе следующий ход перепишет кэш по полной цене записи.`
+    : st === 'cold' ? 'Следующий ход перепишет кэш.'
+    : 'Срок продлится, когда придёт ответ.';
+  const miss = state.lastMiss
+    ? `${state.lastMiss.label}${state.lastMiss.tokens ? ` · ${fmtTokens(state.lastMiss.tokens)} ток.` : ''}`
+    : 'не было';
+  return (
+    <>
+      <div style={badgeTitleStyle}>Кэш промпта</div>
+      <MeterRow pip={<CacheDialPip state={state} isWaiting={isWaiting} />}
+        label={st === 'cold' ? 'Состояние' : 'Осталось'}
+        value={val} valueColor={valColor}
+        pct={st === 'warm' || st === 'cooling' ? Math.round(frac * 100) : undefined}
+        fill={st === 'warm' ? C.success : C.warning}
+        sub={<div style={{ ...meterSubStyle, ...(st === 'cold' ? { color: C.dangerText } : {}) }}>{sub}</div>} />
+      <BadgeRow k="В кэше" v={`${fmtTokens(state.readTokens)} токенов`} />
+      <BadgeRow k="Срок кэша" v={ttlText} />
+      <BadgeRow k="Последний промах" v={miss} />
+    </>
+  );
+}
+
 // Тело поповера трат fal.ai: остаток баланса (асинхронно) + траты чата + ссылка на статистику.
 // Вынесено для переиспользования в отдельном FalCostBadge и в секции поповера кольцевой пилюли (мобила).
 function FalPopoverBody({ stats }: { stats: FalCostStats }) {
@@ -795,6 +835,8 @@ export function RingPillBadge(props: {
   isCompact?: boolean;
   // Сброс поповера при смене чата
   resetKey?: string;
+  // Лента чата для индикатора кэша промпта (F-1b): состояние считает хук usePromptCache
+  items?: ChatItem[];
   // Только витрина: показать состояние 5.2r без смены настройки ОС
   forceReducedMotion?: boolean;
   // id чата: для живых данных локальной модели (хвост + поповер «Локальная модель»)
@@ -807,6 +849,11 @@ export function RingPillBadge(props: {
   } = props;
   const activeWorkflow = isCompact ? props.activeWorkflow : undefined;
   const wfActive = !!activeWorkflow;
+
+  // Кэш промпта (F-1b): состояние — целиком из хука F-1a, здесь ничего не пересчитывается.
+  // Во время хода лента заморожена: якорь двигает только result. До первого result'а с
+  // данными кэша state=null — циферблата и разделителя нет вовсе.
+  const cache = usePromptCache(usePromptCacheItems(props.items ?? [], props.isWaiting));
 
   // Живые данные локальной модели: хвост + поповер «Локальная модель». Хуки — до раннего
   // return (правило хуков). live=null — чат не на локальной модели (событий нет). Хвост —
@@ -904,8 +951,9 @@ export function RingPillBadge(props: {
   );
 
   // Подсказка и aria-label — всё полными подписями, доступно без клика. У строк, за
-  // которыми стоит кольцо, — пип этого кольца (как в поповере): так видно, что есть что
-  const parts: { text: string; pip?: { slot: 0 | 1 | 2; level: RateWindow['level'] } }[] = [];
+  // которыми стоит кольцо, — пип этого кольца (как в поповере): так видно, что есть что.
+  // Строка кэша — с мини-циферблатом вместо кольца (dial).
+  const parts: { text: string; pip?: { slot: 0 | 1 | 2; level: RateWindow['level'] }; dial?: boolean }[] = [];
   if (wfActive) parts.push({ text: `Workflow ${activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт'}` });
   if (apiCost) parts.push({ text: `Claude по API-ключу ${fmtUsd(cost.cost)}` });
   const ctxPip = { slot: 0 as const, level: estimate.level };
@@ -926,13 +974,16 @@ export function RingPillBadge(props: {
       pip: i < RING_WINDOWS ? { slot: (i + 1) as 1 | 2, level: s.level } : undefined,
     })));
   }
+  // Тон пилюли кэш не перекрашивает — у циферблата свой цвет, строка только в подсказке
+  if (cache) parts.push({ text: cacheSpoken(cache, props.isWaiting), dial: true });
   const title = (parts.length > 0 ? parts.map(p => p.text).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
   const tip = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs + 1 }}>
       {parts.length > 0 ? parts.map(p => (
         <div key={p.text} style={{ display: 'flex', alignItems: 'center', gap: SP.xs + 2 }}>
           {/* Строки без кольца — с пустым местом под пип, чтобы текст шёл одной колонкой */}
-          {p.pip ? <RingPip slot={p.pip.slot} level={p.pip.level} /> : <span style={{ width: 12, flexShrink: 0 }} />}
+          {p.dial && cache ? <CacheDialPip state={cache} isWaiting={props.isWaiting} />
+            : p.pip ? <RingPip slot={p.pip.slot} level={p.pip.level} /> : <span style={{ width: 12, flexShrink: 0 }} />}
           <span>{p.text}</span>
         </div>
       )) : <div>Контекст и расход сессии</div>}
@@ -970,6 +1021,9 @@ export function RingPillBadge(props: {
             </>
           )}
         </span>
+        {/* Циферблат кэша — справа от лица, через разделитель; сам по себе не кнопка,
+            цель клика — вся пилюля (F-1b) */}
+        {cache && <CacheDial state={cache} isWaiting={props.isWaiting} isMobile={isMobile} />}
       </>}
       isMobile={isMobile}
       isCompact={isCompact}
@@ -1011,6 +1065,11 @@ export function RingPillBadge(props: {
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
+      {cache && (
+        <div style={(lmActive || wfActive || showCtx || showCost) ? sectionDivider : undefined}>
+          <PromptCacheSection state={cache} isWaiting={props.isWaiting} />
+        </div>
+      )}
       {hasFal && (
         <div style={sectionDivider}>
           <FalPopoverBody stats={falCost} />
@@ -1044,6 +1103,8 @@ interface ChatHeaderBarProps {
   onOpenSidebar?: () => void;
   ctxEstimate: ContextEstimate;
   isWaiting: boolean;
+  // Лента чата для индикатора кэша промпта (F-1b): без неё циферблата просто нет
+  items?: ChatItem[];
   isCompacting: boolean;
   canCompact: boolean;
   compactNote?: string;
@@ -1182,7 +1243,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -1617,6 +1678,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       activeWorkflow={activeWorkflow} isMobile={isMobile} isCompact={isCompact}
       resetKey={preview ? `menu-${session.id}` : session.id}
       sessionId={session.id}
+      items={items}
     />
   );
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —

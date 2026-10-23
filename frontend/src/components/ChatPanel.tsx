@@ -2707,6 +2707,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onOpenSidebar={onOpenSidebar}
       ctxEstimate={ctxEstimate}
       isWaiting={isWaiting}
+      items={items}
       isCompacting={isCompacting}
       canCompact={canCompact}
       compactNote={compactNote}

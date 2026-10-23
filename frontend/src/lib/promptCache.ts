@@ -86,7 +86,9 @@ export function normTtl(ttl?: string): '1h' | '5m' | undefined {
 // якоря/срока пропускаются — индикатор берётся по последнему, который их несёт. Ход
 // на провайфере без сигнала кэша не гасит живой индикатор: кэш привязан к разговору,
 // не к провайдеру. Ни одного result с данными — пустое состояние.
-export function promptCacheState(items: ChatItem[], now: number): PromptCacheState | null {
+// warnThresholdMs — точка расширения личного порога «остывает» (B-3, User.cacheWarnThresholds):
+// пока не подключена, по умолчанию — константа EXPIRING_THRESHOLD_MS.
+export function promptCacheState(items: ChatItem[], now: number, warnThresholdMs?: number): PromptCacheState | null {
   let lastMiss: PromptCacheMissInfo | undefined;
   let state: PromptCacheState | null = null;
   for (let i = items.length - 1; i >= 0; i--) {
@@ -112,7 +114,7 @@ export function promptCacheState(items: ChatItem[], now: number): PromptCacheSta
     const remainingMs = Math.max(0, pc.anchorAtMs + TTL_MS[ttl] - now);
     const status: PromptCacheStatus =
       remainingMs <= 0 ? 'cold'
-      : remainingMs <= EXPIRING_THRESHOLD_MS[ttl] ? 'cooling'
+      : remainingMs <= (warnThresholdMs ?? EXPIRING_THRESHOLD_MS[ttl]) ? 'cooling'
       : 'warm';
 
     state = {

@@ -7,14 +7,16 @@ import { promptCacheState, type PromptCacheState } from '../lib/promptCache';
 // кэш не меняют, их отсекает заморозка usePromptCacheItems. Тикает ровно на смену
 // показываемой минуты (остаток округляется вверх, порог «остывает» — целые минуты),
 // поэтому перерисовок раз в минуту и не чаще; у остывшего и пустого состояния таймера нет.
-export function usePromptCache(items: ChatItem[]): PromptCacheState | null {
+// warnThresholdMs — точка расширения личного порога «остывает» (B-3): пока не подключена,
+// подключается на шаге диалога порогов.
+export function usePromptCache(items: ChatItem[], warnThresholdMs?: number): PromptCacheState | null {
   const [now, setNow] = useState(() => Date.now());
   const state = useMemo(() => {
-    const s = promptCacheState(items, now);
+    const s = promptCacheState(items, now, warnThresholdMs);
     // «Сейчас» из стейта отстаёт до ближайшего тика. Новый ход приносит якорь позже
     // этого «сейчас» — без зажима остаток вышел бы больше TTL
-    return s && s.anchorAtMs > now ? promptCacheState(items, s.anchorAtMs) : s;
-  }, [items, now]);
+    return s && s.anchorAtMs > now ? promptCacheState(items, s.anchorAtMs, warnThresholdMs) : s;
+  }, [items, now, warnThresholdMs]);
 
   // Новая лента (result хода, загрузка истории) — сверяем часы сразу, не дожидаясь тика
   // eslint-disable-next-line react-hooks/set-state-in-effect -- часы живут вне React

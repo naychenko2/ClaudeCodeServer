@@ -116,6 +116,21 @@ describe('promptCacheState — остаток и состояния', () => {
     const s = promptCacheState(items, ANCHOR)!;
     expect(s.lastMiss).toEqual({ reason: 'modelChanged', label: 'смена модели' });
   });
+
+  it('два промаха подряд — lastMiss более свежий, а не первый в ленте', () => {
+    const items = [
+      resultItem(cache({ missReason: 'systemChanged', missedTokens: 4200 })),
+      resultItem(cache({ missReason: 'modelChanged', missedTokens: 1200 })),
+    ];
+    const s = promptCacheState(items, ANCHOR)!;
+    expect(s.lastMiss).toEqual({ reason: 'modelChanged', tokens: 1200, label: 'смена модели' });
+  });
+
+  it('личный порог (точка расширения B-3): переданный порог считает «остывает» раньше константы', () => {
+    // остаток 10 мин — по умолчанию тёплый (порог 5 мин), с личным порогом 15 мин — остывает
+    expect(promptCacheState([resultItem(cache())], ANCHOR + 50 * MIN)!.status).toBe('warm');
+    expect(promptCacheState([resultItem(cache())], ANCHOR + 50 * MIN, 15 * MIN)!.status).toBe('cooling');
+  });
 });
 
 describe('missReasonLabel — подписи причин', () => {

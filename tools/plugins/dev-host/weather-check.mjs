@@ -52,12 +52,15 @@
 //   20. Лимит частоты (limit) — «Слишком много запросов», не «нет связи» (C5-д, MAJOR 1).
 //   21. Исключение внутри renderMain — «Что-то сломалось в панели погоды»,
 //       а не «сервис не прочитал ответ» (C5-д, MAJOR 2).
-//   22. Срез 6 берётся по населению, внутри среза — свои первыми: крупный
-//       иностранный город в выдаче, «ru» в нижнем регистре — тоже своя страна (C5-д).
-//       (Срез ДО сортировки по стране — мутация, которую ловит этот сценарий.)
-//   23. Запрос без своей страны — порядок строго по населению (C5-д, minor).
+//   22. Квоты: до 5 своих + до 2 иностранных, свои первыми; иностранный не
+//       вытесняет мелкого своего, «ru» в нижнем регистре — своя страна (C5-д2).
+//   23. Запрос без своей страны — только квота иностранных (2), по населению (C5-д2).
 //   24. Температура 0 — «0°», а не прочерк (C5-д, minor).
 //   25. storage «denied»: при отказе хранилища подсказки о запоминании нет (C5-д, minor).
+//   4g. unavailable / not_found / invalid — свои тексты, не «нет связи» (C5-д2).
+//   26. «Повторить» уходит новым запросом net.fetch (C5-д2).
+//   27. Сбой пробы storage не кэшируется: вторая проба удалась — подсказка есть (C5-д2).
+//   28. Равное население — порядок по названию; нет поля country — код страны (C5-д2).
 
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
@@ -379,8 +382,8 @@ async function scenarioErrors(browser, base) {
     }
   });
 
-  // Правка 23.10 и C5-д (MAJOR 1): разные коды отказа хоста — разные тексты.
-  // Таймаут и сбой на стороне сервиса — не «нет связи»: запрос ушёл и не вернулся.
+  // Правка 23.10 и C5-д2: разные коды отказа хоста — разные тексты. Таймаут и
+  // upstream — настоящий сетевой обрыв на бою: «Сервис погоды не ответил».
   for (const failCode of ['timeout', 'upstream']) {
     await scenario('4d. ' + failCode + ' — «Сервис погоды не ответил», не «нет связи»', async (checks) => {
       const { context, page, frame } = await openEmulator(browser, base, {
@@ -397,6 +400,34 @@ async function scenarioErrors(browser, base) {
         assertEq(checks, 'кнопка «Повторить»', btn.trim(), 'Повторить');
       } catch (e) {
         await shot(page, 'scenario-4d-' + failCode);
+        throw e;
+      } finally {
+        await context.close();
+      }
+    });
+  }
+
+  // C5-д2 (MAJOR): unavailable — про плагин, остальные коды хоста — нейтральный
+  // дефолт; ни тот ни другой не «нет связи».
+  for (const [failCode, wantTitle, wantText, wantBtn] of [
+    ['unavailable', 'Плагин погоды сейчас недоступен', 'Попробуйте открыть панель позже.', false],
+    ['not_found', 'Не удалось получить данные о погоде', 'Попробуйте ещё раз.', true],
+    ['invalid', 'Не удалось получить данные о погоде', 'Попробуйте ещё раз.', true],
+  ]) {
+    await scenario('4g. ' + failCode + ' — «' + wantTitle + '», не «нет связи»', async (checks) => {
+      const { context, page, frame } = await openEmulator(browser, base, {
+        grant: GRANT_ALL,
+        fail: failCode,
+      });
+      try {
+        await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
+        assertEq(checks, 'заголовок', (await textOf(frame, '.cc-empty__title')).trim(), wantTitle);
+        assertEq(checks, 'текст', (await textOf(frame, '.cc-empty__text')).trim(), wantText);
+        assertEq(checks, 'кнопка «Повторить»', await frame.locator('#retry').count(), wantBtn ? 1 : 0);
+        const all = (await textOf(frame, '#wx')).toLowerCase();
+        assertTrue(checks, 'слов «нет связи» нет', !all.includes('нет связи'), all);
+      } catch (e) {
+        await shot(page, 'scenario-4g-' + failCode);
         throw e;
       } finally {
         await context.close();
@@ -1013,7 +1044,7 @@ async function scenarioEmptyTemps(browser, base) {
 // населению; подпись «Город · Регион, Страна». Страна — из country_code, не по
 // названию: «Торонто» не встанет перед русским «Тором».
 async function scenarioCountrySort(browser, base) {
-  await scenario('18. Порядок: своя страна раньше, подпись «Город · Регион, Страна» (правка 23.10)', async (checks) => {
+  await scenario('18. Квоты: свои раньше иностранных, подпись «Город · Регион, Страна» (правка 23.10, C5-д2)', async (checks) => {
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
       fixtures: [
@@ -1142,6 +1173,14 @@ async function scenarioRenderFail(browser, base) {
       assertEq(checks, 'заголовок ошибки панели', title, 'Что-то сломалось в панели погоды');
       const text = (await textOf(frame, '.cc-empty__text')).trim();
       assertEq(checks, 'текст про перезагрузку', text, 'Попробуйте обновить страницу.');
+      // C5-д2: «Повторить» тут тупик — вместо него «Обновить страницу».
+      assertEq(checks, 'кнопки «Повторить» нет', await frame.locator('#retry').count(), 0);
+      assertEq(checks, 'кнопка «Обновить страницу»', (await frame.locator('#reload').innerText().catch(() => '')).trim(), 'Обновить страницу');
+      // Перезагрузка настоящая: метка, поставленная в окне панели, пропадает.
+      await frame.evaluate(() => { window.__wxMarker = 1; });
+      await frame.locator('#reload').click();
+      await frame.waitForFunction(() => window.__wxMarker === undefined, null, { timeout: 15000 });
+      assertTrue(checks, 'страница перезагружена', true);
     } catch (e) {
       await shot(page, 'scenario-21-render-fail');
       throw e;
@@ -1151,11 +1190,11 @@ async function scenarioRenderFail(browser, base) {
   });
 }
 
-// C5-д (продуктовое решение): срез 6 результатов — по населению, внутри среза —
-// свои первыми. Крупный иностранный город попадает в выдачу, даже если «своих»
-// больше, чем размер среза; country_code в нижнем регистре — тоже своя страна.
-async function scenarioSliceByPopulation(browser, base) {
-  await scenario('22. Срез по населению: крупный иностранный в выдаче, свои первыми (C5-д)', async (checks) => {
+// C5-д2 (продуктовое решение): раздельные квоты — до 5 своих по населению и до
+// 2 иностранных по населению, сначала свои. Крупный иностранный не вытесняет
+// мелкого своего; «ru» в нижнем регистре — тоже своя страна.
+async function scenarioQuotas(browser, base) {
+  await scenario('22. Квоты 5 своих + 2 иностранных: иностранный не вытесняет мелкого своего (C5-д2)', async (checks) => {
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
       fixtures: [
@@ -1170,26 +1209,24 @@ async function scenarioSliceByPopulation(browser, base) {
       await frame.locator('#q').waitFor({ timeout: 5000 });
       await frame.locator('#q').fill('Рогач');
       await frame.locator('.city').first().waitFor({ timeout: 15000 });
-      const lines = await frame.locator('.city').allInnerTexts();
-      assertEq(checks, 'строк результатов', lines.length, 6);
-      const clean = (s) => s.replace(/\n/g, ' ').trim();
-      const first = clean(lines[0]);
-      assertTrue(checks, 'первая строка — самый крупный свой (600 тыс.)',
-        first.includes('Рогачёв ·') && first.includes('Тверская обл., Россия'), first);
-      // Город с country_code «ru» (нижний регистр) считается своей страной:
-      // сравнение нормализовано по регистру (minor, C5-д).
-      const fourth = clean(lines[3]);
-      assertTrue(checks, '«ru» нижнего регистра — своя, в своём блоке',
-        fourth.includes('Рогач ·') && fourth.includes('Псковская обл., Россия'), fourth);
-      // Крупный иностранный (2 млн) врезался в выдачу, несмотря на шесть «своих»:
-      // срез — по населению, порядок внутри — свои первыми.
-      const last = clean(lines[5]);
-      assertTrue(checks, 'последняя строка — Роттердам (иностранный, по населению)',
-        last.includes('Роттердам') && last.includes('Нидерланды'), last);
-      const all = lines.map(clean).join(' ');
-      assertTrue(checks, 'меньшего иностранного (150 тыс.) в срезе нет', !all.includes('Розенталь'), all);
+      const lines = await frame.locator('.city').allInnerTexts().then((a) => a.map((s) => s.replace(/\n/g, ' ').trim()));
+      assertEq(checks, 'строк результатов: 5 + 2', lines.length, 7);
+      assertEq(checks, 'своих ровно 5', lines.filter((l) => l.includes('Россия')).length, 5);
+      assertEq(checks, 'иностранных ровно 2', lines.filter((l) => !l.includes('Россия')).length, 2);
+      assertTrue(checks, 'первая — самый крупный свой (600 тыс.)',
+        lines[0].includes('Рогачёв ·') && lines[0].includes('Тверская обл., Россия'), lines[0]);
+      // Город с country_code «ru» (нижний регистр) — своя страна, в своём блоке.
+      assertTrue(checks, '«ru» нижнего регистра — своя, четвёртая',
+        lines[3].includes('Рогач ·') && lines[3].includes('Псковская обл., Россия'), lines[3]);
+      // Пятая своя — Рогачи (200 тыс.): её не вытеснил ни Роттердам (2 млн), ни Розенталь.
+      assertTrue(checks, 'пятая своя — Рогачи (200 тыс.), не вытеснена иностранным',
+        lines[4].includes('Рогачи') && lines[4].includes('Россия'), lines[4]);
+      assertTrue(checks, 'шестая — Роттердам', lines[5].includes('Роттердам') && lines[5].includes('Нидерланды'), lines[5]);
+      assertTrue(checks, 'седьмая — Розенталь', lines[6].includes('Розенталь') && lines[6].includes('Германия'), lines[6]);
+      // Вытесняется шестой свой (100 тыс.) — своими же, а не иностранным.
+      assertTrue(checks, 'шестой свой (Калининградская, 100 тыс.) вне выдачи', !lines.join(' ').includes('Калининградская'), lines.join(' '));
     } catch (e) {
-      await shot(page, 'scenario-22-slice-population');
+      await shot(page, 'scenario-22-quotas');
       throw e;
     } finally {
       await context.close();
@@ -1197,9 +1234,9 @@ async function scenarioSliceByPopulation(browser, base) {
   });
 }
 
-// C5-д (minor): запрос без своей страны — население остаётся решающим порядком.
+// C5-д2: запрос без своей страны — квота иностранных (2), внутри — по населению.
 async function scenarioAllForeign(browser, base) {
-  await scenario('23. Все иностранные — порядок строго по населению (C5-д)', async (checks) => {
+  await scenario('23. Все иностранные — не больше двух, по населению (C5-д2)', async (checks) => {
     const { context, page, frame } = await openEmulator(browser, base, {
       grant: GRANT_ALL,
       fixtures: [
@@ -1215,11 +1252,9 @@ async function scenarioAllForeign(browser, base) {
       await frame.locator('#q').fill('Лим');
       await frame.locator('.city').first().waitFor({ timeout: 15000 });
       const lines = await frame.locator('.city').allInnerTexts().then((a) => a.map((s) => s.replace(/\n/g, ' ').trim()));
-      assertEq(checks, 'строк результатов', lines.length, 4);
+      assertEq(checks, 'строк результатов: квота иностранных', lines.length, 2);
       assertTrue(checks, 'первая — Лима, Перу (9 млн)', lines[0].includes('Лима ·') && lines[0].includes('Перу'), lines[0]);
       assertTrue(checks, 'вторая — Лимассо, Кипр (300 тыс.)', lines[1].includes('Лимассо') && lines[1].includes('Кипр'), lines[1]);
-      assertTrue(checks, 'третья — Лимы, Италия (100 тыс.)', lines[2].includes('Лимы') && lines[2].includes('Италия'), lines[2]);
-      assertTrue(checks, 'последняя — Лима, Греция (50 тыс.)', lines[3].includes('Лима ·') && lines[3].includes('Греция'), lines[3]);
     } catch (e) {
       await shot(page, 'scenario-23-all-foreign');
       throw e;
@@ -1303,6 +1338,110 @@ async function scenarioStorageDenied(browser, base) {
   });
 }
 
+// C5-д2 (minor): «Повторить» действительно перезапрашивает прогноз — считаем
+// запросы net.fetch в логе хоста, а не только смену текста.
+async function scenarioRetryRequests(browser, base) {
+  await scenario('26. «Повторить» уходит новым запросом (C5-д2)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fail: 'upstream',
+    });
+    try {
+      await frame.locator('#retry').waitFor({ timeout: 15000 });
+      const count = () => page.evaluate(() =>
+        Array.from(document.querySelectorAll('#log p')).filter((p) => p.textContent.includes('→ net.fetch')).length);
+      const before = await count();
+      await frame.locator('#retry').click();
+      await page.waitForFunction((n) =>
+        Array.from(document.querySelectorAll('#log p')).filter((p) => p.textContent.includes('→ net.fetch')).length > n, before, { timeout: 15000 });
+      assertEq(checks, 'после «Повторить» ушёл ровно один новый запрос', (await count()) - before, 1);
+      await frame.locator('#retry').waitFor({ timeout: 15000 });
+    } catch (e) {
+      await shot(page, 'scenario-26-retry');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C5-д2 (minor): проба storage.get кэширует только успех. Первая проба не
+// удалась (хранилище недоступно) — подсказки нет; вторая удалась — подсказка есть.
+async function scenarioProbeRetry(browser, base) {
+  await scenario('27. Проба storage: сбой не кэшируется — вторая проба удалась, подсказка есть (C5-д2)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL + ',storage',
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await page.evaluate(() => {
+        window.__lsDesc = Object.getOwnPropertyDescriptor(window, 'localStorage');
+        Object.defineProperty(window, 'localStorage', {
+          configurable: true,
+          get: function () { throw new Error('storage disabled'); },
+        });
+      });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await page.waitForFunction(() =>
+        Array.from(document.querySelectorAll('#log p')).some((p) => p.textContent.includes('← unavailable: Хранилище недоступно')),
+      null, { timeout: 15000 });
+      assertEq(checks, 'первая проба не удалась — подсказки нет', await frame.locator('.hint').count(), 0);
+      // Хост «починился»; выходим из режима и открываем его снова.
+      await page.evaluate(() => { Object.defineProperty(window, 'localStorage', window.__lsDesc); });
+      await frame.locator('#back').click();
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('.hint').waitFor({ timeout: 5000 });
+      assertEq(checks, 'вторая проба удалась — подсказка появилась', (await textOf(frame, '.hint')).trim(), 'Город запоминается в этом браузере.');
+    } catch (e) {
+      await shot(page, 'scenario-27-probe-retry');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C5-д2 (minor): страна в подписи без поля country (запасной country_code) и
+// порядок при равном населении не зависит от порядка ответа геокодера.
+async function scenarioTiesAndCountryFallback(browser, base) {
+  await scenario('28. Равное население — порядок по названию; без поля country — код страны (C5-д2)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-ties.json|name=%D0%A2%D0%B5%D1%81',
+        FX + 'batch-mixed.json|latitude',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Тес');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      const lines = await frame.locator('.city').allInnerTexts().then((a) => a.map((s) => s.replace(/\n/g, ' ').trim()));
+      assertEq(checks, 'строк результатов', lines.length, 4);
+      assertTrue(checks, 'первый — Тесто (300 тыс.)', lines[0].includes('Тесто'), lines[0]);
+      // В ответе «Тесов» стоит раньше «Тесны», население равное: решает название.
+      assertTrue(checks, 'при равном населении «Тесна» раньше «Тесова»', lines[1].includes('Тесна') && lines[2].includes('Тесов'), lines[1] + ' | ' + lines[2]);
+      assertTrue(checks, 'иностранный без поля country — в подписи код страны',
+        lines[3].includes('Тессин') && /· DE(\s|$)/.test(lines[3]), lines[3]);
+    } catch (e) {
+      await shot(page, 'scenario-28-ties');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 // ---------- Запуск ----------
 
 const { server, base } = await startServer();
@@ -1329,10 +1468,13 @@ try {
   await scenarioStorageUnavailable(browser, base);
   await scenarioRateLimit(browser, base);
   await scenarioRenderFail(browser, base);
-  await scenarioSliceByPopulation(browser, base);
+  await scenarioQuotas(browser, base);
   await scenarioAllForeign(browser, base);
   await scenarioZeroTemp(browser, base);
   await scenarioStorageDenied(browser, base);
+  await scenarioRetryRequests(browser, base);
+  await scenarioProbeRetry(browser, base);
+  await scenarioTiesAndCountryFallback(browser, base);
 } finally {
   await browser.close();
   server.close();

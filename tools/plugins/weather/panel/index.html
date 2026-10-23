@@ -343,7 +343,9 @@
         // Связь есть — упёрлись в частоту запросов (30 в минуту). «Проверьте
         // подключение» здесь врёт по факту (MAJOR 1, C5-д).
         icon = 'info'; title = 'Слишком много запросов';
-        text = 'Подождите минуту и попробуйте ещё раз.';
+        // Код один и для частоты, и для «слишком больших аргументов» / «слишком
+        // много одновременных вызовов» от самого PluginFrame: про минуту не врём.
+        text = 'Подождите немного и попробуйте снова.';
         extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
       } else if (kind === 'upstream') {
         // Запрос ушёл и не вернулся: таймаут или сбой на стороне сервиса.
@@ -363,10 +365,12 @@
         extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
       } else if (kind === 'renderfail') {
         // Причина внутри панели: неожиданный тип поля в ответе, баг разметки.
-        // Повтор запроса не поможет — нужна перезагрузка страницы (C5-д2).
+        // Простой повтор запроса не поможет — нужен перезапуск панели с чистого
+        // состояния (self-restart). Перезагрузить страницу из sandbox-фрейма
+        // нельзя: боевой хост на повторный ready init не шлёт (C5-д3).
         icon = 'cloudoff'; title = 'Что-то сломалось в панели погоды';
-        text = 'Попробуйте обновить страницу.';
-        extra = '<button class="cc-btn cc-btn--primary" type="button" id="reload">Обновить страницу</button>';
+        text = 'Попробуйте обновить данные.';
+        extra = '<button class="cc-btn cc-btn--primary" type="button" id="restart">Обновить данные</button>';
       } else if (kind === 'badstatus') {
         // Ошибочный HTTP-статус — сервис действительно «вернул ошибку».
         icon = 'cloudoff'; title = 'Сервис погоды не ответил';
@@ -480,6 +484,8 @@
       // Проба операции storage: подсказка — только если хост реально отвечает
       // (denied/unavailable — обещания нет). Запоминается только успех: после
       // временного сбоя хоста следующее открытие пробует снова (C5-д2).
+      // Кэш storageOk переживает отзыв права: подсказка — только если право есть
+      // прямо сейчас (C5-д3).
       if (hasStorageRight()) {
         if (storageOk) {
           showStorageHint();
@@ -567,8 +573,11 @@
             String(a.name).localeCompare(String(b.name), 'ru') ||
             (a.lat - b.lat) || (a.lon - b.lon);
         });
+        // До 5 своих; иностранных — 2 плюс свободные места своих (5 − N_своих).
+        // Потолок — 7 строк (C5-д3).
         var own = all.filter(function (c) { return c.country_code === HOME_COUNTRY; }).slice(0, 5);
-        var foreign = all.filter(function (c) { return c.country_code !== HOME_COUNTRY; }).slice(0, 2);
+        var foreignQuota = 2 + Math.max(0, 5 - own.length);
+        var foreign = all.filter(function (c) { return c.country_code !== HOME_COUNTRY; }).slice(0, foreignQuota);
         var snapshot = own.concat(foreign);
         found = snapshot;
         renderGeo();
@@ -742,7 +751,7 @@
     // поэтому следим через closest().
     root.addEventListener('click', function (e) {
       if (e.target.closest('#refresh') || e.target.closest('#retry')) { load(); return; }
-      if (e.target.closest('#reload')) { location.reload(); return; }
+      if (e.target.closest('#restart')) { restart(); return; }
       if (e.target.closest('#citybtn')) { openSearch(); return; }
       // «Назад» — выход из режима: гасим дебаунс до load(), иначе висящий ответ
       // применится к уже закрытому режиму (MAJOR-1, ревью R3).
@@ -769,6 +778,15 @@
       root.setAttribute('aria-busy', 'true');
       root.innerHTML = skeleton();
       readStoredCity().then(load);
+    }
+    // Self-restart: сбрасываем стартовое состояние панели, пересоздаём разметку
+    // и заново забираем данные — без перезагрузки документа (C5-д3).
+    function restart() {
+      started = false;
+      storageOk = false;
+      storageProbing = false;
+      offlineShown = false;
+      startOnce();
     }
     ccsPlugin.on('init', startOnce);
     if (ccsPlugin.state && ccsPlugin.state.plugin) startOnce();

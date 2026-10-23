@@ -50,11 +50,14 @@
 //   19. Обещание запоминания — только если операция storage реально отвечает,
 //       а не просто выдано право (правка приёмки 23.10).
 //   20. Лимит частоты (limit) — «Слишком много запросов», не «нет связи» (C5-д, MAJOR 1).
-//   21. Исключение внутри renderMain — «Что-то сломалось в панели погоды»,
-//       а не «сервис не прочитал ответ» (C5-д, MAJOR 2).
+//   21. Исключение внутри renderMain — «Что-то сломалось в панели погоды»;
+//       «Обновить данные» — self-restart: панель жива, данные запрошены заново,
+//       эмулятор не отвечает init на повторный ready (C5-д, C5-д3).
 //   22. Квоты: до 5 своих + до 2 иностранных, свои первыми; иностранный не
 //       вытесняет мелкого своего, «ru» в нижнем регистре — своя страна (C5-д2).
-//   23. Запрос без своей страны — только квота иностранных (2), по населению (C5-д2).
+//   23. Свободные места своих достаются иностранным: 2 + (5 − N_своих), потолок 7 (C5-д3).
+//   29. Два открытия режима во время пробы — один storage.get (C5-д3).
+//   30. Право storage отозвано после успешной пробы — подсказки нет (C5-д3).
 //   24. Температура 0 — «0°», а не прочерк (C5-д, minor).
 //   25. storage «denied»: при отказе хранилища подсказки о запоминании нет (C5-д, minor).
 //   4g. unavailable / not_found / invalid — свои тексты, не «нет связи» (C5-д2).
@@ -1135,7 +1138,10 @@ async function scenarioRateLimit(browser, base) {
       const title = (await textOf(frame, '.cc-empty__title')).trim();
       assertEq(checks, 'заголовок про частоту', title, 'Слишком много запросов');
       const text = (await textOf(frame, '.cc-empty__text')).trim();
-      assertEq(checks, 'текст про минуту', text, 'Подождите минуту и попробуйте ещё раз.');
+      // Код limit — и частота, и «аргументы слишком большие», и «слишком много
+      // одновременных вызовов»: текст нейтральный, без «минуты» (C5-д3).
+      assertEq(checks, 'нейтральный текст', text, 'Подождите немного и попробуйте снова.');
+      assertTrue(checks, 'слова «минуту» нет', !/минут/.test(title + ' ' + text), title + ' ' + text);
       const btn = await frame.locator('#retry').innerText().catch(() => '');
       assertEq(checks, 'кнопка «Повторить»', btn.trim(), 'Повторить');
     } catch (e) {
@@ -1172,15 +1178,29 @@ async function scenarioRenderFail(browser, base) {
       const title = (await textOf(frame, '.cc-empty__title')).trim();
       assertEq(checks, 'заголовок ошибки панели', title, 'Что-то сломалось в панели погоды');
       const text = (await textOf(frame, '.cc-empty__text')).trim();
-      assertEq(checks, 'текст про перезагрузку', text, 'Попробуйте обновить страницу.');
-      // C5-д2: «Повторить» тут тупик — вместо него «Обновить страницу».
+      assertEq(checks, 'текст про обновление данных', text, 'Попробуйте обновить данные.');
+      // «Повторить» тут тупик — вместо него «Обновить данные» (self-restart).
       assertEq(checks, 'кнопки «Повторить» нет', await frame.locator('#retry').count(), 0);
-      assertEq(checks, 'кнопка «Обновить страницу»', (await frame.locator('#reload').innerText().catch(() => '')).trim(), 'Обновить страницу');
-      // Перезагрузка настоящая: метка, поставленная в окне панели, пропадает.
-      await frame.evaluate(() => { window.__wxMarker = 1; });
-      await frame.locator('#reload').click();
-      await frame.waitForFunction(() => window.__wxMarker === undefined, null, { timeout: 15000 });
-      assertTrue(checks, 'страница перезагружена', true);
+      assertEq(checks, 'кнопка «Обновить данные»', (await frame.locator('#restart').innerText().catch(() => '')).trim(), 'Обновить данные');
+      // Причина «починилась» (валидный ответ) — перезапуск должен поднять панель.
+      await page.evaluate((path) => { window.__emulator.cfg.fixtures[0].path = path; }, '/' + FX + 'forecast-yaroslavl.json');
+      const count = () => page.evaluate(() =>
+        Array.from(document.querySelectorAll('#log p')).filter((p) => p.textContent.includes('→ net.fetch')).length);
+      const before = await count();
+      await frame.locator('#restart').click();
+      // Панель жива: герой и неделя на месте, плагин в состоянии не потерян.
+      await frame.locator('.hero').waitFor({ timeout: 15000 });
+      assertEq(checks, 'герой есть', await frame.locator('.hero').count(), 1);
+      assertEq(checks, 'в неделе 7 строк', await frame.locator('.week .day').count(), 7);
+      assertTrue(checks, 'state.plugin не null', await frame.evaluate(() => !!(window.ccsPlugin.state && window.ccsPlugin.state.plugin)));
+      assertTrue(checks, 'данные запрошены заново (net.fetch вырос)', (await count()) > before, before + ' → ' + (await count()));
+      // Боевой гейт эмулятора: повторный ready остаётся без init.
+      assertEq(checks, 'init хост отправил один раз', await page.evaluate(() => window.__emulator.initCount), 1);
+      await frame.evaluate(() => window.ccsPlugin.ready());
+      await page.waitForFunction(() =>
+        Array.from(document.querySelectorAll('#log p')).some((p) => p.textContent.includes('повторный ready проигнорирован')),
+      null, { timeout: 5000 });
+      assertEq(checks, 'повторный ready init не породил', await page.evaluate(() => window.__emulator.initCount), 1);
     } catch (e) {
       await shot(page, 'scenario-21-render-fail');
       throw e;
@@ -1234,32 +1254,54 @@ async function scenarioQuotas(browser, base) {
   });
 }
 
-// C5-д2: запрос без своей страны — квота иностранных (2), внутри — по населению.
+// C5-д3: свободные места своих достаются иностранным. До 5 своих; иностранных —
+// 2 + (5 − N_своих); общий потолок — 7 строк. Без своих — до 7 иностранных
+// (в фикстуре их четыре — все четыре); при трёх своих — 3 + 4 = 7.
 async function scenarioAllForeign(browser, base) {
-  await scenario('23. Все иностранные — не больше двух, по населению (C5-д2)', async (checks) => {
-    const { context, page, frame } = await openEmulator(browser, base, {
-      grant: GRANT_ALL,
-      fixtures: [
-        FX + 'forecast-yaroslavl.json|apparent_temperature',
-        FX + 'geocode-allforeign.json|name=%D0%9B%D0%B8%D0%BC',
-        FX + 'batch-allforeign.json|latitude',
-      ].join(','),
-    });
+  await scenario('23. Квоты со свободными местами: 0 своих — все иностранные, 3 своих — 3 + 4, потолок 7 (C5-д3)', async (checks) => {
+    const open = async (geo, batch, q) => {
+      const o = await openEmulator(browser, base, {
+        grant: GRANT_ALL,
+        fixtures: [FX + 'forecast-yaroslavl.json|apparent_temperature', FX + geo, FX + batch + '|latitude'].join(','),
+      });
+      await o.frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await o.frame.locator('#citybtn').click();
+      await o.frame.locator('#q').waitFor({ timeout: 5000 });
+      await o.frame.locator('#q').fill(q);
+      await o.frame.locator('.city').first().waitFor({ timeout: 15000 });
+      o.lines = await o.frame.locator('.city').allInnerTexts().then((a) => a.map((s) => s.replace(/\n/g, ' ').trim()));
+      return o;
+    };
+    let o = await open('geocode-allforeign.json|name=%D0%9B%D0%B8%D0%BC', 'batch-allforeign.json', 'Лим');
     try {
-      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
-      await frame.locator('#citybtn').click();
-      await frame.locator('#q').waitFor({ timeout: 5000 });
-      await frame.locator('#q').fill('Лим');
-      await frame.locator('.city').first().waitFor({ timeout: 15000 });
-      const lines = await frame.locator('.city').allInnerTexts().then((a) => a.map((s) => s.replace(/\n/g, ' ').trim()));
-      assertEq(checks, 'строк результатов: квота иностранных', lines.length, 2);
-      assertTrue(checks, 'первая — Лима, Перу (9 млн)', lines[0].includes('Лима ·') && lines[0].includes('Перу'), lines[0]);
-      assertTrue(checks, 'вторая — Лимассо, Кипр (300 тыс.)', lines[1].includes('Лимассо') && lines[1].includes('Кипр'), lines[1]);
+      const lines = o.lines;
+      assertEq(checks, '0 своих: все четыре иностранных, а не два', lines.length, 4);
+      assertTrue(checks, '1 — Лима, Перу (9 млн)', lines[0].includes('Лима ·') && lines[0].includes('Перу'), lines[0]);
+      assertTrue(checks, '2 — Лимассо, Кипр (300 тыс.)', lines[1].includes('Лимассо') && lines[1].includes('Кипр'), lines[1]);
+      assertTrue(checks, '3 — Лимы, Италия (100 тыс.)', lines[2].includes('Лимы') && lines[2].includes('Италия'), lines[2]);
+      assertTrue(checks, '4 — Лима, Греция (50 тыс.)', lines[3].includes('Лима ·') && lines[3].includes('Греция'), lines[3]);
     } catch (e) {
-      await shot(page, 'scenario-23-all-foreign');
+      await shot(o.page, 'scenario-23-all-foreign');
       throw e;
     } finally {
-      await context.close();
+      await o.context.close();
+    }
+    o = await open('geocode-own3.json|name=%D0%9E', 'batch-allforeign.json', 'Ор');
+    try {
+      const lines = o.lines;
+      const own = lines.filter((l) => l.includes('Россия')).length;
+      assertEq(checks, '3 своих — все три', own, 3);
+      assertEq(checks, 'иностранных 2 + 2 свободных места = 4', lines.length - own, 4);
+      assertEq(checks, 'общий потолок 7', lines.length, 7);
+      assertTrue(checks, 'свои первыми', lines.slice(0, 3).every((l) => l.includes('Россия')), lines.join(' | '));
+      assertTrue(checks, 'иностранные по населению: Осло, Оттава, Остин, Орлеан',
+        lines[3].includes('Осло') && lines[4].includes('Оттава') && lines[5].includes('Остин') && lines[6].includes('Орлеан'), lines.slice(3).join(' | '));
+      assertTrue(checks, 'пятый иностранный (Оруро) вне выдачи', !lines.join(' ').includes('Оруро'), lines.join(' | '));
+    } catch (e) {
+      await shot(o.page, 'scenario-23-own3');
+      throw e;
+    } finally {
+      await o.context.close();
     }
   });
 }
@@ -1442,6 +1484,85 @@ async function scenarioTiesAndCountryFallback(browser, base) {
   });
 }
 
+// C5-д3 (minor): guard `!storageProbing` — два открытия режима выбора подряд ВО
+// ВРЕМЯ идущей пробы дают ровно один storage.get. Проба замедляется задержкой
+// хоста, выставленной после загрузки главного экрана.
+async function scenarioProbeGuard(browser, base) {
+  await scenario('29. Два открытия режима во время пробы — ровно один storage.get (C5-д3)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL + ',storage',
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      const gets = () => page.evaluate(() =>
+        Array.from(document.querySelectorAll('#log p')).filter((p) => p.textContent.includes('→ storage.get')).length);
+      const before = await gets();
+      await page.evaluate(() => { window.__emulator.cfg.delay = 3000; });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      // Главный экран должен вернуться быстро: задержку снимаем до «Назад»,
+      // а уже ушедший storage.get остаётся в полёте.
+      await page.evaluate(() => { window.__emulator.cfg.delay = 0; });
+      await frame.locator('#back').click();
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      // Дождёмся ответа пробы и подсказки.
+      await frame.locator('.hint').waitFor({ timeout: 8000 });
+      assertEq(checks, 'storage.get ушёл ровно один раз', (await gets()) - before, 1);
+    } catch (e) {
+      await shot(page, 'scenario-29-probe-guard');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C5-д3 (minor): кэш storageOk живёт до перезагрузки страницы, а право storage
+// могут отозвать. Подсказка «Город запоминается…» — только если проба успешна И
+// право есть сейчас.
+async function scenarioHintRevoked(browser, base) {
+  await scenario('30. Право storage отозвано после успешной пробы — подсказки нет (C5-д3)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL + ',storage',
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('.hint').waitFor({ timeout: 8000 });
+      assertEq(checks, 'пока право есть — подсказка показана', await frame.locator('.hint').count(), 1);
+      // Хост переинициализирует панель без права storage (как после отзыва).
+      await page.evaluate(() => {
+        const g = window.__emulator.cfg.grant.filter((x) => !x.startsWith('storage'));
+        const inner = document.getElementById('frame').contentWindow.frames[0];
+        inner.postMessage({ source: 'ccs-host', v: 1, type: 'init', granted: g }, '*');
+      });
+      await frame.locator('#back').click();
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await page.waitForTimeout(500);
+      assertEq(checks, 'право отозвано — подсказки нет', await frame.locator('.hint').count(), 0);
+    } catch (e) {
+      await shot(page, 'scenario-30-hint-revoked');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 // ---------- Запуск ----------
 
 const { server, base } = await startServer();
@@ -1475,6 +1596,8 @@ try {
   await scenarioRetryRequests(browser, base);
   await scenarioProbeRetry(browser, base);
   await scenarioTiesAndCountryFallback(browser, base);
+  await scenarioProbeGuard(browser, base);
+  await scenarioHintRevoked(browser, base);
 } finally {
   await browser.close();
   server.close();

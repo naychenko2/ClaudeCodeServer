@@ -312,7 +312,16 @@ window.addEventListener('message', (e) => {
   if (e.source !== panelWindow()) return; // сообщения только из окна панели
 
   if (d.type === 'ready') {
+    // Боевой PluginFrame (PluginFrame.tsx:389) отвечает init только на ПЕРВЫЙ
+    // ready за жизнь фрейма; повторные игнорирует. Эмулятор повторяет гейт,
+    // иначе сценарии с перезапуском панели врут.
+    if (readyReceived) {
+      logLine('· повторный ready проигнорирован (как на боевом хосте)');
+      return;
+    }
     readyReceived = true;
+    window.__emulator = window.__emulator || {};
+    window.__emulator.initCount = (window.__emulator.initCount || 0) + 1;
     postToPanel({
       type: 'init',
       // Идентификатор «плагина» для эмулятора — условный: он нужен панели только
@@ -608,7 +617,7 @@ async function main() {
   document.getElementById('btn-theme').textContent = cfg.theme === 'dark' ? 'светлая' : 'тёмная';
   updateStatus();
 
-  window.__emulator = { cfg, granted: cfg.grant };
+  window.__emulator = { cfg, granted: cfg.grant, initCount: 0 };
   logLine('хост-эмулятор: панель ' + cfg.panel + ' · права: ' + (cfg.grant.length ? cfg.grant.join(', ') : 'нет'));
 }
 

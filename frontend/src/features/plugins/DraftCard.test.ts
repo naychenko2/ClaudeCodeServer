@@ -498,6 +498,16 @@ describe('FilesDrawer: окно по макету', () => {
     expect(html).toContain('aria-label="Закрыть"');
   });
 
+  it('дефект QA: подзаголовок обновления читается «обновляет установленную 1.0.0», без сырого JSX', () => {
+    const html = drawerHtml({ ...PREVIEW, installedVersion: '1.0.0' }, DIFF);
+    // текст подзаголовка без разметки — именно так его видит человек
+    const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+    expect(text).toContain('обновляет установленную 1.0.0');
+    // старый дефект: JSX внутри шаблонной строки экранируется и читается как текст
+    expect(html).not.toContain('&lt;span');
+    expect(html).not.toContain('style={{');
+  });
+
   it('дерево вместо плоского перечня: каталоги — Button из ui-кита с aria-expanded, файлы data-file, метки +/~/− и размеры', () => {
     const html = drawerHtml(PREVIEW, DIFF);
     // Хвост ревью: testid каталога — с префиксом dir:, боевой путь не маскируется под контрол.

@@ -543,7 +543,7 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
     <span>
       {preview.name} · <span style={{ fontFamily: FONT.mono }}>{preview.version}</span>
       {preview.installedVersion
-        ? ` · обновляет установленную <span style={{ fontFamily: FONT.mono }}>{preview.installedVersion}</span>`
+        ? <> · обновляет установленную <span style={{ fontFamily: FONT.mono }}>{preview.installedVersion}</span></>
         : ' · новый плагин'}
     </span>
   );

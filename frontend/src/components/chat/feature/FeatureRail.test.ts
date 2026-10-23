@@ -1,4 +1,4 @@
-// Мини-рельса фичи (FeatureRail) — «конвейер, положенный набок»: 7 сегментов
+// Мини-рельса фичи (FeatureRail) — «конвейер, положенный набок»: 8 сегментов
 // по rail[] индекса. Рельса «глупая»: состояния (state/tone) и признак «закрыта»
 // даёт бэк, фронт только раскладывает.
 //
@@ -10,9 +10,10 @@ import { describe, expect, it } from 'vitest';
 import type { FeatureRailSegment, FeatureRailKey } from '../../../types/featureIndex';
 import { FeatureRail } from './FeatureRail';
 
-// 7 стадий в порядке жизненного цикла (cut → plan → prod → review → qa → final → merge).
-// `over` — точечные переопределения по ключу стадии.
-const KEYS: FeatureRailKey[] = ['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge'];
+// 8 стадий в порядке жизненного цикла (cut → design → plan → … → merge); design —
+// необязательна (без задач бэк отдаёт skipped). `over` — точечные переопределения
+// по ключу стадии.
+const KEYS: FeatureRailKey[] = ['cut', 'design', 'plan', 'prod', 'review', 'qa', 'final', 'merge'];
 function rail(over: Partial<Record<FeatureRailKey, Partial<FeatureRailSegment>>> = {}): FeatureRailSegment[] {
   const base: Record<FeatureRailKey, FeatureRailSegment> = {
     cut:    { key: 'cut',    state: 'done',    tone: null },
@@ -37,15 +38,15 @@ function segCount(html: string): number {
 }
 
 describe('FeatureRail', () => {
-  it('рисует ровно 7 сегментов', () => {
-    expect(segCount(render(rail()))).toBe(7);
+  it('рисует ровно 8 сегментов', () => {
+    expect(segCount(render(rail()))).toBe(8);
   });
 
   it('активный сегмент длиннее (15px), остальные 8px', () => {
     const html = render(rail()); // prod — active
     // ровно один сегмент шириной 15px (активный), остальные 8px.
     expect((html.match(/width:15px/g) ?? []).length).toBe(1);
-    expect((html.match(/width:8px/g) ?? []).length).toBe(6);
+    expect((html.match(/width:8px/g) ?? []).length).toBe(7);
   });
 
   it('цвет активного сегмента — по tone', () => {
@@ -59,17 +60,38 @@ describe('FeatureRail', () => {
     const html = render(rail({ review: { state: 'absent' } }));
     // done (cut/plan) → success
     expect((html.match(/background:var\(--c-success\)/g) ?? []).length).toBe(2);
-    // pending (qa/final/merge) → progressTrack
-    expect((html.match(/background:var\(--c-progress-track\)/g) ?? []).length).toBe(3);
+    // pending (design/qa/final/merge) → progressTrack
+    expect((html.match(/background:var\(--c-progress-track\)/g) ?? []).length).toBe(4);
     // absent (review) → прозрачный + inset пунктирный контур
     expect(html.includes('box-shadow:inset 0 0 0 1px var(--c-dashed)')).toBe(true);
   });
 
   it('закрытая фича: вся рельса приглушена (textMuted, opacity .5)', () => {
     const html = render(rail(), true);
-    // все 7 сегментов — textMuted + opacity .5 (absent — тоже, только контур).
+    // все 8 сегментов — textMuted + opacity .5 (absent — тоже, только контур).
+    expect((html.match(/background:var\(--c-text-muted\)/g) ?? []).length).toBe(8);
+    expect((html.match(/opacity:0\.5/g) ?? []).length).toBe(8);
+  });
+
+  it('skipped (необязательная design без задач) — «не было», нейтральная заливка', () => {
+    const html = render(rail({ design: { state: 'skipped' } }));
+    // title: «Дизайн — не было» — не «впереди» и не «пройден».
+    expect(html.includes('title="Дизайн — не было"')).toBe(true);
+    // нейтральная заливка C.bgInset: не progressTrack (pending — review/qa/final/merge)
+    // и не success.
+    expect(html.includes('background:var(--c-bg-inset)')).toBe(true);
+    expect((html.match(/background:var\(--c-progress-track\)/g) ?? []).length).toBe(4);
+    expect((html.match(/background:var\(--c-success\)/g) ?? []).length).toBe(2);
+  });
+
+  it('закрытая фича со skipped: «не было», а не «пройден» (не textMuted)', () => {
+    // Бэк держит skipped и у закрытой фичи (FeatureProjector.cs:1626).
+    const html = render(rail({ design: { state: 'skipped' } }), true);
+    expect(html.includes('title="Дизайн — не было"')).toBe(true);
+    // design остаётся нейтральной (bgInset), остальные 7 — textMuted; все под opacity .5.
+    expect((html.match(/background:var\(--c-bg-inset\)/g) ?? []).length).toBe(1);
     expect((html.match(/background:var\(--c-text-muted\)/g) ?? []).length).toBe(7);
-    expect((html.match(/opacity:0\.5/g) ?? []).length).toBe(7);
+    expect((html.match(/opacity:0\.5/g) ?? []).length).toBe(8);
   });
 
   it('aria-label: активный этап / закрыта / не начат', () => {

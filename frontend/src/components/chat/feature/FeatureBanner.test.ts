@@ -71,7 +71,7 @@ vi.mock('../../../lib/personas', async (importOriginal) => {
 
 // === Фикстуры ===
 
-// Рельса 7 стадий: cut/plan пройдены, prod — активная (run), остальное — впереди.
+// Рельса без design (необязательный этап в фикстуре нет): cut/plan пройдены, prod — активная (run), остальное — впереди.
 function rail(): FeatureIndexFeature['rail'] {
   return [
     { key: 'cut', state: 'done', tone: null },

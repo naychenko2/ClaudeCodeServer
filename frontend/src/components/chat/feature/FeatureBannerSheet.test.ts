@@ -61,7 +61,7 @@ function mkStage(key: StageKey, state: StageState, tone: StageTone | null = null
   };
 }
 
-// 7 стадий: cut/plan пройдены, prod — активная (run, с исполнителем), остальное — впереди.
+// 7 стадий в фикстуре (design не включена — необязательный этап): cut/plan пройдены, prod — активная (run, с исполнителем), остальное — впереди.
 function stages(): FeatureStage[] {
   return [
     mkStage('cut', 'done'),

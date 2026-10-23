@@ -12,7 +12,7 @@ import type { FeatureGlyph as GlyphKind } from './FeatureGlyphs';
 import { FeatureBannerSheet } from './FeatureBannerSheet';
 import { statusPhrase, uniquePersonaNames } from './pillModel';
 import { stepProgressFromIndex, formatStepProgress } from '../../../lib/featureProgress';
-import type { FeatureIndexFeature, FeatureChatLink, FeatureRailKey, FeatureRailTone } from '../../../types/featureIndex';
+import type { FeatureIndexFeature, FeatureChatLink, FeatureRailKey, FeatureRailState, FeatureRailTone } from '../../../types/featureIndex';
 
 // Плашка фичи в чате — ОДНА КОМПАКТНАЯ СТРОКА (макет feature-banner-1, вариант «А · Строка»
 // + кликабельные точки этапов из «Г · Мини-хронология»; записка Майи 20.10, решения Андрея).
@@ -24,7 +24,7 @@ import type { FeatureIndexFeature, FeatureChatLink, FeatureRailKey, FeatureRailT
 //   • КУДА ПЕРЕЙТИ — точки ведут на страницу фичи (вкладка «Хронология»); «Мерж…» НЕ на панели.
 //
 // Источник правды — БЭК: строка фичи из индекса (lib/featuresIndex, GET features/index)
-// несёт state (9 состояний), rail (7 стадий), attention, keySessionId и связь «чат × фича».
+// несёт state (9 состояний), rail (8 стадий, design необязательна), attention, keySessionId и связь «чат × фича».
 // Фронт НЕ пересчитывает — только раскладывает в точки/подпись/действие/роль.
 //
 // Показывается под ДВУМЯ флагами: turn-plan-feature-mode (поверхность режима «Исполнение
@@ -40,12 +40,13 @@ import type { FeatureIndexFeature, FeatureChatLink, FeatureRailKey, FeatureRailT
 type BannerTone = 'run' | 'wait' | 'stop' | 'closed';
 
 // Точка этапа (макет .dots i): done — пройдена (зелёная), active — текущая (вытянутая,
-// цвет тона), pending — впереди (дорожка), absent — нет в трекере (пунктир).
-// «Впереди» (pending) и absent НЕ кликабельны (задача, п.2); done/active — кликабельны
-// (ведут на страницу фичи, вкладка «Хронология», к этому этапу).
+// цвет тона), pending — впереди (дорожка), absent — нет в трекере (пунктир),
+// skipped — необязательный этап без задач (design, W4-DES-B): нейтральная заливка.
+// «Впереди» (pending), absent и skipped НЕ кликабельны (задача, п.2); done/active —
+// кликабельны (ведут на страницу фичи, вкладка «Хронология», к этому этапу).
 interface StageDot {
   key: FeatureRailKey;
-  state: 'done' | 'active' | 'pending' | 'absent';
+  state: FeatureRailState;
   tone: FeatureRailTone | null;
   clickable: boolean;
 }
@@ -222,6 +223,7 @@ function StageDotView({ dot, onOpen }: { dot: StageDot; onOpen: (key: FeatureRai
   if (dot.state === 'done') style = { ...base, width: DOT, background: C.success };
   else if (dot.state === 'active') style = { ...base, width: DOT_ACTIVE, background: activeDotColor(dot.tone) };
   else if (dot.state === 'absent') style = { ...base, width: DOT, background: 'transparent', boxShadow: `inset 0 0 0 1px ${C.dashed}` };
+  else if (dot.state === 'skipped') style = { ...base, width: DOT, background: C.bgInset };
   else style = { ...base, width: DOT, background: C.progressTrack };
 
   if (!dot.clickable) return <i data-testid={`feature-dot-${dot.key}`} aria-hidden="true" style={style} />;

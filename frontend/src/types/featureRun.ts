@@ -88,7 +88,8 @@ export interface FeatureVerdicts {
 }
 
 // Ключ стадии конвейера (бэк: `FeatureStage.Key`), в порядке жизненного цикла.
-export type StageKey = 'cut' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
+// design — необязательный этап после cut (W4-DES-B): без задач — state 'skipped'.
+export type StageKey = 'cut' | 'design' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
 // Состояние стадии (бэк: `FeatureStage.State`).
 export type StageState = 'done' | 'active' | 'pending' | 'absent';
 // Тон активной стадии (бэк: `FeatureStage.Tone`): run — идёт; wait — ждёт человека;

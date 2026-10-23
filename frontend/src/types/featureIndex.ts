@@ -23,7 +23,9 @@ export type FeatureBucket = 'attention' | 'running' | 'idle' | 'closed';
 
 // Состояние стадии рельсы — словарь бэка `FeatureStage.State` один в один
 // (контракт: `pending`, а не `ahead` — переименование дало бы вторую точку правды).
-export type FeatureRailState = 'done' | 'active' | 'pending' | 'absent';
+// `skipped` — необязательная «design» без задач (W4-DES-B): остаётся skipped и у
+// закрытой фичи (это не «пройден»).
+export type FeatureRailState = 'done' | 'active' | 'pending' | 'absent' | 'skipped';
 // Тон активной стадии (контракт: у закрытой фичи tone = null).
 export type FeatureRailTone = 'run' | 'loop' | 'wait' | 'stopped';
 // Восемь стадий конвейера в порядке жизненного цикла (контракт: «ровно 8»); design

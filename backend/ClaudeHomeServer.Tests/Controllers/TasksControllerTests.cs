@@ -836,6 +836,31 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             .GetProperty("archived").GetBoolean().Should().BeTrue();
     }
 
+    // W4-CHT-B3: уровень ручки, а не фикстуры проектора. design-задача и безролевая задача
+    // (featureId есть, role null) — задачи фичи: их чаты обязаны быть в chats[] страницы
+    // фичи. Мутации: убрать AddRange(run.Design) или AddRange(run.Unroled) в GetFeature
+    // (TasksController.cs) — соответствующий чат выпадает → тест краснеет.
+    [Fact]
+    public async Task GetFeature_Chats_DesignИБезролевая_ВЧатах()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-chats-dr", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var design = await CreateTaskAsync(new { title = "дизайн-задача", featureId = epicId, role = "design" });
+        var designId = design.GetProperty("id").GetString();
+        var unroled = await CreateTaskAsync(new { title = "безролевая-задача", featureId = epicId });
+        var unroledId = unroled.GetProperty("id").GetString();
+        var designChatId = await CreatePersonalChatAsync(OwnerId, designId);
+        var unroledChatId = await CreatePersonalChatAsync(OwnerId, unroledId);
+        await _client.PutAsJsonAsync($"/api/tasks/{designId}", new { linkedSessionId = designChatId });
+        await _client.PutAsJsonAsync($"/api/tasks/{unroledId}", new { linkedSessionId = unroledChatId });
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var chats = page.GetProperty("chats");
+        chats.EnumerateArray().Should().Contain(c => c.GetProperty("id").GetString() == designChatId, "чат design-задачи в chats[]");
+        chats.EnumerateArray().Should().Contain(c => c.GetProperty("id").GetString() == unroledChatId, "чат безролевой задачи в chats[]");
+    }
+
     // Подсистема Tasks выключена (FeatureProjector не зарегистрирован) → честный 503, а не 500.
     // Прямая сборка контроллера: GetFeatures проверяет features==null ДО обращения к задачам.
     [Fact]

@@ -1085,7 +1085,10 @@ describe('WorkspacePage: центр — страница фичи соседом
     clickNode(container, 'mockup-open-area');
     await act(async () => { vi.advanceTimersByTime(100); });
 
-    // Открываем ВТОРОЙ, другой макет (bar.html) — «чужой» файл, тоже после страницы.
+    // Возврат к сетке (5В: деталь на всю ширину, список закрыт) — открываем ВТОРОЙ,
+    // другой макет (bar.html) — «чужой» файл, тоже после страницы.
+    clickNode(container, 'plans-back-to-list');
+    await act(async () => { vi.advanceTimersByTime(100); });
     clickNode(container, 'mockup-row', 'docs/mockups/bar.html');
     await act(async () => { vi.advanceTimersByTime(100); });
     clickNode(container, 'mockup-open-area');
@@ -1235,10 +1238,13 @@ describe('WorkspacePage: центр — страница фичи соседом
     });
     await act(async () => { vi.advanceTimersByTime(100); });
 
-    // (1) Два файла подряд: foo.html, затем bar.html → последний (bar) выигрывает.
+    // (1) Два файла подряд: foo.html, возврат к сетке (5В), затем bar.html → последний
+    // (bar) выигрывает.
     clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
     await act(async () => { vi.advanceTimersByTime(100); });
     clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'plans-back-to-list');
     await act(async () => { vi.advanceTimersByTime(100); });
     clickNode(container, 'mockup-row', 'docs/mockups/bar.html');
     await act(async () => { vi.advanceTimersByTime(100); });

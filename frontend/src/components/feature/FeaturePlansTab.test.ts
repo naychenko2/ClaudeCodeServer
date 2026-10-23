@@ -1,6 +1,8 @@
-// Вкладка «Планы и макеты» (волна 3): порядок документов (cut → plan → consult),
-// hasText=false → «Текста пока нет», на 360 → экран документа, exists=false не открывает
-// файл, mockupsUnavailable='device', счётчик вкладки, ошибка загрузки текста + «Повторить».
+// Вкладка «Планы и макеты» (волна 4, вариант 5В): сетка карточек-превью (3 колонки,
+// на 360 — одна), клик по карточке — читалка/карточка на всю ширину с возвратом к сетке;
+// порядок документов (cut → plan → consult), hasText=false → «Текста пока нет»,
+// exists=false не открывает файл, mockupsUnavailable='device', счётчик вкладки,
+// ошибка загрузки текста + «Повторить».
 //
 // Окружение node (без jsdom): fakeDom (mount) + mock api.tasks.get (текст документа).
 
@@ -169,11 +171,11 @@ describe('FeaturePlansTab', () => {
     expect(textNodes(noText!).join('')).toContain('Текста пока нет');
   });
 
-  // === 3. На 360 (isMobile) клик по плану → экран документа с «‹ Все документы» ===
+  // === 3. На 360 (isMobile) клик по плану → полноширинный экран с «‹ Все документы» ===
   it('на 360 клик по плану → экран документа', async () => {
     const page = pageData({ plans: [plan({ title: 'Мой план' })] });
     const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: true }));
-    // Сначала список (кнопка возврата ещё нет).
+    // Сначала сетка (кнопка возврата ещё нет).
     expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-back-to-list')).toBeNull();
     click(container as FNode, 'plan-row');
     await flush();
@@ -301,23 +303,24 @@ describe('FeaturePlansTab', () => {
     expect(allEmpty, '«нет ничего» не показано').toBeNull();
   });
 
-  // === 6e. Авто-выбор нового плана (minor 1): смена последнего плана → деталь не пустеет ===
-  // selected инициализируется один раз (ленивый useState): если данные обновились и дедуп
-  // сменил последний plan, selectedPlan=null → деталь пустела бы («Выберите документ»). Эффект
-  // авто-выбирает первый доступный план. Мутация «убрать эффект» (selected не обновляется)
-  // краснеет: деталь остаётся пустой.
-  it('авто-выбор: смена последнего плана после обновления → деталь выбирает новый план (не пустеет)', async () => {
+  // === 6e. Возврат к сетке (вариант 5В): выбранный план заменён данными → снова сетка,
+  // пустой детали нет. Мутация «нет фолбэка на сетку» (рендерить деталь при selectedPlan=null)
+  // краснеет: тест не видит plans-grid.
+  it('выбранный план заменён → возврат к сетке (пустой детали нет)', async () => {
     const pageA = pageData({ plans: [plan({ taskId: 'a', title: 'План A' })] });
     const { root, container } = mount(createElement(FeaturePlansTab, { page: pageA, isMobile: false }));
-    // Начальный выбор: единственный план A открыт (читалка), деталь не пуста.
-    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-detail-empty'), 'деталь пуста в начале').toBeNull();
+    // Сетка — состояние по умолчанию; открыть план A — читалка.
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-grid'), 'сетки нет в начале').not.toBeNull();
+    click(container as FNode, 'plan-row');
+    await flush();
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plan-reader'), 'читалка плана A не открыта').not.toBeNull();
     // Обновление данных: план A заменён планом B (дедуп сменил последний plan).
     const pageB = pageData({ plans: [plan({ taskId: 'b', title: 'План B' })] });
     act(() => { root.render(createElement(FeaturePlansTab, { page: pageB, isMobile: false })); });
     await flush();
-    // Деталь не пустеет: авто-выбран новый план B (читалка открыта, не «Выберите документ»).
-    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-detail-empty'), 'деталь пустая после смены плана (minor 1)').toBeNull();
-    expect(findNodeByAttr(container as FNode, 'data-testid', 'plan-reader'), 'читалка плана B не открыта (minor 1)').not.toBeNull();
+    // Пустой детали нет: снова сетка.
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-grid'), 'после смены плана сетка не показана (6e)').not.toBeNull();
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plan-reader'), 'после смены плана читалка осталась (6e)').toBeNull();
   });
 
   // === 7. Счётчик вкладки: документы + живые макеты ===
@@ -374,5 +377,57 @@ describe('FeaturePlansTab', () => {
     await flush();
     // Повторный запрос ушёл.
     expect(mockTaskGet.calls.length).toBeGreaterThan(before);
+  });
+
+  // === 10. Вариант 5В: клик по карточке плана — читалка на всю ширину, возврата к
+  // колонке-списку 240 px нет; есть возврат к сетке. Мутация «клик не открывает читалку»
+  // (onSelect не ставит selected) краснеет: plan-reader не появляется. Мутация «оставить
+  // старую раскладку» (колонка 240 px) краснеет на hasNarrowColumn.
+  it('клик по карточке открывает читалку во всю ширину, возврат к сетке', async () => {
+    const page = pageData({
+      plans: [plan({ taskId: 'p1', role: 'cut', title: 'Разрез' }), plan({ taskId: 'p2', role: 'plan', title: 'План' })],
+      mockups: [mockup({ path: 'docs/mockups/m1.html', title: 'M1' })],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    // Сетка видна: обе группы карточек, читалки нет.
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-grid-docs'), 'сетки документов нет').not.toBeNull();
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-grid-mockups'), 'сетки макетов нет').not.toBeNull();
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plan-reader')).toBeNull();
+    // Клик — читалка на всю ширину: сетки и узкой колонки 240 px нет.
+    click(container as FNode, 'plan-row');
+    await flush();
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plan-reader'), 'читалка не открылась (5В)').not.toBeNull();
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-grid'), 'сетка не исчезла после клика').toBeNull();
+    const hasNarrowColumn = (function walk(n: FNode): boolean {
+      if (n.nodeType === 1) {
+        const props = reactProps(n);
+        if (props?.style && (props.style as Record<string, unknown>).width === 240) return true;
+        for (const c of n.childNodes) if (walk(c)) return true;
+      }
+      return false;
+    })(container as FNode);
+    expect(hasNarrowColumn, 'читалка осталась в колонке рядом со списком 240 px').toBe(false);
+    // Возврат к сетке.
+    click(container as FNode, 'plans-back-to-list');
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-grid'), 'после возврата сетки нет').not.toBeNull();
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plan-reader')).toBeNull();
+  });
+
+  // === 11. Вариант 5В: на 360 сетка в одну колонку, на десктопе — в три ===
+  // Мутация «одинаковые колонки на мобиле» (gridColumns не читает isMobile) краснеет:
+  // тест видит repeat(3, minmax(0, 1fr)) вместо 1fr.
+  it('на 360 сетка в одну колонку, на десктопе — в три', () => {
+    const page = pageData({ plans: [plan()], mockups: [mockup()] });
+    const colsOf = (root: FNode, testId: string): string | undefined => {
+      const node = findNodeByAttr(root, 'data-testid', testId);
+      expect(node, testId).not.toBeNull();
+      return (reactProps(node!)!.style as Record<string, unknown>).gridTemplateColumns as string | undefined;
+    };
+    const mobile = mount(createElement(FeaturePlansTab, { page, isMobile: true }));
+    expect(colsOf(mobile.container as FNode, 'plans-grid-docs'), 'на 360 сетка документов не в одну колонку').toBe('1fr');
+    expect(colsOf(mobile.container as FNode, 'plans-grid-mockups'), 'на 360 сетка макетов не в одну колонку').toBe('1fr');
+    const desktop = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    expect(colsOf(desktop.container as FNode, 'plans-grid-docs')).toBe('repeat(3, minmax(0, 1fr))');
+    expect(colsOf(desktop.container as FNode, 'plans-grid-mockups')).toBe('repeat(3, minmax(0, 1fr))');
   });
 });

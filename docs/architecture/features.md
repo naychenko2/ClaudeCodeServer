@@ -378,7 +378,7 @@ per-чат, по умолчанию выключена. Управление —
 **`ai.speechkit-tts.user`** — со STT-ролями рабочий ключ отвечает 403 (в лог идёт отдельная
 понятная строка). Конфиг — `Yandex:SpeechKit` в `appsettings.Local.json`; незнакомое имя
 голоса не глушит озвучку, а заменяется дефолтным с предупреждением в лог
-(`TtsVoiceCatalog` — белый список из 16 голосов и карта их амплуа).
+(`TtsVoiceCatalog` — белый список из 20 имён — 19 различимых голосов, `madirus` и `madi_ru` один голос, — и карта их амплуа).
 
 **Чей голос — решает [VoiceResolver](../../backend/ClaudeHomeServer/Services/Tts/VoiceResolver.cs),
 единственная точка склейки** (образец — `UserModelTierResolver.ModelFor`): голос персоны →

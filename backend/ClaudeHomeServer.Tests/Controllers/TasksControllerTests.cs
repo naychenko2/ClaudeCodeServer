@@ -849,10 +849,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var designId = design.GetProperty("id").GetString();
         var unroled = await CreateTaskAsync(new { title = "безролевая-задача", featureId = epicId });
         var unroledId = unroled.GetProperty("id").GetString();
+        // Членство чата в chats[] задаётся TaskId сессии при её создании (FeatureChatMembership
+        // строится по Session.TaskId); PUT с linkedSessionId на состав chats[] не влияет — его здесь нет.
         var designChatId = await CreatePersonalChatAsync(OwnerId, designId);
         var unroledChatId = await CreatePersonalChatAsync(OwnerId, unroledId);
-        await _client.PutAsJsonAsync($"/api/tasks/{designId}", new { linkedSessionId = designChatId });
-        await _client.PutAsJsonAsync($"/api/tasks/{unroledId}", new { linkedSessionId = unroledChatId });
 
         var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
             .Content.ReadFromJsonAsync<JsonElement>();

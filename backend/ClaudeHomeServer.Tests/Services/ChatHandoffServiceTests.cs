@@ -162,6 +162,20 @@ public class ChatHandoffServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Handoff_ПреемникНеНаследуетCostState_НовыйРазговорСНуля()
+    {
+        // Перенос — не ветка: у преемника своя csid и свой накопленный итог, снимок
+        // cost-state источника ему не нужен (иначе первый ход считался бы от чужой истории)
+        var (sut, _, chat) = BuildSut(new CountingRunner("записка"));
+        chat.LastCostState = new SessionCostState { ClaudeSessionId = "csid-source", TotalCostUsd = 3.5 };
+
+        var result = await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        result.Session.LastCostState.Should().BeNull();
+        result.Session.BranchedFromSessionId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Handoff_ВременныйЧат_ПредупреждениеВЧерновике_НовыйНеВременный()
     {
         var (sut, _, chat) = BuildSut(new CountingRunner("записка"));

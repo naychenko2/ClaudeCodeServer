@@ -23,19 +23,19 @@ const inputError = (e: unknown, fallback: string): string =>
 
 export function CacheWarnDialog({ onClose }: { onClose: () => void }) {
   // Подписка на стор (M2): если /auth/me дошёл после открытия диалога — поля
-  // обновляются; как только пользователь правил их руками, пересев прекращается,
-  // чтобы поздний засев не затёр его ввод.
+  // обновляются; как только пользователь правил поле руками, оно больше не пересевается.
+  // Флаг пофайловый (F-3r2): правка одного поля не блокирует поздний засев другого.
   const server = useCacheWarnThresholds();
   const [warn1h, setWarn1h] = useState(String(server?.warn1hMin ?? DEF_1H));
   const [warn5m, setWarn5m] = useState(String(server?.warn5mMin ?? DEF_5M));
-  const edited = useRef(false); // «правил сам» — с первой ручной правки поля не пересевать
+  const edited1h = useRef(false); // «правил сам» по часовому полю
+  const edited5m = useRef(false); // «правил сам» по 5-минутному полю
   useEffect(() => {
-    if (edited.current) return;
-    setWarn1h(String(server?.warn1hMin ?? DEF_1H));
-    setWarn5m(String(server?.warn5mMin ?? DEF_5M));
+    if (!edited1h.current) setWarn1h(String(server?.warn1hMin ?? DEF_1H));
+    if (!edited5m.current) setWarn5m(String(server?.warn5mMin ?? DEF_5M));
   }, [server]);
-  const setManual1h = (v: string) => { edited.current = true; setWarn1h(v); };
-  const setManual5m = (v: string) => { edited.current = true; setWarn5m(v); };
+  const setManual1h = (v: string) => { edited1h.current = true; setWarn1h(v); };
+  const setManual5m = (v: string) => { edited5m.current = true; setWarn5m(v); };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

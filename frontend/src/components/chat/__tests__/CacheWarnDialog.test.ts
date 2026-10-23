@@ -148,11 +148,6 @@ describe('CacheWarnDialog: поля и дефолты', () => {
     });
     return out;
   };
-  const firstInput = (): never => {
-    let hit: never | null = null;
-    walk(body(), (x) => { if (!hit && (x as { nodeName: string }).nodeName === 'INPUT') hit = x; });
-    return hit!;
-  };
   const buttonByLabel = (label: string): never => {
     let hit: never | null = null;
     walk(body(), (x) => {
@@ -160,8 +155,11 @@ describe('CacheWarnDialog: поля и дефолты', () => {
     });
     return hit!;
   };
-  const typeInto = (v: string) => {
-    const props = reactProps(firstInput());
+  const typeInto = (v: string) => typeIntoIdx(0, v);
+  const typeIntoIdx = (i: number, v: string) => {
+    const inputs: never[] = [];
+    walk(body(), (x) => { if ((x as { nodeName: string }).nodeName === 'INPUT') inputs.push(x as never); });
+    const props = reactProps(inputs[i]);
     (props!.onChange as (e: { target: { value: string } }) => void)({ target: { value: v } });
   };
   const visibleText = (): string => textNodes(body()).join(' ');
@@ -209,12 +207,22 @@ describe('CacheWarnDialog: поля и дефолты', () => {
     root.unmount();
   });
 
-  it('ручная правка поля — поздний засев её не затирает (флаг «правил сам»)', () => {
+  it('флаг «правил сам» пофайловый: правка часового не затирается, 5-минутный пересевается (F-3r2)', () => {
     setCacheWarnThresholdsFromServer(null);
     const { root } = openDialog();
-    act(() => typeInto('12'));
+    act(() => typeInto('12')); // правил только часовое поле
     act(() => setCacheWarnThresholdsFromServer({ warn1hMin: 7, warn5mMin: 3 }));
-    expect(inputValues()).toEqual(['12', '1']);
+    // правленное поле сохранено, незатронутое — поздний засев применил
+    expect(inputValues()).toEqual(['12', '3']);
+    root.unmount();
+  });
+
+  it('и наоборот: правка 5-минутного не блокирует поздний засев часового (F-3r2)', () => {
+    setCacheWarnThresholdsFromServer(null);
+    const { root } = openDialog();
+    act(() => typeIntoIdx(1, '2')); // правил только 5-минутное поле
+    act(() => setCacheWarnThresholdsFromServer({ warn1hMin: 7, warn5mMin: 3 }));
+    expect(inputValues()).toEqual(['7', '2']);
     root.unmount();
   });
 
@@ -239,6 +247,25 @@ describe('CacheWarnDialog: поля и дефолты', () => {
     await act(async () => { (reactProps(buttonByLabel('Сохранить'))!.onClick as () => void)(); });
     expect(visibleText()).toContain('1–59');
     expect(visibleText()).not.toContain('Не удалось сохранить');
+    root.unmount();
+  });
+
+  it('общий сбой (не-400): показывается фолбэк, а не e.message (F-3r2)', async () => {
+    setCacheWarnThresholdsFromServer(null);
+    mockRequest = () => Promise.reject(new Error('connection refused'));
+    const { root } = openDialog();
+    await act(async () => { (reactProps(buttonByLabel('Сохранить'))!.onClick as () => void)(); });
+    expect(visibleText()).toContain('Не удалось сохранить');
+    expect(visibleText()).not.toContain('connection refused');
+    root.unmount();
+  });
+
+  it('logout: сброс стора — до нового /me работают дефолты (F-3r2)', () => {
+    setCacheWarnThresholdsFromServer({ warn1hMin: 10, warn5mMin: 2 }); // прежний владелец
+    // logout и cc-unauthorized в App.tsx зовут ровно это до ответа следующего /me
+    setCacheWarnThresholdsFromServer(null);
+    const { root } = openDialog();
+    expect(inputValues()).toEqual(['5', '1']);
     root.unmount();
   });
 });

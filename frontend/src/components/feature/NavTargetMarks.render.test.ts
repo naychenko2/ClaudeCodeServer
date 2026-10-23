@@ -8,7 +8,8 @@
 //   C — чат живой,  задача ЗАКРЫТА   → только «задача закрыта».
 // Разведённые строки ловят оба дефекта по отдельности (A/B/C не дают «всё или ничего»).
 //
-// Места: Хронология (исполнители · шаги · витки), Чаты (живые · архивные), Задачи, События,
+// Места: Хронология (исполнители этапов · меню карточек «Производства», W4-2F3),
+// Чаты (живые · архивные), Задачи, События,
 // Статистика (кнопки задач · «Дольше всех» · разрез), Планы (читалка · макет), тревога
 // страницы (FeaturePageAlert), попап/панель (FeatureRunView), шторка (FeatureBannerSheet).
 //
@@ -185,29 +186,54 @@ afterEach(() => {
 });
 
 // ═══ Хронология ══════════════════════════════════════════════════════════════
+// «Производство» — лента карточек (W4-2F3): строки исполнителей остаются в других
+// этапах, переходы шага живут в меню карточки («старт · чат · задача») — пометки
+// проверяются там.
 describe('пометки: Хронология', () => {
-  it('исполнители этапа: A / B / C из данных run (без marks — из самого агрегата)', () => {
-    const c = render(createElement(FeatureTimelineTab, { run: mkRun() }));
-    const rows = byId(c, 'timeline-executor');
+  const EXEC = [
+    ex('t-a', 'Ш1', 'c-live', false, 'running'),
+    ex('t-b', 'Ш2', 'c-arch', true, 'running'),
+    ex('t-c', 'Ш3', 'c-live', false, 'done'),
+  ];
+
+  it('исполнители этапа «Ревью»: A / B / C из данных run (без marks — из самого агрегата)', () => {
+    const run = mkRun({
+      stages: [
+        { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: ['t-a', 't-b', 't-c'], rounds: [],
+          firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
+        { key: 'review', state: 'active', tone: 'run', passes: 0, taskIds: [], rounds: [],
+          firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
+      ],
+    });
+    const c = render(createElement(FeatureTimelineTab, { run }));
+    // «Производство» раскрыто (текущий): строк исполнителей там нет — лента карточек,
+    // по одной карточке на цепочку.
+    const prodBody = byId(c, 'timeline-stage-body-prod')[0];
+    expect(byId(prodBody, 'timeline-executor').length).toBe(0);
+    expect(byId(prodBody, 'prod-card-Ш1').length + byId(prodBody, 'prod-card-Ш2').length + byId(prodBody, 'prod-card-Ш3').length).toBe(3);
+    // «Ревью» открываем кликом (один этап за раз) — строки исполнителей здесь.
+    act(() => { (reactProps(byId(c, 'timeline-stage-header-review')[0] as never)!.onClick as () => void)(); });
+    const rows = byId(byId(c, 'timeline-stage-body-review')[0], 'timeline-executor');
     expect(rows.length).toBe(3);
     expectFlags(rows[0], A, 'исполнитель Ш1');
     expectFlags(rows[1], B, 'исполнитель Ш2');
     expectFlags(rows[2], C, 'исполнитель Ш3');
   });
 
-  it('шаги: A / B / C (чат шага — chain.chatId, задача шага — первая в цепочке)', () => {
+  it('меню карточки: «чат» помечен «в архиве» (чат шага архивный в агрегате)', () => {
     const c = render(createElement(FeatureTimelineTab, { run: mkRun() }));
-    expectFlags(byId(c, 'feature-step-Ш1')[0], A, 'шаг Ш1');
-    expectFlags(byId(c, 'feature-step-Ш2')[0], B, 'шаг Ш2');
-    expectFlags(byId(c, 'feature-step-Ш3')[0], C, 'шаг Ш3');
+    // Ш2: чат шага c-arch — chatArchived исполнителя в агрегате.
+    act(() => { (reactProps(byId(c, 'prod-code-Ш2')[0] as never)!.onClick as () => void)(); });
+    const body = (globalThis as { document: { body: never } }).document.body as N;
+    expect(textOf(byId(body, 'prod-menu-chat')[0]).includes('в архиве'), 'Ш2: видимое «в архиве»').toBe(true);
   });
 
-  it('витки раскрытого шага: виток 1 → B (чат в архиве), виток 2 → C (задача закрыта)', () => {
+  it('меню карточки: «задача» помечена «закрыта» (задача шага done)', () => {
     const c = render(createElement(FeatureTimelineTab, { run: mkRun() }));
-    const header = byId(c, 'feature-step-header-Ш1')[0];
-    act(() => { (reactProps(header as never)!.onClick as () => void)(); });
-    expectFlags(byId(c, 'feature-round-1')[0], B, 'виток 1');
-    expectFlags(byId(c, 'feature-round-2')[0], C, 'виток 2');
+    // Ш3: задача шага t-c — status done → «закрыта».
+    act(() => { (reactProps(byId(c, 'prod-code-Ш3')[0] as never)!.onClick as () => void)(); });
+    const body = (globalThis as { document: { body: never } }).document.body as N;
+    expect(textOf(byId(body, 'prod-menu-task')[0]).includes('закрыта'), 'Ш3: видимое «закрыта»').toBe(true);
   });
 
   it('marks из страницы (с chats) перекрывают расчёт по агрегату: чат без executors помечен по chats[]', () => {
@@ -215,7 +241,9 @@ describe('пометки: Хронология', () => {
     const run = mkRun({ stepChains: [chain('Ш1', 't-a', 'c-extra')] });
     const marks = buildNavMarks(run, [chatLink('c-extra', 't-a', true)]);
     const c = render(createElement(FeatureTimelineTab, { run, marks }));
-    expect(flagsOf(byId(c, 'feature-step-Ш1')[0]).chat).toBe('archived');
+    act(() => { (reactProps(byId(c, 'prod-code-Ш1')[0] as never)!.onClick as () => void)(); });
+    const body = (globalThis as { document: { body: never } }).document.body as N;
+    expect(textOf(byId(body, 'prod-menu-chat')[0]).includes('в архиве'), 'меню: «в архиве» по marks страницы').toBe(true);
   });
 });
 

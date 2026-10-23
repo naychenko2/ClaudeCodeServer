@@ -3,16 +3,16 @@
 // Чистые функции (имя/состояние/границы/«≈»/точка/линия/задачи/минуты/статус/плашка;
 // Ф2b: вердикт витка, статус/тон/модель шага, пустое состояние витков) — в node, без DOM.
 // Рендер-тесты (fakeDom): порядок 7 этапов, раскрытие одного этапа, исполнители
-// (roleLabel + чип модели), «чата нет», пустые состояния, тач-цель 40 на 360;
-// Ф2b: шаги (шапка, «чат · задача»), раскрытие одного шага, витки (кто/вердикт/находки,
-// «чат · задача» ревью), пустые состояния («ещё не ревьюили», «нет исполнителя»,
-// «ревью идёт», «Шагов пока нет»), честная деградация без stepRef.
+// (roleLabel + чип модели), «чата нет», пустые состояния, тач-цель 40 на 360.
+// «Производство» (W4-2F3): лента карточек FeatureProdCardsView вместо «исполнителей/
+// шагов» — одна карточка на шаг, «сейчас» над текущей; при пустой ленте — существующее
+// пустое состояние «Шагов пока нет». Чистые функции Ф2b (вердикт/статус/тон/модель)
+// остаются: их читает лента.
 //
 // Мутации (в отчёте): (1) переставить этапы в run.stages → «порядок этапов» краснеет;
-// (2) убрать «≈» из stageDurationLabel → «длительность ≈» краснеет;
-// (3) раскрытие двух шагов одновременно (Set вместо одного ключа) → «один шаг за раз» краснеет;
-// (4) убрать подпись вердикта из roundVerdictView → «виток: вердикт» краснеет;
-// (5) игнорировать reviewChatId (всегда рисовать «чат») → «виток без чата» краснеет.
+// (2) убрать «≈» из stageDurationLabel → «длительность ≈» краснеет; (3) не передать run
+// в FeatureProdCardsView (не дать stepChains) → «карточка Ш1» краснеет; (4) не передать
+// isMobile в ленту → «360: поле касания 40» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -400,39 +400,53 @@ describe('FeatureTimelineTab: рендер', () => {
     expect(findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review')).toBeNull();
   });
 
-  // === 5. Исполнители: roleLabel + чип модели + «чата нет» ===
-  it('исполнитель: имя персоны, роль (roleLabel: step+back → «Ш1 · бэк»), чип модели', () => {
-    const c = renderTab(mkRun(fullStages()));
-    const row = findNodeByAttr(c, 'data-testid', 'timeline-executor');
+  // === 5. Исполнители этапов кроме «Производства»: roleLabel + чип модели + «чата нет» ===
+  // «Производство» — лента карточек (W4-2F3), ExecutorRow остаётся в других этапах:
+  // coverage здесь, через этап «Ревью».
+  function openStage(c: FNodeLike, key: string): FNodeLike {
+    const header = findNodeByAttr(c, 'data-testid', `timeline-stage-header-${key}`)!;
+    act(() => { (reactProps(header)!.onClick as () => void)(); });
+    return findNodeByAttr(c, 'data-testid', `timeline-stage-body-${key}`)!;
+  }
+
+  it('исполнитель этапа «Ревью»: имя персоны, роль (roleLabel: review → «ревью»), чип модели', () => {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ personaId: 'p1', taskId: 't-rev', taskRole: 'review', status: 'running', chatId: 'chat-r', modelLabel: 'Opus', modelFull: 'Opus 4.5' })];
+    const c = renderTab(mkRun(stages, { reviews: [{ id: 't-rev', title: 'Ревью', status: 'inProgress' }] }));
+    const body = openStage(c, 'review');
+    const row = findNodeByAttr(body, 'data-testid', 'timeline-executor');
     expect(row).not.toBeNull();
     const t = textNodes(row!).join('');
     expect(t).toContain('Денис');
-    expect(t).toContain('Ш1 · бэк');
+    expect(t).toContain('ревью');
     // Чип модели.
-    const chip = findNodeByAttr(c, 'data-testid', 'timeline-model-chip');
+    const chip = findNodeByAttr(body, 'data-testid', 'timeline-model-chip');
     expect(chip).not.toBeNull();
     expect(textNodes(chip!).join('')).toBe('Opus');
   });
 
   it('исполнитель без чата (chatId == null) → «чата нет» (без мёртвой ссылки)', () => {
     const stages = fullStages();
-    // prod: исполнитель без chatId; задача t2 в run со статусом done.
-    stages[2]!.executors = [mkExec({ personaId: 'p1', taskId: 't2', taskRole: 'step', stepRef: 'Ш2', lane: 'front', status: 'done', chatId: null })];
-    const c = renderTab(mkRun(stages, { steps: [{ id: 't2', title: 'Шаг 2', status: 'done' }] }));
-    const noChat = findNodeByAttr(c, 'data-testid', 'nav-target-no-chat');
+    // review: исполнитель без chatId; задача t2 в run со статусом done.
+    stages[3]!.executors = [mkExec({ personaId: 'p1', taskId: 't2', taskRole: 'review', status: 'done', chatId: null })];
+    const c = renderTab(mkRun(stages, { reviews: [{ id: 't2', title: 'Ревью 2', status: 'done' }] }));
+    const body = openStage(c, 'review');
+    const noChat = findNodeByAttr(body, 'data-testid', 'nav-target-no-chat');
     expect(noChat).not.toBeNull();
     expect(textNodes(noChat!).join('')).toBe('чата нет');
     // R1 major: taskClosed={task?.status === 'done'} (один источник: статус задачи) →
     // кнопка задачи показывает «закрыта».
-    const taskBtn = findNodeByAttr(c, 'data-testid', 'nav-target-task');
+    const taskBtn = findNodeByAttr(body, 'data-testid', 'nav-target-task');
     expect(taskBtn, 'кнопка задачи при taskId != null').not.toBeNull();
     expect(textNodes(taskBtn!).join('')).toContain('закрыта');
   });
 
   it('исполнитель с чатом → кнопка «чат» (NavTargetButton)', () => {
-    const c = renderTab(mkRun(fullStages()));
-    // prod-исполнитель с chatId → кнопка «чат» в конкретной строке (не подстрока по всему дереву).
-    const pair = findNodeByAttr(c, 'data-testid', 'nav-target-pair');
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ personaId: 'p1', taskId: 't-rev', taskRole: 'review', status: 'running', chatId: 'chat-r' })];
+    const c = renderTab(mkRun(stages, { reviews: [{ id: 't-rev', title: 'Ревью', status: 'inProgress' }] }));
+    // «чат» в конкретной строке раскрытого этапа (не подстрока по всему дереву).
+    const pair = findNodeByAttr(openStage(c, 'review'), 'data-testid', 'nav-target-pair');
     expect(pair, 'NavTargetPair не найден').not.toBeNull();
     const pairText = textNodes(pair!).join('');
     expect(pairText).toContain('чат');
@@ -592,9 +606,9 @@ describe('roundsAreaLabel', () => {
   });
 });
 
-// === Ф2b: рендер — шаги и витки ===
+// === W4-2F3: лента «Производства» — подключение FeatureProdCardsView к вкладке ===
 
-describe('FeatureTimelineTab: Ф2b — шаги и витки', () => {
+describe('FeatureTimelineTab: лента «Производства»', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -610,203 +624,69 @@ describe('FeatureTimelineTab: Ф2b — шаги и витки', () => {
     vi.restoreAllMocks();
   });
 
-  // === 1. Строка шага: код, название, исполнитель, roleLabel, статус, «чат · задача» ===
-  it('шаг: код stepRef, название, исполнитель, roleLabel «Ш1 · бэк», статус, пара «чат · задача»', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain()] }));
-    const row = findNodeByAttr(c, 'data-testid', 'feature-step-Ш1');
-    expect(row, 'строка шага Ш1').not.toBeNull();
-    const t = textNodes(row!).join('');
-    expect(t).toContain('Ш1');
-    expect(t).toContain('Модель шаблона');
-    expect(t).toContain('Денис');
-    expect(t).toContain('Ш1 · бэк');
-    expect(t).toContain('принят');
-    // «чат · задача» шага: чат (chatId есть) + задача (taskIds[0]).
-    const pair = findNodeByAttr(row!, 'data-testid', 'nav-target-pair');
-    expect(pair, 'пара «чат · задача» шага').not.toBeNull();
-    expect(textNodes(pair!).join('')).toContain('чат');
-    expect(textNodes(pair!).join('')).toContain('задача');
+  // Фикстура обычной фичи: этап «Производство» (fullStages) + начатый шаг Ш1 с витком
+  // «принят» (Глеб). Карточка строится из stepChains — тот же вход, что у модели.
+  function prodRun(over: Partial<FeatureRun> = {}): FeatureRun {
+    return mkRun(fullStages(), {
+      steps: [{ id: 't-s1', title: 'Модель шаблона', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }],
+      stepChains: [mkChain({ rounds: [mkRound({ n: 1, verdict: 'accepted', personaId: 'p2', reviewChatId: 'chat-r1' })] })],
+      ...over,
+    });
+  }
+
+  // === 1. Одна карточка на шаг: дубля «исполнители, потом шаги» нет ===
+  it('лента в теле «Производства»: карточка Ш1 с цепочкой; строк «исполнитель» и «шаг» нет', () => {
+    const c = renderTab(prodRun());
+    const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
+    expect(findNodeByAttr(body, 'data-testid', 'prod-lane'), 'лента в теле этапа «Производство»').not.toBeNull();
+    expect(findNodeByAttr(body, 'data-testid', 'prod-card-Ш1'), 'карточка шага Ш1').not.toBeNull();
+    // Задача видна один раз: ни строки исполнителя, ни строки шага.
+    expect(findNodeByAttr(body, 'data-testid', 'timeline-executor'), 'строки «исполнитель» в «Производстве» нет').toBeNull();
+    expect(findNodeByAttr(body, 'data-testid', 'feature-step-Ш1'), 'строки «шаг» нет').toBeNull();
+    // Цепочка «работа → принят» — узлы карточки.
+    expect(findNodeByAttr(body, 'data-testid', 'prod-chain'), 'цепочки карточки').not.toBeNull();
+    expect(textNodes(findNodeByAttr(body, 'data-testid', 'prod-status')!).join('')).toBe('принят');
   });
 
-  // === 2. Чип модели шага: из исполнителя стадии с тем же stepRef ===
-  it('чип модели шага — из исполнителя стадии с тем же stepRef', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain()] }));
-    // fullStages: prod-исполнитель stepRef 'Ш1', modelLabel 'Opus' → чип на строке шага.
-    const row = findNodeByAttr(c, 'data-testid', 'feature-step-Ш1')!;
-    const chip = findNodeByAttr(row, 'data-testid', 'timeline-model-chip');
-    expect(chip, 'чип модели на строке шага').not.toBeNull();
-    expect(textNodes(chip!).join('')).toBe('Opus');
+  // === 2. Лента видит тот же run: «сейчас» над текущей карточкой ===
+  it('«сейчас» — только над текущей карточкой (run.now доходит до ленты)', () => {
+    const c = renderTab(prodRun({ now: [{ taskId: 't-s1', stage: 'prod', title: 'Модель шаблона', stepRef: 'Ш1' }] }));
+    const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
+    expect(findNodeByAttr(body, 'data-testid', 'prod-nowline'), 'строка «сейчас»').not.toBeNull();
+    // Без run.now — строки «сейчас» нет (сравнение с обычной фикстурой).
+    const plain = renderTab(prodRun());
+    expect(findNodeByAttr(findNodeByAttr(plain, 'data-testid', 'timeline-stage-body-prod')!, 'data-testid', 'prod-nowline'), 'без run.now строки нет').toBeNull();
   });
 
-  it('шаг без совпадения по stepRef → чипа модели нет (честная деградация)', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ stepRef: 'Ш9', title: 'Шаг девять' })] }));
-    const row = findNodeByAttr(c, 'data-testid', 'feature-step-Ш9')!;
-    expect(findNodeByAttr(row, 'data-testid', 'timeline-model-chip'), 'чипа нет').toBeNull();
-  });
-
-  // === 3. Раскрытие: один шаг за раз ===
-  it('один шаг раскрыт за раз: клик по второму схлопывает первый; повторный клик — схлопывает', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [
-      mkChain(),
-      mkChain({ stepRef: 'Ш2', title: 'Шаг два', taskIds: ['t-s2'], chatId: 'chat-s2' }),
-    ] }));
-    // Сначала ни один шаг не раскрыт.
-    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш1'), 'витков Ш1 нет').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш2'), 'витков Ш2 нет').toBeNull();
-    // Раскрываем Ш1.
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
-    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш1'), 'Ш1 раскрыт').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш2'), 'Ш2 ещё закрыт').toBeNull();
-    // Раскрываем Ш2: Ш1 схлопывается, Ш2 раскрывается (один за раз).
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш2')!)!.onClick as () => void)(); });
-    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш2'), 'Ш2 раскрыт').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш1'), 'Ш1 схлопнут').toBeNull();
-    // aria-expanded: Ш2 — true, Ш1 — false.
-    expect(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш2')!.getAttribute('aria-expanded')).toBe('true');
-    expect(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!.getAttribute('aria-expanded')).toBe('false');
-    // Повторный клик по Ш2 — схлопывает (все закрыты).
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш2')!)!.onClick as () => void)(); });
-    expect(findNodeByAttr(c, 'data-testid', 'feature-step-tours-Ш2'), 'Ш2 схлопнут').toBeNull();
-  });
-
-  // === 4. Виток: номер, кто, вердикт, находки, «чат · задача» ревью ===
-  it('виток: «виток 1», ревьюер, вердикт «принят», находки (reason), «чат · задача» ревью', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
-      mkRound({ n: 1, verdict: 'accepted', personaId: 'p2', reason: 'нет проверки прав' }),
-    ] })] }));
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
-    const round = findNodeByAttr(c, 'data-testid', 'feature-round-1');
-    expect(round, 'строка витка 1').not.toBeNull();
-    const t = textNodes(round!).join('');
-    expect(t).toContain('виток 1');
-    expect(t).toContain('Глеб');
-    expect(t).toContain('принят');
-    expect(t).toContain('нет проверки прав');
-    // «чат · задача» ревью этого витка.
-    const pair = findNodeByAttr(round!, 'data-testid', 'nav-target-pair');
-    expect(pair, 'пара «чат · задача» витка').not.toBeNull();
-    expect(textNodes(pair!).join('')).toContain('чат');
-    expect(textNodes(pair!).join('')).toContain('задача');
-  });
-
-  it('виток: вердикты «вернул» (warning) и «принят с замечаниями» — подписи по-русски', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
-      mkRound({ n: 1, verdict: 'returned', reason: 'сырой hex' }),
-      mkRound({ n: 2, verdict: 'accepted_with_remarks' }),
-    ] })] }));
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
-    const r1 = findNodeByAttr(c, 'data-testid', 'feature-round-1')!;
-    expect(textNodes(r1).join('')).toContain('вернул');
-    const r2 = findNodeByAttr(c, 'data-testid', 'feature-round-2')!;
-    expect(textNodes(r2).join('')).toContain('принят с замечаниями');
-  });
-
-  // === 4а. Цели перехода: шаг (chatId, taskIds[0]) и виток (reviewChatId, reviewTaskId) ===
-  // Мутация: подменить id (чат ← taskIds[0], задача ← chatId) → openChat/openTask
-  // получают чужой id → краснеет.
-  it('шаг: клик «чат» → openChatById(chain.chatId); клик «задача» → openTaskInSection(taskIds[0])', async () => {
-    const chain = mkChain({ chatId: 'chat-s1', taskIds: ['t-s1', 't-s1b'] });
-    const c = renderTab(mkRun(fullStages(), { stepChains: [chain] }));
-    const row = findNodeByAttr(c, 'data-testid', 'feature-step-Ш1')!;
-    const pair = findNodeByAttr(row, 'data-testid', 'nav-target-pair')!;
-    // «чат» → openChatById('chat-s1') (не taskIds[0]).
-    const chatBtn = findNodeByAttr(pair, 'data-testid', 'nav-target-chat')!;
-    await act(async () => { (reactProps(chatBtn)!.onClick as () => void)(); });
-    expect(mockOpenChat.calls, 'цель «чат» = chain.chatId').toEqual(['chat-s1']);
-    // «задача» → openTaskInSection({ id: 't-s1' }) (первая задача цепочки, не вторая).
-    const taskBtn = findNodeByAttr(pair, 'data-testid', 'nav-target-task')!;
-    await act(async () => { (reactProps(taskBtn)!.onClick as () => void)(); });
-    expect(mockOpenTask.calls, 'цель «задача» = taskIds[0]').toEqual([{ id: 't-s1' }]);
-  });
-
-  it('виток: клик «чат» → openChatById(reviewChatId); клик «задача» → openTaskInSection(reviewTaskId)', async () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
-      mkRound({ n: 1, verdict: 'accepted', reviewChatId: 'chat-r1', reviewTaskId: 't-r1' }),
-    ] })] }));
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
-    const round = findNodeByAttr(c, 'data-testid', 'feature-round-1')!;
-    const pair = findNodeByAttr(round, 'data-testid', 'nav-target-pair')!;
-    // «чат» → openChatById('chat-r1') (reviewChatId).
-    const chatBtn = findNodeByAttr(pair, 'data-testid', 'nav-target-chat')!;
-    await act(async () => { (reactProps(chatBtn)!.onClick as () => void)(); });
-    expect(mockOpenChat.calls, 'цель «чат» = reviewChatId').toEqual(['chat-r1']);
-    // «задача» → openTaskInSection({ id: 't-r1' }) (reviewTaskId).
-    const taskBtn = findNodeByAttr(pair, 'data-testid', 'nav-target-task')!;
-    await act(async () => { (reactProps(taskBtn)!.onClick as () => void)(); });
-    expect(mockOpenTask.calls, 'цель «задача» = reviewTaskId').toEqual([{ id: 't-r1' }]);
-  });
-
-  // Мутация (5): игнорировать reviewChatId (всегда рисовать «чат») → кнопка «чат»
-  // появляется у витка без чата → краснеет.
-  it('виток без чата (reviewChatId = null): кнопки «чат» нет, «чата нет», задача есть', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
-      mkRound({ n: 1, verdict: 'running', reviewChatId: null }),
-    ] })] }));
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
-    const round = findNodeByAttr(c, 'data-testid', 'feature-round-1')!;
-    const pair = findNodeByAttr(round, 'data-testid', 'nav-target-pair')!;
-    expect(findNodeByAttr(pair, 'data-testid', 'nav-target-chat'), 'кнопки «чат» нет').toBeNull();
-    expect(textNodes(pair).join('')).toContain('чата нет');
-    expect(findNodeByAttr(pair, 'data-testid', 'nav-target-task'), 'кнопка «задача» есть').not.toBeNull();
-  });
-
-  // === 5. Пустые состояния ===
-  it('шагов нет (stepChains пуст) → «Шагов пока нет»', () => {
+  // === 3. Пустая лента — существующее пустое состояние вкладки ===
+  it('шагов нет (stepChains пуст) → «Шагов пока нет», ленты нет', () => {
     const c = renderTab(mkRun(fullStages(), { stepChains: [] }));
-    const empty = findNodeByAttr(c, 'data-testid', 'feature-steps-empty');
+    const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
+    const empty = findNodeByAttr(body, 'data-testid', 'feature-steps-empty');
     expect(empty, 'пустое состояние «Шагов пока нет»').not.toBeNull();
     expect(textNodes(empty!).join('')).toContain('Шагов пока нет');
+    expect(findNodeByAttr(body, 'data-testid', 'prod-lane'), 'ленты нет').toBeNull();
   });
 
   it('stepChains нет в данных (старая фича) → «Шагов пока нет» (честная деградация)', () => {
     const c = renderTab(mkRun(fullStages()));
-    const empty = findNodeByAttr(c, 'data-testid', 'feature-steps-empty');
+    const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
+    const empty = findNodeByAttr(body, 'data-testid', 'feature-steps-empty');
     expect(empty, 'пустое состояние «Шагов пока нет»').not.toBeNull();
+    expect(findNodeByAttr(body, 'data-testid', 'prod-lane'), 'ленты нет').toBeNull();
   });
 
-  it('шаг без исполнителя и без витков → «нет исполнителя»', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ stepRef: 'Ш1', personaId: null })] }));
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
-    const empty = findNodeByAttr(c, 'data-testid', 'feature-step-rounds-empty');
-    expect(empty, '«нет исполнителя»').not.toBeNull();
-    expect(textNodes(empty!).join('')).toBe('нет исполнителя');
-  });
-
-  it('шаг с исполнителем, витков нет → «ещё не ревьюили»', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ stepRef: 'Ш1', personaId: 'p1' })] }));
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
-    const empty = findNodeByAttr(c, 'data-testid', 'feature-step-rounds-empty');
-    expect(empty, '«ещё не ревьюили»').not.toBeNull();
-    expect(textNodes(empty!).join('')).toBe('ещё не ревьюили');
-  });
-
-  it('последний виток идёт → «ревью идёт»', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ rounds: [
-      mkRound({ n: 1, verdict: 'returned' }),
-      mkRound({ n: 2, verdict: 'running' }),
-    ] })] }));
-    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!)!.onClick as () => void)(); });
-    const running = findNodeByAttr(c, 'data-testid', 'feature-step-review-running');
-    expect(running, '«ревью идёт»').not.toBeNull();
-    expect(textNodes(running!).join('')).toBe('ревью идёт');
-  });
-
-  // === 6. Честная деградация: старый шаг без stepRef ===
-  it('шаг без stepRef (старая фича): кода нет, название и «чат · задача» — как есть', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain({ stepRef: '', title: 'Старый шаг' })] }));
-    const row = findNodeByAttr(c, 'data-testid', 'feature-step-no-ref');
-    expect(row, 'строка шага без stepRef').not.toBeNull();
-    const t = textNodes(row!).join('');
-    expect(t).toContain('Старый шаг');
-    // Код-чип не нарисован (нет stepRef — не выдумываем).
-    expect(findNodeByAttr(row!, 'data-testid', 'feature-step-code'), 'кода нет').toBeNull();
-  });
-
-  // === 7. 360: тач-цель шага ≥ 44 ===
-  it('на 360 кнопка-шаг — minHeight 44', () => {
-    const c = renderTab(mkRun(fullStages(), { stepChains: [mkChain()] }), true);
-    const header = findNodeByAttr(c, 'data-testid', 'feature-step-header-Ш1')!;
-    const st = (header as unknown as { style: Record<string, string> }).style;
-    expect(st.minHeight).toBe('44px');
+  // === 4. 360: isMobile доходит до ленты — поле касания узла 40 px ===
+  it('360: узел ленты — невидимое поле касания 40 px, видимая высота 20 px', () => {
+    const c = renderTab(prodRun(), true);
+    const node = findNodeByAttr(c, 'data-testid', 'prod-node');
+    expect(node, 'узел-кнопка с чатом').not.toBeNull();
+    const st = (reactProps(node as never)!.style ?? {}) as Record<string, string>;
+    expect(st.lineHeight).toBe('20px');
+    // Обёртка-поле: 40 px высоты, отрицательные отступы — раскладка не смещается.
+    const wrap = (node as { parentNode: never }).parentNode;
+    const ws = (reactProps(wrap)!.style ?? {}) as Record<string, string>;
+    expect(ws.height).toBe(40);
+    expect(ws.margin).toBe('-10px 0');
   });
 });

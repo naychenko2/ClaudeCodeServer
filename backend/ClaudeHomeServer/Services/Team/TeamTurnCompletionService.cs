@@ -63,14 +63,14 @@ internal sealed class TeamTurnCompletionService
     private readonly ILogger<TeamTurnCompletionService> _log;
     private readonly TeamDecisionService _decision;
     // Реестр задач — для чтения паузы фичи при пробуждении по докладу (W4-HOLD-I, контракт
-    // §1 :183). Зависимость обязательная (R-HOLD-I, минор): раньше реестр был nullable и
-    // забытый аргумент тихо выключал гейт паузы; теперь параметр обязателен, а недостающий
-    // реестр — fail-fast в самом гейте, а не молчаливое «паузы нет».
+    // §1 :183). Параметр nullable (R-HOLD-I2): ядро передаёт null там, где реестр не подключён,
+    // и гейт CI dotnet build -warnaserror (ci.yml:54) не допускает non-nullable. Смысл R-HOLD-I
+    // сохранён: недостающий реестр — не молчаливое «паузы нет», а fail-fast в самом гейте.
     private readonly TaskManager? _tasks;
 
     internal TeamTurnCompletionService(SessionManager sessions, ITeamSessionDirectory dir,
         ITeamHistoryStore history, ITeamRunState run, TeamDecisionService decision,
-        ILogger<TeamTurnCompletionService> log, TaskManager tasks)
+        ILogger<TeamTurnCompletionService> log, TaskManager? tasks)
     {
         _sessions = sessions;
         _dir = dir;

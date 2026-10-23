@@ -212,7 +212,10 @@ public partial class SessionManagerTests : IDisposable
         // Реестр задач подключён пустым: гейт паузы в ReportBlockerAsync теперь обязательный
         // и без реестра падает сразу (R-HOLD-I). Пустой реестр — то же поведение: задач нет,
         // паузы нет, пробуждения идут как раньше.
-        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster, graphInspector: _graphInspector, tasks: new ClaudeHomeServer.Services.Tasks.TaskManager(config));
+        // Реестр пустой и гасится сразу после фиксации (R-HOLD-I2, минор): TaskManager —
+        // IDisposable с таймером дебаунса, и на каждый экземпляр фиксации он утекал.
+        using var taskStore = new ClaudeHomeServer.Services.Tasks.TaskManager(config);
+        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster, graphInspector: _graphInspector, tasks: taskStore);
     }
 
     public void Dispose()

@@ -13,6 +13,9 @@ import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest
 // чтобы не тянуть навигацию в тест шапки
 const handoff = vi.hoisted(() => ({ fn: () => Promise.resolve({}) }));
 const openedChats = vi.hoisted(() => [] as string[]);
+// Управляемый ответ openChatById и собраные тосты (F-4r): провал перехода — отдельный тест
+const openOk = vi.hoisted(() => ({ value: true }));
+const toasts = vi.hoisted(() => [] as string[]);
 vi.mock('../../../lib/offline', () => ({
   __esModule: true,
   request: (url: string, opts?: { method?: string; timeoutMs?: number }) => handoff.fn(url, opts),
@@ -22,7 +25,11 @@ vi.mock('../../../lib/offline', () => ({
 }));
 vi.mock('../../../lib/openChat', () => ({
   __esModule: true,
-  openChatById: (id: string) => { openedChats.push(id); return Promise.resolve(true); },
+  openChatById: (id: string) => { openedChats.push(id); return Promise.resolve(openOk.value); },
+}));
+vi.mock('../../../lib/toast', () => ({
+  __esModule: true,
+  showToast: (title: string, body?: string) => { toasts.push(`${title} · ${body ?? ''}`); },
 }));
 // Хаб в тесте не поднимаем: useLocalModelLive с sessionId подписывается на signalr —
 // в node-окружении '/hubs/session' не разрешится
@@ -226,25 +233,41 @@ describe('CacheDialPip: мини-циферблат в подсказке', () =
 // рендер, и заморозка ленты уходит в цикл «Too many re-renders». SSR цикл не воспроизводит,
 // поэтому охраняем сам исходник (F-1b-r2).
 describe('ChatHeaderBar: лента кэша без нового литерала на рендер', () => {
-  it('нет `items ?? []` и копий ленты в исходнике шапки', () => {
+  it('нет `items ?? []` и копий ленты в компоненте пилюли', () => {
     const src = readFileSync(fileURLToPath(new URL('../ChatHeaderBar.tsx', import.meta.url)), 'utf8');
-    expect(src).not.toMatch(/items\s*\?\?\s*\[\]/);
+    // Guard — про пилюлю: лента замораживается внутри RingPillBadge. В ExtractTasksButton
+    // свой `dialog.items` — список кандидатов, не лента (F-4r), поэтому берём исходник
+    // компонента, а не весь файл.
+    const pill = src.slice(
+      src.indexOf('export function RingPillBadge('),
+      src.indexOf('function RetitleButton('),
+    );
+    expect(pill.length > 0, 'исходник пилюли найден').toBe(true);
+    expect(pill).not.toMatch(/items\s*\?\?\s*\[\]/);
     // .slice(…)/.concat(…) и Array.from(items…) — та же ловушка: новая ссылка на каждый
     // рендер, заморозка ленты уходит в цикл «Too many re-renders» (минор R3-F1b).
     // Расширение guard'а (минор ревью F-2): аргументы у slice не ограничены пустыми
-    // скобками, плюс spread-копия [...items] и .filter/.map рядом с items. Bare-форма:
-    // `dialog.items.filter(` — про список диалога, не про ленту, поэтому lookbehind
-    // отбрасывает «.items» и «xitems».
-    expect(src).not.toMatch(/(?<![.\w])items\s*\.(slice|concat|filter|map)\(/);
-    expect(src).not.toMatch(/Array\.from\(\s*items\b/);
-    expect(src).not.toMatch(/(?<![.\w])\[\s*\.\.\.items\s*\]/);
+    // скобками, плюс spread-копия [...items] и .filter/.map рядом с items. Lookbehind
+    // `(?<![.\w])` не ловил целевую форму `props.items.map(` — дыра была ровно в ней
+    // (F-4r): теперь допускается любой префикс, кроме `dialog.` — список задачи не лента.
+    const feedGuard = /(?<!\bdialog\.)\bitems\s*\.(slice|concat|filter|map)\(/;
+    expect(pill).not.toMatch(feedGuard);
+    expect(pill).not.toMatch(/Array\.from\(\s*items\b/);
+    expect(pill).not.toMatch(/(?<![.\w])\[\s*\.\.\.items\s*\]/);
+    // Сам guard — на обе стороны (F-4r): целевые формы ловит, диалог — нет
+    expect(feedGuard.test('const heads = props.items.map(h => h);'), 'props.items.map( — целевая форма').toBe(true);
+    expect(feedGuard.test('items.slice(0, 3)'), 'bare items.slice( — тоже ловится').toBe(true);
+    expect(feedGuard.test('dialog.items.filter(t => t.sel)'), 'dialog.items.filter( — не лента').toBe(false);
   });
 });
 
 // === Перенос в новый чат (F-4): вторая точка входа и кнопка ===
 // Мутации:
 //  • убрать строку предложения в parts (уровень danger) → первый тест краснеет;
+//  • убрать `&& cache` в условии предложения → тест про гейт краснеет (F-4r);
 //  • убрать вывод handoffError → тест про 409 краснеет;
+//  • сделать тост успеха безусловным (до ok) → тест про openChatById=false краснеет (F-4r);
+//  • убрать маппинг 404 без тела → тест про «Чат не найден или удалён» краснеет (F-4r);
 //  • убрать проверку фич-флага у кнопки → красный негативный тест про флаг.
 const fullEstimate: ContextEstimate = { window: 200000, pct: 92, fresh: false, level: 'danger' };
 
@@ -272,6 +295,13 @@ describe('RingPillBadge: предложение переноса при полн
   it('уровень normal — предложения нет, даже с включённым флагом', () => {
     setAllFlags({ 'prompt-cache': true });
     expect(ariaOf(renderPillWith(estimate, [cacheItem()]))).not.toContain('можно начать новый чат');
+  });
+
+  it('нет данных кэша — предложения нет: обещание гейтится тем же `cache`, что кнопка (F-4r)', () => {
+    setAllFlags({ 'prompt-cache': true });
+    // Danger-контекст без строк кэша в ленте: в таком чате перенос нечем подтвердить —
+    // обещание без действия (тупик)
+    expect(ariaOf(renderPillWith(fullEstimate, []))).not.toContain('можно начать новый чат');
   });
 });
 
@@ -358,6 +388,7 @@ describe('RingPillBadge: кнопка «Перенести в новый чат�
     setAllFlags({ 'prompt-cache': true });
     handoff.fn = () => Promise.resolve({ chatId: 'new-chat', projectId: null, draft: 'Короткая запись о разговоре', warm: true });
     openedChats.length = 0;
+    toasts.length = 0;
     delete pendingStore['cc_pending_chat_prompt'];
     const { root, container } = mountPill();
     try {
@@ -367,7 +398,46 @@ describe('RingPillBadge: кнопка «Перенести в новый чат�
       await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
       expect(openedChats).toEqual(['new-chat']);
       expect(pendingStore['cc_pending_chat_prompt'], 'черновик ждёт композер нового чата').toBe('Короткая запись о разговоре');
+      expect(toasts.some(t => t.includes('Новый чат открыт')), 'тост успеха — после состоявшегося перехода').toBe(true);
       expect(textNodes(container as never).join(' ')).not.toContain('Переношу…');
+    } finally {
+      act(() => root.unmount());
+    }
+  });
+
+  it('openChatById=false — тоста «открыт» нет, черновик снят (F-4r)', async () => {
+    setAllFlags({ 'prompt-cache': true });
+    handoff.fn = () => Promise.resolve({ chatId: 'ghost-chat', projectId: null, draft: 'Запись о разговоре', warm: false });
+    openOk.value = false;
+    openedChats.length = 0;
+    toasts.length = 0;
+    delete pendingStore['cc_pending_chat_prompt'];
+    const { root, container } = mountPill();
+    try {
+      openPopover(container);
+      const btn = buttonByLabel(container, 'Перенести в новый чат');
+      act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      expect(toasts.some(t => t.includes('открыт')), 'перехода нет — тоста об успехе тоже нет').toBe(false);
+      expect(pendingStore['cc_pending_chat_prompt'], 'черновик не утекает в следующий открытый чат').toBeUndefined();
+    } finally {
+      act(() => root.unmount());
+      openOk.value = true;
+    }
+  });
+
+  it('404 без тела — человек читает «Чат не найден или удалён», а не «Not Found» (F-4r)', async () => {
+    setAllFlags({ 'prompt-cache': true });
+    // Так приходит 404 без тела: message = statusText (offline.ts), текст нечеловеческий
+    handoff.fn = () => Promise.reject(Object.assign(new Error('Not Found'), { status: 404 }));
+    openedChats.length = 0;
+    const { root, container } = mountPill();
+    try {
+      openPopover(container);
+      const btn = buttonByLabel(container, 'Перенести в новый чат');
+      act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      expect(textNodes(container as never).join(' ')).toContain('Чат не найден или удалён');
     } finally {
       act(() => root.unmount());
     }

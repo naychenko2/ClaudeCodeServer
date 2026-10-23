@@ -596,10 +596,22 @@ function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCach
     try {
       const r = await api.chats.handoff(sessionId);
       if (r.draft) sessionStorage.setItem('cc_pending_chat_prompt', r.draft);
-      await openChatById(r.chatId);
+      // Тост успеха — только если переход состоялся (F-4r): пропавший чат называет сам
+      // openChatById. На провале черновик снимается — иначе он утечёт в следующий
+      // открытый чат.
+      const ok = await openChatById(r.chatId);
+      if (!ok) {
+        sessionStorage.removeItem('cc_pending_chat_prompt');
+        return;
+      }
       showToast('Перенос чата', 'Новый чат открыт с передаточной запиской', 'info');
     } catch (e) {
-      setHandoffError((e as Error).message || 'Перенос не получился — попробуйте позже');
+      const err = e as Error & { status?: number };
+      // 404 без тела (страховка к бэковому B-4r3): statusText «Not Found» человек не
+      // прочитает — называем причину словами
+      setHandoffError(err.status === 404 && (!err.message || err.message === 'Not Found')
+        ? 'Чат не найден или удалён'
+        : err.message || 'Перенос не получился — попробуйте позже');
     } finally {
       setHandoffBusy(false);
     }
@@ -1023,8 +1035,10 @@ export function RingPillBadge(props: {
   if (isCompacting) parts.push({ text: 'Контекст: идёт сжатие', pip: ctxPip });
   else if (showCtx) parts.push({ text: estimate.pct !== undefined ? `Контекст ${estimate.pct}%` : 'Контекст сжат', pip: ctxPip });
   // Вторая точка входа переноса (F-4): окно почти полное — в подсказке предлагаем перенос.
-  // Только предложение: само действие — кнопка в поповере, за этим же флагом
-  if (promptCacheOn && showCtx && estimate.level === 'danger') {
+  // Только предложение: само действие — кнопка в поповере, за этим же флагом. То же
+  // условие, что и у секции кнопки — `cache` (F-4r): в чате без данных кэша обещание
+  // без действия — тупик.
+  if (promptCacheOn && showCtx && estimate.level === 'danger' && cache) {
     parts.push({ text: 'Контекст почти полон — можно начать новый чат с запиской' });
   }
   // Локальная модель: живой хвост (десктоп) или слово-лицо (мобила) — озвучиваем,

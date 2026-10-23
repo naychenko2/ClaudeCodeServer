@@ -25,6 +25,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -166,6 +167,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             bindings: _factory.Services.GetRequiredService<PersonaBindingsService>(),
             sessions: _factory.Services.GetRequiredService<SessionManager>(),
             spheres: _factory.Services.GetRequiredService<ISphereDirectory>(),
+            log: NullLogger<TasksController>.Instance,
             noteSync: null,
             features: _factory.Services.GetRequiredService<FeatureProjector>(),
             git: git,
@@ -776,6 +778,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             bindings: _factory.Services.GetRequiredService<PersonaBindingsService>(),
             sessions: _factory.Services.GetRequiredService<SessionManager>(),
             spheres: _factory.Services.GetRequiredService<ISphereDirectory>(),
+            log: NullLogger<TasksController>.Instance,
             noteSync: null,
             features: _factory.Services.GetRequiredService<FeatureProjector>(),
             git: null,
@@ -869,7 +872,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
-            noteSync: null, features: null);
+            log: NullLogger<TasksController>.Instance, noteSync: null, features: null);
 
         var result = controller.GetFeatures(null);
 
@@ -940,7 +943,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
-            noteSync: null, features: null);
+            log: NullLogger<TasksController>.Instance, noteSync: null, features: null);
 
         var result = await controller.GetFeature("any", null);
 
@@ -1432,7 +1435,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
-            noteSync: null, features: null);
+            log: NullLogger<TasksController>.Instance, noteSync: null, features: null);
 
         var result = controller.MergeFeature("any").GetAwaiter().GetResult();
 
@@ -2490,6 +2493,44 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             holdProp.ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // R-HOLD-D (п.4): связка «ручка → возврат» на уровне HTTP. Сервисные тесты продолжения
+    // не ловят ручки: удаление вызова из ClearFeatureHold оставляло их зелёными — связь
+    // терялась. Здесь: после DELETE hold у помеченного шага пропадает пометка и в его чат
+    // уходит реплика-продолжение (стаб адаптера фиксирует доставленные). Мутации: убрать
+    // вызов в ручке — пометка не гасится, тест красный; снять пометку до доставки — тест
+    // изоляции сбоев (TaskExecutionServiceHoldTests) красный.
+    [Fact]
+    public async Task ClearHold_ResumesMarkedTurn_EndsInItsChat()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг на паузе", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.MarkClaudeStarted(stepId, chatId, DateTime.UtcNow); // ход идёт — пауза его прерывает.
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(stepId)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+            "пауза помечает идущий ход: возвращать есть что");
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Ждём событие, а не время: продолжение — фон (fire-and-forget, R-HOLD-D п.1).
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (tm.GetById(stepId)!.ExecutorStopReason is not null && DateTime.UtcNow < deadline)
+            await Task.Delay(50);
+
+        tm.GetById(stepId)!.ExecutorStopReason.Should().BeNull(
+            "снятие паузы возвращает шаг в работу: пометка гасится");
+        _factory.LlmAdapters.Adapters[chatId].SentMessages.Should().Contain(
+            m => m.Contains("продолжи"), "реплика-продолжение уходит в чат исполнителя");
+    }
+
     // W4-HOLD-H (контракт §1, :368): ответ DELETE hold — { resumed, expired }: задачи фичи,
     // которым снятая пауза больше не отказывает запуск, и те, чьё ожидание устройства просрочено
     // потолком DeviceWaitCeiling. Мутации: вернуть Ok(epic) без расчёта — GetProperty("resumed")
@@ -2731,7 +2772,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
-            noteSync: null, features: null);
+            log: NullLogger<TasksController>.Instance, noteSync: null, features: null);
 
         var result = controller.GetFeaturesIndex(null);
 

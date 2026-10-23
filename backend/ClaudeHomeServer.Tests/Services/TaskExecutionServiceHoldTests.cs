@@ -229,11 +229,59 @@ public class TaskExecutionServiceHoldTests : IDisposable
             It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
             Times.Once(), "продолжение идёт в ту же сессию исполнителя, не в новый чат");
         keyAdapter.Verify(a => a.SendMessageAsync(
-            It.Is<string>(t => t.Contains("продолжены 1")),
+            It.Is<string>(t => t.Contains("продолжен 1 шаг")),
             It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
             Times.Once(), "ключевой чат получает карточку с числом продолженных шагов");
         _tasks.GetById(step.Id)!.ExecutorStopReason.Should().BeNull(
             "пометка feature_held гасится вместе с продолжением: задача снова в работе");
+    }
+
+    // R-HOLD-D (п.2, п.3): изоляция сбоев. Первый чат отказывает на доставке — его шаг остаётся
+    // помеченным (проектор не рисует «работает», повторное снятие паузы его подхватит), второй
+    // продолжается, карточка считает только доставленные. Мутации: вернуть снятие пометки ДО
+    // доставки (порядок до правки) — первый абзац краснеет; убрать try/catch — цикл обрывается
+    // на первом сбое, второй шаг не продолжен — красное.
+    [Fact]
+    public async Task ClearHold_ResumesOthers_KeepsMarkWhenDeliveryFails()
+    {
+        var user = _userStore.Add("hold-fail", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var broken = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг с мёртвым чатом", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var good = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг, который продолжится", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var brokenChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "broken",
+            taskId: broken.Id);
+        var goodChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "good",
+            taskId: good.Id);
+        _tasks.MarkClaudeStarted(broken.Id, brokenChat.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeStarted(good.Id, goodChat.Id, DateTime.UtcNow);
+        var brokenAdapter = SetRunningTurn(brokenChat.Id);
+        brokenAdapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>())).Throws(new InvalidOperationException("чат оборван"));
+        var goodAdapter = SetRunningTurn(goodChat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, "manual");
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id);
+
+        resumed.Should().Be(1, "сбой одного чата не обрывает цикл: второй шаг продолжен");
+        _tasks.GetById(broken.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+            "доставка упала — пометка остаётся: шаг не выглядит «в работе» без продолжения");
+        _tasks.GetById(good.Id)!.ExecutorStopReason.Should().BeNull(
+            "у доставленного продолжения пометка гасится");
+        goodAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжи")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "второй шаг получает продолжение, несмотря на сбой первого");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжен 1 шаг")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "счётчик карточки — только доставленные");
     }
 
     // W4-HOLD-D (контракт §1, п.4): пустой случай — прерванных нет (никто не был в работе),

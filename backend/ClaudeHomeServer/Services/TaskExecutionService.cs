@@ -1195,12 +1195,23 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
             if (t.LinkedSessionId is null || keyChain.Contains(t.LinkedSessionId)) continue;
             if (_sessions.GetById(t.LinkedSessionId) is null) continue; // чата нет — пометка остаётся
-            var cleared = _tasks.ClearExecutorStopped(t.Id, ExecutorStopClassifier.FeatureHeldReason);
-            if (cleared is null) continue;
-            await _broadcaster.ToOwner(cleared.OwnerId!, new TaskChangedMessage("updated", cleared));
-            await _sessions.SendMessageAsync(t.LinkedSessionId, HoldResumePrompt, [], auto: true,
-                cause: SessionManager.DeliveryCause.HoldResume);
-            resumed++;
+            // R-HOLD-D (п.3): сбой одного чата не обрывает цикл — каждая задача ловится отдельно,
+            // остальные продолжают. Р-HOLD-D (п.2): пометка снимается только после успешной
+            // доставки: при сбое задача остаётся «на паузе» и повторное снятие её подхватит.
+            try
+            {
+                await _sessions.SendMessageAsync(t.LinkedSessionId, HoldResumePrompt, [], auto: true,
+                    cause: SessionManager.DeliveryCause.HoldResume);
+                var cleared = _tasks.ClearExecutorStopped(t.Id, ExecutorStopClassifier.FeatureHeldReason);
+                if (cleared is null) continue;
+                await _broadcaster.ToOwner(cleared.OwnerId!, new TaskChangedMessage("updated", cleared));
+                resumed++;
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Продолжение после паузы задачи {TaskId} не доставлено в чат {Session}: {Message}",
+                    t.Id, t.LinkedSessionId, ex.Message);
+            }
         }
         if (resumed == 0) return 0;
 
@@ -1209,8 +1220,11 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // как в KeySession (чужой/удалённый чат пропускается).
         var key = keyChain.FirstOrDefault(id => _sessions.GetById(id) is not null);
         if (key is null) return resumed;
+        // R-HOLD-D (п.5): формулировка контракта §1, :249 — «пауза снята, продолжены N шагов»,
+        // с согласованием: 1 — «продолжен 1 шаг», 2–4 — «продолжены N шага», 5+ — «шагов».
+        var (verb, noun) = resumed == 1 ? ("продолжен", "шаг") : resumed <= 4 ? ("продолжены", "шага") : ("продолжены", "шагов");
         await _sessions.SendMessageAsync(key,
-            $"Пауза фичи снята: продолжены {resumed} прерванный{(resumed == 1 ? "" : "ы")} шаг(ов). " +
+            $"Пауза фичи снята: {verb} {resumed} {noun}. " +
             "Доклады, накопленные за паузу, — в лентах этих шагов; разбери их.",
             [], auto: true, cause: SessionManager.DeliveryCause.Direct);
         return resumed;

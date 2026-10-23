@@ -19,6 +19,7 @@ using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -107,6 +108,7 @@ public class TasksController(
     TaskManager tasks, ISessionBroadcaster broadcaster, TaskAiService ai, ProjectManager projects,
     PersonaManager personas, TaskExecutionService executor,
     PersonaBindingsService bindings, SessionManager sessions, ISphereDirectory spheres,
+    ILogger<TasksController> log,
     // Подсистема Notes отключаемая: null — обратная запись чекбокса в заметку-источник
     // тихо пропускается (SyncTaskToNoteAsync ниже, флаг notes-task-sync и так no-op
     // для задач не из заметки).
@@ -938,7 +940,12 @@ public class TasksController(
         // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат. Ответ
         // не меняется: resumed/expired — пробуждение очереди (R-HOLD-H), продолженные шаги
         // в неё не входят (они уже в работе).
-        executor.ResumeFeatureTurnsAfterHold(featureId, UserId);
+        // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой не теряется молча —
+        // логируем (конвенция FireAndForget, SessionManager.cs:10815).
+        _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId).ContinueWith(
+            t => log.LogError("Возврат прерванных паузой ходов фичи {FeatureId}: {Message}",
+                featureId, t.Exception?.GetBaseException().Message),
+            TaskContinuationOptions.OnlyOnFaulted);
         return Ok(new { resumed, expired });
     }
 

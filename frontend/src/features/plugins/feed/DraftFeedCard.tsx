@@ -5,10 +5,10 @@
 // нейтральная строка; отклонён — «Отклонён» + «Вернуть»; установлен. «Принять…» — тот же
 // ConsentDialog, что в 4.4. Включена только под флагом plugins-build-yourself.
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { C, FS } from '../../../lib/design';
 import { FLAGS, useFeature } from '../../../lib/featureFlags';
-import { api } from '../../../lib/api';
+import { api, type PluginDraftDiff } from '../../../lib/api';
 import { ConsentDialog, type PluginConsentData } from '../ConsentDialog';
 import { DraftCard } from '../DraftCard';
 import { toConsentDataFromAccept } from '../draftModel';
@@ -64,6 +64,18 @@ export function DraftFeedCard({ slug, fallback, projectId, chatId }: {
   // Ошибка действия («Принять…», «Вернуть»): текст сервера, пока действие не повторят
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // Сравнение с установленной версией — по требованию (вкладка «Изменения» в окне
+  // файлов), по образцу useDraftCard: идемпотентно; ошибка не блокирует просмотр файлов.
+  const [diff, setDiff] = useState<PluginDraftDiff | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const loadDiff = useCallback(() => {
+    if (diff) return;
+    setDiffError(null);
+    api.plugins.draftDiff(slug)
+      .then(setDiff)
+      .catch((e: unknown) => setDiffError(e instanceof Error ? e.message : 'Не удалось сравнить с установленной версией'));
+  }, [diff, slug]);
+
   // Без флага — нейтральная строка (как делают соседние модули), не карточка
   if (!buildYourself) return fallback ? <NeutralLine>{fallback}</NeutralLine> : null;
 
@@ -113,7 +125,8 @@ export function DraftFeedCard({ slug, fallback, projectId, chatId }: {
       <DraftCard
         summary={summary}
         preview={entry.preview}
-        diff={null}
+        diff={diff}
+        diffError={diffError}
         loading={entry.loading}
         error={entry.error}
         actionError={actionError}
@@ -122,7 +135,7 @@ export function DraftFeedCard({ slug, fallback, projectId, chatId }: {
         onReject={() => void handleReject()}
         onRestore={() => void handleRestore()}
         onEdit={handleEdit}
-        onLoadDiff={() => { /* diff — по требованию в шторке; в ленте не грузим заранее */ }}
+        onLoadDiff={loadDiff}
         // «Открыть в «Плагинах»» (установлен): настройки проекта (секция плагинов); WorkspacePage
         // слушает cc-open-plugins и раскрывает диалог. Вне проекта (projectId null) настроек
         // проекта нет — кнопку скрываем, а не показываем мёртвой (ChatsPage cc-open-plugins не

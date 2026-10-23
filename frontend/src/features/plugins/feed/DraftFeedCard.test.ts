@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { act, createElement } from 'react';
 import type { ChatItem, ServerMessage } from '../../../types';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
-import type { PluginDraftPreview, PluginDraftSummary } from '../../../lib/api';
+import type { PluginDraftDiff, PluginDraftPreview, PluginDraftSummary } from '../../../lib/api';
 import { acceptDraftReplyByChat } from '../../../lib/draftReply';
 
 // onMessage — захватываем подписчика, чтобы «сдвинуть» событие в тесте
@@ -27,6 +27,7 @@ vi.mock('../../../lib/api', () => ({
       draftAccept: vi.fn(),
       draftReject: vi.fn(),
       draftRestore: vi.fn(),
+      draftDiff: vi.fn(),
       grant: vi.fn(),
       setSecret: vi.fn(),
     },
@@ -132,6 +133,7 @@ beforeEach(() => {
   vi.mocked(api.plugins.draftAccept).mockReset();
   vi.mocked(api.plugins.draftReject).mockReset();
   vi.mocked(api.plugins.draftRestore).mockReset();
+  vi.mocked(api.plugins.draftDiff).mockReset();
   vi.mocked(api.plugins.grant).mockReset();
   vi.mocked(api.plugins.setSecret).mockReset();
   setAllFlags({});
@@ -736,5 +738,86 @@ describe('cc-open-plugins: «Открыть в «Плагинах»» (мино�
     vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
     const { container } = await renderAnchorAs(recordItem({ slug: SLUG }), 'proj-1');
     expect(findButton(container, 'Открыть в «Плагинах»'), 'кнопка должна быть видна в проектном чате').not.toBeNull();
+  });
+});
+
+// === Дефект (QA Веры dcfd7747): «Изменения» из карточки ленты были пустыми ===
+// «Посмотреть файлы» открывает окно и по требованию запрашивает diff (GET /diff) — как в
+// секции «Черновики»: вкладка «Изменения» получает сводку со счётчиками и блок «Права».
+// Мутация: вернуть в onLoadDiff заглушку (не звать draftDiff) → тест краснеет на
+// «calledTimes 1» и на отсутствии «Права».
+describe('DraftFeedCard: diff из карточки ленты (дефект QA)', () => {
+  const DIFF: PluginDraftDiff = {
+    status: 'updated',
+    slug: SLUG,
+    id: 'local-1/my-plugin',
+    version: '2.0.0',
+    installedVersion: '1.0.0',
+    truncated: false,
+    added: [],
+    removed: [],
+    modified: [{ path: 'plugin.json', size: 120, binary: false, truncated: false, lines: [] }],
+    manifest: {
+      permissionsAdded: ['notes:read'],
+      permissionsRemoved: [],
+      secretsAdded: [],
+      secretsRemoved: [],
+      secretsRequiredChanged: [],
+    },
+  };
+
+  // Кнопка по подстроке подписи: у вкладки «Изменения» текст вместе со счётчиком,
+  // точное совпадение невозможно.
+  function findButtonLike(container: FNode, label: string): { onClick: () => void } | null {
+    let hit: { onClick: () => void } | null = null;
+    const walk = (x: FNode) => {
+      if (hit) return;
+      if (x.nodeType === 1) {
+        const p = Object.keys(x).find(k => k.startsWith('__reactProps$'));
+        if (p) {
+          const props = (x as unknown as Record<string, unknown>)[p] as Record<string, unknown> | undefined;
+          if (props?.onClick && textOf(x).includes(label)) hit = { onClick: props.onClick as () => void };
+        }
+      }
+      for (const c of x.childNodes) walk(c);
+    }
+    walk(container);
+    return hit;
+  }
+
+  it('«Посмотреть файлы» → GET /diff → «Изменения» со счётчиками и блоком «Права»', async () => {
+    setFlagLocal('plugins-build-yourself', true);
+    vi.mocked(api.plugins.draftsList).mockResolvedValue([SUMMARY]);
+    vi.mocked(api.plugins.draftPreview).mockResolvedValue(PREVIEW);
+    vi.mocked(api.plugins.draftDiff).mockResolvedValue(DIFF);
+
+    const { container } = await renderAnchor(recordItem({ slug: SLUG }));
+    // Окно — Modal-портал в document.body (как диалог согласия); body чистим от
+    // leftover-порталов предыдущих тестов, чтобы «Изменения» искались в нашем окне.
+    const body = (globalThis as { document: { body: FNode } }).document.body;
+    for (const c of [...body.childNodes]) body.removeChild(c);
+
+    const files = findButton(container, 'Посмотреть файлы');
+    expect(files, 'кнопка «Посмотреть файлы» не найдена').not.toBeNull();
+
+    // Клик: открывается окно, loadDiff отправляет GET /diff; ждём, пока ответ уляжется.
+    await act(async () => {
+      files!.onClick();
+      for (let i = 0; i < 5; i++) await new Promise(r => setTimeout(r, 0));
+    });
+
+    // Запрос ушёл ровно один раз (идмпотентность loadDiff) и по нашему slug
+    expect(vi.mocked(api.plugins.draftDiff)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(api.plugins.draftDiff)).toHaveBeenCalledWith(SLUG);
+
+    // Переход на вкладку «Изменения»: сводка с счётчиками и блок «Права» на месте
+    const changes = findButtonLike(body, 'Изменения');
+    expect(changes, 'вкладка «Изменения» не найдена').not.toBeNull();
+    await act(async () => { changes!.onClick(); });
+
+    const drawerText = textOf(body);
+    expect(drawerText).toContain('Изменено · 1');
+    expect(drawerText).toContain('Права');
+    expect(drawerText).toContain('notes:read');
   });
 });

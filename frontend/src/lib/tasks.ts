@@ -642,11 +642,22 @@ export function executorStopText(reason: string | null | undefined, deviceName?:
       return 'Сабагент раз за разом обрывается посреди работы, добить его не удалось';
     case 'tool_call_leak_stuck':
       return 'Вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось';
+    // W4-HOLD-F4 (возврат R-F4): feature_held — штатная пауза фичи (W4-HOLD-D), а не
+    // авария: без своей формулировки карточка выдавала «Исполнение прервано» и
+    // толкала человека перезапускать шаг, который гейт паузы всё равно отклонит.
+    case 'feature_held':
+      return 'Фичу удержали на паузе — шаг ждёт снятия паузы';
     case 'feature_held_expired':
       return 'Чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить';
     default:
       return 'Исполнение прервано';
   }
+}
+
+// Тон плашки остановки (W4-HOLD-F4): пауза фичи — не поломка, предупреждение;
+// остальные терминальные остановки — настоящая беда, danger.
+export function executorStopTone(reason: string | null | undefined): 'warning' | 'danger' {
+  return reason === 'feature_held' ? 'warning' : 'danger';
 }
 
 // Терминальная ли остановка: работа встала насовсем и ждёт человека. Зеркало

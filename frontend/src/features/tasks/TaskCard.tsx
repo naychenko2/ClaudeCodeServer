@@ -15,7 +15,7 @@ import { C, FONT, FS, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Badge, Menu, MenuItem } from '../../components/ui';
 import { useLongPress } from '../../hooks/useLongPress';
-import { deviceWaitDuration, executorStopText, isDeviceWaiting, isTerminalStop, projectColor } from '../../lib/tasks';
+import { deviceWaitDuration, executorStopText, executorStopTone, isDeviceWaiting, isTerminalStop, projectColor } from '../../lib/tasks';
 import { useContextButton } from '../chatContext/useContextButton';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
@@ -136,7 +136,8 @@ function TaskCardImpl({ task, selected, onClick, compact, projectName, deviceNam
             {executorStopped && (
               // Причина — сам текст плашки, а не подсказка по ховеру: фраза переносится
               // внутри чипа (Badge обрезал бы её многоточие на узкой карточке).
-              <StateChip tone="danger">
+              // Тон по причине: пауза фичи — предупреждение, не поломка (W4-HOLD-F4).
+              <StateChip tone={executorStopTone(task.executorStopReason)}>
                 <span style={{ whiteSpace: 'normal' }}>
                   {executorStopText(task.executorStopReason, deviceName)}
                 </span>

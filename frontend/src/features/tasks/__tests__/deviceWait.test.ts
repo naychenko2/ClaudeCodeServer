@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { Task } from '../../../types';
-import { deviceWaitDuration, executorStopText, isDeviceWaiting, isTerminalStop } from '../../../lib/tasks';
+import { deviceWaitDuration, executorStopText, executorStopTone, isDeviceWaiting, isTerminalStop } from '../../../lib/tasks';
 import { TaskCard } from '../TaskCard';
 
 function task(over: Partial<Task> = {}): Task {
@@ -49,6 +49,24 @@ describe('словарь ожидания устройства', () => {
     expect(executorStopText('feature_held_expired'))
       .toBe('Чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить');
   });
+
+  // W4-HOLD-F4 (возврат R-F4): feature_held — штатная пауза фичи, не авария: своя
+  // формулировка и предупреждающий тон, а не красная «Исполнение прервано».
+  // Мутация: удалить кейс 'feature_held' в executorStopText — тест краснеет.
+  it('feature_held — пауза названа паузой, тон warning, не danger', () => {
+    expect(executorStopText('feature_held')).toBe('Фичу удержали на паузе — шаг ждёт снятия паузы');
+    expect(executorStopTone('feature_held')).toBe('warning');
+    // остальные терминальные остановки — настоящая беда
+    expect(executorStopTone('auth_failed')).toBe('danger');
+    expect(executorStopTone('device_wait_expired')).toBe('danger');
+  });
+
+  // Хвост R-F4 п.1: формулировка tool_call_leak_stuck была добавлена без теста.
+  it('tool_call_leak_stuck — своя формулировка и терминальность', () => {
+    expect(executorStopText('tool_call_leak_stuck'))
+      .toBe('Вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось');
+    expect(isTerminalStop('tool_call_leak_stuck')).toBe(true);
+  });
 });
 
 describe('карточка задачи', () => {
@@ -71,6 +89,13 @@ describe('карточка задачи', () => {
     expect(html).not.toContain('Ждёт');
     expect(html).not.toContain('Не запускалась');
   });
+
+  // Хвост R-F4 п.3: текст причины device_wait_expired содержит фразу title старой
+  // плашки — гейт на «плашка ровно одна», чтобы двойная плашка не пролезла.
+  it('истёкшее ожидание — ровно одна плашка остановки', () => {
+    const html = render(task({ executorStoppedAt: '2026-09-24T10:00:00Z', executorStopReason: 'device_wait_expired' }), 'Ноутбук');
+    expect((html.match(/не вышло на связь/gi) || []).length).toBe(1);
+  });
 });
 
 // W4-HOLD-F4 (R-HOLD-J2): причина ЛЮБОЙ терминальной остановки — на карточке,
@@ -82,7 +107,17 @@ describe('терминальная остановка исполнителя', (
     expect(isTerminalStop('subagent_truncated')).toBe(false);
     expect(isTerminalStop('tool_call_leaked')).toBe(false);
     expect(isTerminalStop('feature_held_expired')).toBe(true);
+    expect(isTerminalStop('feature_held')).toBe(true);
     expect(isTerminalStop('auth_failed')).toBe(true);
+  });
+
+  // Хвост R-F4 п.2: feature_held — самая частая причина на карточке в волне (пауза).
+  // Мутация: удалить кейс 'feature_held' в executorStopText — тест краснеет.
+  it('feature_held — карточка называет паузу, а не поломку', () => {
+    const html = render(task({ executorStoppedAt: '2026-10-23T10:00:00Z', executorStopReason: 'feature_held' }));
+    expect(html).toContain('Фичу удержали на паузе');
+    expect(html).not.toContain('Исполнение прервано');
+    expect(html).not.toContain('feature_held');
   });
 
   it('feature_held_expired — причина на карточке человеческим текстом, не кодом', () => {
@@ -109,8 +144,11 @@ describe('терминальная остановка исполнителя', (
     expect(html).not.toContain('Исполнение прервано');
   });
 
+  // Хвост R-F4 п.4: проверяется отсутствие ЛЮБОЙ формулировки остановки, а не
+  // одной подстроки — плашка с другой фразой раньше прошла бы.
   it('завершённая задача плашки остановки не получает', () => {
     const html = render(task({ status: 'done', executorStopReason: 'feature_held_expired' }));
-    expect(html).not.toContain('Чат исполнителя');
+    expect(html).not.toContain(executorStopText('feature_held_expired'));
+    expect(html).not.toContain('Исполнение прервано');
   });
 });

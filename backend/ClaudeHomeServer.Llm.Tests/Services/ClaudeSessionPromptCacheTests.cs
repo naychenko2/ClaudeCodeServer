@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Reflection;
+using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
@@ -370,4 +372,121 @@ public class ClaudeSessionPromptCacheTests : IDisposable
 
         LastPromptCache(sent).Should().BeNull();
     }
+
+    // ── Сторож регресса (шаг B-2): метрика ccs.prompt_cache.turns ────────────────────────────
+
+    // Метка «измерение из этого теста»: колбэк MeterListener исполняется синхронно в потоке
+    // вызова Add, поэтому AsyncLocal отсекает измерения параллельных тестов других классов
+    private static readonly AsyncLocal<bool> Mine = new();
+
+    private static async Task<List<string>> CapturePromptCacheTurns(Func<Task> action)
+    {
+        var reasons = new List<string>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == ServerMetrics.MeterName && instrument.Name == "ccs.prompt_cache.turns")
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
+        {
+            if (!Mine.Value) return;
+            foreach (var t in tags)
+                if (t.Key == "reason") lock (reasons) reasons.Add(t.Value as string);
+        });
+        listener.Start();
+        Mine.Value = true;
+        await action();
+        return reasons;
+    }
+
+    [Fact]
+    public async Task Метрика_ПричинаПромахаПервогоВызова()
+    {
+        var (session, _, _) = NewSession();
+        var run = NewRun();
+
+        var reasons = await CapturePromptCacheTurns(async () =>
+        {
+            await Drive(session, run, MessageStart(Usage(0, 80_000, eph1h: 80_000),
+                """{"cache_miss_reason":{"type":"system_changed","cache_missed_input_tokens":80000}}"""));
+            await Drive(session, run, MessageStart(Usage(80_000, 0)));
+            await Drive(session, run, ResultLine(80_000, 0));
+        });
+
+        reasons.Should().Equal(["systemChanged"], "один ход — одно измерение, по первому вызову");
+    }
+
+    [Fact]
+    public async Task Метрика_БезПромаха_None()
+    {
+        var (session, _, _) = NewSession();
+        var run = NewRun();
+
+        var reasons = await CapturePromptCacheTurns(async () =>
+        {
+            await Drive(session, run, MessageStart(Usage(40_000, 0)));
+            await Drive(session, run, ResultLine(40_000, 0));
+        });
+
+        reasons.Should().Equal(["none"], "ход без промаха — знаменатель доли холодных стартов");
+    }
+
+    // Сторонний провайдер: PromptCache null — в сторож ничего не идёт
+    [Fact]
+    public async Task Метрика_СтороннийПровайдер_НеПишется()
+    {
+        const string thirdPartyModel = "deepseek-v9-test";
+        var providers = new LlmProviderRegistry(TestConfig.Build(new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:Models:0:Id"] = thirdPartyModel,
+        }));
+        var (session, _, _) = NewSession(thirdPartyModel, providers);
+        var run = NewRun();
+
+        var reasons = await CapturePromptCacheTurns(async () =>
+        {
+            await Drive(session, run, MessageStart(Usage(0, 50_000, eph1h: 50_000),
+                """{"cache_miss_reason":{"type":"system_changed","cache_missed_input_tokens":50000}}"""));
+            await Drive(session, run, ResultLine(0, 50_000));
+        });
+
+        reasons.Should().BeEmpty("у стороннего провайдера своя семантика кэша — в сторож не идёт");
+    }
+
+    // TTL и якорь живут через ходы, и PromptCache у result есть и без вызовов модели в этом
+    // ходу; такой ход в метрику не пишется, иначе он разбавил бы долю промахов
+    [Fact]
+    public async Task Метрика_ХодБезВызоваМодели_НеПишется()
+    {
+        var (session, sent, _) = NewSession();
+        var run = NewRun();
+        await Drive(session, run, MessageStart(Usage(0, 50_000, eph1h: 50_000)));
+        await Drive(session, run, ResultLine(0, 50_000));
+        typeof(ClaudeSession).GetMethod("ResetTurnPromptCacheMiss", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(session, null);
+
+        // Новый прогон: result на завершённом прогоне — ход без вызова модели
+        var nextRun = NewRun();
+        int resultsBefore;
+        lock (sent) resultsBefore = sent.OfType<ResultMessage>().Count();
+        var reasons = await CapturePromptCacheTurns(() => Drive(session, nextRun, ResultLine(50_000, 0)));
+
+        lock (sent) sent.OfType<ResultMessage>().Count().Should().Be(resultsBefore + 1, "result второго хода обработан");
+        LastPromptCache(sent).Should().NotBeNull("TTL прошлого хода остался");
+        reasons.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(PromptCacheMissReason.None, "none")]
+    [InlineData(PromptCacheMissReason.SystemChanged, "systemChanged")]
+    [InlineData(PromptCacheMissReason.MessagesChanged, "messagesChanged")]
+    [InlineData(PromptCacheMissReason.Unavailable, "unavailable")]
+    [InlineData(PromptCacheMissReason.PreviousMessageNotFound, "previousMessageNotFound")]
+    [InlineData(PromptCacheMissReason.ModelChanged, "modelChanged")]
+    [InlineData(PromptCacheMissReason.ToolsChanged, "toolsChanged")]
+    public void Метрика_ЗначениеТегаЗамкнуто(PromptCacheMissReason reason, string expected) =>
+        TurnTelemetry.CacheMissReasonTag(reason).Should().Be(expected);
 }

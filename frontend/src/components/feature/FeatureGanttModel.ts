@@ -56,8 +56,9 @@ export interface GanttRow {
   to: string | null;
   // Сегменты полосы в хронологическом порядке (main + review).
   segments: GanttSegment[];
-  // Разбивка «работа · ожидание · простой» по main-сегментам; null — main-сегментов нет.
-  breakdown: { work: number; waiting: number; idle: number } | null;
+  // Разбивка по main-сегментам; error/notWorking — явные части (не теряются: сумма
+  // breakdown равна сумме минут всех main-сегментов). null — main-сегментов нет.
+  breakdown: { work: number; waiting: number; idle: number; error: number; notWorking: number } | null;
   // Самый долгий этап (макс approxMinutes > 0; при равенстве — первый по порядку;
   // единственный кандидат — не подсвечиваем).
   isLongest: boolean;
@@ -155,9 +156,11 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
         }));
       const main = segments.filter(g => g.kind !== 'review');
       const sum = (kind: GanttSegmentKind) => main.filter(g => g.kind === kind).reduce((a, g) => a + g.minutes, 0);
+      // Все виды main-сегментов названы явно: сумма частей равна длине этапа,
+      // error/notWorking не теряются молча.
       const breakdown = main.length === 0
         ? null
-        : { work: sum('work'), waiting: sum('waiting'), idle: sum('idle') };
+        : { work: sum('work'), waiting: sum('waiting'), idle: sum('idle'), error: sum('error'), notWorking: sum('notWorking') };
       return {
         key: s.key,
         label: stageLabel(s.key),
@@ -204,11 +207,23 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
   }
 
   // «Зависла»: только явный stopped (wait — обычное ожидание, без штриховки). Хвост —
-  // на строке текущего этапа; текущего этапа нет — хвоста нет.
+  // на строке этапа остановившейся задачи: по attention.taskId (стадия, где она в
+  // taskIds, или запись now с этим taskId); стадии нет — фолбэк на текущую строку.
+  // Строки нет — хвоста нет.
   const att = closed ? null : (run.attention ?? null);
   let hasStalled = false;
   if (att?.kind === 'stopped' && att.since) {
-    const row = rows.find(r => r.isCurrent);
+    let row: GanttRow | undefined;
+    if (att.taskId) {
+      const taskId = att.taskId; // локальная копия: сужение типа в замыкании теряется
+      const stage = (run.stages ?? []).find(s => (s.taskIds ?? []).includes(taskId));
+      if (stage) row = rows.find(r => r.key === stage.key);
+      if (!row) {
+        const nowEntry = (run.now ?? []).find(n => n.taskId === taskId);
+        if (nowEntry) row = rows.find(r => r.key === nowEntry.stage);
+      }
+    }
+    if (!row) row = rows.find(r => r.isCurrent);
     if (row) {
       row.stalledSince = att.since;
       row.stalledReason = att.reason ?? null;
@@ -231,7 +246,9 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
   return {
     rows,
     axis,
-    hasData: rows.length > 0,
+    // hasData — наличие данных таймлайна (ось или сегменты), как в FeatureStatsBits:
+    // строки без таймлайна — не «данные», рендер на них ничего не рисует.
+    hasData: axis !== null || (tl?.segments?.length ?? 0) > 0,
     returnTotal: flags.length,
     hasStalled,
     closed,

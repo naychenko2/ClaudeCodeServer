@@ -9,7 +9,9 @@
 //
 // Мутации (в отчёте): (1) убрать «waiting» из разбивки → краснеет «обычный путь»;
 // (2) не фильтровать вердикт «accepted» → краснеет «возвраты»; (3) штриховать и при
-// «wait» → краснеет «зависла»; (4) пилюлю давать и закрытой фиче → краснеет «активный этап».
+// «wait» → краснеет «зависла»; (4) пилюлю давать и закрытой фиче → краснеет «активный
+// этап»; (5) убрать поиск хвоста по attention.taskId → краснеет «зависла по taskId»;
+// (6) вернуть hasData по строкам run.stages → краснеет «hasData — по таймлайну».
 
 import { describe, it, expect } from 'vitest';
 import { buildGanttModel, type GanttModel, type GanttRow } from './FeatureGanttModel';
@@ -113,13 +115,33 @@ describe('обычный путь: строки этапов, длительно
   it('разбивка «работа · ожидание · простой» по минутам main-сегментов', () => {
     const prod = rowOf(model, 'prod');
     expect(prod.minutes).toBe(55);
-    expect(prod.breakdown).toEqual({ work: 40, waiting: 10, idle: 5 });
+    expect(prod.breakdown).toEqual({ work: 40, waiting: 10, idle: 5, error: 0, notWorking: 0 });
     // Сегменты полосы: main + review, в хронологическом порядке, минуты посчитаны.
     expect(prod.segments.length).toBe(3);
     expect(prod.segments.map(s => s.kind)).toEqual(['work', 'waiting', 'idle']);
     expect(prod.segments[0]!.minutes).toBe(40);
     // Этап без сегментов — разбивки нет (явный null), а не нули-фантазия.
     expect(rowOf(model, 'plan').breakdown).toBeNull();
+  });
+
+  it('error и notWorking — явные части разбивки: сумма равна длине этапа (не теряются)', () => {
+    const model = buildGanttModel(
+      mkRun({ stages: [mkStage('prod', 'active', 75)] }),
+      mkStats([
+        seg('2026-10-20T10:00:00Z', '2026-10-20T10:40:00Z', 'work', 'prod'),
+        seg('2026-10-20T10:40:00Z', '2026-10-20T10:50:00Z', 'waiting', 'prod'),
+        seg('2026-10-20T10:50:00Z', '2026-10-20T10:55:00Z', 'idle', 'prod'),
+        seg('2026-10-20T10:55:00Z', '2026-10-20T11:05:00Z', 'error', 'prod'),
+        seg('2026-10-20T11:05:00Z', '2026-10-20T11:15:00Z', 'notWorking', 'prod'),
+      ]),
+      NOW,
+    );
+    const prod = rowOf(model, 'prod');
+    expect(prod.breakdown).toEqual({ work: 40, waiting: 10, idle: 5, error: 10, notWorking: 10 });
+    // Сумма частей равна сумме минут всех main-сегментов строки.
+    const b = prod.breakdown!;
+    const mainMinutes = prod.segments.filter(s => s.kind !== 'review').reduce((a, s) => a + s.minutes, 0);
+    expect(b.work + b.waiting + b.idle + b.error + b.notWorking).toBe(mainMinutes);
   });
 
   it('самый долгий — с максимальным approxMinutes; один этап — не подсвечиваем', () => {
@@ -133,11 +155,16 @@ describe('обычный путь: строки этапов, длительно
     expect(rowOf(single, 'prod').isLongest).toBe(false);
   });
 
-  it('ось — из таймлайна; без stats — оси нет', () => {
+  it('ось — из таймлайна; без stats — оси нет и hasData false (данных таймлайна нет)', () => {
     expect(model.axis).toEqual({ from: '2026-10-19T17:00:00Z', to: '2026-10-20T12:00:00Z' });
     const noStats = buildGanttModel(mkRun({ stages: [mkStage('prod', 'active', 10)] }), null, NOW);
     expect(noStats.axis).toBeNull();
-    expect(noStats.hasData).toBe(true); // строки есть, позиции рендер не рисует
+    // hasData — по данным таймлайна (ось или сегменты), а не по строкам run.stages:
+    // строки без таймлайна — существующее пустое состояние вкладки.
+    expect(noStats.hasData).toBe(false);
+    // Ось есть, сегментов нет — данные всё равно есть.
+    const onlyAxis = buildGanttModel(mkRun({ stages: [mkStage('prod', 'active', 10)] }), mkStats([]), NOW);
+    expect(onlyAxis.hasData).toBe(true);
   });
 });
 
@@ -237,6 +264,64 @@ describe('зависла: штриховка только при явном stop
     expect(prod.stalledSince).toBe('2026-10-20T11:30:00Z');
     expect(prod.stalledReason).toBe('нет времени');
     expect(prod.stalledActionChatId).toBe('c-run');
+    expect(model.hasStalled).toBe(true);
+  });
+
+  it('attention.taskId — хвост на этапе остановившейся задачи, а не на текущей строке', () => {
+    // Два now (qa новее — «текущая» строка qa), тревога указывает на задачу prod.
+    const model = buildGanttModel(
+      mkRun({
+        stages: [
+          mkStage('prod', 'active', 60, { firstStartedAt: '2026-10-20T10:00:00Z', taskIds: ['t-prod'] }),
+          mkStage('qa', 'active', 20, { taskIds: ['t-qa'] }),
+        ],
+        now: [
+          { taskId: 't-qa', stage: 'qa', title: 'Проверка', startedAt: '2026-10-20T11:40:00Z' },
+          { taskId: 't-prod', stage: 'prod', title: 'Модель', startedAt: '2026-10-20T11:00:00Z' },
+        ],
+        attention: { kind: 'stopped', taskId: 't-prod', since: '2026-10-20T11:30:00Z', reason: 'нет времени', linkedSessionId: 'c-prod' },
+      }),
+      mkStats([]),
+      NOW,
+    );
+    const prod = rowOf(model, 'prod');
+    const qa = rowOf(model, 'qa');
+    expect(prod.isCurrent).toBe(false);
+    expect(prod.stalledSince).toBe('2026-10-20T11:30:00Z');
+    expect(prod.stalledReason).toBe('нет времени');
+    expect(prod.stalledActionChatId).toBe('c-prod');
+    expect(qa.stalledSince).toBeNull();
+    expect(model.hasStalled).toBe(true);
+  });
+
+  it('стадии с taskId нет — поиск по записи now с этим taskId', () => {
+    const model = buildGanttModel(
+      mkRun({
+        stages: [mkStage('prod', 'active', 60), mkStage('qa', 'active', 20)],
+        now: [
+          { taskId: 't-qa', stage: 'qa', title: 'Проверка', startedAt: '2026-10-20T11:40:00Z' },
+          { taskId: 't-prod', stage: 'prod', title: 'Модель', startedAt: '2026-10-20T11:00:00Z' },
+        ],
+        attention: { kind: 'stopped', taskId: 't-prod', since: '2026-10-20T11:30:00Z' },
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(rowOf(model, 'prod').stalledSince).toBe('2026-10-20T11:30:00Z');
+    expect(rowOf(model, 'qa').stalledSince).toBeNull();
+  });
+
+  it('ни стадии, ни записи now с taskId — фолбэк: хвост на текущей строке', () => {
+    const model = buildGanttModel(
+      mkRun({
+        stages: [mkStage('prod', 'active', 60, { firstStartedAt: '2026-10-20T10:00:00Z' })],
+        now: [{ taskId: 't-1', stage: 'prod', title: 'Модель', startedAt: '2026-10-20T11:00:00Z' }],
+        attention: { kind: 'stopped', taskId: 't-unknown', since: '2026-10-20T11:30:00Z' },
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(rowOf(model, 'prod').stalledSince).toBe('2026-10-20T11:30:00Z');
     expect(model.hasStalled).toBe(true);
   });
 

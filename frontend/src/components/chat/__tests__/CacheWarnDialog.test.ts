@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 // Диалог — Modal на портале: серверный рендер порталы не поддерживает,
 // поэтому он монтируется фейк-DOM-клиентом (паттерн TaskCreatedView.test.ts)
 import { installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } from './fakeDom';
@@ -24,6 +24,7 @@ import {
   getCacheWarnThresholds, resetCacheWarnOnLogout, saveCacheWarnThresholds,
   setCacheWarnThresholdsFromServer,
 } from '../../../lib/cacheWarnPrefs';
+import { setAllFlags } from '../../../lib/featureFlags';
 import { CacheWarnDialog } from '../CacheWarnDialog';
 import { RingPillBadge, type CostStats, type FalCostStats, type ProviderBalance } from '../ChatHeaderBar';
 import type { GlifGenStats } from '../glifStats';
@@ -111,6 +112,11 @@ describe('cacheWarnPrefs: чтение /me, сохранение, сброс', (
 });
 
 describe('Применение личного порога к индикатору (F-3)', () => {
+  // Дефект гейта: обвязка циферблата живёт за фич-флагом prompt-cache (2e575a83c) —
+  // состояния индикатора проверяются при включённом флаге, сброс после каждого теста.
+  beforeEach(() => setAllFlags({ 'prompt-cache': true }));
+  afterEach(() => setAllFlags({}));
+
   it('часовой кэш, личный порог 15 мин: остаток 10 мин — «остывает», минуты на циферблате', () => {
     setCacheWarnThresholdsFromServer({ warn1hMin: 15, warn5mMin: 2 });
     const html = renderPill([cacheItem({ anchorAtMs: Date.now() - 50 * MIN })]);

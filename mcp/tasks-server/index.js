@@ -373,6 +373,40 @@ const VERIFICATION_SCHEMA = {
       enum: ['accepted', 'accepted_with_remarks', 'returned', 'withdrawn'],
       description: 'Исход витка: accepted · accepted_with_remarks · returned · withdrawn',
     },
+    returnReason: {
+      type: 'string',
+      enum: ['size', 'side-effect', 'contract', 'robustness', 'quality', 'other'],
+      description: 'Причина возврата (только при verdict=returned; other — с текстом в notes): ' +
+        'size · side-effect · contract · robustness · quality · other',
+    },
+  },
+};
+
+// Критерии приёмки и свидетельства. Парные AcceptanceSchema/EvidenceSchema http-ветки TasksToolset.cs.
+const ACCEPTANCE_SCHEMA = {
+  type: 'array',
+  description: 'Критерии приёмки (измеримые): заменяют список целиком; исполнитель задачи их не меняет',
+  items: {
+    type: 'object',
+    required: ['text'],
+    properties: {
+      id: { type: 'string', description: 'Id критерия (пусто — присвоится c1, c2…)' },
+      text: { type: 'string', description: 'Измеримая формулировка критерия' },
+    },
+  },
+};
+
+const EVIDENCE_SCHEMA = {
+  type: 'array',
+  description: 'Свидетельства по критериям приёмки: добавляются к имеющимся; закрытие задачи требует свидетельство на каждый критерий',
+  items: {
+    type: 'object',
+    required: ['criterionId', 'how', 'result'],
+    properties: {
+      criterionId: { type: 'string', description: 'Id критерия' },
+      how: { type: 'string', description: 'Чем проверено (команда, замер)' },
+      result: { type: 'string', description: 'Что получилось (вывод, цифры)' },
+    },
   },
 };
 
@@ -525,6 +559,7 @@ const TOOLS = [
         stepRef: STEP_REF_SCHEMA,
         lane: LANE_SCHEMA,
         reviewOf: REVIEW_OF_SCHEMA,
+        acceptance: ACCEPTANCE_SCHEMA,
         projectId: { type: 'string', description: 'Проект задачи, если не текущий (см. tasks_list_projects; нужен полный доступ)' },
       },
     },
@@ -563,6 +598,8 @@ const TOOLS = [
         stepRef: STEP_REF_SCHEMA,
         lane: LANE_SCHEMA,
         reviewOf: REVIEW_OF_SCHEMA,
+        acceptance: ACCEPTANCE_SCHEMA,
+        evidence: EVIDENCE_SCHEMA,
         verification: VERIFICATION_SCHEMA,
         outcome: OUTCOME_SCHEMA,
         projectId: { type: 'string', description: 'Перенести в другой проект (см. tasks_list_projects) или "" — сделать личной' },
@@ -587,6 +624,7 @@ const TOOLS = [
         id: { type: 'string', description: 'ID задачи' },
         resultMarkdown: { ...RESULT_MARKDOWN_SCHEMA, description: 'Короткий итог сделанного (markdown)' },
         linkedFiles: { ...LINKED_FILES_SCHEMA, description: 'Итоговые файлы проекта (пути от корня, через /)' },
+        evidence: EVIDENCE_SCHEMA,
         verification: VERIFICATION_SCHEMA,
         outcome: OUTCOME_SCHEMA,
       },
@@ -732,7 +770,7 @@ async function callTool(name, args) {
 
     case 'tasks_create': {
       const body = { title: args.title };
-      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'modelTier', 'worktreePath', 'worktreeBranch', 'labels', 'columnId', 'executionExpiresAfterMinutes', 'kind', 'repro'])
+      for (const k of ['description', 'priority', 'dueDate', 'dueTime', 'reminderMinutes', 'recurrence', 'assignee', 'personaId', 'modelTier', 'worktreePath', 'worktreeBranch', 'labels', 'columnId', 'executionExpiresAfterMinutes', 'kind', 'repro', 'acceptance'])
         if (args[k] !== undefined) body[k] = args[k];
       // Происхождение задачи из окружения хода: персона-постановщик (если ход шёл от её лица)
       // и чат-источник. Чат-источник — факт «задача рождена в этом чате», он не зависит от того,
@@ -771,6 +809,7 @@ async function callTool(name, args) {
       // не подставляет автора вердикта — бэкенд берёт personaId из сессии вызова
       // (X-Caller-Session-Id) сам, иначе мы бы затирали фактического автора дефолтом чата.
       if (args.verification !== undefined) body.verification = args.verification;
+      if (args.evidence !== undefined) body.evidence = args.evidence;
       if (args.outcome !== undefined) body.outcome = args.outcome;
       const task = await api(`/api/tasks/${args.id}`, { method: 'PUT', body: JSON.stringify(body) });
       // Мягкое предупреждение (паритет с CompleteResponse http-ветки): ревью/проверку/финал

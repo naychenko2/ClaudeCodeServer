@@ -390,6 +390,123 @@ public sealed partial class TestRunService
         return null;
     }
 
+    // Каталог node_modules с одним из пакетов (ui_probe: скрипту нужен только require('playwright'), без CLI тест-раннера).
+    // Идём от цели вверх до корня дерева по правилам Node. Мягче FindNodeBin ровно в одном: сам
+    // node_modules может быть ссылкой на node_modules другого каталога с package.json (так
+    // scripts/worktree-setup.sh подключает зависимости основного дерева к worktree). Всё внутри
+    // этого node_modules обязано в нём и оставаться. Возвращает каталог node_modules с пакетом или null
+    public static string? FindPackageDir(string root, string target, IReadOnlyList<string> packages, out string error)
+    {
+        error = "";
+        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string targetFull;
+        try { targetFull = SafePath.Join(rootFull, target); }
+        catch (Exception e) when (e is UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            error = "target выходит за пределы проекта — вызов отклонён.";
+            return null;
+        }
+        targetFull = targetFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        for (var dir = targetFull; ; dir = Path.GetDirectoryName(dir)!)
+        {
+            var modules = Path.Combine(dir, "node_modules");
+            var package = packages.FirstOrDefault(p => File.Exists(Path.Combine(modules, p, "package.json")));
+            if (package is not null)
+            {
+                // Сам пакет проверяется в обеих ветках: node_modules/playwright → ссылка наружу исполнила бы чужой код
+                var packagePath = Path.Combine(modules, package);
+                if (ResolvesInside(rootFull, modules))
+                {
+                    if (ResolvesInside(rootFull, packagePath)) return modules;
+                    error = $"{Relative(rootFull, packagePath)} ведёт символической ссылкой за пределы проекта — "
+                        + "такой пакет не запускаем.";
+                    return null;
+                }
+                if (LinkedModulesInRepository(rootFull, modules, package)) return modules;
+                error = $"{Relative(rootFull, modules)} ведёт символической ссылкой за пределы проекта не на "
+                    + "node_modules с package.json рядом в основном дереве того же репозитория — такой пакет не запускаем.";
+                return null;
+            }
+            if (PathComparer.Equals(dir, rootFull) || !IsInside(rootFull, dir)) break;
+        }
+        var shown = Relative(rootFull, targetFull);
+        error = $"Ни в «{(shown.Length == 0 ? "." : shown)}», ни выше до корня проекта нет пакета {string.Join(" / ", packages)} — зависимости "
+            + "не установлены (npm ci / pnpm install или scripts/worktree-setup.sh) или это не тот каталог.";
+        return null;
+    }
+
+    // node_modules — ссылка на каталог ТАКОГО ЖЕ имени, рядом с которым лежит package.json, внутри дерева
+    // того же репозитория (основной checkout или любой его worktree), а пакет внутри него ссылками из него не выходит
+    private static bool LinkedModulesInRepository(string rootFull, string modules, string package)
+    {
+        FileSystemInfo? resolved;
+        try { resolved = new DirectoryInfo(modules).ResolveLinkTarget(returnFinalTarget: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+        if (resolved is not DirectoryInfo { Name: "node_modules", Parent: { } owner } real || !real.Exists) return false;
+        var realFull = real.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return File.Exists(Path.Combine(owner.FullName, "package.json"))
+            && RepositoryTrees(rootFull).Any(tree => IsInside(tree, RealPath(realFull)))
+            && ResolvesInside(realFull, Path.Combine(real.FullName, package));
+    }
+
+    // Деревья репозитория корня (как `git worktree list`, но без запуска git): основной checkout и worktree'ы
+    // из <общий .git>/worktrees/*/gitdir. .git ищется от корня вверх: корень проекта — подкаталог репозитория.
+    // Нет .git ни в корне, ни выше — пусто (сам по себе корень не «репозиторий»)
+    private static IEnumerable<string> RepositoryTrees(string rootFull)
+    {
+        try
+        {
+            string? commonDir = null;
+            for (var dir = rootFull; dir is { Length: > 0 }; dir = Path.GetDirectoryName(dir))
+            {
+                var dotGit = Path.Combine(dir, ".git");
+                if (Directory.Exists(dotGit)) { commonDir = dotGit; break; }
+                if (File.Exists(dotGit))
+                {
+                    if (File.ReadAllText(dotGit).Trim() is var line && line.StartsWith("gitdir:", StringComparison.Ordinal))
+                    {
+                        // gitdir: <общий .git>/worktrees/<имя>
+                        var gitDir = Path.GetFullPath(line["gitdir:".Length..].Trim(), dir);
+                        commonDir = Path.GetDirectoryName(Path.GetDirectoryName(gitDir));
+                    }
+                    break;
+                }
+            }
+            if (commonDir is null || Path.GetDirectoryName(commonDir) is not { } primary) return [];
+            var trees = new List<string> { primary };
+            var worktrees = Path.Combine(commonDir, "worktrees");
+            if (Directory.Exists(worktrees))
+                foreach (var entry in Directory.EnumerateDirectories(worktrees))
+                    if (File.Exists(Path.Combine(entry, "gitdir"))
+                        && Path.GetDirectoryName(File.ReadAllText(Path.Combine(entry, "gitdir")).Trim()) is { Length: > 0 } tree)
+                        trees.Add(tree);
+            // Реальные пути: сравнение с целью ссылки идёт по раскрытым ссылкам, а не по тому, как записан путь
+            return trees.Select(t => RealPath(t.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return []; }
+    }
+
+    // Путь с раскрытыми ссылками на каждом сегменте; сегмент, который не удалось раскрыть, остаётся как есть
+    private static string RealPath(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? "";
+        var current = root;
+        foreach (var segment in full[root.Length..].Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar,
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            try
+            {
+                if (new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true) is { } target)
+                    current = target.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* не раскрылся */ }
+        }
+        return current;
+    }
+
     private static readonly StringComparer PathComparer =
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 

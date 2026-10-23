@@ -157,6 +157,15 @@ public class TaskItem
     // заметки, снятие волной), которые не оставляют системного Verification. Прочие значения
     // ставит человек/персона. Сбрасывается при уходе из Done.
     public DefectOutcome? Outcome { get; set; }
+    // Критерии приёмки (измеримые) и свидетельства их выполнения. Аддитивные поля: старые
+    // задачи читаются пустыми списками, BackupSchema.Version не растёт. Закрыть задачу с
+    // непустым Acceptance можно, только когда на каждый критерий есть свидетельство
+    // (гейт один — AcceptanceRules, вызывается из TaskManager на переходе в Done).
+    // Явный "acceptance": null в JSON затирал бы инициализатор — сеттер возвращает пустой список
+    public List<AcceptanceCriterion> Acceptance { get => _acceptance; set => _acceptance = value ?? []; }
+    public List<AcceptanceEvidence> Evidence { get => _evidence; set => _evidence = value ?? []; }
+    private List<AcceptanceCriterion> _acceptance = [];
+    private List<AcceptanceEvidence> _evidence = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Дата+время завершения: когда статус стал Done. null — не завершена.
@@ -164,6 +173,12 @@ public class TaskItem
     // экземпляр регулярной задачи (как ClaudeResult/ResultMarkdown — серия начинается заново).
     public DateTime? CompletedAt { get; set; }
 }
+
+// Критерий приёмки задачи: Id стабилен (на него ссылается свидетельство), Text — измеримая формулировка.
+public record AcceptanceCriterion(string Id, string Text);
+
+// Свидетельство по критерию: How — чем проверено, Result — что получилось (вывод, цифры).
+public record AcceptanceEvidence(string CriterionId, string How, string Result);
 
 public class TaskSubtask
 {

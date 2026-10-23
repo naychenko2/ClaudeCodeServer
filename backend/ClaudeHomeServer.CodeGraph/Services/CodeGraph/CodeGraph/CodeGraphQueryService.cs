@@ -145,6 +145,87 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
     }
 
     /// <summary>
+    /// Связи файла: входящие связи всех типов, объявленных в файле, сгруппированные по файлу-потребителю
+    /// (хук PreToolUse «потребители правленого файла»). Форма выхода та же, что у node: каждая строка
+    /// Neighbors — один файл-потребитель (Fqn/Location — путь файла, Id — он же), Total — число
+    /// файлов-потребителей; Node описывает сам файл. file — путь от корня дерева. Результата нет
+    /// (Result = null), если в графе нет ни одного типа из этого файла; кандидатов у режима нет.
+    /// </summary>
+    public async Task<CodeGraphNeighborsOutcome> NeighborsByFileAsync(
+        string rootPath, string file, int limit, CancellationToken ct)
+    {
+        var index = await GetIndexAsync(rootPath, ct);
+        if (index is null) return new CodeGraphNeighborsOutcome(false, null, []);
+
+        var wanted = NormalizeFile(file);
+        if (wanted.Length == 0) return new CodeGraphNeighborsOutcome(true, null, []);
+
+        var declared = index.Nodes.Values
+            .Where(n => NormalizeFile(n.SourceFile).Equals(wanted, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (declared.Count == 0) return new CodeGraphNeighborsOutcome(true, null, []);
+
+        var declaredIds = declared.Select(n => n.Id).ToHashSet(StringComparer.Ordinal);
+        var consumers = new Dictionary<string, (int Count, HashSet<string> Relations)>(StringComparer.OrdinalIgnoreCase);
+        var totalIn = 0;
+        foreach (var id in declaredIds)
+        {
+            foreach (var e in index.Incoming.GetValueOrDefault(id) ?? [])
+            {
+                // Связь внутри самого файла потребителем не считается
+                if (declaredIds.Contains(e.Source)) continue;
+                var from = index.Nodes.TryGetValue(e.Source, out var src) && !string.IsNullOrEmpty(src.SourceFile)
+                    ? src.SourceFile
+                    : e.Source.Contains("::") ? e.Source[..e.Source.LastIndexOf("::", StringComparison.Ordinal)] : e.Source;
+                var key = NormalizeFile(from);
+                if (key.Equals(wanted, StringComparison.OrdinalIgnoreCase)) continue;
+                totalIn++;
+                if (!consumers.TryGetValue(key, out var acc)) consumers[key] = acc = (0, new HashSet<string>(StringComparer.Ordinal));
+                acc.Relations.Add(e.Relation);
+                consumers[key] = (acc.Count + 1, acc.Relations);
+            }
+        }
+
+        var byRelation = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (_, acc) in consumers)
+            foreach (var r in acc.Relations) byRelation[r] = byRelation.GetValueOrDefault(r) + 1;
+
+        var neighbors = consumers
+            .OrderByDescending(c => c.Value.Count)
+            .ThenBy(c => c.Key, StringComparer.Ordinal)
+            .Take(Clamp(limit))
+            .Select(c => new CodeGraphNeighborDto
+            {
+                Id = c.Key,
+                Fqn = c.Key,
+                Kind = "File",
+                Location = c.Key,
+                Direction = "in",
+                Relation = string.Join("+", c.Value.Relations.Order(StringComparer.Ordinal)),
+                Confidence = "",
+            })
+            .ToList();
+
+        return new CodeGraphNeighborsOutcome(true, new CodeGraphNeighborsResultDto
+        {
+            Node = new CodeGraphNodeBriefDto { Id = wanted, Fqn = wanted, Kind = "File", Location = wanted, Degree = totalIn },
+            Neighbors = neighbors,
+            Total = consumers.Count,
+            TotalIn = totalIn,
+            TotalOut = 0,
+            ByRelation = byRelation,
+            IsStale = StaleAndRefresh(rootPath, index),
+        }, []);
+    }
+
+    private static string NormalizeFile(string? path)
+    {
+        var p = (path ?? "").Trim().Replace('\\', '/');
+        while (p.StartsWith("./", StringComparison.Ordinal)) p = p[2..];
+        return p.TrimStart('/');
+    }
+
+    /// <summary>
     /// Топ узлов по связности (те же хабы, что в slice системного промпта, но по запросу).
     /// null — граф не построен.
     /// </summary>

@@ -13,6 +13,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
@@ -1705,6 +1706,12 @@ if (!inspectionMode)
                     try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
         }
         catch { /* нет доступа к temp — не критично */ }
+        try
+        {
+            // хук потребителей: признаки «файл уже правили» (<префикс проекта>_<session_id>) и каталоги отпечатков прежних сборок, TTL сутки
+            ClaudeRuntimeSettings.CleanupHookState(Path.GetTempPath(), TimeSpan.FromDays(1));
+        }
+        catch { /* не критично */ }
     });
 
 // Однократная миграция: переносим DifyDatasetId/DocumentTags из старых Project-записей в WorkspaceKnowledge

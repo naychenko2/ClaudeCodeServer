@@ -652,6 +652,28 @@ public class TaskExecutionServiceTests
         text.Should().Contain("Собрал, тесты зелёные.");
     }
 
+    [Fact]
+    public void BuildDelegationReportText_СКритериями_СодержитТаблицуКритерийСвидетельство()
+    {
+        var task = new TaskItem { Title = "Шаг", ResultMarkdown = "Готово." };
+        task.Acceptance.AddRange([new("c1", "кнопка ≥ 40 на 360"), new("c2", "ui_probe без находок")]);
+        task.Evidence.Add(new("c1", "ui_probe 360", "высота 44, ширина 48"));
+
+        var text = TaskExecutionService.BuildDelegationReportText(task);
+
+        text.Should().Contain("| Критерий | Свидетельство |");
+        text.Should().Contain("| c1. кнопка ≥ 40 на 360 | ui_probe 360 — высота 44, ширина 48 |");
+        text.Should().Contain("| c2. ui_probe без находок | _нет свидетельства_ |");
+    }
+
+    [Fact]
+    public void BuildDelegationReportText_БезКритериев_БезТаблицы()
+    {
+        var text = TaskExecutionService.BuildDelegationReportText(new TaskItem { Title = "Т", ResultMarkdown = "Ок" });
+
+        text.Should().NotContain("Критерий");
+    }
+
     // B3: пустой итог объясняется человеку, а не скобочной пометкой
     [Fact]
     public void BuildDelegationReportText_БезИтога_ЧеловеческийТекст()

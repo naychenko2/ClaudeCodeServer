@@ -84,7 +84,10 @@ public sealed record PromptSessionContext(
     // MCP-сервер модуля «Видео» (video_*) доехал до хода — по той же причине
     bool HasVideoEditorMcp = false,
     // Живого человека у хода нет — см. TurnAudience.IsUnattended
-    bool Unattended = false);
+    bool Unattended = false,
+    // Хук PreToolUse «потребители правленого файла» реально доедет до CLI хода (local-владелец на Linux, http-адрес).
+    // Только диагностика: хвост первого хода ConsumersTailContributor идёт независимо от признака (правки через Bash хук не видит)
+    bool ConsumersHookActive = false);
 
 public static class TurnAudience
 {

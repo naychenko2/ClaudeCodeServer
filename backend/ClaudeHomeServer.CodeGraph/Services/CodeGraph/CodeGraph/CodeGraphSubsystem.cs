@@ -37,6 +37,8 @@ public sealed class CodeGraphSubsystem : IAppPhaseSubsystem
         // зарегистрирован в своей вертикали, Turn собирает IEnumerable<IPromptSectionContributor>
         // и натравливает на шину (см. PromptSectionContributorsRegistration.RegisterAll).
         services.AddPromptSectionContributor<CodeGraphContributor>();
+        // Потребители файлов постановки хвостом первого хода исполнителя — там, где нет хука PreToolUse
+        services.AddPromptSectionContributor<ConsumersTailContributor>();
     }
 
     public void ConfigureApp(WebApplication app)

@@ -716,6 +716,44 @@ public class ClaudeSessionPromptSectionsOrderTests : IDisposable
         section.Should().BeNull($"{why}: video_* у хода нет («No such tool available»)");
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task ПризнакХукаПотребителей_ХостБезПесочницыСHttpГрафом_ТогдаИТолькоТогдаTrue(bool httpGraph, bool expected)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        bool? seen = null;
+        await RunTailTurnAsync(false, "x", bus => bus.OnFilter<PromptAssembling>(200, (e, next) =>
+        {
+            seen = e.Session.ConsumersHookActive;
+            return next();
+        }, "Test.HookFlag"), tweak: httpGraph
+            ? c => c with { CodeGraphMcp = new CodeGraphMcpContext("http://localhost:5999", () => "tok", "proj1") }
+            : null);
+
+        seen.Should().Be(expected, "хук доезжает до CLI только на хосте без песочницы и при http-адресе графа");
+    }
+
+    [Fact]
+    public void ХукПотребителей_ВПесочницеНеЗапускается()
+    {
+        ClaudeRuntimeSettings.ConsumersHookRuns(new SandboxedLauncher()).Should().BeFalse(
+            "у container-владельца --settings не передаётся — потребителей несёт хвост первого хода");
+    }
+
+    private sealed class SandboxedLauncher : IProcessLauncher
+    {
+        public bool IsSandboxed => true;
+        public bool TargetIsWindows => false;
+        public IPathMapper Paths => IdentityPathMapper.Instance;
+        public string ClaudeCliCommand => "fake-claude";
+        public string HostTempDir => Path.GetTempPath();
+        public string? McpApiUrlOverride => null;
+        public Process Start(ProcessSpec spec) => throw new NotSupportedException();
+        public void Kill(Process process, string? turnId = null) { }
+        public int EstimateCommandLineLength(ProcessSpec spec) => 0;
+    }
+
     private async Task<(string SystemPrompt, IReadOnlyList<PromptSectionDto> Sections)> RunTailTurnAsync(
         bool recallInTurnText, string stateText, Action<TurnEventBus>? extra = null, Session? info = null,
         Func<LlmSessionContext, LlmSessionContext>? tweak = null, Dictionary<string, string?>? providerConfig = null,

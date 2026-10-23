@@ -189,6 +189,31 @@ internal sealed partial class DevStand(
         }
     }
 
+    // Адрес поднятого стенда сервиса (ui_probe): только ЧИТАЕТ реестр и конфигурацию, ничего не
+    // поднимает. Нет реестра, сервиса или живого стенда — текст отказа
+    public async Task<(string? Origin, string? Error)> FindRunningOriginAsync(Session session, Project project,
+        string ownerId, string? raw)
+    {
+        if (devServer is null || discovery is null)
+            return (null, "Стенды из чата выключены на этом сервере — передай url живого стенда.");
+        var running = devServer.GetRunning(project.Id, ownerId);
+        var root = ProjectRunCaller.RootOf(session, project);
+        var live = running.FirstOrDefault(r => r.ServiceId == raw);
+        string name = raw ?? "";
+        if (live is null)
+        {
+            var resolved = await ResolveServiceAsync(project, root, raw);
+            if (resolved.Error is not null) return (null, resolved.Error);
+            name = resolved.Service!.Name;
+            var id = StandId(resolved.Service.Id, root, project.RootPath);
+            live = running.FirstOrDefault(r => r.ServiceId == id);
+        }
+        return live is { Status: "started", Port: { } port }
+            ? ($"http://127.0.0.1:{port}", null)
+            : (null, $"Стенд «{name}» не поднят — ui_probe сам стенды не поднимает. Попроси поднять его "
+                + $"(start_stand, service «{raw}») и повтори вызов.");
+    }
+
     public async Task<McpToolCallResult> StopAsync(Session session, Project project, string ownerId,
         JsonObject arguments)
     {

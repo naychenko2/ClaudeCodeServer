@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.ProjectServices;
 using ClaudeHomeServer.Services.TestRuns;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
@@ -27,10 +28,16 @@ public sealed class TestsToolset(
     // Из отключаемой вертикали TestRuns: выключена — инструмент честно отказывает
     TestRunService? runs = null,
     // Живые фазы прогона в ленту; нет — вызов работает без прогресса
-    ISessionBroadcaster? broadcaster = null) : IMcpParameterizedToolset
+    ISessionBroadcaster? broadcaster = null,
+    // Замер интерфейса стенда (ui_probe): движок той же вертикали TestRuns; нет — инструмент отказывает
+    UiProbeService? probe = null,
+    // Реестр «Сервисов» (вертикаль ProjectServices): по нему service резолвится в адрес живого стенда
+    DevServerService? devServer = null,
+    ProjectServiceDiscovery? discovery = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.TestsName;
     public const string ToolName = "run_tests";
+    public const string UiProbeName = "ui_probe";
 
     internal const string LocalProjectReason =
         "Тесты локального проекта прогоняй Bash'ем на устройстве: run_tests работает только с проектами на сервере.";
@@ -43,6 +50,9 @@ public sealed class TestsToolset(
         NoBash: "Персоне запрещён Bash — значит, и запуск кода тестов: run_tests исполняет код проекта.");
 
     private readonly ProjectRunCaller _caller = new(sessions, projects, personas, broadcaster);
+    // Резолв service → адрес стенда: тот же код, что у start_stand, но только чтение реестра
+    private readonly DevStand _stands = new(new ProjectRunCaller(sessions, projects, personas, broadcaster),
+        devServer, discovery, null, null, 0);
 
     public string Name => ServerName;
     public string Version => "1.0.0";
@@ -53,6 +63,7 @@ public sealed class TestsToolset(
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
+        if (tool == UiProbeName) return await CallUiProbeAsync(arguments, context, ct);
         if (tool != ToolName) throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         if (!_caller.TryResolveSession(context, Refusals, out var session, out var error)) return Deny(error);
         if (runs is null)
@@ -115,6 +126,142 @@ public sealed class TestsToolset(
         }
         // Упавшие тесты — штатный исход вызова, а не ошибка инструмента; ошибка — только отказ
         return new McpToolCallResult(runs.FormatResult(result), IsError: result.Refusal is not null);
+    }
+
+    // ui_probe: те же гейты вызывателя, что у run_tests (процесс исполняет код из node_modules проекта)
+    private async Task<McpToolCallResult> CallUiProbeAsync(JsonObject arguments, McpToolCallContext context,
+        CancellationToken ct)
+    {
+        if (!_caller.TryResolveSession(context, Refusals, out var session, out var error)) return Deny(error);
+        if (probe is null)
+            return Deny("Замер интерфейса выключен на этом сервере — открой страницу Playwright'ом сам.");
+        _caller.SendStarted(session.Id, context.ToolUseId);
+        if (!_caller.TryResolveProject(session, context.OwnerId, Refusals, out var project, out error)) return Deny(error);
+        var root = ProjectRunCaller.RootOf(session, project);
+
+        var rawUrl = StringArg(arguments, "url");
+        var rawService = StringArg(arguments, "service");
+        if ((rawUrl is null) == (rawService is null))
+            return Deny("Укажи ровно одно: url живого стенда (http://127.0.0.1:порт) или service из панели «Сервисы».");
+        string origin;
+        if (rawUrl is not null)
+        {
+            if (!TryParseStandUrl(rawUrl, out origin, out error)) return Deny(error);
+        }
+        else
+        {
+            // Контракт fail-closed: нет адреса — ошибка непустая; на случай нарушения контракта отказ всё равно текстом
+            var (found, standError) = await _stands.FindRunningOriginAsync(session, project, context.OwnerId, rawService);
+            if (found is null) return Deny(standError ?? "Стенд сервиса не найден — передай url живого стенда.");
+            origin = found;
+        }
+        if (!TryParsePath(StringArg(arguments, "path"), out var path, out error)) return Deny(error);
+        if (!TryParseViewports(arguments["viewports"], out var viewports, out error)) return Deny(error);
+        if (!TryParseMinSize(arguments["min_size_px"], out var minSize, out error)) return Deny(error);
+        var selector = StringArg(arguments, "selector");
+        if (selector is { Length: > MaxSelectorLength } || selector?.Any(char.IsControl) == true)
+            return Deny($"selector — CSS-селектор до {MaxSelectorLength} символов без управляющих символов.");
+        if (!TryResolveProbeTarget(root, StringArg(arguments, "target"), out var target, out error))
+            return Deny(error);
+
+        // Учётка стенда: по умолчанию та же, что у e2e (playwright.config). Едет в окружение процесса
+        var user = StringArg(arguments, "user") ?? "admin";
+        var password = StringArg(arguments, "password") ?? "12345";
+        if (user.Length > MaxEnvValueLength || password.Length > MaxEnvValueLength
+            || user.Any(char.IsControl) || password.Any(char.IsControl))
+            return Deny($"user и password — строки до {MaxEnvValueLength} символов без управляющих символов.");
+
+        var request = new UiProbeRequest(project, root, Path.Combine(root, target!), session.Id, origin, path,
+            viewports, minSize, selector, user, password);
+        var stages = new TestRunStages(() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        UiProbeResult? result = null;
+        try
+        {
+            result = await probe.RunAsync(request, p => _caller.SendProgress(session.Id, context.ToolUseId, p, stages), ct);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            return Deny($"Не удалось запустить замер: {e.Message}");
+        }
+        finally
+        {
+            _caller.SendFinal(session.Id, context.ToolUseId, stages,
+                failed: result is null || result.Json is null, totals: null);
+        }
+        if (result.Refusal is not null) return Deny(result.Refusal);
+        if (result.Json is null)
+            return Deny(result.Cancelled ? "Замер остановлен («Стоп»)."
+                : result.TimedOut ? $"Замер упёрся в потолок вызова ({probe.Options.CeilingSeconds} с) — повтори с меньшим числом viewports."
+                : result.Failure ?? "Замер не удался.");
+        return new McpToolCallResult(result.Json);
+    }
+
+    public const int MaxSelectorLength = 200;
+    public const int MaxViewports = 6;
+
+    // url — только loopback (сервер сам стучится по нему), от него берётся только origin: маршрут — в path
+    internal static bool TryParseStandUrl(string raw, out string origin, out string error)
+    {
+        origin = "";
+        error = "";
+        if (!Uri.TryCreate(raw.Trim(), UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https")
+            || !url.IsLoopback)
+        {
+            error = "url — только локальный стенд: http(s)://localhost, 127.0.0.1 или [::1] с портом.";
+            return false;
+        }
+        origin = url.GetLeftPart(UriPartial.Authority);
+        return true;
+    }
+
+    // Маршрут стенда «/…» вместе с «#/…» у hash-роутера; адрес он не меняет, потому что склеивается с origin
+    internal static bool TryParsePath(string? raw, out string path, out string error)
+    {
+        error = "";
+        path = string.IsNullOrWhiteSpace(raw) ? "/" : raw.Trim();
+        if (path.Length <= 300 && path.StartsWith('/') && !path.StartsWith("//") && !path.Contains('\\')
+            && !path.Any(c => char.IsControl(c) || char.IsWhiteSpace(c)))
+            return true;
+        error = "path — маршрут на стенде вида /#/ui-kit: с одного «/» в начале, до 300 символов, без пробелов.";
+        return false;
+    }
+
+    internal static bool TryParseViewports(JsonNode? node, out IReadOnlyList<int> viewports, out string error)
+    {
+        error = "";
+        viewports = UiProbeReport.DefaultViewports;
+        if (node is null) return true;
+        if (node is not JsonArray array || array.Count is 0 or > MaxViewports)
+        {
+            error = $"viewports — массив из 1–{MaxViewports} ширин экрана в px (по умолчанию [360, 1280]).";
+            return false;
+        }
+        var result = new List<int>();
+        foreach (var item in array)
+        {
+            if (item is not JsonValue v || !v.TryGetValue<int>(out var width) || width is < 200 or > 4000)
+            {
+                error = "viewports — целые ширины экрана от 200 до 4000 px.";
+                return false;
+            }
+            result.Add(width);
+        }
+        viewports = result.Distinct().ToList();
+        return true;
+    }
+
+    internal static bool TryParseMinSize(JsonNode? node, out int minSize, out string error)
+    {
+        error = "";
+        minSize = UiProbeReport.DefaultMinTargetPx;
+        if (node is null) return true;
+        if (node is JsonValue v && v.TryGetValue<int>(out var value) && value is >= 1 and <= 200)
+        {
+            minSize = value;
+            return true;
+        }
+        error = "min_size_px — целое от 1 до 200 (по умолчанию 40).";
+        return false;
     }
 
     internal static bool TryParseKind(string? raw, out TestRunKind kind, out string error)
@@ -290,8 +437,26 @@ public sealed class TestsToolset(
     internal static bool TryResolveNodeTarget(string root, string? raw, TestRunKind kind, out string? target,
         out string? nodeBin, out string error)
     {
-        target = null;
         nodeBin = null;
+        if (!TryPickNodeDirectory(root, raw, kind, out target, out error)) return false;
+
+        // Монорепа: пакет лежит в node_modules выше цели (до корня дерева, не выше)
+        nodeBin = TestRunService.FindNodeBin(root, target!, kind, out error);
+        return nodeBin is not null;
+    }
+
+    // Каталог для ui_probe: тот же выбор цели, но от дерева нужен только пакет playwright
+    // (require из скрипта), а не бинарь тест-раннера; node_modules worktree может вести на основное дерево
+    internal static bool TryResolveProbeTarget(string root, string? raw, out string? target, out string error)
+    {
+        if (!TryPickNodeDirectory(root, raw, TestRunKind.Playwright, out target, out error)) return false;
+        return TestRunService.FindPackageDir(root, target!, UiProbeService.RequiredPackages, out error) is not null;
+    }
+
+    private static bool TryPickNodeDirectory(string root, string? raw, TestRunKind kind, out string? target,
+        out string error)
+    {
+        target = null;
         var tool = TestRunService.KindName(kind);
         if (string.IsNullOrWhiteSpace(raw))
         {
@@ -313,10 +478,7 @@ public sealed class TestsToolset(
             }
             target = relative;
         }
-
-        // Монорепа: пакет лежит в node_modules выше цели (до корня дерева, не выше)
-        nodeBin = TestRunService.FindNodeBin(root, target!, kind, out error);
-        return nodeBin is not null;
+        return true;
     }
 
     // Пути тестов vitest/Playwright: те же правила, что у цели (не опция, внутри дерева,
@@ -426,7 +588,7 @@ public sealed class TestsToolset(
 
     private static string? StringArg(JsonObject arguments, string name) => ProjectRunCaller.StringArg(arguments, name);
 
-    // Состав постоянный — один инструмент; описание не зависит ни от хода, ни от сессии
+    // Состав постоянный — два инструмента; описание не зависит ни от хода, ни от сессии
     internal static IReadOnlyList<McpToolSchema> Tools { get; } =
     [
         new(ToolName,
@@ -485,6 +647,72 @@ public sealed class TestsToolset(
                         ["type"] = "boolean",
                         ["description"] = "Только dotnet: true — пропустить сборку (дерево уже собрано после последней правки)",
                     },
+                },
+            }),
+        new(UiProbeName,
+            "Замер интерфейса УЖЕ ПОДНЯТОГО стенда цифрами (headless Chromium, только чтение, без скриншотов и "
+            + "оценок): интерактивные элементы с любой стороной меньше порога, горизонтальное переполнение "
+            + "документа и контейнеров, обрезанный текст, ошибки консоли и упавшие запросы за время загрузки, "
+            + "интерактивные элементы без доступного имени. Результат — JSON с числами по каждой ширине экрана. "
+            + "Размеры округлены до 0,1 px; порог сравнивается строго (меньше порога — находка), поэтому у границы "
+            + "возможен субпиксельный джиттер между прогонами (39.6 ↔ 40.0) — решает счётчик по двум прогонам. "
+            + "Страница без единого видимого интерактивного элемента (не отрисовалась, вход не выполнен) — отказ, а не нули. "
+            + $"Картина считается устойчивой, если не менялась {UiProbeService.StableWindowMs / 1000} с, ожидание ширины ограничено 15 с: ступень догрузки с паузой дольше окна не ловится, а при долгой догрузке будет отказ «не устоялась»; "
+            + "анимация размеров или переполнения тоже даёт этот отказ — предел метода. "
+            + "«truncated: true» — счётчики нижние оценки (обрезка скриптом или опущенный хвост списков). "
+            + "Стенд сам не поднимает: нет стенда — отказ (попроси поднять его). Встаёт в общую очередь "
+            + $"сборок, останавливается по «Стоп», потолок — {TestRunsOptions.DefaultCeilingSeconds / 60} минут.",
+            new JsonObject
+            {
+                ["type"] = "object",
+                ["properties"] = new JsonObject
+                {
+                    ["url"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Адрес живого стенда http://127.0.0.1:порт (только loopback); вместо service",
+                    },
+                    ["service"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["maxLength"] = 300,
+                        ["description"] = "id сервиса из панели «Сервисы» (как у start_stand) — адрес берётся у "
+                            + "поднятого стенда; вместо url",
+                    },
+                    ["path"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["maxLength"] = 300,
+                        ["description"] = "Маршрут на стенде, у hash-роутера вместе с «#» (например /#/ui-kit); по умолчанию /",
+                    },
+                    ["viewports"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["maxItems"] = MaxViewports,
+                        ["items"] = new JsonObject { ["type"] = "integer", ["minimum"] = 200, ["maximum"] = 4000 },
+                        ["description"] = "Ширины экрана в px; по умолчанию [360, 1280]",
+                    },
+                    ["min_size_px"] = new JsonObject
+                    {
+                        ["type"] = "integer",
+                        ["minimum"] = 1,
+                        ["maximum"] = 200,
+                        ["description"] = "Порог размера интерактивного элемента (любая сторона меньше — находка); по умолчанию 40",
+                    },
+                    ["selector"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["maxLength"] = MaxSelectorLength,
+                        ["description"] = "CSS-селектор: замерять только внутри него; без него — вся страница",
+                    },
+                    ["target"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "ОТНОСИТЕЛЬНО корня проекта: каталог с playwright в node_modules (например "
+                            + "frontend); не задан — единственный каталог с playwright.config.*",
+                    },
+                    ["user"] = new JsonObject { ["type"] = "string", ["description"] = "Учётка стенда; по умолчанию как у e2e" },
+                    ["password"] = new JsonObject { ["type"] = "string", ["description"] = "Пароль стенда; по умолчанию как у e2e" },
                 },
             }),
     ];

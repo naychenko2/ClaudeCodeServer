@@ -29,6 +29,9 @@ public sealed class TestRunsSubsystem : IAppSubsystem
         services.AddSingleton<DotnetBuildService>();
         // Движок сборки `npm run <скрипт>` с прогрессом «этап N из M» — на том же конвейере
         services.AddSingleton<NpmBuildService>();
+        // Замер интерфейса стенда (ui_probe) — на том же конвейере; без регистрации тулсет получает null
+        // в optional-параметр и инструмент всегда отказывает
+        services.AddSingleton<UiProbeService>();
         // Подсказка «тесты — через run_tests»: выключенная подсистема не объявляет и секцию
         services.AddPromptSectionContributor<TestRunsHintContributor>();
         // Подсказка «сборка — через build» (сервер dev): та же форма, свой гейт HasDevMcp

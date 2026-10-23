@@ -40,6 +40,38 @@ public static class TaskVerdicts
         [Accepted, AcceptedWithRemarks, Returned, Withdrawn];
 }
 
+// Закрытый список причин возврата (вердикт returned): по нему считается метрика «доля возвратов
+// по причине», поэтому свободной строкой причина быть не может. Пусто = «причина не указана»
+// (старые данные и возврат без причины). Единственная константа списка — для MCP-схемы и REST.
+public static class TaskReturnReasons
+{
+    public const string Size = "size";               // размер тач-цели / переполнение
+    public const string SideEffect = "side-effect";  // скрытый побочный эффект
+    public const string Contract = "contract";       // невидимый контракт соседнего слоя
+    public const string Robustness = "robustness";   // необработанный вход/ошибка
+    public const string Quality = "quality";         // качество кода, стиль, отсутствие тестов
+    public const string Other = "other";             // только с текстом в Notes
+
+    public static readonly IReadOnlyList<string> All =
+        [Size, SideEffect, Contract, Robustness, Quality, Other];
+
+    // Правило вердикта: причина допустима только при returned, из списка; other требует Notes.
+    // Бросает InvalidOperationException (400 на REST, отказ на MCP). Пустая причина — норма.
+    public static void Validate(string? verdict, string? reason, string? notes)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return;
+        if (verdict != TaskVerdicts.Returned)
+            throw new InvalidOperationException(
+                $"Причина возврата (returnReason) задаётся только при вердикте «{TaskVerdicts.Returned}».");
+        if (!All.Contains(reason))
+            throw new InvalidOperationException(
+                $"Недопустимая причина возврата «{reason}». Допустимые: {string.Join(", ", All)}.");
+        if (reason == Other && string.IsNullOrWhiteSpace(notes))
+            throw new InvalidOperationException(
+                "Причина возврата «other» требует пояснения в verification.notes.");
+    }
+}
+
 // Мягкое предупреждение «ревью/проверку/финал фичи закрыли без вердикта» (разрез §5):
 // карточка фичи вердикт не покажет, а блокировать закрытие ради UI нельзя. Единая строка
 // и условие — для MCP (TasksToolset.CompleteResponse) и REST (TasksController.Update):

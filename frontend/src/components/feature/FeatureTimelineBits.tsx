@@ -339,7 +339,8 @@ export function ModelChip({ label, full, isMobile = false }: { label: string; fu
 }
 
 // Аватар исполнителя (18): персона по personaId; не найдена — нейтральный круг (без инициалов).
-// Экспортируется: Ф2b — строка шага рисует тот же аватар.
+// Экспортируется: тот же аватар рисуют карточки «Производства» (FeatureProdCardsView),
+// вкладки «Чаты»/«Задачи»/«События» и ExecutorRow здесь.
 export function ExecutorAvatar({ personaId }: { personaId: string | null }) {
   if (personaId) {
     const persona = getPersonaById(personaId);

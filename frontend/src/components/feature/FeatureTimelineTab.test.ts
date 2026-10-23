@@ -29,7 +29,7 @@ import {
 import type { StepProgress } from '../../lib/featureProgress';
 import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
-import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureRound, FeatureTask, StageKey } from '../../types/featureRun';
+import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureRound, FeatureTask } from '../../types/featureRun';
 
 // === Мок персон (lib/personas): id → имя; аватар — инициалы (без image) ===
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));

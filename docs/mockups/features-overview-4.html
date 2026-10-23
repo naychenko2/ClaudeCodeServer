@@ -33,6 +33,9 @@
   --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
   --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
   --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --c-glass:rgba(255,255,255,.74);
+  /* Цвета персон — данные (AGENT_COLORS в AgentSelector.tsx), не токены темы */
+  --p-orange:#D97757; --p-purple:#6C5CB0; --p-brown:#8A6A28; --p-blue:#3E7CA6; --p-green:#5E8B4E;
 }
 [data-theme="dark"] {
   --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
@@ -52,6 +55,7 @@
   --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
   --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
   --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --c-glass:rgba(46,42,37,.74);
 }
 * { box-sizing:border-box; }
 html,body { margin:0; }
@@ -367,6 +371,119 @@ svg { flex-shrink:0; }
 .ba > div { min-width:0; }
 .ba .cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 6px; }
 .xrow { display:flex; align-items:center; gap:10px; padding:8px 10px; font-size:12px; border:1px solid var(--c-border-light); border-radius:10px; background:var(--c-bg-card); }
+
+/* ===== Правки 23.10 (решения Андрея) ===== */
+.picked { font-size:11px; font-weight:700; background:var(--c-accent-light); color:var(--c-accent); border:1px solid var(--c-accent-muted); border-radius:6px; padding:0 7px; line-height:18px; }
+.var.dropped { opacity:.45; }
+.var.dropped > h3::after { content:"не выбран"; font-size:11px; font-weight:700; background:var(--c-bg-selected); color:var(--c-text-secondary); border-radius:6px; padding:1px 7px; }
+.decided { display:block; font-size:12.5px; background:var(--c-success-bg); color:var(--c-text-heading); border:1px solid var(--c-success); border-radius:10px; padding:6px 10px; margin:4px 0 14px; max-width:900px; }
+.states { display:flex; flex-wrap:wrap; gap:10px 14px; margin-top:12px; padding-top:10px; border-top:1px dashed var(--c-dashed); }
+.states > div { display:flex; flex-direction:column; gap:4px; }
+.states .cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); }
+
+/* Точка 1: чип «ведёт» — сам переход в ключевой чат */
+.who.go { cursor:pointer; padding-right:6px; }
+.who.go .gi { color:var(--c-text-muted); display:inline-flex; }
+.who.go:hover, .who.go.hv { background:var(--c-bg-selected); border-color:var(--c-accent-muted); }
+.who.go:hover .gi, .who.go.hv .gi { color:var(--c-accent); }
+.who.go.fc { box-shadow:var(--shadow-focus); border-color:var(--c-accent); }
+.who.go.pr { background:var(--c-accent-light); }
+.who.static { cursor:default; border-style:dashed; border-color:var(--c-dashed); background:transparent; }
+.anch { position:relative; display:inline-flex; }
+.anch .tip { top:30px; left:0; }
+
+/* Точка 2: компактная карточка */
+.tk.cp { padding:8px 12px; }
+.tk .h .when { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-muted); white-space:nowrap; }
+.mini-ib { width:24px; height:24px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-secondary); flex-shrink:0; }
+.mb .mini-ib { width:40px; height:40px; }
+.mini-ib:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.ref.btnref { border-radius:6px; padding:0 4px; border:1px solid var(--c-border-light); background:var(--c-bg-white); line-height:18px; }
+.mb .ref.btnref { min-height:40px; min-width:40px; display:inline-flex; align-items:center; justify-content:center; }
+.ref.btnref:hover, .ref.btnref.hv { border-color:var(--c-accent-muted); color:var(--c-text-heading); }
+.nd.go { cursor:pointer; }
+.nd.go:hover { box-shadow:0 0 0 1px var(--c-accent-muted); }
+.hgt { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-muted); }
+.pop { position:absolute; z-index:6; top:24px; left:0; background:var(--c-bg-white); border:1px solid var(--c-border); box-shadow:var(--shadow-dropdown); border-radius:10px; padding:6px; width:230px; font-size:12px; }
+.pop .pr { display:flex; align-items:center; gap:8px; padding:5px 6px; border-radius:6px; }
+.pop button.pr:hover { background:var(--c-bg-selected); }
+.mb .pop button.pr { min-height:40px; }
+.pop .pr .k { color:var(--c-text-muted); width:46px; flex-shrink:0; font-size:11px; }
+
+/* Точка 6: анализ внутри Ганта */
+.gh6 { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.gh6 b { font-size:14px; color:var(--c-text-heading); }
+.gr6 { display:grid; grid-template-columns:110px 1fr 84px; align-items:center; gap:8px; min-height:28px; font-size:12px; position:relative; }
+.mb .gr6 { grid-template-columns:86px 1fr 60px; min-height:40px; gap:6px; }
+.gr6 .nm { font-weight:600; color:var(--c-text-heading); display:flex; align-items:center; gap:5px; min-width:0; }
+.gr6 .nm .cdot { width:7px; height:7px; border-radius:7px; background:var(--c-accent); box-shadow:var(--shadow-focus); flex-shrink:0; }
+.gr6 .tm { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-secondary); text-align:right; display:flex; flex-direction:column; align-items:flex-end; line-height:1.2; }
+.gr6 .tm.long { color:var(--c-warning-text); font-weight:700; }
+.gr6 .tm .x { font-family:"Hanken Grotesk",sans-serif; font-size:10px; font-weight:700; }
+.gr6.dim .nm, .gr6.dim .tm { opacity:.55; }
+.gr6.focus .gbar { box-shadow:0 0 0 2px var(--c-bg-white), 0 0 0 3.5px var(--c-warning); }
+.gtail { position:absolute; top:2px; height:12px; border-radius:0 3px 3px 0; background:repeating-linear-gradient(135deg, var(--c-danger) 0 3px, var(--c-danger-bg) 3px 6px); }
+.rmk { position:absolute; top:-3px; width:18px; height:18px; margin-left:-9px; border-radius:18px; background:var(--c-warning-bg); color:var(--c-warning-text); border:1.5px solid var(--c-warning); display:inline-flex; align-items:center; justify-content:center; z-index:2; }
+.rmk svg { width:10px; height:10px; }
+.rmk.on { box-shadow:0 0 0 3px var(--c-warning-bg); }
+.nowpill { position:absolute; top:-21px; transform:translateX(-50%); white-space:nowrap; font-size:10.5px; font-weight:700; line-height:16px; padding:0 6px; border-radius:6px; background:var(--c-accent); color:var(--c-on-accent); z-index:3; }
+.nowpill.bad { background:var(--c-danger); }
+.nowmk.bad { background:var(--c-danger); }
+.gsp { height:16px; }
+.sub6 { grid-column:2 / -1; font-size:11px; color:var(--c-text-secondary); margin:-4px 0 6px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mb .sub6 { grid-column:1 / -1; }
+.sub6.cur { color:var(--c-text-heading); }
+.sub6.cur::before { content:""; width:6px; height:6px; border-radius:6px; background:var(--c-accent); }
+.sub6.bad { color:var(--c-danger-text); font-weight:600; }
+.sub6 .tag { font-weight:700; }
+.verdict { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:8px 10px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); margin-bottom:12px; font-size:12px; }
+.verdict.bad { background:var(--c-danger-bg); border-color:var(--c-danger-border); }
+.vchip { display:inline-flex; align-items:center; gap:5px; height:24px; padding:0 8px; border-radius:24px; background:var(--c-bg-white); border:1px solid var(--c-border-light); color:var(--c-text-primary); white-space:nowrap; }
+.mb .vchip { height:40px; padding:0 12px; }
+.vchip:hover, .vchip.hv { border-color:var(--c-warning); background:var(--c-warning-bg); }
+.vchip.ok { color:var(--c-success-text); }
+.vchip.bad { color:var(--c-danger-text); border-color:var(--c-danger-border); }
+.acts6 { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center; }
+
+/* Точка 7: настоящая карточка списка чатов (ChatCard.tsx) */
+.clist7 { width:300px; display:flex; flex-direction:column; gap:4px; padding:8px; background:var(--c-bg-panel); border-radius:14px; }
+.mb .clist7 { width:auto; border-radius:0; padding:6px 8px; }
+.cc { position:relative; overflow:hidden; border-radius:8px; background:var(--c-bg-white); padding:11px 12px; min-height:64px; display:flex; flex-direction:column; justify-content:center; gap:3px; }
+.mb .cc { padding:14px 12px; min-height:70px; }
+.cc.hv { background:var(--c-bg-selected); }
+.cc.on { background:var(--c-accent-muted); }
+.cc.on::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--c-accent); z-index:2; }
+.cveil { position:absolute; inset:0; pointer-events:none; opacity:.22;
+  background:linear-gradient(to left, var(--pc) 0%, color-mix(in srgb, var(--pc) 82%, transparent) 16%, color-mix(in srgb, var(--pc) 50%, transparent) 38%, color-mix(in srgb, var(--pc) 22%, transparent) 62%, color-mix(in srgb, var(--pc) 6%, transparent) 82%, transparent 100%); }
+.cc.on .cveil { display:none; }
+.cface { position:absolute; top:0; right:0; bottom:0; width:84px; pointer-events:none; display:flex; align-items:center; justify-content:flex-end; padding-right:10px;
+  color:var(--pc); font-weight:800; font-size:38px; line-height:1; letter-spacing:-1px; opacity:.85;
+  -webkit-mask-image:linear-gradient(to left, #000 40%, transparent); mask-image:linear-gradient(to left, #000 40%, transparent); }
+.cface.photo { padding:0; opacity:.92;
+  background:radial-gradient(circle at 68% 36%, color-mix(in srgb, var(--pc) 35%, var(--c-bg-inset)) 0 18%, transparent 19%),
+    radial-gradient(ellipse at 68% 105%, color-mix(in srgb, var(--pc) 55%, var(--c-bg-inset)) 0 38%, transparent 39%),
+    color-mix(in srgb, var(--pc) 18%, var(--c-bg-inset)); }
+.cwm { position:absolute; right:-6px; bottom:-14px; color:var(--c-text-muted); opacity:.16; pointer-events:none; }
+.ctx { position:relative; z-index:1; display:flex; flex-direction:column; gap:3px; min-width:0; }
+.cc.p .ctx { padding-right:72px; }
+.ctx .l1 { display:flex; align-items:center; gap:6px; min-width:0; }
+.ctx .l1 .nm { font-size:13.5px; font-weight:600; color:var(--c-text-heading); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cc.on .ctx .l1 .nm { color:var(--c-accent); font-weight:700; }
+.ctx .l1 .ti { color:var(--c-text-muted); display:inline-flex; }
+.ctx .l2 { font-size:12px; color:var(--c-text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.krole { font-family:"JetBrains Mono",monospace; font-size:10.5px; font-weight:700; color:var(--c-accent); background:var(--c-accent-light); border-radius:6px; padding:0 5px; white-space:nowrap; flex-shrink:0; }
+/* Сам чип модели: стекло C.glass поверх лица, у нижнего края полосы собеседника */
+.gchip { position:absolute; z-index:2; bottom:5px; font-family:"JetBrains Mono",monospace; font-size:9.5px; font-weight:600; line-height:14px; padding:0 5px; border-radius:6px;
+  background:var(--c-glass); color:var(--c-text-secondary); box-shadow:0 0 0 1px var(--c-border-light); -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); white-space:nowrap; pointer-events:auto; }
+.gchip.ctr { right:42px; transform:translateX(50%); }
+.gchip.cor { right:6px; }
+.mb .gchip { bottom:6px; }
+.hcl { position:absolute; top:50%; right:4px; transform:translateY(-50%); z-index:3; display:flex; background:var(--c-bg-selected); border-radius:10px; box-shadow:var(--shadow-card); }
+.hcl span { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-secondary); }
+.zoom { transform:scale(2); transform-origin:top left; width:150px; height:76px; }
+.zoomwrap { width:300px; height:152px; overflow:hidden; border-radius:12px; border:1px solid var(--c-border-light); }
+.avw2 { position:relative; display:inline-flex; }
+.avw2 .gchip { right:auto; left:50%; transform:translateX(-50%); bottom:-8px; font-size:9px; line-height:12px; padding:0 4px; }
 </style>
 </head>
 <body>
@@ -392,23 +509,27 @@ svg { flex-shrink:0; }
 <section class="pt on" id="pt1">
   <h2>1. Шапка: кто ведёт фичу и где её ключевой чат</h2>
   <p class="brief">Сейчас в мета-строке — ветка, возраст, число задач и строка счётчиков. Кто ведёт фичу, не видно; ключевой чат прячется в меню «Ещё» или в главной кнопке, когда нет действия. Сценарий: «открыл фичу — сразу понимаю, кому писать, и одним касанием попадаю к нему».</p>
-  <div class="choose"><b>Андрей выбирает:</b> А (персона и чат — два элемента в мета-строке) или Б (одна строка «Ведёт …» под заголовком).</div>
-  <div class="var" data-v="1A"><h3>Вариант А — «Ведёт» и «Ключевой чат» в мета-строке <span class="rec">рекомендую</span></h3>
-    <p>Два отдельных элемента после ветки: чип персоны (аватар + имя, подсказка «Ведёт фичу · оркестратор») и ссылка «Ключевой чат». Статус и счётчики не двигаются: мета-строка и так переносится. Клик по персоне — карточка персоны, по ссылке — чат (с плашкой возврата, как у «чат · задача»).</p></div>
-  <div class="var" data-v="1B"><h3>Вариант Б — отдельная строка «Ведёт»</h3>
-    <p>Под мета-строкой — тихая карточка: «Ведёт <b>Софья (локальная)</b> · последнее сообщение 12 мин назад» и кнопка «Открыть ключевой чат». Видно сильнее, но страница опускается на ~44 px. Подойдёт, если ключевой чат — главный вход в фичу. <span class="be">нужен бэк: время последнего сообщения</span></p></div>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант А, но без отдельной ссылки «Ключевой чат» — сам чип «ведёт · Софья (локальная)» открывает ключевой чат.</div>
+  <div class="var" data-v="1A"><h3>Вариант А′ — чип «ведёт» и есть вход в ключевой чат <span class="picked">выбрано</span></h3>
+    <p>Чип — кнопка: аватар, «ведёт», имя и значок чата со стрелкой в конце — по нему видно, что чип куда-то ведёт. Подсказка по наведению и фокусу: «Ключевой чат фичи · ведёт Софья (локальная), оркестратор». Клик — ключевой чат с плашкой возврата к фиче (как у «чат · задача»). Карточку персоны отсюда больше не открываем: путь к ней — из самого чата. Ниже — все состояния чипа.</p></div>
+  <div class="var dropped" data-v="1B"><h3>Вариант Б — отдельная строка «Ведёт»</h3>
+    <p>Под мета-строкой — тихая карточка «Ведёт Софья (локальная)» и кнопка «Открыть ключевой чат». Оставлен для истории.</p></div>
 </section>
 
 <!-- ================= ТОЧКА 2 ================= -->
 <section class="pt" id="pt2">
   <h2>2. «Производство»: одна лента задач по времени</h2>
   <p class="brief">Сейчас этап раскрывается двумя блоками: исполнители со статусом, ниже шаги со своими витками. Одна и та же задача видна дважды, а «где процесс сейчас» приходится собирать глазами. Сценарий: «открыл Производство — вижу задачи в порядке старта, у каждой сколько было кругов ревью и где она стоит; текущая подсвечена».</p>
-  <div class="choose"><b>Андрей выбирает:</b> А (карточки с цепочкой цикла), Б (таблица «задача × цикл») или В (журнал событий).</div>
-  <div class="var" data-v="2A"><h3>Вариант А — карточки с цепочкой цикла <span class="rec">рекомендую</span></h3>
-    <p>Каждая задача — карточка в порядке старта: код шага, название, исполнитель, модель, статус, счётчик «2 цикла». Под шапкой — цепочка узлов «работа → ревью: вернул → доработка → ревью: принят». Текущий узел обведён акцентом, над активной задачей — линия «сейчас». Причина последнего возврата — одной строкой под цепочкой. Данные уже есть: stepChains + rounds.</p></div>
-  <div class="var" data-v="2B"><h3>Вариант Б — таблица «задача × цикл»</h3>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант А, но карточку сократить по высоте: нижнюю строку «старт · чат · задача» убрать или перенести. Ниже — три размещения на выбор, у каждого подписана высота карточки (было ~74 px у Ш1).</div>
+  <div class="var" data-v="2A1"><h3>А1 — в шапку карточки: время старта и две иконки справа</h3>
+    <p>Строка уходит в конец шапки: «21.10 10:05» тихим моноширинным и иконки «чат» и «задача» по 24 px (на 360 — 40 px). Всё под рукой в один клик, но шапка плотнее: на 880 она ещё помещается в строку, на 360 переносится на вторую — экономии там почти нет.</p></div>
+  <div class="var" data-v="2A2"><h3>А2 — в подсказку на коде шага, узлы цепочки ведут в чаты <span class="rec">рекомендую</span></h3>
+    <p>Код «Ш3» становится кнопкой: клик или касание раскрывает меню «старт · чат исполнителя · задача» (на Ш3 открыто для показа). Узлы цепочки — тоже контролы: клик по «Глеб: вернул» — чат этого ревью, по «доработка» — чат исполнителя. Карточка теряет целую строку, а переход в чат становится точнее: прямо в нужный виток.</p></div>
+  <div class="var" data-v="2A3"><h3>А3 — совсем без строки</h3>
+    <p>Шапка и цепочка, больше ничего. Клик по названию — карточка задачи, по узлу цепочки — чат витка. Время старта не показываем: оно видно в «Статистике» (ступени точки 4). Самая компактная, но вход в задачу и чат ничем не подписан — его надо знать.</p></div>
+  <div class="var dropped" data-v="2B"><h3>Вариант Б — таблица «задача × цикл»</h3>
     <p>Строка — задача, столбец — цикл (1, 2, 3). В ячейке — «работа N мин → вердикт». Сразу видно, у кого больше кругов: таблица растёт вправо. На 360 строка превращается в карточку со списком циклов. Хорошо для сравнения, хуже для «где сейчас».</p></div>
-  <div class="var" data-v="2C"><h3>Вариант В — журнал событий</h3>
+  <div class="var dropped" data-v="2C"><h3>Вариант В — журнал событий</h3>
     <p>Лента событий по дням: «сдал», «вернул (причина)», «принял», «взял в доработку». У каждого события — чип задачи «Ш3 · цикл 2». Сверху — плашка «Сейчас». Честнее всего показывает хронологию, но число циклов у задачи надо собирать по журналу. <span class="be">нужен бэк: журнал событий фичи</span></p></div>
 </section>
 
@@ -416,10 +537,10 @@ svg { flex-shrink:0; }
 <section class="pt" id="pt3">
   <h2>3. Связка «кто оценивает → какую задачу»</h2>
   <p class="brief">В этапах «Разрез», «План», «Ревью», «Проверка», «Финальное ревью» строка исполнителя показывает имя и статус, но не то, ЧТО он оценивает. Сценарий: «вижу: Глеб ревьюит Ш3 «Панель хранилища», и она сейчас в доработке».</p>
-  <div class="choose"><b>Андрей выбирает:</b> А (строка «оценивает →» под исполнителем) или Б (группы по оцениваемой задаче).</div>
-  <div class="var" data-v="3A"><h3>Вариант А — строка «оценивает →» под исполнителем <span class="rec">рекомендую</span></h3>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант А как есть — без изменений.</div>
+  <div class="var" data-v="3A"><h3>Вариант А — строка «оценивает →» под исполнителем <span class="picked">выбрано</span></h3>
     <p>Под строкой исполнителя — чип оцениваемой задачи: код, название, её текущий статус. Клик — к этой задаче в ленте «Производства» (точка 2). Источник — reviewOf у задачи ревью. Тексты по этапам: Ревью/Проверка — «оценивает», План — «по разрезу», Разрез — «по эпику», Финал — «фичу целиком: 4 из 5 шагов принято». У «Производства» обратная связка: в карточке задачи — кто её ревьюит (уже видно в цепочке узлов). У «Мержа» — «после финала ✓ · feat/plugin-storage → master».</p></div>
-  <div class="var" data-v="3B"><h3>Вариант Б — группы по оцениваемой задаче</h3>
+  <div class="var dropped" data-v="3B"><h3>Вариант Б — группы по оцениваемой задаче</h3>
     <p>Внутри этапа сначала оцениваемая задача (заголовок группы со статусом), под ней — её ревьюеры по витку. Удобно, когда у задачи 2–3 ревью подряд; при одном ревью на задачу — лишний уровень вложенности.</p></div>
 </section>
 
@@ -427,12 +548,12 @@ svg { flex-shrink:0; }
 <section class="pt" id="pt4">
   <h2>4. Полоса статистики: этапы читаются при любом числе</h2>
   <p class="brief">Сейчас одна сплошная лента: ширина этапа ∝ минутам, подпись — над сегментом. Короткие этапы (Финал 12 мин, Мерж 4 мин) превращаются в щель без подписи, минут не видно нигде. Сценарий: «за 5 секунд понимаю, где ушло время и что было после чего».</p>
-  <div class="choose"><b>Андрей выбирает:</b> А (ступени), Б (лента + легенда) или В (столбцы по этапам).</div>
-  <div class="var" data-v="4A"><h3>Вариант А — ступени (диаграмма Ганта) <span class="rec">рекомендую</span></h3>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант А (ступени) как есть. На нём же строится новый «Анализ процесса» — точка 6.</div>
+  <div class="var" data-v="4A"><h3>Вариант А — ступени (диаграмма Ганта) <span class="picked">выбрано</span></h3>
     <p>Каждый этап — своя строка: имя слева, минуты справа, полоса на общей оси времени. Подпись больше не зависит от ширины полосы. Длинная пауза — сжатая строка «разрыв · 14 ч». Наведение (на 360 — касание) показывает подсказку с разбивкой: работа, ожидание, простой. Отметка «сейчас» — вертикальная линия.</p></div>
-  <div class="var" data-v="4B"><h3>Вариант Б — лента остаётся, подписи уходят в легенду</h3>
+  <div class="var dropped" data-v="4B"><h3>Вариант Б — лента остаётся, подписи уходят в легенду</h3>
     <p>Сплошная лента без текста, на сегментах — только номера. Под ней — легенда «1 Разрез 18 мин …» в 4 колонки. Наведение на пункт легенды подсвечивает сегмент, и наоборот. Минимальная переделка, но связь «номер ↔ сегмент» требует взгляда туда-обратно.</p></div>
-  <div class="var" data-v="4C"><h3>Вариант В — столбцы по этапам</h3>
+  <div class="var dropped" data-v="4C"><h3>Вариант В — столбцы по этапам</h3>
     <p>Без оси времени: строка на этап, полоса по длительности (работа / ожидание / простой стопкой) и доля от общего. Лучше всех отвечает на «где ушло время», но теряет «что шло параллельно» и паузы.</p></div>
 </section>
 
@@ -440,37 +561,43 @@ svg { flex-shrink:0; }
 <section class="pt" id="pt5">
   <h2>5. «Планы и макеты»: место под чтение и макеты прямо здесь</h2>
   <p class="brief">Сейчас слева жёсткий список 240 px, справа читалка; макет открывается кнопкой в отдельном окне. На узком экране читалке остаётся меньше половины. Сценарий: «пролистал документы фичи, открыл макет и посмотрел его тут же, в обеих ширинах».</p>
-  <div class="choose"><b>Андрей выбирает:</b> способ навигации — А (сворачиваемый список), Б (вкладки сверху) или В (карточки-превью). Встроенный просмотр макета (внизу каждого варианта) один для всех трёх.</div>
-  <div class="var" data-v="5A"><h3>Вариант А — список сворачивается в рельс</h3>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант В (карточки-превью) как есть, со встроенным просмотром макета.</div>
+  <div class="var dropped" data-v="5A"><h3>Вариант А — список сворачивается в рельс</h3>
     <p>Список 240 px сворачивается кнопкой в рельс 44 px со значками групп; уже меньше 1100 px ширины острова — свёрнут сразу. Ближе всего к нынешнему коду. На 360 список — шторка.</p></div>
-  <div class="var" data-v="5B"><h3>Вариант Б — вкладки документов сверху</h3>
+  <div class="var dropped" data-v="5B"><h3>Вариант Б — вкладки документов сверху</h3>
     <p>Документы — горизонтальные вкладки под шапкой (прокручиваются), читалка во всю ширину. Хорошо при 3–6 документах; при 10+ вкладки уезжают за край.</p></div>
-  <div class="var" data-v="5C"><h3>Вариант В — карточки-превью, затем читалка во всю ширину <span class="rec">рекомендую</span></h3>
+  <div class="var" data-v="5C"><h3>Вариант В — карточки-превью, затем читалка во всю ширину <span class="picked">выбрано</span></h3>
     <p>Сначала сетка карточек: группа «Планы» и группа «Макеты» с живой миниатюрой. Клик — документ на всю ширину с «← Все документы». Макет открывается во встроенном просмотре с переключателем «Десктоп / 360» и «Открыть отдельно». На 360 карточки идут в одну колонку — естественно для пальца.</p></div>
 </section>
 
 <!-- ================= ТОЧКА 6 ================= -->
 <section class="pt" id="pt6">
-  <h2>6. Блок «Анализ процесса»</h2>
-  <p class="brief">Сценарий: «зашёл на фичу и за 3 секунды понял: где она, не зависла ли, сколько было возвратов и какой этап самый долгий. Если хочу словами — жму кнопку, и модель пишет резюме». Резюме не генерируется само: только по кнопке, с отметкой времени.</p>
-  <div class="choose"><b>Андрей выбирает:</b> место блока — А (над «Хронологией», сворачивается) или Б (первым на «Статистике»). Рисунок блока один.</div>
-  <div class="var" data-v="6A"><h3>Блок — фича движется</h3>
-    <p>Четыре плитки: «Где сейчас», «Зависла?», «Возвраты ревью», «Длительность»; под ними — длительности этапов (самый долгий — тоном предупреждения). Кнопка «Резюме моделью» — призрачная, справа в шапке блока.</p></div>
-  <div class="var" data-v="6B"><h3>Блок — фича зависла (кто чего ждёт)</h3>
-    <p>«Зависла?» поднимается тревогой: кто ждёт, кого и сколько. Порог — 2 ч без движения у задачи в работе; «ждёт вас» — сразу. <span class="be">нужен бэк: порог «зависла» считает сервер</span></p></div>
-  <div class="var" data-v="6C"><h3>Состояния резюме моделью</h3>
-    <p>Покой → идёт (скелет, кнопка «Остановить») → готово (с временем и «Обновить») → ошибка (с повтором). Резюме хранится до следующего нажатия. <span class="be">нужен бэк: ручка резюме + кэш</span></p></div>
+  <h2>6. «Анализ процесса» — прямо на ступенях Ганта</h2>
+  <p class="brief">Сценарий тот же: «зашёл на фичу и за 3 секунды понял — где она, не зависла ли, сколько было возвратов и где ушло время». Отдельные плитки Андрей отверг. Теперь ответы живут на самих ступенях выбранного Ганта (точка 4): «где» — отметка «сейчас» на этапе, «зависла» — штриховка хвоста ступени, возвраты — флажки на полосе в момент возврата, длительность — минуты справа, самый долгий этап — тоном предупреждения. Отдельного блока больше нет.</p>
+  <div class="decided"><b>Андрей отклонил прошлый вариант (плитки)</b> и просит 2–3 варианта, встроенных в Гант. Ниже три. Переключатель «Фича: движется / зависла» показывает тревожное состояние у каждого.</div>
+  <div class="grp" style="margin:0 0 14px"><span class="lbl" style="font-size:10px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.05em">Фича</span>
+    <div class="pills" id="s6Pills"><button data-s6="move" class="on">движется</button><button data-s6="stuck">зависла</button></div></div>
+  <div class="var" data-v="6A"><h3>6А — метки на ступенях <span class="rec">рекомендую</span></h3>
+    <p>Ничего не добавляем в высоту: возврат — круглый флажок ↺ на полосе в момент возврата (наведение или касание — «Глеб вернул Ш3 · 09:41 · причина»), счётчик возвратов — под минутами справа. «Сейчас» — пилюля над отметкой: «Ш3 · доработка · 42 мин». Самый долгий этап — минуты тоном предупреждения. Зависла — хвост ступени от последнего события до «сейчас» заштрихован тоном опасности, пилюля краснеет («стоит 3 ч 20»), под Гантом одна строка с действием. Самая тихая из трёх.</p></div>
+  <div class="var" data-v="6B"><h3>6Б — подстрока под ступенью</h3>
+    <p>Под строкой этапа, где есть что сказать, — одна строчка 11 px: у текущего «● здесь сейчас — Ш3, доработка у Киры, 42 мин», у Производства «2 возврата · 1,5 цикла в среднем · дольше всех Ш3», у Ревью «Ш4 ждёт 1 ч». У этапов без событий подстроки нет. Зависла — подстрока текущего этапа краснеет и несёт кнопку. Читается словами без наведения, но Гант вырастает на 3–4 строки.</p></div>
+  <div class="var" data-v="6C"><h3>6В — вердикт над Гантом, чипы подсвечивают ступени</h3>
+    <p>Над Гантом — строка из четырёх чипов: «● Производство», «движется · 4 мин назад», «↺ 2 возврата», «2 д 4 ч · работа 9 ч 5». Наведение или касание чипа подсвечивает его место на Ганте (на макете «2 возврата» наведён — флажки и полоса обведены). Зависла — строка краснеет, чип «стоит 3 ч 20» несёт действие. Это ближе всего к прошлым плиткам, но одной строкой и в связке с Гантом.</p></div>
+  <div class="var" data-v="6D"><h3>Резюме моделью — общее для всех трёх вариантов</h3>
+    <p>Кнопка «Резюме моделью» — призрачная, в шапке Ганта справа. Резюме раскрывается под Гантом. Состояния: покой → идёт (скелет, «Остановить») → готово (время, модель, «Обновить») → ошибка (с повтором). Хранится до следующего нажатия. <span class="be">нужен бэк: ручка резюме + кэш</span> <span class="be">нужен бэк: порог «зависла» и время последнего события у этапа</span></p></div>
 </section>
 
 <!-- ================= ТОЧКА 7 ================= -->
 <section class="pt" id="pt7">
-  <h2>7. Чипы моделей</h2>
-  <p class="brief">На странице фичи (баннер режима фичи, FeatureRunView) чип модели «чернильный» — C.navInk: в светлой теме это чёрная плашка, которая перетягивает взгляд с имени и статуса. Нужен один тихий чип модели везде, и тот же чип — в списке чатов.</p>
-  <div class="choose"><b>Андрей выбирает:</b> вид чипа в списке чатов — А (мягкий чип), Б (контурный) или В (только текст во второй строке).</div>
-  <div class="var" data-v="7A"><h3>Страница фичи: было → стало</h3>
-    <p>Чёрный чип на аватаре убираем; модель — мягкий чип C.bgSelected / C.textSecondary после имени, как уже сделано в ModelChip хронологии. Решения тут не требуется — это правка под существующий образец.</p></div>
-  <div class="var" data-v="7B"><h3>Список чатов: три вида чипа</h3>
-    <p>Чип стоит справа перед временем и не спорит с названием. Показываем только у чатов, где модель отличается от умолчания проекта, — иначе в каждой строке «Opus» станет шумом. <span class="be">нужен бэк: модель чата в списке</span></p></div>
+  <h2>7. Чип модели на лице собеседника в карточке чата</h2>
+  <p class="brief">Карточка списка чатов (ChatCard.tsx) устроена так: слева заголовок (значок темы, имя 13.5 px) и превью сообщения, справа — полоса собеседника 84 px во всю высоту карточки: фото или крупные инициалы цветом персоны, растяжка маской влево и вуаль её цветом. Сценарий: «пролистываю чаты фичи и сразу вижу, где модель поменяли руками — например, Киру перевели на облако». Чип нужен ТОЛЬКО там, где модель чата отличается от умолчания; у остальных лицо остаётся чистым.</p>
+  <div class="decided"><b>Андрей отклонил чип справа перед временем</b> (прошлые А/Б/В) и просит полупрозрачный аккуратный чип в нижней части аватара — на настоящей карточке. Ниже два размещения на той же карточке и увеличенный фрагмент.</div>
+  <div class="var" data-v="7B"><h3>7А — стекло по центру нижнего края лица <span class="rec">рекомендую</span></h3>
+    <p>Чип стоит у нижнего края полосы собеседника, по центру видимой части лица: моноширинный 9.5 px, фон C.glass с лёгким размытием, текст C.textSecondary, волосяная обводка C.borderLight. Лицо под ним просвечивает, имя и превью не задеты: отступ текста под полосу (72 px) уже есть. Кнопки по наведению висят по вертикальному центру и чип не перекрывают. В выбранном чате вуаль гаснет, чип остаётся. Подсказка (title): «Модель чата: Opus 5.5 · у Киры по умолчанию — Qwen3.8-27B».</p></div>
+  <div class="var" data-v="7C"><h3>7Б — стекло в правом нижнем углу</h3>
+    <p>Тот же чип прижат к углу карточки (6 px от краёв). Ещё тише, лицо открыто полностью, но у фото чип ложится на плечо, а у инициалов — под последнюю букву и читается как часть подписи.</p></div>
+  <div class="var" data-v="7A"><h3>Тот же чип — на аватаре в FeatureRunView</h3>
+    <p>Чёрный чип C.navInk на круглом аватаре заменяем тем же стеклом — один вид чипа модели на всё приложение. Здесь, в отличие от списка, модель показываем всегда: на странице фичи она — часть отчёта.</p></div>
 </section>
 
 </div>
@@ -529,16 +656,24 @@ const headTop = (m) => `
     ${m ? '' : '<span class="tag run">идёт · Производство</span>'}
     ${m ? '' : `<button class="btn pri">${I.chat} Ответить Кире</button>`}
     <button class="tib">${I.more}</button></div>`;
+const whoGo = (st) => `<button class="who go ${st}" aria-label="Открыть ключевой чат · ведёт Софья (локальная)">${av('s','С')}<span class="rl">ведёт</span> Софья (локальная)<span class="gi">${I.chat}${I.arr}</span></button>`;
 const segs = `<div class="segs"><span><b>5</b>общий</span><span><b>2</b>принято</span><span><b>1</b>на ревью</span><span><b>1</b>в работе</span><span><b>1</b>не заведено</span></div>`;
 V['1A'] = m => `${headTop(m)}<div class="body">
   <div class="meta">${m ? '<span class="tag run">идёт · Производство</span>' : ''}
     <span class="br">${I.br}feat/plugin-storage</span><span>идёт 2 д 4 ч</span><span>14 задач</span>
     ${m ? '' : '<span class="vsep"></span>'}
-    <button class="who" title="Ведёт фичу · оркестратор">${av('s','С')}<span class="rl">ведёт</span> Софья (локальная)</button>
-    <a class="lnk" title="Открыть ключевой чат фичи">${I.chat}Ключевой чат</a>
+    <span class="anch">${whoGo(m ? '' : 'hv')}${m ? '' : `<div class="tip"><b>Ключевой чат фичи</b><br>ведёт Софья (локальная), оркестратор<br><span class="mut">клик — открыть чат</span></div>`}</span>
   </div>${segs}
   ${m ? `<div style="margin-top:10px"><button class="btn pri" style="width:100%;justify-content:center">${I.chat} Ответить Кире</button></div>` : ''}
-  <p class="sm11 mut" style="margin:12px 0 0">Наведение на «ведёт» — подсказка «Ведёт фичу · оркестратор». Оркестратора нет — элемент не рисуется; ключевого чата нет — «Ключевой чат» не рисуется (в «Ещё» остаётся пункт с подсказкой «чата нет»).</p></div>`;
+  <div class="states" style="${m ? '' : 'margin-top:64px'}">
+    <div><span class="cap">Покой</span>${whoGo('')}</div>
+    <div><span class="cap">Наведение</span>${whoGo('hv')}</div>
+    <div><span class="cap">Фокус с клавиатуры</span>${whoGo('fc')}</div>
+    <div><span class="cap">Нажатие / касание</span>${whoGo('pr')}</div>
+    <div><span class="cap">Чата нет</span><span class="who static" title="Ключевого чата у фичи нет">${av('s','С')}<span class="rl">ведёт</span> Софья (локальная)</span></div>
+    <div><span class="cap">Оркестратора нет</span><span class="sm11 mut" style="line-height:24px">чип не рисуется</span></div>
+  </div>
+  <p class="sm11 mut" style="margin:10px 0 0">«Чата нет» — чип не кнопка: пунктирная рамка, без значка-стрелки, подсказка «Ключевого чата у фичи нет». На 360 подсказка по наведению не всплывает — смысл несёт значок чата со стрелкой и aria-label «Открыть ключевой чат · ведёт Софья (локальная)»; высота чипа 40 px.</p></div>`;
 V['1B'] = m => `${headTop(m)}<div class="body">
   <div class="meta">${m ? '<span class="tag run">идёт · Производство</span>' : ''}
     <span class="br">${I.br}feat/plugin-storage</span><span>идёт 2 д 4 ч</span><span>14 задач</span></div>${segs}
@@ -556,6 +691,27 @@ V['2A'] = m => `<div class="body">${prodSum}<div class="tl">${TASKS.map(t => `
     ${t.why ? `<div class="why">${t.why}</div>` : ''}
     <div class="sm11 mut" style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap"><span>старт ${t.start}</span>${t.cyc ? nav() : ''}</div>
   </div>`).join('')}</div></div>`;
+// Компактные карточки: chainGo — узлы цепочки как переходы в чат витка
+const nodeGo = (n) => n[0] === 'pend' ? node(n) : node(n).replace('class="nd ', 'title="Открыть чат витка" class="nd go ');
+const tkHead = (t, refHtml, tail = '') => `<div class="h">${refHtml}<span class="nm">${t.t}</span>
+  ${av(t.a[0], t.a[1])}<span class="sm12">${t.a[2]}</span>${mchip(t.m)}${cycTag(t.cyc)}<span class="tag ${t.st[0]}">${t.st[1]}</span>${tail}</div>`;
+const tkWrap = (t, inner) => `${t.now ? '<div class="nowline">сейчас</div>' : ''}<div class="tk cp${t.now ? ' now' : ''}${t.st[0] === 'wait' ? ' wt' : ''}">${inner}</div>`;
+const tkChain = (t, go) => `<div class="chain">${t.chain.map(go ? nodeGo : node).join('<span class="ar">→</span>')}</div>${t.why ? `<div class="why">${t.why}</div>` : ''}`;
+const hNote = (txt) => `<p class="sm11 mut" style="margin:10px 0 0">${txt}</p>`;
+V['2A1'] = m => `<div class="body">${prodSum}<div class="tl">${TASKS.map(t => tkWrap(t,
+  tkHead(t, `<span class="ref">${t.ref}</span>`, `${t.start !== '—' ? `<span class="when" title="Старт задачи">${t.start}</span>` : ''}${t.cyc ? `<button class="mini-ib" title="Чат исполнителя">${I.chat}</button><button class="mini-ib" title="Карточка задачи">${I.file}</button>` : ''}`)
+  + tkChain(t))).join('')}</div>
+  ${hNote('Высота карточки Ш1: ~52 px вместо ~74. У «не начат» иконок нет — чата ещё нет. На 360 время и иконки переносятся во вторую строку шапки.')}</div>`;
+V['2A2'] = m => `<div class="body">${prodSum}<div class="tl">${TASKS.map(t => tkWrap(t,
+  tkHead(t, `<span class="anch"><button class="ref btnref${t.now ? ' hv' : ''}" title="Старт, чат и задача">${t.ref}</button>${t.now ? `<div class="pop">
+    <div class="pr"><span class="k">старт</span><span class="mono sm11">${t.start}</span></div>
+    <button class="pr" style="width:100%"><span class="k">чат</span>${I.chat}Чат Киры · доработка</button>
+    <button class="pr" style="width:100%"><span class="k">задача</span>${I.file}Карточка задачи Ш3</button></div>` : ''}</span>`)
+  + tkChain(t, true))).join('')}</div>
+  ${hNote('Высота карточки Ш1: ~52 px. Меню на коде шага открыто у Ш3 для показа (клик, Enter, касание; Esc и клик мимо — закрыть). Узел цепочки по наведению обводится C.accentMuted, подсказка «Открыть чат витка»; у пунктирных узлов («ревью» впереди) перехода нет.')}</div>`;
+V['2A3'] = m => `<div class="body">${prodSum}<div class="tl">${TASKS.map(t => tkWrap(t,
+  tkHead(t, `<span class="ref">${t.ref}</span>`) + tkChain(t, true))).join('')}</div>
+  ${hNote('Высота карточки Ш1: ~52 px. Клик по названию — карточка задачи (курсор-рука, подчёркивание по наведению), по узлу — чат витка. Время старта — только на «Статистике».')}</div>`;
 const cellB = (c) => `<td>${c ? `<div class="cell">${c.map(node).join('')}</div>` : '<span class="mut">—</span>'}</td>`;
 const CYC = {
   'Ш1':[[['ok','работа','1 ч 20'],['ret','вернул']],[['ok','доработка','35 мин'],['ok','принят']],null],
@@ -689,28 +845,56 @@ V['5C'] = m => `<div style="border-top:1px solid var(--c-border-light)"><div cla
   <div class="pcards"><div class="grpttl" style="grid-column:1/-1">Макеты · 3</div>${MOCKS.map(d => pcard(d, true)).join('')}</div>
   <div class="body" style="border-top:1px solid var(--c-border-light)"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="btn gh sm">${I.back}Все документы</button><span class="sm11 mut">после клика по карточке макета</span></div>${mview(m)}</div></div>`;
 
-// --- 6. Анализ процесса ---
-const anaHead = (m, extra = '') => `<div class="ah"><b>Анализ процесса</b><span class="sm11 mut">обновлено сейчас</span><span style="flex:1"></span>${extra}<button class="btn gh sm">${I.spark}Резюме моделью</button>${m ? '' : `<button class="tib" title="Свернуть">${I.down}</button>`}</div>`;
-const durs = `<div class="durs"><div class="grpttl" style="margin-bottom:2px">Длительность этапов</div>
-  ${[['Разрез',18,'18 мин'],['План',42,'42 мин'],['Производство',370,'6 ч 10',1],['Ревью',85,'1 ч 25'],['Проверка',0,'—'],['Финал',0,'—']].map(([n, v, t, l]) =>
-    `<div class="dr"><span class="${v ? '' : 'mut'}">${n}</span><span class="b"><span class="${l ? 'long' : ''}" style="width:${v / 370 * 100}%"></span></span><span class="t">${t}</span></div>`).join('')}</div>`;
-V['6A'] = m => `<div class="body"><div class="ana">${anaHead(m)}
-  <div class="kpis">
-    <div class="kpi"><div class="kl">Где сейчас</div><div class="kv">Производство</div><div class="ks">Ш3 · доработка у Киры, 42 мин</div></div>
-    <div class="kpi"><div class="kl">Зависла?</div><div class="kv"><span class="tag ok">движется</span></div><div class="ks">последнее событие 4 мин назад</div></div>
-    <div class="kpi"><div class="kl">Возвраты ревью</div><div class="kv">2</div><div class="ks">1 открыт · Ш3</div></div>
-    <div class="kpi"><div class="kl">Длительность</div><div class="kv">2 д 4 ч</div><div class="ks">работы 9 ч 5 мин</div></div>
-  </div>${durs}</div></div>`;
-V['6B'] = m => `<div class="body"><div class="ana">${anaHead(m)}
-  <div class="kpis">
-    <div class="kpi"><div class="kl">Где сейчас</div><div class="kv">Ревью</div><div class="ks">Ш4 · ждёт Глеба</div></div>
-    <div class="kpi bad"><div class="kl">Зависла?</div><div class="kv">${I.clock} 3 ч 20</div><div class="ks">Ш4 ждёт ревью, Глеб не запущен</div></div>
-    <div class="kpi alert"><div class="kl">Ждёт вас</div><div class="kv">1</div><div class="ks">Кира спрашивает про квоту</div></div>
-    <div class="kpi"><div class="kl">Возвраты ревью</div><div class="kv">2</div><div class="ks">оба закрыты</div></div>
-  </div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn pri sm">${I.chat}Ответить Кире</button><button class="btn sec sm">Запустить ревью Ш4</button></div>
-  ${durs}</div></div>`;
-V['6C'] = m => `<div class="body"><div class="statesrow" style="${m ? 'flex-direction:column' : ''}">
+// --- 6. Анализ процесса — на ступенях Ганта (точка 4, вариант А) ---
+let S6 = 'move';
+const NOW6 = 96;
+const rows6 = (stuck) => [
+  { n:'Разрез', l:0, w:3, seg:[[90,'work'],[10,'wait']], t:'18 мин' },
+  { n:'План', l:3, w:7, seg:[[80,'work'],[20,'wait']], t:'42 мин' },
+  { n:'Производство', l:10, w:stuck ? 70 : NOW6 - 10, seg:[[62,'work'],[24,'wait'],[14,'idle']], t:'6 ч 10', long:true, ret:[44, 70], cur:!stuck },
+  { n:'Ревью', l:30, w:stuck ? 50 : NOW6 - 30, seg:[[100,'rev']], t:'1 ч 25', cur:stuck, tail:stuck ? [80, NOW6] : null },
+  { n:'Проверка', pend:true, t:'впереди' }, { n:'Финал', pend:true, t:'впереди' }, { n:'Мерж', pend:true, t:'впереди' },
+];
+const subs6 = (stuck, m) => stuck ? {
+  'Производство':[['', 'все 5 шагов сданы · 2 возврата (Ш1, Ш3)']],
+  'Ревью':[['bad', `${I.clock} стоит 3 ч 20 — Ш4 ждёт ревью, Глеб не запущен <button class="btn pri sm">Запустить ревью Ш4</button>`]],
+} : {
+  'Производство':[['cur', `здесь сейчас — Ш3, доработка у Киры, 42 мин`], ['', `2 возврата (Ш1, Ш3) · 1,5 цикла в среднем · дольше всех Ш3 — 1 ч 50`]],
+  'Ревью':[['', 'Ш4 ждёт ревью 1 ч · Ш1 принят со второго витка']],
+};
+const gantt6 = (m, o) => {
+  const stuck = S6 === 'stuck';
+  const sub = subs6(stuck, m);
+  return `<div class="gh6"><b>Этапы и время</b><span class="sm11 mut">обновлено сейчас</span><span style="flex:1"></span><button class="btn gh sm">${I.spark}Резюме моделью</button></div>
+  <div class="gantt">${rows6(stuck).map(r => `<div class="gr6${r.pend ? ' dim' : ''}${o.hl && r.ret ? ' focus' : ''}">
+    <span class="nm">${r.cur ? '<span class="cdot" title="Фича сейчас здесь"></span>' : ''}<span class="ellip">${r.n}</span></span>
+    <div class="gtrack">${r.pend ? '' : `<div class="gbar" style="left:${r.l}%;width:${r.w}%">${r.seg.map(([w, k]) => `<span class="${kcls[k]}" style="width:${w}%"></span>`).join('')}</div>`}
+      ${r.tail ? `<span class="gtail" style="left:${r.tail[0]}%;width:${r.tail[1] - r.tail[0]}%" title="Без движения с 10:50"></span>` : ''}
+      ${o.v !== 'B' && r.ret ? r.ret.map((x, i) => `<span class="rmk${o.hl ? ' on' : ''}" style="left:${x}%" title="${i ? 'Глеб вернул Ш3 · 23.10 09:41' : 'Глеб вернул Ш1 · 22.10 15:20'}">${I.rot}</span>`).join('') : ''}
+      ${r.cur ? `<span class="nowmk${stuck ? ' bad' : ''}" style="left:${NOW6}%"></span>` : ''}
+      ${r.cur && o.v === 'A' ? `<span class="nowpill${stuck ? ' bad' : ''}" style="left:${NOW6}%;transform:translateX(calc(-100% + 2px))">${stuck ? (m ? 'стоит 3 ч 20' : 'стоит 3 ч 20 · Ш4 ждёт ревью') : (m ? 'Ш3 · 42 мин' : 'Ш3 · доработка · 42 мин')}</span>` : ''}
+      ${o.tip && r.ret ? `<div class="tip" style="left:calc(70% - ${m ? 150 : 200}px);top:22px"><b>Глеб вернул Ш3</b> · 23.10 09:41<br>«нет пустого состояния и тёмной темы у списка ключей»<div style="margin-top:6px"><a class="lnk">Чат ревью ${I.arr}</a></div></div>` : ''}
+    </div>
+    <span class="tm${r.long ? ' long' : ''}"${r.long ? ' title="Самый долгий этап"' : ''}>${r.t}${r.ret && o.v === 'A' ? `<span class="x" style="color:var(--c-warning-text)">↺ ${r.ret.length}</span>` : ''}</span>
+    ${o.v === 'B' && sub[r.n] ? sub[r.n].map(([k, tx]) => `<div class="sub6 ${k}">${tx}</div>`).join('') : ''}
+  </div>`).join('')}
+  <div class="gaxis" style="grid-template-columns:${m ? '86px 1fr 60px' : '110px 1fr 84px'}"><span></span><span class="tk2"><span>21.10 10:00</span>${m ? '' : '<span>22.10 09:00</span>'}<span>сейчас</span></span><span></span></div></div>
+  <div class="legend"><span><i class="k-work"></i>работа</span><span><i class="k-wait"></i>ожидание</span><span><i class="k-idle"></i>простой</span><span><i class="k-rev"></i>ревью</span><span><i style="background:var(--c-warning-bg);border:1.5px solid var(--c-warning);border-radius:10px"></i>возврат</span>${stuck ? '<span><i style="background:repeating-linear-gradient(135deg, var(--c-danger) 0 2px, var(--c-danger-bg) 2px 4px)"></i>без движения</span>' : ''}</div>`;
+};
+V['6A'] = m => `<div class="body">${gantt6(m, { v:'A', tip:!m && S6 === 'move' })}
+  ${S6 === 'stuck' ? `<div class="acts6"><span class="tag stop">${I.clock} стоит 3 ч 20</span><span class="sm12">Ш4 ждёт ревью, Глеб не запущен</span><button class="btn pri sm">Запустить ревью Ш4</button></div>` : ''}
+  ${hNote(S6 === 'move' ? 'Подсказка флажка открыта для показа (наведение; на 360 — касание флажка, цель 40 px за счёт невидимого поля вокруг 18 px круга). Пилюля «сейчас» прижата правым краем к отметке, на 360 — короче.' : 'Зависла: порог 2 ч без событий у этапа в работе (считает сервер). Хвост от последнего события до «сейчас» заштрихован, отметка и пилюля — C.danger.')}</div>`;
+V['6B'] = m => `<div class="body">${gantt6(m, { v:'B' })}
+  ${hNote('Подстроки — только у этапов, где есть событие; «здесь сейчас» с точкой C.accent, текст C.textHeading; обычные — C.textSecondary 11 px. Флажков на полосе нет — возвраты названы словами.')}</div>`;
+V['6C'] = m => {
+  const stuck = S6 === 'stuck';
+  const vd = stuck
+    ? `<div class="verdict bad"><button class="vchip">${'<span class="dot" style="color:var(--c-accent)"></span>'}Ревью</button><button class="vchip bad">${I.clock}стоит 3 ч 20</button><button class="vchip">${I.rot}2 возврата</button><button class="vchip">${I.clock}2 д 7 ч</button><span style="flex:1"></span><button class="btn pri sm">Запустить ревью Ш4</button></div>`
+    : `<div class="verdict"><button class="vchip"><span class="dot" style="color:var(--c-accent)"></span>Производство</button><button class="vchip ok">${I.ok}движется · 4 мин назад</button><button class="vchip hv">${I.rot}2 возврата</button><button class="vchip">${I.clock}2 д 4 ч · работа 9 ч 5</button></div>`;
+  return `<div class="body">${vd}${gantt6(m, { v:'C', hl:!stuck })}
+  ${hNote('Чип «2 возврата» наведён: флажки и полоса Производства обведены C.warning. Наведение на «Производство» подсвечивает его строку, на «2 д 4 ч» — всю ось. На 360 чипы 40 px и переносятся в две строки; касание подсвечивает, второе касание снимает.')}</div>`;
+};
+V['6D'] = m => `<div class="body"><div class="statesrow" style="${m ? 'flex-direction:column' : ''}">
   <div style="${m ? 'width:auto' : ''}"><p class="cap">Покой</p><div class="sumcard sec2 sm12">Резюме не запрашивали. Модель напишет 3–5 пунктов: что сделано, где затык, что дальше.<div style="margin-top:8px"><button class="btn sec sm">${I.spark}Резюме моделью</button></div></div></div>
   <div style="${m ? 'width:auto' : ''}"><p class="cap">Идёт</p><div class="sumcard"><div class="sm12 sec2">Модель читает хронологию фичи…</div><div class="skel" style="width:92%"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div><button class="btn gh sm">Остановить</button></div></div>
   <div style="${m ? 'width:auto' : ''}"><p class="cap">Готово</p><div class="sumcard"><div class="sm11 mut" style="display:flex;gap:6px;align-items:center">${I.spark}резюме · 10:42 · Sonnet<span style="flex:1"></span><a class="lnk">${I.rot}Обновить</a></div>
@@ -718,30 +902,45 @@ V['6C'] = m => `<div class="body"><div class="statesrow" style="${m ? 'flex-dire
   <div style="${m ? 'width:auto' : ''}"><p class="cap">Ошибка</p><div class="err">Не удалось составить резюме: модель не ответила.<button class="btn sec sm">Повторить</button></div></div>
 </div></div>`;
 
-// --- 7. Чипы ---
+// --- 7. Чип модели на лице собеседника (ChatCard.tsx) ---
+const BUG = (s) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="6" width="8" height="14" rx="4"/><path d="M19 7l-3 2M5 7l3 2M19 19l-3-2M5 19l3-2M20 13h-4M4 13h4M10 4l1 2M14 4l-1 2"/></svg>`;
+const PIN = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 10.8V4h6v6.8l3 3.2H6z"/></svg>';
+const CC = [
+  { nm:'Хранилище плагина', role:1, prev:'Софья: Ш3 вернулся, Кира дорабатывает пустое состояние', p:'orange', ini:'С' },
+  { nm:'Ш3 · Панель «Хранилище»', prev:'Кира: пустое состояние готово, проверяю тёмную тему', p:'purple', photo:1, model:'Opus', on:1, tip:'Модель чата: Opus 5.5 · у Киры по умолчанию — Qwen3.8-27B' },
+  { nm:'Ревью Ш3', prev:'Глеб: вернул — нет пустого состояния у списка ключей', p:'brown', ini:'Г', model:'Sonnet', tip:'Модель чата: Sonnet 5.5 · у Глеба по умолчанию — Opus 5.5' },
+  { nm:'Ш4 · Контрактные тесты', prev:'Тимур: сдал на ревью, 14 тестов зелёные', p:'blue', ini:'Т', hv:1 },
+  { nm:'Разбор логов vLLM', prev:'Падение на prefill 63k: смотрю очередь планировщика', model:'DeepSeek', tip:'Модель чата: DeepSeek V4 · по умолчанию — Opus 5.5' },
+];
+const ccard = (c, place, m) => `<div class="cc${c.p ? ' p' : ' np'}${c.on ? ' on' : ''}${c.hv ? ' hv' : ''}"${c.p ? ` style="--pc:var(--p-${c.p})"` : ''}>
+  ${c.p ? `<div class="cveil"${c.on ? ' style="display:none"' : ''}></div><div class="cface${c.photo ? ' photo' : ''}">${c.photo ? '' : c.ini}</div>` : `<span class="cwm">${BUG(64)}</span>`}
+  <div class="ctx"><div class="l1"><span class="ti">${c.p ? I.chat : BUG(14)}</span><span class="nm">${c.nm}</span>${c.role ? '<span class="krole">ключевой</span>' : ''}</div>
+    <div class="l2"${!c.p && c.model ? ' style="padding-right:60px"' : ''}>${c.prev}</div></div>
+  ${c.model ? `<span class="gchip ${c.p ? place : 'cor'}" title="${c.tip}">${c.model}</span>` : ''}
+  ${c.hv && !m ? `<div class="hcl"><span>${PIN}</span><span>${I.more}</span></div>` : ''}
+</div>`;
+const clist7 = (place, m) => `<div class="clist7">${CC.map(c => ccard(c, place, m)).join('')}</div>`;
+const zoom7 = (place) => `<div><p class="cap">Фрагмент ×2 · выбранный чат и соседний</p><div class="zoomwrap" style="position:relative;height:280px"><div style="position:absolute;right:0;top:8px;width:300px;transform:scale(2);transform-origin:top right;display:flex;flex-direction:column;gap:4px">${ccard(CC[1], place, false)}${ccard(CC[2], place, false)}</div></div></div>`;
+const note7 = (m) => hNote(`Чип есть у трёх чатов из пяти: «Хранилище плагина» и «Ш4» идут на модели по умолчанию — лицо чистое. У чата без персоны (водяной знак темы) чип стоит в правом нижнем углу, а превью получает отступ справа под его ширину. Кнопки по наведению («Ш4») — по вертикальному центру, чип не перекрывают.${m ? ' На 360 кнопок по наведению нет; чип не интерактивный, касание открывает чат как обычно.' : ''}`);
+V['7B'] = m => `<div class="body"><div class="ba"><div><p class="cap">Список чатов фичи</p>${clist7('ctr', m)}</div>${m ? '' : zoom7('ctr')}</div>${note7(m)}</div>`;
+V['7C'] = m => `<div class="body"><div class="ba"><div><p class="cap">Список чатов фичи</p>${clist7('cor', m)}</div>${m ? '' : zoom7('cor')}</div>${note7(m)}</div>`;
 V['7A'] = m => `<div class="body"><div class="ba">
   <div><p class="cap">Было · FeatureRunView</p><div class="xrow"><span class="avw">${av('k','К',1)}<span class="mchip ink">Qwen</span></span><b style="color:var(--c-text-heading)">Кира</b><span class="sec2">фронт · Ш3</span><span class="tag run">идёт</span></div></div>
-  <div><p class="cap">Стало</p><div class="xrow">${av('k','К',1)}<b style="color:var(--c-text-heading)">Кира</b><span class="sec2">фронт · Ш3</span>${mchip('Qwen')}<span class="tag run">идёт</span></div></div>
-</div><p class="sm11 mut" style="margin:10px 0 0">Подсказка с полной моделью («Qwen3.8-27B, локально») остаётся — по наведению, фокусу и касанию, как у ModelChip.</p></div>`;
-const CH = [['Хранилище плагина (ключевой чат)', '12 мин', 'Sonnet', 's', 'С'], ['Кира · Ш3 доработка', '42 мин', 'Qwen', 'k', 'К', 1], ['Глеб · ревью Ш3', '1 ч', 'Opus', 'g', 'Г'], ['Тимур · Ш4 тесты', '2 ч', null, 't', 'Т'], ['Денис · Ш2 ручки API', 'вчера', 'Qwen', 'd', 'Д']];
-const clistA = (kind, m) => `<div class="clist">${CH.map(c => `<div class="crow${c[5] ? ' on' : ''}">${av(c[3], c[4])}<span class="nm">${c[0]}</span>${c[2] ? `<span class="mchip ${kind}">${c[2]}</span>` : ''}<span class="tm">${c[1]}</span></div>`).join('')}</div>`;
-const clistC = (m) => `<div class="clist">${CH.map(c => `<div class="crow2"${c[5] ? ' style="background:var(--c-bg-selected)"' : ''}><div class="l1">${av(c[3], c[4])}<span class="nm"${c[5] ? ' style="font-weight:600;color:var(--c-text-heading)"' : ''}>${c[0]}</span><span class="crow tm" style="padding:0;min-height:0">${c[1]}</span></div>${c[2] ? `<div class="l2"><span class="mono">${c[2]}</span></div>` : ''}</div>`).join('')}</div>`;
-V['7B'] = m => `<div class="body"><div class="ba">
-  <div><p class="cap">А · мягкий чип <span class="rec">рекомендую</span></p>${clistA('soft', m)}</div>
-  <div><p class="cap">Б · контурный</p>${clistA('line', m)}</div>
-  <div><p class="cap">В · текстом во второй строке</p>${clistC(m)}</div>
-</div><p class="sm11 mut" style="margin:10px 0 0">У «Тимур · Ш4» модель совпадает с умолчанием проекта — чипа нет. В тёмной теме мягкий чип — C.bgSelected на C.bgWhite, контраст текста C.textSecondary ≥ 4.5:1.</p></div>`;
+  <div><p class="cap">Стало · то же стекло</p><div class="xrow" style="padding-bottom:12px"><span class="avw2">${av('k','К',1)}<span class="gchip">Qwen</span></span><b style="color:var(--c-text-heading)">Кира</b><span class="sec2">фронт · Ш3</span><span class="tag run">идёт</span></div></div>
+</div>${hNote('Подсказка с полной моделью («Qwen3.8-27B, локально») — по наведению, фокусу и касанию, как у ModelChip.')}</div>`;
 
 // ===== Раскладка: в каждом .var — десктоп 880 и 360 =====
-document.querySelectorAll('.var').forEach(el => {
+const renderVar = el => {
   const f = V[el.dataset.v];
   if (!f) return;
+  el.querySelector(':scope > .row')?.remove();
   const row = document.createElement('div');
   row.className = 'row';
   row.innerHTML = `<div class="frm dk"><div class="cap">Десктоп · остров центра</div><div class="isl">${f(false)}</div></div>
     <div class="frm mb"><div class="cap">Мобильный · 360</div><div class="isl">${f(true)}</div></div>`;
   el.appendChild(row);
-});
+};
+document.querySelectorAll('.var').forEach(renderVar);
 document.querySelectorAll('.mb').forEach(x => x.classList.add('m'));
 
 // ===== Переключатели =====
@@ -752,6 +951,7 @@ const pick = (id, attr, fn) => document.getElementById(id).addEventListener('cli
 });
 pick('ptPills', 'pt', v => { document.querySelectorAll('.pt').forEach(s => s.classList.toggle('on', s.id === 'pt' + v)); window.scrollTo(0, 0); });
 pick('thPills', 'th', v => document.documentElement.dataset.theme = v);
+pick('s6Pills', 's6', v => { S6 = v; document.querySelectorAll('#pt6 .var').forEach(renderVar); });
 pick('mkPills', 'mk', v => document.body.classList.toggle('nomarks', v === 'off'));
 </script>
 </body>

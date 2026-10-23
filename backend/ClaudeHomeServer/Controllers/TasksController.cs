@@ -137,6 +137,13 @@ public class TasksController(
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    // Признак сервисного токена (W4-HOLD-B2): тот же claim-литерал, что в PluginBridgeController
+    // (MapInboundClaims=false оставляет raw-имена). Удержание фичи ставит только человек —
+    // сервисный токен (MCP-обвязка) на ручках hold/clear отказывается 403.
+    private const string TokenKindClaim = "typ";
+    private const string ServiceTokenKind = "svc";
+    private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
+
     // Проект генерации: только свой; чужой/несуществующий → личный контекст
     private string? OwnProjectId(string? projectId) =>
         projectId is not null && projects.GetById(projectId)?.OwnerId == UserId ? projectId : null;
@@ -823,6 +830,88 @@ public class TasksController(
         return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
             mockups, mockupsUnavailable });
     }
+
+    // ─── W4-HOLD-B2: удержание фичи (POST/DELETE /api/tasks/features/{featureId}/hold) ────────
+    // Контракт §1 (docs/research/feature-lifecycle-shared-chat-cut-2026-10.md): Hold ставит
+    // только человек — сервисный токен (typ=svc) получает 403 на обе ручки. Эти ручки только
+    // пишут поле эпика и записи журнала held/hold_cleared; прерывание идущих ходов — шаг D.
+    // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой/кривой id — тело как у GET),
+    // 400 (неизвестный reason), 409: merged/closed/merging; draft после первого запуска шага;
+    // manual/queue поверх существующего draft; DELETE без удержания. 200 — обновлённый эпик.
+
+    // Тело POST hold: reason — словарь FeatureHoldReasons (draft | manual | queue).
+    public record FeatureHoldRequest(string? Reason);
+
+    [HttpPost("features/{featureId}/hold")]
+    public IActionResult SetFeatureHold(string featureId, [FromBody] FeatureHoldRequest? req)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Удержание фичи ставит только человек" });
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // Тот же 404 с телом, что у GET features/{id} (фронт различает не должен).
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        // Завершённые и мержащиеся фичи на паузу не ставят: merged/closed — удерживать нечего,
+        // merging — мерж пауза не трогает вовсе (контракт §1: «на нём ручка отвечает 409»).
+        if (run.State == FeatureStates.Merged)
+            return Conflict(new { error = "Фича уже смержена" });
+        if (run.State == FeatureStates.Closed)
+            return Conflict(new { error = "Фича закрыта" });
+        if (run.State == FeatureStates.Merging)
+            return Conflict(new { error = "Мерж идёт: пауза на мерж не ставится" });
+
+        var reason = req?.Reason is null ? null : req.Reason.Trim();
+        if (string.IsNullOrEmpty(reason))
+            return BadRequest(new { error = "Нужен reason удержания (draft | manual | queue)" });
+        if (reason != FeatureHoldReasons.Draft && reason != FeatureHoldReasons.Manual
+            && reason != FeatureHoldReasons.Queue)
+            return BadRequest(new { error = "Неизвестный reason удержания: " + reason });
+
+        // Draft — черновик: фичу готовят, до первого запуска шага (решение 23.10: «только до
+        // первого запуска шага, иначе 409»). Тот же предикат anyStarted, что в проекторе.
+        if (reason == FeatureHoldReasons.Draft && FeatureAnyStarted(featureId))
+            return Conflict(new { error = "Draft только до первого запуска шага" });
+        // Manual/queue поверх draft: фича не начиналась — останавливать нечего, черновик
+        // снимают clear, а не переклейкой в паузу.
+        if (reason != FeatureHoldReasons.Draft && run.Epic.Hold?.Reason == FeatureHoldReasons.Draft)
+            return Conflict(new { error = "Фича в черновике: ручное удержание поверх draft" });
+
+        var epic = tasks.SetHold(featureId, reason);
+        if (epic is null) return NotFound(new { error = "Фича не найдена" });
+        return Ok(epic);
+    }
+
+    [HttpDelete("features/{featureId}/hold")]
+    public IActionResult ClearFeatureHold(string featureId)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Удержание фичи снимает только человек" });
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+        if (run.Epic.Hold is null)
+            return Conflict(new { error = "Фича не удержана: снимать нечего" });
+
+        var epic = tasks.ClearHold(featureId);
+        if (epic is null) return NotFound(new { error = "Фича не найдена" });
+        return Ok(epic);
+    }
+
+    // Любая задача фичи хоть раз запускалась — «первый запуска шага» состоялся. Тот же состав
+    // задач, что FeatureTasks в проекторе (эпик + дочерние по FeatureId), и тот же признак
+    // anyStarted (ClaudeStartedAt ≠ null) — гард draft не должен расходиться с состоянием.
+    private bool FeatureAnyStarted(string featureId) =>
+        tasks.GetByOwner(UserId).Any(t => (t.Id == featureId || t.FeatureId == featureId)
+            && t.ClaudeStartedAt is not null);
 
     // Б-mk-b: склейка макетов фичи (ADR-031 «Макеты фичи»). Порядок (fail-closed, сторож G10):
     //   1. эпик → его проект: только если принадлежит текущему владельцу (GetByOwner);

@@ -953,6 +953,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             ClearAwaitingHuman(id);
             before.AwaitingHumanSince = null;
             before.AwaitingHumanReason = null;
+            // W4-HOLD-B2: закрытие эпика снимает удержание — закрытую фичу нельзя держать
+            // на паузе (tasks_complete/PUT без отдельной ручки; hold-ручки сюда не доходят:
+            // merged/closed → 409). Поле гасится здесь же — в той же функции перехода в Done.
+            if (task.Role == TaskRoles.Feature) task.Hold = null;
         }
         else if (task.Status != TaskItemStatus.Done) task.CompletedAt = null;
         // Вердикт и исход дефекта — устаревшая проверка после переоткрытия (образец — CompletedAt)
@@ -1214,6 +1218,47 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         task.AwaitingHumanReason = null;
         task.UpdatedAt = DateTime.UtcNow;
         WriteJournalTransitions(task, before);
+        ScheduleSave();
+        return task;
+    }
+
+    // Удержание фичи (W4-HOLD-B2, контракт §1): ставят/снимают только ручки человека
+    // (сервисный токен отказывает 403 в контроллере; 409 по состояниям — тоже там). Только
+    // эпик (role=feature): у дочерних задачи Hold нет. В журнал фичи — ровно одна запись
+    // действия: held с reason / hold_cleared с снятым reason (по ней таймлайн считает
+    // интервал паузы). Прерывание идущих ходов — шаг D, здесь только поле и журнал.
+    public TaskItem? SetHold(string id, string reason)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.Role != TaskRoles.Feature) return null;
+        var now = DateTime.UtcNow;
+        task.Hold = new FeatureHold(reason, now, null, true);
+        task.UpdatedAt = now;
+        AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
+        {
+            At = now,
+            Kind = "held",
+            TaskId = task.Id,
+            Reason = reason,
+        });
+        ScheduleSave();
+        return task;
+    }
+
+    public TaskItem? ClearHold(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.Role != TaskRoles.Feature || task.Hold is null) return null;
+        var reason = task.Hold.Reason;
+        task.Hold = null;
+        task.UpdatedAt = DateTime.UtcNow;
+        AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
+        {
+            At = DateTime.UtcNow,
+            Kind = "hold_cleared",
+            TaskId = task.Id,
+            Reason = reason,
+        });
         ScheduleSave();
         return task;
     }

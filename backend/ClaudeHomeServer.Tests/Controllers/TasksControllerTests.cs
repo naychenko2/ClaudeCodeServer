@@ -151,8 +151,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // вызовы, чтобы проверить, что для локального проекта Docs не дёргается).
     // journal — реальный FeatureJournalStore на временном каталоге (Б9c шаг 6: метод journal
     // интеграционно достижим, а не только approx). null — подсистема журнала выключена.
+    // serviceToken (W4-HOLD-B2): claim typ=svc — тот же признак, что в PluginBridgeController;
+    // для проверки отказа 403 на ручках hold/clear.
     private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
-        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null)
+        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -170,7 +172,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             catalog: catalog,
             journal: journal,
             spend: spend);
-        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, OwnerId)], "test");
+        var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, OwnerId) };
+        if (serviceToken) claims.Add(new("typ", "svc"));
+        var identity = new ClaimsIdentity(claims, "test");
         controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) },
@@ -2203,6 +2207,251 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         body.GetArrayLength().Should().Be(1);
+    }
+
+    // ─── W4-HOLD-B2: hold/clear (POST/DELETE /api/tasks/features/{id}/hold) ───────────────────
+    // Контракт §1 (docs/research/feature-lifecycle-shared-chat-cut-2026-10.md): Hold ставит
+    // только человек — сервисный токен (typ=svc) отказывается 403 на обе ручки; merged/closed/
+    // merging → 409; draft годен только до первого запуска шага; manual/queue поверх draft → 409;
+    // DELETE без удержания → 409. tasks_update поле Hold не пишет; закрытие эпика его снимает.
+
+    private async Task<string> CreateFeatureEpicAsync()
+    {
+        var epic = await CreateTaskAsync(new
+        {
+            title = "hold-эпик-" + Guid.NewGuid().ToString("N")[..6],
+            role = "feature",
+        });
+        return epic.GetProperty("id").GetString()!;
+    }
+
+    // Сервисный токен → 403. Мутация (критерий c1): убрать проверку IsServiceToken в
+    // SetFeatureHold — этот тест падает (без неё ручка дошла бы до SetHold и вернула 200).
+    [Fact]
+    public void PostHold_ServiceToken_Returns403()
+    {
+        var epicId = CreateFeatureEpicAsync().GetAwaiter().GetResult();
+        var controller = BuildController(RealGit(), serviceToken: true);
+
+        var result = controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"));
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
+    }
+
+    // Сервисный токен → 403 и на снятии (та же причина: удержание снимает только человек).
+    [Fact]
+    public async Task ClearHold_ServiceToken_Returns403()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        // Удержание есть — отказ не должен зависеть от состояния.
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var controller = BuildController(RealGit(), serviceToken: true);
+        var result = controller.ClearFeatureHold(epicId);
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
+    }
+
+    // 404: чужой эпик — тот же 404 с телом, что у GET features/{id}.
+    [Fact]
+    public async Task PostHold_ChuzhayaFicha_404()
+    {
+        var created = await _stranger.PostAsJsonAsync("/api/tasks", new { title = "чужой эпик", role = "feature" });
+        var epicId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // 404: кривой id (символы вне белого списка) — как у GET/merge (п.7).
+    [Fact]
+    public async Task PostHold_KrivoyId_404()
+    {
+        var response = await _client.PostAsJsonAsync("/api/tasks/features/a..b/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // 409: merged (merge Done + финал принят) — удерживать нечего.
+    [Fact]
+    public async Task PostHold_Merged_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new
+        {
+            title = "финал", featureId = epicId, role = "final", status = "done",
+            verification = new { verdict = "accepted" },
+        });
+        await CreateTaskAsync(new { title = "мерж", featureId = epicId, role = "merge", status = "done" });
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("смержена");
+    }
+
+    // 409: closed — эпик Done.
+    [Fact]
+    public async Task PostHold_Closed_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { status = "done" });
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("закрыта");
+    }
+
+    // 409: merging — мерж идёт (merge-задача InProgress); пауза мерж не трогает (контракт §1).
+    [Fact]
+    public async Task PostHold_Merging_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new
+        {
+            title = "финал", featureId = epicId, role = "final", status = "done",
+            verification = new { verdict = "accepted" },
+        });
+        await CreateTaskAsync(new { title = "мерж", featureId = epicId, role = "merge", status = "inProgress" });
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // 400: reason вне словаря FeatureHoldReasons.
+    [Fact]
+    public async Task PostHold_NeizvestnyReason_400()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "pause" });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    // 200: draft до первого запуска шага — поле в эпике, ответ — обновлённый эпик.
+    [Fact]
+    public async Task PostHold_DraftDoZapuskStepa_200()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "draft" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var epic = await response.Content.ReadFromJsonAsync<JsonElement>();
+        epic.GetProperty("hold").GetProperty("reason").GetString().Should().Be("draft");
+    }
+
+    // 409: draft после первого запуска шага (решение 23.10: «только до первого запуска»).
+    [Fact]
+    public async Task PostHold_DraftPosleZapuskStepa_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString()!;
+        // «Шаг запущен» — тот же признак, что в гарде (ClaudeStartedAt ≠ null).
+        _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!.ClaudeStartedAt = DateTime.UtcNow;
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "draft" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // 409: manual поверх существующего draft — черновик снимают clear, а не переклейкой в паузу.
+    [Fact]
+    public async Task PostHold_ManualPoverDraft_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var draft = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "draft" });
+        draft.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // 200 + в журнале ровно одна запись held с reason. Журнал пишет сам TaskManager (его
+    // _journal из DI) — читаем зарегистрированный FeatureJournalStore той же сборки.
+    [Fact]
+    public async Task PostHold_200_ZhurnalRovnoOdnaHeld()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var controller = BuildController(RealGit());
+
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)
+            controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"))!;
+        result.StatusCode.Should().Be(200);
+
+        var journal = _factory.Services.GetRequiredService<FeatureJournalStore>();
+        var held = journal.Read(OwnerId, epicId).Entries.Where(e => e.Kind == "held").ToList();
+        held.Should().HaveCount(1);
+        held[0].Reason.Should().Be("manual");
+    }
+
+    // 409: DELETE без удержания — снимать нечего.
+    [Fact]
+    public async Task ClearHold_BezUderzhaniya_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // 200: снятие — поле cleared, в журнале ровно одна hold_cleared с снятым reason.
+    [Fact]
+    public async Task ClearHold_200_SnimаетHoldIZapisyvаетHoldCleared()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var journal = _factory.Services.GetRequiredService<FeatureJournalStore>();
+        var controller = BuildController(RealGit(), journal: journal);
+
+        controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"))
+            .Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>();
+
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.ClearFeatureHold(epicId)!;
+        result.StatusCode.Should().Be(200);
+
+        var entries = journal.Read(OwnerId, epicId).Entries;
+        entries.Count(e => e.Kind == "held").Should().Be(1);
+        var cleared = entries.Where(e => e.Kind == "hold_cleared").ToList();
+        cleared.Should().HaveCount(1);
+        cleared[0].Reason.Should().Be("manual");
+
+        // Фактическое состояние эпика после снятия — hold отсутствует (проверка через GET).
+        var body = await (await _client.GetAsync($"/api/tasks/{epicId}")).Content.ReadFromJsonAsync<JsonElement>();
+        if (body.TryGetProperty("hold", out var holdProp))
+            holdProp.ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    // Критерий c3: tasks_update с «hold» в теле поле не меняет (UpdateTaskRequest Hold не содержит,
+    // лишнее поле игнорируется) — удержание остаётся manual.
+    [Fact]
+    public async Task PostHold_UpdateVTelePoleNeMenyaet()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var put = await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new
+        {
+            title = "переименован",
+            hold = new { reason = "queue", since = DateTime.UtcNow, byUser = true },
+        });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await (await _client.GetAsync($"/api/tasks/{epicId}")).Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("hold").GetProperty("reason").GetString().Should().Be("manual");
+    }
+
+    // Критерий c3: tasks_complete (PUT status=done) эпика с Hold → Hold=null.
+    [Fact]
+    public async Task PostHold_CompleteEpikaSnimаетHold()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var close = await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { status = "done" });
+        close.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await (await _client.GetAsync($"/api/tasks/{epicId}")).Content.ReadFromJsonAsync<JsonElement>();
+        if (body.TryGetProperty("hold", out var holdProp))
+            holdProp.ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     // ─── Изоляция по владельцу ───────────────────────────────────────────────

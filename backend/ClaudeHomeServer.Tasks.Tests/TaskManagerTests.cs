@@ -1796,4 +1796,58 @@ public class TaskManagerTests : IDisposable
         var updated = _sut.Update(step.Id, new UpdateTaskRequest(PlanSteps: []))!;
         updated.PlanSteps.Should().BeNull("пустой список у не-плана — null, а не []");
     }
+
+    // ─── FeatureHoldGate (W4-HOLD-G, контракт §1 :170) ───────────────────────────────────
+    // Формула отказа запуска исполнителя по задачам фичи с активным Hold. Мутация: убрать
+    // вызов FeatureHoldRefusal в TaskExecutionService.ExecuteAsync — интеграционный тест
+    // Hold_RefusesExecutorLaunch_ClearingPauseAllowsStart краснеет.
+    [Fact]
+    public void FeatureHoldRefusal_ManualHold_РабочаяЗадачаФичиОтказана()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+        _sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+        _sut.FeatureHoldRefusal(step).Should().Be("Фича на паузе, снимите паузу на странице фичи.");
+
+        // Задача без фичи — проходит всегда (контракт :170)
+        _sut.FeatureHoldRefusal(_sut.Create(null, "u", new CreateTaskRequest("обычная")))
+            .Should().BeNull();
+        // Висячий FeatureId (эпик не найден) — как задача без фичи: не блокируем. Такой
+        // FeatureId создаётся не Create'ом (там fail-closed валидация), а старыми данными —
+        // поэтому задача собрана напрямую, гейт на неё смотрит как на чистую функцию.
+        _sut.FeatureHoldRefusal(new TaskItem { Title = "висяк", FeatureId = "нет-такого-эпика" })
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void FeatureHoldRefusal_DraftHold_ПропускаетТолькоПодготовку()
+    {
+        var epic = CreateEpic("u");
+        _sut.SetHold(epic.Id, FeatureHoldReasons.Draft);
+
+        // Роли подготовки (cut/design/plan/consult) — разрешены (контракт :171)
+        foreach (var role in new[] { TaskRoles.Cut, TaskRoles.Design, TaskRoles.Plan, TaskRoles.Consult })
+            _sut.FeatureHoldRefusal(_sut.Create(null, "u", new CreateTaskRequest("подготовка",
+                FeatureId: epic.Id, Role: role))).Should().BeNull(role);
+
+        // Рабочая роль — отказана
+        _sut.FeatureHoldRefusal(_sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step)))
+            .Should().Be("Фича — черновик, запустите её на странице фичи.");
+    }
+
+    [Fact]
+    public void FeatureHoldRefusal_СнятиеПаузыРазрешаетЗапуск()
+    {
+        var epic = CreateEpic("u");
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг",
+            FeatureId: epic.Id, Role: TaskRoles.Step));
+        _sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.FeatureHoldRefusal(step).Should().NotBeNull();
+
+        _sut.ClearHold(epic.Id);
+        _sut.FeatureHoldRefusal(step).Should().BeNull("снятие паузы снимает и запрет запуска");
+    }
 }

@@ -241,6 +241,11 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // Отказ до claim'а и до подъёма процесса; текст гейта — FeatureEpicLaunchRefusal.
         if (FeatureEpicLaunchRefusal(task) is { } refusal)
             throw new InvalidOperationException(refusal);
+        // Фича на паузе (W4-HOLD-G, контракт §1 :174): здесь сходятся и tasks_run_executor, и
+        // автоматика (автозапуск ждающей задачи идёт через этот же ExecuteAsync) — поэтому гейт
+        // один и стоит до claim'а и до подъёма процесса. Формула — TaskManager.FeatureHoldRefusal.
+        if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
+            throw new InvalidOperationException(holdRefusal);
 
         // Claim ДО гарда «одна сессия на задачу»: сам гард читает LinkedSessionId, который
         // этот же метод выставит только через несколько строк ниже (после подъёма CLI-процесса)

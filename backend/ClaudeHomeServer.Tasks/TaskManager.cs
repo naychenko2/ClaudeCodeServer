@@ -1291,6 +1291,27 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return task;
     }
 
+    // FeatureHoldGate (W4-HOLD-G, контракт §1 :170): единственный гейт паузы на сервере — отказ
+    // запуска исполнителя по задачам фичи с активным Hold. Формула одна и совпадает с «паузой»
+    // проектора (FeatureProjector :1546): любой Hold кроме draft — пауза, закрытая и открытая
+    // одинаково. Задача без фичи проходит всегда; висячий FeatureId (эпик не найден) — тоже,
+    // как задача без фичи: это отдельный дефект трекера, блокировать из-за него работу не надо.
+    // Возвращает null — запуск разрешён; иначе текст отказа для точки запуска (контракт :175).
+    public string? FeatureHoldRefusal(TaskItem task)
+    {
+        if (string.IsNullOrEmpty(task.FeatureId)) return null;
+        var epic = _tasks.GetValueOrDefault(task.FeatureId);
+        if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        if (epic.Hold is null) return null;
+        // draft — фичу готовят: пропускать только роли подготовки (cut/design/plan/consult),
+        // рабочие (step/rework/review/qa/final/merge) — нет.
+        if (epic.Hold.Reason == FeatureHoldReasons.Draft)
+            return task.Role is TaskRoles.Cut or TaskRoles.Design or TaskRoles.Plan or TaskRoles.Consult
+                ? null
+                : "Фича — черновик, запустите её на странице фичи.";
+        return "Фича на паузе, снимите паузу на странице фичи.";
+    }
+
     // Пометка снятия человеком по карточке блокера (волна 1 team-blocker-honest, дефект
     // f3965801): ставится штабом в DropSubtaskAsync после Update(Status=Done). С этого
     // момента TaskManager.Update не меняет Status/Outcome, а ResultMarkdown исполнителя

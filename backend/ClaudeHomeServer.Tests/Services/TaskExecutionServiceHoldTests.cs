@@ -199,4 +199,28 @@ public class TaskExecutionServiceHoldTests : IDisposable
         _tasks.GetById(step.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
             "ClearHold пометку не гасит — иначе задача выглядела бы живой, хотя хода нет");
     }
+
+    // Критерий W4-HOLD-G (контракт §1 :174): tasks_run_executor и автоматика проходят через
+    // ExecuteAsync — гейт стоит там, до claim'а и подъёма процесса. Мутация: убрать вызов
+    // FeatureHoldRefusal в ExecuteAsync — первый абзац краснеет (запуск проходит). Снятие
+    // паузы разрешает запуск — второй абзац ловит обратную сторону гейта.
+    [Fact]
+    public async Task Hold_RefusesExecutorLaunch_ClearingPauseAllowsStart()
+    {
+        var user = _userStore.Add("hold-gate", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг фичи", Role: "step",
+            FeatureId: epic.Id));
+        _tasks.SetHold(epic.Id, "manual");
+
+        var start = async () => await _sut.ExecuteAsync(step, auto: false);
+        await start.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Фича на паузе, снимите паузу на странице фичи*",
+                "запуск исполнителя по удержанной фиче отказан до подъёма процесса");
+        step.ClaudeStartedAt.Should().BeNull("отказ не оставляет следов запуска");
+
+        _tasks.ClearHold(epic.Id);
+        var started = await _sut.ExecuteAsync(step, auto: false);
+        started.ClaudeStartedAt.Should().NotBeNull("снятие паузы разрешает запуск");
+    }
 }

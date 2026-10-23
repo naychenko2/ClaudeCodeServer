@@ -73,7 +73,8 @@ Tone.js, где встроен, инварианты ленивой загруз
 [architecture-section.md](features/architecture-section.md) (раздел «Архитектура»: C4-модель
 проекта файлом под git, мост с Viaduct, сборка из кода, тулсет `arch_*`, ограничения),
 [plugins.md](features/plugins.md) (плагины: зачем фича, что видит человек, «Что нового»
-и границы; за двумя флагами `plugins-mvp` и `plugins-build-yourself`).
+и границы; за двумя флагами `plugins-mvp` и `plugins-build-yourself`),
+[task-acceptance-criteria.md](features/task-acceptance-criteria.md) (критерии приёмки и свидетельства у задачи: гейт закрытия, кто меняет критерии, причина возврата, оговорка «не граница безопасности»).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
 [audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),

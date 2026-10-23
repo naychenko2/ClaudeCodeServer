@@ -488,14 +488,20 @@ async function doHoldPause(fid: string, state: FeatureState, nowCount: number): 
 // DELETE hold, без подтверждения (макет: «Снять паузу» и «Запустить фичу» — без модалки).
 // Ответ — {resumed, expired} (вердикт R-HOLD-H): resumed — задачи, которым пауза
 // мешала запуститься и теперь разрешены (не очередь автостарта), их и называем, без
-// числа (R-HOLD-H2); expired не показываем. ClearHold ничего сам не возобновляет
-// (ClearHold_DoesNotAutoResumeAnything) — поэтому текст тоста без обещания работы.
+// числа (R-HOLD-H2); expired не показываем. Метод хранилища ClearHold сам ничего не
+// возобновляет (ClearHold_DoesNotAutoResumeAnything), но ручка DELETE сразу после него
+// зовёт ResumeFeatureTurnsAfterHold (TasksController.cs:941) — прерванные ходы
+// продолжаются; текст тоста остаётся честным для гейт-множества.
 async function doHoldClear(fid: string, state: FeatureState): Promise<void> {
   try {
-    const { resumed } = await api.tasks.clearFeatureHold(fid);
+    // Тело ответа может быть пустым (Ok() без контента — request отдаёт undefined,
+    // offline.ts:447): деструктуризация undefined бросила бы TypeError.
+    const { resumed } = (await api.tasks.clearFeatureHold(fid)) ?? {};
     const resumedIds = resumed ?? []; // страховка: ответ без тела
     if (state === 'draft') {
-      showToast('Фича запущена', 'Куратор начинает конвейер.');
+      // Бэк не обещает немедного старта конвейера — честный текст до решения
+      // по дефекту bec00347 (карточка «фича запущена»).
+      showToast('Черновик снят', 'Шаги запустит куратор.');
     } else if (resumedIds.length > 0) {
       showToast('Фича снята с паузы', 'Задачи, которым пауза мешала, снова разрешены.');
     } else {

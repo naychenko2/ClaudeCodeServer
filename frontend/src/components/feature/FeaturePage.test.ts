@@ -67,6 +67,9 @@ const mockHold = vi.hoisted(() => ({
   error: null as (Error & { status?: number; body?: unknown }) | null,
   resumed: [] as string[],
   expired: [] as string[],
+  // Имитация Ok() без тела: request отдаёт undefined (offline.ts:447) — проверка
+  // страховки на пустое тело в doHoldClear (хвост R-HOLD-F3).
+  emptyBody: false,
 }));
 // Журнал тостов (W4-HOLD-F2: текст 409 и успех — проверяются по нему).
 const toasts = vi.hoisted(() => [] as [string, string | undefined][]);
@@ -101,6 +104,7 @@ vi.mock('../../lib/api', () => ({
         mockHold.calls.push({ fid, method: 'DELETE' });
         if (mockHold.pending) return new Promise<{ resumed: string[]; expired: string[] }>(() => {});
         if (mockHold.error) return Promise.reject(mockHold.error);
+        if (mockHold.emptyBody) return Promise.resolve(undefined as unknown as { resumed: string[]; expired: string[] });
         return Promise.resolve({ resumed: mockHold.resumed, expired: mockHold.expired });
       },
     },
@@ -1182,6 +1186,7 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     mockHold.error = null;
     mockHold.resumed = [];
     mockHold.expired = [];
+    mockHold.emptyBody = false;
     toasts.length = 0;
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
   });
@@ -1293,6 +1298,21 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     expect(last[1] ?? '', 'деталей про продолженные шаги нет').toBe('');
   });
 
+  // Хвост R-HOLD-F3: Ok() без тела — request отдаёт undefined (offline.ts:447).
+  // Без страховки `(await ...) ?? {}` деструктуризация бросит TypeError, попадёт в
+  // catch — тост стал бы «Не получилось». Мутация: убрать `?? {}` — тест краснеет.
+  it('пустое тело ответа: не падает, «Пауза снята», а не «Не получилось»', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [] });
+    mockHold.emptyBody = true;
+    const c = render({});
+    await settle();
+    const unpause = findNodeByAttr(c, 'data-testid', 'feature-page-unpause')!;
+    await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
+    const last = toasts[toasts.length - 1];
+    expect(last[0], 'страховка сработала — заголовок «Пауза снята»').toBe('Пауза снята');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница жива').not.toBeNull();
+  });
+
   it('360: кнопки «Пауза» в ряду нет — первый пункт шторки ⋯ с подсказкой', async () => {
     holdPage('running', { now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
     const c = render({ isMobile: true });
@@ -1336,7 +1356,9 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     await act(async () => { (reactProps(start)!.onClick as () => void)(); });
     expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'DELETE' }]);
     const last = toasts[toasts.length - 1];
-    expect(last[0], 'заголовок тоста — «Фича запущена»').toBe('Фича запущена');
-    expect(last[1] ?? '', 'деталь про куратора').toContain('Куратор');
+    // Текст соответствует фактическому поведению бэка до решения по дефекту
+    // bec00347: снятие draft-удержания не утверждает, что конвейер уже начался.
+    expect(last[0], 'заголовок тоста — «Черновик снят»').toBe('Черновик снят');
+    expect(last[1] ?? '', 'деталь про куратора').toContain('куратор');
   });
 });

@@ -1,4 +1,5 @@
 import type { Mode } from '../lib/modes';
+import type { PromptCacheWire } from '../lib/promptCache';
 export type { Mode };
 
 export interface PermissionRule {
@@ -1258,8 +1259,10 @@ export type ServerMessage = { sessionId: string } & (
   // contextTokens — размер контекста последнего запроса хода (оценка заполнения окна).
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
   // usageModel — фактическая модель хода (её же бэк проставляет постам в истории):
-  // на этом событии лента клеит модель постам текущего хода
-  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string; durationApiMs?: number }
+  // на этом событии лента клеит модель постам текущего хода.
+  // promptCache — состояние prompt cache хода (фич-флаг prompt-cache); null/отсутствует —
+  // ход без сигнала кэша и история до появления поля
+  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string; durationApiMs?: number; promptCache?: PromptCacheWire }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   // Завершённая генерация glif: счётчик + кредиты (если billing доехал в payload). Дедуп по jobId.
   | { type: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
@@ -2232,7 +2235,7 @@ export type ChatItem =
   // durationApiMs — время запросов к API за ход (без инструментов и ожиданий): знаменатель
   // скорости генерации в плашке итога. Нет поля (старая история, локальный движок) — скорость
   // считается по durationMs
-  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; durationApiMs?: number }
+  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; durationApiMs?: number; promptCache?: PromptCacheWire }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { kind: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }

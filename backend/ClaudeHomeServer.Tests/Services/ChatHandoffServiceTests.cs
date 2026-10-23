@@ -246,6 +246,37 @@ public class ChatHandoffServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ХолодныйПуть_СлужебнаяРепликаШтаба_НеПопадаетВМатериалЗаписки()
+    {
+        // Условие u.StaffNote == null в BuildConversationTranscript: служебная реплика штаба
+        // (пробуждение, доклад по задаче) — не суть диалога. Без фильтра записка пересказывала
+        // служебный слой вместо разговора (тот же дефект, что с системными директивами, QA B-4).
+        // Мутация «снять условие» краснит этот тест
+        var runner = new CountingRunner("### Цель\nнастроить значки");
+        var (mgr, projects, _) = BuildManager();
+        var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "proj_staff_" + Guid.NewGuid().ToString("N"))).FullName;
+        var project = projects.Create("Проект переноса", dir, TestUserId, TestUsername);
+        var csid = "handoff_staff_" + Guid.NewGuid().ToString("N");
+        _history.SaveAsync(csid, new List<StoredMessage>
+        {
+            new StoredUserMessage("Настройте значки проектов"),
+            // Служебный ход штаба: плашка-разделитель с подписью — в транскрипт не попадает
+            new StoredUserMessage("Служебная реплика штаба: волна закрыта", staffNote: "Волна 2 закрыта — сводка передана координатору"),
+            new StoredTextMessage("Готово, значки настроены"),
+        }).GetAwaiter().GetResult();
+        var chat = mgr.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: csid).GetAwaiter().GetResult();
+        var sut = new ChatHandoffService(mgr, runner, NullLogger<ChatHandoffService>.Instance);
+
+        await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        runner.Calls.Should().Be(1);
+        // Суть диалога в материале — обе реплики разговора
+        runner.LastPrompt!.Should().Contain("Настройте значки проектов").And.Contain("Готово, значки настроены");
+        // Служебная реплика штаба в материал не входит
+        runner.LastPrompt!.Should().NotContain("Служебная реплика штаба");
+    }
+
+    [Fact]
     public async Task Handoff_СтарыйЧатНеМеняется()
     {
         var (sut, _, chat) = BuildSut(new CountingRunner("записка"));

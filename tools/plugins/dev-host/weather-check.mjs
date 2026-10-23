@@ -24,8 +24,8 @@
 //   3. Нет горизонтальной прокрутки на ширинах 320 и 390.
 //   4. denied (нет права на прогноз), status400 и неполный ответ — каждый
 //      даёт свой кадр; неполный ответ — прочерки, не выдуманная погода (R3).
-//      4d–4f: три разных отказа — три текста: нет связи, ответ без прогноза,
-//      ответ не разобрался (правка приёмки 23.10).
+//      4d–4f: разные отказы — разные тексты: таймаут и сбой на стороне сервиса,
+//      ответ без прогноза, ответ не разобрался (правки 23.10 и C5-д).
 //   5. Поиск «Ярц» — сортировка по населению (Ярцево Смоленское первым);
 //      повторное открытие режима выбора — чистое (R3).
 //   6. Пустой поиск — пустое состояние.
@@ -49,6 +49,15 @@
 //       населению; подпись «Город · Регион, Страна» (правка приёмки 23.10).
 //   19. Обещание запоминания — только если операция storage реально отвечает,
 //       а не просто выдано право (правка приёмки 23.10).
+//   20. Лимит частоты (limit) — «Слишком много запросов», не «нет связи» (C5-д, MAJOR 1).
+//   21. Исключение внутри renderMain — «Что-то сломалось в панели погоды»,
+//       а не «сервис не прочитал ответ» (C5-д, MAJOR 2).
+//   22. Срез 6 берётся по населению, внутри среза — свои первыми: крупный
+//       иностранный город в выдаче, «ru» в нижнем регистре — тоже своя страна (C5-д).
+//       (Срез ДО сортировки по стране — мутация, которую ловит этот сценарий.)
+//   23. Запрос без своей страны — порядок строго по населению (C5-д, minor).
+//   24. Температура 0 — «0°», а не прочерк (C5-д, minor).
+//   25. storage «denied»: при отказе хранилища подсказки о запоминании нет (C5-д, minor).
 
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
@@ -370,27 +379,30 @@ async function scenarioErrors(browser, base) {
     }
   });
 
-  // Правка приёмки 23.10: три разных отказа — три разных текста.
-  await scenario('4d. Сетевой сбой (таймаут) — «Нет связи с сервисом погоды»', async (checks) => {
-    const { context, page, frame } = await openEmulator(browser, base, {
-      grant: GRANT_ALL,
-      fail: 'timeout',
+  // Правка 23.10 и C5-д (MAJOR 1): разные коды отказа хоста — разные тексты.
+  // Таймаут и сбой на стороне сервиса — не «нет связи»: запрос ушёл и не вернулся.
+  for (const failCode of ['timeout', 'upstream']) {
+    await scenario('4d. ' + failCode + ' — «Сервис погоды не ответил», не «нет связи»', async (checks) => {
+      const { context, page, frame } = await openEmulator(browser, base, {
+        grant: GRANT_ALL,
+        fail: failCode,
+      });
+      try {
+        await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
+        const title = (await textOf(frame, '.cc-empty__title')).trim();
+        assertEq(checks, 'заголовок ответа сервиса', title, 'Сервис погоды не ответил');
+        const text = (await textOf(frame, '.cc-empty__text')).trim();
+        assertEq(checks, 'текст повтори', text, 'Попробуйте ещё раз.');
+        const btn = await frame.locator('#retry').innerText().catch(() => '');
+        assertEq(checks, 'кнопка «Повторить»', btn.trim(), 'Повторить');
+      } catch (e) {
+        await shot(page, 'scenario-4d-' + failCode);
+        throw e;
+      } finally {
+        await context.close();
+      }
     });
-    try {
-      await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
-      const title = (await textOf(frame, '.cc-empty__title')).trim();
-      assertEq(checks, 'заголовок нет связи', title, 'Нет связи с сервисом погоды');
-      const text = (await textOf(frame, '.cc-empty__text')).trim();
-      assertEq(checks, 'текст про подключение', text, 'Проверьте подключение и попробуйте ещё раз.');
-      const btn = await frame.locator('#retry').innerText().catch(() => '');
-      assertEq(checks, 'кнопка «Повторить»', btn.trim(), 'Повторить');
-    } catch (e) {
-      await shot(page, 'scenario-4d-noconn');
-      throw e;
-    } finally {
-      await context.close();
-    }
-  });
+  }
 
   await scenario('4e. Ответ без прогноза — «Сервис погоды не прислал прогноз»', async (checks) => {
     // Синтетическая фикстура: current есть, daily нет — сервис ответил успешно,
@@ -844,6 +856,10 @@ async function scenarioOnlineClosesSearch(browser, base) {
       await context.setOffline(true);
       await frame.locator('#refresh').click();
       await frame.locator('#retry').waitFor({ timeout: 5000 });
+      // C5-д (minor): офлайн-кадр назван явно про интернет, чтобы не путать его
+      // с «Нет связи с сервисом погоды».
+      const offlineTitle = (await textOf(frame, '.cc-empty__title')).trim();
+      assertEq(checks, 'офлайн-заголовок — явно про интернет', offlineTitle, 'Нет связи с интернетом');
       // Из офлайн-экрана открываем поиск и набираем запрос — дебаунс взведён.
       await frame.locator('#citybtn').click();
       await frame.locator('#q').waitFor({ timeout: 5000 });
@@ -1074,6 +1090,219 @@ async function scenarioStorageUnavailable(browser, base) {
   });
 }
 
+// C5-д (MAJOR 1): коды отказа хоста различаются. Лимит частоты — не «нет связи»:
+// связь есть, упёрлись в частоту запросов (30 в минуту — достижимо реальным
+// поиском с дебаунсом и батчем температур).
+async function scenarioRateLimit(browser, base) {
+  await scenario('20. Лимит частоты (limit) — «Слишком много запросов», не «нет связи» (C5-д)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fail: 'limit',
+    });
+    try {
+      await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
+      const title = (await textOf(frame, '.cc-empty__title')).trim();
+      assertEq(checks, 'заголовок про частоту', title, 'Слишком много запросов');
+      const text = (await textOf(frame, '.cc-empty__text')).trim();
+      assertEq(checks, 'текст про минуту', text, 'Подождите минуту и попробуйте ещё раз.');
+      const btn = await frame.locator('#retry').innerText().catch(() => '');
+      assertEq(checks, 'кнопка «Повторить»', btn.trim(), 'Повторить');
+    } catch (e) {
+      await shot(page, 'scenario-20-limit');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C5-д (MAJOR 2): исключение внутри панели — не «сервис не прочитал ответ».
+// Фикстура валидна по форме, но temperature_2m_min — строка вместо массива:
+// renderMain бросает внутри панели.
+async function scenarioRenderFail(browser, base) {
+  await scenario('21. Ошибка внутри панели — «Что-то сломалось в панели погоды» (C5-д)', async (checks) => {
+    const broken = '.cc-attachments/weather-check/forecast-broken-array.json';
+    await mkdir(join(ROOT, '.cc-attachments', 'weather-check'), { recursive: true });
+    await writeFile(join(ROOT, broken), JSON.stringify({
+      latitude: 57.63, longitude: 39.87, utc_offset_seconds: 10800, timezone: 'Europe/Moscow',
+      current: { time: '2026-10-22T15:45', temperature_2m: 10, weather_code: 1 },
+      daily: {
+        time: ['2026-10-22', '2026-10-23'], weather_code: [1, 2],
+        temperature_2m_min: 'oops', temperature_2m_max: [12, 8],
+        precipitation_probability_max: [10, 20],
+      },
+    }));
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: broken,
+    });
+    try {
+      await frame.locator('.cc-empty__title').waitFor({ timeout: 15000 });
+      const title = (await textOf(frame, '.cc-empty__title')).trim();
+      assertEq(checks, 'заголовок ошибки панели', title, 'Что-то сломалось в панели погоды');
+      const text = (await textOf(frame, '.cc-empty__text')).trim();
+      assertEq(checks, 'текст про перезагрузку', text, 'Попробуйте обновить страницу.');
+    } catch (e) {
+      await shot(page, 'scenario-21-render-fail');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C5-д (продуктовое решение): срез 6 результатов — по населению, внутри среза —
+// свои первыми. Крупный иностранный город попадает в выдачу, даже если «своих»
+// больше, чем размер среза; country_code в нижнем регистре — тоже своя страна.
+async function scenarioSliceByPopulation(browser, base) {
+  await scenario('22. Срез по населению: крупный иностранный в выдаче, свои первыми (C5-д)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-mixed.json|name=%D0%A0%D0%BE%D0%B3%D0%B0%D1%87',
+        FX + 'batch-mixed.json|latitude',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Рогач');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      const lines = await frame.locator('.city').allInnerTexts();
+      assertEq(checks, 'строк результатов', lines.length, 6);
+      const clean = (s) => s.replace(/\n/g, ' ').trim();
+      const first = clean(lines[0]);
+      assertTrue(checks, 'первая строка — самый крупный свой (600 тыс.)',
+        first.includes('Рогачёв ·') && first.includes('Тверская обл., Россия'), first);
+      // Город с country_code «ru» (нижний регистр) считается своей страной:
+      // сравнение нормализовано по регистру (minor, C5-д).
+      const fourth = clean(lines[3]);
+      assertTrue(checks, '«ru» нижнего регистра — своя, в своём блоке',
+        fourth.includes('Рогач ·') && fourth.includes('Псковская обл., Россия'), fourth);
+      // Крупный иностранный (2 млн) врезался в выдачу, несмотря на шесть «своих»:
+      // срез — по населению, порядок внутри — свои первыми.
+      const last = clean(lines[5]);
+      assertTrue(checks, 'последняя строка — Роттердам (иностранный, по населению)',
+        last.includes('Роттердам') && last.includes('Нидерланды'), last);
+      const all = lines.map(clean).join(' ');
+      assertTrue(checks, 'меньшего иностранного (150 тыс.) в срезе нет', !all.includes('Розенталь'), all);
+    } catch (e) {
+      await shot(page, 'scenario-22-slice-population');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C5-д (minor): запрос без своей страны — население остаётся решающим порядком.
+async function scenarioAllForeign(browser, base) {
+  await scenario('23. Все иностранные — порядок строго по населению (C5-д)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-allforeign.json|name=%D0%9B%D0%B8%D0%BC',
+        FX + 'batch-allforeign.json|latitude',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Лим');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      const lines = await frame.locator('.city').allInnerTexts().then((a) => a.map((s) => s.replace(/\n/g, ' ').trim()));
+      assertEq(checks, 'строк результатов', lines.length, 4);
+      assertTrue(checks, 'первая — Лима, Перу (9 млн)', lines[0].includes('Лима ·') && lines[0].includes('Перу'), lines[0]);
+      assertTrue(checks, 'вторая — Лимассо, Кипр (300 тыс.)', lines[1].includes('Лимассо') && lines[1].includes('Кипр'), lines[1]);
+      assertTrue(checks, 'третья — Лимы, Италия (100 тыс.)', lines[2].includes('Лимы') && lines[2].includes('Италия'), lines[2]);
+      assertTrue(checks, 'последняя — Лима, Греция (50 тыс.)', lines[3].includes('Лима ·') && lines[3].includes('Греция'), lines[3]);
+    } catch (e) {
+      await shot(page, 'scenario-23-all-foreign');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C5-д (minor): ноль — это значение, а не пустота. Прочерк ставят только
+// отсутствующие значения.
+async function scenarioZeroTemp(browser, base) {
+  await scenario('24. Температура 0 — «0°», а не прочерк (C5-д)', async (checks) => {
+    const zero = '.cc-attachments/weather-check/forecast-zero.json';
+    await mkdir(join(ROOT, '.cc-attachments', 'weather-check'), { recursive: true });
+    await writeFile(join(ROOT, zero), JSON.stringify({
+      latitude: 57.63, longitude: 39.87, utc_offset_seconds: 10800, timezone: 'Europe/Moscow',
+      current: {
+        time: '2026-10-22T15:45', temperature_2m: 0, apparent_temperature: 0,
+        relative_humidity_2m: 80, weather_code: 0, wind_speed_10m: 2, wind_direction_10m: 180, is_day: 1,
+      },
+      daily: {
+        time: ['2026-10-22', '2026-10-23'], weather_code: [0, 1],
+        temperature_2m_max: [0, 1], temperature_2m_min: [0, -1],
+        precipitation_probability_max: [0, 10],
+      },
+    }));
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL,
+      fixtures: zero,
+    });
+    try {
+      await frame.locator('.hero .temp').waitFor({ timeout: 15000 });
+      assertEq(checks, 'температура героя — 0°', (await textOf(frame, '.hero .temp')).trim(), '0°');
+      const hl = (await textOf(frame, '.hero .hl')).trim();
+      assertTrue(checks, 'днём/ночью в герое — 0°', hl.includes('Днём 0°') && hl.includes('ночью 0°'), hl);
+      const firstRow = frame.locator('.week .day').first();
+      assertEq(checks, 'первая строка недели — min 0°', (await firstRow.locator('.lo').innerText()).trim(), '0°');
+      assertEq(checks, 'первая строка недели — max 0°', (await firstRow.locator('.hi').innerText()).trim(), '0°');
+    } catch (e) {
+      await shot(page, 'scenario-24-zero-temp');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
+// C5-д (minor): «denied» по хранилищу. Панель видит право по префиксу «storage»,
+// хост отказывает неизвестное право («storageX» ≠ «storage») — обещания
+// запоминания нет, панель работает.
+async function scenarioStorageDenied(browser, base) {
+  await scenario('25. storage denied: хост отказывает операцию — подсказки нет (C5-д)', async (checks) => {
+    const { context, page, frame } = await openEmulator(browser, base, {
+      grant: GRANT_ALL + ',storageX',
+      fixtures: [
+        FX + 'forecast-yaroslavl.json|apparent_temperature',
+        FX + 'geocode-arts.json|name=%D0%AF%D1%80%D1%86',
+        FX + 'forecast-batch-arts.json|55.06491',
+      ].join(','),
+    });
+    try {
+      await frame.locator('.week .day').nth(6).waitFor({ timeout: 15000 });
+      // Факт отказа по storage есть в логе хоста: код denied.
+      await page.waitForFunction(() => {
+        const lines = Array.from(document.querySelectorAll('#log p'));
+        return lines.some((p) => p.textContent.includes('← denied: Нет права: storage'));
+      }, { timeout: 15000 });
+      await frame.locator('#citybtn').click();
+      await frame.locator('#q').waitFor({ timeout: 5000 });
+      await frame.locator('#q').fill('Ярц');
+      await frame.locator('.city').first().waitFor({ timeout: 15000 });
+      assertEq(checks, 'подсказки про запоминание нет', await frame.locator('.hint').count(), 0);
+      assertTrue(checks, 'сам поиск работает', await frame.locator('.city').count() > 0);
+    } catch (e) {
+      await shot(page, 'scenario-25-storage-denied');
+      throw e;
+    } finally {
+      await context.close();
+    }
+  });
+}
+
 // ---------- Запуск ----------
 
 const { server, base } = await startServer();
@@ -1098,6 +1327,12 @@ try {
   await scenarioEmptyTemps(browser, base);
   await scenarioCountrySort(browser, base);
   await scenarioStorageUnavailable(browser, base);
+  await scenarioRateLimit(browser, base);
+  await scenarioRenderFail(browser, base);
+  await scenarioSliceByPopulation(browser, base);
+  await scenarioAllForeign(browser, base);
+  await scenarioZeroTemp(browser, base);
+  await scenarioStorageDenied(browser, base);
 } finally {
   await browser.close();
   server.close();

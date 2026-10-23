@@ -22,12 +22,16 @@
   Запоминание города — через операцию хоста storage (решение 22.10): без права
   storage панель работает полностью, просто не запоминает (denied/unavailable —
   молча). Подсказка «Город запоминается в этом браузере» показывается только если
-  операция storage реально отвечает: панель пробует storage.get при открытии режима
-  (правка приёмки 23.10: одного права мало — операций в хосте ещё нет).
-  Состояния отказов (C2, правка приёмки 23.10): нет связи — «Нет связи с сервисом
-  погоды»; успешный ответ без прогноза — «Сервис погоды не прислал прогноз»;
-  ответ не разобрался — «Не удалось прочитать ответ сервиса погоды»; HTTP-ошибка —
-  «Сервис погоды не ответил».
+  операция storage реально отвечает: панель пробует storage.get при первом открытии
+  режима и запоминает факт ответа на сессию (правка приёмки 23.10: одного права
+  мало — операций в хосте ещё нет; C5-д: повторных проб при каждом открытии нет).
+  Состояния отказов (C2, правки 23.10 и C5-д): нет связи с интернетом; нет права
+  на сервис; частотный лимит — «Слишком много запросов»; запрос ушёл и не вернулся
+  (таймаут или сбой на стороне сервиса) — «Сервис погоды не ответил»; успешный
+  ответ без прогноза — «Сервис погоды не прислал прогноз»; ответ не разобрался —
+  «Не удалось прочитать ответ сервиса погоды»; ошибка самой панели — «Что-то
+  сломалось в панели погоды». «Нет связи с сервисом погоды» остаётся только для
+  реального сетевого обрыва.
 -->
 <style>
   .wx { display: flex; flex-direction: column; gap: 12px; }
@@ -311,9 +315,10 @@
     // Состояния ошибок (C2): карточка, как в макете (.cc-card > .cc-empty).
     // Право на прогноз — ключ net:{хост}, собранный из своего URL: в тексте
     // отказа хост приходит без префикса (§1, п. 2).
-    // Разные отказы — разные тексты (правка приёмки 23.10): одна плашка
+    // Разные отказы — разные тексты (правки 23.10 и C5-д): одна плашка
     // «вернул ошибку» звучала и когда связи нет, и когда сервис ответил
-    // успешно без прогноза — это неверно. Каждый случай назван по факту.
+    // успешно без прогноза — это неверно. Каждый случай назван по факту:
+    // лимит частоты — про частоту, таймаут — про ответ сервиса, а не про связь.
     var offlineShown = false;
     function renderProblem(kind) {
       root.setAttribute('aria-busy', 'false');
@@ -324,13 +329,27 @@
         text = 'Панели не выдано право ходить на\u00a0' + FORECAST_HOST + '. Выдайте его в плашке выше или в настройках плагина.';
         extra = '<span class="cc-badge cc-badge--warning" style="margin-top:12px">net:' + FORECAST_HOST + '</span>';
       } else if (kind === 'offline') {
-        icon = 'wifioff'; title = 'Нет подключения к интернету';
+        // Явно про интернет: «Нет связи с сервисом погоды» (noconn) звучит
+        // почти так же и путает человека (minor C5-д).
+        icon = 'wifioff'; title = 'Нет связи с интернетом';
         text = 'Погода обновится, как только связь вернётся.';
         extra = '<button class="cc-btn cc-btn--ghost" type="button" id="retry">Повторить</button>';
       } else if (kind === 'noconn') {
-        // Запрос не дошёл до сервиса: сетевой сбой или таймаут (правка приёмки 23.10).
+        // Только реальный сетевой обрыв: запрос не дошёл до сервиса (C5-д).
         icon = 'wifioff'; title = 'Нет связи с сервисом погоды';
         text = 'Проверьте подключение и попробуйте ещё раз.';
+        extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
+      } else if (kind === 'limit') {
+        // Связь есть — упёрлись в частоту запросов (30 в минуту). «Проверьте
+        // подключение» здесь врёт по факту (MAJOR 1, C5-д).
+        icon = 'info'; title = 'Слишком много запросов';
+        text = 'Подождите минуту и попробуйте ещё раз.';
+        extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
+      } else if (kind === 'upstream') {
+        // Запрос ушёл и не вернулся: таймаут или сбой на стороне сервиса.
+        // Это не «нет связи» (MAJOR 1, C5-д).
+        icon = 'cloudoff'; title = 'Сервис погоды не ответил';
+        text = 'Попробуйте ещё раз.';
         extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
       } else if (kind === 'nodata') {
         // Сервис ответил успешно, но дневного блока в ответе нет.
@@ -341,6 +360,12 @@
         // Ответ пришёл, но не читается как JSON.
         icon = 'cloudoff'; title = 'Не удалось прочитать ответ сервиса погоды';
         text = 'Попробуйте ещё раз.';
+        extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
+      } else if (kind === 'renderfail') {
+        // Причина внутри панели: неожиданный тип поля в ответе, баг разметки.
+        // Повтор запроса не поможет — нужна перезагрузка страницы (MAJOR 2, C5-д).
+        icon = 'cloudoff'; title = 'Что-то сломалось в панели погоды';
+        text = 'Попробуйте обновить страницу.';
         extra = '<button class="cc-btn cc-btn--primary" type="button" id="retry">Повторить</button>';
       } else {
         // kind === 'badstatus': ошибочный HTTP-статус — сервис действительно «вернул ошибку».
@@ -378,10 +403,13 @@
     }
 
     // Подпись строки результата: «Ярославская Область» → «Ярославская обл.» (§1, грабли).
+    // Если геокодер не дал имени страны, код страны лучше пустоты: подпись
+    // «Город · Регион, Страна» обещает страну (minor, C5-д).
     function regionText(r) {
       var parts = [];
       if (r.admin1) parts.push(String(r.admin1).replace(/\s+[Оо]бласть$/, ' обл.'));
-      if (r.country) parts.push(r.country);
+      var country = r.country || String(r.country_code || '').toUpperCase();
+      if (country) parts.push(country);
       return parts.join(', ');
     }
     // Подсветка совпавшего начала запроса, как в макете.
@@ -443,14 +471,24 @@
         searchTimer = setTimeout(function () { searchCity(query); }, 400);
       });
       renderGeo();
-      // Проба операции storage: подсказка — только если хост реально отвечает.
+      // Проба операции storage: подсказка — только если хост реально отвечает
+      // (denied/unavailable — обещания нет). Факт запоминается на сессию (C5-д).
       if (hasStorageRight()) {
-        ccsPlugin.call('storage.get', { key: CITY_KEY })
-          .then(function () {
+        if (storageProbed) {
+          if (storageOk) {
             var slot = root.querySelector('#hint-slot');
             if (slot) slot.innerHTML = '<div class="hint">Город запоминается в этом браузере.</div>';
-          })
-          .catch(function () { /* denied/unavailable — обещания нет */ });
+          }
+        } else {
+          storageProbed = true;
+          ccsPlugin.call('storage.get', { key: CITY_KEY })
+            .then(function () {
+              storageOk = true;
+              var slot = root.querySelector('#hint-slot');
+              if (slot) slot.innerHTML = '<div class="hint">Город запоминается в этом браузере.</div>';
+            })
+            .catch(function () { /* denied/unavailable — обещания нет */ });
+        }
       }
     }
 
@@ -500,20 +538,34 @@
         var data;
         try { data = JSON.parse(res.body); } catch (e) { found = []; renderGeo(); return; }
         var list = (data && data.results) || []; // при пустом ответе ключа results нет вовсе (§1)
-        // Порядок (правка приёмки 23.10): сперва своя страна — панель ищет на
-        // русском, домашняя страна RU; внутри своей — по населению. Страна
-        // берётся из country_code ответа геокодера, а не угадывается по названию:
-        // «Москва, Айдахо» не должна вставать рядом с «Москва, Россия».
+        // Порядок (правка приёмки 23.10, продуктовое решение C5-д): срез 6
+        // результатов берётся ПО НАСЕЛЕНИЮ — как отдаёт геокодер — чтобы крупный
+        // иностранный город не вытеснили из выдачи мелкие «свои». Внутри среза
+        // — сперва своя страна (панель ищет на русском, домашняя страна RU),
+        // затем население. Страна берётся из country_code ответа геокодера с
+        // нормализацией регистра, а не угадывается по названию: «Москва, Айдахо»
+        // не должна вставать рядом с «Москва, Россия».
         list.sort(function (a, b) {
-          var ah = a.country_code === HOME_COUNTRY ? 1 : 0;
-          var bh = b.country_code === HOME_COUNTRY ? 1 : 0;
-          if (ah !== bh) return bh - ah;
           return (b.population || 0) - (a.population || 0); // без населения — в конец
         });
         // Снимок списка на момент запроса: пакетные температуры применяются
         // только к нему, а не к тому, что будет в `found` к моменту ответа.
         var snapshot = list.slice(0, 6).map(function (r) {
-          return { name: r.name, lat: r.latitude, lon: r.longitude, region: regionText(r), temp: null };
+          return {
+            name: r.name, lat: r.latitude, lon: r.longitude,
+            population: r.population || 0,
+            // Страна — из country_code с нормализацией регистра: без неё подпись
+            // «Город · Регион, Страна» теряет страну (minor, C5-д).
+            country_code: String(r.country_code || '').toUpperCase(),
+            region: regionText(r), temp: null,
+          };
+        });
+        // Внутри среза — «свои» первыми, затем по населению (C5-д).
+        snapshot.sort(function (a, b) {
+          var ah = a.country_code === HOME_COUNTRY ? 1 : 0;
+          var bh = b.country_code === HOME_COUNTRY ? 1 : 0;
+          if (ah !== bh) return bh - ah;
+          return b.population - a.population;
         });
         found = snapshot;
         renderGeo();
@@ -563,6 +615,9 @@
       return !!(st && Array.isArray(st.granted) &&
         st.granted.some(function (g) { return String(g).slice(0, 7) === 'storage'; }));
     }
+    // Факт ответа storage проверяется один раз на сессию (minor, C5-д):
+    // повторное открытие режима не должно шуметь запросами к хосту.
+    var storageProbed = false, storageOk = false;
     function readStoredCity() {
       return ccsPlugin.call('storage.get', { key: CITY_KEY }).then(function (res) {
         var v = res && (typeof res === 'string' ? res : res.value);
@@ -662,11 +717,18 @@
           renderProblem('nodata');
           return;
         }
-        try { renderMain(data); } catch (e) { renderProblem('badbody'); }
+        // Исключение внутри самой панели — не «плохой ответ сервиса»: причина
+        // в панели, повтор запроса её не чинит (MAJOR 2, C5-д).
+        try { renderMain(data); } catch (e) { renderProblem('renderfail'); }
       }).catch(function (err) {
+        // Коды отказа хоста разные (MAJOR 1, C5-д): лимит частоты — не «нет
+        // связи», таймаут и сбой на стороне сервиса — тоже. «Нет связи с
+        // сервисом погоды» остаётся только для реального сетевого обрыва.
         if (err && err.code === 'denied') renderProblem('denied');
+        else if (err && err.code === 'limit') renderProblem('limit');
         else if (navigator.onLine === false) renderProblem('offline');
-        else renderProblem('noconn'); // запрос не дошёл до сервиса (сбой/таймаут)
+        else if (err && (err.code === 'timeout' || err.code === 'upstream')) renderProblem('upstream');
+        else renderProblem('noconn'); // запрос не дошёл до сервиса: сетевой обрыв
       });
     }
 

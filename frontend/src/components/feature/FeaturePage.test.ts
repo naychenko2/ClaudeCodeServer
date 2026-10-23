@@ -21,7 +21,7 @@ import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
 import { KEY_SESSION_TOOLTIP } from '../../lib/chatGroups';
-import { C } from '../../lib/design';
+import { C, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
@@ -948,24 +948,58 @@ describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'без персоны — чипа нет').toBeNull();
   });
 
-  // Состояния чипа на наведении (возврат R-1): базовые фон/рамка инлайном — класс их
-  // не перебивает, поэтому hover/active живут JS-обработчиками. Мутация (в отчёте):
-  // убрать onMouseEnter у кнопки → обработчика нет в reactProps → тест краснеет.
-  it('наведение: фон и рамка меняются (JS-обработчики, не класс)', async () => {
+  // Состояния чипа (хвосты R-1F-R): контрол — ui.Button, состояния — React-состояние
+  // LeadChip, обработчики на обёртке (ui.Button их не форвардит, прецедент
+  // TaskCreatedView). Мутации (в отчёте): убрать onMouseDown на обёртке → тест
+  // нажатия краснеет; убрать boxShadow/рамку фокуса в стиле → тест фокуса краснеет.
+  it('наведение: фон и рамка меняются, с наведения — обратно', async () => {
     const c = render({});
     await settle();
     const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    expect(chip.nodeName, 'контрол — кнопка из ui.Button').toBe('BUTTON');
     expect(chip.style.background, 'базовый фон чипа').toBe(C.bgWhite);
-    const props = reactProps(chip) ?? {};
-    const enter = props.onMouseEnter as ((e: { currentTarget: FNodeLike }) => void) | undefined;
-    const leave = props.onMouseLeave as ((e: { currentTarget: FNodeLike }) => void) | undefined;
-    expect(enter && leave, 'на чипе обработчики наведения').toBeTruthy();
-    act(() => { enter!({ currentTarget: chip as never }); });
+    const wrap = reactProps(chip!.parentNode as never) ?? {};
+    const enter = wrap.onMouseEnter as (() => void) | undefined;
+    const leave = wrap.onMouseLeave as (() => void) | undefined;
+    expect(enter && leave, 'на обёртке обработчики наведения').toBeTruthy();
+    act(() => { enter!(); });
     expect(chip.style.background, 'фон на наведении').toBe(C.bgSelected);
     expect(chip.style.borderColor, 'рамка на наведении').toBe(C.accentMuted);
-    act(() => { leave!({ currentTarget: chip as never }); });
+    act(() => { leave!(); });
     expect(chip.style.background, 'фон возвращается после наведения').toBe(C.bgWhite);
     expect(chip.style.borderColor, 'рамка возвращается после наведения').toBe(C.border);
+  });
+
+  it('нажатие: фон accentLight, после отпускания — снова фон наведения', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    const wrap = reactProps(chip!.parentNode as never) ?? {};
+    const enter = wrap.onMouseEnter as (() => void) | undefined;
+    const down = wrap.onMouseDown as (() => void) | undefined;
+    const up = wrap.onMouseUp as (() => void) | undefined;
+    expect(down && up, 'на обёртке обработчики нажатия').toBeTruthy();
+    act(() => { enter!(); });
+    act(() => { down!(); });
+    expect(chip.style.background, 'фон на нажатии').toBe(C.accentLight);
+    act(() => { up!(); });
+    expect(chip.style.background, 'после отпускания — фон наведения').toBe(C.bgSelected);
+  });
+
+  it('фокус: кольцо SHADOW.focus + accent-рамка (макет pt1); blur — обратно', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    const wrap = reactProps(chip!.parentNode as never) ?? {};
+    const focus = wrap.onFocus as (() => void) | undefined;
+    const blur = wrap.onBlur as (() => void) | undefined;
+    expect(focus && blur, 'на обёртке обработчики фокуса').toBeTruthy();
+    act(() => { focus!(); });
+    expect(chip.style.boxShadow, 'фокус — кольцо').toBe(SHADOW.focus);
+    expect(chip.style.borderColor, 'фокус — accent-рамка').toBe(C.accent);
+    act(() => { blur!(); });
+    expect(chip.style.boxShadow, 'blur — без кольца').toBe('none');
+    expect(chip.style.borderColor, 'blur — базовая рамка').toBe(C.border);
   });
 
   // Реактивность стора персон (возврат R-2): getPersonaById сам по себе не реактивен

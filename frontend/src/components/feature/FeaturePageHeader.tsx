@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { ArrowRight, GitBranch, ListChecks, MessageCircle, Pause, Play } from 'lucide-react';
-import { C, R, FS, SP, FONT, MODAL_W } from '../../lib/design';
+import { C, R, SHADOW, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
@@ -220,42 +220,42 @@ function StepProgressSegments({ p }: { p: StepProgress }) {
 // возврата к фиче (как у «чат · задача»); keyArchived — пометка «в архиве»;
 // чата нет — статичный чип (пунктирная рамка, без стрелки); персоны нет — элемента нет.
 //
-// Наведение/фокус/нажатие. Базовые фон/рамка живут инлайном (гайдлайны дизайна), а
-// инлайн перебивает класс — поэтому hover/active в <style> не работают (мерил в
-// Chromium: фон и рамка не меняются). Они — JS-обработчиками, как у кнопки ветки
-// ниже. В классе остаются только свойства, которых нет инлайном: box-shadow фокуса
-// и цвет значка (у значка базовый цвет тоже в классе — иначе инлайн его перебивает).
-const LEAD_CLASS = 'cc-feature-page-lead';
-const LEAD_GI_CLASS = 'cc-feature-page-lead-gi';
-if (typeof document !== 'undefined' && !document.getElementById('cc-feature-page-lead-style')) {
-  const el = document.createElement('style');
-  el.id = 'cc-feature-page-lead-style';
-  el.textContent =
-    `.${LEAD_GI_CLASS}{color:var(--c-text-muted)}` +
-    `.${LEAD_CLASS}:hover .${LEAD_GI_CLASS},.${LEAD_CLASS}:focus-visible .${LEAD_GI_CLASS}{color:var(--c-accent)}` +
-    `.${LEAD_CLASS}:focus-visible{box-shadow:var(--shadow-focus)}`;
-  document.head.appendChild(el);
-}
-
+// Контрол — ui.Button (железное правило дизайн-системы): база — ghostFilled + pill;
+// состояния наведения/нажатия/фокуса — React-состояние этой компоненты, стиль считается
+// от него. ui.Button не форвардит mouse/focus-обработчики, поэтому они живут на
+// обёртке-спане (прецедент: чип плана в TaskCreatedView). Фокус по pt1 — кольцо
+// SHADOW.focus + accent-рамка, не только кольцо.
 function LeadChip({ feature, isMobile }: { feature: FeatureIndexFeature; isMobile: boolean }) {
   const personaId = feature.orchestratorPersonaId ?? null;
   // getPersonaById сам по себе не реактивен (lib/personas.ts:75): подписка на версию
-  // стора + запрос загрузки — пока стор не догружен, чип не должен выглядеть как
-  // «оркестратора нет» (прецедент: NotificationAvatar, TaskPersonaBadge).
+  // стора + запрос загрузки. Состояние одно: персона не резолвится (нет id в индексе
+  // или стор ещё не догружен) — элемента нет. Чип НЕ различает «не загрузилась» и
+  // «нет оркестратора» — оба случая пустые; подписка лишь гарантирует, что чип
+  // появится после догрузки (прецедент: NotificationAvatar, TaskPersonaBadge).
   usePersonasVersion();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
+  // Состояния (макет pt1): наведение — bgSelected + кромка accentMuted; нажатие —
+  // accentLight; фокус — кольцо + accent-рамка. Значок-стрелка красится вместе с
+  // наведением/фокусом. Состояние — локальное React-состояние (до ранних return:
+  // порядок хуков не должен плыть), стиль ui.Button считается от него; обработчики
+  // — на обёртке, потому что ui.Button их не форвардит.
+  const [hover, setHover] = useState(false);
+  const [pressed, setPressed] = useState(false);
+  const [focused, setFocused] = useState(false);
   const persona = personaId ? getPersonaById(personaId) : null;
   // Персона не задана или не резолвится — элемента нет (состояние «Оркестратора нет»).
   if (!persona) return null;
   const keyChat = feature.keySessionId ?? null;
   const name = persona.name;
 
-  // Каркас чипа (макет pt1): pill 24 px (на 360 — 40), поля 8/4, 12 sans.
+  // Каркас чипа (макет pt1): pill 24 px (на 360 — 40), поля 8/4, 12 sans. fontWeight
+  // и выравнивание перебивают дефолты ui.Button: чип — подпись, не кнопка с центровкой.
   const shell: CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
     height: isMobile ? 40 : 24,
     padding: isMobile ? `0 ${SP.md}px 0 ${SP.sm}px` : `0 ${SP.sm}px 0 ${SP.xs}px`,
     borderRadius: R.max, fontSize: FS.sm, color: C.textPrimary, fontFamily: FONT.sans,
+    fontWeight: 400, justifyContent: 'flex-start',
   };
 
   if (!keyChat) {
@@ -274,36 +274,48 @@ function LeadChip({ feature, isMobile }: { feature: FeatureIndexFeature; isMobil
   }
 
   return (
-    <button
-      type="button"
-      data-testid="feature-page-lead"
-      className={LEAD_CLASS}
-      aria-label={`Открыть ключевой чат${feature.keyArchived ? ' (в архиве)' : ''} · ведёт ${name}`}
-      title={`Ключевой чат фичи${feature.keyArchived ? ' · в архиве' : ''}\nклик — открыть чат`}
-      onClick={() => {
-        recordFeatureReturn(feature.featureId, { kind: 'chat', id: keyChat }, feature.title ?? null);
-        void openChatById(keyChat);
-      }}
-      // Состояния чипа (макет pt1): наведение — bgSelected + кромка accentMuted;
-      // нажатие — accentLight. Инлайн-базу класс не перебивает, поэтому состояния
-      // живут JS-обработчиками (тот же приём, что у кнопки ветки в FeaturePageHeader).
-      onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; e.currentTarget.style.borderColor = C.accentMuted; }}
-      onMouseLeave={e => { e.currentTarget.style.background = C.bgWhite; e.currentTarget.style.borderColor = C.border; }}
-      onMouseDown={e => { e.currentTarget.style.background = C.accentLight; }}
-      onMouseUp={e => { e.currentTarget.style.background = C.bgSelected; }}
-      style={{ ...shell, border: `1px solid ${C.border}`, background: C.bgWhite, cursor: 'pointer' }}
+    <span
+      style={{ flexShrink: 0 }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => { setHover(false); setPressed(false); }}
+      onMouseDown={() => setPressed(true)}
+      onMouseUp={() => setPressed(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
     >
-      <PersonaAvatar persona={persona} size={18} />
-      <span style={{ color: C.textMuted }}>ведёт</span>
-      <span>{name}</span>
-      {feature.keyArchived && (
-        <span style={{ color: C.textMuted, fontSize: FS.xs }}>в архиве</span>
-      )}
-      <span aria-hidden className={LEAD_GI_CLASS} style={{ display: 'inline-flex' }}>
-        <MessageCircle size={12} strokeWidth={ICON_STROKE} />
-        <ArrowRight size={12} strokeWidth={ICON_STROKE} />
-      </span>
-    </button>
+      <Button
+        variant="ghostFilled"
+        pill
+        size="xs"
+        dataTestId="feature-page-lead"
+        ariaLabel={`Открыть ключевой чат${feature.keyArchived ? ' (в архиве)' : ''} · ведёт ${name}`}
+        title={`Ключевой чат фичи${feature.keyArchived ? ' · в архиве' : ''}\nклик — открыть чат`}
+        onClick={() => {
+          recordFeatureReturn(feature.featureId, { kind: 'chat', id: keyChat }, feature.title ?? null);
+          void openChatById(keyChat);
+        }}
+        // Рамка — longhand (borderColor): база 1px solid из ghostFilled остаётся,
+        // цвет меняется состоянием; shorthand затёр бы саму толщину рамки.
+        style={{
+          ...shell,
+          background: pressed ? C.accentLight : hover ? C.bgSelected : C.bgWhite,
+          borderColor: focused ? C.accent : hover ? C.accentMuted : C.border,
+          boxShadow: focused ? SHADOW.focus : 'none',
+          outline: 'none',
+        }}
+      >
+        <PersonaAvatar persona={persona} size={18} />
+        <span style={{ color: C.textMuted }}>ведёт</span>
+        <span>{name}</span>
+        {feature.keyArchived && (
+          <span style={{ color: C.textMuted, fontSize: FS.xs }}>в архиве</span>
+        )}
+        <span aria-hidden style={{ display: 'inline-flex', color: hover || focused ? C.accent : C.textMuted }}>
+          <MessageCircle size={12} strokeWidth={ICON_STROKE} />
+          <ArrowRight size={12} strokeWidth={ICON_STROKE} />
+        </span>
+      </Button>
+    </span>
   );
 }
 

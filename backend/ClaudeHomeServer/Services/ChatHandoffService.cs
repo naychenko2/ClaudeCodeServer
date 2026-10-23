@@ -206,17 +206,25 @@ public class ChatHandoffService(
         return false;
     }
 
-    // Материал записки — только реплики разговора: просьбы пользователя и ответы Claude.
-    // Системные директивы (ниджи, директивы цикла «до готово», оунбилдинг) и пометки об
-    // инструментах/файлах в транскрипт не входят: предметом записки становится служебный
-    // слой, а не суть диалога (дефект QA шага B-4). Бюджет и обрезка переполнения — общие,
+    // Материал записки — реплики разговора: просьбы пользователя и ответы Claude, плюс
+    // маркеры изменённых файлов. Системные директивы (ниджи, директивы цикла «до готово»,
+    // оунбилдинг), служебные реплики штаба (StaffNote) и пометки об инструментах в
+    // транскрипт не входят: предметом записки становится служебный слой, а не суть диалога
+    // (дефект QA шага B-4). Маркеры файлов остаются: спецификация записки (AppendNoteSpec)
+    // требует раздел «### Изменённые файлы», без маркеров он систематически даёт «нет»
+    // при реальных изменениях (дефект QA-r1). Бюджет и обрезка переполнения — общие,
     // через SessionTranscript
     private static string BuildConversationTranscript(IReadOnlyList<StoredMessage> history)
     {
         var turns = history.Where(m => m switch
         {
-            StoredUserMessage u => u.SystemDirective != true && !string.IsNullOrWhiteSpace(u.Text),
+            StoredUserMessage u => u.SystemDirective != true && u.StaffNote == null
+                                 && !string.IsNullOrWhiteSpace(u.Text),
+            // Правило про текст сабагента дублирует SessionTranscript.Build
+            // (ClaudeHomeServer.Core/Services/SessionTranscript.cs, case StoredTextMessage):
+            // источник правила — там; при правке Core-правила это место разойдётся с ним
             StoredTextMessage t => t.ParentToolUseId is null && !string.IsNullOrWhiteSpace(t.Text),
+            StoredFileChangedMessage => true,
             _ => false,
         }).ToList();
         return SessionTranscript.Build(turns, TranscriptBudget);

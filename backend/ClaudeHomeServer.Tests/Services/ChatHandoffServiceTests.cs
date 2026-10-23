@@ -210,9 +210,10 @@ public class ChatHandoffServiceTests : IDisposable
     [Fact]
     public async Task ХолодныйПуть_РаннерВидитТолькоРеплики_БезСистемныхБлоковИПометок()
     {
-        // Дефект QA: записка пересказывала правила продукта. Раннеру дают только реплики
-        // разговора: системные директивы (ниджи, директивы цикла) и пометки об инструментах
-        // и файлах в транскрипт не попадают
+        // Дефект QA: записка пересказывала правила продукта. Раннеру дают реплики разговора
+        // и маркеры изменённых файлов (дефект QA-r1: спецификация требует раздел «### Изменённые
+        // файлы», без маркеров он систематически «нет»); системные директивы (ниджи, директивы
+        // цикла) и пометки об инструментах в транскрипт не попадают
         var runner = new CountingRunner("### Цель\nнастроить значки");
         var (mgr, projects, _) = BuildManager();
         var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "proj_sys_" + Guid.NewGuid().ToString("N"))).FullName;
@@ -238,6 +239,9 @@ public class ChatHandoffServiceTests : IDisposable
         // Правил системы и пометок инструментов в материале нет
         runner.LastPrompt!.Should().NotContain("CCS-Session");
         runner.LastPrompt!.Should().NotContain("[инструмент Edit]");
+        // Маркер изменённого файла в материале — по нему записка заполняет раздел
+        // «### Изменённые файлы», а не даёт систематическое «нет» (дефект QA-r1)
+        runner.LastPrompt!.Should().Contain("[изменён файл frontend/src/lib/design.ts +3/-1]");
         result.Draft.Should().Contain("### Цель\nнастроить значки");
     }
 

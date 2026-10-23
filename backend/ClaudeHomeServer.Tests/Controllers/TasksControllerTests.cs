@@ -2758,6 +2758,65 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             holdProp.ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // W4-HOLD-N (хвост R-N п.3, критерий c3): страховка на уровне ручки — сервисный тест
+    // зовёт метод напрямую, связь «DELETE задачи → возврат срока» ничем не защищена.
+    // Удалённый на паузе эпик: его шагу возвращают замороженный срок до удаления.
+    // Мутации: убрать вызов RestoreFrozenChatsBeforeDelete в Delete — чат остаётся без
+    // срока — красное; перенести вызов после tasks.Delete — эпик уже не в реестре,
+    // шаги не обходятся — красное.
+    [Fact]
+    public async Task Delete_EpicOnPause_ReturnsFrozenExpiryToItsStep()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик на паузе", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг на паузе", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.MarkClaudeStarted(stepId, chatId, DateTime.UtcNow);
+        Sessions.SetExpiry(chatId, 10);
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        Sessions.GetById(chatId)!.ExpiresAfterMinutes.Should().BeNull("пауза заморозила срок чата");
+
+        var del = await _client.DeleteAsync($"/api/tasks/{epicId}");
+        del.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        Sessions.GetById(chatId)!.ExpiresAfterMinutes.Should().Be(10,
+            "эпик удалён на паузе: его шагу возвращают его срок — чат не остаётся вечным");
+    }
+
+    // W4-HOLD-N (хвост R-N п.3): отдельно — удаление шага на паузе: его собственный чат
+    // никогда не дождётся снятия паузы, срок возвращается сразу. Мутация: убрать не-эпиковую
+    // ветку RestoreFrozenChatsBeforeDelete — последний абзац краснеет.
+    [Fact]
+    public async Task Delete_StepOnPause_ReturnsOwnChatExpiry()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг на паузе", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.MarkClaudeStarted(stepId, chatId, DateTime.UtcNow);
+        Sessions.SetExpiry(chatId, 10);
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        Sessions.GetById(chatId)!.ExpiresAfterMinutes.Should().BeNull("пауза заморозила срок");
+
+        var del = await _client.DeleteAsync($"/api/tasks/{stepId}");
+        del.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        Sessions.GetById(chatId)!.ExpiresAfterMinutes.Should().Be(10,
+            "удалённый шаг не дождётся снятия паузы: его срок возвращается сразу");
+    }
+
     // ─── Изоляция по владельцу ───────────────────────────────────────────────
 
     [Fact]

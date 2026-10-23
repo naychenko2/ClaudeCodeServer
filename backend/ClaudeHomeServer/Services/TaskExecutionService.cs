@@ -1207,11 +1207,16 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // R-HOLD-J (п.3): шаги, чей чат исчез за паузу: их не продолжить, но в карточке
         // их считают отдельно — оркестратор должен знать, что их перезапускают штатно.
         var expired = 0;
+        // W4-HOLD-N (хвост R-N п.2): пауза может встать во время await'ов цикла — снимок
+        // эпика на входе метода устаревает. Текущий Hold перечитывается перед каждой
+        // отправкой: новая пауза держит и продолжения, и карточку «пауза снята».
+        bool HeldNow() => _tasks.GetById(featureId)?.Hold is not null;
         foreach (var t in featureTasks)
         {
             if (t.Status != TaskItemStatus.InProgress) continue;
             if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
             if (t.LinkedSessionId is null || keyChain.Contains(t.LinkedSessionId)) continue;
+            if (HeldNow()) return resumed;
             if (_sessions.GetById(t.LinkedSessionId) is null)
             {
                 // Ветка feature_held_expired (контракт §1 :241): чат исполнителя удалён
@@ -1276,6 +1281,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // пропускается).
         var key = keyChain.FirstOrDefault(id => _sessions.GetById(id) is not null);
         if (key is null) return resumed;
+        // W4-HOLD-N (хвост R-N п.2): карточка «пауза снята» не уходит, если за время
+        // продолжений пауза встала заново: она противоречила бы состоянию фичи.
+        if (HeldNow()) return resumed;
         if (holdReason == FeatureHoldReasons.Draft) {
             // «Фича запущена» (контракт :103): кнопка снимает гейт, шаги по плану запускает
             // оркестратор — будить его здесь и есть смысл запроса. Пока фича стояла под
@@ -1339,17 +1347,36 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         return restored;
     }
 
+    // W4-HOLD-N (хвост R-N п.3): единая страховка на всех дверях удаления задачи. Её обходят
+    // только REST-удаление эпика; MCP tasks_delete, удаление проекта и REST-удаление шага
+    // оставляли заморозку необратимой: удалённый на паузе эпик больше ни «снялся», ни
+    // «встал» — возврат срока его шагам не выполнится никогда; удалённый на паузе шаг не
+    // дождётся её снятия — его чат останется «вечным» навсегда. Каждая точка, зовущая
+    // TaskManager.Delete/DeleteByProject (REST, MCP-тулсет, удаление проекта), вызывает это
+    // ДО удаления: после него задачи в реестре нет. Возвращает число восстановленных чатов.
+    public int RestoreFrozenChatsBeforeDelete(TaskItem task)
+    {
+        if (task.Role == TaskRoles.Feature)
+            return RestoreFrozenChatsAfterFeatureDelete(task.Id, task.OwnerId!);
+        // Отдельно — удаление шага на паузе: возвращаем срок его собственному чату.
+        if (task.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason &&
+            task.LinkedSessionId is not null)
+            return _sessions.RestoreFrozenExpiry(task.LinkedSessionId) is not null ? 1 : 0;
+        return 0;
+    }
+
     // R-HOLD-K (хвост): карточка в ключевой чат — фоновая нотификация: сбой доставки
     // логируется сервисом и не всплывает до ручки — продолжение уже завершено, и отказ
     // уведомления не должен читаться как отказ возврата.
-    // W4-HOLD-N (хвост R-HOLD-D2): причина — HoldResume, не Direct: это продолжение цикла,
-    // прерванного паузой, и лог «Доставка хода» должен pinpoint'ить её именно так.
+    // W4-HOLD-N (хвост R-N): причина карточки — HoldCard, не HoldResume: карточка — сама
+    // нотификация снятия паузы, а не продолжение прерванного хода (у черновика прерванных
+    // ходов не бывает вовсе). HoldResume остаётся честным для продолжений в чаты шагов.
     private async Task DeliverKeyChatCardAsync(string sessionId, string text)
     {
         try
         {
             await _sessions.SendMessageAsync(sessionId, text, [], auto: true,
-                cause: SessionManager.DeliveryCause.HoldResume);
+                cause: SessionManager.DeliveryCause.HoldCard);
         }
         catch (Exception ex)
         {

@@ -854,16 +854,24 @@ public class TaskExecutionServiceHoldTests : IDisposable
             Func<TState, Exception?, string> formatter) => sink.Add(formatter(state, exception));
     }
 
-    // W4-HOLD-N (хвост R-HOLD-D2, критерий c1): карточка ключевому чату уходит с причиной
-    // HoldResume, а не Direct: это продолжение цикла, прерванного паузой. Мутация: вернуть
-    // cause: Direct в DeliverKeyChatCardAsync —Contain краснеет (в логе cause=Direct).
+    // W4-HOLD-N (хвост R-N, критерий c1): честная причина: продолжение в чат шага —
+    // HoldResume (ход был прерван паузой), карточка оркестратору — HoldCard: она сама
+    // нотификация снятия, а не продолжение (у черновика прерванных ходов не бывает).
+    // Мутации: вернуть cause HoldResume в DeliverKeyChatCardAsync — последний Contain
+    // краснеет; сменить причину продолжения — краснеет первый.
     [Fact]
-    public async Task ClearHold_KeyChatCard_CauseIsHoldResume()
+    public async Task ClearHold_CauseIsHoldCardForCardAndHoldResumeForContinuation()
     {
         var user = _userStore.Add("hold-cause", "password123", "user");
         var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
         var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
             SourceSessionId: keyChat.Id));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec",
+            taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        SetRunningTurn(chat.Id);
         SetRunningTurn(keyChat.Id);
 
         var logLines = new List<string>();
@@ -871,12 +879,16 @@ public class TaskExecutionServiceHoldTests : IDisposable
             .SetValue(_sessions, new CapturingLogger(logLines));
 
         _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
         _tasks.ClearHold(epic.Id);
         var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
-        resumed.Should().Be(0, "ничего не прерывалось — продолжать нечего");
+        resumed.Should().Be(1, "шаг продолжен: атрибутировать есть что");
         logLines.Should().Contain(
-            l => l.Contains("Доставка хода") && l.Contains("cause=HoldResume") && l.Contains("Пауза снята"),
-            "карточка снятой паузы атрибутируется как продолжение паузы, а не прямая отправка");
+            l => l.Contains("Доставка хода") && l.Contains("cause=HoldResume") && l.Contains("Ход был прерван"),
+            "продолжение прерванного хода атрибутируется как HoldResume");
+        logLines.Should().Contain(
+            l => l.Contains("Доставка хода") && l.Contains("cause=HoldCard") && l.Contains("продолжен 1 шаг"),
+            "карточка — нотификация снятия паузы, а не продолжение прерванного хода");
     }
 
     // W4-HOLD-N (хвост R-HOLD-J п.1, критерий c3): гонка фонового продолжения — пауза,
@@ -1042,5 +1054,95 @@ public class TaskExecutionServiceHoldTests : IDisposable
         await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
             .TickAsync(DateTime.UtcNow.AddMinutes(60));
         _sessions.GetById(chat.Id).Should().BeNull("возвращённый срок течёт: уборка сносит чат");
+    }
+
+    // W4-HOLD-N (хвост R-N п.1, критерий c1): повторная пауза не затирает сохранённый срок —
+    // FreezeExpiryForHold пишет его, только если срок снят сейчас. Вторая пауза видит
+    // ExpiresAfterMinutes == null: безусловная запись затёр бы сохранённое значение null,
+    // после снятия чат стал бы вечным — регрессия дельты. Мутация: убрать guard
+    // «is not null» в FreezeExpiryForHold — краснеет абзац про сохранённое значение.
+    [Fact]
+    public async Task TwoPauses_ClearHold_RestoresSavedExpiry()
+    {
+        var user = _userStore.Add("hold-two-pauses", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: 10));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec",
+            taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(chat.Id, 10);
+        SetRunningTurn(chat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(chat.Id);
+        _sessions.GetById(chat.Id)!.HoldFrozenExpiresAfterMinutes.Should().Be(10,
+            "первая пауза сохранила срок самого чата");
+
+        // Вторая пауза той же фичи: ручка зовёт цикл пометки на каждом POST hold
+        // (TasksController.cs:890) — заморозка вызывается снова.
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        _sessions.GetById(chat.Id)!.HoldFrozenExpiresAfterMinutes.Should().Be(10,
+            "вторая пауза не затирает сохранённое значение null");
+
+        _tasks.ClearHold(epic.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Queue);
+        resumed.Should().Be(1, "шаг возвращён");
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10,
+            "после снятия паузы срок возвращается — чат не вечный");
+        SetIdle(chat.Id);
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(60));
+        _sessions.GetById(chat.Id).Should().BeNull("возвращённый срок течёт: уборка сносит чат");
+    }
+
+    // W4-HOLD-N (хвост R-N п.2, критерий c2): гонка «снятие → новая пауза до доставки».
+    // Guard на входе метода пройден, а пауза встаёт во время await'ов цикла — её ловит
+    // перечитывание Hold внутри цикла перед каждой отправкой. Side-effect первого
+    // продолжения (мок адаптера) ставит новую паузу: второй шаг не продолжается, карточка
+    // «пауза снята» не уходит. Мутация: убрать HeldNow() в цикле — второй шаг продолжится,
+    // Verify и абзац про пометку краснеют.
+    [Fact]
+    public async Task ResumeLoop_NewPauseMidLoop_HoldsSecondStepAndCard()
+    {
+        var user = _userStore.Add("hold-race-loop", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var first = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг, продолженный первым", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var second = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг, держимый новой паузой", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var firstChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "first",
+            taskId: first.Id);
+        var secondChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "second",
+            taskId: second.Id);
+        _tasks.MarkClaudeStarted(first.Id, firstChat.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeStarted(second.Id, secondChat.Id, DateTime.UtcNow);
+        var firstAdapter = SetRunningTurn(firstChat.Id);
+        var secondAdapter = SetRunningTurn(secondChat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        // Сама гонка: новая пауза встаёт в момент доставки первого продолжения.
+        firstAdapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()))
+            .Returns(() => { _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue); return Task.CompletedTask; });
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        _tasks.ClearHold(epic.Id);
+
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+        resumed.Should().Be(1, "первый шаг продолжен до того, как встала новая пауза");
+        _tasks.GetById(second.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+            "guard цикла поймал новую паузу: второй шаг остаётся на паузе");
+        secondAdapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
+            "новая пауза держит продолжение второго шага");
+        keyAdapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()), Times.Never(),
+            "карточка «пауза снята» не уходит, пока держится новая пауза");
     }
 }

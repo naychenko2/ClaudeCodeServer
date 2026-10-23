@@ -376,6 +376,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         ToolCallLeakNudge, // auto — повтор вызова инструмента, ушедшего в текст (локальная модель)
         ServerRestartResume, // auto — возобновление хода, оборванного рестартом сервера (фича turn-auto-resume)
         HoldResume,     // auto — продолжение хода, прерванного паузой фичи (W4-HOLD-D)
+        HoldCard,      // auto — карточка оркестратору в ключевой чат при снятии паузы: сама
+                      // нотификация, а не продолжение прерванного хода (W4-HOLD-N, хвост R-N)
         Unknown,        // auto — точка не помечена (диагностика: проставить cause)
     }
 
@@ -2437,7 +2439,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public Session? FreezeExpiryForHold(string sessionId)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        entry.Info.HoldFrozenExpiresAfterMinutes = entry.Info.ExpiresAfterMinutes;
+        // W4-HOLD-N (хвост R-N п.1): значение сохраняется только если срок снят сейчас.
+        // Вторая пауза той же записи видит ExpiresAfterMinutes == null: безусловное присваивание
+        // затёр бы сохранённый срок null — после снятия он не вернулся бы, чат стал бы вечным.
+        if (entry.Info.ExpiresAfterMinutes is not null)
+            entry.Info.HoldFrozenExpiresAfterMinutes = entry.Info.ExpiresAfterMinutes;
         entry.Info.ExpiresAfterMinutes = null;
         entry.Info.ExpiryAnchor = null;
         SaveSessions();

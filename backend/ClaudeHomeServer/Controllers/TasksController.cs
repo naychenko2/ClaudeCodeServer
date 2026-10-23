@@ -1402,11 +1402,10 @@ public class TasksController(
         var task = tasks.GetById(taskId);
         if (task is null || task.OwnerId != UserId) return NotFound();
 
-        // W4-HOLD-N (хвост R-HOLD-D2): удалённый на паузе эпик больше не может ни сняться,
-        // ни встать — возврат срока его шагам не выполнится никогда. Страховка: до удаления
-        // возвращаем замороженные сроки чатам шагов с пометкой feature_held.
-        if (task.Role == TaskRoles.Feature)
-            executor.RestoreFrozenChatsAfterFeatureDelete(taskId, UserId);
+        // W4-HOLD-N (хвост R-N п.3): страховка на любой двери удаления: эпик возвращает
+        // замороженные сроки своим шагам, шаг на паузе — срок собственному чату. До удаления:
+        // после него задачи в реестре нет, и путь возврата срока для её чата больше не выполнится.
+        executor.RestoreFrozenChatsBeforeDelete(task);
         tasks.Delete(taskId);
         await broadcaster.ToOwner(UserId, new TaskChangedMessage("deleted", task));
         return NoContent();

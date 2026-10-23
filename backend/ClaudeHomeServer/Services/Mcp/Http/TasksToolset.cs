@@ -574,6 +574,9 @@ public sealed class TasksToolset(
                 var id = StringArg(arguments, "id");
                 if (GetAccessible(context.OwnerId, projectId, allowed, id) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
+                // W4-HOLD-N (хвост R-N п.3): та же страховка, что у REST-удаления: MCP-путь
+                // её обходил — удалённый на паузе эпик/шаг оставлял чат «вечным».
+                executor.RestoreFrozenChatsBeforeDelete(task);
                 tasks.Delete(id);
                 await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("deleted", task));
                 return Text($"Задача {id} удалена.");

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { BackButton, Badge, Button, EmptyState, IconButton, InlineSegmented, Modal, Notice, Tabs } from '../../components/ui';
+import { showToast } from '../../lib/toast';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { getEffectiveTheme, subscribeThemeMode } from '../../lib/themeMode';
@@ -325,22 +326,28 @@ function TreeRows({ node, depth, isMobile, selected, onSelect, collapsed, toggle
   for (const name of [...node.dirs.keys()].sort()) {
     const child = node.dirs.get(name)!;
     const isCollapsed = collapsed.has(child.path);
+    // Кнопка каталога — контрол из ui-кита с aria-expanded (минор ревью): раскрыт/свёрнут
+    // читается скринридером, а не только направлением стрелки.
     rows.push(
-      <button
+      <Button
         key={child.path}
-        data-dir={child.path}
+        dataTestId={child.path}
+        ariaExpanded={!isCollapsed}
+        ariaLabel={`Каталог ${name}`}
+        variant="ghost"
+        size="xs"
         onClick={() => toggle(child.path)}
         style={{
-          display: 'flex', alignItems: 'center', gap: SP.xs, height: isMobile ? 44 : 28,
+          gap: SP.xs, height: isMobile ? 44 : 28,
           padding: `0 ${SP.sm}px 0 ${SP.sm + depth * 12}px`, border: 'none', background: 'transparent',
-          borderRadius: R.md, cursor: 'pointer', color: C.textSecondary, fontSize: FS.base,
+          color: C.textSecondary, fontSize: FS.base, fontWeight: 400, justifyContent: 'flex-start',
         }}>
         {isCollapsed
           ? <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           : <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
         <FolderIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-      </button>
+      </Button>
     );
     if (!isCollapsed) {
       rows.push(
@@ -472,7 +479,10 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   // Перенос строк: на мобиле по умолчанию — горизонтального скролла в шторке нет.
+  // Минор ревью: дефолт пересчитывается при смене ширины (resize/поворот), а не
+  // фиксируется один раз при монтировании; ручное переключение живёт до следующей смены ширины.
   const [wrap, setWrap] = useState(isMobile);
+  useEffect(() => { setWrap(isMobile); }, [isMobile]);
 
   const files = preview.files.filter(f => !f.isDir);
   // Выбор и вид — свои на каждую вкладку; «Панель» их не использует.
@@ -511,6 +521,20 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
     setTab(t);
     // Возврат на вкладку на мобиле — её сохранённый вид, а не список.
     setListOpen(false);
+    // Сводка принадлежит только вкладке «Изменения»: при смене вкладки она сбрасывается,
+    // иначе возврат в «Изменения» открывает сводку вместо списка (пункт 2 вердикта).
+    setSummaryOpen(false);
+  };
+
+  // «Копировать»: видимая реакция, когда у браузера нет буфера обмена (минор ревью) —
+  // тост, а не молчание. Общая для десктопной и мобильной шапки файла.
+  const copySelected = () => {
+    const text = (selectedEntry?.lines ?? []).filter(l => l.kind !== 'del').map(l => l.text).join('\n');
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      void navigator.clipboard.writeText(text);
+    } else {
+      showToast('Копирование недоступно', 'Браузер не даёт доступ к буферу обмена', 'error');
+    }
   };
 
   const subtitle = (
@@ -678,13 +702,18 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
               </span>
             ))}
           </div>
-          // Major 3 (ревью): блок «Права» с обоими списками — как в старой сводке.
+          // Major 3 (ревью): блок «Права». Пункт 3 вердикта: добавленные права — снова
+          // warning-плашка «Новые права» (как до правки), снятые — тихие строки.
           {((diff.manifest?.permissionsAdded.length ?? 0) + (diff.manifest?.permissionsRemoved.length ?? 0)) > 0 && (
             <>
               <SectionLabel>Права</SectionLabel>
-              {diff.manifest!.permissionsAdded.map(p => (
-                <div key={p} style={{ fontSize: FS.xs, color: C.successText, padding: '2px 0' }}>+ {p}</div>
-              ))}
+              {diff.manifest!.permissionsAdded.length > 0 && (
+                <Notice tone="warning" icon={AlertTriangle} title="Новые права">
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: 4 }}>
+                    {diff.manifest!.permissionsAdded.map(p => <span key={p} style={{ fontFamily: FONT.mono, fontSize: FS.xs }}>+ {p}</span>)}
+                  </div>
+                </Notice>
+              )}
               {diff.manifest!.permissionsRemoved.map(p => (
                 <div key={p} style={{ fontSize: FS.xs, color: C.dangerText, padding: '2px 0' }}>− {p}</div>
               ))}
@@ -777,10 +806,7 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
               <IconButton size="sm" ariaLabel="Перенос строк" active={wrap} onClick={() => setWrap(w => !w)}>
                 <TextWrap size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </IconButton>
-              <IconButton size="sm" ariaLabel="Копировать содержимое" onClick={() => {
-                const text = selectedEntry!.lines!.filter(l => l.kind !== 'del').map(l => l.text).join('\n');
-                if (typeof navigator !== 'undefined' && navigator.clipboard) void navigator.clipboard.writeText(text);
-              }}>
+              <IconButton size="sm" ariaLabel="Копировать содержимое" onClick={copySelected}>
                 <Copy size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </IconButton>
             </>
@@ -841,7 +867,9 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
               display: 'flex', alignItems: 'center', gap: SP.xs, height: 44, padding: '0 4px',
               background: C.bgCard, borderBottom: `1px solid ${C.borderLight}`, flexShrink: 0,
             }}>
-              <BackButton onClick={() => setListOpen(true)} ariaLabel={tab === 'files' ? 'Назад к списку файлов' : 'Назад к сводке'}>
+              // Пункт 1 вердикта: Back ведёт к списку (side), а не к сводке — подпись
+              // соответствует действию, а не обещает другой уровень.
+              <BackButton onClick={() => setListOpen(true)} ariaLabel={tab === 'files' ? 'Назад к списку файлов' : 'Назад к списку изменённых файлов'}>
                 <span style={{ fontSize: FS.base, color: C.textSecondary }}>{tab === 'files' ? 'Файлы' : 'Изменения'}</span>
               </BackButton>
               <div style={{ flex: 1 }} />
@@ -850,10 +878,7 @@ export function FilesDrawer({ preview, diff, diffError, onClose, onLoadDiff }: {
                   <IconButton size="lg" ariaLabel="Перенос строк" active={wrap} onClick={() => setWrap(w => !w)}>
                     <TextWrap size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                   </IconButton>
-                  <IconButton size="lg" ariaLabel="Копировать содержимое" onClick={() => {
-                    const text = selectedEntry!.lines!.filter(l => l.kind !== 'del').map(l => l.text).join('\n');
-                    if (typeof navigator !== 'undefined' && navigator.clipboard) void navigator.clipboard.writeText(text);
-                  }}>
+                  <IconButton size="lg" ariaLabel="Копировать содержимое" onClick={copySelected}>
                     <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                   </IconButton>
                 </>

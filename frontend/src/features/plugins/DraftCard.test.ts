@@ -10,6 +10,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { C } from '../../lib/design';
 import type { ServerMessage } from '../../types';
 import type {
   PluginDraftAcceptResult, PluginDraftDiff, PluginDraftPreview, PluginDraftSummary,
@@ -497,9 +498,10 @@ describe('FilesDrawer: окно по макету', () => {
     expect(html).toContain('aria-label="Закрыть"');
   });
 
-  it('дерево вместо плоского перечня: каталоги data-dir, файлы data-file, метки +/~/− и размеры', () => {
+  it('дерево вместо плоского перечня: каталоги — Button из ui-кита с aria-expanded, файлы data-file, метки +/~/− и размеры', () => {
     const html = drawerHtml(PREVIEW, DIFF);
-    expect(html).toContain('data-dir="panel"');
+    expect(html).toContain('data-testid="panel"');
+    expect(html).toContain('aria-expanded="true"');
     expect(html).toContain('data-file="panel/index.html"');
     expect(html).toContain('data-file="commands/my-cmd.md"');
     expect(html).toContain('aria-label="Добавлен"');
@@ -656,7 +658,7 @@ describe('FilesDrawer: окно по макету', () => {
     uninstallFakeDom();
   });
 
-  it('Major 3: сводка «Права» — списки добавленных и снятых прав', () => {
+  it('Major 3 + пункт 3: добавленные права — warning-плашка «Новые права», снятые — тихие строки', () => {
     const diff: PluginDraftDiff = {
       ...DIFF,
       manifest: { ...DIFF.manifest!, permissionsAdded: ['net:api.example.com'], permissionsRemoved: ['notes:read'] },
@@ -666,8 +668,133 @@ describe('FilesDrawer: окно по макету', () => {
     expect(clickByText(container, 'Изменения')).toBe(true);
     const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
     expect(text).toContain('Права');
+    expect(text).toContain('Новые права');
     expect(text).toContain('+ net:api.example.com');
     expect(text).toContain('− notes:read');
+    // Акцент — не строка в общем списке: заголовок живёт внутри warning-плашки (role="status").
+    let notice: any = null;
+    const walk = (n: any): void => {
+      if (notice) return;
+      if (n.nodeType === 1 && n.getAttribute('role') === 'status' && textNodes(n).join(' ').includes('Новые права')) { notice = n; return; }
+      for (const c of n.childNodes) walk(c);
+    };
+    walk(container);
+    expect(notice).toBeTruthy();
+    expect(notice.style.background).toBe(C.warningBg);
+    uninstallFakeDom();
+  });
+
+  it('пункт 1 (мобила): Back в «Изменения» подписан по действию и ведёт к списку', () => {
+    installFakeDom();
+    window.matchMedia = (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('old line');
+    // Подпись обещает список — клик открывает список изменённых файлов.
+    expect(clickByAttr(container, 'aria-label', 'Назад к списку изменённых файлов')).toBe(true);
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Изменённые файлы');
+    expect(text).not.toContain('old line');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
+  it('пункт 2 (мобила): сводка не «липкая» — «Файлы» → «Изменения» открывает список, не сводку', () => {
+    installFakeDom();
+    window.matchMedia = (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByText(container, 'Сводка')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('Что поменялось');
+    // Ушёл в другую вкладку и вернулся — открылся список, а не оставшаяся сводка.
+    expect(clickByText(container, 'Файлы')).toBe(true);
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).not.toContain('Что поменялось');
+    expect(text).toContain('Изменённые файлы');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
+  it('дерево: кнопка каталога сворачивает ветку и сообщает об этом через aria-expanded', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    const dir = () => findNodeByAttr(container, 'data-testid', 'panel');
+    expect(dir()).toBeTruthy();
+    expect(dir()!.getAttribute('aria-expanded')).toBe('true');
+    expect(clickByAttr(container, 'data-testid', 'panel')).toBe(true);
+    expect(container.querySelector('[data-file="panel/index.html"]')).toBeNull();
+    expect(dir()!.getAttribute('aria-expanded')).toBe('false');
+    // Раскрыть обратно.
+    expect(clickByAttr(container, 'data-testid', 'panel')).toBe(true);
+    expect(container.querySelector('[data-file="panel/index.html"]')).toBeTruthy();
+    expect(dir()!.getAttribute('aria-expanded')).toBe('true');
+    uninstallFakeDom();
+  });
+
+  it('wrap пересчитывается при смене ширины (resize/поворот), а не фиксируется при монтировании', () => {
+    const listeners: ((e: { matches: boolean }) => void)[] = [];
+    const mq = {
+      matches: false,
+      addEventListener: (_t: string, h: (e: { matches: boolean }) => void) => { listeners.push(h); },
+      removeEventListener: () => {},
+    };
+    installFakeDom();
+    window.matchMedia = (q: string) => (q.includes('max-width') ? mq : { matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    const codeSpan = (): any => {
+      let hit: any = null;
+      const walk = (n: any): void => {
+        if (hit) return;
+        if (n.nodeType === 3 && (n.nodeValue ?? '').includes('new line')) { hit = n.parentElement; return; }
+        for (const c of n.childNodes) walk(c);
+      };
+      walk(container);
+      return hit;
+    };
+    // Десктоп: переноса нет.
+    expect(codeSpan().style.whiteSpace).toBe('pre');
+    // «Resize» в мобилу: событие change — перенос включается сам.
+    act(() => { mq.matches = true; for (const h of listeners) h({ matches: true }); });
+    expect(codeSpan().style.whiteSpace).toBe('pre-wrap');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
+  it('«Копировать» без clipboard — видимая реакция (тост), а не молчание', () => {
+    installFakeDom();
+    vi.stubGlobal('navigator', { clipboard: undefined });
+    const toasts: { title: string }[] = [];
+    window.addEventListener('cc-local-toast', (e: { detail: { title: string } }) => toasts.push(e.detail));
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    expect(clickByAttr(container, 'aria-label', 'Копировать содержимое')).toBe(true);
+    expect(toasts.length).toBe(1);
+    expect(toasts[0].title).toContain('Копирование');
+    vi.unstubAllGlobals();
+    uninstallFakeDom();
+  });
+
+  it('«Повторить» вызывает onLoadDiff (поведение, не разметка)', () => {
+    installFakeDom();
+    const onLoadDiff = vi.fn();
+    const { container } = mount(createElement(FilesDrawer, {
+      preview: PREVIEW, diff: null, diffError: 'Сервер не ответил', onClose: () => {}, onLoadDiff,
+    }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByText(container, 'Повторить')).toBe(true);
+    expect(onLoadDiff).toHaveBeenCalledTimes(1);
+    uninstallFakeDom();
+  });
+
+  it('закрытие окна — крестик шапки вызывает onClose (поведение, не разметка)', () => {
+    installFakeDom();
+    let closed = false;
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => { closed = true; } }));
+    expect(clickByAttr(container, 'aria-label', 'Закрыть')).toBe(true);
+    expect(closed).toBe(true);
     uninstallFakeDom();
   });
 

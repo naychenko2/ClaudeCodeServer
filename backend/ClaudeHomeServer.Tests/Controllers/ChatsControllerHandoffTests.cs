@@ -89,13 +89,16 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
         var resp = await _client.PostAsync($"/api/chats/{id}/handoff", null);
 
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        // Тело с текстом, а не пустой 404: без него фронт подставляет свой «Not Found»
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("Чат не найден или удалён");
     }
 
     [Fact]
-    public async Task Перенос_НесуществующийЧат_404()
+    public async Task Перенос_НесуществующийЧат_404_СТекстом()
     {
         var resp = await _client.PostAsync("/api/chats/no-such-chat/handoff", null);
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("Чат не найден или удалён");
     }
 
     [Fact]
@@ -153,17 +156,46 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
         (await resp.Content.ReadAsStringAsync()).Should().Contain("занят");
     }
 
-    // Заглушка раннера: фиксированный ответ, отказ при назначении на локаль
+    [Fact]
+    public async Task Перенос_ХолодныйПутьНеУложилсяВПотолок_502БезПреемника()
+    {
+        // Холодный путь имеет явный потолок (4 мин): без него медленный раннер оборвался бы
+        // на стороне клиента (фронт ждёт 6 мин). Тест укорачивает потолок: раннер висит,
+        // token гасится — честный 502, преемник не создан
+        var id = await CreateSessionAsync(_client);
+        SeedAgentTurn(id);
+        var service = _factory.Services.GetRequiredService<ChatHandoffService>();
+        service.ColdPathTimeout = TimeSpan.FromMilliseconds(50);
+        var manager = _factory.Services.GetRequiredService<SessionManager>();
+        var before = manager.GetAll().Count;
+        var runner = (StubRunner)_factory.Services.GetRequiredService<ICheapTextRunner>();
+        runner.Hang = true;
+
+        var resp = await _client.PostAsync($"/api/chats/{id}/handoff", null);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("перенос не успел завершиться");
+        manager.GetAll().Count.Should().Be(before, "таймаут холодного пути не создаёт преемника");
+        runner.Hang = false;
+    }
+
+    // Заглушка раннера: фиксированный ответ, отказ при назначении на локаль. Hang — для
+    // теста потолка холодного пути: вызов висит, пока его не отменят
     private sealed class StubRunner(string answer) : ICheapTextRunner
     {
+        public bool Hang;
+
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
         public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
 
-        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+        public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
-            => Task.FromResult(answer);
+        {
+            if (Hang) await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            return answer;
+        }
 
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
             object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(answer);

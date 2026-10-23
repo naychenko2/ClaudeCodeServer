@@ -60,6 +60,12 @@ public class ChatHandoffService(
     // доработает сам), но новый чат не создаётся — записки на руках нет
     public static readonly TimeSpan WarmTurnTimeout = TimeSpan.FromMinutes(5);
 
+    // Явный потолок холодного пути: фронт ждёт 6 минут, без потолка медленный раннер
+    // обрывается на стороне клиента — человек видит оборванный запрос, а не честный 502.
+    // 4 минуты — запас: отказ приходит раньше, чем клиент сдаётся. Свойство экземпляра,
+    // а не константа: тесты укорачивают потолок (настоящие 4 минуты в тест не влезают).
+    internal TimeSpan ColdPathTimeout { get; set; } = TimeSpan.FromMinutes(4);
+
     private readonly ConcurrentDictionary<string, byte> _inFlight = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _ownerGates = new();
 
@@ -111,44 +117,57 @@ public class ChatHandoffService(
             // ему лишние вызовы. Тёплый путь мимо этого гейта осознанно: там записку пишет
             // сам чат своим ходом (его очередь), а не конкурентный раннер (минор ревью B-4).
             var gate = _ownerGates.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
-            await gate.WaitAsync(ct);
+            // Потолок холодного пути считается целиком: очередь в гейте и вызов раннера.
+            // Не уложились — честный 502, а не оборванный на стороне клиента запрос
+            using var coldDeadline = new CancellationTokenSource(ColdPathTimeout);
+            var runCt = CancellationTokenSource.CreateLinkedTokenSource(ct, coldDeadline.Token).Token;
             try
             {
-                // Пока стояли в очереди, чат могли удалить
-                source = sessions.GetOwned(sessionId, userId)
-                    ?? throw new KeyNotFoundException("Чат не найден");
-
-                var transcript = SessionTranscript.Build(history, TranscriptBudget);
-                if (string.IsNullOrWhiteSpace(transcript))
-                    throw new InvalidOperationException(NothingToHandOff);
-
-                string note;
+                await gate.WaitAsync(runCt);
                 try
                 {
-                    note = await cheap.RunAsync(LocalActionCatalog.ChatHandoff,
-                        BuildPrompt(source.Name, transcript), ownerId: userId, ct: ct);
-                }
-                catch (InvalidOperationException ex)
-                {
-                    throw new HandoffGenerationException(ex.Message);
-                }
-                if (string.IsNullOrWhiteSpace(note))
-                    throw new HandoffGenerationException("Модель вернула пустую передаточную записку");
+                    // Пока стояли в очереди, чат могли удалить
+                    source = sessions.GetOwned(sessionId, userId)
+                        ?? throw new KeyNotFoundException("Чат не найден");
 
-                var successor = await sessions.CreateHandoffChatAsync(source, userId,
-                    SessionManager.ContinuationName(source.Name));
-                var draft = BuildDraft(source, note.Trim());
-                logger.LogInformation("Чат {SessionId} перенесён в {NewId} (записка {Length} символов)",
-                    sessionId, successor.Id, draft.Length);
-                return new ChatHandoffResult(successor, draft);
+                    var transcript = SessionTranscript.Build(history, TranscriptBudget);
+                    if (string.IsNullOrWhiteSpace(transcript))
+                        throw new InvalidOperationException(NothingToHandOff);
+
+                    string note;
+                    try
+                    {
+                        note = await cheap.RunAsync(LocalActionCatalog.ChatHandoff,
+                            BuildPrompt(source.Name, transcript), ownerId: userId, ct: runCt);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        throw new HandoffGenerationException(ex.Message);
+                    }
+                    if (string.IsNullOrWhiteSpace(note))
+                        throw new HandoffGenerationException("Модель вернула пустую передаточную записку");
+
+                    var successor = await sessions.CreateHandoffChatAsync(source, userId,
+                        SessionManager.ContinuationName(source.Name));
+                    var draft = BuildDraft(source, note.Trim());
+                    logger.LogInformation("Чат {SessionId} перенесён в {NewId} (записка {Length} символов)",
+                        sessionId, successor.Id, draft.Length);
+                    return new ChatHandoffResult(successor, draft);
+                }
+                finally
+                {
+                    // Гейт из словаря не вычищаем: Release → проверка → TryRemove неатомарны, и
+                    // снятый «пустой» семафор пока в него входит другой перенос того же владельца
+                    // порождал второй — «1 поток на владельца» переставал быть правдой. Запись на
+                    // владельца — копейки
+                    gate.Release();
+                }
             }
-            finally
+            catch (OperationCanceledException) when (coldDeadline.IsCancellationRequested)
             {
-                // Гейт из словаря не вычищаем: Release → проверка → TryRemove неатомарны, и
-                // снятый «пустой» семафор пока в него входит другой перенос того же владельца
-                // порождал второй — «1 поток на владельца» переставал быть правдой. Запись на
-                // владельца — копейки
-                gate.Release();
+                // Отказ по нашему потолку, а не по отключению клиента: текст говорит про
+                // время, чтобы человек понял, что перенос можно повторить
+                throw new HandoffGenerationException("перенос не успел завершиться, попробуйте ещё раз");
             }
         }
         finally

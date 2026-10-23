@@ -125,6 +125,26 @@ public class ChatHistoryServiceTests : IDisposable
         JsonSerializer.Deserialize<PromptCacheState>(json, opts)!.MissReason.Should().Be(expected);
     }
 
+    // Каждое имя на проводе — ровно свой член enum, и наоборот: тег метрики ccs.prompt_cache.turns
+    // и значение поля на проводе — один и тот же camelCase (TurnTelemetry.CacheMissReasonTag).
+    // Разъезд имён — молча потерянный разрез в SigNoz.
+    [Theory]
+    [InlineData("none", PromptCacheMissReason.None)]
+    [InlineData("systemChanged", PromptCacheMissReason.SystemChanged)]
+    [InlineData("messagesChanged", PromptCacheMissReason.MessagesChanged)]
+    [InlineData("unavailable", PromptCacheMissReason.Unavailable)]
+    [InlineData("previousMessageNotFound", PromptCacheMissReason.PreviousMessageNotFound)]
+    [InlineData("modelChanged", PromptCacheMissReason.ModelChanged)]
+    [InlineData("toolsChanged", PromptCacheMissReason.ToolsChanged)]
+    public void PromptCacheMissReason_имя_на_проводе_это_член_enum(string wire, PromptCacheMissReason expected)
+    {
+        var json = $$"""{"readTokens":1,"writtenTokens":2,"anchorAtMs":null,"ttl":null,"missedTokens":null,"missReason":"{{wire}}"}""";
+        var opts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        opts.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+
+        JsonSerializer.Deserialize<PromptCacheState>(json, opts)!.MissReason.Should().Be(expected);
+    }
+
     [Fact]
     public async Task AppendTurnAborted_ХодОстановленПользователем_НеСчитаетсяОборванным()
     {

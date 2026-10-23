@@ -1,4 +1,7 @@
-﻿namespace ClaudeHomeServer.Models;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace ClaudeHomeServer.Models;
 
 public class User
 {
@@ -113,6 +116,11 @@ public record ContextThresholds(int WarnPct, int DangerPct);
 // (EXPIRING_THRESHOLD_MS в frontend/src/lib/promptCache.ts), здесь — только границы
 // валидации. Порог обязан быть строго меньше срока: при ≥ TTL кэш был бы «остывающим»
 // с момента записи.
+// Контракт хранилища (users.json): {"warn1hMin": 1–59, "warn5mMin": 1–4} — минуты.
+// На чтении нормализует CacheWarnThresholdsJsonConverter: старые имена origin-формата
+// в секундах (warn1hSec/warn5mSec) переводятся в минуты (round), значения вне диапазона
+// и любое несоответствующее тело — null, то есть «не настроено».
+[JsonConverter(typeof(CacheWarnThresholdsJsonConverter))]
 public record CacheWarnThresholds(int Warn1hMin, int Warn5mMin)
 {
     public const int MinMin = 1;
@@ -122,4 +130,67 @@ public record CacheWarnThresholds(int Warn1hMin, int Warn5mMin)
     // Метод, а не свойство: свойство уехало бы в users.json и ответ /me
     public static bool InRange(int warn1hMin, int warn5mMin) =>
         warn1hMin is >= MinMin and <= Max1hMin && warn5mMin is >= MinMin and <= Max5mMin;
+}
+
+/// <summary>
+/// Читает stored-запись порога: старые имена origin-формата в секундах (warn1hSec/warn5mSec)
+/// конвертируются в минуты (round) — настройка человека не теряется; всё остальное
+/// (вне диапазона, полпары, мусор) — null, «не настроено», фронт применит дефолты.
+/// Пишем всегда каноническую форму в минутах. Конвертер на самом типе, а не в опциях:
+/// users.json пишется своими JsonSerializerOptions в UserStore, а API-ответы — чужими,
+/// и разъехаться они не должны (тот же приём, что QuickPhraseJsonConverter).
+/// </summary>
+public class CacheWarnThresholdsJsonConverter : JsonConverter<CacheWarnThresholds>
+{
+    public override CacheWarnThresholds? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return null;
+        if (reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException("Порог кэша — объект { warn1hMin, warn5mMin } в минутах");
+
+        int? min1h = null;
+        int? min5m = null;
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject) break;
+            if (reader.TokenType != JsonTokenType.PropertyName) continue;
+
+            var name = reader.GetString();
+            reader.Read();
+            if (string.Equals(name, "warn1hMin", StringComparison.OrdinalIgnoreCase))
+                min1h = ReadMinutes(reader);
+            else if (string.Equals(name, "warn5mMin", StringComparison.OrdinalIgnoreCase))
+                min5m = ReadMinutes(reader);
+            else if (string.Equals(name, "warn1hSec", StringComparison.OrdinalIgnoreCase))
+                min1h = ReadSecondsToMinutes(reader);
+            else if (string.Equals(name, "warn5mSec", StringComparison.OrdinalIgnoreCase))
+                min5m = ReadSecondsToMinutes(reader);
+            else
+                reader.Skip();
+        }
+
+        // Полпара или полупустая запись — не настройка: без обеих границ циферблат
+        // не построить, отдаём null (дефолты фронта)
+        return min1h is not null && min5m is not null && CacheWarnThresholds.InRange(min1h.Value, min5m.Value)
+            ? new CacheWarnThresholds(min1h.Value, min5m.Value)
+            : null;
+    }
+
+    private static int? ReadMinutes(Utf8JsonReader reader) =>
+        reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int value) ? value : null;
+
+    // 300 с → 5 мин. Нечетные секунды округляются к ближайшей минуте; результат всё
+    // равно проверяется диапазоном (3600 с → 60 мин > потолка 59 → null)
+    private static int? ReadSecondsToMinutes(Utf8JsonReader reader) =>
+        reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int seconds)
+            ? (int)Math.Round(seconds / 60.0)
+            : null;
+
+    public override void Write(Utf8JsonWriter writer, CacheWarnThresholds value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("warn1hMin", value.Warn1hMin);
+        writer.WriteNumber("warn5mMin", value.Warn5mMin);
+        writer.WriteEndObject();
+    }
 }

@@ -159,6 +159,7 @@ public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
     [InlineData(60, 2)]    // часовой порог не меньше всего срока — кэш был бы «остывающим» с рождения
     [InlineData(10, 5)]    // 5-минутный порог не меньше всего срока
     [InlineData(10, null)] // половина пары
+    [InlineData(null, 2)]  // симметричная половина пары
     public async Task CacheThresholds_OutOfRange_Returns400AndKeepsValue(int? warn1h, int? warn5m)
     {
         var authed = _factory.CreateAuthenticatedClient();
@@ -168,6 +169,26 @@ public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await MeBody(authed)).GetProperty("cacheWarnThresholds").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task CacheThresholds_ForeignBody_Returns400AndKeepsValue()
+    {
+        var authed = _factory.CreateAuthenticatedClient();
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 10, warn5mMin = 2 }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Опечатка в имени — не тихий сброс: запрос отвергается, сохранённая настройка остаётся
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMins = 10, warn5mMins = 2 }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await MeBody(authed)).GetProperty("cacheWarnThresholds").GetProperty("warn1hMin")
+            .GetInt32().Should().Be(10);
+
+        // Старые имена (секунды) на записи тоже не принимаются: единица — только минуты
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = 600, warn5mSec = 300 }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await MeBody(authed)).GetProperty("cacheWarnThresholds").GetProperty("warn5mMin")
+            .GetInt32().Should().Be(2);
     }
 
     [Fact]

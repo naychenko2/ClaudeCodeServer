@@ -1234,6 +1234,7 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
     const last = toasts[toasts.length - 1];
     expect(last[0], 'заголовок — «Фича снята с паузы»').toBe('Фича снята с паузы');
+    expect(last[1], 'текст без обещания работы (R-HOLD-F3)').toBe('Задачи, которым пауза мешала, снова разрешены.');
     expect((last[1] ?? ''), 'в тексте нет числа').not.toMatch(/\d/);
     expect((last[1] ?? ''), 'expired не показывается').not.toMatch(/просрочен|expired/i);
     expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница жива').not.toBeNull();
@@ -1292,5 +1293,8 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     expect(textNodes(start!).join('')).toContain('Запустить фичу');
     await act(async () => { (reactProps(start)!.onClick as () => void)(); });
     expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'DELETE' }]);
+    const last = toasts[toasts.length - 1];
+    expect(last[0], 'заголовок тоста — «Фича запущена»').toBe('Фича запущена');
+    expect(last[1] ?? '', 'деталь про куратора').toContain('Куратор');
   });
 });

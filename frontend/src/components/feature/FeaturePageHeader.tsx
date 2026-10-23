@@ -474,15 +474,18 @@ async function doHoldPause(fid: string, state: FeatureState, nowCount: number): 
 
 // Снятие удержания: «Снять паузу» (paused) и «Запустить фичу» (draft) — обе ручки
 // DELETE hold, без подтверждения (макет: «Снять паузу» и «Запустить фичу» — без модалки).
-// Ответ — {resumed, expired} (вердикт R-HOLD-H): resumed — задачи, которым пауза разрешала
-// запуск (не очередь автостарта), их и называем, без числа (R-HOLD-H2); expired не показываем.
+// Ответ — {resumed, expired} (вердикт R-HOLD-H): resumed — задачи, которым пауза
+// мешала запуститься и теперь разрешены (не очередь автостарта), их и называем, без
+// числа (R-HOLD-H2); expired не показываем. ClearHold ничего сам не возобновляет
+// (ClearHold_DoesNotAutoResumeAnything) — поэтому текст тоста без обещания работы.
 async function doHoldClear(fid: string, state: FeatureState): Promise<void> {
   try {
     const { resumed } = await api.tasks.clearFeatureHold(fid);
+    const resumedIds = resumed ?? []; // страховка: ответ без тела
     if (state === 'draft') {
       showToast('Фича запущена', 'Куратор начинает конвейер.');
-    } else if (resumed.length > 0) {
-      showToast('Фича снята с паузы', 'Задачи, которым пауза мешала, снова в работе.');
+    } else if (resumedIds.length > 0) {
+      showToast('Фича снята с паузы', 'Задачи, которым пауза мешала, снова разрешены.');
     } else {
       showToast('Пауза снята', '');
     }

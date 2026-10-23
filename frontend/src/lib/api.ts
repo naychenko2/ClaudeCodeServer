@@ -1793,8 +1793,8 @@ export const api = {
     setFeatureHold: (fid: string, reason: string) =>
       request<{ interrupted: string[] }>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'POST', body: JSON.stringify({ reason }) }),
     // Снятие паузы (W4-HOLD-F2, хвост R-HOLD-H): 200 — { resumed: [taskId], expired: [taskId] }:
-    // resumed — задачи, которым пауза разрешала запуск (не очередь автостарта), expired — те,
-    // чьё ожидание истекло (фронтом не показывается).
+    // resumed — задачи, которым пауза мешала запуститься и теперь разрешены (не очередь
+    // автостарта), expired — те, чьё ожидание истекло (фронтом не показывается).
     clearFeatureHold: (fid: string) =>
       request<{ resumed: string[]; expired: string[] }>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'DELETE' }),
     // projectId === null → личная задача (вне проекта)

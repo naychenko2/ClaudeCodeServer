@@ -174,7 +174,7 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
         var resp = await _client.PostAsync($"/api/chats/{id}/handoff", null);
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadGateway);
-        (await resp.Content.ReadAsStringAsync()).Should().Contain("перенос не успел завершиться");
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("Перенос не успел завершиться");
         manager.GetAll().Count.Should().Be(before, "таймаут холодного пути не создаёт преемника");
         runner.Hang = false;
     }
@@ -196,6 +196,9 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
 
         var act = async () => await service.HandoffAsync(owner, id, cts.Token);
 
+        // Через HTTP-ручку этот контракт не проверить: при отмене клиента (HttpClient с токеном)
+        // ответ не доходит до клиента, он видит лишь TaskCanceledException — и при 502, и при
+        // отмене. Различимо только на уровне сервиса, поэтому тест зовёт его напрямую
         await act.Should().ThrowAsync<OperationCanceledException>();
         manager.GetAll().Count.Should().Be(before, "отмена клиента не создаёт преемника");
         runner.Hang = false;

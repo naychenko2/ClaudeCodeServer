@@ -174,7 +174,7 @@ public class ChatHandoffService(
                 ct.ThrowIfCancellationRequested();
                 // Отказ по нашему потолку: текст говорит про время, чтобы человек понял,
                 // что перенос можно повторить
-                throw new HandoffGenerationException("перенос не успел завершиться, попробуйте ещё раз");
+                throw new HandoffGenerationException("Перенос не успел завершиться, попробуйте ещё раз");
             }
         }
         finally

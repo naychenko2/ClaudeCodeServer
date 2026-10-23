@@ -120,8 +120,14 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
                 var s = sessions.GetOwned(sessionId, UserId);
                 if (s is null || s.ProjectId != p.Id) return NotFound(new { error = "Чат не найден" });
                 if (!string.IsNullOrEmpty(s.WorktreePath))
+                    // Хвост W4-LINK-B: чат может быть привязан к корню проекта — главное дерево
+                    // числится в `git worktree list`, но предикат считает main не деревом фичи
+                    // (null → 404). Корень читается напрямую — тот же ранний выход, что у задачи
+                    // без дерева.
+                    if (PathNormalizer.NormalizePath(s.WorktreePath) == PathNormalizer.NormalizePath(p.RootPath))
+                        root = p.RootPath;
                     // Своё дерево чата: без Git нечем сверить — fail-closed, как маршрут featureId.
-                    root = (git is null || UserId is null) ? null
+                    else root = (git is null || UserId is null) ? null
                         : await git.VerifiedFeatureTreeAsync(UserId, p.RootPath, s.WorktreePath);
                 else if (s.TaskId is not null) root = await TaskTreeRootForAsync(p, s.TaskId);
                 else root = p.RootPath;

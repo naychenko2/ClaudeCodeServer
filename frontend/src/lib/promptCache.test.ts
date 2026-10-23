@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem } from '../types';
 import type { PromptCacheWire } from './promptCache';
-import { promptCacheState, missReasonLabel } from './promptCache';
+import { promptCacheState, missReasonLabel, liveState, expiringThresholdMs } from './promptCache';
 
 // Якорь — условный «момент последнего касания кэша» (мс эпохи)
 const ANCHOR = 1_700_000_000_000;
@@ -126,10 +126,43 @@ describe('promptCacheState — остаток и состояния', () => {
     expect(s.lastMiss).toEqual({ reason: 'modelChanged', tokens: 1200, label: 'смена модели' });
   });
 
-  it('личный порог (точка расширения B-3): переданный порог считает «остывает» раньше константы', () => {
+  it('личный порог (B-3): применяется по ttl, дефолты — константы', () => {
     // остаток 10 мин — по умолчанию тёплый (порог 5 мин), с личным порогом 15 мин — остывает
     expect(promptCacheState([resultItem(cache())], ANCHOR + 50 * MIN)!.status).toBe('warm');
-    expect(promptCacheState([resultItem(cache())], ANCHOR + 50 * MIN, 15 * MIN)!.status).toBe('cooling');
+    expect(promptCacheState([resultItem(cache())], ANCHOR + 50 * MIN, { warn1hMin: 15 })!.status).toBe('cooling');
+    // короткий срок: дефолт — 1 мин; личный warn5mMin — 3 мин
+    const c5 = cache({ ttl: '5m' });
+    expect(promptCacheState([resultItem(c5)], ANCHOR + 2 * MIN)!.status).toBe('warm');
+    expect(promptCacheState([resultItem(c5)], ANCHOR + 2 * MIN, { warn5mMin: 3 })!.status).toBe('cooling');
+    // часовой порог не действует на короткий срок
+    expect(promptCacheState([resultItem(c5)], ANCHOR + 2 * MIN, { warn1hMin: 4 })!.status).toBe('warm');
+  });
+
+  it('зажим личного порога [30 с, срок − запас]: вне диапазона — зажать, не выбросить', () => {
+    // ниже 30 с → 30 с: остаток 1 мин всё ещё тёплый
+    expect(promptCacheState([resultItem(cache())], ANCHOR + 59 * MIN, { warn1hMin: 0 })!.status).toBe('warm');
+    // выше видимого срока часового (60 − 1 мин запаса) → 59 мин: остаток 58 мин — остывает
+    expect(promptCacheState([resultItem(cache())], ANCHOR + 58 * MIN, { warn1hMin: 100 })!.status).toBe('cooling');
+    // 5-минутный: запас полминуты, потолок 4.5 мин — 4 мин внутри, 5 — зажимается до 4.5
+    expect(expiringThresholdMs('5m', { warn5mMin: 5 })).toBe(4.5 * MIN);
+    expect(expiringThresholdMs('1h', { warn1hMin: 60 })).toBe(59 * MIN);
+    expect(expiringThresholdMs('1h', { warn1hMin: 0 })).toBe(30_000);
+    // без личного — дефолты
+    expect(expiringThresholdMs('1h')).toBe(5 * MIN);
+    expect(expiringThresholdMs('5m')).toBe(MIN);
+  });
+
+  it('liveState: циферблат сам держит остаток и статус живыми', () => {
+    const s = promptCacheState([resultItem(cache())], ANCHOR)!;
+    expect(liveState(s, ANCHOR + 55 * MIN).status).toBe('cooling');
+    expect(liveState(s, ANCHOR + 55 * MIN).remainingMs).toBe(5 * MIN);
+    expect(liveState(s, ANCHOR + 61 * MIN).status).toBe('cold');
+    expect(liveState(s, ANCHOR + 61 * MIN).remainingMs).toBe(0);
+    // личный порог применяется и здесь
+    expect(liveState(s, ANCHOR + 55 * MIN, { warn1hMin: 1 }).status).toBe('warm');
+    // структурные поля не меняются
+    expect(liveState(s, ANCHOR + 61 * MIN).readTokens).toBe(1000);
+    expect(liveState(s, ANCHOR + 61 * MIN).lastMiss).toEqual(s.lastMiss);
   });
 });
 

@@ -2,14 +2,15 @@
 // Кухонный таймер 14×14 (ICON_SIZE.xs) справа от кольца контекста в той же пилюле: сектор
 // показывает, сколько кэшу осталось жить, стрелка — сколько прошло (по часовой, к остыванию
 // доходит до 12). Макет и состояния — docs/mockups/prompt-cache-dial-v1.{html,md}.
-// Состояние берётся из хука usePromptCache — компонент ничего не считает сам, только рисует.
+// Состояние берётся из хука usePromptCache, но остаток и статус циферблат держит живыми
+// сам, своим таймером (F-1b-r): тик перерисовывает блок циферблата, а не всю пилюлю.
 // Своей кнопки нет: цель клика — вся пилюля (BadgeShell). Нет состояния — не рисуется ни
 // циферблат, ни разделитель: блок появляется и исчезает целиком.
-import { type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { C, FONT, FS, SP } from '../../lib/design';
 import { ICON_SIZE } from './icons';
-import { type PromptCacheState } from '../../lib/promptCache';
+import { type CacheWarnThresholds, type PromptCacheState, liveState } from '../../lib/promptCache';
 
 // Геометрия рисуется в координатах viewBox 20×20 (как у RingIcon): контур r 8.5, сектор r 7,
 // стрелка r 6.5, ось r 1.3. Один и тот же циферблат — на пилюле (14 px) и пипом строки
@@ -40,14 +41,31 @@ export function cacheSpoken(state: PromptCacheState, isWaiting: boolean): string
   return `${state.status === 'cooling' ? 'Кэш скоро остынет' : 'Кэш тёплый'} · ${cacheLeftText(state.remainingMs)}`;
 }
 
-// Доля оставшегося срока: remainingMs / (expiresAt − anchorAtMs)
-function dialFrac(state: PromptCacheState): number {
+// Доля оставшегося срока: remainingMs / (expiresAt − anchorAtMs). Единая для циферблата
+// и полоски поповера — здесь, а не пересчитывается в каждом месте (F-1b-r).
+export function dialFrac(state: PromptCacheState): number {
   const total = Math.max(1, state.expiresAt - state.anchorAtMs);
   return Math.min(1, Math.max(0, state.remainingMs / total));
 }
 
+// Часы циферблата (и живых строк рядом с ним): тик ровно на смену показываемой минуты
+// (остаток округляется вверх, порог «остывает» — целые минуты), поэтому перерисовок
+// раз в минуту и не чаще; у остывшего и пустого состояния таймера нет. Держит их
+// компонент циферблата, не хук: тик не перерисовывает всю пилюлю (F-1b-r).
+export function useLiveNow(state: PromptCacheState | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!state) return;
+    const remaining = state.expiresAt - now;
+    if (remaining <= 0) return;
+    const t = window.setTimeout(() => setNow(Date.now()), (remaining % 60_000 || 60_000) + 50);
+    return () => window.clearTimeout(t);
+  }, [now, state]);
+  return now;
+}
+
 // Цвета — только через style: C.* — это var(--…), а в SVG-атрибутах CSS-переменные не резолвятся.
-function DialSvg({ st, frac, size, reducedMotion }: {
+export function CacheDialFace({ st, frac, size, reducedMotion }: {
   st: DialState; frac: number; size: number; reducedMotion: boolean;
 }) {
   const c = COLOR[st];
@@ -84,29 +102,46 @@ function DialSvg({ st, frac, size, reducedMotion }: {
   );
 }
 
-// Пип строки «Осталось» в поповере — тот же циферблат размером 12
-export function CacheDialPip({ state, isWaiting }: { state: PromptCacheState; isWaiting: boolean }) {
-  return <DialSvg st={isWaiting ? 'turn' : state.status} frac={dialFrac(state)} size={12} reducedMotion={usePrefersReducedMotion()} />;
+// Пип строки «Осталось» в подсказке и поповере — тот же циферблат размером 12, со
+// своими часами: тик перерисовывает только пип.
+export function CacheDialPip({ state, isWaiting, warnThresholds }: {
+  state: PromptCacheState; isWaiting: boolean; warnThresholds?: CacheWarnThresholds;
+}) {
+  const reducedMotion = usePrefersReducedMotion();
+  const live = liveState(state, useLiveNow(state), warnThresholds);
+  return <CacheDialFace st={isWaiting ? 'turn' : live.status} frac={dialFrac(live)} size={12} reducedMotion={reducedMotion} />;
+}
+
+// Текст строки кэша в подсказке: живой на часах самого компонента — иначе каждую минуту
+// пришлось бы перерисовывать всю пилюлю (F-1b-r).
+export function CacheSpokenText({ state, isWaiting, warnThresholds }: {
+  state: PromptCacheState; isWaiting: boolean; warnThresholds?: CacheWarnThresholds;
+}) {
+  return <span>{cacheSpoken(liveState(state, useLiveNow(state), warnThresholds), isWaiting)}</span>;
 }
 
 // Циферблат на пилюле: разделитель + таймер + текст. Текст — только на десктопе и планшете
 // (на мобиле шапка не резиновая, минуты и «остыл» — в поповере). Возвращает null, когда
 // состояния нет: разделитель тоже не рисуется.
-export function CacheDial({ state, isWaiting, isMobile }: {
-  state: PromptCacheState | null; isWaiting: boolean; isMobile?: boolean;
+export function CacheDial({ state, isWaiting, isMobile, warnThresholds }: {
+  state: PromptCacheState | null; isWaiting: boolean; isMobile?: boolean; warnThresholds?: CacheWarnThresholds;
 }) {
+  // Хуки — до раннего return (правило хуков): без состояния useLiveNow не тикает
+  const reducedMotion = usePrefersReducedMotion();
+  const now = useLiveNow(state);
   if (!state) return null;
-  const st: DialState = isWaiting ? 'turn' : state.status;
+  const live = liveState(state, now, warnThresholds);
+  const st: DialState = isWaiting ? 'turn' : live.status;
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
       <span aria-hidden style={{ width: 1, height: 12, background: C.border, margin: `0 ${SP.xxs}px`, flexShrink: 0 }} />
       {/* Высота пилюли не растёт: svg обёрнут в span нулевой высоты, как RingIcon */}
       <span style={{ display: 'flex', alignItems: 'center', height: 0, flexShrink: 0 }}>
-        <DialSvg st={st} frac={dialFrac(state)} size={ICON_SIZE.xs} reducedMotion={usePrefersReducedMotion()} />
+        <CacheDialFace st={st} frac={dialFrac(live)} size={ICON_SIZE.xs} reducedMotion={reducedMotion} />
       </span>
       {st === 'cooling' && !isMobile && (
         <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 700, color: C.warningText }}>
-          {cacheLeftText(state.remainingMs)}
+          {cacheLeftText(live.remainingMs)}
         </span>
       )}
       {st === 'cold' && !isMobile && (

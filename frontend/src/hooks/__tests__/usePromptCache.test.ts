@@ -6,7 +6,9 @@ import type { ChatItem } from '../../types';
 import type { PromptCacheWire } from '../../lib/promptCache';
 
 // Тесты: пустое состояние до первого result'а с кэшем, состояние по result'у,
-// переход warm → cooling → cold по таймеру, заморозка ленты на стрим-дельты хода.
+// заморозка ленты на стрим-дельты хода и стабильный рендер без ленты (F-1b-r).
+// Переход warm → cooling → cold по часам — ответственность liveState (promptCache.test),
+// таймер живёт в циферблате, не в хуке.
 
 // --- Мини-раннер React-хуков (окружение node: ни jsdom, ни testing-library нет) ---
 // useState держит значение в слоте: setNow из эффекта обновляет его, следующий
@@ -103,12 +105,6 @@ function mount() {
   };
 }
 
-// Один тик: таймер будит setNow, «ре-рендер» пересчитывает состояние
-function tick(m: ReturnType<typeof mount>, items: ChatItem[]) {
-  vi.advanceTimersByTime(MIN + 50);
-  return m.render(items);
-}
-
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(ANCHOR);
@@ -135,7 +131,7 @@ describe('usePromptCache — пустое состояние', () => {
   });
 });
 
-describe("usePromptCache — состояние по result'у и переходы по таймеру", () => {
+describe("usePromptCache — состояние по result'у", () => {
   it('result с кэшем даёт тёплое состояние с полным остатком', () => {
     const m = mount();
     const items = [resultItem(cache())];
@@ -156,22 +152,18 @@ describe("usePromptCache — состояние по result'у и переход
     m.unmount();
   });
 
-  it('таймер двигает часы: тёплый → остывает → холодный, после остывания тиков нет', () => {
-    const m = mount();
-    const items = [resultItem(cache())];
-    let s = m.render(items);
-    expect(s?.status).toBe('warm');
-    // 55 минут по минутным тикам — остаток 4,95 мин, ниже пяиминутного порога
-    for (let i = 0; i < 55; i++) s = tick(m, items);
-    expect(s?.status).toBe('cooling');
-    // до нуля остатка — ещё ~5 минут тиков
-    for (let i = 0; i < 5; i++) s = tick(m, items);
-    expect(s?.status).toBe('cold');
-    expect(s?.remainingMs).toBe(0);
-    // холодный — таймера нет: ещё один тик ничего не двигает
-    vi.advanceTimersByTime(10 * MIN);
-    expect(m.render(items)).toEqual(s);
-    m.unmount();
+});
+
+describe('usePromptCacheItems — стабильный рендер без ленты (F-1b-r)', () => {
+  it('два рендера без items — одна и та же ссылка, ни одного setState в рендер', () => {
+    // Новый [] каждый рендер заморозка ловила в бесконечный цикл «Too many re-renders»
+    const host = { slots: [] as Array<{ value?: unknown }>, i: 0 };
+    rt.state.current = host;
+    const r1 = usePromptCacheItems(undefined, false);
+    host.i = 0;
+    const r2 = usePromptCacheItems(undefined, false);
+    expect(r2).toBe(r1); // EMPTY_ITEMS — стабильная ссылка, а не свежий []
+    rt.state.current = null;
   });
 });
 

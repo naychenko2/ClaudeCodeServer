@@ -1,48 +1,37 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ChatItem } from '../types';
-import { promptCacheState, type PromptCacheState } from '../lib/promptCache';
+import { promptCacheState, type CacheWarnThresholds, type PromptCacheState } from '../lib/promptCache';
 
-// Состояние prompt cache чата со своим таймером (фича «Индикатор prompt cache», шаг F-1a).
-// Пересчёт — только на смену ленты (её двигает result хода) и по таймеру: стрим-дельты
-// кэш не меняют, их отсекает заморозка usePromptCacheItems. Тикает ровно на смену
-// показываемой минуты (остаток округляется вверх, порог «остывает» — целые минуты),
-// поэтому перерисовок раз в минуту и не чаще; у остывшего и пустого состояния таймера нет.
-// warnThresholdMs — точка расширения личного порога «остывает» (B-3): пока не подключена,
-// подключается на шаге диалога порогов.
-export function usePromptCache(items: ChatItem[], warnThresholdMs?: number): PromptCacheState | null {
+// Стабильная пустая лента для параметра-дефолта: новый [] каждый рендер заморозка
+// ловила бы в бесконечный цикл «Too many re-renders» — ссылка между рендерами
+// должна быть одна (F-1b-r).
+export const EMPTY_ITEMS: ChatItem[] = [];
+
+// Состояние prompt cache чата (фича «Индикатор prompt cache и перенос в новый чат»,
+// шаг F-1a). Пересчёт — только на смену ленты (её двигает result хода): остаток и
+// статус держит живыми сам циферблат своим таймером, а не вся пилюля (F-1b-r).
+// warnThresholds — личный порог «остывает» (B-3), применяется по ttl; не задан —
+// дефолты EXPIRING_THRESHOLD_MS.
+export function usePromptCache(
+  items: ChatItem[] = EMPTY_ITEMS,
+  warnThresholds?: CacheWarnThresholds,
+): PromptCacheState | null {
   const [now, setNow] = useState(() => Date.now());
-  const state = useMemo(() => {
-    const s = promptCacheState(items, now, warnThresholdMs);
-    // «Сейчас» из стейта отстаёт до ближайшего тика. Новый ход приносит якорь позже
-    // этого «сейчас» — без зажима остаток вышел бы больше TTL
-    return s && s.anchorAtMs > now ? promptCacheState(items, s.anchorAtMs, warnThresholdMs) : s;
-  }, [items, now, warnThresholdMs]);
-
-  // Новая лента (result хода, загрузка истории) — сверяем часы сразу, не дожидаясь тика
+  // Новая лента (result хода, загрузка истории) — сверяем часы сразу: остаток в state
+  // нужен только для aria-label, живые минуты считает циферблат своими таймером
   // eslint-disable-next-line react-hooks/set-state-in-effect -- часы живут вне React
   useEffect(() => { setNow(Date.now()); }, [items]);
-
-  // Следующий тик — на ближайшую смену минуты остатка; дальше остатка нет — не тикаем
-  useEffect(() => {
-    if (!state || state.remainingMs <= 0) return;
-    const t = window.setTimeout(() => setNow(Date.now()), (state.remainingMs % 60_000 || 60_000) + 50);
-    return () => window.clearTimeout(t);
-  }, [state]);
-
-  // Фоновая вкладка душит таймеры: вернулись — пересчитываем сразу
-  useEffect(() => {
-    const onVisible = () => { if (document.visibilityState === 'visible') setNow(Date.now()); };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, []);
-
-  return state;
+  return useMemo(() => {
+    const s = promptCacheState(items, now, warnThresholds);
+    // «Сейчас» отстаёт от якоря нового хода: без зажима остаток вышел бы больше TTL
+    return s && s.anchorAtMs > now ? promptCacheState(items, s.anchorAtMs, warnThresholds) : s;
+  }, [items, now, warnThresholds]);
 }
 
 // Лента для индикатора кэша: пока идёт ход, держим ту, что была до него. Состояние кэша
 // меняет только result хода, а стрим-дельты обновляют ленту на каждый токен — без заморозки
 // шапка пересчитывала бы кэш (обход всей ленты) на каждую дельту впустую.
-export function usePromptCacheItems(items: ChatItem[], isWaiting: boolean): ChatItem[] {
+export function usePromptCacheItems(items: ChatItem[] = EMPTY_ITEMS, isWaiting: boolean): ChatItem[] {
   const [held, setHeld] = useState(items);
   // Хранение значения прошлых рендеров — штатный приём React (setState во время рендера)
   if (!isWaiting && held !== items) setHeld(items);

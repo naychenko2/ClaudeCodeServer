@@ -6,6 +6,8 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it } from 'vitest';
+import { CacheDialPip } from '../../ui/CacheDial';
+import type { PromptCacheState } from '../../../lib/promptCache';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { RingPillBadge, type CostStats, type FalCostStats, type ProviderBalance } from '../ChatHeaderBar';
 import type { GlifGenStats } from '../glifStats';
@@ -140,5 +142,41 @@ describe('RingPillBadge: циферблат кэша промпта (F-1b)', () 
     expect(html).toContain('<svg width="14"');
     expect(visibleLeftText(html)).toBeNull();
     expect(ariaOf(html)).toContain('Кэш · идёт ход');
+  });
+
+  it('без items вообще — рендер не падает и циферблата нет (стабильный EMPTY_ITEMS)', () => {
+    const html = renderToStaticMarkup(createElement(RingPillBadge, {
+      estimate, isWaiting: false, isCompacting: false, canCompact: false, onCompact: () => {},
+      online: true, assistantName: 'Тест',
+      isCliProvider: false, providerName: 'Claude', cost, falCost, glifCost, balance, billing, windows,
+    }));
+    expect(html).not.toContain('<svg width="14"');
+    expect(ariaOf(html)).not.toContain('Кэш');
+  });
+});
+
+// Мини-циферблат строки подсказки (tip) — тот же компонент, что в подсказке пилюли (F-1b-r)
+describe('CacheDialPip: мини-циферблат в подсказке', () => {
+  const state = (over: Partial<PromptCacheState> = {}): PromptCacheState => ({
+    status: 'warm', ttl: '1h', anchorAtMs: Date.now(), expiresAt: Date.now() + 60 * MIN,
+    remainingMs: 60 * MIN, readTokens: 1000, writtenTokens: 500, ...over,
+  });
+  it('тёплый: пип 12 px с сектором на весь круг', () => {
+    const html = renderToStaticMarkup(createElement(CacheDialPip, { state: state(), isWaiting: false }));
+    expect(html).toContain('<svg width="12"');
+    expect(html).toContain('r="7"');
+    expect(html).not.toContain('stroke-dasharray');
+  });
+  it('остывающий: «дыхание» сектора в пипе', () => {
+    // Якорь 55 мин назад — liveState сам считает остаток 5 мин и статус «остывает»
+    const html = renderToStaticMarkup(createElement(CacheDialPip, {
+      state: state({ anchorAtMs: Date.now() - 55 * MIN, expiresAt: Date.now() + 5 * MIN, remainingMs: 5 * MIN }),
+      isWaiting: false,
+    }));
+    expect(html).toContain('cc-cache-breathe');
+  });
+  it('идёт ход: пип серый, без сектора', () => {
+    const html = renderToStaticMarkup(createElement(CacheDialPip, { state: state(), isWaiting: true }));
+    expect(html).not.toContain('fill-opacity');
   });
 });

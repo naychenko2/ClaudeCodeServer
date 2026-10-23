@@ -54,8 +54,8 @@ import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
-import { CacheDial, CacheDialPip, cacheLeftText, cacheSpoken } from '../ui/CacheDial';
-import type { PromptCacheState } from '../../lib/promptCache';
+import { CacheDial, CacheDialPip, CacheSpokenText, cacheLeftText, cacheSpoken, dialFrac, useLiveNow } from '../ui/CacheDial';
+import { liveState, type PromptCacheState } from '../../lib/promptCache';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
 import { chatFilterScope, leaveChatArchiveView } from '../../lib/chatFilters';
@@ -568,20 +568,24 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
 
 // Секция «Кэш промпта» в поповере кольцевой пилюли (шаг F-1b): после контекста и его
 // действий, перед fal/glif — порядок секций по макету prompt-cache-dial-v1. Состояние
-// берётся из хука usePromptCache, здесь только тексты и полоска. Личный порог «остывает»
-// (B-3) — точка расширения в promptCacheState/usePromptCache; здесь не нужен: статус
-// приходит уже посчитанным.
+// берётся из хука usePromptCache, здесь только тексты и полоска. Секция монтируется,
+// когда поповер открыт: остаток и статус пересчитываются на момент открытия (тик
+// не перерисовывает всю пилюлю, F-1b-r), доля — готовая dialFrac, не свой счёт (F-1b-r).
+// Личный порог «остывает» (B-3) — точка расширения в promptCacheState/usePromptCache;
+// здесь не нужен: статус приходит уже посчитанным.
 function PromptCacheSection({ state, isWaiting }: { state: PromptCacheState; isWaiting: boolean }) {
-  const st = isWaiting ? 'turn' : state.status;
-  const ttlText = state.ttl === '1h' ? '1 час' : '5 минут';
-  const total = Math.max(1, state.expiresAt - state.anchorAtMs);
-  const frac = Math.min(1, Math.max(0, state.remainingMs / total));
-  const val = st === 'turn' ? 'идёт ход' : st === 'cold' ? 'остыл' : cacheLeftText(state.remainingMs);
+  // Те же часы, что у циферблата: пока поповер открыт, остаток живёт своей строкой,
+  // не перерисовывая всю пилюлю (F-1b-r)
+  const live = liveState(state, useLiveNow(state));
+  const st = isWaiting ? 'turn' : live.status;
+  const ttlText = live.ttl === '1h' ? '1 час' : '5 минут';
+  const frac = dialFrac(live);
+  const val = st === 'turn' ? 'идёт ход' : st === 'cold' ? 'остыл' : cacheLeftText(live.remainingMs);
   const valColor = st === 'turn' ? C.textMuted : st === 'cold' ? C.dangerText : st === 'cooling' ? C.warningText : C.textSecondary;
   // Цена перезаписи кэша по фронту не известна (тарифов нет) — по предложению макета
   // без цены sub холодный сокращается до короткой фразы
   const sub = st === 'warm' ? `Срок ${ttlText}, каждый ход продлевает его заново.`
-    : st === 'cooling' ? `Ответьте до ${new Date(state.expiresAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} — иначе следующий ход перепишет кэш по полной цене записи.`
+    : st === 'cooling' ? `Ответьте до ${new Date(live.expiresAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} — иначе следующий ход перепишет кэш по полной цене записи.`
     : st === 'cold' ? 'Следующий ход перепишет кэш.'
     : 'Срок продлится, когда придёт ответ.';
   const miss = state.lastMiss
@@ -596,7 +600,7 @@ function PromptCacheSection({ state, isWaiting }: { state: PromptCacheState; isW
         pct={st === 'warm' || st === 'cooling' ? Math.round(frac * 100) : undefined}
         fill={st === 'warm' ? C.success : C.warning}
         sub={<div style={{ ...meterSubStyle, ...(st === 'cold' ? { color: C.dangerText } : {}) }}>{sub}</div>} />
-      <BadgeRow k="В кэше" v={`${fmtTokens(state.readTokens)} токенов`} />
+      <BadgeRow k="В кэше" v={`${fmtTokens(live.readTokens)} токенов`} />
       <BadgeRow k="Срок кэша" v={ttlText} />
       <BadgeRow k="Последний промах" v={miss} />
     </>
@@ -853,7 +857,7 @@ export function RingPillBadge(props: {
   // Кэш промпта (F-1b): состояние — целиком из хука F-1a, здесь ничего не пересчитывается.
   // Во время хода лента заморожена: якорь двигает только result. До первого result'а с
   // данными кэша state=null — циферблата и разделителя нет вовсе.
-  const cache = usePromptCache(usePromptCacheItems(props.items ?? [], props.isWaiting));
+  const cache = usePromptCache(usePromptCacheItems(props.items, props.isWaiting));
 
   // Живые данные локальной модели: хвост + поповер «Локальная модель». Хуки — до раннего
   // return (правило хуков). live=null — чат не на локальной модели (событий нет). Хвост —
@@ -984,7 +988,9 @@ export function RingPillBadge(props: {
           {/* Строки без кольца — с пустым местом под пип, чтобы текст шёл одной колонкой */}
           {p.dial && cache ? <CacheDialPip state={cache} isWaiting={props.isWaiting} />
             : p.pip ? <RingPip slot={p.pip.slot} level={p.pip.level} /> : <span style={{ width: 12, flexShrink: 0 }} />}
-          <span>{p.text}</span>
+          {/* Строка кэша — с живыми минутами на часах самой подсказки: тик циферблата
+              не должен перерисовывать всю пилюлю (F-1b-r) */}
+          {p.dial && cache ? <CacheSpokenText state={cache} isWaiting={props.isWaiting} /> : <span>{p.text}</span>}
         </div>
       )) : <div>Контекст и расход сессии</div>}
       <div style={{ color: C.textMuted, fontSize: FS.xs }}>Нажмите для деталей</div>

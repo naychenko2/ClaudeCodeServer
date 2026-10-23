@@ -52,12 +52,48 @@ export interface PromptCacheState {
 
 const TTL_MS: Record<'1h' | '5m', number> = { '1h': 60 * 60_000, '5m': 5 * 60_000 };
 
-// Порог «остывает» пока константа (личная настройка — позже, после B-3): 5 минут у
-// часового кэша, пятая доля срока у короткого — иначе 5m был бы «остывающим» всю жизнь.
+// Личный порог «остывает» (B-3): минуты остатка до остывания, отдельно для часового и
+// 5-минутного срока. Форма — та же, что поле cacheWarnThresholds в ответе /me.
+export interface CacheWarnThresholds {
+  warn1hMin?: number;
+  warn5mMin?: number;
+}
+
+// Дефолт порога «остывает», пока личный не подключён: 5 минут у часового кэша, пятая
+// доля срока у короткого — иначе 5m был бы «остывающим» всю жизнь.
 export const EXPIRING_THRESHOLD_MS: Record<'1h' | '5m', number> = {
   '1h': 5 * 60_000,
   '5m': 60_000,
 };
+
+// Запас на время до первого токена: якорь — приход message_start, а кэш живёт от начала
+// запроса: минута у часового, полминуты у 5-минутного (десятая доля срока). Личный порог
+// зажимается видимым сроком минус этот запас — те же границы держит бэкенд (B-3).
+function marginMs(ttlMs: number): number {
+  return Math.min(60_000, Math.floor(ttlMs / 10));
+}
+
+// Порог «остывает»: дефолт — константа; личный (минуты) зажимается в [30 с, срок − запас]
+// — меньше полминуты «остывание» мелькнуло бы, а порог не ниже срока означал бы
+// «остывающий» с момента записи. Значения вне диапазона с провода — зажать, не выбросить.
+export function expiringThresholdMs(ttl: '1h' | '5m', warn?: CacheWarnThresholds): number {
+  const prefMin = ttl === '1h' ? warn?.warn1hMin : warn?.warn5mMin;
+  if (prefMin === undefined || !Number.isFinite(prefMin)) return EXPIRING_THRESHOLD_MS[ttl];
+  const hi = TTL_MS[ttl] - marginMs(TTL_MS[ttl]);
+  return Math.min(hi, Math.max(30_000, prefMin * 60_000));
+}
+
+// Статус по остатку: ноль — холодный, не выше порога — остывает, выше — тёплый.
+export function statusForRemaining(remainingMs: number, ttl: '1h' | '5m', warn?: CacheWarnThresholds): PromptCacheStatus {
+  return remainingMs <= 0 ? 'cold' : remainingMs <= expiringThresholdMs(ttl, warn) ? 'cooling' : 'warm';
+}
+
+// Живое состояние на момент now: меняются только остаток и статус, остальное как было.
+// Считает циферблат (и поповер при открытии), не вся пилюля.
+export function liveState(state: PromptCacheState, now: number, warn?: CacheWarnThresholds): PromptCacheState {
+  const remainingMs = Math.max(0, state.expiresAt - now);
+  return { ...state, remainingMs, status: statusForRemaining(remainingMs, state.ttl, warn) };
+}
 
 // Подписи причин промаха (там имена snake_case, на проводе camelCase — маппинг явный).
 // Все — именными фразами одного вида («смена модели», а не «сменилась модель»): в UI
@@ -86,9 +122,9 @@ export function normTtl(ttl?: string): '1h' | '5m' | undefined {
 // якоря/срока пропускаются — индикатор берётся по последнему, который их несёт. Ход
 // на провайфере без сигнала кэша не гасит живой индикатор: кэш привязан к разговору,
 // не к провайдеру. Ни одного result с данными — пустое состояние.
-// warnThresholdMs — точка расширения личного порога «остывает» (B-3, User.cacheWarnThresholds):
-// пока не подключена, по умолчанию — константа EXPIRING_THRESHOLD_MS.
-export function promptCacheState(items: ChatItem[], now: number, warnThresholdMs?: number): PromptCacheState | null {
+// warnThresholds — личный порог «остывает» (B-3, User.cacheWarnThresholds), применяется
+// по ttl; не задан — дефолты EXPIRING_THRESHOLD_MS.
+export function promptCacheState(items: ChatItem[], now: number, warnThresholds?: CacheWarnThresholds): PromptCacheState | null {
   let lastMiss: PromptCacheMissInfo | undefined;
   let state: PromptCacheState | null = null;
   for (let i = items.length - 1; i >= 0; i--) {
@@ -112,10 +148,7 @@ export function promptCacheState(items: ChatItem[], now: number, warnThresholdMs
     if (typeof pc.anchorAtMs !== 'number' || !ttl) continue;
 
     const remainingMs = Math.max(0, pc.anchorAtMs + TTL_MS[ttl] - now);
-    const status: PromptCacheStatus =
-      remainingMs <= 0 ? 'cold'
-      : remainingMs <= (warnThresholdMs ?? EXPIRING_THRESHOLD_MS[ttl]) ? 'cooling'
-      : 'warm';
+    const status = statusForRemaining(remainingMs, ttl, warnThresholds);
 
     state = {
       status,

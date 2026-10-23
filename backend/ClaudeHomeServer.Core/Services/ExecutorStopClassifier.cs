@@ -56,6 +56,13 @@ public static class ExecutorStopClassifier
     public const string DeviceWaitExpiredReason = "device_wait_expired";
 
     /// <summary>
+    /// Фичу поставили на паузу (W4-HOLD-D, разрез §1): человек снял активный ход исполнителя
+    /// задачи. Терминальная причина: сам ход не продолжается — его возвращает только снятие
+    /// паузы (шаг D), а пока фича удержана, гейт закрывает новые запуски по ней.
+    /// </summary>
+    public const string FeatureHeldReason = "feature_held";
+
+    /// <summary>
     /// Сабагенты хода: None — обрывов не было; Truncated — оборвался, добивание в пути;
     /// Stuck — обрывается раз за разом, попытки добивания исчерпаны.
     /// </summary>

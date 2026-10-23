@@ -207,6 +207,11 @@ public sealed class FeatureProjector(TaskManager tasks)
         // стоит выше), и упавший исполнитель разреза в черновике должен быть виден.
         if (featureState == FeatureStates.Paused) attention = null;
 
+        // W4-HOLD-D: на паузе никто не идёт — «Сейчас» пустой. SetHold прервал исполнителей
+        // (feature_held), но статус остаётся InProgress: без гашения строка показывала бы
+        // «Сейчас: <исполнитель>», а Now0Of/NowPersonaIds отдавали бы прерванную задачу.
+        if (featureState == FeatureStates.Paused) nowList.Clear();
+
         // Конвейер: стадии в порядке жизненного цикла. Порядок задаётся ЯВНЫМ списком,
         // а не выводится из порядка кода (W4-DES-B): «design» — необязательный этап после
         // «cut»; без дизайн-задач — состояние skipped, на готовность не влияет.

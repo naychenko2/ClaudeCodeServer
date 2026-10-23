@@ -1,4 +1,7 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tasks.Tests.Fixtures;
 
@@ -2159,6 +2162,74 @@ public class FeatureProjectorTests
             CreatedAt = t, CompletedAt = t, Hold = Hold(FeatureHoldReasons.Manual, t) };
         var run = FeatureProjector.Build(epic, [epic]);
         run.State.Should().Be(FeatureStates.Closed, "закрытая фича закрыта, даже если удержание не сняли");
+    }
+
+    // ─── W4-HOLD-D: пауза прерывает идущие ходы (контракт §1) ──────────────────────────────
+    // Сквозной: TaskManager.SetHold → проектор. Идущий исполнитель помечается feature_held
+    // (статус не трогается), «Сейчас» пустой, журнал задачи содержит «stopped» с причиной
+    // feature_held; ClearHold пометки не снимает — снятие паузы ход не оживляет.
+    // Мутации: убрать цикл пометки в SetHold → ExecutorStoppedAt null → красное; убрать
+    // nowList.Clear() в BuildCore → Now не пустой → красное.
+    [Fact]
+    public void SetHold_StopsRunningExecutor_NowEmpty_JournalHasFeatureHeld()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_d_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var journal = new FeatureJournalStore(Path.Combine(dir, "feature-journal"));
+        var sut = new TaskManager(config, journal: journal);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            // Идущий ход: старт, без стопа и ожидания.
+            var step = sut.Create(null, "u", new CreateTaskRequest("шаг D1",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D1", Lane: "back"));
+            sut.MarkClaudeStarted(step.Id, "sess-1", DateTime.UtcNow);
+            // Не запущенная задача: прерывать нечего.
+            var todo = sut.Create(null, "u", new CreateTaskRequest("шаг D2",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D2"));
+            // Уже остановленная по другой причине: пауза её не трогает.
+            var alreadyStopped = sut.Create(null, "u", new CreateTaskRequest("шаг D3",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D3"));
+            sut.MarkClaudeStarted(alreadyStopped.Id, "sess-3", DateTime.UtcNow);
+            sut.MarkExecutorStopped(alreadyStopped.Id, DateTime.UtcNow, ExecutorStopClassifier.AuthFailedReason);
+
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+            var stopped = sut.GetById(step.Id);
+            stopped!.ExecutorStoppedAt.Should().NotBeNull("пауза прерывает идущий ход");
+            stopped!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+                "причина прервания — feature_held");
+            stopped!.Status.Should().Be(TaskItemStatus.InProgress, "статус остановки не трогает");
+            sut.GetById(todo.Id)!.ExecutorStoppedAt.Should().BeNull("незапущенная задача не помечается");
+            sut.GetById(alreadyStopped.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.AuthFailedReason,
+                "уже остановленная по другой причине остаётся как была");
+
+            var run = new FeatureProjector(sut).Project(epic.Id, "u");
+            run!.State.Should().Be(FeatureStates.Paused);
+            run.Now.Should().BeEmpty("пауза: никто не идёт — «Сейчас» пустой");
+
+            // Журнал фичи: stopped с причиной feature_held (пишет существующий WriteJournalTransitions).
+            journal.Read("u", epic.Id).Entries.Should().Contain(
+                e => e.Kind == "stopped" && e.TaskId == step.Id && e.Reason == ExecutorStopClassifier.FeatureHeldReason,
+                "прервание идущего хода видно в журнале с причиной feature_held");
+
+            // Снятие паузы — только снятие состояния: ход не оживляется.
+            sut.ClearHold(epic.Id);
+            var after = sut.GetById(step.Id);
+            after!.ExecutorStoppedAt.Should().NotBeNull("ClearHold не снимает пометку feature_held");
+            after!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason);
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     // Каждое значение FeatureStates имеет явную ветку Bucket: тест перебирает константы

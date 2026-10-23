@@ -1226,7 +1226,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // (сервисный токен отказывает 403 в контроллере; 409 по состояниям — тоже там). Только
     // эпик (role=feature): у дочерних задачи Hold нет. В журнал фичи — ровно одна запись
     // действия: held с reason / hold_cleared с снятым reason (по ней таймлайн считает
-    // интервал паузы). Прерывание идущих ходов — шаг D, здесь только поле и журнал.
+    // интервал паузы). Прерывание идущих ходов (W4-HOLD-D): SetHold помечает исполнителей
+    // в состоянии running пометкой feature_held — статус не трогает, журнал задачи пишет
+    // существующий WriteJournalTransitions («stopped» с причиной feature_held).
     public TaskItem? SetHold(string id, string reason)
     {
         var task = _tasks.GetValueOrDefault(id);
@@ -1241,10 +1243,27 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             TaskId = task.Id,
             Reason = reason,
         });
+        // W4-HOLD-D (разрез §1): пауза отнимает идущие ходы. Критерий «running» тот же, что
+        // у статуса исполнителя в проекторе: старт есть, завершения/стопа/ожидания нет.
+        // Эпик в выборку не входит (FeatureId == null): ключевой чат оркестратора общий для
+        // нескольких фич и паузой не прерывается. Уже остановленные по другой причине не
+        // трогается — возвращать её пауза не должна.
+        foreach (var t in _tasks.Values)
+        {
+            if (t.FeatureId != task.Id) continue;
+            if (t.Status == TaskItemStatus.Done) continue;
+            if (t.ClaudeStartedAt is null) continue; // не запускался — прерывать нечего.
+            if (t.ExecutorStoppedAt is not null) continue; // уже остановлен.
+            if (t.AwaitingHumanSince is not null) continue; // ждёт человека, не идёт.
+            MarkExecutorStopped(t.Id, now, ExecutorStopClassifier.FeatureHeldReason);
+        }
         ScheduleSave();
         return task;
     }
 
+    // Снятие паузы (W4-HOLD-D): только снимает состояние Hold — пометку feature_held НЕ
+    // гасит: возврат прерванных шагов в работу (продолжение в тех же сессиях) — отдельный
+    // шаг D с проверкой живости чата. Без него снятие паузы оставило бы задачи «остановленными».
     public TaskItem? ClearHold(string id)
     {
         var task = _tasks.GetValueOrDefault(id);

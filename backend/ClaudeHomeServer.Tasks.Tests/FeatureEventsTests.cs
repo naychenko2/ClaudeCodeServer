@@ -347,6 +347,32 @@ public class FeatureEventsTests
         stopped.Reason.Should().Be("auth_failed");
     }
 
+    // ── 9b. W4-HOLD-D: прервание паузой — stopped с причиной feature_held ──────────────────────
+
+    // Пауза прерывает идущие ходы (TaskManager.SetHold помечает их feature_held): лента отдаёт
+    // стоп с причиной — по ней фронт считает «Прервано N шагов». Guard тот же, что у section 9:
+    // стоп раньше старта (stale-пометка) в ленту не попадает.
+    [Fact]
+    public void BuildEvents_FeatureHeldStop_ReasonReachFeed_GuardFromStale()
+    {
+        var epic = Epic("epic-hold");
+        epic.Hold = new FeatureHold(FeatureHoldReasons.Manual, new DateTime(2026, 10, 2, 10, 0, 0), null, true);
+        // Идущая задача, прерванная паузой: старт раньше стопа.
+        var running = Child("run", "epic-hold", status: TaskItemStatus.InProgress,
+            startedAt: new DateTime(2026, 10, 2, 9, 0, 0),
+            stoppedAt: new DateTime(2026, 10, 2, 10, 0, 0), stopReason: "feature_held");
+        // Тот же reason, но пометка раньше старта — не показывается.
+        var stale = Child("stale", "epic-hold", status: TaskItemStatus.InProgress,
+            startedAt: new DateTime(2026, 10, 2, 10, 30, 0),
+            stoppedAt: new DateTime(2026, 10, 2, 10, 0, 0), stopReason: "feature_held");
+
+        var events = FeatureProjector.BuildEvents(Run(epic, running, stale), Sessions());
+
+        var stopped = Find(events, "stopped", "run");
+        stopped.Reason.Should().Be("feature_held", "причина прервания паузой доходит до ленты");
+        events.Should().NotContain(e => e.Kind == "stopped" && e.TaskId == "stale");
+    }
+
     // ── 10. W4-DES-B: хронология — ВСЕ задачи с featureId, включая безролевые ─────────────────
 
     // Безролевая задача (role=null) ни в одну стадию не попадает, но в ленте обязана быть:

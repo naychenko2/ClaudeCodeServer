@@ -126,10 +126,11 @@ describe('usePromptCache — пустое состояние', () => {
     m.unmount();
   });
 
-  it('последний result без кэша — индикатора нет, даже если раньше он был', () => {
+  it('последний result без кэша — индикатор остаётся по предыдущему с данными', () => {
     const m = mount();
-    expect(m.render([resultItem(cache())])).not.toBeNull();
-    expect(m.render([resultItem(cache()), resultItem()])).toBeNull();
+    const s = m.render([resultItem(cache()), resultItem()]);
+    expect(s?.status).toBe('warm');
+    expect(s?.readTokens).toBe(1000);
     m.unmount();
   });
 });

@@ -620,6 +620,25 @@ describe('applyServerMessage: завершение хода', () => {
     expect(next.items[0]).toMatchObject({ kind: 'result', subtype: 'success', usage, totalCostUsd: 0.01 });
   });
 
+  // Индикатор prompt cache (фича «Индикатор prompt cache») читает ленту: если редьюсер
+  // не положит promptCache из result-сообщения в item — циферблату нечего показывать.
+  it('result пробрасывает promptCache сообщения в item ленты', () => {
+    const promptCache = { readTokens: 1200, writtenTokens: 800, anchorAtMs: 1_700_000_000_000, ttl: '1h', missReason: 'none' };
+    const next = run(
+      [{ type: 'result', subtype: 'success', durationMs: 100, numTurns: 2, promptCache }],
+      state({ isWaiting: true }),
+    );
+    expect(next.items[0]).toMatchObject({ kind: 'result', promptCache });
+  });
+
+  it('result без promptCache на проводе — в item ничего не подставляется', () => {
+    const next = run(
+      [{ type: 'result', subtype: 'success', durationMs: 100, numTurns: 1 }],
+      state({ isWaiting: true }),
+    );
+    expect((next.items[0] as { promptCache?: unknown }).promptCache).toBeUndefined();
+  });
+
   it('result клеит модель хода постам этого хода', () => {
     const next = run([
       { type: 'text_delta', text: 'ответ' },

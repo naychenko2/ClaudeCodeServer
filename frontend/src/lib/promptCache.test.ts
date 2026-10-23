@@ -23,12 +23,28 @@ describe('promptCacheState — пустое состояние', () => {
     expect(promptCacheState([textItem('привет')], ANCHOR)).toBeNull();
   });
 
-  it('последний result без данных кэша — индикатора нет (сторонний провайдер, старая история)', () => {
-    const items = [resultItem(cache()), resultItem()];
-    expect(promptCacheState(items, ANCHOR + MIN)).toBeNull();
+  it('ни один result не несёт данных кэша — индикатора нет (сторонний провайдер, старая история)', () => {
+    expect(promptCacheState([resultItem(), resultItem()], ANCHOR)).toBeNull();
   });
 
-  it('данные кэша без якоря или без срока — индикатора нет', () => {
+  it('последний result без кэша — индикатор по предыдущему с данными (ход на DeepSeek не гасит тёплый кэш)', () => {
+    const items = [resultItem(cache()), resultItem()];
+    const s = promptCacheState(items, ANCHOR + MIN);
+    expect(s).not.toBeNull();
+    expect(s!.readTokens).toBe(1000);
+    expect(s!.remainingMs).toBe(59 * MIN);
+  });
+
+  it('result без якоря или без срока пропускается, а не гасит индикатор', () => {
+    const items = [
+      resultItem(cache()),
+      resultItem(cache({ anchorAtMs: undefined })),
+      resultItem(cache({ ttl: '30m' })),
+    ];
+    expect(promptCacheState(items, ANCHOR + MIN)?.readTokens).toBe(1000);
+  });
+
+  it('данные кэша есть, но ни разу не был якорь и срок — индикатора нет', () => {
     expect(promptCacheState([resultItem(cache({ anchorAtMs: undefined }))], ANCHOR)).toBeNull();
     expect(promptCacheState([resultItem(cache({ ttl: undefined }))], ANCHOR)).toBeNull();
     expect(promptCacheState([resultItem(cache({ ttl: '30m' }))], ANCHOR)).toBeNull();
@@ -77,20 +93,39 @@ describe('promptCacheState — остаток и состояния', () => {
 
   it('промах с причиной попадает в lastMiss, «none» — нет', () => {
     const s = promptCacheState([resultItem(cache({ missReason: 'systemChanged', missedTokens: 4200 }))], ANCHOR)!;
-    expect(s.lastMiss).toEqual({ reason: 'systemChanged', tokens: 4200, label: 'сменился системный промпт' });
+    expect(s.lastMiss).toEqual({ reason: 'systemChanged', tokens: 4200, label: 'смена системного промпта' });
     const s2 = promptCacheState([resultItem(cache({ missReason: 'none' }))], ANCHOR)!;
     expect(s2.lastMiss).toBeUndefined();
+  });
+
+  it('lastMiss — последний промах в чате, а не промах решающего result’а', () => {
+    const items = [
+      resultItem(cache({ missReason: 'systemChanged', missedTokens: 4200 })),
+      resultItem(cache({ missReason: 'none' })),
+    ];
+    const s = promptCacheState(items, ANCHOR)!;
+    expect(s.readTokens).toBe(1000);
+    expect(s.lastMiss).toEqual({ reason: 'systemChanged', tokens: 4200, label: 'смена системного промпта' });
+  });
+
+  it('промах из result’а без якоря тоже учитывается', () => {
+    const items = [
+      resultItem(cache()),
+      resultItem(cache({ anchorAtMs: undefined, missReason: 'modelChanged' })),
+    ];
+    const s = promptCacheState(items, ANCHOR)!;
+    expect(s.lastMiss).toEqual({ reason: 'modelChanged', label: 'смена модели' });
   });
 });
 
 describe('missReasonLabel — подписи причин', () => {
-  it('camelCase-причины с текстами из origin', () => {
-    expect(missReasonLabel('previousMessageNotFound')).toBe('истёк срок кэша');
-    expect(missReasonLabel('systemChanged')).toBe('сменился системный промпт');
-    expect(missReasonLabel('messagesChanged')).toBe('изменилась история сообщений');
-    expect(missReasonLabel('modelChanged')).toBe('сменилась модель');
-    expect(missReasonLabel('toolsChanged')).toBe('сменились инструменты');
-    expect(missReasonLabel('unavailable')).toBe('причина неизвестна');
+  it('camelCase-причины, все подписи — именными фразами одного вида', () => {
+    expect(missReasonLabel('previousMessageNotFound')).toBe('истечение срока кэша');
+    expect(missReasonLabel('systemChanged')).toBe('смена системного промпта');
+    expect(missReasonLabel('messagesChanged')).toBe('изменение истории сообщений');
+    expect(missReasonLabel('modelChanged')).toBe('смена модели');
+    expect(missReasonLabel('toolsChanged')).toBe('смена инструментов');
+    expect(missReasonLabel('unavailable')).toBe('неизвестная причина');
   });
 
   it('незнакомая причина показывается как есть', () => {

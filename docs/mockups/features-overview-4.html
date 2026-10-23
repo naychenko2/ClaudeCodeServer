@@ -34,6 +34,8 @@
   --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
   --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
   --c-glass:rgba(255,255,255,.74);
+  /* C.mediaScrim / C.onDark — плашка поверх чужой картинки, от темы не зависят (одинаковы в dark) */
+  --c-media-scrim:rgba(0,0,0,.55); --c-on-dark:#FFFFFF;
   /* Цвета персон — данные (AGENT_COLORS в AgentSelector.tsx), не токены темы */
   --p-orange:#D97757; --p-purple:#6C5CB0; --p-brown:#8A6A28; --p-blue:#3E7CA6; --p-green:#5E8B4E;
 }
@@ -482,6 +484,29 @@ svg { flex-shrink:0; }
 .hcl span { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-secondary); }
 .zoom { transform:scale(2); transform-origin:top left; width:150px; height:76px; }
 .zoomwrap { width:300px; height:152px; overflow:hidden; border-radius:12px; border:1px solid var(--c-border-light); }
+/* Точка 7, круг 2: плашка модели в нижней части полосы собеседника (84 px) */
+.cface.photo.lt { background:radial-gradient(circle at 68% 36%, color-mix(in srgb, var(--pc) 25%, var(--c-on-dark)) 0 18%, transparent 19%),
+    radial-gradient(ellipse at 68% 105%, color-mix(in srgb, var(--pc) 30%, var(--c-on-dark)) 0 38%, transparent 39%), var(--c-on-dark); opacity:1; }
+.cface.photo.dk { background:radial-gradient(circle at 68% 36%, color-mix(in srgb, var(--pc) 40%, #000) 0 18%, transparent 19%),
+    radial-gradient(ellipse at 68% 105%, color-mix(in srgb, var(--pc) 30%, #000) 0 38%, transparent 39%), #000; opacity:1; }
+.mpl { position:absolute; z-index:2; right:0; bottom:0; width:72px; display:flex; align-items:center; justify-content:flex-end; padding:0 8px 0 14px;
+  font-family:"JetBrains Mono",monospace; font-size:10px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:auto; }
+.mpl span { overflow:hidden; text-overflow:ellipsis; }
+/* 7А — полоса-скрим: C.mediaScrim + C.onDark, 18 px, левый край растворяется маской */
+.mpl.bar { height:18px; background:var(--c-media-scrim); color:var(--c-on-dark);
+  -webkit-mask-image:linear-gradient(to left, #000 78%, transparent); mask-image:linear-gradient(to left, #000 78%, transparent); }
+/* 7Б — срез аватара: стекло C.glass + размытие, волосяная линия C.borderLight сверху, 16 px */
+.mpl.slice { height:16px; background:var(--c-glass); color:var(--c-text-secondary); box-shadow:inset 0 1px 0 var(--c-border-light);
+  -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
+  -webkit-mask-image:linear-gradient(to left, #000 78%, transparent); mask-image:linear-gradient(to left, #000 78%, transparent); }
+/* 7В — под аватаром: лицо кончается на 16 px выше, текст на фоне карточки, плашки нет */
+.cc.under .cface { bottom:16px; border-bottom-left-radius:0; }
+.mpl.under { height:16px; color:var(--c-text-secondary); font-weight:600; }
+/* Чат без персоны — во всех вариантах просто текст в углу */
+.mpl.np { height:16px; color:var(--c-text-muted); font-weight:600; background:none; box-shadow:none; -webkit-mask-image:none; mask-image:none; -webkit-backdrop-filter:none; backdrop-filter:none; }
+.ctr7 { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px 14px; font-size:11.5px; margin-top:10px; }
+.mb .ctr7 { grid-template-columns:1fr; }
+.ctr7 b { color:var(--c-text-heading); }
 .avw2 { position:relative; display:inline-flex; }
 .avw2 .gchip { right:auto; left:50%; transform:translateX(-50%); bottom:-8px; font-size:9px; line-height:12px; padding:0 4px; }
 </style>
@@ -591,13 +616,15 @@ svg { flex-shrink:0; }
 <section class="pt" id="pt7">
   <h2>7. Чип модели на лице собеседника в карточке чата</h2>
   <p class="brief">Карточка списка чатов (ChatCard.tsx) устроена так: слева заголовок (значок темы, имя 13.5 px) и превью сообщения, справа — полоса собеседника 84 px во всю высоту карточки: фото или крупные инициалы цветом персоны, растяжка маской влево и вуаль её цветом. Сценарий: «пролистываю чаты фичи и сразу вижу, где модель поменяли руками — например, Киру перевели на облако». Чип нужен ТОЛЬКО там, где модель чата отличается от умолчания; у остальных лицо остаётся чистым.</p>
-  <div class="decided"><b>Андрей отклонил чип справа перед временем</b> (прошлые А/Б/В) и просит полупрозрачный аккуратный чип в нижней части аватара — на настоящей карточке. Ниже два размещения на той же карточке и увеличенный фрагмент.</div>
-  <div class="var" data-v="7B"><h3>7А — стекло по центру нижнего края лица <span class="rec">рекомендую</span></h3>
-    <p>Чип стоит у нижнего края полосы собеседника, по центру видимой части лица: моноширинный 9.5 px, фон C.glass с лёгким размытием, текст C.textSecondary, волосяная обводка C.borderLight. Лицо под ним просвечивает, имя и превью не задеты: отступ текста под полосу (72 px) уже есть. Кнопки по наведению висят по вертикальному центру и чип не перекрывают. В выбранном чате вуаль гаснет, чип остаётся. Подсказка (title): «Модель чата: Opus 5.5 · у Киры по умолчанию — Qwen3.8-27B».</p></div>
-  <div class="var" data-v="7C"><h3>7Б — стекло в правом нижнем углу</h3>
-    <p>Тот же чип прижат к углу карточки (6 px от краёв). Ещё тише, лицо открыто полностью, но у фото чип ложится на плечо, а у инициалов — под последнюю букву и читается как часть подписи.</p></div>
-  <div class="var" data-v="7A"><h3>Тот же чип — на аватаре в FeatureRunView</h3>
-    <p>Чёрный чип C.navInk на круглом аватаре заменяем тем же стеклом — один вид чипа модели на всё приложение. Здесь, в отличие от списка, модель показываем всегда: на странице фичи она — часть отчёта.</p></div>
+  <div class="decided"><b>Андрей 23.10 отверг и чип на лице</b>: нужна полупрозрачная плашка с текстом модели в нижней части аватара. Ниже три варианта на той же настоящей карточке — разная высота, прозрачность и место текста. В списке нарочно есть худшие случаи: почти белое фото («Ш3»), почти чёрное («Ревью Ш1»), инициалы («Ревью Ш3») и чат без персоны. Плашка — только у чатов, где модель отличается от умолчания персоны; у «Хранилища плагина» и «Ш4» лицо чистое. Прошлые чипы (стекло по центру и в углу) сняты.</div>
+  <div class="var" data-v="7P1"><h3>7А — полоса-скрим по низу лица <span class="rec">рекомендую</span></h3>
+    <p>Нижние 18 px полосы собеседника — тёмная плашка C.mediaScrim (чёрный 55 %), текст C.onDark, 10 px моноширинный жирный, прижат вправо. Левый край плашки растворяется той же маской, что и лицо. Токены от темы не зависят — так в продукте уже подписаны фото персонажей (CharacterCard) и номера лиц (FaceOverlay). <b>Контраст защищён лучше всех: худший случай — чисто белое фото — 4.76:1, то есть AA при любом фото, теме и выделении карточки</b>; лицо под плашкой просвечивает.</p></div>
+  <div class="var" data-v="7P2"><h3>7Б — срез аватара стеклом</h3>
+    <p>Нижние 16 px — «срез» стеклом C.glass с размытием 6 px и волосяной линией C.borderLight сверху, текст C.textSecondary. Тише и в тон теме, но контраст зависит от фото: на чёрном фото в светлой теме — 2.8:1, на белом в тёмной — 2.6:1. Посмотрите «Ревью Ш1» в светлой и «Ш3» в тёмной.</p></div>
+  <div class="var" data-v="7P3"><h3>7В — подпись под аватаром</h3>
+    <p>Лицо кончается на 16 px выше низа карточки, под ним — текст модели прямо на фоне карточки, C.textSecondary, без плашки. От фото не зависит, но зависит от фона самой карточки: на обычной 5.2:1, на выбранной (C.accentMuted) в светлой теме — 3.6:1. И это уже не «плашка на аватаре»: лицо на карточке 64 px укорачивается на четверть.</p></div>
+  <div class="var" data-v="7A"><h3>FeatureRunView — по итогам выбора</h3>
+    <p>Аватар там — круг 22 px, плашка на него не помещается. Предлагаю оставить мини-чип, но в той же гамме, что выбранная плашка (для 7А — C.mediaScrim / C.onDark вместо C.navInk). Здесь модель показываем всегда: на странице фичи она — часть отчёта.</p></div>
 </section>
 
 </div>
@@ -907,26 +934,36 @@ const BUG = (s) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="no
 const PIN = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 10.8V4h6v6.8l3 3.2H6z"/></svg>';
 const CC = [
   { nm:'Хранилище плагина', role:1, prev:'Софья: Ш3 вернулся, Кира дорабатывает пустое состояние', p:'orange', ini:'С' },
-  { nm:'Ш3 · Панель «Хранилище»', prev:'Кира: пустое состояние готово, проверяю тёмную тему', p:'purple', photo:1, model:'Opus', on:1, tip:'Модель чата: Opus 5.5 · у Киры по умолчанию — Qwen3.8-27B' },
+  { nm:'Ш3 · Панель «Хранилище»', prev:'Кира: пустое состояние готово, проверяю тёмную тему', p:'purple', photo:'lt', model:'Opus', on:1, tip:'Модель чата: Opus 5.5 · у Киры по умолчанию — Qwen3.8-27B' },
   { nm:'Ревью Ш3', prev:'Глеб: вернул — нет пустого состояния у списка ключей', p:'brown', ini:'Г', model:'Sonnet', tip:'Модель чата: Sonnet 5.5 · у Глеба по умолчанию — Opus 5.5' },
+  { nm:'Ревью Ш1', prev:'Глеб: принято со второго витка', p:'blue', photo:'dk', model:'Qwen', tip:'Модель чата: Qwen3.8-27B · у Глеба по умолчанию — Opus 5.5' },
   { nm:'Ш4 · Контрактные тесты', prev:'Тимур: сдал на ревью, 14 тестов зелёные', p:'blue', ini:'Т', hv:1 },
   { nm:'Разбор логов vLLM', prev:'Падение на prefill 63k: смотрю очередь планировщика', model:'DeepSeek', tip:'Модель чата: DeepSeek V4 · по умолчанию — Opus 5.5' },
 ];
-const ccard = (c, place, m) => `<div class="cc${c.p ? ' p' : ' np'}${c.on ? ' on' : ''}${c.hv ? ' hv' : ''}"${c.p ? ` style="--pc:var(--p-${c.p})"` : ''}>
-  ${c.p ? `<div class="cveil"${c.on ? ' style="display:none"' : ''}></div><div class="cface${c.photo ? ' photo' : ''}">${c.photo ? '' : c.ini}</div>` : `<span class="cwm">${BUG(64)}</span>`}
+// place: bar (7А) | slice (7Б) | under (7В)
+const ccard = (c, place, m) => `<div class="cc${c.p ? ' p' : ' np'}${c.on ? ' on' : ''}${c.hv ? ' hv' : ''}${c.p && c.model && place === 'under' ? ' under' : ''}"${c.p ? ` style="--pc:var(--p-${c.p})"` : ''}>
+  ${c.p ? `<div class="cveil"${c.on ? ' style="display:none"' : ''}></div><div class="cface${c.photo ? ' photo ' + c.photo : ''}">${c.photo ? '' : c.ini}</div>` : `<span class="cwm">${BUG(64)}</span>`}
   <div class="ctx"><div class="l1"><span class="ti">${c.p ? I.chat : BUG(14)}</span><span class="nm">${c.nm}</span>${c.role ? '<span class="krole">ключевой</span>' : ''}</div>
     <div class="l2"${!c.p && c.model ? ' style="padding-right:60px"' : ''}>${c.prev}</div></div>
-  ${c.model ? `<span class="gchip ${c.p ? place : 'cor'}" title="${c.tip}">${c.model}</span>` : ''}
+  ${c.model ? `<span class="mpl ${c.p ? place : 'np'}" title="${c.tip}" aria-label="${c.tip}"><span>${c.model}</span></span>` : ''}
   ${c.hv && !m ? `<div class="hcl"><span>${PIN}</span><span>${I.more}</span></div>` : ''}
 </div>`;
 const clist7 = (place, m) => `<div class="clist7">${CC.map(c => ccard(c, place, m)).join('')}</div>`;
-const zoom7 = (place) => `<div><p class="cap">Фрагмент ×2 · выбранный чат и соседний</p><div class="zoomwrap" style="position:relative;height:280px"><div style="position:absolute;right:0;top:8px;width:300px;transform:scale(2);transform-origin:top right;display:flex;flex-direction:column;gap:4px">${ccard(CC[1], place, false)}${ccard(CC[2], place, false)}</div></div></div>`;
-const note7 = (m) => hNote(`Чип есть у трёх чатов из пяти: «Хранилище плагина» и «Ш4» идут на модели по умолчанию — лицо чистое. У чата без персоны (водяной знак темы) чип стоит в правом нижнем углу, а превью получает отступ справа под его ширину. Кнопки по наведению («Ш4») — по вертикальному центру, чип не перекрывают.${m ? ' На 360 кнопок по наведению нет; чип не интерактивный, касание открывает чат как обычно.' : ''}`);
-V['7B'] = m => `<div class="body"><div class="ba"><div><p class="cap">Список чатов фичи</p>${clist7('ctr', m)}</div>${m ? '' : zoom7('ctr')}</div>${note7(m)}</div>`;
-V['7C'] = m => `<div class="body"><div class="ba"><div><p class="cap">Список чатов фичи</p>${clist7('cor', m)}</div>${m ? '' : zoom7('cor')}</div>${note7(m)}</div>`;
+const zoom7 = (place) => `<div><p class="cap">Фрагмент ×2 · светлое фото, инициалы, тёмное фото</p><div class="zoomwrap" style="position:relative;height:420px"><div style="position:absolute;right:0;top:8px;width:300px;transform:scale(2);transform-origin:top right;display:flex;flex-direction:column;gap:4px">${ccard(CC[1], place, false)}${ccard(CC[2], place, false)}${ccard(CC[3], place, false)}</div></div></div>`;
+const CTR7 = {
+  bar:['4.76:1 на чисто белом фото (до 21:1 на чёрном)', 'не зависит ни от темы, ни от выделения карточки', 'единственный вариант с AA ≥ 4.5:1 везде'],
+  slice:['2.8:1 — чёрное фото в светлой теме', '2.6:1 — белое фото в тёмной теме', 'проваливает AA на краевых фото'],
+  under:['3.6:1 — выбранная карточка (C.accentMuted) в светлой теме', 'на обычной 5.2:1, на наведённой 4.0:1; от фото не зависит', 'проседает от фона карточки, лицо ниже на 16 px'],
+};
+const note7 = (place, m) => `<div class="ctr7"><span><b>Худший контраст:</b> ${CTR7[place][0]}</span><span>${CTR7[place][1]}</span><span>${CTR7[place][2]}</span></div>`
+  + hNote(`Плашка у четырёх чатов из шести: «Хранилище плагина» и «Ш4» на модели по умолчанию — лицо чистое. У чата без персоны (водяной знак темы) во всех вариантах — только текст C.textMuted в правом нижнем углу, превью отступает под его ширину. Кнопки по наведению («Ш4») — по вертикальному центру и плашку не перекрывают. Длинное имя модели режется многоточием в пределах 72 px; полное — в подсказке.${m ? ' На 360 кнопок по наведению нет; плашка не интерактивна, касание открывает чат; полная модель — в шапке открытого чата.' : ''}`);
+const v7 = (place) => m => `<div class="body"><div class="ba"><div><p class="cap">Список чатов фичи</p>${clist7(place, m)}</div>${m ? '' : zoom7(place)}</div>${note7(place, m)}</div>`;
+V['7P1'] = v7('bar');
+V['7P2'] = v7('slice');
+V['7P3'] = v7('under');
 V['7A'] = m => `<div class="body"><div class="ba">
   <div><p class="cap">Было · FeatureRunView</p><div class="xrow"><span class="avw">${av('k','К',1)}<span class="mchip ink">Qwen</span></span><b style="color:var(--c-text-heading)">Кира</b><span class="sec2">фронт · Ш3</span><span class="tag run">идёт</span></div></div>
-  <div><p class="cap">Стало · то же стекло</p><div class="xrow" style="padding-bottom:12px"><span class="avw2">${av('k','К',1)}<span class="gchip">Qwen</span></span><b style="color:var(--c-text-heading)">Кира</b><span class="sec2">фронт · Ш3</span><span class="tag run">идёт</span></div></div>
+  <div><p class="cap">Стало · гамма плашки 7А</p><div class="xrow" style="padding-bottom:12px"><span class="avw2">${av('k','К',1)}<span class="gchip" style="background:var(--c-media-scrim);color:var(--c-on-dark);box-shadow:none">Qwen</span></span><b style="color:var(--c-text-heading)">Кира</b><span class="sec2">фронт · Ш3</span><span class="tag run">идёт</span></div></div>
 </div>${hNote('Подсказка с полной моделью («Qwen3.8-27B, локально») — по наведению, фокусу и касанию, как у ModelChip.')}</div>`;
 
 // ===== Раскладка: в каждом .var — десктоп 880 и 360 =====

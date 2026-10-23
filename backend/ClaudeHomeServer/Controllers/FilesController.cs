@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
+using ClaudeHomeServer.Services.Git;
 using FileMutationKind = ClaudeHomeServer.Services.Composition.FileMutationKind;
 
 namespace ClaudeHomeServer.Controllers;
@@ -17,7 +18,12 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions, INoteAccessor? notes = null) : ControllerBase
+public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions, INoteAccessor? notes = null,
+    // W4-5B2 (п.5.2): чтение файла из проверенного дерева эпика (?featureId=). Tasks и Git —
+    // отключаемые подсистемы: нет одной из них — маршрут featureId отказывает 404 (fail-closed),
+    // маршрут без параметра работает как раньше.
+    ClaudeHomeServer.Services.Tasks.TaskManager? tasks = null,
+    GitService? git = null) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -91,11 +97,18 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpGet("content")]
-    public IActionResult GetContent(string projectId, [FromQuery] string path)
+    public async Task<IActionResult> GetContent(string projectId, [FromQuery] string path, [FromQuery] string? featureId = null)
     {
         try
         {
-            var root = GetRoot(projectId);
+            var p = GetProject(projectId);
+            // W4-5B2 (п.5.2): ?featureId= — чтение из проверенного дерева эпика, по образцу
+            // GitController.RootFor(?sessionId=). Без параметра — корень проекта (прежнее
+            // поведение). Нет эпика (нет/чужой/другой проект) или дерево не проверено — 404,
+            // без тихого фолбэка на main: пользователь должен понять, что смотрит не то.
+            var root = string.IsNullOrEmpty(featureId) ? p.RootPath : await FeatureTreeRootForAsync(p, featureId);
+            if (root is null) return NotFound(new { error = "Дерево фичи не найдено" });
+
             if (IsDirectoryPath(root, path)) return NotFound();
 
             // Вид файла и способ отдачи — общий с агентом устройства (вертикаль Files):
@@ -107,6 +120,19 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         // Путь ведёт в несуществующую папку (или она исчезла между проверкой и чтением)
         catch (DirectoryNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
+    }
+
+    // W4-5B2 (п.5.2): проверенное дерево эпика для чтения — тот же предикат, что каталог
+    // макетов W4-5 (GitService.VerifiedFeatureTreeAsync). Эпик — задача с id == featureId,
+    // принадлежащая текущему владельцу и этому проекту. Любой отказ (нет Tasks/Git, нет эпика,
+    // чужой, другой проект, нечислящееся дерево) — null → 404. Маршрут только для чтения:
+    // SaveContent featureId не принимает — запись идёт в корень проекта.
+    private async Task<string?> FeatureTreeRootForAsync(ClaudeHomeServer.Models.Project project, string featureId)
+    {
+        if (tasks is null || git is null || UserId is null) return null;
+        var epic = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == featureId);
+        if (epic is null || epic.ProjectId != project.Id) return null;
+        return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, epic.WorktreePath);
     }
 
     // Абсолютный путь документа с проверкой, что это просматриваемый документ (pdf/docx/xlsx/pptx).

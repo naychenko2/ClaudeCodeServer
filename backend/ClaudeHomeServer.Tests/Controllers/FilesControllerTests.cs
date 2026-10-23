@@ -1,6 +1,9 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -8,11 +11,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
 {
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _tempDir;
 
     public FilesControllerTests(TestWebApplicationFactory factory)
     {
+        _factory = factory;
         _client = factory.CreateAuthenticatedClient();
         _tempDir = Path.Combine(factory.TempDir, "file_tests");
         Directory.CreateDirectory(_tempDir);
@@ -219,6 +224,103 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         var id = await CreateProjectAsync("PathTraversalTest");
         var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=../../etc/passwd");
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // ─── W4-5B2: GET /api/projects/{id}/files/content?featureId= — чтение из дерева эпика ───
+
+    // Реальный git-worktree проекта (git init + worktree add -b) и эпик фичи с этим деревом
+    // (тот же приём, что merge-тесты TasksControllerTests). Возвращает (epicId, worktree,
+    // projectId, mainRoot).
+    private async Task<(string EpicId, string Worktree, string ProjectId, string MainRoot)>
+        CreateEpicWithVerifiedWorktreeAsync(string tag)
+    {
+        var mainRoot = Path.Combine(_tempDir, "feat_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "FeatProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var worktree = Path.Combine(_tempDir, "feat_wt_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(worktree);
+        var branch = "feat/" + tag + "-" + Guid.NewGuid().ToString("N")[..6];
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+        await git.WorktreeAddAsync(null, mainRoot, worktree, branch);
+
+        var taskResp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new
+        {
+            title = "epic " + tag, role = "feature",
+            worktreePath = worktree, worktreeBranch = branch,
+        });
+        taskResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var epicId = JsonSerializer.Deserialize<JsonElement>(await taskResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        return (epicId, worktree, projectId, mainRoot);
+    }
+
+    // Файл с одинаковым относительным путём есть и в дереве эпика, и в main: с featureId —
+    // читается дерево эпика (проверенный worktree), без него — main (прежнее поведение).
+    [Fact]
+    public async Task GetContent_FeatureId_ЧитаетИзПроверенногоДереваЭпика()
+    {
+        var (epicId, worktree, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("read");
+        File.WriteAllText(Path.Combine(worktree, "draft.md"), "from feature tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var withFeature = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}");
+        withFeature.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyFeature = JsonSerializer.Deserialize<JsonElement>(await withFeature.Content.ReadAsStringAsync());
+        bodyFeature.GetProperty("content").GetString().Should().Be("from feature tree", "featureId — читает проверенное дерево эпика");
+
+        var withoutFeature = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md");
+        withoutFeature.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyMain = JsonSerializer.Deserialize<JsonElement>(await withoutFeature.Content.ReadAsStringAsync());
+        bodyMain.GetProperty("content").GetString().Should().Be("from main tree", "без параметра — корень проекта, как раньше");
+    }
+
+    // Путь эпика есть на диске, но НЕ числится в `git worktree list` проекта (чужая папка) —
+    // отказ 404, без тихого фолбэка на main (пользователь смотрит не то).
+    // Мутация: в GitService.VerifiedFeatureTreeAsync заменить `list.Any(...)` на unconditional
+    // return path — этот тест краснеет (чужая папка принялась бы как дерево эпика).
+    [Fact]
+    public async Task GetContent_FeatureId_ПутьНеВWorktreeList_404()
+    {
+        var (epicId, _, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("alien");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+        var alien = Path.Combine(_tempDir, "feat_alien_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(alien);
+        File.WriteAllText(Path.Combine(alien, "draft.md"), "from alien dir");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.WorktreePath = alien;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, "непроверенный путь — 404, не фолбэк на main");
+    }
+
+    // Эпик принадлежит другому проекту — для этого проекта фичи нет: 404.
+    [Fact]
+    public async Task GetContent_FeatureId_ЭпикДругогоПроекта_404()
+    {
+        var (epicId, _, _, _) = await CreateEpicWithVerifiedWorktreeAsync("otherproj");
+        var (otherId, _) = await SetupProjectWithFileAsync("draft.md", "from main tree");
+
+        var response = await _client.GetAsync($"/api/projects/{otherId}/files/content?path=draft.md&featureId={epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Запись через этот маршрут невозможна: PUT featureId не принимает — пишет в корень
+    // проекта, дерево эпика остаётся нетронутым.
+    [Fact]
+    public async Task SaveContent_FeatureId_ИгнорируетПараметр_ПишетВMain()
+    {
+        var (epicId, worktree, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("write");
+        File.WriteAllText(Path.Combine(worktree, "draft.md"), "from feature tree");
+
+        var put = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}",
+            new { content = "written to main" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        File.ReadAllText(Path.Combine(mainRoot, "draft.md")).Should().Be("written to main");
+        File.ReadAllText(Path.Combine(worktree, "draft.md")).Should().Be("from feature tree", "запись мимо дерева: featureId игнорируется");
     }
 
     [Fact]

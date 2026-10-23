@@ -1163,40 +1163,16 @@ public class TasksController(
         return (false, null);
     }
 
-    // W4-5 (п.5.1): проверенное дерево эпика для чтения каталога макетов. Тот же предикат,
-    // что FeatureWorktreeErrorAsync/AttachWorktreeAsync: путь непустой, на диске и числится
-    // в `git worktree list` проекта. Не прошёл проверку — дерева нет (null): каталог читает
-    // main, как раньше. В отличие от гарда мержа — не 409: отсутствие дерева здесь фолбэк,
-    // а не ошибка. Ветка эпика не требуется: для чтения дерева она не нужна. Git выключен
-    // (null) или сбой git — fail-closed, main (не 500).
+    // W4-5 (п.5.1): проверенное дерево эпика для чтения каталога макетов. Предикат — общий
+    // с W4-5B2: GitService.VerifiedFeatureTreeAsync (тот же, что FeatureWorktreeErrorAsync/
+    // AttachWorktreeAsync). Не прошёл проверку — дерева нет (null): каталог читает main, как
+    // раньше. В отличие от гарда мержа — не 409: отсутствие дерева здесь фолбэк, а не ошибка.
+    // Ветка эпика не требуется: для чтения дерева она не нужна. Git выключен (null) или сбой
+    // git — fail-closed, main (не 500).
     private async Task<string?> FeatureTreePathAsync(TaskItem epic, Project project)
     {
-        if (string.IsNullOrWhiteSpace(epic.WorktreePath)) return null;
-        string path;
-        try
-        {
-            path = Path.GetFullPath(epic.WorktreePath.Trim());
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-        if (!Directory.Exists(path)) return null;
-        // Само основное дерево — не «дерево фичи»: второй вызов каталога был бы дублем.
-        if (PathNormalizer.NormalizePath(path) == PathNormalizer.NormalizePath(project.RootPath))
-            return null;
         if (git is null) return null;
-        IReadOnlyList<GitWorktreeInfo> list;
-        try
-        {
-            list = await git.WorktreeListAsync(UserId, project.RootPath);
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-        var wanted = PathNormalizer.NormalizePath(path);
-        return list.Any(w => PathNormalizer.NormalizePath(w.Path) == wanted) ? path : null;
+        return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, epic.WorktreePath);
     }
 
     // m1: основная ветка проекта — текущая ветка корня (git symbolic-ref). null — git выключен,

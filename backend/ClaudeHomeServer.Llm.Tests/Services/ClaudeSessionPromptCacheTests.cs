@@ -113,7 +113,7 @@ public class ClaudeSessionPromptCacheTests : IDisposable
     // Якорь последней записи — приход message_start вызова, писавшего кэш; строка assistant
     // (приходит после генерации) якорь не двигает
     [Fact]
-    public async Task LastWriteAtMs_ПоMessageStartПисавшегоВызова()
+    public async Task AnchorAtMs_ПоMessageStartПисавшегоВызова()
     {
         var (session, sent, clock) = NewSession();
         var run = NewRun();
@@ -125,12 +125,29 @@ public class ClaudeSessionPromptCacheTests : IDisposable
         await Drive(session, run, ResultLine(0, 80_000));
 
         var pc = LastPromptCache(sent)!;
-        pc.LastWriteAtMs.Should().Be(writeAt, "якорь — приход message_start, а не конец генерации");
+        pc.AnchorAtMs.Should().Be(writeAt, "якорь — приход message_start, а не конец генерации");
     }
 
-    // Вызов, который только читал кэш, якорь записи не двигает: последней остаётся настоящая запись
+    // API продлевает TTL и при попадании в чтение: вызов, который только читал кэш,
+    // двигает якорь на момент своего message_start
     [Fact]
-    public async Task ТолькоЧтение_ЯкорьЗаписиНеДвигает()
+    public async Task ТолькоЧтение_ЯкорьДвигаетсяПоКасанию()
+    {
+        var (session, sent, clock) = NewSession();
+        var run = NewRun();
+
+        await Drive(session, run, MessageStart(Usage(0, 50_000)));
+        clock.NowMs += 60_000;
+        var readAt = clock.NowMs;
+        await Drive(session, run, MessageStart(Usage(50_000, 0)));
+        await Drive(session, run, ResultLine(50_000, 0));
+
+        LastPromptCache(sent)!.AnchorAtMs.Should().Be(readAt);
+    }
+
+    // Вызов без касания кэша (ни чтения, ни записи) якорь не двигает
+    [Fact]
+    public async Task БезКасанияКэша_ЯкорьНеДвигается()
     {
         var (session, sent, clock) = NewSession();
         var run = NewRun();
@@ -138,10 +155,10 @@ public class ClaudeSessionPromptCacheTests : IDisposable
         await Drive(session, run, MessageStart(Usage(0, 50_000)));
         var writeAt = clock.NowMs;
         clock.NowMs += 60_000;
-        await Drive(session, run, MessageStart(Usage(50_000, 0)));
-        await Drive(session, run, ResultLine(50_000, 0));
+        await Drive(session, run, MessageStart(Usage(0, 0)));
+        await Drive(session, run, ResultLine(0, 0));
 
-        LastPromptCache(sent)!.LastWriteAtMs.Should().Be(writeAt);
+        LastPromptCache(sent)!.AnchorAtMs.Should().Be(writeAt);
     }
 
     // Причина промаха — diagnostics ПЕРВОГО вызова хода; последующие вызовы её не перетирают
@@ -179,7 +196,7 @@ public class ClaudeSessionPromptCacheTests : IDisposable
 
         var pc = LastPromptCache(sent)!;
         pc.MissReason.Should().Be(PromptCacheMissReason.None, "промах был у продолжения, а не у нашего хода");
-        pc.LastWriteAtMs.Should().Be(writeAt, "запись кэша продолжением настоящая — якорь от неё");
+        pc.AnchorAtMs.Should().Be(writeAt, "запись кэша продолжением настоящая — якорь от неё");
         pc.ReadTokens.Should().Be(70_000);
     }
 
@@ -259,6 +276,25 @@ public class ClaudeSessionPromptCacheTests : IDisposable
         await Drive(session3, run3, MessageStart(Usage(0, 10_000)));
         await Drive(session3, run3, ResultLine(0, 10_000));
         LastPromptCache(sent3)!.Ttl.Should().BeNull("ephemeral_* не пришёл — срок записи неизвестен");
+    }
+
+    // Реальная форма потока: разбивка ephemeral_* приходит только в usage строки assistant
+    // (в message_start её нет) — TTL берётся оттуда, якорь строкой assistant не двигается
+    [Fact]
+    public async Task Ttl_ИзUsageСтрокиAssistant_ЯкорьНеДвигается()
+    {
+        var (session, sent, clock) = NewSession();
+        var run = NewRun();
+
+        await Drive(session, run, MessageStart("""{"input_tokens":3,"cache_read_input_tokens":0,"cache_creation_input_tokens":80000}"""));
+        var writeAt = clock.NowMs;
+        clock.NowMs += 30_000;
+        await Drive(session, run, Assistant(Usage(0, 80_000, eph1h: 80_000)));
+        await Drive(session, run, ResultLine(0, 80_000));
+
+        var pc = LastPromptCache(sent)!;
+        pc.Ttl.Should().Be("1h");
+        pc.AnchorAtMs.Should().Be(writeAt);
     }
 
     // Вызов, который только читал кэш, TTL не стирает: наследует срок последней записи

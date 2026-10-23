@@ -7273,7 +7273,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // якорь последней записи, TTL и причина промаха — по стриму основного агента. Причина — только
     // у ПЕРВОГО вызова после эха: вызовы до эха принадлежат ход-продолжению CLI (см. эхо-ветку
     // в HandleStreamJson), а дальнейшие вызовы того же хода уже греют префикс им же.
-    private long? _promptCacheLastWriteMs;
+    private long? _promptCacheAnchorMs;
     private string? _promptCacheTtl;
     private bool _turnFirstCallSeen;
     private string? _turnFirstCallId;
@@ -7294,23 +7294,18 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     // message — объект message из stream_event/message_start основного агента (сабагентов
-    // отсекает HandleStreamEventAsync: у них свой кэш). Якорь записи — время прихода
-    // message_start вызова, который писал кэш: ближайшая к началу запроса точка, которую
+    // отсекает HandleStreamEventAsync: у них свой кэш). Якорь — время прихода message_start
+    // вызова, который ЧИТАЛ или ПИСАЛ кэш: API продлевает TTL записи и при попадании в чтение,
+    // поэтому отсчёт идёт от последнего касания. Это ближайшая к началу запроса точка, которую
     // видит сервер. Строку assistant якорь не двигает: она приходит после генерации и
-    // сдвинула бы отсчёт на время ответа (для неё — только страховка причины ниже).
+    // сдвинула бы отсчёт на время ответа (для неё — TTL и страховка причины ниже).
     private void TrackPromptCache(JsonElement message, bool isCallStart)
     {
         if (message.TryGetProperty("usage", out var u) && u.ValueKind == JsonValueKind.Object)
         {
-            if (isCallStart && IntProp(u, "cache_creation_input_tokens") > 0)
-                _promptCacheLastWriteMs = PromptCacheClock.GetUtcNow().ToUnixTimeMilliseconds();
-            // TTL последней записи: вызов, который только читал, наследует его — ephemeral_*
-            // в его usage описывает используемую запись кэша.
-            if (u.TryGetProperty("cache_creation", out var cc) && cc.ValueKind == JsonValueKind.Object)
-            {
-                if (IntProp(cc, "ephemeral_1h_input_tokens") > 0) _promptCacheTtl = "1h";
-                else if (IntProp(cc, "ephemeral_5m_input_tokens") > 0) _promptCacheTtl = "5m";
-            }
+            if (isCallStart && (IntProp(u, "cache_creation_input_tokens") > 0 || IntProp(u, "cache_read_input_tokens") > 0))
+                _promptCacheAnchorMs = PromptCacheClock.GetUtcNow().ToUnixTimeMilliseconds();
+            TrackPromptCacheTtl(u);
         }
 
         if (_turnFirstCallSeen) return;
@@ -7322,12 +7317,24 @@ public class ClaudeSession : ILlmSessionAdapter
         _turnMissedTokens = missed;
     }
 
+    // TTL последней записи: вызов, который только читал, наследует его — ephemeral_* в его
+    // usage описывает используемую запись кэша. Разбивка может прийти и в message_start, и
+    // только в строке assistant — поэтому зовётся с обеих сторон.
+    private void TrackPromptCacheTtl(JsonElement usage)
+    {
+        if (!usage.TryGetProperty("cache_creation", out var cc) || cc.ValueKind != JsonValueKind.Object) return;
+        if (IntProp(cc, "ephemeral_1h_input_tokens") > 0) _promptCacheTtl = "1h";
+        else if (IntProp(cc, "ephemeral_5m_input_tokens") > 0) _promptCacheTtl = "5m";
+    }
+
     // Второй источник диагностики (страховка, дешёвая): если message_start не принёс
     // diagnostics, причина промаха берётся из строки assistant ТОГО ЖЕ вызова — по id
     // сообщения, чтобы промах последующего вызова хода (его уже греет тул-луп) не считался
-    // промахом между ходами. Якорь и TTL здесь не двигаются.
+    // промахом между ходами. Якорь здесь не двигается; TTL — обновляется (см. TrackPromptCacheTtl).
     private void TrackPromptCacheMissFromAssistant(JsonElement message)
     {
+        if (message.TryGetProperty("usage", out var asstUsage) && asstUsage.ValueKind == JsonValueKind.Object)
+            TrackPromptCacheTtl(asstUsage);
         if (!_turnFirstCallSeen || _turnMissReason != PromptCacheMissReason.None) return;
         var id = message.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String
             ? idEl.GetString() : null;
@@ -7372,10 +7379,10 @@ public class ClaudeSession : ILlmSessionAdapter
         if (_providers?.ResolveByModel(EffectiveModel) is not null) return null;
         int read = usage?.CacheReadTokens ?? 0;
         int written = usage?.CacheCreationTokens ?? 0;
-        if (read == 0 && written == 0 && _promptCacheLastWriteMs is null && _promptCacheTtl is null
+        if (read == 0 && written == 0 && _promptCacheAnchorMs is null && _promptCacheTtl is null
             && _turnMissReason == PromptCacheMissReason.None && _turnMissedTokens is null)
             return null;
-        return new PromptCacheState(read, written, _promptCacheLastWriteMs, _promptCacheTtl, _turnMissedTokens, _turnMissReason);
+        return new PromptCacheState(read, written, _promptCacheAnchorMs, _promptCacheTtl, _turnMissedTokens, _turnMissReason);
     }
 
     // Оценка токенов по объёму текста. Грубость намеренная: сторож ловит РАЗНИЦУ

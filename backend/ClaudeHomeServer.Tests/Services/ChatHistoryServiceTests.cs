@@ -78,8 +78,9 @@ public class ChatHistoryServiceTests : IDisposable
 
     // Строковый контракт PromptCacheMissReason (шаг B-1r): JSON одного поля идентичен в обоих
     // каналах — history.json пишется _opts (конвертер добавлен ровно ради этого совпадения),
-    // SignalR/MVC — с JsonStringEnumConverter(CamelCase) из Program.cs. Атрибут на enum
-    // держится как гарантия строкового формата сериализаторам без глобального конвертера.
+    // SignalR/MVC — с JsonStringEnumConverter(CamelCase) из Program.cs. Конвертер и имена
+    // членов (JsonStringEnumMemberName, camelCase) заданы на самом enum — гарантия формата
+    // сериализаторам без глобального конвертера.
     // До фикса история отдавала число, а хаб — строку: фронте пришлось бы разбирать два
     // формата одного поля.
     [Fact]
@@ -103,6 +104,25 @@ public class ChatHistoryServiceTests : IDisposable
         (await _sut.LoadAsync(sessionId)).Should().ContainSingle()
             .Which.Should().BeOfType<StoredResultMessage>()
             .Which.PromptCache!.MissReason.Should().Be(PromptCacheMissReason.SystemChanged);
+    }
+
+    // Legacy-история хранила причину числом (порядок членов до явной фиксации): «3» — это
+    // Unavailable, а не следующий по текущему порядку член. Числа зафиксированы в enum явно.
+    [Theory]
+    [InlineData("0", PromptCacheMissReason.None)]
+    [InlineData("1", PromptCacheMissReason.SystemChanged)]
+    [InlineData("2", PromptCacheMissReason.MessagesChanged)]
+    [InlineData("3", PromptCacheMissReason.Unavailable)]
+    [InlineData("4", PromptCacheMissReason.PreviousMessageNotFound)]
+    [InlineData("5", PromptCacheMissReason.ModelChanged)]
+    [InlineData("6", PromptCacheMissReason.ToolsChanged)]
+    public void PromptCacheMissReason_legacy_число_читается_по_зафиксированному_номеру(string legacy, PromptCacheMissReason expected)
+    {
+        var json = $$"""{"readTokens":1,"writtenTokens":2,"anchorAtMs":null,"ttl":null,"missedTokens":null,"missReason":{{legacy}}}""";
+        var opts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        opts.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+
+        JsonSerializer.Deserialize<PromptCacheState>(json, opts)!.MissReason.Should().Be(expected);
     }
 
     [Fact]

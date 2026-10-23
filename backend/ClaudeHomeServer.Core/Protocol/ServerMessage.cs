@@ -249,33 +249,33 @@ public record ResultMessage(string Subtype, long DurationMs, int NumTurns, Usage
 // Причина промаха prompt cache первого вызова хода — из diagnostics.cache_miss_reason.type
 // API-ответа. None — промаха не было; Unavailable — промах есть, но известная причина не
 // названа (в том числе незнакомый type) — осознанно: новый тип API не приравнивается к
-// известным bucket'ам. Контракт — строка, не число: атрибут на типе гарантирует строковый
-// формат любому сериализатору, а точное написание (camelCase) совпадает с глобальными
-// опциями SignalR/MVC (Program.cs) и ChatHistoryService — проверка равенства JSON двух
-// каналов — в ChatHistoryServiceTests. Формулировки подписей — на фронте (promptCache.ts),
-// ключи — имена членов enum.
+// известным bucket'ам. Контракт — строка, не число: конвертер на типе гарантирует строковый
+// формат любому сериализатору, имена на проводе — camelCase (JsonStringEnumMemberName
+// задаёт их явно, не завися от naming policy сериализатора). Числовые значения зафиксированы
+// явно в legacy-порядке: JsonStringEnumConverter читает числа по номеру, и перестановка
+// членов сломала бы чтение старой истории. Формулировки подписей — на фронте (promptCache.ts).
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum PromptCacheMissReason
 {
-    None,
-    SystemChanged,            // system_changed — сменился системный промпт
-    MessagesChanged,          // messages_changed — изменилась история сообщений
-    PreviousMessageNotFound,  // previous_message_not_found — запись кэша истекла
-    ModelChanged,             // model_changed — сменилась модель
-    ToolsChanged,             // tools_changed — сменились инструменты
-    Unavailable,              // unavailable — причина неизвестна
+    [JsonStringEnumMemberName("none")] None = 0,
+    [JsonStringEnumMemberName("systemChanged")] SystemChanged = 1,                    // system_changed — сменился системный промпт
+    [JsonStringEnumMemberName("messagesChanged")] MessagesChanged = 2,                // messages_changed — изменилась история сообщений
+    [JsonStringEnumMemberName("unavailable")] Unavailable = 3,                        // unavailable — причина неизвестна
+    [JsonStringEnumMemberName("previousMessageNotFound")] PreviousMessageNotFound = 4, // previous_message_not_found — запись кэша истекла
+    [JsonStringEnumMemberName("modelChanged")] ModelChanged = 5,                      // model_changed — сменилась модель
+    [JsonStringEnumMemberName("toolsChanged")] ToolsChanged = 6,                      // tools_changed — сменились инструменты
 }
 
 // Состояние prompt cache на конец хода (фича «Индикатор prompt cache», шаг B-1).
 // ReadTokens/WrittenTokens — cache_read_input_tokens и cache_creation_input_tokens из
-// usage result'а хода; LastWriteAtMs — серверное UTC-время (мс) прихода message_start
-// последнего вызова основного агента, который писал кэш; Ttl — срок последней записи кэша,
+// usage result'а хода; AnchorAtMs — серверное UTC-время (мс) прихода message_start
+// последнего вызова основного агента, который читал или писал кэш (TTL продлевается и при чтении); Ttl — срок последней записи кэша,
 // "1h" | "5m" (usage.cache_creation.ephemeral_*), null — записи за жизнь процесса ещё не
 // видели; MissReason/MissedTokens — diagnostics первого вызова ПОСЛЕ эха нашего сообщения
 // (вызовы до эха — ход-продолжение CLI, а не наш ход), MissedTokens — cache_missed_input_tokens
 // того же diagnostics, null — промаха не было. Поле регистрируется (шаг B-1), интерфейс
 // фичи строится следующими шагами.
-public record PromptCacheState(int ReadTokens, int WrittenTokens, long? LastWriteAtMs, string? Ttl, int? MissedTokens, PromptCacheMissReason MissReason);
+public record PromptCacheState(int ReadTokens, int WrittenTokens, long? AnchorAtMs, string? Ttl, int? MissedTokens, PromptCacheMissReason MissReason);
 
 // Фактически списанная стоимость генерации fal.ai. Приходит асинхронно после tool_result:
 // сервер опрашивает fal.ai billing-events по request_id (см. FalCostService).

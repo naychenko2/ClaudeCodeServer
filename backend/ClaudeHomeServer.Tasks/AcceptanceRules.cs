@@ -90,6 +90,7 @@ public static class AcceptanceRules
     }
 
     // Исполнитель не меняет критерии: совпадающий список допустим (клиенты шлют поля целиком).
+    // Сравнение по множеству пар (Id, Text), порядок не важен: иное порядок давал бы ложный отказ.
     public static bool SameCriteria(IReadOnlyList<AcceptanceCriterion> a, IReadOnlyList<AcceptanceCriterion> b) =>
-        a.SequenceEqual(b);
+        a.Count == b.Count && a.ToHashSet().SetEquals(b);
 }

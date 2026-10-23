@@ -23,8 +23,9 @@ public class TasksToolsetParityTests
     private record StdioTool(string Name, JsonElement Schema);
 
     // tools/list живого stdio-сервера с заданным env: бэкенд не нужен (состав считается из
-    // env, в сеть сервер не ходит). null — node недоступен.
-    private static IReadOnlyList<StdioTool>? ListStdioTools(params (string Key, string Value)[] env)
+    // env, в сеть сервер не ходит). Недоступность не молчит: нет index.js — падение, нет node — явный
+    // skip с причиной в выводе (Skip.If бросает SkipException, результат «пропущен», а не «зелёный»).
+    private static IReadOnlyList<StdioTool> ListStdioTools(params (string Key, string Value)[] env)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
@@ -33,7 +34,7 @@ public class TasksToolsetParityTests
             if (File.Exists(candidate)) break;
             dir = dir.Parent;
         }
-        Skip.If(dir is null, "mcp/tasks-server/index.js не найден");
+        dir.Should().NotBeNull("mcp/tasks-server/index.js обязан лежать в репозитории");
 
         var psi = new System.Diagnostics.ProcessStartInfo
         {
@@ -50,8 +51,8 @@ public class TasksToolsetParityTests
 
         System.Diagnostics.Process? proc;
         try { proc = System.Diagnostics.Process.Start(psi); }
-        catch (Exception ex) { Skip.If(true, $"node недоступен: {ex.Message}"); return null; }
-        Skip.If(proc is null, "не удалось запустить node");
+        catch (Exception ex) { Skip.If(true, $"node недоступен: {ex.Message}"); throw; }
+        Skip.If(proc is null, "не удалось запустить node: сверка со stdio-веткой невозможна");
 
         using (proc!)
         {
@@ -81,7 +82,6 @@ public class TasksToolsetParityTests
     public void Состав_СовпадаетСоStdioВеткой()
     {
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
-        if (stdio is null) return;
         var expected = TasksToolset.ProjectChatTools.Select(t => t.Name).ToList();
         stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering(),
             "состав обязан совпадать с stdio-веткой отката");
@@ -100,7 +100,6 @@ public class TasksToolsetParityTests
     public void АварийнаяОсь_БезRunExecutor_СоставСовпадаетМинусОдин()
     {
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "0"));
-        if (stdio is null) return;
         var expected = TasksToolset.ProjectChatTools.Select(t => t.Name)
             .Where(n => n != "tasks_run_executor").ToList();
         stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
@@ -114,7 +113,6 @@ public class TasksToolsetParityTests
     public void RequiredНаборы_СовпадаютПосимвольно()
     {
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
-        if (stdio is null) return;
         var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
 
         foreach (var tool in stdio)
@@ -154,7 +152,6 @@ public class TasksToolsetParityTests
     public void EnumЗначения_СовпадаютПосимвольно()
     {
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
-        if (stdio is null) return;
         var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
         var stdioByName = stdio.ToDictionary(t => t.Name);
 
@@ -188,7 +185,6 @@ public class TasksToolsetParityTests
     public void EnumЗначения_ПровокацияHttpДополнительноеЗначение_Краснеет()
     {
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
-        if (stdio is null) return;
         var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
         var stdioByName = stdio.ToDictionary(t => t.Name);
 
@@ -209,7 +205,6 @@ public class TasksToolsetParityTests
     public void ВложенныеСхемы_AcceptanceИEvidence_СовпадаютСоStdio()
     {
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
-        if (stdio is null) return;
         var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
         var checkedPairs = 0;
 
@@ -217,7 +212,7 @@ public class TasksToolsetParityTests
         {
             var csharpProps = byName[tool.Name].InputSchema["properties"] as JsonObject;
             var stdioProps = JsonNode.Parse(tool.Schema.GetRawText())!["properties"] as JsonObject;
-            foreach (var prop in new[] { "acceptance", "evidence" })
+            foreach (var prop in new[] { "acceptance", "evidence", "verification" })
             {
                 var inCsharp = csharpProps?[prop] is not null;
                 (stdioProps?[prop] is not null).Should().Be(inCsharp,

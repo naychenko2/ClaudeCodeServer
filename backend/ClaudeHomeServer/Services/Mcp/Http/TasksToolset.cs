@@ -332,6 +332,7 @@ public sealed class TasksToolset(
                 {
                     Notes = verificationArg.Notes,
                     Verdict = verificationArg.Verdict,
+                    ReturnReason = verificationArg.ReturnReason,
                     VerifiedAt = DateTime.UtcNow,
                     PersonaId = session.PersonaId,
                 };
@@ -388,6 +389,9 @@ public sealed class TasksToolset(
                     // Агентский путь (MCP): isAgentCall=true — гард против затирания
                     // DroppedByHumanAt выдаёт внятный 400 вместо молчаливого 200 OK
                     // (фикс-волна 4 team-blocker-honest)
+                    // Исполнитель здесь = сессия привязана к задаче (session.TaskId == id), claim typ=svc
+                    // не сверяется: MCP всегда идёт под сервисным токеном, и эта дверь строже REST
+                    // (TasksController.Update). Правила двух дверей должны оставаться согласованными.
                     updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
                         callerIsExecutor: session.TaskId == id)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
@@ -435,6 +439,7 @@ public sealed class TasksToolset(
                 {
                     Notes = verificationArg.Notes,
                     Verdict = verificationArg.Verdict,
+                    ReturnReason = verificationArg.ReturnReason,
                     VerifiedAt = DateTime.UtcNow,
                     PersonaId = session.PersonaId,
                 };
@@ -1000,6 +1005,7 @@ public sealed class TasksToolset(
         {
             Notes = OptionalArg(ver, "notes"),
             Verdict = OptionalArg(ver, "verdict"),
+            ReturnReason = OptionalArg(ver, "returnReason"),
         };
 
     // Критерии приёмки: [{id?, text}]; id пустой — присвоит TaskManager. null — ключа нет, не менять
@@ -1493,6 +1499,13 @@ public sealed class TasksToolset(
                 ["type"] = "string",
                 ["enum"] = StringArray(TaskVerdicts.All),
                 ["description"] = "Исход витка: accepted · accepted_with_remarks · returned · withdrawn",
+            },
+            ["returnReason"] = new JsonObject
+            {
+                ["type"] = "string",
+                ["enum"] = StringArray(TaskReturnReasons.All),
+                ["description"] = "Причина возврата (только при verdict=returned; other — с текстом в notes): " +
+                    "size · side-effect · contract · robustness · quality · other",
             },
         },
     };

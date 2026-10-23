@@ -215,4 +215,54 @@ public class TasksAcceptanceGateTests : IClassFixture<TestWebApplicationFactory>
         isError.Should().BeTrue();
         denyText.Should().Contain("c2").And.NotContain("c1:").And.NotContain("c3:");
     }
+
+    [Fact]
+    public async Task Rest_СервисныйТокен_СессияЧужогоВладельца_Исполнитель_400()
+    {
+        var setter = await CreateSessionAsync();
+        var foreign = await CreateSessionAsync();
+        var id = await CreateTaskWithThreeCriteriaAsync(setter);
+        // Сессия чужого владельца (вне проекта), к задаче не привязана: по ней нельзя «стать постановщиком»
+        var info = _factory.Services.GetRequiredService<SessionManager>().GetById(foreign)!;
+        info.ProjectId = null;
+        info.OwnerId = "чужой-владелец";
+
+        var resp = await ServiceClient(foreign).PutAsJsonAsync($"/api/tasks/{id}", new { acceptance = RewrittenCriteria });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, "fail-closed: чужая сессия не смягчает правило");
+    }
+
+    // Причина возврата: одинаковые правила на MCP (Deny) и REST (400), валидная причина сохраняется
+    [Fact]
+    public async Task ПричинаВозврата_McpИRest_ОдинаковыеПравила()
+    {
+        var sessionId = await CreateSessionAsync();
+        async Task<string> NewTaskId()
+        {
+            var (t, err) = await CallToolAsync(sessionId, "tasks_create", new { title = "ревью" });
+            err.Should().BeFalse(t);
+            return JsonSerializer.Deserialize<JsonElement>(t).GetProperty("id").GetString()!;
+        }
+
+        // MCP: причина при accepted и вне списка — отказ; returned + size — сохраняется
+        var id = await NewTaskId();
+        var (t1, e1) = await CallToolAsync(sessionId, "tasks_complete", new { id, verification = new { verdict = "accepted", returnReason = "size" } });
+        e1.Should().BeTrue(t1);
+        var (t2, e2) = await CallToolAsync(sessionId, "tasks_complete", new { id, verification = new { verdict = "returned", returnReason = "придумал" } });
+        e2.Should().BeTrue(t2);
+        var (t3, e3) = await CallToolAsync(sessionId, "tasks_complete", new { id, verification = new { verdict = "returned", returnReason = "contract", notes = "n" } });
+        e3.Should().BeFalse(t3);
+        JsonSerializer.Deserialize<JsonElement>(t3).GetProperty("verification").GetProperty("returnReason").GetString().Should().Be("contract");
+
+        // REST: те же отказы и то же сохранение
+        var rid = await NewTaskId();
+        (await _client.PutAsJsonAsync($"/api/tasks/{rid}", new { status = "done", verification = new { verdict = "accepted", returnReason = "size" } }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await _client.PutAsJsonAsync($"/api/tasks/{rid}", new { status = "done", verification = new { verdict = "returned", returnReason = "other" } }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest, "other требует notes");
+        var ok = await _client.PutAsJsonAsync($"/api/tasks/{rid}", new { status = "done", verification = new { verdict = "returned", returnReason = "quality" } });
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, await ok.Content.ReadAsStringAsync());
+        JsonSerializer.Deserialize<JsonElement>(await ok.Content.ReadAsStringAsync())
+            .GetProperty("verification").GetProperty("returnReason").GetString().Should().Be("quality");
+    }
 }

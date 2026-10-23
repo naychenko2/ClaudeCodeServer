@@ -386,6 +386,8 @@ public class TasksController(
                     // Дефект a7b3b85d: verdict терялся при PUT (MCP tasks_complete его копировал,
                     // REST — нет) — через REST нельзя было закрыть review/qa/final фичи с вердиктом.
                     Verdict = req.Verification.Verdict,
+                    ReturnReason = string.IsNullOrWhiteSpace(req.Verification.ReturnReason)
+                        ? null : req.Verification.ReturnReason.Trim(),
                 },
             };
         }
@@ -411,6 +413,9 @@ public class TasksController(
             var callerSession = callerSessionHeader is not null
                 && sessions.GetById(callerSessionHeader) is { } cs
                 && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
+            // Дверь MCP (TasksToolset) строже REST: исполнитель там определяется только по
+            // session.TaskId == id, без claim typ=svc (MCP всегда под сервисным токеном). Правила двух
+            // дверей обязаны оставаться согласованными: ослабление одной открывает обход через другую.
             var callerIsExecutor =
                 User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
                 && (callerSession is null || callerSession.TaskId == taskId);

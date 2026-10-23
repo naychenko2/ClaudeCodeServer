@@ -188,4 +188,38 @@ public class AcceptanceTests : IDisposable
 
         act.Should().Throw<InvalidOperationException>();
     }
+
+    [Fact]
+    public void ЯвныйNullВJson_ЧитаетсяПустымиСпискамиБезПадения()
+    {
+        var item = System.Text.Json.JsonSerializer.Deserialize<TaskItem>(
+            """{"id":"old-2","title":"после ручной правки","acceptance":null,"evidence":null}""",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+
+        item.Acceptance.Should().NotBeNull().And.BeEmpty();
+        item.Evidence.Should().NotBeNull().And.BeEmpty();
+    }
+
+    [Fact]
+    public void Исполнитель_ТеЖеКритерииВДругомПорядке_Проходит()
+    {
+        var task = TaskWithThreeCriteria();
+        var reordered = task.Acceptance.AsEnumerable().Reverse().ToList();
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(Acceptance: reordered),
+            isAgentCall: true, callerIsExecutor: true)!;
+
+        updated.Acceptance.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void SameCriteria_РазныйТекстИлиСоставПриТомЖеЧисле_НеРавны()
+    {
+        AcceptanceCriterion[] a = [new("c1", "x"), new("c2", "y")];
+
+        AcceptanceRules.SameCriteria(a, [new("c2", "y"), new("c1", "x")]).Should().BeTrue();
+        AcceptanceRules.SameCriteria(a, [new("c1", "x"), new("c2", "иначе")]).Should().BeFalse();
+        AcceptanceRules.SameCriteria(a, [new("c1", "x"), new("c3", "y")]).Should().BeFalse();
+        AcceptanceRules.SameCriteria(a, [new("c1", "x")]).Should().BeFalse();
+    }
 }

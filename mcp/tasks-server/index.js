@@ -373,6 +373,12 @@ const VERIFICATION_SCHEMA = {
       enum: ['accepted', 'accepted_with_remarks', 'returned', 'withdrawn'],
       description: 'Исход витка: accepted · accepted_with_remarks · returned · withdrawn',
     },
+    returnReason: {
+      type: 'string',
+      enum: ['size', 'side-effect', 'contract', 'robustness', 'quality', 'other'],
+      description: 'Причина возврата (только при verdict=returned; other — с текстом в notes): ' +
+        'size · side-effect · contract · robustness · quality · other',
+    },
   },
 };
 

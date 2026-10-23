@@ -432,6 +432,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // чтобы при отказе состояние менеджера не изменилось)
         ValidateFeatureFields(task.FeatureId, task.Role, task.Verification?.Verdict,
             task.ReviewOf, task.PersonaId, ownerId);
+        EnsureReturnReason(task.Verification);
         _tasks[task.Id] = task;
         // created: эпик фичи — первая запись её журнала (журнал точный, только если
         // начинается с created; дочерние задачи фичи created не пишут).
@@ -476,6 +477,13 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // по нему сверяются ВСЕ ссылки (эпик и reviewOf), иначе чужой владелец читал бы разметку.
     // Бросает InvalidOperationException с внятным текстом — вызывающая сторона превращает в 400.
     // Тихо отбрасывать неверное значение нельзя: агент не узнает, что разметка не легла.
+    // Причина возврата проверяется только у присланного вердикта: хранимый уже прошёл проверку при записи
+    private static void EnsureReturnReason(TaskVerification? verification)
+    {
+        if (verification is null) return;
+        TaskReturnReasons.Validate(verification.Verdict, verification.ReturnReason, verification.Notes);
+    }
+
     private void ValidateFeatureFields(
         string? featureId, string? role, string? verdict,
         List<string>? reviewOf, string? personaId, string ownerId)
@@ -682,6 +690,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var effReviewOf = req.ReviewOf is null ? task.ReviewOf : req.ReviewOf;
         var effPersonaId = req.PersonaId is null ? task.PersonaId : (req.PersonaId == "" ? null : req.PersonaId);
         ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "");
+        EnsureReturnReason(req.Verification);
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;

@@ -109,7 +109,9 @@ public class ReturnReasonTests : IDisposable
     [Fact]
     public void Создание_ПричинаСПробелами_СохраняетсяБезПробелов()
     {
+        // Вердикт хранится только у закрытой задачи (Create обнуляет его у незакрытой)
         var task = _sut.Create(null, "u", new CreateTaskRequest("t",
+            Status: TaskItemStatus.Done,
             Verification: V(TaskVerdicts.Returned, " quality ")));
 
         task.Verification!.ReturnReason.Should().Be("quality");

@@ -1656,10 +1656,8 @@ public sealed class TasksToolset(
         },
         // Инструкция (минор 7, паритет со stdio-веткой mcp/tasks-server/index.js): планировщик
         // заполняет planSteps, а доработка (role=rework) обязана ссылаться на review/qa/final.
-        ["description"] = "ПЛАН: задача role=plan заполняет planSteps — структурный список шагов "
-            + "[{stepRef, title, lane}]; stepRef непуст и уникален. Markdown плана — проза, "
-            + "знаменатель «сколько всего» берётся из planSteps. Доработка (role=rework) ОБЯЗАНА "
-            + "ссылаться на review/qa/final той же фичи через reviewOf — иначе 400 (связь обязательна).",
+        ["description"] = "Шаги плана (role=plan), stepRef уникален. "
+            + "rework обязан ссылаться на review/qa/final через reviewOf, иначе 400",
     };
 
     private static McpToolSchema Tool(string name, string description, JsonObject schema) =>

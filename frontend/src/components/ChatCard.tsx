@@ -1108,7 +1108,13 @@ function ChatCardView({
                 data-testid="chat-feature-role"
                 title={isKey && !canHover ? KEY_SESSION_TOOLTIP : undefined}
                 style={{
-                  display: 'inline-flex', flexShrink: 0, alignItems: 'center',
+                  // Минор Глеба (24.10): метка не должна выталкивать имя чата из
+                  // строки на 360 px. Текст уже короткий (первая пара + «· ещё N»,
+                  // см. featureRoleFor), а длинное название одной фичы обрезается
+                  // здесь: ellipsis работает только на box, содержащем текст
+                  // напрямую, — поэтому inline-block, а не inline-flex.
+                  display: 'inline-block', flexShrink: 0, maxWidth: 140,
+                  overflow: 'hidden', textOverflow: 'ellipsis',
                   fontFamily: FONT.mono, fontSize: FS.xs,
                   fontWeight: isKey ? 700 : 400,
                   color: isKey ? C.accent : C.textSecondary,

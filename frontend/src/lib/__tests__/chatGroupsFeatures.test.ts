@@ -8,7 +8,8 @@
 //   2. У чата без фичи — группа родителя (рекурсивно); корень без фичи — «Без фичи».
 //   3. Ребро живёт в группе, где есть и родитель; иначе ребёнок всплывает в корень.
 //   4. ParentOverrideId не обрабатывается отдельно (уже в parentSessionId).
-//   5. Висячий featureId (нет в features[]) группы не создаёт — чат в «Без фичи».
+//   5. Висячий featureId (нет в features[]) группы не создаёт — чат идёт по п.2
+//      (группа родителя, рекурсивно); в «Без фичи» — только если цепочка родителей тоже без фичи.
 //
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
@@ -143,7 +144,7 @@ describe('groupByFeatures: «Без фичи»', () => {
     expect(groups[0].sessions.find(c => c.id === 'child')?.parentSessionId).toBe('root');
   });
 
-  it('висячий featureId (нет в features[]) тоже уходит в «Без фичи»', () => {
+  it('висячий featureId (нет в features[]) без родителя — уходит в «Без фичи»', () => {
     const feats = [feature('A', 'running')];
     // чат ссылается на фичу 'GHOST', которой нет в features[]
     const idx = index(feats, { 'ghost': [link('GHOST')] });
@@ -152,6 +153,26 @@ describe('groupByFeatures: «Без фичи»', () => {
     const noFeat = groups.find(g => g.feature === null);
     expect(noFeat).toBeDefined();
     expect(noFeat!.sessions.map(c => c.id).sort()).toEqual(['a', 'ghost']);
+  });
+
+  it('висячий featureId + родитель в фиче → группа родителя, а не «Без фичи» (правило 5)', () => {
+    // Мутация (в отчёте): если resolve() не рекурсирует к родителю, child попадает
+    // в «Без фичи» — группа не одна, и тест краснеет.
+    const feats = [feature('A', 'running')];
+    const idx = index(feats, {
+      'parent': [link('A', 'key')],   // родитель — в фиче A
+      'ghostChild': [link('GHOST')],  // у child только висячая ссылка
+    });
+    const groups = groupByFeatures(
+      [chat('parent'), chat('ghostChild', { parentSessionId: 'parent' })],
+      idx,
+    );
+    // одна группа — A; «Без фичи» нет
+    expect(groups).toHaveLength(1);
+    expect(groups[0].feature?.featureId).toBe('A');
+    expect(groups[0].sessions.map(c => c.id).sort()).toEqual(['ghostChild', 'parent']);
+    // ребро parent→child внутри одной группы — сохранено
+    expect(groups[0].sessions.find(c => c.id === 'ghostChild')?.parentSessionId).toBe('parent');
   });
 });
 
@@ -400,17 +421,18 @@ describe('M2: sharedFeatureTitles (пометка «общий с …»)', () =>
 });
 
 // === M3: роль чата в группе — по id САМОЙ строки, не замыканием корня ===
-// featureRoleFor: «ключевой» (ключевой чат фичи) и/или «общий с <названия>» (чат
+// featureRoleFor: «ключевой» (ключевой чат фичи) и/или «общий с …» (чат
 // показывается и в группах других своих фич). Считается по id строки: ChatTreeBranch
 // рекурсивно передаёт renderCard потомкам, и замыкание роли корня лило её на всё
 // поддерево (M3). Мутация (в отчёте): роль по фиксированному id (корню) вместо id
 // строки — «plain» (не ключевой, не мультифичевый) получает «ключевой», тест краснеет.
+// Формат метки ограничен (минор Глеба, 24.10): первая другая фича + «· ещё N».
 describe('M3: featureRoleFor (роль по id строки, пометка «общий с …»)', () => {
   const feats = [feature('A', 'running'), feature('B', 'running'), feature('C', 'running')];
   const idx = index(feats, {
     // key — ключевой чат фичи A, ровно одна фича
     'key': [link('A', 'key')],
-    // multi — мультифичевый: A + B + C → в группе A пометка «общий с Фича B, Фича C»
+    // multi — мультифичевый: A + B + C → в группе A пометка «общий с Фича B · ещё 1»
     'multi': [link('A', 'executor'), link('B', 'executor'), link('C', 'executor')],
     // plain — одна фича (A), не ключевой → метки нет
     'plain': [link('A', 'executor')],
@@ -419,18 +441,32 @@ describe('M3: featureRoleFor (роль по id строки, пометка «о
   it('ключевой чат: «ключевой» (без других фич) / «ключевой · общий с …» (с другими)', () => {
     // key — ровно A → «ключевой»
     expect(featureRoleFor('key', 'key', idx, 'A')).toBe('ключевой');
-    // multi — A + B + C, ключевой = multi → «ключевой · общий с Фича B, Фича C»
-    expect(featureRoleFor('multi', 'multi', idx, 'A')).toBe('ключевой · общий с Фича B, Фича C');
+    // multi — A + B + C, ключевой = multi → первая другая + счётчик
+    expect(featureRoleFor('multi', 'multi', idx, 'A')).toBe('ключевой · общий с Фича B · ещё 1');
   });
 
-  it('не-ключевой мультифичевый: «общий с …» в каждой группе — с другими названиями', () => {
-    // multi не ключевой (keyId='key') → в группе A — B и C, в группе B — A и C
-    expect(featureRoleFor('multi', 'key', idx, 'A')).toBe('общий с Фича B, Фича C');
-    expect(featureRoleFor('multi', 'key', idx, 'B')).toBe('общий с Фича A, Фича C');
+  it('не-ключевой мультифичевый: «общий с …» в каждой группе — первая другая + «· ещё N»', () => {
+    // multi не ключевой (keyId='key') → в группе A названа B, остальные — счётчиком
+    expect(featureRoleFor('multi', 'key', idx, 'A')).toBe('общий с Фича B · ещё 1');
+    expect(featureRoleFor('multi', 'key', idx, 'B')).toBe('общий с Фича A · ещё 1');
     // plain — одна фича, не ключевой → undefined
     expect(featureRoleFor('plain', 'key', idx, 'A')).toBeUndefined();
     // ghost — не в индексе → undefined
     expect(featureRoleFor('ghost', 'key', idx, 'A')).toBeUndefined();
+  });
+
+  it('ровно одна другая фича — счётчика «· ещё» нет', () => {
+    const two = index([feature('A'), feature('B')], { 'pair': [link('A'), link('B')] });
+    expect(featureRoleFor('pair', null, two, 'A')).toBe('общий с Фича B');
+  });
+
+  it('длина ограничена: четыре фичы → названа первая, остальные — «· ещё 2»', () => {
+    const four = index(
+      [feature('A'), feature('B'), feature('C'), feature('D')],
+      { 'multi': [link('A'), link('B'), link('C'), link('D')] },
+    );
+    // Полный список («Фича B, Фича C, Фича D») на 360 px выталкивал имя чата из строки
+    expect(featureRoleFor('multi', null, four, 'A')).toBe('общий с Фича B · ещё 2');
   });
 });
 

@@ -214,8 +214,9 @@ export interface FeatureChatGroup {
 //      иначе ребёнок становится корнем в своей группе (всплывает — как у висячего родителя).
 //   4. ParentOverrideId не обрабатывается отдельно: он уже в parentSessionId и
 //      подчиняется п.3 — ручной родитель действует внутри фичи, через границу всплывает.
-//   5. Висячий featureId (нет в features[]) группы не создаёт — такой чат уходит в
-//      «Без фичи».
+//   5. Висячий featureId (нет в features[]) группы не создаёт: у чата с ним своей
+//      группы нет, и он идёт по п.2 — в группу родителя (рекурсивно); в «Без фичи»
+//      уходит только если и цепочка родителей без фичи.
 //
 // Порядок групп = порядок features[] бэка (OrderRuns; фронт НЕ пересортировывает).
 // Закрытые фичи (bucket=closed) уже в конце OrderRuns — это и есть «отдельная секция»;
@@ -292,8 +293,8 @@ export function groupByFeatures(
     if (!items) continue; // фича без чатов — секцию не рисуем
     groups.push({ feature: f, title: f.title, sessions: withEffectiveParent(items, f.featureId) });
   }
-  // «Без фичи» — хвост: чаты без известной фичи (в том числе с висячими featureId —
-  // они уже попали в null, отдельной группы для них нет).
+  // «Без фичи» — хвост: чаты, у которых нет ни своей известной фичи, ни группы
+  // родителя (в том числе с висячими featureId при пустой цепочке родителей).
   const rest = byGroup.get(null);
   if (rest && rest.length) {
     groups.push({ feature: null, title: 'Без фичи', sessions: withEffectiveParent(rest, null) });
@@ -555,6 +556,19 @@ export function drawnClosedFeatures(features: FeatureIndexFeature[]): number {
   return features.filter(f => f.bucket === 'closed' && f.chatCount > 0).length;
 }
 
+// Карту фич по featureId строим ОДИН раз на объект индекса (WeakMap — живёт, пока
+// живёт сам index). Без неё sharedFeatureTitles на каждую строку списка делала
+// линейный .find по features[] для каждой ссылки чата (минор Глеба, 24.10).
+const featureTitleIndex = new WeakMap<FeaturesIndex, Map<string, FeatureIndexFeature>>();
+function titleIndex(index: FeaturesIndex): Map<string, FeatureIndexFeature> {
+  let m = featureTitleIndex.get(index);
+  if (!m) {
+    m = new Map(index.features.map(f => [f.featureId, f]));
+    featureTitleIndex.set(index, m);
+  }
+  return m;
+}
+
 // Названия ДРУГИХ известных фич чата (кроме текущей группы) — для пометки «общий с …»
 // (решение Андрея 24.10, вариант 1): мультифичевый чат показывается в группе каждой
 // своей фичы, а пометка называет остальные его группы. Висячие featureId (нет в
@@ -562,11 +576,12 @@ export function drawnClosedFeatures(features: FeatureIndexFeature[]): number {
 export function sharedFeatureTitles(chatId: string, groupId: string, index: FeaturesIndex): string[] {
   const links = index.chats[chatId];
   if (!links) return [];
+  const map = titleIndex(index);
   const out: string[] = [];
   const seen = new Set<string>();
   for (const l of links) {
     if (l.featureId === groupId || seen.has(l.featureId)) continue;
-    const f = index.features.find(x => x.featureId === l.featureId);
+    const f = map.get(l.featureId);
     if (!f) continue;
     seen.add(l.featureId);
     out.push(f.title);
@@ -580,17 +595,23 @@ export function sharedFeatureTitles(chatId: string, groupId: string, index: Feat
 // для него больше нет — ссылка дублировала бы сам чат.
 
 // Роль чата в группе фичи (макет features-overview.html, .fg .kids): «ключевой»
-// (ключевой чат фичи) и/или «общий с <названия>» (чат показывается и в группах других
+// (ключевой чат фичи) и/или «общий с …» (чат показывается и в группах других
 // своих фич — решение Андрея 24.10, вариант 1). Считается по id САМОЙ строки, а не
 // замыканием корня: ChatTreeBranch рекурсивно передаёт renderCard потомкам, и роль
 // корня лилась на всё поддерево (M3). undefined — метки нет (чат не ключевой и не
 // мультифичевый).
+// Метка ограничена по длине (минор Глеба, 24.10): называем ПЕРВУЮ другую фичу,
+// остальные — счётчиком «· ещё N». Полный список на 360 px выталкивал имя чата
+// из строки; сам чип дополнительно обрезан maxWidth+ellipsis (ChatCard).
 export function featureRoleFor(
   sessionId: string, keyId: string | null, index: FeaturesIndex, groupId: string,
 ): string | undefined {
   const others = sharedFeatureTitles(sessionId, groupId, index);
-  if (sessionId === keyId) return others.length ? `ключевой · общий с ${others.join(', ')}` : 'ключевой';
-  return others.length ? `общий с ${others.join(', ')}` : undefined;
+  if (others.length === 0) return sessionId === keyId ? 'ключевой' : undefined;
+  const shared = others.length === 1
+    ? `общий с ${others[0]}`
+    : `общий с ${others[0]} · ещё ${others.length - 1}`;
+  return sessionId === keyId ? `ключевой · ${shared}` : shared;
 }
 
 // Подсказка у метки «ключевой» (волна 2, Ф3.2): что значит «ключевой чат» —

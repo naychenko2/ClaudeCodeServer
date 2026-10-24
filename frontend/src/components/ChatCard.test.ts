@@ -190,10 +190,16 @@ describe('Ф3.2: метка «ключевой» (группа, SSR)', () => {
     expect(html).toContain('ключевой');
   });
 
-  it('«ещё N» (не ключевой) — метка «ещё 2», без слова «ключевой»', () => {
-    const html = renderRoleCard('ещё 2');
+  it('«общий с …» (не ключевой) — метка живым форматом, без слова «ключевой»', () => {
+    // Мёртвый формат «ещё 2» (минор Глеба, 24.10): featureRoleFor так больше не
+    // выдаёт — берём то, что реально строится: первая пара + «· ещё N».
+    const html = renderRoleCard('общий с Фича B · ещё 2');
     expect(html).toContain('data-testid="chat-feature-role"');
-    expect(html).toContain('ещё 2');
+    expect(html).toContain('общий с Фича B · ещё 2');
+    // Ограничение длины (минор 2): чип не выталкивает имя чата из строки на 360 px —
+    // maxWidth + ellipsis. Мутация (убрать maxWidth) краснит этот тест.
+    expect(html).toContain('max-width:140px');
+    expect(html).toContain('text-overflow:ellipsis');
   });
 });
 

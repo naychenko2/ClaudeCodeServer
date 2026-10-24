@@ -43,6 +43,9 @@ export function Modal({
   closeOnBackdrop = true, hideCloseButton = false, children, cardStyle, size = 'default', header,
 }: ModalProps) {
   const isMobile = useIsMobileModal();
+  // Проверка на truthy, а не на null: header={cond && <X/>} при ложном cond даёт false,
+  // и заголовок не должен уходить в фиксированную обёртку пустой шапки
+  const hasHeader = Boolean(header);
 
   useEffect(() => {
     // preventDefault — сигнал нижележащим слоям (оверлей «Стены» и любой будущий),
@@ -145,7 +148,7 @@ export function Modal({
         >
           {fsHeader}
           {/* Тело fullscreen без отступов — отступы шапки задаёт сам потребитель */}
-          {header != null && <div style={{ flexShrink: 0 }}>{header}</div>}
+          {hasHeader && <div style={{ flexShrink: 0 }}>{header}</div>}
           <div style={{
             flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column',
             WebkitOverflowScrolling: 'touch',
@@ -202,7 +205,7 @@ export function Modal({
           </div>
           {/* С шапкой тела заголовок уходит к ней, вне скролла: иначе он уезжал бы, а
               поиск под ним оставался — шапка оказалась бы над заголовком */}
-          {header != null && (
+          {hasHeader && (
             <div style={{ padding: '8px 18px 0', display: 'flex', flexDirection: 'column', gap: 16, flexShrink: 0 }}>
               {headerRow}
               {header}
@@ -213,7 +216,7 @@ export function Modal({
             padding: '8px 18px 16px', display: 'flex', flexDirection: 'column', gap: 16,
             overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch',
           }}>
-            {header == null && headerRow}
+            {!hasHeader && headerRow}
             {children}
           </div>
           {/* Действия — прижаты к низу, учитываем safe-area iOS */}
@@ -250,14 +253,14 @@ export function Modal({
           ...cardStyle,
         }}
       >
-        {header != null && (
+        {hasHeader && (
           <div style={{ padding: '26px 28px 0', display: 'flex', flexDirection: 'column', gap: 18, flexShrink: 0 }}>
             {headerRow}
             {header}
           </div>
         )}
         <div className="cc-modal-content" style={{
-          padding: header != null
+          padding: hasHeader
             ? `${SP.md}px 28px ${footer ? 20 : 28}px`
             : footer ? '26px 28px 20px' : 28,
           display: 'flex', flexDirection: 'column', gap: 18,
@@ -267,7 +270,7 @@ export function Modal({
           // Класс — против сжатия детей (см. .cc-modal-content в index.css).
           overflowY: 'auto', flex: 1, minHeight: 0,
         }}>
-          {header == null && headerRow}
+          {!hasHeader && headerRow}
           {children}
         </div>
         {footer && (

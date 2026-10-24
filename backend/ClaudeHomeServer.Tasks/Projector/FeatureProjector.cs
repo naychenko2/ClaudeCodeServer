@@ -1113,18 +1113,21 @@ public sealed class FeatureProjector(TaskManager tasks)
 
     // «Задача держится, не идёт» (дефект 4a241bee, консалт f5edf92c): её держит человек
     // (AwaitingHumanSince) или исполнитель встал (валидная пометка остановки). Статус здесь
-    // НЕ проверяется: зовущие сами ограничивают InProgress (nowList, stoppedTask, ветки
-    // ExecutorStatus), закрытые отсекаются CompletedAt/Done раньше. Защита от устаревшей
+    // НЕ проверяется: зовущие сами ограничивают InProgress (nowList, ветки ExecutorStatus),
+    // закрытые отсекаются CompletedAt/Done раньше (LongestNow). Защита от устаревшей
     // пометки — та же, что у тревоги (HasValidStopMark): «устаревшая» пометка (раньше
     // ClaudeStartedAt) — не остановка, задача идёт. Единая точка правды «держится»: её
-    // зовут nowList, половины stoppedTask/waitTask, LongestNow (FeatureBreakdown) и
-    // ветки ExecutorStatus — своих копий правила нигде нет.
+    // зовут nowList, LongestNow (FeatureBreakdown) и ветки ExecutorStatus; stoppedTask и
+    // waitTask её не зовут — их половины расписаны прямо (:118–119, :133). Своей копии
+    // правила нигде нет.
     internal static bool IsHeld(TaskItem t)
         => t.AwaitingHumanSince is not null || HasValidStopMark(t);
 
     // Б2: статус исполнителя из полей задачи. Приоритет: running (ход идёт сейчас —
-    // IsTurnRunning) → waiting (AwaitingHumanSince) → stopped (валидная пометка остановки)
-    // → done (Done) → pending (остальное, в том числе не стартовала).
+    // IsTurnRunning) → stopped (валидная пометка остановки) → waiting (AwaitingHumanSince)
+    // → done (Done) → pending (остальное, в том числе не стартовала). stopped раньше wait —
+    // тот же приоритет, что у тревоги и state (хвост 4a241bee): у задачи с обоими маркерами
+    // тон стадии и чип исполнителя не расходятся.
     // waiting/stopped — половины IsHeld (выше, рядом с IsTurnRunning), тот же guard, что у тревоги: только
     // InProgress-задачи с валидной пометкой; закрытая вручную (Done) задача со stale-пометками
     // не «stopped»/«waiting» (тревоги по ней тоже нет), как и у тревоги. InProgress-задача со
@@ -1135,7 +1138,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         if (IsTurnRunning(t))
             return "running";
         if (t.Status == TaskItemStatus.InProgress && IsHeld(t))
-            return t.AwaitingHumanSince is not null ? "waiting" : "stopped";
+            return HasValidStopMark(t) ? "stopped" : "waiting";
         if (t.Status == TaskItemStatus.Done)
             return "done";
         return "pending";

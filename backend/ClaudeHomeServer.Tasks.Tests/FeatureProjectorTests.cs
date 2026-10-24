@@ -833,6 +833,31 @@ public class FeatureProjectorTests
         run.Now.Should().BeEmpty("держится — не «Сейчас»");
     }
 
+    // п.1б: тот же случай «оба маркера» — статус исполнителя: stopped раньше wait, как у
+    // тревоги и state (хвост 4a241bee): иначе тон стадии «стоит», а чип «ждёт вас» — и
+    // плашка стадии не находит исполнителя со status='stopped'. Мутация: вернуть старый
+    // порядок (проверка AwaitingHumanSince первой, FeatureProjector.cs) → «waiting» → краснеет.
+    [Fact]
+    public void Build_ОбаМаркера_СтатусИсполнителяStoppedПриоритетНадWait()
+    {
+        var t = new DateTime(2026, 10, 17, 10, 0, 0);
+        var epic = new TaskItem { Id = "epic-both-exec", Role = TaskRoles.Feature };
+        var both = new TaskItem
+        {
+            Id = "b1", FeatureId = "epic-both-exec", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = t,
+            ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed",
+            AwaitingHumanSince = t.AddMinutes(40), AwaitingHumanReason = "ждём подтверждения",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, both]);
+
+        var prod = Stage(run, "prod");
+        prod.Executors.Should().HaveCount(1);
+        prod.Executors[0].Status.Should().Be("stopped", "оба маркера — stopped: чип не расходится с тоном стадии");
+    }
+
     // п.2в: InProgress-задача со stale-пометкой (ExecutorStoppedAt < ClaudeStartedAt) — не
     // «stopped»: тот же guard, что у тревоги и Now (HasValidStopMark). Статус «pending» —
     // остаток: ход не идёт (IsTurnRunning требует отсутствия пометки), валидной остановки нет.

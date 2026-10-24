@@ -1,3 +1,4 @@
+using System.Text;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Tasks.Projector;
 
@@ -12,7 +13,8 @@ namespace ClaudeHomeServer.Services.Tasks;
 // вызова модели. После перезапуска резюме считается заново по кнопке: диск не заводим —
 // цена ошибки один дешёвый вызов, а файл в data/ тянет за собой бэкап и схему.
 // Отказ модели (таймаут LlmTimeoutException, пустой ответ) — исключение; ручка гасит его
-// в честный 502 с причиной.
+// в честный 502 с причиной. Формат ответа гарантируется здесь: без трёх заголовков ответ
+// приводится к структуре (хвост W4-ANB, вердикт W4-R-ANB3).
 public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration config)
 {
     private const int CacheCap = 64;
@@ -40,7 +42,11 @@ public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration
             if (!force && _cache.TryGetValue(key, out var hit) && hit.Fingerprint == fingerprint)
             {
                 Touch(key);
-                return hit.Result with { Cached = true };
+                // Хвост W4-ANB (вердикт W4-R-ANB3): счётчик пересчитывается по живому run.
+                // Кэш хранит текст, а не число: хронология может вырасти без смены отпечатка
+                // (DroppedByHumanAt/ExecutorStoppedAt в выжимку не входят) — шапка страницы
+                // «по N событиям» считается живым BuildEvents, и ответ ручки обязан совпадать.
+                return hit.Result with { Cached = true, EventCount = FeatureProjector.BuildEvents(run, []).Count };
             }
             if (!_inFlight.TryGetValue(flightKey, out flight))
             {
@@ -95,7 +101,55 @@ public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration
             config["Tasks:AiModel"] ?? "haiku", ownerId, ct: ct);
         if (string.IsNullOrWhiteSpace(res.Text))
             throw new InvalidOperationException("Модель вернула пустой ответ");
-        return new FeatureSummaryResult(res.Text, DateTime.UtcNow, res.Usage?.Model, false, res.Usage, eventCount);
+        // Хвост W4-ANB (вердикт W4-R-ANB3): формат ответа не проверялся на бэкенде — ответ без
+        // заголовков («Сделано (3 пункта)») фронтный parseSummary схлопывает в одну колонку.
+        // Страховка здесь: три заголовка гарантируются до ответа фронту.
+        return new FeatureSummaryResult(EnsureSections(res.Text), DateTime.UtcNow, res.Usage?.Model, false, res.Usage, eventCount);
+    }
+
+    // Заголовки разделов — те же, что у фронтного parseSummary (FeatureAnalysisSummary.tsx):
+    // строка считается заголовком, если после снятия «#», «*», «:» она равна ключу (без регистра).
+    private static readonly string[] SectionKeys = ["сделано", "где застряло", "дальше"];
+    private static readonly string[] SectionTitles = ["Сделано", "Где застряло", "Дальше"];
+
+    private static bool IsHeading(string line, string key)
+    {
+        var s = line.Trim();
+        if (s.Length == 0) return false;
+        var stripped = new StringBuilder(s.Length);
+        foreach (var c in s)
+            if (c != '#' && c != '*' && c != ':') stripped.Append(c);
+        return stripped.ToString().Trim().ToLowerInvariant() == key;
+    }
+
+    // Хвост W4-ANB (вердикт W4-R-ANB3): страховка формата. Ответ с тремя заголовками — как есть;
+    // ответ без них — приводится к структуре: существующие заголовки сохраняются, недостающие
+    // вставляются по порядку с пунктом «—» (пустой раздел — тоже часть структуры). Текст до
+    // первого заголовка остаётся под «Сделано» — фронт без заголовков всё равно теряет его.
+    private static string EnsureSections(string text)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        var found = new int[SectionKeys.Length];
+        for (int i = 0; i < found.Length; i++) found[i] = -1;
+        for (int i = 0; i < lines.Length; i++)
+            for (int k = 0; k < SectionKeys.Length; k++)
+                if (found[k] < 0 && IsHeading(lines[i], SectionKeys[k])) found[k] = i;
+        if (Array.TrueForAll(found, f => f >= 0)) return text;
+
+        var sb = new StringBuilder();
+        int pos = 0;
+        for (int k = 0; k < SectionKeys.Length; k++)
+        {
+            if (found[k] >= 0)
+                while (pos <= found[k]) sb.AppendLine(lines[pos++]);
+            else
+            {
+                sb.AppendLine(SectionTitles[k]);
+                sb.AppendLine("—");
+            }
+        }
+        while (pos < lines.Length) sb.AppendLine(lines[pos++]);
+        return sb.ToString();
     }
 
     private void Touch((string, string) key)
@@ -110,6 +164,7 @@ public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration
 // стоимости нет, модели в смысле тарификации тоже). Cached — результат из кэша или
 // того же идущего расчёта, без нового вызова модели. EventCount — число событий
 // хронологии, на которых построено резюме (лента событий страницы фичи, BuildEvents):
-// для шапки «по N событиям» и тега «устарело» (хвост W4-ANB, отчёт Майи).
+// для шапки «по N событиям» и тега «устарело» (хвост W4-ANB, отчёт Майи). В кэше хранится
+// текст, не счётчик: при кэш-хите число пересчитывается по живому run (хвост W4-ANB).
 public sealed record FeatureSummaryResult(
     string Text, DateTime GeneratedAt, string? Model, bool Cached, OneShotUsage? Usage, int EventCount);

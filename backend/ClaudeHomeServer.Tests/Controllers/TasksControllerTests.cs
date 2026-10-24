@@ -2287,7 +2287,13 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var json = JsonSerializer.SerializeToElement(((OkObjectResult)first!).Value!,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         json.GetProperty("cached").GetBoolean().Should().BeFalse("первый вызов считает");
-        json.GetProperty("text").GetString().Should().Be("резюме");
+        // Хвост W4-ANB (вердикт W4-R-ANB3): ответ ручки всегда структурирован — несвязный текст
+        // заглушки приводится к трём разделам, содержимое сохраняется.
+        var text = json.GetProperty("text").GetString();
+        text.Should().Contain("Сделано");
+        text.Should().Contain("Где застряло");
+        text.Should().Contain("Дальше");
+        text.Should().Contain("резюме", "текст модели не теряется при страховке формата");
         // W4-R-ANB3, minor-1: поле eventCount в контракте ручки — не только cached/text.
         // Эпик только создан — в ленте ровно одно событие (created).
         json.GetProperty("eventCount").GetInt32().Should().Be(1, "счётчик хронологии в ответе первой ручки");
@@ -2298,6 +2304,38 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         json2.GetProperty("cached").GetBoolean().Should().BeTrue("тот же отпечаток — из кэша");
         json2.GetProperty("eventCount").GetInt32().Should().Be(1, "кэш несёт тот же счётчик");
         stub.Calls.Should().Be(1, "повторный вызов не зовёт модель");
+    }
+
+    // Хвост W4-ANB (вердикт W4-R-ANB4, minor): пара Project/ProjectFull закреплена end-to-end:
+    // eventsTotal страницы (полный run) = eventCount резюме (облегчённый run). Одна фича —
+    // одно число, включая события вердикта (не только created).
+    [Fact]
+    public async Task FeatureSummary_EventCount_РавенEventsTotalСтраницы()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
+        await CreateTaskAsync(new
+        {
+            title = "ревью", featureId = epicId, role = "review",
+            status = "done", verification = new { verdict = "returned", notes = "нет тестов" },
+        });
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var eventsTotal = page.GetProperty("eventsTotal").GetInt32();
+        // Хронология: эпик created, шаг created, ревью created + returned — 4 события.
+        eventsTotal.Should().Be(4);
+
+        var stub = new SummaryStubRunner();
+        var summary = new FeatureSummaryService(stub, _factory.Services.GetRequiredService<IConfiguration>());
+        var controller = BuildController(RealGit(), summary: summary);
+        var result = await controller.FeatureSummary(epicId, false);
+        var json = JsonSerializer.SerializeToElement(((OkObjectResult)result!).Value!,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
+        json.GetProperty("eventCount").GetInt32().Should().Be(eventsTotal,
+            "счётчик резюме = eventsTotal страницы: облегчённый run даёт то же число, что полный");
     }
 
     [Fact]

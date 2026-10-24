@@ -186,6 +186,36 @@ public class FeatureSummaryServiceTests
         stub.LastPrompt.Should().Contain("Дальше", "раздел «Дальше» — в промпте");
     }
 
+    // Хвост W4-ANB (вердикт W4-R-ANB3): формат ответа не проверялся на бэкенде — ответ без
+    // заголовков фронтный parseSummary схлопывает в одну колонку. Страховка: ответ без трёх
+    // заголовков приводится к структуре, содержимое (пункты) сохраняется.
+    [Fact]
+    public async Task ОтветБезЗаголовков_ПриводитсяКТремРазделам()
+    {
+        var stub = new StubRunner { Text = "Сделано (3 пункта)\n- закрыт шаг Ш1\n- добавлен тест" };
+        var service = MakeService(stub);
+
+        var res = await service.SummarizeAsync("owner", "f1", OpenRun("f1"), false, CancellationToken.None);
+
+        res.Text.Should().Contain("Сделано");
+        res.Text.Should().Contain("Где застряло", "пустой раздел — «—», колонки не теряются");
+        res.Text.Should().Contain("Дальше");
+        res.Text.Should().Contain("закрыт шаг Ш1", "содержимое ответа не выбрасывается");
+    }
+
+    // Ответ с тремя заголовками (в любой разметке, как понимает фронт) — возвращается как есть.
+    [Fact]
+    public async Task ОтветСТремяЗаголовками_БезИзменений()
+    {
+        var text = "## Сделано\n- закрыт шаг\nГде застряло:\n—\nДальше\n- тег в шапке";
+        var stub = new StubRunner { Text = text };
+        var service = MakeService(stub);
+
+        var res = await service.SummarizeAsync("owner", "f1", OpenRun("f1"), false, CancellationToken.None);
+
+        res.Text.Should().Be(text, "структура есть — текст не трогается");
+    }
+
     // Хвост W4-ANB: в ответе есть число событий, на которых построено резюме — хронология run
     // (BuildEvents), та же, что лента событий страницы фичи.
     [Fact]
@@ -222,6 +252,50 @@ public class FeatureSummaryServiceTests
         cached.EventCount.Should().Be(6);
     }
 
+    // Хвост W4-ANB (вердикт W4-R-ANB3): при кэш-хите счётчик пересчитывается по живому run.
+    // Живой случай: задача снята человеком (DroppedByHumanAt) — хронология выросла, а отпечаток
+    // выжимки не изменился (поле в выжимку не входит). Текст не пересчитывается, число — живое.
+    [Fact]
+    public async Task EventCount_КэшХит_ПересчитываетсяПоЖивойХронологии()
+    {
+        var now = new DateTime(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem { Id = "epic-k", Role = TaskRoles.Feature, Title = "фича-кэш", CreatedAt = now - TimeSpan.FromDays(3) };
+        var step = new TaskItem
+        {
+            Id = "k1", FeatureId = "epic-k", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            CreatedAt = now - TimeSpan.FromDays(2),
+            ClaudeStartedAt = now - TimeSpan.FromDays(2),
+            CompletedAt = now - TimeSpan.FromDays(1),
+        };
+        var before = FeatureProjector.Build(epic, [epic, step], now);
+        var stub = new StubRunner();
+        var service = MakeService(stub);
+
+        var first = await service.SummarizeAsync("owner", "epic-k", before, false, CancellationToken.None);
+        first.EventCount.Should().Be(4, "эпик created + шаг created/started/completed");
+
+        var stepDropped = new TaskItem
+        {
+            Id = "k1", FeatureId = "epic-k", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            CreatedAt = now - TimeSpan.FromDays(2),
+            ClaudeStartedAt = now - TimeSpan.FromDays(2),
+            CompletedAt = now - TimeSpan.FromDays(1),
+            DroppedByHumanAt = now - TimeSpan.FromHours(1),
+        };
+        var after = FeatureProjector.Build(epic, [epic, stepDropped], now);
+
+        // Посылка кейса: отпечаток тот же — DroppedByHumanAt в выжимку не входит.
+        FeatureSummaryDigest.Build(before).Fingerprint.Should().Be(FeatureSummaryDigest.Build(after).Fingerprint);
+
+        var cached = await service.SummarizeAsync("owner", "epic-k", after, false, CancellationToken.None);
+        cached.Cached.Should().BeTrue("текст из кэша — модель не зовётся второй раз");
+        stub.Calls.Should().Be(1);
+        cached.Text.Should().Be(first.Text, "текст не пересчитывается");
+        cached.EventCount.Should().Be(5, "счётчик живой: добавилось событие «dropped»");
+    }
+
     // Вердикт W4-R-ANB3, minor-2: паритет счётчика. Ручка резюме подаёт сервису облегчённый
     // run (Project → SlimRun), eventsTotal страницы считается по полному (ProjectFull). Один и
     // тот же набор задач обоими путями обязан дать то же число: Slim обнуляет тексты
@@ -254,7 +328,34 @@ public class FeatureSummaryServiceTests
             Id = "pu1", FeatureId = "epic-p", Status = TaskItemStatus.Done,
             CreatedAt = now - TimeSpan.FromDays(1), CompletedAt = now - TimeSpan.FromHours(2),
         };
-        var tasks = new List<TaskItem> { epic, step, review, unroled };
+        // Хвост W4-ANB (вердикт W4-R-ANB4, minor): в наборе были только created/started/
+        // completed/returned — события stopped/waiting/dropped паритет не проверяли.
+        var stopped = new TaskItem
+        {
+            Id = "ps2", FeatureId = "epic-p", Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.InProgress,
+            CreatedAt = now - TimeSpan.FromDays(1),
+            ClaudeStartedAt = now - TimeSpan.FromHours(3),
+            ExecutorStoppedAt = now - TimeSpan.FromHours(2),
+            ExecutorStopReason = "исполнитель остановлен паузой",
+        };
+        var waiting = new TaskItem
+        {
+            Id = "pw1", FeatureId = "epic-p", Role = TaskRoles.Step, StepRef = "Ш3",
+            Status = TaskItemStatus.InProgress,
+            CreatedAt = now - TimeSpan.FromDays(1),
+            AwaitingHumanSince = now - TimeSpan.FromHours(1),
+            AwaitingHumanReason = "нужен ответ по границе",
+        };
+        var dropped = new TaskItem
+        {
+            Id = "pd1", FeatureId = "epic-p", Role = TaskRoles.Cut,
+            Status = TaskItemStatus.Done,
+            CreatedAt = now - TimeSpan.FromDays(1),
+            CompletedAt = now - TimeSpan.FromHours(1),
+            DroppedByHumanAt = now - TimeSpan.FromMinutes(30),
+        };
+        var tasks = new List<TaskItem> { epic, step, review, unroled, stopped, waiting, dropped };
         var snapshot = new List<FeatureIndexSession> { new FeatureIndexSession("chat-p", null, null, false) };
 
         var full = FeatureProjector.BuildCore(epic, tasks, now, snapshot);
@@ -263,10 +364,11 @@ public class FeatureSummaryServiceTests
 
         var res = await service.SummarizeAsync("owner", "epic-p", slim, false, CancellationToken.None);
 
-        // Хронология полного run: эпик created; шаг created/started/completed; ревью created/returned;
-        // безролевая created/completed — 8 событий.
+        // Хронология полного run: эпик created; шаг created/started/completed; ревью
+        // created/returned; безролевая created/completed; остановленная created/started/stopped;
+        // ожидающая created/waiting; снятая created/completed/dropped — 16 событий.
         var expected = FeatureProjector.BuildEvents(full, snapshot).Count;
-        expected.Should().Be(8, "лента страницы фичи по полному run");
+        expected.Should().Be(16, "лента страницы фичи по полному run");
         res.EventCount.Should().Be(expected, "счётчик резюме = лента страницы (полный run)");
     }
 

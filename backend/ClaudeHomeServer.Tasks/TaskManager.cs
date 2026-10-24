@@ -512,10 +512,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         foreach (var s in steps)
         {
             if (s is null) { copy.Add(null!); continue; }
+            // «!» — осознанное сохранение null: поля PlannedStep non-nullable по типу,
+            // но null — сигнал «не задано», его ловит валидатор (400, а не NRE).
             copy.Add(new PlannedStep
             {
-                StepRef = s.StepRef?.Trim(),
-                Title = s.Title?.Trim(),
+                StepRef = s.StepRef?.Trim()!,
+                Title = s.Title?.Trim()!,
                 Lane = s.Lane,
             });
         }

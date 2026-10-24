@@ -118,7 +118,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             if (!string.IsNullOrEmpty(featureId)) root = await FeatureTreeRootForAsync(p, featureId);
             else if (!string.IsNullOrEmpty(sessionId))
             {
-                var s = sessions.GetOwned(sessionId, UserId);
+                // UserId null (нет JWT) — владельца нет, чат не находится: тот же приём,
+                // что в GitController.RootFor (?sessionId=), а не NRE в GetOwned.
+                var s = UserId is null ? null : sessions.GetOwned(sessionId, UserId);
                 if (s is null || s.ProjectId != p.Id) return NotFound(new { error = "Чат не найден" });
                 root = await ChatTreeRootForAsync(p, s);
             }

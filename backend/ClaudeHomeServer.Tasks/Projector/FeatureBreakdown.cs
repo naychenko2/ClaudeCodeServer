@@ -271,8 +271,10 @@ public sealed record FeatureBreakdown(
                     taskTokens = acc.Tokens;
                     hasTaskRecords = acc.Has;
                 }
+                // TaskId — t.Id: TaskItem.Id non-nullable (default — Guid, TaskItem.cs:9);
+                // «!» — тот же приём, что в roleByTask выше (строка 230): id задачи всегда есть.
                 longest = new FeatureLongestNow(
-                    TaskId: t.Id,
+                    TaskId: t.Id!,
                     ChatId: LiveSession(t.LinkedSessionId)?.Id,
                     PersonaId: t.PersonaId,
                     StepRef: t.StepRef,

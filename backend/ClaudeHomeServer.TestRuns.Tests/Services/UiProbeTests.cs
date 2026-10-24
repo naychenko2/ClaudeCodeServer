@@ -317,8 +317,6 @@ public class UiProbeTests : IDisposable
         var found = TestRunService.FindPackageDir(worktree, "frontend", UiProbeService.RequiredPackages, out var error);
 
         found.Should().NotBeNull(error);
-        TestRunService.FindNodeBin(worktree, "frontend", TestRunKind.Playwright, out _)
-            .Should().BeNull("строгий резолв бинаря тест-раннера в таком worktree отказывает — ради него и мягче");
     }
 
     [Fact]

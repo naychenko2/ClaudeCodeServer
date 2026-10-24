@@ -373,7 +373,9 @@ public sealed partial class TestRunService
             var candidate = Path.Combine(dir, bin);
             if (File.Exists(candidate))
             {
-                if (!ResolvesInside(rootFull, candidate))
+                // Worktree: node_modules — ссылка на зависимости основного дерева того же репозитория (как у FindPackageDir)
+                if (!ResolvesInside(rootFull, candidate)
+                    && !LinkedModulesInRepository(rootFull, Path.Combine(dir, "node_modules"), bin["node_modules/".Length..]))
                 {
                     error = $"{Relative(rootFull, candidate)} ведёт символической ссылкой за пределы проекта — "
                         + "такой пакет не запускаем.";
@@ -437,8 +439,8 @@ public sealed partial class TestRunService
     }
 
     // node_modules — ссылка на каталог ТАКОГО ЖЕ имени, рядом с которым лежит package.json, внутри дерева
-    // того же репозитория (основной checkout или любой его worktree), а пакет внутри него ссылками из него не выходит
-    private static bool LinkedModulesInRepository(string rootFull, string modules, string package)
+    // того же репозитория (основной checkout или любой его worktree), а путь внутри него (пакет или бинарь) ссылками из него не выходит
+    internal static bool LinkedModulesInRepository(string rootFull, string modules, string package)
     {
         FileSystemInfo? resolved;
         try { resolved = new DirectoryInfo(modules).ResolveLinkTarget(returnFinalTarget: true); }

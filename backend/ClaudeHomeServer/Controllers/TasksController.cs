@@ -30,7 +30,7 @@ namespace ClaudeHomeServer.Controllers;
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
     ISessionBroadcaster broadcaster, PersonaBindingsService bindings,
-    ISphereDirectory spheres) : ControllerBase
+    ISphereDirectory spheres, SessionManager sessions) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -57,6 +57,11 @@ public class ProjectTasksController(
             return BadRequest(new { error = "Название задачи не может быть пустым" });
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+
+        // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
+        if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), req.FeatureId) is { } bound)
+            return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
 
         // Колонка доски → статус выводим из её категории
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
@@ -251,6 +256,11 @@ public class TasksController(
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
+        // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
+        if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), req.FeatureId) is { } bound)
+            return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
+
         // Проект из тела (если он свой) — для резолва кастомной колонки. Чужой проект
         // игнорируем: личный эндпоинт не должен подменять статус по чужой доске.
         var project = bodyProjectId is not null && projects.GetById(bodyProjectId)?.OwnerId == UserId
@@ -357,6 +367,12 @@ public class TasksController(
         if (task is null || task.OwnerId != UserId) return NotFound();
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+
+        // Смена featureId (не очистка и не то же значение) — та же дверь, что у создания
+        if (!string.IsNullOrEmpty(req.FeatureId) && req.FeatureId != task.FeatureId
+            && FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), req.FeatureId) is { } bound)
+            return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
 
         // Целевой проект для валидации колонки/персоны: текущий, либо новый из req.ProjectId
         // (null в req = не менять; "" = сделать личной; guid = привязать к проекту)
@@ -557,10 +573,7 @@ public class TasksController(
     // источник для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/
     // удалённые id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
     // Session.Model (null/пусто — «Авто», слот; Б4). PersonaId — Session.PersonaId (W4-1B, оркестратор).
-    private List<FeatureIndexSession> SessionSnapshot() =>
-        sessions.GetAllOwnedBy(UserId)
-            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId))
-            .ToList();
+    private List<FeatureIndexSession> SessionSnapshot() => FeatureChatDoor.Snapshot(sessions, UserId);
 
     // Б4/Б5b: готовая функция модели чата (label/full) для проекции фичи. Явная модель
     // (Session.Model) — её имя/метка. «Авто» — боевой резолвер ModelAssignmentResolver.ExecutorModel
@@ -1452,6 +1465,10 @@ public class TasksController(
             var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
             var callerSession = callerSessionId is not null && sessions.GetById(callerSessionId) is { } cs
                 && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
+            if (callerSession is not null
+                && FeatureChatDoor.DenyReason(tasks, SessionSnapshot(), UserId, callerSession.Id,
+                    FeatureChatDoor.TargetFeature(task)) is { } bound)
+                return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
             return Ok(await executor.ExecuteAsync(task, auto: false,
                 new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId)));
         }

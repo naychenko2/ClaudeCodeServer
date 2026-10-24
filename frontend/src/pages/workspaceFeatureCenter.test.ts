@@ -18,6 +18,7 @@ import { getNav } from '../lib/nav';
 import { encodePendingChat } from '../lib/pendingProjectChat';
 import { centerWinner } from './workspace/DesktopWorkspace';
 import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
+import { setMeFromServer } from '../lib/defaultPersona';
 import { __test as backNavTest, recordBackNav, recordFeatureReturn, featureBackNavFrom, backNavFrom, getBackNav } from '../lib/featureBackNav';
 import { centerOccupiedByOther, centerFingerprint, CENTER_OCCUPANCY_KEYS, type CenterOccupancy } from '../lib/centerOccupancy';
 import { __test as indexTest } from '../lib/featuresIndex';
@@ -666,6 +667,33 @@ describe('WorkspacePage: центр — страница фичи соседом
     act(() => { (reactProps(back!.childNodes[0]) as any).onClick(); });
     expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница не скрыта после возврата (C1)').toBeNull();
     expect(chatPanelInDom(), 'чат не восстановлен после возврата (C1)').toBe(true);
+  });
+
+  // === Сквозной тест гейта владельца (хвост вердикта bb0a70c7) ===
+  // Цепочка project.ownerId → WorkspacePage.tsx:2446 → FeatureCenter.tsx:42 →
+  // FeaturePage.tsx:127 (canClose) раньше не проверялась: в FeaturePage.test.ts проп
+  // подётся напрямую. Мутация «убрать projectOwnerId из вызова FeatureCenter» красит
+  // первое утверждение (кнопка не появляется ни у кого).
+  it('гейт владельца через цепочку: «Закрыть фичу» только владельцу проекта', async () => {
+    (globalThis as any).window.innerWidth = 1280;
+    const ownedProject = { ...project, ownerId: 'u-own' } as Project;
+    act(() => { setMeFromServer({ userId: 'u-own', username: 'andrey', role: 'user' }); });
+    const { container } = mount(createElement(WorkspacePage, {
+      project: ownedProject,
+      auth: { serverUrl: 'http://x', token: 't', username: 'andrey', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close-btn'), 'владельцу «Закрыть фичу» есть').not.toBeNull();
+    // Смена me на не-владельца: тот же рендер, кнопка исчезает (гейт живой, не разовый).
+    act(() => { setMeFromServer({ userId: 'u-other', username: 'other', role: 'user' }); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close-btn'), 'не владельцу кнопки нет').toBeNull();
   });
 
   // === N1: десктоп 1280 — названия/персоны чатов фичи приходят через SessionList-колбэк ===

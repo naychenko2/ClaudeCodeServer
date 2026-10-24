@@ -1622,27 +1622,43 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     const cancel = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-cancel')!;
     await act(async () => { (reactProps(cancel)!.onClick as () => void)(); });
     expect(stillOpen(), '«Отмена» в полёте не закрывает').not.toBeNull();
-    // Esc: обработчик модалки висит на document (fakeDom — тот же listeners-механизм).
-    act(() => {
-      for (const f of ((globalThis as any).document.listeners?.keydown ?? new Set<Function>())) {
-        f({ key: 'Escape', defaultPrevented: false });
-      }
-    });
+    // Esc: обработчик модалки висит на document (fakeDom — настоящая подписка).
+    // Фиктивному событию даём preventDefault: обработчик Modal зовёт его (ui/Modal.tsx:58),
+    // без метода на фиктиве он бросил бы TypeError.
+    const pressEsc = () => {
+      act(() => {
+        for (const f of ((globalThis as any).document.listeners?.keydown ?? new Set<Function>())) {
+          f({ key: 'Escape', defaultPrevented: false, preventDefault: () => {} });
+        }
+      });
+    };
+    pressEsc();
     expect(stillOpen(), 'Esc в полёте не закрывает').not.toBeNull();
     // Отказ бэка снимает busy (try/finally, хвост 3): «Отмена» снова работает.
     await act(async () => { mockUpdateTask.fail?.(Object.assign(new Error('offline'), { status: 500 })); await Promise.resolve(); });
     expect(stillOpen(), 'при отказе модалка остаётся открытой с причиной').not.toBeNull();
-    await act(async () => { (reactProps(cancel)!.onClick as () => void)(); });
+    // Парное утверждение (хвост вердикта bb0a70c7): вне полёта Esc закрывает модалку —
+    // доказательство, что обработчик действительно висит и работает; без этого «в полёте
+    // не закрывает» было бы вакуумным. Мутация: убрать регистрацию Esc в ui/Modal.tsx —
+    // эта проверка краснеет.
+    pressEsc();
+    expect(stillOpen(), 'Esc вне полёта закрывает модалку').toBeNull();
+    // «Отмена» тоже работает: открыть снова и закрыть кнопкой.
+    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    const cancel2 = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-cancel')!;
+    await act(async () => { (reactProps(cancel2)!.onClick as () => void)(); });
     expect(stillOpen(), 'после отказа «Отмена» закрывает').toBeNull();
   });
 });
 
 // === F3 (статусной модели): «Возобновить» на закрытой фиче — только владелец, без подтверждения ===
-// Та же PUT-ручка /api/tasks/{epicId}, status:'todo'. «Закрыть» и «Возобновить»
-// взаимоисключающие по epic.status. Подтверждения нет: возобновление не
+// Та же PUT-ручка /api/tasks/{epicId}, status:'todo'. Гейт «Возобновить» — по состоянию
+// фичи (run.state === 'closed', хвост вердикта bb0a70c7), а не по epic.status: у
+// смерженной фичи с закрытым эпиком кнопки нет. Подтверждения нет: возобновление не
 // разрушительное (решение продукта). Состояние пересчитывает проектор после refetch.
 // Мутации (в отчёте): (1) убрать гейт canClose → тест «не владелец» красный;
-// (2) снять условие epic.status === 'done' → тест «на открытой фиче нет» красный;
+// (2) заменить гейт run.state === 'closed' на epic.status === 'done' → тест «смерженная
+// фича с закрытым эпиком» красный;
 // (3) убрать api.tasks.update в doResumeFeature → тест «клик — PUT todo» красный;
 // (4) не делать refetchFeaturePage → тест «после возобновления снова «Закрыть»» красный.
 describe('F3: кнопка «Возобновить» на закрытой фиче', () => {
@@ -1719,6 +1735,20 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn'), 'не владельцу кнопки нет').toBeNull();
+  });
+
+  // Хвост вердикта bb0a70c7: гейт по состоянию фичи (run.state), а не по epic.status.
+  // Смерженная фича с закрытым эпиком — «Возобновить» нет: возобновление эпика не
+  // вернуло бы её в активные (проектор считает её merged). Мутация гейта (заменить
+  // run.state === 'closed' на epic.status === 'done') красит этот тест.
+  it('смерженная фича с закрытым эпиком: «Возобновить» нет (гейт по run.state, не по epic)', async () => {
+    const pd = pageData();
+    pd.run = { ...pd.run, state: 'merged', epic: { id: 'f1', title: 'Моя фича', status: 'done' } } as never;
+    mockGetFeature.result = pd;
+    owner();
+    const c = render({ projectOwnerId: 'u-own' });
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn'), 'у смерженной фичи «Возобновить» нет').toBeNull();
   });
 
   it('открытая фича: «Возобновить» нет — кнопки взаимоисключающие', async () => {

@@ -577,7 +577,9 @@ async function doCloseFeature(epicId: string): Promise<string | null> {
 async function doResumeFeature(epicId: string): Promise<string | null> {
   try {
     await api.tasks.update(epicId, { status: 'todo' });
-    showToast('Фича возобновлена', 'Эпик снова «В работе» — фича вернулась в активные.');
+    // Без обещания группы: куда фича попадёт после refetch, решает проектор (хвост
+    // вердикта bb0a70c7) — тост обещает только смену статуса эпика.
+    showToast('Фича возобновлена', 'Эпик снова «В работе».');
     refetchFeaturePage(epicId);
     return null;
   } catch (e) {
@@ -717,10 +719,12 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   // эпик не «Готово» — у закрытой фичи кнопки нет (состояние «закрыта» считает
   // проектор, элемент в группе «Закрытые» уже на месте).
   const canCloseNow = !!canClose && !!epic && epic.status !== 'done';
-  // Возобновление (F3): тот же гейт владельца, но только у закрытой фичи. Кнопки
-  // «Закрыть» и «Возобновить» взаимоисключающие по epic.status. Подтверждения нет:
+  // Возобновление (F3): тот же гейт владельца, но только у закрытой фичи — закрытость
+  // считает состояние проектора (run.state === 'closed'), а не epic.status: у смерженной
+  // фичи с закрытым эпиком «Возобновить» нет, иначе тост обещал бы возврат в активные,
+  // которого проектор не даст (хвост вердикта bb0a70c7). Подтверждения нет:
   // возобновление не разрушительное (решение продукта).
-  const canResumeNow = !!canClose && !!epic && epic.status === 'done';
+  const canResumeNow = !!canClose && run?.state === 'closed';
   const [closeBusy, setCloseBusy] = useState(false);
   const [closeModal, setCloseModal] = useState(false);
   // Причина отказа бэка живёт в модалке (хвост 1): при отказе она остаётся открытой;

@@ -335,9 +335,36 @@ describe('state карточки (A2)', () => {
     expect(c.runningSince).toBe('2026-10-21T10:00:00Z');
   });
 
-  it('run сильнее wait: идущая задача при «ждёт ревью» — всё равно run', () => {
-    const c = stateOf([task({ id: 's1', status: 'inProgress', claudeStartedAt: start })], { status: 'ждёт ревью', outcome: 'pending' });
+  it('run: корзина «в работе» (outcome running, задача идёт)', () => {
+    const c = stateOf([task({ id: 's1', status: 'inProgress', claudeStartedAt: start })], { status: 'идёт', outcome: 'running' });
     expect(c.state).toBe('run');
+    expect(c.stopped).toBe(false);
+  });
+
+  it('остановленный исполнитель (executorStoppedAt) — wait/stopped, а не run', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'inProgress', claudeStartedAt: start, executorStoppedAt: '2026-10-20T11:00:00Z' })],
+      { status: 'идёт', outcome: 'running' },
+    );
+    expect(c.state).toBe('wait');
+    expect(c.stopped).toBe(true);
+    expect(c.runKind).toBeNull();
+  });
+
+  it('задача закрыта + идущий виток ревью (бэк: review, outcome running) — wait, не done и не run', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'done', claudeStartedAt: start })],
+      { status: 'идёт', outcome: 'running', rounds: [round({ n: 1, verdict: 'running' })] },
+      { now: [{ taskId: 'r1', stage: 'review', title: 'Ревью', stepRef: 'Ш1' }] },
+    );
+    expect(c.state).toBe('wait');
+    expect(c.awaitingReview).toBe(true);
+    expect(c.runKind).toBeNull();
+  });
+
+  it('снятый шаг: состояние withdrawn, не done', () => {
+    const c = stateOf([task({ id: 's1', status: 'done', claudeStartedAt: start })], { status: 'снят с выкладки', outcome: 'withdrawn' });
+    expect(c.state).toBe('withdrawn');
   });
 
   it('wait: задача закрыта, ждёт ревью; run.now по ревью шаг в run не переводит', () => {

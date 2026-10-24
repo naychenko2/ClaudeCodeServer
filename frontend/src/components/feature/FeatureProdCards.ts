@@ -21,9 +21,9 @@ import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound } from '..
 // ok — сделано, ret — возврат, cur — текущий (обведён акцентом), pend — впереди (пунктир).
 export type ProdNodeState = 'ok' | 'ret' | 'cur' | 'pend';
 
-// Состояние шага для ленты (макет A2): done — готово, run — идёт, wait — ждёт, queue — в очереди.
-// Приоритет при конфликте: run > wait > done > queue.
-export type ProdCardState = 'done' | 'run' | 'wait' | 'queue';
+// Состояние шага для ленты (макет A2): done — готово, run — идёт, wait — ждёт, queue — в очереди,
+// withdrawn — снят с выкладки. Выводится из корзины бэка (bucketOf), конфликтов приоритетов нет.
+export type ProdCardState = 'done' | 'run' | 'wait' | 'queue' | 'withdrawn';
 
 export interface ProdNode {
   // Тип узла: работа / возврат / доработка / ревью (пунктирный, впереди) / принят.
@@ -49,8 +49,10 @@ export interface ProdCard {
   cycles: number;
   // Этот шаг — текущий фичи (run.now указывает на него или его задачи).
   isCurrent: boolean;
-  // Шаг ждёт ревью (status «ждёт ревью» / outcome pending).
+  // Шаг в корзине «ревью»: ждёт ревью или виток ревью идёт (плашка различает по chain.outcome).
   awaitingReview: boolean;
+  // Исполнитель идущей задачи остановлен (тревога stopped): состояние wait, не run.
+  stopped: boolean;
   nodes: ProdNode[];
   // Состояние шага (иконка, тон карточки и плашка).
   state: ProdCardState;
@@ -97,13 +99,6 @@ function reworkChatId(run: FeatureRun, taskId: string): string | null {
   if (!prod) return null;
   const x = prod.executors.find(e => e.taskId === taskId);
   return x?.chatId ?? null;
-}
-
-// «Ждёт ревью»: готовая строка статуса бэка или фолбэк по outcome (старые ответы
-// без status) — тот же принцип, что stepStatusView в FeatureTimelineBits.
-function awaitingReviewOf(chain: FeatureStepChain): boolean {
-  if (chain.status) return chain.status.toLowerCase().includes('ждет') || chain.status.toLowerCase().includes('ждёт');
-  return chain.outcome === 'pending';
 }
 
 // Подпись витка: «{Имя}: вернул» / «принят с замечаниями» / «{Имя}: принят».
@@ -177,21 +172,38 @@ function chainNodes(
   return nodes;
 }
 
-// Состояние шага. run — в цепочке есть задача inProgress (шаг или доработка), либо шаг текущий
-// (run.now) и не ждёт ревью; wait — ждёт ревью или вернулся и ждёт доработки; done — принят/снят
-// или все задачи закрыты; queue — шаг не начат.
+// Корзина шага — зеркало FeatureStepAccounting на бэке (единственный источник правды, своей
+// эвристики нет): withdrawn → accepted → work → review. Идущий виток ревью (outcome «running» при
+// всех закрытых задачах цепочки) — корзина review, а не work: шаг ждёт ревью, как и в сводке.
+type ProdBucket = 'withdrawn' | 'accepted' | 'review' | 'work' | 'notCreated';
+
+function bucketOf(chain: FeatureStepChain, tasks: FeatureTask[], started: boolean): ProdBucket {
+  if (chain.outcome === 'withdrawn') return 'withdrawn';
+  if (chain.outcome === 'accepted') return 'accepted';
+  if (!started) return 'notCreated';
+  if (chain.outcome === 'pending') return 'review';
+  const allDone = chain.taskIds.length > 0 && chain.taskIds.length === tasks.length && tasks.every(t => t.status === 'done');
+  if (chain.outcome === 'running' && allDone) return 'review';
+  return 'work';
+}
+
+// Состояние шага — из корзины: accepted → done, withdrawn → withdrawn, review → wait,
+// notCreated → queue; work → run, если задача идёт и её исполнитель не остановлен (остановленный —
+// тревога stopped: wait), иначе wait (вернулся и ждёт доработки). run.now состояние не меняет.
 function cardState(
-  chain: FeatureStepChain, taskMap: Map<string, FeatureTask>, started: boolean,
-  isCurrent: boolean, awaiting: boolean,
-): { state: ProdCardState; runTask: FeatureTask | null } {
-  const tasks = chain.taskIds.map(id => taskMap.get(id)).filter((t): t is FeatureTask => !!t);
+  chain: FeatureStepChain, tasks: FeatureTask[], started: boolean,
+): { state: ProdCardState; runTask: FeatureTask | null; stopped: boolean; review: boolean } {
+  const out = (state: ProdCardState, runTask: FeatureTask | null = null, stopped = false, review = false) =>
+    ({ state, runTask, stopped, review });
+  const bucket = bucketOf(chain, tasks, started);
+  if (bucket === 'withdrawn') return out('withdrawn');
+  if (bucket === 'accepted') return out('done');
+  if (bucket === 'notCreated') return out('queue');
+  if (bucket === 'review') return out('wait', null, false, true);
   const running = tasks.find(t => t.status === 'inProgress') ?? null;
-  if (running || (isCurrent && !awaiting && started)) return { state: 'run', runTask: running };
-  if (!started) return { state: 'queue', runTask: null };
-  if (awaiting) return { state: 'wait', runTask: null };
-  const closed = chain.outcome === 'accepted' || chain.outcome === 'withdrawn'
-    || (chain.outcome !== 'returned' && tasks.length > 0 && tasks.every(t => t.status === 'done'));
-  return { state: closed ? 'done' : 'wait', runTask: null };
+  if (running?.executorStoppedAt) return out('wait', null, true);
+  if (running) return out('run', running);
+  return out('wait');
 }
 
 // Причина последнего возврата: причина ПОСЛЕДНЕГО витка-возврата. Если у него причины
@@ -231,8 +243,8 @@ export function buildProdCards(
     const now = run.now ?? [];
     const isCurrent = now.some(n => n.stepRef === chain.stepRef || chain.taskIds.includes(n.taskId));
     const started = chainStart(chain, taskMap) !== null;
-    const awaiting = awaitingReviewOf(chain);
-    const { state, runTask } = cardState(chain, taskMap, started, isCurrent, awaiting);
+    const tasks = chain.taskIds.map(id => taskMap.get(id)).filter((t): t is FeatureTask => !!t);
+    const { state, runTask, stopped, review: awaiting } = cardState(chain, tasks, started);
     const nodes = chainNodes(run, chain, taskMap, personaName);
     const runKind = state !== 'run' ? null
       : [...nodes].reverse().find(n => n.kind === 'rework' || n.kind === 'work')?.kind === 'rework' ? 'rework' : 'work';
@@ -246,6 +258,7 @@ export function buildProdCards(
       cycles: chain.loops ?? 0,
       isCurrent,
       awaitingReview: awaiting,
+      stopped,
       nodes,
       state,
       runKind,

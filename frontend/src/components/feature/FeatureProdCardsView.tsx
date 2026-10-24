@@ -8,7 +8,7 @@
 // «старт · чат · задача» нет — переходы живут на коде шага (Menu) и на узлах.
 //
 // Замечания ревью (Глеб, R4c), держатся здесь:
-//   • подпись статуса — из stepStatusView (FeatureTimelineBits), не из своей эвристики;
+//   • слово плашки — из card.state (корзина проектора), stepStatusView не используется;
 //   • «текущий» узел берётся как есть из модели: state 'cur' стоит только на активном
 //     действии (работа/доработка), рендер завершённые узлы не перетирает;
 //   • «закрыта» задача — из одного источника: статус задачи (task.status === 'done'),
@@ -18,14 +18,14 @@
 
 import { Fragment, useRef, useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactElement } from 'react';
-import { MessageCircle, FileText, Check, Clock, ChevronDown } from 'lucide-react';
+import { MessageCircle, FileText, Check, Clock, Minus, ChevronDown } from 'lucide-react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Menu, MenuItem } from '../ui/Menu';
 import { Tooltip } from '../ui/Tooltip';
 import { PressableArea } from '../ui/PressableArea';
 import { LiveDot } from '../ui/LiveDot';
-import { ExecutorAvatar, ModelChip, stepModel, stepStatusView } from './FeatureTimelineBits';
+import { ExecutorAvatar, ModelChip, stepModel } from './FeatureTimelineBits';
 import { buildProdCards, type ProdCard, type ProdCardState, type ProdNode } from './FeatureProdCards';
 import { formatDateTime } from './FeatureStatsBits';
 import { openChatById } from '../../lib/openChat';
@@ -262,12 +262,13 @@ function StepCode({ card, chain, featureId, featureTitle, marks, isMobile, nameO
 // === Карточка шага ===
 
 // Тоны состояния: плашка (фон/текст), иконка и кромка карточки.
-const STATE_WORD: Record<ProdCardState, string> = { done: 'Готово', run: 'Идёт', wait: 'Ждёт', queue: 'В очереди' };
+const STATE_WORD: Record<ProdCardState, string> = { done: 'Готово', run: 'Идёт', wait: 'Ждёт', queue: 'В очереди', withdrawn: 'Снят' };
 
 function stateTone(state: ProdCardState): CSSProperties {
   if (state === 'done') return { background: C.successBg, color: C.successText };
   if (state === 'run') return { background: C.accentLight, color: C.accent };
   if (state === 'wait') return { background: C.infoBg, color: C.info };
+  if (state === 'withdrawn') return { background: C.bgPanel, color: C.textMuted };
   return { background: 'transparent', color: C.textMuted, boxShadow: `inset 0 0 0 1px ${C.dashed}` };
 }
 
@@ -283,7 +284,7 @@ function StateIcon({ state }: { state: ProdCardState }) {
   if (state === 'queue') {
     return <span data-testid="prod-state-icon" data-state={state} role="img" aria-label={STATE_WORD.queue} style={{ ...box, background: 'transparent', border: `1px dashed ${C.dashed}`, boxSizing: 'border-box' }} />;
   }
-  const Icon = state === 'done' ? Check : Clock;
+  const Icon = state === 'done' ? Check : state === 'withdrawn' ? Minus : Clock;
   return (
     <span data-testid="prod-state-icon" data-state={state} role="img" aria-label={STATE_WORD[state]} style={box}>
       <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden />
@@ -313,13 +314,13 @@ function stateBadge(card: ProdCard, chain: FeatureStepChain | undefined): { word
     return { word: 'идёт', rest: sep([card.runKind === 'rework' ? 'доработка' : 'работа', elapsedLabel(card.runningSince)]) };
   }
   if (card.state === 'wait') {
-    const label = chain ? stepStatusView(chain).label : '';
-    return { word: card.awaitingReview ? 'ждёт ревью' : label || 'ждёт', rest: sep([elapsedLabel(card.waitingSince)]) };
+    const word = card.stopped ? 'остановлен'
+      : card.awaitingReview ? (chain?.outcome === 'running' ? 'идёт ревью' : 'ждёт ревью')
+      : chain?.outcome === 'returned' ? 'вернули, ждёт доработки' : 'ждёт запуска';
+    return { word, rest: sep([elapsedLabel(card.waitingSince)]) };
   }
-  if (card.state === 'done') {
-    const label = chain ? stepStatusView(chain).label : '';
-    return { word: label || 'принят', rest: sep([shortDate(card.acceptedAt)]) };
-  }
+  if (card.state === 'withdrawn') return { word: 'снят с выкладки', rest: '' };
+  if (card.state === 'done') return { word: 'принят', rest: sep([shortDate(card.acceptedAt)]) };
   return { word: 'в очереди', rest: '' };
 }
 
@@ -358,7 +359,7 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, 
     padding: `${SP.sm}px ${SP.md}px`,
     boxShadow: state === 'run' ? `inset 3px 0 0 ${C.accent}` : state === 'wait' ? `inset 3px 0 0 ${C.info}` : undefined,
   };
-  const dim = state === 'done' || state === 'queue';
+  const dim = state === 'done' || state === 'queue' || state === 'withdrawn';
 
   const badge = stateBadge(card, chain);
   const name = card.personaId ? nameOf(card.personaId) ?? 'персона недоступна' : null;
@@ -513,7 +514,7 @@ export function FeatureProdCardsView({
   const cards = buildProdCards(run, nameOf);
   if (cards.length === 0) return null;
 
-  // Цепочка по коду шага — для статуса (stepStatusView) и пункта меню «задача».
+  // Цепочка по коду шага — для статуса и пункта меню «задача».
   const chainByRef = new Map<string, FeatureStepChain>();
   for (const ch of run.stepChains ?? []) if (ch.stepRef) chainByRef.set(ch.stepRef, ch);
   const prodExecutors = (run.stages ?? []).find(s => s.key === 'prod')?.executors ?? [];

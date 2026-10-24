@@ -997,6 +997,8 @@ public class FeatureProjectorTests
         run.Closed.Should().BeFalse("эпик открыт — смержена, но не закрыта");
         FeatureProjector.Bucket(run).Should().Be("merged");
         FeatureProjector.ChipsOf(run).Should().Equal("open", "merged");
+        FeatureProjector.SummaryOf(run)!.MergedAt.Should().Be(new DateTime(2026, 10, 17, 15, 0, 0),
+            "у смерженной с открытым эпиком mergedAt виден в строке индекса");
         run.Summary!.MergedAt.Should().Be(new DateTime(2026, 10, 17, 15, 0, 0),
             "merged → MergedAt = merge.CompletedAt");
     }

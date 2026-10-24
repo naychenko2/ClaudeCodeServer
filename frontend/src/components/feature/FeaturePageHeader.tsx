@@ -553,22 +553,37 @@ function HoldConfirmModal({ now, busy, onClose, onConfirm }: { now: FeatureNow[]
 // пользовательский JWT (кнопка в UI) и отказывает сервисный токен. Фича уходит в
 // группу «Закрытые», состояние «закрыта» — считает проектор (FeatureProjector),
 // страница обновляется перезапросом. «Возобновить» — отдельный шаг, кнопки нет.
-async function doCloseFeature(epicId: string): Promise<void> {
+// Возвращает текст отказа или null при успехе: модалка при отказе остаётся открытой
+// и показывает причину в себе (хвост 1 вердикта F2-R), тост — только дополнение.
+async function doCloseFeature(epicId: string): Promise<string | null> {
   try {
     await api.tasks.update(epicId, { status: 'done' });
     showToast('Фича закрыта', 'Эпик отмечён «Готово» — фича в группе «Закрытые».');
     refetchFeaturePage(epicId);
+    return null;
   } catch (e) {
     const err = e as Error & { status?: number; body?: unknown };
     const body = err.body as { error?: string } | undefined;
-    showToast('Не получилось', body?.error || err.message || 'сервер не ответил');
+    const msg = body?.error || err.message || 'сервер не ответил';
+    showToast('Не получилось', msg);
+    return msg;
   }
 }
 
 // Модалка подтверждения закрытия: MODAL_W.confirm, «Отмена» (ghost) + «Закрыть»
 // (primary — действие конечное, но не опасное: мерж и задачи остаются на месте).
 // Фокус при открытии — на «Отмена» (тот же приём, что у модалки паузы).
-function CloseConfirmModal({ title, busy, onClose, onConfirm }: { title: string; busy: boolean; onClose: () => void; onConfirm: () => void }) {
+// При отказе бэка модалка НЕ закрывается — причина показывается в ней (хвост 1).
+// Если идут шаги (nowCount > 0) — предупреждение: закрытие эпика их не гасит,
+// фича уйдёт в «Закрытые» под работающими шагами (решение продукта, хвост 3).
+function CloseConfirmModal({ title, busy, error, nowCount, onClose, onConfirm }: {
+  title: string;
+  busy: boolean;
+  error?: string | null;
+  nowCount: number;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
   useEffect(() => {
     const el = typeof document !== 'undefined' ? document.querySelector('[data-testid="feature-page-close-cancel"]') : null;
     (el as { focus?: () => void } | null)?.focus?.();
@@ -591,9 +606,19 @@ function CloseConfirmModal({ title, busy, onClose, onConfirm }: { title: string;
         <div style={{ fontSize: FS.base, color: C.textPrimary }}>
           Эпик будет отмечен «Готово», фича уйдёт в группу «Закрытые».
         </div>
+        {nowCount > 0 && (
+          <div style={{ fontSize: FS.sm, color: C.textSecondary }} data-testid="feature-page-close-running">
+            Идут {nowCount} {pluralSteps(nowCount)} — они не остановятся, фича перейдёт в «Закрытые».
+          </div>
+        )}
         <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
           Чаты, задачи и файлы останутся на месте. «Возобновить» фичу — отдельный шаг.
         </div>
+        {error && (
+          <div style={{ fontSize: FS.sm, color: C.dangerText, background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, padding: `${SP.xs}px ${SP.sm}px`, borderRadius: R.sm }} data-testid="feature-page-close-error">
+            {error}
+          </div>
+        )}
       </div>
     </Modal>
   );
@@ -670,17 +695,28 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   const canCloseNow = !!canClose && !!epic && epic.status !== 'done';
   const [closeBusy, setCloseBusy] = useState(false);
   const [closeModal, setCloseModal] = useState(false);
+  // Причина отказа бэка живёт в модалке (хвост 1): при отказе она остаётся открытой;
+  // ошибка снимается при закрытии и при новой попытке.
+  const [closeError, setCloseError] = useState<string | null>(null);
   const closeClick = () => {
     if (closeBusy) return;
+    setCloseError(null);
     setCloseModal(true);
   };
-  const confirmClose = () => {
+  const closeModalNow = () => {
+    setCloseModal(false);
+    setCloseError(null);
+  };
+  const confirmClose = async () => {
     if (closeBusy || !epic) return;
     setCloseBusy(true);
-    void doCloseFeature(epic.id).finally(() => {
-      setCloseBusy(false);
+    const err = await doCloseFeature(epic.id);
+    setCloseBusy(false);
+    if (err) {
+      setCloseError(err);
+    } else {
       setCloseModal(false);
-    });
+    }
   };
 
   // Главное действие: wait/stopped → в чат исполнителя; merge → «Мерж…» (Ф6: общая
@@ -789,11 +825,12 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
             size="sm"
             variant="secondary"
             leftIcon={<Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            loading={closeBusy}
             dataTestId="feature-page-close-btn"
             title="Закрыть фичу: эпик будет отмечен «Готово»"
             onClick={closeClick}
           >
-            Закрыть фичу
+            {closeBusy ? 'Закрываю…' : 'Закрыть фичу'}
           </Button>
         </span>
       )}
@@ -811,7 +848,9 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
         <CloseConfirmModal
           title={feature?.title ?? epic?.title ?? 'фичу'}
           busy={closeBusy}
-          onClose={() => setCloseModal(false)}
+          error={closeError}
+          nowCount={now.length}
+          onClose={closeModalNow}
           onConfirm={confirmClose}
         />
       )}

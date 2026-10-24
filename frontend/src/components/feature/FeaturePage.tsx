@@ -120,10 +120,11 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Кнопка «Закрыть фичу» (F2): только владелец проекта — бэковый гард принимает
-  // пользовательский JWT, этот гейт чисто UI-ный. Проект без ownerId (старые) —
-  // владелец по умолчанию, как у ProjectIntroCard.
+  // пользовательский JWT, этот гейт чисто UI-ный. Фолбэка «поля нет — владелец по
+  // умолчанию» нет: бэк отдаёт ownerId у всех проектов (миграция ProjectManager),
+  // а для разрушительного действия отсутствие данных — не разрешение, а неизвестность.
   const me = useMe();
-  const canClose = !projectOwnerId || (!!me.userId && projectOwnerId === me.userId);
+  const canClose = !!me.userId && projectOwnerId === me.userId;
 
   // Название: из индекса, фолбэк — эпик страницы, затем нейтральное. Контракт:
   // UI обязан пережить отсутствие любого поля ответа — эпик без title не роняет страницу.

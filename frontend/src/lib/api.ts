@@ -2790,7 +2790,9 @@ export const api = {
     // URL файла проекта для браузерного <img>/<video>: токен через ?access_token=,
     // потому что тег не шлёт заголовки. Нужен картинкам в markdown — README ссылается
     // на них относительным путём, а base64 из files/content для <img src> не подходит
-    fileUrl: (projectId: string, path: string): string => {
+    // sessionId (F1a, «Резолвинг ссылок по worktree»): забрать файл из дерева чата,
+    // а не из анкера проекта; параметр необязательный — старые вызовы не меняются.
+    fileUrl: (projectId: string, path: string, sessionId?: string): string => {
       // Локальный проект: поток отдаёт агент по узкому билету на путь, а его выдача
       // асинхронна — синхронного URL нет (точка — agentStreamUrl в deviceAgent.ts).
       // Основной билет проекта в URL не кладём никогда
@@ -2798,6 +2800,7 @@ export const api = {
       if (route === 'agent') return '';
       const token = readStoredToken();
       const params = new URLSearchParams({ path });
+      if (sessionId) params.set('sessionId', sessionId);
       if (token) params.set('access_token', token);
       // С другого устройства файл отдаёт ретранслятор — целиком, без Range, под тем же JWT
       const base = route === 'relay' ? 'relay/files/stream' : 'files/stream';
@@ -2809,9 +2812,18 @@ export const api = {
       projectRequest<FileEntry[]>(`/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}${showHidden ? '&showHidden=true' : ''}`),
     search: (projectId: string, q: string) =>
       projectRequest<FileEntry[]>(`/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`),
+    // Где путь реально лежит в деревьях проекта (анкер + worktree). paths ≤ 50,
+    // иначе сервер 400; в ответе только найденные пути. Формат — TreeHit бэкенда.
+    locate: (projectId: string, paths: string[], sessionId?: string) =>
+      projectRequest<{ path: string; branch?: string; isAnchor: boolean; alternatives?: string[] }[]>(
+        `/projects/${projectId}/files/locate`,
+        { method: 'POST', body: JSON.stringify({ paths, ...(sessionId ? { sessionId } : {}) }) },
+      ),
     // featureId (W4-5B2): читать из проверенного дерева эпика; без него — корень проекта.
-    getContent: (projectId: string, path: string, featureId?: string) =>
-      projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}`),
+    // sessionId (F1a): резолвить путь в дереве чата; ответ несёт branch (в каком дереве
+    // нашли) и isAnchor (файл из основного дерева).
+    getContent: (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string }) =>
+      projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string; isAnchor: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`),
     saveContent: (projectId: string, path: string, content: string) =>
       projectRequest<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
         method: 'PUT',

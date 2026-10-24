@@ -185,6 +185,24 @@ public class TasksFeatureChatBindingDoorTests : IClassFixture<TestWebApplication
         TaskCount.Should().Be(before);
     }
 
+    [Theory]
+    [InlineData("feature ")]
+    [InlineData(" feature")]
+    public async Task CreateEpic_RoleWithWhitespace_FromBoundChat_Denied_CountUnchanged(string role)
+    {
+        var chat = await NewChat();
+        Epic("Фича A12", chat.Id);
+        var before = TaskCount;
+
+        var resp = await Rest(HttpMethod.Post, "/api/tasks", new { title = "Фича B12", role }, chat.Id);
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict, "роль с пробелом хранится обрезанной — это эпик");
+        TaskCount.Should().Be(before);
+
+        var (isError, _) = await Mcp(chat.Id, "tasks_create", new { title = "Фича B12", role });
+        isError.Should().BeTrue();
+        TaskCount.Should().Be(before);
+    }
+
     [Fact]
     public async Task RestCreate_NewChat_CreatesEpic_Ok()
     {

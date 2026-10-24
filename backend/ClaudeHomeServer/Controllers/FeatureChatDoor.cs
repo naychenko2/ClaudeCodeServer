@@ -26,7 +26,7 @@ public static class FeatureChatDoor
     // новая фича, которой нет ни у одного чата, поэтому привязанный чат её не пускает.
     public static string? CreateTarget(string? featureId, string? role) =>
         !string.IsNullOrEmpty(featureId) ? featureId
-        : role == TaskRoles.Feature ? "new-feature:" + Guid.NewGuid().ToString("N")
+        : role?.Trim() == TaskRoles.Feature ? "new-feature:" + Guid.NewGuid().ToString("N")
         : null;
 
     // REST-вход: чат-вызыватель — по заголовку X-Caller-Session-Id. Нет заголовка (кнопка в UI),

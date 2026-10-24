@@ -996,9 +996,12 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
                 var delayed = new ProcessSpec
                 {
                     FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
-                    Args = OperatingSystem.IsWindows()
-                        ? ["/c", "ping -n 3 127.0.0.1 >nul & " + git]
-                        : ["-c", "sleep 2; " + git],
+                    // Windows: сырая командная строка по контракту RawArguments, иначе .NET
+                    // экранирует внутренние кавычки как \" и cmd.exe их не понимает.
+                    RawArguments = OperatingSystem.IsWindows()
+                        ? ShellCommandLine.WindowsCmdArguments("ping -n 3 127.0.0.1 >nul & " + git)
+                        : null,
+                    Args = OperatingSystem.IsWindows() ? [] : ["-c", "sleep 2; " + git],
                     WorkingDirectory = spec.WorkingDirectory,
                     Env = spec.Env,
                     ClearEnv = spec.ClearEnv,

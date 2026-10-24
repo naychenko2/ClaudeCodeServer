@@ -357,9 +357,10 @@ function isNetworkError(e: unknown): boolean {
 
 // Отмена — по имени ошибки, а не по типу: потребитель (featurePage.ts:105) судит по
 // e.name === 'AbortError', и внутренняя проверка не должна расходиться с этим контрактом:
-// отмена не-DOMException иначе прошла бы мимо обеих проверок.
+// instanceof-гейт отсекал бы Error-подобную отмену (name='AbortError' без типа Error),
+// и она прошла бы мимо обеих проверок. Поэтому судим только по имени у объекта.
 function isAbortError(e: unknown): boolean {
-  return e instanceof Error && e.name === 'AbortError';
+  return typeof e === 'object' && e !== null && (e as { name?: unknown }).name === 'AbortError';
 }
 
 

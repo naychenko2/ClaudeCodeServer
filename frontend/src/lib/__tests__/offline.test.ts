@@ -227,24 +227,63 @@ describe('request: signal вызывающего', () => {
     expect(offline.isOnline()).toBe(true);
   });
 
-  it('слушатель на signal вызывающего снимается: на долгоживущем signal не накапливается', async () => {
+  it('слушатель на signal вызывающего снимается: на долгоживущем signal не остаётся записи', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
-    let added = 0;
-    let removed = 0;
-    // Сигнал, который переживает запрос: тот же signal передают в следующий вызов
+    // Сигнал, который переживает запрос: тот же signal передают в следующий вызов.
+    // Считаем не вызовы add/remove, а состояние реестра слушателей: Map по типу,
+    // и после каждого запроса запись 'abort' должна быть удалена по ключу.
+    const handlers = new Map<string, () => void>();
     const longLivedSignal = {
       aborted: false,
-      addEventListener: (_type: string, _handler: () => void) => { added++; },
-      removeEventListener: (_type: string, _handler: () => void) => { removed++; },
+      addEventListener: (type: string, handler: () => void) => { handlers.set(type, handler); },
+      removeEventListener: (type: string, handler: () => void) => {
+        if (handlers.get(type) === handler) handlers.delete(type);
+      },
     } as unknown as AbortSignal;
 
     for (let i = 0; i < 3; i++) {
       await offline.request('/tasks/features/f1', { signal: longLivedSignal });
+      // Каждый слушатель снят в finally: на сигнале не остаётся ни одного
+      expect(handlers.has('abort')).toBe(false);
     }
+    expect(handlers.size).toBe(0);
+  });
 
-    expect(added).toBe(3);
-    // Каждый слушатель снят в finally: на сигнале не остаётся ни одного
-    expect(removed).toBe(3);
+  it('отмена вызывающим Error-подобным AbortError (не DOMException) возвращается как есть', async () => {
+    // Ветка «отмена вызывающим» (offline.ts:477) закрыта name-контрактом: отмена,
+    // пришедшая не как DOMException, тоже опознаётся по имени и не трактуется как пропажа связи.
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    }));
+    const ac = new AbortController();
+
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', signal: ac.signal });
+    ac.abort();
+
+    const err = await promise.catch((e: unknown) => e);
+    expect((err as Error).name).toBe('AbortError');
+    // Намеренная отмена — не сетевой сбой: состояние не трогаем, OfflineError нет
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('isAbortError судит по имени без instanceof: объект с name="AbortError" — отмена', async () => {
+    // Потребитель (featurePage.ts:105) судит по e.name === 'AbortError'; слой не должен
+    // быть строже. Наш таймаут, обрывающий fetch объектом не-Error с именем 'AbortError',
+    // обязан дать RequestTimeoutError, а не проткнуть сырой объект (с instanceof-гейтом
+    // он проходил мимо обеих веток).
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject({ name: 'AbortError', message: 'Aborted' }));
+    }));
+
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', timeoutMs: 180_000 });
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+    expect(offline.isOnline()).toBe(true);
   });
 });
 

@@ -1279,4 +1279,78 @@ public class TaskExecutionServiceHoldTests : IDisposable
             It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()), Times.Never(),
             "карточка «пауза снята» не уходит, пока держится новая пауза");
     }
+
+    // ─── W4-SEAM: доработка швов (R2, R3) ─────────────────────────────────────────────────
+
+    // W4-SEAM R2 (минор-мажор): «Стоп» человека по шагу, стоящему на паузе, не затирает
+    // причину паузы. Без guard'а MarkExecutorStopped безусловно пишет interrupted_by_user:
+    // шаг выпадает из продолжения (фильтр по feature_held его не видит), а замороженный
+    // срок чата никто не возвращает — чат вечен. Мутации: убрать guard в MarkStoppedByUserAsync
+    // — краснеет первый абзац (причина затёрта), следом — отсутствие продолжения и срока.
+    [Fact]
+    public async Task UserStopOnPausedStep_KeepsFeatureHeld_AndClearReturnsExpiry()
+    {
+        var user = _userStore.Add("seam-stop-on-hold", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: 10));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec",
+            taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(chat.Id, 10);
+        SetRunningTurn(chat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(chat.Id);
+
+        // «Стоп» человека по той же сессии: процесс уже гашен, пометку не трогаем.
+        (await _sut.MarkStoppedByUserAsync(chat.Id)).Should().BeNull(
+            "Стоп на паузе не пересоздаёт остановку: возвращать эту причину — работа паузы");
+        _tasks.GetById(step.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+            "«Стоп» не затирает feature_held: шаг остаётся в продолжении");
+
+        _tasks.ClearHold(epic.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+        resumed.Should().Be(1, "стопнутый на паузе шаг остаётся продолженным");
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10,
+            "замороженный срок возвращается при снятии: чат не вечный");
+    }
+
+    // W4-SEAM R3 (минор, «четвёртая дверь»): штатный перезапуск шага с пометкой feature_held
+    // при уже снятом Hold (доставка продолжения упала, паузу больше не снимали). Новый чат
+    // поднимается, MarkClaudeStarted снимает пометку — и никто больше не вернёт старому чату
+    // замороженный срок: шаг перестанет быть feature_held, эпик не удаляется. Мутация: убрать
+    // вызов RestoreFrozenChatOfTask в ExecuteClaimedAsync — абзац про срок краснеет (чат
+    // вечный, уборка его не сносит).
+    [Fact]
+    public async Task RestartOfFeatureHeldStep_ReturnsFrozenExpiryOfOldChat()
+    {
+        var user = _userStore.Add("seam-restart-frozen", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: 10));
+        var oldChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec-old",
+            taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, oldChat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(oldChat.Id, 10);
+        SetRunningTurn(oldChat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(oldChat.Id);
+        // Состояние четвёртой двери: Hold снят, продолжение не доставлено — шаг и его чат
+        // на паузе. Штатный перезапуск (tasks_run_executor) не должен оставить чат вечным.
+        _tasks.ClearHold(epic.Id);
+
+        var started = await _sut.ExecuteAsync(step, auto: false);
+        started.LinkedSessionId.Should().NotBe(oldChat.Id, "перезапуск поднимает новый чат");
+        _sessions.GetById(oldChat.Id)!.ExpiresAfterMinutes.Should().Be(10,
+            "замороженный чат перезапускаемого шага получает свой срок обратно — он не вечный");
+        SetIdle(oldChat.Id);
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddMinutes(60));
+        _sessions.GetById(oldChat.Id).Should().BeNull(
+            "возвращённый срок течёт: сиротский чат сносится уборкой, а не живёт вечно");
+    }
 }

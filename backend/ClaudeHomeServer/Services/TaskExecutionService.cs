@@ -327,6 +327,14 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             throw new InvalidOperationException(zoneRefusal);
         }
 
+        // W4-SEAM R3 (четвёртая дверь): штатный перезапуск шага с пометкой feature_held при
+        // уже снятом Hold (доставка продолжения упала, паузу больше не снимали — R1). Новый
+        // чат создаётся, MarkClaudeStarted снимает пометку — и никто больше не вернёт старому
+        // чату замороженный срок: шаг перестанет быть feature_held, а эпик не удаляется.
+        // До подъёма нового чата возвращаем замороженный срок старому — та же страховка, что на
+        // дверях удаления.
+        RestoreFrozenChatOfTask(task);
+
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
         // Модель исполнителя (ADR-007 §5.3): единая точка резолвера — уровень задачи →
         // модель персоны → уровень с матрицами (персона → специальность → слоты). Разворачивается
@@ -1126,6 +1134,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     {
         var task = FindTracked(sessionId);
         if (task is null || task.Status == TaskItemStatus.Done) return null;
+        // W4-SEAM R2: «Стоп» не затирает пометку паузы. Стоп на паузе записан самой паузой:
+        // если перезаписать причину, шаг выпадет из продолжения при снятии (фильтр по
+        // feature_held его не увидит), а замороженный паузой срок чата никто не вернёт —
+        // чат станет вечным. Тот же мотив, что у SetHold: чужие причины не трогает
+        // (TaskManager.cs:1298). Процесс уже гасится штатным Interrupt — пометку не меняем.
+        if (task.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason) return null;
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.InterruptedByUserReason);
         if (stopped is null) return null;
         await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
@@ -1389,17 +1403,22 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (task.Role == TaskRoles.Feature)
             return task.OwnerId is null ? 0 : RestoreFrozenChatsAfterFeatureDelete(task.Id, task.OwnerId);
         // Отдельно — удаление шага на паузе: возвращаем срок его собственному чату.
-        // Хвост N2 (минор, тот же мотив, что R-N2 выше): RestoreFrozenExpiry возвращает
-        // запись и когда возвращать нечего (чат не замораживался — вечный). Считаем только
-        // фактический возврат, как в feature-ветке: guard по реальной заморозке на чате.
-        if (task.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason &&
-            task.LinkedSessionId is not null &&
-            _sessions.GetById(task.LinkedSessionId)?.HoldFrozenExpiresAfterMinutes is not null)
-        {
-            _sessions.RestoreFrozenExpiry(task.LinkedSessionId);
-            return 1;
-        }
-        return 0;
+        return RestoreFrozenChatOfTask(task) ? 1 : 0;
+    }
+
+    // Тело той же страховки для одной задачи: вернуть замороженный паузой срок её собственному
+    // чату. Хвост N2 (минор): RestoreFrozenExpiry возвращает запись и когда возвращать нечего
+    // (чат не замораживался — вечный) — guard по фактической заморозке, возврат считается
+    // только настоящий. Зовётся с двух дверей: удаление задачи (выше) и штатный перезапуск
+    // шага (W4-SEAM R3, «четвёртая дверь» ниже в ExecuteClaimedAsync). Возвращает, был ли
+    // настоящий возврат.
+    private bool RestoreFrozenChatOfTask(TaskItem task)
+    {
+        if (task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) return false;
+        if (task.LinkedSessionId is null) return false;
+        if (_sessions.GetById(task.LinkedSessionId)?.HoldFrozenExpiresAfterMinutes is null) return false;
+        _sessions.RestoreFrozenExpiry(task.LinkedSessionId);
+        return true;
     }
 
     // R-HOLD-K (хвост): карточка в ключевой чат — фоновая нотификация: сбой доставки

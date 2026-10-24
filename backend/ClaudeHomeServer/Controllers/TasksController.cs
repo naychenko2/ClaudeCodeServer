@@ -910,7 +910,21 @@ public class TasksController(
         var run = features.Project(featureId, UserId);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
         if (run.Epic.Hold is null)
-            return Conflict(new { error = "Фича не удержана: снимать нечего" });
+        {
+            // W4-SEAM R1 (тупик после сбоя продолжения): если доставка продолжения упала
+            // (catch в ResumeFeatureTurnsAfterHold), шаг остаётся помеченный feature_held при
+            // уже снятом Hold: карточка «шаг ждёт снятия паузы», фича stopped, а повторный
+            // DELETE hold давал бы 409 «снимать нечего» — тупик. Если такие шаги есть,
+            // повторное снятие не 409, а повтор продолжения: метод идемпотентен по пометке.
+            // Причина снятой паузы из состояния не восстанавливается — карточка повторяется
+            // в общей формулировке (manual).
+            var stuck = tasks.GetByOwner(UserId).Any(t => t.FeatureId == featureId
+                && t.Status == TaskItemStatus.InProgress
+                && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason);
+            if (!stuck) return Conflict(new { error = "Фича не удержана: снимать нечего" });
+            _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, FeatureHoldReasons.Manual);
+            return Ok(new { resumed = new List<string>(), expired = new List<string>() });
+        }
 
         // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. Состав считается
         // ДО снятия паузы (находка R-HOLD-H): пока Hold активен, FeatureHoldRefusal не-null ровно

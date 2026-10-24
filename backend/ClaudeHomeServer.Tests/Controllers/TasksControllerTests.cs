@@ -2540,6 +2540,52 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             m => m.Contains("продолжи"), "реплика-продолжение уходит в чат исполнителя");
     }
 
+    // W4-SEAM R1 (мажор, тупик после сбоя продолжения): доставка продолжения упала — шаг
+    // остаётся feature_held при уже снятом Hold: карточка «шаг ждёт снятия паузы», фича
+    // stopped, а повторный DELETE hold без правки — 409 «снимать нечего» и тупик. Рев
+    // идемпотентен по пометке. Мутации: вернуть безусловный 409 при Hold == null — второй
+    // ответ краснеет (409), пометка не гасится; убрать вызов продолжения в рев-ветке —
+    // пометка остаётся — последний абзац краснеет.
+    [Fact]
+    public async Task ClearHold_PovtorPosleSboyaDostavki_ProdolzhaetShag()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг с боем продолжения", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        var keyChat = await CreatePersonalChatAsync(OwnerId);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetExecutorLauncher(stepId, keyChat, null);
+        tm.MarkClaudeStarted(stepId, chatId, DateTime.UtcNow);
+
+        // Первое снятие: доставка продолжения отказывает — шаг остаётся «на паузе».
+        _factory.LlmAdapters.Adapters[chatId].FailOnSend = true;
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        var first = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        first.StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(stepId)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+            "доставка упала — шаг ждёт, фича выглядит stopped: снимать «нечего», но тупик не финал");
+
+        // Повторный DELETE hold: Hold уже null — без правки здесь 409. С правкой — повтор
+        // продолжения: ждём событие доставки в чат шага, не время.
+        var resumedTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _factory.LlmAdapters.Adapters[chatId].FirstMessageTcs = resumedTcs;
+        _factory.LlmAdapters.Adapters[chatId].FailOnSend = false;
+        var second = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        second.StatusCode.Should().Be(HttpStatusCode.OK,
+            "повторное снятие при оставшихся feature_held шагах — не 409, а повтор продолжения");
+
+        var winner = await Task.WhenAny(resumedTcs.Task, Task.Delay(5000));
+        ReferenceEquals(winner, resumedTcs.Task).Should().BeTrue(
+            "повтор продолжения дошёл до чата шага в потолок");
+        tm.GetById(stepId)!.ExecutorStopReason.Should().BeNull(
+            "рев идемпотентен по пометке: успешное продолжение её гасит — шаг снова в работе");
+    }
+
     // R-HOLD-K (критерий c1): порядок «причина читается ДО ClearHold» (TasksController.cs:938)
     // сервисные тесты не защищают — они зовут сервис напрямую, а reason передаёт сама ручка.
     // Здесь — связка на уровне HTTP: DELETE hold с reason=draft → в ключевой чат уходит

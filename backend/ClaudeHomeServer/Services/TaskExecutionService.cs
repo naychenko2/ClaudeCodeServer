@@ -1226,8 +1226,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 // если задачу удалили между снимком и вызовом, карточка не должна обещать
                 // перезапуск несуществующего шага.
                 // W4-HOLD-J (хвост R-J3): сама смена пометки под try: сбой записи tasks.json
-                // (синхронный режим Tasks:SaveDebounceMs ≤ 0) не должен уходить из метода —
-                // остальные шаги продолжают, карточка оркестратору уходит.
+                // не должен уходить из метода — остальные шаги продолжают, карточка
+                // оркестратору уходит. Честность защиты (хвост R-J4): до try исключение
+                // доходит только в синхронном режиме (Tasks:SaveDebounceMs ≤ 0) и после
+                // Dispose — там ScheduleSave пишет сразу (TaskManager.cs:1511). При
+                // дефолтном дебаунсе (1000 мс) сбой записи глотает OnSaveTimer
+                // (TaskManager.cs:1529), до MarkExecutorStopExpired он не долетает.
                 TaskItem? marked;
                 try
                 {
@@ -1237,6 +1241,11 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 {
                     _log.LogWarning("Не удалось сменить пометку на терминальную {TaskId}: {Message}",
                         t.Id, ex.Message);
+                    // Хвост R-J4 (контракт §1 :241): сбой марки не отменяет факта: чат
+                    // исполнителя исчез, продолжить шаг нельзя — он истёк и ждёт штатного
+                    // tasks_run_executor. Без этого счётчика карточка говорит «прерванных
+                    // шагов нет», хотя шаг с исчезнувшим чатом в фиче есть.
+                    expired++;
                     continue;
                 }
                 if (marked is null) continue;
@@ -1380,9 +1389,16 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (task.Role == TaskRoles.Feature)
             return task.OwnerId is null ? 0 : RestoreFrozenChatsAfterFeatureDelete(task.Id, task.OwnerId);
         // Отдельно — удаление шага на паузе: возвращаем срок его собственному чату.
+        // Хвост N2 (минор, тот же мотив, что R-N2 выше): RestoreFrozenExpiry возвращает
+        // запись и когда возвращать нечего (чат не замораживался — вечный). Считаем только
+        // фактический возврат, как в feature-ветке: guard по реальной заморозке на чате.
         if (task.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason &&
-            task.LinkedSessionId is not null)
-            return _sessions.RestoreFrozenExpiry(task.LinkedSessionId) is not null ? 1 : 0;
+            task.LinkedSessionId is not null &&
+            _sessions.GetById(task.LinkedSessionId)?.HoldFrozenExpiresAfterMinutes is not null)
+        {
+            _sessions.RestoreFrozenExpiry(task.LinkedSessionId);
+            return 1;
+        }
         return 0;
     }
 

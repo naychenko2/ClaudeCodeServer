@@ -1029,6 +1029,10 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // Первый (expired) шаг не помечается — без try IOException ушла бы из метода: второй
     // шаг не получил бы продолжения, карточка не ушла бы оркестратору. Мутация: вернуть
     // марку без try — тест умирает на исключении.
+    // Хвост R-J4 (критерий c1): шаг с исчезнувшим чатом истёк по контракту §1 :241 даже
+    // при сбойной марке — карточка обязана назвать его, а не молчать «прерванных шагов нет».
+    // Мутация: убрать expired++ в catch марки — карточка теряет «1 шаг не продолжен» и
+    // «перезапустить», последние два Verify краснеют.
     [Fact]
     public async Task ResumeFeatureTurnsAfterHold_MarkSaveFails_SecondStepContinuesAndCardSent()
     {
@@ -1085,9 +1089,11 @@ public class TaskExecutionServiceHoldTests : IDisposable
             It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
             Times.Once(), "сбой марки не оборвал цикл: второй шаг получил продолжение");
         keyAdapter.Verify(a => a.SendMessageAsync(
-            It.Is<string>(t => t.Contains("Пауза снята")),
+            It.Is<string>(t => t.Contains("Пауза снята") && t.Contains("1 шаг не продолжен") &&
+                              t.Contains("перезапустить")),
             It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()),
-            Times.Once(), "карточка ушла оркестратору, несмотря на сбой стора");
+            Times.Once(), "карточка ушла оркестратору и честно назвала expired-шаг, " +
+                         "несмотря на сбой стора: его перезапускают штатно");
         syncTasks.Dispose();
     }
 
@@ -1135,6 +1141,49 @@ public class TaskExecutionServiceHoldTests : IDisposable
         await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
             .TickAsync(DateTime.UtcNow.AddMinutes(60));
         _sessions.GetById(chat.Id).Should().BeNull("возвращённый срок течёт: уборка сносит чат");
+    }
+
+    // Хвост N2 (минор 3, критерий c3): step-ветка общей страховки RestoreFrozenChatsBeforeDelete
+    // обязана считать только фактический возврат, как feature-ветка: прежний паттерн
+    // «RestoreFrozenExpiry(...) is not null ? 1 : 0» считал и чаты без заморозки — вечному
+    // чату возвращать нечего. Мутация: убрать guard HoldFrozen — первый счётный абзац
+    // для вечного чата краснеет (метод вернул бы 1).
+    [Fact]
+    public async Task RestoreFrozenChatsBeforeDelete_StepCountsOnlyActualReturns()
+    {
+        var user = _userStore.Add("hold-delete-step-count", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        var frozen = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг с замороженным чатом",
+            Role: "step", FeatureId: epic.Id, Status: TaskItemStatus.InProgress,
+            ExecutionExpiresAfterMinutes: 10));
+        var frozenChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "frozen",
+            taskId: frozen.Id);
+        _tasks.MarkClaudeStarted(frozen.Id, frozenChat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(frozenChat.Id, 10);
+        // Вечный чат: срока нет → FreezeExpiryForHold нечего сохранить, заморозки на чате нет.
+        var eternal = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг с вечным чатом",
+            Role: "step", FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var eternalChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "eternal",
+            taskId: eternal.Id);
+        _tasks.MarkClaudeStarted(eternal.Id, eternalChat.Id, DateTime.UtcNow);
+        SetRunningTurn(frozenChat.Id);
+        SetRunningTurn(eternalChat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(frozenChat.Id);
+        SetIdle(eternalChat.Id);
+
+        // Фактический возврат считается.
+        _sut.RestoreFrozenChatsBeforeDelete(_tasks.GetById(frozen.Id)!).Should().Be(1,
+            "на чате есть сохранённая заморозка — возврат настоящий");
+        _sessions.GetById(frozenChat.Id)!.ExpiresAfterMinutes.Should().Be(10,
+            "замороженный срок вернулся его чату");
+        // Помеченный шаг без заморозки — не возврат.
+        _sut.RestoreFrozenChatsBeforeDelete(_tasks.GetById(eternal.Id)!).Should().Be(0,
+            "вечному чату нечего возвращать: пустой RestoreFrozenExpiry не считается");
+        _sessions.GetById(eternalChat.Id)!.ExpiresAfterMinutes.Should().BeNull(
+            "вечный чат не стал временным от несуществующей заморозки");
     }
 
     // W4-HOLD-N (хвост R-N п.1, критерий c1): повторная пауза не затирает сохранённый срок —

@@ -6,10 +6,14 @@
 //   · резюме нет, пока не нажал кнопку; первый клик — запрос без force (кэш бэка);
 //   · «Обновить» — запрос с force=true;
 //   · повторный клик после «Свернуть» — БЕЗ нового запроса (результат в состоянии);
-//   · 502 — спокойная заглушка с причиной и «Повторить», без toast-цепочек.
+//   · 502 — спокойная заглушка с причиной и «Повторить», без toast-цепочек;
+//   · смена featureId — состояние резюме сброшено (доработка W5-F2a, вердикт W5-R-F2 п.3);
+//   · на 360 кнопки «Остановить», «Обновить», «Свернуть» — minHeight 40 (п.4).
 //
-// Мутация (в отчёте): в FeatureAnalysisLine «Обновить» → fetchSummary(false) —
-// тест «Обновить — запрос с force» краснеет.
+// Мутации (в отчёте): в FeatureAnalysisLine «Обновить» → fetchSummary(false) —
+// тест «Обновить — запрос с force» краснеет; удаление сброса состояния при смене
+// featureId красит тест «смена featureId — состояния нет»; удаление btnStyle в
+// FeatureAnalysisSummary красит тест про minHeight 40.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -21,16 +25,19 @@ import type { FeatureSummaryResult } from '../../lib/api';
 
 // === Мок запроса резюме: журнал вызовов + управляемый ответ ===
 const mockSummary = vi.hoisted(() => ({
-  calls: [] as { force: boolean }[],
+  calls: [] as { fid: string; force: boolean }[],
   result: null as FeatureSummaryResult | null,
   error: null as (Error & { status?: number; body?: { error?: string } }) | null,
+  // true — запрос «висит» (никогда не завершается): состояние «идёт» для теста «Остановить».
+  pending: false,
 }));
 
 vi.mock('../../lib/api', () => ({
   api: {
     tasks: {
-      featureSummary: (_fid: string, force?: boolean) => {
-        mockSummary.calls.push({ force: !!force });
+      featureSummary: (fid: string, force?: boolean) => {
+        mockSummary.calls.push({ fid, force: !!force });
+        if (mockSummary.pending) return new Promise<FeatureSummaryResult>(() => {});
         if (mockSummary.error) return Promise.reject(mockSummary.error);
         return Promise.resolve(mockSummary.result!);
       },
@@ -52,9 +59,9 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
 vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
 
 // Худший случай строки — «idle»: действие ровно одно, «Анализ моделью».
-function mkRun(): FeatureRun {
+function mkRun(featureId = 'f-1'): FeatureRun {
   return {
-    featureId: 'f-1',
+    featureId,
     state: 'idle',
     steps: [],
     reviews: [],
@@ -74,10 +81,20 @@ const SUMMARY: FeatureSummaryResult = {
   cached: true,
 };
 
-function render() {
+// render возвращает и root: тест смены фичи перерендеривает тот же экземпляр
+// с другим run — так же делает WorkspacePage при переходе между фичами.
+function render(opts?: { isMobile?: boolean }) {
   installFakeDom();
-  const { container } = mount(createElement(FeatureAnalysisLine, { run: mkRun() }));
-  return container;
+  const { root, container } = mount(
+    createElement(FeatureAnalysisLine, { run: mkRun(), isMobile: !!opts?.isMobile }),
+  );
+  return { root, c: container };
+}
+
+// minHeight из inline-стиля узла (React приводит числа к px).
+function minHeightPx(el: Element): number {
+  const raw = (el as { style?: Record<string, string> }).style?.minHeight ?? '';
+  return Number.parseInt(raw, 10);
 }
 
 // Дать промисам мока разрешиться.
@@ -96,6 +113,7 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
     mockSummary.calls = [];
     mockSummary.result = SUMMARY;
     mockSummary.error = null;
+    mockSummary.pending = false;
   });
   afterEach(() => {
     uninstallFakeDom();
@@ -103,7 +121,7 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
 
   // === 1. Резюме только по кнопке; первый клик — без force (берётся кэш) ===
   it('без клика резюме нет; клик «Анализ моделью» — запрос без force', async () => {
-    const c = render();
+    const { c } = render();
     expect(findNodeByAttr(c, 'data-testid', 'feature-analysis-summary'), 'до клика резюме нет').toBeNull();
     clickLineSummary(c);
     await flush();
@@ -118,7 +136,7 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
 
   // === 2. «Обновить» — запрос с force (мутация: force=false красит этот тест) ===
   it('«Обновить» — повторный запрос с force=true', async () => {
-    const c = render();
+    const { c } = render();
     clickLineSummary(c);
     await flush();
     const refresh = findNodeByAttr(c, 'data-testid', 'summary-refresh');
@@ -131,7 +149,7 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
 
   // === 3. Повторный клик после «Свернуть» — не-запрос: результат в состоянии ===
   it('свернул и открыл снова — нового запроса нет (результат в состоянии)', async () => {
-    const c = render();
+    const { c } = render();
     clickLineSummary(c);
     await flush();
     const collapse = findNodeByAttr(c, 'data-testid', 'summary-collapse');
@@ -149,7 +167,7 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
   // === 4. 502 — спокойная заглушка с причиной и «Повторить» ===
   it('502 — заглушка «Не удалось составить анализ: …» и кнопка «Повторить»', async () => {
     mockSummary.error = Object.assign(new Error('the model did not answer'), { status: 502, body: { error: 'the model did not answer' } });
-    const c = render();
+    const { c } = render();
     clickLineSummary(c);
     await flush();
     const box = findNodeByAttr(c, 'data-testid', 'feature-analysis-summary');
@@ -173,5 +191,46 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
     expect(bare.length, 'без заголовков — одна колонка').toBe(1);
     expect(bare[0].title, 'без заголовка').toBeNull();
     expect(bare[0].items, 'пункты собраны').toEqual(['пункт один', 'пункт два']);
+  });
+
+  // === 6. Смена featureId — состояние сброшено (вердикт W5-R-F2, п.3) ===
+  it('смена featureId — резюме закрыто, кнопка «Анализ моделью» снова в строке, запрос — для новой фичи', async () => {
+    const { root, c } = render();
+    clickLineSummary(c);
+    await flush();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-analysis-summary'), 'резюме для f-1 раскрыто').not.toBeNull();
+
+    // WorkspacePage при смене фичи переиспользует этот же экземпляр — перерендер
+    // того же компонента с другим run.
+    act(() => { root.render(createElement(FeatureAnalysisLine, { run: mkRun('f-2') })); });
+    expect(findNodeByAttr(c, 'data-testid', 'feature-analysis-summary'), 'после смены фичи резюме нет').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'analysis-line-summary'), 'кнопка «Анализ моделью» вернулась').not.toBeNull();
+    // Клик по новой фиче — новый запрос, привязанный к новой featureId.
+    clickLineSummary(c);
+    await flush();
+    expect(mockSummary.calls.length, 'второй запрос').toBe(2);
+    expect(mockSummary.calls[1].fid, 'запрос — для новой фичи').toBe('f-2');
+  });
+
+  // === 7. Тач-цель 40 на 360 (вердикт W5-R-F2, п.4) ===
+  it('на 360 кнопки «Остановить», «Обновить» и «Свернуть» — minHeight 40', async () => {
+    // «Идёт»: кнопка «Остановить» — тоже 40.
+    mockSummary.pending = true;
+    const { c } = render({ isMobile: true });
+    clickLineSummary(c);
+    const stop = findNodeByAttr(c, 'data-testid', 'summary-stop');
+    expect(stop, '«Остановить» в состоянии «идёт»').not.toBeNull();
+    expect(minHeightPx(stop!), 'тач-цель 40 на мобиле').toBe(40);
+
+    // «Готово»: кнопки шапки — тоже 40.
+    mockSummary.pending = false;
+    const { c: c2 } = render({ isMobile: true });
+    clickLineSummary(c2);
+    await flush();
+    for (const id of ['summary-refresh', 'summary-collapse']) {
+      const btn = findNodeByAttr(c2, 'data-testid', id);
+      expect(btn, `кнопка ${id} в шапке резюме`).not.toBeNull();
+      expect(minHeightPx(btn!), 'тач-цель 40 на мобиле').toBe(40);
+    }
   });
 });

@@ -120,7 +120,11 @@ export function FeatureAnalysisSummary({
         <div style={{ display: 'flex', gap: SP.xs + 2, alignItems: 'center' }}>
           <Sparkles size={ICON_SIZE.xs} {...ICON_PROPS} style={{ color: C.textMuted }} />
           <span style={{ flex: 1, minWidth: 0, color: C.textSecondary }}>Модель читает хронологию фичи…</span>
-          <Button variant="ghost" size="sm" dataTestId="summary-stop" onClick={onStop}>Остановить</Button>
+          <Button
+            variant="ghost" size="sm" dataTestId="summary-stop"
+            style={isMobile ? { minHeight: 40 } : undefined}
+            onClick={onStop}
+          >Остановить</Button>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs + 2, marginTop: SP.xs }}>
           {[92, 78, 60].map(w => (
@@ -158,6 +162,8 @@ export function FeatureAnalysisSummary({
   const stale = !!data?.generatedAt && !!run.lastActivityAt &&
     Date.parse(run.lastActivityAt) > Date.parse(data.generatedAt);
   const btnSize = isMobile ? 'sm' : 'xs';
+  // Тач-цель 40 на 360 (спека §«Мобильная 360»): размер остаётся sm, высота — 40.
+  const btnStyle = isMobile ? { minHeight: 40 } : undefined;
 
   return (
     <div data-testid="feature-analysis-summary" style={box}>
@@ -171,13 +177,13 @@ export function FeatureAnalysisSummary({
         {stale && <Badge tone="warning" size="xs">устарело</Badge>}
         <span style={{ flex: 1 }} />
         <Button
-          variant="ghost" size={btnSize} dataTestId="summary-refresh"
+          variant="ghost" size={btnSize} dataTestId="summary-refresh" style={btnStyle}
           leftIcon={<RotateCcw size={ICON_SIZE.xs} {...ICON_PROPS} />}
           onClick={onRefresh}
         >
           Обновить
         </Button>
-        <Button variant="ghost" size={btnSize} dataTestId="summary-collapse" onClick={onCollapse}>Свернуть</Button>
+        <Button variant="ghost" size={btnSize} dataTestId="summary-collapse" style={btnStyle} onClick={onCollapse}>Свернуть</Button>
       </div>
 
       <div style={{

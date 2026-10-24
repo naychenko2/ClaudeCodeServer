@@ -64,6 +64,19 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
   const [summaryRunning, setSummaryRunning] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Смена фичи: WorkspacePage переиспользует этот экземпляр с другим run, а состояние
+  // привязано к featureId (спека §«Точка 6»). Сбрасываем всё и отменяем висящий запрос —
+  // иначе его ответ вернулся бы под другой фичей и «Анализ моделью» не запросил бы ничего.
+  const lastFeatureRef = useRef(run.featureId);
+  if (lastFeatureRef.current !== run.featureId) {
+    lastFeatureRef.current = run.featureId;
+    abortRef.current?.abort();
+    setOpenSummary(false);
+    setSummaryData(null);
+    setSummaryError(null);
+    setSummaryRunning(false);
+  }
+
   // force=false — берётся кэш бэка; force=true — новый прогон («Обновить»).
   const fetchSummary = (force: boolean) => {
     if (summaryRunning) return;

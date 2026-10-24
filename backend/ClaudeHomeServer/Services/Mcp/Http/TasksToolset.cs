@@ -404,7 +404,7 @@ public sealed class TasksToolset(
                     // (TasksController.Update). Правила двух дверей должны оставаться согласованными.
                     updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
                         callerIsExecutor: session.TaskId == id,
-                        denyFeatureClose: DenyFeatureClose(session, context.OwnerId, id))
+                        denyFeatureClose: DenyFeatureClose(session, context.OwnerId))
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -473,7 +473,7 @@ public sealed class TasksToolset(
                         // tasks_complete на снятой задаче вернёт 400 вместо молчаливого 200 OK
                         isAgentCall: true,
                         callerIsExecutor: session.TaskId == id,
-                        denyFeatureClose: DenyFeatureClose(session, context.OwnerId, id))
+                        denyFeatureClose: DenyFeatureClose(session, context.OwnerId))
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -914,10 +914,11 @@ public sealed class TasksToolset(
     private static McpToolCallResult Json<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOpts));
 
-    // Закрытие эпика фичи — только человеком: запрет из чата-исполнителя этой задачи и на
-    // делегированном ходу (глубина > 0). Из чата человека на глубине 0 проходит.
-    private bool DenyFeatureClose(Session session, string ownerId, string taskId) =>
-        session.TaskId == taskId
+    // Закрытие эпика фичи — только человеком: запрет из чата-исполнителя любой задачи
+    // (Session.TaskId задан) и на делегированном ходу (глубина > 0). Из чата человека
+    // (TaskId == null) на глубине 0 проходит.
+    private bool DenyFeatureClose(Session session, string ownerId) =>
+        session.TaskId is not null
         || !DelegatedTurnGate.Decide(sessions, ownerId, session.Id, "Закрытие фичи",
             alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
             failOpenWhenUnknown: false).Allowed;

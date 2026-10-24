@@ -296,7 +296,7 @@ public class TasksHttpDelegationGateTests : IDisposable
         (await StatusOfAsync(epicId)).Should().NotBe("done");
     }
 
-    /// <summary>Чат-исполнитель эпика (Session.TaskId == id) закрыть его не может даже на глубине 0.</summary>
+    /// <summary>Чат-исполнитель ЛЮБОЙ задачи фичи (Session.TaskId задан, не эпик) закрыть эпик не может даже на глубине 0.</summary>
     [Theory]
     [InlineData("tasks_complete")]
     [InlineData("tasks_update")]
@@ -305,7 +305,7 @@ public class TasksHttpDelegationGateTests : IDisposable
         var (projectId, sessionId) = await CreateProjectWithSessionAsync();
         var epicId = await CreateEpicAsync(projectId);
         _adapters.AgentDepth = 0;
-        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = epicId;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = "шаг-фичи";
 
         var answer = await CallToolAsync(Client, sessionId, tool, new { id = epicId, status = "done" });
 
@@ -351,7 +351,7 @@ public class TasksHttpDelegationGateTests : IDisposable
         var (projectId, humanSession) = await CreateProjectWithSessionAsync();
         var (_, executorSession) = await CreateProjectWithSessionAsync();
         var epicId = await CreateEpicAsync(projectId);
-        _factory.Services.GetRequiredService<SessionManager>().GetById(executorSession)!.TaskId = epicId;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(executorSession)!.TaskId = "шаг-фичи";
         var body = new { status = "done" };
 
         _adapters.AgentDepth = 0;

@@ -444,18 +444,21 @@ public class TasksController(
             var callerIsExecutor =
                 User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
                 && (callerSession is null || callerSession.TaskId == taskId);
-            // Закрытие эпика фичи: исполнитель (по правилу выше) или делегированный ход
-            // (глубина > 0) — отказ; из чата человека на глубине 0 проходит.
-            var denyFeatureClose = callerIsExecutor
+            // Закрытие эпика фичи — только из чата человека: сервисный токен без сессии (fail-closed) или
+            // из чата-исполнителя любой задачи (Session.TaskId задан), либо делегированный ход (глубина > 0).
+            // Сам отказ бросает TaskManager (FeatureCloseDeniedException) — предиката здесь нет.
+            var denyFeatureClose =
+                (User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
+                    && (callerSession is null || callerSession.TaskId is not null))
                 || (callerSessionHeader is not null && !DelegatedTurnGate.Decide(
                     sessions, UserId, callerSessionHeader, "Закрытие фичи",
                     alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
-            if (denyFeatureClose && task.Role == TaskRoles.Feature
-                && req.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done)
-                return StatusCode(StatusCodes.Status403Forbidden,
-                    new { error = TaskManager.FeatureCloseDeniedText });
             updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor, denyFeatureClose)
                 ?? throw new InvalidOperationException("Задача не найдена");
+        }
+        catch (TaskManager.FeatureCloseDeniedException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {

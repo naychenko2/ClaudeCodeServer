@@ -148,7 +148,12 @@ export function FeatureAnalysisSummary({
             ? 'Анализ недоступен на этом сервере'
             : `Не удалось составить анализ: ${error?.text || 'модель не ответила'}`}
           action={status === 502 ? (
-            <Button variant="secondary" size="sm" dataTestId="summary-retry" onClick={onRetry}>Повторить</Button>
+            // Тач-цель 40 на 360 без исключений (спека §«Мобильная 360», вердикт W5-R-F2a, п.1).
+            <Button
+              variant="secondary" size="sm" dataTestId="summary-retry"
+              style={isMobile ? { minHeight: 40 } : undefined}
+              onClick={onRetry}
+            >Повторить</Button>
           ) : undefined}
         />
       </div>

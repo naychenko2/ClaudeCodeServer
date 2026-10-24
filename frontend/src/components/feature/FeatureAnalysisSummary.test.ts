@@ -8,12 +8,18 @@
 //   · повторный клик после «Свернуть» — БЕЗ нового запроса (результат в состоянии);
 //   · 502 — спокойная заглушка с причиной и «Повторить», без toast-цепочек;
 //   · смена featureId — состояние резюме сброшено (доработка W5-F2a, вердикт W5-R-F2 п.3);
-//   · на 360 кнопки «Остановить», «Обновить», «Свернуть» — minHeight 40 (п.4).
+//   · смена featureId — висящий запрос ОТМЕНЁН (signal.aborted), запрос новой фичи ушёл (W5-R-F2a, п.2/4);
+//   · старый запрос отклонён по abort, пока новый «идёт» — finally не трёт состояние нового
+//     запроса: страховка равенства контроллера (W5-R-F2a, п.3);
+//   · на 360 кнопки «Остановить», «Обновить», «Свернуть» — minHeight 40 (п.4),
+//     «Повторить» в заглушке 502 — тоже 40 (W5-R-F2a, п.1).
 //
 // Мутации (в отчёте): в FeatureAnalysisLine «Обновить» → fetchSummary(false) —
 // тест «Обновить — запрос с force» краснеет; удаление сброса состояния при смене
-// featureId красит тест «смена featureId — состояния нет»; удаление btnStyle в
-// FeatureAnalysisSummary красит тест про minHeight 40.
+// featureId красит тест «смена featureId — состояния нет»; удаление abort() из
+// useEffect красит тест про отмену висящего запроса; удаление guards в finally
+// (просто setSummaryRunning(false)) красит тест про «идёт» нового запроса; удаление
+// btnStyle и style у «Повторить» красит тесты про minHeight 40.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -25,19 +31,28 @@ import type { FeatureSummaryResult } from '../../lib/api';
 
 // === Мок запроса резюме: журнал вызовов + управляемый ответ ===
 const mockSummary = vi.hoisted(() => ({
-  calls: [] as { fid: string; force: boolean }[],
+  calls: [] as { fid: string; force: boolean; signal?: AbortSignal }[],
   result: null as FeatureSummaryResult | null,
   error: null as (Error & { status?: number; body?: { error?: string } }) | null,
-  // true — запрос «висит» (никогда не завершается): состояние «идёт» для теста «Остановить».
+  // true — запрос «висит» (не завершается, пока его не отменят): состояние «идёт».
   pending: false,
 }));
 
 vi.mock('../../lib/api', () => ({
   api: {
     tasks: {
-      featureSummary: (fid: string, force?: boolean) => {
-        mockSummary.calls.push({ fid, force: !!force });
-        if (mockSummary.pending) return new Promise<FeatureSummaryResult>(() => {});
+      featureSummary: (fid: string, force?: boolean, signal?: AbortSignal) => {
+        mockSummary.calls.push({ fid, force: !!force, signal });
+        if (mockSummary.pending) {
+          // Висящий запрос отклоняется по abort — как настоящий fetch.
+          return new Promise<FeatureSummaryResult>((resolve, reject) => {
+            if (signal) {
+              signal.addEventListener('abort', () => {
+                reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+              });
+            }
+          });
+        }
         if (mockSummary.error) return Promise.reject(mockSummary.error);
         return Promise.resolve(mockSummary.result!);
       },
@@ -212,7 +227,49 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
     expect(mockSummary.calls[1].fid, 'запрос — для новой фичи').toBe('f-2');
   });
 
-  // === 7. Тач-цель 40 на 360 (вердикт W5-R-F2, п.4) ===
+  // === 7. «Повторить» в заглушке 502 — тач-цель 40 на 360 (вердикт W5-R-F2a, п.1) ===
+  it('на 360 «Повторить» в заглушке 502 — minHeight 40', async () => {
+    mockSummary.error = Object.assign(new Error('the model did not answer'), { status: 502, body: { error: 'the model did not answer' } });
+    const { c } = render({ isMobile: true });
+    clickLineSummary(c);
+    await flush();
+    const retry = findNodeByAttr(c, 'data-testid', 'summary-retry');
+    expect(retry, 'кнопка «Повторить» в заглушке').not.toBeNull();
+    expect(minHeightPx(retry!), 'тач-цель 40 на мобиле').toBe(40);
+  });
+
+  // === 8. Смена featureId — висящий запрос отменён (вердикт W5-R-F2a, п.2 и п.4) ===
+  it('смена featureId — старый запрос отменён по signal, запрос новой фичи ушёл', async () => {
+    mockSummary.pending = true;
+    const { root, c } = render();
+    clickLineSummary(c);
+    expect(mockSummary.calls.length, 'запрос для f-1 ушёл').toBe(1);
+    // Перерендер с другим run — тот же путь, что у WorkspacePage при смене фичи.
+    act(() => { root.render(createElement(FeatureAnalysisLine, { run: mkRun('f-2') })); });
+    expect(mockSummary.calls[0].signal?.aborted, 'висящий запрос отменён').toBe(true);
+    // Кнопка вернулась — клик плодит запрос уже для новой фичи.
+    clickLineSummary(c);
+    await flush();
+    expect(mockSummary.calls.length, 'второй запрос').toBe(2);
+    expect(mockSummary.calls[1].fid, 'запрос — для новой фичи').toBe('f-2');
+  });
+
+  // === 9. Страховка finally (вердикт W5-R-F2a, п.3) ===
+  it('старый запрос отклонён по abort, пока новый «идёт» — состояние «идёт» не сбито', async () => {
+    mockSummary.pending = true;
+    const { root, c } = render();
+    clickLineSummary(c);                      // запрос f-1 — «висит»
+    act(() => { root.render(createElement(FeatureAnalysisLine, { run: mkRun('f-2') })); }); // отмена
+    clickLineSummary(c);                      // новый запрос f-2 — уже «идёт»
+    await flush();                           // старый finally исполняется после клика
+    const box = findNodeByAttr(c, 'data-testid', 'feature-analysis-summary');
+    expect(box, 'резюме открыто').not.toBeNull();
+    // Без страховки старый finally сбросил бы summaryRunning — «идёт» превратилось бы
+    // в пустое «готово». С ней — кнопка «Остановить» на месте.
+    expect(findNodeByAttr(c, 'data-testid', 'summary-stop'), 'новый запрос всё ещё «идёт»').not.toBeNull();
+  });
+
+  // === 10. Тач-цель 40 на 360 (вердикт W5-R-F2, п.4) ===
   it('на 360 кнопки «Остановить», «Обновить» и «Свернуть» — minHeight 40', async () => {
     // «Идёт»: кнопка «Остановить» — тоже 40.
     mockSummary.pending = true;

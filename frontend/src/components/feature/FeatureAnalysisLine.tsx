@@ -3,7 +3,7 @@
 // Состояние выбирает чистая функция analysisLineState — компонент только рисует.
 // Без `run` (старые ответы) строки нет; пустых состояний у строки не бывает — худшее — other.
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { Badge } from '../ui/Badge';
 import { Dot } from '../ui/Dot';
@@ -65,17 +65,22 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
   const abortRef = useRef<AbortController | null>(null);
 
   // Смена фичи: WorkspacePage переиспользует этот экземпляр с другим run, а состояние
-  // привязано к featureId (спека §«Точка 6»). Сбрасываем всё и отменяем висящий запрос —
-  // иначе его ответ вернулся бы под другой фичей и «Анализ моделью» не запросил бы ничего.
+  // привязано к featureId (спека §«Точка 6»). Сброс состояния — здесь; отмена висящего
+  // запроса — в useEffect по run.featureId (вердикт W5-R-F2a, п.4: без побочного
+  // эффекта abort в рендере). Без отмены ответ старого запроса вернулся бы под другой
+  // фичей и «Анализ моделью» не запросил бы ничего.
   const lastFeatureRef = useRef(run.featureId);
   if (lastFeatureRef.current !== run.featureId) {
     lastFeatureRef.current = run.featureId;
-    abortRef.current?.abort();
     setOpenSummary(false);
     setSummaryData(null);
     setSummaryError(null);
     setSummaryRunning(false);
   }
+
+  useEffect(() => {
+    abortRef.current?.abort();
+  }, [run.featureId]);
 
   // force=false — берётся кэш бэка; force=true — новый прогон («Обновить»).
   const fetchSummary = (force: boolean) => {
@@ -91,7 +96,14 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
         const err = e as Error & { status?: number; body?: { error?: string } };
         setSummaryError({ status: err.status ?? 0, text: err.body?.error || err.message });
       })
-      .finally(() => { setSummaryRunning(false); abortRef.current = null; });
+      .finally(() => {
+        // Страховка (вердикт W5-R-F2a, п.3): гасим состояние, только если этот запрос
+        // всё ещё текущий — иначе старый finally затрёт «идёт» нового запроса.
+        if (abortRef.current === ac) {
+          abortRef.current = null;
+          setSummaryRunning(false);
+        }
+      });
   };
 
   // Чат шага в архиве или пуст — действие «Открыть чат» снимается; «Анализ моделью»

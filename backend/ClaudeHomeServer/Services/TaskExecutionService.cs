@@ -193,6 +193,24 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // единственный путь в Done, поднимает событие ровно на переходе
         _tasks.TaskCompleted += OnTaskCompleted;
         _tasks.TaskDeleted += t => ReleaseReviewTree(t.Id);
+        // Предгейт шага красный второй раз подряд по той же причине: доклад постановщику (NC-P1b)
+        _tasks.PregateEscalated += (t, text) => _ = ReportPregateEscalationAsync(t, text);
+    }
+
+    // Синхронное событие TaskManager → фон: доклад идёт чатом исполнителя вверх (ReportUpAsync сам
+    // вычисляет адресата), ошибки логируем — доставка не должна ронять вызов предгейта
+    private async Task ReportPregateEscalationAsync(TaskItem task, string text)
+    {
+        if (task.LinkedSessionId is null || task.OwnerId is null) return;
+        try
+        {
+            var result = await _sessions.ReportUpAsync(task.LinkedSessionId, "⛔ " + text, task.OwnerId, withTurn: true);
+            _log.LogInformation("Предгейт задачи {TaskId}: доклад постановщику — {Outcome}", task.Id, result);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Не удалось доложить постановщику о втором красном предгейте задачи {TaskId}", task.Id);
+        }
     }
 
     // Предусловие ухода цикла в фазу waiting. Задача «живая делегированная» = поставлена

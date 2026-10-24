@@ -181,6 +181,9 @@ public class TaskItem
     public List<AcceptanceCriterion> Acceptance { get => _acceptance; set => _acceptance = value ?? []; }
     public List<AcceptanceEvidence> Evidence { get => _evidence; set => _evidence = value ?? []; }
     private List<AcceptanceCriterion> _acceptance = [];
+    // Последний результат предгейта шага (NC-P1b): кладёт только TaskManager.RecordPregate по вердикту
+    // ITaskPregate. Аддитивное поле: старые задачи читаются с null. Гейт закрытия шага — PregateRules
+    public PregateRecord? Pregate { get; set; }
     private List<AcceptanceEvidence> _evidence = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
@@ -201,6 +204,11 @@ public record AcceptanceCriterion(string Id, string Text);
 
 // Свидетельство по критерию: How — чем проверено, Result — что получилось (вывод, цифры).
 public record AcceptanceEvidence(string CriterionId, string How, string Result);
+
+// Результат предгейта: Sha — коммит дерева, по которому гнали проверки; Green — вердикт; Summary — вывод
+// красных проверок (для зелёного пусто); RedKey — «отпечаток» причины красного (имена красных
+// проверок), RedStreak — сколько красных подряд по одному RedKey (зелёный обнуляет).
+public record PregateRecord(string Sha, bool Green, string Summary, DateTime At, int RedStreak = 0, string? RedKey = null);
 
 public class TaskSubtask
 {

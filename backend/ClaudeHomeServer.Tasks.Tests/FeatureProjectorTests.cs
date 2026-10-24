@@ -803,6 +803,85 @@ public class FeatureProjectorTests
         longest2.Should().BeNull("ничего не идёт — «дольше всех сейчас» нет");
     }
 
+    // ─── Доработка 4a241bee (вердикт 8a7d7993): приоритет stopped над wait ───────────────────
+
+    // п.1: задача с ОБОИМИ маркерами (ждёт человека + валидная пометка остановки,
+    // MarkExecutorStopped) — тревога «stopped»: приоритет stopped → wait, причина остановки
+    // видна, state тоже stopped. Мутация: вернуть && AwaitingHumanSince is null в stoppedTask
+    // (FeatureProjector.cs:133) → тревога станет wait → краснеет.
+    [Fact]
+    public void Build_ОбаМаркера_ТревогаStoppedПриоритетНадWait()
+    {
+        var t = new DateTime(2026, 10, 17, 10, 0, 0);
+        var epic = new TaskItem { Id = "epic-both", Role = TaskRoles.Feature };
+        var both = new TaskItem
+        {
+            Id = "b1", FeatureId = "epic-both", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = t,
+            ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed",
+            AwaitingHumanSince = t.AddMinutes(40), AwaitingHumanReason = "ждём подтверждения",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, both]);
+
+        run.Attention!.Kind.Should().Be("stopped", "оба маркера — stopped: видна причина, а не «ждёт вас»");
+        run.Attention!.TaskId.Should().Be("b1");
+        run.Attention!.Since.Should().Be(t.AddMinutes(30), "since — момент остановки");
+        run.Attention!.Reason.Should().Be("auth_failed", "причина остановки не выпадает");
+        run.State.Should().Be(FeatureStates.Stopped, "state тоже stopped — ветка выше wait");
+        run.Now.Should().BeEmpty("держится — не «Сейчас»");
+    }
+
+    // п.2в: InProgress-задача со stale-пометкой (ExecutorStoppedAt < ClaudeStartedAt) — не
+    // «stopped»: тот же guard, что у тревоги и Now (HasValidStopMark). Статус «pending» —
+    // остаток: ход не идёт (IsTurnRunning требует отсутствия пометки), валидной остановки нет.
+    // Мутация: вернуть старое условие «ExecutorStoppedAt is not null» → «stopped» → краснеет.
+    [Fact]
+    public void Build_Stage_УстаревшаяПометка_СтатусPending()
+    {
+        var t = new DateTime(2026, 10, 17, 10, 0, 0);
+        var epic = new TaskItem { Id = "epic-stale-exec", Role = TaskRoles.Feature };
+        var s = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic-stale-exec", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Кира",
+            ClaudeStartedAt = t.AddHours(1),
+            ExecutorStoppedAt = t, ExecutorStopReason = "auth_failed",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s]);
+
+        var prod = Stage(run, "prod");
+        prod.Executors.Should().HaveCount(1);
+        prod.Executors[0].Status.Should().Be("pending", "stale-пометка — не остановка: не «stopped»");
+    }
+
+    // п.2г: задача со stale-пометкой попадает в «дольше всех сейчас» — согласованно с Now:
+    // IsHeld ложна (пометка невалидна), задача идёт. Мутация: снять stale-guard в IsHeld
+    // (оставить голый ExecutorStoppedAt) → задача выпадет из Now и LongestNow → краснеет.
+    [Fact]
+    public void Build_LongestNow_УстаревшаяПометкаВNow()
+    {
+        var t = new DateTime(2026, 10, 17, 10, 0, 0);
+        var now = new DateTime(2026, 10, 18, 0, 0, 0);
+        var epic = new TaskItem { Id = "epic-stale-long", Role = TaskRoles.Feature };
+        var s = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic-stale-long", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Кира",
+            ClaudeStartedAt = t.AddHours(1),
+            ExecutorStoppedAt = t, ExecutorStopReason = "auth_failed",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s]);
+        var (_, longest) = FeatureBreakdown.Build(run, null, Array.Empty<FeatureIndexSession>(), null, now);
+
+        run.Now.Should().HaveCount(1, "stale-пометка — не остановка: задача в «Сейчас»");
+        longest!.TaskId.Should().Be("s1", "та же задача — в «дольше всех сейчас»");
+        run.Now.Select(n => n.TaskId).Should().Contain(longest!.TaskId, "LongestNow ⊆ Now");
+    }
+
     // Финал accepted, merge-задачи нет → Attention = merge, since = CompletedAt финала.
     [Fact]
     public void Build_ФиналAcceptedБезМержа_AttentionMerge()

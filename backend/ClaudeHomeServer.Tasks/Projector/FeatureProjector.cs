@@ -113,24 +113,24 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Тревога: приоритет stopped → wait явный → merge.
         FeatureAttention? attention = null;
 
-        // waitTask — явный wait («ждущая» половина IsHeld, ниже рядом с IsTurnRunning:
-        // AwaitingHumanSince, ждущий дольше всех); finalAccepted — для merge (attention) и
-        // для state (merge_pending/merged). Вынесены в scope метода: используются и в
-        // attention, и в расчёте state.
+        // waitTask — явный wait (AwaitingHumanSince, ждущий дольше всех); finalAccepted —
+        // для merge (attention) и для state (merge_pending/merged). Вынесены в scope метода:
+        // используются и в attention, и в расчёте state. IsHeld тут не нужен:
+        // AwaitingHumanSince сам делает задачу held.
         var waitTask = featureTasks
-            .Where(t => IsHeld(t) && t.AwaitingHumanSince is not null)
+            .Where(t => t.AwaitingHumanSince is not null)
             .OrderBy(t => t.AwaitingHumanSince)
             .FirstOrDefault();
         bool finalAccepted = IsFinalAccepted(final);
 
-        // 1. stopped: InProgress-задача, «держится» без ожидания человека — «остановленная»
-        //    половина IsHeld. Тот же guard «позже ClaudeStartedAt» (HasValidStopMark) — защита
-        //    от stale-пометки: если исполнитель перезапустили (MarkClaudeStarted сбрасывает
-        //    ExecutorStoppedAt), но пометка не успела сброситься, ClaudeStartedAt будет
-        //    позже → stopped не показываем.
+        // 1. stopped: InProgress-задача с валидной пометкой остановки (HasValidStopMark) —
+        //    «остановленная» половина IsHeld. Задача с обоими маркерами (ещё и ждёт человека)
+        //    остаётся stopped: приоритет stopped → wait (:113), причина остановки видна.
+        //    Тот же guard «позже ClaudeStartedAt» (HasValidStopMark) — защита от stale-пометки:
+        //    если исполнитель перезапустили (MarkClaudeStarted сбрасывает ExecutorStoppedAt),
+        //    но пометка не успела сброситься, ClaudeStartedAt будет позже → stopped не показываем.
         var stoppedTask = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress
-                && IsHeld(t) && t.AwaitingHumanSince is null)
+            .Where(t => t.Status == TaskItemStatus.InProgress && HasValidStopMark(t))
             .OrderByDescending(t => t.ExecutorStoppedAt)
             .FirstOrDefault();
         if (stoppedTask is not null)
@@ -645,13 +645,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             if (t.ClaudeStartedAt is not null)
                 Add(t, "started", t.ClaudeStartedAt.Value, null);
 
-            // stopped — только у незакрытой (InProgress) задачи и только когда ExecutorStoppedAt >
-            // ClaudeStartedAt (то же правило, что у Attention: guard от stale-пометки).
+            // stopped — только у незакрытой (InProgress) задачи с валидной пометкой остановки
+            // (HasValidStopMark — то же правило, что у Attention: guard от stale-пометки).
             // reason = ExecutorStopReason.
-            if (t.Status == TaskItemStatus.InProgress
-                && t.ExecutorStoppedAt is not null
-                && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt))
-                Add(t, "stopped", t.ExecutorStoppedAt.Value, Truncate(t.ExecutorStopReason));
+            if (t.Status == TaskItemStatus.InProgress && HasValidStopMark(t))
+                Add(t, "stopped", t.ExecutorStoppedAt!.Value, Truncate(t.ExecutorStopReason));
 
             // waiting — «ждёт вас» (AwaitingHumanSince); reason = AwaitingHumanReason.
             if (t.AwaitingHumanSince is not null)
@@ -1129,7 +1127,9 @@ public sealed class FeatureProjector(TaskManager tasks)
     // → done (Done) → pending (остальное, в том числе не стартовала).
     // waiting/stopped — половины IsHeld (выше, рядом с IsTurnRunning), тот же guard, что у тревоги: только
     // InProgress-задачи с валидной пометкой; закрытая вручную (Done) задача со stale-пометками
-    // не «stopped»/«waiting» (тревоги по ней тоже нет), как и у тревоги.
+    // не «stopped»/«waiting» (тревоги по ней тоже нет), как и у тревоги. InProgress-задача со
+    // stale-пометкой тоже не «stopped» — попадает в «pending»: ход не идёт, остановки нет
+    // (фиксировано тестом Build_Stage_УстаревшаяПометка_СтатусPending).
     private static string ExecutorStatus(TaskItem t)
     {
         if (IsTurnRunning(t))

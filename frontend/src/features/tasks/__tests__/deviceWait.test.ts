@@ -21,6 +21,11 @@ function task(over: Partial<Task> = {}): Task {
 const render = (t: Task, deviceName?: string) =>
   renderToStaticMarkup(createElement(TaskCard, { task: t, deviceName, onClick: () => {} }));
 
+// Глиф lucide по иконке — общий helper проверок карточки и панели (хвост R-F7: был дубль
+// внутри двух describe-блоков, вынесен на уровень файла)
+const iconClass = (icon: LucideIcon) =>
+  /lucide-[a-z0-9-]+/.exec(renderToStaticMarkup(createElement(icon, { size: 16 })))![0];
+
 describe('словарь ожидания устройства', () => {
   it('ждёт только незакрытая задача с отметкой', () => {
     expect(isDeviceWaiting({ deviceWaitSince: '2026-09-24T10:00:00Z', status: 'todo' })).toBe(true);
@@ -134,9 +139,6 @@ describe('терминальная остановка исполнителя', (
   // W4-HOLD-F5 (п.2 R-F5): карточка не собирает чип сама — текст, тон и глиф приходят
   // из одного триплета executorStopVisual. Мутация: зафиксировать что-то из трёх
   // параллельно в карточке — тест краснеет.
-  const iconClass = (icon: LucideIcon) =>
-    /lucide-[a-z0-9-]+/.exec(renderToStaticMarkup(createElement(icon, { size: 16 })))![0];
-
   it('единый источник: карточка повторяет текст, тон и глиф функции', () => {
     for (const reason of ['feature_held', 'feature_held_expired', 'auth_failed', 'device_wait_expired']) {
       const v = executorStopVisual(reason);
@@ -205,8 +207,6 @@ describe('панель деталей задачи', () => {
     renderToStaticMarkup(createElement(TaskDetailsPane, { task: t, project: null, onDeleted: () => {} }));
   // Notice — единственный элемент с role="status" в панели: его стиль и есть тон плашки
   const noticeStyle = (html: string) => /role="status" style="([^"]*)"/.exec(html)?.[1] ?? '';
-  const iconClass = (icon: LucideIcon) =>
-    /lucide-[a-z0-9-]+/.exec(renderToStaticMarkup(createElement(icon, { size: 16 })))![0];
 
   it('feature_held — панель отмечает паузу Pause и warning, а не Unplug и danger', () => {
     const html = renderPane(task({ executorStopReason: 'feature_held' }));
@@ -231,6 +231,16 @@ describe('панель деталей задачи', () => {
   it('завершённая задача плашки остановки в панели не получает', () => {
     const html = renderPane(task({ status: 'done', executorStopReason: 'feature_held' }));
     expect(html).not.toContain('Фичу удержали на паузе');
+    expect(noticeStyle(html)).toBe('');
+  });
+
+  // Хвост R-F7: обратный тест для панели — восстановимая причина (subagent_truncated)
+  // не терминальная, плашки остановки быть не должно. Мутация: снять isTerminalStop
+  // в гейте TaskDetailsPane.tsx:251 — тест краснеет (появляются «Исполнение прервано»
+  // и Notice с role="status").
+  it('восстановимый обрыв — панель без плашки остановки и без role="status"', () => {
+    const html = renderPane(task({ executorStopReason: 'subagent_truncated' }));
+    expect(html).not.toContain('Исполнение прервано');
     expect(noticeStyle(html)).toBe('');
   });
 

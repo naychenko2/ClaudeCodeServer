@@ -42,7 +42,7 @@ public sealed class PregateCheckOptions
 }
 
 // Предгейт шага (шов ITaskPregate): проверки из конфига идут по очереди под одной блокировкой
-// дерева и общим потолком, каждая — слотом очереди сборок (BuildConcurrencyGate), как
+// дерева, каждая со своим потолком и слотом очереди сборок (BuildConcurrencyGate), как
 // `dotnet build`/`npm run` у DotnetBuildService и NpmBuildService. Модели нет: вердикт —
 // код выхода и строки с предупреждением или ошибкой из вывода.
 public sealed class PregateService : ITaskPregate
@@ -76,8 +76,6 @@ public sealed class PregateService : ITaskPregate
             return PregateVerdict.Refused("В этом дереве уже идёт сборка или прогон тестов — предгейт не начат."
                 + PhasePipeline.BusyWaitHint);
 
-        // Один потолок на весь предгейт: очередь сборок входит в него, как у run_tests
-        using var limit = PhasePipeline.Ceiling(_testRunsOptions.CeilingSeconds, ct);
         var results = new List<PregateCheckResult>();
         foreach (var check in _options.Checks)
         {
@@ -87,6 +85,9 @@ public sealed class PregateService : ITaskPregate
                 continue;
             }
 
+            // Потолок — на каждую проверку отдельно (очередь сборок входит в него, как у run_tests): долгая
+            // сборка не съедает запас тестов-сторожей, а суммарное время ограничено числом проверок конфига
+            using var limit = PhasePipeline.Ceiling(_testRunsOptions.CeilingSeconds, ct);
             PregateCheckResult? result;
             try
             {
@@ -101,7 +102,7 @@ public sealed class PregateService : ITaskPregate
             if (result is null)
                 return PregateVerdict.Refused(ct.IsCancellationRequested
                     ? "Предгейт остановлен."
-                    : $"Предгейт не уложился в потолок {_testRunsOptions.CeilingSeconds} с (вместе с очередью сборок).",
+                    : $"Проверка «{check.Name}» не уложилась в потолок {_testRunsOptions.CeilingSeconds} с (вместе с очередью сборок).",
                     results);
             results.Add(result);
         }

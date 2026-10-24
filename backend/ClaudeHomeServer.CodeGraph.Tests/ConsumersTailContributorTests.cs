@@ -547,21 +547,26 @@ public class ConsumersTailContributorTests
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "backend", "ClaudeHomeServer.slnx")))
             root = root.Parent;
         root.Should().NotBeNull("тест ищет сторожей по исходникам репозитория");
-        // Классы сторожей живут в двух тестовых проектах; ищем только в них, а не по всему backend/
-        var projects = new[] { "ClaudeHomeServer.Tests", "ClaudeHomeServer.Guards.Tests" };
-        var sources = projects
-            .SelectMany(p => Directory.EnumerateFiles(Path.Combine(root!.FullName, "backend", p), "*.cs", SearchOption.AllDirectories))
-            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
-                        && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
-            .Select(File.ReadAllText).ToList();
-
         var guards = ContractGuardMap.Entries.SelectMany(e => e.Guards).Where(g => g.TestClass is not null).ToList();
         guards.Should().NotBeEmpty();
+        // Класс ищется только в проекте, к которому он привязан в таблице; исходники проекта читаем один раз
+        var sourcesByProject = new Dictionary<string, List<string>>();
+        foreach (var g in guards)
+        {
+            g.TestProject.Should().NotBeNullOrEmpty($"у сторожа {g.TestClass} в таблице не указан его тестовый проект");
+            if (sourcesByProject.ContainsKey(g.TestProject!)) continue;
+            sourcesByProject[g.TestProject!] = Directory
+                .EnumerateFiles(Path.Combine(root!.FullName, "backend", g.TestProject!), "*.cs", SearchOption.AllDirectories)
+                .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                            && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+                .Select(File.ReadAllText).ToList();
+        }
+
         foreach (var g in guards)
         {
             var cls = new System.Text.RegularExpressions.Regex($@"\bclass\s+{g.TestClass}\b");
-            var body = sources.Where(src => cls.IsMatch(src)).ToList();
-            body.Should().NotBeEmpty($"класс сторожа {g.TestClass} должен существовать в тестовых проектах");
+            var body = sourcesByProject[g.TestProject!].Where(src => cls.IsMatch(src)).ToList();
+            body.Should().NotBeEmpty($"класс сторожа {g.TestClass} должен существовать в проекте {g.TestProject}");
             if (g.TestMethod is not null)
             {
                 // объявление метода: возвращаемый тип, имя и открывающая скобка, а не любое упоминание

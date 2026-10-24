@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -7,8 +9,15 @@ namespace ClaudeHomeServer.Tests.Services;
 // изменённых файлов от основной ветки
 public class GitWorktreeHeadReaderTests : IDisposable
 {
+    private sealed class LocalLaunchers : ILauncherFactory
+    {
+        public IProcessLauncher Local => LocalProcessRunner.Instance;
+        public IProcessLauncher ForOwner(string? ownerId) => LocalProcessRunner.Instance;
+        public IProcessLauncher ForProject(Project project) => LocalProcessRunner.Instance;
+    }
+
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "git_head_" + Guid.NewGuid().ToString("N"));
-    private readonly GitWorktreeHeadReader _sut = new();
+    private readonly GitWorktreeHeadReader _sut = new(new LocalLaunchers());
 
     public GitWorktreeHeadReaderTests()
     {
@@ -88,5 +97,17 @@ public class GitWorktreeHeadReaderTests : IDisposable
     public void ChangedFiles_БезИзменений_ПустойСписок()
     {
         _sut.ChangedFiles(_dir).Should().NotBeNull().And.BeEmpty();
+    }
+
+    [Fact]
+    public void ChangedFiles_ВеткаОтMain_НеТянетФайлыУстаревшегоMaster()
+    {
+        // master остался на основе, main ушёл вперёд на один коммит, ветка шага — от main
+        Git("checkout", "-b", "main");
+        Commit("backend/Old.cs", "o");
+        Git("checkout", "-b", "step");
+        Commit("frontend/src/App.tsx", "a");
+
+        _sut.ChangedFiles(_dir).Should().Equal("frontend/src/App.tsx");
     }
 }

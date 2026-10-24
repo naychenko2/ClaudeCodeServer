@@ -226,6 +226,26 @@ public class TaskManagerPregateTests : IDisposable
     }
 
     [Fact]
+    public void СбросПредгейта_НеИсчерпаннойСерии_Отказ()
+    {
+        var task = Step();
+        _sut.RecordPregate(task.Id, Sha1, false, "x", "build");
+
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(ResetPregate: true), isAgentCall: true);
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("исчерпанной");
+        _sut.GetById(task.Id)!.Pregate.Should().NotBeNull("отказ не трогает запись");
+    }
+
+    [Fact]
+    public void Applies_СогласованоСGatedPath_НаНеизменныхРолиИДереве()
+    {
+        foreach (var role in new[] { TaskRoles.Step, TaskRoles.Rework, TaskRoles.Cut, null })
+            foreach (var path in new[] { Wt, "", "  ", null })
+                PregateRules.Applies(role, path).Should().Be(PregateRules.GatedPath(role, role, path, path) is not null,
+                    $"роль {role}, дерево «{path}»");
+    }
+
+    [Fact]
     public void ШагБезWorktree_ЗакрываетсяБезГейта()
     {
         var task = Step(worktree: null);

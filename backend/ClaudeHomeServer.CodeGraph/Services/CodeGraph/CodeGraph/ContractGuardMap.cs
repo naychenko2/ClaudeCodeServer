@@ -7,13 +7,17 @@ namespace ClaudeHomeServer.Services.CodeGraph;
 // (опечатка в имени сторожа даёт красный тест, а не молчаливо пустую подсказку).
 internal static class ContractGuardMap
 {
-    // TestClass/TestMethod — имя теста в коде (для проверки существования); у проверок без класса
-    // (npm-скрипты, ui_probe) оба null, Title — человекочитаемое имя как оно пойдёт в хвост.
-    internal sealed record Guard(string Title, string? TestClass = null, string? TestMethod = null)
+    // TestClass/TestMethod — имя теста в коде, TestProject — тестовый проект, где этот класс объявлен
+    // (для проверки существования: ищем только в нём); у проверок без класса (npm-скрипты, ui_probe)
+    // все три null, Title — человекочитаемое имя как оно пойдёт в хвост.
+    internal sealed record Guard(string Title, string? TestClass = null, string? TestMethod = null, string? TestProject = null)
     {
-        public static Guard Test(string testClass, string? method = null) =>
-            new(method is null ? testClass : $"{testClass}.{method}", testClass, method);
+        public static Guard Test(string testProject, string testClass, string? method = null) =>
+            new(method is null ? testClass : $"{testClass}.{method}", testClass, method, testProject);
     }
+
+    private const string GuardsTests = "ClaudeHomeServer.Guards.Tests";
+    private const string MainTests = "ClaudeHomeServer.Tests";
 
     internal sealed record Entry(string Prefix, IReadOnlyList<Guard> Guards);
 
@@ -21,17 +25,17 @@ internal static class ContractGuardMap
     [
         new("backend/ClaudeHomeServer.Core/",
         [
-            Guard.Test("SubsystemBoundaryTests", "CoreDll_СодержитТолькоРазрешённыеНеймспейсы"),
-            Guard.Test("CorePackageReferenceGuardTests"),
+            Guard.Test(GuardsTests, "SubsystemBoundaryTests", "CoreDll_СодержитТолькоРазрешённыеНеймспейсы"),
+            Guard.Test(MainTests, "CorePackageReferenceGuardTests"),
         ]),
         new("backend/ClaudeHomeServer.",
         [
-            Guard.Test("SubsystemBoundaryTests"),
-            Guard.Test("SubsystemBoundaryCoverageTests"),
+            Guard.Test(GuardsTests, "SubsystemBoundaryTests"),
+            Guard.Test(GuardsTests, "SubsystemBoundaryCoverageTests"),
         ]),
         new("backend/ClaudeHomeServer/Controllers/",
         [
-            Guard.Test("AnonymousEndpointsGuardTests"),
+            Guard.Test(MainTests, "AnonymousEndpointsGuardTests"),
         ]),
         new("frontend/",
         [

@@ -48,7 +48,9 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
             return new(TaskPregateStatus.NotRun, "Не удалось определить текущий коммит дерева шага — предгейт не запущен.");
 
         // Проверки идут по рабочему дереву, а вердикт привязывается к HEAD: грязное дерево дало бы зелёный
-        // коду, которого в коммите нет. Чистота читается ДО прогона, HEAD сверяется ПОСЛЕ
+        // коду, которого в коммите нет. Чистота читается ДО прогона, HEAD сверяется ПОСЛЕ: дерево занято
+        // блокировкой PregateService на время прогона, а правка файлов между проверками без коммита
+        // сдвинула бы только чистоту, не HEAD — для вердикта по коммиту это не меняет привязки
         var clean = heads.IsClean(task.WorktreePath!);
         if (clean is null)
             return new(TaskPregateStatus.NotRun, "Не удалось прочитать состояние дерева шага (git status) — предгейт не запущен.");

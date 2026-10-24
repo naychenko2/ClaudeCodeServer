@@ -905,6 +905,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (req.ResetPregate == true && callerIsExecutor)
             throw new InvalidOperationException(
                 "Исполнитель не может сбросить результат предгейта своей задачи: после двух красных решение за постановщиком.");
+        // Сброс — только исчерпанной серии: иначе им стирали бы свежий зелёный или красный первого круга
+        if (req.ResetPregate == true && !PregateRules.Exhausted(task.Pregate))
+            throw new InvalidOperationException(
+                "Сбросить предгейт можно только после исчерпанной серии красных (два подряд по одной причине); сейчас серия не исчерпана.");
         var effVerdict = (req.Verification ?? task.Verification)?.Verdict;
         var effReviewOf = req.ReviewOf is null ? task.ReviewOf : req.ReviewOf;
         var effPersonaId = req.PersonaId is null ? task.PersonaId : (req.PersonaId == "" ? null : req.PersonaId);

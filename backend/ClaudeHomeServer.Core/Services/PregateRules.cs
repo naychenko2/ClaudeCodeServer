@@ -10,9 +10,10 @@ public static class PregateRules
     // постановщику, третьего круга нет
     public const int MaxRedStreak = 2;
 
-    // Гейт касается только шага/доработки с собственным деревом
+    // Гейт касается только шага/доработки с собственным деревом. Та же формулировка, что и у закрытия
+    // (GatedPath), на неизменных роли и дереве: расхождения «когда касается» между сервисом и менеджером нет
     public static bool Applies(string? role, string? worktreePath) =>
-        IsGatedRole(role) && !string.IsNullOrWhiteSpace(worktreePath);
+        GatedPath(role, role, worktreePath, worktreePath) is not null;
 
     // Путь дерева, по которому гейт сверяет коммит при закрытии; null — гейт не касается. Касается, если роль
     // была ИЛИ стала step/rework и дерево было ИЛИ стало непустым: иначе «step→cut» или сброс дерева

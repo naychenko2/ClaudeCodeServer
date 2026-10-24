@@ -73,7 +73,7 @@ export interface FeatureNow {
   stepRef: string | null;
 }
 
-// Итог смерженной фичи: только при bucket=closed, иначе null.
+// Итог смерженной фичи: есть при bucket=closed и merged (смержена, эпик открыт), иначе null.
 export interface FeatureSummary {
   // Момент мержа: CompletedAt merge-задачи; null — мержа нет.
   mergedAt: string | null;
@@ -88,7 +88,7 @@ export interface FeatureIndexFeature {
   projectId: string | null;
   bucket: FeatureBucket;
   // Состояние фичи (FeatureRun.State, 9 значений; всегда отдаётся). Единая точка
-  // правды: bucket и state не расходятся (бэк выводит bucket из State).
+  // правды: bucket = f(state, эпик Done) (merged при эпике Done → closed).
   state: FeatureState;
   // null — тревоги нет.
   attention: FeatureAttention | null;
@@ -113,7 +113,7 @@ export interface FeatureIndexFeature {
   // null — фича не идёт.
   now0: FeatureNow | null;
   lastActivityAt: string | null;
-  // Только при bucket=closed.
+  // При bucket=closed и merged (итог есть и у смерженной с открытым эпиком).
   summary: FeatureSummary | null;
   // Ключевой чат фичи (цепочка из контракта §1); null — не найден.
   keySessionId: string | null;

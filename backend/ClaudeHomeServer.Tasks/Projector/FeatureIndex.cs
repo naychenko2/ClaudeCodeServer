@@ -66,7 +66,7 @@ public sealed record FeatureIndexRow(
     string? ProjectId,
     // Группа фичи: attention — требует внимания; running — идёт; merged — смержена, эпик открыт
     // (ждёт закрытия); idle — стоит; closed — закрыта (эпик Done).
-    // Выводится из State (единая точка правда, FeatureProjector.Bucket) — bucket и state не расходятся.
+    // bucket = f(state, эпик Done) (единая точка правды, FeatureProjector.Bucket): merged при эпике Done → closed.
     string Bucket,
     // Состояние фичи (FeatureRun.State; 11 значений, см. FeatureStates): merged · closed · paused ·
     // stopped · waiting · draft · merging · merge_pending · running · not_started · idle.
@@ -87,7 +87,7 @@ public sealed record FeatureIndexRow(
     FeatureIndexNow? Now0,
     // Последняя активность (максимум по CompletedAt/ClaudeStartedAt); null — активности нет.
     DateTime? LastActivityAt,
-    // Итог смерженной фичи; только у закрытой, иначе null.
+    // Итог смерженной фичи (у закрытой и у смерженной с открытым эпиком); иначе null.
     FeatureIndexSummary? Summary,
     // Ключевой чат фичи (цепочка контракта §1); null — не найден.
     string? KeySessionId,
@@ -152,7 +152,7 @@ public sealed record FeatureIndexNow(
     string Stage,
     string? StepRef);
 
-// Итог смерженной фичи: только у закрытой, иначе null.
+// Итог смерженной фичи (у закрытой и у смерженной с открытым эпиком): иначе null.
 public sealed record FeatureIndexSummary(
     DateTime? MergedAt,
     double DurationMinutes,

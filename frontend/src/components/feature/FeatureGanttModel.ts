@@ -139,6 +139,8 @@ function collectReturnFlags(run: FeatureRun): GanttReturnFlag[] {
 // фиксированное, в работе — Date.now() на момент построения.
 export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now: number): GanttModel {
   const closed = run.closed === true;
+  // «Сейчас» и тревога гаснут по state (как в баннере): смерженная фича с открытым эпиком не идёт.
+  const finished = closed || run.state === 'merged' || run.state === 'closed';
   const tl = stats?.timeline;
 
   const axis = tl?.from && tl?.to ? { from: tl.from, to: tl.to } : null;
@@ -199,7 +201,7 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
   }
 
   // «Сейчас»: первый InProgress-этап (бэк отдаёт now по убыванию старта). У закрытой — пусто.
-  const cur = closed ? null : (run.now?.[0] ?? null);
+  const cur = finished ? null : (run.now?.[0] ?? null);
   if (cur) {
     const row = rows.find(r => r.key === cur.stage);
     if (row) {
@@ -218,7 +220,7 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
   // на строке этапа остановившейся задачи: по attention.taskId (стадия, где она в
   // taskIds, или запись now с этим taskId); стадии нет — фолбэк на текущую строку.
   // Строки нет — хвоста нет.
-  const att = closed ? null : (run.attention ?? null);
+  const att = finished ? null : (run.attention ?? null);
   let hasStalled = false;
   if (att?.kind === 'stopped' && att.since) {
     let row: GanttRow | undefined;

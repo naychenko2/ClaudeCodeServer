@@ -96,7 +96,7 @@ function whereTone(f: FeatureIndexFeature): 'wait' | 'stop' | 'run' {
 }
 
 // Тон строки (фон/кромка): тревога (wait/stop) — цветная, закрыта (merged/closed) — серая,
-// иначе нейтр. Выводится из state (единая точка правды; bucket/state не расходятся).
+// иначе нейтр. Выводится из state (bucket = f(state, эпик Done)).
 function bannerTone(f: FeatureIndexFeature): BannerTone {
   if (f.state === 'merged' || f.state === 'closed') return 'closed';
   if (f.state === 'waiting' || f.state === 'merge_pending') return 'wait';
@@ -104,7 +104,7 @@ function bannerTone(f: FeatureIndexFeature): BannerTone {
   return 'run';
 }
 
-// Глиф состояния (для шторки): из state (единая точка правды; bucket/state не расходятся).
+// Глиф состояния (для шторки): из state (bucket = f(state, эпик Done)).
 // merged → done (галочка), closed → closed (без мержа), тревога → wait/stopped, иначе run.
 function bannerGlyph(f: FeatureIndexFeature): GlyphKind {
   if (f.state === 'merged') return 'done';

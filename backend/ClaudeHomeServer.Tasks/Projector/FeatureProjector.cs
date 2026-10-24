@@ -477,7 +477,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         bool closed = featureState == FeatureStates.Closed
             || (featureState == FeatureStates.Merged && epic.Status == TaskItemStatus.Done);
 
-        // Итог смерженной фичи: только у закрытой, иначе null.
+        // Итог смерженной фичи (у закрытой и у смерженной с открытым эпиком); иначе null.
         FeatureSummary? summary = null;
         if (terminal)
         {
@@ -1591,7 +1591,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Группа фичи (контракт §1, план С0 §2 — единая точка правды: bucket строки и порядок
-    // OrderRuns выведены из state, не расходятся): closed → merged → attention → running → idle.
+    // OrderRuns выводятся из state и эпика Done: bucket = f(state, эпик Done), не расходятся): closed → merged → attention → running → idle.
     // Изменение против старой версии: merging (идёт мерж) → running, а не attention —
     // «мерж идёт» теперь не «ждёт вас» (merge_pending — ждёт, merging — идёт).
     internal static string Bucket(FeatureRun run) => run.State switch
@@ -1708,7 +1708,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         return new FeatureIndexNow(n.PersonaId, n.Stage, n.StepRef);
     }
 
-    // Итог: из FeatureRun.Summary (mergedAt + durationMinutes); null — фича не закрыта.
+    // Итог: из FeatureRun.Summary (mergedAt + durationMinutes); null — фича не смержена и не закрыта.
     internal static FeatureIndexSummary? SummaryOf(FeatureRun run)
     {
         var s = run.Summary;

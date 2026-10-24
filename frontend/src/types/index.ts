@@ -2905,6 +2905,21 @@ export interface TtsVoicesResponse {
   voices: TtsVoiceInfo[];
 }
 
+// Кандидат подбора голоса под персону: голос, амплуа (null — обычное) и почему подходит
+export interface VoiceCandidate {
+  voice: string;
+  role: string | null;
+  why: string;
+}
+
+// Ответ подбора: до трёх обычных голосов, отдельно живой (LiveTTS, дороже) и признак
+// «непоказанных обычных голосов больше нет»
+export interface VoiceCandidatesResponse {
+  candidates: VoiceCandidate[];
+  live: VoiceCandidate | null;
+  exhausted: boolean;
+}
+
 // Как персона звучит в голосовом режиме; отсутствует — голосом инстанса из конфига
 export interface PersonaVoice {
   voice?: string;        // имя голоса SpeechKit (белый список на сервере)

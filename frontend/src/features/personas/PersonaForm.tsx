@@ -798,7 +798,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               </div>
             </Field>
           </div>
-          <div style={{ maxWidth: isMobile ? '100%' : 360 }}>
+          {/* Шире соседних полей: рядом с выбором голоса стоят ▶ и «Подобрать под персону» */}
+          <div style={{ maxWidth: isMobile ? '100%' : 520 }}>
             <Field label="Голос" hint="Как персона звучит в голосовом режиме">
               <PersonaVoicePicker
                 value={voice ?? null}
@@ -813,6 +814,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   character: character.trim() || undefined,
                   tone: tone.trim() || undefined,
                 })}
+                greeting={greeting}
               />
             </Field>
           </div>

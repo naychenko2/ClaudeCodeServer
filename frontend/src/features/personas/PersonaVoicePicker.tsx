@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Volume2, ChevronDown, Search } from 'lucide-react';
+import { Volume2, ChevronDown, Search, Sparkles } from 'lucide-react';
 import { C, FS, SP, R, FIELD, FONT, SHADOW } from '../../lib/design';
 import { Button, Chip, IconButton, IconField, Menu, MenuItem, Modal, InlineSegmented } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -12,6 +12,8 @@ import {
   LIVE_TTS_GROUP, filterVoices, isLiveTtsVoice, voiceName, voiceRoleLabel, voiceSupportsSpeed, voiceTrait,
   type VoiceGenderFilter,
 } from './voiceLabels';
+import { VoicePickPanel, type PersonaDescription } from './VoicePickPanel';
+import { PlayingBars } from './PlayingBars';
 
 // Выбор голоса персоны: список голосов с прослушиванием, амплуа и скорость.
 //
@@ -51,20 +53,6 @@ const GENDERS: readonly { key: VoiceGenderFilter; label: string }[] = [
 // Амплуа в подписи: пустое — «обычное», а не пустота
 const roleLabel = (role?: string | null) => (role ? voiceRoleLabel(role) : 'обычное');
 
-// «Звук идёт» — те же полоски-эквалайзер, которыми композер показывает запись голоса:
-// знак в продукте уже знакомый, и он влезает в кнопку. WaitingIndicator сюда не годится
-// вовсе — это индикатор ЛЕНТЫ, с логотипом, аватаром персоны и печатающимся текстом:
-// внутри кнопки-иконки он раскрывался в целый блок не на своём месте.
-export function PlayingBars({ height }: { height: number }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, height }} aria-hidden>
-      {[0, 0.15, 0.3].map(delay => (
-        <span key={delay} className="cc-wave-bar" style={{ height, animationDelay: `${delay}s` }} />
-      ))}
-    </span>
-  );
-}
-
 // Голос не выбран — «обычная» скорость, а не «ничего не выбрано»: пустой ряд читается как
 // сломанный контрол, хотя персона в этот момент говорит именно с обычной скоростью
 function speedKey(speed?: number | null): 'slow' | 'normal' | 'fast' {
@@ -73,13 +61,15 @@ function speedKey(speed?: number | null): 'slow' | 'normal' | 'fast' {
   return speed > 1.05 ? 'fast' : 'normal';
 }
 
-export function PersonaVoicePicker({ value, onChange, emptyLabel }: {
+export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, greeting }: {
   value: PersonaVoice | null;
   onChange: (v: PersonaVoice | null) => void;
   // Подпись строки, пока голос не выбран (по умолчанию — «Голос по умолчанию»)
   emptyLabel?: string;
   // Чем персона является ПРЯМО СЕЙЧАС в форме (несохранённое тоже) — для подбора голоса
-  describe?: () => { name?: string; role?: string; description?: string; character?: string; tone?: string };
+  describe?: () => PersonaDescription;
+  // Приветствие персоны из формы: кандидатов подбора слушают её же фразой
+  greeting?: string;
 }) {
   const isMobile = useIsMobile();
   const [catalog, setCatalog] = useState<TtsVoiceInfo[] | null>(null);
@@ -92,6 +82,9 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel }: {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [gender, setGender] = useState<VoiceGenderFilter>('all');
+  // Подбор под персону: ключ перезапускает панель (повторное нажатие — новый подбор)
+  const [pickKey, setPickKey] = useState(0);
+  const [pickBusy, setPickBusy] = useState(false);
   const alive = useRef(true);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -170,6 +163,20 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel }: {
   const previewIcon = (key: string) => playing === key
     ? <PlayingBars height={ICON_SIZE.sm} />
     : <Volume2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
+
+  // Вторичное действие: главное в этой карточке «Сохранить»
+  const pickButton = (
+    <Button
+      variant="ghostAccent"
+      size="sm"
+      loading={pickBusy}
+      disabled={!catalog?.length}
+      leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      onClick={() => { if (pickBusy) return; setPickBusy(true); setPickKey(k => k + 1); }}
+    >
+      Подобрать под персону
+    </Button>
+  );
 
   const items = catalog ? filterVoices(catalog, query, gender) : [];
   const resetFilters = () => { setQuery(''); setGender('all'); };
@@ -308,7 +315,11 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel }: {
         >
           {previewIcon(selected?.voice ?? 'default')}
         </IconButton>
+        {describe && !isMobile && pickButton}
       </div>
+
+      {/* На узком экране кнопке подбора рядом с полем не хватает места — под ним */}
+      {describe && isMobile && <div>{pickButton}</div>}
 
       {open && catalog && !isMobile && anchor && (
         <Menu
@@ -352,6 +363,22 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel }: {
             />
           </div>
         </div>
+      )}
+
+      {describe && pickKey > 0 && catalog && (
+        <VoicePickPanel
+          key={pickKey}
+          describe={describe}
+          greeting={greeting}
+          catalog={catalog}
+          value={value}
+          configured={configured}
+          isMobile={isMobile}
+          onPick={(voice, role) => onChange({ voice, role: role ?? undefined, speed: value?.speed ?? null })}
+          onOpenList={openList}
+          onClose={() => setPickKey(0)}
+          onBusy={setPickBusy}
+        />
       )}
 
       {failed && (

@@ -14,7 +14,7 @@ import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
-import { PlayingBars } from './PersonaVoicePicker';
+import { PlayingBars } from './PlayingBars';
 import { bindingsCounter } from './bindingMeta';
 import { useBindingLabels } from './useBindingLabels';
 import { PersonaActivityFeed } from './PersonaActivityFeed';

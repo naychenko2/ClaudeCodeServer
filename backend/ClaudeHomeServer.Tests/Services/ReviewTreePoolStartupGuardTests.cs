@@ -7,23 +7,69 @@ namespace ClaudeHomeServer.Tests.Services;
 // Сторож старта: после рестарта учёт аренд пула пуст, и без RestoreLeasesAsync слот открытого
 // ревью отдали бы другой задаче и сбросили под ногами ревьюера. Вызов стоит в Program.cs вне
 // подсистем, поэтому удаление строки никто бы не заметил — держим его текстовым сторожем.
+// Ищем вызов по имени, а не по всей цепочке: перенос строки или локальная переменная не должны краснить сторож.
 public class ReviewTreePoolStartupGuardTests
 {
-    private static string ProgramText()
+    private static readonly Regex Call = new(@"\bRestoreLeasesAsync\s*\(", RegexOptions.Compiled);
+
+    // Строковые литералы оставляем как есть (в них бывает «//»), комментарии обоих видов вычищаем.
+    private static readonly Regex Tokens = new(
+        @"""(?:\\.|[^""\\])*""|/\*.*?\*/|//[^\r\n]*", RegexOptions.Compiled | RegexOptions.Singleline);
+
+    internal static string StripComments(string text) =>
+        Tokens.Replace(text, m => m.Value.StartsWith('"') ? m.Value : "");
+
+    // Пустая строка — вызов на месте; иначе причина отказа.
+    internal static string? Verdict(string text)
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "CLAUDE.md")))
-            dir = dir.Parent;
-        dir.Should().NotBeNull("не нашли корень репо по CLAUDE.md от AppContext.BaseDirectory");
-        return File.ReadAllText(Path.Combine(dir!.FullName, "backend", "ClaudeHomeServer", "Program.cs"));
+        if (Call.IsMatch(StripComments(text))) return null;
+        return Call.IsMatch(text)
+            ? "вызов RestoreLeasesAsync закомментирован"
+            : "вызов RestoreLeasesAsync не найден";
+    }
+
+    private static string RepoRoot()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            var git = Path.Combine(dir.FullName, ".git");
+            if ((Directory.Exists(git) || File.Exists(git)) && Directory.Exists(Path.Combine(dir.FullName, "backend")))
+                return dir.FullName;
+        }
+        throw new DirectoryNotFoundException("Корень репозитория (.git + backend/) не найден выше каталога тестов");
     }
 
     [Fact]
     public void Program_НаСтартеВосстанавливаетАрендыСлотовРевью()
     {
-        var code = Regex.Replace(ProgramText(), @"^\s*//.*$", "", RegexOptions.Multiline);
+        var text = File.ReadAllText(Path.Combine(RepoRoot(), "backend", "ClaudeHomeServer", "Program.cs"));
 
-        code.Should().MatchRegex(@"await\s+app\.Services\.GetRequiredService<ReviewTreePool>\(\)\s*\.RestoreLeasesAsync\(\)\s*;",
+        var verdict = Verdict(text);
+
+        verdict.Should().BeNull(
             "без восстановления аренд после рестарта слот открытого ревью отдадут другой задаче");
     }
+
+    [Theory]
+    [InlineData("await app.Services.GetRequiredService<ReviewTreePool>().RestoreLeasesAsync();")]
+    [InlineData("await app.Services\n    .GetRequiredService<ReviewTreePool>()\n    .RestoreLeasesAsync();")]
+    [InlineData("var pool = app.Services.GetRequiredService<ReviewTreePool>();\nawait pool.RestoreLeasesAsync();")]
+    public void Вызов_НаходитсяПоИмени_НезависимоОтНаписания(string text) =>
+        Verdict(text).Should().BeNull();
+
+    [Theory]
+    [InlineData("// await pool.RestoreLeasesAsync();")]
+    [InlineData("/* await app.Services.GetRequiredService<ReviewTreePool>().RestoreLeasesAsync(); */")]
+    [InlineData("/*\n await pool.RestoreLeasesAsync();\n*/")]
+    [InlineData("var x = 1; // await pool.RestoreLeasesAsync();")]
+    public void ЗакомментированныйВызов_НеСчитаетсяВызовом(string text) =>
+        Verdict(text).Should().Be("вызов RestoreLeasesAsync закомментирован");
+
+    [Fact]
+    public void ОтсутствующийВызов_ОтличаетсяОтЗакомментированного() =>
+        Verdict("var x = 1;").Should().Be("вызов RestoreLeasesAsync не найден");
+
+    [Fact]
+    public void Вызов_ПослеСтроковогоЛитералаСДвойнымСлэшем_НеТеряется() =>
+        Verdict("var u = \"http://x\"; await pool.RestoreLeasesAsync();").Should().BeNull();
 }

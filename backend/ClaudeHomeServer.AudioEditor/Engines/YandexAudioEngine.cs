@@ -33,9 +33,7 @@ public sealed class YandexAudioEngine(ITtsEngine? tts) : IAudioEngine, IAudioQuo
     // поставщика, и дорогая LiveTTS не должна стать умолчанием
     public IReadOnlyList<AudioModelInfo> Models => tts is null
         ? []
-        : tts.Voices.Any(v => v.Model == TtsEngineVoice.LiveTts)
-            ? [Model(ModelId, "SpeechKit · дикторы Яндекса"), Model(LiveTtsModelId, "SpeechKit LiveTTS · живые дикторы")]
-            : [Model(ModelId, "SpeechKit · дикторы Яндекса")];
+        : [Model(ModelId, "SpeechKit · дикторы Яндекса"), Model(LiveTtsModelId, "SpeechKit LiveTTS · живые дикторы")];
 
     private AudioModelInfo Model(string id, string label) =>
         new(id, label, new AudioCaps([AudioOp.Speak], ["ru"], [AudioVoiceKind.Preset], [AudioOutputs.Audio],

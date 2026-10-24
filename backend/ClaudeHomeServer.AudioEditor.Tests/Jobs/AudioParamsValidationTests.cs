@@ -77,7 +77,7 @@ public sealed class AudioParamsValidationTests : IDisposable
         ok.Value!.Model.Should().Be(YandexAudioEngine.LiveTtsModelId);
     }
 
-    // И1: «Авто» у Яндекса с включённой LiveTTS берёт дешёвую модель, а не дорогую
+    // И1: «Авто» у Яндекса с моделью LiveTTS берёт дешёвую модель, а не дорогую
     [Fact]
     public async Task Quote_YandexAutoModel_PicksSpeechKitNotLiveTts()
     {

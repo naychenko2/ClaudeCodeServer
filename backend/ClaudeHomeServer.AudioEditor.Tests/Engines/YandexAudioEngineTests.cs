@@ -133,7 +133,7 @@ public sealed class YandexAudioEngineTests
     {
         var engine = new YandexAudioEngine(new FakeTts());
 
-        var model = engine.Models.Should().ContainSingle().Subject;
+        var model = engine.Models.Should().ContainSingle(m => m.Id == YandexAudioEngine.ModelId).Subject;
         model.Caps.Ops.Should().Equal(AudioOp.Speak);
         model.Caps.SpeaksRu.Should().BeTrue();
         model.Caps.MaxTextChars.Should().Be(3000);
@@ -154,13 +154,6 @@ public sealed class YandexAudioEngineTests
 
         engine.Models.Select(m => m.Id).Should().Equal(YandexAudioEngine.ModelId, YandexAudioEngine.LiveTtsModelId);
         engine.Models.Should().OnlyContain(m => m.Caps.Ops.SequenceEqual(new[] { AudioOp.Speak }) && m.Caps.SpeaksRu);
-    }
-
-    [Fact]
-    public void LiveTts_SeamWithoutLiveTtsVoices_NoLiveTtsModel()
-    {
-        // Тумблер выключен — шов не отдаёт голосов LiveTTS, и модели нет
-        new YandexAudioEngine(new FakeTts()).Models.Select(m => m.Id).Should().Equal(YandexAudioEngine.ModelId);
     }
 
     [Fact]

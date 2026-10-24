@@ -97,7 +97,7 @@ internal sealed class FakeTts : ITtsEngine
         new("jane", "Джейн", ["neutral", "good", "evil"]),
     ];
 
-    // Шов с включённой LiveTTS: её голоса — в конце, как в каталоге Tts
+    // Шов с голосами LiveTTS: они — в конце, как в каталоге Tts
     public static IReadOnlyList<TtsEngineVoice> WithLiveTts { get; } =
     [
         new("alena", "Алёна", ["neutral", "good"]),

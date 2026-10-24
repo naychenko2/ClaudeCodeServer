@@ -400,6 +400,77 @@ GUARD_DUMP_KEEP = int(os.environ.get("GUARD_DUMP_KEEP", "30"))
 CACHE_QUARANTINE = os.environ.get("CACHE_QUARANTINE", "off")
 _карантин = {}  # заголовок сессии -> cache_salt
 
+# --- Атрибуция промахов prefix cache (2026-10-24) -------------------------------------------
+#
+# Повод: на проде Strata по 5–7 полных перечитываний 130–420K токенов в день (1–2,5 мин каждое,
+# сосед в это время декодирует 4 tok/s), и по размерам из engine.log не понять, ЧЕМ новый
+# промпт разошёлся с прошлым: клиент перестроил системную часть, историю или контекст стал
+# короче. PRUNE_DUMP_DIR отвечает на это, но хранит чужие чаты целиком — надолго не включить.
+# Здесь — без тел: на каждый запрос запоминается отпечаток (хеш системной части и хеш каждого
+# сообщения), а по концу ответа, если из кэша взято меньше MISS_RATIO промпта, в журнал уходит
+# одна строка: сессия, цифры кэша, что именно разошлось и на каком сообщении. Сжатие в облако
+# (compact) не учитывается: его usage — чужой. Откат: MISS_LOG=off и рестарт.
+MISS_LOG = os.environ.get("MISS_LOG", "on")
+MISS_RATIO = float(os.environ.get("MISS_RATIO", "0.5"))
+_отпечатки = {}  # заголовок сессии -> отпечаток последнего запроса (+ "prompt": размер по usage)
+_отпечатки_lock = threading.Lock()
+
+
+def _хеш(значение):
+    return hashlib.sha256(json.dumps(значение, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+
+
+def fingerprint(doc):
+    """Отпечаток тела ПОСЛЕ правок прокси: системная часть (model + system + tools) и хеш каждого
+    сообщения. Сравнение соседних отпечатков одной сессии говорит, где разошёлся префикс, не
+    храня самих тел."""
+    msgs = doc.get("messages") if isinstance(doc.get("messages"), list) else []
+    return {"system": _хеш([doc.get("model"), doc.get("system"), doc.get("tools")]),
+            "msgs": [_хеш(m) for m in msgs]}
+
+
+def miss_verdict(прошлый, отпечаток, чтение, промпт):
+    """Текст причины промаха по двум отпечаткам. Чистая функция — для тестов."""
+    if прошлый is None:
+        return "первого запроса сессии прокси не видел (новая сессия или рестарт прокси)"
+    части = []
+    if прошлый["system"] != отпечаток["system"]:
+        части.append("СИСТЕМНАЯ ЧАСТЬ ИЗМЕНИЛАСЬ (model/system/tools)")
+    a, b = прошлый["msgs"], отпечаток["msgs"]
+    общих = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        общих += 1
+    if общих == len(a) and len(b) >= len(a):
+        части.append(f"история продолжает прошлую ({len(a)}→{len(b)} сообщений)"
+                     + ("" if части else " — тело то же, блоки вытеснены из кэша движка"))
+    else:
+        части.append(f"история разошлась на сообщении {общих + 1} из {len(b)} "
+                     f"(в прошлом {len(a)}, совпали первые {общих})")
+    if прошлый.get("prompt"):
+        части.append(f"промпт {прошлый['prompt']}→{промпт}")
+    return "; ".join(части)
+
+
+def attribute_miss(сессия, отпечаток, usage, prefill):
+    """По концу ответа: запоминает отпечаток сессии и, если кэш взял меньше MISS_RATIO промпта,
+    пишет строку-атрибуцию в журнал. Fail-open: любая ошибка — молча, ход не задевает."""
+    try:
+        чтение, промпт = usage_totals(usage)
+        with _отпечатки_lock:
+            прошлый = _отпечатки.get(сессия)
+            _отпечатки[сессия] = dict(отпечаток, prompt=промпт)
+            while len(_отпечатки) > 2000:  # прокси живёт неделями: старые сессии не копить
+                del _отпечатки[next(iter(_отпечатки))]
+        if MISS_LOG != "on" or not промпт or чтение is None or чтение >= промпт * MISS_RATIO:
+            return
+        print(f"промах кэша: сессия {сессия or '-'}: из кэша {чтение} из {промпт} "
+              f"({100 * чтение // промпт}%), prefill {prefill if prefill is None else round(prefill, 1)} с — "
+              f"{miss_verdict(прошлый, отпечаток, чтение, промпт)}", flush=True)
+    except Exception as e:  # noqa: BLE001 — журнал не смеет уронить ход
+        print(f"атрибуция промаха не удалась: {e!r}", file=sys.stderr, flush=True)
+
 # --- Прунинг картинок -----------------------------------------------------------------------
 #
 # Картинки (скриншоты через Read, вложения человека) живут в истории вечно: CLI шлёт её целиком
@@ -2447,6 +2518,7 @@ class Handler(BaseHTTPRequestHandler):
                   if (BACKEND_EVENTS_URL or DUMP_DIR or GUARD_DUMP_DIR
                       or CACHE_QUARANTINE == "on") else None)
         событие = None  # заготовка карточки: цифры замера допишем по первому байту ответа
+        отпечаток = None  # атрибуция промаха кэша: отпечаток тела, ушедшего в движок
         дамп = None  # дамп тела, если включён PRUNE_DUMP_DIR
         compact_before = None
         compact_by_header = False  # True — в облако шлём по заголовку-маркеру, а не по сигнатуре+порогу
@@ -2583,13 +2655,15 @@ class Handler(BaseHTTPRequestHandler):
                             stats["quarantine_salted"] += 1
                     if stripped or соль:
                         body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
+                    if MISS_LOG == "on" and compact is None:
+                        отпечаток = fingerprint(doc)
             except Exception as e:
                 # fail-open: не наш формат ИЛИ неожиданная структура внутри — отдаём тело как
                 # есть. Ловим всё намеренно: исключение отсюда уходит в handle_one_request,
                 # клиент остаётся без ответа и висит до своего таймаута — то есть опечатка в
                 # разборе тела ломает ход пользователя молча. Тело чужое, доверять его форме
                 # нельзя: `{"type":"text","text":5}` достаточно, чтобы получить TypeError.
-                body, stripped, compact, событие = original, False, None, None
+                body, stripped, compact, событие, отпечаток = original, False, None, None, None
                 if сохранённое is not None:
                     # Дополнение инструкции ушло вместе с правками — блок без него не вставляем.
                     сохранённое = None
@@ -2788,6 +2862,8 @@ class Handler(BaseHTTPRequestHandler):
             if событие is not None:
                 self._отправить_событие(событие, prefill, usage_карточки)
                 событие = None
+            if отпечаток is not None:
+                attribute_miss(self.headers.get(EVENT_SESSION_HEADER), отпечаток, usage_карточки, prefill)
             conn.close()
 
     def _после_срыва(self, kind, реле, conn, body, headers, сессия, итог):

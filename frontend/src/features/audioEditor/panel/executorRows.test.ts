@@ -102,6 +102,20 @@ describe('список «Исполнитель»', () => {
     expect(executorPatch(AUTO_EXECUTOR)).toEqual({ provider: null, model: null });
   });
 
+  it('LiveTTS — своя строка Яндекса после дикторов SpeechKit, выбор ставит её модель', () => {
+    // Сервер отдаёт yandex-livetts вторым (только при включённом тумблере): «Чем» показывает,
+    // за что платит человек, а дешёвая модель остаётся первой у поставщика
+    const yandex: AudioProvider = {
+      key: 'yandex', label: 'Яндекс', priceUnit: 'rub', available: true, reason: null,
+      models: [model('yandex-speechkit', ['speak']), model('yandex-livetts', ['speak'])],
+    };
+    const rows = executorRows({ ...CATALOG, providers: [FAL, yandex, LOCAL] }, 'speak');
+    expect(rows.filter(r => r.id.startsWith('yandex|')).map(r => r.id))
+      .toEqual(['yandex|yandex-speechkit', 'yandex|yandex-livetts']);
+    expect(rows.find(r => r.id === 'yandex|yandex-livetts')).toMatchObject({ group: 'cloud', name: 'YANDEX-LIVETTS' });
+    expect(executorPatch('yandex|yandex-livetts')).toEqual({ provider: 'yandex', model: 'yandex-livetts' });
+  });
+
   it('подсветка строки', () => {
     const auto = st({ op: 'speak' });
     expect(executorValue(CATALOG, auto)).toBe(AUTO_EXECUTOR);

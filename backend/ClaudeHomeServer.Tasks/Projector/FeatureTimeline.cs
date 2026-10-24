@@ -77,7 +77,8 @@ public sealed record TimelineTotals(
     int? ErrorMinutes);
 
 // Статистика фичи (GET features/{id}, поле stats): источник (approx/journal), признак
-// обрезки, график, разрезы («кто и на чём работали»), «дольше всех сейчас» и расход.
+// обрезки, график, разрезы («кто и на чём работали»), «дольше всех сейчас», расход и
+// «типичная фича проекта» (ST-B1).
 public sealed record FeatureStats(
     // approx | journal.
     string Source,
@@ -90,7 +91,10 @@ public sealed record FeatureStats(
     FeatureLongestNow? LongestNow = null,
     // Расход фичи (Б9b); null — подсистема Spend выключена (шов ISpendFeatureReader не
     // зарегистрирован → расход «≈», не 500; решение Андрея 20.10).
-    FeatureSpend? Spend = null);
+    FeatureSpend? Spend = null,
+    // «Типичная фича проекта» (ST-B1): медиана и p25–p75 по смерженным фичам того же проекта
+    // и владельца; null — смерженных меньше трёх.
+    FeatureTypical.TypicalFeatureStats? Typical = null);
 
 // Расход фичи (GET features/{id}, stats.spend; Б9b): токены (вход/выход/кэш) + стоимость.
 // Атрибуция (шов ISpendFeatureReader): записи, чья задача — задача фичи, ИЛИ чей чат — чат

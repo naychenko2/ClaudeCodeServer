@@ -130,6 +130,27 @@ export interface FeatureSpend {
   } | null;
 }
 
+// Квантили одной метрики: медиана и p25–p75 (линейная интерполяция, тип 7).
+export interface TypicalPercentiles {
+  median: number;
+  p25: number;
+  p75: number;
+}
+
+// «Типичная фича проекта» (ST-B1): медиана и p25–p75 по СМЕРЖЕННЫМ фичам того же проекта и
+// владельца; текущая фича в выборку не входит. null — смерженных меньше трёх (шкалы сравнения
+// нет). Ожидание — null, если меньше трёх смерженных фич имеют полный журнал.
+export interface TypicalFeatureStats {
+  // Число смерженных фич в выборке (текущая не считается).
+  count: number;
+  // Длительность (минуты).
+  duration: TypicalPercentiles;
+  // Ожидание человека (минуты); null — не достаточно фич с журналом.
+  waiting: TypicalPercentiles | null;
+  // Число возвратов.
+  loops: TypicalPercentiles;
+}
+
 // Статистика фичи (только в GET features/{id}).
 export interface FeatureStats {
   // Источник чисел: approx — приближённо; journal — по журналу ходов.
@@ -144,4 +165,7 @@ export interface FeatureStats {
   longestNow: FeatureLongestNow | null;
   // Расход; null — не считался.
   spend: FeatureSpend | null;
+  // «Типичная фича проекта»; null — смерженных меньше трёх. Опциональна: старые ответы
+  // поля не несут.
+  typical?: TypicalFeatureStats | null;
 }

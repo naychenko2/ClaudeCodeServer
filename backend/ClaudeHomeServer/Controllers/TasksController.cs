@@ -820,13 +820,21 @@ public class TasksController(
             From: (spendTotals.From ?? DateOnly.FromDateTime(run.Epic.CreatedAt)).ToString("yyyy-MM-dd"),
             Shared: shared);
         var (breakdown, longestNow) = FeatureBreakdown.Build(run, journalResult, snapshot, resolver, now, spendRecords);
+        // ST-B1: «типичная фича проекта» — медиана и p25–p75 длительности, ожидания и возвратов
+        // по смерженным фичам того же проекта и владельца (текущая исключена; null — смерженных
+        // меньше трёх). Длительность и возвраты — из уже посчитанного Summary/Verdicts (чистая
+        // проекция, кэш на ревизию данных); ожидание — только из полного журнала. Выборка и
+        // стоимость — в комментарии FeatureTypical.cs.
+        var typical = FeatureTypical.Build(owner, UserId, run.Epic.ProjectId, run.Epic.Id,
+            fid => journal?.Read(UserId, fid), now);
         var stats = new FeatureStats(
             Source: journalComplete ? "journal" : "approx",
             Truncated: journalResult?.Truncated ?? false,
             Timeline: FeatureTimeline.Build(run, journalResult, now),
             Breakdown: breakdown,
             LongestNow: longestNow,
-            Spend: featureSpend);
+            Spend: featureSpend,
+            Typical: typical);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);

@@ -10,9 +10,11 @@
 // empty=true.
 //
 // Мутации (в отчёте): (1) «<» на «<=» в пороге few — краснеет тест «30 мин —
-// уже не few»; (2) убрать фильтр `v != null` в compositionRows — краснеет
-// «null-поле — строки нет»; (3) `ch.loops > 0` без условия — краснеет
-// «loops=0 — карточки нет».
+// уже не few»; (2) заменить `v != null && v > 0` в compositionRows на `v >= 0` —
+// краснеет «null-поле — строки нет» (null >= 0 — true); просто снять `v != null`
+// НЕ краснит (null > 0 — false); (3) `ch.loops > 0` без условия — краснеет
+// «loops=0 — карточки нет»; (4) longestWaitMinutes в живой карточке 1 — краснеет
+// тест «текущее 3 мин → 3».
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -85,6 +87,8 @@ function mkStats(over: Partial<FeatureStats> = {}, stages: string[] = ['cut', 'p
 }
 
 const ATTENTION = { kind: 'wait' as const, since: '2026-10-20T15:00:00Z', reason: 'Вопрос', personaId: null, sessionId: null, taskId: null };
+// «Сейчас» для живой карточки: NOW — на 3 минуты позже attention.since.
+const NOW = Date.parse('2026-10-20T15:03:00Z');
 
 describe('FEW_DATA_MIN', () => {
   it('экспортирован и равен 30', () => {
@@ -250,14 +254,15 @@ describe('lossesModel', () => {
       })),
       longestNow: { taskId: 't-9', chatId: 'c-1', personaId: 'p-1', stepRef: 'Ш3', minutes: 55, tokens: null, share: 0.3 },
     });
-    const m = lossesModel(run, stats);
+    const m = lossesModel(run, stats, NOW);
     expect(m.empty).toBe(false);
     expect(m.cards.map(c => c.no)).toEqual([1, 2, 3]);
     const c1 = m.cards[0]!;
     if (c1.no !== 1) throw new Error('карточка 1 отсутствует');
     expect(c1.live).toBe(true);
     expect(c1.title).toBe('Ждёт вас сейчас');
-    expect(c1.minutes).toBe(42);
+    // Живая карточка — текущее ожидание (NOW − since = 3 мин), не прошлый максимум 42.
+    expect(c1.minutes).toBe(3);
     const c2 = m.cards[1]!;
     if (c2.no !== 2) throw new Error('карточка 2 отсутствует');
     expect(c2.stepRef).toBe('Ш4');
@@ -272,22 +277,34 @@ describe('lossesModel', () => {
     const stats = mkStats({
       timeline: mkTimeline(['cut', 'prod'], mkTotals({ elapsedMinutes: 400, longestWaitMinutes: 42, waitingCount: 2 })),
     });
-    const m = lossesModel(mkRun(), stats);
+    const m = lossesModel(mkRun(), stats, NOW);
     const c1 = m.cards[0]!;
     if (c1.no !== 1) throw new Error('карточка 1 отсутствует');
     expect(c1.live).toBe(false);
     expect(c1.title).toBe('Дольше всего ждали вас');
+    expect(c1.minutes).toBe(42);
+  });
+
+  it('живая карточка: текущее ожидание 3 мин, прошлый максимум 120 — показываем 3', () => {
+    const run = mkRun({ attention: ATTENTION });
+    const stats = mkStats({
+      timeline: mkTimeline(['cut', 'prod'], mkTotals({ elapsedMinutes: 400, longestWaitMinutes: 120, waitingCount: 3 })),
+    });
+    const m = lossesModel(run, stats, NOW);
+    const c1 = m.cards[0]!;
+    if (c1.no !== 1) throw new Error('карточка 1 отсутствует');
+    expect(c1.minutes).toBe(3);
   });
 
   it('loops=0 — карточки 2 нет', () => {
     const run = mkRun({ stepChains: [mkChain({ loops: 0 })] });
-    const m = lossesModel(run, mkStats());
+    const m = lossesModel(run, mkStats(), NOW);
     expect(m.cards.some(c => c.no === 2)).toBe(false);
   });
 
   it('берётся цепочка с максимальным loops, не первая', () => {
     const run = mkRun({ stepChains: [mkChain({ stepRef: 'Ш1', loops: 1 }), mkChain({ stepRef: 'Ш2', loops: 3 })] });
-    const m = lossesModel(run, mkStats());
+    const m = lossesModel(run, mkStats(), NOW);
     const c2 = m.cards.find(c => c.no === 2)!;
     if (c2.no !== 2) throw new Error('карточка 2 отсутствует');
     expect(c2.stepRef).toBe('Ш2');
@@ -299,7 +316,7 @@ describe('lossesModel', () => {
       closed: true,
       stages: [mkStage({ key: 'cut', approxMinutes: 18 }), mkStage({ key: 'prod', approxMinutes: 210 }), mkStage({ key: 'qa', approxMinutes: 40 })],
     });
-    const m = lossesModel(run, mkStats());
+    const m = lossesModel(run, mkStats(), NOW);
     const c3 = m.cards.find(c => c.no === 3)!;
     if (c3.no !== 3 || c3.kind !== 'stage') throw new Error('карточка 3 отсутствует');
     expect(c3.title).toBe('Самый долгий этап');
@@ -311,20 +328,20 @@ describe('lossesModel', () => {
   it('longestNow важнее этапа даже у закрытой', () => {
     const run = mkRun({ state: 'merged', closed: true, stages: [mkStage({ key: 'prod', approxMinutes: 210 })] });
     const stats = mkStats({ longestNow: { taskId: 't-1', chatId: null, personaId: null, stepRef: null, minutes: 30, tokens: null, share: null } });
-    const m = lossesModel(run, stats);
+    const m = lossesModel(run, stats, NOW);
     const c3 = m.cards.find(c => c.no === 3)!;
     if (c3.no !== 3 || c3.kind !== 'longest') throw new Error('карточка 3 отсутствует');
   });
 
   it('нечего показать — empty=true', () => {
-    const m = lossesModel(mkRun(), mkStats());
+    const m = lossesModel(mkRun(), mkStats(), NOW);
     expect(m.empty).toBe(true);
     expect(m.cards.length).toBe(0);
   });
 
   it('закрытая фича без этапов — карточки 3 нет', () => {
     const run = mkRun({ state: 'closed', closed: true, stages: [] });
-    const m = lossesModel(run, mkStats());
+    const m = lossesModel(run, mkStats(), NOW);
     expect(m.empty).toBe(true);
   });
 });

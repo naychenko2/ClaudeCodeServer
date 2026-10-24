@@ -8,7 +8,7 @@ import type {
   FeatureRun, FeatureReturnsBySource, FeatureRoundVerdict, FeatureStage, FeatureStepChain,
 } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
-import { stageLabel } from './FeatureStatsBits';
+import { stageLabel, minutesSince } from './FeatureStatsBits';
 
 // === Состояние героя ===
 
@@ -141,19 +141,32 @@ export interface LossesModel {
 }
 
 // Три главные потери (макет §C, перенесён в A по записке §«Рекомендация»).
-export function lossesModel(run: FeatureRun, stats: FeatureStats): LossesModel {
+// nowMs — текущее время: живая карточка 1 показывает длительность ТЕКУЩЕГО ожидания
+// (макет feature-stats-5.html:538 — attention.dur), тот же образец, что analysisLineState(run, nowMs).
+export function lossesModel(run: FeatureRun, stats: FeatureStats, nowMs: number): LossesModel {
   const cards: LossCard[] = [];
   const t = stats.timeline.totals;
-  const live = run.attention?.kind === 'wait';
+  const att = run.attention;
+  const live = att?.kind === 'wait';
 
   // 1. Долше всего ждали вас; живая карточка — пока фича ждёт человека.
-  if (t.longestWaitMinutes != null) {
+  if (live) {
+    // Живая карточка — длительность текущего ожидания, а не прошлый максимум.
     cards.push({
       no: 1,
       kind: 'wait',
-      title: live ? 'Ждёт вас сейчас' : 'Дольше всего ждали вас',
+      title: 'Ждёт вас сейчас',
+      minutes: minutesSince(att!.since, nowMs),
+      live: true,
+      count: t.waitingCount ?? null,
+    });
+  } else if (t.longestWaitMinutes != null) {
+    cards.push({
+      no: 1,
+      kind: 'wait',
+      title: 'Дольше всего ждали вас',
       minutes: t.longestWaitMinutes,
-      live,
+      live: false,
       count: t.waitingCount ?? null,
     });
   }

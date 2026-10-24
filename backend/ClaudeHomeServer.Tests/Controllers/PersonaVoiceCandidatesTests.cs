@@ -222,6 +222,18 @@ public class PersonaVoiceCandidatesTests : IDisposable
     }
 
     [Fact]
+    public void Разбор_ПреамбулаСРазделителем_НеДаётЖивогоГолоса()
+    {
+        // Тире внутри преамбулы — тоже разделитель: «Для Vera » ушло бы в ключ, и vera стала бы живым
+        var (candidates, live) = PersonasCrudService.ParseCandidates("""
+            Для Vera — три голоса:
+            masha friendly | тёплая
+            """);
+        candidates.Select(c => c.Voice).Should().Equal("masha");
+        live.Should().BeNull();
+    }
+
+    [Fact]
     public void Разбор_БольшеТрёхОбычных_Повторы_ЧужоеАмплуа_ВторойЖивой()
     {
         var (candidates, live) = PersonasCrudService.ParseCandidates("""

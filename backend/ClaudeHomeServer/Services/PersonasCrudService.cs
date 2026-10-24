@@ -1208,9 +1208,10 @@ public sealed class PersonasCrudService(
     // «Вера», и слово vera тихо стало бы живым голосом. Обычные — до трёх, без повторов и
     // без показанных; живой — первый подходящий LiveTTS.
     //
-    // Строка без разделителя — не кандидат, если в ответе есть строки по формату или она
-    // кончается двоеточием: это преамбула вроде «Голоса для Vera:», и vera из неё тихо
-    // стала бы живым голосом. Ответ из одних голых ключей при этом разбирается как раньше
+    // Строка, кончающаяся двоеточием, — не кандидат никогда (даже с разделителем внутри):
+    // это преамбула вроде «Голоса для Vera:» или «Для Vera — три голоса:», и vera из неё
+    // тихо стала бы живым голосом. Строка без разделителя — не кандидат, если в ответе есть
+    // строки по формату. Ответ из одних голых ключей при этом разбирается как раньше
     internal static (IReadOnlyList<VoiceCandidate> Candidates, VoiceCandidate? Live) ParseCandidates(
         string raw, IReadOnlySet<string>? shown = null)
     {
@@ -1222,8 +1223,10 @@ public sealed class PersonasCrudService(
         var anySeparated = lines.Any(l => SeparatorAt(l) >= 0);
         foreach (var line in lines)
         {
+            // Двоеточие в конце — преамбула и при найденном разделителе: «Для Vera — три голоса:»
+            if (line.TrimEnd().EndsWith(':')) continue;
             var sep = SeparatorAt(line);
-            if (sep < 0 &&(anySeparated || line.TrimEnd().EndsWith(':'))) continue;
+            if (sep < 0 && anySeparated) continue;
             var key = sep < 0 ? line : line[..sep];
             var why = sep < 0 ? "" : line[(sep + 1)..].Trim().Trim('"', '«', '»').Trim();
             if (why.Length > 140) why = why[..140].TrimEnd() + "…";

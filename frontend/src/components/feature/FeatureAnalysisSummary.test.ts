@@ -16,8 +16,11 @@
 //     запроса: страховка равенства контроллера (W5-R-F2a, п.3);
 //   · на 360 кнопки «Остановить», «Обновить», «Свернуть» — minHeight 40 (п.4),
 //     «Повторить» в заглушке 502 — тоже 40 (W5-R-F2a, п.1);
-//   · число событий: «по N событиям» в шапке и «устарело · N событий» в бейдже (W4-AN-EC);
-//     если бэк его не несёт (старая версия) — числа нигде нет.
+//   · число событий: «по N событиям» в шапке (W4-AN-EC); бейдж устаревания — просто
+//     «устарело», без числа (решение продакта); если бэк eventCount не несёт (старая
+//     версия) — числа в шапке нигде нет;
+//   · полная строка шапки с пробелами вокруг «·» — проверяется целиком, не подстроками
+//     (вердикт W4-R-AN-EC, п.2).
 //
 // Мутации (в отчёте): в FeatureAnalysisLine «Обновить» → fetchSummary(false) —
 // тест «Обновить — запрос с force» краснеет; удаление сброса состояния при смене
@@ -28,13 +31,14 @@
 // «текущий запрос» в .then красит тест «ответ старого запроса не липнет» (проверено
 // прогоном); удаление cleanup-стрелки в useEffect красит тест про отмену при
 // размонтировании; удаление показа «по N событиям» в шапке красит тест про число
-// событий; вырезание числа из бейджа красит тест «устарело · N событий» (проверено
-// прогоном).
+// событий; склейка шапки без пробела перед «·» (join('· ')) красит тест полной
+// строки шапки (проверено прогоном).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureAnalysisLine } from './FeatureAnalysisLine';
 import { parseSummary } from './FeatureAnalysisSummary';
+import { formatClock } from './FeatureStatsBits';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun } from '../../types/featureRun';
 import type { FeatureSummaryResult } from '../../lib/api';
@@ -344,45 +348,53 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
     }
   });
 
-  // === 14. Число событий в шапке (W4-AN-EC; мутация: вырезать показ — тест краснеет) ===
-  it('шапка — «по 12 событиям» рядом с датой резюме', async () => {
+  // === 14. Полная строка шапки (вердикт W4-R-AN-EC, п.2; мутация: убрать пробел перед
+  //     «·» в склейке — тест краснеет, проверено прогоном) ===
+  it('шапка — «анализ · <время> · по 12 событиям · claude-opus-4-8» целиком, с пробелами вокруг «·»', async () => {
     const { c } = render();
     clickLineSummary(c);
     await flush();
     const box = findNodeByAttr(c, 'data-testid', 'feature-analysis-summary');
     expect(box, 'резюме раскрыто').not.toBeNull();
     const all = textNodes(box!).join('');
-    expect(all, 'число событий в шапке').toContain('по 12 событиям');
+    // Время берём тем же formatClock, что и компонент: тест не зависит от часовой зоны.
+    const header = `анализ · ${formatClock(SUMMARY.generatedAt)} · по 12 событиям · claude-opus-4-8`;
+    expect(all, 'полная строка шапки').toContain(header);
   });
 
-  // === 15. Бейдж устаревания с числом (W4-AN-EC; мутация: вырезание числа красит тест) ===
-  it('устаревшее резюме — бейдж «устарело · 12 событий»', async () => {
-    // Активность фичи позже генерации — бейдж есть, и с числом событий резюме.
+  // === 15. Бейдж устаревания без числа (решение продакта; мутация: вернуть число — краснеет) ===
+  it('устаревшее резюме — бейдж «устарело», без числа событий', async () => {
+    // Активность фичи позже генерации — бейдж есть, но только слово «устарело».
     const { c } = render({ lastActivityAt: '2026-10-24T12:00:00Z' });
     clickLineSummary(c);
     await flush();
     const box = findNodeByAttr(c, 'data-testid', 'feature-analysis-summary');
     expect(box, 'резюме раскрыто').not.toBeNull();
     const all = textNodes(box!).join('');
-    expect(all, 'бейдж с числом событий').toContain('устарело · 12 событий');
+    expect(all, 'бейдж «устарело»').toContain('устарело');
+    expect(all, 'числа событий в бейдже нет').not.toContain('устарело · 12');
   });
 
   // === 16. Формы числительных и ответ старой версии бэка без eventCount ===
-  it('eventCount 1 — «по 1 событию» и «устарело · 1 событие»; без eventCount — числа нет нигде', async () => {
+  it('eventCount 1 — «по 1 событию» в шапке; без eventCount — числа в шапке нет; бейдж всегда без числа', async () => {
     mockSummary.result = { ...SUMMARY, eventCount: 1 };
     const { c } = render({ lastActivityAt: '2026-10-24T12:00:00Z' });
     clickLineSummary(c);
     await flush();
     const all = textNodes(findNodeByAttr(c, 'data-testid', 'feature-analysis-summary')!).join('');
     expect(all, 'единичная форма в шапке').toContain('по 1 событию');
-    expect(all, 'единичная форма в бейдже').toContain('устарело · 1 событие');
+    expect(all, 'бейдж без числа').toContain('устарело');
+    expect(all, 'числа в бейдже нет').not.toContain('устарело · 1');
 
-    // Старая версия сервера поля не несёт — ни в шапке, ни в бейдже числа нет.
+    // Старая версия сервера поля не несёт — в шапке числа нет, бейдж просто «устарело».
     mockSummary.result = { text: SUMMARY.text, generatedAt: SUMMARY.generatedAt, model: null, cached: true };
     const { c: c2 } = render({ lastActivityAt: '2026-10-24T12:00:00Z' });
     clickLineSummary(c2);
     await flush();
     const all2 = textNodes(findNodeByAttr(c2, 'data-testid', 'feature-analysis-summary')!).join('');
+    // Путь без eventCount тоже проверяется полной строкой: «анализ · <время> · локальная модель».
+    const header2 = `анализ · ${formatClock(SUMMARY.generatedAt)} · локальная модель`;
+    expect(all2, 'полная строка шапки без eventCount').toContain(header2);
     expect(all2, 'бейдж без числа — просто «устарело»').toContain('устарело');
     expect(all2, 'числа событий в шапке нет').not.toContain('событи');
   });

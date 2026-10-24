@@ -192,14 +192,18 @@ export function FeatureAnalysisSummary({
       }}>
         <Sparkles size={ICON_SIZE.xs} {...ICON_PROPS} />
         <span>
-          анализ · {formatClock(data?.generatedAt ?? '')}
-          {eventCount !== null ? ` · по ${eventCount} ${plural(eventCount, 'событию', 'событиям', 'событиям')}` : ''}
-          · {data?.model || 'локальная модель'}
+          {/* Шапка склеивается частями с « · » между ними (вердикт W4-R-AN-EC, п.1):
+              пробелы вокруг разделителя держатся и в пути без eventCount. */}
+          {[
+            'анализ',
+            formatClock(data?.generatedAt ?? ''),
+            eventCount !== null ? `по ${eventCount} ${plural(eventCount, 'событию', 'событиям', 'событиям')}` : '',
+            data?.model || 'локальная модель',
+          ].filter(Boolean).join(' · ')}
         </span>
         {stale && (
-          <Badge tone="warning" size="xs">
-            устарело{eventCount !== null ? ` · ${eventCount} ${plural(eventCount, 'событие', 'события', 'событий')}` : ''}
-          </Badge>
+          // Бейдж без числа: N в нём читалось как «набежало N», хотя это число резюме (решение продакта).
+          <Badge tone="warning" size="xs">устарело</Badge>
         )}
         <span style={{ flex: 1 }} />
         <Button

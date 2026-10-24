@@ -753,7 +753,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
     {
         var text = BuildSection(0);
 
-        text.Should().Contain("переиспользуется и сбрасывается").And.Contain("незакоммиченные правки прошлого хода");
+        text.Should().Contain("берётся свободный слот волны (не обязательно тот же)").And.Contain("незакоммиченные правки прошлых ходов").And.Contain("задача стартует в дереве волны");
     }
 
     [Fact]

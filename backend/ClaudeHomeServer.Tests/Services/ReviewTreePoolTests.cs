@@ -383,6 +383,62 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task RemoveSlotsOfProject_Слот_На_Ветке_После_Снятия_Аренды_Сносится()
+    {
+        var pool = NewPool();
+        var lease = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        await RawGit(lease!.SlotPath, "checkout", "-b", "reviewer/after-stop");
+        pool.Release("t1"); // «Стоп» исполнителя
+
+        await pool.RemoveSlotsOfProjectAsync(null, _project);
+
+        (await InWorktreeList(lease.SlotPath)).Should().BeFalse("слот заведён пулом — наш и без аренды");
+    }
+
+    [Fact]
+    public async Task Acquire_Слот_На_Ветке_После_Снятия_Аренды_Возвращается_В_Detached()
+    {
+        var pool = NewPool();
+        var first = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        await RawGit(first!.SlotPath, "checkout", "-b", "reviewer/poison");
+        pool.Release("t1");
+
+        var second = await pool.TryAcquireAsync(null, _project, _wave, "t2");
+
+        second.Should().NotBeNull("отравленный слот чинится, ревью не уходит в дерево волны");
+        second!.SlotPath.Should().Be(first.SlotPath);
+        (await _git.WorktreeListAsync(null, _repo)).Should().Contain(w =>
+            Path.GetFullPath(w.Path) == Path.GetFullPath(second.SlotPath) && w.Branch == null);
+    }
+
+    [Fact]
+    public async Task Acquire_Чужое_Дерево_На_Ветке_С_Именем_Слота_Не_Чинится()
+    {
+        var pool = NewPool();
+        var chatTree = Path.Combine(_slotBase, "feat-wave-review-1");
+        await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/clash3");
+
+        var act = () => pool.TryAcquireAsync(null, _project, _wave, "t1");
+
+        await act.Should().ThrowAsync<GitCommandException>();
+        (await _git.WorktreeListAsync(null, _repo)).Should().Contain(w =>
+            Path.GetFullPath(w.Path) == Path.GetFullPath(chatTree) && w.Branch == "feat/clash3");
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Слот_Созданный_После_Снимка_Деревьев_Тоже_Сносится()
+    {
+        var pool = NewPool();
+        string? slot = null;
+        pool.AfterWaveSnapshot = async () => slot = (await pool.TryAcquireAsync(null, _project, _wave, "t1"))!.SlotPath;
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        slot.Should().NotBeNull();
+        (await InWorktreeList(slot!)).Should().BeFalse("снимок устарел — список перечитывается");
+    }
+
+    [Fact]
     public async Task RestoreLeases_Игнорирует_Чат_Вне_Слота_Проекта()
     {
         var tasks = new List<TaskItem>

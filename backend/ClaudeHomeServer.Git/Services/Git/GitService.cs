@@ -1447,7 +1447,9 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // Защищённый сброс слота ревью на sha. До записи проверяем: путь числится в `worktree list`,
     // это не основное дерево, не locked и HEAD detached — иначе отказ без единой записи на диск.
     // clean БЕЗ -x: игнорируемое (obj/, bin/, node_modules) выживает, сборка остаётся инкрементальной.
-    public async Task ResetReviewWorktreeAsync(string? ownerId, string mainRoot, string path, string sha, CancellationToken ct = default)
+    // detachBranched: слот заведомо наш, и ревьюер заветвился в нём — возвращаем в detached вместо отказа.
+    public async Task ResetReviewWorktreeAsync(string? ownerId, string mainRoot, string path, string sha,
+        bool detachBranched = false, CancellationToken ct = default)
     {
         ValidateRevision(sha);
         var wanted = PathNormalizer.NormalizePath(path);
@@ -1462,7 +1464,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             var list = await WorktreeListAsync(ownerId, mainRoot, ct);
             var info = list.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == wanted)
                 ?? throw new GitCommandException("Путь не числится среди worktree репозитория");
-            if (info.Branch is not null)
+            if (info.Branch is not null && !detachBranched)
                 throw new GitCommandException("Дерево стоит на ветке — это не слот ревью");
             if (info.Locked)
                 throw new GitCommandException("Дерево заблокировано (locked)");

@@ -3,6 +3,7 @@
 // Состояние выбирает чистая функция analysisLineState — компонент только рисует.
 // Без `run` (старые ответы) строки нет; пустых состояний у строки не бывает — худшее — other.
 
+import { useRef, useState } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { Badge } from '../ui/Badge';
 import { Dot } from '../ui/Dot';
@@ -10,9 +11,11 @@ import { Button } from '../ui/Button';
 import { ICON_SIZE, ICON_PROPS } from '../ui/icons';
 import { Bell, Check, Clock, Moon, Sparkles } from 'lucide-react';
 import { openChatById } from '../../lib/openChat';
+import { api, type FeatureSummaryResult } from '../../lib/api';
 import type { NavMarks } from '../../lib/featureNavMarks';
 import type { FeatureRun } from '../../types/featureRun';
 import { analysisLineState, type AnalysisBadge, type AnalysisLineState } from './FeatureAnalysisModel';
+import { FeatureAnalysisSummary } from './FeatureAnalysisSummary';
 
 const BADGE_ICON: Record<AnalysisBadge['icon'], typeof Clock> = {
   Clock, Bell, Moon, Check,
@@ -52,9 +55,39 @@ export interface FeatureAnalysisLineProps {
 export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAnalysisLineProps) {
   const st = analysisLineState(run, Date.now());
 
-  // Чат шага в архиве или пуст — действие «Открыть чат» снимается, «Анализ моделью» остаётся.
+  // Резюме (W5-F2): состояние живёт здесь — «результат держится в состоянии страницы».
+  // Открыто и готово — кнопки «Анализ моделью» в строке нет (действия — в шапке резюме);
+  // идёт — кнопка остаётся, но disabled.
+  const [openSummary, setOpenSummary] = useState(false);
+  const [summaryData, setSummaryData] = useState<FeatureSummaryResult | null>(null);
+  const [summaryError, setSummaryError] = useState<{ status: number; text: string } | null>(null);
+  const [summaryRunning, setSummaryRunning] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // force=false — берётся кэш бэка; force=true — новый прогон («Обновить»).
+  const fetchSummary = (force: boolean) => {
+    if (summaryRunning) return;
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setSummaryRunning(true);
+    setSummaryError(null);
+    api.tasks.featureSummary(run.featureId, force, ac.signal)
+      .then(d => { setSummaryData(d); })
+      .catch(e => {
+        if (ac.signal.aborted) return; // «Остановить» — не ошибка.
+        const err = e as Error & { status?: number; body?: { error?: string } };
+        setSummaryError({ status: err.status ?? 0, text: err.body?.error || err.message });
+      })
+      .finally(() => { setSummaryRunning(false); abortRef.current = null; });
+  };
+
+  // Чат шага в архиве или пуст — действие «Открыть чат» снимается; «Анализ моделью»
+  // снимается только когда резюме раскрыто и готово (спека: «когда резюме раскрыто —
+  // кнопки в строке нет»).
   const actions = st.actions.filter(
-    a => a.kind === 'analysis' || (a.sessionId && !marks?.chatArchived(a.sessionId)),
+    a => a.kind === 'analysis'
+      ? !(openSummary && !summaryRunning)
+      : (a.sessionId && !marks?.chatArchived(a.sessionId)),
   );
 
   const open = (sessionId: string) => { void openChatById(sessionId); };
@@ -67,6 +100,7 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
   // и «Последнее событие {dur} назад.».
 
   return (
+    <>
     <div data-testid="feature-analysis-line" style={boxStyle(st, isMobile)}>
       {st.badge && BadgeIcon ? (
         <Badge tone={st.badge.tone} size="xs" icon={<BadgeIcon size={ICON_SIZE.xs} {...ICON_PROPS} />}>
@@ -89,14 +123,22 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
         {actions.map((a, i) => (
           a.kind === 'analysis' ? (
             <Button
+              key="analysis"
               variant="ghost" size={isMobile ? 'md' : 'sm'} fullWidth={isMobile}
               leftIcon={<Sparkles size={ICON_SIZE.xs} {...ICON_PROPS} />}
               dataTestId="analysis-line-summary"
+              disabled={summaryRunning}
+              onClick={() => {
+                setOpenSummary(true);
+                // Повторный клик — без force: результат уже в состоянии, не плодим запрос.
+                if (!summaryData) fetchSummary(false);
+              }}
             >
               {a.label}
             </Button>
           ) : (
             <Button
+              key={`chat-${i}`}
               variant={a.variant} size={isMobile ? 'md' : 'sm'} fullWidth={isMobile}
               onClick={() => open(a.sessionId!)}
               dataTestId={`analysis-line-open-chat-${i}`}
@@ -107,5 +149,20 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
         ))}
       </div>
     </div>
+
+    {openSummary && (
+      <FeatureAnalysisSummary
+        run={run}
+        phase={summaryRunning ? 'running' : summaryError ? 'error' : 'ready'}
+        data={summaryData}
+        error={summaryError}
+        isMobile={isMobile}
+        onRefresh={() => fetchSummary(true)}
+        onRetry={() => fetchSummary(false)}
+        onCollapse={() => setOpenSummary(false)}
+        onStop={() => { abortRef.current?.abort(); setOpenSummary(false); }}
+      />
+    )}
+    </>
   );
 }

@@ -815,6 +815,19 @@ export function panelEntryPath(entry: unknown): string | null {
   return segs.map(s => encodeURIComponent(s)).join('/');
 }
 
+// Резюме фичи (W5-F2, «Точка 6 · резюме»): результат модельного анализа хронологии.
+// text — markdown с разделами «Сделано», «Где застряло», «Дальше» (или голые пункты
+// без заголовков — пока так просит промпт feature-summary); model=null — локальная
+// модель; cached — результат взят из кэша бэка, без нового прогона. Ошибки: 502 —
+// модель не ответила (причина в error), 503 — подсистема выключена, 404 — фичи нет.
+export interface FeatureSummaryResult {
+  text: string;
+  generatedAt: string;
+  model: string | null;
+  cached: boolean;
+  usage?: unknown;
+}
+
 // Projects
 export const api = {
   auth: {
@@ -1782,6 +1795,15 @@ export const api = {
       request<FeaturePage>(
         `/tasks/features/${encodeURIComponent(fid)}${eventsLimit ? `?eventsLimit=${encodeURIComponent(eventsLimit)}` : ''}`,
         signal ? { signal } : undefined,
+      ),
+    // Резюме фичи моделью (W5-F2, «Точка 6 · резюме»): POST summary[?force=true].
+    // force=false — берётся кэш бэка, если есть; force=true — новый прогон. 200 —
+    // FeatureSummaryResult; 502 — модель не ответила (текст причины в error); 503 —
+    // подсистема выключена; 404 — фичи нет. signal — «Остановить» в шапке резюме.
+    featureSummary: (fid: string, force?: boolean, signal?: AbortSignal) =>
+      request<FeatureSummaryResult>(
+        `/tasks/features/${encodeURIComponent(fid)}/summary${force ? '?force=true' : ''}`,
+        { method: 'POST', ...(signal ? { signal } : {}) },
       ),
     // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{fid}/merge):
     // создаёт задачу role=merge с персоной DevopsExecutor и запускает её. Fail-closed:

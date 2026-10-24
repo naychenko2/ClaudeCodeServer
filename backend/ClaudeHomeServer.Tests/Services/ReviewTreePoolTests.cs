@@ -707,6 +707,8 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
         await _git.WorktreeAddAsync(null, _repo, dashWave, "feat-wave");
         var pool = NewPool();
         var dash = await pool.TryAcquireAsync(null, _project, dashWave, "t1");
+        // аренду снимаем: слот должен защищать только фильтр «claimed» в фолбэке, а не живая аренда
+        pool.Release("t1");
         await RawGit(_repo, "worktree", "remove", "--force", _wave);
 
         await pool.RemoveSlotsOfWaveAsync(null, _project, Path.Combine(_root, "feat-wave"));

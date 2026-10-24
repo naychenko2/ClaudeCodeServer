@@ -20,6 +20,10 @@ import { usePersonas } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { formatDuration } from './FeatureStatsBits';
+// Форматтеры чисел живут в FeatureStatsFormat.ts (ST-F8); ре-экспорт сохранён —
+// потребители (Tiles, MiniSummary, тесты) импортируют их из этого блока.
+import { formatTokens, formatUsd } from './FeatureStatsFormat';
+export { formatTokens, formatUsd };
 import { NavTargetPair, NavTargetButton } from './NavTargetButton';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { EMPTY_NAV_MARKS, type FeatureNavCtx } from '../../lib/featureNavMarks';
@@ -33,20 +37,6 @@ import type {
 } from '../../types/featureStats';
 
 // === Чистые помощники (node, без DOM) ===
-
-// Токены: «1,2М» / «640 тыс.» / «12 345». null → '' (нет данных).
-export function formatTokens(n: number | null): string {
-  if (n == null) return '';
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace('.', ',')}М`;
-  if (n >= 1_000) return `${Math.round(n / 1000)} тыс.`;
-  return String(n);
-}
-
-// Деньги (USD): «$15,60» / «$0,42». null → '' (нет данных).
-export function formatUsd(n: number | null): string {
-  if (n == null) return '';
-  return `$${n.toFixed(2).replace('.', ',')}`;
-}
 
 // Доля 0..1 → «31 %». null → '' (не считалась).
 export function sharePercent(share: number | null): string {

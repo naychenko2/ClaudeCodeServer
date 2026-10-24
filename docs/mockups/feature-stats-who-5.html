@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · страница фичи · «Кто на чём работает»: три варианта</title>
+<!--
+  Макеты на выбор Андрею: блок «Кто на чём работает» (сейчас — «Кто и на чём работал», Breakdown в
+  FeatureStatsBlocks.tsx). Записка и спецификация — feature-stats-who-5.md. Код продукта не правится.
+  Привязка: featureId 8d33d18b-c6f6-4311-8ddb-e5a627f38fb2, задача aae59264 (role=design, stepRef нет).
+  Данные выдуманы, но только из полей, которые бэк уже отдаёт: run.stages[].executors (personaId, taskRole,
+  stepRef, lane, status, chatId, modelLabel, reviewOf), run.now, run.attention, run.stepChains, задачи фичи
+  (claudeStartedAt, completedAt, createdAt, awaitingHumanSince/Reason, executorStoppedAt/Reason),
+  stats.breakdown.personas (minutes, tokens, costUsd), stats.timeline.segments (kind + taskId).
+  Пометка .be «нужны данные» — поля нет в ответе API.
+  A — «Доска»: колонки по состоянию (работают · ждут вас · ждут ревью · в очереди · свободны).
+  B — «Команда»: строка на человека: сейчас · дальше · сделано · время и расход.
+  C — «Загрузка»: люди на оси времени — когда кто был занят, где простой, что в очереди после «сейчас».
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css (как в feature-stats-5), семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  /* Цвета персон — данные (AGENT_COLORS в AgentSelector.tsx), не токены темы */
+  --p-orange:#D97757; --p-purple:#6C5CB0; --p-brown:#8A6A28; --p-blue:#3E7CA6; --p-green:#5E8B4E;
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-panel); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.be { display:inline-flex; align-items:center; font:700 10px/16px "Hanken Grotesk",sans-serif; border-radius:6px; padding:0 6px;
+  background:var(--c-info-bg); color:var(--c-text-primary); border:1px dashed var(--c-info); max-width:100%; }
+.nomarks .be { display:none; }
+/* обвязка макета */
+.mk { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.note { padding:10px 16px 0; font-size:12px; color:var(--c-text-secondary); max-width:1280px; }
+#out { display:flex; flex-wrap:wrap; gap:24px; padding:16px; align-items:flex-start; }
+.cap { font-size:11px; color:var(--c-text-muted); margin:0 0 6px 2px; }
+.frame { background:var(--c-bg-main); color:var(--c-text-primary); border:1px solid var(--c-border); border-radius:12px; overflow:hidden; }
+.w1280 .frame { width:1280px; } .w360 .frame { width:360px; }
+.page { padding:20px 32px 32px; } .w360 .page { padding:12px 12px 24px; }
+.ph { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.ph .back { font-size:12px; color:var(--c-text-muted); }
+.ph h2 { margin:0; font:700 22px/1.25 "PT Serif",Georgia,serif; color:var(--c-text-heading); }
+.w360 .ph h2 { font-size:18px; width:100%; }
+.tabs { display:flex; gap:4px; margin:12px 0 16px; border-bottom:1px solid var(--c-border-light); overflow-x:auto; }
+.tabs span { padding:8px 10px; font-size:13px; color:var(--c-text-secondary); white-space:nowrap; border-bottom:2px solid transparent; }
+.tabs span.on { color:var(--c-text-heading); font-weight:600; border-bottom-color:var(--c-accent); }
+/* примитивы */
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; box-shadow:var(--shadow-card); padding:12px; }
+.sec { font-size:10px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; margin:0 0 8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.sec .t { font-size:16px; font-weight:700; color:var(--c-text-heading); text-transform:none; letter-spacing:0; font-family:"PT Serif",Georgia,serif; }
+.chip { display:inline-flex; align-items:center; gap:6px; height:22px; padding:0 8px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }
+.chip .d { width:7px; height:7px; border-radius:50%; background:currentColor; }
+.t-run { background:var(--c-accent-light); color:var(--c-accent); }
+.t-wait { background:var(--c-info-bg); color:var(--c-info); }
+.t-stop { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.t-rev { background:var(--c-plan-light); color:var(--c-plan-text); }
+.t-q { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.t-free { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.t-ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.ref { font:700 11px "JetBrains Mono",monospace; padding:1px 6px; border-radius:6px; background:var(--c-bg-selected); color:var(--c-text-heading); white-space:nowrap; }
+.mdl { font-size:10px; padding:1px 6px; border-radius:6px; border:1px solid var(--c-border); color:var(--c-text-secondary); white-space:nowrap; }
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:28px; padding:0 12px; border-radius:12px; font-size:12px; font-weight:600; white-space:nowrap; }
+.w360 .btn { height:40px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.gh { border:1px solid var(--c-border); background:var(--c-bg-white); }
+.btn.ln { color:var(--c-accent); padding:0 4px; }
+.av { width:22px; height:22px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; color:var(--c-on-accent); flex-shrink:0; }
+.av.lg { width:32px; height:32px; font-size:13px; }
+.av.you { background:var(--c-info); }
+.muted { color:var(--c-text-muted); } .sec2 { color:var(--c-text-secondary); }
+.dashed { border:1px dashed var(--c-dashed); border-radius:10px; color:var(--c-text-muted); font-size:12px; padding:10px 12px; }
+.sum { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+.acc { font-size:11px; color:var(--c-text-muted); margin-bottom:8px; }
+.live { animation:pulse 1.6s ease-in-out infinite; } @keyframes pulse { 50% { opacity:.45; } }
+
+/* A · Доска */
+.a-cols { display:grid; grid-template-columns:repeat(5, 1fr); gap:12px; align-items:start; }
+.a-col { background:var(--c-bg-panel); border-radius:10px; padding:8px; min-height:120px; }
+.a-col.hot { background:var(--c-info-bg); box-shadow:inset 0 0 0 1px var(--c-info); }
+.a-col h4 { margin:0 0 8px; display:flex; align-items:center; gap:6px; font-size:12px; color:var(--c-text-heading); }
+.a-col h4 .n { margin-left:auto; font:700 11px "JetBrains Mono",monospace; color:var(--c-text-muted); }
+.a-card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:10px; margin-bottom:8px; box-shadow:var(--shadow-card); }
+.a-card .who { display:flex; align-items:center; gap:6px; font-weight:600; color:var(--c-text-heading); font-size:12px; }
+.a-card .who .tm { margin-left:auto; font:600 11px "JetBrains Mono",monospace; color:var(--c-text-secondary); }
+.a-card .what { margin:6px 0 4px; font-size:12px; color:var(--c-text-primary); display:flex; gap:6px; align-items:baseline; flex-wrap:wrap; }
+.a-card .meta { display:flex; gap:6px; align-items:center; flex-wrap:wrap; font-size:11px; color:var(--c-text-muted); }
+.a-card .why { margin-top:6px; font-size:12px; color:var(--c-text-primary); background:var(--c-bg-white); border-radius:8px; padding:6px 8px; }
+.a-card .ft { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+.a-empty { font-size:11px; color:var(--c-text-muted); border:1px dashed var(--c-dashed); border-radius:8px; padding:10px; text-align:center; }
+.w360 .a-cols { grid-template-columns:1fr; gap:8px; }
+.w360 .a-col { min-height:0; }
+.w360 .a-col.fold { padding:0 10px; min-height:40px; display:flex; align-items:center; }
+.w360 .a-col.fold h4 { margin:0; width:100%; color:var(--c-text-muted); }
+
+/* B · Команда */
+.b-head, .b-row { display:grid; grid-template-columns:200px 1.4fr 1fr 1fr 130px; gap:16px; align-items:start; }
+.b-head { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); padding:0 12px 6px; }
+.b-row { padding:12px; border-top:1px solid var(--c-border-light); }
+.b-row.hot { background:var(--c-info-bg); border-radius:10px; border-top-color:transparent; }
+.b-who { display:flex; gap:8px; align-items:center; }
+.b-who b { display:block; color:var(--c-text-heading); font-size:13px; }
+.b-who small { display:block; font-size:11px; color:var(--c-text-muted); }
+.b-now { display:flex; flex-direction:column; gap:4px; font-size:12px; }
+.b-now .ln1 { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.b-list { display:flex; flex-wrap:wrap; gap:4px; font-size:11px; }
+.b-done i { font-style:normal; display:inline-flex; gap:3px; align-items:center; padding:1px 6px; border-radius:6px; font:700 11px "JetBrains Mono",monospace; }
+.b-num { text-align:right; font:600 12px "JetBrains Mono",monospace; color:var(--c-text-heading); }
+.b-num small { display:block; font-weight:400; color:var(--c-text-muted); }
+.b-bar { height:4px; border-radius:999px; background:var(--c-bg-selected); margin-top:6px; overflow:hidden; }
+.b-bar i { display:block; height:100%; border-radius:999px; }
+.w360 .b-head { display:none; }
+.w360 .b-row { grid-template-columns:1fr; gap:8px; padding:12px 4px; }
+.w360 .b-row.hot { padding:12px; }
+.w360 .b-num { text-align:left; display:flex; gap:8px; align-items:baseline; }
+.w360 .b-num small { display:inline; }
+.w360 .nil { display:none; }
+.lbl2 { font-size:10px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; display:none; }
+.w360 .lbl2 { display:block; }
+
+/* C · Загрузка */
+.c-axis, .c-row { display:grid; grid-template-columns:150px 1fr 110px; gap:12px; align-items:center; }
+.c-axis .ax { position:relative; height:16px; font:10px "JetBrains Mono",monospace; color:var(--c-text-muted); border-bottom:1px solid var(--c-border-light); }
+.c-axis .ax span { position:absolute; transform:translateX(-50%); }
+.c-row { min-height:44px; border-bottom:1px solid var(--c-border-light); }
+.c-row .nm { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:var(--c-text-heading); min-width:0; }
+.c-row .nm small { display:block; font-weight:400; font-size:10px; color:var(--c-text-muted); }
+.c-tk { position:relative; height:26px; }
+.c-tk .base { position:absolute; left:0; top:12px; height:2px; background:var(--c-border-light); }
+.c-b { position:absolute; top:3px; height:20px; border-radius:6px; display:flex; align-items:center; padding:0 6px; overflow:hidden; white-space:nowrap;
+  font:700 10px "JetBrains Mono",monospace; color:var(--c-on-accent); min-width:4px; }
+.c-b.work { background:var(--c-accent); }
+.c-b.rev { background:var(--c-plan); }
+.c-b.wait { background:var(--c-info); }
+.c-b.err { background:var(--c-danger); }
+.c-b.q { background:transparent; border:1px dashed var(--c-warning); color:var(--c-warning-text); }
+.c-gap { position:absolute; top:6px; height:14px; font:10px "JetBrains Mono",monospace; color:var(--c-text-muted); display:flex; align-items:center; justify-content:center; overflow:hidden; white-space:nowrap; }
+.c-now { position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--c-accent); border-radius:999px; }
+.c-row .vl { text-align:right; font:600 11px "JetBrains Mono",monospace; color:var(--c-text-secondary); }
+.c-row .vl small { display:block; font-weight:400; color:var(--c-text-muted); }
+.c-legend { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:11px; color:var(--c-text-muted); margin-top:10px; }
+.c-legend span { display:inline-flex; align-items:center; gap:5px; }
+.sw { width:12px; height:10px; border-radius:3px; display:inline-block; }
+.c-util { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+.c-util .k { padding:8px 12px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); }
+.c-util .k b { font:700 16px "PT Serif",Georgia,serif; color:var(--c-text-heading); margin-right:6px; }
+.c-util .k span { font-size:11px; color:var(--c-text-muted); }
+.w360 .c-axis { display:none; }
+.w360 .c-row { grid-template-columns:1fr auto; gap:4px 8px; padding:8px 0; }
+.w360 .c-row .c-tk { grid-column:1 / -1; grid-row:2; }
+.w360 .c-util { display:grid; grid-template-columns:1fr 1fr; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>«Кто на чём работает» · 3 подачи</h1>
+  <div class="grp"><span class="lbl">Вариант</span><div class="pills" data-k="v">
+    <button data-v="A" class="on">A · Доска</button><button data-v="B">B · Команда</button><button data-v="C">C · Загрузка</button></div></div>
+  <div class="grp"><span class="lbl">Состояние</span><div class="pills" data-k="s">
+    <button data-v="running" class="on">идёт</button><button data-v="waiting">ждёт вас</button><button data-v="merged">смержена</button><button data-v="empty">пусто</button></div></div>
+  <div class="grp"><span class="lbl">Тема</span><div class="pills" data-k="t">
+    <button data-v="light">светлая</button><button data-v="dark">тёмная</button><button data-v="both" class="on">обе</button></div></div>
+  <div class="grp"><span class="lbl">Ширина</span><div class="pills" data-k="w">
+    <button data-v="1280">1280</button><button data-v="360">360</button><button data-v="both" class="on">обе</button></div></div>
+  <div class="grp"><span class="lbl">Пометки</span><div class="pills" data-k="m">
+    <button data-v="on" class="on">«нужны данные»</button><button data-v="off">скрыть</button></div></div>
+</div>
+<div class="note" id="note"></div>
+<div id="out"></div>
+<script>
+// Минуты — от старта фичи (09:20). Всё ниже — поля run/stats, см. шапку файла.
+const START = 9 * 60 + 20;
+const fmt = m => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), r = m % 60;
+  if (!h) return r + ' мин'; if (!r) return h + ' ч'; return h + ' ч ' + String(r).padStart(2, '0') + ' мин'; };
+const clock = m => { const t = START + Math.round(m); return String(Math.floor(t / 60) % 24).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); };
+const BE = t => ` <span class="be">нужны данные${t ? ': ' + t : ''}</span>`;
+const P = {
+  sofya: { n: 'Софья', r: 'координатор', c: 'var(--p-orange)' }, egor: { n: 'Егор', r: 'планировщик', c: 'var(--p-brown)' },
+  timur: { n: 'Тимур', r: 'бэкенд', c: 'var(--p-blue)' }, denis: { n: 'Денис', r: 'бэкенд · локальная', c: 'var(--p-blue)' },
+  polina: { n: 'Полина', r: 'фронтенд', c: 'var(--p-purple)' }, kira: { n: 'Кира', r: 'фронтенд · локальная', c: 'var(--p-purple)' },
+  gleb: { n: 'Глеб', r: 'ревью', c: 'var(--p-green)' }, vera: { n: 'Вера', r: 'проверка', c: 'var(--p-green)' }, alex: { n: 'Александр', r: 'финал', c: 'var(--p-brown)' },
+};
+const av = (k, lg) => `<span class="av${lg ? ' lg' : ''}" style="background:${P[k].c}">${P[k].n[0]}</span>`;
+const CAT = {
+  run: { t: 'Работают', chip: 't-run', w: 'идёт' }, wait: { t: 'Ждут вас', chip: 't-wait', w: 'ждёт вас' },
+  stop: { t: 'Встали', chip: 't-stop', w: 'встал' }, review: { t: 'Ждут ревью', chip: 't-rev', w: 'ждёт ревью' },
+  queue: { t: 'В очереди', chip: 't-q', w: 'в очереди' }, free: { t: 'Свободны', chip: 't-free', w: 'свободен' }, done: { t: 'Сделали', chip: 't-ok', w: 'готово' },
+};
+// Задачи фичи: кто (personaId), что (stepRef + title из stepChains/задачи), роль, линия, модель (executor.modelLabel),
+// интервалы работы (claudeStartedAt → completedAt), ожидания (segments kind=waiting с taskId), статус исполнителя.
+const T_RUN = [
+  { who: 'sofya', ref: 'Разрез', title: 'Разрез фичи', role: 'разрез', model: 'Haiku 5.5', a: 0, b: 18, st: 'done' },
+  { who: 'egor', ref: 'План', title: 'План из 7 шагов', role: 'план', model: 'Sonnet 5.5', a: 18, b: 78, st: 'done', waits: [[70, 8]] },
+  { who: 'timur', ref: 'Ш1', title: 'Сервис экспорта', role: 'шаг', lane: 'бэк', model: 'Opus 5.5', a: 80, b: 150, st: 'done', ok: true },
+  { who: 'timur', ref: 'Ш2', title: 'Движок PDF', role: 'шаг', lane: 'бэк', model: 'Opus 5.5', a: 150, b: 200, st: 'done', waits: [[120 + 40, 20]] },
+  { who: 'gleb', ref: 'Ш1', title: 'ревью Ш1', role: 'ревью', model: 'Opus 5.5', a: 150, b: 165, st: 'done', rev: true },
+  { who: 'gleb', ref: 'Ш2', title: 'ревью Ш2', role: 'ревью', model: 'Opus 5.5', a: 200, b: 210, st: 'done', rev: true, ret: true },
+  { who: 'timur', ref: 'Ш2', title: 'Движок PDF · доработка', role: 'доработка', lane: 'бэк', model: 'Opus 5.5', a: 215, b: 280, st: 'done', ok: true },
+  { who: 'gleb', ref: 'Ш2', title: 'ревью Ш2 · 2-й виток', role: 'ревью', model: 'Opus 5.5', a: 280, b: 290, st: 'done', rev: true },
+  { who: 'polina', ref: 'Ш4', title: 'Кнопка экспорта', role: 'шаг', lane: 'фронт', model: 'Sonnet 5.5', a: 210, b: null, st: 'run', waits: [[300, 23]] },
+  { who: 'denis', ref: 'Ш3', title: 'Шрифты в PDF', role: 'шаг', lane: 'бэк', model: 'Qwen 3.8 · локальная', a: 210, b: 330, st: 'done', err: [[240, 15]] },
+  { who: 'gleb', ref: 'Ш3', title: 'ревью Ш3', role: 'ревью', model: 'Opus 5.5', a: 335, b: 350, st: 'done', rev: true, ret: true },
+  { who: 'denis', ref: 'Ш3', title: 'Шрифты в PDF · доработка', role: 'доработка', lane: 'бэк', model: 'Qwen 3.8 · локальная', a: 355, b: null, st: 'run' },
+  { who: 'timur', ref: 'Ш5', title: 'Предпросмотр', role: 'шаг', lane: 'бэк', model: 'Opus 5.5', a: 290, b: 375, st: 'done' },
+  { who: 'gleb', ref: 'Ш5', title: 'ревью Ш5', role: 'ревью', model: 'Opus 5.5', a: 380, b: null, st: 'run', rev: true },
+  { who: 'timur', ref: 'Ш6', title: 'Имя файла', role: 'шаг', lane: 'бэк', model: 'Opus 5.5', a: 376, b: 392, st: 'done', needReview: true },
+  { who: 'kira', ref: 'Ш7', title: 'Настройки экспорта', role: 'шаг', lane: 'фронт', model: 'Qwen 3.8 · локальная', a: null, b: null, created: 78, st: 'queue', after: 'Ш4' },
+  { who: 'vera', ref: 'Проверка', title: 'Проверка фичи', role: 'проверка', model: 'Sonnet 5.5', created: 78, st: 'queue', after: 'все шаги' },
+  { who: 'alex', ref: 'Финал', title: 'Финальное ревью', role: 'финал', model: 'Opus 5.5', created: 78, st: 'queue', after: 'проверка' },
+];
+const MONEY = { timur: [262, '$6,10'], polina: [190, '$4,30'], denis: [175, '$0,00'], gleb: [65, '$2,40'], egor: [60, '$1,10'], sofya: [18, '$0,30'], kira: [0, ''], vera: [0, ''], alex: [0, ''] };
+const clone = o => JSON.parse(JSON.stringify(o));
+function mk(key, now, tasks, extra) { return Object.assign({ key, now, tasks }, extra || {}); }
+const S = {};
+S.running = mk('running', 400, T_RUN);
+S.waiting = mk('waiting', 442, (() => { const t = clone(T_RUN); const p = t.find(x => x.who === 'polina');
+  p.st = 'wait'; p.since = 400; p.reason = 'Экспорт по умолчанию — A4 или Letter? Без ответа кнопку не доделать.'; return t; })());
+S.merged = mk('merged', 555, (() => { const t = clone(T_RUN).map(x => Object.assign(x, { st: 'done' }));
+  t.find(x => x.who === 'polina').b = 395; t.find(x => x.ref === 'Ш3' && x.role === 'доработка').b = 392;
+  t.find(x => x.ref === 'Ш5' && x.rev).b = 395;
+  const k = t.find(x => x.who === 'kira'); Object.assign(k, { a: 395, b: 440 });
+  const v = t.find(x => x.who === 'vera'); Object.assign(v, { a: 440, b: 480, waits: [[445, 38]] });
+  const al = t.find(x => x.who === 'alex'); Object.assign(al, { a: 480, b: 525 });
+  t.push({ who: 'gleb', ref: 'Ш6', title: 'ревью Ш6, Ш7', role: 'ревью', model: 'Opus 5.5', a: 400, b: 435, st: 'done', rev: true });
+  t.push({ who: 'sofya', ref: 'Мерж', title: 'Мерж в master', role: 'мерж', model: 'Haiku 5.5', a: 525, b: 555, st: 'done' });
+  t.forEach(x => delete x.needReview); return t; })());
+S.merged.money = { timur: [262, '$6,10'], polina: [205, '$4,60'], denis: [212, '$0,00'], gleb: [100, '$3,10'], egor: [60, '$1,10'], sofya: [48, '$0,50'], kira: [45, '$0,00'], vera: [40, '$2,30'], alex: [45, '$1,40'] };
+S.empty = mk('empty', 3, [{ who: 'sofya', ref: 'Разрез', title: 'Разрез фичи', role: 'разрез', model: 'Haiku 5.5', created: 0, st: 'queue', after: 'запуск исполнителя' }]);
+
+// Категория исполнителя «сейчас» — по его самой актуальной задаче.
+// run/wait/stop — executor.status; review — шаг done, задача ревью по reviewOf не стартовала (или её нет);
+// queue — executor.status=pending; free — все задачи done; done — у закрытой фичи.
+function people(D) {
+  const by = {};
+  for (const t of D.tasks) (by[t.who] = by[t.who] || []).push(t);
+  const out = [];
+  for (const [who, ts] of Object.entries(by)) {
+    let cat, cur;
+    if (D.key === 'merged') { cat = 'done'; }
+    else if ((cur = ts.find(t => t.st === 'wait'))) cat = 'wait';
+    else if ((cur = ts.find(t => t.st === 'run'))) cat = 'run';
+    else if ((cur = ts.find(t => t.st === 'queue'))) cat = 'queue';
+    else cat = 'free';
+    const last = ts.filter(t => t.b != null).reduce((m, t) => Math.max(m, t.b), -1);
+    out.push({ who, ts, cat, cur, last, next: ts.filter(t => t.st === 'queue' && t !== cur) });
+  }
+  return out;
+}
+// «Ждут ревью» — это шаги, а не люди: шаг сдан, ревью ещё не взято.
+const reviewWaits = D => D.tasks.filter(t => t.needReview && D.key !== 'merged');
+function sinceTxt(D, p) {
+  const c = p.cur;
+  if (p.cat === 'wait') return fmt(D.now - c.since);
+  if (p.cat === 'run') return fmt(D.now - c.a);
+  if (p.cat === 'queue') return fmt(D.now - (c.created || 0));
+  if (p.cat === 'free') return fmt(D.now - p.last);
+  return '';
+}
+function head(D) {
+  const chip = { running: `<span class="chip t-run"><span class="d"></span>идёт · ${fmt(D.now)}</span>`, waiting: `<span class="chip t-wait"><span class="d"></span>ждёт вас · 42 мин</span>`,
+    merged: `<span class="chip t-ok">✓ смержена ${clock(D.now)}</span>`, empty: `<span class="chip t-free"><span class="d"></span>создана ${fmt(D.now)} назад</span>` }[D.key];
+  return `<div class="ph"><span class="back">← Обзор фич</span><h2>Экспорт заметок в PDF</h2>${chip}</div>
+  <div class="tabs"><span>Хронология</span><span>Планы и макеты</span><span>Задачи</span><span>Чаты</span><span>События</span><span class="on">Статистика</span></div>`;
+}
+function summary(D, ps) {
+  if (D.key === 'merged') {
+    return `<div class="sum"><span class="chip t-ok">${ps.length} участников</span><span class="chip t-free">${D.tasks.filter(t => t.role === 'шаг').length} шагов</span><span class="chip t-free">3 возврата</span><span class="chip t-free">4 модели</span></div>`;
+  }
+  const n = c => ps.filter(p => p.cat === c).length, rw = reviewWaits(D).length;
+  const it = (c, k, v) => v ? `<span class="chip ${CAT[c].chip}">${c === 'run' ? '<span class="d live"></span>' : ''}${CAT[c].t.toLowerCase()} · ${v}</span>` : '';
+  return `<div class="sum">${it('run', 0, n('run'))}${it('wait', 0, n('wait'))}${it('review', 0, rw)}${it('queue', 0, n('queue'))}${it('free', 0, n('free'))}</div>`;
+}
+const title = (D, ps) => `<div class="sec"><span class="t">${D.key === 'merged' ? 'Кто что сделал' : 'Кто на чём работает'}</span>
+  <span>· обновлено ${clock(D.now)}</span></div>`;
+const what = t => `<span class="ref">${t.ref}</span><span>${t.title}</span>`;
+const meta = t => `${t.role}${t.lane ? ' · ' + t.lane : ''} <span class="mdl">${t.model}</span>`;
+
+// ===== A · Доска =====
+function renderA(D, m) {
+  const ps = people(D);
+  if (D.key === 'empty') return title(D, ps) + emptyBlock(D, m);
+  if (D.key === 'merged') return title(D, ps) + summary(D, ps) + mergedTeam(D, ps, m);
+  const card = (p, extra = '') => {
+    const c = p.cur; const tm = sinceTxt(D, p);
+    let body = '', ft = '';
+    if (p.cat === 'run') { body = `<div class="what">${what(c)}</div><div class="meta">${meta(c)}</div>`; ft = `<button class="btn ln">чат →</button>`; }
+    if (p.cat === 'wait') { body = `<div class="what">${what(c)}</div><div class="why">${c.reason}</div>`; ft = `<button class="btn pri">Ответить в чате</button>`; }
+    if (p.cat === 'queue') { body = `<div class="what">${what(c)}</div><div class="meta">ждёт: ${c.after}${c.who === 'kira' ? BE('зависимость шагов') : ''}</div>`; ft = `<button class="btn ln">задача →</button>`; }
+    if (p.cat === 'free') { const l = p.ts.filter(t => t.b === p.last)[0]; body = `<div class="meta">последнее: <span class="ref">${l.ref}</span> в ${clock(p.last)}</div>`; }
+    const lbl = { run: 'идёт', wait: 'ждёт', queue: 'в очереди', free: 'свободен' }[p.cat];
+    return `<div class="a-card"><div class="who">${av(p.who)}${P[p.who].n}<span class="tm" title="${lbl}">${tm}</span></div>${body}${extra}${ft ? `<div class="ft">${ft}</div>` : ''}</div>`;
+  };
+  const revCard = t => `<div class="a-card"><div class="who"><span class="ref">${t.ref}</span>${t.title}<span class="tm">${fmt(D.now - t.b)}</span></div>
+    <div class="meta">сдал ${P[t.who].n} в ${clock(t.b)} · ревьюер ${P.gleb.n} занят <span class="ref">Ш5</span></div></div>`;
+  const cols = [
+    ['run', ps.filter(p => p.cat === 'run').map(p => card(p))],
+    ['wait', ps.filter(p => p.cat === 'wait').map(p => card(p))],
+    ['review', reviewWaits(D).map(revCard)],
+    ['queue', ps.filter(p => p.cat === 'queue').map(p => card(p))],
+    ['free', ps.filter(p => p.cat === 'free').map(p => card(p))],
+  ];
+  const html = cols.map(([c, items]) => {
+    const hot = c === 'wait' && items.length;
+    const fold = m && !items.length;
+    return `<div class="a-col ${hot ? 'hot' : ''} ${fold ? 'fold' : ''}"><h4><span class="chip ${CAT[c].chip}" style="height:18px"><span class="d ${c === 'run' ? 'live' : ''}"></span></span>${CAT[c].t}<span class="n">${items.length || (m ? 'никого' : '')}</span></h4>
+      ${items.length ? items.join('') : (m ? '' : `<div class="a-empty">${c === 'wait' ? 'никто не ждёт — хорошо' : 'никого'}</div>`)}</div>`;
+  }).join('');
+  return title(D, ps) + summary(D, ps) + `<div class="a-cols">${html}</div>`;
+}
+
+// ===== B · Команда =====
+function renderB(D, m) {
+  const ps = people(D);
+  if (D.key === 'empty') return title(D, ps) + emptyBlock(D, m);
+  const order = { wait: 0, stop: 1, run: 2, queue: 3, free: 4, done: 5 };
+  ps.sort((a, b) => order[a.cat] - order[b.cat] || (D.money || MONEY)[b.who][0] - (D.money || MONEY)[a.who][0]);
+  const maxMin = Math.max(...ps.map(p => (D.money || MONEY)[p.who][0]), 1);
+  const rows = ps.map(p => {
+    const c = p.cur; const tm = sinceTxt(D, p);
+    let now;
+    if (p.cat === 'run') now = `<div class="ln1"><span class="chip t-run"><span class="d live"></span>идёт ${tm}</span>${what(c)}</div><div class="muted" style="font-size:11px">${meta(c)}</div>`;
+    else if (p.cat === 'wait') now = `<div class="ln1"><span class="chip t-wait"><span class="d"></span>ждёт вас ${tm}</span>${what(c)}</div><div>${c.reason}</div><div><button class="btn pri">Ответить в чате</button></div>`;
+    else if (p.cat === 'queue') now = `<div class="ln1"><span class="chip t-q">в очереди ${tm}</span>${what(c)}</div><div class="muted" style="font-size:11px">ждёт: ${c.after}${c.who === 'kira' ? BE('зависимость шагов') : ''}</div>`;
+    else if (p.cat === 'free') now = `<div class="ln1"><span class="chip t-free">свободен ${tm}</span><span class="muted">с ${clock(p.last)}</span></div>`;
+    else now = `<div class="ln1"><span class="chip t-ok">✓ ${fmt((D.money || MONEY)[p.who][0])} работы</span></div>`;
+    const next = p.next.length ? p.next.map(t => `<span class="ref">${t.ref}</span>`).join('') : '<span class="muted">—</span>';
+    const done = p.ts.filter(t => t.st === 'done' && t.b != null);
+    const doneHtml = done.length ? done.map(t => `<i class="${t.ret ? 't-stop' : 't-ok'}">${t.ret ? '↩' : '✓'} ${t.ref}</i>`).join('') : '<span class="muted">пока ничего</span>';
+    const [mins, cost] = (D.money || MONEY)[p.who];
+    const models = [...new Set(p.ts.map(t => t.model))].map(x => `<span class="mdl">${x}</span>`).join(' ');
+    return `<div class="b-row ${p.cat === 'wait' ? 'hot' : ''}">
+      <div class="b-who">${av(p.who, true)}<div><b>${P[p.who].n}</b><small>${P[p.who].r}</small><div style="margin-top:3px">${models}</div></div></div>
+      <div class="b-now"><span class="lbl2">${D.key === 'merged' ? 'итог' : 'сейчас'}</span>${now}</div>
+      <div class="${p.next.length || D.key === 'merged' ? '' : 'nil'}"><span class="lbl2">дальше</span><div class="b-list">${D.key === 'merged' ? '<span class="muted">—</span>' : next}</div></div>
+      <div class="${done.length ? '' : 'nil'}"><span class="lbl2">сделано</span><div class="b-list b-done">${doneHtml}</div></div>
+      <div class="b-num">${mins ? fmt(mins) : '—'}<small>${cost || 'расхода нет'}</small>${mins ? `<div class="b-bar" style="flex:1"><i style="width:${mins / maxMin * 100}%;background:${P[p.who].c}"></i></div>` : ''}</div></div>`;
+  }).join('');
+  const rv = reviewWaits(D).map(t => `<div class="dashed" style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip t-rev">ждёт ревью ${fmt(D.now - t.b)}</span><span class="ref">${t.ref}</span>${t.title} · сдал ${P[t.who].n} · ревьюер занят <span class="ref">Ш5</span></div>`).join('');
+  return title(D, ps) + summary(D, ps) + (rv ? `<div style="margin-bottom:8px">${rv}</div>` : '') + `<div class="card" style="padding:${m ? 8 : 4}px ${m ? 12 : 4}px">
+    <div class="b-head" style="padding-top:8px"><span>Кто</span><span>${D.key === 'merged' ? 'Итог' : 'Сейчас'}</span><span>Дальше в очереди</span><span>Сделано</span><span style="text-align:right">Время · расход</span></div>${rows}</div>`;
+}
+
+// ===== C · Загрузка =====
+function renderC(D, m) {
+  const ps = people(D);
+  if (D.key === 'empty') return title(D, ps) + emptyBlock(D, m);
+  const merged = D.key === 'merged';
+  const T = merged ? D.now : D.now + 90; // справа от «сейчас» — очередь (горизонт 1,5 ч, без прогноза длительности)
+  const x = v => v / T * 100;
+  const order = ['sofya', 'egor', 'timur', 'denis', 'polina', 'kira', 'gleb', 'vera', 'alex'];
+  ps.sort((a, b) => order.indexOf(a.who) - order.indexOf(b.who));
+  const ticks = []; for (let h = Math.ceil(START / 60) * 60; h <= START + T - 30; h += 60) if (merged || Math.abs(h - START - D.now) > 25) ticks.push(h - START);
+  const rows = ps.map(p => {
+    let bars = '';
+    const busy = [];
+    for (const t of p.ts) {
+      if (t.st === 'queue' && !merged) {
+        bars += `<span class="c-b q" style="left:${x(D.now + 2)}%;width:${x(80)}%" title="в очереди с ${clock(t.created)}">${t.ref} · ждёт ${t.after}</span>`; continue;
+      }
+      if (t.a == null) continue;
+      const b = t.b == null ? D.now : t.b; busy.push([t.a, b]);
+      const cls = t.rev ? 'rev' : 'work';
+      bars += `<span class="c-b ${cls}" style="left:${x(t.a)}%;width:${x(b - t.a)}%" title="${t.ref} · ${t.title} · ${clock(t.a)}–${t.b == null ? 'идёт' : clock(t.b)}">${x(b - t.a) > 5 ? t.ref : ''}</span>`;
+      for (const [w, d] of (t.waits || [])) bars += `<span class="c-b wait" style="left:${x(w)}%;width:${x(d)}%" title="ждали вас ${d} мин"></span>`;
+      for (const [w, d] of (t.err || [])) bars += `<span class="c-b err" style="left:${x(w)}%;width:${x(d)}%" title="ошибка ${d} мин"></span>`;
+      if (t.st === 'wait') bars += `<span class="c-b wait live" style="left:${x(t.since)}%;width:${x(D.now - t.since)}%" title="ждёт вас">✋</span>`;
+    }
+    // Простой между задачами человека внутри фичи (подпись, если промежуток заметный).
+    busy.sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < busy.length; i++) { const g0 = busy[i - 1][1], g1 = busy[i][0]; if (g1 - g0 >= 40) bars += `<span class="c-gap" style="left:${x(g0)}%;width:${x(g1 - g0)}%">простой ${fmt(g1 - g0)}</span>`; }
+    if (!merged && p.cat === 'free' && D.now - p.last >= 40) bars += `<span class="c-gap" style="left:${x(p.last)}%;width:${x(D.now - p.last)}%">свободен ${fmt(D.now - p.last)}</span>`;
+    const span = busy.length ? [Math.min(...busy.map(b => b[0])), Math.max(...busy.map(b => b[1]))] : null;
+    const base = span ? `<span class="base" style="left:${x(span[0])}%;width:${x(span[1] - span[0])}%"></span>` : '';
+    const nowl = merged ? '' : `<span class="c-now" style="left:${x(D.now)}%"></span>`;
+    const [mins, cost] = (D.money || MONEY)[p.who];
+    const st = merged ? '' : `<span class="chip ${CAT[p.cat].chip}" style="height:18px;font-size:10px">${CAT[p.cat].w}</span>`;
+    return `<div class="c-row"><div class="nm">${av(p.who)}<div style="min-width:0">${P[p.who].n} ${st}<small>${P[p.who].r}</small></div></div>
+      <div class="c-tk">${base}${bars}${nowl}</div><div class="vl">${mins ? fmt(mins) : '—'}<small>${cost || ''}</small></div></div>`;
+  }).join('');
+  const active = merged ? D.now : D.now;
+  const util = merged
+    ? `<div class="c-util"><div class="k"><b>9</b><span>участников</span></div><div class="k"><b>2,4</b><span>в среднем работали одновременно</span></div><div class="k"><b>${fmt(95)}</b><span>ждали вас, всего</span></div><div class="k"><b>${fmt(317)}</b><span>дольше всех ждала в очереди: Кира</span></div></div>`
+    : `<div class="c-util"><div class="k"><b>${ps.filter(p => p.cat === 'run').length}</b><span>работают</span></div><div class="k"><b>${ps.filter(p => p.cat === 'wait').length}</b><span>ждут вас</span></div><div class="k"><b>${ps.filter(p => p.cat === 'queue').length}</b><span>в очереди</span></div><div class="k"><b>${ps.filter(p => p.cat === 'free').length}</b><span>свободны</span></div></div>`;
+  const axis = `<div class="c-axis"><span></span><div class="ax">${ticks.map(t => `<span style="left:${x(t)}%">${clock(t)}</span>`).join('')}${merged ? '' : `<span style="left:${x(D.now)}%;color:var(--c-accent);font-weight:700">сейчас</span>`}</div><span></span></div>`;
+  const legend = `<div class="c-legend"><span><i class="sw" style="background:var(--c-accent)"></i>работа</span><span><i class="sw" style="background:var(--c-plan)"></i>ревью</span><span><i class="sw" style="background:var(--c-info)"></i>ждали вас</span><span><i class="sw" style="background:var(--c-danger)"></i>ошибка</span>${merged ? '' : '<span><i class="sw" style="border:1px dashed var(--c-warning)"></i>в очереди (длина не прогноз)</span>'}<span>— линия: между первой и последней задачей</span></div>`;
+  return title(D, ps) + util + `<div class="card">${axis}${rows}${legend}</div>`;
+}
+
+// ===== Общее: смержена (для A) и пусто =====
+function mergedTeam(D, ps, m) {
+  const cards = ps.sort((a, b) => (D.money || MONEY)[b.who][0] - (D.money || MONEY)[a.who][0]).map(p => {
+    const done = p.ts.filter(t => t.b != null);
+    return `<div class="a-card"><div class="who">${av(p.who)}${P[p.who].n}<span class="tm">${fmt((D.money || MONEY)[p.who][0])}</span></div>
+      <div class="meta" style="margin-top:4px">${P[p.who].r} · ${(D.money || MONEY)[p.who][1] || 'расхода нет'}</div>
+      <div class="b-list b-done" style="margin-top:6px">${done.map(t => `<i class="${t.ret ? 't-stop' : 't-ok'}">${t.ret ? '↩' : '✓'} ${t.ref}</i>`).join('')}</div></div>`;
+  }).join('');
+  return `<div style="display:grid;grid-template-columns:${m ? '1fr' : 'repeat(3,1fr)'};gap:8px">${cards}</div>`;
+}
+function emptyBlock(D, m) {
+  return `<div class="card" style="display:flex;flex-direction:column;gap:10px">
+    <div style="font:700 16px 'PT Serif',Georgia,serif;color:var(--c-text-heading)">Пока никто не работает</div>
+    <div class="sec2" style="font-size:12px">Команда соберётся после плана: шаги получат исполнителей. Сейчас в очереди одна задача.</div>
+    <div class="a-card" style="margin:0"><div class="who">${av('sofya')}${P.sofya.n}<span class="tm">в очереди ${fmt(D.now)}</span></div>
+      <div class="what">${what(D.tasks[0])}</div><div class="meta">ждёт: запуск исполнителя</div>
+      <div class="ft"><button class="btn gh">Запустить исполнителя</button></div></div></div>`;
+}
+
+const st = { v: 'A', s: 'running', t: 'both', w: 'both', m: 'on' };
+const NOTES = {
+  A: 'A · «Доска»: пять колонок по состоянию — работают · ждут вас · ждут ревью · в очереди · свободны. Ответ на «кто сейчас чем занят и кого я держу». На 360 — секции друг под другом, пустые свёрнуты в строку.',
+  B: 'B · «Команда»: строка на человека — сейчас · дальше в очереди · сделано (✓/↩) · время и расход. Ждущий вас всегда первый и подсвечен. На 360 — карточка на человека.',
+  C: 'C · «Загрузка»: люди на оси времени — работа, ревью, ожидание вас, ошибки, простой между задачами; справа от «сейчас» — очередь пунктиром. Видно, кто простаивал и кто был узким местом.',
+};
+function render() {
+  document.body.classList.toggle('nomarks', st.m === 'off');
+  document.getElementById('note').textContent = NOTES[st.v];
+  const D = S[st.s];
+  const themes = st.t === 'both' ? ['light', 'dark'] : [st.t];
+  const widths = st.w === 'both' ? ['1280', '360'] : [st.w];
+  const fn = { A: renderA, B: renderB, C: renderC }[st.v];
+  const out = [];
+  for (const w of widths) for (const t of themes)
+    out.push(`<div class="w${w}"><div class="cap">${st.v} · ${w} · ${t === 'light' ? 'светлая' : 'тёмная'}</div>
+      <div class="frame" data-theme="${t}"><div class="page">${head(D)}${fn(D, w === '360')}</div></div></div>`);
+  document.getElementById('out').innerHTML = out.join('');
+}
+document.querySelectorAll('.pills').forEach(p => p.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  p.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  st[p.dataset.k] = b.dataset.v; render();
+}));
+const h = location.hash.slice(1).split('-');
+if (h[0]) { st.v = h[0]; st.s = h[1] || st.s; st.t = h[2] || st.t; st.w = h[3] || st.w;
+  document.querySelectorAll('.pills').forEach(p => p.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.v === st[p.dataset.k]))); }
+render();
+</script>
+</body>
+</html>

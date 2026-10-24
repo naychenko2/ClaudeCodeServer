@@ -7,7 +7,10 @@
 // Мутации (проверены прогоном): (1) убрать тон живой карточки (в cardStyle всегда
 // bgCard/borderLight) — краснеет тест «живая карточка — infoBg/info»; (2) в focusStep
 // звать focusFeatureStage(card.stepRef) вместо ключа этапа — краснеет тест «клик по
-// карточке 2»; (3) убрать ветку empty — краснеет тест «пустое — пунктир».
+// карточке 2»; (3) убрать ветку empty — краснеет тест «пустое — пунктир»; (4) убрать
+// LINK_CARD_EXTRA из стиля карточки-ссылки — краснеет тест «карточка-ссылка —
+// textAlign left, cursor pointer» (fakeDom не знает вычисленных стилей, UA-центрирование
+// без явного сброса прошёл бы молча).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -109,8 +112,8 @@ function mkChain(over: Partial<FeatureStepChain> = {}): FeatureStepChain {
     durationMinutes: 65,
     loops: 2,
     rounds: [
-      { n: 1, verdict: 'returned' },
-      { n: 2, verdict: 'accepted' },
+      { n: 1, verdict: 'returned', reviewChatId: null },
+      { n: 2, verdict: 'accepted', reviewChatId: null },
     ],
     chatId: null,
     ...over,
@@ -281,6 +284,18 @@ describe('карточка 2 — витки (к1, к2)', () => {
     const card = findNodeByAttr(container, 'data-testid', 'loss-card-2');
     expect(card!.attributes?.['aria-label']).toBe('Открыть цепочку шага ST-F7');
   });
+
+  // Мутация (4): убрать LINK_CARD_EXTRA из стиля кнопки — тест краснеет: без явного
+  // сброса UA-центрирование и cursor: default остались бы незамеченными.
+  it('карточка-ссылка — textAlign left и cursor pointer (сброс UA-стилей кнопки)', () => {
+    const run = mkRun({ stepChains: [mkChain()], stages: [mkStage()] });
+    const { container } = mountLosses(run, mkStats());
+    const card = findNodeByAttr(container, 'data-testid', 'loss-card-2');
+    expect(card, 'карточки 2 нет').toBeTruthy();
+    const st = styleOf(card!);
+    expect(st.textAlign, 'текст карточки-ссылки центрируется UA').toBe('left');
+    expect(st.cursor, 'курсор карточки-ссылки не pointer').toBe('pointer');
+  });
 });
 
 describe('карточка 3 (к1)', () => {
@@ -358,7 +373,7 @@ describe('раскладка и токены (к4)', () => {
   it('число живой карточки — FONT.serif FS.h2 на десктопе', () => {
     const run = mkRun({ attention: { kind: 'wait', taskId: 't-1', since: new Date(NOW - 5 * 60_000).toISOString() } });
     const { container } = mountLosses(run, mkStats());
-    const big = findNodeByAttr(container, 'data-testid', 'loss-big-1').style as Record<string, string>;
+    const big = findNodeByAttr(container, 'data-testid', 'loss-big-1')!.style as Record<string, string>;
     expect(big.fontSize).toBe(`${FS.h2}px`);
     expect(big.fontFamily).toContain('PT Serif');
   });

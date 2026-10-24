@@ -55,6 +55,11 @@ function cardStyle(live: boolean, isMobile: boolean): CSSProperties {
   };
 }
 
+// Сброс UA-стилей для карточки-ссылки (2): `<button>` по умолчанию центрирует текст
+// и даёт cursor: default — без этого числа и контекст стоят по центру, у карточек 1
+// и 3 — слева. Тот же приём, что в строках этапов (FeatureRunView) и чипах перехода.
+const LINK_CARD_EXTRA: CSSProperties = { textAlign: 'left', cursor: 'pointer' };
+
 // Пунктирная заметка «нечего показать» — стиль героевой «нет данных» (макет .dashed).
 const DASH_NOTE: CSSProperties = {
   border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: SP.md,
@@ -214,7 +219,7 @@ export function FeatureStatsLosses({ run, stats, isMobile = false, nowMs }: Feat
                   data-testid={`loss-card-${card.no}`}
                   aria-label={`Открыть цепочку шага ${card.stepRef}`}
                   onClick={() => focusStep(run, card.stepRef)}
-                  style={cardStyle(false, isMobile)}
+                  style={{ ...cardStyle(false, isMobile), ...LINK_CARD_EXTRA }}
                 >
                   {body}
                   <span aria-hidden style={ACTION}>Цепочка шага →</span>

@@ -620,6 +620,11 @@ function OverlaysSection() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
+  // Menu со слотом header: якорь кнопки и строка поиска
+  const [searchAnchor, setSearchAnchor] = useState<DOMRect | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchItems = Array.from({ length: 30 }, (_, i) => `Пункт списка ${i + 1}`)
+    .filter((s) => s.toLowerCase().includes(searchQuery.trim().toLowerCase()));
 
   return (
     <Island>
@@ -694,6 +699,40 @@ function OverlaysSection() {
               </Menu>
             )}
           </div>
+        </SubBlock>
+
+        {/* Menu header: поиск вне прокрутки, листаются только пункты (только anchor-режим) */}
+        <SubBlock label="Menu header — поиск над длинным списком (anchor)">
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={(e) => setSearchAnchor(e.currentTarget.getBoundingClientRect())}
+          >
+            Открыть список с поиском
+          </Button>
+          {searchAnchor && (
+            <Menu
+              onClose={() => { setSearchAnchor(null); setSearchQuery(''); }}
+              anchor={searchAnchor}
+              anchorAlign="start"
+              minWidth={260}
+              maxHeight={320}
+              header={
+                <div style={{ padding: `${SP.xs}px ${SP.xs}px ${SP.sm}px` }}>
+                  <IconField
+                    icon={<Search size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                    value={searchQuery}
+                    onChange={setSearchQuery}
+                    placeholder="Поиск по списку"
+                  />
+                </div>
+              }
+            >
+              {searchItems.map((s) => (
+                <MenuItem key={s} label={s} hint="вторая строка пункта" onClick={() => setSearchAnchor(null)} />
+              ))}
+            </Menu>
+          )}
         </SubBlock>
 
         {/* BackButton: статичный пример */}

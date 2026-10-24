@@ -25,6 +25,10 @@ interface ModalProps {
   // шторки и скругления, с safe-area сверху и снизу; на десктопе — карточка во весь
   // вьюпорт с отступом. width при этом игнорируется.
   size?: 'default' | 'fullscreen';
+  // Шапка тела ВНЕ прокрутки (поиск, фильтры длинного списка): стоит под заголовком,
+  // прокручивается только children. Липкая шапка внутри скролла держалась бы на отступах
+  // тела — поменяй их, и она съедет. Пара к одноимённому слоту Menu
+  header?: ReactNode;
 }
 
 // Единое модальное окно.
@@ -36,7 +40,7 @@ interface ModalProps {
 // могут спрятать встроенный через hideCloseButton.
 export function Modal({
   width = 440, title, subtitle, footer, onClose,
-  closeOnBackdrop = true, hideCloseButton = false, children, cardStyle, size = 'default',
+  closeOnBackdrop = true, hideCloseButton = false, children, cardStyle, size = 'default', header,
 }: ModalProps) {
   const isMobile = useIsMobileModal();
 
@@ -140,6 +144,8 @@ export function Modal({
           }}
         >
           {fsHeader}
+          {/* Тело fullscreen без отступов — отступы шапки задаёт сам потребитель */}
+          {header != null && <div style={{ flexShrink: 0 }}>{header}</div>}
           <div style={{
             flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column',
             WebkitOverflowScrolling: 'touch',
@@ -194,12 +200,20 @@ export function Modal({
             <div style={{ width: 38, height: 4, borderRadius: 2, background: C.track }} />
             {closeButton}
           </div>
+          {/* С шапкой тела заголовок уходит к ней, вне скролла: иначе он уезжал бы, а
+              поиск под ним оставался — шапка оказалась бы над заголовком */}
+          {header != null && (
+            <div style={{ padding: '8px 18px 0', display: 'flex', flexDirection: 'column', gap: 16, flexShrink: 0 }}>
+              {headerRow}
+              {header}
+            </div>
+          )}
           {/* Скроллируемый контент. Класс — против сжатия детей (см. .cc-sheet-content в index.css) */}
           <div className="cc-sheet-content" style={{
             padding: '8px 18px 16px', display: 'flex', flexDirection: 'column', gap: 16,
             overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch',
           }}>
-            {headerRow}
+            {header == null && headerRow}
             {children}
           </div>
           {/* Действия — прижаты к низу, учитываем safe-area iOS */}
@@ -236,8 +250,16 @@ export function Modal({
           ...cardStyle,
         }}
       >
+        {header != null && (
+          <div style={{ padding: '26px 28px 0', display: 'flex', flexDirection: 'column', gap: 18, flexShrink: 0 }}>
+            {headerRow}
+            {header}
+          </div>
+        )}
         <div className="cc-modal-content" style={{
-          padding: footer ? '26px 28px 20px' : 28,
+          padding: header != null
+            ? `${SP.md}px 28px ${footer ? 20 : 28}px`
+            : footer ? '26px 28px 20px' : 28,
           display: 'flex', flexDirection: 'column', gap: 18,
           // flex:1 нужен модалкам с заданной высотой карточки (cardStyle.height):
           // без него контент занимает своё, и футер повисает посередине вместо низа.
@@ -245,7 +267,7 @@ export function Modal({
           // Класс — против сжатия детей (см. .cc-modal-content в index.css).
           overflowY: 'auto', flex: 1, minHeight: 0,
         }}>
-          {headerRow}
+          {header == null && headerRow}
           {children}
         </div>
         {footer && (

@@ -4,6 +4,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tts;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -61,6 +62,54 @@ public class VoiceResolverTests : IDisposable
         choice.Voice.Should().Be("jane");
         choice.Role.Should().BeNull();
         choice.Speed.Should().Be(1.2);
+    }
+
+    // Логгер, который только считает предупреждения: другого от него здесь не нужно
+    private sealed class WarningCounter : ILogger<VoiceResolver>
+    {
+        public int Warnings;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning) Warnings++;
+        }
+    }
+
+    [Theory]
+    [InlineData("Zahar", "zahar")]
+    [InlineData(" MARINA ", "marina")]
+    [InlineData("madirus", "madi_ru")]
+    public void ГолосКонфига_РегистрИАлиас_БезПредупреждения(string configured, string expected)
+    {
+        // Тот же голос в другом регистре или под алиасом — не опечатка: голос канонический,
+        // ложного предупреждения в лог на старте нет
+        var logger = new WarningCounter();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Yandex:SpeechKit:Voice"] = configured,
+        }).Build();
+
+        var choice = new VoiceResolver(new PersonaVoiceLookup(_personas), config, logger).Resolve(null, "user-1");
+
+        choice.Voice.Should().Be(expected);
+        logger.Warnings.Should().Be(0);
+    }
+
+    [Fact]
+    public void ГолосКонфига_Опечатка_Предупреждение()
+    {
+        var logger = new WarningCounter();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Yandex:SpeechKit:Voice"] = "zaharr",
+        }).Build();
+
+        var choice = new VoiceResolver(new PersonaVoiceLookup(_personas), config, logger).Resolve(null, "user-1");
+
+        choice.Voice.Should().Be(TtsVoiceCatalog.Default);
+        logger.Warnings.Should().Be(1);
     }
 
     [Fact]

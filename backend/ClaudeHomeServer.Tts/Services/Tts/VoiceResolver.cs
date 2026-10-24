@@ -65,8 +65,13 @@ public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, 
     {
         // Голос LiveTTS в конфиге при выключенном тумблере — как незнакомый: иначе каждая
         // фраза инстанса упиралась бы в 403 и уходила на голос браузера
-        var voice = TtsVoiceCatalog.IsAvailable(configured, liveTts) ? TtsVoiceCatalog.Resolve(configured) : TtsVoiceCatalog.Default;
-        if (!string.IsNullOrWhiteSpace(configured) && voice != configured.Trim())
+        var voice = TtsVoiceCatalog.IsAvailable(configured, liveTts)
+            ? TtsVoiceCatalog.Canonical(configured) ?? TtsVoiceCatalog.Default
+            : TtsVoiceCatalog.Default;
+        // Сравнение по каноническому имени: «Zahar» или алиас «madirus» — тот же голос, и
+        // предупреждать об опечатке тут не о чем
+        if (!string.IsNullOrWhiteSpace(configured)
+            && TtsVoiceCatalog.Canonical(voice) != TtsVoiceCatalog.Canonical(configured))
             logger.LogWarning("Голос синтеза «{Voice}» не значится среди доступных голосов SpeechKit v3 — " +
                               "озвучка пойдёт голосом «{Fallback}». Проверь Yandex:SpeechKit:Voice.",
                 configured, voice);

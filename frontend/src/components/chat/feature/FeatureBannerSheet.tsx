@@ -48,9 +48,11 @@ function stageStatusText(s: FeatureStage): string {
   }
 }
 
-// Время этапа: границы (dd.mm · ЧЧ:ММ – ЧЧ:ММ) + длительность «≈ N мин» (Б2).
-// null/0 — без времени (стадия ещё не шла).
-function stageTimeText(s: FeatureStage): string | null {
+// Время этапа: начало + конец (dd.mm · ЧЧ:ММ – ЧЧ:ММ) + длительность «≈ N мин» (Б2).
+// null/0 — без времени (стадия ещё не шла). Конец — только у закрытой стадии:
+// lastCompletedAt есть лишь когда все задачи Done (W5-DEF-хвост п.2); край полосы
+// (barEnd) в подпись не выходит — у идущей стадии конца нет.
+export function stageTimeText(s: FeatureStage): string | null {
   const parts: string[] = [];
   if (s.firstStartedAt) {
     const d = new Date(s.firstStartedAt);

@@ -453,9 +453,11 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Verdict = StageVerdict(tasks),
                 // Б2: границы, длительность (объединение интервалов), пересечение, исполнители.
                 FirstStartedAt = firstStartedAt,
-                // W5-DEF: край полосы — у незакрытой стадии тоже есть (последняя активность),
-                // иначе Гант не рисует строку-полосу у стадии, которая шла параллельно.
-                LastCompletedAt = StageBarEnd(tasks, nowUtc),
+                // Конец стадии — только у закрытой (для минут/пересечений); край полосы Ганта
+                // — отдельное поле (W5-DEF-хвост): у незакрытой стадии тоже есть, иначе Гант
+                // не рисует строку-полосу у стадии, которая шла параллельно.
+                LastCompletedAt = closedStageEnd,
+                BarEnd = StageBarEnd(tasks, nowUtc),
                 ApproxMinutes = approxMinutes,
                 OverlapsActive = overlapsActive,
                 Executors = executors,
@@ -983,24 +985,27 @@ public sealed class FeatureProjector(TaskManager tasks)
         return completed.Count > 0 ? completed.Max() : null;
     }
 
-    // W5-DEF (полоса Ганта у незакрытой стадии): правый край полосы. Фронт рисует полосу
-    // только при наличии «to»; стадия, которая шла, но не закрыта (параллельное ревью при
-    // идущем производстве), оставалась без полосы, хотя минуты у неё были. Край: если ход
-    // стадии реально идёт (IsTurnRunning — тот же критерий, что у статуса «running») — now;
-    // иначе — max CompletedAt её закрытых задач (null, если закрытых нет). Закрытая стадия —
-    // тот же max CompletedAt. Длительность не затрагивается: её stageEnd — конец закрытой
-    // стадии (StageLastCompletedAt), край полосы интервалы не растягивает.
+    // W5-DEF (правый край полосы Ганта; хвост ревью 4aea41632 п.5). Край покрывает интервал,
+    // в котором стадия была в работе. Стадия в работе — есть незакрытая (не Done) задача,
+    // которая не встала (ExecutorStoppedAt null): ход реально идёт, ждёт человека/устройства
+    // или дала результат и не закрыта — тот же верх минуты, что у IntervalOf (интервал
+    // незакрытой задачи открыт до now): край = now. Вставшая стадия — край по моменту
+    // остановки (последняя активность). Не в работе — max CompletedAt закрытых (совпадает с
+    // концом стадии). Активности не было — null. Длительность не затрагивается: её stageEnd —
+    // конец закрытой стадии (StageLastCompletedAt), край полосы интервалы не растягивает.
     private static DateTime? StageBarEnd(List<TaskItem> tasks, DateTime now)
     {
         if (tasks.Count == 0)
             return null;
-        if (tasks.Any(t => IsTurnRunning(t)))
+        if (tasks.Any(t => t.Status == TaskItemStatus.InProgress && t.ExecutorStoppedAt is null))
             return now;
-        var completed = tasks
-            .Where(t => t.Status == TaskItemStatus.Done && t.CompletedAt is not null)
-            .Select(t => t.CompletedAt!.Value)
-            .ToList();
-        return completed.Count > 0 ? completed.Max() : null;
+        DateTime? end = null;
+        foreach (var t in tasks)
+        {
+            var e = t.Status == TaskItemStatus.Done ? t.CompletedAt : t.ExecutorStoppedAt;
+            if (e is not null && (end is null || e > end)) end = e;
+        }
+        return end;
     }
 
     // Б2: интервал задачи: [ClaudeStartedAt, конец]. Не стартовала (нет ClaudeStartedAt) →

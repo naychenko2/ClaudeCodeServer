@@ -318,8 +318,9 @@ function Gantt({
     <div data-testid="stats-gantt" style={{ fontFamily: FONT.sans }}>
       {gantt.rows.map((row) => {
         const left = axisFrac(row.from);
-        // Правый край: lastCompletedAt; у активного этапа конца нет — текущий момент
-        // (axis.to): полоса дотягивается до «сейчас», а не исчезает.
+        // Правый край: row.to — край полосы (barEnd из модели Ганта); если края нет —
+        // для текущего этапа текущий момент (axis.to): полоса дотягивается до «сейчас»,
+        // а не исчезает.
         const right = axisFrac(row.to ?? (row.isCurrent ? axis.to : null));
         // Минимальная видимая ширина полосы (макет: min-width 3px) — чтобы этап в
         // 4 минуты не превратился в щель.

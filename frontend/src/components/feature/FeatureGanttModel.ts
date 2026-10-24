@@ -56,7 +56,8 @@ export interface GanttRow {
   isSkipped: boolean;
   // Длительность этапа — approxMinutes бэка (фронт не пересчитывает).
   minutes: number;
-  // Границы полосы на оси: firstStartedAt / lastCompletedAt; null — этапа нет в данных.
+  // Границы полосы на оси: firstStartedAt / barEnd (край полосы, W5-DEF); null — этапа нет
+  // в данных. Конец стадии (lastCompletedAt) — отдельная семантика, полосу не рисует.
   from: string | null;
   to: string | null;
   // Сегменты полосы в хронологическом порядке (main + review).
@@ -187,7 +188,7 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
         isSkipped: skipped,
         minutes: skipped ? 0 : (s.approxMinutes ?? 0),
         from: skipped ? null : (s.firstStartedAt ?? null),
-        to: skipped ? null : (s.lastCompletedAt ?? null),
+        to: skipped ? null : (s.barEnd ?? null),
         segments,
         breakdown,
         isLongest: false,

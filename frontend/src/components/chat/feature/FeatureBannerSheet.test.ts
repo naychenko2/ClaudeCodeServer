@@ -14,7 +14,7 @@
 
 import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FeatureBannerSheet, executorLines, focusablesIn } from './FeatureBannerSheet';
+import { FeatureBannerSheet, executorLines, focusablesIn, stageTimeText } from './FeatureBannerSheet';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../__tests__/fakeDom';
 import { __test as backNav } from '../../../lib/featureBackNav';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureTask, StageKey, StageState, StageTone } from '../../../types/featureRun';
@@ -55,6 +55,8 @@ function mkStage(key: StageKey, state: StageState, tone: StageTone | null = null
     rounds: [],
     firstStartedAt: state === 'done' || state === 'active' ? '2026-10-20T10:00:00Z' : null,
     lastCompletedAt: state === 'done' ? '2026-10-20T11:30:00Z' : null,
+    // Край полосы: у закрытой — тот же конец; у идущей — «сейчас» (бэк так и отдаёт).
+    barEnd: state === 'done' ? '2026-10-20T11:30:00Z' : state === 'active' ? '2026-10-20T10:40:00Z' : null,
     approxMinutes: state === 'done' ? 90 : state === 'active' ? 40 : 0,
     overlapsActive: false,
     executors,
@@ -106,6 +108,25 @@ describe('executorLines: подписи исполнителей (roleLabel + м
 
   it('пустая стадия → пустой список', () => {
     expect(executorLines(mkStage('qa', 'pending'))).toEqual([]);
+  });
+});
+
+// === stageTimeText: конец — только у закрытой (W5-DEF-хвост п.2) ===
+describe('stageTimeText: конец не печатается у идущей стадии', () => {
+  it('done → «с … до …» и минуты', () => {
+    const t = stageTimeText(mkStage('cut', 'done'));
+    expect(t).toContain('до ');
+    expect(t).toContain('≈ 90 мин');
+  });
+  // Мутация: читать край (barEnd) вместо конца (lastCompletedAt) — «до» появляется
+  // у активной — тест краснеет.
+  it('active с barEnd → без «до», только «с …» и минуты', () => {
+    const t = stageTimeText(mkStage('prod', 'active', 'run'));
+    expect(t, 'у идущей стадии фиктивного конца нет').not.toContain('до ');
+    expect(t).toContain('≈ 40 мин');
+  });
+  it('pending → null', () => {
+    expect(stageTimeText(mkStage('qa', 'pending'))).toBeNull();
   });
 });
 

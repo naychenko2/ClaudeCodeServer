@@ -174,8 +174,12 @@ export interface FeatureStage {
   verdict?: FeatureRoundVerdict | null;
   // Б2: начало стадии (мин. ClaudeStartedAt задач стадии); null — ни одна не стартовала.
   firstStartedAt: string | null;
-  // Б2: конец стадии (макс. CompletedAt); null — стадия ещё не завершилась (не все Done).
+  // Б2: конец стадии — макс. CompletedAt, только если все задачи Done; незакрытая стадия —
+  // null. Семантика для минут/пересечений; край полосы Ганта — отдельное поле barEnd.
   lastCompletedAt: string | null;
+  // Правый край полосы Ганта (W5-DEF): стадия в работе — «сейчас»; вставшая — момент
+  // остановки; закрытая — макс. CompletedAt; null — активности не было.
+  barEnd: string | null;
   // Б2: длительность по часам стены (минуты): объединение интервалов задач стадии
   // (параллельные не складываются); пустая стадия → 0.
   approxMinutes: number;

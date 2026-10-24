@@ -2803,12 +2803,14 @@ public class FeatureProjectorTests
         }
     }
 
-    // Идущая задача: LastCompletedAt = now (W5-DEF: полоса незакрытой стадии дотягивается до
-    // «сейчас»), ApproxMinutes растёт до now (now — параметром Build, как часы в существующих
-    // тестах): 10:00 → 10:30 = 30, 10:00 → 11:00 = 60. Мутация: вернуть null (старое
-    // поведение StageBarEnd) — проверка конца краснеет.
+    // Идущая задача: BarEnd = now (полоса незакрытой стадии дотягивается до «сейчас»),
+    // LastCompletedAt = null (W5-DEF-хвост п.1: незакрытая стадия конца не имеет — это отдельная
+    // семантика от края полосы), ApproxMinutes растёт до now (now — параметром Build, как часы
+    // в существующих тестах): 10:00 → 10:30 = 30, 10:00 → 11:00 = 60. Мутация: вернуть null в
+    // StageBarEnd (старое поведение) — проверка края краснеет; вернуть StageBarEnd в
+    // LastCompletedAt — краснеет проверка null.
     [Fact]
-    public void Build_Stage_ИдущаяЗадача_КонецNow_ДлительностьРастётДоNow()
+    public void Build_Stage_ИдущаяЗадача_КрайNow_КонцаНет_ДлительностьРастётДоNow()
     {
         const string epicId = "epic-b2-running";
         var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
@@ -2822,8 +2824,9 @@ public class FeatureProjectorTests
         var at30 = FeatureProjector.Build(epic, [epic, s1], new DateTime(2026, 10, 17, 10, 30, 0));
         var prod30 = Stage(at30, "prod");
         prod30.FirstStartedAt.Should().Be(new DateTime(2026, 10, 17, 10, 0, 0));
-        prod30.LastCompletedAt.Should().Be(new DateTime(2026, 10, 17, 10, 30, 0),
+        prod30.BarEnd.Should().Be(new DateTime(2026, 10, 17, 10, 30, 0),
             "стадия реально идёт — край полосы now");
+        prod30.LastCompletedAt.Should().BeNull("стадия не закрыта — конца стадии нет");
         prod30.ApproxMinutes.Should().Be(30, "now 10:30: 30 минут от старта");
 
         var at60 = FeatureProjector.Build(epic, [epic, s1], new DateTime(2026, 10, 17, 11, 0, 0));
@@ -2857,14 +2860,63 @@ public class FeatureProjectorTests
         // Ревью идёт параллельно: край полосы — now.
         var running = FeatureProjector.Build(
             epic, [epic, r1, r2, r3], new DateTime(2026, 10, 17, 12, 0, 0));
-        Stage(running, "review").LastCompletedAt.Should().Be(new DateTime(2026, 10, 17, 12, 0, 0),
+        Stage(running, "review").BarEnd.Should().Be(new DateTime(2026, 10, 17, 12, 0, 0),
             "несколько ревью в работе — полоса дотягивается до «сейчас»");
 
         // Закрытые есть, идущего хода нет: край — max CompletedAt закрытых.
         var stopped = FeatureProjector.Build(
             epic, [epic, r1, r3], new DateTime(2026, 10, 17, 12, 0, 0));
-        Stage(stopped, "review").LastCompletedAt.Should().Be(new DateTime(2026, 10, 17, 11, 0, 0),
+        Stage(stopped, "review").BarEnd.Should().Be(new DateTime(2026, 10, 17, 11, 0, 0),
             "хода нет — полоса до последней закрытой активности, а не до now");
+    }
+
+    // Хвост ревью 4aea41632 п.5: параллельная стадия, где задачи InProgress не «идут» по
+    // IsTurnRunning — ждут человека или дали результат, — раньше теряла полосу при минутах.
+    // Честное поведение: стадия в работе (незакрытая задача не встала) — край now; вставшая —
+    // край по моменту остановки. Мутация: вернуть в StageBarEnd старый IsTurnRunning-критерий
+    // (для wait/result — null) — первая и вторая проверки краснеют; убрать ветку
+    // ExecutorStoppedAt — краснеет третья.
+    [Fact]
+    public void Build_StageBarEnd_ЖдётЧеловекаИлиДалаРезультат_КрайПоАктивности()
+    {
+        const string epicId = "epic-w5-bar-wait";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var now = new DateTime(2026, 10, 17, 12, 0, 0);
+
+        // Ждёт человека: полоса до now (минуты считаются до now — край не должен отставать).
+        var waiting = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            AwaitingHumanSince = new DateTime(2026, 10, 17, 10, 30, 0),
+        };
+        var runWait = FeatureProjector.Build(epic, [epic, waiting], now);
+        Stage(runWait, "review").BarEnd.Should().Be(now, "ждёт человека — стадия в работе, край now");
+        Stage(runWait, "review").LastCompletedAt.Should().BeNull("стадия не закрыта — конца нет");
+
+        // Дала результат, но не закрыта: тот же открытый интервал, что у минут — край now.
+        var result = new TaskItem
+        {
+            Id = "r2", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            ClaudeResult = "success",
+        };
+        Stage(FeatureProjector.Build(epic, [epic, result], now), "review")
+            .BarEnd.Should().Be(now, "результат есть, задача открыта — край now");
+
+        // Вставшая стадия: последней активностью была остановка — край по ней, не null.
+        var stalled = new TaskItem
+        {
+            Id = "r3", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 17, 11, 15, 0),
+        };
+        Stage(FeatureProjector.Build(epic, [epic, stalled], now), "review")
+            .BarEnd.Should().Be(new DateTime(2026, 10, 17, 11, 15, 0),
+                "исполнитель встал — полоса до остановки, а не до now");
     }
 
     // Этап из одной задачи: границы = старт/конец задачи, длительность = её интервал.

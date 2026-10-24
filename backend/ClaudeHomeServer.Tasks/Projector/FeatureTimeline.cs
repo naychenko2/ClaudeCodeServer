@@ -5,18 +5,18 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 
 // ─── Записи графика (JSON camelCase) ─────────────────────────────────────────────────────────
 
-// Стадия на графике: ключ конвейера + границы (старт/конец). Границы — из FeatureStage
-// (FirstStartedAt/LastCompletedAt): старт = минимальный ClaudeStartedAt задач стадии,
-// конец = край полосы (W5-DEF): у закрытой — max CompletedAt; у незакрытой, которая шла,
-// — «сейчас» или max CompletedAt закрытых задач; null — активности не было.
+// Стадия на графике: ключ конвейера + границы полосы. Границы — из FeatureStage
+// (FirstStartedAt/BarEnd): старт = минимальный ClaudeStartedAt задач стадии, край полосы —
+// BarEnd (W5-DEF): стадия в работе — «сейчас»; вставшая — момент остановки; закрытая —
+// max CompletedAt; null — активности не было. Конец стадии (LastCompletedAt) — отдельная
+// семантика, на график не выходит (W5-DEF-хвост п.4: имя совпадает с семантикой).
 public sealed record TimelineStage(
     // Ключ стадии: cut | plan | prod | review | qa | final | merge.
     string Key,
     // Начало стадии; null — ни одна задача стадии не стартовала.
     DateTime? StartedAt,
-    // Конец стадии (край полосы, W5-DEF); null — активности не было (или нет закрытых задач
-    // и идущего хода).
-    DateTime? EndedAt);
+    // Правый край полосы (BarEnd); null — активности не было.
+    DateTime? BarEnd);
 
 // Сегмент времени: интервал [From, To] с видом, треком, стадией и (опц.) задачей.
 // Kind: "work" | "waiting" | "idle" | "error" | "notWorking" (в approx только work/notWorking).
@@ -185,9 +185,9 @@ public sealed record FeatureTimeline(
         var to = ClosureAt(run) ?? now;
         if (to < from) to = from;
 
-        // Стадии: из готовых FeatureStage (FirstStartedAt/LastCompletedAt уже вычислены).
+        // Стадии: из готовых FeatureStage (FirstStartedAt/BarEnd уже вычислены).
         var stages = run.Stages
-            .Select(s => new TimelineStage(s.Key, s.FirstStartedAt, s.LastCompletedAt))
+            .Select(s => new TimelineStage(s.Key, s.FirstStartedAt, s.BarEnd))
             .ToList();
 
         // «Сейчас»: из тревоги фичи (waiting/stopped/merge_pending) — в обоих режимах.

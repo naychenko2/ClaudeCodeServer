@@ -84,9 +84,9 @@ function mkTimeline(over: Partial<FeatureTimeline> = {}): FeatureTimeline {
     from: '2026-10-19T17:20:00Z',
     to: '2026-10-20T12:30:00Z',
     stages: [
-      { key: 'cut', startedAt: '2026-10-19T17:20:00Z', endedAt: '2026-10-19T17:55:00Z' },
-      { key: 'plan', startedAt: '2026-10-19T17:58:00Z', endedAt: '2026-10-19T18:30:00Z' },
-      { key: 'prod', startedAt: '2026-10-20T10:05:00Z', endedAt: null },
+      { key: 'cut', startedAt: '2026-10-19T17:20:00Z', barEnd: '2026-10-19T17:55:00Z' },
+      { key: 'plan', startedAt: '2026-10-19T17:58:00Z', barEnd: '2026-10-19T18:30:00Z' },
+      { key: 'prod', startedAt: '2026-10-20T10:05:00Z', barEnd: null },
     ],
     segments: [
       seg('2026-10-19T17:20:00Z', '2026-10-19T17:55:00Z', 'work', 'cut', { taskId: 't-cut' }),
@@ -696,7 +696,7 @@ describe('FeatureStatsTab: рендер', () => {
 function mkGanttStage(key: StageKey, state: StageState, minutes: number, over: Partial<FeatureStage> = {}): FeatureStage {
   return {
     key, state, passes: 0, taskIds: [], rounds: [],
-    firstStartedAt: null, lastCompletedAt: null, approxMinutes: minutes,
+    firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: minutes,
     overlapsActive: false, executors: [], ...over,
   };
 }
@@ -712,13 +712,13 @@ function mkGanttRun(): FeatureRun {
     ready: false,
     closed: false,
     stages: [
-      mkGanttStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:20:00Z', lastCompletedAt: '2026-10-19T17:55:00Z' }),
+      mkGanttStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:20:00Z', lastCompletedAt: '2026-10-19T17:55:00Z', barEnd: '2026-10-19T17:55:00Z' }),
       mkGanttStage('design', 'skipped', 0),
-      mkGanttStage('plan', 'done', 32, { firstStartedAt: '2026-10-19T17:58:00Z', lastCompletedAt: '2026-10-19T18:30:00Z' }),
-      mkGanttStage('prod', 'done', 370, { firstStartedAt: '2026-10-20T10:05:00Z', lastCompletedAt: '2026-10-20T16:15:00Z' }),
-      mkGanttStage('review', 'done', 40, { firstStartedAt: '2026-10-20T11:20:00Z', lastCompletedAt: '2026-10-20T12:00:00Z' }),
-      mkGanttStage('qa', 'done', 15, { firstStartedAt: '2026-10-20T16:20:00Z', lastCompletedAt: '2026-10-20T16:35:00Z' }),
-      mkGanttStage('final', 'done', 12, { firstStartedAt: '2026-10-20T16:40:00Z', lastCompletedAt: '2026-10-20T16:52:00Z' }),
+      mkGanttStage('plan', 'done', 32, { firstStartedAt: '2026-10-19T17:58:00Z', lastCompletedAt: '2026-10-19T18:30:00Z', barEnd: '2026-10-19T18:30:00Z' }),
+      mkGanttStage('prod', 'done', 370, { firstStartedAt: '2026-10-20T10:05:00Z', lastCompletedAt: '2026-10-20T16:15:00Z', barEnd: '2026-10-20T16:15:00Z' }),
+      mkGanttStage('review', 'done', 40, { firstStartedAt: '2026-10-20T11:20:00Z', lastCompletedAt: '2026-10-20T12:00:00Z', barEnd: '2026-10-20T12:00:00Z' }),
+      mkGanttStage('qa', 'done', 15, { firstStartedAt: '2026-10-20T16:20:00Z', lastCompletedAt: '2026-10-20T16:35:00Z', barEnd: '2026-10-20T16:35:00Z' }),
+      mkGanttStage('final', 'done', 12, { firstStartedAt: '2026-10-20T16:40:00Z', lastCompletedAt: '2026-10-20T16:52:00Z', barEnd: '2026-10-20T16:52:00Z' }),
       mkGanttStage('merge', 'active', 4, { firstStartedAt: '2026-10-20T17:00:00Z', tone: 'run' }),
     ],
     now: [{ taskId: 't-merge', stage: 'merge', title: 'Мерж', startedAt: '2026-10-20T17:00:00Z' }],
@@ -814,7 +814,7 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
     expect(findNodeByAttr(revBar, 'data-kind', 'review'), 'сегмент review на строке review').not.toBeNull();
   });
 
-  // === 3b. Активный этап без lastCompletedAt: полоса до «сейчас» (мутация: убрать
+  // === 3b. Активный этап без края (barEnd): полоса до «сейчас» (мутация: убрать
   // фолбэк right на axis.to — полоса merge исчезает, тест краснеет) ===
   it('активный этап: полоса дотягивается до правого края оси (текущего момента)', () => {
     const c = renderGantt();

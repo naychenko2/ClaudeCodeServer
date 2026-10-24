@@ -73,7 +73,7 @@ function run(over: Partial<FeatureRun>): FeatureRun {
 function prodStage(executors: Array<{ taskId: string; chatId: string | null }>): FeatureStage {
   return {
     key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], runningSince: null, rounds: [],
-    longestStepRef: null, firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false,
+    longestStepRef: null, firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: 0, overlapsActive: false,
     executors: executors.map(x => ({
       personaId: 'p-kira', taskId: x.taskId, taskRole: 'rework', stepRef: 'Ш1', lane: null,
       status: 'done', chatId: x.chatId, chatArchived: false, modelLabel: 'Qwen', modelFull: 'qwen-3.8',

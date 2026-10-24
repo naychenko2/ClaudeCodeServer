@@ -136,7 +136,7 @@ function mkRun(over: Record<string, unknown> = {}): FeatureRun {
     progress: 0, ready: false,
     stages: [{
       key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: ['t-a', 't-b', 't-c'], rounds: [],
-      firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false,
+      firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: 0, overlapsActive: false,
       executors: [
         ex('t-a', 'Ш1', 'c-live', false, 'running'),
         ex('t-b', 'Ш2', 'c-arch', true, 'running'),
@@ -200,9 +200,9 @@ describe('пометки: Хронология', () => {
     const run = mkRun({
       stages: [
         { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: ['t-a', 't-b', 't-c'], rounds: [],
-          firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
+          firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
         { key: 'review', state: 'active', tone: 'run', passes: 0, taskIds: [], rounds: [],
-          firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
+          firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
       ],
     });
     const c = render(createElement(FeatureTimelineTab, { run }));
@@ -294,8 +294,8 @@ function mkStats(): FeatureStats {
     timeline: {
       from: '2026-10-19T17:20:00Z', to: '2026-10-20T12:30:00Z',
       stages: [
-        { key: 'plan', startedAt: '2026-10-19T17:58:00Z', endedAt: '2026-10-19T18:30:00Z' },
-        { key: 'prod', startedAt: '2026-10-20T10:05:00Z', endedAt: null },
+        { key: 'plan', startedAt: '2026-10-19T17:58:00Z', barEnd: '2026-10-19T18:30:00Z' },
+        { key: 'prod', startedAt: '2026-10-20T10:05:00Z', barEnd: null },
       ],
       segments: [
         seg('2026-10-19T17:58:00Z', '2026-10-19T18:30:00Z', 'plan', 't-b'),   // открыта

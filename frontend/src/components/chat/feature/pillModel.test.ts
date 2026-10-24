@@ -38,7 +38,7 @@ function run(over: Partial<FeatureRun> = {}): FeatureRun {
 function activeStage(key: FeatureStage['key']): FeatureStage {
   return {
     key, state: 'active', passes: 1, taskIds: [], rounds: [],
-    firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: [],
+    firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: 0, overlapsActive: false, executors: [],
   };
 }
 

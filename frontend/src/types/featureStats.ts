@@ -17,8 +17,9 @@ export interface FeatureTimeline {
   from: string;
   // Конец таймлайна (ISO-строка).
   to: string;
-  // Интервалы стадий: ключ стадии + её старт/конец (null — не началось/не закончилось).
-  stages: { key: string; startedAt: string | null; endedAt: string | null }[];
+  // Границы полосы стадии: ключ + старт/край (barEnd — правый край полосы, W5-DEF;
+  // null — активности не было).
+  stages: { key: string; startedAt: string | null; barEnd: string | null }[];
   // Сегменты: непрерывные куски времени с видом, треком, стадией и задачей.
   segments: {
     from: string;

@@ -54,6 +54,7 @@ function mkStage(key: StageKey, state: StageState, minutes: number, over: Partia
     rounds: [],
     firstStartedAt: null,
     lastCompletedAt: null,
+    barEnd: null,
     approxMinutes: minutes,
     overlapsActive: false,
     executors: [],
@@ -95,7 +96,7 @@ describe('обычный путь: строки этапов, длительно
   const model = buildGanttModel(
     mkRun({
       stages: [
-        mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z' }),
+        mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z', barEnd: '2026-10-19T17:35:00Z' }),
         mkStage('plan', 'done', 32),
         mkStage('prod', 'active', 55, { firstStartedAt: '2026-10-20T10:00:00Z', tone: 'run' }),
         mkStage('review', 'pending', 0),
@@ -176,6 +177,28 @@ describe('обычный путь: строки этапов, длительно
     const stages = [mkStage('prod', 'active', 10)];
     expect(buildGanttModel(mkRun({ stages }), withCur, NOW).hasData).toBe(true);
     expect(buildGanttModel(mkRun({ stages, closed: true }), withCur, NOW).hasData).toBe(false);
+  });
+});
+
+// === Край полосы (W5-DEF-хвост п.1): полоса читает barEnd, не конец стадии ===
+
+describe('край полосы: to — barEnd (отдельное поле), не lastCompletedAt', () => {
+  // Мутация: читать lastCompletedAt вместо barEnd (старое поведение) — первая проверка
+  // краснеет: у идущей стадии конца стадии нет, полоса бы пропала при минутах.
+  it('идущая стадия: to = barEnd; закрытая: to = barEnd (совпадает с концом)', () => {
+    const model = buildGanttModel(
+      mkRun({
+        stages: [
+          mkStage('prod', 'active', 55, { firstStartedAt: '2026-10-20T10:00:00Z', tone: 'run', barEnd: '2026-10-20T11:00:00Z' }),
+          mkStage('review', 'done', 40, { firstStartedAt: '2026-10-20T11:20:00Z', lastCompletedAt: '2026-10-20T12:00:00Z', barEnd: '2026-10-20T12:00:00Z' }),
+        ],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(rowOf(model, 'prod').from).toBe('2026-10-20T10:00:00Z');
+    expect(rowOf(model, 'prod').to, 'полоса читает поле края, а не конец стадии').toBe('2026-10-20T11:00:00Z');
+    expect(rowOf(model, 'review').to).toBe('2026-10-20T12:00:00Z');
   });
 });
 
@@ -510,9 +533,9 @@ describe('skipped: строка «этапа не было», без минут'
     const model = buildGanttModel(
       mkRun({
         stages: [
-          mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z' }),
+          mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z', barEnd: '2026-10-19T17:35:00Z' }),
           // Бэк может принести approxMinutes и даже границы — модель их обнуляет явно.
-          mkStage('design', 'skipped', 7, { firstStartedAt: '2026-10-19T17:36:00Z', lastCompletedAt: '2026-10-19T17:43:00Z' }),
+          mkStage('design', 'skipped', 7, { firstStartedAt: '2026-10-19T17:36:00Z', lastCompletedAt: '2026-10-19T17:43:00Z', barEnd: '2026-10-19T17:43:00Z' }),
           mkStage('prod', 'active', 55, { firstStartedAt: '2026-10-20T10:00:00Z' }),
         ],
       }),

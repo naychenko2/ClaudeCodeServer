@@ -97,6 +97,29 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    // Контракт ревью F2: ответ проекта несёт ownerId — фронтовые гейты «только владелец»
+    // (EditDialog, ProjectIntroCard, FeaturePage) читают это поле. API отдаёт только
+    // проекты владельца, поэтому ownerId == id запросившего — наружу ничего не утекает.
+    [Fact]
+    public async Task ProjectResponse_CarriesOwnerId()
+    {
+        var userId = JsonSerializer.Deserialize<JsonElement>(
+            await _client.GetStringAsync("/api/auth/me")).GetProperty("userId").GetString()!;
+
+        var project = await CreateProjectAsync("OwnerIdContract");
+        var id = project.GetProperty("id").GetString()!;
+
+        project.GetProperty("ownerId").GetString().Should().Be(userId);
+
+        var detail = JsonSerializer.Deserialize<JsonElement>(
+            await _client.GetStringAsync($"/api/projects/{id}"));
+        detail.GetProperty("ownerId").GetString().Should().Be(userId);
+
+        var list = JsonSerializer.Deserialize<JsonElement>(await _client.GetStringAsync("/api/projects"));
+        var entry = list.EnumerateArray().First(e => e.GetProperty("id").GetString() == id);
+        entry.GetProperty("ownerId").GetString().Should().Be(userId);
+    }
+
     [Fact]
     public async Task Update_ExistingProject_Returns200WithUpdatedName()
     {

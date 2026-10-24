@@ -1,7 +1,10 @@
 using System.Net;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -241,5 +244,298 @@ public class TasksHttpDelegationGateTests : IDisposable
             "проект по умолчанию — проект чата-вызывателя");
         // Происхождение: задача из чата помнит его id (sourceSessionId)
         task.GetProperty("sourceSessionId").GetString().Should().Be(sessionId);
+    }
+
+    // ── Закрытие эпика фичи — только человеком ──────────────────────────────
+
+    private const string FeatureCloseDenied = "Фичу закрывает человек";
+
+    private async Task<string> CreateEpicAsync(string projectId)
+    {
+        var resp = await Client.PostAsJsonAsync("/api/tasks",
+            new { title = "эпик", role = "feature", projectId });
+        resp.EnsureSuccessStatusCode();
+        return JsonSerializer.Deserialize<JsonElement>(
+            await resp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+    }
+
+    private async Task<string> StatusOfAsync(string id) =>
+        JsonSerializer.Deserialize<JsonElement>(await (await Client.GetAsync($"/api/tasks/{id}"))
+            .Content.ReadAsStringAsync()).GetProperty("status").GetString()!;
+
+    /// <summary>Ответ — content-ошибка; при не-отказе падает с текстом ответа, а не KeyNotFoundException.</summary>
+    private static void AssertIsError(JsonElement answer) =>
+        (answer.GetProperty("result").TryGetProperty("isError", out var isError) && isError.GetBoolean())
+            .Should().BeTrue($"ожидался отказ, пришло: {ToolText(answer)}");
+
+    /// <summary>Чат человека на глубине 0 (не исполнитель этого эпика) закрывает фичу — проходит.</summary>
+    [Theory]
+    [InlineData("tasks_complete")]
+    [InlineData("tasks_update")]
+    public async Task ЗакрытиеЭпика_ЧатЧеловекаГлубина0_Проходит(string tool)
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _adapters.AgentDepth = 0;
+
+        var answer = await CallToolAsync(Client, sessionId, tool, new { id = epicId, status = "done" });
+
+        answer.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse(ToolText(answer));
+        (await StatusOfAsync(epicId)).Should().Be("done");
+    }
+
+    /// <summary>Делегированный ход (глубина 1) эпик закрыть не может — потолок 0, не 1, как у запуска.</summary>
+    [Theory]
+    [InlineData("tasks_complete")]
+    [InlineData("tasks_update")]
+    public async Task ЗакрытиеЭпика_ДелегированныйХод_Отказ(string tool)
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _adapters.AgentDepth = 1;
+
+        var answer = await CallToolAsync(Client, sessionId, tool, new { id = epicId, status = "done" });
+
+        AssertIsError(answer);
+        ToolText(answer).Should().Contain(FeatureCloseDenied);
+        (await StatusOfAsync(epicId)).Should().NotBe("done");
+    }
+
+    /// <summary>Чат-исполнитель ЛЮБОЙ задачи фичи (Session.TaskId задан, не эпик) закрыть эпик не может даже на глубине 0.</summary>
+    [Theory]
+    [InlineData("tasks_complete")]
+    [InlineData("tasks_update")]
+    public async Task ЗакрытиеЭпика_ЧатИсполнительЭпика_Отказ(string tool)
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = "шаг-фичи";
+
+        var answer = await CallToolAsync(Client, sessionId, tool, new { id = epicId, status = "done" });
+
+        AssertIsError(answer);
+        ToolText(answer).Should().Contain(FeatureCloseDenied);
+        (await StatusOfAsync(epicId)).Should().NotBe("done");
+    }
+
+    /// <summary>Перевод карточки эпика в колонку категории «Готово» тем же исполнителем — отказ: и в MCP, и в REST (403).</summary>
+    [Fact]
+    public async Task ЗакрытиеЭпика_ЧерезКолонкуГотово_ИсполнительОтказ()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = "шаг-фичи";
+
+        var mcp = await CallToolAsync(Client, sessionId, "tasks_update", new { id = epicId, columnId = "done" });
+        AssertIsError(mcp);
+        ToolText(mcp).Should().Contain(FeatureCloseDenied);
+
+        var rest = await ServiceClient(sessionId).PutAsJsonAsync($"/api/tasks/{epicId}", new { columnId = "done" });
+        rest.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await rest.Content.ReadAsStringAsync()).Should().Contain(FeatureCloseDenied);
+        (await StatusOfAsync(epicId)).Should().NotBe("done");
+    }
+
+    /// <summary>Обычная задача (не эпик) закрывается исполнителем как раньше — запрет только на role=feature.</summary>
+    [Fact]
+    public async Task ЗакрытиеОбычнойЗадачи_ЧатИсполнитель_Проходит()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var created = await Client.PostAsJsonAsync("/api/tasks", new { title = "шаг", projectId });
+        var id = JsonSerializer.Deserialize<JsonElement>(
+            await created.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = id;
+
+        var answer = await CallToolAsync(Client, sessionId, "tasks_complete", new { id });
+
+        answer.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse(ToolText(answer));
+    }
+
+    private HttpClient ServiceClient(string? callerSessionId)
+    {
+        var userId = new JwtSecurityTokenHandler()
+            .ReadJwtToken(Client.DefaultRequestHeaders.Authorization!.Parameter).Subject;
+        var token = _factory.Services.GetRequiredService<JwtService>().IssueServiceToken(userId);
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (callerSessionId is not null) client.DefaultRequestHeaders.Add("X-Caller-Session-Id", callerSessionId);
+        return client;
+    }
+
+    /// <summary>
+    /// REST PUT: сервисный токен — из чата-исполнителя и с делегированного хода отказ (400),
+    /// из чата человека на глубине 0 и пользовательский JWT (кнопка в UI) — проходит.
+    /// </summary>
+    [Fact]
+    public async Task Rest_ЗакрытиеЭпика_СервисныйТокен()
+    {
+        var (projectId, humanSession) = await CreateProjectWithSessionAsync();
+        var (_, executorSession) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _factory.Services.GetRequiredService<SessionManager>().GetById(executorSession)!.TaskId = "шаг-фичи";
+        var body = new { status = "done" };
+
+        _adapters.AgentDepth = 0;
+        var byExecutor = await ServiceClient(executorSession).PutAsJsonAsync($"/api/tasks/{epicId}", body);
+        byExecutor.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await byExecutor.Content.ReadAsStringAsync()).Should().Contain(FeatureCloseDenied);
+
+        var noSession = await ServiceClient(null).PutAsJsonAsync($"/api/tasks/{epicId}", body);
+        noSession.StatusCode.Should().Be(HttpStatusCode.Forbidden, "fail-closed: сервисный токен без сессии");
+
+        _adapters.AgentDepth = 1;
+        var delegated = await ServiceClient(humanSession).PutAsJsonAsync($"/api/tasks/{epicId}", body);
+        delegated.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await StatusOfAsync(epicId)).Should().NotBe("done");
+
+        _adapters.AgentDepth = 0;
+        (await ServiceClient(humanSession).PutAsJsonAsync($"/api/tasks/{epicId}", body))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "чат человека на глубине 0");
+    }
+
+    /// <summary>Пользовательский JWT (кнопка «Закрыть фичу») закрывает эпик всегда.</summary>
+    [Fact]
+    public async Task Rest_ЗакрытиеЭпика_ПользовательскийJwt_Проходит()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+
+        (await Client.PutAsJsonAsync($"/api/tasks/{epicId}", new { status = "done" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // ── Возобновление эпика фичи — только человеком (дефект df85c799) ───────────
+    //
+    // Симметрия закрытию: тот же предикат вызывающего, обратный переход Done → Todo.
+    // Без этого гарда чат-исполнитель молча отменял решение человека о закрытии.
+
+    private const string FeatureReopenDenied = "Фичу возобновляет человек";
+
+    /// <summary>Закрываем эпик пользовательским JWT (путь кнопки «Закрыть») — человек проходит.</summary>
+    private async Task CloseEpicAsync(string epicId)
+    {
+        var resp = await Client.PutAsJsonAsync($"/api/tasks/{epicId}", new { status = "done" });
+        resp.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>Чат-исполнитель ЛЮБОЙ задачи (Session.TaskId задан) не может возобновить закрытый эпик: отказ в MCP и REST (403), статус остаётся done.</summary>
+    [Fact]
+    public async Task ВозобновлениеЭпика_ЧатИсполнитель_Отказ_McpИRest()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        await CloseEpicAsync(epicId);
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = "шаг-фичи";
+
+        var mcp = await CallToolAsync(Client, sessionId, "tasks_update", new { id = epicId, status = "todo" });
+        AssertIsError(mcp);
+        ToolText(mcp).Should().Contain(FeatureReopenDenied);
+
+        var rest = await ServiceClient(sessionId).PutAsJsonAsync($"/api/tasks/{epicId}", new { status = "todo" });
+        rest.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await rest.Content.ReadAsStringAsync()).Should().Contain(FeatureReopenDenied);
+        (await StatusOfAsync(epicId)).Should().Be("done", "отказ не должен трогать статус");
+    }
+
+    /// <summary>Перевод карточки эпика в колонку категории «Работа» (columnId=todo) тем же исполнителем — отказ: и в MCP, и в REST (403). Статус из колонки попадает в гард так же, как у закрытия.</summary>
+    [Fact]
+    public async Task ВозобновлениеЭпика_ЧерезКолонкуВРаботе_ИсполнительОтказ()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        await CloseEpicAsync(epicId);
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = "шаг-фичи";
+
+        var mcp = await CallToolAsync(Client, sessionId, "tasks_update", new { id = epicId, columnId = "todo" });
+        AssertIsError(mcp);
+        ToolText(mcp).Should().Contain(FeatureReopenDenied);
+
+        var rest = await ServiceClient(sessionId).PutAsJsonAsync($"/api/tasks/{epicId}", new { columnId = "todo" });
+        rest.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await rest.Content.ReadAsStringAsync()).Should().Contain(FeatureReopenDenied);
+        (await StatusOfAsync(epicId)).Should().Be("done", "отказ не должен трогать статус");
+    }
+
+    /// <summary>Делегированный ход (глубина 1) эпик возобновить не может — потолок 0, по образцу отказа закрытия. tasks_complete возобновить не может в принципе (всегда Status=Done), поэтому инструмент один.</summary>
+    [Fact]
+    public async Task ВозобновлениеЭпика_ДелегированныйХод_Отказ()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        await CloseEpicAsync(epicId);
+        _adapters.AgentDepth = 1;
+
+        var answer = await CallToolAsync(Client, sessionId, "tasks_update", new { id = epicId, status = "todo" });
+
+        AssertIsError(answer);
+        ToolText(answer).Should().Contain(FeatureReopenDenied);
+        (await StatusOfAsync(epicId)).Should().Be("done", "отказ не должен трогать статус");
+    }
+
+    /// <summary>Чат человека на глубине 0 (не исполнитель) возобновляет эпик — проходит (MCP), статус становится todo.</summary>
+    [Fact]
+    public async Task ВозобновлениеЭпика_ЧатЧеловекаГлубина0_Проходит()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        await CloseEpicAsync(epicId);
+        _adapters.AgentDepth = 0;
+
+        var answer = await CallToolAsync(Client, sessionId, "tasks_update", new { id = epicId, status = "todo" });
+
+        answer.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse(ToolText(answer));
+        (await StatusOfAsync(epicId)).Should().Be("todo");
+    }
+
+    /// <summary>
+    /// REST PUT: сервисный токен без сессии и делегированный ход — отказ (403); чат человека
+    /// на глубине 0 и пользовательский JWT (кнопка «Возобновить» в UI) — проходят.
+    /// </summary>
+    [Fact]
+    public async Task Rest_ВозобновлениеЭпика_СервисныйТокен()
+    {
+        var (projectId, humanSession) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        await CloseEpicAsync(epicId);
+        var body = new { status = "todo" };
+
+        var noSession = await ServiceClient(null).PutAsJsonAsync($"/api/tasks/{epicId}", body);
+        noSession.StatusCode.Should().Be(HttpStatusCode.Forbidden, "fail-closed: сервисный токен без сессии");
+
+        _adapters.AgentDepth = 1;
+        var delegated = await ServiceClient(humanSession).PutAsJsonAsync($"/api/tasks/{epicId}", body);
+        delegated.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await StatusOfAsync(epicId)).Should().Be("done", "отказ не трогает статус");
+
+        _adapters.AgentDepth = 0;
+        (await ServiceClient(humanSession).PutAsJsonAsync($"/api/tasks/{epicId}", body))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "чат человека на глубине 0");
+
+        (await Client.PutAsJsonAsync($"/api/tasks/{epicId}", body))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "пользовательский JWT — кнопка «Возобновить»");
+    }
+
+    /// <summary>Обычная задача (не эпик) возвращается исполнителем как раньше — запрет только на role=feature.</summary>
+    [Fact]
+    public async Task ВозобновлениеОбычнойЗадачи_ЧатИсполнитель_Проходит()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var created = await Client.PostAsJsonAsync("/api/tasks", new { title = "шаг", projectId });
+        var id = JsonSerializer.Deserialize<JsonElement>(
+            await created.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        (await Client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" })).EnsureSuccessStatusCode();
+
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = id;
+
+        var answer = await CallToolAsync(Client, sessionId, "tasks_update", new { id, status = "todo" });
+
+        answer.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse(ToolText(answer));
+        (await StatusOfAsync(id)).Should().Be("todo");
     }
 }

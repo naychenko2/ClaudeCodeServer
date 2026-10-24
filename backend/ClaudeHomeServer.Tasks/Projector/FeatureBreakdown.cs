@@ -103,7 +103,7 @@ public sealed record FeatureBreakdown(
             }
         }
 
-        // Все задачи фичи (эпик + дочерние) — та же выборка, что FeatureTimeline.AllTasks.
+        // Задачи фичи с ролью (эпик + дочерние, без безролевых) — та же выборка, что FeatureTimeline.AllTasks.
         var tasks = AllTasks(run).ToList();
 
         // Work-интервал задачи: [ClaudeStartedAt, min(CompletedAt, ExecutorStoppedAt, now));
@@ -271,8 +271,10 @@ public sealed record FeatureBreakdown(
                     taskTokens = acc.Tokens;
                     hasTaskRecords = acc.Has;
                 }
+                // TaskId — t.Id: TaskItem.Id non-nullable (default — Guid, TaskItem.cs:9);
+                // «!» — тот же приём, что в roleByTask выше (строка 230): id задачи всегда есть.
                 longest = new FeatureLongestNow(
-                    TaskId: t.Id,
+                    TaskId: t.Id!,
                     ChatId: LiveSession(t.LinkedSessionId)?.Id,
                     PersonaId: t.PersonaId,
                     StepRef: t.StepRef,
@@ -287,7 +289,8 @@ public sealed record FeatureBreakdown(
 
     // ─── Вспомогательные ──────────────────────────────────────────────────────────────────────
 
-    // Все задачи фичи: эпик + дочерние (та же выборка, что FeatureTimeline.AllTasks).
+    // Задачи фичи с ролью: эпик + дочерние (та же выборка, что FeatureTimeline.AllTasks).
+    // Безролевые (Unroled) не входят: в метриках считаются только задачи с ролью (W4-DES-B).
     private static IEnumerable<TaskItem> AllTasks(FeatureRun run)
     {
         yield return run.Epic;
@@ -297,6 +300,7 @@ public sealed record FeatureBreakdown(
         if (run.Final is not null) yield return run.Final;
         if (run.Merge is not null) yield return run.Merge;
         foreach (var t in run.Cut) yield return t;
+        foreach (var t in run.Design) yield return t;
         foreach (var t in run.Plan) yield return t;
     }
 

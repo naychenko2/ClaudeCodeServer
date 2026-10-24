@@ -53,9 +53,10 @@ public class FeatureIndexRowTests
         Status = status,
     };
 
-    // Живой чат владельца (снимок FeatureIndexSession): id + опционально taskId/projectId/archived.
+    // Живой чат владельца (снимок FeatureIndexSession): id + опционально taskId/projectId/archived/personaId.
     private static FeatureIndexSession Session(string id, string? taskId = null,
-        string? projectId = null, bool archived = false) => new(id, taskId, projectId, archived);
+        string? projectId = null, bool archived = false, string? personaId = null) =>
+        new(id, taskId, projectId, archived, null, personaId);
 
     // ── 1. bucket: каждое из четырёх значений ────────────────────────────────────────────────
 
@@ -216,6 +217,23 @@ public class FeatureIndexRowTests
             "явный wait → чип «waiting» (не «wait»: словарь чипов ≠ словарь attention.kind)");
     }
 
+    // ── 3b. удержание (W4-HOLD-B1, R-HOLD-B1): строка несёт HoldSince ────────────────────────
+    // Мутация: убрать `run.Hold?.Since` в BuildRow — HoldSince null, тест красный.
+    [Fact]
+    public void Строка_HoldSince_ИзHoldЭпика()
+    {
+        const string epicId = "epic-hold-since";
+        var since = new DateTime(2026, 10, 23, 10, 0, 0);
+        var epic = Epic(epicId);
+        epic.Hold = new FeatureHold(FeatureHoldReasons.Manual, since, null, true);
+        var step = Child("s1", epicId, status: TaskItemStatus.InProgress);
+
+        var row = Row(epic, [epic, step]);
+
+        row.HoldReason.Should().Be(FeatureHoldReasons.Manual, "причина удержания — как раньше");
+        row.HoldSince.Should().Be(since, "момент постановки удержания — для «на паузе · {dur}»");
+    }
+
     // ── 4. цепочка ключевого чата: первое ЖИВОЕ звено ────────────────────────────────────────
 
     // Ключевой чат — первое живое звено цепочки: 1) epic.SourceSessionId;
@@ -252,7 +270,7 @@ public class FeatureIndexRowTests
 
     // ── 5. rail закрытой фичи ─────────────────────────────────────────────────────────────────
 
-    // У смерженной (закрытой) фичи рельса: 7 стадий, active нет → tone = null у всех сегментов.
+    // У смерженной (закрытой) фичи рельса: 8 стадий, active нет → tone = null у всех сегментов.
     // Закрыта = merge Done (или epic Done): нормализация RailOf приводит все стадии, кроме absent,
     // к done (см. тест 5b для «честного мержа» без merge-задачи).
     [Fact]
@@ -268,14 +286,16 @@ public class FeatureIndexRowTests
         var row = FeatureProjector.BuildRow(run, [epic, step, merge], Array.Empty<FeatureIndexSession>(), 0);
 
         row.Bucket.Should().Be("closed");
-        row.Rail.Should().HaveCount(7, "рельса — ровно 7 стадий в порядке жизненного цикла");
+        row.Rail.Should().HaveCount(8, "рельса — 8 стадий: пустая необязательная «design» добавляется (W4-DES-B)");
         row.Rail.Select(s => s.Key).Should().Equal(
-            ["cut", "plan", "prod", "review", "qa", "final", "merge"],
+            ["cut", "design", "plan", "prod", "review", "qa", "final", "merge"],
             "порядок стадий жизненного цикла");
         row.Rail.Should().OnlyContain(s => s.Tone == null,
             "у смерженной фичи active нет → tone = null у всех сегментов");
         row.Rail.Single(s => s.Key == "prod").State.Should().Be("done");
         row.Rail.Single(s => s.Key == "merge").State.Should().Be("done");
+        row.Rail.Single(s => s.Key == "design").State.Should().Be("skipped",
+            "«design» без задач — skipped, не «done»: необязательный этап не пройден (W4-DES-B)");
     }
 
     // ── 5b. rail «честного мержа»: epic Done, merge-задачи нет ─────────────────────────────────
@@ -325,8 +345,9 @@ public class FeatureIndexRowTests
         run.Now.Should().NotBeEmpty();
         row.Bucket.Should().Be("running");
 
-        // rail: ровно 7, совпадает с FeatureRun.Stages (key/state/tone).
-        row.Rail.Should().HaveCount(7);
+        // rail: ровно 8 стадий (с необязательной «design», W4-DES-B), совпадает с FeatureRun.Stages
+        // (key/state/tone).
+        row.Rail.Should().HaveCount(8);
         for (var i = 0; i < run.Stages.Count; i++)
         {
             row.Rail[i].Key.Should().Be(run.Stages[i].Key);
@@ -518,5 +539,119 @@ public class FeatureIndexRowTests
         var rowA = Row(epicA, [epicA, stopped]);
         rowA.Bucket.Should().Be("attention");
         rowA.Chips.Should().Equal(["open", "stopped"], "у тревоги (stopped) running не появляется");
+    }
+
+    // ── 9. оркестратор фичи (W4-1B) ────────────────────────────────────────────────────────
+
+    // Цепочка: персона ключевого чата (если он в снимке владельца) → персона, запустившая
+    // исполнителя эпика → персона, создавшая эпик; ничего нет → null.
+    // (a) живой ключевой чат с персоной — именно она, поля эпика ниже по приоритету;
+    // (b) ключевой чат жив, но без персоны — следующее звено;
+    // (c) ни звеньев, ни полей эпика — null.
+    [Fact]
+    public void OrchestratorOf_KeySessionPersona_ThenEpicFields()
+    {
+        // (a) персона ключевого чата приоритетнее полей эпика.
+        var epicA = Epic("epic-orch-a", sourceSessionId: "chat-key");
+        epicA.ExecutorLaunchedByPersonaId = "p-launched";
+        epicA.CreatedByPersonaId = "p-created";
+        var rowA = Row(epicA, [epicA], [Session("chat-key", personaId: "p-key")]);
+        rowA.KeySessionId.Should().Be("chat-key");
+        rowA.OrchestratorPersonaId.Should().Be("p-key", "персона ключевого чата — первое звено");
+
+        // (b) ключевой чат жив, но персоны нет — цепочка идёт к запустившей.
+        var epicB = Epic("epic-orch-b", sourceSessionId: "chat-key");
+        epicB.ExecutorLaunchedByPersonaId = "p-launched";
+        epicB.CreatedByPersonaId = "p-created";
+        var rowB = Row(epicB, [epicB], [Session("chat-key")]);
+        rowB.OrchestratorPersonaId.Should().Be("p-launched", "у ключевого чата нет персоны → следующее звено");
+
+        // (c) ни ключевого чата, ни полей эпика — null.
+        var epicC = Epic("epic-orch-c");
+        Row(epicC, [epicC]).OrchestratorPersonaId.Should().BeNull("цепочка пуста → null");
+    }
+
+    // Чужой/удалённый ключевой чат — не в снимке владельца: персона из него не берётся,
+    // работает запасная цепочка (запустившая исполнителя эпика). Мутация: убрать сверку
+    // ключевого чата с снимком (брать первого живого чата) → "p-live" ≠ "p-launched" → краснеет.
+    [Fact]
+    public void OrchestratorOf_ForeignKeySession_FallsBackToLaunchedByPersona()
+    {
+        var epic = Epic("epic-orch-foreign", sourceSessionId: "chat-foreign");
+        epic.ExecutorLaunchedByPersonaId = "p-launched";
+        epic.CreatedByPersonaId = "p-created";
+        // В снимке другой чат владельца (с персоной) — он не ключевой.
+        var row = Row(epic, [epic], [Session("chat-live", personaId: "p-live")]);
+        row.KeySessionId.Should().BeNull("ключевой чат не в снимке → ключа нет");
+        row.OrchestratorPersonaId.Should().Be("p-launched",
+            "чужой ключевой чат → запасная цепочка, не персона первого чата снимка");
+    }
+
+    // Последний запас: никто не запускал исполнителя — создатель эпика.
+    [Fact]
+    public void OrchestratorOf_NoLaunchedBy_CreatedByPersona()
+    {
+        var epic = Epic("epic-orch-created", sourceSessionId: "chat-foreign");
+        epic.CreatedByPersonaId = "p-created";
+        var row = Row(epic, [epic], [Session("chat-live", personaId: "p-live")]);
+        row.OrchestratorPersonaId.Should().Be("p-created", "нет запустившей → создатель эпика");
+    }
+
+    // Первое звено цепочки чужое (не в снимке) → ключевое — второе живое; персона берётся
+    // из него, а не из полей эпика. Мутация: передать в OrchestratorOf сырое первое звено
+    // вместо найденного key (отдельный расчёт) → ключа в снимке нет → фолбэк на "p-launched"
+    // ≠ "p-live" → краснеет.
+    [Fact]
+    public void OrchestratorOf_ПервоеЗвеноЧужое_КлючевоеВторое()
+    {
+        var epic = Epic("epic-orch-chain", sourceSessionId: "chat-foreign", executorLaunchedBy: "chat-live");
+        epic.ExecutorLaunchedByPersonaId = "p-launched";
+        epic.CreatedByPersonaId = "p-created";
+        var row = Row(epic, [epic], [Session("chat-live", personaId: "p-live")]);
+        row.KeySessionId.Should().Be("chat-live", "первое звено чужое → ключевое — второе живое");
+        row.OrchestratorPersonaId.Should().Be("p-live", "персона найденного ключевого, не поля эпика");
+    }
+
+    // Ключевой чат в архиве, но в снимке владельца — живый (то же правило, что у KeySession:
+    // решает присутствие в снимке, флаг архива его не исключает).
+    [Fact]
+    public void OrchestratorOf_ЖивойКлючевойВАрхиве()
+    {
+        var epic = Epic("epic-orch-arch", sourceSessionId: "chat-arch");
+        epic.ExecutorLaunchedByPersonaId = "p-launched";
+        var row = Row(epic, [epic], [Session("chat-arch", archived: true, personaId: "p-arch")]);
+        row.KeySessionId.Should().Be("chat-arch", "архивный ключевой в снимке — всё равно ключевой");
+        row.KeyArchived.Should().BeTrue();
+        row.OrchestratorPersonaId.Should().Be("p-arch", "персона архивного ключевого — первое звено");
+    }
+
+    // Контракт: OrchestratorOf получает уже найденный в BuildRow key и не пересчитывает его
+    // сам. Прямой вызов: передан живой "chat-extra" (не из цепочки) — функция верит аргументу.
+    // Мутация (игнорировать параметр, пересчитать своё звено): "chat-live" → "p-live"
+    // ≠ "p-extra" → краснеет.
+    [Fact]
+    public void OrchestratorOf_ИспользуетПереданныйKey_БезПересчёта()
+    {
+        var epic = Epic("epic-orch-pass", sourceSessionId: "chat-foreign", executorLaunchedBy: "chat-live");
+        epic.ExecutorLaunchedByPersonaId = "p-launched";
+        epic.CreatedByPersonaId = "p-created";
+        var orchestrator = FeatureProjector.OrchestratorOf(
+            epic,
+            [Session("chat-live", personaId: "p-live"), Session("chat-extra", personaId: "p-extra")],
+            "chat-extra");
+        orchestrator.Should().Be("p-extra", "переданный key — точка правды, не пересчитанный");
+    }
+
+    // Звенья цепочки проверяются одинаково: пустое/пробельное пропускается (раньше поля эпика
+    // шли через ?? — пустая строка выходила наружу). Мутация: вернуть ?? на полях эпика →
+    // "" вместо "p-created" → краснеет.
+    [Fact]
+    public void OrchestratorOf_ПустоеЗвеноЦепочки_Пропускается()
+    {
+        var epic = Epic("epic-orch-empty");
+        epic.ExecutorLaunchedByPersonaId = "";
+        epic.CreatedByPersonaId = "p-created";
+        Row(epic, [epic]).OrchestratorPersonaId.Should().Be("p-created",
+            "пустое звено пропускается — та же проверка, что у ключевого чата");
     }
 }

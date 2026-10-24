@@ -375,6 +375,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         SubagentNudge,  // auto — добивание сабагента, оборвавшегося на середине
         ToolCallLeakNudge, // auto — повтор вызова инструмента, ушедшего в текст (локальная модель)
         ServerRestartResume, // auto — возобновление хода, оборванного рестартом сервера (фича turn-auto-resume)
+        HoldResume,     // auto — продолжение хода, прерванного паузой фичи (W4-HOLD-D)
+        HoldCard,      // auto — карточка оркестратору в ключевой чат при снятии паузы: сама
+                      // нотификация, а не продолжение прерванного хода (W4-HOLD-N, хвост R-N)
         Unknown,        // auto — точка не помечена (диагностика: проставить cause)
     }
 
@@ -909,7 +912,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // рецепту, что у _teamDecision/_teamBudget. Подписчик turn/completed переехал в
         // вертикаль — шинная подписка ниже регистрирует делегат на метод TeamTurnCompletionService.
         _teamTurnCompletion = new TeamTurnCompletionService(this, this, this, this, _teamDecision,
-            loggerFactory?.CreateLogger<TeamTurnCompletionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamTurnCompletionService>.Instance);
+            loggerFactory?.CreateLogger<TeamTurnCompletionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamTurnCompletionService>.Instance,
+            tasks);
         // Включение и переключение режима «Командная реализация» (волна Ж): SetTeamImplementAsync
         // и SetTeamImplementAutoAsync. Owning-паттерн по тому же рецепту, что и _teamBudget.
         _teamEnable = new TeamEnableService(this, this, this, this, _teamState,
@@ -2426,6 +2430,35 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         entry.Info.ExpiryAnchor = minutes is null ? null : DateTime.UtcNow;
         SaveSessions();
         return entry.Info;
+    }
+
+    // Заморозить срок чата паузой фичи (W4-HOLD-E/J, хвост N): снимаемое значение сохраняется
+    // в HoldFrozenExpiresAfterMinutes — возврат после снятия паузы восстанавливает срок самого
+    // чата, а не задачи (R-HOLD-J п.3). Идемпотентна: повторная пауза той же записи не трогает
+    // уже снятый срок. UpdatedAt, как в SetExpiry, не двигается: настройка хранения — не активность.
+    public Session? FreezeExpiryForHold(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        // W4-HOLD-N (хвост R-N п.1): значение сохраняется только если срок снят сейчас.
+        // Вторая пауза той же записи видит ExpiresAfterMinutes == null: безусловное присваивание
+        // затёр бы сохранённый срок null — после снятия он не вернулся бы, чат стал бы вечным.
+        if (entry.Info.ExpiresAfterMinutes is not null)
+            entry.Info.HoldFrozenExpiresAfterMinutes = entry.Info.ExpiresAfterMinutes;
+        entry.Info.ExpiresAfterMinutes = null;
+        entry.Info.ExpiryAnchor = null;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Вернуть замороженный срок: якорь — «сейчас» (как SetExpiry), сохранённое значение гасится.
+    // Нечего возвращать (чат был вечным или не замораживался) — состояние не меняется.
+    public Session? RestoreFrozenExpiry(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (entry.Info.HoldFrozenExpiresAfterMinutes is null) return entry.Info;
+        var frozen = entry.Info.HoldFrozenExpiresAfterMinutes;
+        entry.Info.HoldFrozenExpiresAfterMinutes = null;
+        return SetExpiry(sessionId, frozen);
     }
 
     // Запись модуля в ленту вне хода (ADR-019 §2, шов IChatFeed): история + живая пара

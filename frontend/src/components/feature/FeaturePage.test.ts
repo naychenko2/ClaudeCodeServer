@@ -11,20 +11,22 @@
 // Окружение node (без jsdom): fakeDom (mount) + управляемые сторы (featurePage,
 // featuresIndex, featureBackNav) и mock api (chats.get, tasks.getFeature).
 
-import { act } from 'react';
+import { act, useSyncExternalStore } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { pluralTasks } from './FeaturePageHeader';
+import { pluralTasks, featureRunStatusTag } from './FeaturePageHeader';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
 import { KEY_SESSION_TOOLTIP } from '../../lib/chatGroups';
+import { C, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { FeaturePage as FeaturePageData } from '../../types/featureIndex';
+import type { FeatureState } from '../../types/featureRun';
 import type { Session, Task } from '../../types';
 
 // Управляемый индекс фич (useFeaturesIndex → этот срез).
@@ -55,6 +57,22 @@ const mockMergeFeature = vi.hoisted(() => ({
   error: null as (Error & { status?: number; body?: unknown }) | null,
   calls: [] as string[],
 }));
+// Управляемые ответы api.tasks.setFeatureHold/clearFeatureHold (W4-HOLD-F2): calls —
+// журнал (fid + метод + reason), pending (запрос в полёте), error (409/сбой).
+// Ответ DELETE hold — {resumed, expired} (вердикт R-HOLD-H): resumed/expired — управления
+// для теста тоста снятия паузы (W4-HOLD-F3 хвост).
+const mockHold = vi.hoisted(() => ({
+  calls: [] as { fid: string; method: 'POST' | 'DELETE'; reason?: string }[],
+  pending: false,
+  error: null as (Error & { status?: number; body?: unknown }) | null,
+  resumed: [] as string[],
+  expired: [] as string[],
+  // Имитация Ok() без тела: request отдаёт undefined (offline.ts:447) — проверка
+  // страховки на пустое тело в doHoldClear (хвост R-HOLD-F3).
+  emptyBody: false,
+}));
+// Журнал тостов (W4-HOLD-F2: текст 409 и успех — проверяются по нему).
+const toasts = vi.hoisted(() => [] as [string, string | undefined][]);
 
 vi.mock('../../lib/api', () => ({
   api: {
@@ -76,24 +94,53 @@ vi.mock('../../lib/api', () => ({
         if (mockMergeFeature.error) return Promise.reject(mockMergeFeature.error);
         return Promise.resolve(mockMergeFeature.result!);
       },
+      setFeatureHold: (fid: string, reason: string) => {
+        mockHold.calls.push({ fid, method: 'POST', reason });
+        if (mockHold.pending) return new Promise<{ interrupted: string[] }>(() => {});
+        if (mockHold.error) return Promise.reject(mockHold.error);
+        return Promise.resolve({ interrupted: [] as string[] });
+      },
+      clearFeatureHold: (fid: string) => {
+        mockHold.calls.push({ fid, method: 'DELETE' });
+        if (mockHold.pending) return new Promise<{ resumed: string[]; expired: string[] }>(() => {});
+        if (mockHold.error) return Promise.reject(mockHold.error);
+        if (mockHold.emptyBody) return Promise.resolve(undefined as unknown as { resumed: string[]; expired: string[] });
+        return Promise.resolve({ resumed: mockHold.resumed, expired: mockHold.expired });
+      },
     },
   },
 }));
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя (аватары 18 в строках
-// чатов/шагов, таблица §5.5). Компоненту нужен только .name.
-const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
+// чатов/шагов, таблица §5.5). Компоненту нужен только .name. usePersonasVersion —
+// настоящий useSyncExternalStore: тест может «догрузить стор» (добавить персону и
+// поднять версию) и проверить, что чип перерисовывается (W4-1F, реактивность).
+const personaStore = vi.hoisted(() => ({
+  map: new Map<string, string>(),
+  version: 0,
+  listeners: new Set<() => void>(),
+  ensureCalls: 0,
+}));
+const personaMap = personaStore.map;
 vi.mock('../../lib/personas', () => ({
   getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
-  usePersonasVersion: () => 0,
+  usePersonasVersion: () => useSyncExternalStore(
+    (fn: () => void) => { personaStore.listeners.add(fn); return () => personaStore.listeners.delete(fn); },
+    () => personaStore.version,
+    () => personaStore.version,
+  ),
   usePersonas: () => [],
+  ensurePersonasLoaded: () => { personaStore.ensureCalls++; return Promise.resolve(); },
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
 vi.mock('../../lib/signalr', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/signalr')>();
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
 });
-vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
-vi.mock('../../lib/openChat', () => ({ openChatById: async () => true }));
+// Тосты пишутся в журнал toasts: тексты успеха и 409 (W4-HOLD-F2) проверяются по нему.
+vi.mock('../../lib/toast', () => ({ showToast: (title: string, detail?: string) => { toasts.push([title, detail]); } }));
+// Журнал openChatById: тесты чипа «ведёт» (W4-1F) проверяют, куда ведёт клик.
+const openChatCalls = vi.hoisted(() => [] as string[]);
+vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { openChatCalls.push(id); return true; } }));
 // Модели: вкладка «Статистика» (Breakdown) читает каталог — в тесте он пуст.
 vi.mock('../../lib/models', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/models')>();
@@ -154,6 +201,9 @@ function render(props: { featureId?: string; projectId?: string | null; isMobile
     win.__winListeners = listeners;
   }
   if (!doc.querySelector) doc.querySelector = () => null;
+  // ToolbarOverflowMenu при открынении слушает прокручиваемых предков через
+  // getComputedStyle — в fakeDom его нет; все зоны «visible» (прокрутки нет).
+  if (!(globalThis as any).getComputedStyle) (globalThis as any).getComputedStyle = () => ({ overflowY: 'visible' });
   const { container } = mount(createElement(FeaturePage, {
     featureId: props.featureId ?? 'f1',
     projectId: props.projectId ?? 'p1',
@@ -225,6 +275,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockChats.clear();
+    openChatCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = pageData();
     mockGetFeature.error = null;
@@ -234,6 +285,10 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     mockMergeFeature.result = null;
     mockMergeFeature.error = null;
     mockMergeFeature.calls = [];
+    mockHold.calls = [];
+    mockHold.pending = false;
+    mockHold.error = null;
+    toasts.length = 0;
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
   });
   afterEach(() => {
@@ -824,6 +879,196 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
 });
 
 
+// === W4-1F: чип «ведёт ·» в мета-строке шапки (макет pt1) ===
+// Чип — сам вход в ключевой чат: клик открывает keySessionId. Мутация (в отчёте):
+// убрать openChatById в обработчике чипа → вызов не попадёт в журнал → тест краснеет.
+describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    personaMap.set('p-sofya', 'Софья (локальная)');
+    mockIndex.features = [feat({ orchestratorPersonaId: 'p-sofya' })];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = pageData();
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  const reindex = (over: Partial<FeatureIndexFeature>) => {
+    mockIndex.features = [feat({ orchestratorPersonaId: 'p-sofya', ...over })];
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  };
+
+  // Клик чипа — переход с записью возврата (плашка Ф9b): recordFeatureReturn пишет
+  // указатель {from: фича, to: ключевой чат}. Мутация: убрать вызов recordFeatureReturn
+  // в onClick → getBackNav() пуст → тест краснеет (хвост R-1F-T, п.3).
+  it('клик по чипу открывает keySessionId и записывает возврат к фиче; на чипе — «ведёт» и имя', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
+    expect(chip, 'чип «ведёт» в мета-строке').not.toBeNull();
+    const text = textNodes(chip!).join('');
+    expect(text, 'подпись «ведёт» и имя оркестратора').toContain('ведёт');
+    expect(text, 'имя оркестратора').toContain('Софья (локальная)');
+    await act(async () => { (reactProps(chip)!.onClick as () => void)(); });
+    expect(openChatCalls, 'клик ведёт в keySessionId').toEqual(['chat-key']);
+    const nav = backNavTest.getBackNav();
+    expect(nav?.from, 'запись возврата — из фичы f1').toBe('f1');
+    expect(nav?.fromKind, 'дискриминатор — feature').toBe('feature');
+    expect(nav?.to, 'цель возврата — ключевой чат').toEqual({ kind: 'chat', id: 'chat-key' });
+    expect(nav?.fromTitle, 'название фичи для плашки').toBe('Моя фича');
+  });
+
+  it('keyArchived: чип помечен «в архиве»', async () => {
+    reindex({ keyArchived: true });
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    expect(textNodes(chip).join(''), 'пометка «в архиве»').toContain('в архиве');
+  });
+
+  it('чата нет, персона есть: чип без перехода (не кнопка, нет onClick)', async () => {
+    reindex({ keySessionId: null });
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
+    expect(chip, 'статичный чип (без ключевого чата)').not.toBeNull();
+    expect(chip!.nodeName, 'не кнопка — перехода нет').not.toBe('BUTTON');
+    expect(reactProps(chip)?.onClick, 'у статичного чипа нет обработчика клика').toBeUndefined();
+  });
+
+  it('персоны нет: элемента нет', async () => {
+    mockIndex.features = [feat()]; // дефолт без orchestratorPersonaId
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'без персоны — чипа нет').toBeNull();
+  });
+
+  // Состояния чипа (хвосты R-1F-R/R-1F-T): контрол — ui.Button, состояния —
+  // React-состояние LeadChip, обработчики на обёртке (ui.Button их не форвардит,
+  // прецедент TaskCreatedView). Нажатие — pointer-события (тач и мышь дают их
+  // одинаково), фокус — :focus-visible (кольцо только с клавиатуры), глиф-стрелка
+  // красится только по наведению. Мутации (в отчёте): убрать onPointerDown на
+  // обёртке → тест нажатия краснеет; вернуть setFocused(true) без :focus-visible →
+  // тест фокуса краснеет; убрать recordFeatureReturn в onClick → тест записи возврата
+  // краснеет; убрать textOverflow у спана имени → тест ellipsis краснеет.
+  it('наведение: фон и рамка меняются, глиф красится только здесь; с наведения — обратно', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    const icon = findNodeByAttr(c, 'data-testid', 'feature-page-lead-icon')!;
+    expect(chip.nodeName, 'контрол — кнопка из ui.Button').toBe('BUTTON');
+    expect(chip.style.background, 'базовый фон чипа').toBe(C.bgWhite);
+    expect(icon.style.color, 'глиф без наведения — тихий').toBe(C.textMuted);
+    const wrap = reactProps(chip!.parentNode as never) ?? {};
+    const enter = wrap.onMouseEnter as (() => void) | undefined;
+    const leave = wrap.onMouseLeave as (() => void) | undefined;
+    expect(enter && leave, 'на обёртке обработчики наведения').toBeTruthy();
+    act(() => { enter!(); });
+    expect(chip.style.background, 'фон на наведении').toBe(C.bgSelected);
+    expect(chip.style.borderColor, 'рамка на наведении').toBe(C.accentMuted);
+    expect(icon.style.color, 'глиф на наведении — accent').toBe(C.accent);
+    act(() => { leave!(); });
+    expect(chip.style.background, 'фон возвращается после наведения').toBe(C.bgWhite);
+    expect(chip.style.borderColor, 'рамка возвращается после наведения').toBe(C.border);
+    expect(icon.style.color, 'глиф после наведения — тихий').toBe(C.textMuted);
+  });
+
+  it('нажатие: фон accentLight; отпускание и pointercancel — снова фон наведения', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    const wrap = reactProps(chip!.parentNode as never) ?? {};
+    const enter = wrap.onMouseEnter as (() => void) | undefined;
+    const down = wrap.onPointerDown as (() => void) | undefined;
+    const up = wrap.onPointerUp as (() => void) | undefined;
+    const cancel = wrap.onPointerCancel as (() => void) | undefined;
+    expect(down && up && cancel, 'нажатие — по pointer-событиям (не mouse)').toBeTruthy();
+    act(() => { enter!(); });
+    act(() => { down!(); });
+    expect(chip.style.background, 'фон на нажатии').toBe(C.accentLight);
+    act(() => { up!(); });
+    expect(chip.style.background, 'после отпускания — фон наведения').toBe(C.bgSelected);
+    // Сход пальца (pointercancel без pointerup): нажатие должно сниматься.
+    act(() => { down!(); });
+    act(() => { cancel!(); });
+    expect(chip.style.background, 'pointercancel — нажатие снято').toBe(C.bgSelected);
+  });
+
+  it('фокус с клавиатуры: кольцо и accent-рамка; фокус после мыши (:focus-visible false) — нет', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    const icon = findNodeByAttr(c, 'data-testid', 'feature-page-lead-icon')!;
+    const wrapNode = chip!.parentNode as unknown as { focusVisible: boolean };
+    const wrap = reactProps(wrapNode as never) ?? {};
+    const focus = wrap.onFocus as ((e: unknown) => void) | undefined;
+    const blur = wrap.onBlur as (() => void) | undefined;
+    expect(focus && blur, 'на обёртке обработчики фокуса').toBeTruthy();
+    // Tab: :focus-visible = true → кольцо + accent-рамка (макет pt1).
+    wrapNode.focusVisible = true;
+    act(() => { focus!({ currentTarget: wrapNode }); });
+    expect(chip.style.boxShadow, 'фокус с клавиатуры — кольцо').toBe(SHADOW.focus);
+    expect(chip.style.borderColor, 'фокус с клавиатуры — accent-рамка').toBe(C.accent);
+    expect(icon.style.color, 'глиф по фокусу не красится (только по наведению)').toBe(C.textMuted);
+    // Мышь/тап: :focus-visible = false → рамка и кольцо не залипают (хвост R-1F-T).
+    act(() => { blur!(); });
+    wrapNode.focusVisible = false;
+    act(() => { focus!({ currentTarget: wrapNode }); });
+    expect(chip.style.boxShadow, 'фокус после мыши — без кольца').toBe('none');
+    expect(chip.style.borderColor, 'фокус после мыши — базовая рамка').toBe(C.border);
+    act(() => { blur!(); });
+    expect(chip.style.boxShadow, 'blur — без кольца').toBe('none');
+    expect(chip.style.borderColor, 'blur — базовая рамка').toBe(C.border);
+  });
+
+  it('длинное имя: спан имени с ellipsis (чип не лезет за 360)', async () => {
+    const c = render({});
+    await settle();
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
+    const nameSpan = (chip!.childNodes as FNodeLike[]).find((n) => textNodes(n as never).join('') === 'Софья (локальная)');
+    expect(nameSpan, 'спан с именем оркестратора').not.toBeUndefined();
+    expect(nameSpan!.style.textOverflow, 'имя реется многоточием').toBe('ellipsis');
+    expect(nameSpan!.style.overflow, 'overflow скрыт').toBe('hidden');
+  });
+
+  // Реактивность стора персон (возврат R-2): getPersonaById сам по себе не реактивен
+  // (lib/personas.ts:75) — чип подписывается на версию стора и просит загрузку.
+  // Мутация (в отчёте): убрать usePersonasVersion() в LeadChip → подъём версии не
+  // перерисовывает чип → тест краснеет.
+  it('стор персон не догружен: чипа нет; после догрузки — появляется', async () => {
+    personaMap.clear(); // оркестратор в индексе есть, в сторе — пока нет
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'пока стор не догружен — чипа нет').toBeNull();
+    expect(personaStore.ensureCalls, 'чип запросил загрузку стора персон').toBeGreaterThan(0);
+    act(() => {
+      personaMap.set('p-sofya', 'Софья (локальная)');
+      personaStore.version++;
+      for (const fn of [...personaStore.listeners]) fn();
+    });
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
+    expect(chip, 'чип появляется после догрузки стора').not.toBeNull();
+    expect(textNodes(chip!).join(''), 'имя оркестратора после догрузки').toContain('Софья (локальная)');
+  });
+});
+
 // Тип узла fakeDom для обходов в тестах (childNodes/attributes).
 type FNodeLike = { nodeType: number; nodeName: string; childNodes: FNodeLike[]; attributes?: Record<string, string> };
 
@@ -904,5 +1149,216 @@ describe('pluralTasks: склонение «задача/задачи/задач
     expect(pluralTasks(5)).toBe('задач');
     expect(pluralTasks(11)).toBe('задач');
     expect(pluralTasks(21)).toBe('задача');
+  });
+});
+
+// === W4-HOLD-F2: кнопка «Пауза» и блок состояния «на паузе»/«черновик» (feature-hold-1.md) ===
+// Мутации (в отчёте): (1) убрать ветку 'paused' в featureRunStatusTag → тест тега
+// краснеет; (2) убрать api.tasks.setFeatureHold в doHoldPause → «клик Паузы» краснеет;
+// (3) убрать ранний return paused в FeaturePageAlert → блок «на паузе» не появится;
+// (4) убрать разбор ответа в doHoldClear (всегда «Пауза снята») → тест «снятие с resumed»
+// краснеет: заголовок не «Фича снята с паузы».
+describe('W4-HOLD-F2: пауза и черновик в шапке и блоке состояния', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    personaMap.set('p-kira', 'Кира');
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    mockHold.calls = [];
+    mockHold.pending = false;
+    mockHold.error = null;
+    mockHold.resumed = [];
+    mockHold.expired = [];
+    mockHold.emptyBody = false;
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // run страницы с состоянием: та же форма, что pageData, плюс state/hold/now.
+  const holdPage = (state: FeatureState, over: Record<string, unknown> = {}) => {
+    const pd = pageData();
+    pd.run = { ...pd.run, state, ...over } as never;
+    mockGetFeature.result = pd;
+  };
+
+  it('тег: paused → «на паузе» (тон hold), draft → «черновик» — даже с stageName', () => {
+    expect(featureRunStatusTag('paused', 'Продукт')).toEqual({ label: 'на паузе', tone: 'hold' });
+    expect(featureRunStatusTag('draft', 'Продукт')).toEqual({ label: 'черновик', tone: 'draft' });
+  });
+
+  it('paused на десктопе: тег «на паузе» без «идёт» и без тревожного тона; блок — «Фича на паузе»', async () => {
+    holdPage('paused', {
+      hold: { reason: 'manual', since: '2026-10-19T10:00:00Z' },
+      now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }],
+    });
+    const c = render({});
+    await settle();
+    const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
+    expect(tag, 'тег на месте').not.toBeNull();
+    const tagText = textNodes(tag!).join('');
+    expect(tagText, 'тег «на паузе»').toContain('на паузе');
+    expect(tagText, 'нет «идёт» (тон активной стадии на бэке — run)').not.toContain('идёт');
+    expect((tag as unknown as { style: Record<string, string> }).style.background, 'тон не тревожный').toBe('var(--c-bg-inset)');
+    const block = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(block, 'блок состояния на месте').not.toBeNull();
+    expect((block as unknown as { attributes: Record<string, string> }).attributes['data-tone'], 'тон hold').toBe('hold');
+    const blockText = textNodes(block!).join('');
+    expect(blockText).toContain('Фича на паузе');
+    expect(blockText).toContain('Прервано 1 шаг');
+    expect(blockText).toContain('Кира · W2-A');
+    expect(blockText, 'нет тревоги «ждёт вас»').not.toContain('ждёт вас');
+    expect((block as unknown as { style: Record<string, string> }).style.background, 'фон блока — bgInset, не dangerBg').toBe('var(--c-bg-inset)');
+  });
+
+  it('клик «Пауза» с идущими ходами: модалка; подтверждение — POST hold', async () => {
+    holdPage('running', { now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
+    const c = render({});
+    await settle();
+    const pause = findNodeByAttr(c, 'data-testid', 'feature-page-pause');
+    expect(pause, 'кнопка «Пауза» в тулбаре').not.toBeNull();
+    await act(async () => { (reactProps(pause)!.onClick as () => void)(); });
+    const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-hold-confirm');
+    expect(confirm, 'модалка подтверждения').not.toBeNull();
+    const modalText = textNodes((globalThis as any).document.body).join(' ');
+    expect(modalText).toContain('Поставить фичу на паузу?');
+    expect(modalText).toContain('Кира · W2-A');
+    await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
+    expect(mockHold.calls, 'POST hold reason manual').toEqual([{ fid: 'f1', method: 'POST', reason: 'manual' }]);
+  });
+
+  it('идущих ходов нет: сразу POST без модалки', async () => {
+    holdPage('running', { now: [] });
+    const c = render({});
+    await settle();
+    const pause = findNodeByAttr(c, 'data-testid', 'feature-page-pause')!;
+    await act(async () => { (reactProps(pause)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'POST', reason: 'manual' }]);
+    expect(findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-hold-confirm'), 'модалки нет').toBeNull();
+  });
+
+  it('при paused: «Снять паузу» — DELETE hold', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [] });
+    const c = render({});
+    await settle();
+    const unpause = findNodeByAttr(c, 'data-testid', 'feature-page-unpause');
+    expect(unpause, 'главное действие «Снять паузу»').not.toBeNull();
+    expect(textNodes(unpause!).join('')).toContain('Снять паузу');
+    await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
+    expect(mockHold.calls, 'DELETE hold').toEqual([{ fid: 'f1', method: 'DELETE' }]);
+  });
+
+  // Хвост R-HOLD-H2: ответ DELETE hold — {resumed, expired}. resumed не пустой → тост
+  // «Фича снята с паузы» без числа; пустой → просто «Пауза снята». expired не показывается.
+  it('снятие паузы с resumed: тост «Фича снята с паузы», без числа; expired не упоминается', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [] });
+    mockHold.resumed = ['t1', 't2'];
+    mockHold.expired = ['t3'];
+    const c = render({});
+    await settle();
+    const unpause = findNodeByAttr(c, 'data-testid', 'feature-page-unpause')!;
+    await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
+    const last = toasts[toasts.length - 1];
+    expect(last[0], 'заголовок — «Фича снята с паузы»').toBe('Фича снята с паузы');
+    expect(last[1], 'текст без обещания работы (R-HOLD-F3)').toBe('Задачи, которым пауза мешала, снова разрешены.');
+    expect((last[1] ?? ''), 'в тексте нет числа').not.toMatch(/\d/);
+    expect((last[1] ?? ''), 'expired не показывается').not.toMatch(/просрочен|expired/i);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница жива').not.toBeNull();
+  });
+
+  it('снятие паузы с пустым resumed: просто «Пауза снята», без «продолжено N»', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
+    const c = render({});
+    await settle();
+    const unpause = findNodeByAttr(c, 'data-testid', 'feature-page-unpause')!;
+    await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
+    const last = toasts[toasts.length - 1];
+    expect(last[0], 'заголовок — «Пауза снята»').toBe('Пауза снята');
+    expect(last[1] ?? '', 'деталей про продолженные шаги нет').toBe('');
+  });
+
+  // Хвост R-HOLD-F3: Ok() без тела — request отдаёт undefined (offline.ts:447).
+  // Без страховки `(await ...) ?? {}` деструктуризация бросит TypeError, попадёт в
+  // catch — тост стал бы «Не получилось». Мутация: убрать `?? {}` — тест краснеет.
+  it('пустое тело ответа: не падает, «Пауза снята», а не «Не получилось»', async () => {
+    holdPage('paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' }, now: [] });
+    mockHold.emptyBody = true;
+    const c = render({});
+    await settle();
+    const unpause = findNodeByAttr(c, 'data-testid', 'feature-page-unpause')!;
+    await act(async () => { (reactProps(unpause)!.onClick as () => void)(); });
+    const last = toasts[toasts.length - 1];
+    expect(last[0], 'страховка сработала — заголовок «Пауза снята»').toBe('Пауза снята');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница жива').not.toBeNull();
+  });
+
+  it('360: кнопки «Пауза» в ряду нет — первый пункт шторки ⋯ с подсказкой', async () => {
+    holdPage('running', { now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
+    const c = render({ isMobile: true });
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-pause'), 'на мобиле кнопки в ряду нет').toBeNull();
+    const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
+    expect(trigger, 'триггер ⋯').not.toBeNull();
+    await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
+    const item = findNodeByAttr((globalThis as any).document.body, 'role', 'menuitem');
+    expect(item, 'пункт шторки').not.toBeNull();
+    const itemText = textNodes(item!).join('');
+    expect(itemText).toContain('Поставить на паузу');
+    expect(itemText).toContain('Прервёт 1 идущий шаг');
+  });
+
+  it('409: тост с причиной из ответа, страница не падает', async () => {
+    holdPage('running', { now: [] });
+    mockHold.error = Object.assign(new Error('Conflict'), { status: 409, body: { error: 'Мерж уже идёт — его не останавливают посреди' } });
+    const c = render({});
+    await settle();
+    const pause = findNodeByAttr(c, 'data-testid', 'feature-page-pause')!;
+    await act(async () => { (reactProps(pause)!.onClick as () => void)(); });
+    expect(mockHold.calls.length, 'POST был попытан').toBe(1);
+    const last = toasts[toasts.length - 1];
+    expect(last[1], 'тост — причина из ответа').toContain('Мерж уже идёт');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница жива после 409').not.toBeNull();
+  });
+
+  it('draft: блок «Черновик», кнопки «Пауза» нет; «Запустить фичу» — DELETE', async () => {
+    holdPage('draft', { hold: { reason: 'draft', since: '2026-10-19T11:00:00Z' } });
+    const c = render({});
+    await settle();
+    const block = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(block, 'блок черновика').not.toBeNull();
+    expect((block as unknown as { attributes: Record<string, string> }).attributes['data-tone'], 'тон draft').toBe('draft');
+    expect(textNodes(block!).join('')).toContain('Черновик.');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-pause'), 'в черновике паузы нет').toBeNull();
+    const start = findNodeByAttr(c, 'data-testid', 'feature-page-unpause');
+    expect(start, 'главное действие «Запустить фичу»').not.toBeNull();
+    expect(textNodes(start!).join('')).toContain('Запустить фичу');
+    await act(async () => { (reactProps(start)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'DELETE' }]);
+    const last = toasts[toasts.length - 1];
+    // Текст соответствует фактическому поведению бэка до решения по дефекту
+    // bec00347: снятие draft-удержания не утверждает, что конвейер уже начался.
+    expect(last[0], 'заголовок тоста — «Черновик снят»').toBe('Черновик снят');
+    expect(last[1] ?? '', 'деталь про куратора').toContain('куратор');
   });
 });

@@ -33,6 +33,12 @@ internal sealed class FakeLlmSessionAdapter : ILlmSessionAdapter
     public Session Info { get; }
     public List<string> SentMessages { get; } = [];
 
+    // Крюки для тестов, которым важно событие, а не опрос времени (CLAUDE.md):
+    // FirstMessageTcs — первая доставка будит её; FailOnSend — доставка бросает
+    // (модель отказа: путь «сбой не теряется молча»). По умолчанию — как раньше.
+    public TaskCompletionSource<string>? FirstMessageTcs;
+    public bool FailOnSend;
+
     public FakeLlmSessionAdapter(Session info) => Info = info;
 
     public LlmCapabilities Capabilities => LlmCapabilitiesCatalog.Claude;
@@ -51,7 +57,9 @@ internal sealed class FakeLlmSessionAdapter : ILlmSessionAdapter
     public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
         int agentDepth = 0, bool suppressTasksExecute = false, string? turnModelOverride = null)
     {
+        if (FailOnSend) throw new InvalidOperationException("Доставка хода оборвана (тестовый стаб)");
         lock (SentMessages) SentMessages.Add(text);
+        FirstMessageTcs?.TrySetResult(text);
         return Task.CompletedTask;
     }
 

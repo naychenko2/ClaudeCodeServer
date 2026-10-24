@@ -23,8 +23,11 @@ using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -151,8 +154,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // вызовы, чтобы проверить, что для локального проекта Docs не дёргается).
     // journal — реальный FeatureJournalStore на временном каталоге (Б9c шаг 6: метод journal
     // интеграционно достижим, а не только approx). null — подсистема журнала выключена.
+    // serviceToken (W4-HOLD-B2): claim typ=svc — тот же признак, что в PluginBridgeController;
+    // для проверки отказа 403 на ручках hold/clear.
     private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
-        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null)
+        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -170,7 +175,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             catalog: catalog,
             journal: journal,
             spend: spend);
-        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, OwnerId)], "test");
+        var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, OwnerId) };
+        if (serviceToken) claims.Add(new("typ", "svc"));
+        var identity = new ClaimsIdentity(claims, "test");
         controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) },
@@ -487,7 +494,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task GetFeatures_ПоСессии_ВозвращаетАгрегат()
     {
-        const string sessionId = "sess-feature-test-1";
+        // Чат реальный: с W4-CHT-B список фич чата строится по единому правилу
+        // FeatureChatMembership, оно fail-closed по снимку владельца — несуществующего
+        // чата в нём быть не может (прежня фикстура использовала синтетический id).
+        var sessionId = await CreatePersonalChatAsync(OwnerId);
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
         var epicId = epic.GetProperty("id").GetString();
         await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
@@ -829,6 +839,31 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             .GetProperty("archived").GetBoolean().Should().BeTrue();
     }
 
+    // W4-CHT-B3: уровень ручки, а не фикстуры проектора. design-задача и безролевая задача
+    // (featureId есть, role null) — задачи фичи: их чаты обязаны быть в chats[] страницы
+    // фичи. Мутации: убрать AddRange(run.Design) или AddRange(run.Unroled) в GetFeature
+    // (TasksController.cs) — соответствующий чат выпадает → тест краснеет.
+    [Fact]
+    public async Task GetFeature_Chats_DesignИБезролевая_ВЧатах()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-chats-dr", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        var design = await CreateTaskAsync(new { title = "дизайн-задача", featureId = epicId, role = "design" });
+        var designId = design.GetProperty("id").GetString();
+        var unroled = await CreateTaskAsync(new { title = "безролевая-задача", featureId = epicId });
+        var unroledId = unroled.GetProperty("id").GetString();
+        // Членство чата в chats[] задаётся TaskId сессии при её создании (FeatureChatMembership
+        // строится по Session.TaskId); PUT с linkedSessionId на состав chats[] не влияет — его здесь нет.
+        var designChatId = await CreatePersonalChatAsync(OwnerId, designId);
+        var unroledChatId = await CreatePersonalChatAsync(OwnerId, unroledId);
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var chats = page.GetProperty("chats");
+        chats.EnumerateArray().Should().Contain(c => c.GetProperty("id").GetString() == designChatId, "чат design-задачи в chats[]");
+        chats.EnumerateArray().Should().Contain(c => c.GetProperty("id").GetString() == unroledChatId, "чат безролевой задачи в chats[]");
+    }
+
     // Подсистема Tasks выключена (FeatureProjector не зарегистрирован) → честный 503, а не 500.
     // Прямая сборка контроллера: GetFeatures проверяет features==null ДО обращения к задачам.
     [Fact]
@@ -903,14 +938,14 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // 503: подсистема Tasks выключена (FeatureProjector не зарегистрирован) — прямой сборкой контроллера.
     [Fact]
-    public void GetFeature_ПодсистемаВыключена_503()
+    public async Task GetFeature_ПодсистемаВыключена_503()
     {
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
             noteSync: null, features: null);
 
-        var result = controller.GetFeature("any", null);
+        var result = await controller.GetFeature("any", null);
 
         result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>()
             .Which.StatusCode.Should().Be(503);
@@ -1044,7 +1079,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task GetFeature_Stats_Страница_ИндексИСписокБез()
     {
-        var sessionId = "sess-stats-test-1";
+        // Чат реальный: список фич чата (W4-CHT-B) — по единому правилу FeatureChatMembership,
+        // fail-closed по снимку владельца; синтетический id в нём не резолвится.
+        var sessionId = await CreatePersonalChatAsync(OwnerId);
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
         var epicId = epic.GetProperty("id").GetString();
         await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
@@ -1090,10 +1127,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     public async Task GetFeature_ЖурналаНет_ApproxБез500()
     {
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
-        var epicId = epic.GetProperty("id").GetString();
+        var epicId = epic.GetProperty("id").GetString()!;
 
         var controller = BuildController(git: null); // journal = null (дефолт)
-        var result = controller.GetFeature(epicId, null); // GetFeature — синхронный (IActionResult)
+        var result = await controller.GetFeature(epicId, null);
 
         result.Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>();
         var body = (result as Microsoft.AspNetCore.Mvc.OkObjectResult)!.Value!;
@@ -1152,7 +1189,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var counting = new CountingMockupCatalog();
         var controller = BuildController(git: null, catalog: counting);
-        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
         json.GetProperty("mockups").GetArrayLength().Should().Be(0, "локальный проект → []");
@@ -1173,7 +1210,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
 
         var controller = BuildController(git: null, catalog: null); // каталога нет в DI
-        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
         json.GetProperty("mockups").GetArrayLength().Should().Be(0, "каталога нет в DI → []");
@@ -1209,12 +1246,184 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             Files: [new MockupFile("docs/mockups/mine.html", true)],
             Source: MockupSource.LinkedFiles, ModifiedAt: null));
         var controller = BuildController(git: null, catalog: catalog);
-        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.GetFeature(epicId, null)!;
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
         var mockup = json.GetProperty("mockups").EnumerateArray().Single();
         mockup.GetProperty("taskId").GetString().Should().Be(stepId, "taskId — по задаче, в linkedFiles которой path");
         mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-mk");
+    }
+
+    // ─── W4-5: каталог читает проверенное worktree эпика (п.5.1) ────────────────────────────
+
+    // Каталог, запоминающий корень каждого вызова Find и возвращающий маркерную запись с ОДНИМ
+    // относительным путём для обоих деревьев (title — по корню). Существование файла-макета
+    // он задаёт намеренно: в дереве эпика его нет (exists=false), в main — есть (exists=true).
+    // Так проверяются и резолвер (какие корни вызывались), и слияние (побеждает запись дерева),
+    // и семантика exists: запись дерева обещает файл только если он есть в дереве (W4-R1).
+    private sealed class RootsMockupCatalog : MockupCatalog
+    {
+        private readonly string _mainRoot;
+        public readonly List<string> Roots = [];
+        public RootsMockupCatalog(string mainRoot) : base(new DocsIndexService())
+        {
+            _mainRoot = mainRoot;
+        }
+        public override IReadOnlyList<MockupEntry> Find(string rootPath, string featureId,
+            IReadOnlyCollection<string> linkedPaths)
+        {
+            Roots.Add(rootPath);
+            return [new MockupEntry(
+                Path: "docs/mockups/x.md", Title: "mockup@" + rootPath, Status: null,
+                Files: [new MockupFile("docs/mockups/x.html", rootPath == _mainRoot)],
+                Source: MockupSource.Header, ModifiedAt: null)];
+        }
+    }
+
+    // Проверенный worktree эпика (числится в `git worktree list` проекта): Find вызывается
+    // дважды — сначала по дереву эпика, затем по корню; слияние по относительному пути:
+    // запись дерева побеждает (tree="feature", title по корню дерева), а exists файла
+    // проверяется по дереву фичи: в дереве файла нет (есть только в main) → exists=false,
+    // иначе карточка обещала бы файл, которого читатель по ?featureId= не отдаст (W4-R1).
+    [Fact]
+    public async Task GetFeature_Mockups_ПроверенныйWorktree_КаталогЧитаетДеревоЭпика()
+    {
+        var (epicId, worktree, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var mainRoot = Projects.GetById(projectId)!.RootPath;
+
+        var catalog = new RootsMockupCatalog(mainRoot);
+        var controller = BuildController(RealGit(), catalog: catalog);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        // Сначала дерево эпика, потом main — слияние по относительному пути.
+        catalog.Roots.Should().Equal(worktree, mainRoot);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main");
+        mockup.GetProperty("title").GetString().Should().Be("mockup@" + worktree);
+        mockup.GetProperty("files").EnumerateArray().Single().GetProperty("exists")
+            .GetBoolean().Should().BeFalse("файл только в main — запись дерева его не обещает");
+    }
+
+    // Фолбэк: у эпика нет worktreePath — каталог вызывается один раз, по корню проекта,
+    // запись помечена tree="main".
+    [Fact]
+    public async Task GetFeature_Mockups_БезWorktree_ФолбэкНаMainTree()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var dir = Path.Combine(_factory.TempDir, "mk_notree_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = Projects.Create("mk-notree-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
+
+        var catalog = new RootsMockupCatalog(project.RootPath);
+        var controller = BuildController(RealGit(), catalog: catalog);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        // Дерева нет — только main.
+        catalog.Roots.Should().Equal(project.RootPath);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("main");
+        mockup.GetProperty("title").GetString().Should().Be("mockup@" + project.RootPath);
+    }
+
+    // Путь задачи есть на диске, но НЕ числится в `git worktree list` этого проекта (реальный
+    // git-репозиторий, папка просто рядом) — отказ: каталог читает только main.
+    // Мутация: в FeatureTreePathAsync заменить `list.Any(...)` на unconditional return path
+    // — этот тест краснеет (чужая папка принялась бы как дерево эпика).
+    [Fact]
+    public async Task GetFeature_Mockups_ПутьНеВWorktreeList_ОтказФолбэкНаMain()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var mainRoot = Projects.GetById(projectId)!.RootPath;
+        // Эпик получает путь реальной папки, которой нет в `git worktree list` проекта.
+        var alien = Path.Combine(_factory.TempDir, "mk_alien_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(alien);
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.WorktreePath = alien;
+
+        var catalog = new RootsMockupCatalog(mainRoot);
+        var controller = BuildController(RealGit(), catalog: catalog);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        // Непроверенный путь — только main.
+        catalog.Roots.Should().Equal(mainRoot);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("main");
+    }
+
+    // Сквозной сценарий W4-R1 (major 1+2) на НАСТОЯщем MockupCatalog и настоящем git-worktree:
+    // записка-макет лежит в обоих деревьях и в шапке перечисляет три файла — один только в
+    // дереве, другой только в main, третий — в обоих. Каталог записывает путь под tree="feature"
+    // (запись дерева побеждает), Files — объединение путей: файл только из main не исчезает
+    // (major 2), но его exists=false — читатель с ?featureId= читает ровно дерево и отдаёт 404
+    // (major 1). Файл, есть в обоих деревьях → exists=true (минор R1B).
+    // Мутация: убрать объединение Files в слиянии — этот тест краснеет (main_only пропадает).
+    [Fact]
+    public async Task GetFeature_Mockups_ФайлТолькоВMain_ДеревоНеОбещаетExists()
+    {
+        var (epicId, worktree, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var mainRoot = Projects.GetById(projectId)!.RootPath;
+        var note = "# Макет\n\n**Фича:** " + epicId + "\n**Файлы:** tree_only.html, main_only.html, both.html\n";
+        Directory.CreateDirectory(Path.Combine(mainRoot, "docs", "mockups"));
+        Directory.CreateDirectory(Path.Combine(worktree, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "note.md"), note);
+        File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "note.md"), note);
+        File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "tree_only.html"), "tree only");
+        File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "main_only.html"), "main only");
+        // Файл в ОБОИХ деревьях: есть и в дереве, и в main.
+        File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "both.html"), "both");
+        File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "both.html"), "both");
+
+        var controller = BuildController(RealGit(),
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main");
+        var files = mockup.GetProperty("files").EnumerateArray()
+            .ToDictionary(f => f.GetProperty("path").GetString()!, f => f.GetProperty("exists").GetBoolean());
+        files.Keys.Should().Contain("docs/mockups/main_only.html",
+            "файл, существующий только в main, не исчезает из каталога");
+        files["docs/mockups/main_only.html"].Should().BeFalse(
+            "в дереве файла нет — exists=false, обещания читателю нет");
+        files["docs/mockups/tree_only.html"].Should().BeTrue("файл в дереве — обещание честное");
+        files["docs/mockups/both.html"].Should().BeTrue(
+            "файл существует в обоих деревьях — exists=true (минор R1B)");
+
+        // Читатель подтверждает контракт: по ?featureId= файла из main нет, фолбэка на main нет.
+        var content = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path=docs/mockups/main_only.html&featureId={epicId}");
+        content.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Вторая половина контракта: файл макета есть только в проверенном дереве — каталог
+    // говорит exists=true, и читатель с ?featureId= отдаёт 200 (exists=true ⇒ файл откроется).
+    [Fact]
+    public async Task GetFeature_Mockups_ФайлТолькоВДереве_ExistsTrue_ЧитательОтдаёт200()
+    {
+        var (epicId, worktree, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var relPath = "docs/mockups/only_tree.html";
+        Directory.CreateDirectory(Path.Combine(worktree, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "only_tree.html"), "tree only");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.LinkedFiles = [relPath];
+
+        var controller = BuildController(RealGit(),
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("tree").GetString().Should().Be("feature");
+        mockup.GetProperty("files").EnumerateArray().Single().GetProperty("exists")
+            .GetBoolean().Should().BeTrue("файл в дереве — обещание честное");
+
+        var content = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={relPath}&featureId={epicId}");
+        content.StatusCode.Should().Be(HttpStatusCode.OK, "exists=true ⇒ читатель отдаёт файл");
     }
 
     // ─── REST POST /api/tasks/features/{featureId}/merge: мерж фичи ─────────────────────────
@@ -2028,6 +2237,795 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         body.GetArrayLength().Should().Be(1);
     }
 
+    // ─── W4-HOLD-B2: hold/clear (POST/DELETE /api/tasks/features/{id}/hold) ───────────────────
+    // Контракт §1 (docs/research/feature-lifecycle-shared-chat-cut-2026-10.md): Hold ставит
+    // только человек — сервисный токен (typ=svc) отказывается 403 на обе ручки; merged/closed/
+    // merging → 409; draft годен только до первого запуска шага; manual/queue поверх draft → 409;
+    // DELETE без удержания → 409. tasks_update поле Hold не пишет; закрытие эпика его снимает.
+
+    private async Task<string> CreateFeatureEpicAsync()
+    {
+        var epic = await CreateTaskAsync(new
+        {
+            title = "hold-эпик-" + Guid.NewGuid().ToString("N")[..6],
+            role = "feature",
+        });
+        return epic.GetProperty("id").GetString()!;
+    }
+
+    // Сервисный токен → 403. Мутация (критерий c1): убрать проверку IsServiceToken в
+    // SetFeatureHold — этот тест падает (без неё ручка дошла бы до SetHold и вернула 200).
+    [Fact]
+    public async Task PostHold_ServiceToken_Returns403()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var controller = BuildController(RealGit(), serviceToken: true);
+
+        var result = await controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"));
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
+    }
+
+    // Сервисный токен → 403 и на снятии (та же причина: удержание снимает только человек).
+    [Fact]
+    public async Task ClearHold_ServiceToken_Returns403()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        // Удержание есть — отказ не должен зависеть от состояния.
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var controller = BuildController(RealGit(), serviceToken: true);
+        var result = await controller.ClearFeatureHold(epicId);
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
+    }
+
+    // 404: чужой эпик — тот же 404 с телом, что у GET features/{id}.
+    [Fact]
+    public async Task PostHold_ChuzhayaFicha_404()
+    {
+        var created = await _stranger.PostAsJsonAsync("/api/tasks", new { title = "чужой эпик", role = "feature" });
+        var epicId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // 404: кривой id (символы вне белого списка) — как у GET/merge (п.7).
+    [Fact]
+    public async Task PostHold_KrivoyId_404()
+    {
+        var response = await _client.PostAsJsonAsync("/api/tasks/features/a..b/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // 409: merged (merge Done + финал принят) — удерживать нечего.
+    [Fact]
+    public async Task PostHold_Merged_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new
+        {
+            title = "финал", featureId = epicId, role = "final", status = "done",
+            verification = new { verdict = "accepted" },
+        });
+        await CreateTaskAsync(new { title = "мерж", featureId = epicId, role = "merge", status = "done" });
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("смержена");
+    }
+
+    // 409: closed — эпик Done.
+    [Fact]
+    public async Task PostHold_Closed_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { status = "done" });
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString().Should().Contain("закрыта");
+    }
+
+    // 409: merging — мерж идёт (merge-задача InProgress); пауза мерж не трогает (контракт §1).
+    [Fact]
+    public async Task PostHold_Merging_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new
+        {
+            title = "финал", featureId = epicId, role = "final", status = "done",
+            verification = new { verdict = "accepted" },
+        });
+        await CreateTaskAsync(new { title = "мерж", featureId = epicId, role = "merge", status = "inProgress" });
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // 400: reason вне словаря FeatureHoldReasons.
+    [Fact]
+    public async Task PostHold_NeizvestnyReason_400()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "pause" });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    // 200: draft до первого запуска шага. Тело по контракту :364 — { interrupted: [] }:
+    // черновик ставится до первого запуска, прерывать нечего.
+    [Fact]
+    public async Task PostHold_DraftDoZapuskStepa_200()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "draft" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("interrupted").EnumerateArray().Should().BeEmpty("черновик: ходов ещё нет");
+    }
+
+    // 409: draft после первого запуска шага (решение 23.10: «только до первого запуска»).
+    [Fact]
+    public async Task PostHold_DraftPosleZapuskStepa_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString()!;
+        // «Шаг запущен» — тот же признак, что в гарде (ClaudeStartedAt ≠ null).
+        _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!.ClaudeStartedAt = DateTime.UtcNow;
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "draft" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // 409: manual поверх существующего draft — черновик снимают clear, а не переклейкой в паузу.
+    [Fact]
+    public async Task PostHold_ManualPoverDraft_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var draft = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "draft" });
+        draft.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // 200 + в журнале ровно одна запись held с reason. Журнал пишет сам TaskManager (его
+    // _journal из DI) — читаем зарегистрированный FeatureJournalStore той же сборки.
+    [Fact]
+    public async Task PostHold_200_ZhurnalRovnoOdnaHeld()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var controller = BuildController(RealGit());
+
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)
+            await controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"));
+        result.StatusCode.Should().Be(200);
+
+        var journal = _factory.Services.GetRequiredService<FeatureJournalStore>();
+        var held = journal.Read(OwnerId, epicId).Entries.Where(e => e.Kind == "held").ToList();
+        held.Should().HaveCount(1);
+        held[0].Reason.Should().Be("manual");
+    }
+
+    // W4-HOLD-D2 (контракт :364): ответ POST hold — id прерванных этой паузой ходов. Идущий
+    // шаг (старт, без стопа/результата) попадает, уже остановленный по другой причине — нет.
+    // Мутации: вернуть Ok(epic) вместо { interrupted } — GetProperty бросит; убрать цикл
+    // пометки в SetHold — список пуст — красное.
+    [Fact]
+    public async Task PostHold_200_ReturnsInterruptedIds()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new { title = "шаг D1", featureId = epicId, role = "step", status = "inProgress" });
+        var stepId = step.GetProperty("id").GetString()!;
+        var other = await CreateTaskAsync(new { title = "шаг D2", featureId = epicId, role = "step", status = "inProgress" });
+        var otherId = other.GetProperty("id").GetString()!;
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.MarkClaudeStarted(stepId, "sess-d1", DateTime.UtcNow); // ход идёт.
+        tm.MarkClaudeStarted(otherId, "sess-d2", DateTime.UtcNow);
+        tm.MarkExecutorStopped(otherId, DateTime.UtcNow, ExecutorStopClassifier.AuthFailedReason); // уже встал.
+
+        var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var interrupted = body.GetProperty("interrupted").EnumerateArray().Select(x => x.GetString()).ToList();
+
+        interrupted.Should().Contain(stepId, "идущий ход прерван — он в ответе");
+        interrupted.Should().NotContain(otherId, "уже остановленный по другой причине — не прерванный паузой");
+    }
+
+    // Дефект 8a94dede (возврат QA): POST hold молчал — стор страницы фичи и стор списка
+    // задач живут только по task_changed, поэтому после «Паузы» тег оставался «идёт» и
+    // кнопка «Снять паузу» не появлялась. Фикс: ручка вещает эпик и каждый помеченный шаг.
+    // Ловим через живой SignalR (прецедент: TagsApply в WorkspaceHttpOwnerIsolationTests):
+    // после POST hold в группе владельца — task_changed(«updated») с Hold у эпика (по нему
+    // проектор считает state=paused) и пометкой feature_held у шага. Мутация: убрать
+    // вещание в SetFeatureHold — ожидание событий таймит, тест краснеет.
+    [Fact]
+    public async Task PostHold_BroadcastsTaskChanged_EpicAndMarkedStep()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг B1", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.MarkClaudeStarted(stepId, "sess-b1", DateTime.UtcNow); // идущий ход — пауза его помечает.
+
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        var connection = new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "hubs/session"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
+                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+            })
+            .Build();
+
+        var got = new ConcurrentDictionary<string, JsonElement>();
+        var both = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("message", msg =>
+        {
+            if (!msg.TryGetProperty("type", out var type) || type.GetString() != "task_changed") return;
+            var id = msg.GetProperty("task").GetProperty("id").GetString();
+            if (id != epicId && id != stepId) return;
+            got[id] = msg;
+            if (got.ContainsKey(epicId) && got.ContainsKey(stepId)) both.TrySetResult(true);
+        });
+        try
+        {
+            await connection.StartAsync();
+            await connection.InvokeAsync("JoinUser", me.GetProperty("userId").GetString());
+
+            var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold",
+                new { reason = "manual" });
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var winner = await Task.WhenAny(both.Task, Task.Delay(15_000));
+            winner.Should().Be(both.Task,
+                "пауза обязана дойти до группы владельца живьём: task_changed по эпику и по помеченному шагу");
+
+            // Эпик в событии — с Hold: это ровно тот признак, по которому FeatureProjector.IsPaused
+            // (FeatureProjector.cs:1520) считает state=paused — экран после события его покажет.
+            got[epicId].GetProperty("action").GetString().Should().Be("updated");
+            got[epicId].GetProperty("task").GetProperty("hold").ValueKind.Should().NotBe(JsonValueKind.Null);
+            // Шаг — с пометкой feature_held: карточка в списке показывает «на паузе».
+            got[stepId].GetProperty("task").GetProperty("executorStopReason").GetString()
+                .Should().Be(ExecutorStopClassifier.FeatureHeldReason);
+        }
+        finally { await connection.DisposeAsync(); }
+    }
+
+    // W4-HOLD-D2 (контракт :212): повторный hold с тем же reason идемпотентен — Since не
+    // сдвигается, в журнале ровно одна held. Мутация: убрать guard в SetHold — Since сдвинется
+    // и записей станет две — красное.
+    [Fact]
+    public async Task PostHold_PovtorTotoyReason_IdempotentSinceIDurnal()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var first = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        first.StatusCode.Should().Be(HttpStatusCode.OK);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        var since = tm.GetById(epicId)!.Hold!.Since;
+
+        var second = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        second.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        tm.GetById(epicId)!.Hold!.Since.Should().Be(since, "повторная пауза — не новая пауза: Since не двигается");
+        var journal = _factory.Services.GetRequiredService<FeatureJournalStore>();
+        journal.Read(OwnerId, epicId).Entries.Count(e => e.Kind == "held").Should().Be(1, "одна запись на паузу");
+    }
+
+    // 409: DELETE без удержания — снимать нечего.
+    [Fact]
+    public async Task ClearHold_BezUderzhaniya_409()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    // 200: снятие — поле cleared, в журнале ровно одна hold_cleared с снятым reason.
+    [Fact]
+    public async Task ClearHold_200_SnimаетHoldIZapisyvаетHoldCleared()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var journal = _factory.Services.GetRequiredService<FeatureJournalStore>();
+        var controller = BuildController(RealGit(), journal: journal);
+
+        var set = await controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"));
+        set.Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>();
+
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)await controller.ClearFeatureHold(epicId);
+        result.StatusCode.Should().Be(200);
+
+        var entries = journal.Read(OwnerId, epicId).Entries;
+        entries.Count(e => e.Kind == "held").Should().Be(1);
+        var cleared = entries.Where(e => e.Kind == "hold_cleared").ToList();
+        cleared.Should().HaveCount(1);
+        cleared[0].Reason.Should().Be("manual");
+
+        // Фактическое состояние эпика после снятия — hold отсутствует (проверка через GET).
+        var body = await (await _client.GetAsync($"/api/tasks/{epicId}")).Content.ReadFromJsonAsync<JsonElement>();
+        if (body.TryGetProperty("hold", out var holdProp))
+            holdProp.ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    // Дефект c41d7e02 (возврат QA): DELETE hold молчал — страница фичи оставалась «на паузе»
+    // до ручной перезагрузки: task_changed вещает только сервис продолжений по ПРОДОЛЖЕНным
+    // шагам (TaskExecutionService.cs:1343), а если прерванных шагов не было — вещания нет
+    // вовсе. Фикс: ClearFeatureHold вещает эпик, тот же формат, что постановка (:897).
+    // Ловим через живой SignalR (прецедент: PostHold_BroadcastsTaskChanged_EpicAndMarkedStep).
+    // Мутация: убрать вещание в ClearFeatureHold — ожидание события таймит, тест краснеет.
+    [Fact]
+    public async Task ClearHold_BroadcastsTaskChanged_Epic()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        // Идущих ходов нет: продолжать нечего — именно ветка, где дефект виден.
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Соединяемся ПОСЛЕ постановки: канал ловит только событие снятия — иначе в него
+        // попадёт task_changed самой паузы (её вещание проверяет другой тест).
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        var connection = new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "hubs/session"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
+                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+            })
+            .Build();
+
+        var got = new ConcurrentDictionary<string, JsonElement>();
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("message", msg =>
+        {
+            if (!msg.TryGetProperty("type", out var type) || type.GetString() != "task_changed") return;
+            if (msg.GetProperty("task").GetProperty("id").GetString() != epicId) return;
+            got[epicId] = msg;
+            done.TrySetResult(true);
+        });
+        try
+        {
+            await connection.StartAsync();
+            await connection.InvokeAsync("JoinUser", me.GetProperty("userId").GetString());
+
+            var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var winner = await Task.WhenAny(done.Task, Task.Delay(15_000));
+            winner.Should().Be(done.Task,
+                "снятие паузы обязано дойти до группы владельца живьём: task_changed по эпику");
+
+            // Эпик в событии — без Hold: с снятым Hold проектор (FeatureProjector.cs:1520)
+            // считает состояние не-пауза — экран по событию уходит с «на паузе».
+            got[epicId].GetProperty("action").GetString().Should().Be("updated");
+            if (got[epicId].GetProperty("task").TryGetProperty("hold", out var holdProp))
+                holdProp.ValueKind.Should().Be(JsonValueKind.Null);
+        }
+        finally { await connection.DisposeAsync(); }
+    }
+
+    // Дефект 06aae1bf (гонка): два параллельных DELETE hold одной фичи. Окно гонки — между
+    // проверкой Hold и ClearHold в ручке: это обход задач владельца. Окно намеренно расширяется
+    // тысячами задач (создание напрямую в менеджере, не через HTTP) — при одновременной
+    // постановке двух запросов проигравший гарантированно попадает в гонку. Проигравший не
+    // имеет права отдавать 404 «Фича не найдена» на существующую фичу: ответ победителя — 200,
+    // проигравшего — 200 с пустыми списками или 409 «снимать нечего». Мутация: вернуть
+    // безусловный 404 при epic is null — тест краснеет на первой же попытке.
+    [Fact]
+    public async Task ClearHold_GonkaParallelnykhDelete_NeDaet404()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        for (int i = 0; i < 5000; i++)
+            tm.Create(null, OwnerId, new CreateTaskRequest(Title: "фон гонки " + i, FeatureId: epicId, Role: "step"));
+
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+            set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var responses = await Task.WhenAll(
+                _client.DeleteAsync($"/api/tasks/features/{epicId}/hold"),
+                _client.DeleteAsync($"/api/tasks/features/{epicId}/hold"));
+
+            foreach (var r in responses)
+                r.StatusCode.Should().NotBe(HttpStatusCode.NotFound,
+                    "проигравший в гонке не выдаёт 404 на существующую фичу");
+        }
+    }
+
+    // R-HOLD-D (п.4, п.1): связка «ручка → возврат» на уровне HTTP. Сервисные тесты продолжения
+    // не ловят ручки: удаление вызова из ClearFeatureHold оставляло их зелёными — связь
+    // терялась. Здесь: после DELETE hold у помеченного шага пропадает пометка и в его чат
+    // уходит реплика-продолжение (стаб адаптера фиксирует доставленные). Ожидание — событие,
+    // а не опрос времени: карточка оркестратору в ключевой чат — последний выход продолжения
+    // (после снятия пометки), её приход будит TCS (прецедент: PluginDraftWatcherTests).
+    // Мутации: убрать вызов в ручке — пометка не гасится и карточка не уходит — красное;
+    // снять пометку до доставки — тест изоляции сбоев (TaskExecutionServiceHoldTests) красный.
+    [Fact]
+    public async Task ClearHold_ResumesMarkedTurn_EndsInItsChat()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг на паузе", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        // Ключевой чат — адресат карточки: её доставка и есть событие конца цепочки возврата.
+        var keyChat = await CreatePersonalChatAsync(OwnerId);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetExecutorLauncher(stepId, keyChat, null);
+        tm.MarkClaudeStarted(stepId, chatId, DateTime.UtcNow); // ход идёт — пауза его прерывает.
+
+        var cardSent = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Крюк на стабе ключевого чата (его процесс поднят при создании чата): доставка будит
+        // TCS — ожидание события, а не опроса времени.
+        _factory.LlmAdapters.Adapters[keyChat].FirstMessageTcs = cardSent;
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(stepId)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+            "пауза помечает идущий ход: возвращать есть что");
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Ждём событие, а не время: продолжение — фон (fire-and-forget, R-HOLD-D п.1).
+        var winner = await Task.WhenAny(cardSent.Task, Task.Delay(5000));
+        ReferenceEquals(winner, cardSent.Task).Should().BeTrue(
+            "возврат завершился в потолок: карточка ушла в ключевой чат");
+        // .Result блокирует (xUnit1031) — TCS уже завершён, await тот же факт без блокировки.
+        var cardText = await cardSent.Task;
+        cardText.Should().Contain("продолжен 1 шаг", "карточка считает продолженный шаг");
+
+        tm.GetById(stepId)!.ExecutorStopReason.Should().BeNull(
+            "снятие паузы возвращает шаг в работу: пометка гасится");
+        _factory.LlmAdapters.Adapters[chatId].SentMessages.Should().Contain(
+            m => m.Contains("продолжи"), "реплика-продолжение уходит в чат исполнителя");
+    }
+
+    // W4-SEAM R1 (мажор, тупик после сбоя продолжения): доставка продолжения упала — шаг
+    // остаётся feature_held при уже снятом Hold: карточка «шаг ждёт снятия паузы», фича
+    // stopped, а повторный DELETE hold без правки — 409 «снимать нечего» и тупик. Рев
+    // идемпотентен по пометке. Мутации: вернуть безусловный 409 при Hold == null — второй
+    // ответ краснеет (409), пометка не гасится; убрать вызов продолжения в рев-ветке —
+    // пометка остаётся — последний абзац краснеет.
+    [Fact]
+    public async Task ClearHold_PovtorPosleSboyaDostavki_ProdolzhaetShag()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг с боем продолжения", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        var keyChat = await CreatePersonalChatAsync(OwnerId);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetExecutorLauncher(stepId, keyChat, null);
+        tm.MarkClaudeStarted(stepId, chatId, DateTime.UtcNow);
+
+        // Первое снятие: доставка продолжения отказывает — шаг остаётся «на паузе».
+        _factory.LlmAdapters.Adapters[chatId].FailOnSend = true;
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        var first = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        first.StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(stepId)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+            "доставка упала — шаг ждёт, фича выглядит stopped: снимать «нечего», но тупик не финал");
+
+        // Повторный DELETE hold: Hold уже null — без правки здесь 409. С правкой — повтор
+        // продолжения: ждём событие доставки в чат шага, не время.
+        var resumedTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _factory.LlmAdapters.Adapters[chatId].FirstMessageTcs = resumedTcs;
+        _factory.LlmAdapters.Adapters[chatId].FailOnSend = false;
+        var second = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        second.StatusCode.Should().Be(HttpStatusCode.OK,
+            "повторное снятие при оставшихся feature_held шагах — не 409, а повтор продолжения");
+        // W4-SEAM2 (минор, критерий c2): ответ R1-ветки помечен флагом повтора — пустые
+        // resumed/expired перестают неотличимыми от «нечего делать». Мутация: убрать
+        // repeated в ответе — GetProperty краснеет.
+        var secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
+        secondBody.GetProperty("repeated").GetBoolean().Should().BeTrue(
+            "ответ повтора говорит, что продолжение повторено, а не что снимать нечего");
+
+        var winner = await Task.WhenAny(resumedTcs.Task, Task.Delay(5000));
+        ReferenceEquals(winner, resumedTcs.Task).Should().BeTrue(
+            "повтор продолжения дошёл до чата шага в потолок");
+        tm.GetById(stepId)!.ExecutorStopReason.Should().BeNull(
+            "рев идемпотентен по пометке: успешное продолжение её гасит — шаг снова в работе");
+    }
+
+    // R-HOLD-K (критерий c1): порядок «причина читается ДО ClearHold» (TasksController.cs:938)
+    // сервисные тесты не защищают — они зовут сервис напрямую, а reason передаёт сама ручка.
+    // Здесь — связка на уровне HTTP: DELETE hold с reason=draft → в ключевой чат уходит
+    // карточка «Фича запущена», и формулировки «Пауза снята» в ней нет (draft-ветка
+    // возвращается до общей). Мутация (R-HOLD-K2 п.2): читать причину из живого эпика после
+    // ClearHold (tasks.GetById), а не из снимка run — Hold уже null, ручка бросает, карточка
+    // не уходит — ожидание краснеет. Перестановка строки holdReason внутри снимка ничего не
+    // меняет: run — снимок, тест ловит живое перечитывание причины.
+    [Fact]
+    public async Task ClearHold_DraftReason_WakesKeyChatWithStartedCard()
+    {
+        var keyChat = await CreatePersonalChatAsync(OwnerId);
+        var epic = await CreateTaskAsync(new
+        {
+            title = "фича в черновике", role = "feature", sourceSessionId = keyChat,
+        });
+        var epicId = epic.GetProperty("id").GetString()!;
+
+        var cardSent = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _factory.LlmAdapters.Adapters[keyChat].FirstMessageTcs = cardSent;
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "draft" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Возврат — фон (fire-and-forget): ждём событие доставки, не время.
+        var winner = await Task.WhenAny(cardSent.Task, Task.Delay(5000));
+        ReferenceEquals(winner, cardSent.Task).Should().BeTrue(
+            "карточка дошла до ключевского чата в потолок");
+        // .Result блокирует (xUnit1031) — TCS уже завершён, await тот же факт без блокировки.
+        var text = await cardSent.Task;
+        text.Should().Contain("Фича запущена", "снятие черновика будит оркестратора карточкой «фича запущена»");
+        text.Should().NotContain("Пауза снята", "draft не даёт формулировку «пауза снята»");
+        _factory.LlmAdapters.Adapters[keyChat].SentMessages.Count.Should().Be(1,
+            "в ключевой чат уходит ровно одна карточка");
+    }
+
+    // R-HOLD-D (п.2) + R-HOLD-K (хвост): сбой доставки карточки не теряется молча — его логирует
+    // сервис (try/catch вокруг карточки, TaskExecutionService.DeliverKeyChatCardAsync). Ручка
+    // вызов не оборачивает: сбой локализован в сервисе и до ответа не доходит (R-HOLD-K2 п.1).
+    // Прецедент логгера: UnhandledExceptionHandlerTests.cs:24. Мутация: убрать try/catch в
+    // DeliverKeyChatCardAsync — лог сервиса пуст — первое ожидание краснеет.
+    [Fact]
+    public async Task ClearHold_FailedCardDeliveryIsLoggedByService()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new { title = "шаг без продолжения", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString()!;
+        var keyChat = await CreatePersonalChatAsync(OwnerId);
+        _factory.Services.GetRequiredService<TaskManager>().SetExecutorLauncher(stepId, keyChat, null);
+        _factory.LlmAdapters.Adapters[keyChat].FailOnSend = true;
+
+        var serviceLogged = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Логгер сервиса подменяем точечно (прецедент: рефлексивная подмена состояния в
+        // TaskExecutionServiceHoldTests.SetRunningTurn) и возвращаем в finally — тест не
+        // оставляет следов на singletonе фабрики для остальных тестов.
+        var service = _factory.Services.GetRequiredService<TaskExecutionService>();
+        var logField = typeof(TaskExecutionService).GetField("_log",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var originalLog = logField.GetValue(service);
+        logField.SetValue(service, new CapturingLogger<TaskExecutionService>(serviceLogged));
+        try {
+            var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+            set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var controller = BuildController(RealGit());
+            var result = await controller.ClearFeatureHold(epicId);
+            result.Should().BeOfType<OkObjectResult>(); // ответ не ждёт фон: сбой карточки локализован в сервисе
+
+            var winner = await Task.WhenAny(serviceLogged.Task, Task.Delay(5000));
+            ReferenceEquals(winner, serviceLogged.Task).Should().BeTrue(
+                "сбой карточки записан в лог сервиса в потолок, а не потерян молча");
+            // .Result блокирует (xUnit1031) — TCS уже завершён, await тот же факт без блокировки.
+            var logged = await serviceLogged.Task;
+            logged.Should().Contain("Карточка в ключевой чат",
+                "catch карточки логирует отказ доставки");
+        } finally {
+            logField.SetValue(service, originalLog);
+        }
+    }
+
+    // Записывающий логгер (прецедент: UnhandledExceptionHandlerTests.cs:24): первая запись
+    // Warning+ будит TCS — тест ждёт событие лога, а не время.
+    private sealed class CapturingLogger<T>(TaskCompletionSource<string> firstRecord) : ILogger<T>
+    {
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => null!;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (level >= LogLevel.Warning) firstRecord.TrySetResult(formatter(state, exception));
+        }
+    }
+
+    // W4-HOLD-H (контракт §1, :368): ответ DELETE hold — { resumed, expired }: задачи фичи,
+    // которым снятая пауза больше не отказывает запуск, и те, чьё ожидание устройства просрочено
+    // потолком DeviceWaitCeiling. Мутации: вернуть Ok(epic) без расчёта — GetProperty("resumed")
+    // бросит; убрать расчёт resumed — список пуст — красное; отнести просроченную в resumed —
+    // NotContain краснеет.
+    [Fact]
+    public async Task ClearHold_200_ResumedContainsDeviceWaitingTask()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetHold(epicId, "manual");
+
+        var step = await CreateTaskAsync(new { title = "шаг ждёт устройство", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString()!;
+        tm.MarkDeviceWait(stepId, DateTime.UtcNow, "устройство офлайн");
+
+        var stale = await CreateTaskAsync(new { title = "шаг с истёкшим ожиданием", featureId = epicId, role = "step" });
+        var staleId = stale.GetProperty("id").GetString()!;
+        tm.MarkDeviceWait(staleId, DateTime.UtcNow - ProjectCapabilities.DeviceWaitCeiling - TimeSpan.FromHours(1),
+            "устройство офлайн");
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var resumed = body.GetProperty("resumed").EnumerateArray().Select(x => x.GetString()).ToList();
+        var expired = body.GetProperty("expired").EnumerateArray().Select(x => x.GetString()).ToList();
+
+        resumed.Should().Contain(stepId, "снятие паузы снимает запрет гейта — ждущая задача пробуждается");
+        expired.Should().Contain(staleId, "ожидание за потолком — просроченное: в expired");
+        resumed.Should().NotContain(staleId, "просроченное ожидание не пробуждается");
+        // W4-HOLD-H (R-HOLD-H находка 4): эпик в выборку не входит — его никто не запускает.
+        resumed.Should().NotContain(epicId, "эпик — не шаг: его не пробуждают");
+        expired.Should().NotContain(epicId, "эпик — не задача ожидания устройства");
+    }
+
+    // W4-HOLD-H (R-HOLD-H находка 1): состав считается ДО ClearHold — resumed только те, кому
+    // пауза отказывает прямо сейчас. Подготовка на черновике гейтом пропускается: её снятие
+    // «не пробуждает» — она и так могла идти. Мутации: вернуть расчёт после ClearHold или
+    // заменить условие на безусловный Add — prep попадёт в resumed, NotContain краснеет.
+    [Fact]
+    public async Task ClearHold_200_ResumedТолькоОтказанныеПаузой()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetHold(epicId, "draft");
+
+        var prep = await CreateTaskAsync(new { title = "нарезка", featureId = epicId, role = "cut" });
+        var prepId = prep.GetProperty("id").GetString()!;
+        var step = await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step" });
+        var stepId = step.GetProperty("id").GetString()!;
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var resumed = body.GetProperty("resumed").EnumerateArray().Select(x => x.GetString()).ToList();
+        var expired = body.GetProperty("expired").EnumerateArray().Select(x => x.GetString()).ToList();
+
+        resumed.Should().Contain(stepId, "пауза блокировала шаг — снятие открывает ему запуск");
+        resumed.Should().NotContain(prepId, "подготовка не блокировалась паузой — пробуждать нечего");
+        expired.Should().BeEmpty("ожидания устройства нет");
+    }
+
+    // W4-HOLD-H (R-HOLD-H находка 3): закрытые не пробуждаются — как GetDeviceWaiting исключает
+    // Done, так и ответ снятия паузы. Мутация: снять гард Status == Done — closed попадёт в
+    // expired (просроченное ожидание), NotContain краснеет.
+    [Fact]
+    public async Task ClearHold_200_ClosedНеВResumedИНеВExpired()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetHold(epicId, "manual");
+
+        var closed = await CreateTaskAsync(new { title = "закрытый шаг", featureId = epicId, role = "step" });
+        var closedId = closed.GetProperty("id").GetString()!;
+        await _client.PutAsJsonAsync($"/api/tasks/{closedId}", new { status = "done" });
+        tm.MarkDeviceWait(closedId, DateTime.UtcNow - ProjectCapabilities.DeviceWaitCeiling - TimeSpan.FromHours(1),
+            "устройство офлайн");
+
+        var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var resumed = body.GetProperty("resumed").EnumerateArray().Select(x => x.GetString()).ToList();
+        var expired = body.GetProperty("expired").EnumerateArray().Select(x => x.GetString()).ToList();
+
+        resumed.Should().NotContain(closedId, "закрытая задача не встаёт в очередь");
+        expired.Should().NotContain(closedId, "закрытая не участвует в механике ожидания (GetDeviceWaiting)");
+    }
+
+    // Критерий c3: tasks_update с «hold» в теле поле не меняет (UpdateTaskRequest Hold не содержит,
+    // лишнее поле игнорируется) — удержание остаётся manual.
+    [Fact]
+    public async Task PostHold_UpdateVTelePoleNeMenyaet()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var put = await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new
+        {
+            title = "переименован",
+            hold = new { reason = "queue", since = DateTime.UtcNow, byUser = true },
+        });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await (await _client.GetAsync($"/api/tasks/{epicId}")).Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("hold").GetProperty("reason").GetString().Should().Be("manual");
+    }
+
+    // Критерий c3: tasks_complete (PUT status=done) эпика с Hold → Hold=null.
+    [Fact]
+    public async Task PostHold_CompleteEpikaSnimаетHold()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var close = await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { status = "done" });
+        close.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await (await _client.GetAsync($"/api/tasks/{epicId}")).Content.ReadFromJsonAsync<JsonElement>();
+        if (body.TryGetProperty("hold", out var holdProp))
+            holdProp.ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    // W4-HOLD-N (хвост R-N п.3, критерий c3): страховка на уровне ручки — сервисный тест
+    // зовёт метод напрямую, связь «DELETE задачи → возврат срока» ничем не защищена.
+    // Удалённый на паузе эпик: его шагу возвращают замороженный срок до удаления.
+    // Мутации: убрать вызов RestoreFrozenChatsBeforeDelete в Delete — чат остаётся без
+    // срока — красное; перенести вызов после tasks.Delete — эпик уже не в реестре,
+    // шаги не обходятся — красное.
+    [Fact]
+    public async Task Delete_EpicOnPause_ReturnsFrozenExpiryToItsStep()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик на паузе", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг на паузе", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.MarkClaudeStarted(stepId, chatId, DateTime.UtcNow);
+        Sessions.SetExpiry(chatId, 10);
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        Sessions.GetById(chatId)!.ExpiresAfterMinutes.Should().BeNull("пауза заморозила срок чата");
+
+        var del = await _client.DeleteAsync($"/api/tasks/{epicId}");
+        del.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        Sessions.GetById(chatId)!.ExpiresAfterMinutes.Should().Be(10,
+            "эпик удалён на паузе: его шагу возвращают его срок — чат не остаётся вечным");
+    }
+
+    // W4-HOLD-N (хвост R-N п.3): отдельно — удаление шага на паузе: его собственный чат
+    // никогда не дождётся снятия паузы, срок возвращается сразу. Мутация: убрать не-эпиковую
+    // ветку RestoreFrozenChatsBeforeDelete — последний абзац краснеет.
+    [Fact]
+    public async Task Delete_StepOnPause_ReturnsOwnChatExpiry()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг на паузе", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var chatId = await CreatePersonalChatAsync(OwnerId, stepId);
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.MarkClaudeStarted(stepId, chatId, DateTime.UtcNow);
+        Sessions.SetExpiry(chatId, 10);
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        Sessions.GetById(chatId)!.ExpiresAfterMinutes.Should().BeNull("пауза заморозила срок");
+
+        var del = await _client.DeleteAsync($"/api/tasks/{stepId}");
+        del.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        Sessions.GetById(chatId)!.ExpiresAfterMinutes.Should().Be(10,
+            "удалённый шаг не дождётся снятия паузы: его срок возвращается сразу");
+    }
+
     // ─── Изоляция по владельцу ───────────────────────────────────────────────
 
     [Fact]
@@ -2303,11 +3301,11 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     };
 
     // Страница фичи через BuildController (spend — шов, journal — реальный журнал) → stats.
-    private JsonElement GetFeatureStats(ISpendFeatureReader? spend, string epicId,
+    private async Task<JsonElement> GetFeatureStats(ISpendFeatureReader? spend, string epicId,
         FeatureJournalStore? journal = null)
     {
         var controller = BuildController(null, null, spend, journal);
-        var result = (ObjectResult)controller.GetFeature(epicId)!;
+        var result = (ObjectResult)(await controller.GetFeature(epicId))!;
         // CamelCase — как wire-формат приложения (SystemTextJson): FeatureStats.Spend → spend.
         return JsonSerializer.SerializeToElement(result.Value!,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })
@@ -2332,7 +3330,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     {
         var (epicId, _, _) = await MakeFeature("sp-off");
 
-        var stats = GetFeatureStats(null, epicId);
+        var stats = await GetFeatureStats(null, epicId);
 
         var spendAbsent = !stats.TryGetProperty("spend", out var spend) || spend.ValueKind == JsonValueKind.Null;
         spendAbsent.Should().BeTrue("Spend выключен → stats.spend = null, не 500");
@@ -2386,7 +3384,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (epicId, stepId, _) = await MakeFeature("sp-cost");
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "claude-opus-4", 100, 50, 1.5));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.ValueKind.Should().NotBe(JsonValueKind.Null);
         spend.GetProperty("inputTokens").GetInt64().Should().Be(100);
@@ -2404,7 +3402,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (epicId, stepId, _) = await MakeFeature("sp-deepseek");
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "deepseek-chat", 100, 50, 2.0));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("inputTokens").GetInt64().Should().Be(100, "токены ненадёжной модели в сумме");
         spend.GetProperty("costUsd").GetDouble().Should().Be(0, "стоимость ненадёжной модели не в сумме");
@@ -2420,7 +3418,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (epicId, stepId, _) = await MakeFeature("sp-free");
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "llama-3", 100, 50, 0, source: "free"));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("inputTokens").GetInt64().Should().Be(100);
         spend.GetProperty("costUsd").GetDouble().Should().Be(0, "free → честный 0");
@@ -2435,7 +3433,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // Запись с taskId фичи, но владелец = SecondOwner → фильтр OwnerId == owner отсекает.
         var (_, reader) = SpendStoreWith(SpendRecord(SecondOwnerId, stepId, null, "claude-opus-4", 100, 50, 1.5));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("inputTokens").GetInt64().Should().Be(0,
             "чужая запись (OwnerId=SecondOwner) не входит в расход фичи");
@@ -2458,7 +3456,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // Запись расхода: без taskId, но sessionId = ключевой чат фичи.
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, null, keyChat, "claude-opus-4", 100, 50, 1.5));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("inputTokens").GetInt64().Should().Be(100,
             "ключевой чат (сессия с TaskId = id эпика) входит в срез → запись расхода учитывается");
@@ -2486,12 +3484,12 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, null, chatC, "claude-opus-4", 100, 50, 1.5));
 
         // Срез A: ключевой чат не исключителен (входит ещё в B) → запись не входит.
-        var spendA = GetFeatureStats(reader, epicAId).GetProperty("spend");
+        var spendA = (await GetFeatureStats(reader, epicAId)).GetProperty("spend");
         spendA.GetProperty("inputTokens").GetInt64().Should().Be(0,
             "чат в двух фичах не входит в срез A (двойного счёта нет)");
 
         // Срез B: чат C — не ключевой чат B (TaskId = id эпика A) и не сессия задачи B → тоже нет.
-        var spendB = GetFeatureStats(reader, epicBId).GetProperty("spend");
+        var spendB = (await GetFeatureStats(reader, epicBId)).GetProperty("spend");
         spendB.GetProperty("inputTokens").GetInt64().Should().Be(0,
             "чат C не сессия задачи B и не её ключевой чат → не входит в срез B");
     }
@@ -2515,7 +3513,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         };
         var (_, reader) = SpendStoreWith(rec);
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.GetProperty("from").GetString().Should().Be(
             DateTime.UtcNow.ToString("yyyy-MM-dd"),
@@ -2544,7 +3542,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             SpendRecord(OwnerId, stepId, null, "gpt-4o", 100, 50, null),
             SpendRecord(OwnerId, stepId, null, "glm-local:8b", 100, 50, 5.0, source: "free"));
 
-        var stats = GetFeatureStats(reader, epicId);
+        var stats = await GetFeatureStats(reader, epicId);
         var spend = stats.GetProperty("spend");
         var roles = stats.GetProperty("breakdown").GetProperty("roles");
 
@@ -2621,7 +3619,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (_, reader) = SpendStoreWith(rec);
 
         // Срез A: общий чат C исключён из среза (0 токенов), доля A = 1/2 (A и B активны) = 50.
-        var spendA = GetFeatureStats(reader, epicAId).GetProperty("spend");
+        var spendA = (await GetFeatureStats(reader, epicAId)).GetProperty("spend");
         spendA.GetProperty("shared").GetProperty("inputTokens").GetInt64().Should().Be(50,
             "общий чат делится поровну: A и B активны → 1/2");
         spendA.GetProperty("shared").GetProperty("method").GetString().Should().Be("approx",
@@ -2630,7 +3628,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         spendA.GetProperty("inputTokens").GetInt64().Should().Be(50, "итог включает долю общего чата");
 
         // Срез B: симметрично, доля B = 50.
-        var spendB = GetFeatureStats(reader, epicBId).GetProperty("spend");
+        var spendB = (await GetFeatureStats(reader, epicBId)).GetProperty("spend");
         spendB.GetProperty("shared").GetProperty("inputTokens").GetInt64().Should().Be(50);
         spendB.GetProperty("inputTokens").GetInt64().Should().Be(50);
     }
@@ -2670,13 +3668,13 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (_, reader) = SpendStoreWith(rec);
 
         // A активна, B нет → знаменатель = 1 → A получает целиком (100), не 50.
-        var spendA = GetFeatureStats(reader, epicAId).GetProperty("spend");
+        var spendA = (await GetFeatureStats(reader, epicAId)).GetProperty("spend");
         spendA.GetProperty("shared").GetProperty("inputTokens").GetInt64().Should().Be(100,
             "только A активна → доля = 1/1 = целиком (знаменатель = активные, не все фичи чата)");
         spendA.GetProperty("inputTokens").GetInt64().Should().Be(100);
 
         // B не активна → её доля 0 → shared: null (вклада в расход фичи нет); итог B без доли.
-        var spendB = GetFeatureStats(reader, epicBId).GetProperty("spend");
+        var spendB = (await GetFeatureStats(reader, epicBId)).GetProperty("spend");
         spendB.GetProperty("shared").ValueKind.Should().Be(JsonValueKind.Null,
             "B не активна на момент хода → её доля 0 → shared: null");
         spendB.GetProperty("inputTokens").GetInt64().Should().Be(0, "B не активна → итог без доли");
@@ -2690,7 +3688,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // Запись расхода задачи фичи (надёжная цена) → расход есть, но общих чатов нет.
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, stepId, null, "claude-opus-4", 100, 50, 1.5));
 
-        var spend = GetFeatureStats(reader, epicId).GetProperty("spend");
+        var spend = (await GetFeatureStats(reader, epicId)).GetProperty("spend");
 
         spend.ValueKind.Should().NotBe(JsonValueKind.Null, "расход фичи есть");
         spend.GetProperty("shared").ValueKind.Should().Be(JsonValueKind.Null,
@@ -2790,7 +3788,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var reader = new SpendFeatureReader(coldStore);
         var swWarm = Stopwatch.StartNew();
         for (var i = 0; i < warmIters; i++)
-            GetFeatureStats(reader, epicIds[0]);
+            await GetFeatureStats(reader, epicIds[0]);
         swWarm.Stop();
 
         Console.WriteLine($"[B9c bench] записей={totalRecords}, фич={featureCount}, общий чат в {featureCount} фичах");
@@ -2999,9 +3997,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         store.RollupOlderThan(store.WindowStart);
 
         // ── Сценарий (a): все журналы полные → method=journal ──
-        var statsA = GetFeatureStats(reader, epicAId, journal);
-        var statsB = GetFeatureStats(reader, epicBId, journal);
-        var statsC = GetFeatureStats(reader, epicCId, journal);
+        var statsA = await GetFeatureStats(reader, epicAId, journal);
+        var statsB = await GetFeatureStats(reader, epicBId, journal);
+        var statsC = await GetFeatureStats(reader, epicCId, journal);
 
         statsA.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
             .Should().Be("approx",
@@ -3027,9 +4025,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         // ── Сценарий (b): журнал B (соседки) удалён → method=approx (у всех) ──
         journal.Delete(OwnerId, epicBId);
-        var statsA2 = GetFeatureStats(reader, epicAId, journal);
-        var statsB2 = GetFeatureStats(reader, epicBId, journal);
-        var statsC2 = GetFeatureStats(reader, epicCId, journal);
+        var statsA2 = await GetFeatureStats(reader, epicAId, journal);
+        var statsB2 = await GetFeatureStats(reader, epicBId, journal);
+        var statsC2 = await GetFeatureStats(reader, epicCId, journal);
 
         statsA2.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
             .Should().Be("approx", "журнала соседки B нет → method=approx");
@@ -3089,9 +4087,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1));
 
-        var statsA = GetFeatureStats(reader, epicAId);
-        var statsB = GetFeatureStats(reader, epicBId);
-        var statsC = GetFeatureStats(reader, epicCId);
+        var statsA = await GetFeatureStats(reader, epicAId);
+        var statsB = await GetFeatureStats(reader, epicBId);
+        var statsC = await GetFeatureStats(reader, epicCId);
 
         // Наибольший остаток 100/3: сумма 34+33+33=100 (input), 17+17+16=50 (output).
         // Индивидуальные значения зависят от порядка id (GUID, idx) → проверяем сумму и диапазон.
@@ -3155,9 +4153,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, c1, stepFId, "claude-opus-4", 90, 44, 1.0, t1));
 
-        var statsF = GetFeatureStats(reader, epicFId);
-        var statsG = GetFeatureStats(reader, epicGId);
-        var statsH = GetFeatureStats(reader, epicHId);
+        var statsF = await GetFeatureStats(reader, epicFId);
+        var statsG = await GetFeatureStats(reader, epicGId);
+        var statsH = await GetFeatureStats(reader, epicHId);
 
         // Знаменатель = M[c1] = {F, G}: F и G по 45 (input), по 22 (output), H (не в c1) — 0.
         AssertShared(statsF, 45, 22, 0.5);
@@ -3226,8 +4224,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, c2, stepHId, "claude-opus-4", 90, 44, 1.0, t1));
 
-        var statsF = GetFeatureStats(reader, epicFId, journal);
-        var statsH = GetFeatureStats(reader, epicHId, journal);
+        var statsF = await GetFeatureStats(reader, epicFId, journal);
+        var statsH = await GetFeatureStats(reader, epicHId, journal);
 
         // Нулевая доля приходит как shared: null — читаем её как 0, а не падаем на разборе.
         long InputOrZero(JsonElement st) =>
@@ -3274,8 +4272,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1));
 
-        var statsA = GetFeatureStats(reader, epicAId);
-        var statsB = GetFeatureStats(reader, epicBId);
+        var statsA = await GetFeatureStats(reader, epicAId);
+        var statsB = await GetFeatureStats(reader, epicBId);
 
         // Ход до создания B: A активна, B нет (клип) → ход целиком у A (100), B — 0.
         AssertShared(statsA, 100, 50, 1.0);
@@ -3327,7 +4325,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var (store, reader) = SpendStoreWith(
             ProdRecord(OwnerId, chatS, stepAId, "claude-opus-4", 100, 50, 1.0, t1));
 
-        var statsA = GetFeatureStats(reader, epicAId, journal);
+        var statsA = await GetFeatureStats(reader, epicAId, journal);
 
         statsA.GetProperty("spend").GetProperty("shared").GetProperty("method").GetString()
             .Should().Be("journal", "все журналы полные и нет дневных строк → method=journal");

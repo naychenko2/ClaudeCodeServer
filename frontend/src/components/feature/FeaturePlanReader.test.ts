@@ -143,6 +143,46 @@ const TEXTS = vi.hoisted(() => ({
     '## a*b', 'тело 5',
     '## Раздел 6', 'тело 6',
   ].join('\n'),
+  // Ссылки между документами (W4-LINK-F): markdown-путь, [[заголовок]] другого документа,
+  // [[несуществующее]] (остаётся текстом) — короткий документ.
+  links: [
+    'Преамбула: [на заметку](docs/features/note.md), [[Другой план]] и [[несуществующее]].',
+    '## Раздел 1', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+  ].join('\n'),
+  // Цель есть только в корень проекта: в дереве фичи mock отказывает по featureId.
+  onlymain: [
+    'См. [в main](docs/only-main.md).',
+    '## Раздел 1', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+  ].join('\n'),
+  // Битая ссылка: цели нет ни в дереве фичи, ни в проекте.
+  brokenLink: [
+    'См. [нет файла](docs/missing.md).',
+    '## Раздел 1', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+  ].join('\n'),
+  // [[…]] внутри код-забора — цитата, не ссылка.
+  fencedLink: [
+    'Ссылка [в тексте](docs/features/note.md) живая, а в коде — нет.',
+    '```md',
+    '[[docs/inside.md]]',
+    '```',
+    '## Раздел 1', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+  ].join('\n'),
   // Заголовки с разметкой — подпись переключателя без `**`.
   markup: [
     'Преамбула.',
@@ -169,6 +209,15 @@ vi.mock('../../lib/api', () => ({
             : Promise.resolve({ resultMarkdown: TEXTS.long });
         }
         return Promise.resolve({ resultMarkdown: TEXTS[id] ?? '' });
+      },
+    },
+    // Чтение целевого документа (W4-LINK-F): «only-main» нет в дереве фичи — есть в
+    // корень проекта (фолбэк читалки); «missing» — ни там, ни там.
+    files: {
+      getContent: (projectId: string, path: string, featureId?: string) => {
+        if (path === 'docs/missing.md') return Promise.reject({ status: 404 });
+        if (path === 'docs/only-main.md' && featureId) return Promise.reject({ status: 404 });
+        return Promise.resolve({ content: `Содержимое: ${path}`, isBinary: false, isImage: false });
       },
     },
   },
@@ -565,5 +614,89 @@ describe('FeaturePlanReader: свёртка разделов', () => {
     await flush();
     bubbleClick(allNodes(container, 'plan-section-toggle')[0]);
     expect(expandedFlags(container)).toEqual(['false', 'true', 'true', 'true', 'true', 'true']);
+  });
+});
+
+// === W4-LINK-F: ссылки между документами фичи в читалке ===
+// [[wikilinks]] и относительные пути внутри дерева фичи — кликабельны, цель открывается
+// в той же читалке; чтение — через резолв featureId (W4-5B2), при отказе — корень
+// проекта. Внешние http-ссылки — как раньше. Битые ссылки не роняют читалку.
+describe('FeaturePlanReader: ссылки между документами (W4-LINK-F)', () => {
+  beforeEach(() => installFakeDom());
+  afterEach(() => {
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  function clickByTitle(container: FNode, title: string): void {
+    const node = findNodeByAttr(container, 'title', title);
+    expect(node, `ссылка ${title}`).not.toBeNull();
+    const props = reactProps(node!);
+    expect(props?.onClick, `onClick on ${title}`).toBeTruthy();
+    act(() => { (props!.onClick as () => void)(); });
+  }
+
+  // Клик по относительному пути внутри дерева фичи: цель читается через featureId
+  // (mock отдаёт «Содержимое: <path>») и показывается в читалке.
+  it('клик по относительному пути открывает целевой документ через резолв featureId', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('links'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
+    await flush();
+    clickByTitle(container, 'Открыть docs/features/note.md');
+    await flush();
+    expect(findNodeByAttr(container, 'data-testid', 'plan-open-doc')).not.toBeNull();
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'plan-open-doc-body')!).join(' ')).toContain('Содержимое: docs/features/note.md');
+  });
+
+  // [[Заголовок]] другого документа фичи — не файл, а документ: клик зовёт onOpenDocument
+  // с taskId этого документа.
+  it('[[заголовок]] другого документа фичи открывает его в читалке', async () => {
+    const opened: string[] = [];
+    const other: FeaturePlan = {
+      taskId: 'doc2', role: 'plan', title: 'Другой план', authorPersonaId: null,
+      createdAt: '2026-10-20T06:00:00Z', completedAt: null, hasText: false, mockupPaths: [],
+    };
+    const { container } = mount(createElement(FeaturePlanReader, {
+      plan: plan('links'), mockups: [], featureId: 'feat-1', projectId: 'p1',
+      documents: [other], onOpenDocument: (id: string) => opened.push(id),
+    }));
+    await flush();
+    clickByTitle(container, 'Открыть документ фичи');
+    expect(opened).toEqual(['doc2']);
+  });
+
+  // Цели нет ни в дереве фичи, ни в проекте: честный «Документа нет», читалка жива.
+  it('битая ссылка не роняет читалку: «Документа нет» вместо текста', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('brokenLink'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
+    await flush();
+    clickByTitle(container, 'Открыть docs/missing.md');
+    await flush();
+    expect(findNodeByAttr(container, 'data-testid', 'plan-open-doc-missing')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'plan-reader')).not.toBeNull();
+  });
+
+  // В дереве фичи цели нет (mock отказывает по featureId) — фолбэк на корень проекта
+  // даёт текст.
+  it('если цели нет в дереве фичи — чтение из корня проекта (фолбэк)', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('onlymain'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
+    await flush();
+    clickByTitle(container, 'Открыть docs/only-main.md');
+    await flush();
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'plan-open-doc-body')!).join(' ')).toContain('Содержимое: docs/only-main.md');
+  });
+
+  // [[…]] внутри код-забора — цитата: ссылка не появляется.
+  it('[[…]] внутри код-забора остаётся текстом, ссылкой не становится', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('fencedLink'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
+    await flush();
+    expect(findNodeByAttr(container, 'title', 'Открыть docs/inside.md')).toBeNull();
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'plan-reader-body')!).join(' ')).toContain('[[docs/inside.md]]');
+  });
+
+  // Без резолва фичи (нет featureId/projectId) поведение как раньше: текст как текст.
+  it('без featureId ссылки не оживают: [[…]] и путь остаются текстом', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('links'), mockups: [] }));
+    await flush();
+    expect(findNodeByAttr(container, 'title', 'Открыть docs/features/note.md')).toBeNull();
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'plan-reader-body')!).join(' ')).toContain('[[Другой план]]');
   });
 });

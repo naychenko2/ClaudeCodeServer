@@ -1,4 +1,7 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tasks.Tests.Fixtures;
 
@@ -197,8 +200,10 @@ public class FeatureProjectorTests
         var mergeStage = run.Stages.Single(s => s.Key == "merge");
         mergeStage.State.Should().Be("active",
             "финал зелёный, а merge-задачи нет — мерж не пройден, а активен");
-        // Все стадии до merge — done.
-        run.Stages.Where(s => s.Key != "merge").Should().OnlyContain(s => s.State == "done");
+        // Все настоящие стадии до merge — done; пустая необязательная «design» — skipped (W4-DES-B).
+        run.Stages.Where(s => s.Key is not "merge" and not "design").Should().OnlyContain(s => s.State == "done");
+        run.Stages.Single(s => s.Key == "design").State.Should().Be("skipped",
+            "дизайн-задач нет — необязательный этап skipped (W4-DES-B)");
     }
 
     // Нет cut-задачи, а план начат (имеет задачи) → cut = absent («нет в трекере»).
@@ -1612,6 +1617,79 @@ public class FeatureProjectorTests
             "исход стадии — последней по времени закрытой задачи, а не первой");
     }
 
+    // ─── W4-DES-B: необязательный этап «Дизайн» и безролевые задачи в хронологии ─────────────
+
+    // Фича с дизайн-задачей: этап «Дизайн» виден — порядок стадий cut → design → plan (явный
+    // список), задача в TaskIds, идущая дизайн-задача делает стадию active.
+    [Fact]
+    public void Build_ДизайнЗадача_ЭтапДизайнВиденПослеРазреза()
+    {
+        const string epicId = "epic-des-b";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut,
+            Status = TaskItemStatus.Done,
+        };
+        var d1 = new TaskItem
+        {
+            Id = "d1", FeatureId = epicId, Role = TaskRoles.Design,
+            Status = TaskItemStatus.InProgress, PersonaId = "Майя",
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut, d1]);
+
+        run.Stages.Select(s => s.Key).Should().Equal(
+            new[] { "cut", "design", "plan", "prod", "review", "qa", "final", "merge" },
+            "порядок стадий — явный список, «design» после «cut» (W4-DES-B)");
+        var design = Stage(run, "design");
+        design.TaskIds.Should().Equal(new[] { "d1" }, "дизайн-задача в этапе");
+        design.State.Should().Be("active", "идущая дизайн-задача — стадия active");
+        design.PersonaIds.Should().Equal(new[] { "Майя" }, "исполнитель дизайна");
+    }
+
+    // Без дизайн-задач: этап «design» — skipped; готовность не сдвигается (Ready — из финала).
+    // Мутация: убрать ветку skipped (пустая design → absent/pending) → State=skipped краснеет.
+    [Fact]
+    public void Build_БезДизайна_ЭтапSkipped_ГотовностьНеСдвигается()
+    {
+        const string epicId = "epic-des-none";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final,
+            Status = TaskItemStatus.Done,
+            CompletedAt = new DateTime(2026, 10, 17, 12, 0, 0),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, final]);
+
+        Stage(run, "design").State.Should().Be("skipped",
+            "дизайн-задач нет — необязательный этап skipped (W4-DES-B)");
+        run.Ready.Should().BeTrue("готовность — от финала, «design» на неё не влияет");
+    }
+
+    // Пустая «design» никогда не активна: cut закрыт, других задач нет — активность на «plan»
+    // (следующая настоящая стадия), а не на «design».
+    [Fact]
+    public void Build_ПустаяDesignНеАктивна_АктивностьНаСледующейСтадии()
+    {
+        const string epicId = "epic-des-active";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = epicId, Role = TaskRoles.Cut,
+            Status = TaskItemStatus.Done,
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, cut]);
+
+        Stage(run, "design").State.Should().Be("skipped", "пустая необязательная стадия — skipped");
+        Stage(run, "plan").State.Should().Be("active", "фича дошла до cut — ждёт plan, не «design»");
+    }
+
     // ─── Дефект: consult → стадия «Разрез», не «Мерж» ─────────────────────────────────────
 
     // Эпик + одна живая consult (InProgress) → стадия «Разрез» active, «Мерж» НЕ active.
@@ -1864,7 +1942,9 @@ public class FeatureProjectorTests
             $"до {before} симв. (сырые задачи), после {after} симв. (агрегат; Reason витков остаётся)");
     }
 
-    // ─── Б1a: состояние фичи (state) — 9 значений, приоритет сверху вниз ──────────────────────
+    // ─── Б1a: состояние фичи (state) — 11 значений, приоритет сверху вниз ─────────────────────
+    // W4-HOLD-B1 добавляет paused и draft: их место в приоритете (merged → closed → paused →
+    // stopped → waiting → draft → …) закрепляют тесты ComputeState_* ниже.
 
     // Каждое из 9 состояний: фикстура → Build → сверка run.State. Приоритет (первое совпавшее
     // побеждает): merged → closed → stopped → waiting → merging → merge_pending → running →
@@ -1989,12 +2069,471 @@ public class FeatureProjectorTests
         }
     }
 
-    // Все 9 состояний ЛИТЕРАЛАМИ (не константами) + JSON-сериализация: смена значения константы
+    // ─── W4-HOLD-B1: удержание (paused/draft) — приоритет и bucket ──────────────────────────────
+    // Порядок merged → closed → paused → stopped → waiting → draft → … (разрез §1). Конструктор
+    // удержания — общий, чтобы не повторять запись в каждом кейсе.
+    private static FeatureHold Hold(string reason, DateTime since) => new FeatureHold(reason, since, null, true);
+
+    // paused ДО stopped: ручное удержание + остановленный исполнитель → paused, а не stopped.
+    // Мутация: поменять местами правила paused/stopped в ComputeState — тест краснеет.
+    [Fact]
+    public void ComputeState_ManualHoldWithStoppedExecutor_IsPausedNotStopped()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-paused", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold(FeatureHoldReasons.Manual, t) };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "e-paused", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+            ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed",
+        };
+        var run = FeatureProjector.Build(epic, [epic, step]);
+        run.State.Should().Be(FeatureStates.Paused, "manual-удержание + остановленный исполнитель → paused, не stopped");
+        run.Hold.Should().NotBeNull("FeatureRun несёт копию Hold эпика");
+        FeatureProjector.Bucket(run).Should().Be("idle", "paused → idle: не идёт и внимания не требует");
+    }
+
+    // draft ДО running: hold=draft + идущий разрез → draft, не running (важнее «фича не запущена»).
+    [Fact]
+    public void ComputeState_DraftHoldWithRunningCut_IsDraftNotRunning()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-draft", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold(FeatureHoldReasons.Draft, t) };
+        var cut = new TaskItem
+        {
+            Id = "c1", FeatureId = "e-draft", Role = TaskRoles.Cut,
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+        };
+        var run = FeatureProjector.Build(epic, [epic, cut]);
+        run.State.Should().Be(FeatureStates.Draft, "draft + идущий разрез → draft: фича ещё не запущена");
+        FeatureProjector.Bucket(run).Should().Be("idle", "draft → idle");
+    }
+
+    // stopped ДО draft: hold=draft + упавший исполнитель → stopped: тревога подготовки видна.
+    [Fact]
+    public void ComputeState_DraftHoldWithStoppedExecutor_IsStoppedNotDraft()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-draft-stopped", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold(FeatureHoldReasons.Draft, t) };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "e-draft-stopped", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+            ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed",
+        };
+        var run = FeatureProjector.Build(epic, [epic, step]);
+        run.State.Should().Be(FeatureStates.Stopped, "даже в черновике остановленный исполнитель — тревога");
+        run.Attention.Should().NotBeNull("для draft тревога НЕ гасится: упавший исполнитель виден");
+    }
+
+    // R-HOLD-B1: пауза гасит тревогу. Мутация: убрать `if (featureState == FeatureStates.Paused)
+    // attention = null;` — Attention остаётся "stopped", чипы ["open","stopped"], тон "stopped" → красное.
+    [Fact]
+    public void PausedHold_AttentionSuppressed_NoStoppedChipsOrTone()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-paused-att", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold(FeatureHoldReasons.Manual, t) };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "e-paused-att", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t,
+            ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed",
+        };
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        run.State.Should().Be(FeatureStates.Paused);
+        run.Attention.Should().BeNull("пауза — решение человека, а не тревога: stopped не показывается");
+        FeatureProjector.ChipsOf(run).Should().Equal(["open"],
+            "фича на паузе: только open — ни stopped, ни running");
+        var active = run.Stages.First(s => s.State == "active");
+        active.Tone.Should().NotBe("stopped", "тон стадии выводится из Attention — тревога погашена");
+    }
+
+    // closed ДО paused: эпик Done + удержание → closed, не paused.
+    [Fact]
+    public void ComputeState_DoneEpicWithHold_IsClosedNotPaused()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-done-held", Role = TaskRoles.Feature, Status = TaskItemStatus.Done,
+            CreatedAt = t, CompletedAt = t, Hold = Hold(FeatureHoldReasons.Manual, t) };
+        var run = FeatureProjector.Build(epic, [epic]);
+        run.State.Should().Be(FeatureStates.Closed, "закрытая фича закрыта, даже если удержание не сняли");
+    }
+
+    // W4-HOLD-G (R-HOLD-G находка 2): одна точка правды. Гейт (TaskManager.FeatureHoldRefusal)
+    // и состояние (ComputeState) зовут один предикат FeatureProjector.HoldAllows/IsPaused — тест
+    // сверяет оба выражения на всех причинах и всех ролях. Мутация: инлайн-формула в гейте,
+    // сузённая до manual (предикат не зовётся) — расхождение на reason «queue» → красное.
+    [Fact]
+    public void HoldPredicate_GateAndState_SingleSourceOfTruth()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_g_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var sut = new TaskManager(config);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            foreach (var reason in new[] { FeatureHoldReasons.Draft, FeatureHoldReasons.Manual,
+                FeatureHoldReasons.Queue })
+            {
+                sut.SetHold(epic.Id, reason);
+                var held = sut.GetById(epic.Id)!;
+
+                // Задачи собраны напрямую: гейт — чистая функция от FeatureId/Role, валидация
+                // Create'а (rework требует reviewOf) здесь не нужна и только мешала бы.
+                foreach (var role in TaskRoles.All)
+                {
+                    var task = new TaskItem { Title = "задача", FeatureId = epic.Id, Role = role };
+                    (sut.FeatureHoldRefusal(task) is null)
+                        .Should().Be(FeatureProjector.HoldAllows(task, held),
+                            $"гейт и предикат расходятся: reason «{reason}», роль «{role}»");
+                }
+
+                var run = FeatureProjector.Build(held, [held]);
+                if (FeatureProjector.IsPaused(held))
+                    run.State.Should().Be(FeatureStates.Paused, $"«{reason}» — пауза по предикату: state paused");
+                else
+                    run.State.Should().Be(FeatureStates.Draft, $"«{reason}» — не пауза: state draft");
+            }
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // R-HOLD-G2 (находка 1): таблица «причина × роль» по контракту §1 :171 — ожидания
+    // выписаны ИЗ КОНТРАКТА, а не из реализации: сверка «гейт == предикат» тавтологична и
+    // ничего не доказывает. Мутация: добавить review в HoldPrepRoles — строка «draft ×
+    // review» краснеет.
+    [Fact]
+    public void HoldTable_ReasonByRole_MatchesContract()
+    {
+        var t = new DateTime(2026, 10, 23);
+        string[] prep = [TaskRoles.Cut, TaskRoles.Design, TaskRoles.Plan, TaskRoles.Consult];
+        var table = new[]
+        {
+            (reason: (string?)null, allowed: TaskRoles.All.ToArray()),          // Hold нет — всё
+            (reason: FeatureHoldReasons.Manual, allowed: Array.Empty<string>()), // пауза — ничего
+            (reason: FeatureHoldReasons.Queue, allowed: Array.Empty<string>()),  // queue — та же пауза
+            (reason: FeatureHoldReasons.Draft, allowed: prep),                  // черновик — подготовка
+        };
+        foreach (var (reason, allowed) in table)
+        {
+            var epic = new TaskItem { Id = "e-" + (reason ?? "none"), Role = TaskRoles.Feature, CreatedAt = t,
+                Hold = reason is null ? null : Hold(reason, t) };
+            foreach (var role in TaskRoles.All)
+            {
+                var task = new TaskItem { Title = "задача", FeatureId = epic.Id, Role = role };
+                FeatureProjector.HoldAllows(task, epic).Should().Be(allowed.Contains(role),
+                    $"контракт §1 :171: причина «{reason}», роль «{role}» — " +
+                    $"{(allowed.Contains(role) ? "разрешено" : "отказано")}");
+            }
+        }
+    }
+
+    // R-HOLD-G2 (находка 2): причина вне словаря (SetHold его не фильтрует, фильтрует REST) —
+    // фоллбэк как черновик: состояние NOT «ни paused, ни draft», а draft; гейт ведёт себя
+    // идентично черновику. Мутация: сузить IsDraft до Reason == Draft — state перестанет
+    // быть draft при неизвестной причине → красное.
+    [Fact]
+    public void UnknownReasonHold_FallbackAsDraft_StateAndGateAgree()
+    {
+        var t = new DateTime(2026, 10, 23);
+        var epic = new TaskItem { Id = "e-unknown", Role = TaskRoles.Feature, CreatedAt = t,
+            Hold = Hold("нет-в-словаре", t) };
+        var run = FeatureProjector.Build(epic, [epic]);
+        run.State.Should().Be(FeatureStates.Draft,
+            "вне словаря — черновик: состояние и гейт говорят одно, а не «ни paused, ни draft»");
+
+        var step = new TaskItem { Title = "шаг", FeatureId = epic.Id, Role = TaskRoles.Step };
+        var plan = new TaskItem { Title = "план", FeatureId = epic.Id, Role = TaskRoles.Plan };
+        FeatureProjector.HoldAllows(step, epic).Should().BeFalse("рабочая роль закрыта, как при черновике");
+        FeatureProjector.HoldAllows(plan, epic).Should().BeTrue("подготовка разрешена, как при черновике");
+    }
+
+    // ─── W4-HOLD-D: пауза прерывает идущие ходы (контракт §1) ──────────────────────────────
+    // Сквозной: TaskManager.SetHold → проектор. Идущий исполнитель помечается feature_held
+    // (статус не трогается), «Сейчас» пустой, журнал задачи содержит «stopped» с причиной
+    // feature_held; ClearHold пометки не снимает — снятие паузы ход не оживляет.
+    // Мутации: убрать цикл пометки в SetHold → ExecutorStoppedAt null → красное; убрать
+    // nowList.Clear() в BuildCore → Now не пустой → красное.
+    [Fact]
+    public void SetHold_StopsRunningExecutor_NowEmpty_JournalHasFeatureHeld()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_d_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var journal = new FeatureJournalStore(Path.Combine(dir, "feature-journal"));
+        var sut = new TaskManager(config, journal: journal);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            // Идущий ход: старт, без стопа и ожидания.
+            var step = sut.Create(null, "u", new CreateTaskRequest("шаг D1",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D1", Lane: "back"));
+            sut.MarkClaudeStarted(step.Id, "sess-1", DateTime.UtcNow);
+            // Не запущенная задача: прерывать нечего.
+            var todo = sut.Create(null, "u", new CreateTaskRequest("шаг D2",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D2"));
+            // Уже остановленная по другой причине: пауза её не трогает.
+            var alreadyStopped = sut.Create(null, "u", new CreateTaskRequest("шаг D3",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D3"));
+            sut.MarkClaudeStarted(alreadyStopped.Id, "sess-3", DateTime.UtcNow);
+            sut.MarkExecutorStopped(alreadyStopped.Id, DateTime.UtcNow, ExecutorStopClassifier.AuthFailedReason);
+
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+            var stopped = sut.GetById(step.Id);
+            stopped!.ExecutorStoppedAt.Should().NotBeNull("пауза прерывает идущий ход");
+            stopped!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+                "причина прервания — feature_held");
+            stopped!.Status.Should().Be(TaskItemStatus.InProgress, "статус остановки не трогает");
+            sut.GetById(todo.Id)!.ExecutorStoppedAt.Should().BeNull("незапущенная задача не помечается");
+            sut.GetById(alreadyStopped.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.AuthFailedReason,
+                "уже остановленная по другой причине остаётся как была");
+
+            var run = new FeatureProjector(sut).Project(epic.Id, "u");
+            run!.State.Should().Be(FeatureStates.Paused);
+            run.Now.Should().BeEmpty("пауза: никто не идёт — «Сейчас» пустой");
+            run.Interrupted.Should().Contain(step.Id,
+                "прерванные — отдельным полем, а не через Now (контракт :364, W4-HOLD-D2)");
+
+            // Журнал фичи: stopped с причиной feature_held (пишет существующий WriteJournalTransitions).
+            journal.Read("u", epic.Id).Entries.Should().Contain(
+                e => e.Kind == "stopped" && e.TaskId == step.Id && e.Reason == ExecutorStopClassifier.FeatureHeldReason,
+                "прервание идущего хода видно в журнале с причиной feature_held");
+
+            // Снятие паузы — только снятие состояния: ход не оживляется.
+            sut.ClearHold(epic.Id);
+            var after = sut.GetById(step.Id);
+            after!.ExecutorStoppedAt.Should().NotBeNull("ClearHold не снимает пометку feature_held");
+            after!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason);
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // W4-HOLD-D2 (R-HOLE-D, находка 4): «running» — «ход идёт сейчас», а не «запускался
+    // когда-то». Задача, чей ход закончился результатом и ещё не закрыта: прерывать нечего —
+    // ни пометки feature_held, ни в interrupted. Мутация: убрать проверку ClaudeResult в
+    // FeatureProjector.IsTurnRunning — задача помечается — красное.
+    [Fact]
+    public void SetHold_CompletedTurnIsNotRunning_IsNotMarked()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_d2_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var journal = new FeatureJournalStore(Path.Combine(dir, "feature-journal"));
+        var sut = new TaskManager(config, journal: journal);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            var running = sut.Create(null, "u", new CreateTaskRequest("шаг D1",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D1", Lane: "back"));
+            sut.MarkClaudeStarted(running.Id, "sess-1", DateTime.UtcNow);
+            // Ход закончился результатом, задача не закрыта: прерывать нечего.
+            var finished = sut.Create(null, "u", new CreateTaskRequest("шаг D2",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D2", Lane: "back"));
+            sut.MarkClaudeStarted(finished.Id, "sess-2", DateTime.UtcNow);
+            sut.MarkClaudeResult(finished.Id, "success");
+
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+            sut.GetById(finished.Id)!.ExecutorStoppedAt.Should().BeNull(
+                "ход уже завершён — пауза его не помечает");
+            sut.GetById(running.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+                "идущий — прерывается");
+
+            var run = new FeatureProjector(sut).Project(epic.Id, "u");
+            run!.Interrupted.Should().Equal([running.Id], "прерванные — только те, чей ход идёт сейчас");
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // W4-HOLD-D2 (R-HOLE-D, находка 1): guard идемпотентности гасит только запись Hold и
+    // журнал — цикл пометки живёт на КАЖДом вызове SetHold. Ход, начатый после первой
+    // паузы, помечается повторной паузой с тем же reason; стоп уже помеченного не
+    // двигается. Мутация: вернуть guard до цикла → second не помечен → красное. Снять
+    // continue по feature_held здесь нельзя наблюдать: у уже помеченной стоит
+    // ExecutorStoppedAt, и IsTurnRunning отсекает её до пометки.
+    [Fact]
+    public void RepeatedHold_SameReason_MarksTurnStartedAfterFirst()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_d3_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var journal = new FeatureJournalStore(Path.Combine(dir, "feature-journal"));
+        var sut = new TaskManager(config, journal: journal);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            var firstStep = sut.Create(null, "u", new CreateTaskRequest("шаг D1",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D1", Lane: "back"));
+            sut.MarkClaudeStarted(firstStep.Id, "sess-1", DateTime.UtcNow);
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+            var firstStoppedAt = sut.GetById(firstStep.Id)!.ExecutorStoppedAt;
+
+            // Ход, начатый после первой паузы: его обязана поймать повторная пауза.
+            var secondStep = sut.Create(null, "u", new CreateTaskRequest("шаг D2",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D2", Lane: "back"));
+            sut.MarkClaudeStarted(secondStep.Id, "sess-2", DateTime.UtcNow);
+
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+            sut.GetById(secondStep.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
+                "повторная пауза с тем же reason помечает ход, начатый после первой");
+            sut.GetById(firstStep.Id)!.ExecutorStoppedAt.Should().Be(firstStoppedAt,
+                "стоп уже помеченной задачи не двигается");
+            journal.Read("u", epic.Id).Entries.Count(e => e.Kind == "held").Should().Be(1,
+                "запись held в журнале — одна на паузу, даже при повторном вызове");
+
+            var run = new FeatureProjector(sut).Project(epic.Id, "u");
+            run!.Interrupted.Should().Contain(secondStep.Id,
+                "помеченный повторной паузой ход — в interrupted текущей паузы");
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // W4-HOLD-D2 (R-HOLE-D, находка 2): interrupted — прерванные текущей паузой, а не
+    // «все когда-либо помеченные». Старая пометка feature_held со стопом раньше Since
+    // действующего удержания в текущую паузу не входит. Мутации: убрать сравнение с
+    // epic.Hold!.Since → старая пометка попадает → красное; вернуть «все когда-либо»
+    // без scope → красное.
+    [Fact]
+    public void Interrupted_ScopedToCurrentHold_OldMarkIsNotIncluded()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hold_d4_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+            })
+            .Build();
+        var journal = new FeatureJournalStore(Path.Combine(dir, "feature-journal"));
+        var sut = new TaskManager(config, journal: journal);
+        try
+        {
+            var epic = sut.Create(null, "u", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+            var oldDay = DateTime.UtcNow.AddDays(-1);
+            // «Старая» пометка: feature_held со стопом до начала текущей паузы.
+            var oldStep = sut.Create(null, "u", new CreateTaskRequest("шаг D1",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D1", Lane: "back"));
+            sut.MarkClaudeStarted(oldStep.Id, "sess-old", oldDay);
+            sut.MarkExecutorStopped(oldStep.Id, oldDay, ExecutorStopClassifier.FeatureHeldReason);
+            // Идущий сейчас: прерывается этой паузой.
+            var curStep = sut.Create(null, "u", new CreateTaskRequest("шаг D2",
+                FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "D2", Lane: "back"));
+            sut.MarkClaudeStarted(curStep.Id, "sess-cur", DateTime.UtcNow);
+
+            sut.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+            var run = new FeatureProjector(sut).Project(epic.Id, "u");
+            run!.Interrupted.Should().Equal([curStep.Id],
+                "прерванные текущей паузой — только те, чей стоп внутри её интервала");
+        }
+        finally
+        {
+            sut.Dispose();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Каждое значение FeatureStates имеет явную ветку Bucket: тест перебирает константы
+    // FeatureStates рефлексией и сверяет с явной таблицей ожиданий. Новый state без правки
+    // таблицы краснит тест — фоллбэк не пряжет пробел.
+    [Fact]
+    public void Bucket_EveryFeatureState_HasExplicitBranch()
+    {
+        var expected = new Dictionary<string, string>
+        {
+            [FeatureStates.Merged] = "closed",
+            [FeatureStates.Closed] = "closed",
+            [FeatureStates.Paused] = "idle",
+            [FeatureStates.Stopped] = "attention",
+            [FeatureStates.Waiting] = "attention",
+            [FeatureStates.Draft] = "idle",
+            [FeatureStates.MergePending] = "attention",
+            [FeatureStates.Merging] = "running",
+            [FeatureStates.Running] = "running",
+            [FeatureStates.NotStarted] = "idle",
+            [FeatureStates.Idle] = "idle",
+        };
+        var states = typeof(FeatureStates)
+            .GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetValue(null)!)
+            .ToList();
+        states.Should().HaveCount(expected.Count, "таблица обязана покрывать все константы FeatureStates");
+        foreach (var state in states)
+        {
+            expected.ContainsKey(state).Should().BeTrue($"для state '{state}' нет явного ожидания");
+            FeatureProjector.Bucket(new FeatureRun { State = state }).Should().Be(expected[state],
+                $"Bucket('{state}') берётся из таблицы, а не из фоллбэка");
+        }
+        FeatureProjector.Bucket(new FeatureRun { State = FeatureStates.Paused })
+            .Should().Be(FeatureProjector.Bucket(new FeatureRun { State = FeatureStates.Draft }),
+                "paused и draft — одна группа: idle");
+    }
+
+    // Обратная совместимость: старый tasks.json без поля «hold» читается как null, поведение
+    // не меняется (нет удержания — не paused и не draft).
+    [Fact]
+    public void TaskItem_LegacyJsonWithoutHold_ReadsAsNull()
+    {
+        var json = """{"id":"e-old","title":"старая фича","role":"feature","createdAt":"2026-10-01T00:00:00Z"}""";
+        var epic = System.Text.Json.JsonSerializer.Deserialize<TaskItem>(
+            json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        epic.Hold.Should().BeNull("поля в JSON нет — Hold остаётся null");
+        var run = FeatureProjector.Build(epic, [epic]);
+        run.State.Should().Be(FeatureStates.NotStarted, "старый эпик без удержания ведёт себя как раньше");
+        FeatureProjector.Bucket(run).Should().Be("idle");
+    }
+
+    // Все 11 состояний ЛИТЕРАЛАМИ (не константами) + JSON-сериализация: смена значения константы
     // (например, "merged" → "merged_v2") оставила бы набор зелёным, а фронт получил бы незнакомый
     // state. Мутация: поменять значение ЛЮБОЙ константы FeatureStates → соответствующий подкейс
-    // краснеет. Сценарии — те же, что в Build_State_ДевятьСостояний.
+    // краснеет. Сценарии — те же, что в Build_State_ДевятьСостояний, плюс paused/draft (W4-HOLD-B1).
     [Fact]
-    public void State_Литералы_ВсеДевять_ИJson()
+    public void State_Литералы_ВсеОдинадцать_ИJson()
     {
         var t = new DateTime(2026, 10, 17);
 
@@ -2018,6 +2557,12 @@ public class FeatureProjectorTests
             ("closed", () =>
             {
                 var epic = new TaskItem { Id = "e-lit-2", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+                return FeatureProjector.Build(epic, [epic]);
+            }),
+            ("paused", () =>
+            {
+                var epic = new TaskItem { Id = "e-lit-2b", Role = TaskRoles.Feature, CreatedAt = t,
+                    Hold = new FeatureHold("manual", t, null, true) };
                 return FeatureProjector.Build(epic, [epic]);
             }),
             ("stopped", () =>
@@ -2044,6 +2589,14 @@ public class FeatureProjectorTests
                     AwaitingHumanReason = "ждём решения",
                 };
                 return FeatureProjector.Build(epic, [epic, step]);
+            }),
+            ("draft", () =>
+            {
+                var epic = new TaskItem { Id = "e-lit-4b", Role = TaskRoles.Feature, CreatedAt = t,
+                    Hold = new FeatureHold("draft", t, null, true) };
+                var cut = new TaskItem { Id = "c1", FeatureId = "e-lit-4b", Role = TaskRoles.Cut,
+                    Status = TaskItemStatus.InProgress, ClaudeStartedAt = t };
+                return FeatureProjector.Build(epic, [epic, cut]);
             }),
             ("merging", () =>
             {
@@ -2099,7 +2652,7 @@ public class FeatureProjectorTests
 
         // JSON: сериализованный ответ несёт литерал (camelCase, как в MVC).
         var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
-        var json = System.Text.Json.JsonSerializer.Serialize(cases[5].Build(), options);
+        var json = System.Text.Json.JsonSerializer.Serialize(cases[7].Build(), options); // merge_pending
         json.Should().Contain("\"state\":\"merge_pending\"", "JSON-ответ несёт литерал state, а не переименованную константу");
     }
 
@@ -2412,6 +2965,70 @@ public class FeatureProjectorTests
         prod.Executors[0].ChatArchived.Should().BeFalse();
         prod.Executors[0].ModelLabel.Should().BeNull();
         prod.Executors[0].ModelFull.Should().BeNull();
+    }
+
+    // W4-3B: связь «оценивает →» у исполнителя стадии: ReviewOf — task.ReviewOf,
+    // отфильтрованный по задачам этого run. Висящие (задачи нет) и чужие id наружу не
+    // выходят — их число в ReviewOfOutside. У задачи без ReviewOf — пустой список и нуль.
+    [Fact]
+    public void StageExecutor_ReviewOf_ТолькоЗадачиЭтогоRun()
+    {
+        const string epicId = "epic-w4-3b-reviewof";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done, PersonaId = "Денис",
+        };
+        // r1 оценивает s1 (в run) и два id вне run: висящий «x-dangling» и чужой «x-foreign»
+        // (задача другой фичи — в Build не попадает, в run её нет).
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            ReviewOf = ["s1", "x-dangling", "x-foreign"],
+        };
+        var r2 = new TaskItem
+        {
+            Id = "r2", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, r1, r2]);
+
+        var review = Stage(run, "review");
+        var e1 = review.Executors.Single(e => e.TaskId == "r1");
+        e1.ReviewOf.Should().BeEquivalentTo(["s1"], "оцениваются только задачи этого run");
+        e1.ReviewOfOutside.Should().Be(2, "висящий и чужой id наружу не выходят, но считаются");
+        var e2 = review.Executors.Single(e => e.TaskId == "r2");
+        e2.ReviewOf.Should().BeEmpty("без ReviewOf — пустой список");
+        e2.ReviewOfOutside.Should().Be(0);
+    }
+
+    // Мутация: убрать фильтр по run (давать t.ReviewOf как есть) — «x-foreign» выйдет в
+    // ReviewOf → этот тест краснеет.
+    [Fact]
+    public void StageExecutor_ReviewOfForeignTask_CountedOutsideNotExposed()
+    {
+        const string epicId = "epic-w4-3b-foreign";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done, PersonaId = "Денис",
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.Done, PersonaId = "Глеб",
+            ReviewOf = ["x-foreign"],
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, r1]);
+
+        var e1 = Stage(run, "review").Executors.Single(e => e.TaskId == "r1");
+        e1.ReviewOf.Should().BeEmpty("чужой id наружу не выходит");
+        e1.ReviewOfOutside.Should().Be(1, "чужой id считается в ReviewOfOutside");
     }
 
     // Конец стадии (LastCompletedAt) — max ТОЛЬКО по CompletedAt: Done-задача без CompletedAt
@@ -2741,14 +3358,37 @@ public class FeatureProjectorTests
         chats.Should().ContainSingle(c => c.Id == "chat-arch-b4d").Which.Archived.Should().BeTrue();
     }
 
-    // chats[]: чат эпика без признака curator/orchestrator → key.
+    // chats[]: чат эпика без признака curator/orchestrator — executor по единому правилу
+    // FeatureChatMembership (TaskId = эпик). Локальной копии «key» на бэке нет (W4-CHT-B):
+    // ключевой чат помечает фронт по keySessionId (FeatureChatsTab).
     [Fact]
-    public void BuildFeatureChats_Эпик_БезПризнака_Key()
+    public void BuildFeatureChats_Эпик_БезПризнака_Executor()
     {
         var epic = new TaskItem { Id = "epic-b4e", Role = TaskRoles.Feature }; // нет SourceSessionId/ExecutorLaunchedBySessionId
         var step = new TaskItem { Id = "s-b4e", FeatureId = "epic-b4e", Role = TaskRoles.Step };
         var sessions = new[] { new FeatureIndexSession("chat-epic-b4e", "epic-b4e", null, false) };
         var chats = FeatureProjector.BuildFeatureChats(epic, [epic, step], sessions, null);
-        chats.Should().ContainSingle(c => c.Id == "chat-epic-b4e").Which.Kind.Should().Be("key");
+        chats.Should().ContainSingle(c => c.Id == "chat-epic-b4e").Which.Kind.Should().Be("executor");
+    }
+
+    // W4-CHT-B2: область BuildFeatureChats = ВСЕ задачи фичи (как FeatureTasks в индексе),
+    // включая Design/Unroled: чат исполнителя design-задачи — в «Чатах» так же, как в индексе.
+    // Мутация (прежняя область без Design): второй вызов ниже без design-задачи → чат
+    // теряется → краснеет.
+    [Fact]
+    public void BuildFeatureChats_DesignЗадача_ЕёЧатВЧатах()
+    {
+        var epic = new TaskItem { Id = "epic-w4c", Role = TaskRoles.Feature };
+        var design = new TaskItem { Id = "d-w4c", FeatureId = "epic-w4c", Role = TaskRoles.Design };
+        var sessions = new[] { new FeatureIndexSession("chat-design-w4c", "d-w4c", null, false) };
+
+        var chats = FeatureProjector.BuildFeatureChats(epic, [epic, design], sessions, null);
+        chats.Should().Contain(c => c.Id == "chat-design-w4c" && c.Kind == "executor",
+            "чат исполнителя design-задачи — в «Чатах» так же, как в индексе");
+
+        // Без Design в области тот же чат не попадает — поэтому контроллер обязан её добавлять.
+        var withoutDesign = FeatureProjector.BuildFeatureChats(epic, [epic], sessions, null);
+        withoutDesign.Should().NotContain(c => c.Id == "chat-design-w4c",
+            "прежняя область (без Design) теряет чат design-задачи");
     }
 }

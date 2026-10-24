@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · страница фичи · волна 4: 7 точек доработки</title>
+<!--
+  Макеты на согласование Андрею: семь точек доработки страницы фичи (#/project/{pid}/feature/{fid}).
+  Записка с выбором по каждой точке — features-overview-4.md. Код продукта не правится.
+  Привязка: featureId ba38ba28-d8a6-489d-a23a-1d6f153456a2 (эпик волны 4 «Обзор фич»);
+  stepRef нет (задача 07ead894 — артефакт без роли); макетом пользуются шаги фронта волны 4 после выбора Андрея.
+  Данные выдуманы, но сверены с моделью FeatureRun (stepChains, rounds, reviewOf, stages, now, attention).
+  Пометка .be «нужен бэк» — элемент требует поля, которого в ответе API сейчас нет.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css (как в features-overview-3-final), семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --c-glass:rgba(255,255,255,.74);
+  /* C.mediaScrim / C.onDark — плашка поверх чужой картинки, от темы не зависят (одинаковы в dark) */
+  --c-media-scrim:rgba(0,0,0,.55); --c-on-dark:#FFFFFF;
+  /* Цвета персон — данные (AGENT_COLORS в AgentSelector.tsx), не токены темы */
+  --p-orange:#D97757; --p-purple:#6C5CB0; --p-brown:#8A6A28; --p-blue:#3E7CA6; --p-green:#5E8B4E;
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-nav-ink:#EDE6DB; --c-on-nav-ink:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --c-glass:rgba(46,42,37,.74);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; -webkit-appearance:none; appearance:none; cursor:pointer; text-align:left; }
+button:focus-visible, [tabindex]:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+svg { flex-shrink:0; }
+.be { display:inline-flex; align-items:center; font:700 10px/16px "Hanken Grotesk",sans-serif; border-radius:6px; padding:0 6px;
+  white-space:nowrap; background:var(--c-info-bg); color:var(--c-text-primary); vertical-align:middle; }
+.nomarks .be { display:none; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.wrap { max-width:1320px; margin:0 auto; padding:16px; }
+.pt { display:none; }
+.pt.on { display:block; }
+.pt > h2 { font-family:"PT Serif",Georgia,serif; font-size:20px; color:var(--c-text-heading); margin:4px 0 6px; }
+.brief { font-size:13px; color:var(--c-text-secondary); max-width:900px; margin:0 0 6px; }
+.brief b { color:var(--c-text-heading); }
+.choose { display:inline-block; font-size:12.5px; background:var(--c-accent-light); color:var(--c-text-heading);
+  border:1px solid var(--c-accent-muted); border-radius:10px; padding:6px 10px; margin:4px 0 14px; }
+.var { margin:0 0 28px; }
+.var > h3 { font-size:15px; margin:0 0 4px; color:var(--c-text-heading); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.var > p { margin:0 0 10px; font-size:12.5px; color:var(--c-text-secondary); max-width:900px; }
+.rec { font-size:11px; font-weight:700; background:var(--c-success-bg); color:var(--c-success-text); border-radius:6px; padding:1px 7px; }
+.row { display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; }
+.frm { flex-shrink:0; }
+.frm > .cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 4px 2px; }
+.dk { width:880px; }
+.mb { width:360px; }
+/* Остров центра: та же подложка, что у страницы фичи */
+.isl { background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; }
+.mb .isl { border-radius:22px; border:1px solid var(--c-border); box-shadow:none; }
+.body { padding:16px 20px; }
+.mb .body { padding:12px; }
+
+/* ===== Компоненты продукта ===== */
+.ttl { font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:700; color:var(--c-text-heading); margin:0; }
+.mb .ttl { font-size:18px; }
+.tbar { display:flex; align-items:center; gap:10px; padding:10px 20px; min-height:52px; border-bottom:1px solid var(--c-border); background:var(--c-bg-main); }
+.mb .tbar { padding:8px 8px 8px 6px; min-height:56px; gap:4px; }
+.tbar .ttl { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tib { width:32px; height:32px; border-radius:32px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+.mb .tib { width:40px; height:40px; }
+.tib:hover { background:var(--c-bg-selected); }
+.btn { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; border-radius:8px; font-size:13px; font-weight:600; white-space:nowrap; }
+.mb .btn { height:40px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.sec { background:var(--c-bg-white); border:1px solid var(--c-border); color:var(--c-text-primary); }
+.btn.gh { color:var(--c-text-secondary); }
+.btn.gh:hover, .btn.sec:hover { background:var(--c-bg-selected); }
+.btn.sm { height:26px; padding:0 8px; font-size:12px; }
+.mb .btn.sm { height:40px; }
+.tag { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; line-height:18px; padding:0 7px; border-radius:6px; white-space:nowrap; flex-shrink:0; }
+.tag.run { background:var(--c-accent-light); color:var(--c-accent); }
+.tag.wait { background:var(--c-info-bg); color:var(--c-info); }
+.tag.stop { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.tag.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.tag.warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.tag.mute { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.tag.plan { background:var(--c-plan-light); color:var(--c-plan-text); }
+.dot { width:6px; height:6px; border-radius:6px; background:currentColor; }
+.av { width:18px; height:18px; border-radius:18px; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; flex-shrink:0; }
+.av.lg { width:22px; height:22px; font-size:11px; }
+.av.t { background:var(--c-info-bg); color:var(--c-info); }
+.av.d { background:var(--c-success-bg); color:var(--c-success-text); }
+.av.k { background:var(--c-plan-light); color:var(--c-plan-text); }
+.av.g { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.av.s { background:var(--c-accent-light); color:var(--c-accent); }
+.av.e { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.av.v { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.ref { font-family:"JetBrains Mono",monospace; font-size:11px; font-weight:700; color:var(--c-text-secondary); flex-shrink:0; }
+.mut { color:var(--c-text-muted); }
+.sec2 { color:var(--c-text-secondary); }
+.sm12 { font-size:12px; }
+.sm11 { font-size:11px; }
+.lnk { color:var(--c-accent); font-weight:600; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+.lnk:hover { text-decoration:underline; }
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; }
+.grpttl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); }
+.tip { position:absolute; z-index:5; background:var(--c-bg-white); border:1px solid var(--c-border); box-shadow:var(--shadow-dropdown);
+  border-radius:10px; padding:8px 10px; font-size:12px; color:var(--c-text-primary); width:220px; line-height:1.4; }
+.tip b { color:var(--c-text-heading); }
+.ellip { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+
+/* --- Точка 1: шапка --- */
+.meta { display:flex; flex-wrap:wrap; align-items:center; gap:4px 14px; font-size:12px; color:var(--c-text-secondary); margin-top:8px; }
+.meta .br { font-family:"JetBrains Mono",monospace; font-size:11px; display:inline-flex; align-items:center; gap:4px; }
+.segs { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; color:var(--c-text-secondary); margin-top:6px; }
+.segs b { font-family:"JetBrains Mono",monospace; color:var(--c-text-heading); margin-right:3px; }
+.who { display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 8px 0 3px; border-radius:24px; border:1px solid var(--c-border); background:var(--c-bg-white); font-size:12px; color:var(--c-text-primary); }
+.mb .who { height:40px; padding:0 12px 0 8px; }
+.who:hover { background:var(--c-bg-selected); }
+.who .rl { color:var(--c-text-muted); }
+.vsep { width:1px; height:14px; background:var(--c-divider); }
+.lead { display:flex; align-items:center; gap:10px; margin-top:10px; padding:8px 10px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); }
+.mb .lead { flex-wrap:wrap; }
+.lead .tx { flex:1; min-width:0; font-size:12px; }
+.lead .tx b { color:var(--c-text-heading); }
+
+/* --- Точка 2: лента производства --- */
+.tl { display:flex; flex-direction:column; gap:8px; }
+.tk { border:1px solid var(--c-border-light); background:var(--c-bg-card); border-radius:12px; padding:10px 12px; }
+.tk.now { border-color:var(--c-accent-muted); box-shadow:inset 3px 0 0 var(--c-accent); }
+.tk.wt { box-shadow:inset 3px 0 0 var(--c-info); }
+.tk .h { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.tk .h .nm { font-weight:700; color:var(--c-text-heading); flex:1; min-width:140px; }
+.mb .tk .h .nm { flex-basis:100%; order:2; }
+.cyc { font-size:11px; font-weight:700; color:var(--c-text-secondary); border:1px solid var(--c-border); border-radius:6px; padding:0 6px; line-height:18px; white-space:nowrap; }
+.cyc.ret { color:var(--c-warning-text); border-color:var(--c-warning); }
+.chain { display:flex; align-items:center; flex-wrap:wrap; gap:4px; margin-top:8px; }
+.nd { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; padding:2px 8px; border-radius:20px; background:var(--c-bg-white); border:1px solid var(--c-border-light); color:var(--c-text-primary); white-space:nowrap; }
+.nd.ok { background:var(--c-success-bg); border-color:transparent; color:var(--c-success-text); }
+.nd.ret { background:var(--c-warning-bg); border-color:transparent; color:var(--c-warning-text); }
+.nd.cur { border-color:var(--c-accent); box-shadow:var(--shadow-focus); color:var(--c-text-heading); font-weight:600; }
+.nd.pend { border-style:dashed; border-color:var(--c-dashed); color:var(--c-text-muted); background:transparent; }
+.nd .d2 { color:var(--c-text-muted); font-family:"JetBrains Mono",monospace; font-size:10.5px; }
+.ar { color:var(--c-text-muted); font-size:11px; }
+.why { margin-top:6px; font-size:11.5px; color:var(--c-text-secondary); padding-left:8px; border-left:2px solid var(--c-warning); }
+.nowline { display:flex; align-items:center; gap:8px; font-size:11px; font-weight:700; color:var(--c-accent); margin:2px 0; }
+.nowline::after { content:""; flex:1; height:1px; background:var(--c-accent-muted); }
+.sumrow { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12px; color:var(--c-text-secondary); margin-bottom:10px; }
+.sumrow b { color:var(--c-text-heading); font-family:"JetBrains Mono",monospace; }
+/* B: таблица циклов */
+.grid { width:100%; border-collapse:separate; border-spacing:0; font-size:12px; }
+.grid th { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); text-align:left; font-weight:700; padding:0 8px 6px; }
+.grid td { border-top:1px solid var(--c-border-light); padding:8px; vertical-align:top; }
+.grid tr.now td { background:var(--c-accent-light); }
+.cell { display:flex; flex-direction:column; align-items:flex-start; gap:3px; }
+.cell .w { font-size:11px; color:var(--c-text-secondary); }
+.mcard { border:1px solid var(--c-border-light); border-radius:12px; padding:10px; background:var(--c-bg-card); margin-bottom:8px; }
+.mcard.now { border-color:var(--c-accent-muted); }
+.mcyc { display:grid; grid-template-columns:52px 1fr; gap:4px 8px; margin-top:8px; font-size:11.5px; }
+/* C: журнал */
+.day { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); margin:10px 0 4px; }
+.ev { display:grid; grid-template-columns:44px 20px 1fr; gap:8px; align-items:start; padding:6px 0; border-top:1px solid var(--c-border-light); font-size:12px; }
+.ev .t { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); padding-top:1px; }
+.ev .tx b { color:var(--c-text-heading); }
+.tchip { display:inline-flex; align-items:center; gap:4px; font-size:11px; padding:0 6px; border-radius:6px; background:var(--c-bg-selected); color:var(--c-text-secondary); white-space:nowrap; }
+.tchip .mono { font-weight:700; }
+
+/* --- Точка 3: связка с оцениваемой задачей --- */
+.stg { position:relative; padding-left:24px; padding-bottom:12px; }
+.stg::before { content:""; position:absolute; left:4px; top:7px; width:12px; height:12px; border-radius:12px; background:var(--c-success); }
+.stg.cur::before { background:var(--c-accent); box-shadow:var(--shadow-focus); }
+.stg.pend::before { background:transparent; border:2px solid var(--c-dashed); }
+.stg::after { content:""; position:absolute; left:9px; top:22px; bottom:0; width:2px; background:var(--c-border); }
+.stg:last-child::after { display:none; }
+.stg .sh { display:flex; align-items:center; gap:8px; min-height:26px; }
+.stg .sh b { font-size:14px; color:var(--c-text-heading); }
+.stg .sh .dur { margin-left:auto; font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-secondary); }
+.sbody { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:6px 10px; margin-top:4px; }
+.ex { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 0; font-size:12px; }
+.ex + .ex, .ex + .of + .ex, .of + .ex { border-top:1px solid var(--c-border-light); }
+.ex .nm { font-weight:600; color:var(--c-text-heading); }
+.ex .nav { margin-left:auto; display:inline-flex; gap:10px; font-size:11.5px; }
+.mb .ex .nav { margin-left:0; width:100%; }
+.of { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin:-2px 0 6px 26px; font-size:11.5px; color:var(--c-text-secondary); }
+.mb .of { margin-left:0; }
+.ofchip { display:inline-flex; align-items:center; gap:6px; max-width:100%; padding:1px 8px 1px 6px; border-radius:8px; border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-primary); min-height:22px; }
+.mb .ofchip { min-height:40px; }
+.ofchip:hover { background:var(--c-bg-selected); }
+.ofgrp { border:1px solid var(--c-border-light); border-radius:10px; background:var(--c-bg-white); margin:6px 0; }
+.ofgrp .gh { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--c-border-light); font-size:12px; flex-wrap:wrap; }
+.ofgrp .gh .nm { font-weight:700; color:var(--c-text-heading); }
+.ofgrp .ex { padding:6px 10px; }
+
+/* --- Точка 4: статистика --- */
+.legend { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; color:var(--c-text-secondary); margin-top:10px; }
+.legend i { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:4px; vertical-align:-1px; }
+.k-work { background:var(--c-accent); } .k-wait { background:var(--c-info); } .k-idle { background:var(--c-progress-track); }
+.k-rev { background:var(--c-plan); } .k-err { background:var(--c-danger); }
+.gantt { position:relative; }
+.gr { display:grid; grid-template-columns:110px 1fr 70px; align-items:center; gap:8px; min-height:28px; font-size:12px; position:relative; }
+.mb .gr { grid-template-columns:86px 1fr 52px; min-height:40px; gap:6px; }
+.gr .nm { font-weight:600; color:var(--c-text-heading); }
+.gr .tm { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-secondary); text-align:right; }
+.gtrack { position:relative; height:16px; background:repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), var(--c-border-light) calc(25% - 1px) 25%); border-radius:4px; }
+.gbar { position:absolute; top:2px; height:12px; border-radius:3px; display:flex; overflow:hidden; min-width:3px; }
+.gbar span { height:100%; }
+.gbar.hl { box-shadow:0 0 0 2px var(--c-bg-white), 0 0 0 3.5px var(--c-accent); }
+.gaxis { display:grid; grid-template-columns:110px 1fr 70px; gap:8px; font-family:"JetBrains Mono",monospace; font-size:10px; color:var(--c-text-muted); margin-top:4px; }
+.mb .gaxis { grid-template-columns:86px 1fr 52px; gap:6px; }
+.gaxis .tk2 { display:flex; justify-content:space-between; }
+.gbreak { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-muted); text-align:center; padding:2px 0; border-top:1px dashed var(--c-dashed); border-bottom:1px dashed var(--c-dashed); margin:2px 0 2px 118px; }
+.mb .gbreak { margin-left:92px; }
+.nowmk { position:absolute; top:-4px; bottom:-4px; width:2px; background:var(--c-accent); border-radius:2px; }
+.band { display:flex; gap:2px; height:28px; }
+.band > div { position:relative; display:flex; overflow:hidden; border-radius:4px; }
+.band > div span { height:100%; }
+.band .num { position:absolute; left:4px; top:5px; font-size:11px; font-weight:700; color:var(--c-on-accent); }
+.band .brk { background:repeating-linear-gradient(135deg, var(--c-bg-selected) 0 5px, var(--c-bg-inset) 5px 10px); }
+.band .hl { box-shadow:inset 0 0 0 2px var(--c-text-heading); }
+.leg2 { display:grid; grid-template-columns:repeat(4, 1fr); gap:4px 10px; margin-top:10px; }
+.mb .leg2 { grid-template-columns:1fr 1fr; }
+.leg2 button { display:flex; align-items:center; gap:6px; padding:4px 6px; border-radius:8px; font-size:12px; min-height:28px; }
+.mb .leg2 button { min-height:40px; }
+.leg2 button:hover, .leg2 button.on { background:var(--c-bg-selected); }
+.leg2 .n { width:18px; height:18px; border-radius:5px; background:var(--c-accent); color:var(--c-on-accent); font-size:10px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+.leg2 .m { margin-left:auto; font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-secondary); }
+.hb { display:grid; grid-template-columns:110px 1fr 110px; gap:8px; align-items:center; min-height:30px; font-size:12px; }
+.mb .hb { grid-template-columns:1fr 70px; gap:2px 8px; min-height:auto; padding:4px 0; }
+.mb .hb .bar { grid-column:1 / -1; grid-row:2; }
+.hb .nm { font-weight:600; color:var(--c-text-heading); }
+.hb .bar { display:flex; height:14px; border-radius:4px; overflow:hidden; background:var(--c-bg-inset); }
+.hb .bar span { height:100%; }
+.hb .tm { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-secondary); text-align:right; }
+.hb .tm em { font-style:normal; color:var(--c-text-muted); }
+
+/* --- Точка 5: планы и макеты --- */
+.pl { display:flex; height:440px; border-top:1px solid var(--c-border-light); }
+.mb .pl { height:560px; flex-direction:column; }
+.psb { width:240px; flex-shrink:0; border-right:1px solid var(--c-border-light); padding:8px; overflow:hidden; background:var(--c-bg-white); }
+.psb.col { width:44px; padding:8px 4px; display:flex; flex-direction:column; align-items:center; gap:4px; }
+.prow { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px; font-size:12px; min-height:34px; }
+.prow:hover { background:var(--c-bg-selected); }
+.prow.on { background:var(--c-accent-light); color:var(--c-text-heading); font-weight:600; }
+.prd { flex:1; min-width:0; overflow:auto; padding:14px 18px; }
+.mb .prd { padding:12px; }
+.prd h4 { font-family:"PT Serif",Georgia,serif; font-size:17px; margin:0 0 6px; color:var(--c-text-heading); }
+.prd p { margin:0 0 8px; font-size:12.5px; }
+.ptabs { display:flex; gap:4px; padding:8px 12px; border-bottom:1px solid var(--c-border-light); overflow-x:auto; flex-shrink:0; }
+.ptabs button { display:inline-flex; align-items:center; gap:6px; padding:0 10px; height:30px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); white-space:nowrap; flex-shrink:0; }
+.mb .ptabs button { height:40px; }
+.ptabs button.on { background:var(--c-accent-light); color:var(--c-text-heading); font-weight:600; }
+.ptabs .cnt { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-muted); }
+.pcards { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; padding:14px; }
+.mb .pcards { grid-template-columns:1fr; padding:12px; }
+.pc { border:1px solid var(--c-border-light); border-radius:12px; background:var(--c-bg-card); overflow:hidden; }
+.pc:hover { border-color:var(--c-border); box-shadow:var(--shadow-card); }
+.pc .th { height:96px; background:var(--c-bg-inset); position:relative; overflow:hidden; border-bottom:1px solid var(--c-border-light); }
+.mb .pc .th { height:120px; }
+.pc .th .ln { position:absolute; left:12px; right:30%; height:5px; border-radius:3px; background:var(--c-border); }
+.pc .th .mini { position:absolute; inset:10px 12px; border-radius:6px; background:var(--c-bg-white); box-shadow:var(--shadow-thumb); }
+.pc .th .mini i { position:absolute; display:block; border-radius:3px; background:var(--c-bg-selected); }
+.pc .bd { padding:8px 10px; }
+.pc .bd b { display:block; font-size:12.5px; color:var(--c-text-heading); }
+.pc .bd .sub { font-size:11px; color:var(--c-text-muted); display:flex; gap:6px; align-items:center; margin-top:2px; }
+.mview { border:1px solid var(--c-border); border-radius:10px; overflow:hidden; background:var(--c-bg-main); }
+.mview .mtb { display:flex; align-items:center; gap:6px; padding:6px 8px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); font-size:12px; flex-wrap:wrap; }
+.seg2 { display:inline-flex; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:8px; }
+.seg2 button { padding:0 8px; height:24px; border-radius:6px; font-size:11.5px; color:var(--c-text-secondary); display:inline-flex; align-items:center; gap:4px; }
+.mb .seg2 button { height:36px; }
+.seg2 button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.mframe { height:250px; display:flex; justify-content:center; align-items:flex-start; padding:10px; background:var(--c-bg-inset); }
+.mframe .scr { width:100%; height:100%; border-radius:8px; background:var(--c-bg-white); box-shadow:var(--shadow-thumb); position:relative; overflow:hidden; }
+.mframe .scr.phone { width:120px; border-radius:14px; }
+.mframe .scr i { position:absolute; display:block; border-radius:3px; background:var(--c-bg-selected); }
+
+/* --- Точка 6: анализ процесса --- */
+.ana { border:1px solid var(--c-border-light); border-radius:14px; background:var(--c-bg-card); padding:12px 14px; }
+.ana .ah { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ana .ah b { font-size:14px; color:var(--c-text-heading); }
+.kpis { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-top:10px; }
+.mb .kpis { grid-template-columns:1fr 1fr; }
+.kpi { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:10px; padding:8px 10px; min-width:0; }
+.kpi .kl { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); }
+.kpi .kv { font-size:15px; font-weight:700; color:var(--c-text-heading); margin-top:2px; display:flex; align-items:center; gap:6px; }
+.kpi .ks { font-size:11.5px; color:var(--c-text-secondary); margin-top:2px; }
+.kpi.alert { border-color:var(--c-info); background:var(--c-info-bg); }
+.kpi.bad { border-color:var(--c-danger-border); background:var(--c-danger-bg); }
+.kpi.bad .kv { color:var(--c-danger-text); }
+.durs { margin-top:10px; display:flex; flex-direction:column; gap:3px; }
+.durs .dr { display:grid; grid-template-columns:100px 1fr 64px; gap:8px; align-items:center; font-size:11.5px; }
+.mb .durs .dr { grid-template-columns:84px 1fr 56px; }
+.durs .dr .b { height:8px; border-radius:4px; background:var(--c-bg-inset); overflow:hidden; }
+.durs .dr .b span { display:block; height:100%; background:var(--c-accent); border-radius:4px; }
+.durs .dr .b span.long { background:var(--c-warning); }
+.durs .dr .t { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-secondary); text-align:right; }
+.sumbox { margin-top:12px; border-top:1px solid var(--c-border-light); padding-top:10px; }
+.sumcard { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:10px; padding:10px 12px; font-size:12.5px; }
+.sumcard ul { margin:6px 0 0; padding-left:18px; }
+.sumcard li { margin:2px 0; }
+.skel { height:10px; border-radius:5px; background:var(--c-bg-selected); margin:6px 0; }
+.err { background:var(--c-danger-bg); border:1px solid var(--c-danger-border); color:var(--c-danger-text); border-radius:10px; padding:8px 10px; font-size:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.statesrow { display:flex; gap:12px; flex-wrap:wrap; }
+.statesrow > div { width:290px; }
+.statesrow .cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 4px; }
+
+/* --- Точка 7: чипы --- */
+.mchip { display:inline-flex; align-items:center; font-family:"JetBrains Mono",monospace; font-size:10px; font-weight:700; line-height:16px; padding:0 5px; border-radius:6px; white-space:nowrap; flex-shrink:0; }
+.mchip.ink { background:var(--c-nav-ink); color:var(--c-on-nav-ink); }
+.mchip.soft { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.crow.on .mchip.soft { background:var(--c-bg-white); }
+.mchip.line { border:1px solid var(--c-border); color:var(--c-text-secondary); line-height:14px; }
+.mchip.txt { padding:0; color:var(--c-text-muted); font-weight:600; }
+.avw { position:relative; display:inline-flex; }
+.avw .mchip { position:absolute; left:50%; transform:translateX(-50%); bottom:-7px; box-shadow:0 0 0 1.5px var(--c-bg-white); line-height:13px; font-size:9px; }
+.clist { width:300px; background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); padding:8px; }
+.mb .clist { width:auto; box-shadow:none; border-radius:0; padding:4px 8px; }
+.crow { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px; min-height:36px; font-size:12px; color:var(--c-text-primary); }
+.mb .crow { min-height:44px; }
+.crow:hover { background:var(--c-bg-selected); }
+.crow.on { background:var(--c-bg-selected); color:var(--c-text-heading); font-weight:600; }
+.crow .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.crow .tm { font-size:11px; color:var(--c-text-muted); flex-shrink:0; }
+.crow2 { display:flex; flex-direction:column; gap:1px; padding:6px 8px; border-radius:8px; }
+.crow2:hover { background:var(--c-bg-selected); }
+.crow2 .l1 { display:flex; align-items:center; gap:8px; font-size:12px; }
+.crow2 .l1 .nm { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--c-text-primary); }
+.crow2 .l2 { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); padding-left:26px; }
+.ba { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
+.ba > div { min-width:0; }
+.ba .cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 6px; }
+.xrow { display:flex; align-items:center; gap:10px; padding:8px 10px; font-size:12px; border:1px solid var(--c-border-light); border-radius:10px; background:var(--c-bg-card); }
+
+/* ===== Правки 23.10 (решения Андрея) ===== */
+.picked { font-size:11px; font-weight:700; background:var(--c-accent-light); color:var(--c-accent); border:1px solid var(--c-accent-muted); border-radius:6px; padding:0 7px; line-height:18px; }
+.var.dropped { opacity:.45; }
+.var.dropped > h3::after { content:"не выбран"; font-size:11px; font-weight:700; background:var(--c-bg-selected); color:var(--c-text-secondary); border-radius:6px; padding:1px 7px; }
+.decided { display:block; font-size:12.5px; background:var(--c-success-bg); color:var(--c-text-heading); border:1px solid var(--c-success); border-radius:10px; padding:6px 10px; margin:4px 0 14px; max-width:900px; }
+.states { display:flex; flex-wrap:wrap; gap:10px 14px; margin-top:12px; padding-top:10px; border-top:1px dashed var(--c-dashed); }
+.states > div { display:flex; flex-direction:column; gap:4px; }
+.states .cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); }
+
+/* Точка 1: чип «ведёт» — сам переход в ключевой чат */
+.who.go { cursor:pointer; padding-right:6px; }
+.who.go .gi { color:var(--c-text-muted); display:inline-flex; }
+.who.go:hover, .who.go.hv { background:var(--c-bg-selected); border-color:var(--c-accent-muted); }
+.who.go:hover .gi, .who.go.hv .gi { color:var(--c-accent); }
+.who.go.fc { box-shadow:var(--shadow-focus); border-color:var(--c-accent); }
+.who.go.pr { background:var(--c-accent-light); }
+.who.static { cursor:default; border-style:dashed; border-color:var(--c-dashed); background:transparent; }
+.anch { position:relative; display:inline-flex; }
+.anch .tip { top:30px; left:0; }
+
+/* Точка 2: компактная карточка */
+.tk.cp { padding:8px 12px; }
+.tk .h .when { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-muted); white-space:nowrap; }
+.mini-ib { width:24px; height:24px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-secondary); flex-shrink:0; }
+.mb .mini-ib { width:40px; height:40px; }
+.mini-ib:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.ref.btnref { border-radius:6px; padding:0 4px; border:1px solid var(--c-border-light); background:var(--c-bg-white); line-height:18px; }
+.mb .ref.btnref { min-height:40px; min-width:40px; display:inline-flex; align-items:center; justify-content:center; }
+.ref.btnref:hover, .ref.btnref.hv { border-color:var(--c-accent-muted); color:var(--c-text-heading); }
+.nd.go { cursor:pointer; }
+.nd.go:hover { box-shadow:0 0 0 1px var(--c-accent-muted); }
+.hgt { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-muted); }
+.pop { position:absolute; z-index:6; top:24px; left:0; background:var(--c-bg-white); border:1px solid var(--c-border); box-shadow:var(--shadow-dropdown); border-radius:10px; padding:6px; width:230px; font-size:12px; }
+.pop .pr { display:flex; align-items:center; gap:8px; padding:5px 6px; border-radius:6px; }
+.pop button.pr:hover { background:var(--c-bg-selected); }
+.mb .pop button.pr { min-height:40px; }
+.pop .pr .k { color:var(--c-text-muted); width:46px; flex-shrink:0; font-size:11px; }
+
+/* Точка 6: анализ внутри Ганта */
+.gh6 { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.gh6 b { font-size:14px; color:var(--c-text-heading); }
+.gr6 { display:grid; grid-template-columns:110px 1fr 84px; align-items:center; gap:8px; min-height:28px; font-size:12px; position:relative; }
+.mb .gr6 { grid-template-columns:86px 1fr 60px; min-height:40px; gap:6px; }
+.gr6 .nm { font-weight:600; color:var(--c-text-heading); display:flex; align-items:center; gap:5px; min-width:0; }
+.gr6 .nm .cdot { width:7px; height:7px; border-radius:7px; background:var(--c-accent); box-shadow:var(--shadow-focus); flex-shrink:0; }
+.gr6 .tm { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-secondary); text-align:right; display:flex; flex-direction:column; align-items:flex-end; line-height:1.2; }
+.gr6 .tm.long { color:var(--c-warning-text); font-weight:700; }
+.gr6 .tm .x { font-family:"Hanken Grotesk",sans-serif; font-size:10px; font-weight:700; }
+.gr6.dim .nm, .gr6.dim .tm { opacity:.55; }
+.gr6.focus .gbar { box-shadow:0 0 0 2px var(--c-bg-white), 0 0 0 3.5px var(--c-warning); }
+.gtail { position:absolute; top:2px; height:12px; border-radius:0 3px 3px 0; background:repeating-linear-gradient(135deg, var(--c-danger) 0 3px, var(--c-danger-bg) 3px 6px); }
+.rmk { position:absolute; top:-3px; width:18px; height:18px; margin-left:-9px; border-radius:18px; background:var(--c-warning-bg); color:var(--c-warning-text); border:1.5px solid var(--c-warning); display:inline-flex; align-items:center; justify-content:center; z-index:2; }
+.rmk svg { width:10px; height:10px; }
+.rmk.on { box-shadow:0 0 0 3px var(--c-warning-bg); }
+.nowpill { position:absolute; top:-21px; transform:translateX(-50%); white-space:nowrap; font-size:10.5px; font-weight:700; line-height:16px; padding:0 6px; border-radius:6px; background:var(--c-accent); color:var(--c-on-accent); z-index:3; }
+.nowpill.bad { background:var(--c-danger); }
+.nowmk.bad { background:var(--c-danger); }
+.gsp { height:16px; }
+.sub6 { grid-column:2 / -1; font-size:11px; color:var(--c-text-secondary); margin:-4px 0 6px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mb .sub6 { grid-column:1 / -1; }
+.sub6.cur { color:var(--c-text-heading); }
+.sub6.cur::before { content:""; width:6px; height:6px; border-radius:6px; background:var(--c-accent); }
+.sub6.bad { color:var(--c-danger-text); font-weight:600; }
+.sub6 .tag { font-weight:700; }
+.verdict { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:8px 10px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); margin-bottom:12px; font-size:12px; }
+.verdict.bad { background:var(--c-danger-bg); border-color:var(--c-danger-border); }
+.vchip { display:inline-flex; align-items:center; gap:5px; height:24px; padding:0 8px; border-radius:24px; background:var(--c-bg-white); border:1px solid var(--c-border-light); color:var(--c-text-primary); white-space:nowrap; }
+.mb .vchip { height:40px; padding:0 12px; }
+.vchip:hover, .vchip.hv { border-color:var(--c-warning); background:var(--c-warning-bg); }
+.vchip.ok { color:var(--c-success-text); }
+.vchip.bad { color:var(--c-danger-text); border-color:var(--c-danger-border); }
+.acts6 { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center; }
+
+/* Точка 7: настоящая карточка списка чатов (ChatCard.tsx) */
+.clist7 { width:300px; display:flex; flex-direction:column; gap:4px; padding:8px; background:var(--c-bg-panel); border-radius:14px; }
+.mb .clist7 { width:auto; border-radius:0; padding:6px 8px; }
+.cc { position:relative; overflow:hidden; border-radius:8px; background:var(--c-bg-white); padding:11px 12px; min-height:64px; display:flex; flex-direction:column; justify-content:center; gap:3px; }
+.mb .cc { padding:14px 12px; min-height:70px; }
+.cc.hv { background:var(--c-bg-selected); }
+.cc.on { background:var(--c-accent-muted); }
+.cc.on::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--c-accent); z-index:2; }
+.cveil { position:absolute; inset:0; pointer-events:none; opacity:.22;
+  background:linear-gradient(to left, var(--pc) 0%, color-mix(in srgb, var(--pc) 82%, transparent) 16%, color-mix(in srgb, var(--pc) 50%, transparent) 38%, color-mix(in srgb, var(--pc) 22%, transparent) 62%, color-mix(in srgb, var(--pc) 6%, transparent) 82%, transparent 100%); }
+.cc.on .cveil { display:none; }
+.cface { position:absolute; top:0; right:0; bottom:0; width:84px; pointer-events:none; display:flex; align-items:center; justify-content:flex-end; padding-right:10px;
+  color:var(--pc); font-weight:800; font-size:38px; line-height:1; letter-spacing:-1px; opacity:.85;
+  -webkit-mask-image:linear-gradient(to left, #000 40%, transparent); mask-image:linear-gradient(to left, #000 40%, transparent); }
+.cface.photo { padding:0; opacity:.92;
+  background:radial-gradient(circle at 68% 36%, color-mix(in srgb, var(--pc) 35%, var(--c-bg-inset)) 0 18%, transparent 19%),
+    radial-gradient(ellipse at 68% 105%, color-mix(in srgb, var(--pc) 55%, var(--c-bg-inset)) 0 38%, transparent 39%),
+    color-mix(in srgb, var(--pc) 18%, var(--c-bg-inset)); }
+.cwm { position:absolute; right:-6px; bottom:-14px; color:var(--c-text-muted); opacity:.16; pointer-events:none; }
+.ctx { position:relative; z-index:1; display:flex; flex-direction:column; gap:3px; min-width:0; }
+.cc.p .ctx { padding-right:72px; }
+.ctx .l1 { display:flex; align-items:center; gap:6px; min-width:0; }
+.ctx .l1 .nm { font-size:13.5px; font-weight:600; color:var(--c-text-heading); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cc.on .ctx .l1 .nm { color:var(--c-accent); font-weight:700; }
+.ctx .l1 .ti { color:var(--c-text-muted); display:inline-flex; }
+.ctx .l2 { font-size:12px; color:var(--c-text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.krole { font-family:"JetBrains Mono",monospace; font-size:10.5px; font-weight:700; color:var(--c-accent); background:var(--c-accent-light); border-radius:6px; padding:0 5px; white-space:nowrap; flex-shrink:0; }
+/* Сам чип модели: стекло C.glass поверх лица, у нижнего края полосы собеседника */
+.gchip { position:absolute; z-index:2; bottom:5px; font-family:"JetBrains Mono",monospace; font-size:9.5px; font-weight:600; line-height:14px; padding:0 5px; border-radius:6px;
+  background:var(--c-glass); color:var(--c-text-secondary); box-shadow:0 0 0 1px var(--c-border-light); -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); white-space:nowrap; pointer-events:auto; }
+.gchip.ctr { right:42px; transform:translateX(50%); }
+.gchip.cor { right:6px; }
+.mb .gchip { bottom:6px; }
+.hcl { position:absolute; top:50%; right:4px; transform:translateY(-50%); z-index:3; display:flex; background:var(--c-bg-selected); border-radius:10px; box-shadow:var(--shadow-card); }
+.hcl span { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-secondary); }
+.zoom { transform:scale(2); transform-origin:top left; width:150px; height:76px; }
+.zoomwrap { width:300px; height:152px; overflow:hidden; border-radius:12px; border:1px solid var(--c-border-light); }
+/* Точка 7, круг 2: плашка модели в нижней части полосы собеседника (84 px) */
+.cface.photo.lt { background:radial-gradient(circle at 68% 36%, color-mix(in srgb, var(--pc) 25%, var(--c-on-dark)) 0 18%, transparent 19%),
+    radial-gradient(ellipse at 68% 105%, color-mix(in srgb, var(--pc) 30%, var(--c-on-dark)) 0 38%, transparent 39%), var(--c-on-dark); opacity:1; }
+.cface.photo.dk { background:radial-gradient(circle at 68% 36%, color-mix(in srgb, var(--pc) 40%, #000) 0 18%, transparent 19%),
+    radial-gradient(ellipse at 68% 105%, color-mix(in srgb, var(--pc) 30%, #000) 0 38%, transparent 39%), #000; opacity:1; }
+.mpl { position:absolute; z-index:2; right:0; bottom:0; width:72px; display:flex; align-items:center; justify-content:flex-end; padding:0 8px 0 14px;
+  font-family:"JetBrains Mono",monospace; font-size:10px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:auto; }
+.mpl span { overflow:hidden; text-overflow:ellipsis; }
+/* 7А — полоса-скрим: C.mediaScrim + C.onDark, 18 px, левый край растворяется маской */
+.mpl.bar { height:18px; background:var(--c-media-scrim); color:var(--c-on-dark);
+  -webkit-mask-image:linear-gradient(to left, #000 78%, transparent); mask-image:linear-gradient(to left, #000 78%, transparent); }
+/* 7Б — срез аватара: стекло C.glass + размытие, волосяная линия C.borderLight сверху, 16 px */
+.mpl.slice { height:16px; background:var(--c-glass); color:var(--c-text-secondary); box-shadow:inset 0 1px 0 var(--c-border-light);
+  -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px);
+  -webkit-mask-image:linear-gradient(to left, #000 78%, transparent); mask-image:linear-gradient(to left, #000 78%, transparent); }
+/* 7В — под аватаром: лицо кончается на 16 px выше, текст на фоне карточки, плашки нет */
+.cc.under .cface { bottom:16px; border-bottom-left-radius:0; }
+.mpl.under { height:16px; color:var(--c-text-secondary); font-weight:600; }
+/* Чат без персоны — во всех вариантах просто текст в углу */
+.mpl.np { height:16px; color:var(--c-text-muted); font-weight:600; background:none; box-shadow:none; -webkit-mask-image:none; mask-image:none; -webkit-backdrop-filter:none; backdrop-filter:none; }
+.ctr7 { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px 14px; font-size:11.5px; margin-top:10px; }
+.mb .ctr7 { grid-template-columns:1fr; }
+.ctr7 b { color:var(--c-text-heading); }
+.avw2 { position:relative; display:inline-flex; }
+.avw2 .gchip { right:auto; left:50%; transform:translateX(-50%); bottom:-8px; font-size:9px; line-height:12px; padding:0 4px; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>Страница фичи · волна 4 · 7 точек</h1>
+  <div class="grp"><span class="lbl">Точка</span>
+    <div class="pills" id="ptPills">
+      <button data-pt="1" class="on">1 Шапка</button><button data-pt="2">2 Производство</button><button data-pt="3">3 Связка</button>
+      <button data-pt="4">4 Статистика</button><button data-pt="5">5 Планы</button><button data-pt="6">6 Анализ</button><button data-pt="7">7 Чипы</button>
+    </div>
+  </div>
+  <div class="grp"><span class="lbl">Тема</span>
+    <div class="pills" id="thPills"><button data-th="light" class="on">Светлая</button><button data-th="dark">Тёмная</button></div>
+  </div>
+  <div class="grp"><span class="lbl">Пометки бэка</span>
+    <div class="pills" id="mkPills"><button data-mk="on" class="on">Да</button><button data-mk="off">Нет</button></div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<!-- ================= ТОЧКА 1 ================= -->
+<section class="pt on" id="pt1">
+  <h2>1. Шапка: кто ведёт фичу и где её ключевой чат</h2>
+  <p class="brief">Сейчас в мета-строке — ветка, возраст, число задач и строка счётчиков. Кто ведёт фичу, не видно; ключевой чат прячется в меню «Ещё» или в главной кнопке, когда нет действия. Сценарий: «открыл фичу — сразу понимаю, кому писать, и одним касанием попадаю к нему».</p>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант А, но без отдельной ссылки «Ключевой чат» — сам чип «ведёт · Софья (локальная)» открывает ключевой чат.</div>
+  <div class="var" data-v="1A"><h3>Вариант А′ — чип «ведёт» и есть вход в ключевой чат <span class="picked">выбрано</span></h3>
+    <p>Чип — кнопка: аватар, «ведёт», имя и значок чата со стрелкой в конце — по нему видно, что чип куда-то ведёт. Подсказка по наведению и фокусу: «Ключевой чат фичи · ведёт Софья (локальная), оркестратор». Клик — ключевой чат с плашкой возврата к фиче (как у «чат · задача»). Карточку персоны отсюда больше не открываем: путь к ней — из самого чата. Ниже — все состояния чипа.</p></div>
+  <div class="var dropped" data-v="1B"><h3>Вариант Б — отдельная строка «Ведёт»</h3>
+    <p>Под мета-строкой — тихая карточка «Ведёт Софья (локальная)» и кнопка «Открыть ключевой чат». Оставлен для истории.</p></div>
+</section>
+
+<!-- ================= ТОЧКА 2 ================= -->
+<section class="pt" id="pt2">
+  <h2>2. «Производство»: одна лента задач по времени</h2>
+  <p class="brief">Сейчас этап раскрывается двумя блоками: исполнители со статусом, ниже шаги со своими витками. Одна и та же задача видна дважды, а «где процесс сейчас» приходится собирать глазами. Сценарий: «открыл Производство — вижу задачи в порядке старта, у каждой сколько было кругов ревью и где она стоит; текущая подсвечена».</p>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант А, но карточку сократить по высоте: нижнюю строку «старт · чат · задача» убрать или перенести. Ниже — три размещения на выбор, у каждого подписана высота карточки (было ~74 px у Ш1).</div>
+  <div class="var" data-v="2A1"><h3>А1 — в шапку карточки: время старта и две иконки справа</h3>
+    <p>Строка уходит в конец шапки: «21.10 10:05» тихим моноширинным и иконки «чат» и «задача» по 24 px (на 360 — 40 px). Всё под рукой в один клик, но шапка плотнее: на 880 она ещё помещается в строку, на 360 переносится на вторую — экономии там почти нет.</p></div>
+  <div class="var" data-v="2A2"><h3>А2 — в подсказку на коде шага, узлы цепочки ведут в чаты <span class="rec">рекомендую</span></h3>
+    <p>Код «Ш3» становится кнопкой: клик или касание раскрывает меню «старт · чат исполнителя · задача» (на Ш3 открыто для показа). Узлы цепочки — тоже контролы: клик по «Глеб: вернул» — чат этого ревью, по «доработка» — чат исполнителя. Карточка теряет целую строку, а переход в чат становится точнее: прямо в нужный виток.</p></div>
+  <div class="var" data-v="2A3"><h3>А3 — совсем без строки</h3>
+    <p>Шапка и цепочка, больше ничего. Клик по названию — карточка задачи, по узлу цепочки — чат витка. Время старта не показываем: оно видно в «Статистике» (ступени точки 4). Самая компактная, но вход в задачу и чат ничем не подписан — его надо знать.</p></div>
+  <div class="var dropped" data-v="2B"><h3>Вариант Б — таблица «задача × цикл»</h3>
+    <p>Строка — задача, столбец — цикл (1, 2, 3). В ячейке — «работа N мин → вердикт». Сразу видно, у кого больше кругов: таблица растёт вправо. На 360 строка превращается в карточку со списком циклов. Хорошо для сравнения, хуже для «где сейчас».</p></div>
+  <div class="var dropped" data-v="2C"><h3>Вариант В — журнал событий</h3>
+    <p>Лента событий по дням: «сдал», «вернул (причина)», «принял», «взял в доработку». У каждого события — чип задачи «Ш3 · цикл 2». Сверху — плашка «Сейчас». Честнее всего показывает хронологию, но число циклов у задачи надо собирать по журналу. <span class="be">нужен бэк: журнал событий фичи</span></p></div>
+</section>
+
+<!-- ================= ТОЧКА 3 ================= -->
+<section class="pt" id="pt3">
+  <h2>3. Связка «кто оценивает → какую задачу»</h2>
+  <p class="brief">В этапах «Разрез», «План», «Ревью», «Проверка», «Финальное ревью» строка исполнителя показывает имя и статус, но не то, ЧТО он оценивает. Сценарий: «вижу: Глеб ревьюит Ш3 «Панель хранилища», и она сейчас в доработке».</p>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант А как есть — без изменений.</div>
+  <div class="var" data-v="3A"><h3>Вариант А — строка «оценивает →» под исполнителем <span class="picked">выбрано</span></h3>
+    <p>Под строкой исполнителя — чип оцениваемой задачи: код, название, её текущий статус. Клик — к этой задаче в ленте «Производства» (точка 2). Источник — reviewOf у задачи ревью. Тексты по этапам: Ревью/Проверка — «оценивает», План — «по разрезу», Разрез — «по эпику», Финал — «фичу целиком: 4 из 5 шагов принято». У «Производства» обратная связка: в карточке задачи — кто её ревьюит (уже видно в цепочке узлов). У «Мержа» — «после финала ✓ · feat/plugin-storage → master».</p></div>
+  <div class="var dropped" data-v="3B"><h3>Вариант Б — группы по оцениваемой задаче</h3>
+    <p>Внутри этапа сначала оцениваемая задача (заголовок группы со статусом), под ней — её ревьюеры по витку. Удобно, когда у задачи 2–3 ревью подряд; при одном ревью на задачу — лишний уровень вложенности.</p></div>
+</section>
+
+<!-- ================= ТОЧКА 4 ================= -->
+<section class="pt" id="pt4">
+  <h2>4. Полоса статистики: этапы читаются при любом числе</h2>
+  <p class="brief">Сейчас одна сплошная лента: ширина этапа ∝ минутам, подпись — над сегментом. Короткие этапы (Финал 12 мин, Мерж 4 мин) превращаются в щель без подписи, минут не видно нигде. Сценарий: «за 5 секунд понимаю, где ушло время и что было после чего».</p>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант А (ступени) как есть. На нём же строится новый «Анализ процесса» — точка 6.</div>
+  <div class="var" data-v="4A"><h3>Вариант А — ступени (диаграмма Ганта) <span class="picked">выбрано</span></h3>
+    <p>Каждый этап — своя строка: имя слева, минуты справа, полоса на общей оси времени. Подпись больше не зависит от ширины полосы. Длинная пауза — сжатая строка «разрыв · 14 ч». Наведение (на 360 — касание) показывает подсказку с разбивкой: работа, ожидание, простой. Отметка «сейчас» — вертикальная линия.</p></div>
+  <div class="var dropped" data-v="4B"><h3>Вариант Б — лента остаётся, подписи уходят в легенду</h3>
+    <p>Сплошная лента без текста, на сегментах — только номера. Под ней — легенда «1 Разрез 18 мин …» в 4 колонки. Наведение на пункт легенды подсвечивает сегмент, и наоборот. Минимальная переделка, но связь «номер ↔ сегмент» требует взгляда туда-обратно.</p></div>
+  <div class="var dropped" data-v="4C"><h3>Вариант В — столбцы по этапам</h3>
+    <p>Без оси времени: строка на этап, полоса по длительности (работа / ожидание / простой стопкой) и доля от общего. Лучше всех отвечает на «где ушло время», но теряет «что шло параллельно» и паузы.</p></div>
+</section>
+
+<!-- ================= ТОЧКА 5 ================= -->
+<section class="pt" id="pt5">
+  <h2>5. «Планы и макеты»: место под чтение и макеты прямо здесь</h2>
+  <p class="brief">Сейчас слева жёсткий список 240 px, справа читалка; макет открывается кнопкой в отдельном окне. На узком экране читалке остаётся меньше половины. Сценарий: «пролистал документы фичи, открыл макет и посмотрел его тут же, в обеих ширинах».</p>
+  <div class="decided"><b>Андрей выбрал (23.10):</b> вариант В (карточки-превью) как есть, со встроенным просмотром макета.</div>
+  <div class="var dropped" data-v="5A"><h3>Вариант А — список сворачивается в рельс</h3>
+    <p>Список 240 px сворачивается кнопкой в рельс 44 px со значками групп; уже меньше 1100 px ширины острова — свёрнут сразу. Ближе всего к нынешнему коду. На 360 список — шторка.</p></div>
+  <div class="var dropped" data-v="5B"><h3>Вариант Б — вкладки документов сверху</h3>
+    <p>Документы — горизонтальные вкладки под шапкой (прокручиваются), читалка во всю ширину. Хорошо при 3–6 документах; при 10+ вкладки уезжают за край.</p></div>
+  <div class="var" data-v="5C"><h3>Вариант В — карточки-превью, затем читалка во всю ширину <span class="picked">выбрано</span></h3>
+    <p>Сначала сетка карточек: группа «Планы» и группа «Макеты» с живой миниатюрой. Клик — документ на всю ширину с «← Все документы». Макет открывается во встроенном просмотре с переключателем «Десктоп / 360» и «Открыть отдельно». На 360 карточки идут в одну колонку — естественно для пальца.</p></div>
+</section>
+
+<!-- ================= ТОЧКА 6 ================= -->
+<section class="pt" id="pt6">
+  <h2>6. «Анализ процесса» — прямо на ступенях Ганта</h2>
+  <p class="brief">Сценарий тот же: «зашёл на фичу и за 3 секунды понял — где она, не зависла ли, сколько было возвратов и где ушло время». Отдельные плитки Андрей отверг. Теперь ответы живут на самих ступенях выбранного Ганта (точка 4): «где» — отметка «сейчас» на этапе, «зависла» — штриховка хвоста ступени, возвраты — флажки на полосе в момент возврата, длительность — минуты справа, самый долгий этап — тоном предупреждения. Отдельного блока больше нет.</p>
+  <div class="decided"><b>Андрей отклонил прошлый вариант (плитки)</b> и просит 2–3 варианта, встроенных в Гант. Ниже три. Переключатель «Фича: движется / зависла» показывает тревожное состояние у каждого.</div>
+  <div class="grp" style="margin:0 0 14px"><span class="lbl" style="font-size:10px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.05em">Фича</span>
+    <div class="pills" id="s6Pills"><button data-s6="move" class="on">движется</button><button data-s6="stuck">зависла</button></div></div>
+  <div class="var" data-v="6A"><h3>6А — метки на ступенях <span class="rec">рекомендую</span></h3>
+    <p>Ничего не добавляем в высоту: возврат — круглый флажок ↺ на полосе в момент возврата (наведение или касание — «Глеб вернул Ш3 · 09:41 · причина»), счётчик возвратов — под минутами справа. «Сейчас» — пилюля над отметкой: «Ш3 · доработка · 42 мин». Самый долгий этап — минуты тоном предупреждения. Зависла — хвост ступени от последнего события до «сейчас» заштрихован тоном опасности, пилюля краснеет («стоит 3 ч 20»), под Гантом одна строка с действием. Самая тихая из трёх.</p></div>
+  <div class="var" data-v="6B"><h3>6Б — подстрока под ступенью</h3>
+    <p>Под строкой этапа, где есть что сказать, — одна строчка 11 px: у текущего «● здесь сейчас — Ш3, доработка у Киры, 42 мин», у Производства «2 возврата · 1,5 цикла в среднем · дольше всех Ш3», у Ревью «Ш4 ждёт 1 ч». У этапов без событий подстроки нет. Зависла — подстрока текущего этапа краснеет и несёт кнопку. Читается словами без наведения, но Гант вырастает на 3–4 строки.</p></div>
+  <div class="var" data-v="6C"><h3>6В — вердикт над Гантом, чипы подсвечивают ступени</h3>
+    <p>Над Гантом — строка из четырёх чипов: «● Производство», «движется · 4 мин назад», «↺ 2 возврата», «2 д 4 ч · работа 9 ч 5». Наведение или касание чипа подсвечивает его место на Ганте (на макете «2 возврата» наведён — флажки и полоса обведены). Зависла — строка краснеет, чип «стоит 3 ч 20» несёт действие. Это ближе всего к прошлым плиткам, но одной строкой и в связке с Гантом.</p></div>
+  <div class="var" data-v="6D"><h3>Резюме моделью — общее для всех трёх вариантов</h3>
+    <p>Кнопка «Резюме моделью» — призрачная, в шапке Ганта справа. Резюме раскрывается под Гантом. Состояния: покой → идёт (скелет, «Остановить») → готово (время, модель, «Обновить») → ошибка (с повтором). Хранится до следующего нажатия. <span class="be">нужен бэк: ручка резюме + кэш</span> <span class="be">нужен бэк: порог «зависла» и время последнего события у этапа</span></p></div>
+</section>
+
+<!-- ================= ТОЧКА 7 ================= -->
+<section class="pt" id="pt7">
+  <h2>7. Чип модели на лице собеседника в карточке чата</h2>
+  <p class="brief">Карточка списка чатов (ChatCard.tsx) устроена так: слева заголовок (значок темы, имя 13.5 px) и превью сообщения, справа — полоса собеседника 84 px во всю высоту карточки: фото или крупные инициалы цветом персоны, растяжка маской влево и вуаль её цветом. Сценарий: «пролистываю чаты фичи и сразу вижу, где модель поменяли руками — например, Киру перевели на облако». Чип нужен ТОЛЬКО там, где модель чата отличается от умолчания; у остальных лицо остаётся чистым.</p>
+  <div class="decided"><b>Андрей 23.10 отверг и чип на лице</b>: нужна полупрозрачная плашка с текстом модели в нижней части аватара. Ниже три варианта на той же настоящей карточке — разная высота, прозрачность и место текста. В списке нарочно есть худшие случаи: почти белое фото («Ш3»), почти чёрное («Ревью Ш1»), инициалы («Ревью Ш3») и чат без персоны. Плашка — только у чатов, где модель отличается от умолчания персоны; у «Хранилища плагина» и «Ш4» лицо чистое. Прошлые чипы (стекло по центру и в углу) сняты.</div>
+  <div class="var" data-v="7P1"><h3>7А — полоса-скрим по низу лица <span class="rec">рекомендую</span></h3>
+    <p>Нижние 18 px полосы собеседника — тёмная плашка C.mediaScrim (чёрный 55 %), текст C.onDark, 10 px моноширинный жирный, прижат вправо. Левый край плашки растворяется той же маской, что и лицо. Токены от темы не зависят — так в продукте уже подписаны фото персонажей (CharacterCard) и номера лиц (FaceOverlay). <b>Контраст защищён лучше всех: худший случай — чисто белое фото — 4.76:1, то есть AA при любом фото, теме и выделении карточки</b>; лицо под плашкой просвечивает.</p></div>
+  <div class="var" data-v="7P2"><h3>7Б — срез аватара стеклом</h3>
+    <p>Нижние 16 px — «срез» стеклом C.glass с размытием 6 px и волосяной линией C.borderLight сверху, текст C.textSecondary. Тише и в тон теме, но контраст зависит от фото: на чёрном фото в светлой теме — 2.8:1, на белом в тёмной — 2.6:1. Посмотрите «Ревью Ш1» в светлой и «Ш3» в тёмной.</p></div>
+  <div class="var" data-v="7P3"><h3>7В — подпись под аватаром</h3>
+    <p>Лицо кончается на 16 px выше низа карточки, под ним — текст модели прямо на фоне карточки, C.textSecondary, без плашки. От фото не зависит, но зависит от фона самой карточки: на обычной 5.2:1, на выбранной (C.accentMuted) в светлой теме — 3.6:1. И это уже не «плашка на аватаре»: лицо на карточке 64 px укорачивается на четверть.</p></div>
+  <div class="var" data-v="7A"><h3>FeatureRunView — по итогам выбора</h3>
+    <p>Аватар там — круг 22 px, плашка на него не помещается. Предлагаю оставить мини-чип, но в той же гамме, что выбранная плашка (для 7А — C.mediaScrim / C.onDark вместо C.navInk). Здесь модель показываем всегда: на странице фичи она — часть отчёта.</p></div>
+</section>
+
+</div>
+
+<script>
+// ===== Иконки (lucide, stroke 1.75) =====
+const I = {
+  br:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>',
+  chat:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  back:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+  more:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>',
+  arr:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  ok:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+  rot:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
+  spark:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/></svg>',
+  file:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+  pal:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>',
+  side:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>',
+  ext:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14L21 3"/></svg>',
+  mon:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
+  ph:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/></svg>',
+  clock:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  down:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+};
+const av = (c, l, lg) => `<span class="av ${c}${lg ? ' lg' : ''}">${l}</span>`;
+const nav = () => `<span class="nav"><a class="lnk">чат</a><span class="mut">·</span><a class="lnk">задача</a></span>`;
+const mchip = m => `<span class="mchip soft">${m}</span>`;
+
+// ===== Общие данные фичи «Хранилище плагина» =====
+const TASKS = [
+  { ref:'Ш1', t:'Стор плагина и миграция', a:['t','Т','Тимур'], m:'Opus', st:['ok','принят'], cyc:2, start:'21.10 10:05',
+    chain:[['ok','работа','1 ч 20'],['ret','Глеб: вернул'],['ok','доработка','35 мин'],['ok','Глеб: принят']] },
+  { ref:'Ш2', t:'Ручки API хранилища', a:['d','Д','Денис'], m:'Qwen', st:['ok','принят'], cyc:1, start:'21.10 10:40',
+    chain:[['ok','работа','2 ч 05'],['ok','Глеб: принят']] },
+  { ref:'Ш3', t:'Панель «Хранилище» во фронте', a:['k','К','Кира'], m:'Qwen', st:['run','доработка · 42 мин'], cyc:2, now:true, start:'22.10 09:15',
+    chain:[['ok','работа','1 ч 50'],['ret','Глеб: вернул'],['cur','доработка','идёт 42 мин'],['pend','ревью']],
+    why:'Глеб: «нет пустого состояния и тёмной темы у списка ключей»' },
+  { ref:'Ш4', t:'Контрактные тесты camelCase', a:['t','Т','Тимур'], m:'Opus', st:['wait','ждёт ревью · 1 ч'], cyc:1, start:'22.10 11:30',
+    chain:[['ok','работа','48 мин'],['pend','ревью']] },
+  { ref:'Ш5', t:'Тексты и «Что нового»', a:['s','С','Софья'], m:'Sonnet', st:['mute','не начат'], cyc:0, start:'—',
+    chain:[['pend','работа']] },
+];
+const node = ([k, t, d]) => {
+  const ic = k === 'ok' ? I.ok : k === 'ret' ? I.rot : k === 'cur' ? '<span class="dot" style="color:var(--c-accent)"></span>' : '';
+  return `<span class="nd ${k}">${ic}${t}${d ? ` <span class="d2">${d}</span>` : ''}</span>`;
+};
+const cycTag = n => n === 0 ? '' : `<span class="cyc${n > 1 ? ' ret' : ''}" title="Циклов ревью">${n} ${n === 1 ? 'цикл' : 'цикла'}</span>`;
+
+// ===== Рендер вариантов: каждый — функция (mobile) → html; рисуется в десктопе и в 360 =====
+const V = {};
+
+// --- 1. Шапка ---
+const headTop = (m) => `
+  <div class="tbar">${m ? `<button class="tib">${I.back}</button>` : ''}
+    <span class="ttl">Хранилище плагина</span>
+    ${m ? '' : '<span class="tag run">идёт · Производство</span>'}
+    ${m ? '' : `<button class="btn pri">${I.chat} Ответить Кире</button>`}
+    <button class="tib">${I.more}</button></div>`;
+const whoGo = (st) => `<button class="who go ${st}" aria-label="Открыть ключевой чат · ведёт Софья (локальная)">${av('s','С')}<span class="rl">ведёт</span> Софья (локальная)<span class="gi">${I.chat}${I.arr}</span></button>`;
+const segs = `<div class="segs"><span><b>5</b>общий</span><span><b>2</b>принято</span><span><b>1</b>на ревью</span><span><b>1</b>в работе</span><span><b>1</b>не заведено</span></div>`;
+V['1A'] = m => `${headTop(m)}<div class="body">
+  <div class="meta">${m ? '<span class="tag run">идёт · Производство</span>' : ''}
+    <span class="br">${I.br}feat/plugin-storage</span><span>идёт 2 д 4 ч</span><span>14 задач</span>
+    ${m ? '' : '<span class="vsep"></span>'}
+    <span class="anch">${whoGo(m ? '' : 'hv')}${m ? '' : `<div class="tip"><b>Ключевой чат фичи</b><br>ведёт Софья (локальная), оркестратор<br><span class="mut">клик — открыть чат</span></div>`}</span>
+  </div>${segs}
+  ${m ? `<div style="margin-top:10px"><button class="btn pri" style="width:100%;justify-content:center">${I.chat} Ответить Кире</button></div>` : ''}
+  <div class="states" style="${m ? '' : 'margin-top:64px'}">
+    <div><span class="cap">Покой</span>${whoGo('')}</div>
+    <div><span class="cap">Наведение</span>${whoGo('hv')}</div>
+    <div><span class="cap">Фокус с клавиатуры</span>${whoGo('fc')}</div>
+    <div><span class="cap">Нажатие / касание</span>${whoGo('pr')}</div>
+    <div><span class="cap">Чата нет</span><span class="who static" title="Ключевого чата у фичи нет">${av('s','С')}<span class="rl">ведёт</span> Софья (локальная)</span></div>
+    <div><span class="cap">Оркестратора нет</span><span class="sm11 mut" style="line-height:24px">чип не рисуется</span></div>
+  </div>
+  <p class="sm11 mut" style="margin:10px 0 0">«Чата нет» — чип не кнопка: пунктирная рамка, без значка-стрелки, подсказка «Ключевого чата у фичи нет». На 360 подсказка по наведению не всплывает — смысл несёт значок чата со стрелкой и aria-label «Открыть ключевой чат · ведёт Софья (локальная)»; высота чипа 40 px.</p></div>`;
+V['1B'] = m => `${headTop(m)}<div class="body">
+  <div class="meta">${m ? '<span class="tag run">идёт · Производство</span>' : ''}
+    <span class="br">${I.br}feat/plugin-storage</span><span>идёт 2 д 4 ч</span><span>14 задач</span></div>${segs}
+  <div class="lead">${av('s','С',1)}<div class="tx">Ведёт <b>Софья (локальная)</b><div class="sm11 mut">в ключевом чате · последнее сообщение 12 мин назад</div></div>
+    <button class="btn sec sm"${m ? ' style="width:100%;justify-content:center"' : ''}>${I.chat} Ключевой чат</button></div></div>`;
+
+// --- 2. Производство ---
+const prodSum = `<div class="sumrow"><span>шагов <b>5</b></span><span>принято <b>2</b></span><span>возвратов <b>2</b></span><span>циклов в среднем <b>1,5</b></span><span>этап идёт <b>1 д 6 ч</b></span></div>`;
+V['2A'] = m => `<div class="body">${prodSum}<div class="tl">${TASKS.map(t => `
+  ${t.now ? '<div class="nowline">сейчас</div>' : ''}
+  <div class="tk${t.now ? ' now' : ''}${t.st[0] === 'wait' ? ' wt' : ''}">
+    <div class="h"><span class="ref">${t.ref}</span><span class="nm">${t.t}</span>
+      ${av(t.a[0], t.a[1])}<span class="sm12">${t.a[2]}</span>${mchip(t.m)}${cycTag(t.cyc)}<span class="tag ${t.st[0]}">${t.st[1]}</span></div>
+    <div class="chain">${t.chain.map(node).join('<span class="ar">→</span>')}</div>
+    ${t.why ? `<div class="why">${t.why}</div>` : ''}
+    <div class="sm11 mut" style="margin-top:6px;display:flex;gap:10px;flex-wrap:wrap"><span>старт ${t.start}</span>${t.cyc ? nav() : ''}</div>
+  </div>`).join('')}</div></div>`;
+// Компактные карточки: chainGo — узлы цепочки как переходы в чат витка
+const nodeGo = (n) => n[0] === 'pend' ? node(n) : node(n).replace('class="nd ', 'title="Открыть чат витка" class="nd go ');
+const tkHead = (t, refHtml, tail = '') => `<div class="h">${refHtml}<span class="nm">${t.t}</span>
+  ${av(t.a[0], t.a[1])}<span class="sm12">${t.a[2]}</span>${mchip(t.m)}${cycTag(t.cyc)}<span class="tag ${t.st[0]}">${t.st[1]}</span>${tail}</div>`;
+const tkWrap = (t, inner) => `${t.now ? '<div class="nowline">сейчас</div>' : ''}<div class="tk cp${t.now ? ' now' : ''}${t.st[0] === 'wait' ? ' wt' : ''}">${inner}</div>`;
+const tkChain = (t, go) => `<div class="chain">${t.chain.map(go ? nodeGo : node).join('<span class="ar">→</span>')}</div>${t.why ? `<div class="why">${t.why}</div>` : ''}`;
+const hNote = (txt) => `<p class="sm11 mut" style="margin:10px 0 0">${txt}</p>`;
+V['2A1'] = m => `<div class="body">${prodSum}<div class="tl">${TASKS.map(t => tkWrap(t,
+  tkHead(t, `<span class="ref">${t.ref}</span>`, `${t.start !== '—' ? `<span class="when" title="Старт задачи">${t.start}</span>` : ''}${t.cyc ? `<button class="mini-ib" title="Чат исполнителя">${I.chat}</button><button class="mini-ib" title="Карточка задачи">${I.file}</button>` : ''}`)
+  + tkChain(t))).join('')}</div>
+  ${hNote('Высота карточки Ш1: ~52 px вместо ~74. У «не начат» иконок нет — чата ещё нет. На 360 время и иконки переносятся во вторую строку шапки.')}</div>`;
+V['2A2'] = m => `<div class="body">${prodSum}<div class="tl">${TASKS.map(t => tkWrap(t,
+  tkHead(t, `<span class="anch"><button class="ref btnref${t.now ? ' hv' : ''}" title="Старт, чат и задача">${t.ref}</button>${t.now ? `<div class="pop">
+    <div class="pr"><span class="k">старт</span><span class="mono sm11">${t.start}</span></div>
+    <button class="pr" style="width:100%"><span class="k">чат</span>${I.chat}Чат Киры · доработка</button>
+    <button class="pr" style="width:100%"><span class="k">задача</span>${I.file}Карточка задачи Ш3</button></div>` : ''}</span>`)
+  + tkChain(t, true))).join('')}</div>
+  ${hNote('Высота карточки Ш1: ~52 px. Меню на коде шага открыто у Ш3 для показа (клик, Enter, касание; Esc и клик мимо — закрыть). Узел цепочки по наведению обводится C.accentMuted, подсказка «Открыть чат витка»; у пунктирных узлов («ревью» впереди) перехода нет.')}</div>`;
+V['2A3'] = m => `<div class="body">${prodSum}<div class="tl">${TASKS.map(t => tkWrap(t,
+  tkHead(t, `<span class="ref">${t.ref}</span>`) + tkChain(t, true))).join('')}</div>
+  ${hNote('Высота карточки Ш1: ~52 px. Клик по названию — карточка задачи (курсор-рука, подчёркивание по наведению), по узлу — чат витка. Время старта — только на «Статистике».')}</div>`;
+const cellB = (c) => `<td>${c ? `<div class="cell">${c.map(node).join('')}</div>` : '<span class="mut">—</span>'}</td>`;
+const CYC = {
+  'Ш1':[[['ok','работа','1 ч 20'],['ret','вернул']],[['ok','доработка','35 мин'],['ok','принят']],null],
+  'Ш2':[[['ok','работа','2 ч 05'],['ok','принят']],null,null],
+  'Ш3':[[['ok','работа','1 ч 50'],['ret','вернул']],[['cur','доработка','42 мин'],['pend','ревью']],null],
+  'Ш4':[[['ok','работа','48 мин'],['pend','ревью']],null,null],
+  'Ш5':[null,null,null],
+};
+V['2B'] = m => m ? `<div class="body">${TASKS.map(t => `
+  <div class="mcard${t.now ? ' now' : ''}"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="ref">${t.ref}</span><b class="ellip" style="flex:1;color:var(--c-text-heading)">${t.t}</b><span class="tag ${t.st[0]}">${t.st[1]}</span></div>
+    <div class="sm11 sec2" style="margin-top:4px;display:flex;gap:6px;align-items:center">${av(t.a[0], t.a[1])}${t.a[2]} ${mchip(t.m)}</div>
+    <div class="mcyc">${CYC[t.ref].map((c, i) => c ? `<span class="mut sm11">цикл ${i + 1}</span><span style="display:flex;gap:4px;flex-wrap:wrap">${c.map(node).join('')}</span>` : '').join('') || '<span class="mut sm11">—</span><span class="mut sm11">ещё не начат</span>'}</div></div>`).join('')}</div>`
+ : `<div class="body">${prodSum}<table class="grid"><thead><tr><th>Задача</th><th>Цикл 1</th><th>Цикл 2</th><th>Цикл 3</th><th>Статус</th></tr></thead><tbody>
+  ${TASKS.map(t => `<tr${t.now ? ' class="now"' : ''}><td style="width:260px"><div style="display:flex;gap:6px;align-items:center"><span class="ref">${t.ref}</span><b style="color:var(--c-text-heading)">${t.t}</b></div>
+    <div class="sm11 sec2" style="margin-top:3px;display:flex;gap:6px;align-items:center">${av(t.a[0], t.a[1])}${t.a[2]} ${mchip(t.m)}</div></td>
+    ${CYC[t.ref].map(cellB).join('')}<td><span class="tag ${t.st[0]}">${t.st[1]}</span></td></tr>`).join('')}</tbody></table></div>`;
+const tch = (r, c) => `<span class="tchip"><span class="mono">${r}</span>${c ? ` · цикл ${c}` : ''}</span>`;
+V['2C'] = m => `<div class="body">
+  <div class="card" style="padding:8px 10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-color:var(--c-accent-muted)">
+    <span class="tag run"><span class="dot"></span>сейчас</span><span class="sm12">${av('k','К')} <b style="color:var(--c-text-heading)">Кира</b> дорабатывает ${tch('Ш3', 2)} · 42 мин</span>
+    <span class="sm12 sec2">${av('t','Т')} Ш4 ждёт ревью 1 ч</span></div>
+  <div class="day">Сегодня, 23.10</div>
+  <div class="ev"><span class="t">09:58</span>${av('k','К')}<span class="tx"><b>Кира</b> взяла в доработку ${tch('Ш3', 2)}</span></div>
+  <div class="ev"><span class="t">09:41</span>${av('g','Г')}<span class="tx"><b>Глеб</b> вернул ${tch('Ш3', 1)} <span class="tag warn">вернул</span><div class="sm11 sec2">«нет пустого состояния и тёмной темы у списка ключей»</div></span></div>
+  <div class="ev"><span class="t">09:20</span>${av('t','Т')}<span class="tx"><b>Тимур</b> сдал ${tch('Ш4', 1)} на ревью</span></div>
+  <div class="day">Вчера, 22.10</div>
+  <div class="ev"><span class="t">17:12</span>${av('g','Г')}<span class="tx"><b>Глеб</b> принял ${tch('Ш1', 2)} <span class="tag ok">принят</span></span></div>
+  <div class="ev"><span class="t">16:30</span>${av('t','Т')}<span class="tx"><b>Тимур</b> сдал доработку ${tch('Ш1', 2)}</span></div>
+  <div class="ev"><span class="t">11:05</span>${av('k','К')}<span class="tx"><b>Кира</b> сдала ${tch('Ш3', 1)} на ревью</span></div>
+  <div class="sm11 mut" style="margin-top:8px">Ещё 9 событий · <a class="lnk">показать</a></div></div>`;
+
+// --- 3. Связка ---
+const ofChip = (ref, t, st) => `<button class="ofchip"><span class="ref">${ref}</span><span class="ellip">${t}</span><span class="tag ${st[0]}">${st[1]}</span></button>`;
+V['3A'] = m => `<div class="body">
+  <div class="stg"><div class="sh"><b>Разрез</b><span class="tag ok">готово</span><span class="dur">18 мин</span></div>
+    <div class="sbody"><div class="ex">${av('e','Е')}<span class="nm">Егор</span><span class="sec2">разрез</span>${mchip('Opus')}<span class="tag ok">готово</span>${nav()}</div>
+    <div class="of"><span>по эпику</span>${ofChip('', 'Хранилище плагина', ['run','идёт'])}</div></div></div>
+  <div class="stg"><div class="sh"><b>План</b><span class="tag ok">готово</span><span class="dur">42 мин</span></div>
+    <div class="sbody"><div class="ex">${av('e','Е')}<span class="nm">Егор</span><span class="sec2">план</span>${mchip('Opus')}<span class="tag ok">готово</span>${nav()}</div>
+    <div class="of"><span>по разрезу</span>${ofChip('', 'Разрез: 5 шагов, 2 линии', ['ok','принят'])}</div></div></div>
+  <div class="stg cur"><div class="sh"><b>Ревью</b><span class="sec2 sm12">идёт</span><span class="dur">1 ч 25</span></div>
+    <div class="sbody">
+      <div class="ex">${av('g','Г')}<span class="nm">Глеб</span><span class="sec2">ревью · виток 2</span>${mchip('Opus')}<span class="tag ok">принял</span>${nav()}</div>
+      <div class="of"><span>оценивает</span>${ofChip('Ш1', 'Стор плагина и миграция', ['ok','принят'])}</div>
+      <div class="ex">${av('g','Г')}<span class="nm">Глеб</span><span class="sec2">ревью · виток 1</span>${mchip('Opus')}<span class="tag warn">вернул</span>${nav()}</div>
+      <div class="of"><span>оценивает</span>${ofChip('Ш3', 'Панель «Хранилище» во фронте', ['run','доработка'])}</div>
+      <div class="ex">${av('g','Г')}<span class="nm">Глеб</span><span class="sec2">ревью</span>${mchip('Opus')}<span class="tag mute">не начат</span>${nav()}</div>
+      <div class="of"><span>оценивает</span>${ofChip('Ш4', 'Контрактные тесты camelCase', ['wait','ждёт ревью'])}</div>
+    </div></div>
+  <div class="stg pend"><div class="sh"><b class="mut">Финальное ревью</b><span class="mut sm12">впереди</span></div>
+    <div class="sbody"><div class="ex">${av('e','А')}<span class="nm">Александр</span><span class="sec2">финал</span><span class="tag mute">не заведён</span></div>
+    <div class="of"><span>фичу целиком</span><span class="ofchip"><span class="ellip">2 из 5 шагов принято · 1 в доработке</span></span></div></div></div>
+  <div class="stg pend"><div class="sh"><b class="mut">Мерж</b><span class="mut sm12">впереди</span></div>
+    <div class="sbody"><div class="of" style="margin:4px 0"><span>после финала ✓</span><span class="ofchip mono" style="font-size:11px">${I.br} feat/plugin-storage → master</span></div></div></div>
+</div>`;
+V['3B'] = m => `<div class="body">
+  <div class="stg cur"><div class="sh"><b>Ревью</b><span class="sec2 sm12">идёт</span><span class="dur">1 ч 25</span></div>
+    <div class="sbody" style="padding:6px">
+      <div class="ofgrp"><div class="gh"><span class="ref">Ш3</span><span class="nm">Панель «Хранилище» во фронте</span><span class="tag run">доработка</span><span class="sec2 sm11">2 витка</span></div>
+        <div class="ex">${av('g','Г')}<span class="nm">Глеб</span><span class="sec2">виток 1</span>${mchip('Opus')}<span class="tag warn">вернул</span>${nav()}</div>
+        <div class="ex">${av('g','Г')}<span class="nm">Глеб</span><span class="sec2">виток 2</span><span class="tag mute">ждёт доработку</span></div></div>
+      <div class="ofgrp"><div class="gh"><span class="ref">Ш1</span><span class="nm">Стор плагина и миграция</span><span class="tag ok">принят</span><span class="sec2 sm11">2 витка</span></div>
+        <div class="ex">${av('g','Г')}<span class="nm">Глеб</span><span class="sec2">виток 1</span>${mchip('Opus')}<span class="tag warn">вернул</span>${nav()}</div>
+        <div class="ex">${av('g','Г')}<span class="nm">Глеб</span><span class="sec2">виток 2</span>${mchip('Opus')}<span class="tag ok">принял</span>${nav()}</div></div>
+      <div class="ofgrp"><div class="gh"><span class="ref">Ш4</span><span class="nm">Контрактные тесты camelCase</span><span class="tag wait">ждёт ревью</span></div>
+        <div class="ex">${av('g','Г')}<span class="nm">Глеб</span><span class="sec2">виток 1</span><span class="tag mute">не начат</span></div></div>
+    </div></div></div>`;
+
+// --- 4. Статистика ---
+// Ось: 21.10 10:00 → 23.10 10:40, разрыв ночи сжат. Позиции/ширины в % дорожки.
+const ST = [
+  ['Разрез', 0, 3, [[90,'work'],[10,'wait']], '18 мин', 'работа 16 мин · ожидание 2 мин'],
+  ['План', 3, 7, [[80,'work'],[20,'wait']], '42 мин', 'работа 34 мин · ожидание 8 мин'],
+  ['Производство', 10, 80, [[62,'work'],[24,'wait'],[14,'idle']], '6 ч 10', 'работа 3 ч 50 · ожидание 1 ч 30 · простой 50 мин'],
+  ['Ревью', 30, 64, [[100,'rev']], '1 ч 25', 'ревью идёт по шагам параллельно с производством'],
+  ['Проверка', 91, 4, [[100,'work']], '35 мин', 'работа 35 мин'],
+  ['Финал', 95, 2, [[100,'work']], '12 мин', 'работа 12 мин'],
+  ['Мерж', 97.5, 1, [[100,'work']], '4 мин', 'работа 4 мин'],
+];
+const kcls = { work:'k-work', wait:'k-wait', idle:'k-idle', rev:'k-rev' };
+V['4A'] = m => `<div class="body"><div class="gantt">
+  ${ST.map((s, i) => `${i === 4 ? '<div class="gbreak">разрыв · 14 ч (ночь, сжато)</div>' : ''}<div class="gr"><span class="nm">${s[0]}</span>
+    <div class="gtrack"><div class="gbar${i === 2 ? ' hl' : ''}" style="left:${s[1]}%;width:${s[2]}%">${s[3].map(([w, k]) => `<span class="${kcls[k]}" style="width:${w}%"></span>`).join('')}</div>
+    ${i === 2 ? `<span class="nowmk" style="left:${m ? 76 : 78}%"></span>` : ''}</div>
+    <span class="tm">${s[4]}</span>
+    ${i === 2 ? `<div class="tip" style="left:${m ? 40 : 300}px;top:30px"><b>Производство · 6 ч 10</b><br>${s[5]}<br><span class="mut">21.10 10:40 – идёт · 5 шагов</span><div style="margin-top:6px"><a class="lnk">Открыть в «Хронологии» ${I.arr}</a></div></div>` : ''}
+  </div>`).join('')}
+  <div class="gaxis"><span></span><span class="tk2"><span>21.10 10:00</span><span>16:00</span>${m ? '' : '<span>22.10 09:00</span>'}<span>23.10 10:40</span></span><span></span></div></div>
+  <div class="legend"><span><i class="k-work"></i>работа</span><span><i class="k-wait"></i>ожидание</span><span><i class="k-idle"></i>простой</span><span><i class="k-rev"></i>ревью</span><span><i style="background:var(--c-accent);width:2px"></i>сейчас</span></div>
+  <p class="sm11 mut" style="margin:8px 0 0">Подсказка открыта для показа (наведение на «Производство»). На 360 — касание по строке; строка 40 px высотой, полоса читается без прокрутки вбок.</p></div>`;
+const BAND = [['1',3,[[90,'work'],[10,'wait']]],['2',6,[[80,'work'],[20,'wait']]],['3',46,[[62,'work'],[24,'wait'],[14,'idle']]],['brk',8],['4',16,[[100,'rev']]],['5',8,[[100,'work']]],['6',3,[[100,'work']]],['7',2,[[100,'work']]]];
+V['4B'] = m => `<div class="body"><div style="${m ? 'overflow-x:auto' : ''}"><div class="band" style="${m ? 'min-width:560px' : ''}">
+  ${BAND.map(b => b[0] === 'brk' ? `<div class="brk" style="flex:${b[1]}" title="разрыв · 14 ч"></div>`
+    : `<div class="${b[0] === '3' ? 'hl' : ''}" style="flex:${b[1]}">${b[2].map(([w, k]) => `<span class="${kcls[k]}" style="width:${w}%"></span>`).join('')}${b[1] >= 6 ? `<span class="num">${b[0]}</span>` : ''}</div>`).join('')}
+  </div></div>
+  <div class="leg2">${ST.map((s, i) => `<button class="${i === 2 ? 'on' : ''}"><span class="n">${i + 1}</span>${s[0]}<span class="m">${s[4]}</span></button>`).join('')}
+    <button><span class="n" style="background:var(--c-bg-inset);color:var(--c-text-muted)">⫽</span>разрыв<span class="m">14 ч</span></button></div>
+  <p class="sm11 mut" style="margin:8px 0 0">Номер на сегменте — только если сегмент шире 24 px; у узких номер только в легенде. Наведение на «3 Производство» подсветило сегмент рамкой.</p></div>`;
+const TOT = 545;
+V['4C'] = m => `<div class="body">${ST.map(s => {
+  const min = { '18 мин':18, '42 мин':42, '6 ч 10':370, '1 ч 25':85, '35 мин':35, '12 мин':12, '4 мин':4 }[s[4]];
+  const share = Math.round(min / TOT * 100);
+  return `<div class="hb"><span class="nm">${s[0]}</span><div class="bar"><div style="display:flex;width:${Math.max(2, min / 370 * 100)}%">${s[3].map(([w, k]) => `<span class="${kcls[k]}" style="width:${w}%"></span>`).join('')}</div></div><span class="tm">${s[4]} <em>· ${share}%</em></span></div>`;
+}).join('')}
+  <div class="legend"><span><i class="k-work"></i>работа</span><span><i class="k-wait"></i>ожидание</span><span><i class="k-idle"></i>простой</span><span><i class="k-rev"></i>ревью</span></div>
+  <p class="sm11 mut" style="margin:8px 0 0">Сумма 9 ч 5 мин работы этапов; разрывы и параллельность здесь не видны — это цена варианта.</p></div>`;
+
+// --- 5. Планы и макеты ---
+const DOCS = [['План Егора', 'Ш1–Ш5, 2 линии', 'file'], ['Разрез', 'эпик → 5 шагов', 'file'], ['Предложение Майи', 'проблема → решение', 'file']];
+const MOCKS = [['features-overview-4.html', 'v1 · ждёт выбора', 'warn'], ['plugin-storage-panel.html', 'v2 · утверждён', 'ok'], ['plugin-storage-panel-v1.html', 'заменён', 'mute']];
+const reader = (m) => `<h4>План Егора</h4><p class="sec2 sm12">обновлён 22.10 09:02 · <a class="lnk">задача плана</a></p>
+  <p><b style="color:var(--c-text-heading)">Ш1. Стор плагина.</b> PluginStore пишет в data/plugins/{owner}; миграция старых пакетов. Линия — бэк, исполнитель Тимур.</p>
+  <p><b style="color:var(--c-text-heading)">Ш3. Панель «Хранилище».</b> Список ключей, пустое состояние, ошибка квоты. Линия — фронт, исполнитель Кира.</p>
+  <div class="skel" style="width:90%"></div><div class="skel" style="width:75%"></div>`;
+const mview = (m) => `<div class="mview" style="margin-top:10px"><div class="mtb"><b style="color:var(--c-text-heading)" class="ellip">plugin-storage-panel.html</b><span class="tag ok">утверждён</span>
+  <span style="flex:1"></span><span class="seg2"><button class="on">${I.mon}Десктоп</button><button>${I.ph}360</button></span><a class="lnk">${I.ext}${m ? '' : 'Открыть отдельно'}</a></div>
+  <div class="mframe"><div class="scr"><i style="left:10px;top:10px;width:40%;height:10px"></i><i style="left:10px;top:30px;width:28%;height:150px"></i><i style="left:34%;top:30px;right:10px;height:60px"></i><i style="left:34%;top:100px;right:10px;height:80px"></i></div></div>
+  <div class="sm11 mut" style="padding:6px 8px">Встроенный просмотр: sandbox-iframe, ширина 360 — рамкой телефона. Тема макета переключается его собственным переключателем.</div></div>`;
+V['5A'] = m => m ? `<div class="pl"><div class="ptabs"><button class="on">${I.side} Документы · 6 ${I.down}</button></div><div class="prd">${reader(m)}${mview(m)}</div></div>
+  <div class="body sm11 mut">На 360 список открывается шторкой по кнопке «Документы».</div>`
+ : `<div class="pl"><div class="psb col"><button class="tib" title="Развернуть список">${I.side}</button><button class="tib" style="color:var(--c-accent);background:var(--c-accent-light)">${I.file}</button><button class="tib">${I.pal}</button></div>
+  <div class="prd">${reader(m)}${mview(m)}</div></div>
+  <div class="body sm11 mut">Список свёрнут в рельс 44 px: значок «Планы» (активный) и «Макеты»; наведение — подсказка с именем группы, клик — список выезжает поверх читалки. Развёрнутый вид — как сейчас (240 px).</div>`;
+V['5B'] = m => `<div class="pl" style="flex-direction:column"><div class="ptabs">${DOCS.map((d, i) => `<button class="${i === 0 ? 'on' : ''}">${I.file}${d[0]}</button>`).join('')}<button>${I.pal}Макеты <span class="cnt">3</span></button></div>
+  <div class="prd">${reader(m)}${mview(m)}</div></div>`;
+const pcard = (d, mock) => `<button class="pc"><div class="th">${mock
+  ? `<div class="mini"><i style="left:6px;top:6px;width:40%;height:6px"></i><i style="left:6px;top:18px;width:26%;bottom:6px"></i><i style="left:34%;top:18px;right:6px;height:28px"></i></div>`
+  : `<span class="ln" style="top:14px;right:45%;background:var(--c-text-muted)"></span><span class="ln" style="top:28px"></span><span class="ln" style="top:40px;right:20%"></span><span class="ln" style="top:52px"></span><span class="ln" style="top:64px;right:40%"></span>`}</div>
+  <div class="bd"><b class="ellip">${d[0]}</b><div class="sub">${mock ? `<span class="tag ${d[2]}">${d[1]}</span>` : `${I.file}${d[1]}`}</div></div></button>`;
+V['5C'] = m => `<div style="border-top:1px solid var(--c-border-light)"><div class="pcards" style="padding-bottom:0"><div class="grpttl" style="grid-column:1/-1">Планы · 3</div>${DOCS.map(d => pcard(d)).join('')}</div>
+  <div class="pcards"><div class="grpttl" style="grid-column:1/-1">Макеты · 3</div>${MOCKS.map(d => pcard(d, true)).join('')}</div>
+  <div class="body" style="border-top:1px solid var(--c-border-light)"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="btn gh sm">${I.back}Все документы</button><span class="sm11 mut">после клика по карточке макета</span></div>${mview(m)}</div></div>`;
+
+// --- 6. Анализ процесса — на ступенях Ганта (точка 4, вариант А) ---
+let S6 = 'move';
+const NOW6 = 96;
+const rows6 = (stuck) => [
+  { n:'Разрез', l:0, w:3, seg:[[90,'work'],[10,'wait']], t:'18 мин' },
+  { n:'План', l:3, w:7, seg:[[80,'work'],[20,'wait']], t:'42 мин' },
+  { n:'Производство', l:10, w:stuck ? 70 : NOW6 - 10, seg:[[62,'work'],[24,'wait'],[14,'idle']], t:'6 ч 10', long:true, ret:[44, 70], cur:!stuck },
+  { n:'Ревью', l:30, w:stuck ? 50 : NOW6 - 30, seg:[[100,'rev']], t:'1 ч 25', cur:stuck, tail:stuck ? [80, NOW6] : null },
+  { n:'Проверка', pend:true, t:'впереди' }, { n:'Финал', pend:true, t:'впереди' }, { n:'Мерж', pend:true, t:'впереди' },
+];
+const subs6 = (stuck, m) => stuck ? {
+  'Производство':[['', 'все 5 шагов сданы · 2 возврата (Ш1, Ш3)']],
+  'Ревью':[['bad', `${I.clock} стоит 3 ч 20 — Ш4 ждёт ревью, Глеб не запущен <button class="btn pri sm">Запустить ревью Ш4</button>`]],
+} : {
+  'Производство':[['cur', `здесь сейчас — Ш3, доработка у Киры, 42 мин`], ['', `2 возврата (Ш1, Ш3) · 1,5 цикла в среднем · дольше всех Ш3 — 1 ч 50`]],
+  'Ревью':[['', 'Ш4 ждёт ревью 1 ч · Ш1 принят со второго витка']],
+};
+const gantt6 = (m, o) => {
+  const stuck = S6 === 'stuck';
+  const sub = subs6(stuck, m);
+  return `<div class="gh6"><b>Этапы и время</b><span class="sm11 mut">обновлено сейчас</span><span style="flex:1"></span><button class="btn gh sm">${I.spark}Резюме моделью</button></div>
+  <div class="gantt">${rows6(stuck).map(r => `<div class="gr6${r.pend ? ' dim' : ''}${o.hl && r.ret ? ' focus' : ''}">
+    <span class="nm">${r.cur ? '<span class="cdot" title="Фича сейчас здесь"></span>' : ''}<span class="ellip">${r.n}</span></span>
+    <div class="gtrack">${r.pend ? '' : `<div class="gbar" style="left:${r.l}%;width:${r.w}%">${r.seg.map(([w, k]) => `<span class="${kcls[k]}" style="width:${w}%"></span>`).join('')}</div>`}
+      ${r.tail ? `<span class="gtail" style="left:${r.tail[0]}%;width:${r.tail[1] - r.tail[0]}%" title="Без движения с 10:50"></span>` : ''}
+      ${o.v !== 'B' && r.ret ? r.ret.map((x, i) => `<span class="rmk${o.hl ? ' on' : ''}" style="left:${x}%" title="${i ? 'Глеб вернул Ш3 · 23.10 09:41' : 'Глеб вернул Ш1 · 22.10 15:20'}">${I.rot}</span>`).join('') : ''}
+      ${r.cur ? `<span class="nowmk${stuck ? ' bad' : ''}" style="left:${NOW6}%"></span>` : ''}
+      ${r.cur && o.v === 'A' ? `<span class="nowpill${stuck ? ' bad' : ''}" style="left:${NOW6}%;transform:translateX(calc(-100% + 2px))">${stuck ? (m ? 'стоит 3 ч 20' : 'стоит 3 ч 20 · Ш4 ждёт ревью') : (m ? 'Ш3 · 42 мин' : 'Ш3 · доработка · 42 мин')}</span>` : ''}
+      ${o.tip && r.ret ? `<div class="tip" style="left:calc(70% - ${m ? 150 : 200}px);top:22px"><b>Глеб вернул Ш3</b> · 23.10 09:41<br>«нет пустого состояния и тёмной темы у списка ключей»<div style="margin-top:6px"><a class="lnk">Чат ревью ${I.arr}</a></div></div>` : ''}
+    </div>
+    <span class="tm${r.long ? ' long' : ''}"${r.long ? ' title="Самый долгий этап"' : ''}>${r.t}${r.ret && o.v === 'A' ? `<span class="x" style="color:var(--c-warning-text)">↺ ${r.ret.length}</span>` : ''}</span>
+    ${o.v === 'B' && sub[r.n] ? sub[r.n].map(([k, tx]) => `<div class="sub6 ${k}">${tx}</div>`).join('') : ''}
+  </div>`).join('')}
+  <div class="gaxis" style="grid-template-columns:${m ? '86px 1fr 60px' : '110px 1fr 84px'}"><span></span><span class="tk2"><span>21.10 10:00</span>${m ? '' : '<span>22.10 09:00</span>'}<span>сейчас</span></span><span></span></div></div>
+  <div class="legend"><span><i class="k-work"></i>работа</span><span><i class="k-wait"></i>ожидание</span><span><i class="k-idle"></i>простой</span><span><i class="k-rev"></i>ревью</span><span><i style="background:var(--c-warning-bg);border:1.5px solid var(--c-warning);border-radius:10px"></i>возврат</span>${stuck ? '<span><i style="background:repeating-linear-gradient(135deg, var(--c-danger) 0 2px, var(--c-danger-bg) 2px 4px)"></i>без движения</span>' : ''}</div>`;
+};
+V['6A'] = m => `<div class="body">${gantt6(m, { v:'A', tip:!m && S6 === 'move' })}
+  ${S6 === 'stuck' ? `<div class="acts6"><span class="tag stop">${I.clock} стоит 3 ч 20</span><span class="sm12">Ш4 ждёт ревью, Глеб не запущен</span><button class="btn pri sm">Запустить ревью Ш4</button></div>` : ''}
+  ${hNote(S6 === 'move' ? 'Подсказка флажка открыта для показа (наведение; на 360 — касание флажка, цель 40 px за счёт невидимого поля вокруг 18 px круга). Пилюля «сейчас» прижата правым краем к отметке, на 360 — короче.' : 'Зависла: порог 2 ч без событий у этапа в работе (считает сервер). Хвост от последнего события до «сейчас» заштрихован, отметка и пилюля — C.danger.')}</div>`;
+V['6B'] = m => `<div class="body">${gantt6(m, { v:'B' })}
+  ${hNote('Подстроки — только у этапов, где есть событие; «здесь сейчас» с точкой C.accent, текст C.textHeading; обычные — C.textSecondary 11 px. Флажков на полосе нет — возвраты названы словами.')}</div>`;
+V['6C'] = m => {
+  const stuck = S6 === 'stuck';
+  const vd = stuck
+    ? `<div class="verdict bad"><button class="vchip">${'<span class="dot" style="color:var(--c-accent)"></span>'}Ревью</button><button class="vchip bad">${I.clock}стоит 3 ч 20</button><button class="vchip">${I.rot}2 возврата</button><button class="vchip">${I.clock}2 д 7 ч</button><span style="flex:1"></span><button class="btn pri sm">Запустить ревью Ш4</button></div>`
+    : `<div class="verdict"><button class="vchip"><span class="dot" style="color:var(--c-accent)"></span>Производство</button><button class="vchip ok">${I.ok}движется · 4 мин назад</button><button class="vchip hv">${I.rot}2 возврата</button><button class="vchip">${I.clock}2 д 4 ч · работа 9 ч 5</button></div>`;
+  return `<div class="body">${vd}${gantt6(m, { v:'C', hl:!stuck })}
+  ${hNote('Чип «2 возврата» наведён: флажки и полоса Производства обведены C.warning. Наведение на «Производство» подсвечивает его строку, на «2 д 4 ч» — всю ось. На 360 чипы 40 px и переносятся в две строки; касание подсвечивает, второе касание снимает.')}</div>`;
+};
+V['6D'] = m => `<div class="body"><div class="statesrow" style="${m ? 'flex-direction:column' : ''}">
+  <div style="${m ? 'width:auto' : ''}"><p class="cap">Покой</p><div class="sumcard sec2 sm12">Резюме не запрашивали. Модель напишет 3–5 пунктов: что сделано, где затык, что дальше.<div style="margin-top:8px"><button class="btn sec sm">${I.spark}Резюме моделью</button></div></div></div>
+  <div style="${m ? 'width:auto' : ''}"><p class="cap">Идёт</p><div class="sumcard"><div class="sm12 sec2">Модель читает хронологию фичи…</div><div class="skel" style="width:92%"></div><div class="skel" style="width:80%"></div><div class="skel" style="width:60%"></div><button class="btn gh sm">Остановить</button></div></div>
+  <div style="${m ? 'width:auto' : ''}"><p class="cap">Готово</p><div class="sumcard"><div class="sm11 mut" style="display:flex;gap:6px;align-items:center">${I.spark}резюме · 10:42 · Sonnet<span style="flex:1"></span><a class="lnk">${I.rot}Обновить</a></div>
+    <ul><li>Бэк готов: Ш1 и Ш2 приняты, Ш1 — со второго круга.</li><li>Узкое место — фронт: Ш3 вернули за пустое состояние и тёмную тему.</li><li>Ш4 ждёт ревью час — Глеба можно запустить.</li></ul></div></div>
+  <div style="${m ? 'width:auto' : ''}"><p class="cap">Ошибка</p><div class="err">Не удалось составить резюме: модель не ответила.<button class="btn sec sm">Повторить</button></div></div>
+</div></div>`;
+
+// --- 7. Чип модели на лице собеседника (ChatCard.tsx) ---
+const BUG = (s) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="6" width="8" height="14" rx="4"/><path d="M19 7l-3 2M5 7l3 2M19 19l-3-2M5 19l3-2M20 13h-4M4 13h4M10 4l1 2M14 4l-1 2"/></svg>`;
+const PIN = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M9 10.8V4h6v6.8l3 3.2H6z"/></svg>';
+const CC = [
+  { nm:'Хранилище плагина', role:1, prev:'Софья: Ш3 вернулся, Кира дорабатывает пустое состояние', p:'orange', ini:'С' },
+  { nm:'Ш3 · Панель «Хранилище»', prev:'Кира: пустое состояние готово, проверяю тёмную тему', p:'purple', photo:'lt', model:'Opus', on:1, tip:'Модель чата: Opus 5.5 · у Киры по умолчанию — Qwen3.8-27B' },
+  { nm:'Ревью Ш3', prev:'Глеб: вернул — нет пустого состояния у списка ключей', p:'brown', ini:'Г', model:'Sonnet', tip:'Модель чата: Sonnet 5.5 · у Глеба по умолчанию — Opus 5.5' },
+  { nm:'Ревью Ш1', prev:'Глеб: принято со второго витка', p:'blue', photo:'dk', model:'Qwen', tip:'Модель чата: Qwen3.8-27B · у Глеба по умолчанию — Opus 5.5' },
+  { nm:'Ш4 · Контрактные тесты', prev:'Тимур: сдал на ревью, 14 тестов зелёные', p:'blue', ini:'Т', hv:1 },
+  { nm:'Разбор логов vLLM', prev:'Падение на prefill 63k: смотрю очередь планировщика', model:'DeepSeek', tip:'Модель чата: DeepSeek V4 · по умолчанию — Opus 5.5' },
+];
+// place: bar (7А) | slice (7Б) | under (7В)
+const ccard = (c, place, m) => `<div class="cc${c.p ? ' p' : ' np'}${c.on ? ' on' : ''}${c.hv ? ' hv' : ''}${c.p && c.model && place === 'under' ? ' under' : ''}"${c.p ? ` style="--pc:var(--p-${c.p})"` : ''}>
+  ${c.p ? `<div class="cveil"${c.on ? ' style="display:none"' : ''}></div><div class="cface${c.photo ? ' photo ' + c.photo : ''}">${c.photo ? '' : c.ini}</div>` : `<span class="cwm">${BUG(64)}</span>`}
+  <div class="ctx"><div class="l1"><span class="ti">${c.p ? I.chat : BUG(14)}</span><span class="nm">${c.nm}</span>${c.role ? '<span class="krole">ключевой</span>' : ''}</div>
+    <div class="l2"${!c.p && c.model ? ' style="padding-right:60px"' : ''}>${c.prev}</div></div>
+  ${c.model ? `<span class="mpl ${c.p ? place : 'np'}" title="${c.tip}" aria-label="${c.tip}"><span>${c.model}</span></span>` : ''}
+  ${c.hv && !m ? `<div class="hcl"><span>${PIN}</span><span>${I.more}</span></div>` : ''}
+</div>`;
+const clist7 = (place, m) => `<div class="clist7">${CC.map(c => ccard(c, place, m)).join('')}</div>`;
+const zoom7 = (place) => `<div><p class="cap">Фрагмент ×2 · светлое фото, инициалы, тёмное фото</p><div class="zoomwrap" style="position:relative;height:420px"><div style="position:absolute;right:0;top:8px;width:300px;transform:scale(2);transform-origin:top right;display:flex;flex-direction:column;gap:4px">${ccard(CC[1], place, false)}${ccard(CC[2], place, false)}${ccard(CC[3], place, false)}</div></div></div>`;
+const CTR7 = {
+  bar:['4.76:1 на чисто белом фото (до 21:1 на чёрном)', 'не зависит ни от темы, ни от выделения карточки', 'единственный вариант с AA ≥ 4.5:1 везде'],
+  slice:['2.8:1 — чёрное фото в светлой теме', '2.6:1 — белое фото в тёмной теме', 'проваливает AA на краевых фото'],
+  under:['3.6:1 — выбранная карточка (C.accentMuted) в светлой теме', 'на обычной 5.2:1, на наведённой 4.0:1; от фото не зависит', 'проседает от фона карточки, лицо ниже на 16 px'],
+};
+const note7 = (place, m) => `<div class="ctr7"><span><b>Худший контраст:</b> ${CTR7[place][0]}</span><span>${CTR7[place][1]}</span><span>${CTR7[place][2]}</span></div>`
+  + hNote(`Плашка у четырёх чатов из шести: «Хранилище плагина» и «Ш4» на модели по умолчанию — лицо чистое. У чата без персоны (водяной знак темы) во всех вариантах — только текст C.textMuted в правом нижнем углу, превью отступает под его ширину. Кнопки по наведению («Ш4») — по вертикальному центру и плашку не перекрывают. Длинное имя модели режется многоточием в пределах 72 px; полное — в подсказке.${m ? ' На 360 кнопок по наведению нет; плашка не интерактивна, касание открывает чат; полная модель — в шапке открытого чата.' : ''}`);
+const v7 = (place) => m => `<div class="body"><div class="ba"><div><p class="cap">Список чатов фичи</p>${clist7(place, m)}</div>${m ? '' : zoom7(place)}</div>${note7(place, m)}</div>`;
+V['7P1'] = v7('bar');
+V['7P2'] = v7('slice');
+V['7P3'] = v7('under');
+V['7A'] = m => `<div class="body"><div class="ba">
+  <div><p class="cap">Было · FeatureRunView</p><div class="xrow"><span class="avw">${av('k','К',1)}<span class="mchip ink">Qwen</span></span><b style="color:var(--c-text-heading)">Кира</b><span class="sec2">фронт · Ш3</span><span class="tag run">идёт</span></div></div>
+  <div><p class="cap">Стало · гамма плашки 7А</p><div class="xrow" style="padding-bottom:12px"><span class="avw2">${av('k','К',1)}<span class="gchip" style="background:var(--c-media-scrim);color:var(--c-on-dark);box-shadow:none">Qwen</span></span><b style="color:var(--c-text-heading)">Кира</b><span class="sec2">фронт · Ш3</span><span class="tag run">идёт</span></div></div>
+</div>${hNote('Подсказка с полной моделью («Qwen3.8-27B, локально») — по наведению, фокусу и касанию, как у ModelChip.')}</div>`;
+
+// ===== Раскладка: в каждом .var — десктоп 880 и 360 =====
+const renderVar = el => {
+  const f = V[el.dataset.v];
+  if (!f) return;
+  el.querySelector(':scope > .row')?.remove();
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<div class="frm dk"><div class="cap">Десктоп · остров центра</div><div class="isl">${f(false)}</div></div>
+    <div class="frm mb"><div class="cap">Мобильный · 360</div><div class="isl">${f(true)}</div></div>`;
+  el.appendChild(row);
+};
+document.querySelectorAll('.var').forEach(renderVar);
+document.querySelectorAll('.mb').forEach(x => x.classList.add('m'));
+
+// ===== Переключатели =====
+const pick = (id, attr, fn) => document.getElementById(id).addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  document.querySelectorAll(`#${id} button`).forEach(x => x.classList.toggle('on', x === b));
+  fn(b.dataset[attr]);
+});
+pick('ptPills', 'pt', v => { document.querySelectorAll('.pt').forEach(s => s.classList.toggle('on', s.id === 'pt' + v)); window.scrollTo(0, 0); });
+pick('thPills', 'th', v => document.documentElement.dataset.theme = v);
+pick('s6Pills', 's6', v => { S6 = v; document.querySelectorAll('#pt6 .var').forEach(renderVar); });
+pick('mkPills', 'mk', v => document.body.classList.toggle('nomarks', v === 'off'));
+</script>
+</body>
+</html>

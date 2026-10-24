@@ -1,6 +1,6 @@
 // Плашка фичи в чате (FeatureBanner) — СТРОКА с точками этапов (макет feature-banner-1,
 // вариант «А · Строка» + кликабельные этапы из «Г»). Три вопроса строки:
-//   • ГДЕ МЫ     — 7 точек этапов + подпись «{этап} · {состояние}» (слова 1:1 с pillModel/попапом);
+//   • ГДЕ МЫ     — 8 точек этапов (design может быть skipped) + подпись «{этап} · {состояние}» (слова 1:1 с pillModel/попапом);
 //   • ЧТО ОТ МЕНЯ — одно главное действие (waiting → «Ответить», stopped → «Чат»,
 //                    merge_pending → «Открыть», иначе → «Открыть страницу фичи»);
 //   • КТО РАБОТАЕТ — чип роли этого чата («этот чат — {роль}» / «ключевой»).
@@ -20,7 +20,7 @@ import { createElement, act } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureBanner, featureBannerRow } from './FeatureBanner';
-import { CHAT_MAX_W } from '../../../lib/design';
+import { C, CHAT_MAX_W } from '../../../lib/design';
 import { __test } from '../../../lib/featuresIndex';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../__tests__/fakeDom';
@@ -71,10 +71,12 @@ vi.mock('../../../lib/personas', async (importOriginal) => {
 
 // === Фикстуры ===
 
-// Рельса 7 стадий: cut/plan пройдены, prod — активная (run), остальное — впереди.
+// Рельса по контракту — ровно 8 сегментов в порядке жизненного цикла: design без задач
+// (skipped), cut/plan пройдены, prod — активная (run), остальное — впереди.
 function rail(): FeatureIndexFeature['rail'] {
   return [
     { key: 'cut', state: 'done', tone: null },
+    { key: 'design', state: 'skipped', tone: null },
     { key: 'plan', state: 'done', tone: null },
     { key: 'prod', state: 'active', tone: 'run' },
     { key: 'review', state: 'pending', tone: null },
@@ -199,10 +201,10 @@ describe('featureBannerRow: «где мы», действие, тон, роль'
     expect(m.role).toBe('ключевой');
   });
 
-  it('точки: done/active кликабельны, pending/absent — нет (7 точек, порядок — от бэка)', () => {
+  it('точки: done/active кликабельны, pending/absent/skipped — нет (8 точек, порядок — от бэка)', () => {
     const m = featureBannerRow(feat('running'), link(), 'chat-exec');
-    expect(m.dots).toHaveLength(7);
-    expect(m.dots.map(d => d.key)).toEqual(['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge']);
+    expect(m.dots).toHaveLength(8);
+    expect(m.dots.map(d => d.key)).toEqual(['cut', 'design', 'plan', 'prod', 'review', 'qa', 'final', 'merge']);
     expect(m.dots.filter(d => d.clickable).map(d => d.key)).toEqual(['cut', 'plan', 'prod']);
   });
 });
@@ -296,11 +298,11 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(renderBanner('chat-exec', 'p1')).toBe('');
   });
 
-  it('точки: 7 data-testid feature-dot-*, «впереди» (pending) — <i>, не <button>', () => {
+  it('точки: 8 data-testid feature-dot-*, «впереди» (pending) — <i>, не <button>', () => {
     seedIndex(feat('running'), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
-    // Все 7 точек на месте (data-testid у каждой).
-    for (const k of ['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge']) {
+    // Все 8 точек на месте (data-testid у каждой).
+    for (const k of ['cut', 'design', 'plan', 'prod', 'review', 'qa', 'final', 'merge']) {
       expect(html).toContain(`data-testid="feature-dot-${k}"`);
     }
     // «Впереди» (pending) — <i>, не <button>: тег-открывашка сразу перед data-testid.
@@ -310,6 +312,21 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     // Текущий (active) — <button> (type="button" перед data-testid).
     const b = html.indexOf('data-testid="feature-dot-prod"');
     expect(html.slice(Math.max(0, b - 40), b), 'active prod должен быть <button>').toContain('<button');
+  });
+
+  // Минор R-DES-F: skipped-точка (design без задач, W4-DES-B) — декоративная, не кликабельна.
+  // Мутация (в отчёте): удалить ветку 'skipped' в StageDotView → заливка станет
+  // progressTrack, не bgInset → краснеет; сделать её <button> → краснеет проверка тега.
+  it('design: skipped — точка <i> (не кнопка) с нейтральной заливкой C.bgInset', () => {
+    // Фикстура rail() по контракту уже несёт design: skipped — проверяем её напрямую.
+    seedIndex(feat('running'), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const i = html.indexOf('data-testid="feature-dot-design"');
+    expect(i, 'нет точки design').not.toBe(-1);
+    // Тег-открывашка сразу перед data-testid — <i>, не <button> (некликабельна).
+    expect(html.slice(Math.max(0, i - 20), i), 'skipped design должен быть <i>').toContain('<i');
+    // Заливка — C.bgInset (var(--c-bg-inset)), не дорожка pending.
+    expect(html.slice(i, i + 200), 'skipped-точка залита C.bgInset').toContain(`background:${C.bgInset}`);
   });
 
   it('«· ещё N»: чат с двумя фичами → «· ещё 1» (порядок — от бэка)', () => {

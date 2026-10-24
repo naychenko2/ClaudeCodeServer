@@ -338,6 +338,24 @@ public class TaskExecutionServiceStallTests : IDisposable
         action.Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
     }
 
+    // W4-HOLD-I (контракт §1 :179): задач удержанной фичи сторож не окликает и человека
+    // не зовёт — причина тишины сама пауза, а не брошенная работа. Мутация: убрать
+    // проверку featurePaused в ClassifyStall — оба абзаца краснеют.
+    [Fact]
+    public void ClassifyStall_ФичаНаПаузе_НиОкликаНиЗоваЧеловека()
+    {
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddHours(-2)), Now, Stale, featurePaused: true);
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.None,
+            "фича на паузе: исполнителя не окликаем");
+
+        // Второй шаг — зов человека — гасится тем же guard'ом
+        var alert = TaskExecutionService.ClassifyStall(StaleTask(nudgedAt: Now.AddMinutes(-20)),
+            Chat(SessionStatus.Active, Now.AddHours(-2)), Now, Stale, featurePaused: true);
+        alert.Should().Be(TaskExecutionService.ExecutorStallAction.None,
+            "фича на паузе: человека во время остановки не зовём");
+    }
+
     // Тексты уведомления и подписи плашки разные — иначе координатор не отличит «ждёт»
     // от «молчит» ни по ленте, ни по пушу.
     [Fact]
@@ -466,6 +484,34 @@ public class TaskExecutionServiceStallTests : IDisposable
         var after = _tasks.GetById(task.Id)!;
         after.ExecutorNudgedAt.Should().BeNull();
         after.ExecutorStaleAlertedAt.Should().BeNull();
+    }
+
+    // W4-HOLD-I (контракт §1 :179): резолв паузы — на стороне вызывающего (CheckStalledExecutorAsync),
+    // предикат остаётся чистым. Шаг удержанной фичи, чей чат молчит больше порога, не получает
+    // ничего: ни оклика, ни уведомления. Мутация: убрать FeatureIsPaused в CheckStalledExecutorAsync
+    // — первый оклик краснеет.
+    [Fact]
+    public async Task CheckStalledExecutorAsync_HoldFeature_СтраховкаМолчит()
+    {
+        var user = _userStore.Add("stall-hold", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        _tasks.SetHold(epic.Id, "manual");
+        var created = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг удержанной фичи",
+            Role: "step", FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec");
+        StubProcess(chat);
+        chat.Status = SessionStatus.Active;
+        chat.UpdatedAt = Now - TimeSpan.FromMinutes(20);
+        _tasks.MarkClaudeStarted(created.Id, chat.Id, Now.AddHours(-2));
+        _tasks.MarkClaudeResult(created.Id, "success");
+
+        await _sut.CheckStalledExecutorAsync(_tasks.GetById(created.Id)!, Now);
+
+        var after = _tasks.GetById(created.Id)!;
+        after.ExecutorNudgedAt.Should().BeNull("задач удержанной фичи сторож не окликает");
+        after.ExecutorStaleAlertedAt.Should().BeNull();
+        Sent<UserMessageMessage>().Should().BeEmpty("оклика в чат исполнителя нет");
+        (await CountNotificationsAsync(user.Id)).Should().Be(0, "человека во время паузы не зовём");
     }
 
     // --- Закрытая задача без итога хода: доклад по одному сигналу D --------------

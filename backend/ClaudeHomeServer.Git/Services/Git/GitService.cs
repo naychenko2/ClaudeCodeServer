@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 
@@ -1456,6 +1457,41 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             list.Add(new GitWorktreeInfo(hostPath, head, branch, locked, prunable));
         }
         return list;
+    }
+
+    // W4-5 (п.5.1)/W4-5B2 (п.5.2): проверенное дерево фичи — тот же предикат, что гард мержа
+    // (TasksController.FeatureWorktreeErrorAsync) и SessionManager.AttachWorktreeAsync: путь
+    // непустой, существует на диске и числится в `git worktree list` главной репы. Основное
+    // дерево само — не «дерево фичи». Не прошёл — null: смысл решает вызывающий (гард мержа
+    // даёт 409, каталог макетов фолбэкается на main, читатель файлов — 404). Сбой git —
+    // fail-closed null, не 500.
+    public async Task<string?> VerifiedFeatureTreeAsync(string? ownerId, string mainRoot,
+        string? worktreePath, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(worktreePath)) return null;
+        string path;
+        try
+        {
+            path = Path.GetFullPath(worktreePath.Trim());
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        if (!Directory.Exists(path)) return null;
+        if (PathNormalizer.NormalizePath(path) == PathNormalizer.NormalizePath(mainRoot))
+            return null;
+        IReadOnlyList<GitWorktreeInfo> list;
+        try
+        {
+            list = await WorktreeListAsync(ownerId, mainRoot, ct);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        var wanted = PathNormalizer.NormalizePath(path);
+        return list.Any(w => PathNormalizer.NormalizePath(w.Path) == wanted) ? path : null;
     }
 
     // Удалить worktree. Без force git откажет при незакоммиченных изменениях в дереве —

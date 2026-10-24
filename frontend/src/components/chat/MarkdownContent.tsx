@@ -16,7 +16,7 @@ import { relPathTree } from '../../lib/paths';
 import { useProjectFileIndex, lookupProjectFile, FILE_LIKE_MENTION } from '../../lib/projectFileIndex';
 import { withImageLimit } from '../../lib/concurrency';
 import { useInView } from '../../lib/useInView';
-import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext } from './contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext, FeatureLinkContext } from './contexts';
 
 // Абсолютный путь (Windows-диск или POSIX) — для A1: упоминание вне корня проекта тоже
 // становится ссылкой (открытие само покажет ошибку, если файла на самом деле нет).
@@ -154,10 +154,13 @@ const INLINE_CODE: CSSProperties = {
 // Ссылка на файл проекта в тексте ассистента: открывает файл на просмотр там же, где
 // дерево и карточки инструментов. Рендерится только для файлов, которые реально есть
 // в проекте — битых ссылок и «открыл, а там 404» не бывает.
-export function FileLink({ path, onOpen, mono, children }: {
+// title — подпись подсказки по умолчанию «Открыть {path}»; передают, когда цель не файл
+// (документ фичи), чтобы подсказка не показывала id.
+export function FileLink({ path, onOpen, mono, title, children }: {
   path: string;
   onOpen: (path: string) => void;
   mono?: boolean;
+  title?: string;
   children: ReactNode;
 }) {
   const [hover, setHover] = useState(false);
@@ -166,7 +169,7 @@ export function FileLink({ path, onOpen, mono, children }: {
       onClick={() => onOpen(path)}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={`Открыть ${path}`}
+      title={title ?? `Открыть ${path}`}
       style={{
         ...(mono ? INLINE_CODE : null),
         display: 'inline-flex', alignItems: 'center', gap: SP.xxs,
@@ -340,11 +343,15 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const onOpenFile = useContext(ChatOpenFileContext);
+  const featureLinks = useContext(FeatureLinkContext);
   const fileIndex = useProjectFileIndex(project?.id ?? null);
 
   const urlTransform = useMemo(() => (url: string, key: string) => {
     // Медиа-домены (fal/glif) src — блокируем: медиа уже показаны в MediaBlock из tool_result
     if (key === 'src' && matchesHosts(url, MEDIA_HOSTS)) return null;
+    // Схемы читалки фичи (W4-LINK-F) — сквозные: defaultUrlTransform вырезал бы их как
+    // неизвестный протокол, а «featurelink:docs/…» — сама цель ссылки, не URL.
+    if (/^feature(link|doc):/.test(url)) return url;
     // Абсолютный путь (в т.ч. вне корня проекта, A1) — оставляем как есть: defaultUrlTransform
     // режет его, приняв «C:» за неизвестный протокол; существование не проверяем —
     // resolveFileMention сам решит, стал ли он ссылкой на файл
@@ -420,6 +427,25 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
           );
         },
         a: ({ children, href }) => {
+          // W4-LINK-F: читалка документов фичи — ссылки между её документами. Читалка
+          // переписывает [[…]] в featuredoc: (другой документ фичи) и featurelink: (файл
+          // дерева фичи); относительный путь внутри дерева фичи распознаётся здесь.
+          // Цель читается через резолв featureId (W4-5B2), существование тут не проверяется:
+          // открытие само покажет «не найдено» — тот же приём, что A1 для абсолютных путей.
+          if (featureLinks && href) {
+            if (href.startsWith('featuredoc:')) {
+              const id = decodeURIComponent(href.slice('featuredoc:'.length));
+              return <FileLink path={id} onOpen={featureLinks.openDocument} title="Открыть документ фичи">{children}</FileLink>;
+            }
+            if (href.startsWith('featurelink:')) {
+              const path = decodeURIComponent(href.slice('featurelink:'.length));
+              return <FileLink path={path} onOpen={featureLinks.openFile}>{children}</FileLink>;
+            }
+            const rel = href.trim().split(/[#?]/)[0];
+            if (rel && !ABS_PATH_RE.test(rel) && rel.includes('/') && FILE_LIKE_MENTION.test(rel)) {
+              return <FileLink path={rel} onOpen={featureLinks.openFile}>{children}</FileLink>;
+            }
+          }
           // Ссылка на файл проекта ([гайд](docs/…)) открывает его на просмотр, а не наружу.
           // Текст ссылки — как написал автор markdown, label из resolveFileMention сюда не идёт.
           const mention = resolveFileMention(href);
@@ -429,8 +455,9 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
           return <ReaderLinkWrap href={href}>{children}</ReaderLinkWrap>;
         },
     };
-    // treePath — в зависимостях: от него зависит короткий label абсолютного пути
-  }, [project, onOpenFile, fileIndex, treePath]);
+    // treePath — в зависимостях: от него зависит короткий label абсолютного пути;
+    // featureLinks — от него зависит распознавание ссылок читалки фичи (W4-LINK-F)
+  }, [project, onOpenFile, fileIndex, treePath, featureLinks]);
 
   return (
     <ReactMarkdown remarkPlugins={REMARK_PLUGINS} urlTransform={urlTransform} components={components}>

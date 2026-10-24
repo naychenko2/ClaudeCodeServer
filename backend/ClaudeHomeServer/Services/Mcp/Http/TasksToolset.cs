@@ -574,6 +574,9 @@ public sealed class TasksToolset(
                 var id = StringArg(arguments, "id");
                 if (GetAccessible(context.OwnerId, projectId, allowed, id) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
+                // W4-HOLD-N (хвост R-N п.3): та же страховка, что у REST-удаления: MCP-путь
+                // её обходил — удалённый на паузе эпик/шаг оставлял чат «вечным».
+                executor.RestoreFrozenChatsBeforeDelete(task);
                 tasks.Delete(id);
                 await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("deleted", task));
                 return Text($"Задача {id} удалена.");
@@ -1260,11 +1263,11 @@ public sealed class TasksToolset(
                     },
                     ["dueDate"] = new JsonObject
                     {
-                        ["type"] = "string", ["description"] = "YYYY-MM-DD или \"\" чтобы убрать срок",
+                        ["type"] = "string", ["description"] = "YYYY-MM-DD; \"\" — убрать срок",
                     },
                     ["dueTime"] = new JsonObject
                     {
-                        ["type"] = "string", ["description"] = "HH:MM или \"\" чтобы убрать время",
+                        ["type"] = "string", ["description"] = "HH:MM; \"\" — убрать время",
                     },
                     ["reminderMinutes"] = ReminderMinutesSchema(),
                     ["recurrence"] = RecurrenceSchema(),
@@ -1420,13 +1423,13 @@ public sealed class TasksToolset(
     private static JsonObject ReminderMinutesSchema() => new()
     {
         ["type"] = "integer",
-        ["description"] = "Напоминание: за сколько минут до срока уведомить (0 = в момент срока). Требует dueDate.",
+        ["description"] = "Напоминание за N минут до срока (0 = в момент срока). Требует dueDate.",
     };
 
     private static JsonObject RecurrenceSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Повторение задачи, требует dueDate (см. инструкции сервера tasks)",
+        ["description"] = "Повторение задачи, требует dueDate",
         ["required"] = new JsonArray { "type" },
         ["properties"] = new JsonObject
         {
@@ -1464,19 +1467,19 @@ public sealed class TasksToolset(
     {
         ["type"] = "string",
         ["enum"] = new JsonArray { "strong", "medium", "weak" },
-        ["description"] = "Уровень модели исполнения (см. инструкции сервера tasks); сомневаешься — не указывай",
+        ["description"] = "Уровень модели исполнения; сомневаешься — не указывай",
     };
 
     private static JsonObject WorktreePathSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Абсолютный путь СУЩЕСТВУЮЩЕГО git worktree проекта (см. инструкции сервера tasks); \"\" — убрать",
+        ["description"] = "Абсолютный путь существующего worktree проекта; \"\" — убрать",
     };
 
     private static JsonObject WorktreeBranchSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Ветка этого worktree (метка в git-баре чата); пусто — из самого дерева",
+        ["description"] = "Ветка этого worktree (метка в git-баре чата); пусто — из дерева",
     };
 
     private static JsonObject ExecutionTtlSchema() => new()
@@ -1488,20 +1491,20 @@ public sealed class TasksToolset(
     private static JsonObject ResultMarkdownSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Markdown-описание итога выполнения (заменяет целиком). \"\" — очистить.",
+        ["description"] = "Итог выполнения (markdown), заменяет целиком; \"\" — очистить",
     };
 
     private static JsonObject LinkedFilesSchema() => new()
     {
         ["type"] = "array",
         ["items"] = new JsonObject { ["type"] = "string" },
-        ["description"] = "Пути файлов проекта (от корня проекта, через /). Заменяют список целиком.",
+        ["description"] = "Файлы проекта (от корня, через /); заменяют список целиком",
     };
 
     private static JsonObject ColumnIdSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "ID колонки доски проекта (см. tasks_board_columns); статус выставится по её категории",
+        ["description"] = "ID колонки доски (см. tasks_board_columns); статус — по её категории",
     };
 
     // Вид карточки: task — обычная, defect — дефект (правила DefectRules).
@@ -1509,7 +1512,7 @@ public sealed class TasksToolset(
     {
         ["type"] = "string",
         ["enum"] = new JsonArray { "task", "defect" },
-        ["description"] = "Тип карточки (обычная задача или дефект — см. инструкции сервера tasks)",
+        ["description"] = "Тип карточки: обычная задача или дефект",
     };
 
     // Шаги воспроизведения дефекта. steps обязателен у дефекта, expected/actual — пояснения
@@ -1517,7 +1520,7 @@ public sealed class TasksToolset(
     private static JsonObject ReproSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Шаги воспроизведения дефекта (см. инструкции сервера tasks)",
+        ["description"] = "Шаги воспроизведения дефекта",
         ["properties"] = new JsonObject
         {
             ["steps"] = new JsonObject { ["type"] = "string", ["description"] = "Шаги (markdown); обязательны у дефекта" },
@@ -1610,14 +1613,14 @@ public sealed class TasksToolset(
     private static JsonObject FeatureIdSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Id задачи-эпика фичи; без роли — частичный мерж (см. инструкции сервера tasks)",
+        ["description"] = "Id задачи-эпика фичи; без роли — частичный мерж",
     };
 
     private static JsonObject RoleSchema() => new()
     {
         ["type"] = "string",
         ["enum"] = StringArray(TaskRoles.All),
-        ["description"] = "Роль в фиче: feature · cut · plan · step · rework · review · qa · final · merge (после принятого финала) · consult",
+        ["description"] = "Роль в фиче: feature · cut · design (задача дизайнера, этап необязателен) · plan · step · rework · review · qa · final · merge (после принятого финала) · consult",
     };
 
     private static JsonObject StepRefSchema() => new()

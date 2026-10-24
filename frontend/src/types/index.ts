@@ -663,6 +663,11 @@ export interface Task {
   // (см. ExecutorStopClassifier). executorStoppedAt != null — карточка ждёт человека.
   executorStoppedAt?: string;
   executorStopReason?: string;
+  // Явное ожидание человека (Update AwaitingHumanSince): с какого момента и почему.
+  // «Ход идёт» (спиннер «AI работает») — только без остановки и без ожидания,
+  // тот же предикат, что бэк FeatureProjector.IsTurnRunning.
+  awaitingHumanSince?: string;
+  awaitingHumanReason?: string;
   /** Исполнитель ждёт устройство локального проекта (ADR-016): с какого момента и почему */
   deviceWaitSince?: string | null;
   deviceWaitReason?: string | null;

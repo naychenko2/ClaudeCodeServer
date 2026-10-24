@@ -612,7 +612,9 @@ public sealed record FeatureTimeline(
         return null;
     }
 
-    // Все задачи фичи: эпик + дочерние (шаги/ревью/проверки/финал/мерж/cut+consult/plan).
+    // Задачи фичи с ролью: эпик + дочерние (шаги/ревью/проверки/финал/мерж/cut/design/plan).
+    // Безролевые (Unroled) здесь НЕ входят: у них нет стадии, в метрики они не идут (решение
+    // Александра, W4-DES-B) — остаются только в хронологии (FeatureProjector.BuildEvents).
     private static IEnumerable<TaskItem> AllTasks(FeatureRun run)
     {
         yield return run.Epic;
@@ -622,6 +624,7 @@ public sealed record FeatureTimeline(
         if (run.Final is not null) yield return run.Final;
         if (run.Merge is not null) yield return run.Merge;
         foreach (var t in run.Cut) yield return t;
+        foreach (var t in run.Design) yield return t;
         foreach (var t in run.Plan) yield return t;
     }
 

@@ -82,6 +82,12 @@ public class TaskSchedulerService(
         return dueUtc is not null && dueUtc <= nowUtc && nowUtc - dueUtc <= AutoStartWindow;
     }
 
+    // Отличает отказ по паузе (W4-HOLD-G) от падения автозапуска (R-HOLD-G, находка 6; W4-HOLD-I):
+    // по источнику — типу, который поднимает сам гейт, — а не пересчётом предиката: plain
+    // InvalidOperationException («У задачи нет владельца») рядом с удержанной фичей — не отказ по
+    // правилу, и не должен попадать в тихую ветку.
+    internal static bool IsHoldRefusal(Exception ex) => ex is FeatureHoldException;
+
     // Автозапуск Claude-исполнителя в момент срока: assignee=Claude, ещё не запускалась.
     // Устройство локального проекта офлайн — исполнитель сам ставит задачу в «ждёт устройство»
     private async Task ProcessClaudeAutoStartAsync(TaskItem task, TimeZoneInfo tz, DateTime nowUtc)
@@ -94,8 +100,18 @@ public class TaskSchedulerService(
         }
         catch (Exception ex)
         {
-            log.LogWarning(ex, "Автозапуск Claude-исполнителя не удался: задача {TaskId} «{Title}»",
-                task.Id, task.Title);
+            if (IsHoldRefusal(ex))
+            {
+                // Пауза — правило, а не поломка: задачу не запускаем намеренно. Тихий лог
+                // без трейса, чтобы штатные отказы не тонили реальные провалы автозапуска.
+                log.LogInformation("Автозапуск пропущен по паузе фичи: задача {TaskId} «{Title}» — {Reason}",
+                    task.Id, task.Title, ex.Message);
+            }
+            else
+            {
+                log.LogWarning(ex, "Автозапуск Claude-исполнителя не удался: задача {TaskId} «{Title}»",
+                    task.Id, task.Title);
+            }
         }
     }
 

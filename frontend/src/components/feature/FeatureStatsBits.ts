@@ -128,7 +128,7 @@ export function kindTextColor(kind: SegmentKind): string {
 // Имя этапа по ключу (макет: cut→Разрез, …, merge→Мерж). Неизвестный ключ — как есть.
 export function stageLabel(key: string): string {
   const names: Record<string, string> = {
-    cut: 'Разрез', plan: 'План', prod: 'Производство', review: 'Ревью',
+    cut: 'Разрез', design: 'Дизайн', plan: 'План', prod: 'Производство', review: 'Ревью',
     qa: 'Проверка', final: 'Финальное ревью', merge: 'Мерж',
   };
   return names[key] ?? key;

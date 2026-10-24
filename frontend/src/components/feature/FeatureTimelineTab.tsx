@@ -8,16 +8,19 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
-  stageDotStyle, stageLineStyle, buildTaskMap, stageStatusBadge, ExecutorRow,
-  StepRow, stepModel,
+  stageDotStyle, stageLineStyle, buildTaskMap, stageStatusBadge, ExecutorRow, buildExecutorIndex,
 } from './FeatureTimelineBits';
-import type { FeatureRun, FeatureStage, FeatureStepChain, StageKey } from '../../types/featureRun';
+import type { StepProgress } from '../../lib/featureProgress';
+import { FeatureProdCardsView } from './FeatureProdCardsView';
+import type { FeatureRun, FeatureStage, FeatureStageExecutor, StageKey } from '../../types/featureRun';
 
 // Вкладка «Хронология» (волна 3, Ф2a, макет features-overview-3-final §5): поясняющая
 // строка + вертикальный список 7 этапов в порядке жизненного цикла (cut → plan → prod →
 // review → qa → final → merge). У каждого: точка/линия, имя, состояние, границы, «≈»,
-// исполнители и плашки «ждёт вас · N мин» / «стоит · N мин». Один раскрытый этап за раз;
-// текущий (active) открыт по умолчанию. Шаги/витки/сводка/график — не здесь (Ф2b/Ф7/Ф8).
+// плашка «ждёт вас · N мин» / «стоит · N мин». Один раскрытый этап за раз; текущий
+// (active) открыт по умолчанию. «Производство» (W4-2F3) — лента карточек
+// FeatureProdCardsView вместо «исполнители/шаги»; остальные этапы — исполнители.
+// Сводка/график — не здесь (Ф7/Ф8).
 
 // Поясняющая строка (макет §5): Info 13, 11 textSecondary, bgCard, borderLight, R.md, поля 6 10.
 function TimelineNote() {
@@ -41,17 +44,19 @@ function TimelineNote() {
 }
 
 // Строка этапа: точка + линия + заголовок (имя · состояние · «≈») + границы + (раскрыто)
-// карточка с исполнителями и плашкой состояния; у «Производство» — ещё и шаги (Ф2b).
-// Клик по заголовку — раскрыть/схлопнуть.
+// карточка с плашкой состояния; у «Производство» — лента карточек (W4-2F3), у других
+// этапов — исполнители. Клик по заголовку — раскрыть/схлопнуть.
 function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, featureTitle = null,
-  chains, showSteps = false, expandedStep = null, onToggleStep, marks = EMPTY_NAV_MARKS, isMobile = false }: {
+  run, showProd = false, marks = EMPTY_NAV_MARKS, isMobile = false,
+  execIndex = new Map<string, FeatureStageExecutor>(), progress = null }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
   now: number; featureId: string; featureTitle?: string | null;
-  chains?: FeatureStepChain[]; showSteps?: boolean;
-  expandedStep?: string | null; onToggleStep?: (ref: string) => void;
+  run: FeatureRun; showProd?: boolean;
   marks?: NavMarks;
   isMobile?: boolean;
+  execIndex?: Map<string, FeatureStageExecutor>;
+  progress?: StepProgress | null;
 }) {
   const status = stageStatusLabel(stage);
   const bounds = stageBoundsLabel(stage);
@@ -141,7 +146,39 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
               </span>
             </div>
           )}
-          {stage.executors.length > 0 ? (
+          {showProd ? (
+            /* W4-2F3: «Производство» — одна лента карточек (шаг — карточка, порядок
+               по старту даёт модель). Сироты «Производства» (фикс R4e): если карточек
+               нет, но у стадии есть исполнители — прежние ExecutorRow, задача не
+               исчезает из вкладки. Пустое состояние остаётся только когда показывать
+               действительно некого. */
+            FeatureProdCardsView({ run, featureId, featureTitle, marks, isMobile }) ?? (stage.executors.length > 0 ? (
+              stage.executors.map((x, i) => (
+                <ExecutorRow
+                  key={`${x.taskId}-${i}`}
+                  x={x}
+                  task={x.taskId ? taskMap.get(x.taskId) : undefined}
+                  now={now}
+                  featureId={featureId}
+                  featureTitle={featureTitle}
+                  marks={marks}
+                  isMobile={isMobile}
+                  taskMap={taskMap}
+                  execIndex={execIndex}
+                  progress={progress}
+                />
+              ))
+            ) : (
+              <div data-testid="feature-steps-empty" style={{ fontFamily: FONT.sans }}>
+                <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, padding: `${SP.xs}px 0` }}>
+                  Шагов пока нет
+                </div>
+                <div style={{ fontSize: FS.sm, color: C.textMuted }}>
+                  Появятся, когда Егор составит план.
+                </div>
+              </div>
+            ))
+          ) : stage.executors.length > 0 ? (
             stage.executors.map((x, i) => (
               <ExecutorRow
                 key={`${x.taskId}-${i}`}
@@ -152,47 +189,14 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                 featureTitle={featureTitle}
                 marks={marks}
                 isMobile={isMobile}
+                taskMap={taskMap}
+                execIndex={execIndex}
+                progress={progress}
               />
             ))
           ) : (
             <div data-testid="timeline-stage-no-executors" style={{ fontSize: FS.sm, color: C.textMuted }}>
               Исполнителей нет
-            </div>
-          )}
-          {/* Ф2b: шаги и витки — только у «Производство» */}
-          {showSteps && (
-            <div
-              data-testid="timeline-steps"
-              style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: SP.sm, paddingTop: SP.sm }}
-            >
-              {(chains && chains.length > 0) ? (
-                chains.map(chain => {
-                  const ref = chain.stepRef || chain.title;
-                  return (
-                    <StepRow
-                      key={ref}
-                      chain={chain}
-                      model={stepModel(stage.executors, chain.stepRef)}
-                      expanded={expandedStep === ref}
-                      onToggle={() => onToggleStep?.(ref)}
-                      featureId={featureId}
-                      featureTitle={featureTitle}
-                      task={chain.taskIds[0] ? taskMap.get(chain.taskIds[0]) : undefined}
-                      marks={marks}
-                      isMobile={isMobile}
-                    />
-                  );
-                })
-              ) : (
-                <div data-testid="feature-steps-empty" style={{ fontFamily: FONT.sans }}>
-                  <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, padding: `${SP.xs}px 0` }}>
-                    Шагов пока нет
-                  </div>
-                  <div style={{ fontSize: FS.sm, color: C.textMuted }}>
-                    Появятся, когда Егор составит план.
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -203,13 +207,15 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
 
 // Вкладка «Хронология»: поясняющая строка + список 7 этапов. `now` — фиксированный
 // момент (Date.now на рендер) для минут «идёт/ждёт/стоит»; стабильен в пределах кадра.
-// Ф2b: у «Производство» — шаги (run.stepChains) и их витки; один шаг раскрыт за раз.
+// W4-2F3: «Производство» — лента карточек (FeatureProdCardsView), другие этапы — исполнители.
 export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: { run: FeatureRun; marks?: NavMarks; isMobile?: boolean }) {
   const stages = run.stages ?? [];
-  const chains = run.stepChains ?? [];
   // Честный прогресс (Ф-pr): из run.stepProgress; null — старые ответы (строки нет).
   const progress = stepProgressFromRun(run);
   const taskMap = useMemo(() => buildTaskMap(run), [run]);
+  // W4-3F: индекс исполнителей по taskId — статус чипов «оценивает →» берётся только из
+  // stages[].executors[] (бэк W4-3B уже отфильтровал связь по задачам этого run).
+  const execIndex = useMemo(() => buildExecutorIndex(stages), [stages]);
   // Пометки «в архиве»/«задача закрыта»: страница даёт полные (с чатами), без пропа —
   // из самого агрегата (исполнители стадий + задачи).
   const marks = useMemo(() => marksProp ?? buildNavMarks(run), [marksProp, run]);
@@ -226,10 +232,6 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
   // Один раскрытый этап за раз; null — все схлопнуты.
   const [expanded, setExpanded] = useState<StageKey | null>(currentKey);
   const toggle = (key: StageKey) => setExpanded(cur => (cur === key ? null : key));
-
-  // Ф2b: один раскрытый шаг за раз (ключ = stepRef || title); null — все схлопнуты.
-  const [expandedStep, setExpandedStep] = useState<string | null>(null);
-  const toggleStep = (ref: string) => setExpandedStep(cur => (cur === ref ? null : ref));
 
   // Якорь этапа (Ф-pl-b): клик по точке на плашке чата открыл страницу на «Хронологии» —
   // раскрываем/прокручиваем на этот этап. One-shot по seq (тот же приём, что focusFeatureStep):
@@ -271,12 +273,12 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false }: 
           now={now}
           featureId={run.featureId}
           featureTitle={featureTitle}
-          chains={stage.key === 'prod' ? chains : undefined}
-          showSteps={stage.key === 'prod'}
-          expandedStep={stage.key === 'prod' ? expandedStep : null}
-          onToggleStep={stage.key === 'prod' ? toggleStep : undefined}
+          run={run}
+          showProd={stage.key === 'prod'}
           marks={marks}
           isMobile={isMobile}
+          execIndex={execIndex}
+          progress={progress}
         />
       ))}
     </div>

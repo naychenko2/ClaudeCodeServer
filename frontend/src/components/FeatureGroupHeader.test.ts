@@ -18,12 +18,13 @@ import type { Session, Persona } from '../types';
 
 // === Фикстуры ===
 
-// 7 стадий в порядке жизненного цикла (cut → … → merge); `over` — точечные
+// Фикстура: 7 сегментов (design не включена — необязательный этап); `over` — точечные
 // переопределения по ключу стадии.
 const KEYS: FeatureRailKey[] = ['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge'];
 function rail(over: Partial<Record<FeatureRailKey, Partial<FeatureRailSegment>>> = {}): FeatureRailSegment[] {
   const base: Record<FeatureRailKey, FeatureRailSegment> = {
     cut:    { key: 'cut',    state: 'done',    tone: null },
+    design: { key: 'design', state: 'pending', tone: null },
     plan:   { key: 'plan',   state: 'done',    tone: null },
     prod:   { key: 'prod',   state: 'active',  tone: 'run' },
     review: { key: 'review', state: 'pending', tone: null },

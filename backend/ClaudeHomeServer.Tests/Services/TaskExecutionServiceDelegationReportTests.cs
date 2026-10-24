@@ -212,6 +212,24 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         _sessions.GetVisiblePending(parent.Id).Should().BeEmpty();
     }
 
+    // W4-HOLD-I (контракт §1 :183): доклад о задаче удержанной фичи — карточка в чате
+    // постановщика остаётся, ход-реакция не поднимается: будить оркестатора во время паузы
+    // пустое. Мутация: убрать FeatureIsPaused в ReportToDelegatorAsync — последнее
+    // утверждение краснеет (реакция уйдёт).
+    [Fact]
+    public async Task Доклад_ФичаНаПаузе_КарточкаБезХодаРеакции()
+    {
+        var (task, _, _) = await ArrangeDelegatedTaskAsync();
+        var epic = _tasks.Create(null, task.OwnerId!, new CreateTaskRequest("Фича", Role: "feature"));
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        task.FeatureId = epic.Id;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        Sent<GuestTextMessage>().Should().ContainSingle("факт завершения человек видит карточкой");
+        Sent<UserMessageMessage>().Should().BeEmpty("во время паузы постановщик не будится ходом-реакцией");
+    }
+
     // --- Адресат доклада — запустивший исполнителя, а не только создатель карточки ---
 
     private async Task<Session> LaunchChatAsync(TaskItem task, string name)

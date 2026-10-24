@@ -298,7 +298,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
               <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} />
             </>
           ) : tab === 'plans' ? (
-            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} />
+            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} featureId={featureId} projectId={projectId} />
           ) : tab === 'chats' ? (
             <FeatureChatsTab page={page.page} keySessionId={keyChat} featureId={featureId} marks={marks} isMobile={isMobile} />
           ) : tab === 'tasks' ? (
@@ -306,8 +306,8 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
           ) : tab === 'events' ? (
             <FeatureEventsTab events={page.page.events} eventsTotal={page.page.eventsTotal} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} marks={marks} isMobile={isMobile} />
           ) : (
-            // «Статистика» (Ф7a): лента времени из stats (features/{id}); null — пустое состояние.
-            <FeatureStatsTab stats={page.page.stats ?? null} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} marks={marks} isMobile={isMobile} />
+            // «Статистика» (Ф7a): ступени Ганта из run + stats (features/{id}); stats null — пустое состояние.
+            <FeatureStatsTab stats={page.page.stats ?? null} run={okRun} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} marks={marks} isMobile={isMobile} />
           )}
         </div>
       </>

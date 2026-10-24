@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Journal;
 
@@ -160,6 +161,26 @@ public class FeatureJournalTransitionsTests : IDisposable
         result.Entries.Should().Contain(e => e.Kind == "waiting_cleared");
         // Время waiting_cleared — момент мутации (не значение снятого поля).
         result.Entries.Single(e => e.Kind == "waiting_cleared").At.Should().BeOnOrAfter(now);
+    }
+
+    // ─── stop_expired: смена причины стопа без движения метки (W4-HOLD-J, R-HOLD-J п.4) ──
+    // Мутация: убрать ветку stop_expired в WriteJournalTransitions — первый абзац краснеет
+    // (в журнале нет причины); вернуть «stopped» вместо отдельного вида — красен второй.
+
+    [Fact]
+    public void СменаПричиныСтопа_ПишетStopExpired_БезДубляStopped()
+    {
+        var (epic, step) = CreateFeatureAndStep();
+        var now = DateTime.UtcNow;
+        _sut.MarkExecutorStopped(step.Id, now, ExecutorStopClassifier.FeatureHeldReason);
+        _sut.MarkExecutorStopExpired(step.Id);
+
+        var result = _journal.Read("u", epic.Id);
+        result.Entries.Should().Contain(e => e.Kind == "stop_expired"
+            && e.Reason == ExecutorStopClassifier.FeatureHeldExpiredReason,
+            "терминальная причина смены пометки в журнале");
+        // Момент стопа не двигался: второго «stopped» нет — таймлайн не считает стоп дважды.
+        result.Entries.Count(e => e.Kind == "stopped").Should().Be(1);
     }
 
     // ─── Идемпотентность: повторная мутация без смены значения ──────────────────

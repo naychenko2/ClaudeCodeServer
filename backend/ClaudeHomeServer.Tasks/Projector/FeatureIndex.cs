@@ -5,12 +5,16 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // сессии владельца (SessionManager.GetAllOwnedBy) и маппит в эту запись. Id — id чата;
 // TaskId — Session.TaskId (задача-владелец чата-исполнителя); ProjectId — проект чата
 // (null — чат вне проектов); Archived — чат в архиве (Session.IsArchived); Model — модель
-// чата как сохранена в Session.Model (null/пусто — «Авто», слот; Б4).
-public sealed record FeatureIndexSession(string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null);
+// чата как сохранена в Session.Model (null/пусто — «Авто», слот; Б4). PersonaId — персона
+// чата (Session.PersonaId, W4-1B): оркестратор фичи берётся только от сессий этого снимка
+// (чужой/удалённый ключевой чат в него не попадает → запасная цепочка по полям эпика).
+public sealed record FeatureIndexSession(
+    string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null, string? PersonaId = null);
 
-// Чат фичи (GET /api/tasks/features/{id}, chats[]; Б4): один чат из снимка владельца,
-// привязанный к фиче. kind: key | curator | orchestrator | executor (те же виды, что в
-// FeatureIndexChatEntry; «key» — чат эпика/оркестратора без признака curator/orchestrator).
+// Чат фичи (GET /api/tasks/features/{id}, chats[]; Б4 + W4-CHT-B): один чат из снимка
+// владельца, состоящий в фиче по ЕДИНОМУ правилу FeatureChatMembership. kind: curator |
+// orchestrator | executor — тот же вид, что в FeatureIndexChatEntry; «key» бэк не emits:
+// ключевой чат помечает фронт по keySessionId (FeatureChatsTab).
 // modelLabel/modelFull — как у исполнителя (FeatureStageExecutor): «Авто»/короткая метка и
 // полное имя (для «Авто» — «Авто → {модель} (слот «{тир}»)»).
 public sealed record FeatureChat(
@@ -32,8 +36,10 @@ public sealed record FeatureChat(
 // (per-owner, fail-closed: наружу уходит только id, который есть во входном снимке владельца).
 public sealed class FeatureIndex
 {
-    // Чат → его фичи, упорядоченные по силе связи: key > curator > orchestrator > executor.
-    // При равенстве силы — по порядку фичи в Features. Id чата — только из входного снимка.
+    // Чат → его фичи. Порядок (W4-CHT-B, контракт §2): сначала открытые фичи, потом закрытые;
+    // внутри класса — по силе связи (curator > orchestrator > executor), при равенстве — по
+    // порядку фичи в Features. «Своя» фича чата (по TaskId) — первая внутри своего класса.
+    // Id чата — только из входного снимка.
     public Dictionary<string, List<FeatureIndexChatEntry>> Chats { get; init; } = new();
     // Строки фич (контракт С0 §1) — Б2.
     public List<FeatureIndexRow> Features { get; init; } = [];
@@ -61,12 +67,13 @@ public sealed record FeatureIndexRow(
     // Группа фичи: attention — требует внимания; running — идёт; idle — стоит; closed — закрыта.
     // Выводится из State (единая точка правда, FeatureProjector.Bucket) — bucket и state не расходятся.
     string Bucket,
-    // Состояние фичи (FeatureRun.State; 9 значений, см. FeatureStates): merged · closed · stopped ·
-    // waiting · merging · merge_pending · running · not_started · idle.
+    // Состояние фичи (FeatureRun.State; 11 значений, см. FeatureStates): merged · closed · paused ·
+    // stopped · waiting · draft · merging · merge_pending · running · not_started · idle.
     string State,
     // Тревога; null — тревоги нет.
     FeatureIndexAttention? Attention,
-    // Рельса: ровно 7 стадий в порядке жизненного цикла.
+    // Рельса: 8 стадий в явном порядке жизненного цикла (cut → design → plan → …; «design»
+    // необязательна: без задач — skipped, W4-DES-B).
     List<FeatureIndexRailSegment> Rail,
     // Чипы-фильтры: open | waiting | stopped | merge | closed.
     List<string> Chips,
@@ -87,6 +94,10 @@ public sealed record FeatureIndexRow(
     bool KeyArchived,
     // Проект ключевого чата; null — чат вне проектов.
     string? KeyProjectId,
+    // Оркестратор фичи (W4-1B): персона ключевого чата из снимка владельца; иначе —
+    // персона, запустившая исполнителя эпика; иначе — создавшая эпик; null — никого нет.
+    // Только в строке индекса: в features/{id} (FeatureRun) не дублируется.
+    string? OrchestratorPersonaId,
     // Чатов фичи в этом ответе (архивные включены).
     int ChatCount,
     // Аддитивные (волна 2, без хранения — вычисляются из эпика/задач/«сейчас»):
@@ -108,7 +119,13 @@ public sealed record FeatureIndexRow(
     // Вне знаменателя (как в FeatureStepProgress): шаги, снятые ревью с выкладки, и доработки без
     // привязки к шагу — индекс отдаёт те же числа, что страница фичи.
     int StepsWithdrawn,
-    int UnlinkedReworks);
+    int UnlinkedReworks,
+    // Причина удержания эпика (W4-HOLD-B1): draft | manual | queue; null — удержания нет.
+    // Только сигнал для фронта (тон «на паузе»/«черновик»); сам факт состояния — в State.
+    string? HoldReason,
+    // Момент постановки удержания (FeatureHold.Since, R-HOLD-B1): длительность «на паузе · {dur}»
+    // в макете (блокер фронта HOLE-F2). Аддитивное поле: null — удержания нет.
+    DateTime? HoldSince);
 
 // Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
 // нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя

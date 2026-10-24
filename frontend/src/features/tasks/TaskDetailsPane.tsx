@@ -18,7 +18,7 @@ import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
-  deleteTask, deviceWaitDuration, dueLabel, executorStopText, isDeviceWaiting, projectColor, projectInitial,
+  deleteTask, deviceWaitDuration, dueLabel, executorStopVisual, isDeviceWaiting, isTerminalStop, projectColor, projectInitial,
   recurrenceLabel, reminderLabel, updateTask, useEnsureFullTask, useTasks,
 } from '../../lib/tasks';
 import {
@@ -245,8 +245,18 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
   // Ожидание устройства (ADR-016) — запуска ещё не было, «в работе» не показываем
   const deviceWaiting = isDeviceWaiting(task);
   const deviceName = project?.device?.name ?? null;
-  const deviceWaitExpired = task.status !== 'done' && task.executorStopReason === 'device_wait_expired';
-  const claudeRunning = !!task.claudeStartedAt && !task.claudeResult && task.status !== 'done' && !deviceWaiting;
+  // Вид терминальной остановки (текст, тон, глиф) — из одной функции, как на карточке
+  // (W4-HOLD-F5): панель не собирает триплет сама, иначе у причины текст, тон и глиф
+  // разъехались бы между карточкой и деталями.
+  const stopVisual = task.status !== 'done' && isTerminalStop(task.executorStopReason)
+    ? executorStopVisual(task.executorStopReason, deviceName)
+    : null;
+  // «Ход идёт сейчас» — тот же предикат, что бэк FeatureProjector.IsTurnRunning: не
+  // «запускался когда-то», а идёт теперь: InProgress, есть claudeStartedAt, нет результата,
+  // исполнитель не встал (executorStoppedAt) и не ждёт человека (awaitingHumanSince).
+  // Без этих меток остановленный паузой фичи шаг светился бы «AI работает» (R-F7).
+  const claudeRunning = task.status === 'inProgress' && !!task.claudeStartedAt && !task.claudeResult
+    && !task.executorStoppedAt && !task.awaitingHumanSince && !deviceWaiting;
 
   // AI-хаб: контекстные действия задачи из палитры/подсказки. «Выполнить» — тот же
   // обработчик, что и кнопка (со стейтом «Запуск…»); генерация — вход в правку + авто-запуск.
@@ -438,14 +448,16 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
         </div>
       )}
 
-      {/* Исполнитель ждёт устройство локального проекта либо так его и не дождался */}
-      {(deviceWaiting || deviceWaitExpired) && (
+      {/* Исполнитель ждёт устройство локального проекта либо встал на терминальной причине */}
+      {(deviceWaiting || stopVisual) && (
         <Notice
-          tone={deviceWaiting ? 'warning' : 'danger'}
-          icon={Unplug}
+          // Тон и глиф — из того же триплета, что и текст (хвост R-F6): ожидание
+          // устройства — не остановка (причины ещё нет), у него warning и Unplug
+          tone={deviceWaiting ? 'warning' : stopVisual!.tone}
+          icon={deviceWaiting ? Unplug : stopVisual!.icon}
           title={deviceWaiting
             ? <>{deviceName ? `Ждёт устройство «${deviceName}»` : 'Ждёт устройство проекта'} · {deviceWaitDuration(task.deviceWaitSince!)}</>
-            : executorStopText(task.executorStopReason, deviceName)}
+            : stopVisual!.text}
           style={{ marginBottom: SP.md }}
         >
           {deviceWaiting && (

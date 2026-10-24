@@ -502,7 +502,16 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // на первом рендере, когда флаги ещё не пришли из /me, и гейт здесь терял бы featureId
   // диплинка. Показ страницы гейтится отдельно (featurePageOpen), а адрес при выключенном
   // флаге приводит к проекту эффект «один раз» ниже.
+  // Монтаж под явный выбор чата (канал cc_pending_project_chat этого проекта БЕЗ метки
+  // keepFeature: уведомление, «ждёт ответа», старт чата, диплинк на чат) страницу из
+  // снимка/хэша не поднимает: иначе она всплывает сама и закрывается только выбором чата.
+  // Метку несут восстановления страницы («← к фиче», «назад/вперёд») — там страница остаётся.
   const [openFeatureId, setOpenFeatureId] = useState<string | null>(() => {
+    const raw = sessionStorage.getItem('cc_pending_project_chat');
+    if (raw) {
+      const pending = parsePendingChat(raw, project.id);
+      if (pending.pid === project.id && !pending.keepFeature) return null;
+    }
     return getNav()?.feature ?? parseHash(window.location.hash)?.featureId ?? null;
   });
   // Флаг «Обзор фич»: страница показана, только когда он включён (dark launch). До прихода

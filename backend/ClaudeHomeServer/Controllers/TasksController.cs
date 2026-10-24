@@ -137,6 +137,13 @@ public class TasksController(
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    // Признак сервисного токена (W4-HOLD-B2): тот же claim-литерал, что в PluginBridgeController
+    // (MapInboundClaims=false оставляет raw-имена). Удержание фичи ставит только человек —
+    // сервисный токен (MCP-обвязка) на ручках hold/clear отказывается 403.
+    private const string TokenKindClaim = "typ";
+    private const string ServiceTokenKind = "svc";
+    private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
+
     // Проект генерации: только свой; чужой/несуществующий → личный контекст
     private string? OwnProjectId(string? projectId) =>
         projectId is not null && projects.GetById(projectId)?.OwnerId == UserId ? projectId : null;
@@ -527,13 +534,13 @@ public class TasksController(
         return Ok(features.BuildIndex(UserId, SessionSnapshot(), projectId));
     }
 
-    // Узкий снимок сессий владельца (id, taskId, projectId, archived, model) — единый источник
-    // для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/удалённые
-    // id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
-    // Session.Model (null/пусто — «Авто», слот; Б4).
+    // Узкий снимок сессий владельца (id, taskId, projectId, archived, model, personaId) — единый
+    // источник для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/
+    // удалённые id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
+    // Session.Model (null/пусто — «Авто», слот; Б4). PersonaId — Session.PersonaId (W4-1B, оркестратор).
     private List<FeatureIndexSession> SessionSnapshot() =>
         sessions.GetAllOwnedBy(UserId)
-            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model))
+            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId))
             .ToList();
 
     // Б4/Б5b: готовая функция модели чата (label/full) для проекции фичи. Явная модель
@@ -604,7 +611,7 @@ public class TasksController(
         new(@"^[A-Za-z0-9_-]{1,128}$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     [HttpGet("features/{featureId}")]
-    public IActionResult GetFeature(string featureId, [FromQuery] string? eventsLimit = null)
+    public async Task<IActionResult> GetFeature(string featureId, [FromQuery] string? eventsLimit = null)
     {
         if (features is null)
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
@@ -633,9 +640,9 @@ public class TasksController(
         // Б-pl: документы фичи (вкладка «Планы и макеты») — СПИСОК (без текста) по ПОЛНОМУ run
         // (до SlimRun: Slim обнуляет ResultMarkdown, а hasText/mockupPaths — из него).
         var plans = FeatureProjector.BuildPlans(run);
-        // Б4: chats[] — все чаты фичи (эпик + дочерние) из снимка владельца; только features/{id}
-        // (в SlimRun/индекс chats не входит). kind: executor — чат задачи, curator/orchestrator/key
-        // — чат эпика по признакам (BuildFeatureChats).
+        // Б4: chats[] — все чаты фичи из снимка владельца; только features/{id}
+        // (в SlimRun/индекс chats не входит). Набор и kind — единое правило FeatureChatMembership
+        // (W4-CHT-B), локальной копии по TaskId/признакам эпика нет (BuildFeatureChats).
         var allFeatureTasks = new List<TaskItem> { run.Epic };
         allFeatureTasks.AddRange(run.Steps);
         allFeatureTasks.AddRange(run.Reviews);
@@ -643,7 +650,11 @@ public class TasksController(
         if (run.Final is not null) allFeatureTasks.Add(run.Final);
         if (run.Merge is not null) allFeatureTasks.Add(run.Merge);
         allFeatureTasks.AddRange(run.Cut);
+        // W4-CHT-B2: design и безролевые задачи — тоже задачи фичи: их чаты должны быть
+        // в «Чатах» так же, как в индексе (тот же состав, что FeatureTasks).
+        allFeatureTasks.AddRange(run.Design);
         allFeatureTasks.AddRange(run.Plan);
+        allFeatureTasks.AddRange(run.Unroled);
         var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
         // Б5a/Б5b: stats — график времени фичи по ПОЛНОМУ run (до SlimRun: интервалы work из
         // ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён для ответа).
@@ -815,22 +826,201 @@ public class TasksController(
             Spend: featureSpend);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
-        var (mockups, mockupsUnavailable) = BuildMockups(run, catalog);
+        var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
         return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
             mockups, mockupsUnavailable });
     }
+
+    // ─── W4-HOLD-B2: удержание фичи (POST/DELETE /api/tasks/features/{featureId}/hold) ────────
+    // Контракт §1 (docs/research/feature-lifecycle-shared-chat-cut-2026-10.md): Hold ставит
+    // только человек — сервисный токен (typ=svc) получает 403 на обе ручки. Эти ручки только
+    // пишут поле эпика и записи журнала held/hold_cleared; прерывание идущих ходов — шаг D.
+    // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой/кривой id — тело как у GET),
+    // 400 (неизвестный reason), 409: merged/closed/merging; draft после первого запуска шага;
+    // manual/queue поверх существующего draft; DELETE без удержания. POST 200 — тело
+    // { interrupted: [taskId] } (контракт :364, W4-HOLD-D2): прерванные этой паузой задачи.
+
+    // Тело POST hold: reason — словарь FeatureHoldReasons (draft | manual | queue).
+    public record FeatureHoldRequest(string? Reason);
+
+    [HttpPost("features/{featureId}/hold")]
+    public async Task<IActionResult> SetFeatureHold(string featureId, [FromBody] FeatureHoldRequest? req)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Удержание фичи ставит только человек" });
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // Тот же 404 с телом, что у GET features/{id} (фронт различает не должен).
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        // Завершённые и мержащиеся фичи на паузу не ставят: merged/closed — удерживать нечего,
+        // merging — мерж пауза не трогает вовсе (контракт §1: «на нём ручка отвечает 409»).
+        if (run.State == FeatureStates.Merged)
+            return Conflict(new { error = "Фича уже смержена" });
+        if (run.State == FeatureStates.Closed)
+            return Conflict(new { error = "Фича закрыта" });
+        if (run.State == FeatureStates.Merging)
+            return Conflict(new { error = "Мерж идёт: пауза на мерж не ставится" });
+
+        var reason = req?.Reason is null ? null : req.Reason.Trim();
+        if (string.IsNullOrEmpty(reason))
+            return BadRequest(new { error = "Нужен reason удержания (draft | manual | queue)" });
+        if (reason != FeatureHoldReasons.Draft && reason != FeatureHoldReasons.Manual
+            && reason != FeatureHoldReasons.Queue)
+            return BadRequest(new { error = "Неизвестный reason удержания: " + reason });
+
+        // Draft — черновик: фичу готовят, до первого запуска шага (решение 23.10: «только до
+        // первого запуска шага, иначе 409»). Тот же предикат anyStarted, что в проекторе.
+        if (reason == FeatureHoldReasons.Draft && FeatureAnyStarted(featureId))
+            return Conflict(new { error = "Draft только до первого запуска шага" });
+        // Manual/queue поверх draft: фича не начиналась — останавливать нечего, черновик
+        // снимают clear, а не переклейкой в паузу.
+        if (reason != FeatureHoldReasons.Draft && run.Epic.Hold?.Reason == FeatureHoldReasons.Draft)
+            return Conflict(new { error = "Фича в черновике: ручное удержание поверх draft" });
+
+        var epic = tasks.SetHold(featureId, reason);
+        if (epic is null) return NotFound(new { error = "Фича не найдена" });
+        // W4-HOLD-E (контракт §1, :208): помеченные ходы прерываются физически — тот же путь,
+        // что «Стоп»: процесс гасится, очередь замораживается, прерванный ход не присылает result
+        // и не докладывает постановщику. Ключевой чат оркестратора не трогается — внутри сервиса.
+        executor.InterruptFeatureTurnsOnHold(featureId, UserId);
+        // Дефект 8a94dede (возврат QA): постановка паузы молчала — страница фичи и список
+        // задач остаются «идёт» после «Пауза», экран противоречит тосту. Снятие вещает
+        // (TaskExecutionService.cs:1343), поэтому здесь — тот же формат: task_changed(updated)
+        // в группу владельца для эпика (с Hold — проектор по нему считает state=paused)
+        // и каждого шага, помеченного этой паузой. Без вещания стор обновляется только по
+        // снятию — асимметрия, которую Вера и зафиксировала.
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
+        foreach (var t in tasks.GetByOwner(UserId))
+        {
+            if (t.FeatureId != featureId) continue;
+            if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
+            await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", t));
+        }
+        // W4-HOLD-D2 (контракт :364): ответ — прерванные этой паузой задачи. Тот же набор,
+        // что поле run.interrupted на странице («на паузе» читает его, а не пустой now), —
+        // не отдельный счёт. Повторный hold с тем же reason идемпотентен по записи и Since,
+        // но набор interrupted пересчитывается: guard только на записи Hold, цикл пометки
+        // живёт на каждом вызове — ходы, начатые после первой паузы, добавляются.
+        var after = features.Project(featureId, UserId);
+        return Ok(new { interrupted = after?.Interrupted ?? [] });
+    }
+
+    [HttpDelete("features/{featureId}/hold")]
+    public async Task<IActionResult> ClearFeatureHold(string featureId)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Удержание фичи снимает только человек" });
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+        if (run.Epic.Hold is null)
+        {
+            // W4-SEAM R1 (тупик после сбоя продолжения): если доставка продолжения упала
+            // (catch в ResumeFeatureTurnsAfterHold), шаг остаётся помеченный feature_held при
+            // уже снятом Hold: карточка «шаг ждёт снятия паузы», фича stopped, а повторный
+            // DELETE hold давал бы 409 «снимать нечего» — тупик. Если такие шаги есть,
+            // повторное снятие не 409, а повтор продолжения: метод идемпотентен по пометке.
+            // Причина снятой паузы из состояния не восстанавливается — карточка повторяется
+            // в общей формулировке (manual).
+            var stuck = tasks.GetByOwner(UserId).Any(t => t.FeatureId == featureId
+                && t.Status == TaskItemStatus.InProgress
+                && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason);
+            if (!stuck) return Conflict(new { error = "Фича не удержана: снимать нечего" });
+            _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, FeatureHoldReasons.Manual);
+            // W4-SEAM2 (хвост R-SEAM2 п.2): пустые resumed/expired здесь неотличимы от
+            // «нечего делать» — ответ повтора помечается явно: продолжение повторено,
+            // а не «паузы не было».
+            return Ok(new { resumed = new List<string>(), expired = new List<string>(), repeated = true });
+        }
+
+        // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. Состав считается
+        // ДО снятия паузы (находка R-HOLD-H): пока Hold активен, FeatureHoldRefusal не-null ровно
+        // для задач, которым запуск блокирует пауза — это и есть те, кому снятие открывает запуск.
+        // После ClearHold гейт тавтологически «разрешает» и предикат перестал бы фильтровать.
+        // expired — те, чьё ожидание устройства просрочено потолком (общий предикат
+        // ProjectCapabilities.DeviceWaitExpired, как в sweep TaskExecutionService); закрытые не
+        // пробуждаются — как в GetDeviceWaiting. Форма — как у hold: списки id. Эпик в выборку
+        // не входит (FeatureId == null): его никто не запускает.
+        var now = DateTime.UtcNow;
+        var resumed = new List<string>();
+        var expired = new List<string>();
+        foreach (var t in tasks.GetByOwner(UserId))
+        {
+            if (t.FeatureId != featureId || t.Status == TaskItemStatus.Done) continue;
+            if (ProjectCapabilities.DeviceWaitExpired(t, now))
+                expired.Add(t.Id);
+            else if (tasks.FeatureHoldRefusal(t) is not null)
+                resumed.Add(t.Id);
+        }
+
+        // Дефект bec00347: формулировка карточки зависит от причины удержания — её берут из
+        // снимка run, собранного проектором до ClearHold (:910): у живого эпика после снятия
+        // Hold уже null.
+        var holdReason = run.Epic.Hold!.Reason;
+        var epic = tasks.ClearHold(featureId);
+        if (epic is null)
+        {
+            // Дефект 06aae1bf (гонка): снимок run (:923) взят при активном Hold, а конкурент
+            // успел снять его до этого ClearHold — фича на месте, требование уже выполнено
+            // победителем. 404 «Фича не найдена» здесь вводит в заблуждение: ответ — 200 с
+            // пустыми списками (пробуждение очереди — на стороне победителя). 404 остаётся
+            // только если эпик реально исчез (удалён между снимком и снятием).
+            if (tasks.GetById(featureId) is null) return NotFound(new { error = "Фича не найдена" });
+            return Ok(new { resumed = new List<string>(), expired = new List<string>() });
+        }
+        // Дефект c41d7e02 (возврат QA): снятие паузы молчал — страница фичи оставалась «на
+        // паузе» до ручной перезагрузки: task_changed вещает только сервис продолжений по
+        // ПРОДОЛЖЕНным шагам (TaskExecutionService.cs:1343), а если прерванных не было —
+        // нечего продолжать, вещания нет вовсе. Тот же формат, что у постановки (:897):
+        // task_changed("updated") по эпику — с снятым Hold проектор считает состояние
+        // не-пауза, экран уходит с «на паузе» живьём.
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
+        // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
+        // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
+        // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
+        // разрешены». Ответ не меняется: resumed/expired — пробуждение очереди (R-HOLD-H),
+        // продолженные шаги в неё не входят (они уже в работе).
+        // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой локализован в сервисе:
+        // каждая ветка продолжения обёртана и логируется там (TaskExecutionService.cs:1233,
+        // :1247, :1263, DeliverKeyChatCardAsync :1374), поэтому ручка вызов не оборачивает:
+        // после W4-HOLD-J сервис на известных путях не бросает, обёртка ручки была мёртвым
+        // покрытием (R-HOLD-K2 п.1).
+        _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, holdReason);
+        return Ok(new { resumed, expired });
+    }
+
+    // Любая задача фичи хоть раз запускалась — «первый запуска шага» состоялся. Тот же состав
+    // задач, что FeatureTasks в проекторе (эпик + дочерние по FeatureId), и тот же признак
+    // anyStarted (ClaudeStartedAt ≠ null) — гард draft не должен расходиться с состоянием.
+    private bool FeatureAnyStarted(string featureId) =>
+        tasks.GetByOwner(UserId).Any(t => (t.Id == featureId || t.FeatureId == featureId)
+            && t.ClaudeStartedAt is not null);
 
     // Б-mk-b: склейка макетов фичи (ADR-031 «Макеты фичи»). Порядок (fail-closed, сторож G10):
     //   1. эпик → его проект: только если принадлежит текущему владельцу (GetByOwner);
     //      чужой/нет → mockups: [] (файлы чужого проекта не трогаем);
     //   2. локальный проект (ProjectCapabilities.FilesOnServer=false) → [] + "device"
     //      ДО любого вызова Docs (файлы на устройстве, диск сервера не читаем);
-    //   3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
+    //   3. W4-5 (п.5.1): если у эпика есть проверенное дерево (FeatureTreePathAsync) — Find
+    //      вызывается ДВАЖДЫ: по дереву эпика и по корню проекта. Слияние по относительному
+    //      пути: запись дерева побеждает (ветка свежее), Files — объединение путей, а exists
+    //      записи дерева проверяется по дереву фичи (W4-R1: читатель с ?featureId= читает
+    //      ровно дерево). Дерева нет или проверка не прошла — только main, как раньше.
+    //   4. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
     //      Docs регистрируется безусловно, тумблера нет — ветка защитная, жива в тестах).
     // TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
     // которой есть path макета или любой из его files; иначе null. Сортировка: ModifiedAt
     // убыв., null в конце (детерминизм — путь).
-    private (IReadOnlyList<MockupEntry> Mockups, string? Unavailable) BuildMockups(FeatureRun run, MockupCatalog? catalog)
+    private async Task<(IReadOnlyList<MockupEntry> Mockups, string? Unavailable)> BuildMockups(FeatureRun run, MockupCatalog? catalog)
     {
         // 1. Проект эпика: только если он принадлежит текущему владельцу (GetByOwner, fail-closed).
         var project = run.Epic.ProjectId is { } pid
@@ -846,7 +1036,38 @@ public class TasksController(
         //    linkedFiles всех задач ПОЛНОГО run (эпик + шаги + ревью + qa + финал + мерж +
         //    разрез + план), только из проекта эпика (см. AllLinkedFiles).
         var linkedPaths = AllLinkedFiles(run);
-        var found = catalog?.Find(project.RootPath, run.FeatureId, linkedPaths) ?? [];
+
+        // W4-5: каталог читает проверенное дерево эпика и main; слияние по относительному
+        // пути. Кэш DocsIndexService ключуется корнем — дерево получает свой слот без правок.
+        var featureRoot = await FeatureTreePathAsync(run.Epic, project);
+        var merged = new Dictionary<string, MockupEntry>(StringComparer.OrdinalIgnoreCase);
+        if (featureRoot is not null)
+            foreach (var e in catalog?.Find(featureRoot, run.FeatureId, linkedPaths) ?? [])
+                merged[e.Path] = e with { Tree = MockupTree.Feature };
+        foreach (var e in catalog?.Find(project.RootPath, run.FeatureId, linkedPaths) ?? [])
+        {
+            if (merged.TryGetValue(e.Path, out var fromTree))
+            {
+                // W4-R1 (вариант А): запись дерева побеждает (tree="feature"), Files —
+                // объединение путей: файл, существующий только в main, не исчезает из
+                // каталога. Для дерева фичи exists проверяется ПО дереву фичи: читатель
+                // с ?featureId= читает ровно дерево (фолбэка на main нет), поэтому
+                // exists=true обязан гарантировать, что файл откроется. Пути, лежащие
+                // только в main, остаются в списке с exists=false.
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var files = new List<MockupFile>();
+                foreach (var f in fromTree.Files)
+                    if (seen.Add(f.Path)) files.Add(f);
+                foreach (var f in e.Files)
+                    if (seen.Add(f.Path)) files.Add(f with { Exists = false });
+                merged[e.Path] = fromTree with { Files = files };
+            }
+            else
+            {
+                merged[e.Path] = e with { Tree = MockupTree.Main };
+            }
+        }
+        var found = merged.Values;
 
         // 4. TaskId/AuthorPersonaId — по первой (по CreatedAt) задаче, в linkedFiles которой есть
         //    path макета или любой из его files; иначе null.
@@ -1132,6 +1353,18 @@ public class TasksController(
         return (false, null);
     }
 
+    // W4-5 (п.5.1): проверенное дерево эпика для чтения каталога макетов. Предикат — общий
+    // с W4-5B2: GitService.VerifiedFeatureTreeAsync (тот же, что FeatureWorktreeErrorAsync/
+    // AttachWorktreeAsync). Не прошёл проверку — дерева нет (null): каталог читает main, как
+    // раньше. В отличие от гарда мержа — не 409: отсутствие дерева здесь фолбэк, а не ошибка.
+    // Ветка эпика не требуется: для чтения дерева она не нужна. Git выключен (null) или сбой
+    // git — fail-closed, main (не 500).
+    private async Task<string?> FeatureTreePathAsync(TaskItem epic, Project project)
+    {
+        if (git is null) return null;
+        return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, epic.WorktreePath);
+    }
+
     // m1: основная ветка проекта — текущая ветка корня (git symbolic-ref). null — git выключен,
     // корень не репо, detached HEAD или сбой git: шаблон тогда пишет «обычно master» без жёсткого имени.
     private async Task<string?> ResolveMainBranchAsync(TaskItem epic)
@@ -1215,6 +1448,10 @@ public class TasksController(
         var task = tasks.GetById(taskId);
         if (task is null || task.OwnerId != UserId) return NotFound();
 
+        // W4-HOLD-N (хвост R-N п.3): страховка на любой двери удаления: эпик возвращает
+        // замороженные сроки своим шагам, шаг на паузе — срок собственному чату. До удаления:
+        // после него задачи в реестре нет, и путь возврата срока для её чата больше не выполнится.
+        executor.RestoreFrozenChatsBeforeDelete(task);
         tasks.Delete(taskId);
         await broadcaster.ToOwner(UserId, new TaskChangedMessage("deleted", task));
         return NoContent();

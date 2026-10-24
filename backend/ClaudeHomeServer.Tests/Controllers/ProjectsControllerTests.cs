@@ -2,8 +2,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Images;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -188,6 +190,37 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var response = await _client.GetAsync($"/api/projects/{id}");
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // W4-HOLD-N (хвост R-N п.3, критерий c3): дверь удаления проекта обходила страховку:
+    // сносимый вместе с проектом эпик на паузе уносил замороженные сроки своих шагов.
+    // Мутация: убрать обход RestoreFrozenChatsBeforeDelete до DeleteByProject — последний
+    // абзац краснеет (чат остаётся без срока).
+    [Fact]
+    public async Task DeleteProject_EpicOnPause_ReturnsFrozenExpiryToItsStep()
+    {
+        var project = await CreateProjectAsync("hold-del");
+        var projectId = project.GetProperty("id").GetString()!;
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var user = _factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        var epic = tm.Create(projectId, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        var step = tm.Create(projectId, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var chat = await sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec",
+            taskId: step.Id);
+        tm.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        sessions.SetExpiry(chat.Id, 10);
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epic.Id}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().BeNull("пауза заморозила срок чата");
+
+        var del = await _client.DeleteAsync($"/api/projects/{projectId}");
+        del.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10,
+            "проект удалён вместе с эпиком на паузе: срок шага возвращён — чат не вечный");
     }
 
     // --- Удаление проекта: чьё worktree-дерево сносим, чужое/общее — нет ---

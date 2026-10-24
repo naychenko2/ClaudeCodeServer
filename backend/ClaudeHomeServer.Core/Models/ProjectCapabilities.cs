@@ -250,6 +250,14 @@ public sealed record ProjectCapabilities(
     public static readonly TimeSpan DeviceWaitCeiling = TimeSpan.FromHours(24);
 
     /// <summary>
+    /// Просрочено ли ожидание устройства: с отметки прошло не меньше потолка. Half-open окно
+    /// [Since, Since + Ceiling): ровно на потолке — уже просрочено. Одна формула просрочки
+    /// для всех точек (сweep исполнителя и ответ снятия паузы) — второй копии быть не должно.
+    /// </summary>
+    public static bool DeviceWaitExpired(TaskItem task, DateTime nowUtc) =>
+        task.DeviceWaitSince is { } since && nowUtc - since >= DeviceWaitCeiling;
+
+    /// <summary>
     /// Можно ли фоновой работе (исполнитель задачи, волна штаба, очередь чата, автоматизация,
     /// опрос сторожа) запускать ход проекта прямо сейчас. Серверный проект — всегда да.
     /// Локальный: устройство готово — да; устройства нет (отозвано) — ждать нечего, отказ;

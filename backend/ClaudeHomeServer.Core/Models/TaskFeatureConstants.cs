@@ -10,6 +10,9 @@ public static class TaskRoles
 {
     public const string Feature = "feature";
     public const string Cut = "cut";
+    // Дизайн (W4-DES-B): задача дизайнера в фиче. Стадия «Дизайн» необязательна: её нет —
+    // этап skipped, на готовность фичи не влияет. featureId обязателен (привязанная роль).
+    public const string Design = "design";
     public const string Plan = "plan";
     public const string Step = "step";
     public const string Rework = "rework";
@@ -20,12 +23,22 @@ public static class TaskRoles
     public const string Consult = "consult";
 
     public static readonly IReadOnlyList<string> All =
-        [Feature, Cut, Plan, Step, Rework, Review, Qa, Final, Merge, Consult];
+        [Feature, Cut, Design, Plan, Step, Rework, Review, Qa, Final, Merge, Consult];
 
     // Роли, которым featureId НЕ обязателен: эпик фичи (сам эпик — FeatureId=null, он и
     // есть фича) и cut/plan (семантика без привязки к эпика). Прочие роли (step/rework/
-    // review/qa/final/merge/consult) — «висяк» без эпика, fail-closed требует featureId.
+    // design/review/qa/final/merge/consult) — «висяк» без эпика, fail-closed требует featureId.
     public static readonly IReadOnlyList<string> FeatureIdOptional = [Feature, Cut, Plan];
+}
+
+// Причина удержания фичи (TaskItem.Hold.Reason, волна 4 §1): draft — начальная стадия (фичу готовят,
+// шаги не запускать), manual — пауза человека, queue — задел под очередь (поведение паузы, сейчас
+// не ставится). Строки, а не enum — тот же урок, что у TaskRoles.
+public static class FeatureHoldReasons
+{
+    public const string Draft = "draft";
+    public const string Manual = "manual";
+    public const string Queue = "queue";
 }
 
 // Исход витка (вердикт) ревью/проверки/финала.

@@ -180,14 +180,24 @@ public enum MockupStatus { Draft, Approved, Rejected }
 // покрытый шапкой, не дублируется.
 public enum MockupSource { Header, LinkedFiles }
 
-// Файл макета (прототип .html, -tokens.md, …). Exists=false — «не в master»: путь пришёл
-// из linkedFiles, но файла на диске (основного дерева) ещё нет.
+// Дерево, где найден макет (волна 4, п.5.1): "feature" — проверенный worktree эпика (лежит
+// на диске и числится в `git worktree list` проекта), "main" — основное дерево проекта.
+// Один путь в обоих деревьях: запись дерева побеждает (ветка свежее); exists записи
+// "feature" проверяется по дереву фичи — читатель с ?featureId= читает ровно дерево, без
+// фолбэка на main (W4-R1). Записи "main" приходят только из main.
+public enum MockupTree { Main, Feature }
+
+// Файл макета (прототип .html, -tokens.md, …). Exists=false — файла нет в том дереве, на
+// которое указывает запись: для "feature" — нет в дереве эпика (даже если он есть в main),
+// для "main" — нет в main. При слиянии деревьев список Files — объединение путей: файл,
+// существующий только в main, не исчезает из каталога, но для записи дерева его exists=false.
 public record MockupFile(string Path, bool Exists);
 
 // Запись каталога макетов фичи (MockupCatalog.Find). Path — записка .md (Source=Header)
 // или сам файл (Source=LinkedFiles). Title — H1 записки; у LinkedFiles — имя файла без
 // расширения. TaskId/AuthorPersonaId ставит контроллер (Main) — каталог их не знает.
-// ModifiedAt=null, если файла на диске нет.
+// ModifiedAt=null, если файла на диске нет. Tree проставляет контроллер при слиянии
+// вызовов каталога (W4-5); каталог сам дерева не различает — дефолт Main.
 public record MockupEntry(
     string Path,
     string Title,
@@ -196,4 +206,5 @@ public record MockupEntry(
     MockupSource Source,
     DateTime? ModifiedAt,
     string? TaskId = null,
-    string? AuthorPersonaId = null);
+    string? AuthorPersonaId = null,
+    MockupTree Tree = MockupTree.Main);

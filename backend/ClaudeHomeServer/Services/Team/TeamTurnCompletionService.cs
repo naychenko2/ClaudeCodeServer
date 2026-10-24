@@ -1,4 +1,5 @@
 ﻿using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Turn;
 // ReportUpResult — публичный enum, объявленный внутри класса SessionManager (Services).
 // Через алиас using получаем короткое имя без префикса SessionManager в сигнатуре.
@@ -61,10 +62,15 @@ internal sealed class TeamTurnCompletionService
     private readonly ITeamRunState _run;
     private readonly ILogger<TeamTurnCompletionService> _log;
     private readonly TeamDecisionService _decision;
+    // Реестр задач — для чтения паузы фичи при пробуждении по докладу (W4-HOLD-I, контракт
+    // §1 :183). Параметр nullable (R-HOLD-I2): ядро передаёт null там, где реестр не подключён,
+    // и гейт CI dotnet build -warnaserror (ci.yml:54) не допускает non-nullable. Смысл R-HOLD-I
+    // сохранён: недостающий реестр — не молчаливое «паузы нет», а fail-fast в самом гейте.
+    private readonly TaskManager? _tasks;
 
     internal TeamTurnCompletionService(SessionManager sessions, ITeamSessionDirectory dir,
         ITeamHistoryStore history, ITeamRunState run, TeamDecisionService decision,
-        ILogger<TeamTurnCompletionService> log)
+        ILogger<TeamTurnCompletionService> log, TaskManager? tasks)
     {
         _sessions = sessions;
         _dir = dir;
@@ -72,6 +78,7 @@ internal sealed class TeamTurnCompletionService
         _run = run;
         _decision = decision;
         _log = log;
+        _tasks = tasks;
     }
 
     // Подписчик шины turn/completed (этап 4 / шаг 1в): план вызова HandleTeamTurnEndAsync
@@ -366,6 +373,39 @@ internal sealed class TeamTurnCompletionService
     {
         var chat = _sessions.GetOwned(sessionId, ownerId);
         var parentId = chat is null ? null : _sessions.EffectiveParentSessionId(chat);
+
+        // Фича задачи докладчика на паузе (W4-HOLD-I, контракт §1 :183): доклад — карточка,
+        // координатор не будится: причина молчания — пауза, платное пробуждение во время
+        // остановки пустое (квота не расходуется). Человек карточку видит.
+        // Гейт паузы без реестра задач работать не может — fail-fast, а не тихое «паузы нет»
+        // (R-HOLD-I, минор): молчание докладчика при живой паузе выглядит как зависание.
+        if (_tasks is null)
+            throw new InvalidOperationException(
+                "ReportBlockerAsync вызван без реестра задач: гейт паузы фичи не может работать");
+        var paused = chat?.TaskId is { } taskId
+            && _tasks.GetById(taskId) is { } taskOfChat && _tasks.FeatureIsPaused(taskOfChat);
+        if (paused)
+        {
+            var quiet = await _sessions.ReportUpAsync(sessionId, TeamImplementPrompts.BlockerReportText(text),
+                ownerId, withTurn: false);
+            if (quiet is (ReportUpResult.Delivered or ReportUpResult.Queued)
+                && _sessions.GetById(parentId!) is { TeamImplement: { } heldTeam } heldStab)
+            {
+                var card = new TeamEscalation
+                {
+                    Kind = TeamEscalationKind.Blocker,
+                    Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.Blocker, text),
+                    Details = text,
+                    TaskId = chat?.TaskId,
+                    Wave = heldTeam.WaveNumber,
+                    Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+                };
+                if (_sessions.TeamHandlers.EscalationRaiser is { } raiseHeld) await raiseHeld(heldStab, card);
+                else await _history.PublishTeamEscalationAsync(parentId!, card);
+            }
+            _log.LogInformation("Доклад-блокер из чата {SessionId}: фича на паузе — координатор не разбужен", sessionId);
+            return quiet;
+        }
 
         // Пробуждение штаба — платный ход, инициированный агентом, поэтому оно под квотой:
         // иначе исполнитель поднимал бы координатора докладом-блокером в бесконечном цикле,

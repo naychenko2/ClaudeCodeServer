@@ -661,4 +661,39 @@ public class SharedSpendSplitterTests
         // Метод принудительно approx (дневная строка), хотя никто не активен и доля 0.
         share.Method.Should().Be("approx", "дневная строка понижает метку ДО проверки активных (п.5)");
     }
+
+    // ── W4-DES-B: дизайн-задача — активность фичи ────────────────────────────────────────────
+
+    // Approx: идущая задача с ролью design даёт интервал активности [start, now]: фича,
+    // висящая только на дизайне, активна (первый возврат R7a: run.Design не попадал в
+    // выборку AllTasks, SharedSpendSplitter считал такую фичу неактивной).
+    // Мутация «убрать Design из FeatureActivity.AllTasks» → интервалов нет → тест краснеет.
+    [Fact]
+    public void ApproxActivity_ИдущаяDesignЗадача_Интервал()
+    {
+        var start = T0.AddHours(-1);
+        var run = new FeatureRun
+        {
+            Epic = new TaskItem
+            {
+                Id = "epic",
+                Role = TaskRoles.Feature,
+                CreatedAt = start.AddMinutes(-10),
+            },
+            Design = new List<TaskItem>
+            {
+                new()
+                {
+                    Id = "d1", FeatureId = "epic", Role = TaskRoles.Design,
+                    Status = TaskItemStatus.InProgress, ClaudeStartedAt = start,
+                },
+            },
+        };
+
+        var intervals = SharedSpendSplitter.ApproxActivity(run, T0);
+
+        intervals.Should().ContainSingle()
+            .Which.Should().Be(new FeatureActivityInterval(start, T0),
+                "работа дизайнера — активность фичи до now");
+    }
 }

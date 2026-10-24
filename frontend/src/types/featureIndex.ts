@@ -23,11 +23,14 @@ export type FeatureBucket = 'attention' | 'running' | 'idle' | 'closed';
 
 // Состояние стадии рельсы — словарь бэка `FeatureStage.State` один в один
 // (контракт: `pending`, а не `ahead` — переименование дало бы вторую точку правды).
-export type FeatureRailState = 'done' | 'active' | 'pending' | 'absent';
+// `skipped` — необязательная «design» без задач (W4-DES-B): остаётся skipped и у
+// закрытой фичи (это не «пройден»).
+export type FeatureRailState = 'done' | 'active' | 'pending' | 'absent' | 'skipped';
 // Тон активной стадии (контракт: у закрытой фичи tone = null).
 export type FeatureRailTone = 'run' | 'loop' | 'wait' | 'stopped';
-// Семь стадий конвейера в порядке жизненного цикла (контракт: «ровно 7»).
-export type FeatureRailKey = 'cut' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
+// Восемь стадий конвейера в порядке жизненного цикла (контракт: «ровно 8»); design
+// необязательна — без задач её сегмент skipped (W4-DES-B).
+export type FeatureRailKey = 'cut' | 'design' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
 
 // Сегмент рельсы. У закрытой фичи `active` нет: стадия — `done` (задачи есть,
 // пройдены) или `absent` (задач нет), tone = null (не `pending` — всё завершено).
@@ -89,7 +92,7 @@ export interface FeatureIndexFeature {
   state: FeatureState;
   // null — тревоги нет.
   attention: FeatureAttention | null;
-  // Ровно 7 стадий в порядке жизненного цикла.
+  // Ровно 8 стадий в порядке жизненного цикла (design необязательна, без задач — skipped).
   rail: FeatureRailSegment[];
   chips: FeatureChip[];
   // Счётчики шагов: принятые (Done) / все.
@@ -118,6 +121,10 @@ export interface FeatureIndexFeature {
   keyArchived: boolean;
   // Проект ключевого чата; null — чат вне проектов.
   keyProjectId: string | null;
+  // Оркестратор фичи (W4-1B): персона ключевого чата из снимка владельца; иначе —
+  // запустившая исполнителя эпика; иначе — создавшая эпик; null — никого нет.
+  // Аддитивное: старые ответы его не несут — UI обязан пережить отсутствие.
+  orchestratorPersonaId?: string | null;
   // Чатов фичи в этом ответе (архивные включены).
   chatCount: number;
   // Аддитивные (волна 2, без хранения): старые ответы их не несут — UI обязан пережить

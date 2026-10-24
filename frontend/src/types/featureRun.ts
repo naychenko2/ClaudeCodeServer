@@ -88,17 +88,21 @@ export interface FeatureVerdicts {
 }
 
 // Ключ стадии конвейера (бэк: `FeatureStage.Key`), в порядке жизненного цикла.
-export type StageKey = 'cut' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
+// design — необязательный этап после cut (W4-DES-B): без задач — state 'skipped'.
+export type StageKey = 'cut' | 'design' | 'plan' | 'prod' | 'review' | 'qa' | 'final' | 'merge';
 // Состояние стадии (бэк: `FeatureStage.State`).
-export type StageState = 'done' | 'active' | 'pending' | 'absent';
+// `skipped` — необязательный этап, которого фича не проходила (design без задач,
+// W4-DES-B); бэк отдаёт его для этапа design (дефект a2155c1b).
+export type StageState = 'done' | 'active' | 'pending' | 'absent' | 'skipped';
 // Тон активной стадии (бэк: `FeatureStage.Tone`): run — идёт; wait — ждёт человека;
 // stopped — исполнитель встал; loop — работа вернулась (доработка идёт).
 export type StageTone = 'run' | 'wait' | 'stopped' | 'loop';
 
-// Состояние фичи (бэк: `FeatureRun.State`, константы `FeatureStates`; 9 значений,
+// Состояние фичи (бэк: `FeatureRun.State`, константы `FeatureStates`; 11 значений,
 // camelCase как в JSON). Единая точка правды: из неё бэк выводит bucket строки
 // индекса и порядок OrderRuns. Приоритет (первое совпавшее побеждает):
-// merged → closed → stopped → waiting → merging → merge_pending → running → not_started → idle.
+// merged → closed → paused → stopped → waiting → draft → merging → merge_pending →
+// running → not_started → idle (W4-HOLD-B1).
 export type FeatureState =
   | 'not_started'
   | 'running'
@@ -108,7 +112,9 @@ export type FeatureState =
   | 'merging'
   | 'merged'
   | 'closed'
-  | 'idle';
+  | 'idle'
+  | 'paused'
+  | 'draft';
 
 // Исполнитель стадии (бэк: `FeatureStageExecutor`): одна запись на задачу стадии.
 // Бэк отдаёт сырые данные (TaskRole/StepRef/Lane, статус, исполнителя) — подпись роли
@@ -135,6 +141,11 @@ export interface FeatureStageExecutor {
   modelLabel: string | null;
   // Полное имя модели; null — нет.
   modelFull: string | null;
+  // W4-3B: связь «оценивает →»: task.reviewOf, отфильтрованный по задачам этого run.
+  // Висящие (задачи нет) и чужые id наружу не выходят — их число в reviewOfOutside.
+  // Аддитивное: старые ответы их не несут — UI обязан пережить отсутствие.
+  reviewOf?: string[] | null;
+  reviewOfOutside?: number;
 }
 
 // Стадия конвейера фичи (бэк: `FeatureStage`). Арифметику считает бэк, фронт
@@ -280,6 +291,14 @@ export interface FeatureSummary {
   loops: number;
 }
 
+// Удержание фичи (бэк: `FeatureRun.Hold`, W4-HOLD-B1): копия поля эпика. reason —
+// 'draft' | 'manual' | 'queue' (FeatureHoldReasons); since — момент постановки
+// удержания (FeatureHold.Since). null/undefined — удержания нет, работа разрешена.
+export interface FeatureHold {
+  reason: string;
+  since?: string | null;
+}
+
 // Агрегат фичи — зеркало бэкового `FeatureRun`. `epic`/`steps`/`reviews`/`qa`/
 // `final`/`merge` — задачи трекера, сгруппированные проектором по роли;
 // `verdicts`/`progress`/`ready` вычисляет бэк, фронт только показывает.
@@ -290,9 +309,11 @@ export interface FeatureSummary {
 // nullable-терпимые: опциональны, UI обязан пережить их отсутствие (старые данные).
 export interface FeatureRun {
   featureId: string;
-  // Состояние фичи (бэк: `FeatureRun.State`, 9 значений, всегда отдаётся).
+  // Состояние фичи (бэк: `FeatureRun.State`, 11 значений, всегда отдаётся).
   // Единая точка правды: из неё выводится bucket строки индекса и порядок OrderRuns.
   state: FeatureState;
+  // Удержание фичи (W4-HOLD-B1): null/undefined — удержания нет.
+  hold?: FeatureHold | null;
   // p.32: nullable-терпимо (опционально), как и остальные новые поля — UI обязан
   // пережить отсутствие epic (защита в taskCounters: run.epic ? [run.epic] : []).
   epic?: FeatureTask;
@@ -309,7 +330,8 @@ export interface FeatureRun {
   verdicts: FeatureVerdicts;
   progress: number;   // доля решённых витков, 0..1
   ready: boolean;     // финал закрыт с accepted/accepted_with_remarks
-  // Конвейер: 7 стадий в порядке жизненного цикла (cut → plan → prod → review → qa → final → merge).
+  // Конвейер: 8 стадий в порядке жизненного цикла (cut → design → plan → prod → review → qa →
+  // final → merge); design необязательна — без задач её сегмент skipped (W4-DES-B).
   stages?: FeatureStage[];
   // Цепочки шагов: по одной на шаг (stepRef) — задача шага + её доработки, по времени.
   stepChains?: FeatureStepChain[];

@@ -47,11 +47,12 @@ vi.mock('../lib/personas', async (importOriginal) => {
   return { ...orig, getPersonaById: () => undefined, usePersonasVersion: () => 0, ensurePersonasLoaded: () => Promise.resolve() };
 });
 
-// 7 стадий в порядке жизненного цикла; по умолчанию «идёт» (prod active run).
+// Фикстура: 7 сегментов (design не включена — необязательный этап); по умолчанию «идёт» (prod active run).
 const KEYS: FeatureRailKey[] = ['cut', 'plan', 'prod', 'review', 'qa', 'final', 'merge'];
 function rail(): FeatureRailSegment[] {
   const base: Record<FeatureRailKey, FeatureRailSegment> = {
     cut:    { key: 'cut',    state: 'done',    tone: null },
+    design: { key: 'design', state: 'pending', tone: null },
     plan:   { key: 'plan',   state: 'done',    tone: null },
     prod:   { key: 'prod',   state: 'active',  tone: 'run' },
     review: { key: 'review', state: 'pending', tone: null },

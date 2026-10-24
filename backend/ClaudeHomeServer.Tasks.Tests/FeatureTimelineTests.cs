@@ -350,4 +350,28 @@ public class FeatureTimelineTests
             "WorkWall — объединение интервалов, не сумма (сумма дала бы 480)");
         tl.Totals.AgentsSumMinutes.Should().Be(480);
     }
+
+    // ── 9. W4-DES-B: дизайн-задача в таймлайне ────────────────────────────────────────────────
+
+    // Идущая задача с ролью design даёт work-сегмент на стадии «design»: работа дизайнера
+    // видна в графике (первый возврат R7a: run.Design не попадал в выборку AllTasks).
+    // Мутация «убрать Design из AllTasks» → WorkWall = 0, сегментов нет → тест краснеет.
+    [Fact]
+    public void Build_ИдущаяDesignЗадача_WorkСегментНаСтадииDesign()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        // d1: 10:00–12:00 (2 ч работы дизайнера).
+        var d1 = Child("d1", "epic", role: TaskRoles.Design, status: TaskItemStatus.Done,
+            startedAt: new DateTime(2026, 10, 1, 10, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 12, 0, 0));
+
+        var tl = Timeline(Run(epic, d1), now);
+
+        var work = Kinds(tl, "work");
+        work.Should().HaveCount(1, "design-задача даёт work-сегмент");
+        work[0].Stage.Should().Be("design", "сегмент подписан стадией «design»");
+        work[0].Track.Should().Be("main");
+        tl.Totals.WorkWallMinutes.Should().Be(120, "2 часа работы дизайнера в WorkWall");
+    }
 }

@@ -71,6 +71,8 @@ vi.mock('../../lib/api', () => ({
   },
 }));
 vi.mock('../../lib/personas', () => ({
+  // ensurePersonasLoaded — no-op: в node-окружении тянет signalr/localStorage.
+  ensurePersonasLoaded: () => Promise.resolve(),
   getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
   usePersonasVersion: () => 0,
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
@@ -386,6 +388,29 @@ describe('Тревога (макет §2)', () => {
     const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
     expect(main).not.toBeNull();
     expect(textNodes(main!).join('')).toContain('Чат Кира');
+  });
+
+  // Дефект 5519f071: причина тревоги — формулировка из executorStopVisual (как на
+  // карточке и в панели деталей), а не сырой ключ бэка. Мутация: вернуть в FeaturePageAlert
+  // `reason = a?.reason ?? null` без разбора stopped — оба теста ниже краснеют.
+  it('stopped: причина — человеческая формулировка, не сырой ключ', async () => {
+    mockGetFeature.result = pageData({ state: 'stopped', attention: attention('stopped', { reason: 'feature_held_expired' }) });
+    const c = render({});
+    await settle();
+    const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm')!;
+    const text = textNodes(alarm).join('');
+    expect(text, 'формулировка из executorStopVisual').toContain('Чат исполнителя исчез за время паузы');
+    expect(text, 'сырого ключа нет').not.toContain('feature_held_expired');
+  });
+
+  it('stopped: неизвестный ключ — нейтральная формулировка, без сырого ключа', async () => {
+    mockGetFeature.result = pageData({ state: 'stopped', attention: attention('stopped', { reason: 'weird_new_key' }) });
+    const c = render({});
+    await settle();
+    const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm')!;
+    const text = textNodes(alarm).join('');
+    expect(text, 'нейтральная форма default-ветки').toContain('Исполнение прервано');
+    expect(text, 'сырого ключа нет').not.toContain('weird_new_key');
   });
 
   it('merge_pending: тон info, «Мерж…» (Ф6: кнопка → общая модалка), пара «чат · задача»', async () => {

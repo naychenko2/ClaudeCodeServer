@@ -103,11 +103,13 @@ public class TeamBlockerResolveTests : IDisposable
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var history = new ChatHistoryService(config);
         var planning = new TeamPlanningService(_personas, new StubPlanner(() => "{}"));
+        // Реестр задач подключён (W4-HOLD-I): ReportBlockerAsync читает паузу фичи задачи
+        // докладчика — без реестра пробуждения шли бы как раньше.
         return new SessionManager(_projects, history, config, adapters, falCost, usage,
             appSettings, userStore, jwt, server.Object, llmProviders, flags, _personas,
             bindings, subPool, NullLogger<SessionManager>.Instance,
             TestLauncherFactory.Instance, sandbox, teamPlanning: planning,
-            broadcaster: _broadcaster);
+            tasks: _tasks, broadcaster: _broadcaster);
     }
 
     // Хелпер для тестов: достать словарь _sessions у SessionManager (нужен доступ к
@@ -793,6 +795,82 @@ public class TeamBlockerResolveTests : IDisposable
         var blocker = await PublishBlockerAsync(stab, "missing-task-id");
 
         blocker.TaskTitle.Should().BeNull("удалённая задача — null, не пустой title");
+    }
+
+    // W4-HOLD-I (контракт §1 :183): блокер по задаче удержанной фичи — карточка в штабе
+    // остаётся, координатор не будится: пробуждение во время паузы пустое, квота не
+    // расходуется. Мутация: убрать paused-ветку в ReportBlockerAsync — первое утверждение
+    // краснеет (квота будет списана).
+    [Fact]
+    public async Task ReportBlocker_HoldFeature_КоординаторНеПробуждается()
+    {
+        var (stab, _) = await MakeStabAsync("blocker-hold");
+        var epic = _tasks.Create(stab.ProjectId, UserId,
+            new CreateTaskRequest("Фича на паузе", Role: TaskRoles.Feature));
+        var step = _tasks.Create(stab.ProjectId, UserId,
+            new CreateTaskRequest("Шаг удержанной фичи", Role: TaskRoles.Step, FeatureId: epic.Id));
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+
+        var child = await _sessions.CreateAsync(stab.ProjectId!, ClaudeMode.Auto,
+            name: "Задача: шаг", taskId: step.Id);
+        _sessions.SetParent(child.Id, stab.Id, UserId);
+
+        var r = await _sessions.ReportBlockerAsync(child.Id, "застрял на паузе", UserId);
+
+        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        _sessions.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(0,
+            "фича на паузе — координатор не будится, платное пробуждение не расходуется");
+        (await _sessions.GetHistoryAsync(stab.Id)).OfType<Protocol.StoredUserMessage>().Should()
+            .Contain(m => m.Text.Contains("застрял на паузе"), "сам доклад терять нельзя");
+        // R-HOLD-I (мейор): «карточка Blocker при паузе доходит до штаба» — assert на саму
+        // карточку, а не только на текст в ленте: человек видит причину молчания карточкой.
+        // Мутация: убрать публикацию карточки в paused-ветке ReportBlockerAsync — краснеет.
+        var open = await _sessions.ListOpenEscalationsAsync(stab.Id);
+        open.Should().Contain(c => c.Kind == TeamEscalationKind.Blocker && c.TaskId == step.Id,
+            "доклад при паузе становится карточкой Blocker в штабе с TaskId шага");
+    }
+
+    // R-HOLD-I (минор): «пауза ≠ черновик». IsPaused — только manual/queue (FeatureProjector),
+    // hold с причиной вне словаря — черновик, не пауза: доклад идёт обычным путём и будит
+    // координатора. Мутация: IsPaused → «любой hold» — тест краснеет (wakeups 0).
+    [Fact]
+    public async Task ReportBlocker_HoldСПричинойВнеСловаря_НеПауза_КоординаторПробуждается()
+    {
+        var (stab, _) = await MakeStabAsync("blocker-unknown-reason");
+        var epic = _tasks.Create(stab.ProjectId, UserId,
+            new CreateTaskRequest("Фича с hold вне словаря", Role: TaskRoles.Feature));
+        var step = _tasks.Create(stab.ProjectId, UserId,
+            new CreateTaskRequest("Шаг черновика", Role: TaskRoles.Step, FeatureId: epic.Id));
+        // SetHold причину не фильтрует (валидация — на стороне REST): «stale» вне словаря
+        // FeatureHoldReasons → черновик, не пауза.
+        _tasks.SetHold(epic.Id, "stale");
+        _tasks.FeatureIsPaused(step).Should().BeFalse("hold с причиной вне словаря — не пауза");
+
+        var child = await _sessions.CreateAsync(stab.ProjectId!, ClaudeMode.Auto,
+            name: "Задача: шаг", taskId: step.Id);
+        _sessions.SetParent(child.Id, stab.Id, UserId);
+
+        var r = await _sessions.ReportBlockerAsync(child.Id, "застрял на черновике", UserId);
+        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        _sessions.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(1,
+            "черновик — не пауза: доклад идёт обычным путём пробуждения, квота расходуется");
+    }
+
+    // R-HOLD-I (минор): реестр задач — обязательная зависимость разбора хода. Без него
+    // гейт паузы не «молча выключается», а падает сразу: молчание докладчика при живой
+    // паузе выглядит как зависание, тихая деградация опаснее явного отказа.
+    [Fact]
+    public async Task ReportBlocker_БезРеестраЗадач_FailFast()
+    {
+        var decision = typeof(SessionManager).GetField("_teamDecision",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(_sessions)!;
+        var bare = new ClaudeHomeServer.Services.Team.TeamTurnCompletionService(
+            _sessions, _sessions, _sessions, _sessions,
+            (ClaudeHomeServer.Services.Team.TeamDecisionService)decision,
+            NullLogger<ClaudeHomeServer.Services.Team.TeamTurnCompletionService>.Instance, null);
+        Func<Task> act = () => bare.ReportBlockerAsync("any-session", "застрял", UserId);
+        await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
     // Заглушка планировщика: тесты не вызывают планирование, но SessionManager требует

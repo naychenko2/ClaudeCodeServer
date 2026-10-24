@@ -300,7 +300,7 @@ export function groupByFeatures(
 // Экспортируется: страница фичи (волна 3) строит тег «идёт · {этап}» по run.state
 // и активной стадии — имя стадии берётся отсюда, не дублируется.
 export const STAGE_NAME: Record<FeatureRailKey, string> = {
-  cut: 'Разрез', plan: 'План', prod: 'Производство', review: 'Ревью',
+  cut: 'Разрез', design: 'Дизайн', plan: 'План', prod: 'Производство', review: 'Ревью',
   qa: 'Проверка', final: 'Финальное ревью', merge: 'Мерж',
 };
 

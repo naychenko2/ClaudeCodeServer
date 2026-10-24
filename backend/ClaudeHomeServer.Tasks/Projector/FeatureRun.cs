@@ -25,6 +25,8 @@ public sealed class FeatureRun
     // «Ждёт вас»: с какого момента и почему (у эпика).
     public DateTime? AwaitingHumanSince { get; init; }
     public string? AwaitingHumanReason { get; init; }
+    // Удержание фичи (W4-HOLD-B1): копия поля эпика (TaskItem.Hold); null — работа разрешена.
+    public FeatureHold? Hold { get; init; }
     // Счётчики исходов витков (вердиктов) по ревью+проверке+финалу.
     public FeatureVerdicts Verdicts { get; init; } = new();
     // Доля решённых витков: (ревью/проверка/финал с вердиктом) / (все такие задачи). 0..1.
@@ -34,9 +36,16 @@ public sealed class FeatureRun
     // Разрез (role=cut): задачи с ролью cut и FeatureId == epic.Id.
     // У роли cut featureId необязателен — задача без него честно даёт «нет в трекере».
     public List<TaskItem> Cut { get; init; } = [];
+    // Дизайн (role=design): задачи дизайнера фичи (W4-DES-B). Стадия необязательна:
+    // без них этап «design» — skipped, на готовность не влияет.
+    public List<TaskItem> Design { get; init; } = [];
     // План (role=plan): задачи с ролью plan и FeatureId == epic.Id.
     public List<TaskItem> Plan { get; init; } = [];
-    // Конвейер: 7 стадий в порядке жизненного цикла (cut → plan → prod → review → qa → final → merge).
+    // Безролевые задачи фичи (role=null): ни в одну стадию не попадают, но входят в
+    // ленту событий (W4-DES-B: хронология — ВСЕ задачи с featureId).
+    public List<TaskItem> Unroled { get; init; } = [];
+    // Конвейер: 8 стадий в явном порядке жизненного цикла (cut → design → plan → prod →
+    // review → qa → final → merge); «design» необязательна (см. FeatureProjector.BuildCore).
     // Арифметика стадий — на бэке; фронт только показывает (шаг Ф5, Кира).
     public List<FeatureStage> Stages { get; init; } = [];
     // Цепочки шагов (Б2): по одной на шаг (stepRef) — задача шага + её доработки (role=rework,
@@ -52,10 +61,14 @@ public sealed class FeatureRun
     // «Сейчас»: все InProgress-задачи фичи, по убыванию ClaudeStartedAt. У закрытой фичи — пусто.
     // Стадия пилюли фронт берёт у первого элемента; имена — уникальные через запятую.
     public List<FeatureNow> Now { get; init; } = [];
+    // W4-HOLD-D2 (контракт §1, :364): id задач, прерванных паузой, — помеченные feature_held и
+    // не закрытые. Фронт блока «на паузе» и ответ ручки POST hold читают это поле, а не Now:
+    // на паузе Now гасится намеренно (W4-HOLD-D). Порядок — тот, в котором задачи дал вызывающий.
+    public List<string> Interrupted { get; init; } = [];
     // Состояние фичи (единая точка правды; из него выводится bucket строки индекса и порядок
-    // OrderRuns — см. FeatureProjector.Bucket). 9 значений, приоритет сверху вниз (первое
-    // совпавшее побеждает): merged → closed → stopped → waiting → merging → merge_pending →
-    // running → not_started → idle. Значения — константы FeatureStates (camelCase, как в JSON).
+    // OrderRuns — см. FeatureProjector.Bucket). 11 значений, приоритет сверху вниз (первое
+    // совпавшее побеждает): merged → closed → paused → stopped → waiting → draft → merging →
+    // merge_pending → running → not_started → idle. Значения — константы FeatureStates (camelCase, как в JSON).
     public string State { get; init; } = FeatureStates.Idle;
     // Тревога: stopped → wait явный → merge; один элемент либо null.
     public FeatureAttention? Attention { get; init; }
@@ -170,10 +183,11 @@ public sealed class FeatureVerdicts
 // Арифметику считает бэк (FeatureProjector.Build); фронт только показывает (шаг Ф5).
 public sealed class FeatureStage
 {
-    // Ключ стадии: cut | plan | prod | review | qa | final | merge.
+    // Ключ стадии: cut | design | plan | prod | review | qa | final | merge.
     public string Key { get; init; } = "";
     // Состояние: done — все задачи стадии закрыты; active — первая непройденная;
-    // pending — ещё не начата; absent — ноль задач, а следующая стадия уже начата.
+    // pending — ещё не начата; absent — ноль задач, а следующая стадия уже начата;
+    // skipped — необязательная стадия «design» без задач (W4-DES-B).
     public string State { get; init; } = "pending";
     // Тон (только у active, иначе null): run — идёт; wait — ждёт человека;
     // stopped — исполнитель встал; loop — работа вернулась (доработка идёт).
@@ -247,6 +261,10 @@ public sealed class FeatureStageExecutor
     // Модель исполнителя (Б4: короткая подпись и полное имя); пока null.
     public string? ModelLabel { get; init; }
     public string? ModelFull { get; init; }
+    // W4-3B: связь «оценивает →»: task.ReviewOf, отфильтрованный по задачам этого run.
+    // Висящие (задачи нет) и чужие id наружу не выходят — их число в ReviewOfOutside.
+    public List<string> ReviewOf { get; init; } = [];
+    public int ReviewOfOutside { get; init; }
 }
 
 // Виток: один круг ревью/проверки/финала. Живёт в цепочке шагов (FeatureStepChain.Rounds)
@@ -366,10 +384,10 @@ public sealed class FeatureStepProgress
     public int UnlinkedReworks { get; init; }
 }
 
-// Состояния фичи (FeatureRun.State) — единая точка правды: 9 значений, camelCase (как в JSON).
-// Приоритет расчёта (первое совпавшее побеждает): merged → closed → stopped → waiting → merging →
-// merge_pending → running → not_started → idle. Из state выводится bucket строки индекса
-// (FeatureProjector.Bucket) и порядок OrderRuns — они не расходятся.
+// Состояния фичи (FeatureRun.State) — единая точка правды: 11 значений, camelCase (как в JSON).
+// Приоритет расчёта (первое совпавшее побеждает): merged → closed → paused → stopped → waiting →
+// draft → merging → merge_pending → running → not_started → idle (W4-HOLD-B1, разрез §1). Из state
+// выводится bucket строки индекса (FeatureProjector.Bucket) и порядок OrderRuns — они не расходятся.
 public static class FeatureStates
 {
     // merge-задача Done И (финал принят ИЛИ эпик Done) — фича смержена. Частичный мерж
@@ -378,10 +396,20 @@ public static class FeatureStates
     // Эпик Done и не merged — фича закрыта: решение человека «фича закончена»
     // (даже если работа ещё идёт; без мержа — «честный мерж»).
     public const string Closed = "closed";
+    // Удержание человека — по общему предикату FeatureProjector.IsPaused (FeatureHoldReasons
+    // manual/queue): «фичу не вести». Стоит после closed (закрытая фича закрыта, даже если
+    // удержание не сняли) и перед stopped: пауза, прервавшая исполнителей, — решение человека,
+    // а не тревога «ждёт вас» (W4-HOLD-B1).
+    public const string Paused = "paused";
     // Есть остановленная задача (тревога kind=stopped).
     public const string Stopped = "stopped";
     // Явное ожидание человека (тревога kind=wait, КРОМЕ ожидания «мерж»).
     public const string Waiting = "waiting";
+    // Черновик (Hold есть, FeatureProjector.IsPaused false — reason draft): фичу готовят,
+    // работа не разрешена (роли подготовки пропускает FeatureProjector.HoldAllows). После
+    // stopped/waiting: тревоги подготовки (упавший исполнитель, ожидание ответа) остаются видны.
+    // «Очередь» (queue) — не третье значение: по IsPaused это та же пауза (W4-HOLD-G).
+    public const string Draft = "draft";
     // merge-задача запущена (InProgress) — мерж идёт.
     public const string Merging = "merging";
     // Финал принят, merge-задачи нет ИЛИ она создана, но не запущена (Todo) — ждём

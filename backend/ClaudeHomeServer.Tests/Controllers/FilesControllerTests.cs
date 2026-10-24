@@ -1,6 +1,11 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -8,11 +13,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
 {
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _tempDir;
 
     public FilesControllerTests(TestWebApplicationFactory factory)
     {
+        _factory = factory;
         _client = factory.CreateAuthenticatedClient();
         _tempDir = Path.Combine(factory.TempDir, "file_tests");
         Directory.CreateDirectory(_tempDir);
@@ -219,6 +226,390 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         var id = await CreateProjectAsync("PathTraversalTest");
         var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=../../etc/passwd");
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // ─── W4-5B2: GET /api/projects/{id}/files/content?featureId= — чтение из дерева эпика ───
+
+    // Реальный git-worktree проекта (git init + worktree add -b) и эпик фичи с этим деревом
+    // (тот же приём, что merge-тесты TasksControllerTests). Возвращает (epicId, worktree,
+    // projectId, mainRoot).
+    private async Task<(string EpicId, string Worktree, string ProjectId, string MainRoot)>
+        CreateEpicWithVerifiedWorktreeAsync(string tag)
+    {
+        var mainRoot = Path.Combine(_tempDir, "feat_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "FeatProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var worktree = Path.Combine(_tempDir, "feat_wt_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(worktree);
+        var branch = "feat/" + tag + "-" + Guid.NewGuid().ToString("N")[..6];
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+        await git.WorktreeAddAsync(null, mainRoot, worktree, branch);
+
+        var taskResp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new
+        {
+            title = "epic " + tag, role = "feature",
+            worktreePath = worktree, worktreeBranch = branch,
+        });
+        taskResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var epicId = JsonSerializer.Deserialize<JsonElement>(await taskResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        return (epicId, worktree, projectId, mainRoot);
+    }
+
+    // Файл с одинаковым относительным путём есть и в дереве эпика, и в main: с featureId —
+    // читается дерево эпика (проверенный worktree), без него — main (прежнее поведение).
+    [Fact]
+    public async Task GetContent_FeatureId_ЧитаетИзПроверенногоДереваЭпика()
+    {
+        var (epicId, worktree, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("read");
+        File.WriteAllText(Path.Combine(worktree, "draft.md"), "from feature tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var withFeature = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}");
+        withFeature.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyFeature = JsonSerializer.Deserialize<JsonElement>(await withFeature.Content.ReadAsStringAsync());
+        bodyFeature.GetProperty("content").GetString().Should().Be("from feature tree", "featureId — читает проверенное дерево эпика");
+
+        var withoutFeature = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md");
+        withoutFeature.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyMain = JsonSerializer.Deserialize<JsonElement>(await withoutFeature.Content.ReadAsStringAsync());
+        bodyMain.GetProperty("content").GetString().Should().Be("from main tree", "без параметра — корень проекта, как раньше");
+    }
+
+    // Путь эпика есть на диске, но НЕ числится в `git worktree list` проекта (чужая папка) —
+    // отказ 404, без тихого фолбэка на main (пользователь смотрит не то).
+    // Мутация: в GitService.VerifiedFeatureTreeAsync заменить `list.Any(...)` на unconditional
+    // return path — этот тест краснеет (чужая папка принялась бы как дерево эпика).
+    [Fact]
+    public async Task GetContent_FeatureId_ПутьНеВWorktreeList_404()
+    {
+        var (epicId, _, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("alien");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+        var alien = Path.Combine(_tempDir, "feat_alien_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(alien);
+        File.WriteAllText(Path.Combine(alien, "draft.md"), "from alien dir");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.WorktreePath = alien;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, "непроверенный путь — 404, не фолбэк на main");
+    }
+
+    // Хвост резолва W4-LINK-B3: асимметрия решена — правило «дерево == корень» единое. Дерево
+    // эпика — корень проекта: эпик работает в корне, читается корень (как у дерева чата), а не
+    // 404, как было до унификации. Мутация: убрать обход корня в FilesController.TreeRootForAsync
+    // — тест краснеет (предикат VerifiedFeatureTreeAsync main деревом фичи не считает).
+    [Fact]
+    public async Task GetContent_FeatureId_ЭпикНаКорне_ЧитаетRoot()
+    {
+        var (epicId, _, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("rootepic");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.WorktreePath = mainRoot;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "дерево эпика — корень: читается корень, не 404");
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from main tree");
+    }
+
+    // Хвост резолва W4-LINK-B3: самый частый случай — эпик без заявленного дерева (пустой
+    // WorktreePath — норма большинства задач). Правило «дерева нет → корень» закреплено тестом:
+    // featureId читает корень проекта, а не 404. Мутация: убрать в FilesController.TreeRootForAsync
+    // обход `string.IsNullOrWhiteSpace(worktreePath)` — тест краснеет (пустой путь больше не
+    // попадает в корень: NormalizePath бросает, запрос роняется в 500).
+    [Fact]
+    public async Task GetContent_FeatureId_ЭпикБезДерева_ЧитаетRoot()
+    {
+        var (projectId, _) = await SetupProjectWithFileAsync("draft.md", "from main tree");
+        var taskResp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new
+        {
+            title = "epic без дерева", role = "feature",
+        });
+        taskResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var epicId = JsonSerializer.Deserialize<JsonElement>(await taskResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "дерева нет: читается корень, не 404");
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from main tree");
+    }
+
+    // Эпик принадлежит другому проекту — для этого проекта фичи нет: 404.
+    [Fact]
+    public async Task GetContent_FeatureId_ЭпикДругогоПроекта_404()
+    {
+        var (epicId, _, _, _) = await CreateEpicWithVerifiedWorktreeAsync("otherproj");
+        var (otherId, _) = await SetupProjectWithFileAsync("draft.md", "from main tree");
+
+        var response = await _client.GetAsync($"/api/projects/{otherId}/files/content?path=draft.md&featureId={epicId}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Запись через этот маршрут невозможна: PUT featureId не принимает — пишет в корень
+    // проекта, дерево эпика остаётся нетронутым.
+    [Fact]
+    public async Task SaveContent_FeatureId_ИгнорируетПараметр_ПишетВMain()
+    {
+        var (epicId, worktree, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("write");
+        File.WriteAllText(Path.Combine(worktree, "draft.md"), "from feature tree");
+
+        var put = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}",
+            new { content = "written to main" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        File.ReadAllText(Path.Combine(mainRoot, "draft.md")).Should().Be("written to main");
+        File.ReadAllText(Path.Combine(worktree, "draft.md")).Should().Be("from feature tree", "запись мимо дерева: featureId игнорируется");
+    }
+
+    // ─── W4-LINK-B (п.14): GET /api/projects/{id}/files/content?sessionId= — чтение из дерева задачи, к которой привязан чат ───
+
+    // Тот же приём, что CreateEpicWithVerifiedWorktreeAsync: реальный git-worktree проекта,
+    // задача с этим деревом и чат, привязанный к задаче (Session.TaskId). Возвращает
+    // (sessionId, worktree, projectId, mainRoot).
+    private async Task<(string SessionId, string Worktree, string ProjectId, string MainRoot)>
+        CreateChatWithTaskWorktreeAsync(string tag)
+    {
+        var mainRoot = Path.Combine(_tempDir, "link_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "LinkProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var worktree = Path.Combine(_tempDir, "link_wt_" + tag + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(worktree);
+        var branch = "feat/" + tag + "-" + Guid.NewGuid().ToString("N")[..6];
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+        await git.WorktreeAddAsync(null, mainRoot, worktree, branch);
+
+        var taskResp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new
+        {
+            title = "task " + tag, role = "feature",
+            worktreePath = worktree, worktreeBranch = branch,
+        });
+        taskResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var taskId = JsonSerializer.Deserialize<JsonElement>(await taskResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.Auto, name: "chat " + tag, taskId: taskId);
+        return (session.Id, worktree, projectId, mainRoot);
+    }
+
+    // Файл с одинаковым относительным путём есть и в дереве задачи, и в main: с sessionId —
+    // читается дерево задачи (тот же предикат, что featureId); без параметра — main (прежнее
+    // поведение).
+    [Fact]
+    public async Task GetContent_SessionId_ЧитаетИзДереваЗадачи()
+    {
+        var (sessionId, worktree, projectId, mainRoot) = await CreateChatWithTaskWorktreeAsync("read");
+        File.WriteAllText(Path.Combine(worktree, "draft.md"), "from task tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var withChat = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={sessionId}");
+        withChat.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyChat = JsonSerializer.Deserialize<JsonElement>(await withChat.Content.ReadAsStringAsync());
+        bodyChat.GetProperty("content").GetString().Should().Be("from task tree", "sessionId — читает проверенное дерево задачи чата");
+
+        var withoutChat = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md");
+        withoutChat.StatusCode.Should().Be(HttpStatusCode.OK);
+        var bodyMain = JsonSerializer.Deserialize<JsonElement>(await withoutChat.Content.ReadAsStringAsync());
+        bodyMain.GetProperty("content").GetString().Should().Be("from main tree", "без параметра — корень проекта, как раньше");
+    }
+
+    // Путь задачи есть на диске, но НЕ числится в `git worktree list` проекта (чужое дерево) —
+    // отказ 404, без тихого фолбэка на main. Мутация: в FilesController.TreeRootForAsync
+    // заменить `return await git.VerifiedFeatureTreeAsync(...)` на `return worktreePath;` —
+    // этот тест краснеет (чужая папка принялась бы как дерево задачи).
+    [Fact]
+    public async Task GetContent_SessionId_ЗадачаНеВWorktreeList_404()
+    {
+        var (sessionId, _, projectId, mainRoot) = await CreateChatWithTaskWorktreeAsync("alien");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+        var alien = Path.Combine(_tempDir, "link_alien_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(alien);
+        File.WriteAllText(Path.Combine(alien, "draft.md"), "from alien dir");
+        var taskId = _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId!;
+        _factory.Services.GetRequiredService<TaskManager>().GetById(taskId)!.WorktreePath = alien;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={sessionId}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, "непроверенное дерево — 404, не фолбэк на main");
+    }
+
+    // Чат без задачи — дерева задачи нет, его дерево корень проекта: читается main, как раньше.
+    [Fact]
+    public async Task GetContent_SessionId_ЧатБезЗадачи_ЧитаетMain()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("draft.md", "from main tree");
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(id, ClaudeMode.Auto, name: "chat without task");
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from main tree");
+    }
+
+    // ─── W4-LINK-B (рев.1): «дерева нет» ≠ «дерево не проверено»; своё дерево чата — первично ───
+
+    // Задача без дерева (WorktreePath пуст — норма): её исполнитель работает в корне проекта,
+    // поэтому чат с такой задачей читает main, а не 404. Мутация: убрать в FilesController.TreeRootForAsync
+    // строку `if (string.IsNullOrWhiteSpace(worktreePath)) return project.RootPath;` —
+    // этот тест краснеет (пустое дерево ушло бы в предикат и дал 404).
+    [Fact]
+    public async Task GetContent_SessionId_ЗадачаБезДерева_ЧитаетMain()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("draft.md", "from main tree");
+        var taskResp = await _client.PostAsJsonAsync($"/api/projects/{id}/tasks", new { title = "task without tree" });
+        taskResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var taskId = JsonSerializer.Deserialize<JsonElement>(await taskResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(id, ClaudeMode.Auto, name: "chat with task without tree", taskId: taskId);
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "пустой WorktreePath — не отказ: дерево задачи — main");
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from main tree");
+    }
+
+    // Своё дерево чата (тумблер «отдельное дерево», AttachWorktreeAsync — та же проверка
+    // существования и числения в worktree list): с sessionId читается оно, а не main. Мутация:
+    // убрать ветку `if (!string.IsNullOrEmpty(session.WorktreePath))` в ChatTreeRootForAsync —
+    // тест краснеет (прочитался main вместо дерева чата).
+    [Fact]
+    public async Task GetContent_SessionId_СвоёДеревоЧата_Читается()
+    {
+        var mainRoot = Path.Combine(_tempDir, "ownwt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "OwnTreeProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var worktree = Path.Combine(_tempDir, "ownwt_wt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(worktree);
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+        await git.WorktreeAddAsync(null, mainRoot, worktree, "feat/own-" + Guid.NewGuid().ToString("N")[..6]);
+
+        File.WriteAllText(Path.Combine(worktree, "draft.md"), "from chat tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto, name: "chat with own tree");
+        (await sessions.AttachWorktreeAsync(session.Id, worktree)).Should().BeTrue("дерево на диске и в worktree list");
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from chat tree", "своё дерево чата — первичный источник чтения");
+    }
+
+    // Хвост резолва W4-LINK-B: «дерево есть» закреплено и отказной стороной — своё дерево чата
+    // заявлено (WorktreePath присян напрямую, минуя проверку AttachWorktreeAsync), но его нет
+    // в `git worktree list` проекта (чужая папка): 404, без фолбэка на корень. Мутация: в
+    // FilesController.TreeRootForAsync заменить `return await git.VerifiedFeatureTreeAsync(...)`
+    // на `return project.RootPath;` — этот тест краснеет (чужое дерево прочиталось бы корнем).
+    [Fact]
+    public async Task GetContent_SessionId_СвоёДеревоЧатаНеВWorktreeList_404()
+    {
+        var mainRoot = Path.Combine(_tempDir, "alienchat_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "AlienTreeProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        // Реальный репозиторий: без него worktree list пуст — закрепляем предикат, а не отсутствие git.
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+
+        var alien = Path.Combine(_tempDir, "alienchat_wt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(alien);
+        File.WriteAllText(Path.Combine(alien, "draft.md"), "from alien tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.Auto, name: "chat with unverified tree");
+        session.WorktreePath = alien;
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, "заявленное дерево не в worktree list — 404, не фолбэк на корень");
+    }
+
+    // Хвост W4-LINK-B: приоритет двух деревьев. У чата своё дерево И задача, к которой он
+    // привязан, с другим деревом — читается дерево чата (порядок веток в GetContent:
+    // WorktreePath раньше TaskId). Мутация: поменять порядок веток (сначала проверять
+    // TaskId) — тест краснеет (прочиталось дерево задачи).
+    [Fact]
+    public async Task GetContent_SessionId_СвоёДеревоЧата_ВажнееДереваЗадачи()
+    {
+        var mainRoot = Path.Combine(_tempDir, "prio_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "PriorityProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+
+        var chatTree = Path.Combine(_tempDir, "prio_chat_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(chatTree);
+        await git.WorktreeAddAsync(null, mainRoot, chatTree, "feat/chat-" + Guid.NewGuid().ToString("N")[..6]);
+        var taskTree = Path.Combine(_tempDir, "prio_task_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(taskTree);
+        var taskBranch = "feat/task-" + Guid.NewGuid().ToString("N")[..6];
+        await git.WorktreeAddAsync(null, mainRoot, taskTree, taskBranch);
+
+        File.WriteAllText(Path.Combine(chatTree, "draft.md"), "from chat tree");
+        File.WriteAllText(Path.Combine(taskTree, "draft.md"), "from task tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var taskResp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new
+        {
+            title = "task with its own tree", role = "feature",
+            worktreePath = taskTree, worktreeBranch = taskBranch,
+        });
+        taskResp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var taskId = JsonSerializer.Deserialize<JsonElement>(await taskResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto, name: "chat with own tree and a task", taskId: taskId);
+        (await sessions.AttachWorktreeAsync(session.Id, chatTree)).Should().BeTrue("дерево чата на диске и в worktree list");
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from chat tree", "своё дерево чата важнее дерева задачи");
+    }
+
+    // Хвост W4-LINK-B: чат привязан к корню проекта. Главное дерево числится в
+    // `git worktree list`, поэтому AttachWorktreeAsync его принимает, но предикат
+    // VerifiedFeatureTreeAsync main не считает деревом фичи — без обхода был бы 404.
+    // Мутация: убрать обход корня в FilesController.TreeRootForAsync — тест краснеет (404
+    // вместо чтения main).
+    [Fact]
+    public async Task GetContent_SessionId_ДеревоЧатаРавноКорню_ЧитаетRoot()
+    {
+        var mainRoot = Path.Combine(_tempDir, "rootwt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "RootTreeProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto, name: "chat on the root");
+        (await sessions.AttachWorktreeAsync(session.Id, mainRoot)).Should().BeTrue("главное дерево числится в worktree list");
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=draft.md&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "корень как дерево чата — не отказ: читается корень проекта");
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from main tree");
     }
 
     [Fact]

@@ -462,15 +462,17 @@ public class FeatureIndexMembershipTests
         FeatureProjector.PreferFirst(items, s => s, "z").Should().BeEquivalentTo(new[] { "a", "b", "c" });
     }
 
-    // Оба маршрута совпадают: индекс (BuildIndexCore) и ProjectForSession (Build + OrderRuns +
-    // OwnFeatureId + PreferFirst) дают одинаковый порядок фич для чата в двух фичах.
+    // Оба маршрута совпадают: индекс (BuildIndexCore) и ProjectForSession (FeatureChatMembership
+    // + Build + OrderRuns + OwnFeatureId + PreferFirst внутри класса) дают одинаковый набор и
+    // порядок фич для чата в двух фичах. Маршрут 2 эмулирует ProjectForSession через то же
+    // единое правило — локального фильтра по эпику больше нет (W4-CHT-B).
     [Fact]
     public void ОбаМаршрута_Совпадают_СвояФичаПервой()
     {
         var owner = new List<TaskItem>
         {
             Epic("epicA", sourceSessionId: "chatX"),   // chatX — куратор epicA
-            Epic("epicB", executorLaunchedBy: "chatX"), // chatX — оркестратор epicB (в ProjectForSession)
+            Epic("epicB", executorLaunchedBy: "chatX"), // chatX — оркестратор epicB
             Child("tB", "epicB"),                       // chatX — исполнитель epicB (TaskId=tB)
         };
         var sessions = new[] { Session("chatX", taskId: "tB") };
@@ -479,23 +481,107 @@ public class FeatureIndexMembershipTests
         var index = FeatureProjector.BuildIndexCore(owner, sessions);
         var indexOrder = index.Chats["chatX"].Select(e => e.FeatureId).ToList();
 
-        // Маршрут 2: ProjectForSession (эмулируем: Build + OrderRuns + OwnFeatureId + PreferFirst).
+        // Маршрут 2: ProjectForSession (эмулируем: FeatureChatMembership + Build + OrderRuns +
+        // OwnFeatureId + PreferFirst внутри класса).
         var byId = owner.ToDictionary(t => t.Id);
+        var featureIds = FeatureChatMembership.BuildDetailed(owner, sessions)["chatX"].Keys;
         var epicsForSession = owner
-            .Where(t => t.Role == TaskRoles.Feature
-                && (t.SourceSessionId == "chatX" || t.ExecutorLaunchedBySessionId == "chatX"))
+            .Where(t => t.Role == TaskRoles.Feature && featureIds.Contains(t.Id))
             .ToList();
         var runs = epicsForSession
             .Select(epic => FeatureProjector.Build(epic, FeatureTasksStatic(epic, owner)))
             .ToList();
         var ordered = FeatureProjector.OrderRuns(runs);
         var own = FeatureProjector.OwnFeatureId("chatX", sessions, byId);
-        var sessionOrder = FeatureProjector.PreferFirst(ordered, r => r.FeatureId, own)
+        var open = ordered.Where(r => FeatureProjector.Bucket(r) != "closed").ToList();
+        var closed = ordered.Where(r => FeatureProjector.Bucket(r) == "closed").ToList();
+        var sessionOrder = FeatureProjector.PreferFirst(open, r => r.FeatureId, own)
+            .Concat(FeatureProjector.PreferFirst(closed, r => r.FeatureId, own))
             .Select(r => r.FeatureId).ToList();
 
         // Оба маршрута: epicB (своя) первым, epicA вторым.
         indexOrder.Should().BeEquivalentTo(new[] { "epicB", "epicA" });
         sessionOrder.Should().BeEquivalentTo(new[] { "epicB", "epicA" });
+    }
+
+    // ── W4-CHT-B: закрытая фича не «съедает» общий чат; порядок — открытые раньше закрытых ──
+
+    // Сценарий исчезновения из контракта §2: chatX — куратор закрытой epicA и оркестратор
+    // открытой epicB. Закрытие членство не снимает: обе связи в индексе, первая — живая.
+    // Мутация (полный возврат прежней сборки: без разбиения open/closed, порядок только
+    // по силе): epicA (curator, сила 1) идёт первой → тест краснеет.
+    [Fact]
+    public void Индекс_ЗакрытаяФичаПослеОткрытой_ПерваяСвязьЖивая()
+    {
+        var closed = Epic("epicA", sourceSessionId: "chatX");
+        closed.Status = TaskItemStatus.Done; // «closed» — правило 2 ComputeState
+        var open = Epic("epicB", executorLaunchedBy: "chatX");
+        var owner = new List<TaskItem> { closed, open };
+        var sessions = new[] { Session("chatX") };
+
+        var index = FeatureProjector.BuildIndexCore(owner, sessions);
+
+        var entries = index.Chats["chatX"];
+        entries.Should().HaveCount(2, "закрытие не снимает членство: чат в обеих фичах");
+        entries[0].FeatureId.Should().Be("epicB", "открытая фича — первая (W4-CHT-B §2)");
+        entries[0].Kind.Should().Be("orchestrator");
+        entries[1].FeatureId.Should().Be("epicA");
+        entries[1].Kind.Should().Be("curator");
+    }
+
+    // «Своя» фича чата (TaskId → задача закрытой epicA) не прыгает выше открытой связи:
+    // PreferFirst действует внутри класса (открытые/закрытые), не поверх него.
+    // Мутация (PreferFirst по всему списку, как было): epicA первой → краснеет.
+    [Fact]
+    public void Индекс_СвояФичаЗакрытая_НеПерепрыгиваетОткрытые()
+    {
+        var closed = Epic("epicA", sourceSessionId: "chatX");
+        closed.Status = TaskItemStatus.Done;
+        var open = Epic("epicB", executorLaunchedBy: "chatX");
+        var taskA = Child("tA", "epicA");
+        var owner = new List<TaskItem> { closed, open, taskA };
+        // chatX — исполнитель задачи закрытой epicA (своя фича) и оркестратор открытой epicB.
+        var sessions = new[] { Session("chatX", taskId: "tA") };
+
+        var index = FeatureProjector.BuildIndexCore(owner, sessions);
+
+        var entries = index.Chats["chatX"];
+        entries[0].FeatureId.Should().Be("epicB", "открытая связь первая, даже если своя фича закрыта");
+        entries[1].FeatureId.Should().Be("epicA", "своя закрытая фича — первой среди закрытых");
+    }
+
+    // Вкладка «Чаты» страницы открытой фичи видит общий чат (раньше — только чаты по TaskId):
+    // закрытая epicA его не «съедает». Мутация (локальный фильтр по TaskId, прежняя копия):
+    // chatX не попадает → краснеет.
+    [Fact]
+    public void BuildFeatureChats_ЗакрытаяФича_НеЛишаетОбщийЧатОткрытой()
+    {
+        var closed = Epic("epicA", sourceSessionId: "chatX");
+        closed.Status = TaskItemStatus.Done;
+        var open = Epic("epicB", executorLaunchedBy: "chatX");
+        var stepB = Child("stepB", "epicB");
+        var sessions = new[] { Session("chatX") };
+
+        var chats = FeatureProjector.BuildFeatureChats(open, [open, stepB], sessions, null);
+        chats.Should().ContainSingle(c => c.Id == "chatX").Which.Kind.Should().Be("orchestrator");
+    }
+
+    // Единая реализация правила: на пару «чат × фича» одна запись — сильнейший вид
+    // (curator перекрывает executor по тому же TaskId).
+    [Fact]
+    public void FeatureChatMembership_СильнейшийВидНаПаре()
+    {
+        var owner = new List<TaskItem>
+        {
+            Epic("epicA", sourceSessionId: "chatX"),
+            Child("tA", "epicA"),
+        };
+        var sessions = new[] { Session("chatX", taskId: "tA") };
+
+        var detailed = FeatureChatMembership.BuildDetailed(owner, sessions);
+        var link = detailed["chatX"]["epicA"];
+        link.Kind.Should().Be("curator", "сильнейший вид держится, а не обе записи");
+        link.Strength.Should().Be(FeatureChatMembership.KindStrength("curator"));
     }
 
     // Вспомогательный: FeatureTasks (эпик + дочерние) — статический дубль для теста.

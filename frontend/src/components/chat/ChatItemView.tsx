@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useContext, useEffect, type ReactNode, type CSSProperties } from 'react';
+import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
 import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, MessageSquareShare, Camera, MonitorSmartphone } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
@@ -11,7 +11,7 @@ import { api } from '../../lib/api';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
-import { useFeatureRunsSnapshot, openPillMenu } from '../../lib/featureRuns';
+import { useFeatureRunsSnapshot } from '../../lib/featureRuns';
 import { C, FONT, SHADOW, R, FS, SP, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useSpheres } from '../../lib/useSpheres';
@@ -84,10 +84,10 @@ function parseTodoWriteInput(input: unknown): TodoItem[] {
   return Array.isArray(t) ? (t as TodoItem[]) : [];
 }
 
-// Карточка плана задач. Три вида:
-// 1. Живая (isCurrentPlan) + есть фичи → КОРОТКАЯ строка: значок · «План хода» ·
-//    «· сейчас: {in_progress}» · прогресс 44×4 · «N из M» · «Подробнее ›» → openPillMenu.
-//    БЕЗ состояния фичи в самой карточке (оно в панели А и в попапе).
+// Карточка плана задач. Решение Андрея 23.10: в чате с фичей живая карточка «План хода»
+// не показывается вовсе — статус и сигналы даёт баннер; в ленте остаются только
+// строки-снимки прошлых планов. Два вида:
+// 1. Живая (isCurrentPlan) + есть фичи → ничего (карточки нет).
 // 2. Живая (isCurrentPlan) + без фич → полный чек-лист (прежний вид, байт-в-байт).
 // 3. Прошлые (!isCurrentPlan) → строка-снимок «› ☑ План хода N/M · HH:MM · снимок»,
 //    раскрытие по клику (локальный state, aria-expanded), тело — TodoList того хода.
@@ -103,67 +103,10 @@ function TodoPlanView({ todos, isMobile, isCurrentPlan, ts }: {
   if (todos.length === 0) return null;
   const done = todos.filter(t => t.status === 'completed').length;
   const hasFeatures = runs.length > 0;
-  const inProgress = todos.find(t => t.status === 'in_progress');
 
-  // 1. Живая + фичи: короткая строка (решение Андрея 20.10).
-  if (isCurrentPlan && hasFeatures) {
-    const progress = todos.length > 0 ? done / todos.length : 0;
-    // R2 minor 6: на 360 «сейчас: …» и «Подробнее» — на ВТОРОЙ строке (макет .fcp):
-    // full-width «перенос» (order 5) + order 6/7; на десктопе — одна строка (DOM-порядок).
-    const brk: CSSProperties = isMobile
-      ? { display: 'block', flexBasis: '100%', height: 0, order: 5 }
-      : { display: 'none' };
-    return (
-      <div style={{
-        border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
-        overflow: 'hidden', boxShadow: SHADOW.card,
-      }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          flexWrap: 'wrap', rowGap: 4,
-          padding: '10px 13px',
-          minHeight: isMobile ? TB.iconHitMobile : undefined,
-        }}>
-          <SquareCheck size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
-          <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap' }}>
-            План хода
-          </span>
-          {inProgress && (
-            <span style={{
-              fontSize: FS.sm, color: C.textMuted,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              maxWidth: isMobile ? '100%' : 180,
-              ...(isMobile ? { order: 6, flex: '1 1 0' } : {}),
-            }}>
-              · сейчас: {inProgress.activeForm ?? inProgress.content}
-            </span>
-          )}
-          {/* Прогресс-бар 44×4 */}
-          <span style={{ display: 'inline-block', width: 44, height: 4, borderRadius: 2, background: C.borderLight, overflow: 'hidden', flexShrink: 0 }}>
-            <span style={{ display: 'block', width: `${progress * 100}%`, height: '100%', borderRadius: 2, background: C.accent }} />
-          </span>
-          <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
-            {done} из {todos.length}
-          </span>
-          <span style={brk} />
-          <button
-            onClick={() => { if (sessionId) openPillMenu(sessionId); }}
-            title="Подробнее"
-            style={{
-              marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 2,
-              border: 'none', background: 'transparent', cursor: 'pointer',
-              fontSize: FS.sm, fontWeight: 600, color: C.accent, fontFamily: 'inherit',
-              padding: 0, minHeight: isMobile ? TB.iconHitMobile : undefined,
-              ...(isMobile ? { order: 7 } : {}),
-            }}
-          >
-            Подробнее
-            <span style={{ display: 'inline-flex', transform: 'translateX(1px)' }}>›</span>
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // 1. Живая + фичи: живой карточки нет вовсе (решение Андрея 23.10): статус и сигналы
+  //    даёт баннер; в ленте остаются только снимки прошлых планов (ветка 3 ниже).
+  if (isCurrentPlan && hasFeatures) return null;
 
   // 2. Живая + без фич: прежний полный чек-лист (байт-в-байт).
   if (isCurrentPlan) {

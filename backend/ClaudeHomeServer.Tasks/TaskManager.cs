@@ -186,6 +186,21 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 });
         }
 
+        // stop_expired: причина стопа меняется на терминальную БЕЗ движения метки стопа
+        // (W4-HOLD-J, R-HOLD-J п.4, контракт §1 :278): момент тот же — таймлайн этот вид
+        // не читает, двойного счёта ошибки нет; причина в журнале обязана быть. Единственный
+        // мутатор, меняющий причину без движения метки, — MarkExecutorStopExpired
+        // (feature_held → feature_held_expired).
+        if (before.ExecutorStoppedAt == task.ExecutorStoppedAt && task.ExecutorStoppedAt is not null
+            && before.ExecutorStopReason != task.ExecutorStopReason)
+            AppendJournal(ownerId, featureId, new FeatureJournalEntry
+            {
+                At = now,
+                Kind = "stop_expired",
+                TaskId = task.Id,
+                Reason = task.ExecutorStopReason,
+            });
+
         // waiting / waiting_cleared: AwaitingHumanSince задан или снят.
         if (before.AwaitingHumanSince != task.AwaitingHumanSince)
         {
@@ -497,10 +512,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         foreach (var s in steps)
         {
             if (s is null) { copy.Add(null!); continue; }
+            // «!» — осознанное сохранение null: поля PlannedStep non-nullable по типу,
+            // но null — сигнал «не задано», его ловит валидатор (400, а не NRE).
             copy.Add(new PlannedStep
             {
-                StepRef = s.StepRef?.Trim(),
-                Title = s.Title?.Trim(),
+                StepRef = s.StepRef?.Trim()!,
+                Title = s.Title?.Trim()!,
                 Lane = s.Lane,
             });
         }
@@ -953,6 +970,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             ClearAwaitingHuman(id);
             before.AwaitingHumanSince = null;
             before.AwaitingHumanReason = null;
+            // W4-HOLD-B2: закрытие эпика снимает удержание — закрытую фичу нельзя держать
+            // на паузе (tasks_complete/PUT без отдельной ручки; hold-ручки сюда не доходят:
+            // merged/closed → 409). Поле гасится здесь же — в той же функции перехода в Done.
+            if (task.Role == TaskRoles.Feature) task.Hold = null;
         }
         else if (task.Status != TaskItemStatus.Done) task.CompletedAt = null;
         // Вердикт и исход дефекта — устаревшая проверка после переоткрытия (образец — CompletedAt)
@@ -1178,6 +1199,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var before = Capture(task);
         task.ExecutorStoppedAt = atUtc;
         task.ExecutorStopReason = reason;
+        // W4-SEAM2 (хвост R-SEAM2 п.1): новая пометка — старое «продолжение уже отправлено»
+        // к ней не относится, признак гасится.
+        task.HoldResumeDeliveredAt = null;
         task.UpdatedAt = DateTime.UtcNow;
         WriteJournalTransitions(task, before);
         ScheduleSave();
@@ -1194,6 +1218,52 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var before = Capture(task);
         task.ExecutorStoppedAt = null;
         task.ExecutorStopReason = null;
+        // W4-SEAM2: пометки нет — признак доставки продолжения при ней не нужен.
+        task.HoldResumeDeliveredAt = null;
+        task.UpdatedAt = DateTime.UtcNow;
+        WriteJournalTransitions(task, before);
+        ScheduleSave();
+        return task;
+    }
+
+    // W4-SEAM2 (хвост R-SEAM2 п.1): признак «продолжение этой пометки отправляется/уже
+    // отправлено». Ставится ДО доставки в ResumeFeatureTurnsAfterHold: пока доставка в
+    // полёте, повторное снятие паузы видит признак и не шлёт продолжение второй раз.
+    // Только для пометки feature_held — у других остановок продолжения нет.
+    public TaskItem? MarkHoldResumeDelivered(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) return null;
+        task.HoldResumeDeliveredAt = DateTime.UtcNow;
+        task.UpdatedAt = DateTime.UtcNow;
+        ScheduleSave();
+        return task;
+    }
+
+    // Снять признак: доставка упала — шаг остаётся «на паузе», повторное снятие его
+    // подхватит и попробует снова (W4-HOLD-D п.2).
+    public TaskItem? ClearHoldResumeDelivered(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.HoldResumeDeliveredAt is null) return null;
+        task.HoldResumeDeliveredAt = null;
+        task.UpdatedAt = DateTime.UtcNow;
+        ScheduleSave();
+        return task;
+    }
+
+    // W4-HOLD-J (контракт §1 :241): чат прерванного паузой исполнителя исчез (TTL или
+    // человек) — пометку feature_held не снимаем, а меняем на терминальную
+    // feature_held_expired. ExecutorStoppedAt не двигается: по нему таймлайн паузы
+    // scoped'ит interrupted, а шаг перезапускается штатным tasks_run_executor.
+    // В журнал фичи пишется stop_expired с новой причиной (R-HOLD-J п.4, контракт §1 :278):
+    // момент стопа тот же, дублирующего «stopped» нет.
+    public TaskItem? MarkExecutorStopExpired(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) return null;
+        var before = Capture(task);
+        task.ExecutorStopReason = ExecutorStopClassifier.FeatureHeldExpiredReason;
         task.UpdatedAt = DateTime.UtcNow;
         WriteJournalTransitions(task, before);
         ScheduleSave();
@@ -1217,6 +1287,112 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         ScheduleSave();
         return task;
     }
+
+    // Удержание фичи (W4-HOLD-B2, контракт §1): ставят/снимают только ручки человека
+    // (сервисный токен отказывает 403 в контроллере; 409 по состояниям — тоже там). Только
+    // эпик (role=feature): у дочерних задачи Hold нет. В журнал фичи — ровно одна запись
+    // действия: held с reason / hold_cleared с снятым reason (по ней таймлайн считает
+    // интервал паузы). Прерывание идущих ходов (W4-HOLD-D): SetHold помечает исполнителей
+    // в состоянии running пометкой feature_held — статус не трогает, журнал задачи пишет
+    // существующий WriteJournalTransitions («stopped» с причиной feature_held).
+    public TaskItem? SetHold(string id, string reason)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.Role != TaskRoles.Feature) return null;
+        var now = DateTime.UtcNow;
+        // Идемпотентность повторной паузы (W4-HOLD-D2, R-HOLE-D находка 3): тот же reason —
+        // без второй записи и без сдвига Since (контракт §1, :212: одна запись на паузу).
+        // Другой reason — новая пауза: запись и Since обновляются. Под guard'ом только
+        // запись Hold и журнал; цикл пометки — вне guard'а (R-HOLE-D находка 1):
+        // повторная пауза с тем же reason обязана пересканировать ходы, начатые после первой.
+        if (task.Hold is null || task.Hold.Reason != reason)
+        {
+            task.Hold = new FeatureHold(reason, now, null, true);
+            task.UpdatedAt = now;
+            AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
+            {
+                At = now,
+                Kind = "held",
+                TaskId = task.Id,
+                Reason = reason,
+            });
+        }
+        // W4-HOLD-D (разрез §1): пауза отнимает идущие ходы. «Running» — «ход идёт сейчас»,
+        // тот же предикат, что у статуса исполнителя в проекторе (W4-HOLD-D2): «запускался
+        // когда-то» не годится — ход, закончившийся результатом, прерывать нечего. Эпик в
+        // выборку не входит (FeatureId == null): ключевой чат оркестратора общий для нескольких
+        // фич и паузой не прерывается. Уже остановленные по другой причине не трогается —
+        // возвращать её пауза не должна. Уже помеченные feature_held пропускаем: их стоп
+        // записан этой же паузой, двигать ExecutorStoppedAt нельзя — по нему проектор
+        // scoped'ит interrupted на интервал текущей паузы.
+        foreach (var t in _tasks.Values)
+        {
+            if (t.FeatureId != task.Id) continue;
+            if (t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason) continue;
+            if (!FeatureProjector.IsTurnRunning(t)) continue;
+            MarkExecutorStopped(t.Id, now, ExecutorStopClassifier.FeatureHeldReason);
+        }
+        ScheduleSave();
+        return task;
+    }
+
+    // Снятие паузы (W4-HOLD-D): только снимает состояние Hold — пометку feature_held НЕ
+    // гасит: возврат прерванных шагов в работу (продолжение в тех же сессиях) — отдельный
+    // шаг D с проверкой живости чата. Без него снятие паузы оставило бы задачи «остановленными».
+    public TaskItem? ClearHold(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.Role != TaskRoles.Feature || task.Hold is null) return null;
+        var reason = task.Hold.Reason;
+        task.Hold = null;
+        task.UpdatedAt = DateTime.UtcNow;
+        AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
+        {
+            At = DateTime.UtcNow,
+            Kind = "hold_cleared",
+            TaskId = task.Id,
+            Reason = reason,
+        });
+        ScheduleSave();
+        return task;
+    }
+
+    // FeatureHoldException переехал в Core (дефект 79d0fa9a): его бросает и корневой
+    // TaskExecutionService — ссылка корня на тип из вертикали ловится Root-сторожем.
+
+    // Эпик фичи задачи — сфера гейта паузы (контракт §1 :170): без фичи, висячий FeatureId
+    // (эпик не найден), чужой эпик — null, задача проходит как «без фичи». Owner учитывается
+    // только когда его задал вызывающий (ExecuteAsync проверяет владельца до гейта); при
+    // неизвестном сфера — по самой ссылке FeatureId.
+    private TaskItem? FeatureEpicOf(TaskItem task)
+    {
+        if (string.IsNullOrEmpty(task.FeatureId)) return null;
+        var epic = _tasks.GetValueOrDefault(task.FeatureId);
+        if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        if (task.OwnerId is not null && epic.OwnerId != task.OwnerId) return null;
+        return epic;
+    }
+
+    // FeatureHoldGate (W4-HOLD-G, контракт §1 :170): единственный гейт паузы на сервере — отказ
+    // запуска исполнителя по задачам фичи с активным Hold. Само правило — в FeatureProjector
+    // (HoldAllows/IsPaused, W4-HOLD-G): здесь только текст отказа по причине. Задача без фичи
+    // проходит всегда; висячий FeatureId (эпик не найден) — тоже, как задача без фичи: это
+    // отдельный дефект трекера, блокировать из-за него работу не надо.
+    // Возвращает null — запуск разрешён; иначе текст отказа для точки запуска (контракт :175).
+    public string? FeatureHoldRefusal(TaskItem task)
+    {
+        var epic = FeatureEpicOf(task);
+        if (epic is null || FeatureProjector.HoldAllows(task, epic)) return null;
+        return FeatureProjector.IsPaused(epic)
+            ? "Фича на паузе, снимите паузу на странице фичи."
+            : "Фича — черновик, запустите её на странице фичи.";
+    }
+
+    // «Фича задачи на паузе» — та же сфера, что у гейта запуска (W4-HOLD-I, контракт §1 :179,
+    // :183): сторож зависших и пробуждения по докладам читают это перед действием. Черновик —
+    // не пауза: его задачи подготовки живут как раньше.
+    public bool FeatureIsPaused(TaskItem task) =>
+        FeatureEpicOf(task) is { } epic && FeatureProjector.IsPaused(epic);
 
     // Пометка снятия человеком по карточке блокера (волна 1 team-blocker-honest, дефект
     // f3965801): ставится штабом в DropSubtaskAsync после Update(Status=Done). С этого

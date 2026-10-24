@@ -58,6 +58,13 @@ public class TaskItem
     // Сбрасывается при повторном запуске исполнителя (TaskManager.MarkClaudeStarted).
     public DateTime? ExecutorStoppedAt { get; set; }
     public string? ExecutorStopReason { get; set; }
+    // W4-SEAM2 (хвост R-SEAM2 п.1): признак «продолжение этой пометки уже отправлено». Ставится
+    // перед доставкой продолжения, гасится вместе с пометкой (ClearExecutorStopped) или новой
+    // пометкой (MarkExecutorStopped); при бое доставки — снимается, чтобы повторное снятие
+    // паузы попробовал снова. Без него сбой между доставкой и снятием пометки заставлял
+    // повторное снятие слать продолжение заново. Аддитивная nullable-поле: BackupSchema.Version
+    // не растёт (прецедент ExecutorLaunchedBySessionId/ReportToSessionId).
+    public DateTime? HoldResumeDeliveredAt { get; set; }
     // Исполнитель ждёт устройство локального проекта (ADR-016, вариант А плана §5): момент
     // постановки в ожидание и причина для человека. ClaudeStartedAt при этом пуст — запуска
     // не было. Стартует DeviceOnlineDispatcher при выходе устройства в онлайн; через 24 ч —
@@ -137,6 +144,10 @@ public class TaskItem
     // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика.
     public DateTime? AwaitingHumanSince { get; set; }
     public string? AwaitingHumanReason { get; set; }
+    // Удержание фичи (волна 4, разрез §1): null — работа разрешена; иначе — причина (FeatureHoldReasons).
+    // Ставится только на эпике (role=feature) и только человеком. Аддитивное nullable-поле: старый
+    // tasks.json без «hold» читается как null, BackupSchema.Version не растёт.
+    public FeatureHold? Hold { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
     // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /
@@ -178,6 +189,12 @@ public class TaskItem
     // экземпляр регулярной задачи (как ClaudeResult/ResultMarkdown — серия начинается заново).
     public DateTime? CompletedAt { get; set; }
 }
+
+// Удержание фичи (TaskItem.Hold, волна 4 §1): Reason — словарь FeatureHoldReasons (draft | manual |
+// queue), Since — момент постановки, BySessionId — чат постановки (null — из UI без чата), ByUser —
+// ставил человек (оркестратор только предлагает). Позиционная запись — как AcceptanceCriterion:
+// round-trip через JSON без конвертера.
+public record FeatureHold(string Reason, DateTime Since, string? BySessionId, bool ByUser);
 
 // Критерий приёмки задачи: Id стабилен (на него ссылается свидетельство), Text — измеримая формулировка.
 public record AcceptanceCriterion(string Id, string Text);

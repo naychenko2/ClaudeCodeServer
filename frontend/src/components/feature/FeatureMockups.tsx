@@ -1,12 +1,14 @@
-// Группа «Макеты» вкладки «Планы и макеты» (волна 3).
+// Группа «Макеты» вкладки «Планы и макеты» (волна 4, вариант 5В).
 //
-// Строки (список): миниатюра-заглушка 32×24, название, «дата · N версий», статус-чип,
-// чип «не в master». Карточка (деталь): метка «макет», название, статус, автор «чат ·
-// задача» (при taskId), путь, большая заглушка с «Открыть макет» (первый существующий
-// html → onOpenFile; exists:false → disabled «макет появится после мержа»), «Файлы» (чипы),
-// плашка у отклонённого, подвал, обратная строка «Упомянут в».
+// Сетка карточек-превью (3 колонки на десктопе, 1 на 360): миниатюра-заглушка
+// 100%×64, название, статус-чип, «дата · N версий», чип «не в master». Клик —
+// карточка макета на всю ширину (деталь): метка «макет», название, статус, автор
+// «чат · задача» (при taskId), путь, большая заглушка с «Открыть макет» (первый
+// существующий html → onOpenFile; exists:false → disabled «макет появится после
+// мержа»), «Файлы» (чипы), плашка у отклонённого, подвал, обратная строка
+// «Упомянут в».
 //
-// «Прошлые версии · N» — свёрнутый блок под живыми (там же rejected).
+// «Прошлые версии · N» — свёрнутый блок под живыми (там же rejected), тоже карточки.
 // mockupsUnavailable='device' — локальный проект: «Макеты локального проекта видны
 // только на устройстве».
 
@@ -60,8 +62,29 @@ export function MockupStatusChip({ status, isMobile = false, replaced = false }:
 }
 
 // Миниатюра-заглушка макета (рисунок из токенов, не скриншот):
-// small 32×24 (R.sm), large 100%×160 (на 360 — 128, R.lg).
-export function MockupThumb({ large, isMobile = false }: { large?: boolean; isMobile?: boolean }) {
+// preview 100%×64 (на 360 — 48, R.md) — карточка-превью в сетке;
+// small 32×24 (R.sm), large 100%×160 (на 360 — 128, R.lg) — карточка деталей.
+export function MockupThumb({ large, preview, isMobile = false }: { large?: boolean; preview?: boolean; isMobile?: boolean }) {
+  if (preview) {
+    return (
+      <div
+        data-testid="mockup-thumb-preview"
+        aria-hidden
+        style={{
+          width: '100%', height: isMobile ? 48 : 64, borderRadius: R.md,
+          border: `1px solid ${C.border}`, background: C.bgWhite,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative',
+        }}
+      >
+        {/* полосы-«рисунок» из токенов */}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', gap: 6, padding: 10, opacity: 0.5 }}>
+          <div style={{ height: 6, width: '60%', background: C.accentMuted, borderRadius: R.sm }} />
+          <div style={{ height: 6, width: '80%', background: C.border, borderRadius: R.sm }} />
+          <div style={{ height: 6, width: '45%', background: C.border, borderRadius: R.sm }} />
+        </div>
+      </div>
+    );
+  }
   if (large) {
     return (
       <div
@@ -104,34 +127,35 @@ function notInMaster(m: FeatureMockup): boolean {
   return hasHtml && !hasExistingHtml;
 }
 
-// === Строки макетов (список) ===
+// === Сетка карточек-превью макетов ===
 export interface MockupListSectionProps {
-  // Все макеты (live + past уже разделены вызывающим? нет — здесь сами делим).
+  // Все макеты (live + past здесь сами делим).
   mockups: FeatureMockup[];
-  // Выбранный макет (подсветка строки).
-  selectedPath?: string | null;
   onSelect?: (path: string) => void;
   isMobile?: boolean;
 }
 
-// Раздел «Макеты · N» в списке: живые строки + «Прошлые версии · N» (свёрнуто).
-export function MockupListSection({ mockups, selectedPath, onSelect, isMobile = false }: MockupListSectionProps) {
+// Раздел «Макеты · N» в сетке: живые карточки + «Прошлые версии · N» (свёрнуто).
+export function MockupListSection({ mockups, onSelect, isMobile = false }: MockupListSectionProps) {
   const [pastOpen, setPastOpen] = useState(false);
   const counts = versionCounts(mockups);
   // Живые = текущая версия группы, не отклонённые; прошлые — остальное.
   const live = mockups.filter(m => m.status !== 'rejected' && isCurrentOfGroup(m, mockups));
   const past = mockups.filter(m => !live.includes(m));
+  const columns = isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))';
 
   return (
-    <div data-testid="mockup-list-section" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+    <div data-testid="mockup-list-section" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <SectionHeader label="Макеты" count={live.length} isMobile={isMobile} />
       {mockups.length === 0 ? (
         <EmptyRow isMobile={isMobile} text="Макетов пока нет. Макет появится, когда у его записки в docs/mockups/ будет шапка «Фича · Статус · Файлы»" />
       ) : (
         <>
-          {live.map(m => (
-            <MockupRow key={m.path} m={m} versions={counts.get(m.path) ?? 1} selected={selectedPath === m.path} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
-          ))}
+          <div data-testid="plans-grid-mockups" style={{ display: 'grid', gridTemplateColumns: columns, gap: SP.md }}>
+            {live.map(m => (
+              <MockupPreviewCard key={m.path} m={m} versions={counts.get(m.path) ?? 1} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
+            ))}
+          </div>
           {past.length > 0 && (
             <div style={{ borderTop: `1px solid ${C.borderLight}`, paddingTop: SP.xs }}>
               <button
@@ -148,10 +172,14 @@ export function MockupListSection({ mockups, selectedPath, onSelect, isMobile = 
                 <span>Прошлые версии · {past.length}</span>
                 <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ transform: pastOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
               </button>
-              {pastOpen && past.map(m => (
-                // «заменён» — версия не текущая в группе; текущая, но отклонённая — «отклонён» (свой статус).
-                <MockupRow key={m.path} m={m} versions={counts.get(m.path) ?? 1} dimmed replaced={!isCurrentOfGroup(m, mockups)} selected={selectedPath === m.path} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
-              ))}
+              {pastOpen && (
+                <div data-testid="plans-grid-mockups-past" style={{ display: 'grid', gridTemplateColumns: columns, gap: SP.md }}>
+                  {past.map(m => (
+                    // «заменён» — версия не текущая в группе; текущая, но отклонённая — «отклонён» (свой статус).
+                    <MockupPreviewCard key={m.path} m={m} versions={counts.get(m.path) ?? 1} dimmed replaced={!isCurrentOfGroup(m, mockups)} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </>
@@ -201,9 +229,9 @@ function EmptyRow({ text, isMobile }: { text: string; isMobile: boolean }) {
   );
 }
 
-// Строка макета в списке: заглушка · название · «дата · N версий» · статус-чип · «не в master».
-function MockupRow({ m, versions, selected, dimmed, replaced, isMobile, onSelect }: {
-  m: FeatureMockup; versions: number; selected?: boolean; dimmed?: boolean; replaced?: boolean; isMobile: boolean; onSelect: () => void;
+// Карточка-превью макета в сетке: миниатюра · название · статус-чип · «дата · N версий» · «не в master».
+function MockupPreviewCard({ m, versions, dimmed, replaced, isMobile, onSelect }: {
+  m: FeatureMockup; versions: number; dimmed?: boolean; replaced?: boolean; isMobile: boolean; onSelect: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const date = m.modifiedAt ? dateOnly(m.modifiedAt) : null;
@@ -219,32 +247,37 @@ function MockupRow({ m, versions, selected, dimmed, replaced, isMobile, onSelect
       onMouseLeave={() => setHover(false)}
       title={m.path}
       style={{
-        display: 'flex', alignItems: 'center', gap: SP.sm,
-        height: isMobile ? 56 : 44, padding: `0 ${SP.sm}px`,
-        background: selected ? C.accentLight : (hover ? C.bgSelected : 'transparent'),
-        borderRadius: R.md, cursor: 'pointer',
+        background: hover ? C.bgSelected : C.bgCard,
+        border: `1px solid ${C.border}`,
+        borderRadius: R.md,
+        padding: `${SP.md}px ${SP.md}px`,
+        display: 'flex', flexDirection: 'column', gap: SP.sm,
+        cursor: 'pointer',
+        opacity: dimmed ? 0.7 : 1,
       }}
     >
-      <MockupThumb />
-      <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: dimmed ? C.textSecondary : C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <MockupThumb preview isMobile={isMobile} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+        <span style={{ fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: dimmed ? C.textSecondary : C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
           {m.title}
         </span>
+        <MockupStatusChip status={m.status} isMobile={isMobile} replaced={replaced} />
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {date ? `${date} · ` : ''}{versions} {versions === 1 ? 'версия' : 'версий'}
         </span>
+        {nMaster && (
+          <span data-testid="mockup-not-in-master" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            не в master
+          </span>
+        )}
       </div>
-      <MockupStatusChip status={m.status} isMobile={isMobile} replaced={replaced} />
-      {nMaster && (
-        <span data-testid="mockup-not-in-master" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap', flexShrink: 0 }}>
-          не в master
-        </span>
-      )}
     </div>
   );
 }
 
-// === Карточка макета (деталь) ===
+// === Карточка макета (деталь, на всю ширину) ===
 export interface MockupCardProps {
   mockup: FeatureMockup;
   // Планы фичи — для обратной строки «Упомянут в».

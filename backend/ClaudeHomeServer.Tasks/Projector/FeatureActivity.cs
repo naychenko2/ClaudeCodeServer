@@ -158,7 +158,9 @@ public static class FeatureActivityBuilder
         return end;
     }
 
-    // Все задачи фичи: эпик + дочерние (та же выборка, что FeatureTimeline/FeatureBreakdown).
+    // Задачи фичи с ролью: эпик + дочерние (та же выборка, что FeatureTimeline/FeatureBreakdown).
+    // Безролевые (Unroled) не входят: в метриках активности считаются только задачи с ролью
+    // (W4-DES-B: фича, висящая только на дизайне, должна быть активной).
     private static IEnumerable<TaskItem> AllTasks(FeatureRun run)
     {
         yield return run.Epic;
@@ -168,6 +170,7 @@ public static class FeatureActivityBuilder
         if (run.Final is not null) yield return run.Final;
         if (run.Merge is not null) yield return run.Merge;
         foreach (var t in run.Cut) yield return t;
+        foreach (var t in run.Design) yield return t;
         foreach (var t in run.Plan) yield return t;
     }
 }

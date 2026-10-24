@@ -441,6 +441,42 @@ public class TasksHttpDelegationGateTests : IDisposable
         (await StatusOfAsync(epicId)).Should().Be("done", "отказ не должен трогать статус");
     }
 
+    /// <summary>Перевод карточки эпика в колонку категории «Работа» (columnId=todo) тем же исполнителем — отказ: и в MCP, и в REST (403). Статус из колонки попадает в гард так же, как у закрытия.</summary>
+    [Fact]
+    public async Task ВозобновлениеЭпика_ЧерезКолонкуВРаботе_ИсполнительОтказ()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        await CloseEpicAsync(epicId);
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = "шаг-фичи";
+
+        var mcp = await CallToolAsync(Client, sessionId, "tasks_update", new { id = epicId, columnId = "todo" });
+        AssertIsError(mcp);
+        ToolText(mcp).Should().Contain(FeatureReopenDenied);
+
+        var rest = await ServiceClient(sessionId).PutAsJsonAsync($"/api/tasks/{epicId}", new { columnId = "todo" });
+        rest.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await rest.Content.ReadAsStringAsync()).Should().Contain(FeatureReopenDenied);
+        (await StatusOfAsync(epicId)).Should().Be("done", "отказ не должен трогать статус");
+    }
+
+    /// <summary>Делегированный ход (глубина 1) эпик возобновить не может — потолок 0, по образцу отказа закрытия. tasks_complete возобновить не может в принципе (всегда Status=Done), поэтому инструмент один.</summary>
+    [Fact]
+    public async Task ВозобновлениеЭпика_ДелегированныйХод_Отказ()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        await CloseEpicAsync(epicId);
+        _adapters.AgentDepth = 1;
+
+        var answer = await CallToolAsync(Client, sessionId, "tasks_update", new { id = epicId, status = "todo" });
+
+        AssertIsError(answer);
+        ToolText(answer).Should().Contain(FeatureReopenDenied);
+        (await StatusOfAsync(epicId)).Should().Be("done", "отказ не должен трогать статус");
+    }
+
     /// <summary>Чат человека на глубине 0 (не исполнитель) возобновляет эпик — проходит (MCP), статус становится todo.</summary>
     [Fact]
     public async Task ВозобновлениеЭпика_ЧатЧеловекаГлубина0_Проходит()

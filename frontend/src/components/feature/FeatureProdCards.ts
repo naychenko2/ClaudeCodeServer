@@ -21,6 +21,10 @@ import type { FeatureRun, FeatureTask, FeatureStepChain, FeatureRound } from '..
 // ok — сделано, ret — возврат, cur — текущий (обведён акцентом), pend — впереди (пунктир).
 export type ProdNodeState = 'ok' | 'ret' | 'cur' | 'pend';
 
+// Состояние шага для ленты (макет A2): done — готово, run — идёт, wait — ждёт, queue — в очереди.
+// Приоритет при конфликте: run > wait > done > queue.
+export type ProdCardState = 'done' | 'run' | 'wait' | 'queue';
+
 export interface ProdNode {
   // Тип узла: работа / возврат / доработка / ревью (пунктирный, впереди) / принят.
   kind: 'work' | 'return' | 'rework' | 'review' | 'accept';
@@ -48,6 +52,15 @@ export interface ProdCard {
   // Шаг ждёт ревью (status «ждёт ревью» / outcome pending).
   awaitingReview: boolean;
   nodes: ProdNode[];
+  // Состояние шага (иконка, тон карточки и плашка).
+  state: ProdCardState;
+  // Чем занят идущий шаг: работа / доработка; null — шаг не идёт.
+  runKind: 'work' | 'rework' | null;
+  // С какого момента идёт текущая задача (claudeStartedAt, иначе createdAt); null — неизвестно.
+  runningSince: string | null;
+  // Когда шаг начал ждать ревью / когда принят — поля бэка; null, пока их нет в агрегате.
+  waitingSince: string | null;
+  acceptedAt: string | null;
   // Причина последнего возврата (round.reason); null — её нет.
   returnReason: string | null;
 }
@@ -164,6 +177,23 @@ function chainNodes(
   return nodes;
 }
 
+// Состояние шага. run — в цепочке есть задача inProgress (шаг или доработка), либо шаг текущий
+// (run.now) и не ждёт ревью; wait — ждёт ревью или вернулся и ждёт доработки; done — принят/снят
+// или все задачи закрыты; queue — шаг не начат.
+function cardState(
+  chain: FeatureStepChain, taskMap: Map<string, FeatureTask>, started: boolean,
+  isCurrent: boolean, awaiting: boolean,
+): { state: ProdCardState; runTask: FeatureTask | null } {
+  const tasks = chain.taskIds.map(id => taskMap.get(id)).filter((t): t is FeatureTask => !!t);
+  const running = tasks.find(t => t.status === 'inProgress') ?? null;
+  if (running || (isCurrent && !awaiting && started)) return { state: 'run', runTask: running };
+  if (!started) return { state: 'queue', runTask: null };
+  if (awaiting) return { state: 'wait', runTask: null };
+  const closed = chain.outcome === 'accepted' || chain.outcome === 'withdrawn'
+    || (chain.outcome !== 'returned' && tasks.length > 0 && tasks.every(t => t.status === 'done'));
+  return { state: closed ? 'done' : 'wait', runTask: null };
+}
+
 // Причина последнего возврата: причина ПОСЛЕДНЕГО витка-возврата. Если у него причины
 // нет — null, а не подстановка из более раннего возврата (человек читает причину
 // текущего состояния, а не историю).
@@ -200,6 +230,12 @@ export function buildProdCards(
     // «Текущий» — по run.now: шаг или одна из его задач сейчас InProgress.
     const now = run.now ?? [];
     const isCurrent = now.some(n => n.stepRef === chain.stepRef || chain.taskIds.includes(n.taskId));
+    const started = chainStart(chain, taskMap) !== null;
+    const awaiting = awaitingReviewOf(chain);
+    const { state, runTask } = cardState(chain, taskMap, started, isCurrent, awaiting);
+    const nodes = chainNodes(run, chain, taskMap, personaName);
+    const runKind = state !== 'run' ? null
+      : [...nodes].reverse().find(n => n.kind === 'rework' || n.kind === 'work')?.kind === 'rework' ? 'rework' : 'work';
     return {
       stepRef: chain.stepRef,
       title: chain.title,
@@ -209,8 +245,13 @@ export function buildProdCards(
       chatId: chain.chatId ?? null,
       cycles: chain.loops ?? 0,
       isCurrent,
-      awaitingReview: awaitingReviewOf(chain),
-      nodes: chainNodes(run, chain, taskMap, personaName),
+      awaitingReview: awaiting,
+      nodes,
+      state,
+      runKind,
+      runningSince: runTask ? (runTask.claudeStartedAt ?? runTask.createdAt ?? null) : null,
+      waitingSince: chain.waitingSince ?? null,
+      acceptedAt: chain.acceptedAt ?? null,
       returnReason: lastReturnReason(chain),
     };
   });

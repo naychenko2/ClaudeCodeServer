@@ -213,6 +213,10 @@ export interface FeatureStepChain {
   rounds: FeatureRound[];
   // Б7: чат исполнителя шага (LinkedSessionId, fail-closed); null — нет.
   chatId: string | null;
+  // Когда шаг начал ждать ревью и когда принят (ISO). Поля делает бэк; пока их нет —
+  // лента показывает только слово состояния без времени.
+  waitingSince?: string | null;
+  acceptedAt?: string | null;
 }
 
 // Возвраты одного источника (ревью/проверка/финал) (бэк: `FeatureSourceReturns`).

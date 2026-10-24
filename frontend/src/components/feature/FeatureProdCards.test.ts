@@ -315,3 +315,47 @@ describe('краевые состояния', () => {
     expect(c.nodes.map(n => n.kind)).toEqual(['work']);
   });
 });
+
+describe('state карточки (A2)', () => {
+  const stateOf = (tasks: FeatureTask[], ch: Partial<FeatureStepChain>, over: Partial<FeatureRun> = {}) =>
+    buildProdCards(run({ steps: tasks, stepChains: [chain({ stepRef: 'Ш1', taskIds: tasks.map(t => t.id), ...ch })], ...over }))[0];
+  const start = '2026-10-20T10:00:00Z';
+
+  it('queue: шаг не начат', () => {
+    expect(stateOf([task({ id: 's1', status: 'todo' })], { outcome: 'pending' }).state).toBe('queue');
+  });
+
+  it('run: задача шага inProgress; доработка — runKind rework и старт от неё', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'done', claudeStartedAt: start }), task({ id: 's2', status: 'inProgress', claudeStartedAt: '2026-10-21T10:00:00Z' })],
+      { rounds: [round({ n: 1, verdict: 'returned' })], loops: 1 },
+    );
+    expect(c.state).toBe('run');
+    expect(c.runKind).toBe('rework');
+    expect(c.runningSince).toBe('2026-10-21T10:00:00Z');
+  });
+
+  it('run сильнее wait: идущая задача при «ждёт ревью» — всё равно run', () => {
+    const c = stateOf([task({ id: 's1', status: 'inProgress', claudeStartedAt: start })], { status: 'ждёт ревью', outcome: 'pending' });
+    expect(c.state).toBe('run');
+  });
+
+  it('wait: задача закрыта, ждёт ревью; run.now по ревью шаг в run не переводит', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'done', claudeStartedAt: start })],
+      { status: 'ждёт ревью', outcome: 'pending' },
+      { now: [{ taskId: 'r1', stage: 'review', title: 'Ревью', stepRef: 'Ш1' }] },
+    );
+    expect(c.state).toBe('wait');
+    expect(c.runKind).toBeNull();
+  });
+
+  it('done: принят; вернулся и ждёт доработки — wait; время приёма/ожидания — из бэка или null', () => {
+    const done = stateOf([task({ id: 's1', status: 'done', claudeStartedAt: start })], { status: 'принят', outcome: 'accepted', acceptedAt: '2026-10-23T12:00:00Z' });
+    expect(done.state).toBe('done');
+    expect(done.acceptedAt).toBe('2026-10-23T12:00:00Z');
+    expect(done.waitingSince).toBeNull();
+    const ret = stateOf([task({ id: 's1', status: 'done', claudeStartedAt: start })], { status: 'вернул', outcome: 'returned', rounds: [round({ n: 1, verdict: 'returned' })], loops: 1 });
+    expect(ret.state).toBe('wait');
+  });
+});

@@ -93,14 +93,14 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
     api.tasks.featureSummary(fid, force, ac.signal)
       .then(d => {
         // Ответ принимает только текущий запрос (вердикт W5-R-F2c, п.1; половина про
-        // «другой запрос» убрана в W5-F2e, п.1: новый запрос не начинается, пока старый
-        // «идёт», — summaryRunning не пускает второй fetchSummary). Если фича сменилась
-        // — старый ответ не липнет.
+        // «другой запрос» убрана по вердикту W5-R-F2d, п.1: новый запрос не начинается,
+        // пока старый «идёт» (summaryRunning не пускает второй fetchSummary). Если фича
+        // сменилась — старый ответ не липнет.
         if (lastFeatureRef.current !== fid) return;
         setSummaryData(d);
       })
       .catch(e => {
-        // Симметрия с .then (вердикт W5-R-F2e, п.2): ошибка старого запроса не пишет
+        // Симметрия с .then (вердикт W5-R-F2d, п.2): ошибка старого запроса не пишет
         // заглушку под другой фичей.
         if (lastFeatureRef.current !== fid) return;
         if (ac.signal.aborted) return; // «Остановить» — не ошибка.

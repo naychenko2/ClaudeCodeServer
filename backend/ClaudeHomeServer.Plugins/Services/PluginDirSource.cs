@@ -40,8 +40,9 @@ public class PluginDirSource : IPluginDirSource
         // Персона: personaId null — фильтра нет (все включённые пакеты); персона
         // задана — только пакеты, открытые Skill-биндингом plugin:{id}; персона не
         // найдена — биндингов нет, значит пакетов нет (биндинг — единственный гейт).
-        bool hasPersonaFilter = personaId is not null;
-        var personaTargets = hasPersonaFilter
+        // Проверка вписана прямо в условие: через отдельный bool компилятор не
+        // выводит non-null personaId (CS8604), а в ветке else он гарантирован.
+        var personaTargets = personaId is not null
             ? _personaBindings.Get(ownerId, personaId)?.SkillBindingTargets
             : null;
 
@@ -52,7 +53,7 @@ public class PluginDirSource : IPluginDirSource
             // Персона: пакет открыт, только если среди её Skill-биндингов есть target
             // «plugin:{id}/{skill}» с этим id. Разбор — единая точка PluginSkillTarget (C1):
             // сравниваем по префиксу id, а не по целой строке (target несёт и имя навыка).
-            if (hasPersonaFilter
+            if (personaId is not null
                 && (personaTargets is null
                     || !personaTargets.Any(t => PluginSkillTarget.TryParse(t, out var p)
                                                && p.PluginId == record.Id)))

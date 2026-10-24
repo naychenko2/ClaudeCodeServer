@@ -104,6 +104,11 @@ public static class LocalActionCatalog
     // «Собрать сводку», кэшируется в Session.ArchiveSummary. Не путать с SessionSummary —
     // «Итогом сессии», который выносится заметкой и трогать который нельзя
     public const string ChatDigest = "chat-digest";
+    // Передаточная записка для переноса разговора в новый чат (фича «Индикатор prompt cache
+    // и перенос в новый чат», шаг B-4): вызывается только холодным путём ChatHandoffService
+    // (тёплый путь пишет сам чат своим ходом). Не путать с ChatContinue — «Продолжить в новом
+    // чате», где записку пишет сам чат служебным промптом.
+    public const string ChatHandoff = "chat-handoff";
     // Умный подбор фото персонажа (ADR-027, §6): ракурс и эмоция из текста запроса.
     // Только бесплатная цепочка (RunFreeAsync), платный claude не используется
     public const string CharacterSceneParse = "character-scene-parse";
@@ -250,6 +255,15 @@ public static class LocalActionCatalog
         // для карточки списка, поэтому Small вместо Large «Сводки сессии»: переплачивать
         // профилем за три строки незачем
         new(ChatDigest, "Сводка карточки архива", "Сессии", CheapProfile.Small, DefaultLocal: true),
+        // Перенос в новый чат: вход — транскрипт до 60k символов (голова+хвост), ответ —
+        // структурированная записка из семи разделов. Large обязателен: Text/Small молча
+        // обрежут промпт (num_ctx Ollama) и записка потеряет середину разговора. Локаль
+        // выключена по той же причине: окна локали записка не вывозит, и сервис честно
+        // отказывает, не зовя модель (ChatHandoffService.LocalRouteRefusal). Пер-местный
+        // потолок вывода 4096 ниже профильного 8192: записка — семь коротких списков,
+        // большего не требуется.
+        new(ChatHandoff, "Перенос в новый чат", "Сессии", CheapProfile.Large,
+            DefaultLocal: false, CloudNumPredict: 4096),
         new(CharacterSceneParse, "Разбор сюжета для подбора фото", "Персонажи", CheapProfile.Small, DefaultLocal: true),
         // Места с картинками на входе: локаль слепая, поэтому DefaultLocal: false, Tier — слабая
         // (Small → weak по умолчанию). CheapTextRunner их не обслуживает

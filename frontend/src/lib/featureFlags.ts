@@ -30,6 +30,9 @@ export const FLAGS = {
   // «Авто-возобновление ходов»: после рестарта сервера прерванные активные ходы дотягиваются
   // через Claude CLI resume. Dark launch, выключено по умолчанию.
   turnAutoResume: 'turn-auto-resume',
+  // «Индикатор prompt cache и перенос в новый чат»: регистрация (шаг B-1), фича обвязывается
+  // следующими шагами. Dark launch, выключено по умолчанию.
+  promptCache: 'prompt-cache',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

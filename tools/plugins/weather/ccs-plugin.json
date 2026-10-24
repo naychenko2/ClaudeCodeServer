@@ -1,0 +1,11 @@
+{
+  "name": "weather",
+  "version": "0.1.0",
+  "bridge": { "v": 1 },
+  "contributes": {
+    "panels": [{ "id": "main", "slot": "sidebar", "entry": "panel/index.html", "title": "Погода" }]
+  },
+  "permissions": {
+    "requested": ["net:api.open-meteo.com", "net:geocoding-api.open-meteo.com", "storage"]
+  }
+}

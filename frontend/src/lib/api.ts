@@ -486,6 +486,12 @@ const PREVIEW_START_TIMEOUT_MS = DEV_SERVER_PORT_WAIT_MS + 30_000;
 // за N с»), а не OfflineError, и приложение не уводится в офлайн (offline.ts:423–447).
 const CONTINUE_TIMEOUT_MS = 16 * 60 * 1000;
 
+// Потолок ожидания «Перенести в новый чат» (фича prompt-cache, шаг F-4): тёплый путь —
+// видимый ход самого чата, бэкенд ждёт его до WarmTurnTimeout = 5 мин (ChatHandoffService.cs);
+// холодный — быстрый раннер по транскрипту. Берём 6 мин: обрыв по этому таймауту —
+// RequestTimeoutError, а не OfflineError (тот же приём, что у CONTINUE_TIMEOUT_MS).
+const HANDOFF_TIMEOUT_MS = 6 * 60 * 1000;
+
 // Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку
 // исполняет внешний агент планировщика, а журнал deploy-state.json пишет он же.
 // Формат чужой и версионируется отдельно от сервера: незнакомые поля игнорируем,
@@ -2529,6 +2535,17 @@ export const api = {
       request<{ newSessionId: string; handoffNoteId: string | null }>(
         `/chats/${id}/continue`,
         { method: 'POST', body: JSON.stringify(note ? { note } : {}), timeoutMs: CONTINUE_TIMEOUT_MS },
+      ),
+    // «Перенести в новый чат» (фича prompt-cache, шаг F-4): путь выбирает сервер — тёплый
+    // (записку пишет сам чат, пока его кэш тёплый) или холодный (её собирает дешёвый раннер
+    // по транскрипту). Ответ — id нового чата, его проект и черновик композера. 409 — чат
+    // занят/повторный клик/не тот тип чата, 502 — модель не дала записку; текст ошибки
+    // человеческий и показывается как есть. Тёплый путь — видимый ход чата до 5 мин,
+    // таймаут фронта чуть больше — см. HANDOFF_TIMEOUT_MS.
+    handoff: (id: string) =>
+      request<{ chatId: string; projectId: string | null; draft: string | null; warm: boolean }>(
+        `/chats/${id}/handoff`,
+        { method: 'POST', timeoutMs: HANDOFF_TIMEOUT_MS },
       ),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы

@@ -10,6 +10,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { C } from '../../lib/design';
 import type { ServerMessage } from '../../types';
 import type {
   PluginDraftAcceptResult, PluginDraftDiff, PluginDraftPreview, PluginDraftSummary,
@@ -58,10 +59,10 @@ vi.mock('../../lib/api', () => ({
 }));
 
 const { api } = await import('../../lib/api');
-const { DraftCard } = await import('./DraftCard');
+const { DraftCard, FilesDrawer } = await import('./DraftCard');
 const { ConsentDialog } = await import('./ConsentDialog');
 const { useDraftCard } = await import('./useDraftCard');
-const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
+const { findNodeByAttr, installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } = await import(
   '../../components/chat/__tests__/fakeDom'
 );
 type PluginConsentData = import('./ConsentDialog').PluginConsentData;
@@ -446,5 +447,406 @@ describe('CollapsedRow: «Вернуть» отклонённого чернов
       // onRestore не передан
     }));
     expect(html).not.toContain('Вернуть');
+  });
+});
+
+// === Окно «Файлы черновика» (FilesDrawer, макет plugin-files-window-v1) ===
+// Структура: вкладки «Файлы» | «Изменения» | «Панель», футера нет; дерево файлов с
+// метками изменений; содержимое выбранного файла реконструируется из строк diff;
+// состояния: diff не загружен, diff усечён, двоичный файл, файл удалён из пакета.
+// Клик в фейк-DOM: у элемента нет dispatchEvent — React держит пропсы на узле
+// (reactProps), поэтому вызываем onClick напрямую, внутри act().
+function clickByAttr(container: ReturnType<typeof mount>['container'], attr: string, value: string): boolean {
+  const node = findNodeByAttr(container, attr, value);
+  const props = node ? reactProps(node) : null;
+  if (typeof props?.onClick !== 'function') return false;
+  act(() => { (props!.onClick as () => void)(); });
+  return true;
+}
+
+function clickByText(container: ReturnType<typeof mount>['container'], label: string): boolean {
+  const textOf = (n: any): string => n.nodeType === 3 ? (n.nodeValue ?? '') : n.childNodes.map(textOf).join('');
+  let hit: any = null;
+  const walk = (n: any): void => {
+    if (hit) return;
+    if (n.nodeType === 1 && n.nodeName === 'BUTTON' && textOf(n).includes(label)) { hit = n; return; }
+    for (const c of n.childNodes) walk(c);
+  };
+  walk(container);
+  const props = hit ? reactProps(hit) : null;
+  if (typeof props?.onClick !== 'function') return false;
+  act(() => { (props!.onClick as () => void)(); });
+  return true;
+}
+
+describe('FilesDrawer: окно по макету', () => {
+  const drawerHtml = (preview: PluginDraftPreview, diff: PluginDraftDiff | null, diffError?: string | null) =>
+    renderToStaticMarkup(createElement(FilesDrawer, { preview, diff, diffError, onClose: () => {} }));
+
+  it('вкладки «Файлы» и «Изменения»; «Панель» — только если в пакете есть панели', () => {
+    const html = drawerHtml(PREVIEW, DIFF);
+    expect(html).toContain('Файлы');
+    expect(html).toContain('Изменения');
+    expect(html).toContain('Панель');
+    const noPanel = drawerHtml({ ...PREVIEW, panels: [] }, DIFF);
+    expect(noPanel).not.toContain('Панель');
+  });
+
+  it('футера нет: закрытие — крестик шапки, предпросмотр панели — вкладка', () => {
+    const html = drawerHtml(PREVIEW, DIFF);
+    expect(html).not.toContain('Предпросмотр панели');
+    expect(html).toContain('aria-label="Закрыть"');
+  });
+
+  it('дефект QA: подзаголовок обновления читается «обновляет установленную 1.0.0», без сырого JSX', () => {
+    const html = drawerHtml({ ...PREVIEW, installedVersion: '1.0.0' }, DIFF);
+    // текст подзаголовка без разметки — именно так его видит человек
+    const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+    expect(text).toContain('обновляет установленную 1.0.0');
+    // старый дефект: JSX внутри шаблонной строки экранируется и читается как текст
+    expect(html).not.toContain('&lt;span');
+    expect(html).not.toContain('style={{');
+  });
+
+  it('дерево вместо плоского перечня: каталоги — Button из ui-кита с aria-expanded, файлы data-file, метки +/~/− и размеры', () => {
+    const html = drawerHtml(PREVIEW, DIFF);
+    // Хвост ревью: testid каталога — с префиксом dir:, боевой путь не маскируется под контрол.
+    expect(html).toContain('data-testid="dir:panel"');
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('data-file="panel/index.html"');
+    expect(html).toContain('data-file="commands/my-cmd.md"');
+    expect(html).toContain('aria-label="Добавлен"');
+    expect(html).toContain('aria-label="Изменён"');
+    expect(html).toContain('120 Б');
+  });
+
+  it('выбранный файл: вид «Файл» (ctx+add строки) и переключатель «Файл | Изменения»', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    const ok = clickByAttr(container, 'data-file', 'commands/my-cmd.md');
+    expect(ok).toBe(true);
+    const text = textNodes(container).join(' ');
+    expect(text).toContain('new line'); // содержимое новой версии
+    expect(text).not.toContain('old line'); // удалённая строка в виде «Файл» не показывается
+    expect(text).toContain('Файл');
+    expect(text).toContain('Изменения');
+    uninstallFakeDom();
+  });
+
+  it('вкладка «Изменения»: сводка с счётчиками; удалённый файл — в дереве', () => {
+    const withRemoved: PluginDraftDiff = {
+      ...DIFF,
+      removed: [{ path: 'panel/legacy.js', size: 300, binary: false, truncated: false, lines: null }],
+    };
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: withRemoved, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    // JSX-пробел между {label} и {n} — отдельный текстовый узел; нормализуем пробелы,
+    // чтобы проверить ровно то, что видит человек: «добавлено 1».
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Что поменялось');
+    expect(text).toContain('добавлено 1');
+    expect(text).toContain('удалено 1');
+    expect(container.querySelector('[data-file="panel/legacy.js"]')).toBeTruthy();
+    uninstallFakeDom();
+  });
+
+  it('diff не загружен (ошибка) — «Не удалось сравнить» и «Повторить», а не пустота', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, {
+      preview: PREVIEW, diff: null, diffError: 'Сервер не ответил', onClose: () => {}, onLoadDiff: () => {},
+    }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    const text = textNodes(container).join(' ');
+    expect(text).toContain('Не удалось сравнить с установленной версией');
+    expect(text).toContain('Повторить');
+    expect(text).toContain('Файлы не сравнены');
+    uninstallFakeDom();
+  });
+
+  it('усечённый diff — предупреждение «Сравнение длинное»', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: { ...DIFF, truncated: true }, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('Сравнение длинное');
+    uninstallFakeDom();
+  });
+
+  it('двоичный файл — «Двоичный файл» с размером, не сырое содержимое', () => {
+    const preview: PluginDraftPreview = { ...PREVIEW, files: [...PREVIEW.files, { path: 'assets/logo.png', isDir: false, size: 14336 }] };
+    const diff: PluginDraftDiff = { ...DIFF, added: [...DIFF.added, { path: 'assets/logo.png', size: 14336, binary: true, truncated: false, lines: null }] };
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview, diff, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'assets/logo.png')).toBe(true);
+    const text = textNodes(container).join(' ');
+    expect(text).toContain('Двоичный файл');
+    expect(text).toContain('14,0 КБ');
+    uninstallFakeDom();
+  });
+
+  it('файл удалён из пакета — состояние «Файла больше нет»', () => {
+    const diff: PluginDraftDiff = {
+      ...DIFF, added: [], modified: [],
+      removed: [{ path: 'panel/legacy.js', size: 300, binary: false, truncated: false, lines: null }],
+    };
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByAttr(container, 'data-file', 'panel/legacy.js')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('Файла больше нет');
+    uninstallFakeDom();
+  });
+
+  it('Major 1: каждая вкладка помнит свой файл и вид — выбор не переносится', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    // «Файлы»: выбрали файл → содержимое, без удалённой строки.
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    let text = textNodes(container).join(' ');
+    expect(text).toContain('new line');
+    expect(text).not.toContain('old line');
+    // Переход в «Изменения» → сводка, а не diff, выбранный в «Файлах».
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('Что поменялось');
+    expect(text).not.toContain('old line');
+    // «Изменения»: выбрали тот же файл → полный diff с удалённой строкой.
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('old line');
+    // Обратный переход в «Файлы» → содержимое файла, не diff.
+    expect(clickByText(container, 'Файлы')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('new line');
+    expect(text).not.toContain('old line');
+    // Возврат в «Изменения» → вкладка восстанавливает свой выбор.
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('old line');
+    uninstallFakeDom();
+  });
+
+  it('Major 1 (мобила): Back ведёт к списку, выбор вкладки сохраняется, а не сбрасывается', () => {
+    installFakeDom();
+    // installFakeDom ставит свой window с matchMedia=false — переключаем только matchMedia
+    // (целый window заменять нельзя: react-dom читает из него HTMLIFrameElement).
+    window.matchMedia = (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('new line');
+    // Back — к списку: вид файла закрыт.
+    expect(clickByAttr(container, 'aria-label', 'Назад к списку файлов')).toBe(true);
+    let text = textNodes(container).join(' ');
+    expect(text).toContain('Пакет');
+    expect(text).not.toContain('new line');
+    // Переход на другую вкладку и обратно — выбор «Файлов» восстановлен, не null.
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByText(container, 'Файлы')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('new line');
+    // Выбор в «Изменениях» не переносится в «Файлы»: там своё содержимое, не diff.
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    expect(clickByText(container, 'Файлы')).toBe(true);
+    text = textNodes(container).join(' ');
+    expect(text).toContain('new line');
+    expect(text).not.toContain('old line');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
+  it('Major 2: вид «Файл» изменённого файла — плашка «Показаны только изменённые строки»', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true); // изменённый файл
+    const text = textNodes(container).join(' ');
+    expect(text).toContain('Показаны только изменённые строки');
+    // Файл без строк diff — состояние «Содержимое не показано», содержимое не обещается.
+    expect(clickByAttr(container, 'data-file', 'panel/index.html')).toBe(true);
+    const text2 = textNodes(container).join(' ');
+    expect(text2).toContain('Содержимое не показано');
+    expect(text2).not.toContain('Показаны только изменённые строки');
+    uninstallFakeDom();
+  });
+
+  it('Major 3 + пункт 3: добавленные права — warning-плашка «Новые права», снятые — тихие строки', () => {
+    const diff: PluginDraftDiff = {
+      ...DIFF,
+      manifest: { ...DIFF.manifest!, permissionsAdded: ['net:api.example.com'], permissionsRemoved: ['notes:read'] },
+    };
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Права');
+    expect(text).toContain('Новые права');
+    expect(text).toContain('+ net:api.example.com');
+    expect(text).toContain('− notes:read');
+    // Акцент — не строка в общем списке: заголовок живёт внутри warning-плашки (role="status").
+    let notice: any = null;
+    const walk = (n: any): void => {
+      if (notice) return;
+      if (n.nodeType === 1 && n.getAttribute('role') === 'status' && textNodes(n).join(' ').includes('Новые права')) { notice = n; return; }
+      for (const c of n.childNodes) walk(c);
+    };
+    walk(container);
+    expect(notice).toBeTruthy();
+    expect(notice.style.background).toBe(C.warningBg);
+    uninstallFakeDom();
+  });
+
+  it('пункт 1 (мобила): Back в «Изменения» подписан по действию и ведёт к списку', () => {
+    installFakeDom();
+    window.matchMedia = (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('old line');
+    // Подпись обещает список — клик открывает список изменённых файлов.
+    expect(clickByAttr(container, 'aria-label', 'Назад к списку изменённых файлов')).toBe(true);
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Изменённые файлы');
+    expect(text).not.toContain('old line');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
+  it('пункт 2 (мобила): сводка не «липкая» — «Файлы» → «Изменения» открывает список, не сводку', () => {
+    installFakeDom();
+    window.matchMedia = (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByText(container, 'Сводка')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('Что поменялось');
+    // Ушёл в другую вкладку и вернулся — открылся список, а не оставшаяся сводка.
+    expect(clickByText(container, 'Файлы')).toBe(true);
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).not.toContain('Что поменялось');
+    expect(text).toContain('Изменённые файлы');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
+  it('пункт 4 (мобила, diffError): Back не обещает список, которого нет', () => {
+    installFakeDom();
+    window.matchMedia = (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: null, diffError: 'Сервер не ответил', onClose: () => {} }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    // Сводка — единственный уровень «Изменений» при diffError; из неё Back ведёт обратно к панели.
+    expect(clickByText(container, 'Сводка')).toBe(true);
+    expect(textNodes(container).join(' ')).toContain('Не удалось сравнить с установленной версией');
+    // Подпись не обещает список изменённых файлов — его нет («Файлы не сравнены»).
+    expect(findNodeByAttr(container, 'aria-label', 'Назад к списку изменённых файлов')).toBeNull();
+    expect(findNodeByAttr(container, 'aria-label', 'Назад к разделу «Изменения»')).toBeTruthy();
+    expect(clickByAttr(container, 'aria-label', 'Назад к разделу «Изменения»')).toBe(true);
+    const text = textNodes(container).join(' ').replace(/\s+/g, ' ');
+    expect(text).toContain('Файлы не сравнены');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
+  it('дерево: кнопка каталога сворачивает ветку и сообщает об этом через aria-expanded', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    const dir = () => findNodeByAttr(container, 'data-testid', 'dir:panel');
+    expect(dir()).toBeTruthy();
+    expect(dir()!.getAttribute('aria-expanded')).toBe('true');
+    expect(clickByAttr(container, 'data-testid', 'dir:panel')).toBe(true);
+    expect(container.querySelector('[data-file="panel/index.html"]')).toBeNull();
+    expect(dir()!.getAttribute('aria-expanded')).toBe('false');
+    // Раскрыть обратно.
+    expect(clickByAttr(container, 'data-testid', 'dir:panel')).toBe(true);
+    expect(container.querySelector('[data-file="panel/index.html"]')).toBeTruthy();
+    expect(dir()!.getAttribute('aria-expanded')).toBe('true');
+    uninstallFakeDom();
+  });
+
+  it('wrap пересчитывается при смене ширины (resize/поворот), а не фиксируется при монтировании', () => {
+    const listeners: ((e: { matches: boolean }) => void)[] = [];
+    const mq = {
+      matches: false,
+      addEventListener: (_t: string, h: (e: { matches: boolean }) => void) => { listeners.push(h); },
+      removeEventListener: () => {},
+    };
+    installFakeDom();
+    window.matchMedia = (q: string) => (q.includes('max-width') ? mq : { matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    const codeSpan = (): any => {
+      let hit: any = null;
+      const walk = (n: any): void => {
+        if (hit) return;
+        if (n.nodeType === 3 && (n.nodeValue ?? '').includes('new line')) { hit = n.parentElement; return; }
+        for (const c of n.childNodes) walk(c);
+      };
+      walk(container);
+      return hit;
+    };
+    // Десктоп: переноса нет.
+    expect(codeSpan().style.whiteSpace).toBe('pre');
+    // «Resize» в мобилу: событие change — перенос включается сам.
+    act(() => { mq.matches = true; for (const h of listeners) h({ matches: true }); });
+    expect(codeSpan().style.whiteSpace).toBe('pre-wrap');
+    window.matchMedia = () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} });
+    uninstallFakeDom();
+  });
+
+  it('«Копировать» через copyMarkdown: тост и на успех, и на отказ (минор ревью)', async () => {
+    installFakeDom();
+    const toasts: { title: string }[] = [];
+    window.addEventListener('cc-local-toast', (e: { detail: { title: string } }) => toasts.push(e.detail));
+    // Успех: clipboard есть — реакция «Скопировано», а не тишь.
+    vi.stubGlobal('navigator', { clipboard: { writeText: async () => {} } });
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => {} }));
+    expect(clickByAttr(container, 'data-file', 'commands/my-cmd.md')).toBe(true);
+    expect(clickByAttr(container, 'aria-label', 'Копировать содержимое')).toBe(true);
+    await new Promise(r => setTimeout(r, 0));
+    expect(toasts.length).toBe(1);
+    expect(toasts[0].title).toBe('Скопировано');
+    // Отказ: буфера нет — тост «Копирование недоступно», а не молчание.
+    vi.stubGlobal('navigator', { clipboard: undefined });
+    expect(clickByAttr(container, 'aria-label', 'Копировать содержимое')).toBe(true);
+    await new Promise(r => setTimeout(r, 0));
+    expect(toasts.length).toBe(2);
+    expect(toasts[1].title).toBe('Копирование недоступно');
+    vi.unstubAllGlobals();
+    uninstallFakeDom();
+  });
+
+  it('«Повторить» вызывает onLoadDiff (поведение, не разметка)', () => {
+    installFakeDom();
+    const onLoadDiff = vi.fn();
+    const { container } = mount(createElement(FilesDrawer, {
+      preview: PREVIEW, diff: null, diffError: 'Сервер не ответил', onClose: () => {}, onLoadDiff,
+    }));
+    expect(clickByText(container, 'Изменения')).toBe(true);
+    expect(clickByText(container, 'Повторить')).toBe(true);
+    expect(onLoadDiff).toHaveBeenCalledTimes(1);
+    uninstallFakeDom();
+  });
+
+  it('закрытие окна — крестик шапки вызывает onClose (поведение, не разметка)', () => {
+    installFakeDom();
+    let closed = false;
+    const { container } = mount(createElement(FilesDrawer, { preview: PREVIEW, diff: DIFF, onClose: () => { closed = true; } }));
+    expect(clickByAttr(container, 'aria-label', 'Закрыть')).toBe(true);
+    expect(closed).toBe(true);
+    uninstallFakeDom();
+  });
+
+  it('мобила 320: тач-цели 44px и без сайдбара 280px (двухуровневая раскладка)', () => {
+    vi.stubGlobal('window', Object.assign(new EventTarget(), {
+      innerWidth: 320, innerHeight: 640,
+      matchMedia: (q: string) => ({ matches: q.includes('max-width'), addEventListener: () => {}, removeEventListener: () => {} }),
+    }));
+    const html = drawerHtml(PREVIEW, DIFF);
+    expect(html).toContain('height:44px');
+    expect(html).not.toContain('280px');
+    // вернуть десктоп-окружение для остальных тестов
+    vi.stubGlobal('window', Object.assign(new EventTarget(), {
+      innerWidth: 1440, innerHeight: 900,
+      matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
+    }));
   });
 });

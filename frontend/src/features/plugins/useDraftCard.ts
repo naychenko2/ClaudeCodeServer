@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onMessage } from '../../lib/signalr';
 import { api, type PluginDraftDiff, type PluginDraftPreview, type PluginDraftSummary } from '../../lib/api';
+import { useDraftDiff } from './useDraftDiff';
 
 // Сколько держать подсветку «Черновик обновлён агентом» после события, мс.
 const JUST_UPDATED_MS = 6000;
@@ -18,6 +19,8 @@ export interface DraftCardData {
   preview: PluginDraftPreview | null;
   // Сравнение с установленной версией. null — не запрашивали
   diff: PluginDraftDiff | null;
+  // Ошибка запроса diff (понятным текстом): состояние «diff не загружен» в окне файлов.
+  diffError: string | null;
   // Идёт загрузка предпросмотра
   loading: boolean;
   // Ошибка сервера (403/404/409) — понятным текстом
@@ -32,7 +35,9 @@ export interface DraftCardData {
 
 export function useDraftCard(summary: PluginDraftSummary): DraftCardData {
   const [preview, setPreview] = useState<PluginDraftPreview | null>(null);
-  const [diff, setDiff] = useState<PluginDraftDiff | null>(null);
+  // Счётчик правок агента: смена сбрасывает сравнение (useDraftDiff)
+  const [changeTick, setChangeTick] = useState(0);
+  const { diff, diffError, loadDiff } = useDraftDiff(summary.slug, changeTick);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [justUpdated, setJustUpdated] = useState(false);
@@ -61,6 +66,7 @@ export function useDraftCard(summary: PluginDraftSummary): DraftCardData {
     const off = onMessage(msg => {
       if (msg.type !== 'plugin_draft_changed' || msg.slug !== summary.slug) return;
       setJustUpdated(true);
+      setChangeTick(t => t + 1);
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => setJustUpdated(false), JUST_UPDATED_MS);
       void loadPreview();
@@ -68,13 +74,5 @@ export function useDraftCard(summary: PluginDraftSummary): DraftCardData {
     return () => { off(); if (timer.current) clearTimeout(timer.current); };
   }, [summary.slug, loadPreview]);
 
-  // Сравнение — по требованию (вкладка «Изменения»); идемпотентно.
-  const loadDiff = useCallback(() => {
-    if (diff) return;
-    api.plugins.draftDiff(summary.slug)
-      .then(setDiff)
-      .catch(() => { /* diff — опциональный: ошибка не блокирует просмотр файлов */ });
-  }, [diff, summary.slug]);
-
-  return { preview, diff, loading, error, justUpdated, loadDiff, refresh: () => void loadPreview() };
+  return { preview, diff, diffError, loading, error, justUpdated, loadDiff, refresh: () => void loadPreview() };
 }

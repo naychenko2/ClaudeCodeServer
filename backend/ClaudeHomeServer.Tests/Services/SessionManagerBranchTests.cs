@@ -366,6 +366,26 @@ public class SessionManagerBranchTests : IDisposable
         result.Session.BranchedFromSessionId.Should().Be(session.Id);
     }
 
+    // Снимок накопленного cost-state — поле, специфичное для ветки (передаётся configure'ом
+    // общего хелпера преемника после выноса из BranchAsync). Без него --resume ветки считал бы
+    // всю историю родителя заново.
+    [Fact]
+    public async Task Наследование_CostState_ВеткаБерётСнимокРодителя()
+    {
+        var (session, _, _, text1, _) = await SeedBranchableChatAsync("coststate");
+        session.LastCostState = new SessionCostState
+        {
+            ClaudeSessionId = "csid-original",
+            TotalCostUsd = 1.25,
+        };
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+
+        result.Session.LastCostState.Should().NotBeNull("снимок cost-state родителя — база дельты первого хода ветки");
+        result.Session.LastCostState!.TotalCostUsd.Should().Be(1.25);
+        result.Session.LastCostState.ClaudeSessionId.Should().Be("csid-original");
+    }
+
     // --- Имя по умолчанию ---
 
     [Fact]

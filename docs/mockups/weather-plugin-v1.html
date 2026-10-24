@@ -17,8 +17,8 @@
 
   Адресация кадра (для скриншотов):
     weather-plugin-v1.html#state=main&wx=rain&night=0&theme=dark&w=390
-    state: main | search | search-empty | search-v1 | geo-loading | geo-ok | geo-denied |
-           loading | upstream | no-right | offline
+    state: main | search | search-empty | search-v1 | search-samename | geo-loading | geo-ok | geo-denied |
+           loading | upstream | badstatus | unavailable | no-right | offline
     wx: clear | clouds | rain | storm | snow | fog;  night: 0 | 1;  w: desktop | 320 | 390
     view=board — доска всех состояний разом.
 -->
@@ -238,7 +238,8 @@ body {
 .search-wrap .cc-input { padding-left:36px; }
 .city .nm { font-weight:600; }
 .city .rg { color:var(--cc-fg-muted); font-size:12px; }
-.city .cn { display:flex; flex-direction:column; min-width:0; flex:1; }
+.city .cn { min-width:0; flex:1; }
+.city .more { display:block; }
 .city .t { font-size:12px; color:var(--cc-fg-muted); }
 .city mark { background:none; color:inherit; text-decoration:underline; text-decoration-color:var(--cc-accent); text-underline-offset:3px; }
 .geo { width:100%; justify-content:flex-start; }
@@ -265,7 +266,10 @@ body {
     <option value="geo-ok">Автоопределение — нашли</option>
     <option value="geo-denied">Автоопределение — недоступно</option>
     <option value="loading">Загрузка</option>
-    <option value="upstream">Ошибка сервиса</option>
+    <option value="search-samename">Выбор города — одноимённые</option>
+    <option value="upstream">Ошибка сервиса (таймаут, обрыв)</option>
+    <option value="badstatus">Ошибка сервиса (статус ответа)</option>
+    <option value="unavailable">Плагин недоступен</option>
     <option value="no-right">Нет права сети</option>
     <option value="offline">Нет интернета</option>
   </select></label>
@@ -303,6 +307,14 @@ const CITIES = [
   { nm:'Ярцево',    rg:'Смоленская обл., Россия',  t:'+8°' },
   { nm:'Яранск',    rg:'Кировская обл., Россия',   t:'+3°' },
   { nm:'Ярково',    rg:'Тюменская обл., Россия',   t:'+1°' },
+];
+// Одноимённые: регион одинаков — подпись не различает. Координаты не в подписи,
+// а в title-подсказке; у первой строки группы — приписка «ещё N с похожим названием».
+const SAMENAME = [
+  { nm:'Москва', rg:'Туркменистан', t:'+14°', more:2, title:'37,5000° N, 58,3700° E' },
+  { nm:'Москва', rg:'Туркменистан', t:'+13°', title:'37,9000° N, 58,1000° E' },
+  { nm:'Москва', rg:'Туркменистан', t:'+13°', title:'37,9040° N, 58,1040° E' },
+  { nm:'Москва', rg:'Россия', t:'+4°' },
 ];
 
 /* ---------- Иконки (инлайновый SVG, цвета — классы от токенов) ---------- */
@@ -403,8 +415,8 @@ function searchView({ q = 'Яр', results = CITIES, geo = 'idle', empty = false 
   const list = empty
     ? `<div class="cc-empty"><div class="cc-empty__title">Город не найден</div>
         <div class="cc-empty__text">Проверьте написание или введите название по-английски — например, Yaroslavl.</div></div>`
-    : `<ul class="cc-list" role="listbox" aria-label="Найденные города">${results.map(c => `<li class="cc-list-item city${c.active ? ' is-active' : ''}" role="option" tabindex="0" aria-selected="${!!c.active}">
-        <span class="cn"><span class="nm">${hl(c.nm)}</span><span class="rg">${c.rg}</span></span><span class="t">${c.t}</span></li>`).join('')}</ul>`;
+    : `<ul class="cc-list" role="listbox" aria-label="Найденные города">${results.map(c => `<li class="cc-list-item city${c.active ? ' is-active' : ''}"${c.title ? ` title="${c.title}"` : ''} role="option" tabindex="0" aria-selected="${!!c.active}">
+        <span class="cn"><span class="nm">${hl(c.nm)}</span><span class="rg">, ${c.rg}</span>${c.more ? `<span class="rg more">ещё ${c.more} с похожим названием</span>` : ''}</span><span class="t">${c.t}</span></li>`).join('')}</ul>`;
   return `<div class="wx">
     <div class="wx-top"><button class="cc-btn cc-btn--ghost cc-btn--sm" type="button" style="border-color:transparent;padding-left:4px">${ico('back')}Назад</button>
       <span style="font-size:16px;font-weight:600">Выбор города</span></div>
@@ -412,7 +424,7 @@ function searchView({ q = 'Яр', results = CITIES, geo = 'idle', empty = false 
     ${geoBtn}${geoNote}
     ${q && !empty ? `<div class="sec"><h3>Найдено</h3><span>${results.length}</span></div>` : ''}
     ${list}
-    ${geo === 'none' ? `<div class="hint">Город запоминается до перезагрузки страницы.</div>` : ''}
+    ${geo === 'none' ? `<div class="hint">Город запоминается в этом браузере.</div>` : ''}
   </div>`;
 }
 function loadingView() {
@@ -431,20 +443,26 @@ const VIEWS = {
   search:        () => searchView(),
   'search-empty':() => searchView({ q:'Ярославлб', empty:true }),
   'search-v1':   () => searchView({ geo:'none' }),
+  'search-samename': () => searchView({ q:'Мос', results:SAMENAME }),
   'geo-loading': () => searchView({ q:'', results:CITIES.slice(0, 0), geo:'loading' }),
   'geo-ok':      (wx, n) => main(wx, n, `<span class="cc-badge cc-badge--success" title="Город определён по координатам браузера">${ico('locate', 'ico')}рядом</span>`),
   'geo-denied':  () => searchView({ q:'', results:[], geo:'denied' }),
   loading:       () => loadingView(),
-  upstream:      () => problem('cloudoff', 'Сервис погоды не ответил', 'Open-Meteo вернул ошибку. Обычно это проходит за минуту.',
+  // upstream — запрос ушёл и не вернулся (таймаут, обрыв); badstatus — сервис ответил ошибочным статусом.
+  upstream:      () => problem('cloudoff', 'Сервис погоды не ответил', 'Попробуйте ещё раз.',
                    '<button class="cc-btn cc-btn--primary" type="button">Повторить</button>'),
+  badstatus:     () => problem('cloudoff', 'Сервис погоды не ответил', 'Open-Meteo вернул ошибку. Обычно это проходит за минуту.',
+                   '<button class="cc-btn cc-btn--primary" type="button">Повторить</button>'),
+  // unavailable — плагин выключен или подсистема плагинов недоступна: без кнопки, повтор не поможет.
+  unavailable:   () => problem('cloudoff', 'Плагин погоды сейчас недоступен', 'Попробуйте открыть панель позже или включите плагин в разделе «Плагины»', ''),
   'no-right':    () => problem('shield', 'Нужен доступ к сервису погоды', 'Панели не выдано право ходить на&nbsp;api.open-meteo.com. Выдайте его в плашке выше или в настройках плагина.',
                    '<span class="cc-badge cc-badge--warning" style="margin-top:12px">net:api.open-meteo.com</span>'),
   offline:       () => problem('wifioff', 'Нет подключения к интернету', 'Погода обновится, как только связь вернётся.',
                    '<button class="cc-btn cc-btn--ghost" type="button">Повторить</button>'),
 };
-const LABEL = { main:'Главное', search:'Выбор города', 'search-empty':'Выбор города — пусто', 'search-v1':'Выбор города без автоопределения (рекомендация v1)',
+const LABEL = { main:'Главное', search:'Выбор города', 'search-empty':'Выбор города — пусто', 'search-v1':'Выбор города без автоопределения (рекомендация v1)', 'search-samename':'Выбор города — одноимённые (приписка и подсказка)',
   'geo-loading':'Автоопределение — идёт', 'geo-ok':'Автоопределение — нашли (а)', 'geo-denied':'Автоопределение — недоступно (б)',
-  loading:'Загрузка', upstream:'Ошибка сервиса (upstream)', 'no-right':'Нет права сети', offline:'Нет интернета' };
+  loading:'Загрузка', upstream:'Ошибка сервиса (upstream: таймаут, обрыв)', badstatus:'Ошибка сервиса (статус ответа)', unavailable:'Плагин недоступен', 'no-right':'Нет права сети', offline:'Нет интернета' };
 
 /* ---------- Хост вокруг панели ---------- */
 function hostNotice() {

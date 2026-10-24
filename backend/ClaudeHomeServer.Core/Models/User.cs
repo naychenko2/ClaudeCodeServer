@@ -1,4 +1,7 @@
-﻿namespace ClaudeHomeServer.Models;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace ClaudeHomeServer.Models;
 
 public class User
 {
@@ -26,6 +29,10 @@ public class User
     public string? ModelTierWeak { get; set; }
     // Per-user пороги индикатора заполнения контекста (проценты); null — дефолты фронта
     public ContextThresholds? ContextThresholds { get; set; }
+    // Per-user порог «кэш промпта скоро остынет» (минуты остатка до остывания); null —
+    // дефолты фронта (5 мин у часового, пятая доля срока у 5-минутного, F-1a).
+    // Nullable: старые записи users.json читаются штатно, формат стора не меняется
+    public CacheWarnThresholds? CacheWarnThresholds { get; set; }
     // Глобальный (per-user) промпт AI-генерации сообщения коммита; null/пусто — дефолт.
     // Проект может переопределить своим Project.CommitPromptOverride.
     public string? GitCommitPrompt { get; set; }
@@ -103,3 +110,93 @@ public static class ExecutionEnvironments
 
 // Пороги подсветки индикатора контекста: warn — янтарь, danger — красный
 public record ContextThresholds(int WarnPct, int DangerPct);
+
+// Порог «остывает» циферблата кэша промпта: за сколько минут остатка кэш становится
+// «остывающим» — отдельно для часового и 5-минутного срока. Дефолты живут на фронте
+// (EXPIRING_THRESHOLD_MS в frontend/src/lib/promptCache.ts), здесь — только границы
+// валидации. Порог обязан быть строго меньше срока: при ≥ TTL кэш был бы «остывающим»
+// с момента записи.
+// Контракт хранилища (users.json): {"warn1hMin": 1–59, "warn5mMin": 1–4} — минуты.
+// На чтении нормализует CacheWarnThresholdsJsonConverter: старые имена origin-формата
+// в секундах (warn1hSec/warn5mSec) переводятся в минуты (round) и зажимаются в диапазон,
+// прямые значения вне диапазона и любое несоответствующее тело — null, то есть
+// «не настроено».
+[JsonConverter(typeof(CacheWarnThresholdsJsonConverter))]
+public record CacheWarnThresholds(int Warn1hMin, int Warn5mMin)
+{
+    public const int MinMin = 1;
+    public const int Max1hMin = 59;
+    public const int Max5mMin = 4;
+
+    // Метод, а не свойство: свойство уехало бы в users.json и ответ /me
+    public static bool InRange(int warn1hMin, int warn5mMin) =>
+        warn1hMin is >= MinMin and <= Max1hMin && warn5mMin is >= MinMin and <= Max5mMin;
+}
+
+/// <summary>
+/// Читает stored-запись порога: старые имена origin-формата в секундах (warn1hSec/warn5mSec)
+/// конвертируются в минуты (round) и зажимаются в диапазон — настройка человека не теряется
+/// даже на краях перевода (30 с → 1 мин, 3600 с → 59 мин); всё остальное (прямые минуты
+/// вне диапазона, полпары, мусор) — null, «не настроено», фронт применит дефолты.
+/// Пишем всегда каноническую форму в минутах. Конвертер на самом типе, а не в опциях:
+/// users.json пишется своими JsonSerializerOptions в UserStore, а API-ответы — чужими,
+/// и разъехаться они не должны (тот же приём, что QuickPhraseJsonConverter).
+/// </summary>
+public class CacheWarnThresholdsJsonConverter : JsonConverter<CacheWarnThresholds>
+{
+    public override CacheWarnThresholds? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null) return null;
+        if (reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException("Порог кэша — объект { warn1hMin, warn5mMin } в минутах");
+
+        int? min1h = null;
+        int? min5m = null;
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject) break;
+            if (reader.TokenType != JsonTokenType.PropertyName) continue;
+
+            var name = reader.GetString();
+            reader.Read();
+            if (string.Equals(name, "warn1hMin", StringComparison.OrdinalIgnoreCase))
+                min1h = ReadMinutes(reader);
+            else if (string.Equals(name, "warn5mMin", StringComparison.OrdinalIgnoreCase))
+                min5m = ReadMinutes(reader);
+            else if (string.Equals(name, "warn1hSec", StringComparison.OrdinalIgnoreCase))
+                min1h = ReadSecondsToMinutes(reader, CacheWarnThresholds.Max1hMin);
+            else if (string.Equals(name, "warn5mSec", StringComparison.OrdinalIgnoreCase))
+                min5m = ReadSecondsToMinutes(reader, CacheWarnThresholds.Max5mMin);
+            else
+                reader.Skip();
+        }
+
+        // Полпара или полупустая запись — не настройка: без обеих границ циферблат
+        // не построить, отдаём null (дефолты фронта)
+        return min1h is not null && min5m is not null && CacheWarnThresholds.InRange(min1h.Value, min5m.Value)
+            ? new CacheWarnThresholds(min1h.Value, min5m.Value)
+            : null;
+    }
+
+    private static int? ReadMinutes(Utf8JsonReader reader) =>
+        reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int value) ? value : null;
+
+    // 300 с → 5 мин. Нечетные секунды округляются к ближайшей минуте, а результат
+    // зажимается в диапазон, а не выбрасывается: край перевода 30 с → 0 мин — это
+    // намерение «предупредить сразу», а не отсутствие настройки, поэтому нижняя граница
+    // (1 мин) честнее null; верхняя — потолок срока (3600 с → 59 мин). Отрицательные
+    // секунды — мусор, а не край перевода: их отсекаем до clamp, иначе −5 с зажимались
+    // бы в 1 мин и стали валидной настройкой
+    private static int? ReadSecondsToMinutes(Utf8JsonReader reader, int max) =>
+        reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int seconds) && seconds >= 0
+            ? Math.Clamp((int)Math.Round(seconds / 60.0), CacheWarnThresholds.MinMin, max)
+            : null;
+
+    public override void Write(Utf8JsonWriter writer, CacheWarnThresholds value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("warn1hMin", value.Warn1hMin);
+        writer.WriteNumber("warn5mMin", value.Warn5mMin);
+        writer.WriteEndObject();
+    }
+}

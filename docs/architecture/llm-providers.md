@@ -905,6 +905,12 @@ CLI сам переждал 429/529 внутри процесса (событи�
 из-за канала, цепочка хода, класс и текст последней ошибки, размер контекста,
 и факт внутренних повторов CLI (`CliRetries`/`CliRetryWaitMs`/`CliRetryLastStatus`,
 см. § «Кто ждёт 429/529»).
+Плюс причина промаха prompt cache первого вызова хода — `CacheMissReason` (`systemChanged`,
+`modelChanged`, `previousMessageNotFound`…) и `CacheMissedTokens` (сколько входа ушло мимо
+кэша); берутся из `PromptCache` result последней попытки, у сторонних провайдеров пусты.
+Метрика `ccs.prompt_cache.turns` считает только ХОДЫ по причинам — токены в OTel не едут (C4),
+«во что обошёлся промах» смотрится здесь (правило алерта 09,
+[overview.md](../observability/overview.md#сторож-prompt-cache)).
 
 Исходы не `enum`, а строки, и новые появляются вместе с новыми ветками выхода: `local_down` —
 локальный движок не ответил на pre-flight пробе, `window_1m_unavailable` — нет живой подписки

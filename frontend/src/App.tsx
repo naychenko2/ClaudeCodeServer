@@ -51,6 +51,7 @@ import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './feature
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
 import { useWallFocusProject, resetWallOwner } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
+import { resetCacheWarnOnLogout, setCacheWarnThresholdsFromServer } from './lib/cacheWarnPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
@@ -498,6 +499,9 @@ export default function App() {
         // стор пуст и useSubsystem возвращает false (fail-closed по умолчанию).
         if (me.subsystems) setAllSubsystems(me.subsystems)
         setCtxThresholdsFromServer(me?.contextThresholds)
+        // Личные пороги предупреждения об остывании кэша (F-3) — тем же ответом /me:
+        // при смене пользователя старый набор перезаписывается, а null — сброс.
+        setCacheWarnThresholdsFromServer(me?.cacheWarnThresholds)
         // Стор дефолт-персоны/онбординга — от него живут приглашение первого входа
         // и резолвер аватаров
         if (me) setMeFromServer(me)
@@ -557,6 +561,9 @@ export default function App() {
       invalidateTokenCache()
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
       clearMe()
+      // Личные пороги остывания кэша (F-3r2) — тоже состояние владельца: без сброса
+      // следующий вход поднял бы пороги прежнего до ответа нового /me
+      resetCacheWarnOnLogout()
       resetWallOwner()
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
@@ -1289,6 +1296,7 @@ export default function App() {
     invalidateTokenCache()
     idbClear() // чистим кэш при смене аккаунта/сервера
     clearMe()
+    resetCacheWarnOnLogout() // пороги кэша прежнего владельца — см. cc-unauthorized выше
     resetWallOwner()
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки

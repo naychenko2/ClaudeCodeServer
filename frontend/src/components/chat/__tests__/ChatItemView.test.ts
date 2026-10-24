@@ -4,10 +4,11 @@
 // отсутствии id оригинала в нём — плашка деградирует в обычный текст, без
 // <a> и без onClick. Тест рендерит только эту ветку через контекст-обвязку,
 // нужную ChatItemView (его JSX-дерево использует несколько контекстов ленты).
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
+import { setAllFlags } from '../../../lib/featureFlags';
 import type { FeatureRun } from '../../../types/featureRun';
 import { ChatItemView, shouldHideAbortBanner } from '../ChatItemView';
 import {
@@ -390,5 +391,101 @@ describe('ChatItemView — обрыв хода + авто-продолжение
 
   it('обрыв + hideAbortBanner=false → баннер на месте (подсказка «отправьте ещё раз» верна)', () => {
     expect(renderErrorItem(false), 'красный баннер обрыва показан').toContain(ABORT_TEXT);
+  });
+});
+
+// === F-2: причина промаха кэша в подвале хода (фича prompt-cache) ===
+// Мутация: убрать span «кэш не помог: …» в мета-строке case 'result' → первый тест
+// краснеет; убрать проверку фич-флага → красный и негативный про флаг.
+function renderMeta(item: ChatItem, isLastResult = true): string {
+  const noop = () => {};
+  const tree: ReactElement = createElement(
+    ChatProjectContext.Provider, { value: null },
+    createElement(
+      ChatTreePathContext.Provider, { value: null },
+      createElement(
+        ChatSessionContext.Provider, { value: null },
+        createElement(
+          PersonaContext.Provider, { value: null },
+          createElement(
+            SpeakingItemContext.Provider, { value: null },
+            createElement(
+              AssistantNameContext.Provider, { value: 'Ассистент' },
+              createElement(ChatItemView, {
+                item,
+                index: 0,
+                online: true,
+                isLastResult,
+                onToggleThinking: noop,
+                onAllowPermission: noop,
+                onDenyPermission: noop,
+                onAllowAlways: noop,
+                onAnswerQuestion: noop,
+                onRespondPlan: noop,
+                onSwitchMode: noop,
+                onRetry: noop,
+                onInterrupt: noop,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  return renderToStaticMarkup(tree);
+}
+
+// Успешный итог хода с сигналом кэша; missReason — из карты подписей lib/promptCache
+const resultWithCache = (missReason: string): ChatItem => ({
+  kind: 'result', subtype: 'success', durationMs: 1000, numTurns: 1,
+  usage: { inputTokens: 1200, outputTokens: 300 },
+  promptCache: { readTokens: 1000, writtenTokens: 500, anchorAtMs: Date.now(), ttl: '1h', missReason },
+} as ChatItem);
+// Ход без данных кэша (сторонний провайдер, локальный движок, старая история)
+const plainResult = (): ChatItem => ({
+  kind: 'result', subtype: 'success', durationMs: 1000, numTurns: 1,
+  usage: { inputTokens: 1200, outputTokens: 300 },
+} as ChatItem);
+
+describe('ChatItemView — причина промаха кэша в подвале хода (F-2)', () => {
+  afterEach(() => setAllFlags({}));
+
+  it('флаг вкл, промах есть: «кэш не помог: смена модели» и в подсказке «это нормально»', () => {
+    setAllFlags({ 'prompt-cache': true });
+    const html = renderMeta(resultWithCache('modelChanged'));
+    expect(html, 'строка причины в подвале').toContain('кэш не помог: смена модели');
+    expect(html, 'подтверждение пользы, не техники').toContain('Это нормально');
+  });
+
+  it('флаг выкл — строки нет, даже с промахом', () => {
+    setAllFlags({ 'prompt-cache': false });
+    expect(renderMeta(resultWithCache('modelChanged')), 'за выключенным флагом ничего нет').not.toContain('кэш не помог');
+  });
+
+  it('промаха нет (missReason none) — строки нет', () => {
+    setAllFlags({ 'prompt-cache': true });
+    expect(renderMeta(resultWithCache('none'))).not.toContain('кэш');
+  });
+
+  it('данных кэша нет — строки нет (не-Claude провайдер)', () => {
+    setAllFlags({ 'prompt-cache': true });
+    expect(renderMeta(plainResult())).not.toContain('кэш');
+  });
+
+  // Незнакомая причина (минор ревью F-2): в строке — человекочитательная «другая
+  // причина», сырой кода — в подсказке (title).
+  it('незнакомая причина: «другая причина» в строке, сырой код — в подсказке', () => {
+    setAllFlags({ 'prompt-cache': true });
+    const html = renderMeta(resultWithCache('weirdReason'));
+    expect(html).toContain('кэш не помог: другая причина');
+    expect(html, 'сырой код не потерян — он в title').toContain('Причина не распознана (weirdReason)');
+    expect(html).toContain('Кэш пересобирается сам');
+  });
+
+  // Минор ревью F-2: мета-строка — только у последнего хода. Не последний result с
+  // промахом — сегмента нет вовсе.
+  it('isLastResult: false и промах — сегмента «кэш не помог» нет', () => {
+    setAllFlags({ 'prompt-cache': true });
+    expect(renderMeta(resultWithCache('modelChanged'), false), 'мета только у последнего хода').not.toContain('кэш не помог');
   });
 });

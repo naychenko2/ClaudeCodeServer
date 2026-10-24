@@ -262,6 +262,24 @@ public class PluginNetProxyTests : IDisposable
         result.Error.Message.Should().Contain("rebind.example");
     }
 
+    // HTTP/3 недостижим: примитив отказывает запросу с версией выше 2.0 / политикой OrHigher (QUIC идёт
+    // мимо ConnectCallback). Прокси сам версию не ставит, поэтому проверяем транспорт, который он получает.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Транспорт_ОтказываетHttp3(bool byPolicy)
+    {
+        var handler = PluginNetProxy.CreateHandler();
+        using var http = new HttpClient(handler, disposeHandler: false);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com/");
+        if (byPolicy) request.VersionPolicy = HttpVersionPolicy.RequestVersionOrHigher;
+        else { request.Version = new Version(3, 0); request.VersionPolicy = HttpVersionPolicy.RequestVersionExact; }
+
+        var act = () => http.SendAsync(request);
+
+        await act.Should().ThrowAsync<NotSupportedException>().WithMessage("*HTTP/3*");
+    }
+
     // --- 4. Секрет не в теле и заголовках ответа (эхо вычищается) ---
     // Мутация: возвращаем значение секрета в ответ (не вычищаем) → этот тест красный.
 

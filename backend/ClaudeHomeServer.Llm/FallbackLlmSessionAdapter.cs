@@ -1263,7 +1263,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         LastErrorClass: errorClass,
                         LastError: lastEnd?.ErrorText ?? lastEnd?.Result?.ApiErrorStatus,
                         ContextTokens: ContextEstimate(),
-                        RecordedAt: endedAt)
+                        RecordedAt: endedAt,
+                        // Причина промаха prompt cache и цена промаха — из result последней
+                        // попытки; у сторонних провайдеров PromptCache null — поля остаются пустыми
+                        CacheMissReason: lastEnd?.Result?.PromptCache?.MissReason,
+                        CacheMissedTokens: lastEnd?.Result?.PromptCache?.MissedTokens)
                     {
                         // Факт внутренних повторов CLI (system/api_retry) этого хода: сколько раз
                         // headless-сессия сама переждала 429/529, суммарное ожидание (мс) и

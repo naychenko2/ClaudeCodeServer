@@ -810,6 +810,9 @@ builder.Services.AddSingleton<SessionSummaryService>();
 // подписка на TurnCompleted для продолжений, поставленных инструментом chats_continue из хода чата
 builder.Services.AddSingleton<ChatContinueService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ChatContinueService>());
+// «Перенос в новый чат» (место chat-handoff, шаг B-4 фичы про prompt cache): записка и
+// чат-преемник без resume. Не хостед: событий не слушает, путь выбирается по запросу ручки.
+builder.Services.AddSingleton<ChatHandoffService>();
 // Сводка карточки архива (место chat-digest, шаг 5 плана «Архив чатов») и
 // карта плана (место plan-map, «Визуальный разворот плана» часть B) —
 // DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).

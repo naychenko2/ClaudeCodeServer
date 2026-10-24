@@ -1129,6 +1129,11 @@ public class FeatureProjectorTests
                 [Final("e10", TaskVerdicts.Returned),
                  new TaskItem { Id = "m10", FeatureId = "e10", Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
                      CompletedAt = t.AddHours(3), ClaudeStartedAt = t }]),
+            // merged + эпик Done: state остаётся merged, но Closed=true, bucket=closed, чип closed.
+            ("merged",
+                new TaskItem { Id = "e11", Role = TaskRoles.Feature, Status = TaskItemStatus.Done, CompletedAt = t.AddHours(4), CreatedAt = t },
+                [Final("e11", TaskVerdicts.Accepted),
+                 new TaskItem { Id = "m11", FeatureId = "e11", Role = TaskRoles.Merge, Status = TaskItemStatus.Done, CompletedAt = t.AddHours(3) }]),
         ];
 
         foreach (var (state, epic, children) in cases)
@@ -1137,16 +1142,22 @@ public class FeatureProjectorTests
             run.State.Should().Be(state, $"сценарий обязан дать state={state}");
 
             // Closed = эпик Done: closed → true; merged в сценарии — с открытым эпиком → false.
-            run.Closed.Should().Be(state is FeatureStates.Closed,
-                $"Closed согласован с State={state}");
+            var epicDone = epic.Status == TaskItemStatus.Done;
+            run.Closed.Should().Be(epicDone, $"Closed = эпик Done (State={state}, эпик {epic.Id})");
+            if (epic.Id == "e11")
+            {
+                run.Closed.Should().BeTrue();
+                FeatureProjector.Bucket(run).Should().Be("closed");
+                FeatureProjector.ChipsOf(run).Should().Equal("closed");
+            }
 
-            // Bucket выводится из State (единая точка правды, FeatureProjector.Bucket):
+            // Инвариант: Closed = эпик Done; Bucket = f(state, эпик Done) (FeatureProjector.Bucket):
             // merged/closed → closed; stopped/waiting/merge_pending → attention;
             // merging/running → running; not_started/idle → idle.
             var expectedBucket = state switch
             {
                 FeatureStates.Closed => "closed",
-                FeatureStates.Merged => "merged",
+                FeatureStates.Merged => epicDone ? "closed" : "merged",
                 FeatureStates.Stopped or FeatureStates.Waiting or FeatureStates.MergePending => "attention",
                 FeatureStates.Merging or FeatureStates.Running => "running",
                 _ => "idle",
@@ -2681,7 +2692,7 @@ public class FeatureProjectorTests
         slim.State.Should().Be(full.State, "SlimRun не теряет State (полный run = облегчённый)");
     }
 
-    // Bucket выводится из state (единая точка правда): merging → running (не «ждёт вас»),
+    // Bucket = f(state, эпик Done) (единая точка правды): merging → running (не «ждёт вас»),
     // merge_pending → attention, merged/closed → closed, running → running, not_started/idle → idle.
     [Fact]
     public void Bucket_ВыводитсяИзState()

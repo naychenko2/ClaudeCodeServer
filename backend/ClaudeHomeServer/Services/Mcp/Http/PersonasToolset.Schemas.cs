@@ -63,7 +63,7 @@ public sealed partial class PersonasToolset
     }
 
     // Общие поля персоны для create/update (кроме name — у create он обязателен)
-    private static JsonObject PersonaFields() => new()
+    private static JsonObject PersonaFields(bool liveTtsEnabled) => new()
     {
         ["role"] = Str("Роль — главное в отображении («Роль (Имя)»), например «Дизайнер»"),
         ["specialty"] = new JsonObject
@@ -97,19 +97,31 @@ public sealed partial class PersonasToolset
             ["description"] = "Долгая память персоны (по умолчанию включена)",
         },
         ["handle"] = Str("@handle (латинский slug); пусто при создании — авто из имени"),
-        ["voice"] = Str(VoiceDescription),
+        ["voice"] = Str(VoiceDescription(liveTtsEnabled)),
         ["voiceRole"] = Str("Амплуа голоса — только из поддержанных выбранным голосом (см. voice); "
             + "пустая строка — нейтрально. Без voice в personas_update меняет амплуа текущего голоса"),
     };
 
     // Справочник голосов прямо в схеме: отдельного инструмента-каталога у сервера нет, а
-    // каталог статичен — состав и текст tools/list от хода не зависят
-    private static string VoiceDescription =>
-        "Голос синтеза речи для голосового режима — ключ голоса, в скобках его амплуа: "
-        + string.Join(", ", Services.Tts.TtsVoiceCatalog.All.Select(v => v.Roles.Count > 0
-            ? $"{v.Voice} ({string.Join("/", v.Roles)})" : v.Voice))
-        + ". Пустая строка — без голоса (говорит голосом инстанса). В personas_create не указан — "
-        + "голос подберётся сам по характеру; в personas_update не указан — не меняется";
+    // каталог статичен — состав и текст tools/list от хода не зависят. Тумблер LiveTTS —
+    // свойство конфигурации инстанса, а не хода: в пределах процесса текст постоянный
+    internal static string VoiceDescription(bool liveTtsEnabled)
+    {
+        var visible = Services.Tts.TtsVoiceCatalog.Visible(liveTtsEnabled);
+        return "Голос синтеза речи для голосового режима — ключ голоса, в скобках его амплуа: "
+            + string.Join(", ", visible.Select(v =>
+            {
+                var live = v.Model == Services.Tts.TtsVoiceCatalog.LiveTts;
+                var roles = string.Join("/", v.Roles);
+                return live ? $"{v.Voice} (livetts: {roles})"
+                    : v.Roles.Count > 0 ? $"{v.Voice} ({roles})" : v.Voice;
+            }))
+            + (visible.Any(v => v.Model == Services.Tts.TtsVoiceCatalog.LiveTts)
+                ? ". Голоса livetts дороже и без темпа, сам их не предлагай — только по явной просьбе"
+                : "")
+            + ". Пустая строка — без голоса (говорит голосом инстанса). В personas_create не указан — "
+            + "голос подберётся сам по характеру; в personas_update не указан — не меняется";
+    }
 
     // Привязка персоны: источник знаний или правило с условием применения
     private static JsonObject BindingItemSchema() => Obj(new JsonObject
@@ -214,12 +226,12 @@ public sealed partial class PersonasToolset
 
     // --- Модуль manage: голова (создание и правка персон) ---
 
-    internal static IReadOnlyList<McpToolSchema> ManageHeadTools(bool inProject)
+    internal static IReadOnlyList<McpToolSchema> ManageHeadTools(bool inProject, bool liveTtsEnabled)
     {
         var context = inProject
             ? "Контекст — текущий проект: для проектной персоны projectId можно не указывать."
             : "Контекст — чат вне проекта: по умолчанию создаются глобальные персоны.";
-        var createProps = PersonaFields();
+        var createProps = PersonaFields(liveTtsEnabled);
         createProps["name"] = Str("Имя персоны");
         createProps["scope"] = new JsonObject
         {
@@ -242,7 +254,7 @@ public sealed partial class PersonasToolset
             ["description"] = "true — после создания AI сам подберёт привязки под роль персоны",
         };
 
-        var updateProps = PersonaFields();
+        var updateProps = PersonaFields(liveTtsEnabled);
         updateProps["id"] = Str("ID персоны");
         updateProps["name"] = Str("Новое имя");
         updateProps["scope"] = new JsonObject
@@ -485,7 +497,8 @@ public sealed partial class PersonasToolset
     // mentions-гейт не косметика: без него вызов persona_ask при выключенном
     // tool:consultants запускал бы платный one-shot ход другой персоны
     internal static readonly IReadOnlySet<string> ManageToolNames =
-        ManageHeadTools(false).Concat(ManageBindingsTools).Concat(ManageTailTools(false))
+        // Нужны только имена: от тумблера LiveTTS они не зависят
+        ManageHeadTools(false, liveTtsEnabled: false).Concat(ManageBindingsTools).Concat(ManageTailTools(false))
             .Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
 
     internal static readonly IReadOnlySet<string> AutomationToolNames =

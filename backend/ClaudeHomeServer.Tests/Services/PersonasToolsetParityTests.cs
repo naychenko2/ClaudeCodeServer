@@ -80,7 +80,7 @@ public class PersonasToolsetParityTests
         bool inProject = true)
     {
         var names = PersonasToolset.CoreTools(inProject).Select(t => t.Name).ToList();
-        if (manage) names.AddRange(PersonasToolset.ManageHeadTools(inProject).Select(t => t.Name));
+        if (manage) names.AddRange(PersonasToolset.ManageHeadTools(inProject, liveTtsEnabled: false).Select(t => t.Name));
         names.AddRange(PersonasToolset.BindingsReadTools.Select(t => t.Name));
         if (manage) names.AddRange(PersonasToolset.ManageBindingsTools.Select(t => t.Name));
         names.Add(PersonasToolset.KnowledgeSearchTool.Name);
@@ -153,7 +153,7 @@ public class PersonasToolsetParityTests
             ("PERSONAS_MANAGE", "1"), ("PERSONAS_AUTOMATION", "1"), ("PERSONAS_MENTIONS", "1"));
         if (stdio is null) return;
         var all = PersonasToolset.CoreTools(true)
-            .Concat(PersonasToolset.ManageHeadTools(true))
+            .Concat(PersonasToolset.ManageHeadTools(true, liveTtsEnabled: false))
             .Concat(PersonasToolset.BindingsReadTools)
             .Concat(PersonasToolset.ManageBindingsTools)
             .Append(PersonasToolset.KnowledgeSearchTool)
@@ -185,7 +185,7 @@ public class PersonasToolsetParityTests
     {
         var stdio = ListStdioTools(("PERSONAS_MANAGE", "1"));
         if (stdio is null) return;
-        var http = PersonasToolset.ManageHeadTools(true).ToDictionary(t => t.Name);
+        var http = PersonasToolset.ManageHeadTools(true, liveTtsEnabled: false).ToDictionary(t => t.Name);
 
         foreach (var name in new[] { "personas_create", "personas_update" })
         {

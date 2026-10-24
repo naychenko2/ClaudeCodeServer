@@ -22,9 +22,14 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/tts")]
 public class TtsController(YandexTtsService tts, VoiceResolver voices,
-    SessionManager sessions, ILogger<TtsController> logger,
+    SessionManager sessions, IConfiguration config, ILogger<TtsController> logger,
     ISpendCollector? spend = null) : ControllerBase
 {
+    // Подпись модели LiveTTS в учёте трат: у general поле Model исторически хранит голос
+    public const string LiveTtsSpendModel = "yandex-livetts";
+
+    private bool LiveTts => TtsVoiceCatalog.LiveTtsEnabled(config);
+
     // Форма «предупредили один раз» в остальных местах проекта — инстансное поле (стороны
     // хоста — отдельный TestWebApplicationFactory, и shared static между хостами был бы
     // ложью: один хост прозвонил, другой уже «не предупредим»). Interlocked.Exchange
@@ -40,11 +45,14 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
     // не должен давать в списке две строки), подпись, пол и доступные амплуа.
     // configured=false — синтеза на сервере нет: форме нечего предлагать слушать, и
     // честная плашка лучше живых кнопок, которые молча не работают.
+    // model и speedSupported фронт не выводит сам: голоса LiveTTS помечены и без темпа.
+    // Тумблер LiveTTS выключен — её голосов в списке нет
     [HttpGet("voices")]
     public ActionResult<TtsVoicesResponse> Voices() => Ok(new TtsVoicesResponse(
         tts.IsConfigured,
-        TtsVoiceCatalog.All.Select(v => new TtsVoiceDto(
-            v.Voice, v.Label, v.Gender.ToString().ToLowerInvariant(), v.Roles)).ToList()));
+        TtsVoiceCatalog.Visible(LiveTts).Select(v => new TtsVoiceDto(
+            v.Voice, v.Label, v.Gender.ToString().ToLowerInvariant(), v.Roles,
+            v.Model, TtsVoiceCatalog.SupportsSpeed(v.Voice))).ToList()));
 
     [HttpPost]
     public async Task<IActionResult> Synthesize([FromBody] TtsRequest req, CancellationToken ct)
@@ -61,7 +69,9 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
         {
             if (string.IsNullOrWhiteSpace(req.Voice))
                 return BadRequest(new { error = "Амплуа и темп задаются вместе с голосом" });
-            if (!TtsVoiceCatalog.IsKnown(req.Voice))
+            // Голос LiveTTS при выключенном тумблере — как неизвестный. Явный темп у LiveTTS
+            // не ошибка: старая вкладка шлёт его всегда, а BuildPayload его просто не отправит
+            if (!TtsVoiceCatalog.IsKnown(req.Voice) || !TtsVoiceCatalog.IsAvailable(req.Voice, LiveTts))
                 return BadRequest(new { error = $"Неизвестный голос синтеза: {req.Voice}" });
             if (!string.IsNullOrWhiteSpace(req.Role) && !TtsVoiceCatalog.SupportsRole(req.Voice, req.Role))
                 return BadRequest(new { error = $"Голос {req.Voice} не умеет «{req.Role}»" });
@@ -105,6 +115,10 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
         var session = req.SessionId is { Length: > 0 } sid ? sessions.GetById(sid) : null;
         if (session is not null && session.OwnerId != UserId) session = null;
 
+        // general — как было (Model = голос): непрерывность истории и разрезов аналитики
+        // важнее единообразия. LiveTTS — id модели, голос уезжает в Label (своего поля нет)
+        var liveTts = TtsVoiceCatalog.ModelFor(voice.Voice) == TtsVoiceCatalog.LiveTts;
+
         spend.Record(new SpendRecord
         {
             OwnerId = UserId,
@@ -115,7 +129,7 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
             // отчёте о МОИХ деньгах — ложь дороже пропущенного разреза
             PersonaId = session?.PersonaId,
             Provider = "yandex",
-            Model = voice.Voice,
+            Model = liveTts ? LiveTtsSpendModel : voice.Voice,
             Source = SpendSources.Tts,
             Generations = res.BilledRequests,
             CostRub = res.Rub,
@@ -134,6 +148,9 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
 public record TtsRequest(string? Text, string? PersonaId = null,
     string? Voice = null, string? Role = null, double? Speed = null, string? SessionId = null);
 
-public record TtsVoiceDto(string Voice, string Label, string Gender, IReadOnlyList<string> Roles);
+// Model — модель синтеза (general / livetts), SpeedSupported — настраивается ли темп.
+// Старый фронт лишние поля игнорирует
+public record TtsVoiceDto(string Voice, string Label, string Gender, IReadOnlyList<string> Roles,
+    string Model, bool SpeedSupported);
 
 public record TtsVoicesResponse(bool Configured, IReadOnlyList<TtsVoiceDto> Voices);

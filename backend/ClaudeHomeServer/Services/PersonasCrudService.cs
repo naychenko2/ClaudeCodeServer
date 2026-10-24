@@ -81,7 +81,7 @@ public sealed class PersonasCrudService(
         if (PersonaManager.ExceedsContractLimit(req.Contract, req.SystemPrompt, 0, out var tooBig))
             return BadRequest(new { error = tooBig });
         // Явный голос — до создания: кривой не должен оставлять полусозданную персону
-        if (VoiceError(req.Voice) is { } voiceError)
+        if (VoiceError(req.Voice, Services.Tts.TtsVoiceCatalog.LiveTtsEnabled(config)) is { } voiceError)
             return BadRequest(new { error = voiceError });
 
         // Серверный предохранитель знакомства (план 2.9): в личном знакомстве (сессия с
@@ -1091,14 +1091,20 @@ public sealed class PersonasCrudService(
     // пути озвучки: там кривое значение молча вырождается в дефолт, а здесь ошибку надо
     // показать. null/пустой объект — «снять голос», он валиден. Единственная копия правила:
     // ей пользуются и форма (REST), и агент (MCP personas_create/update).
-    internal static string? VoiceError(PersonaVoice? voice)
+    //
+    // liveTtsEnabled — тумблер LiveTTS инстанса (TtsVoiceCatalog.LiveTtsEnabled): выключен — её
+    // голос недоступен, и перечень допустимых тоже без неё. Темп у LiveTTS не отвергаем: он
+    // хранится и не применяется, а отказ сломал бы старые формы и агента
+    internal static string? VoiceError(PersonaVoice? voice, bool liveTtsEnabled)
     {
         if (voice is null || voice.IsEmpty) return null;
+        var visible = string.Join(", ", Services.Tts.TtsVoiceCatalog.Visible(liveTtsEnabled).Select(v => v.Voice));
         if (!Services.Tts.TtsVoiceCatalog.IsKnown(voice.Voice))
             return string.IsNullOrWhiteSpace(voice.Voice)
                 ? "Амплуа и темп задаются вместе с голосом"
-                : $"Неизвестный голос синтеза: {voice.Voice}; допустимы: "
-                  + string.Join(", ", Services.Tts.TtsVoiceCatalog.All.Select(v => v.Voice));
+                : $"Неизвестный голос синтеза: {voice.Voice}; допустимы: {visible}";
+        if (!Services.Tts.TtsVoiceCatalog.IsAvailable(voice.Voice, liveTtsEnabled))
+            return $"Голос {voice.Voice} (LiveTTS) недоступен на этом сервере; допустимы: {visible}";
         if (!string.IsNullOrWhiteSpace(voice.Role)
             && !Services.Tts.TtsVoiceCatalog.SupportsRole(voice.Voice, voice.Role))
         {
@@ -1117,7 +1123,8 @@ public sealed class PersonasCrudService(
     public async Task<ActionResult<Persona>> SetVoiceAsync(string userId, string id, PersonaVoice? voice)
     {
         if (personas.Get(id, userId) is null) return NotFound();
-        if (VoiceError(voice) is { } error) return BadRequest(new { error });
+        if (VoiceError(voice, Services.Tts.TtsVoiceCatalog.LiveTtsEnabled(config)) is { } error)
+            return BadRequest(new { error });
 
         var persona = personas.SetVoice(id, userId, voice);
         // Как и все соседние мутации: смена голоса должна долетать до других вкладок и
@@ -1182,8 +1189,15 @@ public sealed class PersonasCrudService(
         }
     }
 
+    // Автоподбор предлагает ТОЛЬКО голоса general: LiveTTS дороже в ~1,5 раза и выбирается лишь
+    // явно. Набор один и для промпта, и для разбора ответа — фильтра в одном промпте мало
+    private static bool AutoPickable(string voice) =>
+        Services.Tts.TtsVoiceCatalog.ModelFor(voice) == Services.Tts.TtsVoiceCatalog.General;
+
     // Ответ модели: «голос» либо «голос амплуа». Ищем ключ каталога по границам слова —
-    // модель любит добавить объяснение, и подстрочный поиск увёл бы парсер не туда
+    // модель любит добавить объяснение, и подстрочный поиск увёл бы парсер не туда.
+    // Голос LiveTTS в ответе — не голос: у проекта есть персоны «Вера» и handle sergey, и
+    // слово vera из пояснения тихо выдало бы дорогую модель
     internal static (string Voice, string? Role)? ParseVoiceAnswer(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
@@ -1193,7 +1207,7 @@ public sealed class PersonasCrudService(
         foreach (var word in words)
         {
             var voice = Services.Tts.TtsVoiceCatalog.Canonical(word);
-            if (voice is null) continue;
+            if (voice is null || !AutoPickable(voice)) continue;
             // Амплуа берём только рядом стоящее и только поддержанное этим голосом
             var role = words.FirstOrDefault(w => Services.Tts.TtsVoiceCatalog.SupportsRole(voice, w));
             return (voice, role);
@@ -1201,7 +1215,7 @@ public sealed class PersonasCrudService(
         return null;
     }
 
-    private static string BuildVoicePrompt(AiVoiceRequest req)
+    internal static string BuildVoicePrompt(AiVoiceRequest req)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("Подбери голос синтеза речи, которым будет говорить персона-ассистент.");
@@ -1213,7 +1227,7 @@ public sealed class PersonasCrudService(
 
         sb.AppendLine();
         sb.AppendLine("Доступные голоса (ключ · описание · пол · доступные амплуа):");
-        foreach (var v in Services.Tts.TtsVoiceCatalog.All)
+        foreach (var v in Services.Tts.TtsVoiceCatalog.All.Where(v => AutoPickable(v.Voice)))
         {
             var roles = v.Roles.Count > 0 ? string.Join(", ", v.Roles) : "нет";
             var gender = v.Gender == Services.Tts.TtsVoiceCatalog.Gender.Female ? "женский" : "мужской";

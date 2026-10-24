@@ -130,3 +130,30 @@ STT v3 и TTS (v1 и v3) — независимые API одного серви�
 Нужна ВТОРАЯ роль `ai.speechkit-stt.user` **в дополнение** к `ai.speechkit-tts.user`:
 заменять нельзя — со STT-ролями синтез отвечает 403 при рабочем ключе (записано в
 `appsettings.Local.example.json`).
+
+## 6. LiveTTS (дополнение 24.10.2026)
+
+> Снято с [прайса Yandex Cloud](https://yandex.cloud/ru/docs/speechkit/pricing) и живыми
+> запросами **24.10.2026**; оговорка о срезе из шапки действует и здесь.
+
+- **Цена — 0,25 ₽ за запрос** (та же единица: до 250 символов), в ~1,5 раза дороже general
+  (0,1626 ₽). В коде — `Yandex:SpeechKit:LiveTtsRubPerRequest`, дефолт 0,25
+  (`YandexTtsService`). Модель в одном вызове одна — по голосу, поэтому и цена одна на весь текст.
+- **Голоса и модель.** LiveTTS — sofia, vera, irina, denis, sergey, vasily; запрос несёт поле
+  `model: "livetts"` и никогда `speed` (на него 400). Имя голоса однозначно задаёт модель: голос
+  LiveTTS без `model` даёт 403, голос general с `model=livetts` — 400. Без включённой на аккаунте
+  фичи каждый голос LiveTTS получает 403 «Feature permission denied» — отсюда тумблер
+  `Yandex:SpeechKit:LiveTts:Enabled`, по умолчанию `false`.
+- **`neutral` → 400 у четырёх голосов.** Явный `role: neutral` у sofia, vera, sergey и vasily
+  отвергается, у denis и irina он неотличим от «без роли». Поэтому `neutral` нет в карте амплуа
+  `TtsVoiceCatalog` ни у кого: нейтрально — это запрос без роли.
+- **Смешанная семантика `SpendRecord.Model`.** Учёт трат озвучки пишет в `Model` разное:
+  - голосовой режим чата (`POST /api/tts`, `TtsController`), голос **general** — имя голоса,
+    как было до LiveTTS: непрерывность истории и разрезов аналитики важнее единообразия;
+  - голосовой режим, голос **LiveTTS** — id модели `yandex-livetts`
+    (`TtsController.LiveTtsSpendModel`), а голос — в `Label`;
+  - редактор звука — всегда id модели поставщика (`yandex-speechkit` или `yandex-livetts`,
+    `AudioEditJobService` пишет `job.Quote.Model.Id`).
+
+  Разрез «сколько ушло на LiveTTS» поэтому собирается по `Model == "yandex-livetts"` из обоих
+  источников, а разрез по голосам general — только из голосового режима.

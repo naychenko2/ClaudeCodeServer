@@ -44,7 +44,7 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
         await RawGit(_repo, "config", "user.email", "test@test");
         await RawGit(_repo, "config", "user.name", "Тест");
         Directory.CreateDirectory(Path.Combine(_repo, "frontend", "node_modules"));
-        await File.WriteAllTextAsync(Path.Combine(_repo, ".gitignore"), "node_modules/\n");
+        await File.WriteAllTextAsync(Path.Combine(_repo, ".gitignore"), "node_modules/\nobj/\n");
         await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "один\n");
         await File.WriteAllTextAsync(Path.Combine(_repo, "frontend", "package.json"), "{}\n");
         await _git.StageAllAsync(null, _repo);
@@ -66,13 +66,18 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
     [Fact]
     public async Task Acquire_Создаёт_Detached_Слот_На_Коммите_Волны_И_Ссылку_На_Node_Modules()
     {
-        await File.WriteAllTextAsync(Path.Combine(_wave, "dirty.txt"), "грязное\n");
+        var dirtyFile = Path.Combine(_wave, "dirty.txt");
+        await File.WriteAllTextAsync(dirtyFile, "грязное\n");
+        var waveHead = await _git.LocalTipAsync(null, _wave, "HEAD");
         var pool = NewPool();
 
         var lease = await pool.TryAcquireAsync(null, _project, _wave, "t1");
 
         lease.Should().NotBeNull();
         lease!.SlotPath.Should().Be(Path.Combine(_slotBase, "feat-wave-review-1"));
+        lease.SlotPath.Should().StartWith(_slotBase + Path.DirectorySeparatorChar);
+        (await File.ReadAllTextAsync(dirtyFile)).Should().Be("грязное\n");
+        (await _git.LocalTipAsync(null, _wave, "HEAD")).Should().Be(waveHead);
         lease.Sha.Should().Be(await _git.LocalTipAsync(null, _wave, "HEAD"));
         lease.DirtyPaths.Should().Contain("dirty.txt");
         File.Exists(Path.Combine(lease.SlotPath, "dirty.txt")).Should().BeFalse();
@@ -111,7 +116,9 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
         var stray = Path.Combine(first!.SlotPath, "stray.txt");
         await File.WriteAllTextAsync(stray, "мусор\n");
         await File.WriteAllTextAsync(Path.Combine(first.SlotPath, "a.txt"), "испорчено\n");
-        Directory.CreateDirectory(Path.Combine(first.SlotPath, "obj"));
+        var objFile = Path.Combine(first.SlotPath, "obj", "keep.bin");
+        Directory.CreateDirectory(Path.GetDirectoryName(objFile)!);
+        await File.WriteAllTextAsync(objFile, "сборка");
         await File.WriteAllTextAsync(Path.Combine(_wave, "next.txt"), "новое\n");
         await _git.StageAllAsync(null, _wave);
         await _git.CommitAsync(null, _wave, "второй коммит");
@@ -121,6 +128,9 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
         second!.SlotPath.Should().Be(first.SlotPath);
         second.Sha.Should().NotBe(first.Sha);
         File.Exists(stray).Should().BeFalse();
+        File.Exists(objFile).Should().BeTrue();
+        (await _git.LocalTipAsync(null, second.SlotPath, "HEAD")).Should().Be(second.Sha)
+            .And.Be(await _git.LocalTipAsync(null, _wave, "HEAD"));
         (await File.ReadAllTextAsync(Path.Combine(second.SlotPath, "a.txt"))).Should().Be("один\n");
         File.Exists(Path.Combine(second.SlotPath, "next.txt")).Should().BeTrue();
     }

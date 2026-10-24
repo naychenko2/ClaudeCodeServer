@@ -500,10 +500,10 @@ public class PluginPackageValidator
                 return null;
             }
         }
-        // TransformFinalBlock возвращает итоговый хеш; hash.Hash объявлен как byte[]?
-        // (CS8604), поэтому берём возвращаемое значение, а не свойство.
-        var finalHash = hash.TransformFinalBlock([0], 0, 1);
-        return Convert.ToHexString(finalHash).ToLowerInvariant();
+        // TransformFinalBlock возвращает КОПИЮ входного блока, а не хеш — итог лежит в hash.Hash
+        // (объявлен как byte[]?, после завершающего блока он гарантированно заполнен).
+        hash.TransformFinalBlock([0], 0, 1);
+        return Convert.ToHexString(hash.Hash!).ToLowerInvariant();
     }
 
     // R10-1: нативный манифест .claude-plugin/plugin.json обязателен. CLI берёт имя пакета

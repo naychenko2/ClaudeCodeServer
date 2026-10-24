@@ -38,9 +38,9 @@
   /* НОВАЯ пара для точки 7 (правка Андрея: фон плашки белый): светлая плашка поверх чужой картинки.
      C.mediaChip / C.onMediaChip / C.mediaChipEdge — от темы не зависят, в theme.css идут одинаковыми в обе темы,
      как C.mediaScrim: под плашкой фото, а не фон приложения. Текст — тёмный, как textHeading светлой темы. */
-  --c-media-chip:rgba(255,255,255,.85); --c-on-media-chip:#2A251F; --c-media-chip-edge:rgba(42,37,31,.16);
+  --c-media-chip:rgba(255,255,255,.60); --c-on-media-chip:#2A251F; --c-media-chip-edge:rgba(42,37,31,.16);
   /* Только для сравнения прозрачности в точке 7 (не токены, в продукт не идут) */
-  --x-chip-60:rgba(255,255,255,.60); --x-chip-100:#FFFFFF; --x-black:#000000;
+  --x-chip-85:rgba(255,255,255,.85); --x-chip-100:#FFFFFF; --x-black:#000000;
   /* Цвета персон — данные (AGENT_COLORS в AgentSelector.tsx), не токены темы */
   --p-orange:#D97757; --p-purple:#6C5CB0; --p-brown:#8A6A28; --p-blue:#3E7CA6; --p-green:#5E8B4E;
 }
@@ -261,7 +261,7 @@ button.tag:hover { box-shadow:0 0 0 1px currentColor; }
 .mpl span { overflow:hidden; text-overflow:ellipsis; }
 .w360 .mpl { height:20px; }
 .mpl.np { background:none; color:var(--c-text-muted); font-weight:600; -webkit-mask-image:none; mask-image:none; height:16px; }
-.mpl.a60 { background:var(--x-chip-60); } .mpl.a100 { background:var(--x-chip-100); }
+.mpl.a85 { background:var(--x-chip-85); } .mpl.a100 { background:var(--x-chip-100); }
 .mpl.tipon { box-shadow:none; }
 .tip { position:absolute; z-index:5; width:230px; padding:8px 10px; border-radius:10px; background:var(--c-bg-white); border:1px solid var(--c-border-light); box-shadow:var(--shadow-dropdown); font-size:12px; color:var(--c-text-primary); }
 .tip b { color:var(--c-text-heading); }
@@ -314,20 +314,20 @@ button.tag:hover { box-shadow:0 0 0 1px currentColor; }
 <!-- ================= ТОЧКА 7 ================= -->
 <section class="pt" id="pt7">
   <h2>7. Плашка модели в нижней части аватара</h2>
-  <p class="brief">Сценарий: <b>«листаю чаты фичи и сразу вижу, где модель поменяли руками: Киру перевели на облако, Глеба — на локальную»</b>. Разметка — настоящая <span class="mono">ChatCard</span>: справа полоса собеседника 84 px (<span class="mono">COMPANION_W</span>), под ней фото или инициалы. Плашка — нижние 18 px этой полосы (на 360 — 20 px), фон <span class="mono">C.mediaChip</span> (белый 85 %, лицо чуть просвечивает), текст <span class="mono">C.onMediaChip</span> (тёмный), сверху волосок <span class="mono">C.mediaChipEdge</span>, 10 px, моноширинный, жирный, прижат вправо. Левый край плашки растворяется маской, как и лицо. Это вариант 7А из прошлого круга, теперь с подписями для всех моделей и сравнением прозрачности.</p>
+  <p class="brief">Сценарий: <b>«листаю чаты фичи и сразу вижу, где модель поменяли руками: Киру перевели на облако, Глеба — на локальную»</b>. Разметка — настоящая <span class="mono">ChatCard</span>: справа полоса собеседника 84 px (<span class="mono">COMPANION_W</span>), под ней фото или инициалы. Плашка — нижние 18 px этой полосы (на 360 — 20 px), фон <span class="mono">C.mediaChip</span> (белый 60 %, фото под плашкой читается), текст <span class="mono">C.onMediaChip</span> (тёмный), сверху волосок <span class="mono">C.mediaChipEdge</span>, 10 px, моноширинный, жирный, прижат вправо. Левый край плашки растворяется маской, как и лицо. Это вариант 7А из прошлого круга, теперь с подписями для всех моделей и сравнением прозрачности.</p>
 
   <div class="h3">Список чатов: 1280 (панель 300 px) и 360</div>
-  <p class="note">Худшие случаи собраны нарочно: почти белое фото (Ш3), почти чёрное (Ревью Ш1), инициалы (Ревью Ш3), чат без персоны (разбор логов). У «Хранилища плагина» и «Ш4» модель по умолчанию, поэтому лица чистые. Наведение на плашку открывает подсказку с полным именем модели и умолчанием (на Ш3 подсказка открыта для показа).</p>
+  <p class="note">Худшие случаи собраны нарочно: почти белое фото (Ш3), почти чёрное (Ревью Ш1), инициалы (Ревью Ш3), чат без персоны (разбор логов). У «Хранилища плагина» и «Ш4» модель по умолчанию: плашка есть, а в режиме настройки «только где модель изменена» их лица чистые. Наведение на плашку открывает подсказку с полным именем модели и умолчанием (на Ш3 подсказка открыта для показа).</p>
   <div class="grp" style="margin:0 0 10px"><span class="lbl">Плашка</span>
-    <div class="pills" id="plPills"><button data-pl="diff" class="on">только где модель изменена</button><button data-pl="all">у всех чатов</button></div></div>
+    <div class="pills" id="plPills"><button data-pl="all" class="on">у всех чатов (по умолчанию)</button><button data-pl="diff">только где модель изменена (настройка)</button></div></div>
   <div class="row" id="lists7"></div>
 
   <div class="h3">Место под все модели: подпись на полосе 84 px</div>
-  <p class="note">На текст остаётся 64 px (84 минус 14 на растворение слева и 6 справа). Моноширинный шрифт 10 px — это примерно 6 px на знак, то есть <b>10 знаков</b>. Полное имя из каталога в плашку не влезет («DeepSeek Flash», «MiniMax-M3.1-Flash»), поэтому у плашки своя короткая подпись: семейство и версия, без вендора, если версия и так узнаётся. Длиннее 10 знаков — многоточие, полное имя — в подсказке. Подписи ниже — предложение, источник для каждой модели — её короткое имя из каталога. <span class="be">нужен бэк: короткое имя модели в каталоге /api/models (или правило на фронте — решим в спецификации)</span></p>
+  <p class="note">На текст остаётся 64 px (84 минус 14 на растворение слева и 6 справа). Моноширинный шрифт 10 px — это примерно 6 px на знак, то есть <b>10 знаков</b>. Полное имя из каталога в плашку не влезет («DeepSeek Flash», «MiniMax-M3.1-Flash»), поэтому у плашки своя короткая подпись: семейство и версия, без вендора, если версия и так узнаётся. Длиннее 10 знаков — многоточие, полное имя — в подсказке. Подписи ниже — предложение, источник для каждой модели — её короткое имя из каталога. Решено в спецификации: короткая подпись — правило на фронте (<span class="mono">modelShortLabel</span> в <span class="mono">lib/models.ts</span>), бэк не нужен.</p>
   <div class="mgrid" id="grid7"></div>
 
-  <div class="h3">Прозрачность белой плашки: предварительно 85 %</div>
-  <p class="note">По правке Андрея фон плашки белый, текст тёмный. Самый трудный фон теперь другой — чисто чёрное фото, все три образца на нём. Контраст тёмного текста (<span class="mono">#2A251F</span>) посчитан по формуле WCAG: даже 60 % дают 5.33:1, так что AA (4.5:1) больше не ограничивает выбор. Решает вид: при 60 % плашка серая и грязная, при 100 % — глухая заплатка. 85 % — 10.7:1, лицо ещё чуть просвечивает. На белом фото и на инициалах в светлой теме белая плашка сливается с полосой (1.06:1 к белому), поэтому сверху стоит волосок <span class="mono">C.mediaChipEdge</span>. Готовой светлой пары поверх картинки в шкале нет (<span class="mono">C.bgWhite</span> и <span class="mono">C.textHeading</span> в тёмной теме меняются местами), поэтому предлагаю новую тройку токенов, одинаковую в обе темы. Прозрачность окончательно — на свёрке с Андреем.</p>
+  <div class="h3">Прозрачность белой плашки: 60 % (решение Андрея 24.10)</div>
+  <p class="note">По правке Андрея фон плашки белый, текст тёмный. Самый трудный фон теперь другой — чисто чёрное фото, все три образца на нём. Контраст тёмного текста (<span class="mono">#2A251F</span>) посчитан по формуле WCAG: даже 60 % дают 5.33:1, так что AA (4.5:1) больше не ограничивает выбор. Решает вид. Андрей выбрал 60 %: фон полупрозрачный, фото под плашкой читается, контраст 5.33:1 на худшем фоне — AA проходит. 85 % (10.7:1) и 100 % (15.2:1) оставлены для сравнения: при них плашка становится заплаткой. На белом фото и на инициалах в светлой теме белая плашка сливается с полосой (1.06:1 к белому), поэтому сверху стоит волосок <span class="mono">C.mediaChipEdge</span>. Готовой светлой пары поверх картинки в шкале нет (<span class="mono">C.bgWhite</span> и <span class="mono">C.textHeading</span> в тёмной теме меняются местами), поэтому предлагаю новую тройку токенов, одинаковую в обе темы. Охват — все чаты; «только где модель изменена» — настройка списка.</p>
   <div class="alpha" id="alpha7"></div>
 </section>
 
@@ -349,7 +349,7 @@ const I = {
 const BUG = s => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="6" width="8" height="14" rx="4"/><path d="M19 7l-3 2M5 7l3 2M19 19l-3-2M5 19l3-2M20 13h-4M4 13h4"/></svg>`;
 const BE = t => `<span class="be">нужен бэк: ${t}</span>`;
 
-let ST = 'move', PL = 'diff';
+let ST = 'move', PL = 'all';
 
 // ===== Точка 6: строка анализа =====
 // tone: '' (нейтрально) | warn | bad | quiet; m — мобильная ширина
@@ -493,7 +493,7 @@ const render7grid = () => {
   document.getElementById('grid7').innerHTML = MODELS.map(([s, full, p, ph, cut]) =>
     `<div class="mcell${cut ? ' cut' : ''}"><div class="sw cc p" style="--pc:var(--p-${p});padding:0;min-height:64px"><div class="cveil"></div><div class="cface${ph ? ' photo ' + ph : ''}">${ph ? '' : 'К'}</div><span class="mpl"><span>${s}</span></span></div>
       <div class="meta2"><b>${s}</b> · ${s.length} зн. · ${full}</div></div>`).join('');
-  const A = [['a60', '60 %', '5.33:1 — AA, но плашка серая'], ['', '85 % · C.mediaChip', '10.7:1 — AA ✓'], ['a100', '100 %', '15.2:1 — глухая заплатка']];
+  const A = [['', '60 % · C.mediaChip', '5.33:1 — AA ✓, фото читается'], ['a85', '85 %', '10.7:1 — почти глухая'], ['a100', '100 %', '15.2:1 — глухая заплатка']];
   document.getElementById('alpha7').innerHTML = A.map(([cl, t, c]) =>
     `<div><p class="cap">${t}</p><div class="sw cc p" style="--pc:var(--p-purple);padding:0;min-height:64px"><div class="cface photo dk"></div><span class="mpl ${cl}"><span>Sonnet 5.5</span></span></div><div class="sm11 sec2" style="margin-top:4px">${c}${cl === '' ? ' <span class="rec">рекомендую</span>' : ''}</div></div>`).join('');
 };

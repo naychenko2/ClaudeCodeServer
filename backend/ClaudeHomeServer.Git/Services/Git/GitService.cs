@@ -1420,6 +1420,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         var runtimePath = paths.ToRuntime(worktreePath);
         var sem = LockFor(mainRoot);
         await sem.WaitAsync(ct);
+        InvalidateWorktreeCache(ownerId, mainRoot);
         try
         {
             await RunOkAsync(ownerId, mainRoot, ["worktree", "add", "-b", branch, runtimePath],
@@ -1436,6 +1437,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         var runtimePath = paths.ToRuntime(worktreePath);
         var sem = LockFor(mainRoot);
         await sem.WaitAsync(ct);
+        InvalidateWorktreeCache(ownerId, mainRoot);
         try
         {
             await RunOkAsync(ownerId, mainRoot, ["worktree", "add", "--detach", runtimePath, sha],
@@ -1459,6 +1461,9 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         // успевает изменить список между чтением и сбросом
         var sem = LockFor(mainRoot);
         await sem.WaitAsync(ct);
+        // Сброс меняет HEAD слота — кэш списка обязан быть инвалидирован, иначе локатор
+        // резолвил бы ссылки по прежнему HEAD.
+        InvalidateWorktreeCache(ownerId, mainRoot);
         try
         {
             var list = await WorktreeListAsync(ownerId, mainRoot, ct);
@@ -1506,6 +1511,87 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return list;
     }
 
+    // ---------- Кэш списка worktree (шаг B1a фичы «резолвинг ссылок по worktree») ----------
+    // Локатор ссылок (ProjectTreeLocator, B1b) читает список worktree на каждую картинку
+    // ленты: без кэша — отдельный прогон git на чтение, у container-владельцев — exec в
+    // песочницу. Кэш на (owner, mainRoot) с TTL 20 с (в коридоре 15–30 из разреза) и
+    // single-flight: параллельные вызовы одного ключа дают один прогон git. Существующие
+    // вызывающие (ReviewTreePool, гард мержа) зовют перегрузку без кэша — им обязано
+    // текущее состояние, их не переключаем. Чтение не берёт LockFor(mainRoot): картинка
+    // не должна вставать за долгим worktree add (п.2 «Инвариантов и рисков» разреза).
+
+    private static readonly TimeSpan WorktreeCacheTtl = TimeSpan.FromSeconds(20);
+
+    // Seam для тестов: момент, по которому проверяется TTL. Продукция — UtcNow; тесты
+    // ставят управляемые часы, чтобы проверить истечение без сна на длину TTL.
+    internal Func<DateTimeOffset> Clock = () => DateTimeOffset.UtcNow;
+
+    private sealed record WorktreeCacheEntry(IReadOnlyList<GitWorktreeInfo> List, DateTimeOffset ExpiresAt);
+
+    private readonly ConcurrentDictionary<(string?, string), WorktreeCacheEntry> _worktreeCache = new();
+
+    // Поколение кэша ключа: меняется на любой операции, правящей список. Прогон, начатый
+    // до смены поколения, не пишет свой снимок — иначе чтение, пересекшееся с add/remove,
+    // оставило бы в кэше довоперационный список на всю TTL.
+    private readonly ConcurrentDictionary<(string?, string), int> _worktreeGeneration = new();
+
+    // Single-flight по ключу — НЕ репозиторный лок: кэшированное чтение не должно
+    // ждать длинный worktree add.
+    private readonly ConcurrentDictionary<(string?, string), SemaphoreSlim> _worktreeFlights = new();
+
+    // Ключ по нормализованному mainRoot: одно и то же дерево могут назвать с разным
+    // слэшем/трейлинг-косой — кэш не должен плодить для него две записи.
+    private static (string?, string) WorktreeCacheKey(string? ownerId, string mainRoot) =>
+        (ownerId, PathNormalizer.NormalizePath(mainRoot));
+
+    private bool TryCached((string?, string) key, out IReadOnlyList<GitWorktreeInfo>? list)
+    {
+        if (_worktreeCache.TryGetValue(key, out var entry) && entry.ExpiresAt > Clock())
+        {
+            list = entry.List;
+            return true;
+        }
+        list = null;
+        return false;
+    }
+
+    private void InvalidateWorktreeCache(string? ownerId, string mainRoot)
+    {
+        var key = WorktreeCacheKey(ownerId, mainRoot);
+        _worktreeGeneration[key] = _worktreeGeneration.GetOrAdd(key, 0) + 1;
+        _worktreeCache.TryRemove(key, out _);
+    }
+
+    // Опциональная перегрузка: useCache: true — кэшированный путь; без неё (все текущие
+    // вызывающие) — свежий список.
+    public Task<IReadOnlyList<GitWorktreeInfo>> WorktreeListAsync(
+        string? ownerId, string mainRoot, bool useCache, CancellationToken ct = default) =>
+        useCache ? WorktreeListCachedAsync(ownerId, mainRoot, ct) : WorktreeListAsync(ownerId, mainRoot, ct);
+
+    private async Task<IReadOnlyList<GitWorktreeInfo>> WorktreeListCachedAsync(
+        string? ownerId, string mainRoot, CancellationToken ct)
+    {
+        var key = WorktreeCacheKey(ownerId, mainRoot);
+        if (TryCached(key, out var hit)) return hit;
+
+        var flight = _worktreeFlights.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        await flight.WaitAsync(ct);
+        try
+        {
+            // Double-check: пока ждали, соседний полёт мог уже закончить и наполнить кэш.
+            if (TryCached(key, out hit)) return hit;
+
+            var generation = _worktreeGeneration.GetOrAdd(key, 0);
+            var list = await WorktreeListAsync(ownerId, mainRoot, ct);
+            // Если во время прогона список меняли — поколение ушло, не пишем снимок:
+            // следующее чтение возьмёт свежий.
+            if (_worktreeGeneration.GetOrAdd(key, 0) == generation)
+                _worktreeCache[key] = new WorktreeCacheEntry(list, Clock() + WorktreeCacheTtl);
+            return list;
+        }
+        finally { flight.Release(); }
+    }
+
     // W4-5 (п.5.1)/W4-5B2 (п.5.2): проверенное дерево фичи — тот же предикат, что гард мержа
     // (TasksController.FeatureWorktreeErrorAsync) и SessionManager.AttachWorktreeAsync: путь
     // непустой, существует на диске и числится в `git worktree list` главной репы. Основное
@@ -1549,6 +1635,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         var runtimePath = paths.ToRuntime(worktreePath);
         var sem = LockFor(mainRoot);
         await sem.WaitAsync(ct);
+        InvalidateWorktreeCache(ownerId, mainRoot);
         try
         {
             var args = force

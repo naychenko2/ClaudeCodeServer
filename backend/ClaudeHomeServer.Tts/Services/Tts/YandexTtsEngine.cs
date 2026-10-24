@@ -19,7 +19,8 @@ public sealed class YandexTtsEngine(YandexTtsService tts, IConfiguration config)
 
     private readonly IReadOnlyList<TtsEngineVoice> _voices =
         TtsVoiceCatalog.Visible(TtsVoiceCatalog.LiveTtsEnabled(config))
-            .Select(v => new TtsEngineVoice(v.Voice, v.Label, v.Roles)).ToArray();
+            .Select(v => new TtsEngineVoice(v.Voice, v.Label, v.Roles, v.Model, TtsVoiceCatalog.SupportsSpeed(v.Voice)))
+            .ToArray();
 
     private IReadOnlyList<string>? _roles;
 
@@ -53,7 +54,9 @@ public sealed class YandexTtsEngine(YandexTtsService tts, IConfiguration config)
         if (wantedRole is not null && !TtsVoiceCatalog.SupportsRole(name, wantedRole))
             return TtsSynthesis.Fail($"Голос «{name}» не умеет амплуа «{wantedRole}».");
 
-        if (double.IsNaN(speed) || speed < MinSpeed || speed > MaxSpeed)
+        // Скорость проверяем только у голосов со скоростью: LiveTTS её не принимает, и BuildPayload
+        // её не отправит, так что отказ по ней был бы отказом ни за что
+        if (TtsVoiceCatalog.SupportsSpeed(name) && (double.IsNaN(speed) || speed < MinSpeed || speed > MaxSpeed))
             return TtsSynthesis.Fail($"Скорость {speed} вне пределов {MinSpeed}–{MaxSpeed}.");
 
         var result = await tts.SynthesizeAsync(text, new VoiceChoice(name, wantedRole, speed), ct);

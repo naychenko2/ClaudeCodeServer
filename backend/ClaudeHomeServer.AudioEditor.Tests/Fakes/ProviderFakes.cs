@@ -90,14 +90,24 @@ internal sealed class FakeTts : ITtsEngine
     public TtsSynthesis Result { get; init; } = new([7, 7, 7], 0.3252, null);
     public List<(string Text, string Voice, string? Role, double Speed)> Calls { get; } = [];
 
-    public IReadOnlyList<TtsEngineVoice> Voices { get; } =
+    public IReadOnlyList<TtsEngineVoice> Voices { get; init; } =
     [
         new("alena", "Алёна", ["neutral", "good"]),
         new("filipp", "Филипп", []),
         new("jane", "Джейн", ["neutral", "good", "evil"]),
     ];
 
-    public IReadOnlyList<string> Roles => ["neutral", "good", "evil"];
+    // Шов с включённой LiveTTS: её голоса — в конце, как в каталоге Tts
+    public static IReadOnlyList<TtsEngineVoice> WithLiveTts { get; } =
+    [
+        new("alena", "Алёна", ["neutral", "good"]),
+        new("filipp", "Филипп", []),
+        new("jane", "Джейн", ["neutral", "good", "evil"]),
+        new("sofia", "София · живая", ["casual", "support"], TtsEngineVoice.LiveTts, SpeedSupported: false),
+        new("denis", "Денис · живой", ["casual", "formal", "sales"], TtsEngineVoice.LiveTts, SpeedSupported: false),
+    ];
+
+    public IReadOnlyList<string> Roles => [.. Voices.SelectMany(v => v.Roles).Distinct()];
     public int MaxChars => 3000;
     public double MinSpeed => 0.1;
     public double MaxSpeed => 3.0;

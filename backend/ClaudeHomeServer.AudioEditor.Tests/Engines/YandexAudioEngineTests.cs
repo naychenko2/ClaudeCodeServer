@@ -141,6 +141,90 @@ public sealed class YandexAudioEngineTests
         engine.SpendSource.Should().Be(SpendSources.Tts);
     }
 
+    // ── LiveTTS: вторая модель того же поставщика ───────────────────────────────
+
+    private static AudioRequest SpeakLive(JsonObject? fields = null) =>
+        new(AudioOp.Speak, YandexAudioEngine.LiveTtsModelId, Scope, Text: "Привет", Params: fields);
+
+    [Fact]
+    public void LiveTts_TwoModels_SpeechKitFirst()
+    {
+        // И1: «Авто» берёт первую подходящую модель поставщика — дешёвая обязана стоять первой
+        var engine = new YandexAudioEngine(new FakeTts { Voices = FakeTts.WithLiveTts });
+
+        engine.Models.Select(m => m.Id).Should().Equal(YandexAudioEngine.ModelId, YandexAudioEngine.LiveTtsModelId);
+        engine.Models.Should().OnlyContain(m => m.Caps.Ops.SequenceEqual(new[] { AudioOp.Speak }) && m.Caps.SpeaksRu);
+    }
+
+    [Fact]
+    public void LiveTts_SeamWithoutLiveTtsVoices_NoLiveTtsModel()
+    {
+        // Тумблер выключен — шов не отдаёт голосов LiveTTS, и модели нет
+        new YandexAudioEngine(new FakeTts()).Models.Select(m => m.Id).Should().Equal(YandexAudioEngine.ModelId);
+    }
+
+    [Fact]
+    public async Task LiveTts_EmptyVoice_FirstVoiceOfOwnModel()
+    {
+        // И2: пустой голос — первый голос модели запроса, а не всего шва
+        var tts = new FakeTts { Voices = FakeTts.WithLiveTts };
+        var engine = new YandexAudioEngine(tts);
+
+        await engine.RunAsync(Speak(), NoProgress, CancellationToken.None);
+        await engine.RunAsync(SpeakLive(), NoProgress, CancellationToken.None);
+
+        tts.Calls.Select(c => c.Voice).Should().Equal("alena", "sofia");
+    }
+
+    [Fact]
+    public async Task LiveTts_VoiceOfOtherModel_RejectedWithoutSeamCall()
+    {
+        var tts = new FakeTts { Voices = FakeTts.WithLiveTts };
+        var engine = new YandexAudioEngine(tts);
+
+        var inGeneral = await engine.RunAsync(Speak("Привет", new JsonObject { ["voice"] = "sofia" }), NoProgress,
+            CancellationToken.None);
+        var inLive = await engine.RunAsync(SpeakLive(new JsonObject { ["voice"] = "jane" }), NoProgress,
+            CancellationToken.None);
+
+        inGeneral.Outcome.Should().Be(AudioOutcome.Rejected);
+        inGeneral.Error.Should().Be("Голос «София» — из LiveTTS, выбери модель «SpeechKit LiveTTS»");
+        inLive.Outcome.Should().Be(AudioOutcome.Rejected);
+        inLive.Error.Should().Contain("Джейн");
+        tts.Calls.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LiveTts_RunsWithOwnVoiceAndRole_ParamsWithoutSpeed()
+    {
+        var tts = new FakeTts { Voices = FakeTts.WithLiveTts };
+        var engine = new YandexAudioEngine(tts);
+
+        var result = await engine.RunAsync(SpeakLive(new JsonObject { ["voice"] = "denis", ["role"] = "formal" }),
+            NoProgress, CancellationToken.None);
+
+        result.Outcome.Should().Be(AudioOutcome.Ok);
+        tts.Calls.Should().Equal(("Привет", "denis", "formal", 1.0));
+        engine.ParamNames(engine.Models[1], AudioOp.Speak).Should().BeEquivalentTo(["voice", "role"]);
+        engine.ParamNames(engine.Models[0], AudioOp.Speak).Should().BeEquivalentTo(["voice", "role", "speed"]);
+    }
+
+    [Fact]
+    public async Task LiveTts_ListVoices_FilteredByModel_AllWithModelMarkWithoutModel()
+    {
+        var engine = new YandexAudioEngine(new FakeTts { Voices = FakeTts.WithLiveTts });
+
+        var general = await engine.ListVoicesAsync(YandexAudioEngine.ModelId, null, CancellationToken.None);
+        var live = await engine.ListVoicesAsync(YandexAudioEngine.LiveTtsModelId, null, CancellationToken.None);
+        var all = await engine.ListVoicesAsync(null, null, CancellationToken.None);
+
+        general!.Select(v => v.Id).Should().Equal("alena", "filipp", "jane");
+        live!.Select(v => v.Id).Should().Equal("sofia", "denis");
+        all!.Should().HaveCount(5);
+        all.Single(v => v.Id == "sofia").Name.Should().EndWith("· LiveTTS");
+        all.Single(v => v.Id == "jane").Name.Should().Be("Джейн");
+    }
+
     [Fact]
     public async Task Estimate_BadVoice_RefusedAtQuote()
     {

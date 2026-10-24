@@ -58,6 +58,40 @@ public sealed class AudioParamsValidationTests : IDisposable
         ok.Error.Should().BeNull();
     }
 
+    // У LiveTTS темпа нет: speed — неизвестный параметр модели, отказ с именем поля до цены
+    [Fact]
+    public async Task Quote_YandexLiveTts_Speed_InvalidRequestWithName()
+    {
+        var svc = Service(new YandexAudioEngine(new FakeTts { Voices = FakeTts.WithLiveTts }));
+        AudioQuoteRequest Request(JsonObject fields) =>
+            new(AudioModes.Voice, "speak", YandexAudioEngine.ProviderKey, YandexAudioEngine.LiveTtsModelId, Text: "Привет",
+                Fields: fields);
+
+        var bad = await svc.QuoteAsync(Owner, Scope, Request(new JsonObject { ["speed"] = 1.2 }), CancellationToken.None);
+        var ok = await svc.QuoteAsync(Owner, Scope, Request(new JsonObject { ["voice"] = "sofia", ["role"] = "casual" }),
+            CancellationToken.None);
+
+        bad.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
+        bad.Error.Should().StartWith($"Неизвестный параметр «speed» у модели {YandexAudioEngine.LiveTtsModelId}");
+        ok.Error.Should().BeNull();
+        ok.Value!.Model.Should().Be(YandexAudioEngine.LiveTtsModelId);
+    }
+
+    // И1: «Авто» у Яндекса с включённой LiveTTS берёт дешёвую модель, а не дорогую
+    [Fact]
+    public async Task Quote_YandexAutoModel_PicksSpeechKitNotLiveTts()
+    {
+        var svc = Service(new YandexAudioEngine(new FakeTts { Voices = FakeTts.WithLiveTts }));
+
+        var quote = await svc.QuoteAsync(Owner, Scope,
+            new AudioQuoteRequest(AudioModes.Voice, "speak", YandexAudioEngine.ProviderKey,
+                ClaudeHomeServer.Services.AudioEditor.Catalog.AudioCatalog.AutoModelId, Text: "Привет"),
+            CancellationToken.None);
+
+        quote.Error.Should().BeNull();
+        quote.Value!.Model.Should().Be(YandexAudioEngine.ModelId);
+    }
+
     [Fact]
     public async Task Quote_Higgsfield_UnknownKey_RefusedWithName_BeforeCost_KnownPasses()
     {

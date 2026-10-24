@@ -209,6 +209,25 @@ public class YandexTtsEngineTests
         var on = Make(new StubHandler(_ => AudioOk()), liveTts: true);
         on.Voices.Select(v => v.Voice).Should().Contain(["sofia", "vera", "irina", "denis", "sergey", "vasily"]);
         on.Roles.Should().Contain(["casual", "support", "sales", "formal", "narrator"]);
+
+        // Модель и темп едут в шов из каталога; строки моделей шва и каталога — одни и те же
+        TtsEngineVoice.LiveTts.Should().Be(TtsVoiceCatalog.LiveTts);
+        TtsEngineVoice.General.Should().Be(TtsVoiceCatalog.General);
+        on.Voices.Single(v => v.Voice == "sofia").Should().Match<TtsEngineVoice>(v =>
+            v.Model == TtsEngineVoice.LiveTts && !v.SpeedSupported);
+        on.Voices.Single(v => v.Voice == "zahar").Should().Match<TtsEngineVoice>(v =>
+            v.Model == TtsEngineVoice.General && v.SpeedSupported);
+    }
+
+    [Fact]
+    public async Task LiveTts_СкоростьВнеПределов_НеОтказ_ОнаНеУходитВовсе()
+    {
+        // Отказ по скорости — только у моделей со скоростью (контракт шва)
+        var handler = new StubHandler(_ => AudioOk());
+        var res = await Make(handler, liveTts: true).SynthesizeAsync("Привет.", "vera", null, 5, CancellationToken.None);
+
+        res.Error.Should().BeNull();
+        handler.Bodies[0].Should().NotContain("speed");
     }
 
     [Fact]

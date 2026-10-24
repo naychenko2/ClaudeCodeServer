@@ -392,7 +392,7 @@ public class ClaudeSessionPromptCacheTests : IDisposable
         {
             if (!Mine.Value) return;
             foreach (var t in tags)
-                if (t.Key == "reason") lock (reasons) reasons.Add(t.Value as string);
+                if (t.Key == "reason" && t.Value is string reason) lock (reasons) reasons.Add(reason);
         });
         listener.Start();
         Mine.Value = true;

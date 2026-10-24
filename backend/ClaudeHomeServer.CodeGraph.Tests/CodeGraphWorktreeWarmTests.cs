@@ -121,7 +121,8 @@ public class CodeGraphWorktreeWarmTests : IClassFixture<TestWebApplicationFactor
         sessions.GetById(session.Id)!.WorktreePath = worktree;
 
         var toolset = ActivatorUtilities.CreateInstance<CodeGraphToolset>(_factory.Services);
-        return (toolset, new McpToolCallContext(project.OwnerId, session.Id, session.Id), worktree);
+        var ownerId = project.OwnerId ?? throw new InvalidOperationException("Проект без владельца — контекст вызова не соберётся");
+        return (toolset, new McpToolCallContext(ownerId, session.Id, session.Id), worktree);
     }
 
     [Fact]

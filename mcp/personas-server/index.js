@@ -209,6 +209,22 @@ const COLORS = ['yellow', 'orange', 'blue', 'green', 'purple', 'red', 'brown', '
 const SEE_INSTRUCTIONS = 'см. инструкции сервера personas';
 
 // Общие поля персоны для create/update (кроме name — у create он обязателен)
+// Голос персоны (паритет с http-веткой). Каталог голосов здесь не дублируем: неизвестный
+// ключ бэкенд отвергает текстом со списком допустимых
+const VOICE_FIELDS = {
+  voice: {
+    type: 'string',
+    description: 'Голос синтеза речи для голосового режима — ключ голоса из каталога (неизвестный ключ — '
+      + 'отказ со списком допустимых). Пустая строка — без голоса (говорит голосом инстанса). '
+      + 'В personas_create не указан — голос подберётся сам по характеру; в personas_update не указан — не меняется',
+  },
+  voiceRole: {
+    type: 'string',
+    description: 'Амплуа голоса — только из поддержанных выбранным голосом (см. voice); '
+      + 'пустая строка — нейтрально. Без voice в personas_update меняет амплуа текущего голоса',
+  },
+};
+
 const PERSONA_FIELDS = {
   role: { type: 'string', description: 'Роль — главное в отображении («Роль (Имя)»), например «Дизайнер»' },
   specialty: {
@@ -396,15 +412,16 @@ const TOOLS = [
   },
   {
     // ВСЕГДА в tools/list — до модульных спредов (инвариант стабильности состава: инструмент
-    // не смеет мерцать между ходами). Ограничение — на бэкенде: вызов из чата разрешён только
-    // онбординг-сессии (по X-Caller-Session-Id), в остальных чатах сервер откажет.
+    // не смеет мерцать между ходами). Ограничение — на бэкенде по X-Caller-Session-Id:
+    // онбординг назначает любую персону, обычный чат — только руководителя своего проекта.
     name: 'personas_set_default',
     description: 'Назначить персону дефолтной: глобальную — личной дефолт-персоной пользователя, ' +
       'проектную — руководителем её проекта. Для чата-онбординга: задаёт назначенную персону ' +
       '(как созданную через personas_create, так и выбранную из существующих) ПОСЛЕ явного ' +
       'подтверждения пользователем. Права выбранной существующей персоны НЕ меняй — вызывай ' +
-      'только этот инструмент. В обычных чатах бэкенд откажет — тогда предложи пользователю ' +
-      'сменить дефолт в настройках.',
+      'только этот инструмент. В обычном чате проекта — только руководителя ЭТОГО проекта ' +
+      '(персону его команды) и по просьбе пользователя; личную дефолт-персону из обычного чата ' +
+      'сменить нельзя — предложи пользователю сделать это в настройках.',
     inputSchema: {
       type: 'object',
       required: ['personaId'],
@@ -424,6 +441,7 @@ const TOOLS = [
         scope: { type: 'string', enum: ['global', 'project'], description: 'Зона персоны: global (дефолт) — во всех чатах; project — в своём проекте' },
         projectId: { type: 'string', description: 'ID проекта для scope=project (дефолт — проект сессии)' },
         avatarPrompt: { type: 'string', description: 'Внешность для фото-аватара; пусто — из имени и роли (фото создаётся само)' },
+        ...VOICE_FIELDS,
         ...BINDING_CREATE_FIELDS,
       },
     },
@@ -432,7 +450,8 @@ const TOOLS = [
     name: 'personas_update',
     description: 'Изменить персону: поля как при создании, передавай только изменяемые. ' +
       'Пустая строка очищает role/effort/color/greeting (specialty — "none"). ' +
-      'Смена scope на "project" требует projectId.' +
+      'Смена scope на "project" требует projectId. ' +
+      'voice/voiceRole — голос персоны (пустая voice — сброс).' +
       (BINDINGS ? ' bindings — ПОЛНАЯ замена набора привязок (свои собственные менять нельзя).' : ''),
     inputSchema: {
       type: 'object',
@@ -443,6 +462,7 @@ const TOOLS = [
         ...PERSONA_FIELDS,
         scope: { type: 'string', enum: ['global', 'project'], description: 'Новая зона персоны' },
         projectId: { type: 'string', description: 'ID проекта для scope=project' },
+        ...VOICE_FIELDS,
         ...(BINDINGS ? {
           bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Полная замена набора привязок персоны' },
         } : {}),
@@ -703,6 +723,23 @@ function personaBody(args, keys) {
 // передача model в аргументах сюда не попадёт — поле не попадёт и в body запроса
 const FIELD_KEYS = ['name', 'role', 'specialty', 'description', 'systemPrompt', 'modelTier', 'tierStrong', 'tierMedium', 'tierWeak', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
 
+function blankToUndef(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+// Патч голоса для personas_update — та же семантика, что VoicePatch http-ветки: voice ""
+// — сброс (пустой объект); новый voice без voiceRole — нейтральное амплуа; один voiceRole —
+// амплуа текущего голоса. Темп переносится от текущего голоса (его задаёт только человек)
+function voicePatch(args, current) {
+  const voice = 'voice' in args ? blankToUndef(args.voice) : current?.voice?.voice ?? undefined;
+  if ('voice' in args && !voice) return {};
+  return {
+    voice,
+    role: 'voiceRole' in args ? blankToUndef(args.voiceRole) : undefined,
+    speed: current?.voice?.speed ?? null,
+  };
+}
+
 // Запрет самоэскалации: персона не может менять СОБСТВЕННЫЕ привязки
 // (проверка до любого fetch — изменение прав себе блокируется по построению)
 function assertNotSelfBindings(id) {
@@ -788,6 +825,10 @@ async function callTool(name, args) {
       body.autoAvatar = true;
       if (typeof args.avatarPrompt === 'string' && args.avatarPrompt.trim())
         body.avatarPrompt = args.avatarPrompt;
+      // Голос: не передан — бэкенд подберёт по характеру; передан (в т.ч. пустой) — как есть.
+      // Исход автоподбора stdio-ветка модели не сообщает: REST его не отдаёт
+      if ('voice' in args || 'voiceRole' in args)
+        body.voice = { voice: blankToUndef(args.voice), role: blankToUndef(args.voiceRole) };
       return json(await api('/api/personas', { method: 'POST', body: JSON.stringify(body) }));
     }
 
@@ -801,6 +842,16 @@ async function callTool(name, args) {
           body: JSON.stringify({ bindings: args.bindings ?? [] }),
         });
       }
+      // Голос — своим эндпоинтом и ПЕРВЫМ: бэкенд валидирует его строго, и отказ не должен
+      // оставлять персону с уже применёнными соседними полями
+      let voiced = null;
+      if ('voice' in args || 'voiceRole' in args) {
+        const current = await api(`/api/personas/${encodeURIComponent(args.id)}`);
+        voiced = await api(`/api/personas/${encodeURIComponent(args.id)}/voice`, {
+          method: 'PUT',
+          body: JSON.stringify(voicePatch(args, current)),
+        });
+      }
       const body = personaBody(args, FIELD_KEYS);
       // Частичная правка контракта: мержим с текущим, иначе передача одного слота
       // (напр. только tone) затёрла бы остальные — API заменяет contract целиком
@@ -810,9 +861,9 @@ async function callTool(name, args) {
         body.contract = { ...(current?.contract ?? {}), ...contract };
         delete body.systemPrompt;
       }
-      // Изменены только привязки (body пуст) — просто вернуть актуальную персону
+      // Изменены только привязки и/или голос (body пуст) — вернуть актуальную персону
       if (Object.keys(body).length === 0)
-        return json(await api(`/api/personas/${encodeURIComponent(args.id)}`));
+        return json(voiced ?? await api(`/api/personas/${encodeURIComponent(args.id)}`));
       if (body.scope === 'project' && !('projectId' in body)) {
         if (!PROJECT_ID)
           throw new Error('Для смены зоны на проектную нужен projectId: текущая сессия вне проекта.');

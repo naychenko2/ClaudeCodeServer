@@ -133,7 +133,10 @@ public class TasksController(
     // Б9b: шов расхода фичи (Core, ISpendFeatureReader): null — подсистема Spend выключена
     // (гейт Subsystems:spend:Enabled) → stats.spend = null, не 500 (решение Андрея 20.10).
     // Вертикаль Tasks Spend не видит напрямую — только через этот шов (SubsystemBoundaryTests).
-    ISpendFeatureReader? spend = null) : ControllerBase
+    ISpendFeatureReader? spend = null,
+    // W4-ANB (разрез §4): авторезюме фичи по кнопке. null — подсистема Tasks выключена
+    // (гейт тот же, что у features) → честный 503, не 500 (ADR-014).
+    FeatureSummaryService? summary = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -829,6 +832,42 @@ public class TasksController(
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
         return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
             mockups, mockupsUnavailable });
+    }
+
+    // ─── W4-ANB: резюме фичи (POST /api/tasks/features/{featureId}/summary) ──────────────────
+    // Авторезюме по кнопке (разрез §4): вход модели — детерминированная выжимка FeatureRun
+    // (FeatureSummaryDigest), исполнитель — место «feature-summary» (по умолчанию локаль,
+    // админский выбор в «Поставщиках моделей»). Кэш в памяти процесса: тот же отпечаток
+    // выжимки отдаётся без вызова модели (cached: true); ?force=true — пересчёт. Автоматического
+    // запуска нет (решение Андрея): только по кнопке. 404 — тело как у GET features/{id};
+    // 503 — подсистема выключена; 502 — отказ модели (таймаут — LlmTimeoutException) с причиной.
+    [HttpPost("features/{featureId}/summary")]
+    public async Task<IActionResult> FeatureSummary(string featureId, [FromQuery] bool force = false,
+        CancellationToken ct = default)
+    {
+        if (features is null || summary is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        // Владелец из claim, как у GetFeature: нет эпика/чужой/удалён → один 404. Выжимка
+        // считается по облегчённому run: причина витка живёт в Rounds[].Reason (Slim гасит
+        // Verification.Notes у задач, не у витков) — отдельного ProjectFull не нужно.
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        try
+        {
+            var res = await summary.SummarizeAsync(UserId, featureId, run, force, ct);
+            return Ok(new { text = res.Text, generatedAt = res.GeneratedAt, model = res.Model,
+                cached = res.Cached, usage = res.Usage });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // LlmTimeoutException — потомок InvalidOperationException: причина в сообщении
+            // («не ответил за отведённое время» / «вернула пустой ответ»).
+            return StatusCode(502, new { error = ex.Message });
+        }
     }
 
     // ─── W4-HOLD-B2: удержание фичи (POST/DELETE /api/tasks/features/{featureId}/hold) ────────

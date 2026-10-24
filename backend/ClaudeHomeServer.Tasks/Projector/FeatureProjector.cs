@@ -10,6 +10,12 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // <see cref="TaskManager"/> для REST: без второго источника правды, только выборка задач.
 public sealed class FeatureProjector(TaskManager tasks)
 {
+    // W4-ANB (разрез §4, решение Андрея 24.10): порог «тихо» — 24 часа без активности. Та же
+    // длительность, что у NudgeWindow сторожа зависшего исполнителя (TaskExecutionService):
+    // страница и уведомления не расходятся. Порог константа, не конфиг: это решение продукта,
+    // а не настройка машины.
+    internal static readonly TimeSpan QuietThreshold = TimeSpan.FromHours(24);
+
     // Чистая проекция: эпик + ВСЕ задачи фичи (эпик + дочерние) → конвейер.
     // featureTasks — в порядке, в котором их отдал вызывающий (фикстура/трекер): шаги/ревью/
     // проверки сохраняют этот порядок, финал/мерж берутся как последние по этому порядку.
@@ -186,6 +192,10 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Title = t.Title,
                 StartedAt = t.ClaudeStartedAt,
                 LinkedSessionId = LiveSession(t.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
+                // W4-ANB (разрез §4): отметки сторожа как есть — тот же источник, что уведомления
+                // («зависла» = StaleAlertedAt, предупреждение = NudgedAt); второй порог не заводим.
+                NudgedAt = t.ExecutorNudgedAt,
+                StaleAlertedAt = t.ExecutorStaleAlertedAt,
             })
             .ToList();
 
@@ -473,6 +483,16 @@ public sealed class FeatureProjector(TaskManager tasks)
         // мерж (merge Done, финал не принят, эпик открыт) закрывал фичу (инцидент 21.10).
         bool closed = featureState is FeatureStates.Merged or FeatureStates.Closed;
 
+        // W4-ANB (разрез §4, решение Андрея 24.10): «тихо» — фича стоит и не двигается ≥ 24 часов.
+        // Якорь: LastActivityAt; активности не было никогда — создание эпика (свежий черновик
+        // не «тихо», а молчание с момента создания — тоже тишина). Закрытая фича не «тихо»:
+        // она закрыта, сигнал не про стояние. Идущая задача (nowList) — не тишина: работа
+        // идёт, её зависание — отдельный признак (NudgedAt/StaleAlertedAt выше). nowList уже
+        // гашён паузой (R-HOLD-D): фича на паузе без движения — «тихо»: сам факт простоя
+        // не прячется его причиной, state=paused различает их на фронте.
+        var quietAnchor = lastActivityAt ?? epic.CreatedAt;
+        bool quiet = !closed && nowList.Count == 0 && nowUtc - quietAnchor >= QuietThreshold;
+
         // Итог смерженной фичи: только у закрытой, иначе null.
         FeatureSummary? summary = null;
         if (closed)
@@ -539,6 +559,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             StepsTotal = stepsTotal,
             StepProgress = stepProgress,
             LastActivityAt = lastActivityAt,
+            Quiet = quiet,
             Closed = closed,
             Summary = summary,
         };
@@ -807,6 +828,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         StepsTotal = run.StepsTotal,
         StepProgress = run.StepProgress,
         LastActivityAt = run.LastActivityAt,
+        Quiet = run.Quiet,
         Closed = run.Closed,
         Summary = run.Summary,
     };
@@ -1448,7 +1470,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.StepProgress.Withdrawn,
             run.StepProgress.UnlinkedReworks,
             run.Hold?.Reason,
-            run.Hold?.Since);
+            run.Hold?.Since,
+            run.Quiet);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки

@@ -98,6 +98,10 @@ public static class LocalActionCatalog
     public const string TaskClassify = "task-classify";
     public const string TaskNormalizeTitle = "task-normalize-title";
     public const string TaskDedup = "task-dedup";
+    // Авторезюме фичи по кнопке (W4-ANB, разрез §4): вход — детерминированная выжимка
+    // FeatureRun (≤4000 симв.), ответ — короткий markdown. По умолчанию локаль: цена
+    // одного короткого вызова, исполнителя выбирает админ в «Поставщиках моделей».
+    public const string FeatureSummary = "feature-summary";
     public const string SkillSuggest = "skill-suggest";
     public const string SessionSummary = "session-summary";
     // Сводка карточки архива чата (шаг 5 плана «Архив чатов» v4): 2–3 предложения по кнопке
@@ -249,6 +253,10 @@ public static class LocalActionCatalog
         new(TaskClassify, "Приоритет и метки задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(TaskNormalizeTitle, "Нормализация заголовка задачи", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(TaskDedup, "Поиск дублей задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
+        // Резюме фичи (W4-ANB): Text — выжимка ≤4000 симв. и короткий ответ; Small не годится
+        // (256 токенов вывода обрежут резюме), Large избыточен. Локаль по умолчанию — по
+        // политике A: один дешёвый вызов по кнопке, облачный выбор остаётся правом админа.
+        new(FeatureSummary, "Резюме фичи", "Задачи", CheapProfile.Text, DefaultLocal: true),
         new(SkillSuggest, "Подбор навыка", "Навыки", CheapProfile.Small, DefaultLocal: true),
         new(SessionSummary, "Сводка сессии", "Сессии", CheapProfile.Large, DefaultLocal: true),
         // Сводка карточки архива: сырьё то же (транскрипт чата), а ответ — 2–3 предложения

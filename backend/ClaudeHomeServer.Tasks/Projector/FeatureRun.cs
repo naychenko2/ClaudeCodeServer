@@ -83,6 +83,11 @@ public sealed class FeatureRun
     public FeatureStepProgress StepProgress { get; init; } = new();
     // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
     public DateTime? LastActivityAt { get; init; }
+    // W4-ANB (разрез §4, решение Андрея 24.10): «тихо» — фича стоит без движения ≥ 24 часов.
+    // Выводится здесь (единая точка правды): не закрыта, сейчас ничего не идёт, и с последней
+    // активности (LastActivityAt; её никогда не было — с создания эпика) прошло ≥ порога.
+    // Граница включена: ровно 24 часа — «тихо». Строка индекса берёт это поле, не пересчитывает.
+    public bool Quiet { get; init; }
     // Закрыта: выводится из State (merged или closed) — единая точка правды
     // (старое «merge Done || epic Done» — вторая точка, закрывало фичу частичным мержем).
     public bool Closed { get; init; }
@@ -131,6 +136,12 @@ public sealed class FeatureNow
     public DateTime? StartedAt { get; init; }
     // Связанный чат исполнителя.
     public string? LinkedSessionId { get; init; }
+    // W4-ANB (разрез §4): отметки сторожа зависшего исполнителя (TaskExecutionService.ClassifyStall),
+    // поля задачи как есть. «Зависла» — StaleAlertedAt != null (сторож уже позвал человека);
+    // предупреждение — NudgedAt != null («окликнули, ждём»). Обе сбрасываются перезапуском
+    // исполнителя (MarkClaudeStarted), поэтому признак живой.
+    public DateTime? NudgedAt { get; init; }
+    public DateTime? StaleAlertedAt { get; init; }
 }
 
 // Тревога фичи: один элемент либо null. Приоритет: stopped → wait явный → merge.

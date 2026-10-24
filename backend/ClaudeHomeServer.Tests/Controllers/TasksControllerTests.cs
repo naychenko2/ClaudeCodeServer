@@ -26,6 +26,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -157,7 +158,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // serviceToken (W4-HOLD-B2): claim typ=svc — тот же признак, что в PluginBridgeController;
     // для проверки отказа 403 на ручках hold/clear.
     private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
-        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false)
+        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false,
+        FeatureSummaryService? summary = null)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -174,7 +176,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             git: git,
             catalog: catalog,
             journal: journal,
-            spend: spend);
+            spend: spend,
+            summary: summary);
         var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, OwnerId) };
         if (serviceToken) claims.Add(new("typ", "svc"));
         var identity = new ClaimsIdentity(claims, "test");
@@ -2210,6 +2213,87 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         mergeBody.Should().Be(getBody, "m2: тело 404 мержа совпадает с телом 404 GET (FeatureIdPattern)");
         mergeBody.Should().Contain("Фича не найдена");
+    }
+
+    // ─── W4-ANB: резюме фичи (POST /api/tasks/features/{id}/summary) ────────────────────────
+    // Контракт ручки: 404 — тело как у GET; 502 — отказ модели с причиной; повторный вызов
+    // с тем же отпечатком — из кэша (cached: true). Поведение сервиса (single-flight, LRU,
+    // force) — FeatureSummaryServiceTests в Tasks.Tests; здесь только HTTP-контракт.
+
+    // Заглушка дешёвого раннера со счётчиком вызовов (тот же приём, что в handoff-тестах).
+    private sealed class SummaryStubRunner : ICheapTextRunner
+    {
+        public int Calls;
+        public string Text = "резюме";
+        public Exception? Failure;
+
+        public bool UsesLocal(string actionKey) => true;
+        public bool HasFreeRoute(string actionKey) => true;
+        public bool HasRoute(string actionKey) => true;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "local=stub";
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(Text);
+
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult<string?>(Text);
+
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Calls++;
+            if (Failure is not null) throw Failure;
+            return Task.FromResult(new OneShotResult(Text, null, 100));
+        }
+    }
+
+    // Нестандартный id (символ вне FeatureIdPattern) → тот же 404, что у GET features/{id}.
+    [Fact]
+    public async Task FeatureSummary_НестандартныйId_404КакGet()
+    {
+        var resp = await _client.PostAsync("/api/tasks/features/abc.def/summary", null);
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("Фича не найдена");
+    }
+
+    // Отказ модели (таймаут) → честный 502 с причиной, а не 500 и не пустое резюме.
+    [Fact]
+    public async Task FeatureSummary_ОтказМодели_502СПричиной()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var stub = new SummaryStubRunner { Failure = new LlmTimeoutException("не ответил за отведённое время") };
+        var summary = new FeatureSummaryService(stub, _factory.Services.GetRequiredService<IConfiguration>());
+        var controller = BuildController(RealGit(), summary: summary);
+
+        var result = await controller.FeatureSummary(epicId, false);
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(502);
+    }
+
+    // К2: повторный вызов с тем же состоянием фичи — cached: true, модель не зовётся второй раз.
+    [Fact]
+    public async Task FeatureSummary_ПовторныйВызов_БезВторогоВызоваМодели()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var stub = new SummaryStubRunner();
+        var summary = new FeatureSummaryService(stub, _factory.Services.GetRequiredService<IConfiguration>());
+        var controller = BuildController(RealGit(), summary: summary);
+
+        var first = await controller.FeatureSummary(epicId, false);
+        first.Should().BeOfType<OkObjectResult>();
+        var json = JsonSerializer.SerializeToElement(((OkObjectResult)first!).Value!,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        json.GetProperty("cached").GetBoolean().Should().BeFalse("первый вызов считает");
+        json.GetProperty("text").GetString().Should().Be("резюме");
+
+        var second = await controller.FeatureSummary(epicId, false);
+        var json2 = JsonSerializer.SerializeToElement(((OkObjectResult)second!).Value!,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        json2.GetProperty("cached").GetBoolean().Should().BeTrue("тот же отпечаток — из кэша");
+        stub.Calls.Should().Be(1, "повторный вызов не зовёт модель");
     }
 
     [Fact]

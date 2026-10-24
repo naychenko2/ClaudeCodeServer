@@ -296,6 +296,28 @@ public class PregateServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task DefaultSet_FrontendStep_ClosesAfterGreenTscAndLintDesign()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ClaudeHomeServer", "appsettings.json")))
+            dir = dir.Parent;
+        dir.Should().NotBeNull("appsettings.json основного проекта ищем вверх от каталога тестов");
+        var config = new ConfigurationBuilder().AddJsonFile(Path.Combine(dir!.FullName, "ClaudeHomeServer", "appsettings.json")).Build();
+        var options = PregateOptions.From(config);
+        options.Checks.Should().NotContain(c => c.Kind == PregateCheckOptions.KindUiProbe, "ui_probe мерит стенд чужого checkout и не входит в набор по умолчанию");
+
+        var launcher = Launcher(_ => ("", 0));
+        var service = new PregateService(launcher, new TestRunsOptions(), options,
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+        var verdict = await service.RunAsync(Request(["frontend/src/a.tsx"]), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        verdict.Unmeasured.Should().BeNull();
+        verdict.Checks.Where(c => c.Status == PregateStatus.Green).Select(c => c.Name).Should().Equal("tsc", "lint:design");
+    }
+
+    [Fact]
     public void SubsystemEnabled_RegistersPregateSeam()
     {
         var services = Services(new ConfigurationBuilder().Build());

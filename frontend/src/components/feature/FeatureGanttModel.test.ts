@@ -358,6 +358,25 @@ describe('зависла: штриховка только при явном stop
   });
 });
 
+describe('смерженная фича с открытым эпиком: «сейчас» и тревога гаснут по state', () => {
+  it('merged + closed:false — ни isCurrent, ни пилюли, ни хвоста «зависла»', () => {
+    const model = buildGanttModel(
+      mkRun({
+        state: 'merged',
+        closed: false,
+        stages: [mkStage('prod', 'active', 60, { tone: 'run' })],
+        now: [{ taskId: 't-1', stage: 'prod', stepRef: 'Ш3', title: 'Модель', startedAt: '2026-10-20T11:30:00Z' }],
+        attention: { kind: 'stopped', since: '2026-10-20T09:00:00Z' },
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.closed).toBe(false);
+    expect(model.rows.every(r => !r.isCurrent && r.nowPill === null && r.stalledSince === null)).toBe(true);
+    expect(model.hasStalled).toBe(false);
+  });
+});
+
 // === Активный этап ===
 
 describe('активный этап: пилюля «сейчас»', () => {

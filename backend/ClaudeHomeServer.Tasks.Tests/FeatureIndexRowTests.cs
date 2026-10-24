@@ -115,7 +115,7 @@ public class FeatureIndexRowTests
         rowP.State.Should().Be(FeatureStates.MergePending, "финал принят, мержа нет → state=merge_pending");
         rowP.Bucket.Should().Be("attention", "merge_pending → bucket=attention (ждёт мержа)");
 
-        // merged: merge Done + финал принят → state=merged, bucket=closed.
+        // merged: merge Done + финал принят → state=merged, bucket=merged (эпик открыт).
         var epicMg = Epic("epic-state-merged");
         var finalMg = Child("f1", "epic-state-merged", role: TaskRoles.Final, status: TaskItemStatus.Done);
         finalMg.CompletedAt = t;

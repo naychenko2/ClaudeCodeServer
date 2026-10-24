@@ -8,7 +8,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // ревью отдали бы другой задаче и сбросили под ногами ревьюера. Вызов стоит в Program.cs вне
 // подсистем, поэтому удаление строки никто бы не заметил — держим его текстовым сторожем.
 // Ищем вызов по имени, а не по всей цепочке: перенос строки или локальная переменная не должны краснить сторож.
-public class ReviewTreePoolStartupGuardTests
+public class ReviewTreeLeaseRestoreGuardTests
 {
     private static readonly Regex Call = new(@"\bRestoreLeasesAsync\s*\(", RegexOptions.Compiled);
 
@@ -54,6 +54,8 @@ public class ReviewTreePoolStartupGuardTests
     [InlineData("await app.Services.GetRequiredService<ReviewTreePool>().RestoreLeasesAsync();")]
     [InlineData("await app.Services\n    .GetRequiredService<ReviewTreePool>()\n    .RestoreLeasesAsync();")]
     [InlineData("var pool = app.Services.GetRequiredService<ReviewTreePool>();\nawait pool.RestoreLeasesAsync();")]
+    [InlineData("await Task.Run(() => app.Services.GetRequiredService<ReviewTreePool>().RestoreLeasesAsync());")]
+    [InlineData("await Task.Run(async () =>\n{\n    await pool.RestoreLeasesAsync();\n});")]
     public void Вызов_НаходитсяПоИмени_НезависимоОтНаписания(string text) =>
         Verdict(text).Should().BeNull();
 

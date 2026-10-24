@@ -1016,9 +1016,15 @@ public class TaskExecutionServiceJoinTests : IDisposable
         (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "вторая")).Should().NotBeNull();
         (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().BeNull();
         _reviewPool.Release("вторая");
+        var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
 
-        await _sut.HandleExecutorStoppedAsync(_tasks.GetById(task.Id)!, ExecutorStopClassifier.DeviceWaitExpiredReason);
+        // маршрут целиком: ошибка провайдера → классификатор → обработчик остановки → освобождение слота
+        await _sut.OnSessionMessageAsync(session, new ErrorMessage(
+            "Failed to authenticate. API Error: 401 invalid access token or token expired",
+            ExpectResultFollows: true));
+        await _sut.OnSessionMessageAsync(session, Result("success"));
 
+        _tasks.GetById(task.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.AuthFailedReason);
         await AssertBothSlotsFreeAsync(task, project, wave);
     }
 

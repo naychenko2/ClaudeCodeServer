@@ -1590,8 +1590,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // Исполнитель встал насовсем: пометка на задаче + уведомление владельцу + (если задачу
     // ставила персона) доклад ей с пробуждением. Перезапуск НЕ делаем: причина терминальная,
     // повтор упёрся бы в неё же и дал серию одинаковых уведомлений.
-    // internal для теста выхода аренды слота ревью (InternalsVisibleTo)
-    internal async Task HandleExecutorStoppedAsync(TaskItem task, string reason)
+    private async Task HandleExecutorStoppedAsync(TaskItem task, string reason)
     {
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, reason) ?? task;
         ReleaseReviewTree(task.Id);

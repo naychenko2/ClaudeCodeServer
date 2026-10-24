@@ -204,6 +204,24 @@ public class PersonaVoiceCandidatesTests : IDisposable
     }
 
     [Fact]
+    public void Разбор_ПреамбулаБезРазделителя_НеДаётЖивогоГолоса()
+    {
+        // vera из «Голоса для Vera:» — живой голос: без отсева преамбулы он стал бы кандидатом
+        var (candidates, live) = PersonasCrudService.ParseCandidates("""
+            Голоса для Vera:
+            masha friendly | тёплая
+            Итого для Vera
+            """);
+        candidates.Select(c => c.Voice).Should().Equal("masha");
+        live.Should().BeNull();
+
+        // Преамбула с двоеточием отсеивается и в ответе из одних голых ключей
+        var (bare, bareLive) = PersonasCrudService.ParseCandidates("Голоса для Vera:\nkirill strict\nzahar");
+        bare.Select(c => c.Voice).Should().Equal("kirill", "zahar");
+        bareLive.Should().BeNull();
+    }
+
+    [Fact]
     public void Разбор_БольшеТрёхОбычных_Повторы_ЧужоеАмплуа_ВторойЖивой()
     {
         var (candidates, live) = PersonasCrudService.ParseCandidates("""

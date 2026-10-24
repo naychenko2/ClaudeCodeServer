@@ -1085,7 +1085,7 @@ public sealed class PersonasCrudService(
         };
     }
 
-    // --- Голос (PUT /voice, POST ai/voice, автоподбор при создании) ---
+    // --- Голос (PUT /voice, POST ai/voice/candidates, автоподбор при создании) ---
 
     // Проверка голоса для записи. Строгая (текст ошибки — человеку или модели), в отличие от
     // пути озвучки: там кривое значение молча вырождается в дефолт, а здесь ошибку надо
@@ -1136,8 +1136,8 @@ public sealed class PersonasCrudService(
     // мусором (Raw — для лога и диагностики вызывающего)
     public sealed record VoicePick(VoicePickOutcome Outcome, string? Voice, string? Role, string Raw);
 
-    // Подбор голоса по характеру персоны (one-shot LLM). Сбой вызова пробрасывается: кнопка
-    // формы отдаёт его человеку 502-м, автоподбор при создании глотает
+    // Подбор голоса по характеру персоны (one-shot LLM) для автоподбора при создании. Сбой
+    // вызова пробрасывается — автоподбор его глотает
     public async Task<VoicePick> PickVoiceAsync(string userId, AiVoiceRequest req, CancellationToken ct = default)
     {
         var raw = await RunVoicePromptAsync(userId, BuildVoicePrompt(req), ct);
@@ -1206,7 +1206,11 @@ public sealed class PersonasCrudService(
     // Ответ модели на подбор кандидатов: по строке на кандидата, «ключ [амплуа] | почему».
     // Голос ищем ТОЛЬКО в части до разделителя: в пояснении легко встретить имя вроде
     // «Вера», и слово vera тихо стало бы живым голосом. Обычные — до трёх, без повторов и
-    // без показанных; живой — первый подходящий LiveTTS
+    // без показанных; живой — первый подходящий LiveTTS.
+    //
+    // Строка без разделителя — не кандидат, если в ответе есть строки по формату или она
+    // кончается двоеточием: это преамбула вроде «Голоса для Vera:», и vera из неё тихо
+    // стала бы живым голосом. Ответ из одних голых ключей при этом разбирается как раньше
     internal static (IReadOnlyList<VoiceCandidate> Candidates, VoiceCandidate? Live) ParseCandidates(
         string raw, IReadOnlySet<string>? shown = null)
     {
@@ -1214,10 +1218,12 @@ public sealed class PersonasCrudService(
         VoiceCandidate? live = null;
         if (string.IsNullOrWhiteSpace(raw)) return (candidates, live);
 
-        foreach (var line in raw.Split('\n'))
+        var lines = raw.Split('\n');
+        var anySeparated = lines.Any(l => SeparatorAt(l) >= 0);
+        foreach (var line in lines)
         {
-            var sep = line.IndexOf('|');
-            if (sep < 0) sep = line.IndexOf('—');
+            var sep = SeparatorAt(line);
+            if (sep < 0 &&(anySeparated || line.TrimEnd().EndsWith(':'))) continue;
             var key = sep < 0 ? line : line[..sep];
             var why = sep < 0 ? "" : line[(sep + 1)..].Trim().Trim('"', '«', '»').Trim();
             if (why.Length > 140) why = why[..140].TrimEnd() + "…";
@@ -1237,6 +1243,13 @@ public sealed class PersonasCrudService(
             else live ??= candidate;
         }
         return (candidates, live);
+    }
+
+    // Разделитель «ключ | почему»: модель пишет то черту, то длинное тире
+    private static int SeparatorAt(string line)
+    {
+        var sep = line.IndexOf('|');
+        return sep >= 0 ? sep : line.IndexOf('—');
     }
 
     internal static string BuildCandidatesPrompt(AiVoiceRequest req,

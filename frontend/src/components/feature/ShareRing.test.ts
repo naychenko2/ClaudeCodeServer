@@ -291,6 +291,54 @@ describe('центр по мере (к2, к3)', () => {
   });
 });
 
+describe('«бесплатно» и фолбэк только при null (доработка 2)', () => {
+  const FREE = [mkGroup('kira', 60, 1000, 0), mkGroup('timur', 40, 500, 0)];
+
+  it('все costUsd=0 при tokens>0 — центр «бесплатно», а не «$0,00»', () => {
+    const { container } = mountRing(FREE, 'cost');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-total'))).toBe('бесплатно');
+  });
+
+  it('мера «время» при бесплатных группах: вторая строка — «бесплатно»', () => {
+    const { container } = mountRing(FREE, 'time');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-cost'))).toBe('бесплатно');
+  });
+
+  it('нулевая сумма «деньги» — мера остаётся выбранной: aria-label по деньгам, дуги нулевые', () => {
+    const { container } = mountRing(FREE, 'cost');
+    expect(ringSvg(container)!.getAttribute('aria-label')).toContain('Доли по деньгам');
+    for (const arc of arcs(container)) expect(arc.dash).toBe(0);
+  });
+
+  it('null у всех — фолбэк на время (aria-label и дуги по минутам)', () => {
+    const none = FREE.map(g => ({ ...g, costUsd: null }));
+    const { container } = mountRing(none, 'cost');
+    expect(ringSvg(container)!.getAttribute('aria-label')).toContain('Доли по времени');
+    const L = 2 * Math.PI * ringRadius(container);
+    expect(Math.abs(arcs(container)[0].dash + GAP - 0.6 * L)).toBeLessThan(1e-6);
+  });
+});
+
+describe('геометрия: доля короче зазора и равные группы (хвост 3)', () => {
+  it('доля короче зазора — длина дуги 0, а не отрицательная', () => {
+    // 1/10001 окружности при r≈54 заметно короче 3 px.
+    const { container } = mountRing([mkGroup('a', 10000, 0, 0), mkGroup('b', 1, 0, 0)], 'time');
+    const a = arcs(container);
+    expect(a[1].dash).toBe(0);
+    expect(a[0].dash).toBeGreaterThan(0);
+  });
+
+  it('две равные группы: каждая дуга — L/2 − зазор, смещения 0 и −L/2', () => {
+    const { container } = mountRing([mkGroup('a', 50, 0, 0), mkGroup('b', 50, 0, 0)], 'time');
+    const L = 2 * Math.PI * ringRadius(container);
+    const a = arcs(container);
+    expect(Math.abs(a[0].dash - (L / 2 - GAP))).toBeLessThan(1e-6);
+    expect(Math.abs(a[1].dash - (L / 2 - GAP))).toBeLessThan(1e-6);
+    expect(a[0].offset).toBe(0);
+    expect(Math.abs(a[1].offset + L / 2)).toBeLessThan(1e-6);
+  });
+});
+
 describe('доступность (к3)', () => {
   it('role="img" и aria-label «кому сколько»', () => {
     const { container } = mountRing(GROUPS, 'time');

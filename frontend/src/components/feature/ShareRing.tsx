@@ -11,9 +11,13 @@
 // (§Токены): accent, info, plan, success, warning, progressTrack по порядку,
 // цикл при большем числе групп; вызывающий может задать цвет группы сам (colorOf —
 // у персон цвет персоны). В центре — итог выбранной меры; если у меры нет данных
-// (все null / сумма 0) — фолбэк на время (состояние «без расхода» записки).
+// (null у всех групп) — фолбэк на время (состояние «без расхода» записки).
 // Легенды в кольце нет: подписи — в таблице ниже, смысл несёт aria-label, а не
 // цвет (цвета не единственный носитель смысла).
+//
+// Контракт costPartial: центр показывает сумму только по группам с надёжной ценой
+// (null-цены в сумму не входят). Что цена известна лишь по части моделей, говорит
+// не кольцо, а оболочка (ST-F13): плашка «цена по части моделей недоступна».
 
 import { type CSSProperties } from 'react';
 import { C, FS, SP, FONT } from '../../lib/design';
@@ -58,9 +62,10 @@ function measureTotal(groups: FeatureBreakdownGroup[], measure: Measure): number
 export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisLabel }: ShareRingProps) {
   if (groups.length < 2) return null;
 
-  // Мера без данных (все null, сумма 0) — фолбэк на время: время считается
-  // всегда, кольцо не должно быть пустым (записка, состояние «без расхода»).
-  const effMeasure: Measure = (measureTotal(groups, measure) ?? 0) > 0 ? measure : 'time';
+  // Фолбэк на время — только когда у меры нет данных ни у одной группы (null у
+  // всех, состояние «без расхода» записки). Нулевая сумма — это данные: мера
+  // остаётся выбранной, дуги нулевые (пустое кольцо), центр — «бесплатно».
+  const effMeasure: Measure = measureTotal(groups, measure) == null ? 'time' : measure;
 
   // Порядок — как в таблице (сортировка по мере), первая дуга — самая крупная и
   // толстая. Вход не мутируется (sortGroups копирует).
@@ -110,9 +115,10 @@ export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisL
   // Центр по мере (макет :298): крупная строка — итог выбранной меры; вторая —
   // «<разрез> суммарно» и деньги, если они есть и не совпадают с крупной строкой.
   const totalCost = measureTotal(groups, 'cost');
+  const totalTokens = groups.reduce((a, g) => a + (g.tokens ?? 0), 0);
   const moneyText = totalCost == null
     ? 'нет учёта'
-    : formatMoney({ key: '', minutes: 0, tokens: 0, costUsd: totalCost, chatIds: [] });
+    : formatMoney({ key: '', minutes: 0, tokens: totalTokens, costUsd: totalCost, chatIds: [] });
   const bigText =
     effMeasure === 'time'
       ? formatDuration(raw.reduce((a, b) => a + b, 0))

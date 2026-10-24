@@ -246,8 +246,8 @@ interface Props {
   // абсолютно и на месте остаются.
   leadingInset?: number;
   // Роль чата в фиче (режим «Фичи», макет: метка в подстроке карточки, а не отдельной
-  // строкой над ней): «ключевой» (ключевой чат фичи) и/или «ещё N» (чат принадлежит
-  // ещё N фичам). Не задано — метки нет.
+  // строкой над ней): «ключевой» (ключевой чат фичи) и/или «общий с …» (чат показывается
+  // и в группах других своих фич). Не задано — метки нет.
   featureRole?: string;
   // Карточка внутри группы фичи (режим «Фичи»): метку фичи (FeatureLabel) не рисуем —
   // её уже несёт заголовок группы (n1: дубль имени внутри группы). Не задано — метка
@@ -1091,11 +1091,11 @@ function ChatCardView({
               Глиф + название (обрезка с title); в «Днях» — вместо имени персоны.
               Внутри группы фичи (inFeatureGroup) — не рисуем: имя уже в заголовке (n1) */}
           {feature && !inFeatureGroup && <FeatureLabel feature={feature} />}
-          {/* Роль чата в фиче (режим «Фичи»): «ключевой»/«ещё N» — в подстроке
+          {/* Роль чата в фиче (режим «Фичи»): «ключевой»/«общий с …» — в подстроке
               карточки, а не отдельной строкой над ней (макет, минор m6) */}
           {featureRole && (() => {
             // m4: вид — как в плашке/шторке (макет .role): mono, R 6, 0/5;
-            // «ключевой» — accent/accentLight 700, «ещё N» — textSecondary/bgSelected 400.
+            // «ключевой» — accent/accentLight 700, «общий с …» — textSecondary/bgSelected 400.
             const isKey = featureRole.startsWith('ключевой');
             // Ф3.2: подсказка «что значит ключевой» — единый текст KEY_SESSION_TOOLTIP.
             // По наведению — стилизованная плашка ui/Tooltip (canHover); по клавиатуре (M1)
@@ -1108,7 +1108,13 @@ function ChatCardView({
                 data-testid="chat-feature-role"
                 title={isKey && !canHover ? KEY_SESSION_TOOLTIP : undefined}
                 style={{
-                  display: 'inline-flex', flexShrink: 0, alignItems: 'center',
+                  // Минор Глеба (24.10): метка не должна выталкивать имя чата из
+                  // строки на 360 px. Текст уже короткий (первая пара + «· ещё N»,
+                  // см. featureRoleFor), а длинное название одной фичы обрезается
+                  // здесь: ellipsis работает только на box, содержащем текст
+                  // напрямую, — поэтому inline-block, а не inline-flex.
+                  display: 'inline-block', flexShrink: 0, maxWidth: 140,
+                  overflow: 'hidden', textOverflow: 'ellipsis',
                   fontFamily: FONT.mono, fontSize: FS.xs,
                   fontWeight: isKey ? 700 : 400,
                   color: isKey ? C.accent : C.textSecondary,

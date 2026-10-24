@@ -19,7 +19,7 @@ import type { FeatureChatLink as FeaturePageChatLink } from './featureChats';
 
 // Группа фичи (контракт §1): attention — требует внимания; running — идёт;
 // idle — стоит; closed — закрыта. Считается той же функцией, что и порядок.
-export type FeatureBucket = 'attention' | 'running' | 'idle' | 'closed';
+export type FeatureBucket = 'attention' | 'running' | 'merged' | 'idle' | 'closed';
 
 // Состояние стадии рельсы — словарь бэка `FeatureStage.State` один в один
 // (контракт: `pending`, а не `ahead` — переименование дало бы вторую точку правды).
@@ -43,7 +43,7 @@ export interface FeatureRailSegment {
 // Чипы-фильтры (контракт §1, «chips принят»): фронт фильтрует по chips, а не по attention.
 // open = bucket ≠ closed; waiting/stopped/merge = attention.kind; closed = bucket = closed;
 // running = bucket = running (идёт, без тревоги).
-export type FeatureChip = 'open' | 'waiting' | 'stopped' | 'merge' | 'closed' | 'running';
+export type FeatureChip = 'open' | 'waiting' | 'stopped' | 'merge' | 'closed' | 'running' | 'merged';
 
 // Тревога фичи (контракт: `attention.kind` расширен значением `merge` —
 // маппинг сырой строки «мерж» делается на бэке, на фронт уходит только kind).
@@ -73,7 +73,7 @@ export interface FeatureNow {
   stepRef: string | null;
 }
 
-// Итог смерженной фичи: только при bucket=closed, иначе null.
+// Итог смерженной фичи: есть при bucket=closed и merged (смержена, эпик открыт), иначе null.
 export interface FeatureSummary {
   // Момент мержа: CompletedAt merge-задачи; null — мержа нет.
   mergedAt: string | null;
@@ -88,7 +88,7 @@ export interface FeatureIndexFeature {
   projectId: string | null;
   bucket: FeatureBucket;
   // Состояние фичи (FeatureRun.State, 9 значений; всегда отдаётся). Единая точка
-  // правды: bucket и state не расходятся (бэк выводит bucket из State).
+  // правды: bucket = f(state, эпик Done) (merged при эпике Done → closed).
   state: FeatureState;
   // null — тревоги нет.
   attention: FeatureAttention | null;
@@ -113,7 +113,7 @@ export interface FeatureIndexFeature {
   // null — фича не идёт.
   now0: FeatureNow | null;
   lastActivityAt: string | null;
-  // Только при bucket=closed.
+  // При bucket=closed и merged (итог есть и у смерженной с открытым эпиком).
   summary: FeatureSummary | null;
   // Ключевой чат фичи (цепочка из контракта §1); null — не найден.
   keySessionId: string | null;

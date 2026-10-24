@@ -70,7 +70,7 @@ public class TasksToolsetPlanStepsTests : IClassFixture<TestWebApplicationFactor
             title = "план",
             projectId,
             role = "plan",
-            planSteps = new object[] { null }, // [null]
+            planSteps = new object[] { null! }, // [null]
         });
         isError.Should().BeTrue($"элемент-null в planSteps — отказ, а не NRE/тихий пустой список: {text}");
     }

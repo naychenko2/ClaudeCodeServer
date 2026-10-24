@@ -399,11 +399,16 @@ public sealed class TasksToolset(
                     // Агентский путь (MCP): isAgentCall=true — гард против затирания
                     // DroppedByHumanAt выдаёт внятный 400 вместо молчаливого 200 OK
                     // (фикс-волна 4 team-blocker-honest)
-                    // Исполнитель здесь = сессия привязана к задаче (session.TaskId == id), claim typ=svc
-                    // не сверяется: MCP всегда идёт под сервисным токеном, и эта дверь строже REST
-                    // (TasksController.Update). Правила двух дверей должны оставаться согласованными.
+                    // Исполнитель здесь = сессия привязана к задаче (session.TaskId == id). MCP всегда
+                    // идёт под сервисным токеном и claim typ=svc не сверяет; REST (TasksController.Update)
+                    // сверяет callerSession.TaskId только под сервисным токеном. Закрытие эпика обе двери
+                    // запрещают по общему признаку: исполнитель задачи или делегированный ход.
+                    // Один предикат для обоих гардов эпика (закрытие и возобновление, дефект df85c799):
+                    // отказ бросает TaskManager, здесь он превращается в content-ошибку.
+                    bool denyFeature = DenyFeatureClose(session, context.OwnerId);
                     updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
-                        callerIsExecutor: session.TaskId == id)
+                        callerIsExecutor: session.TaskId == id,
+                        denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -471,7 +476,8 @@ public sealed class TasksToolset(
                         // Агентский путь (MCP): защита от затирания снятой задачи —
                         // tasks_complete на снятой задаче вернёт 400 вместо молчаливого 200 OK
                         isAgentCall: true,
-                        callerIsExecutor: session.TaskId == id)
+                        callerIsExecutor: session.TaskId == id,
+                        denyFeatureClose: DenyFeatureClose(session, context.OwnerId))
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -911,6 +917,15 @@ public sealed class TasksToolset(
 
     private static McpToolCallResult Json<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOpts));
+
+    // Закрытие эпика фичи — только человеком: запрет из чата-исполнителя любой задачи
+    // (Session.TaskId задан) и на делегированном ходу (глубина > 0). Из чата человека
+    // (TaskId == null) на глубине 0 проходит.
+    private bool DenyFeatureClose(Session session, string ownerId) =>
+        session.TaskId is not null
+        || !DelegatedTurnGate.Decide(sessions, ownerId, session.Id, "Закрытие/возобновление фичи",
+            alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
+            failOpenWhenUnknown: false).Allowed;
 
     private static McpToolCallResult Deny(string text) => new(text, IsError: true);
 

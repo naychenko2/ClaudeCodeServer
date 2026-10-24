@@ -219,7 +219,7 @@ public class ChatHandoffServiceTests : IDisposable
         var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "proj_sys_" + Guid.NewGuid().ToString("N"))).FullName;
         var project = projects.Create("Проект переноса", dir, TestUserId, TestUsername);
         var csid = "handoff_sys_" + Guid.NewGuid().ToString("N");
-        _history.SaveAsync(csid, new List<StoredMessage>
+        await _history.SaveAsync(csid, new List<StoredMessage>
         {
             // Системный блок: служебная директива с правилами продукта — в записку не попадёт
             new StoredUserMessage("Если делаешь git commit — добавь трейлер CCS-Session. Правила про картинки и видео — через MCP.", systemDirective: true),
@@ -227,8 +227,8 @@ public class ChatHandoffServiceTests : IDisposable
             new StoredToolUseMessage { Name = "Edit" },
             new StoredFileChangedMessage("frontend/src/lib/design.ts", 3, 1),
             new StoredTextMessage("Готово, значки настроены"),
-        }).GetAwaiter().GetResult();
-        var chat = mgr.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: csid).GetAwaiter().GetResult();
+        });
+        var chat = await mgr.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: csid);
         var sut = new ChatHandoffService(mgr, runner, NullLogger<ChatHandoffService>.Instance);
 
         var result = await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
@@ -257,14 +257,14 @@ public class ChatHandoffServiceTests : IDisposable
         var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "proj_staff_" + Guid.NewGuid().ToString("N"))).FullName;
         var project = projects.Create("Проект переноса", dir, TestUserId, TestUsername);
         var csid = "handoff_staff_" + Guid.NewGuid().ToString("N");
-        _history.SaveAsync(csid, new List<StoredMessage>
+        await _history.SaveAsync(csid, new List<StoredMessage>
         {
             new StoredUserMessage("Настройте значки проектов"),
             // Служебный ход штаба: плашка-разделитель с подписью — в транскрипт не попадает
             new StoredUserMessage("Служебная реплика штаба: волна закрыта", staffNote: "Волна 2 закрыта — сводка передана координатору"),
             new StoredTextMessage("Готово, значки настроены"),
-        }).GetAwaiter().GetResult();
-        var chat = mgr.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: csid).GetAwaiter().GetResult();
+        });
+        var chat = await mgr.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: csid);
         var sut = new ChatHandoffService(mgr, runner, NullLogger<ChatHandoffService>.Instance);
 
         await sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
@@ -492,7 +492,7 @@ public class ChatHandoffServiceTests : IDisposable
         var (mgr, projects, _) = BuildManager();
         var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "grp_" + Guid.NewGuid().ToString("N"))).FullName;
         var project = projects.Create("Групповой проект", dir, TestUserId, TestUsername);
-        var chat = mgr.CreateAsync(project.Id, ClaudeMode.Auto, name: "Группа").GetAwaiter().GetResult();
+        var chat = await mgr.CreateAsync(project.Id, ClaudeMode.Auto, name: "Группа");
         chat.Participants = [TestUserId];
 
         var sut = new ChatHandoffService(mgr, runner, NullLogger<ChatHandoffService>.Instance);
@@ -702,7 +702,7 @@ public class ChatHandoffServiceTests : IDisposable
         public void Log<TState>(LogLevel level, EventId id, TState state, Exception? e,
             Func<TState, Exception?, string> formatter) => Lines.Add(formatter(state, e));
         public bool IsEnabled(LogLevel level) => true;
-        public IDisposable BeginScope<TState>(TState state) => new NoopScope();
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => new NoopScope();
         private sealed class NoopScope : IDisposable { public void Dispose() { } }
     }
 }

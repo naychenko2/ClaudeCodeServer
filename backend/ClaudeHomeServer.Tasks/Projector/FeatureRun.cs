@@ -83,10 +83,11 @@ public sealed class FeatureRun
     public FeatureStepProgress StepProgress { get; init; } = new();
     // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
     public DateTime? LastActivityAt { get; init; }
-    // Закрыта: выводится из State (merged или closed) — единая точка правды
-    // (старое «merge Done || epic Done» — вторая точка, закрывало фичу частичным мержем).
+    // Закрыта = эпик Done: State closed, либо merged с эпиком Done. Смержена с открытым эпиком
+    // (State merged) — не закрыта: bucket «merged», Summary у неё есть. Частичный мерж
+    // (merge Done, финал не принят, эпик открыт) фичу не смерживает.
     public bool Closed { get; init; }
-    // Итог смерженной фичи: только у закрытой, иначе null.
+    // Итог смерженной фичи: у State ∈ {merged, closed}, иначе null.
     public FeatureSummary? Summary { get; init; }
 }
 

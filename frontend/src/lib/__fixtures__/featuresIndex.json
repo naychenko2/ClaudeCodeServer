@@ -61,6 +61,33 @@
       "chatCount": 2
     },
     {
+      "featureId": "feat-merged",
+      "title": "Смержена, ждёт закрытия",
+      "projectId": "p1",
+      "bucket": "merged",
+      "attention": null,
+      "rail": [
+        { "key": "cut", "state": "done", "tone": null },
+        { "key": "plan", "state": "done", "tone": null },
+        { "key": "prod", "state": "done", "tone": null },
+        { "key": "review", "state": "done", "tone": null },
+        { "key": "qa", "state": "done", "tone": null },
+        { "key": "final", "state": "done", "tone": null },
+        { "key": "merge", "state": "done", "tone": null }
+      ],
+      "chips": ["open", "merged"],
+      "stepsAccepted": 2,
+      "stepsTotal": 2,
+      "loops": 0,
+      "now0": null,
+      "lastActivityAt": "2026-10-17T10:00:00Z",
+      "summary": { "mergedAt": "2026-10-17T09:30:00Z", "durationMinutes": 95 },
+      "keySessionId": "chat-key-other",
+      "keyArchived": false,
+      "keyProjectId": "p2",
+      "chatCount": 1
+    },
+    {
       "featureId": "feat-idle",
       "title": "Фича, которую ещё не запускали",
       "projectId": "p1",

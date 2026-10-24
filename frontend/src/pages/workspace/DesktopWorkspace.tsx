@@ -536,7 +536,7 @@ export function DesktopWorkspace(p: Props) {
           (свой макет или любой другой), а открытие страницы (вкл. смена фичи) возвращает её
           поверх ранее открытого файла. Страница остаётся смонтированной (display:none):
           закрыл файл — вернулась с прежним состоянием; файл при закрытии страницы не сбрасывается. */}
-      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree} yielded={yielded}>
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} projectOwnerId={p.project.ownerId ?? null} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree} yielded={yielded}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />

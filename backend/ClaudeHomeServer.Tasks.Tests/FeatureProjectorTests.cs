@@ -994,7 +994,11 @@ public class FeatureProjectorTests
         var run = FeatureProjector.Build(epic, [epic, final, merge]);
 
         run.State.Should().Be(FeatureStates.Merged, $"финал {verdict} + merge Done → merged");
-        run.Closed.Should().BeTrue();
+        run.Closed.Should().BeFalse("эпик открыт — смержена, но не закрыта");
+        FeatureProjector.Bucket(run).Should().Be("merged");
+        FeatureProjector.ChipsOf(run).Should().Equal("open", "merged");
+        FeatureProjector.SummaryOf(run)!.MergedAt.Should().Be(new DateTime(2026, 10, 17, 15, 0, 0),
+            "у смерженной с открытым эпиком mergedAt виден в строке индекса");
         run.Summary!.MergedAt.Should().Be(new DateTime(2026, 10, 17, 15, 0, 0),
             "merged → MergedAt = merge.CompletedAt");
     }
@@ -1074,11 +1078,12 @@ public class FeatureProjectorTests
         run.State.Should().NotBe(FeatureStates.MergePending, "merge_pending требует finalAccepted (Status == Done)");
     }
 
-    // 6. Табличный: Closed, Bucket, ClosureAt согласованы с State на всех 9 состояниях.
+    // 6. Табличный: Closed = эпик Done; Bucket = f(state, эпик Done); ClosureAt по State — на всех 9 состояниях.
     //    Мутация: вернуть Closed = «merge Done || epic Done» (старая вторая точка) →
-    //    merged-строка (merge Done, финал не принят, эпик открыт) даст Closed=true ≠ State.
+    //    таблица падает на merged-строке с открытым эпиком (e1) — и на e10 (idle с частичным мержем:
+    //    merge Done, финал не принят, эпик открыт даст Closed=true при открытом эпике).
     [Fact]
-    public void Закрытие_СогласованоСState_ВсеДевять()
+    public void Закрытие_СогласованоСЭпиком()
     {
         var t = new DateTime(2026, 10, 17);
 
@@ -1125,6 +1130,12 @@ public class FeatureProjectorTests
                 [Final("e10", TaskVerdicts.Returned),
                  new TaskItem { Id = "m10", FeatureId = "e10", Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
                      CompletedAt = t.AddHours(3), ClaudeStartedAt = t }]),
+            // merged + эпик Done: state остаётся merged, Closed=true ⇒ bucket=closed, чип closed
+            // (при открытом эпике merged-строка даёт bucket=merged).
+            ("merged",
+                new TaskItem { Id = "e11", Role = TaskRoles.Feature, Status = TaskItemStatus.Done, CompletedAt = t.AddHours(4), CreatedAt = t },
+                [Final("e11", TaskVerdicts.Accepted),
+                 new TaskItem { Id = "m11", FeatureId = "e11", Role = TaskRoles.Merge, Status = TaskItemStatus.Done, CompletedAt = t.AddHours(3) }]),
         ];
 
         foreach (var (state, epic, children) in cases)
@@ -1132,16 +1143,23 @@ public class FeatureProjectorTests
             var run = FeatureProjector.Build(epic, [epic, ..children]);
             run.State.Should().Be(state, $"сценарий обязан дать state={state}");
 
-            // Closed выводится из State: merged/closed → true, иначе false.
-            run.Closed.Should().Be(state is FeatureStates.Merged or FeatureStates.Closed,
-                $"Closed согласован с State={state}");
+            // Closed = эпик Done: closed → true; merged в сценарии — с открытым эпиком → false.
+            var epicDone = epic.Status == TaskItemStatus.Done;
+            run.Closed.Should().Be(epicDone, $"Closed = эпик Done (State={state}, эпик {epic.Id})");
+            if (epic.Id == "e11")
+            {
+                run.Closed.Should().BeTrue();
+                FeatureProjector.Bucket(run).Should().Be("closed");
+                FeatureProjector.ChipsOf(run).Should().Equal("closed");
+            }
 
-            // Bucket выводится из State (единая точка правды, FeatureProjector.Bucket):
-            // merged/closed → closed; stopped/waiting/merge_pending → attention;
-            // merging/running → running; not_started/idle → idle.
+            // Инвариант: Closed = эпик Done; Bucket = f(state, эпик Done) (FeatureProjector.Bucket):
+            // closed → closed; merged → closed при эпике Done, иначе merged;
+            // stopped/waiting/merge_pending → attention; merging/running → running; not_started/idle → idle.
             var expectedBucket = state switch
             {
-                FeatureStates.Merged or FeatureStates.Closed => "closed",
+                FeatureStates.Closed => "closed",
+                FeatureStates.Merged => epicDone ? "closed" : "merged",
                 FeatureStates.Stopped or FeatureStates.Waiting or FeatureStates.MergePending => "attention",
                 FeatureStates.Merging or FeatureStates.Running => "running",
                 _ => "idle",
@@ -2485,7 +2503,7 @@ public class FeatureProjectorTests
     {
         var expected = new Dictionary<string, string>
         {
-            [FeatureStates.Merged] = "closed",
+            [FeatureStates.Merged] = "merged",
             [FeatureStates.Closed] = "closed",
             [FeatureStates.Paused] = "idle",
             [FeatureStates.Stopped] = "attention",
@@ -2676,8 +2694,9 @@ public class FeatureProjectorTests
         slim.State.Should().Be(full.State, "SlimRun не теряет State (полный run = облегчённый)");
     }
 
-    // Bucket выводится из state (единая точка правда): merging → running (не «ждёт вас»),
-    // merge_pending → attention, merged/closed → closed, running → running, not_started/idle → idle.
+    // Bucket = f(state, эпик Done) (единая точка правды): merging → running (не «ждёт вас»),
+    // merge_pending → attention, closed → closed, merged → merged (эпик открыт) либо closed (эпик Done),
+    // running → running, not_started/idle → idle.
     [Fact]
     public void Bucket_ВыводитсяИзState()
     {
@@ -2702,7 +2721,7 @@ public class FeatureProjectorTests
         runPending.State.Should().Be(FeatureStates.MergePending);
         FeatureProjector.Bucket(runPending).Should().Be("attention", "merge_pending → attention (ждёт мержа)");
 
-        // merged: merge Done + финал принят → bucket = closed.
+        // merged: merge Done + финал принят, эпик открыт → bucket = merged.
         var epicMg = new TaskItem { Id = "e-bk-merged", Role = TaskRoles.Feature };
         var finalMg = new TaskItem
         {
@@ -2713,7 +2732,30 @@ public class FeatureProjectorTests
         var mergeDone = new TaskItem { Id = "m1", FeatureId = "e-bk-merged", Role = TaskRoles.Merge, Status = TaskItemStatus.Done };
         var runMerged = FeatureProjector.Build(epicMg, [epicMg, finalMg, mergeDone]);
         runMerged.State.Should().Be(FeatureStates.Merged);
-        FeatureProjector.Bucket(runMerged).Should().Be("closed", "merged → closed");
+        FeatureProjector.Bucket(runMerged).Should().Be("merged", "merged с открытым эпиком → merged");
+
+        // merged + эпик Done → закрыта: bucket = closed, чип closed, итог с mergedAt.
+        var epicMgDone = new TaskItem { Id = "e-bk-merged-done", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };
+        var mergeDone2 = new TaskItem
+        {
+            Id = "m2", FeatureId = "e-bk-merged-done", Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done, CompletedAt = new DateTime(2026, 10, 17, 15, 0, 0),
+        };
+        var runMergedDone = FeatureProjector.Build(epicMgDone, [epicMgDone, mergeDone2]);
+        runMergedDone.State.Should().Be(FeatureStates.Merged);
+        runMergedDone.Closed.Should().BeTrue();
+        FeatureProjector.Bucket(runMergedDone).Should().Be("closed", "merged + эпик Done → closed");
+        FeatureProjector.ChipsOf(runMergedDone).Should().Equal("closed");
+        runMergedDone.Summary!.MergedAt.Should().NotBeNull();
+
+        // OrderRuns: merged — после running, до idle.
+        var order = FeatureProjector.OrderRuns([
+            new FeatureRun { FeatureId = "idle", State = FeatureStates.Idle },
+            new FeatureRun { FeatureId = "merged", State = FeatureStates.Merged },
+            new FeatureRun { FeatureId = "run", State = FeatureStates.Running },
+            new FeatureRun { FeatureId = "att", State = FeatureStates.Stopped, Attention = new FeatureAttention { Kind = "stopped" } },
+        ]).Select(r => r.FeatureId).ToList();
+        order.Should().Equal("att", "run", "merged", "idle");
 
         // closed: эпик Done, мержа нет → bucket = closed.
         var epicC = new TaskItem { Id = "e-bk-closed", Role = TaskRoles.Feature, Status = TaskItemStatus.Done };

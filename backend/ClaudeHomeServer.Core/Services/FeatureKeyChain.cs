@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services.Tasks;
+namespace ClaudeHomeServer.Services;
 
 // Цепочка ключевого чата в порядке звеньев (без дублей): epic.SourceSessionId →
 // epic.ExecutorLaunchedBySessionId → самый частый ExecutorLaunchedBySessionId у дочерних
@@ -9,8 +9,9 @@ namespace ClaudeHomeServer.Services.Tasks;
 // Перенесена из FeatureProjector в Core (дефект 79d0fa9a, волна 4 «Обзор фич»): чистая
 // функция на TaskItem нужна и вертикали Tasks (KeySession), и корневому
 // TaskExecutionService — а ссылка корня на FeatureProjector ловится
-// RootSubsystemBoundaryTests. Namespace вертикали сохранён: для вызывающих из Tasks
-// ничего не меняется.
+// RootSubsystemBoundaryTests. По прецеденту TaskUrl — в корневном namespace
+// ClaudeHomeServer.Services (вердикт W4-GATE2): вызывающие из Tasks видят её через
+// внешний namespace без using; широкой записи namespace в allow-list нет.
 public static class FeatureKeyChain
 {
     public static List<string> Of(TaskItem epic, IReadOnlyList<TaskItem> featureTasks)

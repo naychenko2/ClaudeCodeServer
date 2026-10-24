@@ -1925,6 +1925,12 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.SnapshotIdGenerator",
         "ClaudeHomeServer.Services.McpEndpoints",
         "ClaudeHomeServer.Services.TaskUrl",
+        // Общий протокол гейта паузы (вердикт W4-GATE2, доработка c743673c): отказ
+        // FeatureHoldException бросает и корневой TaskExecutionService, цепочку
+        // FeatureKeyChain читают Tasks и корень — владения вертикалью нет. По прецеденту
+        // TaskUrl — в корневном namespace, поимённо; Services.Tasks в allow-list не добавляется.
+        "ClaudeHomeServer.Services.FeatureHoldException",
+        "ClaudeHomeServer.Services.FeatureKeyChain",
         "ClaudeHomeServer.Services.ImageAssetHelper",
         "ClaudeHomeServer.Services.InstanceSecretFiles",
         "ClaudeHomeServer.Services.SessionChangedPaths",

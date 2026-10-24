@@ -1,4 +1,4 @@
-namespace ClaudeHomeServer.Services.Tasks;
+namespace ClaudeHomeServer.Services;
 
 // Отказ гейта паузы (W4-HOLD-I): отдельный тип — планировщик отличает отказ по источнику,
 // а не пересчётом предиката: plain InvalidOperationException («У задачи нет владельца») рядом

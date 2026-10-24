@@ -213,6 +213,16 @@ describe('активная задача', () => {
     expect(c.awaitingReview).toBe(false);
   });
 
+  it.each(['merged', 'closed'] as const)('фича в состоянии %s: ни один шаг не «текущий» (как в Ганте)', state => {
+    const r = run({
+      state,
+      steps: [task({ id: 's1', status: 'inProgress', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      now: [{ taskId: 's1', stage: 'prod', title: 'Сделать X', stepRef: 'Ш1' }],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'Сделать X', taskIds: ['s1'], status: 'идёт', outcome: 'running' })],
+    });
+    expect(buildProdCards(r)[0].isCurrent).toBe(false);
+  });
+
   it('идущий виток ревью: метка «текущий» на узле «работа», «ревью» — пунктирный', () => {
     const r = run({
       steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
@@ -313,5 +323,94 @@ describe('краевые состояния', () => {
     });
     const c = buildProdCards(r)[0];
     expect(c.nodes.map(n => n.kind)).toEqual(['work']);
+  });
+});
+
+describe('state карточки (A2)', () => {
+  const stateOf = (tasks: FeatureTask[], ch: Partial<FeatureStepChain>, over: Partial<FeatureRun> = {}) =>
+    buildProdCards(run({ steps: tasks, stepChains: [chain({ stepRef: 'Ш1', taskIds: tasks.map(t => t.id), ...ch })], ...over }))[0];
+  const start = '2026-10-20T10:00:00Z';
+
+  it('queue: шаг не начат', () => {
+    expect(stateOf([task({ id: 's1', status: 'todo' })], { outcome: 'pending' }).state).toBe('queue');
+  });
+
+  it('run: задача шага inProgress; доработка — runKind rework и старт от неё', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'done', claudeStartedAt: start }), task({ id: 's2', status: 'inProgress', claudeStartedAt: '2026-10-21T10:00:00Z' })],
+      { rounds: [round({ n: 1, verdict: 'returned' })], loops: 1 },
+    );
+    expect(c.state).toBe('run');
+    expect(c.runKind).toBe('rework');
+    expect(c.runningSince).toBe('2026-10-21T10:00:00Z');
+  });
+
+  it('run: корзина «в работе» (outcome running, задача идёт)', () => {
+    const c = stateOf([task({ id: 's1', status: 'inProgress', claudeStartedAt: start })], { status: 'идёт', outcome: 'running' });
+    expect(c.state).toBe('run');
+    expect(c.stopped).toBe(false);
+  });
+
+  it('остановленный исполнитель (executorStoppedAt) — wait/stopped, а не run', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'inProgress', claudeStartedAt: start, executorStoppedAt: '2026-10-20T11:00:00Z' })],
+      { status: 'идёт', outcome: 'running' },
+    );
+    expect(c.state).toBe('wait');
+    expect(c.stopped).toBe(true);
+    expect(c.runKind).toBeNull();
+  });
+
+  it('stale-пометка остановки (executorStoppedAt раньше claudeStartedAt) — исполнитель перезапущен, run', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'inProgress', claudeStartedAt: '2026-10-20T12:00:00Z', executorStoppedAt: '2026-10-20T11:00:00Z' })],
+      { status: 'идёт', outcome: 'running' },
+    );
+    expect(c.state).toBe('run');
+    expect(c.stopped).toBe(false);
+  });
+
+  it('остановка без claudeStartedAt — остановлен', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'inProgress', claudeStartedAt: null, createdAt: '2026-10-20T10:00:00Z', executorStoppedAt: '2026-10-20T11:00:00Z' })],
+      { status: 'идёт', outcome: 'running' },
+    );
+    expect(c.stopped).toBe(true);
+    expect(c.state).toBe('wait');
+  });
+
+  it('задача закрыта + идущий виток ревью (бэк: review, outcome running) — wait, не done и не run', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'done', claudeStartedAt: start })],
+      { status: 'идёт', outcome: 'running', rounds: [round({ n: 1, verdict: 'running' })] },
+      { now: [{ taskId: 'r1', stage: 'review', title: 'Ревью', stepRef: 'Ш1' }] },
+    );
+    expect(c.state).toBe('wait');
+    expect(c.awaitingReview).toBe(true);
+    expect(c.runKind).toBeNull();
+  });
+
+  it('снятый шаг: состояние withdrawn, не done', () => {
+    const c = stateOf([task({ id: 's1', status: 'done', claudeStartedAt: start })], { status: 'снят с выкладки', outcome: 'withdrawn' });
+    expect(c.state).toBe('withdrawn');
+  });
+
+  it('wait: задача закрыта, ждёт ревью; run.now по ревью шаг в run не переводит', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'done', claudeStartedAt: start })],
+      { status: 'ждёт ревью', outcome: 'pending' },
+      { now: [{ taskId: 'r1', stage: 'review', title: 'Ревью', stepRef: 'Ш1' }] },
+    );
+    expect(c.state).toBe('wait');
+    expect(c.runKind).toBeNull();
+  });
+
+  it('done: принят; вернулся и ждёт доработки — wait; время приёма/ожидания — из бэка или null', () => {
+    const done = stateOf([task({ id: 's1', status: 'done', claudeStartedAt: start })], { status: 'принят', outcome: 'accepted', acceptedAt: '2026-10-23T12:00:00Z' });
+    expect(done.state).toBe('done');
+    expect(done.acceptedAt).toBe('2026-10-23T12:00:00Z');
+    expect(done.waitingSince).toBeNull();
+    const ret = stateOf([task({ id: 's1', status: 'done', claudeStartedAt: start })], { status: 'вернул', outcome: 'returned', rounds: [round({ n: 1, verdict: 'returned' })], loops: 1 });
+    expect(ret.state).toBe('wait');
   });
 });

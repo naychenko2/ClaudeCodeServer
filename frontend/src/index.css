@@ -1058,6 +1058,12 @@ body[data-panel-drag] .cc-plugin-frame { pointer-events: none; }
   .cc-role-card, .cc-tools-row-btn { transition: none; }
 }
 
+/* Карточка шага ленты «Производство»: вид задаёт инлайн (тон по состоянию), поэтому
+   отклик наведения/нажатия/фокуса — с !important поверх инлайновых border/background/boxShadow */
+@media (hover: hover) { .cc-prod-card:hover { border-color: var(--c-accent-muted) !important; } }
+.cc-prod-card:active { background: var(--c-bg-selected) !important; }
+.cc-prod-card:focus-visible { outline: none; box-shadow: var(--shadow-focus) !important; }
+
 /* Поля поиска размечены type="search": Chrome на Android считает обычный
    однострочный input заполняемым и вешает над клавиатурой полосу
    автозаполнения (autocomplete="off" он для неё игнорирует умышленно), а поля

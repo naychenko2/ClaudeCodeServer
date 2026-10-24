@@ -9788,7 +9788,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 try
                 {
                     if (_projects.GetById(wpid) is { } wproj)
+                    {
+                        // Слоты ревью — детища дерева волны; имя слота строится по ветке дерева,
+                        // поэтому сносим их ДО самого дерева (после него ветку не узнать)
+                        if (ProjectCapabilities.FilesOnServer(wproj) && _services?.GetService<ReviewTreePool>() is { } pool)
+                            await pool.RemoveSlotsOfWaveAsync(ResolveOwnerId(entry.Info), wproj, wt);
                         await _git.WorktreeRemoveAsync(ResolveOwnerId(entry.Info), wproj.RootPath, wt, force: true);
+                    }
                 }
                 catch (Exception ex)
                 {

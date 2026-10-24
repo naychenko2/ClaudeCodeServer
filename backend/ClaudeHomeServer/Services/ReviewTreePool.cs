@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services;
 
@@ -21,16 +22,26 @@ public sealed class ReviewTreePool
     private readonly Func<string?, Project, string> _worktreesBase;
     private readonly Func<string?, string, string> _cwdForOwner;
     private readonly ILogger<ReviewTreePool> _log;
+    private readonly Func<IEnumerable<TaskItem>> _allTasks;
+    private readonly Func<string, string?> _sessionWorktree;
+    private readonly Func<string, Project?> _projectById;
 
     private readonly object _gate = new();
     private readonly Dictionary<string, string> _leases = new(StringComparer.Ordinal);
 
-    public ReviewTreePool(GitService git, SessionManager sessions, ILogger<ReviewTreePool> log)
-        : this(git, sessions.WorktreesBase, sessions.CwdForOwner, log) { }
+    public ReviewTreePool(GitService git, SessionManager sessions, TaskManager tasks, IProjectManager projects,
+        ILogger<ReviewTreePool> log)
+        : this(git, sessions.WorktreesBase, sessions.CwdForOwner, log,
+            () => projects.GetAll().SelectMany(p => tasks.GetByProject(p.Id)), id => sessions.GetById(id)?.WorktreePath, projects.GetById) { }
 
     internal ReviewTreePool(GitService git, Func<string?, Project, string> worktreesBase,
-        Func<string?, string, string> cwdForOwner, ILogger<ReviewTreePool> log)
+        Func<string?, string, string> cwdForOwner, ILogger<ReviewTreePool> log,
+        Func<IEnumerable<TaskItem>>? allTasks = null, Func<string, string?>? sessionWorktree = null,
+        Func<string, Project?>? projectById = null)
     {
+        _allTasks = allTasks ?? (() => []);
+        _sessionWorktree = sessionWorktree ?? (_ => null);
+        _projectById = projectById ?? (_ => null);
         _git = git;
         _worktreesBase = worktreesBase;
         _cwdForOwner = cwdForOwner;
@@ -91,6 +102,94 @@ public sealed class ReviewTreePool
         {
             foreach (var slot in _leases.Where(kv => kv.Value == taskId).Select(kv => kv.Key).ToList())
                 _leases.Remove(slot);
+        }
+    }
+
+    // Волны больше нет — проверять в слотах нечего, поэтому слот сносится и под живой арендой.
+    // Звать ДО сноса дерева волны: имя слота строится по ветке дерева, а после его удаления
+    // ветку из списка worktree уже не узнать.
+    public async Task RemoveSlotsOfWaveAsync(
+        string? ownerId, Project project, string waveTreePath, CancellationToken ct = default)
+    {
+        ProjectCapabilityGuard.EnsureAllowed(project, ProjectCapabilityArea.FileBound);
+
+        var worktrees = await _git.WorktreeListAsync(ownerId, project.RootPath, ct);
+        var waveNorm = PathNormalizer.NormalizePath(waveTreePath);
+        var branch = worktrees.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == waveNorm)?.Branch
+            ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(waveTreePath));
+        var slotBase = _worktreesBase(ownerId, project);
+        var prefix = $"{branch.Replace('/', '-')}-review-";
+
+        for (var n = 1; n <= SlotsPerWave; n++)
+            await RemoveSlotAsync(ownerId, project, worktrees, Path.Combine(slotBase, prefix + n), ct);
+    }
+
+    // Все слоты проекта: дерево в базе деревьев проекта с именем «*-review-1|2»
+    public async Task RemoveSlotsOfProjectAsync(string? ownerId, Project project, CancellationToken ct = default)
+    {
+        ProjectCapabilityGuard.EnsureAllowed(project, ProjectCapabilityArea.FileBound);
+
+        var worktrees = await _git.WorktreeListAsync(ownerId, project.RootPath, ct);
+        var baseNorm = PathNormalizer.NormalizePath(_worktreesBase(ownerId, project));
+        var slotBase = _worktreesBase(ownerId, project);
+        foreach (var w in worktrees)
+        {
+            var norm = PathNormalizer.NormalizePath(w.Path);
+            var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(w.Path));
+            if (PathNormalizer.NormalizePath(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(w.Path)) ?? "") != baseNorm
+                || !IsSlotName(name)) continue;
+            await RemoveSlotAsync(ownerId, project, worktrees, Path.Combine(slotBase, name), ct);
+        }
+    }
+
+    // После рестарта учёт аренд пуст, а чаты открытых ревью живут в своих слотах: без
+    // восстановления вторая задача взяла бы слот ревьюера и сбросила его под ногами.
+    // Закрытые задачи аренду не получают — их слот свободен.
+    public Task RestoreLeasesAsync()
+    {
+        foreach (var task in _allTasks())
+        {
+            if (task.Role != TaskRoles.Review || task.Status == TaskItemStatus.Done
+                || task.LinkedSessionId is null || task.ProjectId is null) continue;
+            if (_projectById(task.ProjectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) continue;
+            if (_sessionWorktree(task.LinkedSessionId) is not { } wt) continue;
+
+            string slotBase;
+            try { slotBase = _worktreesBase(task.OwnerId, project); }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Аренда слота задачи {TaskId} не восстановлена: нет базы деревьев", task.Id);
+                continue;
+            }
+            var trimmed = Path.TrimEndingDirectorySeparator(wt);
+            var name = Path.GetFileName(trimmed);
+            if (!IsSlotName(name)
+                || PathNormalizer.NormalizePath(Path.GetDirectoryName(trimmed) ?? "") != PathNormalizer.NormalizePath(slotBase))
+                continue;
+
+            var slotPath = Path.Combine(slotBase, name);
+            lock (_gate) _leases.TryAdd(slotPath, task.Id);
+        }
+        return Task.CompletedTask;
+    }
+
+    private static bool IsSlotName(string name)
+    {
+        for (var n = 1; n <= SlotsPerWave; n++)
+            if (name.Length > 8 && name.EndsWith("-review-" + n, StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    private async Task RemoveSlotAsync(string? ownerId, Project project,
+        IReadOnlyList<GitWorktreeInfo> worktrees, string slotPath, CancellationToken ct)
+    {
+        var norm = PathNormalizer.NormalizePath(slotPath);
+        lock (_gate) _leases.Remove(slotPath);
+        if (!worktrees.Any(w => PathNormalizer.NormalizePath(w.Path) == norm)) return;
+        try { await _git.WorktreeRemoveAsync(ownerId, project.RootPath, slotPath, force: true, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "Слот ревью {Slot} не снесён", slotPath);
         }
     }
 

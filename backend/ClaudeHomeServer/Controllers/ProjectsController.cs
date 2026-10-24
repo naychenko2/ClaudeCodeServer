@@ -554,6 +554,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
             }
         }
 
+        // Слоты ревью волн проекта (detached-деревья рядом с деревьями чатов): сносим все разом —
+        // они покрывают и слоты снесённых выше деревьев волн, и осиротевшие. Локальному проекту
+        // слоты не выдаются, а серверный git до его дерева не дотянется
+        if (ProjectCapabilities.FilesOnServer(p)
+            && HttpContext.RequestServices.GetService<ReviewTreePool>() is { } reviewPool)
+        {
+            try { await reviewPool.RemoveSlotsOfProjectAsync(p.OwnerId, p); }
+            catch (Exception ex) { logger.LogWarning(ex, "Слоты ревью проекта {ProjectId} не снесены", id); }
+        }
+
         // База знаний проекта: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для
         // проектов в одной папке — чистим, только если RootPath больше никем не используется
         if (ProjectCapabilities.KnowledgeRoot(p) is { } deletedKnowledgeRoot)

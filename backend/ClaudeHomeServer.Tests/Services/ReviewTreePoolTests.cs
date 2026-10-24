@@ -165,6 +165,103 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
         leases.Select(l => l!.SlotPath).Distinct().Should().HaveCount(2);
     }
 
+    private async Task<bool> InWorktreeList(string path) =>
+        (await _git.WorktreeListAsync(null, _repo)).Any(w => Path.GetFullPath(w.Path) == Path.GetFullPath(path));
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Сносит_Оба_Слота_Волны_Даже_Под_Арендой_И_Не_Трогает_Чужие()
+    {
+        var pool = NewPool();
+        var a = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        var b = await pool.TryAcquireAsync(null, _project, _wave, "t2");
+        var foreign = Path.Combine(_slotBase, "other-review-1");
+        await _git.WorktreeAddDetachedAsync(null, _repo, foreign, await _git.LocalTipAsync(null, _repo, "HEAD") ?? "HEAD");
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        (await InWorktreeList(a!.SlotPath)).Should().BeFalse();
+        (await InWorktreeList(b!.SlotPath)).Should().BeFalse();
+        Directory.Exists(a.SlotPath).Should().BeFalse();
+        (await InWorktreeList(foreign)).Should().BeTrue();
+        // аренда снята вместе со слотом: оба слота снова свободны
+        (await pool.TryAcquireAsync(null, _project, _wave, "t3")).Should().NotBeNull();
+        (await pool.TryAcquireAsync(null, _project, _wave, "t4")).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Без_Слотов_Ничего_Не_Делает()
+    {
+        var pool = NewPool();
+
+        var act = () => pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        await act.Should().NotThrowAsync();
+        (await InWorktreeList(_wave)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfProject_Сносит_Слоты_Всех_Волн_И_Оставляет_Деревья_Чатов()
+    {
+        var pool = NewPool();
+        var other = Path.Combine(_root, "wave2");
+        await _git.WorktreeAddAsync(null, _repo, other, "feat/other");
+        var chatTree = Path.Combine(_slotBase, "chat-tree");
+        await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/chat");
+        var a = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        var b = await pool.TryAcquireAsync(null, _project, other, "t2");
+
+        await pool.RemoveSlotsOfProjectAsync(null, _project);
+
+        (await InWorktreeList(a!.SlotPath)).Should().BeFalse();
+        (await InWorktreeList(b!.SlotPath)).Should().BeFalse();
+        (await InWorktreeList(chatTree)).Should().BeTrue();
+        (await InWorktreeList(_wave)).Should().BeTrue();
+        (await pool.TryAcquireAsync(null, _project, _wave, "t3")).Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RestoreLeases_Возвращает_Аренду_Открытого_Ревью_И_Не_Возвращает_Закрытому()
+    {
+        var slot1 = Path.Combine(_slotBase, "feat-wave-review-1");
+        var slot2 = Path.Combine(_slotBase, "feat-wave-review-2");
+        var tasks = new List<TaskItem>
+        {
+            new() { Id = "open", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s-open", Status = TaskItemStatus.InProgress },
+            new() { Id = "done", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s-done", Status = TaskItemStatus.Done },
+            new() { Id = "step", Role = TaskRoles.Step, ProjectId = _project.Id, LinkedSessionId = "s-step", Status = TaskItemStatus.InProgress },
+        };
+        var worktrees = new Dictionary<string, string> { ["s-open"] = slot1, ["s-done"] = slot2, ["s-step"] = slot2 };
+        var pool = new ReviewTreePool(_git, (_, _) => _slotBase, (o, p) => _cwd(o, p), NullLogger<ReviewTreePool>.Instance,
+            () => tasks, id => worktrees.GetValueOrDefault(id), id => id == _project.Id ? _project : null);
+
+        await pool.RestoreLeasesAsync();
+
+        // slot1 занят восстановленной арендой, slot2 свободен ровно один раз
+        var first = await pool.TryAcquireAsync(null, _project, _wave, "new1");
+        var second = await pool.TryAcquireAsync(null, _project, _wave, "new2");
+        first!.SlotPath.Should().Be(slot2);
+        second.Should().BeNull();
+        // повторный вход той же задачи отдаёт её же восстановленный слот
+        var again = await pool.TryAcquireAsync(null, _project, _wave, "open");
+        again!.SlotPath.Should().Be(slot1);
+    }
+
+    [Fact]
+    public async Task RestoreLeases_Игнорирует_Чат_Вне_Слота_Проекта()
+    {
+        var tasks = new List<TaskItem>
+        {
+            new() { Id = "open", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s", Status = TaskItemStatus.InProgress },
+        };
+        var pool = new ReviewTreePool(_git, (_, _) => _slotBase, (o, p) => _cwd(o, p), NullLogger<ReviewTreePool>.Instance,
+            () => tasks, _ => _wave, id => id == _project.Id ? _project : null);
+
+        await pool.RestoreLeasesAsync();
+
+        (await pool.TryAcquireAsync(null, _project, _wave, "a")).Should().NotBeNull();
+        (await pool.TryAcquireAsync(null, _project, _wave, "b")).Should().NotBeNull();
+    }
+
     private static async Task RawGit(string dir, params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = dir, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };

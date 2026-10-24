@@ -43,6 +43,9 @@ const SEGMENT_TONE = { bg: C.bgWhite, fg: C.textPrimary };
 const LIST_MIN_WIDTH = 280;
 const LIST_MAX_HEIGHT = 320;
 
+// Голос инстанса — персона без своего голоса
+const DEFAULT_LABEL = 'Голос по умолчанию';
+
 // «Звук идёт» — те же полоски-эквалайзер, которыми композер показывает запись голоса:
 // знак в продукте уже знакомый, и он влезает в кнопку. WaitingIndicator сюда не годится
 // вовсе — это индикатор ЛЕНТЫ, с логотипом, аватаром персоны и печатающимся текстом:
@@ -65,9 +68,11 @@ function speedKey(speed?: number | null): 'slow' | 'normal' | 'fast' {
   return speed > 1.05 ? 'fast' : 'normal';
 }
 
-export function PersonaVoicePicker({ value, onChange, describe }: {
+export function PersonaVoicePicker({ value, onChange, describe, emptyLabel }: {
   value: PersonaVoice | null;
   onChange: (v: PersonaVoice | null) => void;
+  // Подпись строки, пока голос не выбран (по умолчанию — «Голос по умолчанию»)
+  emptyLabel?: string;
   // Чем персона является ПРЯМО СЕЙЧАС в форме (несохранённое тоже) — для подбора голоса
   describe?: () => { name?: string; role?: string; description?: string; character?: string; tone?: string };
 }) {
@@ -183,7 +188,7 @@ export function PersonaVoicePicker({ value, onChange, describe }: {
           }}
         >
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {selected ? selected.label : 'Голос по умолчанию'}
+            {selected ? selected.label : (emptyLabel ?? DEFAULT_LABEL)}
           </span>
           <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} />
         </button>
@@ -201,6 +206,16 @@ export function PersonaVoicePicker({ value, onChange, describe }: {
 
       {anchor && catalog && (
         <Menu onClose={() => setAnchor(null)} anchor={anchor} minWidth={LIST_MIN_WIDTH} maxHeight={LIST_MAX_HEIGHT}>
+          {/* Явный выбор голоса инстанса: при создании он отменяет подбор голоса сервером */}
+          {/* Подсветка — как у выбранной строки голоса; пока голос лишь «подберётся», не горит */}
+          <div style={{ background: !value?.voice && !emptyLabel ? C.accentLight : undefined, borderRadius: R.md }}>
+            <MenuItem
+              label={
+                <span style={{ color: !value?.voice && !emptyLabel ? C.accent : undefined }}>{DEFAULT_LABEL}</span>
+              }
+              onClick={() => { setAnchor(null); onChange(null); }}
+            />
+          </div>
           <VoiceRows
             catalog={catalog}
             selected={value?.voice}

@@ -213,6 +213,57 @@ public class FeatureSummaryServiceTests
         a.Fingerprint.Should().Be(b.Fingerprint);
     }
 
+    // Длинная история шагов: run с 20 цепочками — «Тревога» и «Итог» идут до «Шагов» и
+    // остаются в выжимке; в «Шаги» попадают только последние цепочки (вердикт W4-R-ANB, MAJOR-1).
+    private static FeatureRun LongRun(string firstChainReason)
+    {
+        var now = new DateTime(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
+        var chains = new List<FeatureStepChain>();
+        for (int i = 1; i <= 20; i++)
+            chains.Add(new FeatureStepChain
+            {
+                StepRef = $"Ш{i}",
+                Title = $"шаг {i}",
+                Outcome = "accepted",
+                Loops = 1,
+                Rounds = [new FeatureRound { N = 1, Verdict = "returned", Reason = i == 1 ? firstChainReason : new string('б', 150) }],
+            });
+        return new FeatureRun
+        {
+            FeatureId = "epic-long",
+            Epic = new TaskItem { Id = "epic-long", Role = TaskRoles.Feature, Title = "фича-длинная", CreatedAt = now - TimeSpan.FromDays(5) },
+            Attention = new FeatureAttention { Kind = "stopped", Since = now - TimeSpan.FromHours(2), Reason = "исполнитель встал" },
+            Summary = new FeatureSummary { DurationMinutes = 120, StepsOpen = 3, Loops = 5 },
+            StepChains = chains,
+        };
+    }
+
+    [Fact]
+    public void Digest_LongStepHistory_TrivogaIItogDoSchagov()
+    {
+        var (digest, _) = FeatureSummaryDigest.Build(LongRun("первая"));
+
+        digest.Length.Should().BeLessOrEqualTo(FeatureSummaryDigest.MaxDigestChars);
+        digest.Should().Contain("Тревога: stopped", "тревога — в выжимке при 20 цепочках");
+        digest.Should().Contain("Итог:", "итог — в выжимке при 20 цепочках");
+        digest.IndexOf("Тревога:").Should().BeLessThan(digest.IndexOf("Шаги:"), "тревога идёт до «Шагов»");
+        digest.IndexOf("Итог:").Should().BeLessThan(digest.IndexOf("Шаги:"), "итог идёт до «Шагов»");
+        digest.Should().Contain("Ш20", "последние цепочки показаны");
+        digest.Should().Contain("ранних цепочек опущено", "старые цепочки свернуты, а не обрезаны слепым [..4000]");
+    }
+
+    // Отпечаток — по полному тексту: правка в хвосте истории (цепочка, опущенная в выжимке)
+    // меняет отпечаток, хотя сама выжимка идентична (вердикт W4-R-ANB, MAJOR-2).
+    [Fact]
+    public void Digest_PравkaVKhvoste_OtprintokDrugoy()
+    {
+        var (digestA, fingerprintA) = FeatureSummaryDigest.Build(LongRun("причина возврата первой цепочки — такая"));
+        var (digestB, fingerprintB) = FeatureSummaryDigest.Build(LongRun("причина возврата первой цепочки — другая"));
+
+        digestA.Should().Be(digestB, "первая цепочка опущена — выжимка не меняется");
+        fingerprintA.Should().NotBe(fingerprintB, "отпечаток считается по полному тексту — хвост значим");
+    }
+
     // Потолки размера: длинная причина витка обрезается, выжимка не большеMaxDigestChars.
     [Fact]
     public void Digest_ОбрезаетДлинныеПричиныИХвост()

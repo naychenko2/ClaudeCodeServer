@@ -63,7 +63,7 @@ public static class PregateRules
     public static PregateRecord Next(PregateRecord? previous, string sha, bool green, string summary,
         string? redKey, DateTime now)
     {
-        if (green) return new PregateRecord(sha, true, "", now);
+        if (green) return new PregateRecord(sha, true, summary, now);
         var streak = previous is { Green: false } && previous.RedKey == redKey ? previous.RedStreak + 1 : 1;
         return new PregateRecord(sha, false, summary, now, streak, redKey);
     }
@@ -71,6 +71,20 @@ public static class PregateRules
     // Предгейт больше не принимается: серия исчерпана — решение за постановщиком
     public static bool Exhausted(PregateRecord? record) =>
         record is { Green: false } && record.RedStreak >= MaxRedStreak;
+
+    public const string UiRoutesMarker = "UI-маршруты:";
+
+    // Маршруты ui_probe — только то, что после маркера в строке постановки; никакого разбора остального текста
+    public static IReadOnlyList<string> UiRoutes(string? description)
+    {
+        foreach (var raw in (description ?? "").Split('\n'))
+        {
+            var line = raw.Trim();
+            if (!line.StartsWith(UiRoutesMarker, StringComparison.OrdinalIgnoreCase)) continue;
+            return [.. line[UiRoutesMarker.Length..].Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)];
+        }
+        return [];
+    }
 
     private static string Short(string sha) => sha.Length > 8 ? sha[..8] : sha;
 }

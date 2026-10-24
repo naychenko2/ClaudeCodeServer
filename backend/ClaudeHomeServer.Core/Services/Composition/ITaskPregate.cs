@@ -15,8 +15,9 @@ public interface ITaskPregate
     Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct);
 }
 
+// UiRoutes — маршруты для ui-probe из постановки задачи (строка «UI-маршруты: …»); пусто — замер невозможен
 public sealed record PregateRequest(Project Project, string WorkingDirectory, string SessionId,
-    IReadOnlyCollection<string>? ChangedFiles = null);
+    IReadOnlyCollection<string>? ChangedFiles = null, IReadOnlyList<string>? UiRoutes = null);
 
 public enum PregateStatus
 {
@@ -40,22 +41,23 @@ public sealed record PregateVerdict(IReadOnlyList<PregateCheckResult> Checks, st
 {
     public bool IsGreen => Refusal is null && Checks.All(c => c.Status != PregateStatus.Red);
 
-    // Причина, по которой зелёный вердикт нельзя записывать: красных нет, но проверка осталась без замера
-    // (NotRun) либо не выполнилась ни одна из заданных (все Skipped). null — вердикт убедителен. Пустой набор
-    // (в конфиге нет проверок) — сознательный выбор конфига, не неубедительность. Красный вердикт честен всегда
-    public string? Inconclusive
+    // (б) Красных нет, но применимая проверка осталась без замера (NotRun: нет маршрута, адреса стенда): зелёный
+    // записывать нельзя и закрывать шаг нельзя. Текст говорит, чего не хватает. null — такого нет
+    public string? Unmeasured
     {
         get
         {
-            if (Refusal is not null || Checks.Count == 0 || Checks.Any(c => c.Status == PregateStatus.Red)) return null;
+            if (Refusal is not null || Checks.Any(c => c.Status == PregateStatus.Red)) return null;
             var unmeasured = Checks.Where(c => c.Status == PregateStatus.NotRun).ToList();
-            if (unmeasured.Count > 0)
-                return "не выполнен замер: " + string.Join("; ", unmeasured.Select(c => $"{c.Name} ({c.Detail})"));
-            return Checks.All(c => c.Status == PregateStatus.Skipped)
-                ? "проверять нечего: изменения не касаются ни одной проверки, ни одна не выполнилась"
-                : null;
+            return unmeasured.Count == 0
+                ? null
+                : "не выполнен замер: " + string.Join("; ", unmeasured.Select(c => $"{c.Name} ({c.Detail})"));
         }
     }
+
+    // (а) Заданы проверки, но ни одна не применима к изменениям (все Skipped, например правки только в docs/):
+    // вердикт NotRun записывается, закрывать можно. Пустой набор (в конфиге нет проверок) сюда не относится
+    public bool NothingApplicable => Refusal is null && Checks.Count > 0 && Checks.All(c => c.Status == PregateStatus.Skipped);
 
     public static PregateVerdict Refused(string reason, IReadOnlyList<PregateCheckResult>? done = null) =>
         new(done ?? [], reason);

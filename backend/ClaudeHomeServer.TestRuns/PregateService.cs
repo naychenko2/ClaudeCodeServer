@@ -181,6 +181,9 @@ public sealed class PregateService : ITaskPregate
     private async Task<PregateCheckResult?> RunUiProbeAsync(PregateCheckOptions check, PregateRequest request,
         CancellationToken limit)
     {
+        if (request.UiRoutes is not { Count: > 0 } routes)
+            return new PregateCheckResult(check.Name, PregateStatus.NotRun,
+                "маршрут не задан: добавь в постановку задачи строку «UI-маршруты: /#/страница, …»");
         if (_uiProbe is null)
             return new PregateCheckResult(check.Name, PregateStatus.NotRun, "замер интерфейса недоступен");
         if (!Uri.TryCreate(check.Origin, UriKind.Absolute, out _))
@@ -193,18 +196,22 @@ public sealed class PregateService : ITaskPregate
         }
 
         var viewports = check.Viewports.Count > 0 ? check.Viewports : [.. UiProbeReport.DefaultViewports];
-        var probe = await _uiProbe.RunAsync(new UiProbeRequest(request.Project, request.WorkingDirectory, directory,
-            request.SessionId, check.Origin, check.Path, viewports, UiProbeReport.DefaultMinTargetPx, null, null, null),
-            progress: null, limit);
-        if (probe.Cancelled || probe.TimedOut) return null;
-        // Нет стенда — причина вне кода шага: не красное, но и не замер (NotRun)
-        if (probe.Refusal is { } refusal) return new PregateCheckResult(check.Name, PregateStatus.NotRun, refusal);
-        if (probe.Json is not { } json)
-            return new PregateCheckResult(check.Name, PregateStatus.Red, probe.Failure ?? "замер не состоялся");
+        var found = new List<string>();
+        foreach (var route in routes)
+        {
+            var probe = await _uiProbe.RunAsync(new UiProbeRequest(request.Project, request.WorkingDirectory, directory,
+                request.SessionId, check.Origin, route, viewports, UiProbeReport.DefaultMinTargetPx, null, null, null),
+                progress: null, limit);
+            if (probe.Cancelled || probe.TimedOut) return null;
+            // Нет стенда — причина вне кода шага: не красное, но и не замер (NotRun)
+            if (probe.Refusal is { } refusal) return new PregateCheckResult(check.Name, PregateStatus.NotRun, refusal);
+            if (probe.Json is not { } json)
+                return new PregateCheckResult(check.Name, PregateStatus.Red, $"{route}: " + (probe.Failure ?? "замер не состоялся"));
 
-        var totals = JsonNode.Parse(json)?["totals"] as JsonObject;
-        var found = totals?.Where(kv => kv.Value is JsonValue v && v.TryGetValue<int>(out var n) && n > 0)
-            .Select(kv => $"{kv.Key}: {kv.Value}").ToList() ?? [];
+            var totals = JsonNode.Parse(json)?["totals"] as JsonObject;
+            found.AddRange(totals?.Where(kv => kv.Value is JsonValue v && v.TryGetValue<int>(out var n) && n > 0)
+                .Select(kv => $"{route} {kv.Key}: {kv.Value}") ?? []);
+        }
         return found.Count == 0
             ? new PregateCheckResult(check.Name, PregateStatus.Green)
             : new PregateCheckResult(check.Name, PregateStatus.Red, "находки ui_probe — " + string.Join(", ", found));

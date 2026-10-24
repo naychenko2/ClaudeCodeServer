@@ -57,18 +57,19 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
                 + "результат привязывается к коммиту, а проверки идут по файлам. Закоммить правки и прогони предгейт снова.");
 
         var verdict = await pregate.RunAsync(new PregateRequest(project, task.WorktreePath!, sessionId,
-            heads.ChangedFiles(task.WorktreePath!)), ct);
+            heads.ChangedFiles(task.WorktreePath!), PregateRules.UiRoutes(task.Description)), ct);
         if (verdict.Refusal is { } refusal)
             return new(TaskPregateStatus.NotRun, "Предгейт не состоялся: " + refusal);
         if (!string.Equals(heads.Head(task.WorktreePath!), sha, StringComparison.OrdinalIgnoreCase))
             return new(TaskPregateStatus.NotRun, "Коммит дерева сменился во время прогона — результат не записан, прогони предгейт снова.");
 
-        if (verdict.Inconclusive is { } inconclusive)
-            return new(TaskPregateStatus.NotRun, "Предгейт не дал вердикта, результат не записан — " + inconclusive + ".");
+        if (verdict.Unmeasured is { } unmeasured)
+            return new(TaskPregateStatus.NotRun, "Предгейт не дал вердикта, результат не записан и закрыть шаг нельзя — " + unmeasured + ".");
 
         var red = verdict.Checks.Where(c => c.Status == PregateStatus.Red).ToList();
         var summary = string.Join("\n", red.Select(c => $"✗ {c.Name}: {c.Detail}"));
         var redKey = red.Count == 0 ? null : string.Join("|", red.Select(c => c.Name).Order(StringComparer.Ordinal));
+        if (verdict.NothingApplicable) summary = "NotRun: изменения не касаются ни одной проверки";
         var record = tasks.RecordPregate(task.Id, sha, verdict.IsGreen, summary, redKey);
         return new(TaskPregateStatus.Recorded, Format(verdict, sha, record), record);
     }
@@ -76,7 +77,8 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
     private static string Format(PregateVerdict verdict, string sha, PregateRecord? record)
     {
         var text = new StringBuilder();
-        text.Append(verdict.IsGreen ? "Предгейт ЗЕЛЁНЫЙ" : "Предгейт КРАСНЫЙ").Append(" по коммиту ")
+        text.Append(verdict.NothingApplicable ? "Предгейт NotRun (проверять нечего, закрытие разрешено)"
+                : verdict.IsGreen ? "Предгейт ЗЕЛЁНЫЙ" : "Предгейт КРАСНЫЙ").Append(" по коммиту ")
             .Append(sha.Length > 8 ? sha[..8] : sha).Append('\n');
         foreach (var c in verdict.Checks)
         {

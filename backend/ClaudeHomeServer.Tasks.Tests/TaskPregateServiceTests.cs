@@ -129,7 +129,7 @@ public class TaskPregateServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ВсеПроверкиПропущены_ИзмененияВнеЗон_ЗелёныйНеЗаписывается()
+    public async Task ВсеПроверкиПропущены_ИзмененияВнеЗон_NotRunЗаписанЗакрытиеРазрешено()
     {
         _reader.Changed = ["docs/заметка.md"];
         _pregate.Checks =
@@ -140,9 +140,12 @@ public class TaskPregateServiceTests : IDisposable
 
         var outcome = await Run();
 
-        outcome.Status.Should().Be(TaskPregateStatus.NotRun);
-        outcome.Text.Should().Contain("проверять нечего");
-        _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
+        outcome.Status.Should().Be(TaskPregateStatus.Recorded);
+        outcome.Text.Should().Contain("NotRun");
+        var record = _tasks.GetById(_task.Id)!.Pregate!;
+        record.Summary.Should().Contain("NotRun");
+        _tasks.Update(_task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done), isAgentCall: true)!
+            .Status.Should().Be(TaskItemStatus.Done);
     }
 
     [Fact]
@@ -157,7 +160,7 @@ public class TaskPregateServiceTests : IDisposable
         var outcome = await Run();
 
         outcome.Status.Should().Be(TaskPregateStatus.NotRun);
-        outcome.Text.Should().Contain("ui_probe 360/1280").And.Contain("Origin");
+        outcome.Text.Should().Contain("ui_probe 360/1280").And.Contain("Origin").And.Contain("закрыть шаг нельзя");
         _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
     }
 
@@ -193,5 +196,24 @@ public class TaskPregateServiceTests : IDisposable
         _pregate.Checks = [];
 
         (await Run()).Status.Should().Be(TaskPregateStatus.Recorded);
+    }
+
+    [Fact]
+    public async Task МаршрутыИзПостановки_ПередаютсяВПрогон()
+    {
+        _tasks.Update(_task.Id, new UpdateTaskRequest(Description: "Сделать.\nUI-маршруты: /#/ui-kit, /#/features\nконец"));
+
+        await Run();
+
+        _pregate.Request!.UiRoutes.Should().Equal("/#/ui-kit", "/#/features");
+    }
+
+    [Fact]
+    public void РазборМаршрутов_ТолькоПослеМаркера()
+    {
+        PregateRules.UiRoutes("UI-маршруты: /a, /b ,, /c").Should().Equal("/a", "/b", "/c");
+        PregateRules.UiRoutes("пишем про /#/ui-kit без маркера").Should().BeEmpty();
+        PregateRules.UiRoutes("UI-маркеры: /a").Should().BeEmpty("имя маркера точное");
+        PregateRules.UiRoutes(null).Should().BeEmpty();
     }
 }

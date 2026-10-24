@@ -444,19 +444,25 @@ public class TasksController(
             var callerIsExecutor =
                 User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
                 && (callerSession is null || callerSession.TaskId == taskId);
-            // Закрытие эпика фичи — только из чата человека: сервисный токен без сессии (fail-closed) или
-            // из чата-исполнителя любой задачи (Session.TaskId задан), либо делегированный ход (глубина > 0).
-            // Сам отказ бросает TaskManager (FeatureCloseDeniedException) — предиката здесь нет.
-            var denyFeatureClose =
+            // Закрытие и возобновление эпика фичи — только из чата человека: сервисный токен без сессии
+            // (fail-closed) или из чата-исполнителя любой задачи (Session.TaskId задан), либо делегированный
+            // ход (глубина > 0). Предикат один для обоих гардов (дефект df85c799): отказ бросает
+            // TaskManager (FeatureCloseDenied/FeatureReopenDenied) — предиката здесь нет.
+            var denyFeature =
                 (User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
                     && (callerSession is null || callerSession.TaskId is not null))
                 || (callerSessionHeader is not null && !DelegatedTurnGate.Decide(
-                    sessions, UserId, callerSessionHeader, "Закрытие фичи",
+                    sessions, UserId, callerSessionHeader, "Закрытие/возобновление фичи",
                     alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
-            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor, denyFeatureClose)
+            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor,
+                denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
                 ?? throw new InvalidOperationException("Задача не найдена");
         }
         catch (TaskManager.FeatureCloseDeniedException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
+        catch (TaskManager.FeatureReopenDeniedException ex)
         {
             return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }

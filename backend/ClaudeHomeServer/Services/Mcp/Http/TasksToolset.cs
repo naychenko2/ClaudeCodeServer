@@ -403,9 +403,12 @@ public sealed class TasksToolset(
                     // идёт под сервисным токеном и claim typ=svc не сверяет; REST (TasksController.Update)
                     // сверяет callerSession.TaskId только под сервисным токеном. Закрытие эпика обе двери
                     // запрещают по общему признаку: исполнитель задачи или делегированный ход.
+                    // Один предикат для обоих гардов эпика (закрытие и возобновление, дефект df85c799):
+                    // отказ бросает TaskManager, здесь он превращается в content-ошибку.
+                    bool denyFeature = DenyFeatureClose(session, context.OwnerId);
                     updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
                         callerIsExecutor: session.TaskId == id,
-                        denyFeatureClose: DenyFeatureClose(session, context.OwnerId))
+                        denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)

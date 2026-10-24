@@ -400,8 +400,10 @@ public sealed class FeatureProjector(TaskManager tasks)
 
             // Б2: границы, длительность, пересечение с идущим, исполнители.
             var firstStartedAt = StageFirstStartedAt(tasks);
-            var lastCompletedAt = StageLastCompletedAt(tasks);
-            var approxMinutes = StageApproxMinutes(tasks, nowUtc, lastCompletedAt);
+            // Конец ЗАКРЫТОЙ стадии — для длительности и пересечения: у незакрытой конца нет,
+            // её интервалы открыты до now. Край полосы Ганта — StageBarEnd (W5-DEF).
+            var closedStageEnd = StageLastCompletedAt(tasks);
+            var approxMinutes = StageApproxMinutes(tasks, nowUtc, closedStageEnd);
             var overlapsActive = StageOverlapsActive(i, stageDefs, nowUtc);
             var executors = tasks.Select(t =>
             {
@@ -451,7 +453,9 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Verdict = StageVerdict(tasks),
                 // Б2: границы, длительность (объединение интервалов), пересечение, исполнители.
                 FirstStartedAt = firstStartedAt,
-                LastCompletedAt = lastCompletedAt,
+                // W5-DEF: край полосы — у незакрытой стадии тоже есть (последняя активность),
+                // иначе Гант не рисует строку-полосу у стадии, которая шла параллельно.
+                LastCompletedAt = StageBarEnd(tasks, nowUtc),
                 ApproxMinutes = approxMinutes,
                 OverlapsActive = overlapsActive,
                 Executors = executors,
@@ -962,16 +966,38 @@ public sealed class FeatureProjector(TaskManager tasks)
     private static DateTime? StageFirstStartedAt(List<TaskItem> tasks)
         => tasks.Where(t => t.ClaudeStartedAt is not null).Min(t => t.ClaudeStartedAt);
 
-    // Б2: конец стадии — максимальный CompletedAt, ТОЛЬКО если все задачи стадии закрыты (Done),
-    // иначе null. Done-задача без CompletedAt (аномалия данных) в max не входит (ранее
-    // подставлялся CreatedAt — конец мог оказаться позже реального: новая задача, созданная
-    // позже закрытия старой).
+    // Б2: конец ЗАКРЫТОЙ стадии — максимальный CompletedAt, ТОЛЬКО если все задачи стадии
+    // закрыты (Done), иначе null. Это stageEnd для длительности и пересечения: у незакрытой
+    // стадии конца нет, её интервалы открыты до now. Край полосы Ганта — StageBarEnd.
+    // Done-задача без CompletedAt (аномалия данных) в max не входит (ранее подставлялся
+    // CreatedAt — конец мог оказаться позже реального: новая задача, созданная позже
+    // закрытия старой).
     private static DateTime? StageLastCompletedAt(List<TaskItem> tasks)
     {
         if (tasks.Count == 0 || !tasks.All(t => t.Status == TaskItemStatus.Done))
             return null;
         var completed = tasks
             .Where(t => t.CompletedAt is not null)
+            .Select(t => t.CompletedAt!.Value)
+            .ToList();
+        return completed.Count > 0 ? completed.Max() : null;
+    }
+
+    // W5-DEF (полоса Ганта у незакрытой стадии): правый край полосы. Фронт рисует полосу
+    // только при наличии «to»; стадия, которая шла, но не закрыта (параллельное ревью при
+    // идущем производстве), оставалась без полосы, хотя минуты у неё были. Край: если ход
+    // стадии реально идёт (IsTurnRunning — тот же критерий, что у статуса «running») — now;
+    // иначе — max CompletedAt её закрытых задач (null, если закрытых нет). Закрытая стадия —
+    // тот же max CompletedAt. Длительность не затрагивается: её stageEnd — конец закрытой
+    // стадии (StageLastCompletedAt), край полосы интервалы не растягивает.
+    private static DateTime? StageBarEnd(List<TaskItem> tasks, DateTime now)
+    {
+        if (tasks.Count == 0)
+            return null;
+        if (tasks.Any(t => IsTurnRunning(t)))
+            return now;
+        var completed = tasks
+            .Where(t => t.Status == TaskItemStatus.Done && t.CompletedAt is not null)
             .Select(t => t.CompletedAt!.Value)
             .ToList();
         return completed.Count > 0 ? completed.Max() : null;

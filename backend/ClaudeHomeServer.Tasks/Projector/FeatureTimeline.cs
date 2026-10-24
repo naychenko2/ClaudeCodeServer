@@ -7,13 +7,15 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 
 // Стадия на графике: ключ конвейера + границы (старт/конец). Границы — из FeatureStage
 // (FirstStartedAt/LastCompletedAt): старт = минимальный ClaudeStartedAt задач стадии,
-// конец = максимальный CompletedAt (только если все задачи стадии закрыты), иначе null.
+// конец = край полосы (W5-DEF): у закрытой — max CompletedAt; у незакрытой, которая шла,
+// — «сейчас» или max CompletedAt закрытых задач; null — активности не было.
 public sealed record TimelineStage(
     // Ключ стадии: cut | plan | prod | review | qa | final | merge.
     string Key,
     // Начало стадии; null — ни одна задача стадии не стартовала.
     DateTime? StartedAt,
-    // Конец стадии; null — стадия ещё не завершилась (не все задачи Done).
+    // Конец стадии (край полосы, W5-DEF); null — активности не было (или нет закрытых задач
+    // и идущего хода).
     DateTime? EndedAt);
 
 // Сегмент времени: интервал [From, To] с видом, треком, стадией и (опц.) задачей.

@@ -230,8 +230,10 @@ public sealed class FeatureStage
     public string? Verdict { get; init; }
     // Начало стадии (Б2): минимальный ClaudeStartedAt задач стадии; null — ни одна не стартовала.
     public DateTime? FirstStartedAt { get; init; }
-    // Конец стадии (Б2): максимальный CompletedAt — ТОЛЬКО если все задачи стадии закрыты (Done),
-    // иначе null (стадия ещё не завершилась).
+    // Конец стадии (Б2, W5-DEF): край полосы Ганта. Закрытая стадия — максимальный CompletedAt
+    // всех задач; незакрытая — now, если ход стадии реально идёт (IsTurnRunning), иначе
+    // максимальный CompletedAt её закрытых задач (null, если закрытых нет). Длительность
+    // (ApproxMinutes) считается по-прежнему: её stageEnd — конец только закрытой стадии.
     public DateTime? LastCompletedAt { get; init; }
     // Длительность по часам стены (Б2, минуты): ОБЪЕДИНЕНИЕ интервалов [ClaudeStartedAt,
     // CompletedAt ?? now] задач стадии — параллельные задачи не складываются; округление вверх

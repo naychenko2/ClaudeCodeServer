@@ -4,6 +4,7 @@ import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab } from '../../lib/featurePage';
+import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
@@ -47,6 +48,9 @@ export interface FeaturePageProps {
   featureId: string;
   // Проект чата (область запроса индекса); null — чат вне проектов.
   projectId: string | null;
+  // Владелец проекта (для гейта кнопки «Закрыть фичу», F2); null — старый проект
+  // без поля: владелец по умолчанию (тот же приём, что у ProjectIntroCard).
+  projectOwnerId?: string | null;
   isMobile?: boolean;
   // Исполнитель закрытия: закрывает страницу и ведёт в target.
   onBack: (target: FeaturePageBackTarget) => void;
@@ -102,7 +106,7 @@ function activeStageName(run: FeatureRun): string | null {
 // Тег статуса — единая точка правды run.state (9 состояний, макет §3); старые данные
 // (state нет) — фолбэк на тег индекса. Выбранная вкладка — в сторе страницы
 // (useFeaturePageTab): переживает скрытие/возврат, не живёт в DOM.
-export function FeaturePage({ featureId, projectId, isMobile = false, onBack, onOpenFile }: FeaturePageProps) {
+export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = false, onBack, onOpenFile }: FeaturePageProps) {
   // Данные страницы (run + events) — из стора; здесь для фолбэка заголовка и 404/503.
   const page = useFeaturePage(featureId);
   const featuresOn = useFeature(FLAGS.featuresOverview);
@@ -114,6 +118,12 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
   // Корень «просмотра» — для правила «скрытый центр не перехватывает Esc» (useEscapeClose):
   // если страница скрыта (display:none → offsetParent=null), Esc её не закрывает. Как у файла.
   const rootRef = useRef<HTMLDivElement>(null);
+
+  // Кнопка «Закрыть фичу» (F2): только владелец проекта — бэковый гард принимает
+  // пользовательский JWT, этот гейт чисто UI-ный. Проект без ownerId (старые) —
+  // владелец по умолчанию, как у ProjectIntroCard.
+  const me = useMe();
+  const canClose = !projectOwnerId || (!!me.userId && projectOwnerId === me.userId);
 
   // Название: из индекса, фолбэк — эпик страницы, затем нейтральное. Контракт:
   // UI обязан пережить отсутствие любого поля ответа — эпик без title не роняет страницу.
@@ -341,7 +351,7 @@ export function FeaturePage({ featureId, projectId, isMobile = false, onBack, on
       }
       trailing={
         // Тег (1280) · главное действие (1280) · ⋯ (макет §1/§11).
-        <FeaturePageToolbar run={run} feature={feature} isMobile={isMobile} tag={tag} onMerge={openMergeDialog} />
+        <FeaturePageToolbar run={run} feature={feature} isMobile={isMobile} tag={tag} onMerge={openMergeDialog} canClose={canClose} />
       }
       rootRef={rootRef}
       rootTestId="feature-page"

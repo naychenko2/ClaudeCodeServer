@@ -21,6 +21,7 @@ import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
 import { KEY_SESSION_TOOLTIP } from '../../lib/chatGroups';
+import { setMeFromServer, clearMe } from '../../lib/defaultPersona';
 import { C, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
@@ -73,6 +74,13 @@ const mockHold = vi.hoisted(() => ({
 }));
 // Журнал тостов (W4-HOLD-F2: текст 409 и успех — проверяются по нему).
 const toasts = vi.hoisted(() => [] as [string, string | undefined][]);
+// Ответ api.tasks.update (F2 «Закрыть фичу»): calls — журнал (id + dto), pending —
+// запрос в полёте, error — отказ бэка (403/сбой).
+const mockUpdateTask = vi.hoisted(() => ({
+  calls: [] as { id: string; dto: unknown }[],
+  pending: false,
+  error: null as (Error & { status?: number; body?: unknown }) | null,
+}));
 
 vi.mock('../../lib/api', () => ({
   api: {
@@ -106,6 +114,12 @@ vi.mock('../../lib/api', () => ({
         if (mockHold.error) return Promise.reject(mockHold.error);
         if (mockHold.emptyBody) return Promise.resolve(undefined as unknown as { resumed: string[]; expired: string[] });
         return Promise.resolve({ resumed: mockHold.resumed, expired: mockHold.expired });
+      },
+      update: (id: string, dto: unknown) => {
+        mockUpdateTask.calls.push({ id, dto });
+        if (mockUpdateTask.pending) return new Promise<Task>(() => {});
+        if (mockUpdateTask.error) return Promise.reject(mockUpdateTask.error);
+        return Promise.resolve({} as Task);
       },
     },
   },
@@ -186,7 +200,7 @@ function pageData(over: Partial<FeaturePageData> = {}): FeaturePageData {
   };
 }
 
-function render(props: { featureId?: string; projectId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void }) {
+function render(props: { featureId?: string; projectId?: string | null; projectOwnerId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void }) {
   installFakeDom();
   // fakeDom'ов window/document без addEventListener/querySelector — ставим минимальные:
   // Esc-обработчик FeaturePage (как у FileViewer) вешает window.addEventListener('keydown')
@@ -207,6 +221,7 @@ function render(props: { featureId?: string; projectId?: string | null; isMobile
   const { container } = mount(createElement(FeaturePage, {
     featureId: props.featureId ?? 'f1',
     projectId: props.projectId ?? 'p1',
+    projectOwnerId: props.projectOwnerId ?? null,
     isMobile: props.isMobile ?? false,
     onBack: props.onBack ?? (() => {}),
   }));
@@ -1360,5 +1375,166 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     // bec00347: снятие draft-удержания не утверждает, что конвейер уже начался.
     expect(last[0], 'заголовок тоста — «Черновик снят»').toBe('Черновик снят');
     expect(last[1] ?? '', 'деталь про куратора').toContain('куратор');
+  });
+});
+
+// === F2 (статусной модели): кнопка «Закрыть фичу» — только владелец, с подтверждением ===
+// Контракт бэка (гард B2, TasksHttpDelegationGateTests): PUT /api/tasks/{epicId}
+// {status:'done'} с пользовательским JWT проходит; сервисный токен — 403. Фронт
+// показывает кнопку только владельцу проекта (FeaturePage, гейт по projectOwnerId)
+// и только пока эпик не «Готово». «Возобновить» — отдельный шаг, её нет.
+// Мутации (в отчёте): (1) убрать гейт canClose в FeaturePage → тест «не владелец»
+// красный; (2) убрать api.tasks.update в doCloseFeature → тест подтверждения красный;
+// (3) убрать проверку epic.status !== 'done' → тест «уже закрыта» красный;
+// (4) не renderить CloseConfirmModal (закрывать сразу) → тест «Отмена» красный.
+describe('F2: кнопка «Закрыть фичу» в шапке', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockUpdateTask.calls = [];
+    mockUpdateTask.pending = false;
+    mockUpdateTask.error = null;
+    toasts.length = 0;
+    clearMe();
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Идущая фича с открытым эпиком (status 'todo').
+  const openPage = () => {
+    const pd = pageData();
+    pd.run = { ...pd.run, state: 'running', epic: { id: 'f1', title: 'Моя фича', status: 'todo' } } as never;
+    mockGetFeature.result = pd;
+  };
+  const owner = () => setMeFromServer({ userId: 'u-own', username: 'andrey', role: 'user' });
+
+  // Все пункты шторки ⋯ (их несколько: пауза, ветка, эпик, закрытие).
+  function menuItems(): AnyNode[] {
+    const out: AnyNode[] = [];
+    const walk = (x: AnyNode) => {
+      if ((x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'menuitem') out.push(x);
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk((globalThis as any).document.body as unknown as AnyNode);
+    return out;
+  }
+
+  it('владелец: кнопка есть; клик — подтверждение; «Отмена» — запроса нет', async () => {
+    openPage();
+    owner();
+    const c = render({ projectOwnerId: 'u-own' });
+    await settle();
+    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn');
+    expect(btn, 'кнопка «Закрыть фичу» в тулбаре').not.toBeNull();
+    expect(textNodes(btn!).join('')).toContain('Закрыть фичу');
+    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    const modalText = textNodes((globalThis as any).document.body).join(' ');
+    expect(modalText, 'заголовок с названием фичи').toContain('Закрыть «Моя фича»?');
+    expect(modalText, 'пояснение про группу «Закрытые»').toContain('Закрытые');
+    const cancel = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-cancel');
+    expect(cancel, 'кнопка «Отмена»').not.toBeNull();
+    await act(async () => { (reactProps(cancel)!.onClick as () => void)(); });
+    expect(mockUpdateTask.calls, 'без подтверждения — не закрыто').toEqual([]);
+    expect(findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm'), 'модалка закрыта').toBeNull();
+  });
+
+  it('подтверждение: PUT status done, тост, страница перезапрошена', async () => {
+    openPage();
+    owner();
+    const c = render({ projectOwnerId: 'u-own' });
+    await settle();
+    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
+    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
+    await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
+    expect(mockUpdateTask.calls, 'PUT done по эпику').toEqual([{ id: 'f1', dto: { status: 'done' } }]);
+    const last = toasts[toasts.length - 1];
+    expect(last[0], 'тост «Фича закрыта»').toBe('Фича закрыта');
+    expect(mockGetFeature.calls.length, 'после закрытия — перезапрос страницы').toBeGreaterThanOrEqual(2);
+  });
+
+  it('не владелец: кнопки нет', async () => {
+    openPage();
+    setMeFromServer({ userId: 'u-other', username: 'other', role: 'user' });
+    const c = render({ projectOwnerId: 'u-own' });
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'не владельцу кнопки нет').toBeNull();
+  });
+
+  // Старый проект без поля ownerId — владелец по умолчанию (тот же приём, что у
+  // ProjectIntroCard): кнопка есть даже без переданного projectOwnerId.
+  it('проект без ownerId: кнопка есть (владелец по умолчанию)', async () => {
+    openPage();
+    owner();
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'без поля — не прячем').not.toBeNull();
+  });
+
+  it('уже закрыта (эпик done): кнопки нет; тег — «закрыта без мержа»', async () => {
+    const pd = pageData();
+    pd.run = { ...pd.run, state: 'closed', epic: { id: 'f1', title: 'Моя фича', status: 'done' } } as never;
+    mockGetFeature.result = pd;
+    owner();
+    const c = render({ projectOwnerId: 'u-own' });
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'у закрытой фичи кнопки нет').toBeNull();
+    const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
+    expect(textNodes(tag!).join(''), 'состояние страницы — «закрыта»').toContain('закрыта');
+  });
+
+  it('360: кнопки в ряду нет — пункт «Закрыть фичу…» в шторке ⋯', async () => {
+    openPage();
+    owner();
+    const c = render({ isMobile: true, projectOwnerId: 'u-own' });
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'на мобиле кнопки в ряду нет').toBeNull();
+    const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
+    expect(trigger, 'триггер ⋯').not.toBeNull();
+    await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
+    const closeItem = menuItems().find(x => textNodes(x as never).join('').includes('Закрыть фичу'));
+    expect(closeItem, 'пункт «Закрыть фичу…»').not.toBeNull();
+    await act(async () => { (reactProps(closeItem)!.onClick as () => void)(); });
+    const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm');
+    expect(confirm, 'модалка подтверждения').not.toBeNull();
+    // Закрыть модалку здесь же: незакрытая остаётся в DOM через портал и её
+    // рендер старого компонента попадает в body следующего теста (респондеры
+    // не анмонтированы) — следующий тест ловил бы чужую модалку.
+    const cancel = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-cancel')!;
+    await act(async () => { (reactProps(cancel)!.onClick as () => void)(); });
+  });
+
+  it('отказ бэка: тост «Не получилось» с причиной, страница жива', async () => {
+    openPage();
+    mockUpdateTask.error = Object.assign(new Error('Forbidden'), { status: 403, body: { error: 'Фичу закрывает только человек' } });
+    owner();
+    const c = render({ projectOwnerId: 'u-own' });
+    await settle();
+    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
+    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
+    await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
+    const last = toasts[toasts.length - 1];
+    expect(last[0], 'отказ не молчание').toBe('Не получилось');
+    expect(last[1] ?? '', 'причина из ответа бэка').toContain('только человек');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page'), 'страница жива').not.toBeNull();
   });
 });

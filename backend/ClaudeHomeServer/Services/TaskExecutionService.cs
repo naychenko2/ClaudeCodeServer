@@ -119,8 +119,6 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // Изолированное дерево ревью: слот на коммите волны вместо живого дерева исполнителя.
     // null — пул не подключён (тесты без него): ревьюер стартует в дереве волны, как раньше.
     private readonly ReviewTreePool? _reviewTrees;
-    // Аренда слота по задаче — ради абзаца в постановке; сама занятость хранится в пуле
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, ReviewTreeLease> _reviewLeases = new();
     // Потолок списка грязных путей дерева волны в постановке ревьюера
     private const int ReviewDirtyPathsLimit = 30;
 
@@ -367,8 +365,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // сессии до первого хода, cwd подставит EnsureProcessAsync. Невалидный путь не
         // должен ронять запуск: мягко деградируем в корень проекта.
         // Повторный запуск той же задачи: прежняя аренда в пуле остаётся — Reserve отдаст задаче
-        // её же слот; запись о выданной аренде заменится новой
-        _reviewLeases.TryRemove(task.Id, out _);
+        // её же слот. Единственный источник правды об аренде — пул; здесь держим лишь выданную
+        // сейчас аренду ради абзаца в постановке
+        ReviewTreeLease? reviewLease = null;
         if (task.WorktreePath is not { } worktree || task.ProjectId is null)
             ReleaseReviewTree(task.Id);
         else
@@ -379,7 +378,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 if (await _sessions.AttachWorktreeAsync(session.Id, lease.SlotPath, null))
                 {
                     attached = true;
-                    _reviewLeases[task.Id] = lease;
+                    reviewLease = lease;
                 }
                 else
                 {
@@ -404,7 +403,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
             ResolveCategoryProfilesPath(task), ResolveRulesTemplate(session.Id, task.OwnerId));
-        if (_reviewLeases.TryGetValue(task.Id, out var reviewLease))
+        if (reviewLease is not null)
             prompt += BuildReviewTreeSection(reviewLease);
         // Обогащение контекста семантически близкими заметками
         var notesBlock = await BuildNotesContextAsync(updated);
@@ -853,11 +852,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
     }
 
-    private void ReleaseReviewTree(string taskId)
-    {
-        _reviewLeases.TryRemove(taskId, out _);
-        _reviewTrees?.Release(taskId);
-    }
+    private void ReleaseReviewTree(string taskId) => _reviewTrees?.Release(taskId);
 
     internal static string BuildReviewTreeSection(ReviewTreeLease lease)
     {
@@ -1595,7 +1590,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // Исполнитель встал насовсем: пометка на задаче + уведомление владельцу + (если задачу
     // ставила персона) доклад ей с пробуждением. Перезапуск НЕ делаем: причина терминальная,
     // повтор упёрся бы в неё же и дал серию одинаковых уведомлений.
-    private async Task HandleExecutorStoppedAsync(TaskItem task, string reason)
+    // internal для теста выхода аренды слота ревью (InternalsVisibleTo)
+    internal async Task HandleExecutorStoppedAsync(TaskItem task, string reason)
     {
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, reason) ?? task;
         ReleaseReviewTree(task.Id);

@@ -867,13 +867,19 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var effFeatureId = req.FeatureId is null ? task.FeatureId : Trimmed(req.FeatureId);
         var effRole = req.Role is null ? task.Role : Trimmed(req.Role);
         // Предгейт шага: закрытие step|rework с деревом требует свежего зелёного результата по текущему
-        // коммиту. Роль считаем эффективной (смена роли в том же запросе гейт не обходит)
+        // коммиту. Роль и дерево берутся и «до», и «после» запроса: смена роли (step→cut) или сброс дерева
+        // в том же запросе, что и закрытие, гейт не обходит
+        var effWorktree = req.WorktreePath is null ? task.WorktreePath : Trimmed(req.WorktreePath);
         if (_pregateGateOn && effective.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done
-            && PregateRules.Applies(effRole, task.WorktreePath))
+            && PregateRules.GatedPath(task.Role, effRole, task.WorktreePath, effWorktree) is { } gatedPath)
         {
-            var refusal = PregateRules.Refusal(task.Pregate, _heads!.Head(task.WorktreePath!));
+            var refusal = PregateRules.Refusal(task.Pregate, _heads!.Head(gatedPath));
             if (refusal is not null) throw new InvalidOperationException(refusal);
         }
+        // Сброс исчерпанной серии красных — решение постановщика или человека, не исполнителя шага
+        if (req.ResetPregate == true && callerIsExecutor)
+            throw new InvalidOperationException(
+                "Исполнитель не может сбросить результат предгейта своей задачи: после двух красных решение за постановщиком.");
         var effVerdict = (req.Verification ?? task.Verification)?.Verdict;
         var effReviewOf = req.ReviewOf is null ? task.ReviewOf : req.ReviewOf;
         var effPersonaId = req.PersonaId is null ? task.PersonaId : (req.PersonaId == "" ? null : req.PersonaId);
@@ -938,6 +944,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             task.ModelTier = ModelTiers.TryParse(req.ModelTier, out var tier) ? tier : null;
         // Дерево чата-исполнителя: null = не менять, "" (и пробелы) = сбросить
         if (req.WorktreePath is not null) task.WorktreePath = Trimmed(req.WorktreePath);
+        if (req.ResetPregate == true) task.Pregate = null;
         if (req.WorktreeBranch is not null) task.WorktreeBranch = Trimmed(req.WorktreeBranch);
         if (req.ExecutorLaunchedBySessionId is not null) task.ExecutorLaunchedBySessionId = Trimmed(req.ExecutorLaunchedBySessionId);
         if (req.ExecutorLaunchedByPersonaId is not null) task.ExecutorLaunchedByPersonaId = Trimmed(req.ExecutorLaunchedByPersonaId);
@@ -1796,6 +1803,9 @@ public record UpdateTaskRequest(
     // Исполнитель-чат своей задачи критерии не меняет (TaskManager.Update, callerIsExecutor)
     List<AcceptanceCriterion>? Acceptance = null,
     // Свидетельства: null = не менять, список = добавить/заменить по criterionId
-    List<AcceptanceEvidence>? Evidence = null);
+    List<AcceptanceEvidence>? Evidence = null,
+    // true — сбросить результат предгейта шага (серия красных начинается заново). Только постановщик или
+    // человек: исполнитель своей задачи получит отказ (NC-P1b)
+    bool? ResetPregate = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

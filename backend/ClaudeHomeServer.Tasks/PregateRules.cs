@@ -12,7 +12,19 @@ public static class PregateRules
 
     // Гейт касается только шага/доработки с собственным деревом
     public static bool Applies(string? role, string? worktreePath) =>
-        (role is TaskRoles.Step or TaskRoles.Rework) && !string.IsNullOrWhiteSpace(worktreePath);
+        IsGatedRole(role) && !string.IsNullOrWhiteSpace(worktreePath);
+
+    // Путь дерева, по которому гейт сверяет коммит при закрытии; null — гейт не касается. Касается, если роль
+    // была ИЛИ стала step/rework и дерево было ИЛИ стало непустым: иначе «step→cut» или сброс дерева
+    // в том же запросе, что и закрытие, открывали бы обход
+    public static string? GatedPath(string? roleBefore, string? roleAfter, string? pathBefore, string? pathAfter)
+    {
+        if (!IsGatedRole(roleBefore) && !IsGatedRole(roleAfter)) return null;
+        return !string.IsNullOrWhiteSpace(pathBefore) ? pathBefore
+            : !string.IsNullOrWhiteSpace(pathAfter) ? pathAfter : null;
+    }
+
+    private static bool IsGatedRole(string? role) => role is TaskRoles.Step or TaskRoles.Rework;
 
     // null — закрывать можно; иначе текст отказа с выводом гейта. head — текущий sha дерева
     // (null — прочитать не удалось: закрыть нельзя)

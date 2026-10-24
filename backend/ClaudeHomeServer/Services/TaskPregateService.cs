@@ -39,7 +39,7 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
             return new(TaskPregateStatus.NotApplicable, "Предгейт нужен только шагу или доработке с собственным деревом (role=step|rework и worktreePath).");
         if (PregateRules.Exhausted(task.Pregate))
             return new(TaskPregateStatus.Exhausted, "Предгейт красный два раза подряд по одной причине, третьего круга нет: "
-                + "решение за постановщиком.\n" + task.Pregate!.Summary);
+                + "решение за постановщиком (сбросить серию: tasks_update с resetPregate=true или PUT с resetPregate).\n" + task.Pregate!.Summary);
         var project = task.ProjectId is null ? null : projects.GetById(task.ProjectId);
         if (project is null)
             return new(TaskPregateStatus.NotRun, "Проект задачи не найден — предгейт не запущен.");
@@ -47,9 +47,21 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         if (sha is null)
             return new(TaskPregateStatus.NotRun, "Не удалось определить текущий коммит дерева шага — предгейт не запущен.");
 
-        var verdict = await pregate.RunAsync(new PregateRequest(project, task.WorktreePath!, sessionId), ct);
+        // Проверки идут по рабочему дереву, а вердикт привязывается к HEAD: грязное дерево дало бы зелёный
+        // коду, которого в коммите нет. Чистота читается ДО прогона, HEAD сверяется ПОСЛЕ
+        var clean = heads.IsClean(task.WorktreePath!);
+        if (clean is null)
+            return new(TaskPregateStatus.NotRun, "Не удалось прочитать состояние дерева шага (git status) — предгейт не запущен.");
+        if (!clean.Value)
+            return new(TaskPregateStatus.NotRun, "В дереве шага есть незакоммиченные или неотслеживаемые изменения: "
+                + "результат привязывается к коммиту, а проверки идут по файлам. Закоммить правки и прогони предгейт снова.");
+
+        var verdict = await pregate.RunAsync(new PregateRequest(project, task.WorktreePath!, sessionId,
+            heads.ChangedFiles(task.WorktreePath!)), ct);
         if (verdict.Refusal is { } refusal)
             return new(TaskPregateStatus.NotRun, "Предгейт не состоялся: " + refusal);
+        if (!string.Equals(heads.Head(task.WorktreePath!), sha, StringComparison.OrdinalIgnoreCase))
+            return new(TaskPregateStatus.NotRun, "Коммит дерева сменился во время прогона — результат не записан, прогони предгейт снова.");
 
         var red = verdict.Checks.Where(c => c.Status == PregateStatus.Red).ToList();
         var summary = string.Join("\n", red.Select(c => $"✗ {c.Name}: {c.Detail}"));

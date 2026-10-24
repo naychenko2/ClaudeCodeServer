@@ -15,6 +15,8 @@ public class TaskManagerPregateTests : IDisposable
     {
         public string? Sha { get; set; } = sha;
         public string? Head(string worktreePath) => Sha;
+        public bool? IsClean(string worktreePath) => true;
+        public IReadOnlyList<string>? ChangedFiles(string worktreePath) => null;
     }
 
     private readonly string _dir;
@@ -123,9 +125,47 @@ public class TaskManagerPregateTests : IDisposable
     {
         var task = Step();
 
-        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Role: TaskRoles.Step));
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Role: TaskRoles.Cut));
 
-        act.Should().Throw<InvalidOperationException>();
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("Предгейт не пройден");
+        _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
+    }
+
+    [Fact]
+    public void СбросДереваВТомЖеЗапросе_ГейтНеОбходит()
+    {
+        var task = Step();
+
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: ""));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("Предгейт не пройден");
+    }
+
+    [Fact]
+    public void ГейтПоРолиДоИПосле()
+    {
+        PregateRules.GatedPath(TaskRoles.Step, TaskRoles.Cut, Wt, Wt).Should().Be(Wt, "роль была step");
+        PregateRules.GatedPath(TaskRoles.Cut, TaskRoles.Rework, Wt, Wt).Should().Be(Wt, "роль стала rework");
+        PregateRules.GatedPath(TaskRoles.Cut, TaskRoles.Review, Wt, Wt).Should().BeNull();
+        PregateRules.GatedPath(TaskRoles.Step, TaskRoles.Step, null, null).Should().BeNull("дерева нет");
+    }
+
+    [Fact]
+    public void СбросПредгейта_ЧеловекомНачинаетСерию_ИсполнителюОтказ()
+    {
+        var task = Step();
+        _sut.RecordPregate(task.Id, Sha1, false, "x", "build");
+        _sut.RecordPregate(task.Id, Sha1, false, "x", "build");
+        PregateRules.Exhausted(_sut.GetById(task.Id)!.Pregate).Should().BeTrue();
+
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(ResetPregate: true), isAgentCall: true, callerIsExecutor: true);
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("постановщиком");
+        _sut.GetById(task.Id)!.Pregate.Should().NotBeNull("отказ не трогает запись");
+
+        _sut.Update(task.Id, new UpdateTaskRequest(ResetPregate: true), isAgentCall: true);
+        var reset = _sut.GetById(task.Id)!;
+        reset.Pregate.Should().BeNull();
+        PregateRules.Exhausted(reset.Pregate).Should().BeFalse();
     }
 
     [Fact]

@@ -21,14 +21,19 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // Квантили — линейная интерполяция (тип 7, как numpy): pos = q·(n−1), между соседними.
 // Для n = 3: p25 = (v0+v1)/2, p75 = (v1+v2)/2 — детерминировано, проверяется на фикстуре.
 //
-// Стоимость (хвост вердикта Глеба по b684cff84): выборка проекта строится один раз на
-// ревизию задач ЭТОГО проекта (число эпиков проекта + сумма UpdatedAt их задач; активность
-// в другом проект кэш не сбрасывает). Кэш — память процесса, ключ (ownerId, projectId):
-// выборка хранится полная, исключение текущей фичы — по запросу (фильтр + квантили — дёшево).
-// После первого запроса на той же ревизии: ни FeatureProjector.Build, ни чтения журналов —
-// только квантили сохранённой выборки. Ключи явно не чистятся при удалении проекта:
-// потолок числа ключей (MaxCachedKeys) ограничивает рост памяти — сброс всего словаря
-// дешевле учёта жизненного цикла каждого проекта.
+// Стоимость (хвосты вердиктов Глеба b684cff84 и a4d19b98f): кэш — по фиче, а не по проекту:
+// ключ (ownerId, featureId, наличие журнала) → (ревизия этой фичи, её выборка). Ревизия
+// фичи — UpdatedAt её эпика и его задач: у смерженной фичи эти таймстемпы после мержа не
+// двигаются, её выборка живёт в кэше долго; активность живой фичи в том же проекте
+// пересчитывает только её собственную выборку (один FeatureProjector.Build), без чтений
+// чужих журналов. Агрегат (фильтр + квантили) собирается из кэша фич на каждый запрос — дёшево.
+// Ключ содержит наличие журнала: выборка, посчитанная без журнала (waiting = null), не должна
+// обслуживать запрос с журналом, и наоборот.
+// Выборки, у которых длительность или окно ожидания зависит от `now` (MergedAt == null),
+// в кэш не кладутся: они застыли бы до следующей мутации задач (п.4 хвостов).
+// Потолок числа ключей (MaxCachedKeys) ограничивает рост памяти: при переполнении
+// выселяется наименее недавно использованный ключ, а не весь словарь — один шумный
+// владелец не обнуляет кэш всем.
 public static class FeatureTypical
 {
     // Квантили одной метрики: медиана и p25–p75.
@@ -51,11 +56,17 @@ public static class FeatureTypical
     // возвраты.
     private sealed record Sample(string FeatureId, double DurationMinutes, int? WaitingMinutes, int Loops);
 
-    // Кэш: ключ "{ownerId}|{projectId или ''}" → (ревизия, выборка). Ревизия — только задачи
-    // этого проекта: число эпиков проекта + сумма UpdatedAt их задач. Любая мутация стора,
-    // касающаяся проекта, делает выборку неактуальной; чужие проекты — нет.
-    private static readonly ConcurrentDictionary<string, (long Revision, List<Sample> Samples)> _cache = new();
+    // Запись кэша: ревизия фичи, её выборка (null — фича не смержена), тик последнего
+    // обращения (для выселения при переполнении).
+    private record Entry(long Revision, Sample? Sample, long LastUsedTicks);
+
+    // Кэш: ключ "{ownerId}|{featureId}|{"j" если журнал доступен, иначе "-"}" → запись.
+    private static readonly ConcurrentDictionary<string, Entry> _cache = new();
     private const int MaxCachedKeys = 256;
+
+    // Для тестов: обнулить кэш — каждый тест начинается с чистого, числа не текутся между
+    // тестами через статический словарь процесса.
+    public static void ClearCache() => _cache.Clear();
 
     // owner — задачи владельца (изоляция по владельцу здесь же: фильтр по OwnerId),
     // projectId — проект текущей фичы (null — фича без проекта),
@@ -90,28 +101,37 @@ public static class FeatureTypical
             }
         }
 
-        // Ревизия — по задачам проекта (эпики проекта и их задачи): любая мутация стора,
-        // касающаяся этого проекта, её двигает; активность в другом проекте — нет.
-        long revision = epics.Count;
-        foreach (var e in epics)
+        // Наличие журнала — часть ключа: выборки с ожиданием и без него — разные числа.
+        var journalFlag = readJournal is null ? "-" : "j";
+        var samples = new List<Sample>(epics.Count);
+        foreach (var epic in epics)
         {
-            unchecked { revision += e.UpdatedAt.Ticks + e.Id.Length; }
-            if (tasksByFeature.TryGetValue(e.Id, out var sub))
+            var featureTasks = new List<TaskItem> { epic };
+            if (tasksByFeature.TryGetValue(epic.Id, out var sub)) featureTasks.AddRange(sub);
+
+            // Ревизия фичи: UpdatedAt её эпика и его задач. Любая мутация, касающаяся
+            // фичи, её двигает; активность других фич — нет.
+            long revision = epic.Id.Length;
+            unchecked { revision += epic.UpdatedAt.Ticks; }
+            if (sub is not null)
                 foreach (var t in sub)
                     unchecked { revision += t.UpdatedAt.Ticks + t.Id.Length; }
-        }
 
-        var key = $"{ownerId}|{projectId ?? ""}";
-        List<Sample> samples;
-        if (_cache.TryGetValue(key, out var hit) && hit.Revision == revision)
-        {
-            samples = hit.Samples;
-        }
-        else
-        {
-            samples = CollectSamples(epics, tasksByFeature, readJournal, now);
-            if (_cache.Count >= MaxCachedKeys) _cache.Clear();
-            _cache[key] = (revision, samples);
+            var key = $"{ownerId}|{epic.Id}|{journalFlag}";
+            if (_cache.TryGetValue(key, out var hit) && hit.Revision == revision)
+            {
+                _cache[key] = hit with { LastUsedTicks = now.Ticks };
+                if (hit.Sample is not null) samples.Add(hit.Sample);
+                continue;
+            }
+
+            var (sample, cacheable) = BuildSample(epic, featureTasks, readJournal, now);
+            if (sample is not null) samples.Add(sample);
+            if (cacheable)
+            {
+                if (_cache.Count >= MaxCachedKeys) EvictOldest();
+                _cache[key] = new Entry(revision, sample, now.Ticks);
+            }
         }
 
         // Текущая фича — вне выборки (она и не «типичная»).
@@ -129,44 +149,54 @@ public static class FeatureTypical
             Percentiles(chosen.Select(s => (double)s.Loops).ToList()));
     }
 
-    // Выборка: все смерженные фичи проекта и владельца (включая текущую — исключение
-    // точечное). Смерженная = State == merged: «честное» закрытие без мержа — не мерж.
-    private static List<Sample> CollectSamples(
-        List<TaskItem> epics, Dictionary<string, List<TaskItem>> tasksByFeature,
+    // Выселение при переполнении: наименее недавно использованный ключ — не весь словарь.
+    private static void EvictOldest()
+    {
+        string? victim = null;
+        long oldest = long.MaxValue;
+        foreach (var (key, entry) in _cache)
+            if (entry.LastUsedTicks < oldest)
+            {
+                oldest = entry.LastUsedTicks;
+                victim = key;
+            }
+        if (victim is not null) _cache.TryRemove(victim, out _);
+    }
+
+    // Выборка одной фичи: null — не смерженная (в выборку входят только смерженные:
+    // «честное» закрытие без мержа — не мерж). cacheable = false, если длительность или
+    // окно ожидания зависит от `now` (MergedAt == null — мерж-задача без CompletedAt):
+    // такая выборка считается на каждый запрос, а не застывает в кэше (п.4 хвостов).
+    private static (Sample? Sample, bool Cacheable) BuildSample(
+        TaskItem epic, List<TaskItem> featureTasks,
         Func<string, FeatureJournalReadResult?>? readJournal, DateTime now)
     {
-        var result = new List<Sample>();
-        foreach (var epic in epics)
+        var run = FeatureProjector.Build(epic, featureTasks, now);
+        if (run.State != FeatureStates.Merged) return (null, true);
+        var summary = run.Summary;
+        if (summary is null) return (null, true);
+
+        int? waiting = null;
+        if (readJournal is not null)
         {
-            var featureTasks = new List<TaskItem> { epic };
-            if (tasksByFeature.TryGetValue(epic.Id, out var sub)) featureTasks.AddRange(sub);
-
-            var run = FeatureProjector.Build(epic, featureTasks, now);
-            if (run.State != FeatureStates.Merged) continue;
-            var summary = run.Summary;
-            if (summary is null) continue;
-
-            int? waiting = null;
-            if (readJournal is not null)
-            {
-                var journal = readJournal(epic.Id);
-                if (journal is { StartsWithCreated: true, Truncated: false })
-                    // Дешёвый путь: прямой скан эпизодов ожидания, без полного sweep-line
-                    // таймлайна. Окно закрытой фичи — [создание эпика, мерж].
-                    waiting = HumanWaitingMinutes(journal, epic.CreatedAt, summary.MergedAt ?? now);
-            }
-
-            result.Add(new Sample(epic.Id, summary.DurationMinutes, waiting, run.Verdicts.Loops));
+            var journal = readJournal(epic.Id);
+            if (journal is { StartsWithCreated: true, Truncated: false })
+                // Дешёвый путь: прямой скан эпизодов ожидания, без полного sweep-line
+                // таймлайна. Окно закрытой фичи — [создание эпика, мерж].
+                waiting = HumanWaitingMinutes(journal, epic.CreatedAt, summary.MergedAt ?? now);
         }
-        return result;
+
+        return (new Sample(epic.Id, summary.DurationMinutes, waiting, run.Verdicts.Loops),
+            summary.MergedAt is not null);
     }
 
     // Минуты ожидания человека в окне [from, to): эпизоды waiting…(waiting_cleared).
-    // Хвост вердикта Глеба: «ожидание» в таймлайне (FeatureTimeline.cs:357-360) включает и
-    // device_wait — ожидание устройства моделью; здесь выбрано только человеческое ожидание
-    // (метрика «сколько ждал человек»), поле назван честно. Незакрытый эпизод обрезается
-    // концом окна: для смерженной фичи окно закрыто (то = mergedAt ≤ now), поэтому тот же
-    // результат, что обрезка «до now» в таймлайне.
+    // Семантика — правило таймлайна (п.2 хвостов вердикта ST-R-B1): пересечения эпизодов
+    // объединяются (sweep), округление — одно по суммарному TimeSpan (FeatureTimeMath.
+    // UnionMinutes), а не сумма floor по эпизодам: параллельное ожидание двух задач одной
+    // фичи считается один раз, подминутные эпизоды не обнуляются. Единственная намеренная
+    // разница с stats.timeline.waitingMinutes — device_wait: здесь только человеческое
+    // ожидание (метрика «сколько ждал человек»), согласовано с прошлым вердиктом.
     private static int HumanWaitingMinutes(FeatureJournalReadResult journal, DateTime from, DateTime to)
     {
         var clearedByTask = new Dictionary<string, List<DateTime>>();
@@ -178,19 +208,20 @@ public static class FeatureTypical
             list.Add(e.At);
         }
 
-        int total = 0;
+        var intervals = new List<(DateTime Start, DateTime End)>();
         foreach (var e in journal.Entries)
         {
+            // Считаются только эпизоды, начавшиеся внутри окна [from, to) — то же правило,
+            // что в FeatureTimeline.cs:338.
             if (e.Kind != "waiting" || e.At < from || e.At >= to) continue;
             var end = to;
             if (e.TaskId is not null && clearedByTask.TryGetValue(e.TaskId, out var cleared))
                 foreach (var c in cleared)
                     if (c > e.At) { end = c; break; }
             if (end > to) end = to;
-            var span = end - e.At;
-            if (span > TimeSpan.Zero) total += (int)span.TotalMinutes;
+            if (end > e.At) intervals.Add((e.At, end));
         }
-        return total;
+        return FeatureTimeMath.UnionMinutes(intervals, from, to);
     }
 
     // Квантили непустой выборки: медиана и p25–p75 линейной интерполяцией.

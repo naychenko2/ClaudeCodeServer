@@ -12,10 +12,14 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // (тип 7): для n = 3 p25 = (v0+v1)/2, p75 = (v1+v2)/2 — ожидаемые числа точные.
 //
 // Мутации: убрать фильтр по проекту/владельцу — тест изоляции красный; убрать исключение
-// текущей фичы — тест с текущей краснеет по Count; убрать UpdatedAt из ревизии — тест
+// текущей фичы — тест с текущей краснеет по Count; убрать UpdatedAt из ревизии фичи — тест
 // инвалидации красный (кэш не сбрасывается); убрать кэш — тест тёплого запроса красный
-// (журнал читается снова); считать ревизию по всем задачам владельца — тест чужого
-// проекта красный (активность в другом проекте сбрасывает кэш).
+// (журнал читается снова); считать ревизию по проекту целиком, а не по фичам — тест живой
+// фичи красный (её активность пересчитывает журналы всех смерженных); убрать наличие
+// журнала из ключа — тест доступности журнала красный; суммировать эпизоды ожидания без
+// объединения — тест семантики ожидания красный; выселять весь словарь при переполнении —
+// тест выселения красный; класть в кэш выборку с длительностью от `now` — тест «now не
+// застывает» красный.
 public class FeatureTypicalTests
 {
     private static readonly DateTime T0 = new(2026, 10, 1, 8, 0, 0);
@@ -75,12 +79,30 @@ public class FeatureTypicalTests
         ],
     };
 
+    // Полный журнал с несколькими эпизодами ожидания разных задач (отсценки от T0, минуты):
+    // параллельное ожидание в бою — всегда разные задачи, одна cleared закрывает свой эпизод.
+    private static FeatureJournalReadResult JournalWithEpisodes(string epicId,
+        List<(string TaskId, double StartMin, double EndMin)> episodes)
+    {
+        var entries = new List<FeatureJournalEntry>
+        {
+            new FeatureJournalEntry { At = T0, Kind = "created", TaskId = epicId },
+        };
+        foreach (var (taskId, s, e) in episodes)
+        {
+            entries.Add(new FeatureJournalEntry { At = T0 + TimeSpan.FromMinutes(s), Kind = "waiting", TaskId = taskId });
+            entries.Add(new FeatureJournalEntry { At = T0 + TimeSpan.FromMinutes(e), Kind = "waiting_cleared", TaskId = taskId });
+        }
+        return new FeatureJournalReadResult { StartsWithCreated = true, Truncated = false, Entries = entries };
+    }
+
     // Три смерженные (100/10/1, 200/20/2, 300/30/3) + текущая смерженная с экстремальными
     // числами (1000/500/10) — текущая в выборку не входит. Квантили по [100,200,300],
     // [10,20,30], [1,2,3].
     [Fact]
     public void Typical_ТриСмерженныеМедианаИКвартилиТекущаяИсключена()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
         tasks.AddRange(MergedFeature("a", "t1", "p1", 100, 1));
         tasks.AddRange(MergedFeature("b", "t1", "p1", 200, 2));
@@ -114,6 +136,7 @@ public class FeatureTypicalTests
     [Fact]
     public void Typical_ДвеСмерженныеNull()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
         tasks.AddRange(MergedFeature("a", "t2", "p1", 100, 1));
         tasks.AddRange(MergedFeature("b", "t2", "p1", 200, 2));
@@ -129,6 +152,7 @@ public class FeatureTypicalTests
     [Fact]
     public void Typical_ЧужойПроектИЧужойВладелецНеУчитываются()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
         tasks.AddRange(MergedFeature("a", "t3", "p1", 100, 1));
         tasks.AddRange(MergedFeature("b", "t3", "p1", 200, 2));
@@ -148,6 +172,7 @@ public class FeatureTypicalTests
     [Fact]
     public void Typical_БезЖурналаОжиданиеNullДлительностьИВозвратыЕсть()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
         tasks.AddRange(MergedFeature("a", "t5", "p1", 100, 1));
         tasks.AddRange(MergedFeature("b", "t5", "p1", 200, 2));
@@ -162,13 +187,14 @@ public class FeatureTypicalTests
         stats.Loops.Median.Should().Be(2.0);
     }
 
-    // ─── хвост вердикта Глеба (b684cff84): кэш по проекту, инвалидация, waitingCount ────────────
+    // ─── хвосты вердикта Глеба (b684cff84, ST-R-B1): кэш по фиче, семантика ожидания ────────────
 
     // Тёплый запрос: тот же набор данных → второй Build не читает журнал (счётчик вызовов).
     // Мутация «не хранить выборку в кэше» → счётчик растёт → тест красный.
     [Fact]
     public void Typical_ТёплыйЗапросНеЧитаетЖурнал()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
         tasks.AddRange(MergedFeature("a", "t6", "pW", 100, 1));
         tasks.AddRange(MergedFeature("b", "t6", "pW", 200, 2));
@@ -182,15 +208,49 @@ public class FeatureTypicalTests
 
         var warm = FeatureTypical.Build(tasks, "t6", "pW", "cur", read, NOW);
         warm!.Count.Should().Be(3);
-        reads.Should().Be(3, "ревизия не изменилась — журнал не читается снова");
+        reads.Should().Be(3, "ревизия фич не изменилась — журнал не читается снова");
     }
 
-    // Ревизия — по задачам проекта: активность в другом проекте (новые смерженные фичи с
-    // новыми UpdatedAt) не сбрасывает кэш и не меняет числа. Мутация «ревизия по всем
-    // задачам владельца» (как было) → второй вызов читает журнал заново → тест красный.
+    // Ревизия — по фиче: активность живой фичи в том же проекте (её шаг двигается) не
+    // пересчитывает журналы смерженных — только выборку самой живой фичи. Мутация «ревизия
+    // по проекту целиком» (как было) → второй вызов читает журнал заново → тест красный.
+    [Fact]
+    public void Typical_АктивностьЖивойФичиНеСбрасываетКэшСмерженных()
+    {
+        FeatureTypical.ClearCache();
+        var tasks = new List<TaskItem>();
+        tasks.AddRange(MergedFeature("a", "t13", "pL", 100, 1));
+        tasks.AddRange(MergedFeature("b", "t13", "pL", 200, 2));
+        tasks.AddRange(MergedFeature("c", "t13", "pL", 300, 3));
+        tasks.Add(OpenFeature("cur", "t13", "pL"));
+        var liveStep = new TaskItem
+        {
+            Id = "cur-s0", FeatureId = "cur", Role = TaskRoles.Step,
+            Status = TaskItemStatus.InProgress, CreatedAt = T0, UpdatedAt = T0,
+        };
+        tasks.Add(liveStep);
+
+        int reads = 0;
+        Func<string, FeatureJournalReadResult?> read = id => { reads++; return JournalWithWaiting(id, 10); };
+
+        var cold = FeatureTypical.Build(tasks, "t13", "pL", "cur", read, NOW);
+        cold!.Duration.Median.Should().Be(200.0);
+        int afterCold = reads; // 3: журнал читается только для смерженных фич
+
+        // Живая фича двигается: шаг её обновлён — ревизия проекта (старая) изменилась бы.
+        liveStep.UpdatedAt = NOW;
+
+        var warm = FeatureTypical.Build(tasks, "t13", "pL", "cur", read, NOW);
+        warm!.Duration.Median.Should().Be(200.0, "выборка смерженных фич не изменилась");
+        reads.Should().Be(afterCold, "ревизия по фиче: активность живой фичи не читает чужие журналы");
+    }
+
+    // Ревизия фичи: активность в другом проекте (новые смерженные фичи с новыми UpdatedAt)
+    // не сбрасывает кэш и не меняет числа.
     [Fact]
     public void Typical_АктивностьВЧужомПроектНеСбрасываетКэш()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
         tasks.AddRange(MergedFeature("a", "t7", "pA", 100, 1));
         tasks.AddRange(MergedFeature("b", "t7", "pA", 200, 2));
@@ -209,15 +269,16 @@ public class FeatureTypicalTests
 
         var warm = FeatureTypical.Build(tasks, "t7", "pA", "cur", read, NOW);
         warm!.Duration.Median.Should().Be(200.0, "выборка проекта pA не изменилась");
-        reads.Should().Be(afterCold, "ревизия pA не изменилась — журнал не читается снова");
+        reads.Should().Be(afterCold, "ревизия фич pA не изменилась — журнал не читается снова");
     }
 
-    // Инвалидация: изменение задачи проекта (сдвиг мержа) → следующий Build даёт новые числа.
-    // Мутация «убрать UpdatedAt из ревизии» (ревизия = только число эпиков) → кэш не
+    // Инвалидация: изменение задачи фичи (сдвиг мержа) → следующий Build даёт новые числа.
+    // Мутация «убрать UpdatedAt из ревизии» (ревизия = только id фичи) → кэш не
     // сбрасывается, числа старые → тест красный.
     [Fact]
     public void Typical_ИзменениеЗадачиПроектаМеняетЧисла()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
         tasks.AddRange(MergedFeature("a", "t8", "pI", 100, 1));
         tasks.AddRange(MergedFeature("b", "t8", "pI", 200, 2));
@@ -240,6 +301,7 @@ public class FeatureTypicalTests
     [Fact]
     public void Typical_WaitingCountРазмерВыборкиОжидания()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
         for (int i = 0; i < 5; i++)
             tasks.AddRange(MergedFeature($"f{i}", "t9", "pC", 100 + 100 * i, i));
@@ -265,6 +327,7 @@ public class FeatureTypicalTests
     [Fact]
     public void Typical_КвантилиN4ИОдинаковыхЗначений()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
         for (int i = 0; i < 4; i++)
             tasks.AddRange(MergedFeature($"q{i}", "t10", "pQ", 100 * (i + 1), 0));
@@ -285,38 +348,182 @@ public class FeatureTypicalTests
         flat!.Duration.P75.Should().Be(100.0);
     }
 
-    // Цена холодного и тёплого запроса на фикстуре из 100 смерженных фич (100 FeatureProjector
-    // .Build + 100 чтений журнала против только квантилей). Числа пишутся в файл — они идут
-    // в отчёт задачи. Тест красный, если тёплый запрос не дешевле холодного.
+    // П.2 хвостов ST-R-B1: семантика ожидания — правило таймлайна. Пересекающиеся эпизоды
+    // двух задач одной фичи считаются один раз (15, не 20); подминутные эпизоды суммируются
+    // до округления (2, не 0). Значения [15, 2, 30]: median 15, p25 8.5. Прежняя сумма
+    // эпизодов без объединения давала [20, 0, 30] — median 20, p25 10 (тест красный).
     [Fact]
-    public void Typical_ЦенаХолодногоИТёплогоЗапросаНа100Фичах()
+    public void Typical_ОжиданиеОбъединяетПересеченияИОкругляетОдинРаз()
     {
+        FeatureTypical.ClearCache();
         var tasks = new List<TaskItem>();
-        var journals = new Dictionary<string, FeatureJournalReadResult>();
-        for (int i = 0; i < 100; i++)
+        tasks.AddRange(MergedFeature("a", "t14", "pO", 100, 0));
+        tasks.AddRange(MergedFeature("b", "t14", "pO", 200, 0));
+        tasks.AddRange(MergedFeature("c", "t14", "pO", 300, 0));
+
+        var journals = new Dictionary<string, FeatureJournalReadResult>
         {
-            tasks.AddRange(MergedFeature($"f{i}", "t12", "pB", 100 + i, i % 5));
-            journals[$"f{i}"] = JournalWithWaiting($"f{i}", 10 + i);
+            // Два перекрывающихся эпизода по 10 минут разных задач: union [10..25] = 15.
+            ["a"] = JournalWithEpisodes("a", [("a-s1", 10.0, 20.0), ("a-s2", 15.0, 25.0)]),
+            // Три эпизода по 40 секунд: сумма 120 с → 2 минуты, не 0 по floor-сумме.
+            ["b"] = JournalWithEpisodes("b", [("b-s1", 10.0, 10 + 2.0 / 3), ("b-s2", 11.0, 11 + 2.0 / 3), ("b-s3", 12.0, 12 + 2.0 / 3)]),
+            // Один эпизод 30 минут.
+            ["c"] = JournalWithEpisodes("c", [("c-s1", 10.0, 40.0)]),
+        };
+
+        var stats = FeatureTypical.Build(tasks, "t14", "pO", "cur", id => journals[id], NOW);
+        stats!.Waiting!.Median.Should().Be(15.0, "пересечения эпизодов объединяются, а не складываются");
+        stats.Waiting!.P25.Should().Be(8.5, "подминутные эпизоды суммируются до округления");
+    }
+
+    // П.3 хвостов: наличие журнала — часть ключа. Выборка, посчитанная без журнала
+    // (waiting = null), не обслуживает запрос с журналом, и наоборот.
+    [Fact]
+    public void Typical_КлючКэшаУчитываетДоступностьЖурнала()
+    {
+        FeatureTypical.ClearCache();
+        var tasks = new List<TaskItem>();
+        for (int i = 0; i < 3; i++)
+            tasks.AddRange(MergedFeature($"f{i}", "t15", "pJ", 100 + 100 * i, 0));
+        var journals = new Dictionary<string, FeatureJournalReadResult>
+        {
+            ["f0"] = JournalWithWaiting("f0", 10),
+            ["f1"] = JournalWithWaiting("f1", 20),
+            ["f2"] = JournalWithWaiting("f2", 30),
+        };
+
+        var without = FeatureTypical.Build(tasks, "t15", "pJ", "cur", null, NOW);
+        without!.Waiting.Should().BeNull();
+
+        var with = FeatureTypical.Build(tasks, "t15", "pJ", "cur", id => journals[id], NOW);
+        with!.Waiting.Should().NotBeNull("кэш не отдаёт выборку без ожидания запросу с журналом");
+        with!.Waiting!.Median.Should().Be(20.0);
+
+        var againWithout = FeatureTypical.Build(tasks, "t15", "pJ", "cur", null, NOW);
+        againWithout!.Waiting.Should().BeNull("и наоборот: выборка с ожиданием не отдаётся без журнала");
+    }
+
+    // П.3 хвостов: переполнение потолка ключей выселяет один наименее recently used ключ,
+    // а не весь словарь: после чужого ключа тёплый запрос теряет одну выборку, не все.
+    [Fact]
+    public void Typical_ПереполнениеКэшаСноситОдинКлючНеВесь()
+    {
+        FeatureTypical.ClearCache();
+        const int keys = 256; // MaxCachedKeys
+        var tasks = new List<TaskItem>();
+        for (int i = 0; i < keys; i++)
+            tasks.AddRange(MergedFeature($"k{i}", "t16", "pM", 100 + i, 0));
+
+        int reads = 0;
+        Func<string, FeatureJournalReadResult?> read = id => { reads++; return null; };
+
+        var cold = FeatureTypical.Build(tasks, "t16", "pM", "cur", read, NOW);
+        cold!.Count.Should().Be(keys);
+        int afterCold = reads; // 256
+
+        // 257-й ключ: другая фича того же владельца (свой счётчик не ведём).
+        var other = MergedFeature("z1", "t16", "pZ", 500, 0);
+        FeatureTypical.Build(other, "t16", "pZ", "cur", _ => null, NOW);
+
+        var warm = FeatureTypical.Build(tasks, "t16", "pM", "cur", read, NOW);
+        warm!.Count.Should().Be(keys, "выборка не обнулена: выселен один ключ, не все");
+        reads.Should().Be(afterCold + 1, "один выселенный ключ — одно перечитывание, не 256");
+    }
+
+    // П.4 хвостов: длительность фичи без CompletedAt у мерж-задачи считается от `now` —
+    // такая выборка не кладётся в кэш и не застывает: второй запрос с другим `now` даёт
+    // другие числа. Мутация «класть такую выборку в кэш» → числа идентичны → тест красный.
+    [Fact]
+    public void Typical_ДлительностьБезМержаНеЗастываетВКэше()
+    {
+        FeatureTypical.ClearCache();
+        var tasks = new List<TaskItem>();
+        for (int i = 0; i < 3; i++)
+            tasks.AddRange(MergedFeature($"g{i}", "t17", "pN", 100 + 100 * i, 0));
+
+        // Фича «h»: мерж Done, но без CompletedAt — конец длительности = now (п.4).
+        tasks.Add(new TaskItem
+        {
+            Id = "h", Role = TaskRoles.Feature, OwnerId = "t17", ProjectId = "pN",
+            Status = TaskItemStatus.Done, CreatedAt = T0, UpdatedAt = T0,
+        });
+        tasks.Add(new TaskItem
+        {
+            Id = "m-h", FeatureId = "h", Role = TaskRoles.Merge,
+            Status = TaskItemStatus.Done, CreatedAt = T0, UpdatedAt = T0,
+        });
+
+        var first = FeatureTypical.Build(tasks, "t17", "pN", "cur", null, NOW);
+        var second = FeatureTypical.Build(tasks, "t17", "pN", "cur", null, NOW + TimeSpan.FromHours(1));
+
+        // Длительность «h» — от now: p75 [100,200,300,14400] = 3825 против
+        // [100,200,300,14460] = 3840. В кэше застыло бы первое.
+        first!.Duration.P75.Should().Be(3825.0);
+        second!.Duration.P75.Should().Be(3840.0, "зависящая от now длительность пересчитывается, а не застывает");
+    }
+
+    // П.5 хвостов: цена измеряется на ФАЙЛОВЫХ журналах (как в бою), а не на выборках в
+    // памяти: 100 журналов по ~500 строк на диске. Холодный путь читает все файлы, тёплый —
+    // ни одного (счётчик), и обязан быть быстрее. Числа пишутся в файл тестовой папки —
+    // они идут в отчёт задачи; папка удаляется.
+    [Fact]
+    public void Typical_ЦенаХолодногоИТёплогоЗапросаНа100ФичахСФайловымиЖурналами()
+    {
+        FeatureTypical.ClearCache();
+        var dir = Path.Combine(Path.GetTempPath(), "typical-bench-" + Guid.NewGuid().ToString("N"));
+        var store = new FeatureJournalStore(dir);
+        try
+        {
+            var tasks = new List<TaskItem>();
+            for (int i = 0; i < 100; i++)
+            {
+                var id = $"f{i}";
+                tasks.AddRange(MergedFeature(id, "t12", "pB", 100 + i, i % 5));
+                // Журнал ~500 строк: created + ходы + эпизод ожидания.
+                store.Append("t12", id, new FeatureJournalEntry { At = T0, Kind = "created", TaskId = id });
+                for (int j = 0; j < 500; j++)
+                    store.Append("t12", id, new FeatureJournalEntry
+                    {
+                        At = T0 + TimeSpan.FromMinutes(j), Kind = "turn", TaskId = id,
+                        SessionId = "s", TurnSeq = j,
+                        StartedAt = T0 + TimeSpan.FromMinutes(j),
+                        EndedAt = T0 + TimeSpan.FromMinutes(j + 1),
+                        Outcome = "finished",
+                    });
+                store.Append("t12", id, new FeatureJournalEntry
+                { At = T0 + TimeSpan.FromMinutes(10), Kind = "waiting", TaskId = id });
+                store.Append("t12", id, new FeatureJournalEntry
+                { At = T0 + TimeSpan.FromMinutes(10 + 10 + i), Kind = "waiting_cleared", TaskId = id });
+            }
+
+            int reads = 0;
+            Func<string, FeatureJournalReadResult?> read = id => { reads++; return store.Read("t12", id); };
+
+            var coldSw = Stopwatch.StartNew();
+            var cold = FeatureTypical.Build(tasks, "t12", "pB", "cur", read, NOW);
+            coldSw.Stop();
+            long coldTicks = coldSw.ElapsedTicks;
+
+            var warmSw = Stopwatch.StartNew();
+            var warm = FeatureTypical.Build(tasks, "t12", "pB", "cur", read, NOW);
+            warmSw.Stop();
+            long warmTicks = warmSw.ElapsedTicks;
+
+            cold!.Count.Should().Be(100);
+            warm!.Count.Should().Be(100);
+            reads.Should().Be(100, "тёплый запрос не читает ни одного файла журнала с диска");
+            warmTicks.Should().BeLessThan(coldTicks,
+                "тёплый путь: ни FeatureProjector.Build, ни чтений журнала с диска");
+
+            double ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
+            Console.WriteLine($"typical-bench: cold={ms(coldTicks):F1} ms, warm={ms(warmTicks):F3} ms, " +
+                $"features=100, journalLines=502");
+            File.WriteAllText(Path.Combine(dir, "typical-bench.txt"),
+                $"cold={ms(coldTicks):F1} ms, warm={ms(warmTicks):F3} ms, features=100, journalLines=502");
         }
-        Func<string, FeatureJournalReadResult?> read = id => journals.TryGetValue(id, out var j) ? j : null;
-
-        var coldSw = Stopwatch.StartNew();
-        var cold = FeatureTypical.Build(tasks, "t12", "pB", "cur", read, NOW);
-        coldSw.Stop();
-        long coldTicks = coldSw.ElapsedTicks;
-
-        var warmSw = Stopwatch.StartNew();
-        var warm = FeatureTypical.Build(tasks, "t12", "pB", "cur", read, NOW);
-        warmSw.Stop();
-        long warmTicks = warmSw.ElapsedTicks;
-
-        cold!.Count.Should().Be(100);
-        warm!.Count.Should().Be(100);
-        warmTicks.Should().BeLessThan(coldTicks,
-            "тёплый запрос: ни FeatureProjector.Build, ни чтений журнала");
-
-        double ms(long ticks) => ticks * 1000.0 / Stopwatch.Frequency;
-        File.WriteAllText(Path.Combine(Path.GetTempPath(), "typical-bench.txt"),
-            $"cold={ms(coldTicks):F1} ms, warm={ms(warmTicks):F3} ms, features=100");
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* временная папка — в порядке исключения */ }
+        }
     }
 }

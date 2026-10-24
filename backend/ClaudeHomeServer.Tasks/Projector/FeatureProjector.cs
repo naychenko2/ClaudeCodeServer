@@ -517,9 +517,11 @@ public sealed class FeatureProjector(TaskManager tasks)
                 ? merge.CompletedAt
                 : null;
             // Длительность: от старта первой задачи (ClaudeStartedAt, иначе CreatedAt) до mergedAt.
+            // Конец — nowUtc того же расчёта, а не отдельный DateTime.UtcNow: значение уходит
+            // в кэш stats.typical и не должно «застывать» между запросами (п.4 хвостов ST-R-B1).
             var firstStart = featureTasks
                 .Min(t => t.ClaudeStartedAt ?? t.CreatedAt);
-            var end = mergedAt ?? lastActivityAt ?? DateTime.UtcNow;
+            var end = mergedAt ?? lastActivityAt ?? nowUtc;
             var duration = Math.Max(0, Math.Round((end - firstStart).TotalMinutes));
             summary = new FeatureSummary
             {

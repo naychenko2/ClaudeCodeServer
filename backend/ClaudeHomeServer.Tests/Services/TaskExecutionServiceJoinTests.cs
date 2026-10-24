@@ -883,7 +883,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         await _sut.ExecuteAsync(task, auto: false);
 
         var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
-        session.WorktreePath.Should().Be(Path.Combine(_slotBase, "feat-wave-review-1"));
+        session.WorktreePath.Should().Be(Path.Combine(_slotBase, "feat~wave-review-1"));
         session.WorktreePath.Should().NotBe(wave);
         var prompt = await PromptOfAsync(task);
         prompt.Should().Contain(sha).And.Contain("не коммить").And.NotContain("не вошли");
@@ -947,7 +947,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         // review-1 занят чужой задачей на время первого запуска: задача уходит в review-2
         (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "чужая")).Should().NotBeNull();
         await _sut.ExecuteAsync(task, auto: false);
-        var slot2 = Path.Combine(_slotBase, "feat-wave-review-2");
+        var slot2 = Path.Combine(_slotBase, "feat~wave-review-2");
         _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!.WorktreePath.Should().Be(slot2);
         _reviewPool.Release("чужая");
         await _sessions.DeleteAsync(_tasks.GetById(task.Id)!.LinkedSessionId!); // прежний чат отработал и ушёл

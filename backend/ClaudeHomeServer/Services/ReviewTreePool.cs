@@ -55,6 +55,10 @@ public sealed class ReviewTreePool
         _log = log;
     }
 
+    // «/» → «~»: в имени ветки git «~» запрещён, поэтому отображение однозначно. Через «-» ветки
+    // «a/b» и «a-b» давали один путь слота, и снос слотов одной волны уносил слот другой.
+    internal static string SlotPrefix(string branch) => $"{branch.Replace('/', '~')}-review-";
+
     // null — оба слота волны заняты другими задачами. Повторный вызов той же задачи отдаёт
     // её же слот (заново сброшенный на актуальный коммит волны).
     public async Task<ReviewTreeLease?> TryAcquireAsync(
@@ -72,7 +76,7 @@ public sealed class ReviewTreePool
         var branch = worktrees.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == waveNorm)?.Branch
             ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(waveTreePath));
         var slotBase = _worktreesBase(ownerId, project);
-        var prefix = $"{branch.Replace('/', '-')}-review-";
+        var prefix = SlotPrefix(branch);
 
         var slotPath = Reserve(slotBase, prefix, taskId);
         if (slotPath is null) return null;
@@ -94,6 +98,10 @@ public sealed class ReviewTreePool
             }
             else
             {
+                // Прогрев (WorktreeBuildWarmup) для слота намеренно не зовём: слот живёт между ревью и
+                // obj/ переживает сброс, так что холодна только первая сборка в свежем слоте (60–90 с, один
+                // раз на слот); прогрев принадлежит SessionManager, а тащить его в пул ради этого — лишний
+                // шов и лишняя тяжёлая сборка при каждом заведении слота под гейтом OOM.
                 Directory.CreateDirectory(slotBase);
                 await _git.WorktreeAddDetachedAsync(ownerId, project.RootPath, slotPath, sha, ct);
             }
@@ -133,7 +141,7 @@ public sealed class ReviewTreePool
         var branch = worktrees.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == waveNorm)?.Branch
             ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(waveTreePath));
         var slotBase = _worktreesBase(ownerId, project);
-        var prefix = $"{branch.Replace('/', '-')}-review-";
+        var prefix = SlotPrefix(branch);
 
         for (var n = 1; n <= SlotsPerWave; n++)
             await RemoveSlotAsync(ownerId, project, Path.Combine(slotBase, prefix + n), ct);
@@ -165,35 +173,46 @@ public sealed class ReviewTreePool
     // живёт, пока жив чат. Терминальный feature_held_expired (чат удалён) под исключение не попадает.
     public Task RestoreLeasesAsync()
     {
-        foreach (var task in _allTasks())
+        // Старт сервера не должен зависеть от восстановления аренд: сбой — в лог, дальше без аренд
+        try
         {
-            if (task.Role != TaskRoles.Review || task.Status == TaskItemStatus.Done
-                || (task.ExecutorStoppedAt is not null && task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason)
-                || task.LinkedSessionId is null || task.ProjectId is null) continue;
-            if (_projectById(task.ProjectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) continue;
-            if (_sessionWorktree(task.LinkedSessionId) is not { } wt) continue;
-
-            string slotBase;
-            try { slotBase = _worktreesBase(task.OwnerId, project); }
-            catch (Exception ex)
+            foreach (var task in _allTasks().ToList())
             {
-                _log.LogWarning(ex, "Аренда слота задачи {TaskId} не восстановлена: нет базы деревьев", task.Id);
-                continue;
-            }
-            var trimmed = Path.TrimEndingDirectorySeparator(wt);
-            var name = Path.GetFileName(trimmed);
-            if (!IsSlotName(name)
-                || PathNormalizer.NormalizePath(Path.GetDirectoryName(trimmed) ?? "") != PathNormalizer.NormalizePath(slotBase))
-                continue;
-
-            var slotPath = Path.Combine(slotBase, name);
-            lock (_gate)
-            {
-                _leases.TryAdd(slotPath, task.Id);
-                _owned.Add(slotPath);
+                try { RestoreLease(task); }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Аренда слота задачи {TaskId} не восстановлена", task.Id);
+                }
             }
         }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Аренды слотов ревью не восстановлены: не прочитан список задач");
+        }
         return Task.CompletedTask;
+    }
+
+    private void RestoreLease(TaskItem task)
+    {
+        if (task.Role != TaskRoles.Review || task.Status == TaskItemStatus.Done
+            || (task.ExecutorStoppedAt is not null && task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason)
+            || task.LinkedSessionId is null || task.ProjectId is null) return;
+        if (_projectById(task.ProjectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) return;
+        if (_sessionWorktree(task.LinkedSessionId) is not { } wt) return;
+
+        var slotBase = _worktreesBase(task.OwnerId, project);
+        var trimmed = Path.TrimEndingDirectorySeparator(wt);
+        var name = Path.GetFileName(trimmed);
+        if (!IsSlotName(name)
+            || PathNormalizer.NormalizePath(Path.GetDirectoryName(trimmed) ?? "") != PathNormalizer.NormalizePath(slotBase))
+            return;
+
+        var slotPath = Path.Combine(slotBase, name);
+        lock (_gate)
+        {
+            _leases.TryAdd(slotPath, task.Id);
+            _owned.Add(slotPath);
+        }
     }
 
     private static bool IsSlotName(string name)

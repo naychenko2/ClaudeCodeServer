@@ -263,6 +263,11 @@ public class TasksHttpDelegationGateTests : IDisposable
         JsonSerializer.Deserialize<JsonElement>(await (await Client.GetAsync($"/api/tasks/{id}"))
             .Content.ReadAsStringAsync()).GetProperty("status").GetString()!;
 
+    /// <summary>Ответ — content-ошибка; при не-отказе падает с текстом ответа, а не KeyNotFoundException.</summary>
+    private static void AssertIsError(JsonElement answer) =>
+        (answer.GetProperty("result").TryGetProperty("isError", out var isError) && isError.GetBoolean())
+            .Should().BeTrue($"ожидался отказ, пришло: {ToolText(answer)}");
+
     /// <summary>Чат человека на глубине 0 (не исполнитель этого эпика) закрывает фичу — проходит.</summary>
     [Theory]
     [InlineData("tasks_complete")]
@@ -291,7 +296,7 @@ public class TasksHttpDelegationGateTests : IDisposable
 
         var answer = await CallToolAsync(Client, sessionId, tool, new { id = epicId, status = "done" });
 
-        answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
+        AssertIsError(answer);
         ToolText(answer).Should().Contain(FeatureCloseDenied);
         (await StatusOfAsync(epicId)).Should().NotBe("done");
     }
@@ -309,8 +314,27 @@ public class TasksHttpDelegationGateTests : IDisposable
 
         var answer = await CallToolAsync(Client, sessionId, tool, new { id = epicId, status = "done" });
 
-        answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
+        AssertIsError(answer);
         ToolText(answer).Should().Contain(FeatureCloseDenied);
+        (await StatusOfAsync(epicId)).Should().NotBe("done");
+    }
+
+    /// <summary>Перевод карточки эпика в колонку категории «Готово» тем же исполнителем — отказ: и в MCP, и в REST (403).</summary>
+    [Fact]
+    public async Task ЗакрытиеЭпика_ЧерезКолонкуГотово_ИсполнительОтказ()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = "шаг-фичи";
+
+        var mcp = await CallToolAsync(Client, sessionId, "tasks_update", new { id = epicId, columnId = "done" });
+        AssertIsError(mcp);
+        ToolText(mcp).Should().Contain(FeatureCloseDenied);
+
+        var rest = await ServiceClient(sessionId).PutAsJsonAsync($"/api/tasks/{epicId}", new { columnId = "done" });
+        rest.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await rest.Content.ReadAsStringAsync()).Should().Contain(FeatureCloseDenied);
         (await StatusOfAsync(epicId)).Should().NotBe("done");
     }
 

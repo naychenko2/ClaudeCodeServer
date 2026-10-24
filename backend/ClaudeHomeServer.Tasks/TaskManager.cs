@@ -751,7 +751,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // в работу и снять пометку, а агенту мы обязаны отказать внятно — иначе «200 OK и
     // ничего не изменилось» (находка фикс-волны 4, мутация в TaskManagerTests).
     public const string FeatureCloseDeniedText =
-        "Фичу закрывает человек: явная просьба в чате фичи или переводом карточки в «Готово».";
+        "Фичу закрывает человек: прямая просьба ассистенту или переводом карточки в «Готово».";
 
     /// <summary>Отказ закрыть эпик фичи не из чата человека; наследник InvalidOperationException — старые catch-и (400/Deny) его тоже ловят.</summary>
     public sealed class FeatureCloseDeniedException() : InvalidOperationException(FeatureCloseDeniedText);

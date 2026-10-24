@@ -399,9 +399,10 @@ public sealed class TasksToolset(
                     // Агентский путь (MCP): isAgentCall=true — гард против затирания
                     // DroppedByHumanAt выдаёт внятный 400 вместо молчаливого 200 OK
                     // (фикс-волна 4 team-blocker-honest)
-                    // Исполнитель здесь = сессия привязана к задаче (session.TaskId == id), claim typ=svc
-                    // не сверяется: MCP всегда идёт под сервисным токеном, и эта дверь строже REST
-                    // (TasksController.Update). Правила двух дверей должны оставаться согласованными.
+                    // Исполнитель здесь = сессия привязана к задаче (session.TaskId == id). MCP всегда
+                    // идёт под сервисным токеном и claim typ=svc не сверяет; REST (TasksController.Update)
+                    // сверяет callerSession.TaskId только под сервисным токеном. Закрытие эпика обе двери
+                    // запрещают по общему признаку: исполнитель задачи или делегированный ход.
                     updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
                         callerIsExecutor: session.TaskId == id,
                         denyFeatureClose: DenyFeatureClose(session, context.OwnerId))

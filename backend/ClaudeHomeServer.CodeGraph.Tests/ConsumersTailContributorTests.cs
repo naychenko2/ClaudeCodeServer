@@ -339,4 +339,158 @@ public class ConsumersTailContributorTests
             if (Directory.Exists(worktree)) Directory.Delete(worktree, true);
         }
     }
+
+    private static CodeGraphEdge Edge(string from, string to, EdgeRelation relation) => new()
+    {
+        Source = from, Target = to, Relation = relation, Confidence = EdgeConfidence.Extracted,
+    };
+
+    // Дерево из заданных файлов; у каждого — deps исходящих целей в чужих файлах и consumers потребителей
+    private static async Task<(ConsumersTailContributor Sut, string Dir, string Data)> PrepareMany(
+        string[] files, int deps, int consumers, Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? dependencies = null)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "cgtail_" + Guid.NewGuid().ToString("N")[..10]);
+        var data = Path.Combine(Path.GetTempPath(), "cgtail_data_" + Guid.NewGuid().ToString("N")[..10]);
+        Directory.CreateDirectory(data);
+        var nodes = new Dictionary<string, CodeGraphNode>();
+        var edges = new List<CodeGraphEdge>();
+        for (var f = 0; f < files.Length; f++)
+        {
+            var full = Path.Combine(dir, files[f]);
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            File.WriteAllText(full, "x");
+            var owner = $"A.F{f}";
+            nodes[owner] = Node(owner, files[f]);
+            for (var i = 0; i < deps; i++)
+            {
+                var id = $"D.F{f}D{i:D2}";
+                nodes[id] = Node(id, $"dep/F{f}D{i:D2}.cs");
+                edges.Add(Edge(owner, id, i % 2 == 0 ? EdgeRelation.Calls : EdgeRelation.References));
+            }
+            for (var i = 0; i < consumers; i++)
+            {
+                var id = $"C.F{f}C{i:D2}";
+                nodes[id] = Node(id, $"use/F{f}C{i:D2}.cs");
+                edges.Add(Edge(id, owner));
+            }
+        }
+        var persistence = new GraphPersistence(data, NullLogger<GraphPersistence>.Instance);
+        await persistence.SaveAsync(dir, new CodeGraph { Nodes = nodes, Edges = edges }, CancellationToken.None);
+        var graphs = new CodeGraphService(NullLogger<CodeGraphService>.Instance, null!, persistence,
+            new ConfigurationBuilder().Build());
+        var sut = new ConsumersTailContributor(graphs, new CodeGraphQueryService(graphs), new OpenGate(),
+            NullLogger<ConsumersTailContributor>.Instance, null, null, dependencies);
+        return (sut, dir, data);
+    }
+
+    [Fact]
+    public async Task Зависимости_ИсходящиеСвязиСОбъявлениемПутьСтрока()
+    {
+        var (sut, dir, data) = await PrepareMany(["src/Lib.cs"], deps: 3, consumers: 0);
+        try
+        {
+            var text = (await sut.BuildAsync(Ctx(dir), "Правь src/Lib.cs"))!.Sections.Single().Text;
+
+            text.Should().Contain("Зависимости src/Lib.cs");
+            text.Should().Contain("- D.F0D00 — dep/F0D00.cs:1 (Calls)");
+            text.Should().Contain("- D.F0D01 — dep/F0D01.cs:1 (References)");
+            text.Should().NotContain("Потребители", "входящих связей нет — подраздел не заводится");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task Зависимости_НазванныеВПостановкеСимволы_ИдутПервыми()
+    {
+        var (sut, dir, data) = await PrepareMany(["src/Lib.cs"], deps: 25, consumers: 0);
+        try
+        {
+            var text = (await sut.BuildAsync(Ctx(dir), "Правь src/Lib.cs: нужен вызов F0D24"))!.Sections.Single().Text;
+
+            var lines = text.Split('\n');
+            lines.Length.Should().BeLessThanOrEqualTo(1 + 20, "потолок подраздела — 20 строк");
+            lines[2].Should().Contain("D.F0D24", "первая строка после заголовка подраздела — названный символ");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task Сторожа_ПоПутиФайла_ДляFrontendИCore()
+    {
+        var (sut, dir, data) = await PrepareMany(
+            ["frontend/src/lib/offline.ts", "backend/ClaudeHomeServer.Core/Services/Foo.cs"], deps: 0, consumers: 1);
+        try
+        {
+            var text = (await sut.BuildAsync(Ctx(dir),
+                "Правь frontend/src/lib/offline.ts и backend/ClaudeHomeServer.Core/Services/Foo.cs"))!.Sections.Single().Text;
+
+            text.Should().Contain("Сторожа по пути frontend/src/lib/offline.ts");
+            text.Should().Contain("- frontend/ → npm run lint:design").And.Contain("ui_probe");
+            text.Should().Contain("SubsystemBoundaryTests.CoreDll_СодержитТолькоРазрешённыеНеймспейсы");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task Потолки_ТриФайлаПо30Зависимостей_СекцияВ120Строк_СторожаНеРежутся()
+    {
+        // четыре файла в тексте — берутся три; на каждом 30 зависимостей, 30 потребителей и сторожа frontend/
+        var files = new[] { "frontend/src/a.ts", "frontend/src/b.ts", "frontend/src/c.ts", "frontend/src/d.ts" };
+        var (sut, dir, data) = await PrepareMany(files, deps: 30, consumers: 30);
+        try
+        {
+            var text = (await sut.BuildAsync(Ctx(dir), string.Join(" ", files.Select(f => $"Правь {f}"))))!
+                .Sections.Single().Text;
+
+            var lines = text.Split('\n');
+            lines.Length.Should().BeLessThanOrEqualTo(ConsumersTailContributor.SectionLineLimit);
+            text.Should().NotContain("frontend/src/d.ts", "четвёртый файл сверх потолка файлов");
+            foreach (var f in files.Take(3))
+                text.Should().Contain($"Сторожа по пути {f}");
+            lines.Count(l => l.Contains("npm run lint:design")).Should().Be(3, "сторожа не режутся никогда");
+            var depLines = lines.Count(l => l.StartsWith("- D.F"));
+            var consLines = lines.Count(l => l.StartsWith("- use/"));
+            depLines.Should().BeLessThan(consLines, "зависимости режутся первыми");
+            text.Should().Contain("ещё ");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task ОшибкаГрафаЗависимостей_СекцииНет_ИсключенияНет()
+    {
+        var (sut, dir, data) = await PrepareMany(["src/Lib.cs"], deps: 2, consumers: 2,
+            dependencies: (_, _, _) => throw new InvalidOperationException("граф упал"));
+        try
+        {
+            (await sut.BuildAsync(Ctx(dir), "Правь src/Lib.cs")).Should().BeNull();
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public void КлассыИМетодыИзContractGuardMap_СуществуютВКоде()
+    {
+        // Корень репозитория — вверх от каталога тестовой сборки до backend/ClaudeHomeServer.slnx
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "backend", "ClaudeHomeServer.slnx")))
+            root = root.Parent;
+        root.Should().NotBeNull("тест ищет сторожей по исходникам репозитория");
+        var sources = Directory.EnumerateFiles(Path.Combine(root!.FullName, "backend"), "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                        && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+            .Select(File.ReadAllText).ToList();
+
+        var guards = ContractGuardMap.Entries.SelectMany(e => e.Guards).Where(g => g.TestClass is not null).ToList();
+        guards.Should().NotBeEmpty();
+        foreach (var g in guards)
+        {
+            var cls = new System.Text.RegularExpressions.Regex($@"\bclass\s+{g.TestClass}\b");
+            var body = sources.Where(src => cls.IsMatch(src)).ToList();
+            body.Should().NotBeEmpty($"класс сторожа {g.TestClass} должен существовать");
+            if (g.TestMethod is not null)
+                body.Should().Contain(src => src.Contains(" " + g.TestMethod + "("),
+                    $"метод сторожа {g.TestClass}.{g.TestMethod} должен существовать");
+        }
+    }
 }

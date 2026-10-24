@@ -213,6 +213,16 @@ describe('активная задача', () => {
     expect(c.awaitingReview).toBe(false);
   });
 
+  it.each(['merged', 'closed'] as const)('фича в состоянии %s: ни один шаг не «текущий» (как в Ганте)', state => {
+    const r = run({
+      state,
+      steps: [task({ id: 's1', status: 'inProgress', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      now: [{ taskId: 's1', stage: 'prod', title: 'Сделать X', stepRef: 'Ш1' }],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'Сделать X', taskIds: ['s1'], status: 'идёт', outcome: 'running' })],
+    });
+    expect(buildProdCards(r)[0].isCurrent).toBe(false);
+  });
+
   it('идущий виток ревью: метка «текущий» на узле «работа», «ревью» — пунктирный', () => {
     const r = run({
       steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],

@@ -192,7 +192,8 @@ public sealed class TasksToolset(
                 // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding; текст
                 // отказа общий с REST)
                 if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
-                        context.OwnerId, session.Id, OptionalArg(arguments, "featureId")) is { } bound)
+                        context.OwnerId, session.Id, FeatureChatDoor.CreateTarget(
+                            OptionalArg(arguments, "featureId"), OptionalArg(arguments, "role"))) is { } bound)
                     return Deny(bound);
 
                 // Целевой проект: по умолчанию текущий; явный projectId, отличный от

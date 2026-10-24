@@ -60,7 +60,7 @@ public class ProjectTasksController(
 
         // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
         if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
-                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), req.FeatureId) is { } bound)
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
             return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
 
         // Колонка доски → статус выводим из её категории
@@ -258,7 +258,7 @@ public class TasksController(
 
         // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
         if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
-                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), req.FeatureId) is { } bound)
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
             return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
 
         // Проект из тела (если он свой) — для резолва кастомной колонки. Чужой проект

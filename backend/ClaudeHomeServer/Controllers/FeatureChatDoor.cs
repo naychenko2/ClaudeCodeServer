@@ -22,6 +22,13 @@ public static class FeatureChatDoor
     public static string? TargetFeature(TaskItem task) =>
         task.FeatureId ?? (task.Role == TaskRoles.Feature ? task.Id : null);
 
+    // Цель при СОЗДАНИИ: явный featureId, а у нового эпика (role=feature без featureId) — сама
+    // новая фича, которой нет ни у одного чата, поэтому привязанный чат её не пускает.
+    public static string? CreateTarget(string? featureId, string? role) =>
+        !string.IsNullOrEmpty(featureId) ? featureId
+        : role == TaskRoles.Feature ? "new-feature:" + Guid.NewGuid().ToString("N")
+        : null;
+
     // REST-вход: чат-вызыватель — по заголовку X-Caller-Session-Id. Нет заголовка (кнопка в UI),
     // чужая или несуществующая сессия — привязки нет, гард пропускает.
     public static string? DenyForHeader(

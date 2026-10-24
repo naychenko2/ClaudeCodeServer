@@ -171,6 +171,86 @@ public class TasksFeatureChatBindingDoorTests : IClassFixture<TestWebApplication
     }
 
     [Fact]
+    public async Task RestCreate_ChatOfFeatureA_CreatesEpic_Conflict_CountUnchanged()
+    {
+        var chat = await NewChat();
+        Epic("Фича A9", chat.Id);
+        var before = TaskCount;
+
+        var resp = await Rest(HttpMethod.Post, "/api/tasks", new { title = "Фича B9", role = "feature" }, chat.Id);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
+            .GetProperty("code").GetString().Should().Be("chat_feature_bound");
+        TaskCount.Should().Be(before);
+    }
+
+    [Fact]
+    public async Task RestCreate_NewChat_CreatesEpic_Ok()
+    {
+        var chat = await NewChat();
+
+        var resp = await Rest(HttpMethod.Post, "/api/tasks", new { title = "Фича C9", role = "feature" }, chat.Id);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "свободный чат вправе завести эпик");
+    }
+
+    [Fact]
+    public async Task RestCreate_LegacyChatWithAAndB_CreatesEpic_Conflict()
+    {
+        var chat = await NewChat();
+        Epic("Фича A10", chat.Id);
+        Epic("Фича B10", chat.Id);
+        var before = TaskCount;
+
+        var resp = await Rest(HttpMethod.Post, "/api/tasks", new { title = "Фича C10", role = "feature" }, chat.Id);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict, "легаси-чат привязан к A и B, третья фича — чужая");
+        TaskCount.Should().Be(before);
+    }
+
+    [Fact]
+    public async Task McpCreate_ChatOfFeatureA_CreatesEpic_Deny_CountUnchanged_TextEqualsRest()
+    {
+        var chat = await NewChat();
+        Epic("Фича A11", chat.Id);
+        var before = TaskCount;
+
+        var (isError, text) = await Mcp(chat.Id, "tasks_create", new { title = "Фича B11", role = "feature" });
+
+        isError.Should().BeTrue();
+        TaskCount.Should().Be(before);
+        var rest = await Rest(HttpMethod.Post, "/api/tasks", new { title = "Фича B11", role = "feature" }, chat.Id);
+        var restText = JsonSerializer.Deserialize<JsonElement>(await rest.Content.ReadAsStringAsync())
+            .GetProperty("error").GetString();
+        text.Should().Be(restText, "текст отказа REST и MCP побайтно один");
+    }
+
+    [Fact]
+    public async Task McpCreate_NewChat_CreatesEpic_Ok()
+    {
+        var chat = await NewChat();
+
+        var (isError, _) = await Mcp(chat.Id, "tasks_create", new { title = "Фича C11", role = "feature" });
+
+        isError.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task McpCreate_LegacyChatWithAAndB_CreatesEpic_Deny()
+    {
+        var chat = await NewChat();
+        Epic("Фича A12", chat.Id);
+        Epic("Фича B12", chat.Id);
+        var before = TaskCount;
+
+        var (isError, _) = await Mcp(chat.Id, "tasks_create", new { title = "Фича C12", role = "feature" });
+
+        isError.Should().BeTrue();
+        TaskCount.Should().Be(before);
+    }
+
+    [Fact]
     public async Task McpCreate_LegacyChatWithAAndB_CreatesA_Ok()
     {
         var chat = await NewChat();

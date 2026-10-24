@@ -2,7 +2,10 @@
 // docs/mockups/feature-stats-breakdown-5.html, вариант C + малое кольцо, записка
 // §«Рекомендация»). Шапка: заголовок и два SegmentedControl — разрез
 // (персоны/модели/роли) и мера (время/токены/деньги). Мера — состояние оболочки:
-// она задаёт центр кольца (десктоп) и сортировку карточек (мобила); у таблицы
+// выбранная задаёт центр кольца (десктоп) и сортировку карточек (мобила); если у
+// неё нет данных ни у одной видимой группы, действующая мера — время (М1): оболочка
+// решает это здесь один раз и передаёт её и кольцу, и карточкам — шапка, кольцо и
+// карточки показывают одну и ту же меру; у таблицы
 // сортировка своя — по заголовкам колонок (ST-F11). Группы фильтруются по
 // hiddenKeys один раз здесь: кольцо, таблица и карточки видят один и тот же
 // набор. Арифметика — только из FeatureBreakdownModel (ST-F8); компонент
@@ -83,6 +86,15 @@ export function FeatureBreakdownBlock({
   const costAvailable = visible.some(g => measureValue(g, 'cost') != null);
   const noCost = !tokensAvailable && !costAvailable;
 
+  // Действующая мера (М1): если у выбранной нет данных ни у одной видимой группы —
+  // фолбэк на время. Решается здесь один раз: шапка, кольцо и карточки видят одну
+  // меру (раньше кольцо молча фолбэчил внутри себя, а карточки и шапка оставались
+  // на выбранной — доли в карточках исчезали).
+  const effMeasure: Measure =
+    measure === 'tokens' ? (tokensAvailable ? 'tokens' : 'time')
+    : measure === 'cost' ? (costAvailable ? 'cost' : 'time')
+    : 'time';
+
   const head = (
     <div data-testid="breakdown-head" style={HEAD}>
       <span data-testid="breakdown-title" style={TITLE}>Кто и на чём работал</span>
@@ -97,7 +109,9 @@ export function FeatureBreakdownBlock({
         ]}
       />
       <SegmentedControl
-        value={measure}
+        // Показываем действующую меру, а не сырой выбор: приглушённый клик
+        // не должен создавать противоречия «шапка — деньги, кольцо — время».
+        value={effMeasure}
         onChange={setMeasure}
         touch={isMobile}
         options={[
@@ -129,18 +143,21 @@ export function FeatureBreakdownBlock({
           {noCost && <div data-testid="breakdown-no-cost" style={PLATE}>Токены и деньги недоступны: у этой фичи нет учёта расхода. Доли — по времени</div>}
           {costPartial && <div data-testid="breakdown-cost-partial" style={PLATE}>цена по части моделей недоступна</div>}
           <FeatureBreakdownCards
-            groups={visible} axis={axis} measure={measure} run={run}
+            groups={visible} axis={axis} measure={effMeasure} run={run}
             labelOf={labelOf} colorOf={colorOf} hiddenKeys={hiddenKeys}
           />
         </div>
       ) : (
         <div style={{ display: 'flex', gap: SP.lg, alignItems: 'flex-start', marginTop: SP.md }}>
-          {/* Колонца кольца: плашки «без расхода» стоят рядом с кольцом (пункт задачи). */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          {/* Колонца кольца: плашки «без расхода» стоят рядом с кольцом (пункт
+             задачи). Ширина фиксирована — размер кольца (М2): без неё длинный текст
+             плашки растягивал колонку до max-content (~430 px) и ломал раскладку 1280;
+             теперь текст переносится внутри колонки. */}
+          <div data-testid="breakdown-ring-col" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, width: 140 }}>
             {noCost && <div data-testid="breakdown-no-cost" style={PLATE}>Токены и деньги недоступны: у этой фичи нет учёта расхода. Доли — по времени</div>}
             {costPartial && <div data-testid="breakdown-cost-partial" style={PLATE}>цена по части моделей недоступна</div>}
             <ShareRing
-              groups={visible} measure={measure} size={140}
+              groups={visible} measure={effMeasure} size={140}
               labelOf={labelOf} colorOf={colorOf} axisLabel={AXIS_WORD[axis]}
             />
           </div>

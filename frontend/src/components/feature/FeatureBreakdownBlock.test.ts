@@ -1,16 +1,24 @@
 // Тесты оболочки блока «Кто и на чём работал» (ST-F13). Рендер на fakeDom: шапка
-// с двумя переключателями; смена разреза и меры; hiddenKeys отсекается один раз —
+// с двумя переключателями; смена разреза и меры; действующая мера решается в
+// оболочке один раз: выбранная без данных фолбэчит на время, и шапка, кольцо и
+// карточки показывают одну меру (М1); hiddenKeys отсекается один раз —
 // кольцо, таблица и карточки видят ОДИН набор групп; плашка costPartial стоит
-// рядом с кольцом; «без расхода» — плашка «нет учёта» и приглушённые опции меры;
+// рядом с кольцом, колонца кольца фиксирована 140 px и не растягивается плашками
+// (М2); «без расхода» — плашка «нет учёта» и приглушённые опции меры;
 // меньше двух групп — «Пока нечего разрезать»; мобила — карточки, без кольца и
 // таблицы. Числа — те, что отдаёт модель ST-F8; пересчёт в оболочке не проверяем.
 //
-// Мутация (проверена прогоном): убрать фильтр hiddenKeys в оболочке (дать ShareRing
-// сырые группы) — краснеет тест «один набор групп» (дуг в кольце 4, строк 3).
+// Мутации (проверены прогоном):
+// - убрать фильтр hiddenKeys в оболочке (дать ShareRing сырые группы) — краснеет
+//   тест «один набор групп» (дуг в кольце 4, строк 3);
+// - дать карточкам сырую measure вместо действующей — краснеет тест «деньги без
+//   расхода» на 360 (доли share-pct исчезают);
+// - снять width: 140 у колонцы кольца — краснеет тест фиксированной ширины.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureBreakdownBlock } from './FeatureBreakdownBlock';
+import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureBreakdown, FeatureBreakdownGroup } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
@@ -51,6 +59,12 @@ const ROLES: FeatureBreakdownGroup[] = [
   mkGroup('review', 60, 3000, 5.0, ['c2']),
 ];
 const BREAKDOWN: FeatureBreakdown = { personas: PERSONAS, models: MODELS, roles: ROLES };
+// «Без расхода» (М1): время есть, токены и деньги — null у всех групп.
+const NO_COST: FeatureBreakdown = {
+  personas: PERSONAS.map(g => ({ ...g, tokens: null, costUsd: null })),
+  models: [],
+  roles: [],
+};
 
 const LABELS: Record<string, string> = {
   feature: 'фича', vera: 'Вера', kira: 'Кира', timur: 'Тимур', opus: 'Opus', qwen: 'Qwen 3.8',
@@ -173,6 +187,19 @@ describe('разрез и мера (к1, к3)', () => {
     expect(ringAria(container)).toContain('Доли по токенам');
   });
 
+  it('«деньги» без расхода: действующая мера — время, шапка и кольцо не противоречат (М1)', () => {
+    const { container } = mountBlock({ breakdown: NO_COST });
+    click(findButtonByLabel(headNode(container)!, 'деньги'));
+    // Кольцо — по времени, а не «по деньгам».
+    const aria = ringAria(container) ?? '';
+    expect(aria).toContain('Доли по времени');
+    expect(aria).not.toContain('по деньгам');
+    // Активный сегмент шапки — «время», а не «деньги».
+    const head = headNode(container)!;
+    expect(findButtonByLabel(head, 'деньги')!.style.background).not.toBe(C.accent);
+    expect(findButtonByLabel(head, 'время')!.style.background).toBe(C.accent);
+  });
+
   it('labelOf прокинут в таблицу: имя строки — метка, не сырой ключ', () => {
     const { container } = mountBlock();
     const text = textOf(findNodeByAttr(container, 'data-testid', 'breakdown-row-kira'));
@@ -220,6 +247,14 @@ describe('плашки (к2)', () => {
     expect(findNodeByAttr(container, 'data-testid', 'breakdown-cost-partial')).toBeNull();
   });
 
+  it('колонца кольца фиксирована 140 px: плашки не растягивают её (М2, раскладка 1280)', () => {
+    const { container } = mountBlock({ costPartial: true });
+    const col = findNodeByAttr(container, 'data-testid', 'breakdown-ring-col');
+    expect(col, 'колонцы кольца').toBeTruthy();
+    const w = Number(String(col!.style.width).replace('px', ''));
+    expect(w, 'ширина колонцы').toBe(140);
+  });
+
   it('без расхода: плашка «нет учёта» и приглушённые «токены»/«деньги»', () => {
     const noCost: FeatureBreakdown = {
       personas: PERSONAS.map(g => ({ ...g, tokens: null, costUsd: null })),
@@ -258,5 +293,16 @@ describe('мобила (к1)', () => {
     expect(findNodeByAttr(container, 'data-testid', 'share-ring'), 'кольца на мобиле').toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'feature-breakdown-table'), 'таблицы на мобиле').toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'breakdown-cost-partial'), 'плашки costPartial').toBeTruthy();
+  });
+
+  it('на 360 «деньги» без расхода: доли карточек на месте (мера — время, М1)', () => {
+    mobileFlag.value = true;
+    const { container } = mountBlock({ breakdown: NO_COST });
+    click(findButtonByLabel(headNode(container)!, 'деньги'));
+    expect(findNodeByAttr(container, 'data-testid', 'feature-breakdown-cards'), 'карточек нет').toBeTruthy();
+    // Доли по времени есть у каждой карточки; сырая мера 'cost' их бы сняла.
+    for (const key of ['feature', 'kira', 'timur', 'vera']) {
+      expect(findNodeByAttr(container, 'data-testid', `share-pct-${key}`), `доли карточки ${key}`).toBeTruthy();
+    }
   });
 });

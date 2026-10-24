@@ -1023,6 +1023,74 @@ public class TaskExecutionServiceHoldTests : IDisposable
             "пометка гасится, несмотря на сбой уведомления: шаг возвращён в работу");
     }
 
+    // W4-HOLD-J (хвост принятого R-J3, критерий c1): сбой самой марки — записи tasks.json —
+    // не обрывает цикл. Сценарий идёт через второй экземпляр стора в синхронном режиме
+    // (Tasks:SaveDebounceMs=0), где tasks.json заменён каталогом: любая запись падает.
+    // Первый (expired) шаг не помечается — без try IOException ушла бы из метода: второй
+    // шаг не получил бы продолжения, карточка не ушла бы оркестратору. Мутация: вернуть
+    // марку без try — тест умирает на исключении.
+    [Fact]
+    public async Task ResumeFeatureTurnsAfterHold_MarkSaveFails_SecondStepContinuesAndCardSent()
+    {
+        var user = _userStore.Add("hold-mark-save-fail", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var gone = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг без чата", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var live = _tasks.Create(null, user.Id, new CreateTaskRequest("Живой шаг", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var goneChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "gone",
+            taskId: gone.Id);
+        var liveChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "live",
+            taskId: live.Id);
+        _tasks.MarkClaudeStarted(gone.Id, goneChat.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeStarted(live.Id, liveChat.Id, DateTime.UtcNow);
+        SetRunningTurn(goneChat.Id);
+        var liveAdapter = SetRunningTurn(liveChat.Id);
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        await _sessions.DeleteAsync(goneChat.Id); // чат исчез за паузу
+        _tasks.ClearHold(epic.Id);
+
+        // Тот же стор, второй экземпляр, синхронная запись: состояние на диске уже целое.
+        _tasks.Flush();
+        var syncConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_dir, "projects.json"),
+            ["Tasks:SaveDebounceMs"] = "0",
+        }).Build();
+        var syncTasks = new TaskManager(syncConfig, personas: _personas);
+        // Сбой записи: tasks.json становится каталогом — File.Move под него не проходит.
+        var storePath = Path.Combine(_dir, "tasks.json");
+        File.Delete(storePath);
+        Directory.CreateDirectory(storePath);
+
+        var broken = new Mock<ISessionBroadcaster>();
+        broken.Setup(b => b.ToOwner(It.IsAny<string>(), It.IsAny<ServerMessage>()))
+            .Returns(Task.CompletedTask);
+        var sut = new TaskExecutionService(syncTasks, _sessions, _personas, broken.Object, _push, _notif,
+            NullLogger<TaskExecutionService>.Instance, _config, kb: _notesKb);
+
+        var resumed = await sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+
+        // Метод не бросил и дошёл до конца цикла: второй шаг получил продолжение, карточка
+        // ушла. resumed=0 — у живого шага пометку тоже не снять (стор сломан), но продолжение
+        // в чат доставлено: цикл не оборвался на сбое марки.
+        resumed.Should().Be(0, "ни один шаг не вернулся в работу: запись стора падает");
+        liveAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("продолжи")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()),
+            Times.Once(), "сбой марки не оборвал цикл: второй шаг получил продолжение");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("Пауза снята")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<string>()),
+            Times.Once(), "карточка ушла оркестратору, несмотря на сбой стора");
+        syncTasks.Dispose();
+    }
+
     // W4-HOLD-N (хвост R-HOLD-D2, критерий c2): страховка необратимой заморозки — при
     // удалении эпика на паузе его шаги больше никогда не «сняются», и их чаты остались бы
     // вечными. Ручка удаления зовёт RestoreFrozenChatsAfterFeatureDelete до Delete; здесь —

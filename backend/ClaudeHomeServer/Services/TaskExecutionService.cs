@@ -1225,7 +1225,20 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 // R-HOLD-J2 (п.2): expired считается только при фактической смене пометки:
                 // если задачу удалили между снимком и вызовом, карточка не должна обещать
                 // перезапуск несуществующего шага.
-                var marked = _tasks.MarkExecutorStopExpired(t.Id);
+                // W4-HOLD-J (хвост R-J3): сама смена пометки под try: сбой записи tasks.json
+                // (синхронный режим Tasks:SaveDebounceMs ≤ 0) не должен уходить из метода —
+                // остальные шаги продолжают, карточка оркестратору уходит.
+                TaskItem? marked;
+                try
+                {
+                    marked = _tasks.MarkExecutorStopExpired(t.Id);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning("Не удалось сменить пометку на терминальную {TaskId}: {Message}",
+                        t.Id, ex.Message);
+                    continue;
+                }
                 if (marked is null) continue;
                 expired++;
                 // R-HOLD-J (п.2): сбой рассылки не обрывает цикл: пометка уже сменена,

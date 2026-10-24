@@ -15,7 +15,9 @@
 //   · старый запрос отклонён по abort, пока новый «идёт» — finally не трёт состояние нового
 //     запроса: страховка равенства контроллера (W5-R-F2a, п.3);
 //   · на 360 кнопки «Остановить», «Обновить», «Свернуть» — minHeight 40 (п.4),
-//     «Повторить» в заглушке 502 — тоже 40 (W5-R-F2a, п.1).
+//     «Повторить» в заглушке 502 — тоже 40 (W5-R-F2a, п.1);
+//   · число событий: «по N событиям» в шапке и «устарело · N событий» в бейдже (W4-AN-EC);
+//     если бэк его не несёт (старая версия) — числа нигде нет.
 //
 // Мутации (в отчёте): в FeatureAnalysisLine «Обновить» → fetchSummary(false) —
 // тест «Обновить — запрос с force» краснеет; удаление сброса состояния при смене
@@ -25,7 +27,9 @@
 // btnStyle и style у «Повторить» красит тесты про minHeight 40; удаление проверки
 // «текущий запрос» в .then красит тест «ответ старого запроса не липнет» (проверено
 // прогоном); удаление cleanup-стрелки в useEffect красит тест про отмену при
-// размонтировании.
+// размонтировании; удаление показа «по N событиям» в шапке красит тест про число
+// событий; вырезание числа из бейджа красит тест «устарело · N событий» (проверено
+// прогоном).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -85,7 +89,7 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
 vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
 
 // Худший случай строки — «idle»: действие ровно одно, «Анализ моделью».
-function mkRun(featureId = 'f-1'): FeatureRun {
+function mkRun(featureId = 'f-1', lastActivityAt?: string): FeatureRun {
   return {
     featureId,
     state: 'idle',
@@ -97,6 +101,7 @@ function mkRun(featureId = 'f-1'): FeatureRun {
     verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
     progress: 0,
     ready: false,
+    ...(lastActivityAt ? { lastActivityAt } : {}),
   };
 }
 
@@ -105,14 +110,18 @@ const SUMMARY: FeatureSummaryResult = {
   generatedAt: '2026-10-24T09:00:00Z',
   model: 'claude-opus-4-8',
   cached: true,
+  eventCount: 12,
 };
 
 // render возвращает и root: тест смены фичи перерендеривает тот же экземпляр
 // с другим run — так же делает WorkspacePage при переходе между фичами.
-function render(opts?: { isMobile?: boolean }) {
+function render(opts?: { isMobile?: boolean; lastActivityAt?: string }) {
   installFakeDom();
   const { root, container } = mount(
-    createElement(FeatureAnalysisLine, { run: mkRun(), isMobile: !!opts?.isMobile }),
+    createElement(
+      FeatureAnalysisLine,
+      { run: mkRun('f-1', opts?.lastActivityAt), isMobile: !!opts?.isMobile },
+    ),
   );
   return { root, c: container };
 }
@@ -333,5 +342,48 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
       expect(btn, `кнопка ${id} в шапке резюме`).not.toBeNull();
       expect(minHeightPx(btn!), 'тач-цель 40 на мобиле').toBe(40);
     }
+  });
+
+  // === 14. Число событий в шапке (W4-AN-EC; мутация: вырезать показ — тест краснеет) ===
+  it('шапка — «по 12 событиям» рядом с датой резюме', async () => {
+    const { c } = render();
+    clickLineSummary(c);
+    await flush();
+    const box = findNodeByAttr(c, 'data-testid', 'feature-analysis-summary');
+    expect(box, 'резюме раскрыто').not.toBeNull();
+    const all = textNodes(box!).join('');
+    expect(all, 'число событий в шапке').toContain('по 12 событиям');
+  });
+
+  // === 15. Бейдж устаревания с числом (W4-AN-EC; мутация: вырезание числа красит тест) ===
+  it('устаревшее резюме — бейдж «устарело · 12 событий»', async () => {
+    // Активность фичи позже генерации — бейдж есть, и с числом событий резюме.
+    const { c } = render({ lastActivityAt: '2026-10-24T12:00:00Z' });
+    clickLineSummary(c);
+    await flush();
+    const box = findNodeByAttr(c, 'data-testid', 'feature-analysis-summary');
+    expect(box, 'резюме раскрыто').not.toBeNull();
+    const all = textNodes(box!).join('');
+    expect(all, 'бейдж с числом событий').toContain('устарело · 12 событий');
+  });
+
+  // === 16. Формы числительных и ответ старой версии бэка без eventCount ===
+  it('eventCount 1 — «по 1 событию» и «устарело · 1 событие»; без eventCount — числа нет нигде', async () => {
+    mockSummary.result = { ...SUMMARY, eventCount: 1 };
+    const { c } = render({ lastActivityAt: '2026-10-24T12:00:00Z' });
+    clickLineSummary(c);
+    await flush();
+    const all = textNodes(findNodeByAttr(c, 'data-testid', 'feature-analysis-summary')!).join('');
+    expect(all, 'единичная форма в шапке').toContain('по 1 событию');
+    expect(all, 'единичная форма в бейдже').toContain('устарело · 1 событие');
+
+    // Старая версия сервера поля не несёт — ни в шапке, ни в бейдже числа нет.
+    mockSummary.result = { text: SUMMARY.text, generatedAt: SUMMARY.generatedAt, model: null, cached: true };
+    const { c: c2 } = render({ lastActivityAt: '2026-10-24T12:00:00Z' });
+    clickLineSummary(c2);
+    await flush();
+    const all2 = textNodes(findNodeByAttr(c2, 'data-testid', 'feature-analysis-summary')!).join('');
+    expect(all2, 'бейдж без числа — просто «устарело»').toContain('устарело');
+    expect(all2, 'числа событий в шапке нет').not.toContain('событи');
   });
 });

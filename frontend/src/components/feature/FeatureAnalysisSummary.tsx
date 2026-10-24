@@ -80,6 +80,14 @@ function focusStep(run: FeatureRun, stepRef: string) {
   if (stage) focusFeatureStage(stage.key);
 }
 
+// Русские числительные для числа событий (та же форма, что в projectUtil.plural).
+function plural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+
 // Пункт: текст, где коды шагов — кнопки-ссылки (моно, акцент, без фона).
 function renderItem(item: string, refs: Set<string>, run: FeatureRun, isMobile: boolean): ReactNode[] {
   return item.split(/\s+/).map((token, i) => refs.has(token) ? (
@@ -164,10 +172,13 @@ export function FeatureAnalysisSummary({
     );
   }
 
-  // «Готово»: шапка (дата, модель, «устарело») + три колонки.
+  // «Готово»: шапка (дата, число событий, модель, «устарело») + три колонки.
   const sections = parseSummary(data?.text ?? '');
   const refs = stepRefsOf(run);
-  // «Устарело» = активность фичи позже генерации. Числа событий бэк не отдаёт — пишем просто «устарело».
+  // Число событий, на которых построено резюме (W4-ANB): бэк отдаёт eventCount;
+  // старая версия сервера его не несёт — тогда числа нигде не показываем.
+  const eventCount = typeof data?.eventCount === 'number' ? data.eventCount : null;
+  // «Устарело» = активность фичи позже генерации.
   const stale = !!data?.generatedAt && !!run.lastActivityAt &&
     Date.parse(run.lastActivityAt) > Date.parse(data.generatedAt);
   const btnSize = isMobile ? 'sm' : 'xs';
@@ -180,8 +191,16 @@ export function FeatureAnalysisSummary({
         ...(isMobile ? { flexWrap: 'wrap' as const } : {}),
       }}>
         <Sparkles size={ICON_SIZE.xs} {...ICON_PROPS} />
-        <span>анализ · {formatClock(data?.generatedAt ?? '')} · {data?.model || 'локальная модель'}</span>
-        {stale && <Badge tone="warning" size="xs">устарело</Badge>}
+        <span>
+          анализ · {formatClock(data?.generatedAt ?? '')}
+          {eventCount !== null ? ` · по ${eventCount} ${plural(eventCount, 'событию', 'событиям', 'событиям')}` : ''}
+          · {data?.model || 'локальная модель'}
+        </span>
+        {stale && (
+          <Badge tone="warning" size="xs">
+            устарело{eventCount !== null ? ` · ${eventCount} ${plural(eventCount, 'событие', 'события', 'событий')}` : ''}
+          </Badge>
+        )}
         <span style={{ flex: 1 }} />
         <Button
           variant="ghost" size={btnSize} dataTestId="summary-refresh" style={btnStyle}

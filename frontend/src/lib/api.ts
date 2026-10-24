@@ -826,6 +826,10 @@ export interface FeatureSummaryResult {
   model: string | null;
   cached: boolean;
   usage?: unknown;
+  // Число событий хронологии, на которых построено резюме (W4-ANB): для шапки
+  // «по N событиям» и бейджа «устарело · N событий». Бэк отдаёт всегда; optional —
+  // защита от ответов старой версии сервера.
+  eventCount?: number;
 }
 
 // Projects

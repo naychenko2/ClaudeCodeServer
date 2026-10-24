@@ -82,7 +82,7 @@ public class LinkedNodeModulesTests : IDisposable
         LinkInWorktree(worktree, Outside());
 
         TestRunService.FindNodeBin(worktree, "frontend", TestRunKind.Vitest, out var error).Should().BeNull();
-        error.Should().Contain("node_modules/vitest/vitest.mjs ведёт символической ссылкой за пределы проекта");
+        error.Should().Contain("frontend/node_modules ведёт символической ссылкой за пределы проекта не на node_modules");
     }
 
     [Fact]
@@ -93,7 +93,23 @@ public class LinkedNodeModulesTests : IDisposable
         LinkInWorktree(worktree, modules);
 
         TestRunService.FindNodeBin(worktree, "frontend", TestRunKind.Vitest, out var error).Should().BeNull();
-        error.Should().Contain("за пределы проекта");
+        error.Should().Contain("за пределы проекта не на node_modules");
+    }
+
+    [Fact]
+    public void FindNodeBin_ПринятаяСсылка_БинарьВнутриСсылаетсяНаружу_Отказ()
+    {
+        if (!CanLink(_root)) return;
+        var (worktree, modules) = Worktree();
+        var bin = Path.Combine(modules, "vitest", "vitest.mjs");
+        File.Delete(bin);
+        var foreign = Path.Combine(_root, "foreign.mjs");
+        File.WriteAllText(foreign, "");
+        if (!TreeLinks.TryLink(bin, foreign, directory: false)) return;
+        LinkInWorktree(worktree, modules);
+
+        TestRunService.FindNodeBin(worktree, "frontend", TestRunKind.Vitest, out var error).Should().BeNull();
+        error.Should().Contain("бинарь внутри неё ссылается наружу");
     }
 
     [Fact]

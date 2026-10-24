@@ -374,12 +374,22 @@ public sealed partial class TestRunService
             if (File.Exists(candidate))
             {
                 // Worktree: node_modules — ссылка на зависимости основного дерева того же репозитория (как у FindPackageDir)
-                if (!ResolvesInside(rootFull, candidate)
-                    && !LinkedModulesInRepository(rootFull, Path.Combine(dir, "node_modules"), bin["node_modules/".Length..]))
+                if (!ResolvesInside(rootFull, candidate))
                 {
-                    error = $"{Relative(rootFull, candidate)} ведёт символической ссылкой за пределы проекта — "
-                        + "такой пакет не запускаем.";
-                    return null;
+                    var modules = Path.Combine(dir, "node_modules");
+                    if (ResolvesInside(rootFull, modules))
+                    {
+                        error = $"{Relative(rootFull, candidate)} ведёт символической ссылкой за пределы проекта — "
+                            + "такой пакет не запускаем.";
+                        return null;
+                    }
+                    if (!LinkedModulesInRepository(rootFull, modules, bin["node_modules/".Length..]))
+                    {
+                        error = $"{Relative(rootFull, modules)} ведёт символической ссылкой за пределы проекта не на "
+                            + "node_modules с package.json рядом в основном дереве того же репозитория, либо бинарь внутри "
+                            + "неё ссылается наружу — такой пакет не запускаем.";
+                        return null;
+                    }
                 }
                 return Path.GetRelativePath(targetFull, candidate).Replace('\\', '/');
             }

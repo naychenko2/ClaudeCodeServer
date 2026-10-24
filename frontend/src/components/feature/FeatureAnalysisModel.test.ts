@@ -17,7 +17,8 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { analysisLineState, stageLabelShort } from './FeatureAnalysisModel';
 import { featureRunStatusTag } from './FeatureStatusTag';
 import { C } from '../../lib/design';
@@ -29,6 +30,11 @@ import type { FeatureRun, FeatureNow } from '../../types/featureRun';
 vi.mock('../../lib/personas', () => ({
   getPersonaById: (id: string) => (id === 'p-1' ? { id: 'p-1', name: 'Кира' } : undefined),
 }));
+
+// Сторож читает исходники рядом с тестом: путь от модуля, а не от process.cwd() —
+// прогон из корня репозитория (`npm test` → `vitest run`, cwd = корень) иначе даёт ENOENT
+// и роняет весь файл (замечание W5-R-F3a).
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 // Фиксированное «сейчас» для детерминизма.
 const NOW = Date.parse('2026-10-20T12:00:00Z');
@@ -241,10 +247,7 @@ describe('analysisLineState — состояния', () => {
 // условий»). Рендер-инфраструктуры (jsdom) во фронте нет — инвариант виден в разметке,
 // как с хвостом строки выше.
 describe('единственный источник статусного тега (W5-F3a)', () => {
-  const headerSrc = readFileSync(
-    join(process.cwd(), 'src/components/feature/FeaturePageHeader.tsx'),
-    'utf8',
-  );
+  const headerSrc = readFileSync(join(HERE, 'FeaturePageHeader.tsx'), 'utf8');
 
   it('шапка не определяет тег сама — он живёт в FeatureStatusTag', () => {
     expect(/function featureRunStatusTag/.test(headerSrc), 'в шапке остался featureRunStatusTag — цикл не разомкнут').toBe(false);
@@ -283,10 +286,7 @@ describe('stageLabelShort', () => {
 // Рендер-инфраструктуры (jsdom) во фронте нет — проверяется исходник, как в
 // voiceMicMount.test.ts: инвариант виден в самой разметке.
 describe('хвост строки на мобильной ширине', () => {
-  const src = readFileSync(
-    join(process.cwd(), 'src/components/feature/FeatureAnalysisLine.tsx'),
-    'utf8',
-  );
+  const src = readFileSync(join(HERE, 'FeatureAnalysisLine.tsx'), 'utf8');
 
   it('хвост не подаётся по ключу состояния — на 360 он полный', () => {
     const guard = /\{st\.tail &&([^{}]*)\(\s*<span/.exec(src);

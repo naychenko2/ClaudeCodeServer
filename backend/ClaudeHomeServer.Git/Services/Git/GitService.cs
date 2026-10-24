@@ -1426,7 +1426,15 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             await RunOkAsync(ownerId, mainRoot, ["worktree", "add", "-b", branch, runtimePath],
                 timeoutMs: NetworkTimeoutMs, ct: ct);
         }
-        finally { sem.Release(); }
+        finally
+        {
+            // Инвалидация ПОСЛЕ операции обязательна: читатель, стартовавший после
+            // первой инвалидации и успевший прогнать list до конца команды, кладёт в кэш
+            // довоперационный снимок — проверка поколения этого не ловит (оно уже
+            // зафиксировано). Повторная инвалидация снимает этот снимок.
+            InvalidateWorktreeCache(ownerId, mainRoot);
+            sem.Release();
+        }
     }
 
     // Создать linked worktree с detached HEAD на указанном sha (слот ревью: ветки нет).
@@ -1443,7 +1451,13 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             await RunOkAsync(ownerId, mainRoot, ["worktree", "add", "--detach", runtimePath, sha],
                 timeoutMs: NetworkTimeoutMs, ct: ct);
         }
-        finally { sem.Release(); }
+        finally
+        {
+            // См. WorktreeAddAsync: кэш инвалидируется и после команды — иначе читатель,
+            // стартовавший между инвалидацией и концом операции, оставит довоперационный снимок.
+            InvalidateWorktreeCache(ownerId, mainRoot);
+            sem.Release();
+        }
     }
 
     // Защищённый сброс слота ревью на sha. До записи проверяем: путь числится в `worktree list`,
@@ -1476,6 +1490,9 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
             await RunOkAsync(ownerId, path, ["checkout", "--detach", "-f", sha], timeoutMs: NetworkTimeoutMs, ct: ct);
             await RunOkAsync(ownerId, path, ["clean", "-fd"], ct: ct);
+            // Сброс меняет HEAD — кэш инвалидируется ПОСЛЕ записи: читатель, стартовавший
+            // во время операции, иначе оставил бы в кэше довоперационный HEAD (см. WorktreeAddAsync).
+            InvalidateWorktreeCache(ownerId, mainRoot);
         }
         finally { sem.Release(); }
     }
@@ -1651,7 +1668,13 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
                     throw new GitCommandException(FirstLine(r.Stderr) ?? "Не удалось удалить worktree");
             }
         }
-        finally { sem.Release(); }
+        finally
+        {
+            // См. WorktreeAddAsync: и remove, и prune меняют список — инвалидация после
+            // операции снимает довоперационный снимок, который мог успеть лечь в кэш.
+            InvalidateWorktreeCache(ownerId, mainRoot);
+            sem.Release();
+        }
     }
 
     private async Task WriteOp(string? ownerId, string root, IReadOnlyList<string> args, int timeoutMs = DefaultTimeoutMs, CancellationToken ct = default)

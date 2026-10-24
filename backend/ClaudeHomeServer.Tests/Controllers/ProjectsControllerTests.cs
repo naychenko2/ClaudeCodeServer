@@ -292,6 +292,63 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         Directory.Exists(worktreePath).Should().BeFalse("своё дерево сносится вместе с проектом");
     }
 
+    // Удаление чата-владельца дерева волны уносит слоты ревью ЭТОГО дерева; слоты другой волны целы
+    [Fact]
+    public async Task DeleteChat_OwningWaveTree_RemovesItsReviewSlots_AndKeepsOtherWaveSlots()
+    {
+        var pool = _factory.Services.GetRequiredService<ReviewTreePool>();
+        var pm = _factory.Services.GetRequiredService<ProjectManager>();
+        var repoDir = await MkGitRepoAsync("rvwave");
+        var projectId = (await CreateProjectAsync("RvWave", repoDir)).GetProperty("id").GetString()!;
+        var project = pm.GetById(projectId)!;
+
+        var chatId = await CreateProjectChatAsync(projectId);
+        var wtResp = await _client.PutAsJsonAsync($"/api/chats/{chatId}/worktree", new { enabled = true });
+        wtResp.EnsureSuccessStatusCode();
+        var wave = JsonSerializer.Deserialize<JsonElement>(await wtResp.Content.ReadAsStringAsync())
+            .GetProperty("worktreePath").GetString()!;
+        var otherWave = await MkWorktreeAsync(repoDir, "rvwave_other");
+
+        var own = await pool.TryAcquireAsync(project.OwnerId, project, wave, "t-own");
+        var foreign = await pool.TryAcquireAsync(project.OwnerId, project, otherWave, "t-foreign");
+        Directory.Exists(own!.SlotPath).Should().BeTrue();
+        Directory.Exists(foreign!.SlotPath).Should().BeTrue();
+
+        (await _client.DeleteAsync($"/api/projects/{projectId}/sessions/{chatId}")).EnsureSuccessStatusCode();
+
+        Directory.Exists(wave).Should().BeFalse("дерево чата снесено");
+        Directory.Exists(own.SlotPath).Should().BeFalse("слот снесён вместе с деревом волны");
+        Directory.Exists(foreign.SlotPath).Should().BeTrue("слот другой волны цел");
+    }
+
+    // Слоты ревью проекта сносятся вместе с ним; слоты другого проекта того же владельца целы
+    [Fact]
+    public async Task Delete_Project_RemovesReviewSlots_AndKeepsSlotsOfOtherProject()
+    {
+        var pool = _factory.Services.GetRequiredService<ReviewTreePool>();
+        var pm = _factory.Services.GetRequiredService<ProjectManager>();
+
+        async Task<(string Id, string Slot)> MkProjectWithSlotAsync(string name)
+        {
+            var repoDir = await MkGitRepoAsync(name);
+            var id = (await CreateProjectAsync(name, repoDir)).GetProperty("id").GetString()!;
+            var wave = await MkWorktreeAsync(repoDir, name + "_wave");
+            var project = pm.GetById(id)!;
+            var lease = await pool.TryAcquireAsync(project.OwnerId, project, wave, "t-" + name);
+            lease.Should().NotBeNull();
+            Directory.Exists(lease!.SlotPath).Should().BeTrue();
+            return (id, lease.SlotPath);
+        }
+
+        var doomed = await MkProjectWithSlotAsync("RvDoomed");
+        var kept = await MkProjectWithSlotAsync("RvKept");
+
+        (await _client.DeleteAsync($"/api/projects/{doomed.Id}")).EnsureSuccessStatusCode();
+
+        Directory.Exists(doomed.Slot).Should().BeFalse("слот снесён вместе с проектом");
+        Directory.Exists(kept.Slot).Should().BeTrue("слот чужого проекта цел");
+    }
+
     // Привязанное дерево (AttachWorktreeAsync, WorktreeOwned=false) → дерево НЕ сносится:
     // его делят другие задачи фичи, удалять проект его работу не должен
     [Fact]

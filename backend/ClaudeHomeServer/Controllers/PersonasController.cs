@@ -12,7 +12,6 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Personas;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.TriggerSources;
-using ClaudeHomeServer.Services.Tts;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -373,74 +372,26 @@ public class PersonasController(
     [HttpPost("ai/voice")]
     public async Task<ActionResult> AiVoice([FromBody] AiVoiceRequest req)
     {
-        var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
         try
         {
-            var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaVoice,
-                BuildVoicePrompt(req), model, UserId, ct: HttpContext.RequestAborted);
-
-            var picked = ParseVoiceAnswer(raw);
-            if (picked is null && raw.Contains("none", StringComparison.OrdinalIgnoreCase))
-                return Ok(new { voice = (string?)null, role = (string?)null });
-
-            if (picked is null)
+            // Подбор — общий с автоподбором при создании персоны (PersonasCrudService)
+            var pick = await _crud.PickVoiceAsync(UserId, req, HttpContext.RequestAborted);
+            switch (pick.Outcome)
             {
-                _log.LogWarning("ai/voice: голос не распознан; сырой ответ: {Raw}",
-                    raw.Length > 600 ? raw[..600] + "…" : raw);
-                return StatusCode(502, new { error = "Модель не выбрала голос из списка — попробуйте ещё раз" });
+                case PersonasCrudService.VoicePickOutcome.NoneFits:
+                    return Ok(new { voice = (string?)null, role = (string?)null });
+                case PersonasCrudService.VoicePickOutcome.Unrecognized:
+                    _log.LogWarning("ai/voice: голос не распознан; сырой ответ: {Raw}",
+                        pick.Raw.Length > 600 ? pick.Raw[..600] + "…" : pick.Raw);
+                    return StatusCode(502, new { error = "Модель не выбрала голос из списка — попробуйте ещё раз" });
+                default:
+                    return Ok(new { voice = pick.Voice, role = pick.Role });
             }
-            return Ok(new { voice = picked.Value.Voice, role = picked.Value.Role });
         }
         catch (Exception ex)
         {
             return StatusCode(502, new { error = $"Не удалось подобрать голос: {ex.Message}" });
         }
-    }
-
-    // Ответ модели: «голос» либо «голос амплуа». Ищем ключ каталога по границам слова —
-    // модель любит добавить объяснение, и подстрочный поиск увёл бы парсер не туда
-    internal static (string Voice, string? Role)? ParseVoiceAnswer(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        var words = System.Text.RegularExpressions.Regex.Matches(raw, @"[A-Za-z_]+")
-            .Select(m => m.Value).ToList();
-
-        foreach (var word in words)
-        {
-            var voice = Services.Tts.TtsVoiceCatalog.Canonical(word);
-            if (voice is null) continue;
-            // Амплуа берём только рядом стоящее и только поддержанное этим голосом
-            var role = words.FirstOrDefault(w => Services.Tts.TtsVoiceCatalog.SupportsRole(voice, w));
-            return (voice, role);
-        }
-        return null;
-    }
-
-    private static string BuildVoicePrompt(AiVoiceRequest req)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Подбери голос синтеза речи, которым будет говорить персона-ассистент.");
-        if (!string.IsNullOrWhiteSpace(req.Name)) sb.AppendLine($"Имя: {req.Name.Trim()}");
-        if (!string.IsNullOrWhiteSpace(req.Role)) sb.AppendLine($"Роль: {req.Role.Trim()}");
-        if (!string.IsNullOrWhiteSpace(req.Description)) sb.AppendLine($"Описание: {req.Description.Trim()}");
-        if (!string.IsNullOrWhiteSpace(req.Character)) sb.AppendLine($"Характер: {req.Character.Trim()}");
-        if (!string.IsNullOrWhiteSpace(req.Tone)) sb.AppendLine($"Тон: {req.Tone.Trim()}");
-
-        sb.AppendLine();
-        sb.AppendLine("Доступные голоса (ключ · описание · пол · доступные амплуа):");
-        foreach (var v in Services.Tts.TtsVoiceCatalog.All)
-        {
-            var roles = v.Roles.Count > 0 ? string.Join(", ", v.Roles) : "нет";
-            var gender = v.Gender == Services.Tts.TtsVoiceCatalog.Gender.Female ? "женский" : "мужской";
-            sb.AppendLine($"{v.Voice} · {v.Label} · {gender} · амплуа: {roles}");
-        }
-
-        sb.AppendLine();
-        sb.AppendLine("Ответь ОДНОЙ строкой: ключ голоса, либо ключ голоса и амплуа через пробел. " +
-                      "Амплуа указывай только из списка доступных для этого голоса. " +
-                      "Если ни один голос не подходит — ответь: none. " +
-                      "Никаких пояснений.");
-        return sb.ToString();
     }
 
     [HttpPost("ai/character")]
@@ -621,35 +572,10 @@ public class PersonasController(
     // Здесь валидация СТРОГАЯ (400), в отличие от пути озвучки, где кривое значение молча
     // вырождается в дефолт: там на другом конце ухо человека посреди разговора, а тут —
     // форма, которой ошибку надо показать.
+    // Валидация и запись — PersonasCrudService (та же копия правила у MCP personas_update)
     [HttpPut("{id}/voice")]
-    public async Task<ActionResult<Persona>> SetVoice(string id, [FromBody] PersonaVoice? req)
-    {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-
-        if (req is { IsEmpty: false })
-        {
-            if (!TtsVoiceCatalog.IsKnown(req.Voice))
-                return BadRequest(new { error = $"Неизвестный голос синтеза: {req.Voice}" });
-            if (!string.IsNullOrWhiteSpace(req.Role) && !TtsVoiceCatalog.SupportsRole(req.Voice, req.Role))
-            {
-                var roles = TtsVoiceCatalog.RolesFor(req.Voice);
-                return BadRequest(new
-                {
-                    error = roles.Count == 0
-                        ? $"Голос {req.Voice} не поддерживает амплуа"
-                        : $"Голос {req.Voice} не умеет «{req.Role}»; доступны: {string.Join(", ", roles)}",
-                });
-            }
-            if (req.Speed is { } speed and (< 0.1 or > 3.0))
-                return BadRequest(new { error = "Темп речи допустим в диапазоне 0.1–3.0" });
-        }
-
-        var persona = _personas.SetVoice(id, UserId, req);
-        // Как и все соседние мутации: смена голоса должна долетать до других вкладок и
-        // списка персон, иначе там останется прежний голос до перезагрузки
-        await Broadcast("updated", id);
-        return Ok(persona);
-    }
+    public Task<ActionResult<Persona>> SetVoice(string id, [FromBody] PersonaVoice? req) =>
+        _crud.SetVoiceAsync(UserId, id, req);
 
     // Изменить одну привязку
     [HttpPut("{id}/bindings/{bindingId}")]
@@ -1684,7 +1610,12 @@ public record CreatePersonaRequest(
     // (при создании — выключен)
     bool? LightContext = null,
     // Сфера для Scope.Sphere: обязательна и должна быть сферой владельца; при другом scope сбрасывается
-    string? SphereId = null);
+    string? SphereId = null,
+    // Голос (валидация как у PUT /voice). null — подобрать по характеру после создания
+    // (best-effort); пустой объект — создать без голоса, ничего не подбирая
+    PersonaVoice? Voice = null,
+    // false — не подбирать голос, даже если Voice не передан
+    bool? AutoVoice = null);
 
 public record UpdatePersonaRequest(
     string? Name,

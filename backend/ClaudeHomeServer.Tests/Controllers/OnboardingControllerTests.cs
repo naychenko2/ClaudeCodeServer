@@ -371,14 +371,15 @@ public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory
     public async Task MakeDefault_ИзОбычногоЧата_400()
     {
         await EnsureHomeConfiguredAsync();
-        // Обычный чат (без OnboardingKind) — MCP-путь make-default обязан отказать
+        // Обычный чат (без OnboardingKind): личный дефолт MCP-путём не меняется — только
+        // руководитель проекта чата (PersonasToolsetVoiceAndLeaderTests)
         var chat = await PostJsonAsync("/api/chats", new { mode = "auto" });
         var chatId = chat.GetProperty("id").GetString()!;
         var personaId = await CreateGlobalPersonaAsync("Самозванка");
 
         var response = await MakeDefaultFromSessionAsync(personaId, chatId);
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await response.Content.ReadAsStringAsync()).Should().Contain("онбординга");
+        (await response.Content.ReadAsStringAsync()).Should().Contain("Личную дефолт-персону меняют в настройках");
     }
 
     // --- Знакомство v2, п.5: сценарий проектного знакомства и шаг команды ---

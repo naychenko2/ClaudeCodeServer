@@ -288,6 +288,14 @@ public class RootSubsystemBoundaryTests
         // `Dossiers → Git.GitService` в `SubsystemBoundaryTests.Boundaries`.
         "ClaudeHomeServer.Services.Git.GitService",
         "ClaudeHomeServer.Services.Git.GitCredentials",
+        // `PersonasCrudService` проверяет голос персоны и строит промпт подбора голоса по
+        // статическому белому списку `Tts.TtsVoiceCatalog` (общая точка для REST и MCP).
+        // Та же сознательная обратная стрелка «спина → каталог вертикали», что у
+        // `PersonaManager` (см. комментарий у Tts в SubsystemBoundaryTests); префикс
+        // `Services.Tts` не открываем — сервис синтеза спине не нужен.
+        "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog",
+        "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+VoiceInfo",
+        "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+Gender",
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как

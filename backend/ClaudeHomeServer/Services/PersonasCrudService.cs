@@ -78,6 +78,9 @@ public sealed class PersonasCrudService(
             return BadRequest(new { error = "Модель уровня — это id модели или preset:{id}; tier:* здесь нельзя" });
         if (PersonaManager.ExceedsContractLimit(req.Contract, req.SystemPrompt, 0, out var tooBig))
             return BadRequest(new { error = tooBig });
+        // Явный голос — до создания: кривой не должен оставлять полусозданную персону
+        if (VoiceError(req.Voice) is { } voiceError)
+            return BadRequest(new { error = voiceError });
 
         // Серверный предохранитель знакомства (план 2.9): в личном знакомстве (сессия с
         // OnboardingKind == "user") нельзя создавать НОВУЮ персону — интервью дорабатывает
@@ -161,6 +164,14 @@ public sealed class PersonasCrudService(
         // через форму/мастер этот параметр не шлёт — там инициалы или явный выбор
         if (req.AutoAvatar == true)
             persona = await TryAutoGenerateAvatarAsync(userId, persona, req.AvatarPrompt);
+        // Голос: явный (непустой) — пишем как есть; явный пустой объект — «без голоса», не
+        // подбираем; не передан — подбираем по характеру (best-effort), если вызывающий не
+        // отказался флагом AutoVoice=false. Последним шагом — после всех прочих one-shot
+        // вызовов создания, так их порядок не меняется
+        if (req.Voice is { IsEmpty: false } explicitVoice)
+            persona = personas.SetVoice(persona.Id, userId, explicitVoice);
+        else if (req.Voice is null && req.AutoVoice != false)
+            persona = await TryAutoVoiceAsync(userId, persona, ct);
         // Персона, созданная из онбординг-сессии (через MCP personas_create), запоминается на ней:
         // финализация досеет профиль дефолта ТОЛЬКО ей, а не выбранной существующей
         // (та прав не получает — молчаливая дозапись Access=Full+manage была бы эскалацией).
@@ -308,9 +319,12 @@ public sealed class PersonasCrudService(
 
     // Назначить персону дефолтной: глобальную — личным дефолтом владельца
     // (User.DefaultPersonaId), проектную — дефолтом её проекта
-    // (Project.DefaultPersonaId). REST из UI свободен; вызов из чата (callerSessionId
-    // от MCP personas_set_default) разрешён ТОЛЬКО онбординг-сессии — иначе любая
-    // manage-персона могла бы переназначить дефолт владельца из любого разговора.
+    // (Project.DefaultPersonaId). REST из UI свободен. Вызов из чата (callerSessionId
+    // от MCP personas_set_default) разрешён онбординг-сессии — любой персоне, а обычному
+    // чату — только руководителя ПРОЕКТА ЭТОГО ЧАТА из его же команды. Личный дефолт
+    // владельца из обычного чата не меняется: он определяет, кто отвечает во всех новых
+    // чатах вне проектов, и переназначать его одной репликой модели — слишком широкий рычаг.
+    // Персоны сферы руководителями проекта не назначаются (их проект — не ProjectId).
     // Из онбординг-сессии назначение финализирует онбординг: досев профиля дефолта,
     // «просыпание» персоны в том же чате, событие onboarding_completed.
     public async Task<IActionResult> MakeDefaultAsync(string userId, string id, string? callerSessionId)
@@ -318,16 +332,24 @@ public sealed class PersonasCrudService(
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
 
-        // MCP-гейт: ход из чата обязан идти из онбординг-сессии (смена дефолта — в настройках)
+        // MCP-гейт: из обычного чата — только руководитель проекта этого чата
         Session? onboarding = null;
         if (callerSessionId is { Length: > 0 } callerSessionIdValue)
         {
-            onboarding = sessions.GetOwned(callerSessionIdValue, userId);
-            if (onboarding?.OnboardingKind is null)
+            var caller = sessions.GetOwned(callerSessionIdValue, userId);
+            if (caller?.OnboardingKind is not null)
+                onboarding = caller;
+            else if (!PersonaZone.IsProjectPersona(persona))
                 return BadRequest(new
                 {
-                    error = "Назначение дефолт-персоны из чата доступно только сессии онбординга. "
-                        + "Смена дефолта выполняется в настройках — попроси об этом пользователя.",
+                    error = "Из обычного чата можно назначить только руководителя проекта — проектную "
+                        + "персону. Личную дефолт-персону меняют в настройках — попроси об этом пользователя.",
+                });
+            else if (caller?.ProjectId is null || !PersonaZone.IsProjectTeam(persona, caller.ProjectId))
+                return BadRequest(new
+                {
+                    error = "Руководителем можно назначить только персону команды проекта этого чата. "
+                        + "Руководителя другого проекта назначают из его чата или в настройках проекта.",
                 });
         }
 
@@ -1055,6 +1077,140 @@ public sealed class PersonasCrudService(
             },
             UpdatedAt = DateTime.UtcNow,
         };
+    }
+
+    // --- Голос (PUT /voice, POST ai/voice, автоподбор при создании) ---
+
+    // Проверка голоса для записи. Строгая (текст ошибки — человеку или модели), в отличие от
+    // пути озвучки: там кривое значение молча вырождается в дефолт, а здесь ошибку надо
+    // показать. null/пустой объект — «снять голос», он валиден. Единственная копия правила:
+    // ей пользуются и форма (REST), и агент (MCP personas_create/update).
+    internal static string? VoiceError(PersonaVoice? voice)
+    {
+        if (voice is null || voice.IsEmpty) return null;
+        if (!Services.Tts.TtsVoiceCatalog.IsKnown(voice.Voice))
+            return string.IsNullOrWhiteSpace(voice.Voice)
+                ? "Амплуа и темп задаются вместе с голосом"
+                : $"Неизвестный голос синтеза: {voice.Voice}; допустимы: "
+                  + string.Join(", ", Services.Tts.TtsVoiceCatalog.All.Select(v => v.Voice));
+        if (!string.IsNullOrWhiteSpace(voice.Role)
+            && !Services.Tts.TtsVoiceCatalog.SupportsRole(voice.Voice, voice.Role))
+        {
+            var roles = Services.Tts.TtsVoiceCatalog.RolesFor(voice.Voice);
+            return roles.Count == 0
+                ? $"Голос {voice.Voice} не поддерживает амплуа"
+                : $"Голос {voice.Voice} не умеет «{voice.Role}»; доступны: {string.Join(", ", roles)}";
+        }
+        if (voice.Speed is { } speed and (< 0.1 or > 3.0))
+            return "Темп речи допустим в диапазоне 0.1–3.0";
+        return null;
+    }
+
+    // Голос персоны в голосовом режиме. Пустой объект (или null) снимает голос — персона
+    // возвращается к голосу инстанса
+    public async Task<ActionResult<Persona>> SetVoiceAsync(string userId, string id, PersonaVoice? voice)
+    {
+        if (personas.Get(id, userId) is null) return NotFound();
+        if (VoiceError(voice) is { } error) return BadRequest(new { error });
+
+        var persona = personas.SetVoice(id, userId, voice);
+        // Как и все соседние мутации: смена голоса должна долетать до других вкладок и
+        // списка персон, иначе там останется прежний голос до перезагрузки
+        await Broadcast(userId, "updated", id);
+        return Ok(persona);
+    }
+
+    public enum VoicePickOutcome { Picked, NoneFits, Unrecognized }
+
+    // Исход подбора: модель выбрала голос, честно сказала «ничего не подходит» или ответила
+    // мусором (Raw — для лога и диагностики вызывающего)
+    public sealed record VoicePick(VoicePickOutcome Outcome, string? Voice, string? Role, string Raw);
+
+    // Подбор голоса по характеру персоны (one-shot LLM). Сбой вызова пробрасывается: кнопка
+    // формы отдаёт его человеку 502-м, автоподбор при создании глотает
+    public async Task<VoicePick> PickVoiceAsync(string userId, AiVoiceRequest req, CancellationToken ct = default)
+    {
+        var model = oneShot.NormalizeModel(config["Notes:AiModel"] ?? config["Tasks:AiModel"] ?? "haiku");
+        var raw = await cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaVoice,
+            BuildVoicePrompt(req), model, userId, ct: ct);
+
+        if (ParseVoiceAnswer(raw) is { } picked)
+            return new VoicePick(VoicePickOutcome.Picked, picked.Voice, picked.Role, raw);
+        return raw.Contains("none", StringComparison.OrdinalIgnoreCase)
+            ? new VoicePick(VoicePickOutcome.NoneFits, null, null, raw)
+            : new VoicePick(VoicePickOutcome.Unrecognized, null, null, raw);
+    }
+
+    // Автоподбор голоса свежесозданной персоне, best-effort: модель промолчала, ответила
+    // мусором или упала — персона остаётся без голоса (говорит голосом инстанса), создание
+    // не срывается. Вызывающий узнаёт исход по persona.Voice
+    public async Task<Persona> TryAutoVoiceAsync(string userId, Persona persona, CancellationToken ct = default)
+    {
+        try
+        {
+            var pick = await PickVoiceAsync(userId, new AiVoiceRequest(persona.Name, persona.Role,
+                persona.Description, persona.Contract?.Character ?? persona.SystemPrompt,
+                persona.Contract?.Tone), ct);
+            if (pick.Outcome != VoicePickOutcome.Picked)
+            {
+                if (pick.Outcome == VoicePickOutcome.Unrecognized)
+                    log.LogWarning("автоподбор голоса: ответ не распознан для {Persona}; сырой ответ: {Raw}",
+                        persona.Id, pick.Raw.Length > 600 ? pick.Raw[..600] + "…" : pick.Raw);
+                return persona;
+            }
+            return personas.SetVoice(persona.Id, userId, new PersonaVoice { Voice = pick.Voice, Role = pick.Role });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            log.LogWarning(ex, "автоподбор голоса для {Persona} не удался", persona.Id);
+            return persona;
+        }
+    }
+
+    // Ответ модели: «голос» либо «голос амплуа». Ищем ключ каталога по границам слова —
+    // модель любит добавить объяснение, и подстрочный поиск увёл бы парсер не туда
+    internal static (string Voice, string? Role)? ParseVoiceAnswer(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var words = System.Text.RegularExpressions.Regex.Matches(raw, @"[A-Za-z_]+")
+            .Select(m => m.Value).ToList();
+
+        foreach (var word in words)
+        {
+            var voice = Services.Tts.TtsVoiceCatalog.Canonical(word);
+            if (voice is null) continue;
+            // Амплуа берём только рядом стоящее и только поддержанное этим голосом
+            var role = words.FirstOrDefault(w => Services.Tts.TtsVoiceCatalog.SupportsRole(voice, w));
+            return (voice, role);
+        }
+        return null;
+    }
+
+    private static string BuildVoicePrompt(AiVoiceRequest req)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Подбери голос синтеза речи, которым будет говорить персона-ассистент.");
+        if (!string.IsNullOrWhiteSpace(req.Name)) sb.AppendLine($"Имя: {req.Name.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Role)) sb.AppendLine($"Роль: {req.Role.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Description)) sb.AppendLine($"Описание: {req.Description.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Character)) sb.AppendLine($"Характер: {req.Character.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Tone)) sb.AppendLine($"Тон: {req.Tone.Trim()}");
+
+        sb.AppendLine();
+        sb.AppendLine("Доступные голоса (ключ · описание · пол · доступные амплуа):");
+        foreach (var v in Services.Tts.TtsVoiceCatalog.All)
+        {
+            var roles = v.Roles.Count > 0 ? string.Join(", ", v.Roles) : "нет";
+            var gender = v.Gender == Services.Tts.TtsVoiceCatalog.Gender.Female ? "женский" : "мужской";
+            sb.AppendLine($"{v.Voice} · {v.Label} · {gender} · амплуа: {roles}");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Ответь ОДНОЙ строкой: ключ голоса, либо ключ голоса и амплуа через пробел. " +
+                      "Амплуа указывай только из списка доступных для этого голоса. " +
+                      "Если ни один голос не подходит — ответь: none. " +
+                      "Никаких пояснений.");
+        return sb.ToString();
     }
 
     // --- Общие хелперы (нужны и контроллеру, и http-тулсету) ---

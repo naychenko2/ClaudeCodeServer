@@ -8,7 +8,7 @@
 
 import type { FeatureRun, FeatureRound, StageKey, StageState } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
-import { stageLabel } from './FeatureStatsBits';
+import { stageLabel, minutesSince } from './FeatureStatsBits';
 // Состояние «тихо» — из общей строки анализа (W5-F1), не своя арифметика по датам.
 import { analysisLineState } from './FeatureAnalysisModel';
 
@@ -102,14 +102,6 @@ function spanMinutes(from: string, to: string): number {
   const b = new Date(to).getTime();
   if (Number.isNaN(a) || Number.isNaN(b)) return 0;
   return Math.max(0, Math.round((b - a) / 60000));
-}
-
-// Минуты от ISO-момента до `now` (округление вверх, min 0); null/невалидно — null.
-function minutesSince(iso: string | null | undefined, now: number): number | null {
-  if (!iso) return null;
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return null;
-  return Math.max(0, Math.ceil((now - t) / 60000));
 }
 
 // Витки-возвраты: цепочки шагов + стадии qa/final. «Принят с замечаниями» — тоже возврат

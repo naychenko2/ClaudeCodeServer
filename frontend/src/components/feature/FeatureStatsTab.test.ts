@@ -895,7 +895,10 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
 // === Строка «тихо» на Ганте (W5-F3b, спецификация features-overview-5.md §«Точка 6») ===
 // Мутации (в отчёте): (3) убрать строку из рендера → «строка после этапов, перед осью»
 // краснеет; (4) убрать пункт легенды → «в легенде „тихо“» краснеет; (5) убрать условие
-// isMobile у «· сжато» → «на 360 без „сжато“» краснеет.
+// isMobile у «· сжато» → «на 360 без „сжато“» краснеет; (6) убрать дату из центра трека →
+// «дата начала тишины» краснеет; (7) снять типографику правой колонки (mono/xs/700) →
+// «типографика правой колонки» краснеет; (8) рисовать «{дата} → сейчас» и при from=null →
+// «без даты» краснеет; (9) строить Гант и без stats → «без stats — Ганта нет» краснеет.
 
 function mkQuietRun(): FeatureRun {
   // Тот же конвейер, но бэк сказал «тихо ≥ 24 ч»: состояние берёт analysisLineState.
@@ -962,11 +965,19 @@ describe('FeatureStatsTab: строка «тихо» на Ганте (W5-F3b)', 
     const inner = track.childNodes[0] as unknown as { style: Record<string, string> };
     const innerText = textNodes(track.childNodes[0] as never).join('');
     expect(innerText).toContain('→ сейчас');
+    // Дата начала тишины в центре трека — из lastActivityAt (spec: «{дата} → сейчас»).
+    expect(innerText, 'в центре трека — дата начала тишины').toContain(formatDateTime('2026-10-20T17:10:00Z'));
     expect(inner.style.fontFamily).toContain('JetBrains Mono');
     expect(inner.style.fontSize).toBe('10px');
     expect(inner.style.color).toBe('var(--c-warning-text)');
-    // Справа — длительность (от lastActivityAt до сейчас, реальное время — проверяем наличие).
+    // Справа — длительность: не только «число есть», но и типографика по spec —
+    // FONT.mono FS.xs 700 C.warningText.
+    const dur = row.childNodes[2] as unknown as { style: Record<string, string> };
     expect(textNodes(row.childNodes[2] as never).join('')).toMatch(/\d+/);
+    expect(dur.style.fontFamily).toContain('JetBrains Mono');
+    expect(dur.style.fontSize).toBe('11px');
+    expect(dur.style.fontWeight).toBe('700');
+    expect(dur.style.color).toBe('var(--c-warning-text)');
   });
 
   it('«· сжато» — только на десктопе; на 360 — сетка 86px 1fr 52px и minHeight 40', () => {
@@ -991,6 +1002,33 @@ describe('FeatureStatsTab: строка «тихо» на Ганте (W5-F3b)', 
     const plain = renderGantt();
     expect(findNodeByAttr(plain, 'data-testid', 'gantt-quiet'), 'в не-quiet строки нет').toBeNull();
     expect(findNodeByAttr(plain, 'data-testid', 'gantt-legend-quiet'), 'в не-quiet пункта легенды нет').toBeNull();
+  });
+
+  // П.3 вердикта W5-R-F3b: ветка quiet.from === null (период без начала) — «сейчас»
+  // в центре трека без даты, правая колонка пустая. Мутация: всегда рисовать
+  // formatDateTime(from) даже при null → краснеет «без даты».
+  it('без lastActivityAt — в центре трека «сейчас» без даты, правая колонка пустая', () => {
+    const run: FeatureRun = { ...mkGanttRun(), quiet: true }; // начала тишины нет
+    installFakeDom();
+    const { container } = mount(createElement(FeatureStatsTab, { stats: mkGanttStats(), run, isMobile: false }));
+    const row = findNodeByAttr(container, 'data-testid', 'gantt-quiet');
+    expect(row, 'строка «тихо» всё равно есть').not.toBeNull();
+    const inner = textNodes((row as never).childNodes[1].childNodes[0] as never).join('');
+    expect(inner).toContain('сейчас');
+    expect(inner, 'без начала периода — никакой даты и стрелки').not.toContain('→');
+    expect(textNodes((row as never).childNodes[2] as never).join(''), 'длительности нет').toBe('');
+  });
+
+  // П.4 вердикта: без stats Ганта нет — строка «тихо» не рисуется; сигнал несёт строка
+  // анализа. Осознанная деградация: закреплена тестом, а не случайностью.
+  it('без stats — Ганта и строки «тихо» нет; сигнал несёт строка анализа с бейджем «тихо»', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FeatureStatsTab, { stats: null, run: mkQuietRun(), isMobile: false }));
+    expect(findNodeByAttr(container, 'data-testid', 'stats-gantt'), 'Ганта нет').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'gantt-quiet'), 'строки «тихо» нет').toBeNull();
+    const line = findNodeByAttr(container, 'data-testid', 'feature-analysis-line');
+    expect(line, 'строка анализа на месте').not.toBeNull();
+    expect(textNodes(line as never).join(''), 'сигнал «тихо» — в строке анализа').toContain('тихо');
   });
 });
 

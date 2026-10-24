@@ -9,7 +9,7 @@
 
 import { C } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
-import { formatClock, formatDateTime, formatDuration } from './FeatureStatsBits';
+import { formatClock, formatDateTime, formatDuration, minutesSince } from './FeatureStatsBits';
 // Тег статуса — общий модуль FeatureStatusTag (W5-F3a): модель не тянет шапку,
 // цикл FeaturePageHeader ⇄ FeatureAnalysisModel разомкнут.
 import { featureRunStatusTag } from './FeatureStatusTag';
@@ -68,14 +68,6 @@ export function stageLabelShort(key: string): string {
 function pickCur(run: FeatureRun): FeatureNow | null {
   const list = run.now ?? [];
   return list.find(n => n.staleAlertedAt) ?? list.find(n => n.nudgedAt) ?? list[0] ?? null;
-}
-
-// Минуты от iso до nowMs; null — нет даты или она нечитаемая (длительность не пишем).
-function minutesSince(iso: string | null | undefined, nowMs: number): number | null {
-  if (!iso) return null;
-  const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return null;
-  return Math.max(0, Math.round((nowMs - t) / 60000));
 }
 
 // {Имя} — имя персоны по personaId; нет — «исполнитель».

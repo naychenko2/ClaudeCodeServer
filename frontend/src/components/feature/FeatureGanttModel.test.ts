@@ -13,10 +13,14 @@
 // этап»; (5) убрать поиск хвоста по attention.taskId → краснеет «зависла по taskId»;
 // (6) вернуть hasData по строкам run.stages → краснеет «hasData — по таймлайну»;
 // (7) давать строку «тихо» при любом состоянии → краснеет «не тихо — строки нет»;
-// (8) не гасить «сейчас» в quiet → краснеет «в тихой — маркера „сейчас“ нет».
+// (8) не гасить «сейчас» в quiet → краснеет «в тихой — маркера „сейчас“ нет»;
+// (9) разная арифметика длительности в двух местах (ceil в модели) → краснеет
+// «длительность одна».
 
 import { describe, it, expect } from 'vitest';
 import { buildGanttModel, type GanttModel, type GanttRow } from './FeatureGanttModel';
+import { analysisLineState } from './FeatureAnalysisModel';
+import { formatDuration } from './FeatureStatsBits';
 import type { FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
 
@@ -474,6 +478,27 @@ describe('строка «тихо»: состояние из analysisLineState',
       NOW,
     );
     expect(model.quiet).toEqual({ from: null, minutes: null });
+  });
+
+  // W5-R-F3b, п.1: длительность — один общий помощник (FeatureStatsBits.minutesSince).
+  // Мутация: вернуть в модели ceil вместо общего round — краснеет: 100.4 мин —
+  // round 100 («1 ч 40 мин»), ceil 101 («1 ч 41 мин») — бейдж и колонка расходятся.
+  it('длительность одна: бейдж строки анализа = правая колонка Ганта (round, не ceil)', () => {
+    const run = mkRun({
+      quiet: true,
+      // Ровно 100.4 мин до NOW: round и ceil дают разные минуты — именно тот случай,
+      // где две арифметики расходятся («тихо 1 ч 40 мин» против «1 ч 41 мин»).
+      lastActivityAt: new Date(NOW - 100.4 * 60000).toISOString(),
+      stages: [mkStage('prod', 'done', 60)],
+    });
+    const model = buildGanttModel(run, mkStats([]), NOW);
+    expect(model.quiet!.minutes).toBe(100);
+    const state = analysisLineState(run, NOW);
+    expect(state.key).toBe('quiet');
+    expect(
+      state.badge!.text,
+      'бейдж анализа и правая колонка Ганта — одна и та же длительность',
+    ).toBe('тихо ' + formatDuration(model.quiet!.minutes));
   });
 });
 

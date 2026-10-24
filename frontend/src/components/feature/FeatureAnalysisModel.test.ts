@@ -4,12 +4,20 @@
 // attention, idle, moving, other), приоритет сверху вниз («stuck побеждает quiet»,
 // «done» раньше всех), выбор cur (сначала позвал человека, потом оклик), отсутствие
 // дат (длительность не пишем), отсутствие чата (кнопки нет — «Анализ» остаётся).
+// «Тихо» — только run.quiet: фронт не выводит quiet из давности lastActivityAt
+// (инвариант спеки «фронт ничего не пересчитывает за бэком»). Хвост moving на 360
+// не режется по ключу — сторож смотрит исходник FeatureAnalysisLine.tsx.
 //
 // Мутации (в отчёте): (1) поменять местами строки 2 и 4 (stuck и quiet) — краснеет
 // «stuck побеждает quiet»; (2) не проверять linkedSessionId у stuck — краснеет
-// «без чата — кнопки нет»; (3) «тихо» без пунктира — краснеет «quiet — рамка пунктиром».
+// «без чата — кнопки нет»; (3) «тихо» без пунктира — краснеет «quiet — рамка пунктиром»;
+// (4) quiet из idleDur (if (run.quiet === true) → if (run.quiet === true || idleDur
+// >= 24*60)) — краснеет «quiet — только run.quiet»; (5) вернуть в компоненте
+// подавление хвоста по isMobile && st.key === 'moving' — краснеет сторож хвоста.
 
 import { describe, it, expect, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { analysisLineState, stageLabelShort } from './FeatureAnalysisModel';
 import { C } from '../../lib/design';
 import type { FeatureRun, FeatureNow } from '../../types/featureRun';
@@ -138,6 +146,23 @@ describe('analysisLineState — состояния', () => {
     expect(st.actions.map(a => a.kind)).toEqual(['analysis']);
   });
 
+  it('quiet — только run.quiet: 30 часов тишины без флага — не «тихо»', () => {
+    // Инвариант спеки: «тихо» — это run.quiet, а не своя арифметика по датам.
+    // Бэк флаг не выставил — состояние остаётся как есть, какой бы длинной ни была
+    // пауза: без now — other, с now — moving.
+    const st = analysisLineState(mkRun({ lastActivityAt: '2026-10-19T06:00:00Z' }), NOW);
+    expect(st.key).not.toBe('quiet');
+    expect(st.key).toBe('other');
+
+    const st2 = analysisLineState(mkRun({
+      quiet: false,
+      lastActivityAt: '2026-10-19T06:00:00Z',
+      now: [mkNow({ stepRef: 'Ш1', startedAt: '2026-10-19T06:00:00Z' })],
+    }), NOW);
+    expect(st2.key).not.toBe('quiet');
+    expect(st2.key).toBe('moving');
+  });
+
   it('stuck побеждает quiet', () => {
     const st = analysisLineState(mkRun({
       quiet: true,
@@ -211,5 +236,28 @@ describe('stageLabelShort', () => {
     expect(stageLabelShort('prod')).toBe('Производство');
     expect(stageLabelShort('qa')).toBe('Проверка');
     expect(stageLabelShort('custom')).toBe('custom');
+  });
+});
+
+// Сторож хвоста строки (W5-R-F1, major): на 360 у moving должны оставаться обе части
+// фразы — «{Шаг} у {Имя} {dur}.» и «Последнее событие {dur} назад.». Модель хвост
+// строит целиком, а «, следом …» (единственное, что убирает спека на мобиле) не
+// строит вовсе. Значит в компоненте хвост не должен скрываться по ключу состояния.
+// Рендер-инфраструктуры (jsdom) во фронте нет — проверяется исходник, как в
+// voiceMicMount.test.ts: инвариант виден в самой разметке.
+describe('хвост строки на мобильной ширине', () => {
+  const src = readFileSync(
+    join(process.cwd(), 'src/components/feature/FeatureAnalysisLine.tsx'),
+    'utf8',
+  );
+
+  it('хвост не подаётся по ключу состояния — на 360 он полный', () => {
+    const guard = /\{st\.tail &&([^{}]*)\(\s*<span/.exec(src);
+    expect(guard, 'В FeatureAnalysisLine.tsx не найден рендер хвоста — сторож сторожит пустоту').toBeTruthy();
+    expect(
+      /isMobile|st\.key/.test(guard[1]),
+      `Хвост скрыт условием «${guard[1].trim()}»: на 360 у moving пропадают шаг, исполнитель `
+      + 'и длительности. Спека убирает на мобиле только клаузу «, следом …», которой модель не строит.',
+    ).toBe(false);
   });
 });

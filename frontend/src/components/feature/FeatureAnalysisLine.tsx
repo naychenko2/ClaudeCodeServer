@@ -61,6 +61,11 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
   // Компонент иконки бейджа — до JSX: тег не принимает computed-индекс.
   const BadgeIcon = st.badge ? BADGE_ICON[st.badge.icon] : null;
 
+  // Хвост показываем целиком, когда он есть. Спека (features-overview-5.md, «Мобильная 360»)
+  // убирает на 360 лишь клаузу «, следом …» — модель для moving её не строит, поэтому
+  // по ключу состояния хвост не скрывать: на 360 остаются и «{Шаг} у {Имя} {dur}.»,
+  // и «Последнее событие {dur} назад.».
+
   return (
     <div data-testid="feature-analysis-line" style={boxStyle(st, isMobile)}>
       {st.badge && BadgeIcon ? (
@@ -75,8 +80,7 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
 
       <span style={{ flex: 1, minWidth: 0, color: C.textPrimary }}>
         {st.strong && <b style={{ color: C.textHeading }}>{st.strong}</b>}
-        // На 360 хвост «Последнее событие …» у «движется» не пишем (в макете он только на 1280).
-        {st.tail && !(isMobile && st.key === 'moving') && (
+        {st.tail && (
           <span style={{ color: C.textMuted }}> {st.tail}</span>
         )}
       </span>

@@ -22,8 +22,9 @@ export { percentText };
 
 export type Measure = 'time' | 'tokens' | 'cost';
 
-// Значение группы по мере; null — данных нет (не считалось).
-function measureValue(g: FeatureBreakdownGroup, measure: Measure): number | null {
+// Значение группы по мере; null — данных нет (не считалось). Публична: ShareRing
+// считает по ней и доли, и итог центра (хвост 7 доработки ST-F9).
+export function measureValue(g: FeatureBreakdownGroup, measure: Measure): number | null {
   if (measure === 'time') return g.minutes;
   if (measure === 'tokens') return g.tokens;
   return g.costUsd;

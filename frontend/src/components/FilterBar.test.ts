@@ -167,6 +167,15 @@ describe('FilterBar: п.2 футер «Показать N фич» (360, реж�
   });
 });
 
+describe('FilterBar: чип «Смержены»', () => {
+  it('чип рисуется, счётчик — по chips[] (merged=1)', async () => {
+    const features = [feat('g1', 'merged', ['open', 'merged']), feat('f1', 'running', ['open'])];
+    expect(featureChipCounts(features).merged).toBe(1);
+    const body = await renderOpenBar(features);
+    expect(findByText(body, 'Смержены'), 'чип «Смержены» отсутствует').not.toBeNull();
+  });
+});
+
 describe('FilterBar: п.2 aria-disabled у нулевого чипа-фильтра фич', () => {
   it('чип с нулевым счётчиком — aria-disabled="true"; с ненулевым — нет', async () => {
     // waiting=2 (f1,f2), stopped/merge/running=0, closed=1 (c1).

@@ -444,7 +444,13 @@ public class TasksController(
             var callerIsExecutor =
                 User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
                 && (callerSession is null || callerSession.TaskId == taskId);
-            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor)
+            // Закрытие эпика фичи: исполнитель (по правилу выше) или делегированный ход
+            // (глубина > 0) — отказ; из чата человека на глубине 0 проходит.
+            var denyFeatureClose = callerIsExecutor
+                || (callerSessionHeader is not null && !DelegatedTurnGate.Decide(
+                    sessions, UserId, callerSessionHeader, "Закрытие фичи",
+                    alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
+            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor, denyFeatureClose)
                 ?? throw new InvalidOperationException("Задача не найдена");
         }
         catch (InvalidOperationException ex)
@@ -1401,7 +1407,7 @@ public class TasksController(
             "Предусловие: финал фичи принят (проверено сервером).",
             "Push НЕ делать — только локальный мерж.",
             "При конфликте не разрешать молча: остановиться и доложить в отчёте задачи, что именно конфликтует.",
-            "После успешного мержа проверить git log/сборку по кратким критериям проекта и закрыть эпик через tasks_complete только если мерж прошёл чисто.",
+            "После успешного мержа проверить git log/сборку по кратким критериям проекта. Эпик не закрывать: фичу закрывает человек.",
             "Worktree и ветки не удалять — уборка по слову человека.");
     }
 

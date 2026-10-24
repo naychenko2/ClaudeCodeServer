@@ -468,14 +468,18 @@ public sealed class FeatureProjector(TaskManager tasks)
                 lastActivityAt = t.ClaudeStartedAt;
         }
 
-        // Закрыта: выводится из State (единая точка правды, §1 разреза «момент закрытия фичи»):
-        // merged или closed. Старое «merge Done || epic Done» — вторая точка правды: частичный
-        // мерж (merge Done, финал не принят, эпик открыт) закрывал фичу (инцидент 21.10).
-        bool closed = featureState is FeatureStates.Merged or FeatureStates.Closed;
+        // Итог (summary) и нормализация рельсы считаются для state ∈ {merged, closed}: у «смержена,
+        // ждёт закрытия» mergedAt виден. Частичный мерж (merge Done, финал не принят, эпик открыт)
+        // сюда не попадает (инцидент 21.10).
+        bool terminal = featureState is FeatureStates.Merged or FeatureStates.Closed;
+        // Закрыта = эпик Done (state closed, либо merged с эпиком Done). Смержена с открытым
+        // эпиком — «merged», но не закрыта (своя группа, Р1-A).
+        bool closed = featureState == FeatureStates.Closed
+            || (featureState == FeatureStates.Merged && epic.Status == TaskItemStatus.Done);
 
         // Итог смерженной фичи: только у закрытой, иначе null.
         FeatureSummary? summary = null;
-        if (closed)
+        if (terminal)
         {
             // MergedAt: CompletedAt merge-задачи — только когда State == merged (полный мерж
             // после принятого финала, либо мерж через epic Done). Закрытая эпиком Done БЕЗ
@@ -1129,7 +1133,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var open = new List<FeatureRun>();
         var closed = new List<FeatureRun>();
         foreach (var r in ordered)
-            (Bucket(r) == "closed" ? closed : open).Add(r);
+            (Bucket(r) == "closed" ? closed : open).Add(r);  // merged — среди открытых
         return PreferFirst(open, r => r.FeatureId, own)
             .Concat(PreferFirst(closed, r => r.FeatureId, own))
             .ToList();
@@ -1139,8 +1143,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     // internal — для золотых тестов (InternalsVisibleTo ClaudeHomeServer.Tasks.Tests).
     internal static IReadOnlyList<FeatureRun> OrderRuns(List<FeatureRun> runs)
     {
-        // 4 группы — по Bucket (единая точка правды, план С0 §2: bucket и OrderRuns не
-        // расходятся): attention → running → idle → closed, у каждой — свой ключ сортировки.
+        // 5 групп — по Bucket (единая точка правды, план С0 §2: bucket и OrderRuns не
+        // расходятся): attention → running → merged → idle → closed, у каждой — свой ключ сортировки.
 
         // 1. Не закрытые с Attention: по since ascending (ждущая дольше всех — первая).
         var withAttention = runs
@@ -1161,6 +1165,12 @@ public sealed class FeatureProjector(TaskManager tasks)
                 : r.LastActivityAt ?? DateTime.MinValue)
             .ToList();
 
+        // 2а. Смерженные с открытым эпиком: по LastActivityAt descending.
+        var merged = runs
+            .Where(r => Bucket(r) == "merged")
+            .OrderByDescending(r => r.LastActivityAt ?? DateTime.MinValue)
+            .ToList();
+
         // 3. Не закрытые прочие (без Attention, не идут): по LastActivityAt descending.
         var other = runs
             .Where(r => Bucket(r) == "idle")
@@ -1176,6 +1186,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var result = new List<FeatureRun>(runs.Count);
         result.AddRange(withAttention);
         result.AddRange(running);
+        result.AddRange(merged);
         result.AddRange(other);
         result.AddRange(closed);
         return result;
@@ -1580,12 +1591,13 @@ public sealed class FeatureProjector(TaskManager tasks)
     }
 
     // Группа фичи (контракт §1, план С0 §2 — единая точка правды: bucket строки и порядок
-    // OrderRuns выведены из state, не расходятся): closed → attention → running → idle.
+    // OrderRuns выведены из state, не расходятся): closed → merged → attention → running → idle.
     // Изменение против старой версии: merging (идёт мерж) → running, а не attention —
     // «мерж идёт» теперь не «ждёт вас» (merge_pending — ждёт, merging — идёт).
     internal static string Bucket(FeatureRun run) => run.State switch
     {
-        FeatureStates.Merged => "closed",
+        // merged: смержена, эпик открыт — своя группа; смержена с эпиком Done — закрыта.
+        FeatureStates.Merged => run.Closed ? "closed" : "merged",
         FeatureStates.Closed => "closed",
         // paused и draft — не идут и внимания не требуют (W4-HOLD-B1): обе в idle.
         FeatureStates.Paused => "idle",
@@ -1601,6 +1613,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     };
 
     // Чипы-фильтры (контракт §1): open = bucket ≠ closed; closed = bucket = closed;
+    // у открытой смерженной (bucket = merged) — ["open","merged"];
     // у тревоги — чип по attention: stopped → stopped, merge → merge, wait (явный) → waiting;
     // bucket = running (идёт, без тревоги) → чип «running».
     // (Чип «waiting» ≠ attention.kind «wait»: словарь чипов и словарь kind различаются.)
@@ -1614,7 +1627,11 @@ public sealed class FeatureProjector(TaskManager tasks)
         else
         {
             chips.Add("open");
-            if (run.Attention is not null)
+            if (run.State == FeatureStates.Merged)
+            {
+                chips.Add("merged");
+            }
+            else if (run.Attention is not null)
             {
                 string chip = run.Attention.Kind switch
                 {
@@ -1674,7 +1691,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         run.Stages
             .Select(s =>
             {
-                if (!run.Closed)
+                if (run.State is not (FeatureStates.Merged or FeatureStates.Closed))
                     return new FeatureIndexRailSegment(s.Key, s.State, s.Tone);
                 // skipped (пустая необязательная «design») остаётся skipped: она не
                 // «пройдена», даже когда фича закрыта (W4-DES-B).

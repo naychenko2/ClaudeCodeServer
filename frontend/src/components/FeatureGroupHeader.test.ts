@@ -217,6 +217,21 @@ describe('FeatureGroupHeader: state (merge_pending / merging)', () => {
 
 // === Клики: шеврон (сворачивает) vs тело (страница) ===
 
+describe('FeatureGroupHeader: bucket merged (смержена, ждёт закрытия)', () => {
+  const f = feat({ bucket: 'merged', chips: ['open', 'merged'], state: 'merged' });
+
+  it('статус «смержена, ждёт закрытия», глиф done, без кромки; тег «Смержена»', () => {
+    expect(featureDisplayState(f)).toEqual({ kind: 'done', alarm: null, status: 'смержена, ждёт закрытия' });
+    expect(featureStatusTag(f)).toEqual({ label: 'Смержена', tone: 'merged' });
+  });
+
+  it('рендер: статус виден, цвет — successText', () => {
+    const html = renderHeader(f);
+    expect(html).toContain('смержена, ждёт закрытия');
+    expect(html).toContain('var(--c-success-text)');
+  });
+});
+
 describe('FeatureGroupHeader: клики (шеvron vs тело)', () => {
   it('клик по шеврону: stopPropagation + onToggle, onOpen НЕ зовёт', () => {
     let toggled = 0, opened = 0, stopped = 0;

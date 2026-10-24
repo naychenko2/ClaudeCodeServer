@@ -123,7 +123,9 @@ public class FeatureIndexRowTests
         var mergeDone = Child("m1", "epic-state-merged", role: TaskRoles.Merge, status: TaskItemStatus.Done);
         var rowMg = Row(epicMg, [epicMg, finalMg, mergeDone]);
         rowMg.State.Should().Be(FeatureStates.Merged, "merge Done + финал принят → state=merged");
-        rowMg.Bucket.Should().Be("closed", "merged → bucket=closed");
+        rowMg.Bucket.Should().Be("merged", "merged при открытом эпике → bucket=merged");
+        rowMg.Chips.Should().Equal("open", "merged");
+        rowMg.Summary.Should().NotBeNull("у смерженной mergedAt виден");
 
         // closed: эпик Done, мержа нет → state=closed, bucket=closed.
         var epicC = Epic("epic-state-closed");

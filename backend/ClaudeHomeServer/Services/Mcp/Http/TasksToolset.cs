@@ -403,7 +403,8 @@ public sealed class TasksToolset(
                     // не сверяется: MCP всегда идёт под сервисным токеном, и эта дверь строже REST
                     // (TasksController.Update). Правила двух дверей должны оставаться согласованными.
                     updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
-                        callerIsExecutor: session.TaskId == id)
+                        callerIsExecutor: session.TaskId == id,
+                        denyFeatureClose: DenyFeatureClose(session, context.OwnerId, id))
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -471,7 +472,8 @@ public sealed class TasksToolset(
                         // Агентский путь (MCP): защита от затирания снятой задачи —
                         // tasks_complete на снятой задаче вернёт 400 вместо молчаливого 200 OK
                         isAgentCall: true,
-                        callerIsExecutor: session.TaskId == id)
+                        callerIsExecutor: session.TaskId == id,
+                        denyFeatureClose: DenyFeatureClose(session, context.OwnerId, id))
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -911,6 +913,14 @@ public sealed class TasksToolset(
 
     private static McpToolCallResult Json<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOpts));
+
+    // Закрытие эпика фичи — только человеком: запрет из чата-исполнителя этой задачи и на
+    // делегированном ходу (глубина > 0). Из чата человека на глубине 0 проходит.
+    private bool DenyFeatureClose(Session session, string ownerId, string taskId) =>
+        session.TaskId == taskId
+        || !DelegatedTurnGate.Decide(sessions, ownerId, session.Id, "Закрытие фичи",
+            alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
+            failOpenWhenUnknown: false).Allowed;
 
     private static McpToolCallResult Deny(string text) => new(text, IsError: true);
 

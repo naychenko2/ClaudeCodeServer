@@ -342,12 +342,15 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
   const f2 = feat('f2', ['open', 'stopped'], 'FICH_S');
   const f3 = feat('f3', ['open', 'merge'], 'FICH_M');
   const c1 = feat('c1', ['closed'], 'FICH_C');
+  // Смержена, ждёт закрытия: bucket=merged — открытая секция, чип «merged».
+  const g1 = { ...feat('g1', ['open', 'merged'], 'FICH_G'), bucket: 'merged' as const };
   const idx: import('../types/featureIndex').FeaturesIndex = {
-    features: [f1, f2, f3, c1],
+    features: [f1, f2, f3, g1, c1],
     chats: {
       's1': [{ featureId: 'f1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
       's2': [{ featureId: 'f2', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
       's3': [{ featureId: 'f3', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
+      's5': [{ featureId: 'g1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
       's4': [{ featureId: 'c1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
     },
   };
@@ -359,7 +362,7 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     indexCalls = 0;
     featuresIndexTest.setIndex('p1', idx);
     mockIndex = idx; // эффект useFeaturesIndex не сбрасывает индекс в EMPTY
-    mockSessions = [s('s1'), s('s2'), s('s3'), s('s4')];
+    mockSessions = [s('s1'), s('s2'), s('s3'), s('s4'), s('s5')];
     store.clear();
     store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', ...filters }));
     const container = new _FakeNode();
@@ -404,6 +407,14 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     expect(hasFeatureTitle(container, 'FICH_W')).toBe(true);
     expect(hasFeatureTitle(container, 'FICH_S')).toBe(true);
     expect(hasFeatureTitle(container, 'FICH_M')).toBe(false);
+  });
+
+  it('смержена (bucket=merged) — в открытой секции без чипов; чип «Смержены» оставляет только её', async () => {
+    const all = await renderFeatures({});
+    expect(hasFeatureTitle(all, 'FICH_G')).toBe(true);
+    const only = await renderFeatures({ featureChips: ['merged'] });
+    expect(hasFeatureTitle(only, 'FICH_G')).toBe(true);
+    expect(hasFeatureTitle(only, 'FICH_W')).toBe(false);
   });
 
   it('крестик снимает чип: убирает «Ждут вас» → фича waiting исчезает, stopped остаётся', async () => {

@@ -64,7 +64,8 @@ public sealed record FeatureIndexRow(
     string FeatureId,
     string Title,
     string? ProjectId,
-    // Группа фичи: attention — требует внимания; running — идёт; idle — стоит; closed — закрыта.
+    // Группа фичи: attention — требует внимания; running — идёт; merged — смержена, эпик открыт
+    // (ждёт закрытия); idle — стоит; closed — закрыта (эпик Done).
     // Выводится из State (единая точка правда, FeatureProjector.Bucket) — bucket и state не расходятся.
     string Bucket,
     // Состояние фичи (FeatureRun.State; 11 значений, см. FeatureStates): merged · closed · paused ·
@@ -75,7 +76,7 @@ public sealed record FeatureIndexRow(
     // Рельса: 8 стадий в явном порядке жизненного цикла (cut → design → plan → …; «design»
     // необязательна: без задач — skipped, W4-DES-B).
     List<FeatureIndexRailSegment> Rail,
-    // Чипы-фильтры: open | waiting | stopped | merge | closed.
+    // Чипы-фильтры: open | waiting | stopped | merge | merged | closed (у открытой смерженной — open + merged).
     List<string> Chips,
     // Счётчики шагов: принятые ревью / знаменатель (честный прогресс, см. FeatureStepProgress).
     int StepsAccepted,

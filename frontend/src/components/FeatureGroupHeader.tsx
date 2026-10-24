@@ -108,11 +108,12 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
   // «доработка» → warningText 600, закрытая смержена → successText, иначе textSecondary 400.
   const statusColor = compact
     ? (closedMerged ? C.successText : C.textSecondary)
+    : feature.bucket === 'merged' ? C.successText
     : st.alarm === 'wait' ? C.info
     : st.alarm === 'stop' ? C.dangerText
     : st.kind === 'loop' ? C.warningText
     : C.textSecondary;
-  const statusWeight = (st.alarm != null || st.kind === 'loop' || (compact && closedMerged)) ? 600 : 400;
+  const statusWeight = (st.alarm != null || st.kind === 'loop' || (compact && closedMerged) || feature.bucket === 'merged') ? 600 : 400;
   // «Давность»: с тревоги (attention.since) или с последней активности (lastActivityAt).
   const age = compact ? '' : ageLabel(feature.attention?.since ?? feature.lastActivityAt, now);
   // Стопка аватаров «кто сейчас»: nowPersonaIds (волна 2) с фолбэком на now0 (волна 1).

@@ -19,7 +19,7 @@ import type { FeatureChatLink as FeaturePageChatLink } from './featureChats';
 
 // Группа фичи (контракт §1): attention — требует внимания; running — идёт;
 // idle — стоит; closed — закрыта. Считается той же функцией, что и порядок.
-export type FeatureBucket = 'attention' | 'running' | 'idle' | 'closed';
+export type FeatureBucket = 'attention' | 'running' | 'merged' | 'idle' | 'closed';
 
 // Состояние стадии рельсы — словарь бэка `FeatureStage.State` один в один
 // (контракт: `pending`, а не `ahead` — переименование дало бы вторую точку правды).
@@ -43,7 +43,7 @@ export interface FeatureRailSegment {
 // Чипы-фильтры (контракт §1, «chips принят»): фронт фильтрует по chips, а не по attention.
 // open = bucket ≠ closed; waiting/stopped/merge = attention.kind; closed = bucket = closed;
 // running = bucket = running (идёт, без тревоги).
-export type FeatureChip = 'open' | 'waiting' | 'stopped' | 'merge' | 'closed' | 'running';
+export type FeatureChip = 'open' | 'waiting' | 'stopped' | 'merge' | 'closed' | 'running' | 'merged';
 
 // Тревога фичи (контракт: `attention.kind` расширен значением `merge` —
 // маппинг сырой строки «мерж» делается на бэке, на фронт уходит только kind).

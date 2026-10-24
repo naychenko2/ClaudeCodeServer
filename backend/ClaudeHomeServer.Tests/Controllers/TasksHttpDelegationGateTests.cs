@@ -1,7 +1,10 @@
 using System.Net;
+using System.IdentityModel.Tokens.Jwt;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -241,5 +244,142 @@ public class TasksHttpDelegationGateTests : IDisposable
             "проект по умолчанию — проект чата-вызывателя");
         // Происхождение: задача из чата помнит его id (sourceSessionId)
         task.GetProperty("sourceSessionId").GetString().Should().Be(sessionId);
+    }
+
+    // ── Закрытие эпика фичи — только человеком ──────────────────────────────
+
+    private const string FeatureCloseDenied = "Фичу закрывает человек";
+
+    private async Task<string> CreateEpicAsync(string projectId)
+    {
+        var resp = await Client.PostAsJsonAsync("/api/tasks",
+            new { title = "эпик", role = "feature", projectId });
+        resp.EnsureSuccessStatusCode();
+        return JsonSerializer.Deserialize<JsonElement>(
+            await resp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+    }
+
+    private async Task<string> StatusOfAsync(string id) =>
+        JsonSerializer.Deserialize<JsonElement>(await (await Client.GetAsync($"/api/tasks/{id}"))
+            .Content.ReadAsStringAsync()).GetProperty("status").GetString()!;
+
+    /// <summary>Чат человека на глубине 0 (не исполнитель этого эпика) закрывает фичу — проходит.</summary>
+    [Theory]
+    [InlineData("tasks_complete")]
+    [InlineData("tasks_update")]
+    public async Task ЗакрытиеЭпика_ЧатЧеловекаГлубина0_Проходит(string tool)
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _adapters.AgentDepth = 0;
+
+        var answer = await CallToolAsync(Client, sessionId, tool, new { id = epicId, status = "done" });
+
+        answer.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse(ToolText(answer));
+        (await StatusOfAsync(epicId)).Should().Be("done");
+    }
+
+    /// <summary>Делегированный ход (глубина 1) эпик закрыть не может — потолок 0, не 1, как у запуска.</summary>
+    [Theory]
+    [InlineData("tasks_complete")]
+    [InlineData("tasks_update")]
+    public async Task ЗакрытиеЭпика_ДелегированныйХод_Отказ(string tool)
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _adapters.AgentDepth = 1;
+
+        var answer = await CallToolAsync(Client, sessionId, tool, new { id = epicId, status = "done" });
+
+        answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
+        ToolText(answer).Should().Contain(FeatureCloseDenied);
+        (await StatusOfAsync(epicId)).Should().NotBe("done");
+    }
+
+    /// <summary>Чат-исполнитель эпика (Session.TaskId == id) закрыть его не может даже на глубине 0.</summary>
+    [Theory]
+    [InlineData("tasks_complete")]
+    [InlineData("tasks_update")]
+    public async Task ЗакрытиеЭпика_ЧатИсполнительЭпика_Отказ(string tool)
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = epicId;
+
+        var answer = await CallToolAsync(Client, sessionId, tool, new { id = epicId, status = "done" });
+
+        answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
+        ToolText(answer).Should().Contain(FeatureCloseDenied);
+        (await StatusOfAsync(epicId)).Should().NotBe("done");
+    }
+
+    /// <summary>Обычная задача (не эпик) закрывается исполнителем как раньше — запрет только на role=feature.</summary>
+    [Fact]
+    public async Task ЗакрытиеОбычнойЗадачи_ЧатИсполнитель_Проходит()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var created = await Client.PostAsJsonAsync("/api/tasks", new { title = "шаг", projectId });
+        var id = JsonSerializer.Deserialize<JsonElement>(
+            await created.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        _adapters.AgentDepth = 0;
+        _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!.TaskId = id;
+
+        var answer = await CallToolAsync(Client, sessionId, "tasks_complete", new { id });
+
+        answer.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse(ToolText(answer));
+    }
+
+    private HttpClient ServiceClient(string? callerSessionId)
+    {
+        var userId = new JwtSecurityTokenHandler()
+            .ReadJwtToken(Client.DefaultRequestHeaders.Authorization!.Parameter).Subject;
+        var token = _factory.Services.GetRequiredService<JwtService>().IssueServiceToken(userId);
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (callerSessionId is not null) client.DefaultRequestHeaders.Add("X-Caller-Session-Id", callerSessionId);
+        return client;
+    }
+
+    /// <summary>
+    /// REST PUT: сервисный токен — из чата-исполнителя и с делегированного хода отказ (400),
+    /// из чата человека на глубине 0 и пользовательский JWT (кнопка в UI) — проходит.
+    /// </summary>
+    [Fact]
+    public async Task Rest_ЗакрытиеЭпика_СервисныйТокен()
+    {
+        var (projectId, humanSession) = await CreateProjectWithSessionAsync();
+        var (_, executorSession) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+        _factory.Services.GetRequiredService<SessionManager>().GetById(executorSession)!.TaskId = epicId;
+        var body = new { status = "done" };
+
+        _adapters.AgentDepth = 0;
+        var byExecutor = await ServiceClient(executorSession).PutAsJsonAsync($"/api/tasks/{epicId}", body);
+        byExecutor.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await byExecutor.Content.ReadAsStringAsync()).Should().Contain(FeatureCloseDenied);
+
+        var noSession = await ServiceClient(null).PutAsJsonAsync($"/api/tasks/{epicId}", body);
+        noSession.StatusCode.Should().Be(HttpStatusCode.BadRequest, "fail-closed: сервисный токен без сессии");
+
+        _adapters.AgentDepth = 1;
+        var delegated = await ServiceClient(humanSession).PutAsJsonAsync($"/api/tasks/{epicId}", body);
+        delegated.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await StatusOfAsync(epicId)).Should().NotBe("done");
+
+        _adapters.AgentDepth = 0;
+        (await ServiceClient(humanSession).PutAsJsonAsync($"/api/tasks/{epicId}", body))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "чат человека на глубине 0");
+    }
+
+    /// <summary>Пользовательский JWT (кнопка «Закрыть фичу») закрывает эпик всегда.</summary>
+    [Fact]
+    public async Task Rest_ЗакрытиеЭпика_ПользовательскийJwt_Проходит()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync();
+        var epicId = await CreateEpicAsync(projectId);
+
+        (await Client.PutAsJsonAsync($"/api/tasks/{epicId}", new { status = "done" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
     }
 }

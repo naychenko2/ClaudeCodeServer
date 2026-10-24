@@ -750,11 +750,19 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // ТОЛЬКО гардом против затирания снятой задачи: человек вправе вернуть снятую задачу
     // в работу и снять пометку, а агенту мы обязаны отказать внятно — иначе «200 OK и
     // ничего не изменилось» (находка фикс-волны 4, мутация в TaskManagerTests).
+    public const string FeatureCloseDeniedText =
+        "Фичу закрывает человек: кнопка «Закрыть фичу» или явная просьба в своём чате.";
+
     public TaskItem? Update(string id, UpdateTaskRequest req, BoardColumn? effectiveColumn = null,
-        bool isAgentCall = false, bool callerIsExecutor = false)
+        bool isAgentCall = false, bool callerIsExecutor = false, bool denyFeatureClose = false)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        // Эпик фичи закрывает только человек: исполнитель задачи и делегированный ход (вызыватель
+        // считает denyFeatureClose) переводить role=feature в Done не вправе. Проверка до мутаций.
+        if (denyFeatureClose && task.Role == TaskRoles.Feature
+            && req.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done)
+            throw new InvalidOperationException(FeatureCloseDeniedText);
         var statusBefore = task.Status;
         // Снимок 6 полей ДО мутации — для журнала фичи (WriteJournalTransitions перед ScheduleSave).
         var before = Capture(task);

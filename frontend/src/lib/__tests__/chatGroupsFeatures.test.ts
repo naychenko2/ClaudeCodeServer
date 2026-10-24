@@ -81,6 +81,20 @@ describe('groupByFeatures: порядок групп', () => {
   });
 });
 
+describe('groupByFeatures: bucket merged', () => {
+  it('порядок бэка attention → running → merged → idle → closed сохраняется', () => {
+    const feats = [feature('Z', 'attention'), feature('M', 'running'), feature('G', 'merged'), feature('A', 'idle'), feature('C', 'closed')];
+    const idx = index(feats, { 'z': [link('Z')], 'm': [link('M')], 'g': [link('G')], 'a': [link('A')], 'c': [link('C')] });
+    const groups = groupByFeatures([chat('a'), chat('c'), chat('g'), chat('z'), chat('m')], idx);
+    expect(groups.map(g => g.feature?.featureId)).toEqual(['Z', 'M', 'G', 'A', 'C']);
+  });
+
+  it('чип merged считается по chips[]', () => {
+    const feats = [withChips('G', ['open', 'merged'])];
+    expect(featureChipCounts(feats)).toMatchObject({ open: 1, merged: 1 });
+  });
+});
+
 describe('groupByFeatures: мультифичевый чат', () => {
   it('стоит в группе первой фичи, строка одна (без дублей)', () => {
     const feats = [feature('X', 'running'), feature('Y', 'running')];
@@ -236,11 +250,11 @@ describe('featureChipCounts: счётчики по chips[]', () => {
       withChips('B', ['open', 'stopped']),
       withChips('C', ['closed']),
     ];
-    expect(featureChipCounts(feats)).toEqual({ open: 2, waiting: 1, stopped: 1, merge: 0, closed: 1, running: 0 });
+    expect(featureChipCounts(feats)).toEqual({ open: 2, waiting: 1, stopped: 1, merge: 0, closed: 1, running: 0, merged: 0 });
   });
 
   it('пустой список — все нули', () => {
-    expect(featureChipCounts([])).toEqual({ open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0 });
+    expect(featureChipCounts([])).toEqual({ open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0, merged: 0 });
   });
 });
 

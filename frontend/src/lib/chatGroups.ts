@@ -362,6 +362,8 @@ export function featureDisplayState(
     const merged = f.summary?.mergedAt != null;
     return { kind: merged ? 'done' : 'closed', alarm: null, status: merged ? 'смержена' : 'закрыта' };
   }
+  // Смержена, но ещё не закрыта (bucket=merged): ждёт закрытия.
+  if (f.bucket === 'merged') return { kind: 'done', alarm: null, status: 'смержена, ждёт закрытия' };
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «ждёт согласия на мерж»,
   // merging → «идёт», waiting → «ждёт вас», stopped → «стоит». Без state (старые данные/кеш)
   // — запасной путь по attention (attention.kind), чтобы существующие тесты не упали.
@@ -400,6 +402,7 @@ export function featureStatusTag(f: FeatureIndexFeature): FeatureStatusTag {
       ? { label: 'Смержена', tone: 'merged' }
       : { label: 'Без мержа', tone: 'closed' };
   }
+  if (f.bucket === 'merged') return { label: 'Смержена', tone: 'merged' };
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «К мержу», merging → «Идёт»,
   // waiting → «Ждёт вас», stopped → «Стоит». Без state (старые данные/кеш) — запасной путь
   // по attention (attention.kind), чтобы существующие тесты не упали.
@@ -524,7 +527,7 @@ export function featureGroupByOptions(inProject: boolean, featuresOverview: bool
 // в SessionList берут подписи отсюда, а не заводят вторую точку правды.
 export const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
   open: 'Открытые', waiting: 'Ждут вас', stopped: 'Стоят', merge: 'К мержу', closed: 'Закрытые',
-  running: 'Идут',
+  running: 'Идут', merged: 'Смержены',
 };
 
 // Определения чипов для рендера ряда: значение + подпись, в порядке ALL_FEATURE_FILTER_CHIPS.
@@ -534,7 +537,7 @@ export const FEATURE_FILTER_CHIPS: { value: FeatureChip; label: string }[] =
 // Число фич по каждому чипу: фронт считает по chips[] бэка (не вычисляет членство сам).
 // Одна фича может входить в несколько чипов (например, «открытая» и «ждёт вас»).
 export function featureChipCounts(features: FeatureIndexFeature[]): Record<FeatureChip, number> {
-  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0 };
+  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0, merged: 0 };
   for (const f of features) for (const c of f.chips) counts[c]++;
   return counts;
 }

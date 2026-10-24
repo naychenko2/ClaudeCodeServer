@@ -372,7 +372,7 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
     expect(box, 'резюме раскрыто').not.toBeNull();
     const all = textNodes(box!).join('');
     expect(all, 'бейдж «устарело»').toContain('устарело');
-    expect(all, 'числа событий в бейдже нет').not.toContain('устарело · 12');
+    expect(all, 'числа событий в бейдже нет').not.toMatch(/устарело\s*·/);
   });
 
   // === 16. Формы числительных и ответ старой версии бэка без eventCount ===
@@ -384,7 +384,7 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
     const all = textNodes(findNodeByAttr(c, 'data-testid', 'feature-analysis-summary')!).join('');
     expect(all, 'единичная форма в шапке').toContain('по 1 событию');
     expect(all, 'бейдж без числа').toContain('устарело');
-    expect(all, 'числа в бейдже нет').not.toContain('устарело · 1');
+    expect(all, 'числа в бейдже нет').not.toMatch(/устарело\s*·/);
 
     // Старая версия сервера поля не несёт — в шапке числа нет, бейдж просто «устарело».
     mockSummary.result = { text: SUMMARY.text, generatedAt: SUMMARY.generatedAt, model: null, cached: true };

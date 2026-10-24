@@ -10,22 +10,24 @@
 //
 // Карточка на группу: имя (аватар персоны 22 / квадрат цвета группы 12, как в
 // таблице ST-F11), живой чип персоны, доля по выбранной мере (percentText),
-// полоса доли от СУММЫ (тот же процент, что текст — полоса и число измеряют
-// одно), «N чатов ›» с раскрытием FeatureBreakdownChats (ST-F10, isMobile).
+// чипы связи разрезов (groupChips, как в таблице ST-F11), три мини-полосы 6 px
+// «время / токены / деньги» от максимума колонки (макет .c-mr .ms), «N чатов ›»
+// с раскрытием FeatureBreakdownChats (ST-F10, isMobile).
 // Скрытые ключи (hiddenKeys) отсекаются до guard'а. Меньше двух групп — null,
 // пустое состояние рисует оболочка. Тач-цель кнопки чатов — 44 px (к1).
 // Сырые button — с явным сбросом UA-стилей (урок ST-F7).
 
-import { useState, type CSSProperties } from 'react';
+import { useState, Fragment, type CSSProperties } from 'react';
 import { C, FS, SP, R, FONT } from '../../lib/design';
 import { plural } from '../../lib/plural';
+import { roleLabel } from '../../lib/roleLabel';
 import { Dot } from '../ui/Dot';
 import { LiveDot } from '../ui/LiveDot';
 import { formatDuration } from './FeatureStatsBits';
 import { formatTokens } from './FeatureStatsFormat';
 import {
-  type Axis, type Measure,
-  sortGroups, formatMoney, liveChipText, fewData, percentText, measureValue,
+  type Axis, type Measure, type BreakdownChip,
+  sortGroups, formatMoney, groupChips, liveChipText, fewData, percentText, measureValue,
 } from './FeatureBreakdownModel';
 import { FeatureBreakdownChats } from './FeatureBreakdownChats';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
@@ -50,8 +52,20 @@ export interface FeatureBreakdownCardsProps {
 // Палитра групп — та же, что у таблицы и ShareRing: если colorOf не передан.
 const ARC_COLORS = [C.accent, C.info, C.plan, C.success, C.warning, C.progressTrack];
 
+const MEASURE_WORD: Record<Measure, string> = { time: 'время', tokens: 'токены', cost: 'деньги' };
+const MEASURES: Measure[] = ['time', 'tokens', 'cost'];
+
 function groupColor(key: string, index: number, colorOf?: (k: string) => string): string {
   return colorOf ? colorOf(key) : ARC_COLORS[index % ARC_COLORS.length];
+}
+
+// Подпись чипа — как в таблице (ST-F11): модель — нормализованное имя (groupChips
+// уже снял «Авто → »); роль — слово roleLabel без шага; для 'step' оно пусто —
+// нейтральное «шаг».
+function chipLabel(chip: BreakdownChip, labelOf?: (k: string) => string): string {
+  if (chip.kind === 'model') return chip.key;
+  if (chip.kind === 'role') return roleLabel(chip.key, null, null) || (chip.key === 'step' ? 'шаг' : chip.key);
+  return labelOf ? labelOf(chip.key) : chip.key;
 }
 
 // Карточка: bgWhite, рамка borderLight, R.lg, padding SP.sm (макет .c-mr).
@@ -86,15 +100,34 @@ const LIVE: CSSProperties = {
   padding: `0 ${SP.xs}px`, borderRadius: R.max, fontSize: FS.xxs, fontWeight: 600,
 };
 
-// Строка меры: полоса доли от суммы (8 px, цвет группы) + значение (mono).
-const MEASURE: CSSProperties = { display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.sm };
-const BAR: CSSProperties = { flex: 1, height: 8, borderRadius: R.max, background: C.bgSelected, overflow: 'hidden' };
-const VAL: CSSProperties = {
-  fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 600,
-  color: C.textHeading, whiteSpace: 'nowrap',
+// Чипы связи разрезов — те же, что в таблице (макет .c-chips): нейтральная рамка;
+// персона — аватар + имя.
+const CHIPS: CSSProperties = { display: 'flex', gap: SP.xs, flexWrap: 'wrap', marginTop: SP.xs };
+const CHIP: CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: SP.xs,
+  fontSize: FS.xxs, padding: `1px ${SP.xs}px`,
+  border: `1px solid ${C.border}`, color: C.textSecondary,
+  borderRadius: R.sm, whiteSpace: 'nowrap',
 };
-// Без учёта — фраза один раз: ни полосы, ни процента (состояние «без расхода»).
-const NONE: CSSProperties = { fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm };
+const CHIP_AV: CSSProperties = {
+  width: 18, height: 18, borderRadius: R.full, display: 'inline-flex',
+  alignItems: 'center', justifyContent: 'center',
+  fontSize: FS.xxs, fontWeight: 700, color: C.onAccent, flexShrink: 0,
+};
+
+// Три мини-полосы 6 px (макет .c-mr .ms): сетка 62px/1fr/74px — подпись, полоса от
+// МАКСИМУМА колонки (как ячейки таблицы), значение (mono). Без учёта — слово в
+// своей строке: ни полосы, ни процента.
+const MS: CSSProperties = {
+  display: 'grid', gridTemplateColumns: '62px 1fr 74px', gap: `${SP.xs}px ${SP.sm}px`,
+  alignItems: 'center', marginTop: SP.sm,
+};
+const M_LABEL: CSSProperties = { fontSize: FS.xs, color: C.textMuted };
+const MINI_BAR: CSSProperties = { height: 6, borderRadius: R.max, background: C.bgSelected, overflow: 'hidden' };
+const M_VAL: CSSProperties = {
+  fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 600,
+  color: C.textHeading, textAlign: 'right', whiteSpace: 'nowrap',
+};
 
 // «N чатов ›» — сырой button со сбросом UA-стилей (урок ST-F7): без font/cursor/
 // textAlign браузер центрирует текст и даёт cursor: default. Высота 44 — тач-цель
@@ -131,6 +164,8 @@ export function FeatureBreakdownCards({
 
   const sorted = sortGroups(visible, measure);
   const total = visible.reduce((a, g) => a + (measureValue(g, measure) ?? 0), 0);
+  // Максимум колонки — база мини-полос (как ячейки таблицы ST-F11), не сумма.
+  const maxOf = (m: Measure) => Math.max(...visible.map(g => measureValue(g, m) ?? 0), 1);
 
   return (
     <div data-testid="feature-breakdown-cards">
@@ -138,6 +173,7 @@ export function FeatureBreakdownCards({
         const color = groupColor(g.key, i, colorOf);
         const label = labelOf ? labelOf(g.key) : g.key;
         const live = axis === 'personas' ? liveChipText(run, g.key) : null;
+        const chips = groupChips(axis, g.key, run);
         const v = measureValue(g, measure);
         const chatIds = (g.chatIds ?? []).filter(Boolean);
         const open = expandedKey === g.key;
@@ -171,19 +207,44 @@ export function FeatureBreakdownCards({
                 </span>
               )}
             </div>
-            {v == null ? (
-              <div style={NONE}>нет учёта</div>
-            ) : (
-              <div style={MEASURE}>
-                <span aria-hidden data-testid="share-bar" style={BAR}>
-                  <i style={{
-                    display: 'block', height: '100%', borderRadius: R.max, background: color,
-                    width: `${(total > 0 ? v / total : 0) * 100}%`,
-                  }} />
+            <div data-testid={`breakdown-chips-${g.key}`} style={CHIPS}>
+              {chips.map(c => c.kind === 'persona' ? (
+                <span key={`${c.kind}:${c.key}`} data-testid={`breakdown-chip-${c.kind}:${c.key}`} style={{ ...CHIP, border: 'none' }}>
+                  <span aria-hidden style={{ ...CHIP_AV, background: groupColor(c.key, 0, colorOf) }}>
+                    {(labelOf ? labelOf(c.key) : c.key).charAt(0).toUpperCase()}
+                  </span>
+                  {chipLabel(c, labelOf)}
                 </span>
-                <span style={VAL}>{measureText(g, measure)}</span>
-              </div>
-            )}
+              ) : (
+                <span key={`${c.kind}:${c.key}`} data-testid={`breakdown-chip-${c.kind}:${c.key}`} style={CHIP}>{chipLabel(c, labelOf)}</span>
+              ))}
+            </div>
+            <div style={MS}>
+              {MEASURES.map(m => {
+                const mv = measureValue(g, m);
+                if (mv == null) {
+                  return (
+                    <Fragment key={m}>
+                      <span style={M_LABEL}>{MEASURE_WORD[m]}</span>
+                      <span data-testid={`measure-none-${m}`} style={{ fontSize: FS.xs, color: C.textMuted }}>нет учёта</span>
+                      <span />
+                    </Fragment>
+                  );
+                }
+                return (
+                  <Fragment key={m}>
+                    <span style={M_LABEL}>{MEASURE_WORD[m]}</span>
+                    <span aria-hidden data-testid={`measure-bar-${m}`} style={MINI_BAR}>
+                      <i style={{
+                        display: 'block', height: '100%', borderRadius: R.max, background: color,
+                        width: `${(mv / maxOf(m)) * 100}%`,
+                      }} />
+                    </span>
+                    <span data-testid={`measure-value-${m}`} style={M_VAL}>{measureText(g, m)}</span>
+                  </Fragment>
+                );
+              })}
+            </div>
             {chatIds.length > 0 ? (
               <button
                 type="button"

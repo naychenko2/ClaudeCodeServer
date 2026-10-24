@@ -1,14 +1,19 @@
 // Тесты мобильных карточек разреза (ST-F12). Рендер на fakeDom: карточка на группу,
-// порядок по мере из sortGroups, сумма и полоса доли — от СУММЫ (тот же процент, что
-// текст), «нет учёта» без полосы и процента, «бесплатно» через formatMoney, живые чипы
-// из liveChipText, «N чатов ›» со склонением и раскрытие FeatureBreakdownChats (одна
-// группа за раз), раскрытие НЕ сбрасывается при смене меры (перерендер того же корня),
-// тач-цель кнопки 44 px и сброс UA-стилей, hiddenKeys, fewData → null. Числа — те, что
-// отдаёт модель ST-F8; пересчёт в компоненте не проверяем.
+// порядок по мере из sortGroups, три мини-полосы 6 px «время / токены / деньги» от
+// МАКСИМУМА колонки (как ячейки таблицы), «нет учёта» в своей строке без полосы и
+// процента, «бесплатно» через formatMoney, чипы связи разрезов из groupChips (персоны
+// — модели и роли; модели и роли — персоны), живые чипы из liveChipText, «N чатов ›»
+// со склонением и раскрытие FeatureBreakdownChats (одна группа за раз), раскрытие НЕ
+// сбрасывается при смене меры (перерендер того же корня), тач-цель кнопки 44 px и
+// сброс UA-стилей, hiddenKeys, fewData → null. Числа — те, что отдаёт модель ST-F8;
+// пересчёт в компоненте не проверяем.
 //
 // Мутации (проверены прогоном): (1) убрать sortGroups (порядок из входа) — краснеет
-// тест порядка по мере; (2) не фильтровать hiddenKeys — краснеет тест «скрытая группа
-// не рендерится»; (3) снять высоту 44 у кнопки чатов — краснеет тест тач-цели.
+// тест порядка по мере; (2) зафиксировать сортировку на 'time' (sortGroups(visible,
+// 'time') вместо measure) — краснеет половина про «токены»; (3) не фильтровать
+// hiddenKeys — краснеет тест «скрытая группа не рендерится»; (4) снять высоту 44 у
+// кнопки чатов — краснеет тест тач-цели. Фикстура GROUPS намеренно НЕ отсортирована
+// по времени: иначе проверка порядка по «времени» вакуумна.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -29,12 +34,13 @@ function mkGroup(
 }
 
 // Кира — локальная модель (0 при токенах → «бесплатно»), Тимур — самый дорогой по
-// токенам, Вера — без учёта. Порядок входа не отсортирован по мере, чтобы
-// сортировка проверялась, а не совпадала с входом.
+// токенам, Вера — без учёта. Порядок входа не совпадает ни с одним порядком по мере
+// (в частности, не отсортирован по времени): иначе сортировка проверялась бы
+// совпадением с входом, а не работой sortGroups.
 const GROUPS = [
-  mkGroup('kira', 120, 1000, 0, ['c1', 'c2', 'c3']),
-  mkGroup('timur', 60, 3000, 5.0, ['c4']),
   mkGroup('vera', 30, null, null, ['c5', 'c6', 'c7', 'c8', 'c9']),
+  mkGroup('timur', 60, 3000, 5.0, ['c4']),
+  mkGroup('kira', 120, 1000, 0, ['c1', 'c2', 'c3']),
 ];
 
 function mkExecutor(over: Partial<FeatureStageExecutor> = {}): FeatureStageExecutor {
@@ -185,7 +191,7 @@ describe('карточка на группу (к1)', () => {
     expect(textOf(card)).not.toContain('kira');
     const avatar = card.children[0].children[0];
     expect(styleOf(avatar).background).toBe(C.success);
-    const fill = findNodeByAttr(card, 'data-testid', 'share-bar')!.children[0];
+    const fill = findNodeByAttr(card, 'data-testid', 'measure-bar-time')!.children[0];
     expect(styleOf(fill).background).toBe(C.success);
   });
 
@@ -218,25 +224,47 @@ describe('карточка на группу (к1)', () => {
   });
 });
 
-describe('сумма и полоса доли — из модели (к2)', () => {
-  it('время: суммы форматером, проценты percentText от суммы, полоса — та же доля', () => {
+describe('три мини-полосы 6 px — из модели (к1)', () => {
+  it('в каждой карточке три строки: время, токены, деньги; полоса от МАКСИМУМА колонки, высота 6', () => {
+    const { container } = mountCards(GROUPS);
+    const card = cardNode(container, 'timur')!;
+    expect(textOf(findNodeByAttr(card, 'data-testid', 'measure-bar-time'))).toBe('');
+    expect(textOf(findNodeByAttr(card, 'data-testid', 'measure-value-time'))).toContain('1 ч');
+    expect(textOf(findNodeByAttr(card, 'data-testid', 'measure-value-tokens'))).toContain('3 тыс.');
+    expect(textOf(findNodeByAttr(card, 'data-testid', 'measure-value-cost'))).toContain('$5,00');
+    for (const m of ['time', 'tokens', 'cost']) {
+      const bar = findNodeByAttr(card, 'data-testid', `measure-bar-${m}`);
+      expect(bar, `нет полосы ${m}`).toBeTruthy();
+      expect(parseFloat(styleOf(bar).height)).toBe(6);
+    }
+    // Максимумы: время 120, токены 3000, деньги 5 — доли полос от них.
+    expect(parseFloat(styleOf(findNodeByAttr(card, 'data-testid', 'measure-bar-time').children[0]).width)).toBeCloseTo(60 / 120 * 100, 3);
+    expect(parseFloat(styleOf(findNodeByAttr(card, 'data-testid', 'measure-bar-tokens').children[0]).width)).toBe(100);
+    const kira = cardNode(container, 'kira')!;
+    expect(parseFloat(styleOf(findNodeByAttr(kira, 'data-testid', 'measure-bar-time').children[0]).width)).toBe(100);
+    expect(parseFloat(styleOf(findNodeByAttr(kira, 'data-testid', 'measure-bar-tokens').children[0]).width)).toBeCloseTo(1000 / 3000 * 100, 3);
+    expect(parseFloat(styleOf(findNodeByAttr(kira, 'data-testid', 'measure-bar-cost').children[0]).width)).toBe(0);
+  });
+
+  it('время: «2 ч» форматером, процент percentText от суммы; полоса — не от суммы, а от максимума', () => {
     const { container } = mountCards(GROUPS, { measure: 'time' });
     const card = cardNode(container, 'kira')!;
     expect(textOf(card)).toContain('2 ч');
     expect(textOf(findNodeByAttr(card, 'data-testid', 'share-pct-kira'))).toBe('57 %');
-    const fill = findNodeByAttr(card, 'data-testid', 'share-bar')!.children[0];
-    expect(parseFloat(styleOf(fill).width)).toBeCloseTo(120 / 210 * 100, 3);
-    expect(parseFloat(styleOf(findNodeByAttr(card, 'data-testid', 'share-bar')).height)).toBe(8);
   });
 
-  it('токены: «3 тыс.» и «1 тыс.»; без учёта — «нет учёта», без полосы и процента', () => {
+  it('токены: «3 тыс.» и «1 тыс.»; без учёта — «нет учёта» в своей строке, без полосы', () => {
     const { container } = mountCards(GROUPS, { measure: 'tokens' });
     const timur = cardNode(container, 'timur')!;
     expect(textOf(timur)).toContain('3 тыс.');
     expect(textOf(findNodeByAttr(timur, 'data-testid', 'share-pct-timur'))).toBe('75 %');
     const vera = cardNode(container, 'vera')!;
-    expect(textOf(vera)).toContain('нет учёта');
-    expect(findNodeByAttr(vera, 'data-testid', 'share-bar')).toBeNull();
+    expect(textOf(findNodeByAttr(vera, 'data-testid', 'measure-none-tokens'))).toBe('нет учёта');
+    expect(textOf(findNodeByAttr(vera, 'data-testid', 'measure-none-cost'))).toBe('нет учёта');
+    expect(findNodeByAttr(vera, 'data-testid', 'measure-bar-tokens')).toBeNull();
+    expect(findNodeByAttr(vera, 'data-testid', 'measure-bar-cost')).toBeNull();
+    // Время у Веры есть — его строка с полосой (30/120 = 25 %).
+    expect(findNodeByAttr(vera, 'data-testid', 'measure-bar-time')).toBeTruthy();
     expect(findNodeByAttr(vera, 'data-testid', 'share-pct-vera')).toBeNull();
   });
 
@@ -245,9 +273,52 @@ describe('сумма и полоса доли — из модели (к2)', () =
     expect(cardOrder(container)).toEqual(['timur', 'kira', 'vera']);
     expect(textOf(cardNode(container, 'timur')!)).toContain('$5,00');
     const kira = cardNode(container, 'kira')!;
-    expect(textOf(kira)).toContain('бесплатно');
+    expect(textOf(findNodeByAttr(kira, 'data-testid', 'measure-value-cost'))).toBe('бесплатно');
     expect(textOf(kira)).not.toContain('$0,00');
-    expect(textOf(cardNode(container, 'vera')!)).toContain('нет учёта');
+    expect(textOf(findNodeByAttr(cardNode(container, 'vera')!, 'data-testid', 'measure-none-cost'))).toBe('нет учёта');
+  });
+});
+
+describe('чипы связи разрезов (к2)', () => {
+  const NAMES: Record<string, string> = { kira: 'Кира', timur: 'Тимур', vera: 'Вера' };
+  const labelOf = (key: string) => NAMES[key] ?? key;
+
+  it('персона — её модели и роли; без исполнителей — чипов нет', () => {
+    const { container } = mountCards(GROUPS, { run: RUN_LIVE, labelOf });
+    const kira = cardNode(container, 'kira')!;
+    expect(textOf(findNodeByAttr(kira, 'data-testid', 'breakdown-chip-model:Qwen 3.8'))).toBe('Qwen 3.8');
+    expect(textOf(findNodeByAttr(kira, 'data-testid', 'breakdown-chip-role:step'))).toBe('шаг');
+    const timur = cardNode(container, 'timur')!;
+    expect(textOf(findNodeByAttr(timur, 'data-testid', 'breakdown-chip-model:Claude Opus 5.5'))).toBe('Claude Opus 5.5');
+    expect(textOf(findNodeByAttr(timur, 'data-testid', 'breakdown-chip-role:review'))).toBe('ревью');
+    // Вера — не исполнитель: чипов в её карточке нет.
+    const vera = cardNode(container, 'vera')!;
+    expect(vera.querySelectorAll('span').filter(s => (s.getAttribute('data-testid') ?? '').startsWith('breakdown-chip-')).length).toBe(0);
+    // run без стадий — чипов нигде (пустой список, а не падение).
+    const { container: bare } = mountCards(GROUPS, { labelOf });
+    expect(findNodeByAttr(bare, 'data-testid', 'breakdown-chip-model:Qwen 3.8')).toBeNull();
+  });
+
+  it('модели и роли — персоны участников: имя и аватар, а не сырой ключ', () => {
+    const modelGroups = [
+      mkGroup('Claude Opus 5.5', 60, 3000, 5.0, ['c4']),
+      mkGroup('Qwen 3.8', 120, 1000, 0, ['c1']),
+    ];
+    const { container } = mountCards(modelGroups, { axis: 'models', run: RUN_LIVE, labelOf });
+    const opus = cardNode(container, 'Claude Opus 5.5')!;
+    const chip = findNodeByAttr(opus, 'data-testid', 'breakdown-chip-persona:timur');
+    expect(textOf(chip)).toContain('Тимур');
+    expect(styleOf(chip).border).toBe('none'); // персона — без рамки, с аватаром
+    expect(parseFloat(styleOf(chip.children[0]).width)).toBe(18); // аватар 18 px
+    const qwen = cardNode(container, 'Qwen 3.8')!;
+    expect(textOf(findNodeByAttr(qwen, 'data-testid', 'breakdown-chip-persona:kira'))).toContain('Кира');
+    const roleGroups = [
+      mkGroup('review', 60, 3000, 5.0, ['c4']),
+      mkGroup('step', 120, 1000, 0, ['c1']),
+    ];
+    const { container: rc } = mountCards(roleGroups, { axis: 'roles', run: RUN_LIVE, labelOf });
+    expect(textOf(findNodeByAttr(cardNode(rc, 'step')!, 'data-testid', 'breakdown-chip-persona:kira'))).toContain('Кира');
+    expect(textOf(findNodeByAttr(cardNode(rc, 'review')!, 'data-testid', 'breakdown-chip-persona:timur'))).toContain('Тимур');
   });
 });
 

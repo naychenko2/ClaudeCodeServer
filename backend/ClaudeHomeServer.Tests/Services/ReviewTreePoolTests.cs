@@ -207,6 +207,7 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
     {
         var pool = NewPool();
         var slot = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        await RawGit(_repo, "worktree", "remove", "--force", _wave); // регистрация дерева волны пропала
         var unregistered = Path.Combine(_root, "feat-wave");
         var foreign = Path.Combine(_slotBase, "other-review-1");
         await _git.WorktreeAddDetachedAsync(null, _repo, foreign, await _git.LocalTipAsync(null, _repo, "HEAD") ?? "HEAD");
@@ -465,17 +466,40 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
-    public async Task Acquire_Чужое_Дерево_На_Ветке_С_Именем_Слота_Не_Чинится()
+    public async Task Acquire_Чужое_Дерево_На_Ветке_С_Именем_Слота_Не_Чинится_И_Не_Роняет_Захват()
     {
         var pool = NewPool();
         var chatTree = Path.Combine(_slotBase, "feat~wave-review-1");
         await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/clash3");
 
-        var act = () => pool.TryAcquireAsync(null, _project, _wave, "t1");
+        var lease = await pool.TryAcquireAsync(null, _project, _wave, "t1");
 
-        await act.Should().ThrowAsync<GitCommandException>();
+        lease!.SlotPath.Should().Be(Path.Combine(_slotBase, "feat~wave-review-2"), "первый слот чужой — берём второй");
         (await _git.WorktreeListAsync(null, _repo)).Should().Contain(w =>
             Path.GetFullPath(w.Path) == Path.GetFullPath(chatTree) && w.Branch == "feat/clash3");
+        File.Exists(chatTree + ReviewTreePool.MarkerSuffix).Should().BeFalse("чужое дерево маркера не получает");
+    }
+
+    [Fact]
+    public async Task Acquire_Слот_Без_Маркера_На_Ветке_Не_Занимает_Первый_Слот_Навсегда()
+    {
+        // слот создан до появления маркера, в нём заветвились: маркера нет, ветка есть
+        var pool = NewPool();
+        var first = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        await RawGit(first!.SlotPath, "checkout", "-b", "reviewer/premarker");
+        pool.Release("t1");
+        File.Delete(first.SlotPath + ReviewTreePool.MarkerSuffix);
+
+        var a = await pool.TryAcquireAsync(null, _project, _wave, "t2");
+        var b = await pool.TryAcquireAsync(null, _project, _wave, "t3");
+        var c = await pool.TryAcquireAsync(null, _project, _wave, "t4");
+
+        a!.SlotPath.Should().Be(Path.Combine(_slotBase, "feat~wave-review-2"), "Reserve доходит до второго слота");
+        b.Should().BeNull("первый слот не наш и не отдаётся, второй занят");
+        c.Should().BeNull();
+        // пропущенный слот не остался под арендой: после занятия второго места он по-прежнему не наш
+        pool.Release("t2");
+        (await pool.TryAcquireAsync(null, _project, _wave, "t5"))!.SlotPath.Should().Be(a.SlotPath);
     }
 
     [Fact]
@@ -640,6 +664,94 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
         slot.Should().NotBeNull();
         (await InWorktreeList(slot!)).Should().BeFalse("состав слотов проекта перечитывается");
         (await pool.TryAcquireAsync(null, _project, _wave, "t2")).Should().NotBeNull("аренда снята вместе со слотом");
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Фолбэк_Сносит_Старый_Слот_Волны_Со_Слешем_В_Ветке()
+    {
+        // слот до смены кодирования: «feat/wave» → «feat-wave-review-1», в маркере — имя ветки
+        var legacy = Path.Combine(_slotBase, "feat-wave-review-1");
+        await _git.WorktreeAddDetachedAsync(null, _repo, legacy, await _git.LocalTipAsync(null, _repo, "HEAD") ?? "HEAD");
+        await File.WriteAllTextAsync(legacy + ReviewTreePool.MarkerSuffix, "feat/wave");
+        await RawGit(_repo, "worktree", "remove", "--force", _wave);
+
+        await NewPool().RemoveSlotsOfWaveAsync(null, _project, Path.Combine(_root, "feat-wave"));
+
+        (await InWorktreeList(legacy)).Should().BeFalse("маркер «feat/wave» и каталог «feat-wave» — одна волна");
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Старый_Слот_Под_Арендой_При_Непустом_Маркере_Не_Сносится()
+    {
+        var legacy = Path.Combine(_slotBase, "feat-wave-review-1");
+        await _git.WorktreeAddDetachedAsync(null, _repo, legacy, await _git.LocalTipAsync(null, _repo, "HEAD") ?? "HEAD");
+        await File.WriteAllTextAsync(legacy + ReviewTreePool.MarkerSuffix, "feat/wave");
+        var tasks = new List<TaskItem>
+        {
+            new() { Id = "live", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s", Status = TaskItemStatus.InProgress },
+        };
+        var pool = new ReviewTreePool(_git, (_, _) => _slotBase, (o, p) => _cwd(o, p), NullLogger<ReviewTreePool>.Instance,
+            () => tasks, _ => legacy, id => id == _project.Id ? _project : null);
+        await pool.RestoreLeasesAsync();
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        (await InWorktreeList(legacy)).Should().BeTrue("старое имя держит живая аренда — слот чужой, маркер не отменяет аренду");
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Фолбэк_Не_Трогает_Слот_Другой_Зарегистрированной_Волны()
+    {
+        // дерево «feat/wave» пропало из регистрации, а волна «feat-wave» жива и её слот называется так же, как искомый
+        var dashWave = Path.Combine(_root, "wave-dash");
+        await _git.WorktreeAddAsync(null, _repo, dashWave, "feat-wave");
+        var pool = NewPool();
+        var dash = await pool.TryAcquireAsync(null, _project, dashWave, "t1");
+        // аренду снимаем: слот должен защищать только фильтр «claimed» в фолбэке, а не живая аренда
+        pool.Release("t1");
+        await RawGit(_repo, "worktree", "remove", "--force", _wave);
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, Path.Combine(_root, "feat-wave"));
+
+        (await InWorktreeList(dash!.SlotPath)).Should().BeTrue("префикс слота принадлежит живой зарегистрированной волне");
+    }
+
+    [Fact]
+    public async Task RestoreLeases_Дерево_Чата_Под_Именем_Слота_Маркера_Не_Получает()
+    {
+        var chatTree = Path.Combine(_slotBase, "feat~wave-review-1");
+        await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/chat-tree");
+        var tasks = new List<TaskItem>
+        {
+            new() { Id = "r", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s", Status = TaskItemStatus.InProgress },
+        };
+        var pool = new ReviewTreePool(_git, (_, _) => _slotBase, (o, p) => _cwd(o, p), NullLogger<ReviewTreePool>.Instance,
+            () => tasks, _ => chatTree, id => id == _project.Id ? _project : null);
+
+        await pool.RestoreLeasesAsync();
+
+        File.Exists(chatTree + ReviewTreePool.MarkerSuffix).Should().BeFalse("дерево на ветке — не слот пула");
+        pool.Release("r");
+        await pool.RemoveSlotsOfProjectAsync(null, _project);
+        (await InWorktreeList(chatTree)).Should().BeTrue("без аренды, маркера и на ветке — дерево чата");
+    }
+
+    [Fact]
+    public async Task RestoreLeases_Слот_Пула_Detached_Получает_Маркер()
+    {
+        var pool0 = NewPool();
+        var slot = (await pool0.TryAcquireAsync(null, _project, _wave, "t0"))!.SlotPath;
+        File.Delete(slot + ReviewTreePool.MarkerSuffix); // слот, созданный до появления маркера
+        var tasks = new List<TaskItem>
+        {
+            new() { Id = "r", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s", Status = TaskItemStatus.InProgress },
+        };
+        var pool = new ReviewTreePool(_git, (_, _) => _slotBase, (o, p) => _cwd(o, p), NullLogger<ReviewTreePool>.Instance,
+            () => tasks, _ => slot, id => id == _project.Id ? _project : null);
+
+        await pool.RestoreLeasesAsync();
+
+        File.Exists(slot + ReviewTreePool.MarkerSuffix).Should().BeTrue();
     }
 
     private static async Task RawGit(string dir, params string[] args)

@@ -12,17 +12,24 @@ public class ReviewTreeLeaseRestoreGuardTests
 {
     private static readonly Regex Call = new(@"\bRestoreLeasesAsync\s*\(", RegexOptions.Compiled);
 
-    // Строковые литералы оставляем как есть (в них бывает «//»), комментарии обоих видов вычищаем.
+    // Строковые литералы разбираем вместе с комментариями (в них бывает «//»), чтобы токены не склеились;
+    // комментарии вычищаются полностью, литерал при желании опустошается: имя вызова в тексте — не вызов.
     private static readonly Regex Tokens = new(
-        @"""(?:\\.|[^""\\])*""|/\*.*?\*/|//[^\r\n]*", RegexOptions.Compiled | RegexOptions.Singleline);
+        @"@?""(?:\\.|""""|[^""\\])*""|/\*.*?\*/|//[^\r\n]*", RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static bool IsLiteral(string token) => token[0] == '"' || token.StartsWith("@\"", StringComparison.Ordinal);
 
     internal static string StripComments(string text) =>
-        Tokens.Replace(text, m => m.Value.StartsWith('"') ? m.Value : "");
+        Tokens.Replace(text, m => IsLiteral(m.Value) ? m.Value : "");
+
+    internal static string StripCommentsAndLiterals(string text) =>
+        Tokens.Replace(text, m => IsLiteral(m.Value) ? "\"\"" : "");
 
     // Пустая строка — вызов на месте; иначе причина отказа.
     internal static string? Verdict(string text)
     {
-        if (Call.IsMatch(StripComments(text))) return null;
+        if (Call.IsMatch(StripCommentsAndLiterals(text))) return null;
+        if (Call.IsMatch(StripComments(text))) return "имя RestoreLeasesAsync есть только в строковом литерале";
         return Call.IsMatch(text)
             ? "вызов RestoreLeasesAsync закомментирован"
             : "вызов RestoreLeasesAsync не найден";
@@ -74,4 +81,11 @@ public class ReviewTreeLeaseRestoreGuardTests
     [Fact]
     public void Вызов_ПослеСтроковогоЛитералаСДвойнымСлэшем_НеТеряется() =>
         Verdict("var u = \"http://x\"; await pool.RestoreLeasesAsync();").Should().BeNull();
+
+    [Theory]
+    [InlineData("var s = \"await pool.RestoreLeasesAsync();\";")]
+    [InlineData("Console.WriteLine(\"RestoreLeasesAsync(\");")]
+    [InlineData("var s = @\"pool.RestoreLeasesAsync(\"\"x\"\")\";")]
+    public void ИмяВСтроковомЛитерале_НеСчитаетсяВызовом(string text) =>
+        Verdict(text).Should().Be("имя RestoreLeasesAsync есть только в строковом литерале");
 }

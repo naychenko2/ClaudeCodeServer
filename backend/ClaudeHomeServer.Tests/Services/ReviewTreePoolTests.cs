@@ -265,6 +265,80 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
         next!.SlotPath.Should().Be(slot1);
     }
 
+    private ReviewTreePool PoolWithStoppedReview(string reason, string slot)
+    {
+        var tasks = new List<TaskItem>
+        {
+            new() { Id = "r", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s-r",
+                    Status = TaskItemStatus.InProgress, ExecutorStoppedAt = DateTime.UtcNow, ExecutorStopReason = reason },
+        };
+        return new ReviewTreePool(_git, (_, _) => _slotBase, (o, p) => _cwd(o, p), NullLogger<ReviewTreePool>.Instance,
+            () => tasks, _ => slot, id => id == _project.Id ? _project : null);
+    }
+
+    [Fact]
+    public async Task RestoreLeases_Пауза_Фичи_Держит_Слот_И_Второе_Ревью_Его_Не_Получает()
+    {
+        var slot1 = Path.Combine(_slotBase, "feat-wave-review-1");
+        var pool = PoolWithStoppedReview(ExecutorStopClassifier.FeatureHeldReason, slot1);
+
+        await pool.RestoreLeasesAsync();
+
+        var next = await pool.TryAcquireAsync(null, _project, _wave, "new");
+        next!.SlotPath.Should().Be(Path.Combine(_slotBase, "feat-wave-review-2"));
+        var again = await pool.TryAcquireAsync(null, _project, _wave, "r");
+        again!.SlotPath.Should().Be(slot1);
+    }
+
+    [Theory]
+    [InlineData(ExecutorStopClassifier.InterruptedByUserReason)]
+    [InlineData(ExecutorStopClassifier.FeatureHeldExpiredReason)]
+    public async Task RestoreLeases_Настоящая_Остановка_Слот_Не_Держит(string reason)
+    {
+        var slot1 = Path.Combine(_slotBase, "feat-wave-review-1");
+        var pool = PoolWithStoppedReview(reason, slot1);
+
+        await pool.RestoreLeasesAsync();
+
+        (await pool.TryAcquireAsync(null, _project, _wave, "new"))!.SlotPath.Should().Be(slot1);
+    }
+
+    [Fact]
+    public async Task Acquire_Ссылка_Node_Modules_Строится_Переводчиком_Путей_Владельца()
+    {
+        _cwd = (_, p) => p.StartsWith(_repo, StringComparison.Ordinal) ? "/sandbox" + p[_repo.Length..] : p;
+        var pool = NewPool();
+
+        var lease = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+
+        new DirectoryInfo(Path.Combine(lease!.SlotPath, "frontend", "node_modules")).LinkTarget
+            .Should().Be("/sandbox/frontend/node_modules");
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfProject_Дерево_Чата_На_Ветке_С_Именем_Слота_Не_Сносится()
+    {
+        var pool = NewPool();
+        var chatTree = Path.Combine(_slotBase, "wt-x-review-1");
+        await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/x-review-1");
+
+        await pool.RemoveSlotsOfProjectAsync(null, _project);
+
+        (await InWorktreeList(chatTree)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Дерево_Чата_На_Ветке_С_Именем_Слота_Не_Сносится()
+    {
+        var pool = NewPool();
+        var chatTree = Path.Combine(_slotBase, "feat-wave-review-1");
+        await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/clash");
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        (await InWorktreeList(chatTree)).Should().BeTrue();
+    }
+
     [Fact]
     public async Task RestoreLeases_Игнорирует_Чат_Вне_Слота_Проекта()
     {

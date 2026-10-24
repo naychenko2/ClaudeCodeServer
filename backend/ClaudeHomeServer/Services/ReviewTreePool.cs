@@ -84,7 +84,7 @@ public sealed class ReviewTreePool
                 Directory.CreateDirectory(slotBase);
                 await _git.WorktreeAddDetachedAsync(ownerId, project.RootPath, slotPath, sha, ct);
             }
-            LinkNodeModules(project.RootPath, slotPath);
+            LinkNodeModules(ownerId, project.RootPath, slotPath);
         }
         catch
         {
@@ -124,7 +124,7 @@ public sealed class ReviewTreePool
             await RemoveSlotAsync(ownerId, project, worktrees, Path.Combine(slotBase, prefix + n), ct);
     }
 
-    // Все слоты проекта: дерево в базе деревьев проекта с именем «*-review-1|2»
+    // Все слоты проекта: detached-дерево в базе деревьев проекта с именем «*-review-1|2»
     public async Task RemoveSlotsOfProjectAsync(string? ownerId, Project project, CancellationToken ct = default)
     {
         ProjectCapabilityGuard.EnsureAllowed(project, ProjectCapabilityArea.FileBound);
@@ -137,7 +137,7 @@ public sealed class ReviewTreePool
             var norm = PathNormalizer.NormalizePath(w.Path);
             var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(w.Path));
             if (PathNormalizer.NormalizePath(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(w.Path)) ?? "") != baseNorm
-                || !IsSlotName(name)) continue;
+                || !IsSlotName(name) || w.Branch is not null) continue;
             await RemoveSlotAsync(ownerId, project, worktrees, Path.Combine(slotBase, name), ct);
         }
     }
@@ -145,12 +145,15 @@ public sealed class ReviewTreePool
     // После рестарта учёт аренд пуст, а чаты открытых ревью живут в своих слотах: без
     // восстановления вторая задача взяла бы слот ревьюера и сбросила его под ногами.
     // Закрытые задачи и задачи с остановленным исполнителем аренду не получают — их слот свободен
-    // (на «Стопе» аренда снимается, поэтому после рестарта поведение то же).
+    // (на «Стопе» аренда снимается, поэтому после рестарта поведение то же). Исключение — пауза
+    // фичи (feature_held): продолжение идёт в тот же чат, чей cwd — этот слот, поэтому аренда
+    // живёт, пока жив чат. Терминальный feature_held_expired (чат удалён) под исключение не попадает.
     public Task RestoreLeasesAsync()
     {
         foreach (var task in _allTasks())
         {
-            if (task.Role != TaskRoles.Review || task.Status == TaskItemStatus.Done || task.ExecutorStoppedAt is not null
+            if (task.Role != TaskRoles.Review || task.Status == TaskItemStatus.Done
+                || task.ExecutorStoppedAt is not null && task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason
                 || task.LinkedSessionId is null || task.ProjectId is null) continue;
             if (_projectById(task.ProjectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) continue;
             if (_sessionWorktree(task.LinkedSessionId) is not { } wt) continue;
@@ -186,7 +189,10 @@ public sealed class ReviewTreePool
     {
         var norm = PathNormalizer.NormalizePath(slotPath);
         lock (_gate) _leases.Remove(slotPath);
-        if (!worktrees.Any(w => PathNormalizer.NormalizePath(w.Path) == norm)) return;
+        var found = worktrees.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == norm);
+        if (found is null) return;
+        // Слот — detached; дерево на ветке (чата, волны) с похожим именем слотом не является
+        if (found.Branch is not null) return;
         try { await _git.WorktreeRemoveAsync(ownerId, project.RootPath, slotPath, force: true, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -216,7 +222,8 @@ public sealed class ReviewTreePool
 
     // Как scripts/worktree-setup.sh: node_modules в worktree пуст, зависимости лежат в основном
     // checkout. Реальную папку и уже стоящую ссылку не трогаем; нет источника — молча пропускаем.
-    private void LinkNodeModules(string mainRoot, string slotPath)
+    // Цель ссылки — путь глазами CLI владельца (у container-владельца хостового корня в песочнице нет).
+    private void LinkNodeModules(string? ownerId, string mainRoot, string slotPath)
     {
         try
         {
@@ -224,7 +231,7 @@ public sealed class ReviewTreePool
             var dst = Path.Combine(slotPath, "frontend", "node_modules");
             if (!Directory.Exists(src) || !Directory.Exists(Path.GetDirectoryName(dst)!)) return;
             if (Directory.Exists(dst) || new DirectoryInfo(dst).LinkTarget is not null) return;
-            Directory.CreateSymbolicLink(dst, src);
+            Directory.CreateSymbolicLink(dst, _cwdForOwner(ownerId, src));
         }
         catch (Exception ex)
         {

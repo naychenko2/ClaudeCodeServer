@@ -366,9 +366,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // стартует сразу в нём. Дерево уже существует — только присваиваем поля свежей
         // сессии до первого хода, cwd подставит EnsureProcessAsync. Невалидный путь не
         // должен ронять запуск: мягко деградируем в корень проекта.
-        // Повторный запуск той же задачи: прежняя аренда снимается до новой
-        ReleaseReviewTree(task.Id);
-        if (task.WorktreePath is { } worktree && task.ProjectId is not null)
+        // Повторный запуск той же задачи: прежняя аренда в пуле остаётся — Reserve отдаст задаче
+        // её же слот; запись о выданной аренде заменится новой
+        _reviewLeases.TryRemove(task.Id, out _);
+        if (task.WorktreePath is not { } worktree || task.ProjectId is null)
+            ReleaseReviewTree(task.Id);
+        else
         {
             var attached = false;
             if (await TryLeaseReviewTreeAsync(task, worktree) is { } lease)
@@ -863,7 +866,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         sb.AppendLine("## ДЕРЕВО РЕВЬЮ");
         sb.AppendLine($"Дерево ревью на коммите `{lease.Sha}`. Правки здесь никуда не уедут, не коммить. " +
                       "Первый прогон тестов — со сборкой, без `no_build`. " +
-                      "После завершения задачи или остановки исполнителя дерево переиспользуется.");
+                      "Дерево освобождается после завершения задачи или «Стопа» исполнителя; на паузе фичи оно остаётся за тобой до снятия паузы.");
         if (lease.DirtyPaths.Count > 0)
         {
             sb.AppendLine("Незакоммиченные правки дерева волны (эти правки в проверяемый коммит не вошли):");
@@ -1353,6 +1356,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 }
                 if (marked is null) continue;
                 expired++;
+                // Чат удалён, продолжения не будет: слот, державшийся паузой, отдаём
+                ReleaseReviewTree(t.Id);
                 // R-HOLD-J (п.2): сбой рассылки не обрывает цикл: пометка уже сменена,
                 // остальные шаги продолжают, карточка оркестратору уходит.
                 try

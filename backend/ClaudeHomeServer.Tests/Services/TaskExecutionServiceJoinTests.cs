@@ -744,7 +744,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var text = BuildSection(0);
 
         text.Should().Contain("Дерево ревью на коммите `abc1234`");
-        text.Should().Contain("не коммить").And.Contain("без `no_build`").And.Contain("переиспользуется");
+        text.Should().Contain("не коммить").And.Contain("без `no_build`").And.Contain("на паузе фичи оно остаётся за тобой");
         text.Should().NotContain("не вошли");
     }
 
@@ -929,5 +929,45 @@ public class TaskExecutionServiceJoinTests : IDisposable
         catch (Exception) { /* исполнение на устройстве в тесте недоступно — важно лишь, что слот не заведён */ }
 
         Directory.Exists(_slotBase).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ПовторныйЗапуск_ВозвращаетЗадачеЕёСлот()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        // review-1 занят чужой задачей на время первого запуска: задача уходит в review-2
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "чужая")).Should().NotBeNull();
+        await _sut.ExecuteAsync(task, auto: false);
+        var slot2 = Path.Combine(_slotBase, "feat-wave-review-2");
+        _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!.WorktreePath.Should().Be(slot2);
+        _reviewPool.Release("чужая");
+        await _sessions.DeleteAsync(_tasks.GetById(task.Id)!.LinkedSessionId!); // прежний чат отработал и ушёл
+
+        await _sut.ExecuteAsync(_tasks.GetById(task.Id)!, auto: false);
+
+        _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!.WorktreePath.Should().Be(slot2,
+            "повторный запуск получает свой же слот, а не освободившийся соседний");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ФичаНаПаузе_ДержитСлот_ПотомExpiredОсвобождает()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        await _sut.ExecuteAsync(task, auto: false);
+        var started = _tasks.GetById(task.Id)!;
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "вторая")).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().BeNull();
+        // пауза помечает шаг, но слот не отпускает
+        _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.FeatureHeldReason);
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().BeNull();
+
+        // чат исполнителя за паузу удалён — продолжения не будет
+        await _sessions.DeleteAsync(started.LinkedSessionId!);
+        await _sut.ResumeFeatureTurnsAfterHold(started.FeatureId!, started.OwnerId!, FeatureHoldReasons.Manual);
+
+        _tasks.GetById(task.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldExpiredReason);
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().NotBeNull();
     }
 }

@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.IdentityModel.Tokens.Jwt;
 using System.Reflection;
 using System.Security.Claims;
+using System.Globalization;
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
@@ -1103,6 +1104,11 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var totals = timeline.GetProperty("totals");
         // ST-B2: totals.longestWait (null или объект) — поле в контракте страницы.
         totals.TryGetProperty("longestWait", out _).Should().BeTrue("totals.longestWait (null или объект)");
+        // Хвост ST-B2: from — валидная ISO-8601 строка (фронт парсит её как Date), не null и не
+        // «не-дата». Мутация «from = null» → TryParse false → краснеет.
+        DateTime.TryParse(timeline.GetProperty("from").GetString(),
+            CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _)
+            .Should().BeTrue("timeline.from разбирается как ISO-8601");
 
         // Б6: stats.breakdown (разрезы по персонам/моделям/ролям) и stats.longestNow на странице.
         var breakdown = stats.GetProperty("breakdown");

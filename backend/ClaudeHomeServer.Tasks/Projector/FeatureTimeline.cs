@@ -40,12 +40,12 @@ public sealed record TimelineCurrent(
     string? TaskId);
 
 // Самый долгий эпизод ожидания (ST-B2): минуты — то же число, что LongestWaitMinutes;
-// TaskId — задача, в которой был эпизод; From — начало эпизода (ISO). null — эпизодов
-// ожидания нет или режим approx.
+// TaskId — задача, в которой был эпизод; From — начало эпизода (ISO). Сам объект null —
+// эпизодов ожидания нет или режим approx; внутри него From заполнен всегда.
 public sealed record TimelineLongestWait(
     int Minutes,
     string? TaskId,
-    DateTime? From);
+    DateTime From);
 
 // Итоги по минутам. В approx Waiting*/Idle*/Error* = null (не различаем без журнала).
 //
@@ -468,6 +468,9 @@ public sealed record FeatureTimeline(
         }
         var agentsSum = FeatureTimeMath.CeilMinutes(agentsSpan);
         var notWorking = Math.Max(0, elapsed - workWall);
+        // Хвост ревью ST-B2: самое долгое ожидание округляется один раз каноническим
+        // хелпером — LongestWaitMinutes и LongestWait.Minutes берут одно и то же число.
+        var lwMinutes = FeatureTimeMath.CeilMinutes(longestWait);
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
             WorkWallMinutes: workWall,
@@ -479,13 +482,12 @@ public sealed record FeatureTimeline(
             WaitingMinutes: waitingMin,
             IdleMinutes: idleMin,
             WaitingCount: waitingCount,
-            LongestWaitMinutes: (int)Math.Ceiling(longestWait.TotalMinutes),
+            LongestWaitMinutes: lwMinutes,
             // ST-B2: минуты — то же число, что LongestWaitMinutes (то же округление); адрес
             // — задача и начало самого долгого эпизода. null — эпизодов ожидания нет.
             LongestWait: longestWaitFrom is null
                 ? null
-                : new TimelineLongestWait(
-                    (int)Math.Ceiling(longestWait.TotalMinutes), longestWaitTaskId, longestWaitFrom),
+                : new TimelineLongestWait(lwMinutes, longestWaitTaskId, longestWaitFrom.Value),
             ErrorCount: errorCount,
             ErrorMinutes: errorMin);
 

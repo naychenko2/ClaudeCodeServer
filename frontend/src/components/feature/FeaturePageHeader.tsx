@@ -12,7 +12,7 @@ import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { formatDuration, MERGE_PENDING_STATUS, type FeatureStatusTag } from '../../lib/chatGroups';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
-import { openTaskInSection } from '../../lib/tasks';
+import { executorStopVisual, openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { showToast } from '../../lib/toast';
@@ -865,6 +865,10 @@ export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marks
       : `Ждёт вашего ответа${dur ? ` ${dur}` : ''}`;
   } else if (a?.kind === 'stopped') {
     head = `Стоит${dur ? ` ${dur}` : ''}`;
+    // Дефект 5519f071: причина — формулировка из executorStopVisual, как на карточке
+    // и в панели деталей; сырой ключ (feature_held_expired) человеку ничего не говорит.
+    // Неизвестный ключ — нейтральная «Исполнение прервано», без ключа.
+    reason = executorStopVisual(a.reason).text;
   } else if (a?.kind === 'merge') {
     head = 'Мерж в master ждёт вашего согласия';
     reason = null;

@@ -44,7 +44,9 @@ public sealed partial class PersonasToolset(
     IConfiguration config) : IMcpParameterizedToolset
 {
     // Тумблер LiveTTS инстанса: от него зависит описание voice в схеме. Это свойство
-    // КОНФИГУРАЦИИ, а не хода — в пределах процесса tools/list не меняется
+    // КОНФИГУРАЦИИ, а не хода — в пределах процесса tools/list не меняется. Обещание держится
+    // на правиле эксплуатации: тумблер меняется ТОЛЬКО с перезапуском сервера (решение по
+    // ревью шага 9). Правка конфига на лету сменила бы текст схемы посреди жизни CLI
     private bool LiveTts => Services.Tts.TtsVoiceCatalog.LiveTtsEnabled(config);
 
     // Имя сервера = первый сегмент маршрута POST /mcp/personas/{sessionId}

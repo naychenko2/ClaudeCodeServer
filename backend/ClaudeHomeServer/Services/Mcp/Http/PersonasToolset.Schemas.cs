@@ -104,7 +104,8 @@ public sealed partial class PersonasToolset
 
     // Справочник голосов прямо в схеме: отдельного инструмента-каталога у сервера нет, а
     // каталог статичен — состав и текст tools/list от хода не зависят. Тумблер LiveTTS —
-    // свойство конфигурации инстанса, а не хода: в пределах процесса текст постоянный
+    // свойство конфигурации инстанса, а не хода: в пределах процесса текст постоянный, потому
+    // что тумблер меняется только с перезапуском сервера
     internal static string VoiceDescription(bool liveTtsEnabled)
     {
         var visible = Services.Tts.TtsVoiceCatalog.Visible(liveTtsEnabled);

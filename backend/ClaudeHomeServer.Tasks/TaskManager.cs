@@ -1197,6 +1197,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var before = Capture(task);
         task.ExecutorStoppedAt = atUtc;
         task.ExecutorStopReason = reason;
+        // W4-SEAM2 (хвост R-SEAM2 п.1): новая пометка — старое «продолжение уже отправлено»
+        // к ней не относится, признак гасится.
+        task.HoldResumeDeliveredAt = null;
         task.UpdatedAt = DateTime.UtcNow;
         WriteJournalTransitions(task, before);
         ScheduleSave();
@@ -1213,8 +1216,36 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var before = Capture(task);
         task.ExecutorStoppedAt = null;
         task.ExecutorStopReason = null;
+        // W4-SEAM2: пометки нет — признак доставки продолжения при ней не нужен.
+        task.HoldResumeDeliveredAt = null;
         task.UpdatedAt = DateTime.UtcNow;
         WriteJournalTransitions(task, before);
+        ScheduleSave();
+        return task;
+    }
+
+    // W4-SEAM2 (хвост R-SEAM2 п.1): признак «продолжение этой пометки отправляется/уже
+    // отправлено». Ставится ДО доставки в ResumeFeatureTurnsAfterHold: пока доставка в
+    // полёте, повторное снятие паузы видит признак и не шлёт продолжение второй раз.
+    // Только для пометки feature_held — у других остановок продолжения нет.
+    public TaskItem? MarkHoldResumeDelivered(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) return null;
+        task.HoldResumeDeliveredAt = DateTime.UtcNow;
+        task.UpdatedAt = DateTime.UtcNow;
+        ScheduleSave();
+        return task;
+    }
+
+    // Снять признак: доставка упала — шаг остаётся «на паузе», повторное снятие его
+    // подхватит и попробует снова (W4-HOLD-D п.2).
+    public TaskItem? ClearHoldResumeDelivered(string id)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.HoldResumeDeliveredAt is null) return null;
+        task.HoldResumeDeliveredAt = null;
+        task.UpdatedAt = DateTime.UtcNow;
         ScheduleSave();
         return task;
     }

@@ -923,7 +923,10 @@ public class TasksController(
                 && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason);
             if (!stuck) return Conflict(new { error = "Фича не удержана: снимать нечего" });
             _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, FeatureHoldReasons.Manual);
-            return Ok(new { resumed = new List<string>(), expired = new List<string>() });
+            // W4-SEAM2 (хвост R-SEAM2 п.2): пустые resumed/expired здесь неотличимы от
+            // «нечего делать» — ответ повтора помечается явно: продолжение повторено,
+            // а не «паузы не было».
+            return Ok(new { resumed = new List<string>(), expired = new List<string>(), repeated = true });
         }
 
         // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. Состав считается

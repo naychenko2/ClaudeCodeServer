@@ -58,6 +58,13 @@ public class TaskItem
     // Сбрасывается при повторном запуске исполнителя (TaskManager.MarkClaudeStarted).
     public DateTime? ExecutorStoppedAt { get; set; }
     public string? ExecutorStopReason { get; set; }
+    // W4-SEAM2 (хвост R-SEAM2 п.1): признак «продолжение этой пометки уже отправлено». Ставится
+    // перед доставкой продолжения, гасится вместе с пометкой (ClearExecutorStopped) или новой
+    // пометкой (MarkExecutorStopped); при бое доставки — снимается, чтобы повторное снятие
+    // паузы попробовал снова. Без него сбой между доставкой и снятием пометки заставлял
+    // повторное снятие слать продолжение заново. Аддитивная nullable-поле: BackupSchema.Version
+    // не растёт (прецедент ExecutorLaunchedBySessionId/ReportToSessionId).
+    public DateTime? HoldResumeDeliveredAt { get; set; }
     // Исполнитель ждёт устройство локального проекта (ADR-016, вариант А плана §5): момент
     // постановки в ожидание и причина для человека. ClaudeStartedAt при этом пуст — запуска
     // не было. Стартует DeviceOnlineDispatcher при выходе устройства в онлайн; через 24 ч —

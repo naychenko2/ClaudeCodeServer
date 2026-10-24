@@ -1353,4 +1353,46 @@ public class TaskExecutionServiceHoldTests : IDisposable
         _sessions.GetById(oldChat.Id).Should().BeNull(
             "возвращённый срок течёт: сиротский чат сносится уборкой, а не живёт вечно");
     }
+
+    // ─── W4-SEAM2: признак «доставка уже была» (хвост R-SEAM2 п.1) ─────────────────────────
+
+    // W4-SEAM2 (минор, критерий c1): два снятия подряд — одно продолжение. Первый вызов
+    // ставит признак «продолжение отправляется» ДО доставки; пока она висит на gate'е мока,
+    // второй вызов видит признак и пропускает шаг. Мутации: убрать проверку признака в цикле
+    // — второй вызов шлёт снова, счёт становится 2 (проверено); убрать гашение признака при
+    // бое доставки — краснеет R1-тест контроллера (ClearHold_PovtorPosleSboyaDostavki):
+    // после первого отказа признак остался бы, и повтор продолжения не ушёл бы.
+    [Fact]
+    public async Task ResumeTwiceInARow_ContinuesOnce()
+    {
+        var user = _userStore.Add("seam2-double-resume", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec",
+            taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        var execAdapter = SetRunningTurn(chat.Id);
+
+        // Первая доставка висит на gate'е: второй вызов входит в цикл, пока она в полёте.
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        execAdapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>())).Returns(() => gate.Task);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        _tasks.ClearHold(epic.Id);
+
+        var first = _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+        var second = _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
+        gate.SetResult(true);
+        (await first + await second).Should().Be(1, "продолжение зачтено ровно один раз");
+        execAdapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once,
+            "второй вызов увидел признак «уже слалось» и не продублировал продолжение");
+        _tasks.GetById(step.Id)!.ExecutorStopReason.Should().BeNull(
+            "первое снятие пометку сняло: шаг снова в работе");
+        _tasks.GetById(step.Id)!.HoldResumeDeliveredAt.Should().BeNull(
+            "признак гасится вместе с пометкой — он живёт только при ней");
+    }
 }

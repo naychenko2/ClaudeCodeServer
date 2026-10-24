@@ -1186,6 +1186,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             // снимается и сохраняется на записи чата — при снятии паузы возвращается тот же
             // срок самого чата с якорем «сейчас» (хвост N: не срок задачи).
             _sessions.FreezeExpiryForHold(t.LinkedSessionId);
+            // W4-SEAM2 (хвост R-SEAM2 п.1): новая пауза прерывает ход заново — старое
+            // «продолжение уже слалось» к этому прерыванию не относится; гасим признак,
+            // чтобы при снятии паузы продолжение ушло снова.
+            _tasks.ClearHoldResumeDelivered(t.Id);
             stopped++;
         }
         return stopped;
@@ -1280,10 +1284,48 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             // R-HOLD-D (п.3): сбой одного чата не обрывает цикл — каждая задача ловится отдельно,
             // остальные продолжают. Р-HOLD-D (п.2): пометка снимается только после успешной
             // доставки: при сбое задача остаётся «на паузе» и повторное снятие её подхватит.
+            // W4-SEAM2 (хвост R-SEAM2 п.1): признак «продолжение уже отправляется» ставится
+            // ДО доставки — гасить пометку до доставки нельзя (W4-HOLD-D п.2), а без признака
+            // повторное снятие, пришедшее пока доставка в полёте, шлёт продолжение второй раз.
+            if (t.HoldResumeDeliveredAt is not null) continue; // продолжение этой пометки уже слалось
+            // Сбой записи стора не должен обрывать продолжение: в памяти признак уже
+            // поставлен (мутация до ScheduleSave), и повторное снятие его увидит.
+            try
+            {
+                _tasks.MarkHoldResumeDelivered(t.Id);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Не удалось поставить признак доставки продолжения {TaskId}: {Message}",
+                    t.Id, ex.Message);
+            }
             try
             {
                 await _sessions.SendMessageAsync(t.LinkedSessionId, HoldResumePrompt, [], auto: true,
                     cause: SessionManager.DeliveryCause.HoldResume);
+            }
+            catch (Exception ex)
+            {
+                // Продолжение не дошло: признак снимается — повторное снятие паузы
+                // подхватит шаг и попробует снова (W4-HOLD-D п.2). И здесь сбой записи
+                // не роняет цикл: в памяти признак снят.
+                try
+                {
+                    _tasks.ClearHoldResumeDelivered(t.Id);
+                }
+                catch (Exception ex2)
+                {
+                    _log.LogWarning("Не удалось снять признак доставки продолжения {TaskId}: {Message}",
+                        t.Id, ex2.Message);
+                }
+                _log.LogWarning("Продолжение после паузы задачи {TaskId} не доставлено в чат {Session}: {Message}",
+                    t.Id, t.LinkedSessionId, ex.Message);
+                continue;
+            }
+            // Доставка состоялась: дальше — снятие пометки. Если оно упадёт, признак
+            // останется и повторное снятие не продублирует продолжение (W4-SEAM2).
+            try
+            {
                 // W4-HOLD-J (контракт §1 :267, R-HOLD-J п.1): возвращаем замороженный паузой
                 // срок только после успешной доставки продолжения: при сбое хода чат остаётся
                 // замороженным (пауза держится — пометка на месте), повторное снятие его
@@ -1308,8 +1350,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             }
             catch (Exception ex)
             {
-                _log.LogWarning("Продолжение после паузы задачи {TaskId} не доставлено в чат {Session}: {Message}",
-                    t.Id, t.LinkedSessionId, ex.Message);
+                _log.LogWarning("Не удалось снять пометку продолженной задачи {TaskId}: {Message}",
+                    t.Id, ex.Message);
             }
         }
         // Общий путь карточки (п.4, дефект bec00347): любое снятие будит оркестратора в ключевом

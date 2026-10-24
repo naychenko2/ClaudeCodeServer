@@ -2578,6 +2578,12 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var second = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
         second.StatusCode.Should().Be(HttpStatusCode.OK,
             "повторное снятие при оставшихся feature_held шагах — не 409, а повтор продолжения");
+        // W4-SEAM2 (минор, критерий c2): ответ R1-ветки помечен флагом повтора — пустые
+        // resumed/expired перестают неотличимыми от «нечего делать». Мутация: убрать
+        // repeated в ответе — GetProperty краснеет.
+        var secondBody = await second.Content.ReadFromJsonAsync<JsonElement>();
+        secondBody.GetProperty("repeated").GetBoolean().Should().BeTrue(
+            "ответ повтора говорит, что продолжение повторено, а не что снимать нечего");
 
         var winner = await Task.WhenAny(resumedTcs.Task, Task.Delay(5000));
         ReferenceEquals(winner, resumedTcs.Task).Should().BeTrue(

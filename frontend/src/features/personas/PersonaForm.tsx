@@ -575,6 +575,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       description: description.trim() || undefined,
       // Характер — только контрактом; legacy-поле systemPrompt чистим при каждом сохранении
       contract: buildContract(),
+      // Создание: выбранный голос едет сразу; не выбран — сервер подберёт по характеру
+      voice: !isEdit && voice ? voice : undefined,
       systemPrompt: '',
       // Правка: шлём значение как есть — "" сбрасывает модель/усилие к дефолту (бэкенд: ""→null).
       // Создание: пусто → не пишем (иначе сохранилась бы пустая строка вместо null).
@@ -606,10 +608,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         ? await api.personas.update(persona!.id, dto)
         : await api.personas.create(dto);
 
-      // Голос — отдельным запросом (у него свой эндпоинт со своей валидацией) и ПОСЛЕ
-      // сохранения: при создании персоны id появляется только здесь. Шлём, только если
-      // он менялся, — иначе каждое сохранение формы дёргало бы лишний PUT
-      const savedVoice = await syncVoice(saved);
+      // Голос правки — отдельным запросом (у него свой эндпоинт со своей валидацией), только
+      // если он менялся. При создании он уже уехал в dto (или подобран сервером)
+      const savedVoice = isEdit ? await syncVoice(saved) : saved;
 
       bumpPersonas();
       invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом

@@ -3096,6 +3096,9 @@ export interface CreatePersonaDto {
   handle?: string;
   // Контракт характера; при обновлении: undefined — не менять, пустые слоты — сбросить
   contract?: PersonaContract;
+  // Только создание: голос персоны; undefined — сервер подберёт его по характеру сам.
+  // При обновлении бэкенд поле игнорирует — голос правится PUT /personas/{id}/voice
+  voice?: PersonaVoice;
   model?: string;
   // Уровень модели персоны: '' = сбросить, undefined — не менять/не задавать
   modelTier?: ModelTierValue | '';

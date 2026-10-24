@@ -201,7 +201,11 @@ function cardState(
   if (bucket === 'notCreated') return out('queue');
   if (bucket === 'review') return out('wait', null, false, true);
   const running = tasks.find(t => t.status === 'inProgress') ?? null;
-  if (running?.executorStoppedAt) return out('wait', null, true);
+  // Как на бэке (FeatureProjector): пометка актуальна, только если новее старта исполнителя.
+  if (running?.executorStoppedAt
+    && (!running.claudeStartedAt || Date.parse(running.executorStoppedAt) > Date.parse(running.claudeStartedAt))) {
+    return out('wait', null, true);
+  }
   if (running) return out('run', running);
   return out('wait');
 }

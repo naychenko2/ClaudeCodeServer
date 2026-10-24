@@ -438,6 +438,17 @@ describe('состояние шага (A2)', () => {
     ],
   });
 
+  it('плашка «закрыт без повторного ревью» — слово берётся из chain.status бэка', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepProgress: { planState: 'cut', total: 1, accepted: 0, review: 0, work: 1, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 },
+      stepChains: [chain({ stepRef: 'Ш1', title: 'А', taskIds: ['s1'], status: 'закрыт без повторного ревью', outcome: 'returned', loops: 1, rounds: [round({ n: 1, verdict: 'returned' })] })],
+    });
+    const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    const b = findNodeByAttr(findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!, 'data-testid', 'prod-status')!;
+    expect(textNodes(b).join('')).toContain('закрыт без повторного ревью');
+  });
+
   it('иконка, плашка и тон карточки различают четыре состояния', () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: five(), featureId: 'F' }));
     const icon = (ref: string) => findNodeByAttr(findNodeByAttr(container, 'data-testid', `prod-card-${ref}`)!, 'data-testid', 'prod-state-icon')!;

@@ -351,6 +351,23 @@ describe('state карточки (A2)', () => {
     expect(c.runKind).toBeNull();
   });
 
+  it('stale-пометка остановки (executorStoppedAt раньше claudeStartedAt) — исполнитель перезапущен, run', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'inProgress', claudeStartedAt: '2026-10-20T12:00:00Z', executorStoppedAt: '2026-10-20T11:00:00Z' })],
+      { status: 'идёт', outcome: 'running' },
+    );
+    expect(c.state).toBe('run');
+    expect(c.stopped).toBe(false);
+  });
+
+  it('остановка без claudeStartedAt — остановлен', () => {
+    const c = stateOf(
+      [task({ id: 's1', status: 'inProgress', claudeStartedAt: null, createdAt: '2026-10-20T10:00:00Z', executorStoppedAt: '2026-10-20T11:00:00Z' })],
+      { status: 'идёт', outcome: 'running' },
+    );
+    expect(c.stopped).toBe(true);
+  });
+
   it('задача закрыта + идущий виток ревью (бэк: review, outcome running) — wait, не done и не run', () => {
     const c = stateOf(
       [task({ id: 's1', status: 'done', claudeStartedAt: start })],

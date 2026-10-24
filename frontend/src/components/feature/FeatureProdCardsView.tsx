@@ -316,7 +316,7 @@ function stateBadge(card: ProdCard, chain: FeatureStepChain | undefined): { word
   if (card.state === 'wait') {
     const word = card.stopped ? 'остановлен'
       : card.awaitingReview ? (chain?.outcome === 'running' ? 'идёт ревью' : 'ждёт ревью')
-      : chain?.outcome === 'returned' ? 'вернули, ждёт доработки' : 'ждёт запуска';
+      : chain?.outcome === 'returned' && chain.status ? chain.status : 'ждёт запуска';
     return { word, rest: sep([elapsedLabel(card.waitingSince)]) };
   }
   if (card.state === 'withdrawn') return { word: 'снят с выкладки', rest: '' };

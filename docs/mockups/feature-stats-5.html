@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · страница фичи · «Статистика»: три варианта подачи</title>
+<!--
+  Макеты на выбор Андрею: три РАЗНЫХ подачи вкладки «Статистика» страницы фичи
+  (#/project/{pid}/feature/{fid} → вкладка «Статистика»). Записка и спецификация — feature-stats-5.md.
+  Код продукта не правится.
+  Привязка: featureId 8d33d18b-c6f6-4311-8ddb-e5a627f38fb2, задача aae59264 (role=design, stepRef нет);
+  макетом пользуется будущий шаг фронта по выбранному варианту.
+  Данные выдуманы, но взяты только из полей, которые бэк уже отдаёт: stats.timeline (segments, totals,
+  current), stats.breakdown, stats.longestNow, stats.spend, run.stages (approxMinutes, rounds, executors),
+  run.stepChains (loops, durationMinutes), run.attention, run.now, run.summary, run.verdicts.
+  Пометка .be «нужны данные» — элемента нет в ответе API; кнопка «пометки» в шапке прячет их.
+  A — «Пульс»: главный показатель крупно + сравнение с типичной фичей.
+  B — «Лента»: хронология по этапам с событиями (возвраты, ожидания, сейчас); на 360 — вертикальная.
+  C — «Где ушло время»: водопад «прошло → работа → ждали вас → простой» и три главные потери.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css (как в features-overview-4), семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  /* Цвета персон — данные (AGENT_COLORS в AgentSelector.tsx), не токены темы */
+  --p-orange:#D97757; --p-purple:#6C5CB0; --p-brown:#8A6A28; --p-blue:#3E7CA6; --p-green:#5E8B4E;
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-panel); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+.be { display:inline-flex; align-items:center; font:700 10px/16px "Hanken Grotesk",sans-serif; border-radius:6px; padding:0 6px;
+  background:var(--c-info-bg); color:var(--c-text-primary); vertical-align:middle; border:1px dashed var(--c-info); max-width:100%; }
+.nomarks .be { display:none; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.note { padding:10px 16px 0; font-size:12px; color:var(--c-text-secondary); max-width:1280px; }
+#out { display:flex; flex-wrap:wrap; gap:24px; padding:16px; align-items:flex-start; }
+.cap { font-size:11px; color:var(--c-text-muted); margin:0 0 6px 2px; }
+.frame { background:var(--c-bg-main); color:var(--c-text-primary); border:1px solid var(--c-border); border-radius:12px; overflow:hidden; }
+.w1280 .frame { width:1280px; } .w360 .frame { width:360px; }
+
+/* ===== Страница фичи (контекст: шапка и вкладки — как сейчас) ===== */
+.page { padding:20px 32px 32px; }
+.w360 .page { padding:12px 12px 24px; }
+.ph { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.ph .back { font-size:12px; color:var(--c-text-muted); }
+.ph h2 { margin:0; font:700 22px/1.25 "PT Serif",Georgia,serif; color:var(--c-text-heading); }
+.w360 .ph h2 { font-size:18px; width:100%; }
+.tabs { display:flex; gap:4px; margin:12px 0 16px; border-bottom:1px solid var(--c-border-light); overflow-x:auto; }
+.tabs span { padding:8px 10px; font-size:13px; color:var(--c-text-secondary); white-space:nowrap; border-bottom:2px solid transparent; }
+.tabs span.on { color:var(--c-text-heading); font-weight:600; border-bottom-color:var(--c-accent); }
+.w360 .tabs span { padding:10px 10px; min-height:40px; }
+
+/* ===== Общие примитивы (= компоненты ui/ и токены) ===== */
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; box-shadow:var(--shadow-card); padding:16px; }
+.w360 .card { padding:12px; }
+.sec { font-size:10px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; margin:24px 0 8px; display:flex; align-items:center; gap:8px; }
+.w360 .sec { margin-top:16px; }
+.chip { display:inline-flex; align-items:center; gap:6px; height:22px; padding:0 8px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }
+.chip .d { width:7px; height:7px; border-radius:50%; background:currentColor; }
+.t-run { background:var(--c-accent-light); color:var(--c-accent); }
+.t-wait { background:var(--c-info-bg); color:var(--c-info); }
+.t-ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.t-new { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:32px; padding:0 14px; border-radius:12px;
+  font-size:13px; font-weight:600; white-space:nowrap; }
+.w360 .btn { height:40px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.gh { border:1px solid var(--c-border); color:var(--c-text-primary); background:var(--c-bg-white); }
+.btn.ln { color:var(--c-accent); padding:0 4px; height:auto; }
+.w360 .btn.ln { min-height:40px; }
+.av { width:20px; height:20px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; color:var(--c-on-accent); flex-shrink:0; }
+.muted { color:var(--c-text-muted); } .sec2 { color:var(--c-text-secondary); }
+.dot { width:10px; height:10px; border-radius:3px; display:inline-block; flex-shrink:0; }
+.legend { display:flex; flex-wrap:wrap; gap:6px 14px; font-size:11px; color:var(--c-text-muted); margin-top:8px; }
+.legend span { display:inline-flex; align-items:center; gap:5px; }
+.bar { display:flex; overflow:hidden; border-radius:999px; background:var(--c-bg-selected); }
+.bar i { display:block; height:100%; }
+.hatch { background:repeating-linear-gradient(135deg, var(--c-bg-selected) 0 5px, var(--c-bg-inset) 5px 10px); }
+.dashed { border:1px dashed var(--c-dashed); border-radius:10px; color:var(--c-text-muted); }
+.more { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:16px; padding:12px 16px; min-height:44px;
+  border:1px solid var(--c-border-light); border-radius:10px; background:var(--c-bg-card); color:var(--c-text-secondary); width:100%; }
+.acc { font-size:11px; color:var(--c-text-muted); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+/* ===== A · «Пульс» ===== */
+.a-hero { display:grid; grid-template-columns: 1fr 1.25fr; gap:32px; padding:24px; }
+.w360 .a-hero { grid-template-columns:1fr; gap:16px; padding:16px; }
+.a-hero.tone-wait { border-color:var(--c-info); background:var(--c-info-bg); }
+.a-eyebrow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.a-big { font:700 34px/1.1 "PT Serif",Georgia,serif; color:var(--c-text-heading); margin:12px 0 4px; }
+.w360 .a-big { font-size:28px; margin-top:8px; }
+.a-sub { font-size:13px; color:var(--c-text-secondary); }
+.a-ask { margin-top:12px; padding:10px 12px; border-radius:8px; background:var(--c-bg-card); border:1px solid var(--c-border-light); font-size:13px; color:var(--c-text-primary); }
+.a-ask b { color:var(--c-text-heading); }
+.a-actions { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+.w360 .a-actions .btn { flex:1; }
+.a-mix .bar { height:16px; }
+.a-rows { margin-top:12px; display:grid; grid-template-columns:auto 1fr auto auto; gap:6px 12px; align-items:center; font-size:13px; }
+.a-rows .v { font-family:"JetBrains Mono",monospace; font-size:12px; color:var(--c-text-primary); text-align:right; }
+.a-rows .p { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); text-align:right; min-width:36px; }
+.a-cmp { margin-top:16px; padding-top:12px; border-top:1px solid var(--c-border-light); }
+.a-cmp .ttl { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:12px; color:var(--c-text-secondary); }
+.a-scale { position:relative; height:28px; margin-top:8px; }
+.a-scale .tr { position:absolute; left:0; right:0; top:12px; height:4px; border-radius:999px; background:var(--c-bg-selected); }
+.a-scale .band { position:absolute; top:10px; height:8px; border-radius:999px; background:var(--c-progress-track); }
+.a-scale .med { position:absolute; top:6px; width:2px; height:16px; background:var(--c-text-secondary); }
+.a-scale .me { position:absolute; top:7px; width:14px; height:14px; margin-left:-7px; border-radius:50%; background:var(--c-accent); border:2px solid var(--c-bg-card); }
+.a-scale-l { display:flex; justify-content:space-between; font-size:11px; color:var(--c-text-muted); font-family:"JetBrains Mono",monospace; }
+.a-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:16px; }
+.w360 .a-kpis { grid-template-columns:1fr 1fr; gap:8px; }
+.a-kpi .l { font-size:12px; font-weight:600; color:var(--c-text-secondary); display:flex; align-items:center; gap:6px; }
+.a-kpi .n { font:700 22px/1.2 "PT Serif",Georgia,serif; color:var(--c-text-heading); margin:6px 0 2px; }
+.w360 .a-kpi .n { font-size:18px; }
+.a-kpi .h { font-size:11px; color:var(--c-text-muted); }
+.a-rounds { display:flex; gap:3px; margin-top:6px; flex-wrap:wrap; }
+.a-rounds i { width:14px; height:14px; border-radius:4px; display:inline-flex; align-items:center; justify-content:center; font-style:normal; font-size:9px; font-weight:700; }
+.r-ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.r-ret { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.a-now { display:flex; gap:8px; flex-wrap:wrap; }
+.a-now .it { display:flex; align-items:center; gap:8px; padding:6px 6px 6px 10px; border:1px solid var(--c-border-light); border-radius:10px; background:var(--c-bg-card); font-size:12px; }
+.w360 .a-now .it { width:100%; }
+.a-now .it .grow { flex:1; }
+.lad .row { display:grid; grid-template-columns:110px 1fr 84px; gap:12px; align-items:center; min-height:30px; }
+.w360 .lad .row { grid-template-columns:78px 1fr 58px; gap:8px; min-height:40px; }
+.lad .nm { font-size:12px; font-weight:600; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lad .tk { position:relative; height:18px; border-radius:6px; background:repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), var(--c-border-light) calc(25% - 1px) 25%); }
+.lad .bx { position:absolute; top:2px; height:14px; border-radius:6px; display:flex; overflow:hidden; min-width:3px; }
+.lad .nm.muted, .b-lane .nm.muted { color:var(--c-text-muted); }
+.lad .mn { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-secondary); text-align:right; }
+.lad .now { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--c-accent); border-radius:999px; }
+.lad .ghost { position:absolute; inset:2px 0; border:1px dashed var(--c-dashed); border-radius:6px; font-size:10px; color:var(--c-text-muted); display:flex; align-items:center; padding-left:6px; }
+
+/* ===== B · «Лента» ===== */
+.b-strip { display:flex; flex-wrap:wrap; gap:8px; }
+.b-strip .k { display:flex; align-items:baseline; gap:6px; padding:8px 12px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); }
+.b-strip .k b { font:700 16px/1.2 "PT Serif",Georgia,serif; color:var(--c-text-heading); }
+.b-strip .k span { font-size:11px; color:var(--c-text-muted); }
+.w360 .b-strip { display:grid; grid-template-columns:1fr 1fr; }
+.b-grid { display:grid; grid-template-columns:1fr 300px; gap:16px; margin-top:16px; align-items:start; }
+.b-lanes { position:relative; padding:8px 0 4px; }
+.b-axis { display:grid; grid-template-columns:96px 1fr; gap:12px; font-family:"JetBrains Mono",monospace; font-size:10px; color:var(--c-text-muted); }
+.b-axis .ax { position:relative; height:16px; border-bottom:1px solid var(--c-border-light); }
+.b-axis .ax span { position:absolute; top:0; transform:translateX(-50%); }
+.b-lane { display:grid; grid-template-columns:96px 1fr; gap:12px; align-items:center; min-height:46px; border-bottom:1px solid var(--c-border-light); }
+.b-lane .nm { font-size:12px; font-weight:600; color:var(--c-text-heading); }
+.b-lane .nm small { display:block; font-weight:400; font-family:"JetBrains Mono",monospace; font-size:10px; color:var(--c-text-muted); }
+.b-lane .tk { position:relative; height:44px; }
+.b-lane .bx { position:absolute; top:18px; height:20px; border-radius:6px; display:flex; overflow:hidden; min-width:4px; }
+.b-lane .bx i { display:flex; align-items:center; justify-content:center; font:700 10px "JetBrains Mono",monospace; color:var(--c-on-accent); font-style:normal; white-space:nowrap; overflow:hidden; }
+.b-mk { position:absolute; top:0; transform:translateX(-50%); width:16px; height:16px; border-radius:5px; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; }
+.b-flag { position:absolute; top:0; height:15px; padding:0 5px; border-radius:5px; font:700 10px/15px "JetBrains Mono",monospace; background:var(--c-info-bg); color:var(--c-info); white-space:nowrap; }
+.b-flag.live { background:var(--c-info); color:var(--c-on-accent); }
+.b-flag.err { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.b-ghost { position:absolute; top:18px; height:20px; left:0; right:0; border:1px dashed var(--c-dashed); border-radius:6px; font-size:10px; color:var(--c-text-muted); display:flex; align-items:center; padding-left:8px; }
+.b-nowline { position:absolute; top:24px; bottom:0; width:2px; background:var(--c-accent); border-radius:999px; pointer-events:none; }
+.b-nowline::before { content:"сейчас"; position:absolute; top:-16px; right:4px; font:700 10px "Hanken Grotesk",sans-serif; color:var(--c-accent); }
+.b-log { max-height:520px; overflow:auto; padding:12px; }
+.b-ev { display:grid; grid-template-columns:44px 12px 1fr; gap:8px; padding:8px 0; border-bottom:1px solid var(--c-border-light); font-size:12px; }
+.b-ev:last-child { border-bottom:0; }
+.b-ev .tm { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+.b-ev .ic { width:10px; height:10px; border-radius:50%; margin-top:4px; }
+.b-ev b { color:var(--c-text-heading); }
+.b-ev .x { color:var(--c-text-secondary); }
+.b-ev.live { background:var(--c-info-bg); margin:0 -12px; padding:8px 12px; border-radius:8px; }
+/* мобильная вертикальная лента */
+.bv-st { display:grid; grid-template-columns:10px 1fr; gap:12px; }
+.bv-rail { display:flex; flex-direction:column; border-radius:999px; overflow:hidden; width:10px; }
+.bv-rail i { display:block; width:100%; }
+.bv-body { padding-bottom:16px; }
+.bv-h { display:flex; align-items:baseline; justify-content:space-between; gap:8px; min-height:24px; }
+.bv-h b { font-size:14px; color:var(--c-text-heading); }
+.bv-h .mono { font-size:11px; color:var(--c-text-secondary); }
+.bv-mix { font-size:11px; color:var(--c-text-muted); margin:2px 0 6px; }
+.bv-ev { display:flex; gap:8px; font-size:12px; padding:5px 0; align-items:flex-start; }
+.bv-ev .tm { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); width:38px; flex-shrink:0; }
+.bv-ev.live { background:var(--c-info-bg); border-radius:8px; padding:8px; margin:4px 0; flex-wrap:wrap; }
+.bv-pend { display:flex; align-items:center; gap:8px; min-height:40px; padding:0 12px; margin-bottom:6px; font-size:12px; }
+
+/* ===== C · «Где ушло время» ===== */
+.c-head { font:700 22px/1.35 "PT Serif",Georgia,serif; color:var(--c-text-heading); margin:0 0 4px; max-width:860px; }
+.w360 .c-head { font-size:18px; }
+.c-head em { font-style:normal; }
+.c-head .w { color:var(--c-info); } .c-head .k { color:var(--c-accent); }
+.c-fall .row { display:grid; grid-template-columns:130px 1fr 150px; gap:12px; align-items:center; min-height:34px; }
+.w360 .c-fall .row { grid-template-columns:1fr auto; gap:2px 8px; min-height:0; margin-bottom:10px; }
+.w360 .c-fall .row .tk { grid-column:1 / -1; grid-row:2; }
+.c-fall .lb { font-size:13px; font-weight:600; color:var(--c-text-heading); display:flex; align-items:center; gap:6px; }
+.c-fall .tk { position:relative; height:20px; background:var(--c-bg-inset); border-radius:6px; }
+.c-fall .tk i { position:absolute; top:0; bottom:0; border-radius:6px; }
+.c-fall .tk .conn { position:absolute; top:-8px; height:8px; border-left:1px dashed var(--c-dashed); }
+.c-fall .vl { font-family:"JetBrains Mono",monospace; font-size:12px; color:var(--c-text-primary); text-align:right; }
+.c-fall .vl small { color:var(--c-text-muted); margin-left:6px; }
+.c-loss { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.w360 .c-loss { grid-template-columns:1fr; gap:8px; }
+.c-card { display:flex; flex-direction:column; gap:4px; }
+.c-card .rk { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; font-size:12px; font-weight:600; color:var(--c-text-secondary); }
+.c-card .rk .no { width:20px; height:20px; border-radius:50%; background:var(--c-bg-selected); color:var(--c-text-heading); display:inline-flex; align-items:center; justify-content:center; font-size:11px; }
+.c-card .n { font:700 22px/1.2 "PT Serif",Georgia,serif; color:var(--c-text-heading); margin-top:4px; }
+.c-card .ctx { font-size:12px; color:var(--c-text-secondary); flex:1; }
+.c-card .ft { display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
+.c-card.live { border-color:var(--c-info); background:var(--c-info-bg); }
+.c-ppl .row { display:grid; grid-template-columns:24px 110px 1fr 120px; gap:10px; align-items:center; min-height:32px; }
+.w360 .c-ppl .row { grid-template-columns:24px 1fr auto; min-height:40px; gap:4px 8px; }
+.w360 .c-ppl .row .tk { grid-column:2 / -1; grid-row:2; }
+.c-ppl .tk { height:10px; border-radius:999px; background:var(--c-bg-selected); overflow:hidden; }
+.c-ppl .tk i { display:block; height:100%; border-radius:999px; }
+.c-ppl .vl { font-family:"JetBrains Mono",monospace; font-size:12px; text-align:right; }
+.seg { display:inline-flex; padding:2px; border-radius:9px; background:var(--c-bg-selected); gap:2px; }
+.seg span { padding:3px 10px; border-radius:7px; font-size:11px; color:var(--c-text-secondary); text-transform:none; letter-spacing:0; font-weight:500; }
+.seg span.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.c-stg { display:flex; gap:2px; height:28px; border-radius:8px; overflow:hidden; }
+.c-stg i { display:flex; align-items:center; justify-content:center; font-style:normal; font-size:11px; font-weight:600; color:var(--c-text-heading); background:var(--c-bg-selected); white-space:nowrap; overflow:hidden; min-width:6px; }
+.c-stg i.on { background:var(--c-accent-muted); }
+.c-stg-l { display:flex; gap:2px; font-family:"JetBrains Mono",monospace; font-size:10px; color:var(--c-text-muted); margin-top:4px; }
+.c-stg-l span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:6px; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>«Статистика» фичи · 3 подачи</h1>
+  <div class="grp"><span class="lbl">Вариант</span><div class="pills" data-k="v">
+    <button data-v="A" class="on">A · Пульс</button><button data-v="B">B · Лента</button><button data-v="C">C · Где ушло время</button></div></div>
+  <div class="grp"><span class="lbl">Состояние</span><div class="pills" data-k="s">
+    <button data-v="running" class="on">идёт</button><button data-v="waiting">ждёт вас</button><button data-v="merged">смержена</button><button data-v="thin">мало данных</button></div></div>
+  <div class="grp"><span class="lbl">Тема</span><div class="pills" data-k="t">
+    <button data-v="light">светлая</button><button data-v="dark">тёмная</button><button data-v="both" class="on">обе</button></div></div>
+  <div class="grp"><span class="lbl">Ширина</span><div class="pills" data-k="w">
+    <button data-v="1280">1280</button><button data-v="360">360</button><button data-v="both" class="on">обе</button></div></div>
+  <div class="grp"><span class="lbl">Пометки</span><div class="pills" data-k="m">
+    <button data-v="on" class="on">«нужны данные»</button><button data-v="off">скрыть</button></div></div>
+</div>
+<div class="note" id="note"></div>
+<div id="out"></div>
+
+<script>
+// ===== Данные: только поля, которые бэк уже отдаёт (stats + run). Минуты — от старта фичи. =====
+const START = 9 * 60 + 20;
+const fmt = m => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), r = m % 60;
+  if (!h) return r + ' мин'; if (!r) return h + ' ч'; return h + ' ч ' + String(r).padStart(2, '0') + ' мин'; };
+const clock = m => { const t = START + Math.round(m); return String(Math.floor(t / 60) % 24).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0'); };
+const pc = (a, b) => b > 0 ? Math.round(a / b * 100) : 0;
+const KV = { work: 'var(--c-accent)', waiting: 'var(--c-info)', idle: 'var(--c-progress-track)', error: 'var(--c-danger)' };
+const KL = { work: 'работа', waiting: 'ждали вас', idle: 'простой', error: 'ошибки' };
+const P = {
+  timur: { n: 'Тимур', c: 'var(--p-blue)' }, polina: { n: 'Полина', c: 'var(--p-purple)' },
+  gleb: { n: 'Глеб', c: 'var(--p-green)' }, egor: { n: 'Егор', c: 'var(--p-brown)' },
+  sofya: { n: 'Софья', c: 'var(--p-orange)' }, vera: { n: 'Вера', c: 'var(--p-green)' }, alex: { n: 'Александр', c: 'var(--p-brown)' },
+};
+const av = k => `<span class="av" style="background:${P[k].c}">${P[k].n[0]}</span>`;
+const BE = t => ` <span class="be">нужны данные${t ? ': ' + t : ''}</span>`;
+
+const RUN = {
+  key: 'running', elapsed: 400, work: 250, agents: 610, waiting: 65, wCount: 3, wLongest: 34, idle: 70, error: 15, eCount: 1,
+  loops: 2, ret: { review: 2, qa: 0, final: 0 }, cost: '$14,20', tokens: '8,4М', source: 'journal',
+  stages: [
+    { k: 'cut', n: 'Разрез', st: 'done', a: 0, b: 18, seg: { work: 18 } },
+    { k: 'design', n: 'Дизайн', st: 'skipped' },
+    { k: 'plan', n: 'План', st: 'done', a: 18, b: 78, seg: { work: 26, waiting: 8, idle: 26 } },
+    { k: 'prod', n: 'Производство', st: 'active', a: 78, b: 400, seg: { work: 190, waiting: 57, idle: 60, error: 15 } },
+    { k: 'review', n: 'Ревью', st: 'active', a: 150, b: 400, seg: { work: 60, idle: 40 } },
+    { k: 'qa', n: 'Проверка', st: 'pending' }, { k: 'final', n: 'Финал', st: 'pending' }, { k: 'merge', n: 'Мерж', st: 'pending' },
+  ],
+  // События ленты: старт этапа, вердикты витков (rounds), эпизоды ожидания/ошибки (segments), «сейчас» (current/now).
+  ev: [
+    { at: 0, s: 'cut', k: 'start', who: 'sofya', t: 'разрез начат' },
+    { at: 18, s: 'plan', k: 'start', who: 'egor', t: 'план начат' },
+    { at: 70, s: 'plan', k: 'wait', who: 'egor', dur: 8, t: 'ждали вас 8 мин' },
+    { at: 78, s: 'prod', k: 'start', who: 'timur', t: 'производство: Ш1, Ш2' },
+    { at: 120, s: 'prod', k: 'wait', who: 'timur', dur: 34, t: 'ждали вас 34 мин · Ш2' },
+    { at: 165, s: 'review', k: 'ok', who: 'gleb', t: 'Ш1 принят' },
+    { at: 210, s: 'review', k: 'ret', who: 'gleb', t: 'Ш2 возвращён: нет теста на пустой PDF' },
+    { at: 240, s: 'prod', k: 'err', who: 'timur', dur: 15, t: 'ошибка 15 мин · Ш3' },
+    { at: 290, s: 'review', k: 'ok', who: 'gleb', t: 'Ш2 принят со 2-го витка' },
+    { at: 300, s: 'prod', k: 'wait', who: 'polina', dur: 23, t: 'ждали вас 23 мин · Ш4' },
+    { at: 350, s: 'review', k: 'ret', who: 'gleb', t: 'Ш3 возвращён: шрифт не встраивается' },
+  ],
+  now: [{ who: 'timur', step: 'Ш3 · доработка', since: 355 }, { who: 'polina', step: 'Ш4 · фронт', since: 360 }],
+  chains: [{ ref: 'Ш2', title: 'Движок PDF', loops: 1, rounds: ['ret', 'ok'], min: 130, who: 'timur' }],
+  longestNow: { ref: 'Ш3', who: 'timur', min: 45, share: 31 },
+  ppl: [['timur', 260, '$6,10'], ['polina', 190, '$4,30'], ['gleb', 90, '$2,40'], ['egor', 52, '$1,10'], ['sofya', 18, '$0,30']],
+  rounds: ['ok', 'ret', 'ok', 'ret'],
+};
+const clone = o => JSON.parse(JSON.stringify(o));
+
+const WAIT = clone(RUN);
+Object.assign(WAIT, { key: 'waiting', elapsed: 442, work: 265, waiting: 107, wCount: 4, wLongest: 42, idle: 55 });
+WAIT.stages[3].b = 442; WAIT.stages[3].seg = { work: 205, waiting: 99, idle: 45, error: 15 };
+WAIT.stages[4].b = 442;
+WAIT.ev.push({ at: 400, s: 'prod', k: 'wait', who: 'polina', dur: 42, live: true, t: 'ждёт вас 42 мин · Ш4' });
+WAIT.attention = { since: 400, dur: 42, who: 'polina', step: 'Ш4 · фронт', text: 'Экспорт по умолчанию — A4 или Letter? Без ответа кнопку не доделать.' };
+WAIT.now = [{ who: 'timur', step: 'Ш3 · доработка', since: 355 }];
+
+const MERGED = clone(RUN);
+Object.assign(MERGED, { key: 'merged', elapsed: 555, work: 360, agents: 870, waiting: 95, wCount: 4, wLongest: 38, idle: 80, error: 20,
+  loops: 3, ret: { review: 2, qa: 1, final: 0 }, cost: '$21,80', tokens: '12,9М', now: [], longestNow: null,
+  summary: { tasks: 14, steps: 5, loops: 3, at: clock(555) } });
+MERGED.stages = [
+  { k: 'cut', n: 'Разрез', st: 'done', a: 0, b: 18, seg: { work: 18 } },
+  { k: 'design', n: 'Дизайн', st: 'skipped' },
+  { k: 'plan', n: 'План', st: 'done', a: 18, b: 78, seg: { work: 26, waiting: 8, idle: 26 } },
+  { k: 'prod', n: 'Производство', st: 'done', a: 78, b: 400, seg: { work: 210, waiting: 49, idle: 43, error: 20 } },
+  { k: 'review', n: 'Ревью', st: 'done', a: 150, b: 410, seg: { work: 70, idle: 30 } },
+  { k: 'qa', n: 'Проверка', st: 'done', a: 410, b: 480, seg: { work: 40, waiting: 38, idle: 4 } },
+  { k: 'final', n: 'Финал', st: 'done', a: 480, b: 525, seg: { work: 40, idle: 5 } },
+  { k: 'merge', n: 'Мерж', st: 'done', a: 525, b: 555, seg: { work: 22, idle: 8 } },
+];
+MERGED.ev = RUN.ev.slice(0, 10).concat([
+  { at: 380, s: 'review', k: 'ok', who: 'gleb', t: 'Ш3, Ш4, Ш5 приняты' },
+  { at: 410, s: 'qa', k: 'start', who: 'vera', t: 'проверка начата' },
+  { at: 430, s: 'qa', k: 'ret', who: 'vera', t: 'Ш4 возвращён: кнопка не видна на 360' },
+  { at: 440, s: 'qa', k: 'wait', who: 'vera', dur: 38, t: 'ждали вас 38 мин' },
+  { at: 478, s: 'qa', k: 'ok', who: 'vera', t: 'проверка принята' },
+  { at: 520, s: 'final', k: 'ok', who: 'alex', t: 'финал принят' },
+  { at: 555, s: 'merge', k: 'merge', who: 'sofya', t: 'смержена в master' },
+]);
+MERGED.chains = [{ ref: 'Ш4', title: 'Кнопка экспорта', loops: 2, rounds: ['ret', 'ok', 'ret', 'ok'], min: 175, who: 'polina' }];
+MERGED.ppl = [['timur', 330, '$8,40'], ['polina', 250, '$6,20'], ['gleb', 120, '$3,10'], ['vera', 80, '$2,30'], ['egor', 52, '$1,10'], ['alex', 20, '$0,40'], ['sofya', 18, '$0,30']];
+MERGED.rounds = ['ok', 'ret', 'ok', 'ret', 'ok', 'ret', 'ok', 'ok'];
+
+const THIN = {
+  key: 'thin', elapsed: 12, work: 12, agents: 12, waiting: 0, wCount: 0, wLongest: null, idle: 0, error: 0, eCount: 0,
+  loops: 0, ret: { review: 0, qa: 0, final: 0 }, cost: '$0,18', tokens: '96 тыс.', source: 'journal',
+  stages: [
+    { k: 'cut', n: 'Разрез', st: 'active', a: 0, b: 12, seg: { work: 12 } },
+    { k: 'design', n: 'Дизайн', st: 'pending' }, { k: 'plan', n: 'План', st: 'pending' }, { k: 'prod', n: 'Производство', st: 'pending' },
+    { k: 'review', n: 'Ревью', st: 'pending' }, { k: 'qa', n: 'Проверка', st: 'pending' }, { k: 'final', n: 'Финал', st: 'pending' }, { k: 'merge', n: 'Мерж', st: 'pending' },
+  ],
+  ev: [{ at: 0, s: 'cut', k: 'start', who: 'sofya', t: 'разрез начат' }],
+  now: [{ who: 'sofya', step: 'Разрез', since: 0 }], chains: [], longestNow: { ref: 'Разрез', who: 'sofya', min: 12, share: 100 },
+  ppl: [['sofya', 12, '$0,18']], rounds: [],
+};
+const DATA = { running: RUN, waiting: WAIT, merged: MERGED, thin: THIN };
+// Типичная фича проекта — НЕТ в бэке (медиана по смерженным фичам проекта): только вариант A.
+const TYP = { n: 8, med: 450, p25: 330, p75: 620, wait: 60, loops: 2 };
+
+// ===== Общие куски =====
+function head(D) {
+  const chip = {
+    running: `<span class="chip t-run"><span class="d"></span>идёт · ${fmt(D.elapsed)}</span>`,
+    waiting: `<span class="chip t-wait"><span class="d"></span>ждёт вас · 42 мин</span>`,
+    merged: `<span class="chip t-ok">✓ смержена ${D.summary ? D.summary.at : ''}</span>`,
+    thin: `<span class="chip t-new"><span class="d"></span>только начали</span>`,
+  }[D.key];
+  return `<div class="ph"><span class="back">← Обзор фич</span><h2>Экспорт заметок в PDF</h2>${chip}</div>
+  <div class="tabs"><span>Хронология</span><span>Планы и макеты</span><span>Задачи</span><span>Чаты</span><span>События</span><span class="on">Статистика</span></div>`;
+}
+const accLine = D => `<div class="acc">по журналу ходов · обновлено ${clock(D.elapsed)}</div>`;
+function mixBar(D, h) {
+  const t = D.elapsed;
+  return `<div class="bar" style="height:${h}px">${['work', 'waiting', 'idle', 'error'].filter(k => D[k] > 0)
+    .map(k => `<i style="width:${D[k] / t * 100}%;background:${KV[k]}"></i>`).join('')}</div>`;
+}
+function stageBox(s) {
+  const tot = Object.values(s.seg).reduce((a, b) => a + b, 0);
+  return Object.entries(s.seg).map(([k, v]) => `<i style="width:${v / tot * 100}%;background:${KV[k]}"></i>`).join('');
+}
+const more = (m) => `<button class="more"><span><b style="color:var(--c-text-heading)">Подробнее</b> · персоны, модели, роли, токены и кэш</span><span>▾</span></button>`;
+
+// ===== A · «Пульс» =====
+function renderA(D, m) {
+  let eyebrow, big, sub, extra = '';
+  if (D.key === 'running') {
+    eyebrow = `<span class="chip t-run"><span class="d"></span>идёт</span><span class="muted" style="font-size:12px">с ${clock(0)} · сейчас ${clock(D.elapsed)}</span>`;
+    big = fmt(D.elapsed); sub = `прошло с начала · из них работали <b style="color:var(--c-text-heading)">${pc(D.work, D.elapsed)} %</b>`;
+  } else if (D.key === 'waiting') {
+    eyebrow = `<span class="chip t-wait"><span class="d"></span>ждёт вас</span><span class="muted" style="font-size:12px">с ${clock(D.attention.since)}</span>`;
+    big = fmt(D.attention.dur); sub = `фича стоит, пока нет ответа · всего прошло ${fmt(D.elapsed)}`;
+    extra = `<div class="a-ask">${av(D.attention.who)} <b>${P[D.attention.who].n}</b> · ${D.attention.step}<br>${D.attention.text}</div>
+      <div class="a-actions"><button class="btn pri">Ответить в чате</button><button class="btn gh">Открыть задачу</button></div>`;
+  } else if (D.key === 'merged') {
+    eyebrow = `<span class="chip t-ok">✓ смержена</span><span class="muted" style="font-size:12px">24.10 · ${D.summary.at}</span>`;
+    big = fmt(D.elapsed); sub = `от разреза до мержа · ${D.summary.tasks} задач · ${D.summary.steps} шагов · ${D.summary.loops} возврата`;
+  } else {
+    eyebrow = `<span class="chip t-new"><span class="d"></span>только начали</span>`;
+    big = fmt(D.elapsed); sub = 'идёт разрез · считать доли пока рано';
+  }
+  // Правая половина героя: из чего состоит время + сравнение с типичной фичей.
+  let mix;
+  if (D.key === 'thin') {
+    mix = `<div class="dashed" style="padding:16px;font-size:12px;line-height:1.6">
+      Доли «работа · ждали вас · простой» появятся после плана.<br>Возвраты — после первого ревью. Сравнение с типичной фичей — у смерженной.</div>`;
+  } else {
+    const rows = ['work', 'waiting', 'idle', 'error'].filter(k => D[k] > 0).map(k =>
+      `<span class="dot" style="background:${KV[k]}"></span><span>${KL[k]}${k === 'waiting' ? ` <span class="muted">· ${D.wCount} раза</span>` : ''}${k === 'error' ? ` <span class="muted">· ${D.eCount}</span>` : ''}</span><span class="v">${fmt(D[k])}</span><span class="p">${pc(D[k], D.elapsed)} %</span>`).join('');
+    const max = Math.max(TYP.p75, D.elapsed) * 1.1;
+    const cmpTxt = D.key === 'merged'
+      ? `на ${fmt(D.elapsed - TYP.med)} дольше типичной · ждали вас на ${fmt(D.waiting - TYP.wait)} больше`
+      : `типичная фича проекта — ${fmt(TYP.med)} (обычно ${fmt(TYP.p25)}–${fmt(TYP.p75)})`;
+    mix = `<div class="sec" style="margin-top:0">Из чего сложилось время</div>${mixBar(D, 16)}<div class="a-rows">${rows}</div>
+      <div class="a-cmp"><div class="ttl">${cmpTxt}${BE('медиана по смерженным фичам проекта')}</div>
+        <div class="a-scale"><div class="tr"></div><div class="band" style="left:${TYP.p25 / max * 100}%;width:${(TYP.p75 - TYP.p25) / max * 100}%"></div>
+          <div class="med" style="left:${TYP.med / max * 100}%"></div><div class="me" style="left:${D.elapsed / max * 100}%" title="эта фича"></div></div>
+        <div class="a-scale-l"><span>0</span><span>● эта · ▮ типичная · ▬ обычный разброс</span><span>${fmt(max)}</span></div></div>`;
+  }
+  const hero = `<div class="card a-hero ${D.key === 'waiting' ? 'tone-wait' : ''}"><div>
+      <div class="a-eyebrow">${eyebrow}</div><div class="a-big">${big}</div><div class="a-sub">${sub}</div>${extra}</div>
+    <div class="a-mix">${mix}</div></div>`;
+  // Четыре плитки.
+  const rnd = D.rounds.map(r => `<i class="${r === 'ok' ? 'r-ok' : 'r-ret'}">${r === 'ok' ? '✓' : '↩'}</i>`).join('');
+  const kpis = D.key === 'thin' ? '' : `<div class="a-kpis">
+    <div class="card a-kpi"><div class="l"><span class="dot" style="background:${KV.work}"></span>Работали</div><div class="n">${fmt(D.work)}</div><div class="h">агенты суммарно ${fmt(D.agents)}</div></div>
+    <div class="card a-kpi"><div class="l"><span class="dot" style="background:${KV.waiting}"></span>Ждали вас</div><div class="n">${fmt(D.waiting)}</div><div class="h">${D.wCount} раза · дольше всего ${fmt(D.wLongest)}</div></div>
+    <div class="card a-kpi"><div class="l">↩ Возвраты</div><div class="n">${D.loops}</div><div class="h">ревью ${D.ret.review} · проверка ${D.ret.qa} · финал ${D.ret.final}</div><div class="a-rounds">${rnd}</div></div>
+    <div class="card a-kpi"><div class="l">Расход</div><div class="n">${D.cost}</div><div class="h">${D.tokens} токенов</div></div></div>`;
+  // Сейчас.
+  const now = (D.now && D.now.length && D.key !== 'merged') ? `<div class="sec">Сейчас работают</div><div class="a-now">${D.now.map(n =>
+    `<div class="it">${av(n.who)}<span class="grow"><b style="color:var(--c-text-heading)">${P[n.who].n}</b> · ${n.step} · <span class="mono muted">${fmt(D.elapsed - n.since)}</span></span><button class="btn ln">чат →</button></div>`).join('')}</div>` : '';
+  // Лестница этапов (нынешний Гант, но крупнее и с минутами по видам в подсказке).
+  const lad = `<div class="sec">Этапы <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">· клик — в «Хронологию»</span></div><div class="card lad">${D.stages.map(s => {
+    if (s.st === 'skipped') return `<div class="row"><span class="nm muted">${s.n}</span><div class="tk"><span class="ghost">этапа не было</span></div><span class="mn"></span></div>`;
+    if (s.st === 'pending') return `<div class="row"><span class="nm muted">${s.n}</span><div class="tk"><span class="ghost">впереди</span></div><span class="mn"></span></div>`;
+    const L = s.a / D.elapsed * 100, W = Math.max(0.8, (s.b - s.a) / D.elapsed * 100);
+    return `<div class="row"><span class="nm">${s.n}</span><div class="tk"><div class="bx" style="left:${L}%;width:${W}%">${stageBox(s)}</div>${s.st === 'active' ? '<span class="now" style="right:0"></span>' : ''}</div><span class="mn">${fmt(s.b - s.a)}</span></div>`;
+  }).join('')}<div class="legend">${['work', 'waiting', 'idle', 'error'].map(k => `<span><span class="dot" style="background:${KV[k]}"></span>${KL[k]}</span>`).join('')}<span><span style="width:2px;height:10px;background:var(--c-accent);display:inline-block"></span>сейчас</span></div></div>`;
+  return accLine(D) + `<div style="margin-top:8px">${hero}</div>` + kpis + now + lad + more(m);
+}
+
+// ===== B · «Лента» =====
+const EVC = { start: 'var(--c-text-muted)', ok: 'var(--c-success)', ret: 'var(--c-danger)', wait: 'var(--c-info)', err: 'var(--c-danger)', merge: 'var(--c-success)' };
+function strip(D) {
+  const k = (b, s) => `<div class="k"><b>${b}</b><span>${s}</span></div>`;
+  return `<div class="b-strip">${k(fmt(D.elapsed), D.key === 'merged' ? 'до мержа' : 'прошло')}${k(pc(D.work, D.elapsed) + ' %', 'работали')}${k(fmt(D.waiting), 'ждали вас' + (D.wCount ? ' · ' + D.wCount : ''))}${k(D.loops, 'возвратов')}${k(D.cost, D.tokens + ' ток.')}</div>`;
+}
+function renderB(D, m) {
+  const T = D.elapsed;
+  const evs = D.ev.slice().sort((a, b) => a.at - b.at);
+  if (m) {
+    // 360: вертикальная лента — этап = отрезок рельса (высота ∝ длительности), события рядом.
+    const live = D.attention ? `<div class="bv-ev live"><span class="tm">${clock(D.attention.since)}</span><span style="flex:1">${av(D.attention.who)} <b>${P[D.attention.who].n} ждёт вас ${D.attention.dur} мин</b><br>${D.attention.text}</span><button class="btn pri" style="width:100%">Ответить в чате</button></div>` : '';
+    const body = D.stages.filter(s => s.st !== 'skipped').map(s => {
+      if (s.st === 'pending') return `<div class="bv-pend dashed">${s.n} <span style="margin-left:auto">впереди</span></div>`;
+      const dur = s.b - s.a, tot = Object.values(s.seg).reduce((a, b) => a + b, 0);
+      const hgt = Math.max(36, Math.min(200, dur * 0.5));
+      const rail = Object.entries(s.seg).map(([k, v]) => `<i style="height:${v / tot * 100}%;background:${KV[k]}"></i>`).join('');
+      const mix = Object.entries(s.seg).map(([k, v]) => `${KL[k]} ${fmt(v)}`).join(' · ');
+      const ee = evs.filter(e => e.s === s.k && !e.live && e.k !== 'start').map(e =>
+        `<div class="bv-ev"><span class="tm">${clock(e.at)}</span><span class="dot" style="background:${EVC[e.k]};border-radius:50%;margin-top:4px;width:8px;height:8px"></span><span>${P[e.who].n}: ${e.t}</span></div>`).join('');
+      return `<div class="bv-st"><div class="bv-rail" style="height:${hgt}px">${rail}</div><div class="bv-body">
+        <div class="bv-h"><b>${s.n}</b><span class="mono">${clock(s.a)}–${s.st === 'active' ? 'идёт' : clock(s.b)} · ${fmt(dur)}</span></div>
+        <div class="bv-mix">${mix}</div>${ee}${s.st === 'active' && s.k === 'prod' ? live : ''}</div></div>`;
+    }).join('');
+    return accLine(D) + `<div style="margin-top:8px">${strip(D)}</div><div class="sec">Как шла фича</div>${body}` + more(m);
+  }
+  // 1280: дорожки этапов на общей оси + журнал событий справа.
+  const ticks = []; for (let h = Math.ceil(START / 60) * 60; h <= START + T - (T > 300 ? 30 : 4); h += (T > 300 ? 60 : 15)) ticks.push(h - START);
+  const axis = `<div class="b-axis"><span></span><div class="ax">${ticks.map(t => `<span style="left:${t / T * 100}%">${clock(t)}</span>`).join('')}</div></div>`;
+  const lanes = D.stages.filter(s => s.st !== 'skipped').map(s => {
+    if (s.st === 'pending') return `<div class="b-lane"><span class="nm muted">${s.n}<small>впереди</small></span><div class="tk"><span class="b-ghost">ещё не начат</span></div></div>`;
+    const L = s.a / T * 100, W = Math.max(0.8, (s.b - s.a) / T * 100);
+    const tot = Object.values(s.seg).reduce((a, b) => a + b, 0);
+    const seg = Object.entries(s.seg).map(([k, v]) => `<i style="width:${v / tot * 100}%;background:${KV[k]}">${v / T * 100 > 6 && k === 'work' ? fmt(v) : ''}</i>`).join('');
+    const mk = evs.filter(e => e.s === s.k && (e.k === 'ok' || e.k === 'ret' || e.k === 'merge')).map(e =>
+      `<span class="b-mk ${e.k === 'ret' ? 'r-ret' : 'r-ok'}" style="left:${e.at / T * 100}%" title="${clock(e.at)} · ${e.t}">${e.k === 'ret' ? '↩' : '✓'}</span>`).join('');
+    const fl = evs.filter(e => e.s === s.k && (e.k === 'wait' || e.k === 'err')).map(e =>
+      `<span class="b-flag ${e.live ? 'live' : ''} ${e.k === 'err' ? 'err' : ''}" style="left:${e.at / T * 100}%" title="${clock(e.at)} · ${e.t}">${e.k === 'err' ? '⚠ ' : '✋ '}${fmt(e.dur)}</span>`).join('');
+    return `<div class="b-lane"><span class="nm">${s.n}<small>${fmt(s.b - s.a)}</small></span><div class="tk"><div class="bx" style="left:${L}%;width:${W}%">${seg}</div>${mk}${fl}</div></div>`;
+  }).join('');
+  const nowLine = D.key === 'merged' ? '' : `<div style="position:absolute;left:108px;right:0;top:0;bottom:0;pointer-events:none"><div class="b-nowline" style="left:calc(100% - 2px)"></div></div>`;
+  const legend = `<div class="legend">${['work', 'waiting', 'idle', 'error'].map(k => `<span><span class="dot" style="background:${KV[k]}"></span>${KL[k]}</span>`).join('')}<span><span class="b-mk r-ok" style="position:static;transform:none">✓</span>принят</span><span><span class="b-mk r-ret" style="position:static;transform:none">↩</span>возврат</span><span>✋ ждали вас · ⚠ ошибка</span></div>`;
+  const log = evs.slice().reverse().map(e => `<div class="b-ev ${e.live ? 'live' : ''}"><span class="tm">${clock(e.at)}</span><span class="ic" style="background:${EVC[e.k]}"></span><span><b>${P[e.who].n}</b> <span class="x">· ${e.t}</span>${e.live ? `<br><span class="x">${D.attention.text}</span><br><button class="btn pri" style="margin-top:6px">Ответить в чате</button>` : ''}</span></div>`).join('');
+  const nowRows = (D.now || []).map(n => `<div class="b-ev"><span class="tm">сейчас</span><span class="ic" style="background:var(--c-accent)"></span><span><b>${P[n.who].n}</b> <span class="x">· ${n.step} · ${fmt(T - n.since)}</span></span></div>`).join('');
+  return accLine(D) + `<div style="margin-top:8px">${strip(D)}</div>
+    <div class="b-grid"><div class="card"><div class="sec" style="margin-top:0">Как шла фича · ${clock(0)}–${D.key === 'merged' ? clock(T) : 'сейчас'}</div>
+      <div class="b-lanes">${axis}${lanes}${nowLine}</div>${legend}
+      ${D.key === 'thin' ? `<div class="dashed" style="padding:10px 12px;margin-top:12px;font-size:12px">Дорожки этапов заполнятся по мере работы — серые рамки показывают, что впереди.</div>` : ''}</div>
+      <div class="card b-log"><div class="sec" style="margin-top:0">Журнал · новые сверху</div>${D.key !== 'merged' ? nowRows : ''}${log}</div></div>` + more(m);
+}
+
+// ===== C · «Где ушло время» =====
+function renderC(D, m) {
+  const T = D.elapsed;
+  let headline;
+  if (D.key === 'thin') headline = `Пока терять нечего: прошло <em class="k">${fmt(T)}</em>, всё это время шла работа.`;
+  else if (D.key === 'merged') headline = `Из <em>${fmt(T)}</em> работали <em class="k">${fmt(D.work)}</em>. Ожидание вас заняло <em class="w">${fmt(D.waiting)}</em> — это ${pc(D.waiting, T)} % пути.`;
+  else headline = `Из <em>${fmt(T)}</em> работали <em class="k">${fmt(D.work)}</em>. Остальное — ждали вас <em class="w">${fmt(D.waiting)}</em> и простой ${fmt(D.idle)}.`;
+  // Водопад: «прошло» целиком, затем доли со сдвигом.
+  let off = 0;
+  const rows = [['all', 'Всего прошло', T, 'var(--c-text-muted)']].concat(['work', 'waiting', 'idle', 'error'].filter(k => D[k] > 0).map(k => [k, k === 'waiting' ? 'Ждали вас' : KL[k][0].toUpperCase() + KL[k].slice(1), D[k], KV[k]]));
+  const fall = rows.map(([k, lb, v, c], i) => {
+    const left = k === 'all' ? 0 : off; if (k !== 'all') off += v;
+    return `<div class="row"><span class="lb">${k === 'all' ? '' : `<span class="dot" style="background:${c}"></span>`}${lb}</span>
+      <div class="tk"><i style="left:${left / T * 100}%;width:${Math.max(0.6, v / T * 100)}%;background:${c}"></i>${i > 1 ? `<span class="conn" style="left:${left / T * 100}%"></span>` : ''}</div>
+      <span class="vl">${fmt(v)}<small>${k === 'all' ? '100 %' : pc(v, T) + ' %'}</small></span></div>`;
+  }).join('');
+  // Три главные потери.
+  let cards;
+  const card = (no, rk, n, ctx, act, cls = '', be = '') => `<div class="card c-card ${cls}"><div class="rk"><span class="no">${no}</span>${rk}${be}</div><div class="n">${n}</div><div class="ctx">${ctx}</div><div class="ft">${act}</div></div>`;
+  if (D.key === 'thin') {
+    cards = `<div class="dashed" style="padding:16px;font-size:12px">Потери появятся с первым ожиданием, возвратом или ошибкой. Сейчас ${P.sofya.n} делает разрез — ${fmt(T)}.</div>`;
+  } else {
+    const ch = D.chains[0];
+    const c1 = D.attention
+      ? card(1, 'Ждёт вас сейчас', fmt(D.attention.dur), `${av(D.attention.who)} ${P[D.attention.who].n} · ${D.attention.step}<br>${D.attention.text}`, `<button class="btn pri">Ответить в чате</button>`, 'live')
+      : card(1, 'Дольше всего ждали вас', fmt(D.wLongest), `${D.key === 'merged' ? 'Вера · проверка · 16:40' : 'Тимур · Ш2 · 11:20'}<br>всего ожиданий: ${D.wCount}, вместе ${fmt(D.waiting)}`, `<button class="btn ln">Открыть чат →</button>`, '', BE('чей эпизод: у longestWait нет taskId'));
+    const c2 = card(2, 'Больше всего витков', `${ch.ref} · ${ch.loops} ${ch.loops === 1 ? 'возврат' : 'возврата'}`, `${av(ch.who)} ${ch.title} · шёл ${fmt(ch.min)}<div class="a-rounds">${ch.rounds.map(r => `<i class="${r === 'ok' ? 'r-ok' : 'r-ret'}">${r === 'ok' ? '✓' : '↩'}</i>`).join('')}</div>`, `<button class="btn ln">Цепочка шага →</button>`);
+    const ln = D.longestNow;
+    const c3 = ln
+      ? card(3, 'Дольше всех сейчас', `${ln.ref} · ${fmt(ln.min)}`, `${av(ln.who)} ${P[ln.who].n} · ${ln.share} % расхода фичи`, `<button class="btn ln">Открыть чат →</button>`)
+      : card(3, 'Самый долгий этап', `Производство · ${fmt(322)}`, `из них ждали вас ${fmt(49)}, ошибки ${fmt(20)}`, `<button class="btn ln">В «Хронологию» →</button>`);
+    cards = `<div class="c-loss">${c1}${c2}${c3}</div>`;
+  }
+  // Кто сколько.
+  const maxP = Math.max(...D.ppl.map(p => p[1]));
+  const ppl = D.ppl.map(([k, v, c]) => `<div class="row">${av(k)}<span style="font-weight:600;color:var(--c-text-heading)">${P[k].n}</span><div class="tk"><i style="width:${v / maxP * 100}%;background:${P[k].c}"></i></div><span class="vl">${fmt(v)} <span class="muted">${c}</span></span></div>`).join('');
+  // По этапам: одна полоса, ширина ∝ approxMinutes.
+  const st = D.stages.filter(s => s.st !== 'skipped' && s.st !== 'pending');
+  const stg = st.length < 2 ? '' : `<div class="sec">По этапам <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">· клик — в «Хронологию»</span></div>
+    <div class="c-stg">${st.map(s => `<i class="${s.st === 'active' ? 'on' : ''}" style="flex:${s.b - s.a}">${(s.b - s.a) / T > 0.12 ? s.n : ''}</i>`).join('')}</div>
+    <div class="c-stg-l">${st.map(s => `<span style="flex:${s.b - s.a}">${(s.b - s.a) / T > 0.08 ? fmt(s.b - s.a) : ''}</span>`).join('')}</div>`;
+  return accLine(D) + `<div class="card" style="margin-top:8px;padding:${m ? 16 : 24}px"><p class="c-head">${headline}</p>
+      <div class="sec">Куда ушло время</div><div class="c-fall">${fall}</div></div>
+    <div class="sec">${D.key === 'thin' ? 'Потери' : 'Три главные потери'}</div>${cards}
+    <div class="sec">Кто сколько <span class="seg"><span class="on">время</span><span>расход</span></span></div><div class="card c-ppl">${ppl}</div>
+    ${stg}` + more(m);
+}
+
+// ===== Обвязка =====
+const st = { v: 'A', s: 'running', t: 'both', w: 'both', m: 'on' };
+const NOTES = {
+  A: 'A · «Пульс»: один ответ на вопрос «как дела у фичи» крупно, состав времени одной полосой, сравнение с типичной фичей, четыре плитки, этапы ниже. Подробные разрезы — под «Подробнее».',
+  B: 'B · «Лента»: история фичи — дорожки этапов на общей оси с флажками ожиданий (✋), ошибок (⚠) и вердиктов (✓/↩), журнал справа. На 360 лента становится вертикальной: этап = отрезок рельса.',
+  C: 'C · «Где ушло время»: фраза-вывод, водопад «прошло → работа → ждали вас → простой → ошибки», три главные потери с действием, кто сколько, этапы одной полосой.',
+};
+function render() {
+  document.body.classList.toggle('nomarks', st.m === 'off');
+  document.getElementById('note').textContent = NOTES[st.v];
+  const D = DATA[st.s];
+  const themes = st.t === 'both' ? ['light', 'dark'] : [st.t];
+  const widths = st.w === 'both' ? ['1280', '360'] : [st.w];
+  const fn = { A: renderA, B: renderB, C: renderC }[st.v];
+  const out = [];
+  for (const w of widths) for (const t of themes) {
+    out.push(`<div class="w${w}"><div class="cap">${st.v} · ${w} · ${t === 'light' ? 'светлая' : 'тёмная'}</div>
+      <div class="frame" data-theme="${t}"><div class="page">${head(D)}${fn(D, w === '360')}</div></div></div>`);
+  }
+  document.getElementById('out').innerHTML = out.join('');
+}
+document.querySelectorAll('.pills').forEach(p => p.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  p.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  st[p.dataset.k] = b.dataset.v; render();
+}));
+// Ссылка вида #C-waiting-dark-360 открывает нужную комбинацию (для скриншотов и ревью).
+const h = location.hash.slice(1).split('-');
+if (h[0]) { st.v = h[0] || st.v; st.s = h[1] || st.s; st.t = h[2] || st.t; st.w = h[3] || st.w;
+  document.querySelectorAll('.pills').forEach(p => p.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.v === st[p.dataset.k]))); }
+render();
+</script>
+</body>
+</html>

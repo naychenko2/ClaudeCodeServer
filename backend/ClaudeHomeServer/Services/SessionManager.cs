@@ -2673,11 +2673,24 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         return Path.Combine(_sandbox.ProfilesHostDir, ownerId, key);
     }
 
+    // База деревьев проекта: {home}/.worktrees/<slug проекта> — вне дерева главной репы и
+    // внутри Sandbox:ProjectsRoot у container-пользователей. Одна формула для деревьев чатов
+    // (SetWorktreeAsync) и слотов ревью (ReviewTreePool).
+    internal string WorktreesBase(string? ownerId, Project project)
+    {
+        var user = ownerId is null ? null : _users.GetById(ownerId);
+        var home = (user is null ? null : _homes.Resolve(user))
+            ?? throw new InvalidOperationException("Не удалось определить домашнюю папку владельца");
+        var projSlug = PersonaManager.Slugify(project.Name);
+        if (projSlug.Length == 0) projSlug = project.Id[..Math.Min(8, project.Id.Length)];
+        return Path.Combine(home, ".worktrees", projSlug);
+    }
+
     // Рабочая папка ГЛАЗАМИ CLI: у container-пользователя процесс видит контейнерный путь
     // (/projects/…), по нему же CLI уплощает имя папки транскрипта. Путь вне монтирований
     // песочницы ToRuntime отвергает исключением (аналог SafeJoin) — вызывающий решает сам,
     // отдать его наружу (явная миграция → 400) или деградировать тихо (авто-фейловер).
-    private string CwdForOwner(string? ownerId, string hostCwd)
+    internal string CwdForOwner(string? ownerId, string hostCwd)
     {
         var launcher = _launchers.ForOwner(ownerId);
         return launcher.IsSandboxed ? launcher.Paths.ToRuntime(hostCwd) : hostCwd;
@@ -9055,12 +9068,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             // Папка: {home}/.worktrees/<проект>/<ветка> — вне дерева главной репы и
             // гарантированно внутри Sandbox:ProjectsRoot у container-пользователей
-            var user = ownerId is null ? null : _users.GetById(ownerId);
-            var home = (user is null ? null : _homes.Resolve(user))
-                ?? throw new InvalidOperationException("Не удалось определить домашнюю папку владельца");
-            var projSlug = PersonaManager.Slugify(project.Name);
-            if (projSlug.Length == 0) projSlug = project.Id[..Math.Min(8, project.Id.Length)];
-            var wtPath = Path.Combine(home, ".worktrees", projSlug, branchName.Replace('/', '-'));
+            var wtPath = Path.Combine(WorktreesBase(ownerId, project), branchName.Replace('/', '-'));
             Directory.CreateDirectory(Path.GetDirectoryName(wtPath)!);
 
             // Рабочие папки ГЛАЗАМИ CLI считаем ДО создания дерева: у container-пользователя

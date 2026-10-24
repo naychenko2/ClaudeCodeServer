@@ -1453,18 +1453,20 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         var wanted = PathNormalizer.NormalizePath(path);
         if (wanted == PathNormalizer.NormalizePath(mainRoot))
             throw new GitCommandException("Сброс основного дерева запрещён");
-        var list = await WorktreeListAsync(ownerId, mainRoot, ct);
-        var info = list.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == wanted)
-            ?? throw new GitCommandException("Путь не числится среди worktree репозитория");
-        if (info.Branch is not null)
-            throw new GitCommandException("Дерево стоит на ветке — это не слот ревью");
-        if (info.Locked)
-            throw new GitCommandException("Дерево заблокировано (locked)");
-
+        // Проверка и запись под одним локом: иначе параллельный worktree add/remove
+        // успевает изменить список между чтением и сбросом
         var sem = LockFor(mainRoot);
         await sem.WaitAsync(ct);
         try
         {
+            var list = await WorktreeListAsync(ownerId, mainRoot, ct);
+            var info = list.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == wanted)
+                ?? throw new GitCommandException("Путь не числится среди worktree репозитория");
+            if (info.Branch is not null)
+                throw new GitCommandException("Дерево стоит на ветке — это не слот ревью");
+            if (info.Locked)
+                throw new GitCommandException("Дерево заблокировано (locked)");
+
             await RunOkAsync(ownerId, path, ["checkout", "--detach", "-f", sha], timeoutMs: NetworkTimeoutMs, ct: ct);
             await RunOkAsync(ownerId, path, ["clean", "-fd"], ct: ct);
         }

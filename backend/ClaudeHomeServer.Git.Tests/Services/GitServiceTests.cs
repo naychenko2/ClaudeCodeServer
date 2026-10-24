@@ -949,6 +949,25 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task ResetReview_Locked_Дерево_Отказ_Ничего_Не_Пишет()
+    {
+        var sha = await HeadAsync();
+        var wt = WtPath("rv_locked");
+        await _git.WorktreeAddDetachedAsync(null, _repo, wt, sha);
+        await RawGit("worktree", "lock", wt);
+        var dirty = Path.Combine(wt, "dirty.txt");
+        await File.WriteAllTextAsync(dirty, "несохранённое\n");
+
+        var act = () => _git.ResetReviewWorktreeAsync(null, _repo, wt, sha);
+
+        (await act.Should().ThrowAsync<GitCommandException>())
+            .Which.Message.Should().Contain("заблокировано");
+        File.Exists(dirty).Should().BeTrue();
+        await RawGit("worktree", "unlock", wt);
+        await _git.WorktreeRemoveAsync(null, _repo, wt, force: true);
+    }
+
+    [Fact]
     public async Task ResetReview_Clean_Без_X_Сохраняет_Игнорируемое()
     {
         await File.WriteAllTextAsync(Path.Combine(_repo, ".gitignore"), "obj/\nnode_modules/\n");

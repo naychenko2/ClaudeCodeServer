@@ -790,6 +790,7 @@ builder.Services.AddSingleton<ITaskNotificationDispatcher>(sp => sp.GetRequiredS
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+builder.Services.AddSingleton<ReviewTreePool>();
 // Шов ITaskExecutor (Core) → TaskExecutorAdapter → TaskExecutionService.
 // Адаптер резолвит TaskExecutionService через конструктор, DI форвардер ниже.
 builder.Services.AddSingleton<TaskExecutorAdapter>();

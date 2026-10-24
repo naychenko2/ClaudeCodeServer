@@ -90,7 +90,7 @@ public class PluginManifestCacheTests
 
         calls.Should().Be(2, "пустой sha не кэшируется: loader вызван дважды");
         r1!.Name.Should().Be("call1");
-        r2.Name.Should().Be("call2", "второй вызов — свежий результат, не stale-кэш");
+        r2!.Name.Should().Be("call2", "второй вызов — свежий результат, не stale-кэш");
     }
 
     // QA-фикс K (minor 4): ownerId в ключе — два владельца с одним id+version+sha (одинаковое

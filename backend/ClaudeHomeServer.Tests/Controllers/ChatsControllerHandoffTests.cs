@@ -233,7 +233,7 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
         var service = _factory.Services.GetRequiredService<ChatHandoffService>();
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
-        var act = async () => await service.HandoffAsync(owner, id, cts.Token);
+        var act = async () => await service.HandoffAsync(owner!, id, cts.Token);
 
         // Через HTTP-ручку этот контракт не проверить: при отмене клиента (HttpClient с токеном)
         // ответ не доходит до клиента, он видит лишь TaskCanceledException — и при 502, и при

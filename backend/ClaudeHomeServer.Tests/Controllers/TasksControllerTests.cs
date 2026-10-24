@@ -671,7 +671,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var epic = await CreateTaskAsync(new { title = "эпик-сверка", role = "feature" });
         var epicId = epic.GetProperty("id").GetString();
         var step = await CreateTaskAsync(new { title = "шаг-сверка", featureId = epicId, role = "step" });
-        var stepId = step.GetProperty("id").GetString();
+        var stepId = step.GetProperty("id").GetString()!;
         // Задача → персона (без уровня задачи: боевой резолвер идёт через PersonaModel).
         _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!.PersonaId = persona.Id;
 
@@ -706,7 +706,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     {
         // (scenario, taskTier): "strong" → «слот задачи»; null → «дефолт места» (уровня задачи нет).
         yield return new object[] { "слот задачи", "strong" };
-        yield return new object[] { "дефолт места", null };
+        yield return new object[] { "дефолт места", null! };
     }
 
     [Theory]
@@ -723,7 +723,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var epic = await CreateTaskAsync(new { title = "эпик-" + scenario, role = "feature" });
         var epicId = epic.GetProperty("id").GetString();
         var step = await CreateTaskAsync(new { title = "шаг-" + scenario, featureId = epicId, role = "step" });
-        var stepId = step.GetProperty("id").GetString();
+        var stepId = step.GetProperty("id").GetString()!;
         var mgr = _factory.Services.GetRequiredService<TaskManager>();
         mgr.GetById(stepId)!.PersonaId = persona.Id;
         if (taskTier is not null) mgr.GetById(stepId)!.ModelTier = Enum.Parse<ModelTier>(taskTier, ignoreCase: true);
@@ -988,7 +988,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
             linkedSessionId = sessionId,
         });
-        var stepId = step.GetProperty("id").GetString();
+        var stepId = step.GetProperty("id").GetString()!;
 
         // Чат жив (в снимке) → sessionId события наружу.
         var live = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
@@ -1430,14 +1430,14 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // 503: подсистема Tasks выключена (FeatureProjector не зарегистрирован) — прямой сборкой контроллера.
     [Fact]
-    public void MergeFeature_ПодсистемаВыключена_503()
+    public async Task MergeFeature_ПодсистемаВыключена_503()
     {
         var controller = new TasksController(
             tasks: null!, broadcaster: null!, ai: null!, projects: null!,
             personas: null!, executor: null!, bindings: null!, sessions: null!, spheres: null!,
             noteSync: null, features: null);
 
-        var result = controller.MergeFeature("any").GetAwaiter().GetResult();
+        var result = await controller.MergeFeature("any");
 
         result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>()
             .Which.StatusCode.Should().Be(503);
@@ -3809,7 +3809,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         {
             title = "план",
             role = "plan",
-            planSteps = new object[] { null },
+            planSteps = new object[] { null! },
         });
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest,
             "элемент-null в planSteps — 400, а не 500 (NRE)");

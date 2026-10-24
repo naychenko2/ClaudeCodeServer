@@ -13,7 +13,7 @@ public class PluginCapabilityTests
     // Мутация (критерий): убираем OwnerId из PluginCallContext → этот тест падает
     // (конструкция/поле OwnerId исчезают, stub не получает владельца).
     [Fact]
-    public void IPluginCapability_ПередаётOwner()
+    public async Task IPluginCapability_ПередаётOwner()
     {
         var ctx = new PluginCallContext(
             OwnerId: "owner-a",
@@ -23,7 +23,7 @@ public class PluginCapabilityTests
 
         var handler = new StubCapability();
         var args = JsonDocument.Parse("{}").RootElement;
-        _ = handler.HandleAsync(ctx, "notes.read", args, ["notes:read"], CancellationToken.None).GetAwaiter().GetResult();
+        _ = await handler.HandleAsync(ctx, "notes.read", args, ["notes:read"], CancellationToken.None);
 
         handler.ReceivedOwner.Should().Be("owner-a", "контекст передаёт владельца (M8)");
         handler.ReceivedPluginId.Should().Be("local-a/pkg", "контекст передаёт id плагина (M8)");

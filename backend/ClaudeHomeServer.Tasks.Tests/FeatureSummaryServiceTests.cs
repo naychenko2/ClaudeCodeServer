@@ -222,6 +222,54 @@ public class FeatureSummaryServiceTests
         cached.EventCount.Should().Be(6);
     }
 
+    // Вердикт W4-R-ANB3, minor-2: паритет счётчика. Ручка резюме подаёт сервису облегчённый
+    // run (Project → SlimRun), eventsTotal страницы считается по полному (ProjectFull). Один и
+    // тот же набор задач обоими путями обязан дать то же число: Slim обнуляет тексты
+    // (Notes/Description), а не поля, по которым BuildEvents считает события. В наборе есть
+    // безролевая задача — самое рискование место SlimRun: мутация (SlimRun не копирует Unroled)
+    // краснит кейс.
+    [Fact]
+    public async Task EventCount_ПаритетСПолнымRun()
+    {
+        var now = new DateTime(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem { Id = "epic-p", Role = TaskRoles.Feature, Title = "фича-паритет", CreatedAt = now - TimeSpan.FromDays(3) };
+        var step = new TaskItem
+        {
+            Id = "p1", FeatureId = "epic-p", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            CreatedAt = now - TimeSpan.FromDays(2),
+            ClaudeStartedAt = now - TimeSpan.FromDays(2),
+            CompletedAt = now - TimeSpan.FromDays(1),
+            ResultMarkdown = "итог шага — текст, который Slim обнуляет",
+        };
+        var review = new TaskItem
+        {
+            Id = "pr1", FeatureId = "epic-p", Role = TaskRoles.Review, ReviewOf = ["p1"],
+            Status = TaskItemStatus.Done, CreatedAt = now - TimeSpan.FromDays(1),
+            CompletedAt = now - TimeSpan.FromHours(1),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Returned, Notes = "нет тестов" },
+        };
+        var unroled = new TaskItem
+        {
+            Id = "pu1", FeatureId = "epic-p", Status = TaskItemStatus.Done,
+            CreatedAt = now - TimeSpan.FromDays(1), CompletedAt = now - TimeSpan.FromHours(2),
+        };
+        var tasks = new List<TaskItem> { epic, step, review, unroled };
+        var snapshot = new List<FeatureIndexSession> { new FeatureIndexSession("chat-p", null, null, false) };
+
+        var full = FeatureProjector.BuildCore(epic, tasks, now, snapshot);
+        var slim = FeatureProjector.Build(epic, tasks, now, snapshot); // = SlimRun(BuildCore), как отдаёт Project
+        var service = MakeService(new StubRunner());
+
+        var res = await service.SummarizeAsync("owner", "epic-p", slim, false, CancellationToken.None);
+
+        // Хронология полного run: эпик created; шаг created/started/completed; ревью created/returned;
+        // безролевая created/completed — 8 событий.
+        var expected = FeatureProjector.BuildEvents(full, snapshot).Count;
+        expected.Should().Be(8, "лента страницы фичи по полному run");
+        res.EventCount.Should().Be(expected, "счётчик резюме = лента страницы (полный run)");
+    }
+
     // ─── Золотые проверки выжимки (разрез §4: «выжимку собирает одна чистая функция») ───────
     private static (string Digest, string Fingerprint) GoldenDigest()
     {

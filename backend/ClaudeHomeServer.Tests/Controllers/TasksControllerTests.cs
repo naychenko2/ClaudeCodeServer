@@ -2288,11 +2288,15 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         json.GetProperty("cached").GetBoolean().Should().BeFalse("первый вызов считает");
         json.GetProperty("text").GetString().Should().Be("резюме");
+        // W4-R-ANB3, minor-1: поле eventCount в контракте ручки — не только cached/text.
+        // Эпик только создан — в ленте ровно одно событие (created).
+        json.GetProperty("eventCount").GetInt32().Should().Be(1, "счётчик хронологии в ответе первой ручки");
 
         var second = await controller.FeatureSummary(epicId, false);
         var json2 = JsonSerializer.SerializeToElement(((OkObjectResult)second!).Value!,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
         json2.GetProperty("cached").GetBoolean().Should().BeTrue("тот же отпечаток — из кэша");
+        json2.GetProperty("eventCount").GetInt32().Should().Be(1, "кэш несёт тот же счётчик");
         stub.Calls.Should().Be(1, "повторный вызов не зовёт модель");
     }
 

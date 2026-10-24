@@ -200,6 +200,49 @@ public class PregateServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ChangedFilesOutsideEveryZone_AllSkipped_VerdictInconclusive()
+    {
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("tsc", whenChanged: ["frontend/"]), Check("build", whenChanged: ["backend/"]));
+
+        var verdict = await service.RunAsync(Request(["docs/заметка.md"]), CancellationToken.None);
+
+        verdict.Checks.Should().OnlyContain(c => c.Status == PregateStatus.Skipped);
+        verdict.Inconclusive.Should().Contain("проверять нечего");
+        launcher.Specs.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OneZoneHit_VerdictConclusive()
+    {
+        var service = Service(Launcher(_ => ("", 0)), Check("tsc", whenChanged: ["frontend/"]), Check("build", whenChanged: ["backend/"]));
+
+        var verdict = await service.RunAsync(Request(["backend/x.cs"]), CancellationToken.None);
+
+        verdict.Inconclusive.Should().BeNull();
+        verdict.IsGreen.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task UiProbeWithoutMeasurement_IsNotRun_AndMakesVerdictInconclusive()
+    {
+        var service = Service(Launcher(_ => ("", 0)),
+            Check("tsc"), new PregateCheckOptions { Name = "ui", Kind = PregateCheckOptions.KindUiProbe });
+
+        var verdict = await service.RunAsync(Request(["frontend/a.tsx"]), CancellationToken.None);
+
+        verdict.Checks.Single(c => c.Name == "ui").Status.Should().Be(PregateStatus.NotRun);
+        verdict.Inconclusive.Should().Contain("ui");
+    }
+
+    [Fact]
+    public void Verdict_RedWinsOverNotRun_AndEmptySetStaysConclusive()
+    {
+        new PregateVerdict([new("a", PregateStatus.Red, "x"), new("b", PregateStatus.NotRun, "y")]).Inconclusive.Should().BeNull();
+        new PregateVerdict([]).Inconclusive.Should().BeNull();
+    }
+
+    [Fact]
     public void Options_ReadOnlyFromPregateSection_NoBuiltInChecks()
     {
         PregateOptions.From(new ConfigurationBuilder().Build()).Checks.Should().BeEmpty("в коде зашитых проверок нет");

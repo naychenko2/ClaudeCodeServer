@@ -16,12 +16,24 @@ public static class PregateRules
 
     // Путь дерева, по которому гейт сверяет коммит при закрытии; null — гейт не касается. Касается, если роль
     // была ИЛИ стала step/rework и дерево было ИЛИ стало непустым: иначе «step→cut» или сброс дерева
-    // в том же запросе, что и закрытие, открывали бы обход
+    // в том же запросе, что и закрытие, открывали бы обход. Подмену одного дерева другим ловит
+    // TreeSwapRefusal — GatedPath возвращает «до»
     public static string? GatedPath(string? roleBefore, string? roleAfter, string? pathBefore, string? pathAfter)
     {
         if (!IsGatedRole(roleBefore) && !IsGatedRole(roleAfter)) return null;
         return !string.IsNullOrWhiteSpace(pathBefore) ? pathBefore
             : !string.IsNullOrWhiteSpace(pathAfter) ? pathAfter : null;
+    }
+
+    // Дерево «до» и «после» одного запроса не должно расходиться при закрытии: результат предгейта привязан к
+    // коммиту дерева задачи, а закрыться задача хочет уже с другим. null — расхождения нет
+    public static string? TreeSwapRefusal(string? pathBefore, string? pathAfter)
+    {
+        if (string.IsNullOrWhiteSpace(pathBefore) || string.IsNullOrWhiteSpace(pathAfter)) return null;
+        return string.Equals(pathBefore.TrimEnd('/', '\\'), pathAfter.TrimEnd('/', '\\'), StringComparison.Ordinal)
+            ? null
+            : "Предгейт: рабочее дерево шага меняется в том же запросе, что и закрытие — результат привязан к коммиту "
+                + "прежнего дерева. Смени дерево отдельным запросом, прогони pregate по нему и закрывай снова.";
     }
 
     private static bool IsGatedRole(string? role) => role is TaskRoles.Step or TaskRoles.Rework;

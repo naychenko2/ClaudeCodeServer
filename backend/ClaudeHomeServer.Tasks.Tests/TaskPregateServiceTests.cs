@@ -36,10 +36,11 @@ public class TaskPregateServiceTests : IDisposable
     private sealed class FakePregate : ITaskPregate
     {
         public PregateRequest? Request { get; private set; }
+        public IReadOnlyList<PregateCheckResult> Checks { get; set; } = [new PregateCheckResult("tsc", PregateStatus.Green)];
         public Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct)
         {
             Request = request;
-            return Task.FromResult(new PregateVerdict([new PregateCheckResult("tsc", PregateStatus.Green)]));
+            return Task.FromResult(new PregateVerdict(Checks));
         }
     }
 
@@ -125,5 +126,72 @@ public class TaskPregateServiceTests : IDisposable
         outcome.Status.Should().Be(TaskPregateStatus.NotRun);
         outcome.Text.Should().Contain("сменился");
         _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ВсеПроверкиПропущены_ИзмененияВнеЗон_ЗелёныйНеЗаписывается()
+    {
+        _reader.Changed = ["docs/заметка.md"];
+        _pregate.Checks =
+        [
+            new PregateCheckResult("tsc", PregateStatus.Skipped, "изменения не касаются проверки"),
+            new PregateCheckResult("build", PregateStatus.Skipped, "изменения не касаются проверки"),
+        ];
+
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.NotRun);
+        outcome.Text.Should().Contain("проверять нечего");
+        _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ПроверкаБезЗамера_ЗелёныйНеЗаписывается_ПроверкаЗелёная_НеСпасает()
+    {
+        _pregate.Checks =
+        [
+            new PregateCheckResult("tsc", PregateStatus.Green),
+            new PregateCheckResult("ui_probe 360/1280", PregateStatus.NotRun, "адрес стенда (Origin) не задан в конфиге Pregate"),
+        ];
+
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.NotRun);
+        outcome.Text.Should().Contain("ui_probe 360/1280").And.Contain("Origin");
+        _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task КрасноеПерекрываетБезЗамера_КрасныйЗаписывается()
+    {
+        _pregate.Checks =
+        [
+            new PregateCheckResult("tsc", PregateStatus.Red, "error TS2322"),
+            new PregateCheckResult("ui_probe", PregateStatus.NotRun, "Origin не задан"),
+        ];
+
+        (await Run()).Status.Should().Be(TaskPregateStatus.Recorded);
+        _tasks.GetById(_task.Id)!.Pregate!.Green.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ЧастьПроверокПропущенаАЧастьЗелёная_ЗелёныйЗаписывается()
+    {
+        _pregate.Checks =
+        [
+            new PregateCheckResult("tsc", PregateStatus.Skipped, "x"),
+            new PregateCheckResult("build", PregateStatus.Green),
+        ];
+
+        (await Run()).Status.Should().Be(TaskPregateStatus.Recorded);
+        _tasks.GetById(_task.Id)!.Pregate!.Green.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ПустойНаборПроверок_ЗелёныйКакПрежде()
+    {
+        _pregate.Checks = [];
+
+        (await Run()).Status.Should().Be(TaskPregateStatus.Recorded);
     }
 }

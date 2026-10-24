@@ -182,9 +182,9 @@ public sealed class PregateService : ITaskPregate
         CancellationToken limit)
     {
         if (_uiProbe is null)
-            return new PregateCheckResult(check.Name, PregateStatus.Skipped, "замер интерфейса недоступен");
+            return new PregateCheckResult(check.Name, PregateStatus.NotRun, "замер интерфейса недоступен");
         if (!Uri.TryCreate(check.Origin, UriKind.Absolute, out _))
-            return new PregateCheckResult(check.Name, PregateStatus.Skipped, "адрес стенда (Origin) не задан в конфиге Pregate");
+            return new PregateCheckResult(check.Name, PregateStatus.NotRun, "адрес стенда (Origin) не задан в конфиге Pregate");
         string directory;
         try { directory = SafePath.Join(request.WorkingDirectory, check.Directory); }
         catch (UnauthorizedAccessException)
@@ -197,8 +197,8 @@ public sealed class PregateService : ITaskPregate
             request.SessionId, check.Origin, check.Path, viewports, UiProbeReport.DefaultMinTargetPx, null, null, null),
             progress: null, limit);
         if (probe.Cancelled || probe.TimedOut) return null;
-        // Нет стенда — причина вне кода шага: пропуск, а не красное
-        if (probe.Refusal is { } refusal) return new PregateCheckResult(check.Name, PregateStatus.Skipped, refusal);
+        // Нет стенда — причина вне кода шага: не красное, но и не замер (NotRun)
+        if (probe.Refusal is { } refusal) return new PregateCheckResult(check.Name, PregateStatus.NotRun, refusal);
         if (probe.Json is not { } json)
             return new PregateCheckResult(check.Name, PregateStatus.Red, probe.Failure ?? "замер не состоялся");
 

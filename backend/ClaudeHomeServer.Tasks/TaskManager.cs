@@ -873,7 +873,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         if (_pregateGateOn && effective.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done
             && PregateRules.GatedPath(task.Role, effRole, task.WorktreePath, effWorktree) is { } gatedPath)
         {
-            var refusal = PregateRules.Refusal(task.Pregate, _heads!.Head(gatedPath));
+            var refusal = PregateRules.TreeSwapRefusal(task.WorktreePath, effWorktree)
+                ?? PregateRules.Refusal(task.Pregate, _heads!.Head(gatedPath));
             if (refusal is not null) throw new InvalidOperationException(refusal);
         }
         // Сброс исчерпанной серии красных — решение постановщика или человека, не исполнителя шага

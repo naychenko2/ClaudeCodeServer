@@ -142,6 +142,40 @@ public class TaskManagerPregateTests : IDisposable
     }
 
     [Fact]
+    public void ПодменаДереваВТомЖеЗапросеЧтоЗакрытие_Отказ_ДажеПриТомЖеSha()
+    {
+        var task = Step();
+        _sut.RecordPregate(task.Id, Sha1, true, "", null);
+
+        var act = () => _sut.Update(task.Id,
+            new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: "/tmp/wt-other"), isAgentCall: true);
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("дерево шага меняется");
+        var after = _sut.GetById(task.Id)!;
+        after.Status.Should().NotBe(TaskItemStatus.Done);
+        after.WorktreePath.Should().Be(Wt);
+    }
+
+    [Fact]
+    public void ТоЖеДеревоСКосойЧертой_НеПодмена()
+    {
+        var task = Step();
+        _sut.RecordPregate(task.Id, Sha1, true, "", null);
+
+        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: Wt + "/"), isAgentCall: true)!
+            .Status.Should().Be(TaskItemStatus.Done);
+    }
+
+    [Fact]
+    public void TreeSwapRefusal_ГраничныеСлучаи()
+    {
+        PregateRules.TreeSwapRefusal(Wt, "/tmp/other").Should().NotBeNull();
+        PregateRules.TreeSwapRefusal(Wt, Wt).Should().BeNull();
+        PregateRules.TreeSwapRefusal(Wt, null).Should().BeNull("дерево не меняют");
+        PregateRules.TreeSwapRefusal(null, Wt).Should().BeNull("у задачи не было дерева: записи предгейта нет, закрыть нельзя и так");
+    }
+
+    [Fact]
     public void ГейтПоРолиДоИПосле()
     {
         PregateRules.GatedPath(TaskRoles.Step, TaskRoles.Cut, Wt, Wt).Should().Be(Wt, "роль была step");

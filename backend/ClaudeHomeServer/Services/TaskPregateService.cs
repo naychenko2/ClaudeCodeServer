@@ -63,6 +63,9 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         if (!string.Equals(heads.Head(task.WorktreePath!), sha, StringComparison.OrdinalIgnoreCase))
             return new(TaskPregateStatus.NotRun, "Коммит дерева сменился во время прогона — результат не записан, прогони предгейт снова.");
 
+        if (verdict.Inconclusive is { } inconclusive)
+            return new(TaskPregateStatus.NotRun, "Предгейт не дал вердикта, результат не записан — " + inconclusive + ".");
+
         var red = verdict.Checks.Where(c => c.Status == PregateStatus.Red).ToList();
         var summary = string.Join("\n", red.Select(c => $"✗ {c.Name}: {c.Detail}"));
         var redKey = red.Count == 0 ? null : string.Join("|", red.Select(c => c.Name).Order(StringComparer.Ordinal));

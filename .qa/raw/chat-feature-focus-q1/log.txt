@@ -1,0 +1,171 @@
+Стенд: http://127.0.0.1:5555   2026-10-24T23:40:06Z
+
+===== Вход владельца =====
+JWT получен, длина 431
+Фич-флаг features-overview (нужен для UI-регрессии):
+[flag_features_overview] PUT /api/feature-flags/features-overview caller= → HTTP 200
+      тело: {"values":{"workspace-destructive":false,"change-dossiers-recall":false,"spheres":false,"character-smart-photos":false,"character-face-swap":false,"local-model-stats":false,"turn-plan-feature-mode":false,"plugins-mvp":false,"plugins-build-yourself":false,"features-overview":true,"turn-auto-resume":false,"prompt-cache":false}}
+
+===== Проект и чаты =====
+projectId=1bbc3cbf-1765-4bd6-939e-2096214afd5a
+chatA (привяжется к фиче A)=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf
+chatFresh (свободный)=33e27bf4-c55d-4fb3-b30b-547a3b252f9f
+chatLegacy (две фичи)=31e4c770-e80f-4f74-962c-5676c5f9e2b2
+
+===== Фичи-эпики =====
+epicA=1b1c158c-383b-4121-9262-42b7a8e7e379 (SourceSessionId=chatA)
+epicB=4a0dd022-16b5-473b-bdd2-6294c36d7a16 (без чата — свободна)
+epicC=8c23d10c-dc05-4221-8898-6007d2c82a6b (свободна)
+epicD=c243ddd8-f63f-4280-8397-0bc22e123044 (легаси-чат)
+epicE=408e0ad0-80f1-49c8-9404-32d70603d60f (легаси-чат)
+Привязка чатов (GET /api/tasks/features?sessionId=…):
+  chat=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf → [{"featureId":"1b1c158c-383b-4121-9262-42b7a8e7e379","title":null,"kind":null}]
+  chat=33e27bf4-c55d-4fb3-b30b-547a3b252f9f → []
+  chat=31e4c770-e80f-4f74-962c-5676c5f9e2b2 → [{"featureId":"c243ddd8-f63f-4280-8397-0bc22e123044","title":null,"kind":null},{"featureId":"408e0ad0-80f1-49c8-9404-32d70603d60f","title":null,"kind":null}]
+
+===== Сценарий 1: чат фичи A создаёт задачу фичи B (REST) → 409 chat_feature_bound =====
+счёт задач до: 5
+[s1_rest_create] POST /api/tasks caller=b5bc8dd8 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+счёт задач после: 5
+задач с названием «шаг B из чата A»: 0
+OK счёт не изменился
+code=chat_feature_bound
+текст отказа: Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+
+===== Сценарий 1b: тот же отказ через MCP (tasks_create) =====
+счёт задач до: 5
+[s1_mcp_create] MCP tools/call tasks_create chat=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf → HTTP 200 isError=true
+      текст: Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+счёт задач после: 5
+OK счёт не изменился
+
+===== Сценарий 2: тот же чат создаёт новый эпик (REST) → 409 =====
+счёт задач до: 5
+[s2_rest_epic] POST /api/tasks caller=b5bc8dd8 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+[s2_rest_epic_tail] POST /api/tasks caller=b5bc8dd8 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+[s2_rest_epic_head] POST /api/tasks caller=b5bc8dd8 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+счёт задач после: 5
+OK счёт не изменился
+
+===== Сценарий 2b: тот же чат создаёт новый эпик (MCP) → Deny =====
+счёт задач до: 5
+[s2_mcp_epic] MCP tools/call tasks_create chat=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf → HTTP 200 isError=true
+      текст: Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+[s2_mcp_epic_tail] MCP tools/call tasks_create chat=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf → HTTP 200 isError=true
+      текст: Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+[s2_mcp_epic_head] MCP tools/call tasks_create chat=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf → HTTP 200 isError=true
+      текст: Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+счёт задач после: 5
+OK счёт не изменился
+
+===== Сценарий 3: свежий чат — эпик, задача своей фичи, задача чужой фичи =====
+[s3_epic] POST /api/tasks caller=33e27bf4 → HTTP 200
+      тело: {"id":"b1d710b4-c49d-49bd-ad5a-efb89688d87d","projectId":null,"ownerId":"ed0e6a3d-630e-4930-a373-fa1c0aa58f52","title":"Фича C из свежего чата","description":"","status":"todo","columnId":null,"priority":"medium","dueDate":null,"dueTime":null,"reminderMinutes":null,"reminderSentAt":null,"assignee":"me","recurrence":null,"seriesId":null,"linkedSessionId":null,"personaId":null,"executionExpiresAfterMinutes":1440,"modelTier":null,"worktreePath":null,"worktreeBranch":null,"claudeSta
+эпик, заведённый свежим чатом: b1d710b4-c49d-49bd-ad5a-efb89688d87d (это и есть «своя» фича чата)
+[s3_same_feature] POST /api/tasks caller=33e27bf4 → HTTP 200
+      тело: {"id":"d5bda335-a921-4843-8626-3e1b6b1cae44","projectId":null,"ownerId":"ed0e6a3d-630e-4930-a373-fa1c0aa58f52","title":"шаг C из свежего чата","description":"","status":"todo","columnId":null,"priority":"medium","dueDate":null,"dueTime":null,"reminderMinutes":null,"reminderSentAt":null,"assignee":"me","recurrence":null,"seriesId":null,"linkedSessionId":null,"personaId":null,"executionExpiresAfterMinutes":1440,"modelTier":null,"worktreePath":null,"worktreeBranch":null,"claudeStart
+[s3_other_feature] POST /api/tasks caller=33e27bf4 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича C из свежего чата». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+[s3_same_feature_mcp] MCP tools/call tasks_create chat=33e27bf4-c55d-4fb3-b30b-547a3b252f9f → HTTP 200 isError=нет-поля
+      текст: {"id":"065caecc-8aef-4abd-bdf3-b03a2106fa0f","projectId":"1bbc3cbf-1765-4bd6-939e-2096214afd5a","ownerId":"ed0e6a3d-630e-4930-a373-fa1c0aa58f52","title":"шаг C из свежего чата (MCP)","description":"","status":"todo","columnId":null,"priority":"medium","dueDate":null,"dueTime":null,"reminderMinutes":null,"reminderSentAt":null,"assignee":"me","recurrence":null,"seriesId":null,"linkedSessionId":null,"personaId":null,"executionExpiresAfterMinutes":1440,"modelTier":null,"worktreePath"
+[s3_other_feature_mcp] MCP tools/call tasks_create chat=33e27bf4-c55d-4fb3-b30b-547a3b252f9f → HTTP 200 isError=true
+      текст: Этот чат уже ведёт фичу «Фича C из свежего чата». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+привязка свежего чата после: [{"featureId":"b1d710b4-c49d-49bd-ad5a-efb89688d87d","title":null,"kind":null}]
+
+===== Сценарий 4: легаси-чат с двумя фичами (D и E) =====
+[s4_feature_d] POST /api/tasks caller=31e4c770 → HTTP 200
+      тело: {"id":"d9b53835-19d7-4737-bf3a-14d96b4ae149","projectId":null,"ownerId":"ed0e6a3d-630e-4930-a373-fa1c0aa58f52","title":"шаг D из легаси","description":"","status":"todo","columnId":null,"priority":"medium","dueDate":null,"dueTime":null,"reminderMinutes":null,"reminderSentAt":null,"assignee":"me","recurrence":null,"seriesId":null,"linkedSessionId":null,"personaId":null,"executionExpiresAfterMinutes":1440,"modelTier":null,"worktreePath":null,"worktreeBranch":null,"claudeStartedAt":null,
+[s4_feature_e] POST /api/tasks caller=31e4c770 → HTTP 200
+      тело: {"id":"e05ec0c2-7c93-44a8-8de5-30fa1480f205","projectId":null,"ownerId":"ed0e6a3d-630e-4930-a373-fa1c0aa58f52","title":"шаг E из легаси","description":"","status":"todo","columnId":null,"priority":"medium","dueDate":null,"dueTime":null,"reminderMinutes":null,"reminderSentAt":null,"assignee":"me","recurrence":null,"seriesId":null,"linkedSessionId":null,"personaId":null,"executionExpiresAfterMinutes":1440,"modelTier":null,"worktreePath":null,"worktreeBranch":null,"claudeStartedAt":null,
+[s4_new_epic] POST /api/tasks caller=31e4c770 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича D». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+[s4_feature_d_mcp] MCP tools/call tasks_create chat=31e4c770-e80f-4f74-962c-5676c5f9e2b2 → HTTP 200 isError=нет-поля
+      текст: {"id":"96eaac8d-2a76-40eb-9ecc-a6a0d99de62c","projectId":"1bbc3cbf-1765-4bd6-939e-2096214afd5a","ownerId":"ed0e6a3d-630e-4930-a373-fa1c0aa58f52","title":"шаг D из легаси (MCP)","description":"","status":"todo","columnId":null,"priority":"medium","dueDate":null,"dueTime":null,"reminderMinutes":null,"reminderSentAt":null,"assignee":"me","recurrence":null,"seriesId":null,"linkedSessionId":null,"personaId":null,"executionExpiresAfterMinutes":1440,"modelTier":null,"worktreePath":null,"work
+[s4_feature_e_mcp] MCP tools/call tasks_create chat=31e4c770-e80f-4f74-962c-5676c5f9e2b2 → HTTP 200 isError=нет-поля
+      текст: {"id":"b496a0be-998d-4eb9-b2a5-a0355501fef0","projectId":"1bbc3cbf-1765-4bd6-939e-2096214afd5a","ownerId":"ed0e6a3d-630e-4930-a373-fa1c0aa58f52","title":"шаг E из легаси (MCP)","description":"","status":"todo","columnId":null,"priority":"medium","dueDate":null,"dueTime":null,"reminderMinutes":null,"reminderSentAt":null,"assignee":"me","recurrence":null,"seriesId":null,"linkedSessionId":null,"personaId":null,"executionExpiresAfterMinutes":1440,"modelTier":null,"worktreePath":null,"work
+[s4_new_epic_mcp] MCP tools/call tasks_create chat=31e4c770-e80f-4f74-962c-5676c5f9e2b2 → HTTP 200 isError=true
+      текст: Этот чат уже ведёт фичу «Фича D». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+привязка легаси-чата: [{"featureId":"c243ddd8-f63f-4280-8397-0bc22e123044","title":null,"kind":null},{"featureId":"408e0ad0-80f1-49c8-9404-32d70603d60f","title":null,"kind":null}]
+
+===== Сценарий 4b: кнопка в UI (без заголовка вызывающего) — гард пропускает =====
+[s4b_ui_button] POST /api/tasks caller= → HTTP 200
+      тело: {"id":"329f07fb-1cda-42f8-8723-4d05d570b8bd","projectId":null,"ownerId":"ed0e6a3d-630e-4930-a373-fa1c0aa58f52","title":"шаг B по кнопке UI","description":"","status":"todo","columnId":null,"priority":"medium","dueDate":null,"dueTime":null,"reminderMinutes":null,"reminderSentAt":null,"assignee":"me","recurrence":null,"seriesId":null,"linkedSessionId":null,"personaId":null,"executionExpiresAfterMinutes":1440,"modelTier":null,"worktreePath":null,"worktreeBranch":null,"claudeStartedAt":nu
+
+===== Сценарий 5: запуск исполнителя задачи чужой фичи из чата фичи A =====
+stepB=023b2f15-95fe-4794-a802-e12a6759f0a8 (фича B)
+[s5_rest_execute] POST /api/tasks/023b2f15-95fe-4794-a802-e12a6759f0a8/execute caller=b5bc8dd8 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+задача после отказа: {"executorLaunchedBySessionId":null,"executorLaunchedByPersonaId":null,"status":"todo","linkedSessionId":null}
+[s5_mcp_execute] MCP tools/call tasks_run_executor chat=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf → HTTP 200 isError=true
+      текст: Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+задача после MCP-отказа: {"executorLaunchedBySessionId":null,"status":"todo","linkedSessionId":null}
+
+===== Сценарий 5b: смена featureId у задачи из чата фичи A → 409, фича не меняется =====
+free=ff0f7be3-c3e0-4f09-a434-9bbab2c50435
+[s5b_rest_update] PUT /api/tasks/ff0f7be3-c3e0-4f09-a434-9bbab2c50435 caller=b5bc8dd8 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+featureId задачи после отказа: {"featureId":null,"role":null}
+[s5b_mcp_update] MCP tools/call tasks_update chat=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf → HTTP 200 isError=true
+      текст: Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+featureId задачи после MCP-отказа: {"featureId":null,"role":null}
+
+===== Сценарий 7 (доп.): ось «исполнитель» — чат-исполнитель задачи фичи A =====
+stepA=92c51453-a794-4e84-9b39-1afe7000ab72 (фича A)
+[s7_rest_execute_no_caller] POST /api/tasks/92c51453-a794-4e84-9b39-1afe7000ab72/execute caller= → HTTP 200
+      тело: {"id":"92c51453-a794-4e84-9b39-1afe7000ab72","projectId":null,"ownerId":"ed0e6a3d-630e-4930-a373-fa1c0aa58f52","title":"шаг A для исполнителя","description":"","status":"inProgress","columnId":null,"priority":"medium","dueDate":null,"dueTime":null,"reminderMinutes":null,"reminderSentAt":null,"assignee":"me","recurrence":null,"seriesId":null,"linkedSessionId":"af9ff1a5-b765-43d3-b2f7-87ec84178990","personaId":null,"executionExpiresAfterMinutes":1440,"modelTier":null,"worktreePath
+чат-исполнитель: af9ff1a5-b765-43d3-b2f7-87ec84178990
+привязка чата-исполнителя: [{"featureId":"1b1c158c-383b-4121-9262-42b7a8e7e379","title":null,"kind":null}]
+[s7_rest_create_from_executor] POST /api/tasks caller=af9ff1a5 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+
+===== Сценарий 6: текст отказа REST и MCP — побайтно =====
+[s6_rest] POST /api/tasks caller=b5bc8dd8 → HTTP 409
+      тело: {"error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","code":"chat_feature_bound"}
+[s6_mcp] MCP tools/call tasks_create chat=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf → HTTP 200 isError=true
+      текст: Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.
+REST: [Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.]
+MCP : [Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.]
+OK тексты совпадают побайтно
+длины: REST=124 MCP=124
+sha256:
+0c977ae8806e79134fa4eb132fd7d25e1059e5c2ced0b91ba232834eee14d5da  /home/an/Sources/ClaudeCodeServer-chat-feature-focus/.qa/raw/chat-feature-focus-q1/deny-text-rest.txt
+0c977ae8806e79134fa4eb132fd7d25e1059e5c2ced0b91ba232834eee14d5da  /home/an/Sources/ClaudeCodeServer-chat-feature-focus/.qa/raw/chat-feature-focus-q1/deny-text-mcp.txt
+
+===== Итог по кодам =====
+flag_features_overview → {"code":null,"error":null,"isError":null,"text":null}
+s1_mcp_create → {"code":null,"error":null,"isError":true,"text":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика."}
+s1_rest_create → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s2_mcp_epic_head → {"code":null,"error":null,"isError":true,"text":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика."}
+s2_mcp_epic → {"code":null,"error":null,"isError":true,"text":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика."}
+s2_mcp_epic_tail → {"code":null,"error":null,"isError":true,"text":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика."}
+s2_rest_epic_head → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s2_rest_epic → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s2_rest_epic_tail → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s3_epic → {"code":null,"error":null,"isError":null,"text":null}
+s3_other_feature → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича C из свежего чата». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s3_other_feature_mcp → {"code":null,"error":null,"isError":true,"text":"Этот чат уже ведёт фичу «Фича C из свежего чата». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика."}
+s3_same_feature → {"code":null,"error":null,"isError":null,"text":null}
+s3_same_feature_mcp → {"code":null,"error":null,"isError":null,"text":"{\"id\":\"065caecc-8aef-4abd-bdf3-b03a2106fa0f\",\"projectId\":\"1bbc3cbf-1765-4bd6-939e-2096214afd5a\",\"ownerId\":\"ed0e6a3d-630e-4930-a373-fa1c0aa58f52\",\"title\":\"шаг C из свежего чата (MCP)\",\"description\":\"\",\"status\":\"todo\",\"columnId\":nu
+s4b_ui_button → {"code":null,"error":null,"isError":null,"text":null}
+s4_feature_d → {"code":null,"error":null,"isError":null,"text":null}
+s4_feature_d_mcp → {"code":null,"error":null,"isError":null,"text":"{\"id\":\"96eaac8d-2a76-40eb-9ecc-a6a0d99de62c\",\"projectId\":\"1bbc3cbf-1765-4bd6-939e-2096214afd5a\",\"ownerId\":\"ed0e6a3d-630e-4930-a373-fa1c0aa58f52\",\"title\":\"шаг D из легаси (MCP)\",\"description\":\"\",\"status\":\"todo\",\"columnId\":null,\"priori
+s4_feature_e → {"code":null,"error":null,"isError":null,"text":null}
+s4_feature_e_mcp → {"code":null,"error":null,"isError":null,"text":"{\"id\":\"b496a0be-998d-4eb9-b2a5-a0355501fef0\",\"projectId\":\"1bbc3cbf-1765-4bd6-939e-2096214afd5a\",\"ownerId\":\"ed0e6a3d-630e-4930-a373-fa1c0aa58f52\",\"title\":\"шаг E из легаси (MCP)\",\"description\":\"\",\"status\":\"todo\",\"columnId\":null,\"priori
+s4_new_epic → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича D». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s4_new_epic_mcp → {"code":null,"error":null,"isError":true,"text":"Этот чат уже ведёт фичу «Фича D». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика."}
+s5b_mcp_update → {"code":null,"error":null,"isError":true,"text":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика."}
+s5b_rest_update → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s5_mcp_execute → {"code":null,"error":null,"isError":true,"text":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика."}
+s5_rest_execute → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s6_mcp → {"code":null,"error":null,"isError":true,"text":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика."}
+s6_rest → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s7_rest_create_from_executor → {"code":"chat_feature_bound","error":"Этот чат уже ведёт фичу «Фича A». Одна фича — один чат: задачи другой фичи заводите из отдельного чата или из чата её эпика.","isError":null,"text":null}
+s7_rest_execute_no_caller → {"code":null,"error":null,"isError":null,"text":null}
+
+Готово. Лог: /home/an/Sources/ClaudeCodeServer-chat-feature-focus/.qa/raw/chat-feature-focus-q1/log.txt
+Идентификаторы для UI-части: chatA=b5bc8dd8-8859-4ab3-97a4-35041a5af9bf chatFresh=33e27bf4-c55d-4fb3-b30b-547a3b252f9f chatLegacy=31e4c770-e80f-4f74-962c-5676c5f9e2b2 projectId=1bbc3cbf-1765-4bd6-939e-2096214afd5a
+Фичи: A=1b1c158c-383b-4121-9262-42b7a8e7e379 B=4a0dd022-16b5-473b-bdd2-6294c36d7a16 C=8c23d10c-dc05-4221-8898-6007d2c82a6b D=c243ddd8-f63f-4280-8397-0bc22e123044 E=408e0ad0-80f1-49c8-9404-32d70603d60f

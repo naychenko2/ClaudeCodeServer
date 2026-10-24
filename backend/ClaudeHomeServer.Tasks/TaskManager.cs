@@ -1050,15 +1050,15 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // Записывает результат предгейта шага: sha — коммит, по которому гнали проверки; redKey —
     // отпечаток причины красного (имена красных проверок). На втором красном подряд по той же
     // причине поднимает PregateEscalated. null — задачи нет
-    public PregateRecord? RecordPregate(string id, string sha, bool green, string summary, string? redKey)
+    public PregateRecord? RecordPregate(string id, string sha, bool green, string summary, string? redKey, bool nothingApplicable = false)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
-        var record = PregateRules.Next(task.Pregate, sha, green, summary, redKey, DateTime.UtcNow);
+        var record = PregateRules.Next(task.Pregate, sha, green, summary, redKey, DateTime.UtcNow, nothingApplicable);
         task.Pregate = record;
         task.UpdatedAt = DateTime.UtcNow;
         ScheduleSave();
-        if (!green && record.RedStreak == PregateRules.MaxRedStreak)
+        if (!green && !nothingApplicable && record.RedStreak == PregateRules.MaxRedStreak)
             PregateEscalated?.Invoke(task, $"Предгейт шага «{task.Title}» (id: {task.Id}) красный второй раз подряд по той же причине "
                 + $"(коммит {(sha.Length > 8 ? sha[..8] : sha)}). Третьего круга нет — нужно решение постановщика.\n{summary}");
         return record;

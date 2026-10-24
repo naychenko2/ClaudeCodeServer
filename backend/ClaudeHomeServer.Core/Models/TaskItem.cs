@@ -208,7 +208,10 @@ public record AcceptanceEvidence(string CriterionId, string How, string Result);
 // Результат предгейта: Sha — коммит дерева, по которому гнали проверки; Green — вердикт; Summary — вывод
 // красных проверок (для зелёного пусто); RedKey — «отпечаток» причины красного (имена красных
 // проверок), RedStreak — сколько красных подряд по одному RedKey (зелёный обнуляет).
-public record PregateRecord(string Sha, bool Green, string Summary, DateTime At, int RedStreak = 0, string? RedKey = null);
+// NothingApplicable — отдельный вердикт «ни одна проверка не применима» (Green при этом false: «зелёным» он не считается,
+// ни одна проверка не выполнена); закрытие шага он разрешает.
+public record PregateRecord(string Sha, bool Green, string Summary, DateTime At, int RedStreak = 0, string? RedKey = null,
+    bool NothingApplicable = false);
 
 public class TaskSubtask
 {

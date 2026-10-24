@@ -69,15 +69,16 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         var red = verdict.Checks.Where(c => c.Status == PregateStatus.Red).ToList();
         var summary = string.Join("\n", red.Select(c => $"✗ {c.Name}: {c.Detail}"));
         var redKey = red.Count == 0 ? null : string.Join("|", red.Select(c => c.Name).Order(StringComparer.Ordinal));
-        if (verdict.NothingApplicable) summary = "NotRun: изменения не касаются ни одной проверки";
-        var record = tasks.RecordPregate(task.Id, sha, verdict.IsGreen, summary, redKey);
-        return new(TaskPregateStatus.Recorded, Format(verdict, sha, record), record);
+        var nothing = verdict.NothingApplicable || verdict.Checks.Count == 0;
+        if (nothing) summary = "NotRun: изменения не касаются ни одной проверки";
+        var record = tasks.RecordPregate(task.Id, sha, verdict.IsGreen && !nothing, summary, redKey, nothing);
+        return new(TaskPregateStatus.Recorded, Format(verdict, sha, record, nothing), record);
     }
 
-    private static string Format(PregateVerdict verdict, string sha, PregateRecord? record)
+    private static string Format(PregateVerdict verdict, string sha, PregateRecord? record, bool nothing)
     {
         var text = new StringBuilder();
-        text.Append(verdict.NothingApplicable ? "Предгейт NotRun (проверять нечего, закрытие разрешено)"
+        text.Append(nothing ? "Предгейт NotRun (проверять нечего, закрытие разрешено)"
                 : verdict.IsGreen ? "Предгейт ЗЕЛЁНЫЙ" : "Предгейт КРАСНЫЙ").Append(" по коммиту ")
             .Append(sha.Length > 8 ? sha[..8] : sha).Append('\n');
         foreach (var c in verdict.Checks)

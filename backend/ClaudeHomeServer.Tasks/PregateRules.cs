@@ -50,7 +50,7 @@ public static class PregateRules
         if (!string.Equals(record.Sha, head, StringComparison.OrdinalIgnoreCase))
             return $"Предгейт устарел: он прогнан по коммиту {Short(record.Sha)}, а дерево сейчас на {Short(head)}. "
                 + "Закоммить правки, прогони pregate заново и закрывай снова.";
-        if (record.Green) return null;
+        if (record.Green || record.NothingApplicable) return null;
         var text = $"Предгейт красный по коммиту {Short(record.Sha)}:\n{record.Summary}";
         return record.RedStreak >= MaxRedStreak
             ? text + $"\nВторой красный подряд по той же причине: докладывай постановщику (chats_report_up, blocker: true), "
@@ -61,16 +61,17 @@ public static class PregateRules
     // Новая запись по вердикту. Красный по той же причине (тот же отпечаток), что и предыдущий красный,
     // наращивает серию; зелёный и красный по новой причине начинают её заново
     public static PregateRecord Next(PregateRecord? previous, string sha, bool green, string summary,
-        string? redKey, DateTime now)
+        string? redKey, DateTime now, bool nothingApplicable = false)
     {
+        if (nothingApplicable) return new PregateRecord(sha, false, summary, now, NothingApplicable: true);
         if (green) return new PregateRecord(sha, true, summary, now);
-        var streak = previous is { Green: false } && previous.RedKey == redKey ? previous.RedStreak + 1 : 1;
+        var streak = previous is { Green: false, NothingApplicable: false } && previous.RedKey == redKey ? previous.RedStreak + 1 : 1;
         return new PregateRecord(sha, false, summary, now, streak, redKey);
     }
 
     // Предгейт больше не принимается: серия исчерпана — решение за постановщиком
     public static bool Exhausted(PregateRecord? record) =>
-        record is { Green: false } && record.RedStreak >= MaxRedStreak;
+        record is { Green: false, NothingApplicable: false } && record.RedStreak >= MaxRedStreak;
 
     public const string UiRoutesMarker = "UI-маршруты:";
 

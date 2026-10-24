@@ -87,6 +87,29 @@ public class TaskManagerPregateTests : IDisposable
     }
 
     [Fact]
+    public void Шаг_NothingApplicableБезGreen_Закрывается()
+    {
+        var task = Step();
+        var record = _sut.RecordPregate(task.Id, Sha1, false, "NotRun: изменения не касаются ни одной проверки", null, nothingApplicable: true)!;
+
+        record.Green.Should().BeFalse();
+        record.NothingApplicable.Should().BeTrue();
+        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
+    }
+
+    [Fact]
+    public void Шаг_NothingApplicableПоСтаромуSha_ОтказУстарел()
+    {
+        var task = Step();
+        _sut.RecordPregate(task.Id, Sha1, false, "NotRun", null, nothingApplicable: true);
+        _head.Sha = Sha2;
+
+        var act = () => _sut.Update(task.Id, Close(), isAgentCall: true);
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("устарел");
+    }
+
+    [Fact]
     public void Шаг_ЗелёныйПоСтаромуSha_ОтказУстарел()
     {
         var task = Step();

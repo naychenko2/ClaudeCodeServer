@@ -144,6 +144,8 @@ public class TaskPregateServiceTests : IDisposable
         outcome.Text.Should().Contain("NotRun");
         var record = _tasks.GetById(_task.Id)!.Pregate!;
         record.Summary.Should().Contain("NotRun");
+        record.NothingApplicable.Should().BeTrue();
+        record.Green.Should().BeFalse();
         _tasks.Update(_task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done), isAgentCall: true)!
             .Status.Should().Be(TaskItemStatus.Done);
     }
@@ -191,11 +193,14 @@ public class TaskPregateServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ПустойНаборПроверок_ЗелёныйКакПрежде()
+    public async Task ПустойНаборПроверок_NothingApplicableБезGreen()
     {
         _pregate.Checks = [];
 
         (await Run()).Status.Should().Be(TaskPregateStatus.Recorded);
+        var record = _tasks.GetById(_task.Id)!.Pregate!;
+        record.Green.Should().BeFalse();
+        record.NothingApplicable.Should().BeTrue();
     }
 
     [Fact]

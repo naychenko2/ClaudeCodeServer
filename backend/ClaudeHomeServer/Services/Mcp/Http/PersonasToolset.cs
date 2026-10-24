@@ -40,15 +40,8 @@ public sealed partial class PersonasToolset(
     KnowledgeService knowledge,
     ClaudeHomeServer.Services.Mcp.McpRegistry mcpRegistry,
     ClaudeHomeServer.Services.Mcp.McpStatusStore mcpStatus,
-    SessionManager sessions,
-    IConfiguration config) : IMcpParameterizedToolset
+    SessionManager sessions) : IMcpParameterizedToolset
 {
-    // Тумблер LiveTTS инстанса: от него зависит описание voice в схеме. Это свойство
-    // КОНФИГУРАЦИИ, а не хода — в пределах процесса tools/list не меняется. Обещание держится
-    // на правиле эксплуатации: тумблер меняется ТОЛЬКО с перезапуском сервера (решение по
-    // ревью шага 9). Правка конфига на лету сменила бы текст схемы посреди жизни CLI
-    private bool LiveTts => Services.Tts.TtsVoiceCatalog.LiveTtsEnabled(config);
-
     // Имя сервера = первый сегмент маршрута POST /mcp/personas/{sessionId}
     public const string ServerName = McpEndpoints.PersonasName;
 
@@ -81,7 +74,7 @@ public sealed partial class PersonasToolset(
         // Порядок групп — как в stdio-ветке (index.js): ядро, manage-create/update,
         // привязки (+manage-набор внутри), knowledge_search, automation, хвост manage, mentions
         var tools = new List<McpToolSchema>(CoreTools(inProject));
-        if (manage) tools.AddRange(ManageHeadTools(inProject, LiveTts));
+        if (manage) tools.AddRange(ManageHeadTools(inProject));
         tools.AddRange(BindingsReadTools);
         if (manage) tools.AddRange(ManageBindingsTools);
         tools.Add(KnowledgeSearchTool);
@@ -194,7 +187,7 @@ public sealed partial class PersonasToolset(
                     return Deny(updateDenied);
                 // Голос проверяем ДО любых правок: отказ не должен оставлять персону полуизменённой
                 var voicePatch = VoicePatch(arguments, current);
-                if (voicePatch is not null && PersonasCrudService.VoiceError(voicePatch, LiveTts) is { } voiceError)
+                if (voicePatch is not null && PersonasCrudService.VoiceError(voicePatch) is { } voiceError)
                     return Deny(voiceError);
                 // Привязки — отдельным путём (как stdio): себе менять нельзя
                 if (arguments.ContainsKey("bindings"))

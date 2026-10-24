@@ -27,10 +27,6 @@ public static class TtsVoiceCatalog
     public const string General = "general";
     public const string LiveTts = "livetts";
 
-    // Тумблер модели LiveTTS: фича включается на аккаунте Яндекса отдельно, и на облаке без
-    // неё каждый голос LiveTTS получит 403. По умолчанию выключен
-    public const string LiveTtsEnabledKey = "Yandex:SpeechKit:LiveTts:Enabled";
-
     // Пол — для группировки списка в форме: имена вроде madi_ru человеку ничего не говорят
     public enum Gender { Female, Male }
 
@@ -119,24 +115,9 @@ public static class TtsVoiceCatalog
         new("vasily", "Василий · живой, убеждающий", Gender.Male, RolesFor("vasily"), LiveTts),
     ];
 
-    // ПОЛНЫЙ каталог, от тумблера LiveTTS не зависит: 25 различимых голосов, а не 26 записей
-    // белого списка — madirus и madi_ru это одно и то же, и в списке им место одно. Показывать
-    // человеку — Visible(флаг)
+    // Полный каталог: 25 различимых голосов, а не 26 записей белого списка — madirus и
+    // madi_ru это одно и то же, и в списке им место одно
     public static IReadOnlyList<VoiceInfo> All => Catalog;
-
-    // Единственная точка чтения тумблера LiveTTS. Флаг дальше ходит АРГУМЕНТОМ: глобального
-    // изменяемого состояния здесь нет, и тесты не делят его между собой
-    public static bool LiveTtsEnabled(IConfiguration config) =>
-        config.GetValue<bool?>(LiveTtsEnabledKey) ?? false;
-
-    // Каталог для показа: при выключенном тумблере голосов LiveTTS в нём нет
-    public static IReadOnlyList<VoiceInfo> Visible(bool liveTtsEnabled) =>
-        liveTtsEnabled ? Catalog : [.. Catalog.Where(v => v.Model != LiveTts)];
-
-    // Можно ли звучать этим голосом на этом сервере. Неизвестный голос — «доступен»: его
-    // судьбу решает IsKnown, а здесь ответ только про тумблер модели
-    public static bool IsAvailable(string? voice, bool liveTtsEnabled) =>
-        liveTtsEnabled || ModelFor(voice) != LiveTts;
 
     // Модель голоса; незнакомое имя — general (в запрос оно всё равно не попадёт)
     public static string ModelFor(string? voice)

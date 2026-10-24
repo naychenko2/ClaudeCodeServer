@@ -134,7 +134,7 @@ public class TtsVoiceCatalogTests
         info.Roles.Should().BeEquivalentTo(roles);
     }
 
-    // --- LiveTTS: модель — поле каталога, тумблер — чистые функции с флагом аргументом ---
+    // --- LiveTTS: модель — поле каталога ---
 
     private static readonly string[] LiveTtsVoices = ["sofia", "vera", "irina", "denis", "sergey", "vasily"];
 
@@ -188,32 +188,10 @@ public class TtsVoiceCatalogTests
     }
 
     [Fact]
-    public void Тумблер_Visible_ПрячетLiveTtsТолькоПриВыключенном()
+    public void LiveTts_ВсегдаВКаталоге()
     {
-        TtsVoiceCatalog.Visible(false).Should().NotContain(v => LiveTtsVoices.Contains(v.Voice));
-        TtsVoiceCatalog.Visible(false).Should().HaveCount(TtsVoiceCatalog.All.Count - LiveTtsVoices.Length);
-        TtsVoiceCatalog.Visible(true).Should().Equal(TtsVoiceCatalog.All);
-    }
-
-    [Fact]
-    public void Тумблер_IsAvailable_ПроLiveTts_АIsKnownОтНегоНеЗависит()
-    {
-        TtsVoiceCatalog.IsAvailable("sofia", false).Should().BeFalse();
-        TtsVoiceCatalog.IsAvailable("sofia", true).Should().BeTrue();
-        TtsVoiceCatalog.IsAvailable("zahar", false).Should().BeTrue();
-        // Полный каталог знает голос всегда: иначе загрузка персон и откат теряли бы его
+        TtsVoiceCatalog.All.Select(v => v.Voice).Should().Contain(LiveTtsVoices);
         TtsVoiceCatalog.IsKnown("sofia").Should().BeTrue();
         TtsVoiceCatalog.Canonical("SOFIA").Should().Be("sofia");
-    }
-
-    [Fact]
-    public void Тумблер_ПустойКонфиг_Выключен()
-    {
-        static Microsoft.Extensions.Configuration.IConfiguration Cfg(Dictionary<string, string?> v) =>
-            new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(v).Build();
-
-        TtsVoiceCatalog.LiveTtsEnabled(Cfg([])).Should().BeFalse();
-        TtsVoiceCatalog.LiveTtsEnabled(Cfg(new() { [TtsVoiceCatalog.LiveTtsEnabledKey] = "true" })).Should().BeTrue();
-        TtsVoiceCatalog.LiveTtsEnabled(Cfg(new() { [TtsVoiceCatalog.LiveTtsEnabledKey] = "false" })).Should().BeFalse();
     }
 }

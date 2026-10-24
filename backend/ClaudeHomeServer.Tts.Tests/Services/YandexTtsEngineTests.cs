@@ -30,7 +30,7 @@ public class YandexTtsEngineTests
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 
-    private static IConfiguration Config(bool configured, bool liveTts = false)
+    private static IConfiguration Config(bool configured)
     {
         var values = configured
             ? new Dictionary<string, string?>
@@ -40,16 +40,12 @@ public class YandexTtsEngineTests
                 ["Yandex:SpeechKit:RubPerRequest"] = "0.1626",
             }
             : [];
-        if (liveTts) values[TtsVoiceCatalog.LiveTtsEnabledKey] = "true";
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
     }
 
-    private static YandexTtsEngine Make(StubHandler handler, bool configured = true, bool liveTts = false)
-    {
-        var config = Config(configured, liveTts);
-        return new(new YandexTtsService(new StubHttpFactory(handler), config,
-            NullLogger<YandexTtsService>.Instance), config);
-    }
+    private static YandexTtsEngine Make(StubHandler handler, bool configured = true) =>
+        new(new YandexTtsService(new StubHttpFactory(handler), Config(configured),
+            NullLogger<YandexTtsService>.Instance));
 
     private static HttpResponseMessage AudioOk() => new(HttpStatusCode.OK)
     {
@@ -167,15 +163,17 @@ public class YandexTtsEngineTests
     }
 
     [Fact]
-    public void Каталог_19ГолосовИПятьАмплуа()
+    public void Каталог_25ГолосовСLiveTtsИДесятьАмплуа()
     {
         var engine = Make(new StubHandler(_ => AudioOk()));
 
         engine.Voices.Select(v => v.Voice).Should().BeEquivalentTo(
             "alena", "marina", "jane", "omazh", "dasha", "julia", "lera", "masha",
             "saule_ru", "zamira_ru", "zhanar_ru", "yulduz_ru",
-            "zahar", "filipp", "ermil", "madi_ru", "alexander", "kirill", "anton");
-        engine.Roles.Should().BeEquivalentTo("good", "evil", "friendly", "whisper", "strict");
+            "zahar", "filipp", "ermil", "madi_ru", "alexander", "kirill", "anton",
+            "sofia", "vera", "irina", "denis", "sergey", "vasily");
+        engine.Roles.Should().BeEquivalentTo("good", "evil", "friendly", "whisper", "strict",
+            "casual", "support", "sales", "formal", "narrator");
         engine.MinSpeed.Should().Be(0.1);
         engine.MaxSpeed.Should().Be(3.0);
     }
@@ -188,7 +186,7 @@ public class YandexTtsEngineTests
         // Правило модели живёт в BuildPayload: шов передаёт скорость как есть, а в теле её
         // быть не должно — LiveTTS ответил бы 400 на любой speed
         var handler = new StubHandler(_ => AudioOk());
-        var res = await Make(handler, liveTts: true)
+        var res = await Make(handler)
             .SynthesizeAsync("Привет.", "sofia", null, 1.2, CancellationToken.None);
 
         res.Error.Should().BeNull();
@@ -200,17 +198,11 @@ public class YandexTtsEngineTests
     }
 
     [Fact]
-    public void LiveTts_ТумблерВыключен_ГолосовLiveTtsВШвеНет()
+    public void LiveTts_МодельИТемпЕдутВШовИзКаталога()
     {
-        var off = Make(new StubHandler(_ => AudioOk()));
-        off.Voices.Should().NotContain(v => TtsVoiceCatalog.ModelFor(v.Voice) == TtsVoiceCatalog.LiveTts);
-        off.Roles.Should().NotContain("casual");
+        var on = Make(new StubHandler(_ => AudioOk()));
 
-        var on = Make(new StubHandler(_ => AudioOk()), liveTts: true);
-        on.Voices.Select(v => v.Voice).Should().Contain(["sofia", "vera", "irina", "denis", "sergey", "vasily"]);
-        on.Roles.Should().Contain(["casual", "support", "sales", "formal", "narrator"]);
-
-        // Модель и темп едут в шов из каталога; строки моделей шва и каталога — одни и те же
+        // Строки моделей шва и каталога — одни и те же
         TtsEngineVoice.LiveTts.Should().Be(TtsVoiceCatalog.LiveTts);
         TtsEngineVoice.General.Should().Be(TtsVoiceCatalog.General);
         on.Voices.Single(v => v.Voice == "sofia").Should().Match<TtsEngineVoice>(v =>
@@ -224,21 +216,10 @@ public class YandexTtsEngineTests
     {
         // Отказ по скорости — только у моделей со скоростью (контракт шва)
         var handler = new StubHandler(_ => AudioOk());
-        var res = await Make(handler, liveTts: true).SynthesizeAsync("Привет.", "vera", null, 5, CancellationToken.None);
+        var res = await Make(handler).SynthesizeAsync("Привет.", "vera", null, 5, CancellationToken.None);
 
         res.Error.Should().BeNull();
         handler.Bodies[0].Should().NotContain("speed");
-    }
-
-    [Fact]
-    public async Task LiveTts_ТумблерВыключен_СинтезГолосомLiveTts_ОтказБезЗапроса()
-    {
-        var handler = new StubHandler(_ => AudioOk());
-        var res = await Make(handler).SynthesizeAsync("Привет.", "sofia", null, 1.0, CancellationToken.None);
-
-        res.Audio.Should().BeNull();
-        res.Error.Should().Contain("sofia");
-        handler.Calls.Should().Be(0);
     }
 
     [Fact]

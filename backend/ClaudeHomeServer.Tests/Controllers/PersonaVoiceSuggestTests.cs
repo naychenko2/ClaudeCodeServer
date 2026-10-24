@@ -130,22 +130,19 @@ public class PersonaVoiceSuggestTests
     }
 
     [Fact]
-    public void Валидация_LiveTts_ПоТумблеру()
+    public void Валидация_LiveTts_ДоступнаВсегда()
     {
-        // Включён — голос и его амплуа принимаются, темп не отвергается (хранится, не применяется)
-        VoiceError(new PersonaVoice { Voice = "sofia", Role = "casual", Speed = 1.2 }, liveTts: true).Should().BeNull();
-        VoiceError(new PersonaVoice { Voice = "sofia", Role = "good" }, liveTts: true)
+        // Голос и его амплуа принимаются, темп не отвергается (хранится, не применяется)
+        VoiceError(new PersonaVoice { Voice = "sofia", Role = "casual", Speed = 1.2 }).Should().BeNull();
+        VoiceError(new PersonaVoice { Voice = "sofia", Role = "good" })
             .Should().Contain("не умеет «good»").And.Contain("casual").And.Contain("support");
 
-        // Выключен — голос недоступен, и в перечне допустимых его нет
-        var off = VoiceError(new PersonaVoice { Voice = "sofia" }, liveTts: false);
-        off.Should().Contain("недоступен на этом сервере");
-        off!.Split("допустимы:")[1].Should().NotContain("sofia").And.Contain("masha");
-        VoiceError(new PersonaVoice { Voice = "зорро" }, liveTts: false)!.Should().NotContain("vera");
+        // В перечне допустимых — и general, и LiveTTS
+        VoiceError(new PersonaVoice { Voice = "зорро" })!.Split("допустимы:")[1]
+            .Should().Contain("sofia").And.Contain("masha");
     }
 
-    private static string? VoiceError(PersonaVoice? voice, bool liveTts = false) =>
-        PersonasCrudService.VoiceError(voice, liveTts);
+    private static string? VoiceError(PersonaVoice? voice) => PersonasCrudService.VoiceError(voice);
 
     private static (string Voice, string? Role)? PersonaVoiceSuggest(string raw) =>
         PersonasCrudService.ParseVoiceAnswer(raw);

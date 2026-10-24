@@ -22,9 +22,7 @@ public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, 
 
     // Дефолты инстанса читаются один раз: сервис Singleton, поэтому предупреждение об
     // опечатке в конфиге печатается на старте, а не на каждую фразу
-    private readonly bool _liveTts = TtsVoiceCatalog.LiveTtsEnabled(config);
-    private readonly string _defaultVoice = ResolveConfiguredVoice(config["Yandex:SpeechKit:Voice"],
-        TtsVoiceCatalog.LiveTtsEnabled(config), logger);
+    private readonly string _defaultVoice = ResolveConfiguredVoice(config["Yandex:SpeechKit:Voice"], logger);
     private readonly double _defaultSpeed = Clamp(config.GetValue<double?>("Yandex:SpeechKit:Speed") ?? 1.0);
 
     // Голос для озвучки текста. personaId приходит от клиента и может быть чужим
@@ -49,9 +47,8 @@ public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, 
     private VoiceChoice ForPersonaVoice(PersonaVoice voice)
     {
         // Незнакомый голос (переименовали в SpeechKit, правили json руками) — дефолтный:
-        // роль при этом теряет смысл, её набор у каждого голоса свой. Так же — голос LiveTTS
-        // при выключенном тумблере: персона молча звучит голосом инстанса, как при откате
-        var name = TtsVoiceCatalog.IsKnown(voice.Voice) && TtsVoiceCatalog.IsAvailable(voice.Voice, _liveTts)
+        // роль при этом теряет смысл, её набор у каждого голоса свой
+        var name = TtsVoiceCatalog.IsKnown(voice.Voice)
             ? voice.Voice!.Trim()
             : _defaultVoice;
         var role = TtsVoiceCatalog.SupportsRole(name, voice.Role) ? voice.Role!.Trim() : null;
@@ -61,13 +58,9 @@ public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, 
 
     private static double Clamp(double speed) => Math.Clamp(speed, MinSpeed, MaxSpeed);
 
-    private static string ResolveConfiguredVoice(string? configured, bool liveTts, ILogger logger)
+    private static string ResolveConfiguredVoice(string? configured, ILogger logger)
     {
-        // Голос LiveTTS в конфиге при выключенном тумблере — как незнакомый: иначе каждая
-        // фраза инстанса упиралась бы в 403 и уходила на голос браузера
-        var voice = TtsVoiceCatalog.IsAvailable(configured, liveTts)
-            ? TtsVoiceCatalog.Canonical(configured) ?? TtsVoiceCatalog.Default
-            : TtsVoiceCatalog.Default;
+        var voice = TtsVoiceCatalog.Canonical(configured) ?? TtsVoiceCatalog.Default;
         // Сравнение по каноническому имени: «Zahar» или алиас «madirus» — тот же голос, и
         // предупреждать об опечатке тут не о чем
         if (!string.IsNullOrWhiteSpace(configured)

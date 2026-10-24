@@ -22,13 +22,11 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/tts")]
 public class TtsController(YandexTtsService tts, VoiceResolver voices,
-    SessionManager sessions, IConfiguration config, ILogger<TtsController> logger,
+    SessionManager sessions, ILogger<TtsController> logger,
     ISpendCollector? spend = null) : ControllerBase
 {
     // Подпись модели LiveTTS в учёте трат: у general поле Model исторически хранит голос
     public const string LiveTtsSpendModel = "yandex-livetts";
-
-    private bool LiveTts => TtsVoiceCatalog.LiveTtsEnabled(config);
 
     // Форма «предупредили один раз» в остальных местах проекта — инстансное поле (стороны
     // хоста — отдельный TestWebApplicationFactory, и shared static между хостами был бы
@@ -45,12 +43,11 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
     // не должен давать в списке две строки), подпись, пол и доступные амплуа.
     // configured=false — синтеза на сервере нет: форме нечего предлагать слушать, и
     // честная плашка лучше живых кнопок, которые молча не работают.
-    // model и speedSupported фронт не выводит сам: голоса LiveTTS помечены и без темпа.
-    // Тумблер LiveTTS выключен — её голосов в списке нет
+    // model и speedSupported фронт не выводит сам: голоса LiveTTS помечены и без темпа
     [HttpGet("voices")]
     public ActionResult<TtsVoicesResponse> Voices() => Ok(new TtsVoicesResponse(
         tts.IsConfigured,
-        TtsVoiceCatalog.Visible(LiveTts).Select(v => new TtsVoiceDto(
+        TtsVoiceCatalog.All.Select(v => new TtsVoiceDto(
             v.Voice, v.Label, v.Gender.ToString().ToLowerInvariant(), v.Roles,
             v.Model, TtsVoiceCatalog.SupportsSpeed(v.Voice))).ToList()));
 
@@ -69,9 +66,9 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
         {
             if (string.IsNullOrWhiteSpace(req.Voice))
                 return BadRequest(new { error = "Амплуа и темп задаются вместе с голосом" });
-            // Голос LiveTTS при выключенном тумблере — как неизвестный. Явный темп у LiveTTS
-            // не ошибка: старая вкладка шлёт его всегда, а BuildPayload его просто не отправит
-            if (!TtsVoiceCatalog.IsKnown(req.Voice) || !TtsVoiceCatalog.IsAvailable(req.Voice, LiveTts))
+            // Явный темп у LiveTTS не ошибка: старая вкладка шлёт его всегда, а BuildPayload
+            // его просто не отправит
+            if (!TtsVoiceCatalog.IsKnown(req.Voice))
                 return BadRequest(new { error = $"Неизвестный голос синтеза: {req.Voice}" });
             if (!string.IsNullOrWhiteSpace(req.Role) && !TtsVoiceCatalog.SupportsRole(req.Voice, req.Role))
                 return BadRequest(new { error = $"Голос {req.Voice} не умеет «{req.Role}»" });

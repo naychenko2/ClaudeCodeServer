@@ -81,7 +81,7 @@ public sealed class PersonasCrudService(
         if (PersonaManager.ExceedsContractLimit(req.Contract, req.SystemPrompt, 0, out var tooBig))
             return BadRequest(new { error = tooBig });
         // Явный голос — до создания: кривой не должен оставлять полусозданную персону
-        if (VoiceError(req.Voice, Services.Tts.TtsVoiceCatalog.LiveTtsEnabled(config)) is { } voiceError)
+        if (VoiceError(req.Voice) is { } voiceError)
             return BadRequest(new { error = voiceError });
 
         // Серверный предохранитель знакомства (план 2.9): в личном знакомстве (сессия с
@@ -1092,19 +1092,16 @@ public sealed class PersonasCrudService(
     // показать. null/пустой объект — «снять голос», он валиден. Единственная копия правила:
     // ей пользуются и форма (REST), и агент (MCP personas_create/update).
     //
-    // liveTtsEnabled — тумблер LiveTTS инстанса (TtsVoiceCatalog.LiveTtsEnabled): выключен — её
-    // голос недоступен, и перечень допустимых тоже без неё. Темп у LiveTTS не отвергаем: он
-    // хранится и не применяется, а отказ сломал бы старые формы и агента
-    internal static string? VoiceError(PersonaVoice? voice, bool liveTtsEnabled)
+    // Темп у LiveTTS не отвергаем: он хранится и не применяется, а отказ сломал бы старые
+    // формы и агента
+    internal static string? VoiceError(PersonaVoice? voice)
     {
         if (voice is null || voice.IsEmpty) return null;
-        var visible = string.Join(", ", Services.Tts.TtsVoiceCatalog.Visible(liveTtsEnabled).Select(v => v.Voice));
         if (!Services.Tts.TtsVoiceCatalog.IsKnown(voice.Voice))
             return string.IsNullOrWhiteSpace(voice.Voice)
                 ? "Амплуа и темп задаются вместе с голосом"
-                : $"Неизвестный голос синтеза: {voice.Voice}; допустимы: {visible}";
-        if (!Services.Tts.TtsVoiceCatalog.IsAvailable(voice.Voice, liveTtsEnabled))
-            return $"Голос {voice.Voice} (LiveTTS) недоступен на этом сервере; допустимы: {visible}";
+                : $"Неизвестный голос синтеза: {voice.Voice}; допустимы: "
+                  + string.Join(", ", Services.Tts.TtsVoiceCatalog.All.Select(v => v.Voice));
         if (!string.IsNullOrWhiteSpace(voice.Role)
             && !Services.Tts.TtsVoiceCatalog.SupportsRole(voice.Voice, voice.Role))
         {
@@ -1123,7 +1120,7 @@ public sealed class PersonasCrudService(
     public async Task<ActionResult<Persona>> SetVoiceAsync(string userId, string id, PersonaVoice? voice)
     {
         if (personas.Get(id, userId) is null) return NotFound();
-        if (VoiceError(voice, Services.Tts.TtsVoiceCatalog.LiveTtsEnabled(config)) is { } error)
+        if (VoiceError(voice) is { } error)
             return BadRequest(new { error });
 
         var persona = personas.SetVoice(id, userId, voice);

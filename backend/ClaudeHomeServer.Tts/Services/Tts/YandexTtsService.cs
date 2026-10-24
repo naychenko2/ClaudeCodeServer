@@ -150,8 +150,8 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
                 if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden
                     && error.Contains("Feature permission denied", StringComparison.OrdinalIgnoreCase))
                     logger.LogWarning("SpeechKit отверг синтез голосом «{Voice}» (403): LiveTTS (фича) не включена " +
-                                      "на аккаунте/облаке SpeechKit — выключи {Key} или включи фичу в облаке.",
-                        voice.Voice, TtsVoiceCatalog.LiveTtsEnabledKey);
+                                      "на аккаунте/облаке SpeechKit — включи фичу в облаке.",
+                        voice.Voice);
                 else if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
                     logger.LogWarning("SpeechKit отверг синтез (403): ключ жив, но у сервисного аккаунта " +
                                       "нет роли ai.speechkit-tts.user — выдай её в Yandex Cloud.");

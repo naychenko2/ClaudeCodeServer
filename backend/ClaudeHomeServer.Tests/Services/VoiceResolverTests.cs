@@ -33,10 +33,9 @@ public class VoiceResolverTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private VoiceResolver Make(string? configuredVoice = null, double? configuredSpeed = null, bool liveTts = false)
+    private VoiceResolver Make(string? configuredVoice = null, double? configuredSpeed = null)
     {
         var values = new Dictionary<string, string?>();
-        if (liveTts) values[TtsVoiceCatalog.LiveTtsEnabledKey] = "true";
         if (configuredVoice is not null) values["Yandex:SpeechKit:Voice"] = configuredVoice;
         if (configuredSpeed is not null)
             values["Yandex:SpeechKit:Speed"] = configuredSpeed.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -162,35 +161,23 @@ public class VoiceResolverTests : IDisposable
         TtsVoiceCatalog.ModelFor(choice.Voice).Should().Be(TtsVoiceCatalog.General);
     }
 
-    // --- LiveTTS: тумблер решает, звучит ли голос; без него — голос инстанса, как при откате ---
+    // --- LiveTTS: доступна всегда, голос персоны и инстанса звучат как есть ---
 
     [Fact]
-    public void LiveTts_ТумблерВыключен_ГолосПерсоныЗаменяетсяГолосомИнстанса()
-    {
-        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "sofia", Role = "casual" });
-
-        var choice = Make("zahar").Resolve(persona.Id, "user-1");
-
-        choice.Voice.Should().Be("zahar");
-        choice.Role.Should().BeNull("амплуа sofia у голоса инстанса нет");
-    }
-
-    [Fact]
-    public void LiveTts_ТумблерВключён_ГолосИАмплуаПерсоны()
+    public void LiveTts_ГолосИАмплуаПерсоны()
     {
         var persona = PersonaWith("user-1", new PersonaVoice { Voice = "sofia", Role = "casual", Speed = 1.3 });
 
-        var choice = Make("zahar", liveTts: true).Resolve(persona.Id, "user-1");
+        var choice = Make("zahar").Resolve(persona.Id, "user-1");
 
         // Темп остаётся в VoiceChoice — выкидывает его BuildPayload, единая точка правила
         choice.Should().BeEquivalentTo(new VoiceChoice("sofia", "casual", 1.3));
     }
 
     [Fact]
-    public void LiveTts_ГолосИнстансаВКонфигеПриВыключенномТумблере_Дефолт()
+    public void LiveTts_ГолосИнстансаВКонфиге_Звучит()
     {
-        Make("sofia").Resolve(null, "user-1").Voice.Should().Be(TtsVoiceCatalog.Default);
-        Make("sofia", liveTts: true).Resolve(null, "user-1").Voice.Should().Be("sofia");
+        Make("sofia").Resolve(null, "user-1").Voice.Should().Be("sofia");
     }
 
     [Fact]

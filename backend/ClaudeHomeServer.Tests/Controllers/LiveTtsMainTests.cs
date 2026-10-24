@@ -12,9 +12,8 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// LiveTTS в Main: тумблер Yandex:SpeechKit:LiveTts:Enabled решает, видна ли модель в списке
-// голосов, в прослушке, в валидации голоса персоны и в описании MCP voice. Хоста два — с
-// выключенным и включённым тумблером: это свойство КОНФИГУРАЦИИ инстанса, а не хода.
+// LiveTTS в Main: модель доступна всегда — в списке голосов, в прослушке, в валидации голоса
+// персоны и в описании MCP voice.
 public sealed class LiveTtsMainTests : IDisposable
 {
     private readonly List<TestWebApplicationFactory> _factories = [];
@@ -47,7 +46,7 @@ public sealed class LiveTtsMainTests : IDisposable
         public void Record(SpendRecord record) { lock (Records) Records.Add(record); }
     }
 
-    private (TestWebApplicationFactory Factory, HttpClient Client) Host(bool liveTts,
+    private (TestWebApplicationFactory Factory, HttpClient Client) Host(
         SpeechKitStub? speechKit = null, SpendSink? spend = null)
     {
         var factory = new TestWebApplicationFactory
@@ -59,7 +58,6 @@ public sealed class LiveTtsMainTests : IDisposable
                 if (spend is not null) s.AddSingleton<ISpendCollector>(spend);
             },
         };
-        if (liveTts) factory.ExtraConfig[TtsVoiceCatalog.LiveTtsEnabledKey] = "true";
         if (speechKit is not null)
         {
             factory.ExtraConfig["Yandex:SpeechKit:ApiKey"] = "key";
@@ -72,15 +70,12 @@ public sealed class LiveTtsMainTests : IDisposable
     // --- GET /api/tts/voices ---
 
     [Fact]
-    public async Task Voices_ОтдаётModelИSpeedSupported_LiveTtsТолькоПриВключённомТумблере()
+    public async Task Voices_ОтдаётModelИSpeedSupported_ВместеСLiveTts()
     {
-        var (_, off) = Host(liveTts: false);
-        var (_, on) = Host(liveTts: true);
+        var (_, on) = Host();
 
-        var offVoices = await VoicesAsync(off);
         var onVoices = await VoicesAsync(on);
 
-        offVoices.Select(v => v.GetProperty("voice").GetString()).Should().NotContain("sofia");
         var sofia = onVoices.Single(v => v.GetProperty("voice").GetString() == "sofia");
         sofia.GetProperty("model").GetString().Should().Be("livetts");
         sofia.GetProperty("speedSupported").GetBoolean().Should().BeFalse();
@@ -98,21 +93,11 @@ public sealed class LiveTtsMainTests : IDisposable
     // --- POST /api/tts: прослушка и учёт трат ---
 
     [Fact]
-    public async Task Прослушка_ТумблерВыключен_ГолосLiveTts400()
-    {
-        var (_, client) = Host(liveTts: false);
-
-        var resp = await client.PostAsJsonAsync("/api/tts", new { text = "Привет", voice = "sofia" });
-
-        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-    }
-
-    [Fact]
     public async Task Прослушка_СофияСТемпом_200_ТемпНеУходит_ТратаПоМоделиLiveTts()
     {
         var speechKit = new SpeechKitStub();
         var spend = new SpendSink();
-        var (_, client) = Host(liveTts: true, speechKit, spend);
+        var (_, client) = Host(speechKit, spend);
 
         // Старая вкладка шлёт темп всегда: 400 увёл бы её на голос браузера
         var resp = await client.PostAsJsonAsync("/api/tts", new { text = "Привет", voice = "sofia", speed = 1.2 });
@@ -130,7 +115,7 @@ public sealed class LiveTtsMainTests : IDisposable
     {
         var speechKit = new SpeechKitStub();
         var spend = new SpendSink();
-        var (_, client) = Host(liveTts: true, speechKit, spend);
+        var (_, client) = Host(speechKit, spend);
 
         var resp = await client.PostAsJsonAsync("/api/tts", new { text = "Привет", voice = "zahar", speed = 1.2 });
 
@@ -172,23 +157,19 @@ public sealed class LiveTtsMainTests : IDisposable
     }
 
     [Fact]
-    public async Task ToolsList_ОписаниеVoice_ЗависитОтКонфигаИнстанса()
+    public async Task ToolsList_ОписаниеVoice_СГолосамиLiveTts()
     {
-        var (_, off) = Host(liveTts: false);
-        var (_, on) = Host(liveTts: true);
+        var (_, on) = Host();
 
-        var offText = await VoiceDescriptionAsync(off);
         var onText = await VoiceDescriptionAsync(on);
 
-        offText.Should().NotContain("sofia").And.NotContain("livetts").And.Contain("masha");
-        onText.Should().Contain("sofia (livetts: casual/support)").And.Contain("дороже и без темпа");
+        onText.Should().Contain("masha").And.Contain("sofia (livetts: casual/support)").And.Contain("дороже и без темпа");
     }
 
     [Fact]
-    public async Task Update_Sofia_ПоТумблеру()
+    public async Task Update_Sofia_ПринимаетсяСАмплуаLiveTts()
     {
-        var (onFactory, on) = Host(liveTts: true);
-        var (offFactory, off) = Host(liveTts: false);
+        var (onFactory, on) = Host();
 
         async Task<(JsonElement Result, Persona Target, PersonaManager Personas)> UpdateAsync(
             TestWebApplicationFactory factory, HttpClient client, object voiceArgs)
@@ -216,10 +197,5 @@ public sealed class LiveTtsMainTests : IDisposable
         var badRole = await UpdateAsync(onFactory, on, new { voice = "sofia", voiceRole = "good" });
         IsError(badRole.Result).Should().BeTrue();
         TextOf(badRole.Result).Should().Contain("casual").And.Contain("support");
-
-        var disabled = await UpdateAsync(offFactory, off, new { voice = "sofia" });
-        IsError(disabled.Result).Should().BeTrue();
-        TextOf(disabled.Result).Should().Contain("недоступен на этом сервере");
-        disabled.Target.Voice.Should().BeNull("отказ не трогает персону");
     }
 }

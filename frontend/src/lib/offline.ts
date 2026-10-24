@@ -383,7 +383,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты).
   // timeoutMs — оверрайд для заведомо долгих запросов (AI-генерация и т.п.)
-  const { timeoutMs, parse, live, ...fetchOptions } = options ?? {};
+  const { timeoutMs, parse, live, signal: callerSignal, ...fetchOptions } = options ?? {};
   // Кэшируем и достаём из кэша только те GET, которым это на пользу (см. комментарий к live)
   const useOfflineCache = isGet && !live;
   const controller = new AbortController();
@@ -392,6 +392,19 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // прочих abort'ов, а причину надо назвать точно (см. RequestTimeoutError)
   let timedOut = false;
   const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, effectiveTimeout);
+  // Signal вызывающего («Остановить» в шапке резюме, смена fid) не перетирается внутренним
+  // контроллером, а объединяется с ним: любой из двух abort'ов обрывает fetch.
+  // Отметка «отменил вызывающий» нужна, чтобы его отмена не трактовалась как пропажа
+  // связи — это не сетевой сбой, а намеренная отмена (её узнают featurePage и FeatureAnalysisLine).
+  let abortedByCaller = false;
+  if (callerSignal) {
+    if (callerSignal.aborted) {
+      abortedByCaller = true;
+      controller.abort();
+    } else {
+      callerSignal.addEventListener('abort', () => { abortedByCaller = true; controller.abort(); });
+    }
+  }
 
   // FormData (multipart-загрузки) — Content-Type ставит сам браузер (с boundary)
   const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
@@ -451,6 +464,11 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     return data;
   } catch (e) {
     clearTimeout(timeoutId);
+    // Отмена вызывающего — не пропажа связи и не наш таймаут: AbortError отдаём как есть,
+    // кэш не подставляем (устаревший ответ под новой фичей — хуже, чем пустота).
+    if (e instanceof DOMException && e.name === 'AbortError' && abortedByCaller) {
+      throw e;
+    }
     // AbortError от нашего таймаута трактуем как сетевую проблему
     if (isNetworkError(e) || (e instanceof DOMException && e.name === 'AbortError')) {
       // Свой таймаут на заведомо долгом запросе (явный timeoutMs) — не улика против

@@ -161,6 +161,53 @@ describe('request: свой таймаут', () => {
   });
 });
 
+// --- Signal вызывающего: «Остановить» должен реально обрывать запрос (W5-F2b, вердикт W5-R-F2) ---
+// Раньше внутренний контроллер таймаута перетирал переданный signal: отмена «Остановить»
+// и смена fid доходили только до компонента, а fetch висел до своего таймаута.
+describe('request: signal вызывающего', () => {
+  // fetch, который висит до любой отмены и реджектит по abort — как настоящий
+  function hangUntilAnyAbort() {
+    return (_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      if (init.signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    });
+  }
+
+  it('abort() вызывающего обрывает запрос AbortError, связь не трогается', async () => {
+    fetchMock.mockImplementation(hangUntilAnyAbort());
+    const ac = new AbortController();
+
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', signal: ac.signal });
+    ac.abort();
+    await expect(promise).rejects.toThrow('Aborted');
+
+    // Отмена человека — не сетевой сбой: приложение остаётся онлайн
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('signal вызывающего не глушит внутренний таймаут: timeoutMs по-прежнему срабатывает', async () => {
+    fetchMock.mockImplementation(hangUntilAnyAbort());
+    const ac = new AbortController();
+
+    const promise = offline.request('/tasks/features/f1/summary', {
+      method: 'POST', body: '{}', signal: ac.signal, timeoutMs: 180_000,
+    });
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+  });
+
+  it('уже отменённый signal — сразу AbortError, без ожидания таймаута', async () => {
+    fetchMock.mockImplementation(hangUntilAnyAbort());
+    const ac = new AbortController();
+    ac.abort();
+
+    await expect(offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', signal: ac.signal }))
+      .rejects.toThrow('Aborted');
+    expect(offline.isOnline()).toBe(true);
+  });
+});
+
 // --- Подтверждающий пинг перед уходом в офлайн ---
 // Раньше ЛЮБОЙ единичный провал fetch единолично ставил офлайн, а зонд через
 // секунды возвращал онлайн — на планшете это давало мигание индикатора при

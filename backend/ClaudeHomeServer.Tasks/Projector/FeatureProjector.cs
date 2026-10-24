@@ -985,38 +985,50 @@ public sealed class FeatureProjector(TaskManager tasks)
         return completed.Count > 0 ? completed.Max() : null;
     }
 
+    // Пометка остановки валидна, только если позже старта — тот же guard, что у Attention
+    // (:132) и журнала (:649): после перезапуска MarkClaudeStarted сбрасывает пометку, но
+    // она может не успеть сброситься; «устаревшая» пометка (раньше ClaudeStartedAt) — не остановка.
+    private static bool HasValidStopMark(TaskItem t)
+        => t.ExecutorStoppedAt is not null
+        && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt);
+
     // W5-DEF (правый край полосы Ганта; хвост ревью 4aea41632 п.5). Край покрывает интервал,
-    // в котором стадия была в работе. Стадия в работе — есть незакрытая (не Done) задача,
-    // которая не встала (ExecutorStoppedAt null): ход реально идёт, ждёт человека/устройства
-    // или дала результат и не закрыта — тот же верх минуты, что у IntervalOf (интервал
-    // незакрытой задачи открыт до now): край = now. Вставшая стадия — край по моменту
-    // остановки (последняя активность). Не в работе — max CompletedAt закрытых (совпадает с
-    // концом стадии). Активности не было — null. Длительность не затрагивается: её stageEnd —
-    // конец закрытой стадии (StageLastCompletedAt), край полосы интервалы не растягивает.
+    // в котором стадия была в работе. Стадия в работе — есть незакрытая (не Done) задача без
+    // валидной пометки остановки (в том числе с «устаревшей» пометкой — она не остановка):
+    // ход реально идёт, ждёт человека/устройства или дал результат и не закрыт — тот же верх
+    // минуты, что у IntervalOf (интервал незакрытой задачи открыт до now): край = now. Вставшая
+    // стадия — край по моменту остановки (последняя активность). Не в работе — max CompletedAt
+    // закрытых (совпадает с концом стадии). Активности не было — null. Длительность не
+    // затрагивается: её stageEnd — конец закрытой стадии (StageLastCompletedAt), край полосы
+    // интервалы не растягивает.
     private static DateTime? StageBarEnd(List<TaskItem> tasks, DateTime now)
     {
         if (tasks.Count == 0)
             return null;
-        if (tasks.Any(t => t.Status == TaskItemStatus.InProgress && t.ExecutorStoppedAt is null))
+        if (tasks.Any(t => t.Status == TaskItemStatus.InProgress && !HasValidStopMark(t)))
             return now;
         DateTime? end = null;
         foreach (var t in tasks)
         {
-            var e = t.Status == TaskItemStatus.Done ? t.CompletedAt : t.ExecutorStoppedAt;
+            var e = t.Status == TaskItemStatus.Done ? t.CompletedAt
+                : HasValidStopMark(t) ? t.ExecutorStoppedAt : null;
             if (e is not null && (end is null || e > end)) end = e;
         }
         return end;
     }
 
     // Б2: интервал задачи: [ClaudeStartedAt, конец]. Не стартовала (нет ClaudeStartedAt) →
-    // интервала нет. Конец: CompletedAt; если его нет — now (задача идёт) или конец стадии
-    // (stageEnd: Done-задача без CompletedAt в закрытой стадии не растягивает интервал до now,
-    // иначе длительность закрытой стадии росла со временем). Конец раньше начала (аномалия)
-    // → нулевая длительность.
+    // интервала нет. Конец: CompletedAt; у вставшей (InProgress с валидной пометкой остановки)
+    // — момент остановки (минуты вставшей стадии не растут до now); иначе — now (задача идёт)
+    // или конец стадии (stageEnd: Done-задача без CompletedAt в закрытой стадии не растягивает
+    // интервал до now, иначе длительность закрытой стадии росла со временем). Конец раньше
+    // начала (аномалия) → нулевая длительность.
     private static (DateTime start, DateTime end)? IntervalOf(TaskItem t, DateTime now, DateTime? stageEnd = null)
     {
         if (t.ClaudeStartedAt is null) return null;
-        var end = t.CompletedAt ?? (t.Status == TaskItemStatus.Done ? stageEnd : null) ?? now;
+        var end = t.CompletedAt
+            ?? (t.Status == TaskItemStatus.Done ? stageEnd : null)
+            ?? (t.Status == TaskItemStatus.InProgress && HasValidStopMark(t) ? t.ExecutorStoppedAt!.Value : now);
         return (t.ClaudeStartedAt.Value, end < t.ClaudeStartedAt.Value ? t.ClaudeStartedAt.Value : end);
     }
 

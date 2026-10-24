@@ -2919,6 +2919,65 @@ public class FeatureProjectorTests
                 "исполнитель встал — полоса до остановки, а не до now");
     }
 
+    // Минор вердикта 987faf2e п.1: «устаревшая» стоп-пометка (раньше ClaudeStartedAt) — не
+    // остановка, тот же guard, что у Attention (:132) и журнала (:649). Без guard'а край
+    // полосы оказывается раньше начала — инвертированная полоса при тоне «run». Мутация:
+    // снять guard в StageBarEnd — первая проверка краснеет (край = устаревшая пометка).
+    [Fact]
+    public void Build_StageBarEnd_StaleStopMark_NotACutoff_КрайNowБезИнверсии()
+    {
+        const string epicId = "epic-w5-bar-stale";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var now = new DateTime(2026, 10, 17, 12, 0, 0);
+
+        // Задача перезапущена: пометка остановки от прошлого хода не успела сброситься.
+        var restarted = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 17, 9, 30, 0),
+        };
+        var review = Stage(FeatureProjector.Build(epic, [epic, restarted], now), "review");
+        review.FirstStartedAt.Should().Be(new DateTime(2026, 10, 17, 10, 0, 0));
+        review.BarEnd.Should().Be(now, "устаревшая пометка — не остановка: стадия идёт, край now");
+        (review.BarEnd!.Value >= review.FirstStartedAt!.Value).Should().BeTrue(
+            "край не раньше начала — инвертированной полосы нет");
+    }
+
+    // Минор вердикта 987faf2e п.2: интервал вставшей стадии обрывается на ExecutorStoppedAt —
+    // минуты не растут до now. Устаревшая пометка, наоборот, не обрезает: ход идёт. Мутация:
+    // убрать обрезку в IntervalOf — вторая проверка краснеет (120 вместо 75).
+    [Fact]
+    public void Build_ApproxMinutes_ВставшаяЗадача_ИнтервалОбрываетсяНаОстановке()
+    {
+        const string epicId = "epic-w5-min-stopped";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var now = new DateTime(2026, 10, 17, 12, 0, 0);
+
+        // Вставшая задача: интервал 10:00 → 11:15, а не до now.
+        var stopped = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 17, 11, 15, 0),
+        };
+        Stage(FeatureProjector.Build(epic, [epic, stopped], now), "review")
+            .ApproxMinutes.Should().Be(75, "вставшая задача: минуты до остановки, не до now");
+
+        // Устаревшая пометка не обрезает: задача идёт — минуты до now.
+        var restarted = new TaskItem
+        {
+            Id = "r2", FeatureId = epicId, Role = TaskRoles.Review,
+            Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = new DateTime(2026, 10, 17, 10, 0, 0),
+            ExecutorStoppedAt = new DateTime(2026, 10, 17, 9, 30, 0),
+        };
+        Stage(FeatureProjector.Build(epic, [epic, restarted], now), "review")
+            .ApproxMinutes.Should().Be(120, "устаревшая пометка — не остановка: интервал открыт до now");
+    }
+
     // Этап из одной задачи: границы = старт/конец задачи, длительность = её интервал.
     [Fact]
     public void Build_Stage_ОднаЗадача_ГраницыИДлительность()

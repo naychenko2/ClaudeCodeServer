@@ -8,6 +8,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { Task } from '../../../types';
 import { deviceWaitDuration, executorStopVisual, isDeviceWaiting, isTerminalStop } from '../../../lib/tasks';
 import { TaskCard } from '../TaskCard';
+import { TaskDetailsPane } from '../TaskDetailsPane';
 
 function task(over: Partial<Task> = {}): Task {
   return {
@@ -193,5 +194,43 @@ describe('терминальная остановка исполнителя', (
     const html = render(task({ status: 'done', executorStopReason: 'feature_held_expired' }));
     expect(html).not.toContain(executorStopVisual('feature_held_expired').text);
     expect(html).not.toContain('Исполнение прервано');
+  });
+});
+
+// W4-HOLD-F6 (хвост R-F6): панель деталей берёт текст, тон и глиф остановки из того же
+// executorStopVisual, что и карточка (раньше тон и глиф в панели были жёсткими).
+// Мутация: вернуть в панели tone/icon жёсткими — тест краснеет.
+describe('панель деталей задачи', () => {
+  const renderPane = (t: Task) =>
+    renderToStaticMarkup(createElement(TaskDetailsPane, { task: t, project: null, onDeleted: () => {} }));
+  // Notice — единственный элемент с role="status" в панели: его стиль и есть тон плашки
+  const noticeStyle = (html: string) => /role="status" style="([^"]*)"/.exec(html)?.[1] ?? '';
+  const iconClass = (icon: LucideIcon) =>
+    /lucide-[a-z0-9-]+/.exec(renderToStaticMarkup(createElement(icon, { size: 16 })))![0];
+
+  it('feature_held — панель отмечает паузу Pause и warning, а не Unplug и danger', () => {
+    const html = renderPane(task({ executorStopReason: 'feature_held' }));
+    expect(html).toContain('Фичу удержали на паузе');
+    expect(html).toContain('lucide-pause');
+    expect(html).not.toContain('lucide-unplug');
+    expect(noticeStyle(html)).toContain('background:var(--c-warning-bg)');
+  });
+
+  // Единый источник: любой терминальной причине панель даёт тот же триплет, что и функция
+  it('единый источник: панель повторяет текст, тон и глиф функции', () => {
+    for (const reason of ['feature_held', 'feature_held_expired', 'auth_failed', 'device_wait_expired']) {
+      const v = executorStopVisual(reason);
+      const html = renderPane(task({ executorStopReason: reason }));
+      expect(html).toContain(v.text);
+      expect(html).toContain(iconClass(v.icon));
+      expect(noticeStyle(html)).toContain(
+        'background:' + (v.tone === 'warning' ? 'var(--c-warning-bg)' : 'var(--c-danger-bg)'));
+    }
+  });
+
+  it('завершённая задача плашки остановки в панели не получает', () => {
+    const html = renderPane(task({ status: 'done', executorStopReason: 'feature_held' }));
+    expect(html).not.toContain('Фичу удержали на паузе');
+    expect(noticeStyle(html)).toBe('');
   });
 });

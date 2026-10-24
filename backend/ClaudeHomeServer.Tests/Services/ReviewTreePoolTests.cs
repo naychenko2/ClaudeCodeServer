@@ -495,6 +495,100 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
         await act2.Should().NotThrowAsync();
     }
 
+    [Fact]
+    public async Task После_Рестарта_Слот_На_Ветке_Остановленного_Ревью_Сносится_По_Маркеру()
+    {
+        var pool = NewPool();
+        var lease = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        await RawGit(lease!.SlotPath, "checkout", "-b", "reviewer/restart");
+        pool.Release("t1"); // «Стоп»
+        var afterRestart = NewPool(); // память нового процесса пуста
+
+        await afterRestart.RemoveSlotsOfProjectAsync(null, _project);
+
+        (await InWorktreeList(lease.SlotPath)).Should().BeFalse("маркер на диске опознаёт слот и без памяти процесса");
+        File.Exists(lease.SlotPath + ReviewTreePool.MarkerSuffix).Should().BeFalse("маркер снят после сноса");
+    }
+
+    [Fact]
+    public async Task После_Рестарта_Acquire_Чинит_Слот_На_Ветке_По_Маркеру()
+    {
+        var pool = NewPool();
+        var first = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        await RawGit(first!.SlotPath, "checkout", "-b", "reviewer/restart2");
+        pool.Release("t1");
+        var afterRestart = NewPool();
+
+        var second = await afterRestart.TryAcquireAsync(null, _project, _wave, "t2");
+
+        second!.SlotPath.Should().Be(first.SlotPath);
+        (await _git.WorktreeListAsync(null, _repo)).Should().Contain(w =>
+            Path.GetFullPath(w.Path) == Path.GetFullPath(second.SlotPath) && w.Branch == null);
+    }
+
+    [Fact]
+    public async Task После_Рестарта_Дерево_Чата_На_Ветке_Без_Маркера_Не_Сносится()
+    {
+        var chatTree = Path.Combine(_slotBase, "feat~wave-review-1");
+        await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/clash-restart");
+
+        await NewPool().RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        (await InWorktreeList(chatTree)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Снос_Не_Сошёлся_Маркер_Остаётся_И_Следующая_Уборка_Доводит()
+    {
+        var pool = NewPool();
+        var lease = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        await RawGit(lease!.SlotPath, "checkout", "-b", "reviewer/locked");
+        await RawGit(_repo, "worktree", "lock", lease.SlotPath);
+
+        await pool.RemoveSlotsOfProjectAsync(null, _project);
+
+        (await InWorktreeList(lease.SlotPath)).Should().BeTrue("locked-дерево с одним --force не сносится");
+        File.Exists(lease.SlotPath + ReviewTreePool.MarkerSuffix).Should().BeTrue("не снесён — признак «наш» не теряем");
+
+        await RawGit(_repo, "worktree", "unlock", lease.SlotPath);
+        await NewPool().RemoveSlotsOfProjectAsync(null, _project);
+        (await InWorktreeList(lease.SlotPath)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Окно_Между_Снятием_Аренды_И_Сносом_Путь_Другой_Задаче_Не_Отдаётся()
+    {
+        var pool = NewPool();
+        var held = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        ReviewTreeLease? other = null;
+        var fired = false;
+        pool.BeforeSlotRemove = async () =>
+        {
+            if (fired) return;
+            fired = true;
+            other = await pool.TryAcquireAsync(null, _project, _wave, "t2");
+        };
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        other.Should().NotBeNull();
+        other!.SlotPath.Should().NotBe(held!.SlotPath, "путь, который сносится, отдавать нельзя");
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfProject_Слот_Взятый_После_Снимка_Деревьев_Тоже_Сносится()
+    {
+        var pool = NewPool();
+        string? slot = null;
+        pool.AfterProjectSnapshot = async () => slot = (await pool.TryAcquireAsync(null, _project, _wave, "t1"))!.SlotPath;
+
+        await pool.RemoveSlotsOfProjectAsync(null, _project);
+
+        slot.Should().NotBeNull();
+        (await InWorktreeList(slot!)).Should().BeFalse("состав слотов проекта перечитывается");
+        (await pool.TryAcquireAsync(null, _project, _wave, "t2")).Should().NotBeNull("аренда снята вместе со слотом");
+    }
+
     private static async Task RawGit(string dir, params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = dir, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };

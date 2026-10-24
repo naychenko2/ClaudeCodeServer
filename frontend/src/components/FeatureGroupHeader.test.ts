@@ -174,6 +174,14 @@ describe('FeatureGroupHeader: тона', () => {
     expect(st.status).toBe('смержена');
     expect(renderHeader(f).includes('data-feature-state="done"')).toBe(true);
   });
+
+  it('рельса приглушена у терминальных состояний (merged и closed), у running — нет', () => {
+    const closedRail = (b: FeatureIndexFeature['bucket']) =>
+      renderHeader(feat({ bucket: b, summary: null })).match(/<i [^>]*opacity:\s*0?\.5/g)?.length ?? 0;
+    expect(closedRail('merged')).toBeGreaterThan(0);
+    expect(closedRail('closed')).toBeGreaterThan(0);
+    expect(closedRail('running')).toBe(0);
+  });
 });
 
 // === state (бэк Б1a/Б1b): источник правды — f.state, не attention ===

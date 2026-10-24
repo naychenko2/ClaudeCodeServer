@@ -91,7 +91,7 @@ import type { FeatureIndexFeature } from '../types/featureIndex';
 import type { Session, Persona } from '../types';
 
 // === фикстуры ===
-const feat = (id: string, bucket: 'running' | 'closed', chips: string[]): FeatureIndexFeature => ({
+const feat = (id: string, bucket: FeatureIndexFeature['bucket'], chips: string[]): FeatureIndexFeature => ({
   featureId: id, title: `Фича ${id}`, projectId: 'p1', bucket,
   attention: null, rail: [], chips: chips as FeatureIndexFeature['chips'],
   stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,

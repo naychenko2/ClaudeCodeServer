@@ -81,7 +81,7 @@
       "loops": 0,
       "now0": null,
       "lastActivityAt": "2026-10-17T10:00:00Z",
-      "summary": null,
+      "summary": { "mergedAt": "2026-10-17T09:30:00Z", "durationMinutes": 95 },
       "keySessionId": "chat-key-other",
       "keyArchived": false,
       "keyProjectId": "p2",

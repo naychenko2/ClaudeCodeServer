@@ -92,7 +92,7 @@ export const ALL_STATUS_CHIPS: ChatStatusChip[] = ['active', 'waiting', 'done', 
 // Белый список значений чипа-фильтра фич (фасет «Фичи»): он же порядок ряда чипов.
 // Незнакомое значение из localStorage вырождается в 'open' (нормализация ниже).
 export const ALL_FEATURE_FILTER_CHIPS: FeatureChip[] = ['open', 'waiting', 'stopped', 'merge', 'merged', 'closed'];
-// Белый список ВЫБИРАЕМЫХ чипов (мультивыбор featureChips): waiting|stopped|merge|running.
+// Белый список ВЫБИРАЕМЫХ чипов (мультивыбор featureChips): waiting|stopped|merge|running|merged.
 // 'open' = пустой выбор (дефолт), 'closed' = showClosed — в массив не входят.
 export const ALL_FEATURE_CHIPS: FeatureChip[] = ['waiting', 'stopped', 'merge', 'running', 'merged'];
 // Дефолт по макету А: активные срезы видны, архив (Готово) скрыт — список не зарастает

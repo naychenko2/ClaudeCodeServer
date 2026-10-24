@@ -84,10 +84,11 @@ describe('groupByFeatures: порядок групп', () => {
 
 describe('groupByFeatures: bucket merged', () => {
   it('порядок бэка attention → running → merged → idle → closed сохраняется', () => {
-    const feats = [feature('Z', 'attention'), feature('M', 'running'), feature('G', 'merged'), feature('A', 'idle'), feature('C', 'closed')];
+    // Порядок features[] намеренно перемешан: фронт не сортирует по bucket, группы идут как у бэка
+    const feats = [feature('G', 'merged'), feature('C', 'closed'), feature('Z', 'attention'), feature('A', 'idle'), feature('M', 'running')];
     const idx = index(feats, { 'z': [link('Z')], 'm': [link('M')], 'g': [link('G')], 'a': [link('A')], 'c': [link('C')] });
     const groups = groupByFeatures([chat('a'), chat('c'), chat('g'), chat('z'), chat('m')], idx);
-    expect(groups.map(g => g.feature?.featureId)).toEqual(['Z', 'M', 'G', 'A', 'C']);
+    expect(groups.map(g => g.feature?.featureId)).toEqual(['G', 'C', 'Z', 'A', 'M']);
   });
 
   it('чип merged считается по chips[]', () => {

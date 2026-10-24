@@ -1,7 +1,7 @@
 import type { ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureChip, FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
 import { sortTagsByRegistry } from './tagRegistry';
-import { sortKeyOf, ALL_FEATURE_FILTER_CHIPS, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
+import { sortKeyOf, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
 import { buildChatTreeRows, type ChatTreeRowData } from './chatTree';
 
 export interface ChatGroup {
@@ -537,10 +537,6 @@ export const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
   open: 'Открытые', waiting: 'Ждут вас', stopped: 'Стоят', merge: 'К мержу', closed: 'Закрытые',
   running: 'Идут', merged: 'Смержены',
 };
-
-// Определения чипов для рендера ряда: значение + подпись, в порядке ALL_FEATURE_FILTER_CHIPS.
-export const FEATURE_FILTER_CHIPS: { value: FeatureChip; label: string }[] =
-  ALL_FEATURE_FILTER_CHIPS.map(v => ({ value: v, label: FEATURE_CHIP_LABEL[v] }));
 
 // Число фич по каждому чипу: фронт считает по chips[] бэка (не вычисляет членство сам).
 // Одна фича может входить в несколько чипов (например, «открытая» и «ждёт вас»).

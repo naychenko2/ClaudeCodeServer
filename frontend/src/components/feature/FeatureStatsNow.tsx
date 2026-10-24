@@ -60,11 +60,22 @@ function runningText(startedAt: string | null | undefined, nowMs: number): strin
   return `идёт ${formatDuration(mins)}`;
 }
 
+// Тревога (attention) на этой задаче — исполнитель не идёт: ждёт человека (wait)
+// или встал (stopped). «Идущая» исключает wait/stopped — то же правило на бэке
+// (FeatureBreakdown); в макете ждущий исполнитель в списке «сейчас» не показан
+// (feature-stats-5.html §.a-now). «merge»-тревога — не про идущую задачу, не фильтруем.
+function isHeldNow(run: FeatureRun, n: FeatureNow): boolean {
+  const a = run.attention;
+  return !!a && (a.kind === 'wait' || a.kind === 'stopped') && a.taskId === n.taskId;
+}
+
 export function FeatureStatsNow({ run, isMobile = false, nowMs }: FeatureStatsNowProps) {
-  const now = run.now ?? [];
+  // Хук выше guard: ранний return не должен обрывать вызов хука
+  // (react-hooks/rules-of-hooks), как в LongestNow (FeatureStatsBlocks.tsx).
+  const personas = usePersonas();
+  const now = (run.now ?? []).filter(n => !isHeldNow(run, n));
   if (now.length === 0 || isFinished(run)) return null;
 
-  const personas = usePersonas();
   const at = nowMs ?? Date.now();
 
   return (

@@ -258,6 +258,10 @@ export interface FeatureNow {
   startedAt?: string | null;
   // Связанный чат исполнителя.
   linkedSessionId?: string | null;
+  // W4-ANB: сторож окликнул исполнителя (NudgedAt бэка, FeatureRun.cs:143). Аддитивное.
+  nudgedAt?: string | null;
+  // W4-ANB: исполнитель не ответил на оклик, сторож позвал человека (StaleAlertedAt, FeatureRun.cs:144).
+  staleAlertedAt?: string | null;
 }
 
 // Тревога фичи (бэк: `FeatureAttention`): один элемент либо null.
@@ -351,6 +355,9 @@ export interface FeatureRun {
   stepProgress?: StepProgress;
   // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
   lastActivityAt?: string | null;
+  // W4-ANB: «тихо» — не закрыта, ни одна задача не идёт, ≥24 ч без активности (граница включена).
+  // Считает бэк (FeatureProjector.cs:494); фронт только показывает. Аддитивное: старые ответы не несут.
+  quiet?: boolean;
   // Закрыта: merge-задача Done или эпик Done.
   closed?: boolean;
   // Итог смерженной фичи: только у закрытой, иначе null.

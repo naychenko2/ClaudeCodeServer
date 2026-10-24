@@ -13,6 +13,8 @@ import {
 } from './FeatureStatsBits';
 import { buildGanttModel, type GanttModel, type GanttSegmentKind } from './FeatureGanttModel';
 import { TotalsCards, LongestNow, Breakdown, Spend } from './FeatureStatsBlocks';
+import { FeatureAnalysisLine } from './FeatureAnalysisLine';
+import { stageLabelShort } from './FeatureAnalysisModel';
 import type { FeatureStats } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
 
@@ -536,26 +538,24 @@ function TaskButtons({ model, nav, isMobile }: { model: TimelineModel; nav?: Fea
   );
 }
 
-// Короткая подпись этапа для ряда «задача» (без полного имени, чтобы влезло).
-function stageLabelShort(key: string): string {
-  const names: Record<string, string> = {
-    cut: 'Разрез', plan: 'План', prod: 'Производство', review: 'Ревью',
-    qa: 'Проверка', final: 'Финал', merge: 'Мерж',
-  };
-  return names[key] ?? key;
-}
-
 export function FeatureStatsTab({ stats, run = null, featureId = null, featureTitle = null, marks, isMobile = false }: FeatureStatsTabProps) {
   const nav: FeatureNavCtx = { featureId, featureTitle, marks };
+  // Строка анализа (W5-F1) — про фичу, а не про статистику: показываем и в пустых
+  // состояниях вкладки, поэтому вынесена до ранних return. Без run (старые ответы) — нет.
+  const line = run ? <FeatureAnalysisLine run={run} marks={marks} isMobile={isMobile} /> : null;
+
   // Пустое состояние: stats нет (старые данные) — причина, а не нули.
   if (!stats) {
     return (
-      <EmptyState
-        compact
-        icon="📊"
-        title="Статистики пока нет"
-        subtitle="Появится, когда будет посчитано время фичи."
-      />
+      <>
+        {line}
+        <EmptyState
+          compact
+          icon="📊"
+          title="Статистики пока нет"
+          subtitle="Появится, когда будет посчитано время фичи."
+        />
+      </>
     );
   }
 
@@ -566,12 +566,15 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
   // Пустое состояние: нет ни сегментов, ни текущего состояния (макет: «Считать пока нечего»).
   if (!model.hasData) {
     return (
-      <EmptyState
-        compact
-        icon="📊"
-        title="Считать пока нечего"
-        subtitle="Статистика появится с первой задачей исполнителя."
-      />
+      <>
+        {line}
+        <EmptyState
+          compact
+          icon="📊"
+          title="Считать пока нечего"
+          subtitle="Статистика появится с первой задачей исполнителя."
+        />
+      </>
     );
   }
 
@@ -585,6 +588,7 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
 
   return (
     <div data-testid="feature-stats-tab" style={{ fontFamily: FONT.sans }}>
+      {line}
       <AccuracyBadges source={stats.source} truncated={stats.truncated} />
       {gantt && gantt.rows.length > 0 ? (
         <Gantt gantt={gantt} axis={model.axis} current={model.current} isMobile={isMobile} />

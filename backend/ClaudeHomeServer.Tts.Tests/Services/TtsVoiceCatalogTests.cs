@@ -133,4 +133,87 @@ public class TtsVoiceCatalogTests
         info.Gender.Should().Be(TtsVoiceCatalog.Gender.Female);
         info.Roles.Should().BeEquivalentTo(roles);
     }
+
+    // --- LiveTTS: модель — поле каталога, тумблер — чистые функции с флагом аргументом ---
+
+    private static readonly string[] LiveTtsVoices = ["sofia", "vera", "irina", "denis", "sergey", "vasily"];
+
+    // Амплуа LiveTTS замерены живыми запросами 24.10.2026 (MP3, без speed); neutral не пишем:
+    // у четырёх голосов явный neutral — 400, у denis и irina он равен «без роли»
+    [Theory]
+    [InlineData("sofia", TtsVoiceCatalog.Gender.Female, new[] { "casual", "support" })]
+    [InlineData("vera", TtsVoiceCatalog.Gender.Female, new[] { "casual", "support" })]
+    [InlineData("irina", TtsVoiceCatalog.Gender.Female, new[] { "formal", "support", "narrator", "sales" })]
+    [InlineData("denis", TtsVoiceCatalog.Gender.Male, new[] { "casual", "formal", "sales" })]
+    [InlineData("sergey", TtsVoiceCatalog.Gender.Male, new[] { "support", "sales" })]
+    [InlineData("vasily", TtsVoiceCatalog.Gender.Male, new[] { "support", "sales" })]
+    public void LiveTts_ГолосаСМодельюПоломИАмплуа(string voice, TtsVoiceCatalog.Gender gender, string[] roles)
+    {
+        var info = TtsVoiceCatalog.All.Single(v => v.Voice == voice);
+        info.Model.Should().Be(TtsVoiceCatalog.LiveTts);
+        info.Gender.Should().Be(gender);
+        info.Roles.Should().BeEquivalentTo(roles);
+        info.Roles.Should().NotContain("neutral");
+        TtsVoiceCatalog.ModelFor(voice).Should().Be(TtsVoiceCatalog.LiveTts);
+        TtsVoiceCatalog.SupportsSpeed(voice).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Модель_УКаждогоГолоса_ИLiveTtsТолькоУШести()
+    {
+        TtsVoiceCatalog.All.Should().OnlyContain(v =>
+            v.Model == TtsVoiceCatalog.General || v.Model == TtsVoiceCatalog.LiveTts);
+        TtsVoiceCatalog.All.Where(v => v.Model == TtsVoiceCatalog.LiveTts).Select(v => v.Voice)
+            .Should().BeEquivalentTo(LiveTtsVoices);
+        TtsVoiceCatalog.ModelFor("zahar").Should().Be(TtsVoiceCatalog.General);
+        TtsVoiceCatalog.ModelFor("madirus").Should().Be(TtsVoiceCatalog.General);
+        TtsVoiceCatalog.ModelFor("зорро").Should().Be(TtsVoiceCatalog.General);
+        TtsVoiceCatalog.SupportsSpeed("zahar").Should().BeTrue();
+    }
+
+    [Fact]
+    public void LiveTts_ВКонцеСвоихГрупп_НикогдаНеПервыми()
+    {
+        // От порядка зависит «первый голос» редактора звука: дорогая модель не должна стать
+        // умолчанием ни в одной группе
+        foreach (var gender in new[] { TtsVoiceCatalog.Gender.Female, TtsVoiceCatalog.Gender.Male })
+        {
+            var group = TtsVoiceCatalog.All.Where(v => v.Gender == gender).Select(v => v.Model).ToList();
+            group[0].Should().Be(TtsVoiceCatalog.General);
+            var firstLive = group.IndexOf(TtsVoiceCatalog.LiveTts);
+            firstLive.Should().BePositive();
+            group.Skip(firstLive).Should().OnlyContain(m => m == TtsVoiceCatalog.LiveTts,
+                "после первого голоса LiveTTS в группе идут только голоса LiveTTS");
+        }
+    }
+
+    [Fact]
+    public void Тумблер_Visible_ПрячетLiveTtsТолькоПриВыключенном()
+    {
+        TtsVoiceCatalog.Visible(false).Should().NotContain(v => LiveTtsVoices.Contains(v.Voice));
+        TtsVoiceCatalog.Visible(false).Should().HaveCount(TtsVoiceCatalog.All.Count - LiveTtsVoices.Length);
+        TtsVoiceCatalog.Visible(true).Should().Equal(TtsVoiceCatalog.All);
+    }
+
+    [Fact]
+    public void Тумблер_IsAvailable_ПроLiveTts_АIsKnownОтНегоНеЗависит()
+    {
+        TtsVoiceCatalog.IsAvailable("sofia", false).Should().BeFalse();
+        TtsVoiceCatalog.IsAvailable("sofia", true).Should().BeTrue();
+        TtsVoiceCatalog.IsAvailable("zahar", false).Should().BeTrue();
+        // Полный каталог знает голос всегда: иначе загрузка персон и откат теряли бы его
+        TtsVoiceCatalog.IsKnown("sofia").Should().BeTrue();
+        TtsVoiceCatalog.Canonical("SOFIA").Should().Be("sofia");
+    }
+
+    [Fact]
+    public void Тумблер_ПустойКонфиг_Выключен()
+    {
+        static Microsoft.Extensions.Configuration.IConfiguration Cfg(Dictionary<string, string?> v) =>
+            new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(v).Build();
+
+        TtsVoiceCatalog.LiveTtsEnabled(Cfg([])).Should().BeFalse();
+        TtsVoiceCatalog.LiveTtsEnabled(Cfg(new() { [TtsVoiceCatalog.LiveTtsEnabledKey] = "true" })).Should().BeTrue();
+        TtsVoiceCatalog.LiveTtsEnabled(Cfg(new() { [TtsVoiceCatalog.LiveTtsEnabledKey] = "false" })).Should().BeFalse();
+    }
 }

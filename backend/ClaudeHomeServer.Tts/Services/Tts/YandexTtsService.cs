@@ -36,6 +36,9 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
     // а не в коде. Дефолт — 0,1626 ₽ (снято 20.08.2026, docs/research/speechkit-pricing.md §1)
     private readonly double _rubPerRequest =
         config.GetValue<double?>("Yandex:SpeechKit:RubPerRequest") ?? 0.1626;
+    // LiveTTS тарифицируется отдельно: 0,25 ₽ за запрос (снято 24.10.2026, тот же прайс)
+    private readonly double _liveTtsRubPerRequest =
+        config.GetValue<double?>("Yandex:SpeechKit:LiveTtsRubPerRequest") ?? 0.25;
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_folderId);
 
@@ -58,6 +61,13 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
 
         var client = http.CreateClient(HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(30);
+
+        // Модель в одном вызове одна — по голосу, поэтому и цена запроса одна на весь текст
+        var price = TtsVoiceCatalog.ModelFor(voice.Voice) == TtsVoiceCatalog.LiveTts
+            ? _liveTtsRubPerRequest
+            : _rubPerRequest;
+        // Округление до копеек — иначе в JSONL расхода поедут хвосты double
+        double Rub(int requests) => Math.Round(requests * price, 4);
 
         var billed = 0;
         using var result = new MemoryStream();
@@ -88,9 +98,6 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             : new TtsResult(null, billed, Rub(billed));
     }
 
-    // Рубли за N запросов; округление до копеек — иначе в JSONL расхода поедут хвосты double
-    private double Rub(int requests) => Math.Round(requests * _rubPerRequest, 4);
-
     // Accepted — Яндекс ответил успехом, то есть запрос затарифицирован (даже если аудио в
     // ответе не оказалось). Отказ и обрыв связи — Accepted=false, см. комментарий у SynthesizeAsync.
     private async Task<(byte[]? Audio, bool Accepted)> SynthesizeChunkAsync(HttpClient client,
@@ -106,14 +113,21 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             using var resp = await client.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
             {
-                // 403 при живом ключе — почти всегда не тот ключ, а не та РОЛЬ: без отдельного
-                // сообщения причина полдня ищется не там (ключ-то работает в STT)
-                if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                var error = await resp.Content.ReadAsStringAsync(ct);
+                // 403 при живом ключе — два разных случая, и без отдельного сообщения причина
+                // полдня ищется не там: «Feature permission denied» — LiveTTS не включена на
+                // аккаунте/облаке; иначе почти всегда не та РОЛЬ (ключ-то работает в STT)
+                if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden
+                    && error.Contains("Feature permission denied", StringComparison.OrdinalIgnoreCase))
+                    logger.LogWarning("SpeechKit отверг синтез голосом «{Voice}» (403): LiveTTS (фича) не включена " +
+                                      "на аккаунте/облаке SpeechKit — выключи {Key} или включи фичу в облаке.",
+                        voice.Voice, TtsVoiceCatalog.LiveTtsEnabledKey);
+                else if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
                     logger.LogWarning("SpeechKit отверг синтез (403): ключ жив, но у сервисного аккаунта " +
                                       "нет роли ai.speechkit-tts.user — выдай её в Yandex Cloud.");
                 else
                     logger.LogWarning("SpeechKit ответил {Status} на синтез: {Body}",
-                        (int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
+                        (int)resp.StatusCode, error);
                 return (null, false);
             }
 
@@ -135,20 +149,30 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
 
     // Тело запроса v3. hints — массив, где каждый элемент задаёт ОДНУ подсказку: голос,
     // скорость и роль в один объект не сложить.
+    //
+    // ЕДИНСТВЕННАЯ точка правила «модель по голосу»: VoiceChoice собирают два места
+    // (VoiceResolver и YandexTtsEngine для модуля «Звук»), и правило в любом из них оставило
+    // бы второе без него. У LiveTTS — поле model и никогда speed (на него 400, что бы ни
+    // пришло в VoiceChoice); у general — speed и никакого model, как было до LiveTTS.
     private static string BuildPayload(string text, VoiceChoice voice)
     {
+        var liveTts = TtsVoiceCatalog.ModelFor(voice.Voice) == TtsVoiceCatalog.LiveTts;
+
         // Роль добавляется только когда она есть: пустая строка в hints — это для SpeechKit
         // не «нейтрально», а ошибка 400
-        var hints = new List<object> { new { voice = voice.Voice }, new { speed = voice.Speed } };
+        var hints = new List<object> { new { voice = voice.Voice } };
+        if (!liveTts) hints.Add(new { speed = voice.Speed });
         if (!string.IsNullOrWhiteSpace(voice.Role)) hints.Add(new { role = voice.Role });
 
-        return JsonSerializer.Serialize(new
+        var payload = new Dictionary<string, object>
         {
-            text,
-            outputAudioSpec = new { containerAudio = new { containerAudioType = "MP3" } },
-            hints,
-            loudnessNormalizationType = "LUFS",
-        });
+            ["text"] = text,
+            ["outputAudioSpec"] = new { containerAudio = new { containerAudioType = "MP3" } },
+            ["hints"] = hints,
+            ["loudnessNormalizationType"] = "LUFS",
+        };
+        if (liveTts) payload["model"] = TtsVoiceCatalog.LiveTts;
+        return JsonSerializer.Serialize(payload);
     }
 
     // Ответ v3 — поток JSON-объектов, по строке на кусок аудио; данные лежат в

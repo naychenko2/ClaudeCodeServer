@@ -8,22 +8,27 @@ namespace ClaudeHomeServer.Services.Tts;
 // В отличие от VoiceResolver голосового режима, здесь кривой вход — отказ, а не тихий дефолт:
 // человек выбрал голос и амплуа в операции явно, и подменить их молча значит отдать ему не то,
 // за что он заплатил.
-public sealed class YandexTtsEngine(YandexTtsService tts) : ITtsEngine
+public sealed class YandexTtsEngine(YandexTtsService tts, IConfiguration config) : ITtsEngine
 {
     // Предел одной операции модуля; запросы SpeechKit по 249 символов нарезает сам сервис
     public const int MaxTextChars = 3000;
 
-    private static readonly IReadOnlyList<TtsEngineVoice> VoiceList =
-        TtsVoiceCatalog.All.Select(v => new TtsEngineVoice(v.Voice, v.Label, v.Roles)).ToArray();
+    // Тумблер LiveTTS читается один раз (сервис Singleton): выключен — голосов LiveTTS в шве
+    // нет вовсе, и модуль «Звук» не покажет их модель
+    private readonly bool _liveTts = TtsVoiceCatalog.LiveTtsEnabled(config);
 
-    private static readonly IReadOnlyList<string> RoleList =
-        VoiceList.SelectMany(v => v.Roles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    private readonly IReadOnlyList<TtsEngineVoice> _voices =
+        TtsVoiceCatalog.Visible(TtsVoiceCatalog.LiveTtsEnabled(config))
+            .Select(v => new TtsEngineVoice(v.Voice, v.Label, v.Roles)).ToArray();
+
+    private IReadOnlyList<string>? _roles;
 
     public bool Configured => tts.IsConfigured;
 
-    public IReadOnlyList<TtsEngineVoice> Voices => VoiceList;
+    public IReadOnlyList<TtsEngineVoice> Voices => _voices;
 
-    public IReadOnlyList<string> Roles => RoleList;
+    public IReadOnlyList<string> Roles =>
+        _roles ??= _voices.SelectMany(v => v.Roles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     public int MaxChars => MaxTextChars;
 
@@ -41,6 +46,8 @@ public sealed class YandexTtsEngine(YandexTtsService tts) : ITtsEngine
 
         var name = TtsVoiceCatalog.Canonical(voice);
         if (name is null) return TtsSynthesis.Fail($"Голос «{voice}» Яндексу незнаком.");
+        if (!TtsVoiceCatalog.IsAvailable(name, _liveTts))
+            return TtsSynthesis.Fail($"Голос «{name}» (LiveTTS) недоступен на этом сервере.");
 
         var wantedRole = string.IsNullOrWhiteSpace(role) ? null : role.Trim();
         if (wantedRole is not null && !TtsVoiceCatalog.SupportsRole(name, wantedRole))

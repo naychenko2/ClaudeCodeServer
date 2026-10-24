@@ -163,9 +163,13 @@ public class YandexTtsServiceTests
     private sealed class StubHandler(Func<int, HttpResponseMessage> respond) : HttpMessageHandler
     {
         public int Calls;
+        public readonly List<string> Bodies = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => Task.FromResult(respond(Interlocked.Increment(ref Calls)));
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Bodies.Add(await request.Content!.ReadAsStringAsync(ct));
+            return respond(Interlocked.Increment(ref Calls));
+        }
     }
 
     private sealed class StubHttpFactory(HttpMessageHandler handler) : IHttpClientFactory
@@ -173,7 +177,8 @@ public class YandexTtsServiceTests
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 
-    private static YandexTtsService MakeLive(StubHandler handler, double? rubPerRequest = null)
+    private static YandexTtsService MakeLive(StubHandler handler, double? rubPerRequest = null,
+        double? liveTtsRubPerRequest = null)
     {
         var values = new Dictionary<string, string?>
         {
@@ -181,6 +186,8 @@ public class YandexTtsServiceTests
             ["Yandex:SpeechKit:FolderId"] = "folder",
         };
         if (rubPerRequest is { } r) values["Yandex:SpeechKit:RubPerRequest"] = r.ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        if (liveTtsRubPerRequest is { } l) values["Yandex:SpeechKit:LiveTtsRubPerRequest"] = l.ToString(
             System.Globalization.CultureInfo.InvariantCulture);
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
         return new YandexTtsService(new StubHttpFactory(handler), config,
@@ -258,5 +265,65 @@ public class YandexTtsServiceTests
 
         res.Audio.Should().BeNull();
         res.BilledRequests.Should().Be(1);
+    }
+
+    // --- тело запроса по модели голоса: снимается перехватом HTTP, BuildPayload не открываем ---
+
+    private static async Task<System.Text.Json.JsonElement> BodyFor(VoiceChoice voice)
+    {
+        var handler = new StubHandler(_ => AudioOk());
+        await MakeLive(handler).SynthesizeAsync("Привет.", voice);
+        handler.Bodies.Should().ContainSingle();
+        return System.Text.Json.JsonDocument.Parse(handler.Bodies[0]).RootElement.Clone();
+    }
+
+    private static List<string> HintNames(System.Text.Json.JsonElement body) =>
+        [.. body.GetProperty("hints").EnumerateArray().Select(h => h.EnumerateObject().Single().Name)];
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("casual")]
+    public async Task Тело_LiveTts_ЕстьModel_НетSpeed(string? role)
+    {
+        // speed у LiveTTS — 400, поэтому он выкидывается, что бы ни пришло в VoiceChoice
+        var body = await BodyFor(new VoiceChoice("sofia", role, 1.4));
+
+        body.GetProperty("model").GetString().Should().Be("livetts");
+        HintNames(body).Should().NotContain("speed");
+        HintNames(body).Should().Equal(role is null ? ["voice"] : ["voice", "role"]);
+        body.GetProperty("outputAudioSpec").GetProperty("containerAudio")
+            .GetProperty("containerAudioType").GetString().Should().Be("MP3");
+        body.GetProperty("loudnessNormalizationType").GetString().Should().Be("LUFS");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("good")]
+    public async Task Тело_General_НетModel_ЕстьSpeed(string? role)
+    {
+        // general работает без поля model — как и до LiveTTS, лишний ключ не шлём
+        var body = await BodyFor(new VoiceChoice("zahar", role, 1.4));
+
+        body.TryGetProperty("model", out _).Should().BeFalse();
+        HintNames(body).Should().Equal(role is null ? ["voice", "speed"] : ["voice", "speed", "role"]);
+        body.GetProperty("hints")[1].GetProperty("speed").GetDouble().Should().Be(1.4);
+    }
+
+    [Fact]
+    public async Task Цена_LiveTts_ПоСвоемуКлючу_ДефолтЧетвертьРубля()
+    {
+        var handler = new StubHandler(_ => AudioOk());
+        var byDefault = await MakeLive(handler, rubPerRequest: 0.1626)
+            .SynthesizeAsync(TwoChunkText(), new VoiceChoice("irina", null, 1.0));
+        byDefault.BilledRequests.Should().Be(2);
+        byDefault.Rub.Should().BeApproximately(0.5, 1e-6, "дефолт LiveTTS — 0,25 ₽ за запрос");
+
+        var configured = await MakeLive(handler, rubPerRequest: 0.1626, liveTtsRubPerRequest: 0.3)
+            .SynthesizeAsync("Привет.", new VoiceChoice("denis", null, 1.0));
+        configured.Rub.Should().BeApproximately(0.3, 1e-6);
+
+        var general = await MakeLive(handler, rubPerRequest: 0.1626, liveTtsRubPerRequest: 0.3)
+            .SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0));
+        general.Rub.Should().BeApproximately(0.1626, 1e-6, "general считается по прежнему ключу");
     }
 }

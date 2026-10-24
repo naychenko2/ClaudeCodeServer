@@ -30,20 +30,26 @@ public class YandexTtsEngineTests
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 
-    private static IConfiguration Config(bool configured) => new ConfigurationBuilder()
-        .AddInMemoryCollection(configured
+    private static IConfiguration Config(bool configured, bool liveTts = false)
+    {
+        var values = configured
             ? new Dictionary<string, string?>
             {
                 ["Yandex:SpeechKit:ApiKey"] = "key",
                 ["Yandex:SpeechKit:FolderId"] = "folder",
                 ["Yandex:SpeechKit:RubPerRequest"] = "0.1626",
             }
-            : [])
-        .Build();
+            : [];
+        if (liveTts) values[TtsVoiceCatalog.LiveTtsEnabledKey] = "true";
+        return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+    }
 
-    private static YandexTtsEngine Make(StubHandler handler, bool configured = true) =>
-        new(new YandexTtsService(new StubHttpFactory(handler), Config(configured),
-            NullLogger<YandexTtsService>.Instance));
+    private static YandexTtsEngine Make(StubHandler handler, bool configured = true, bool liveTts = false)
+    {
+        var config = Config(configured, liveTts);
+        return new(new YandexTtsService(new StubHttpFactory(handler), config,
+            NullLogger<YandexTtsService>.Instance), config);
+    }
 
     private static HttpResponseMessage AudioOk() => new(HttpStatusCode.OK)
     {
@@ -172,6 +178,48 @@ public class YandexTtsEngineTests
         engine.Roles.Should().BeEquivalentTo("good", "evil", "friendly", "whisper", "strict");
         engine.MinSpeed.Should().Be(0.1);
         engine.MaxSpeed.Should().Be(3.0);
+    }
+
+    // --- LiveTTS через шов: путь модуля «Звук» собирает VoiceChoice в обход VoiceResolver ---
+
+    [Fact]
+    public async Task LiveTts_СофияСоСкоростьюБезРоли_ЕстьModel_НетSpeed_НетRole()
+    {
+        // Правило модели живёт в BuildPayload: шов передаёт скорость как есть, а в теле её
+        // быть не должно — LiveTTS ответил бы 400 на любой speed
+        var handler = new StubHandler(_ => AudioOk());
+        var res = await Make(handler, liveTts: true)
+            .SynthesizeAsync("Привет.", "sofia", null, 1.2, CancellationToken.None);
+
+        res.Error.Should().BeNull();
+        res.Rub.Should().BeApproximately(0.25, 1e-6, "цена LiveTTS — своя, по модели запроса");
+        handler.Bodies[0].Should().Contain("\"model\":\"livetts\"")
+            .And.Contain("\"voice\":\"sofia\"")
+            .And.NotContain("speed")
+            .And.NotContain("role");
+    }
+
+    [Fact]
+    public void LiveTts_ТумблерВыключен_ГолосовLiveTtsВШвеНет()
+    {
+        var off = Make(new StubHandler(_ => AudioOk()));
+        off.Voices.Should().NotContain(v => TtsVoiceCatalog.ModelFor(v.Voice) == TtsVoiceCatalog.LiveTts);
+        off.Roles.Should().NotContain("casual");
+
+        var on = Make(new StubHandler(_ => AudioOk()), liveTts: true);
+        on.Voices.Select(v => v.Voice).Should().Contain(["sofia", "vera", "irina", "denis", "sergey", "vasily"]);
+        on.Roles.Should().Contain(["casual", "support", "sales", "formal", "narrator"]);
+    }
+
+    [Fact]
+    public async Task LiveTts_ТумблерВыключен_СинтезГолосомLiveTts_ОтказБезЗапроса()
+    {
+        var handler = new StubHandler(_ => AudioOk());
+        var res = await Make(handler).SynthesizeAsync("Привет.", "sofia", null, 1.0, CancellationToken.None);
+
+        res.Audio.Should().BeNull();
+        res.Error.Should().Contain("sofia");
+        handler.Calls.Should().Be(0);
     }
 
     [Fact]

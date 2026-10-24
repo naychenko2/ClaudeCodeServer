@@ -32,9 +32,10 @@ public class VoiceResolverTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private VoiceResolver Make(string? configuredVoice = null, double? configuredSpeed = null)
+    private VoiceResolver Make(string? configuredVoice = null, double? configuredSpeed = null, bool liveTts = false)
     {
         var values = new Dictionary<string, string?>();
+        if (liveTts) values[TtsVoiceCatalog.LiveTtsEnabledKey] = "true";
         if (configuredVoice is not null) values["Yandex:SpeechKit:Voice"] = configuredVoice;
         if (configuredSpeed is not null)
             values["Yandex:SpeechKit:Speed"] = configuredSpeed.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -101,9 +102,46 @@ public class VoiceResolverTests : IDisposable
     public void НезнакомыйГолосПерсоны_Дефолт()
     {
         // Голос переименовали в SpeechKit или json правили руками — озвучка обязана жить
-        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "зорро" });
+        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "зорро", Role = "casual" });
 
-        Make("zahar").Resolve(persona.Id, "user-1").Voice.Should().Be("zahar");
+        // Без исключения и с голосом general: старый бинарь с голосом LiveTTS в personas.json
+        // попадает ровно сюда, и откат обязан звучать, а не падать
+        var resolver = Make("zahar");
+        var choice = resolver.Invoking(r => r.Resolve(persona.Id, "user-1")).Should().NotThrow().Subject;
+        choice.Voice.Should().Be("zahar");
+        choice.Role.Should().BeNull();
+        TtsVoiceCatalog.ModelFor(choice.Voice).Should().Be(TtsVoiceCatalog.General);
+    }
+
+    // --- LiveTTS: тумблер решает, звучит ли голос; без него — голос инстанса, как при откате ---
+
+    [Fact]
+    public void LiveTts_ТумблерВыключен_ГолосПерсоныЗаменяетсяГолосомИнстанса()
+    {
+        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "sofia", Role = "casual" });
+
+        var choice = Make("zahar").Resolve(persona.Id, "user-1");
+
+        choice.Voice.Should().Be("zahar");
+        choice.Role.Should().BeNull("амплуа sofia у голоса инстанса нет");
+    }
+
+    [Fact]
+    public void LiveTts_ТумблерВключён_ГолосИАмплуаПерсоны()
+    {
+        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "sofia", Role = "casual", Speed = 1.3 });
+
+        var choice = Make("zahar", liveTts: true).Resolve(persona.Id, "user-1");
+
+        // Темп остаётся в VoiceChoice — выкидывает его BuildPayload, единая точка правила
+        choice.Should().BeEquivalentTo(new VoiceChoice("sofia", "casual", 1.3));
+    }
+
+    [Fact]
+    public void LiveTts_ГолосИнстансаВКонфигеПриВыключенномТумблере_Дефолт()
+    {
+        Make("sofia").Resolve(null, "user-1").Voice.Should().Be(TtsVoiceCatalog.Default);
+        Make("sofia", liveTts: true).Resolve(null, "user-1").Voice.Should().Be("sofia");
     }
 
     [Fact]

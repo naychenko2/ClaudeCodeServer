@@ -22,7 +22,9 @@ public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, 
 
     // Дефолты инстанса читаются один раз: сервис Singleton, поэтому предупреждение об
     // опечатке в конфиге печатается на старте, а не на каждую фразу
-    private readonly string _defaultVoice = ResolveConfiguredVoice(config["Yandex:SpeechKit:Voice"], logger);
+    private readonly bool _liveTts = TtsVoiceCatalog.LiveTtsEnabled(config);
+    private readonly string _defaultVoice = ResolveConfiguredVoice(config["Yandex:SpeechKit:Voice"],
+        TtsVoiceCatalog.LiveTtsEnabled(config), logger);
     private readonly double _defaultSpeed = Clamp(config.GetValue<double?>("Yandex:SpeechKit:Speed") ?? 1.0);
 
     // Голос для озвучки текста. personaId приходит от клиента и может быть чужим
@@ -47,8 +49,11 @@ public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, 
     private VoiceChoice ForPersonaVoice(PersonaVoice voice)
     {
         // Незнакомый голос (переименовали в SpeechKit, правили json руками) — дефолтный:
-        // роль при этом теряет смысл, её набор у каждого голоса свой
-        var name = TtsVoiceCatalog.IsKnown(voice.Voice) ? voice.Voice!.Trim() : _defaultVoice;
+        // роль при этом теряет смысл, её набор у каждого голоса свой. Так же — голос LiveTTS
+        // при выключенном тумблере: персона молча звучит голосом инстанса, как при откате
+        var name = TtsVoiceCatalog.IsKnown(voice.Voice) && TtsVoiceCatalog.IsAvailable(voice.Voice, _liveTts)
+            ? voice.Voice!.Trim()
+            : _defaultVoice;
         var role = TtsVoiceCatalog.SupportsRole(name, voice.Role) ? voice.Role!.Trim() : null;
         var speed = voice.Speed is { } s ? Clamp(s) : _defaultSpeed;
         return new VoiceChoice(name, role, speed);
@@ -56,11 +61,13 @@ public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, 
 
     private static double Clamp(double speed) => Math.Clamp(speed, MinSpeed, MaxSpeed);
 
-    private static string ResolveConfiguredVoice(string? configured, ILogger logger)
+    private static string ResolveConfiguredVoice(string? configured, bool liveTts, ILogger logger)
     {
-        var voice = TtsVoiceCatalog.Resolve(configured);
-        if (!string.IsNullOrWhiteSpace(configured) && !TtsVoiceCatalog.IsKnown(configured))
-            logger.LogWarning("Голос синтеза «{Voice}» не значится среди голосов SpeechKit v3 — " +
+        // Голос LiveTTS в конфиге при выключенном тумблере — как незнакомый: иначе каждая
+        // фраза инстанса упиралась бы в 403 и уходила на голос браузера
+        var voice = TtsVoiceCatalog.IsAvailable(configured, liveTts) ? TtsVoiceCatalog.Resolve(configured) : TtsVoiceCatalog.Default;
+        if (!string.IsNullOrWhiteSpace(configured) && voice != configured.Trim())
+            logger.LogWarning("Голос синтеза «{Voice}» не значится среди доступных голосов SpeechKit v3 — " +
                               "озвучка пойдёт голосом «{Fallback}». Проверь Yandex:SpeechKit:Voice.",
                 configured, voice);
         return voice;

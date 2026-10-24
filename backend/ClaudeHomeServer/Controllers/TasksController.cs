@@ -444,14 +444,14 @@ public class TasksController(
             var callerIsExecutor =
                 User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
                 && (callerSession is null || callerSession.TaskId == taskId);
-            // Закрытие и возобновление эпика фичи — только из чата человека: сервисный токен без сессии
-            // (fail-closed) или из чата-исполнителя любой задачи (Session.TaskId задан), либо делегированный
-            // ход (глубина > 0). Предикат один для обоих гардов (дефект df85c799): отказ бросает
-            // TaskManager (FeatureCloseDenied/FeatureReopenDenied) — предиката здесь нет.
-            var denyFeature =
-                (User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
-                    && (callerSession is null || callerSession.TaskId is not null))
-                || (callerSessionHeader is not null && !DelegatedTurnGate.Decide(
+            // Закрытие и возобновление эпика фичи — только из чата человека. Предикат один для
+            // обеих дверей (дефект df85c799) и записан в спинке (FeatureTurnGate, Core): здесь
+            // только входы пути — тип токена и сессия-вызывающий. Отказ бросает TaskManager
+            // (FeatureCloseDenied/FeatureReopenDenied).
+            var denyFeature = FeatureTurnGate.DenyFeature(
+                User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind,
+                callerSession, callerSessionHeader,
+                () => !DelegatedTurnGate.Decide(
                     sessions, UserId, callerSessionHeader, "Закрытие/возобновление фичи",
                     alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
             updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor,

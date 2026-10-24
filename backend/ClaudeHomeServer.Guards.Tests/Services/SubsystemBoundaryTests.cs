@@ -1931,6 +1931,11 @@ public class SubsystemBoundaryTests
         // TaskUrl — в корневном namespace, поимённо; Services.Tasks в allow-list не добавляется.
         "ClaudeHomeServer.Services.FeatureHoldException",
         "ClaudeHomeServer.Services.FeatureKeyChain",
+        // Общий предикат «фичу закрывает/возобновляет только человек» (хвост B статуса-модели,
+        // пункт 1 вердикта 3d2d793c): композицию читают корневый TasksController и TasksToolset —
+        // одна точка правды вместо двух записей. По прецеденту FeatureKeyChain — в корневном
+        // namespace, поимённо.
+        "ClaudeHomeServer.Services.FeatureTurnGate",
         "ClaudeHomeServer.Services.ImageAssetHelper",
         "ClaudeHomeServer.Services.InstanceSecretFiles",
         "ClaudeHomeServer.Services.SessionChangedPaths",

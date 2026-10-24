@@ -918,14 +918,14 @@ public sealed class TasksToolset(
     private static McpToolCallResult Json<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOpts));
 
-    // Закрытие эпика фичи — только человеком: запрет из чата-исполнителя любой задачи
-    // (Session.TaskId задан) и на делегированном ходу (глубина > 0). Из чата человека
-    // (TaskId == null) на глубине 0 проходит.
+    // Закрытие/возобновление эпика фичи — только человеком: сам предикат в спинке
+    // (FeatureTurnGate, Core), здесь только параметры MCP-двери: всегда сервисный токен,
+    // сессия-вызывающий известна, вызов без неё — отказ (fail-closed).
     private bool DenyFeatureClose(Session session, string ownerId) =>
-        session.TaskId is not null
-        || !DelegatedTurnGate.Decide(sessions, ownerId, session.Id, "Закрытие/возобновление фичи",
-            alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
-            failOpenWhenUnknown: false).Allowed;
+        FeatureTurnGate.DenyFeature(true, session, session.Id,
+            () => !DelegatedTurnGate.Decide(sessions, ownerId, session.Id, "Закрытие/возобновление фичи",
+                alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
+                failOpenWhenUnknown: false).Allowed);
 
     private static McpToolCallResult Deny(string text) => new(text, IsError: true);
 

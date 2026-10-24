@@ -844,7 +844,7 @@ public class TasksController(
     public record FeatureHoldRequest(string? Reason);
 
     [HttpPost("features/{featureId}/hold")]
-    public IActionResult SetFeatureHold(string featureId, [FromBody] FeatureHoldRequest? req)
+    public async Task<IActionResult> SetFeatureHold(string featureId, [FromBody] FeatureHoldRequest? req)
     {
         if (IsServiceToken)
             return StatusCode(403, new { error = "Удержание фичи ставит только человек" });
@@ -888,6 +888,19 @@ public class TasksController(
         // что «Стоп»: процесс гасится, очередь замораживается, прерванный ход не присылает result
         // и не докладывает постановщику. Ключевой чат оркестратора не трогается — внутри сервиса.
         executor.InterruptFeatureTurnsOnHold(featureId, UserId);
+        // Дефект 8a94dede (возврат QA): постановка паузы молчала — страница фичи и список
+        // задач остаются «идёт» после «Пауза», экран противоречит тосту. Снятие вещает
+        // (TaskExecutionService.cs:1343), поэтому здесь — тот же формат: task_changed(updated)
+        // в группу владельца для эпика (с Hold — проектор по нему считает state=paused)
+        // и каждого шага, помеченного этой паузой. Без вещания стор обновляется только по
+        // снятию — асимметрия, которую Вера и зафиксировала.
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
+        foreach (var t in tasks.GetByOwner(UserId))
+        {
+            if (t.FeatureId != featureId) continue;
+            if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
+            await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", t));
+        }
         // W4-HOLD-D2 (контракт :364): ответ — прерванные этой паузой задачи. Тот же набор,
         // что поле run.interrupted на странице («на паузе» читает его, а не пустой now), —
         // не отдельный счёт. Повторный hold с тем же reason идемпотентен по записи и Since,

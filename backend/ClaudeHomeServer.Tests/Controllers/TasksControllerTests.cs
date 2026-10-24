@@ -23,7 +23,9 @@ using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -2254,12 +2256,12 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // Сервисный токен → 403. Мутация (критерий c1): убрать проверку IsServiceToken в
     // SetFeatureHold — этот тест падает (без неё ручка дошла бы до SetHold и вернула 200).
     [Fact]
-    public void PostHold_ServiceToken_Returns403()
+    public async Task PostHold_ServiceToken_Returns403()
     {
-        var epicId = CreateFeatureEpicAsync().GetAwaiter().GetResult();
+        var epicId = await CreateFeatureEpicAsync();
         var controller = BuildController(RealGit(), serviceToken: true);
 
-        var result = controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"));
+        var result = await controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"));
 
         result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
     }
@@ -2401,7 +2403,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var controller = BuildController(RealGit());
 
         var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)
-            controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"))!;
+            await controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"));
         result.StatusCode.Should().Be(200);
 
         var journal = _factory.Services.GetRequiredService<FeatureJournalStore>();
@@ -2434,6 +2436,70 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         interrupted.Should().Contain(stepId, "идущий ход прерван — он в ответе");
         interrupted.Should().NotContain(otherId, "уже остановленный по другой причине — не прерванный паузой");
+    }
+
+    // Дефект 8a94dede (возврат QA): POST hold молчал — стор страницы фичи и стор списка
+    // задач живут только по task_changed, поэтому после «Паузы» тег оставался «идёт» и
+    // кнопка «Снять паузу» не появлялась. Фикс: ручка вещает эпик и каждый помеченный шаг.
+    // Ловим через живой SignalR (прецедент: TagsApply в WorkspaceHttpOwnerIsolationTests):
+    // после POST hold в группе владельца — task_changed(«updated») с Hold у эпика (по нему
+    // проектор считает state=paused) и пометкой feature_held у шага. Мутация: убрать
+    // вещание в SetFeatureHold — ожидание событий таймит, тест краснеет.
+    [Fact]
+    public async Task PostHold_BroadcastsTaskChanged_EpicAndMarkedStep()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг B1", featureId = epicId, role = "step", status = "inProgress",
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.MarkClaudeStarted(stepId, "sess-b1", DateTime.UtcNow); // идущий ход — пауза его помечает.
+
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        var connection = new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "hubs/session"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
+                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+            })
+            .Build();
+
+        var got = new ConcurrentDictionary<string, JsonElement>();
+        var both = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("message", msg =>
+        {
+            if (!msg.TryGetProperty("type", out var type) || type.GetString() != "task_changed") return;
+            var id = msg.GetProperty("task").GetProperty("id").GetString();
+            if (id != epicId && id != stepId) return;
+            got[id] = msg;
+            if (got.ContainsKey(epicId) && got.ContainsKey(stepId)) both.TrySetResult(true);
+        });
+        try
+        {
+            await connection.StartAsync();
+            await connection.InvokeAsync("JoinUser", me.GetProperty("userId").GetString());
+
+            var response = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold",
+                new { reason = "manual" });
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var winner = await Task.WhenAny(both.Task, Task.Delay(15_000));
+            winner.Should().Be(both.Task,
+                "пауза обязана дойти до группы владельца живьём: task_changed по эпику и по помеченному шагу");
+
+            // Эпик в событии — с Hold: это ровно тот признак, по которому FeatureProjector.IsPaused
+            // (FeatureProjector.cs:1520) считает state=paused — экран после события его покажет.
+            got[epicId].GetProperty("action").GetString().Should().Be("updated");
+            got[epicId].GetProperty("task").GetProperty("hold").ValueKind.Should().NotBe(JsonValueKind.Null);
+            // Шаг — с пометкой feature_held: карточка в списке показывает «на паузе».
+            got[stepId].GetProperty("task").GetProperty("executorStopReason").GetString()
+                .Should().Be(ExecutorStopClassifier.FeatureHeldReason);
+        }
+        finally { await connection.DisposeAsync(); }
     }
 
     // W4-HOLD-D2 (контракт :212): повторный hold с тем же reason идемпотентен — Since не
@@ -2473,8 +2539,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var journal = _factory.Services.GetRequiredService<FeatureJournalStore>();
         var controller = BuildController(RealGit(), journal: journal);
 
-        controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"))
-            .Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>();
+        var set = await controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"));
+        set.Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>();
 
         var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.ClearFeatureHold(epicId)!;
         result.StatusCode.Should().Be(200);

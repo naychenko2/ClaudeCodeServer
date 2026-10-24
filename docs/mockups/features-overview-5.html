@@ -33,10 +33,14 @@
   --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
   --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
   --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
-  /* C.mediaScrim / C.onDark — плашка поверх чужой картинки, от темы не зависят (одинаковы в dark) */
-  --c-media-scrim:rgba(0,0,0,.55); --c-on-dark:#FFFFFF;
+  /* C.onDark — белый поверх чужой картинки, от темы не зависит */
+  --c-on-dark:#FFFFFF;
+  /* НОВАЯ пара для точки 7 (правка Андрея: фон плашки белый): светлая плашка поверх чужой картинки.
+     C.mediaChip / C.onMediaChip / C.mediaChipEdge — от темы не зависят, в theme.css идут одинаковыми в обе темы,
+     как C.mediaScrim: под плашкой фото, а не фон приложения. Текст — тёмный, как textHeading светлой темы. */
+  --c-media-chip:rgba(255,255,255,.85); --c-on-media-chip:#2A251F; --c-media-chip-edge:rgba(42,37,31,.16);
   /* Только для сравнения прозрачности в точке 7 (не токены, в продукт не идут) */
-  --x-scrim-40:rgba(0,0,0,.40); --x-scrim-70:rgba(0,0,0,.70); --x-black:#000000;
+  --x-chip-60:rgba(255,255,255,.60); --x-chip-100:#FFFFFF; --x-black:#000000;
   /* Цвета персон — данные (AGENT_COLORS в AgentSelector.tsx), не токены темы */
   --p-orange:#D97757; --p-purple:#6C5CB0; --p-brown:#8A6A28; --p-blue:#3E7CA6; --p-green:#5E8B4E;
 }
@@ -248,15 +252,16 @@ button.tag:hover { box-shadow:0 0 0 1px currentColor; }
 .krole { font-family:"JetBrains Mono",monospace; font-size:10.5px; font-weight:700; color:var(--c-accent); background:var(--c-accent-light); border-radius:6px; padding:0 5px; white-space:nowrap; flex-shrink:0; }
 .hcl { position:absolute; top:50%; right:4px; transform:translateY(-50%); z-index:3; display:flex; background:var(--c-bg-selected); border-radius:10px; box-shadow:var(--shadow-card); }
 .hcl span { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; color:var(--c-text-secondary); }
-/* Плашка 7А: нижние 18 px полосы собеседника (84 px), C.mediaScrim + C.onDark; левый край растворяется маской */
+/* Плашка 7А: нижние 18 px полосы собеседника (84 px), C.mediaChip + C.onMediaChip, сверху волосок C.mediaChipEdge
+   (чтобы на белом фото и на инициалах плашка не сливалась с полосой); левый край растворяется маской */
 .mpl { position:absolute; z-index:2; right:0; bottom:0; width:84px; height:18px; display:flex; align-items:center; justify-content:flex-end; padding:0 6px 0 14px;
   font-family:"JetBrains Mono",monospace; font-size:10px; font-weight:700; letter-spacing:-.2px; white-space:nowrap;
-  background:var(--c-media-scrim); color:var(--c-on-dark);
+  background:var(--c-media-chip); color:var(--c-on-media-chip); box-shadow:inset 0 1px 0 var(--c-media-chip-edge);
   -webkit-mask-image:linear-gradient(to left, #000 80%, transparent); mask-image:linear-gradient(to left, #000 80%, transparent); }
 .mpl span { overflow:hidden; text-overflow:ellipsis; }
 .w360 .mpl { height:20px; }
 .mpl.np { background:none; color:var(--c-text-muted); font-weight:600; -webkit-mask-image:none; mask-image:none; height:16px; }
-.mpl.a40 { background:var(--x-scrim-40); } .mpl.a70 { background:var(--x-scrim-70); }
+.mpl.a60 { background:var(--x-chip-60); } .mpl.a100 { background:var(--x-chip-100); }
 .mpl.tipon { box-shadow:none; }
 .tip { position:absolute; z-index:5; width:230px; padding:8px 10px; border-radius:10px; background:var(--c-bg-white); border:1px solid var(--c-border-light); box-shadow:var(--shadow-dropdown); font-size:12px; color:var(--c-text-primary); }
 .tip b { color:var(--c-text-heading); }
@@ -309,7 +314,7 @@ button.tag:hover { box-shadow:0 0 0 1px currentColor; }
 <!-- ================= ТОЧКА 7 ================= -->
 <section class="pt" id="pt7">
   <h2>7. Плашка модели в нижней части аватара</h2>
-  <p class="brief">Сценарий: <b>«листаю чаты фичи и сразу вижу, где модель поменяли руками: Киру перевели на облако, Глеба — на локальную»</b>. Разметка — настоящая <span class="mono">ChatCard</span>: справа полоса собеседника 84 px (<span class="mono">COMPANION_W</span>), под ней фото или инициалы. Плашка — нижние 18 px этой полосы (на 360 — 20 px), фон <span class="mono">C.mediaScrim</span> (чёрный 55 %, лицо просвечивает), текст <span class="mono">C.onDark</span>, 10 px, моноширинный, жирный, прижат вправо. Левый край плашки растворяется маской, как и лицо. Это вариант 7А из прошлого круга, теперь с подписями для всех моделей и сравнением прозрачности.</p>
+  <p class="brief">Сценарий: <b>«листаю чаты фичи и сразу вижу, где модель поменяли руками: Киру перевели на облако, Глеба — на локальную»</b>. Разметка — настоящая <span class="mono">ChatCard</span>: справа полоса собеседника 84 px (<span class="mono">COMPANION_W</span>), под ней фото или инициалы. Плашка — нижние 18 px этой полосы (на 360 — 20 px), фон <span class="mono">C.mediaChip</span> (белый 85 %, лицо чуть просвечивает), текст <span class="mono">C.onMediaChip</span> (тёмный), сверху волосок <span class="mono">C.mediaChipEdge</span>, 10 px, моноширинный, жирный, прижат вправо. Левый край плашки растворяется маской, как и лицо. Это вариант 7А из прошлого круга, теперь с подписями для всех моделей и сравнением прозрачности.</p>
 
   <div class="h3">Список чатов: 1280 (панель 300 px) и 360</div>
   <p class="note">Худшие случаи собраны нарочно: почти белое фото (Ш3), почти чёрное (Ревью Ш1), инициалы (Ревью Ш3), чат без персоны (разбор логов). У «Хранилища плагина» и «Ш4» модель по умолчанию, поэтому лица чистые. Наведение на плашку открывает подсказку с полным именем модели и умолчанием (на Ш3 подсказка открыта для показа).</p>
@@ -321,8 +326,8 @@ button.tag:hover { box-shadow:0 0 0 1px currentColor; }
   <p class="note">На текст остаётся 64 px (84 минус 14 на растворение слева и 6 справа). Моноширинный шрифт 10 px — это примерно 6 px на знак, то есть <b>10 знаков</b>. Полное имя из каталога в плашку не влезет («DeepSeek Flash», «MiniMax-M3.1-Flash»), поэтому у плашки своя короткая подпись: семейство и версия, без вендора, если версия и так узнаётся. Длиннее 10 знаков — многоточие, полное имя — в подсказке. Подписи ниже — предложение, источник для каждой модели — её короткое имя из каталога. <span class="be">нужен бэк: короткое имя модели в каталоге /api/models (или правило на фронте — решим в спецификации)</span></p>
   <div class="mgrid" id="grid7"></div>
 
-  <div class="h3">Прозрачность: почему 55 %</div>
-  <p class="note">Все три образца — на самом трудном фоне, чисто белом фото. Контраст белого текста посчитан по формуле WCAG. При 40 % лицо видно лучше, но подпись не читается (2.8:1). При 70 % плашка выглядит заплаткой и закрывает подбородок. <span class="mono">C.mediaScrim</span> (55 %) — наименьшая прозрачность, при которой ещё выполняется AA (4.5:1), и этот токен уже подписывает фото в CharacterCard и номера лиц в FaceOverlay. Нового токена не нужно.</p>
+  <div class="h3">Прозрачность белой плашки: предварительно 85 %</div>
+  <p class="note">По правке Андрея фон плашки белый, текст тёмный. Самый трудный фон теперь другой — чисто чёрное фото, все три образца на нём. Контраст тёмного текста (<span class="mono">#2A251F</span>) посчитан по формуле WCAG: даже 60 % дают 5.33:1, так что AA (4.5:1) больше не ограничивает выбор. Решает вид: при 60 % плашка серая и грязная, при 100 % — глухая заплатка. 85 % — 10.7:1, лицо ещё чуть просвечивает. На белом фото и на инициалах в светлой теме белая плашка сливается с полосой (1.06:1 к белому), поэтому сверху стоит волосок <span class="mono">C.mediaChipEdge</span>. Готовой светлой пары поверх картинки в шкале нет (<span class="mono">C.bgWhite</span> и <span class="mono">C.textHeading</span> в тёмной теме меняются местами), поэтому предлагаю новую тройку токенов, одинаковую в обе темы. Прозрачность окончательно — на свёрке с Андреем.</p>
   <div class="alpha" id="alpha7"></div>
 </section>
 
@@ -488,9 +493,9 @@ const render7grid = () => {
   document.getElementById('grid7').innerHTML = MODELS.map(([s, full, p, ph, cut]) =>
     `<div class="mcell${cut ? ' cut' : ''}"><div class="sw cc p" style="--pc:var(--p-${p});padding:0;min-height:64px"><div class="cveil"></div><div class="cface${ph ? ' photo ' + ph : ''}">${ph ? '' : 'К'}</div><span class="mpl"><span>${s}</span></span></div>
       <div class="meta2"><b>${s}</b> · ${s.length} зн. · ${full}</div></div>`).join('');
-  const A = [['a40', '40 %', '2.8:1 — не проходит AA'], ['', '55 % · C.mediaScrim', '4.76:1 — AA ✓'], ['a70', '70 %', '8.5:1 — читается, но заплатка']];
+  const A = [['a60', '60 %', '5.33:1 — AA, но плашка серая'], ['', '85 % · C.mediaChip', '10.7:1 — AA ✓'], ['a100', '100 %', '15.2:1 — глухая заплатка']];
   document.getElementById('alpha7').innerHTML = A.map(([cl, t, c]) =>
-    `<div><p class="cap">${t}</p><div class="sw cc p" style="--pc:var(--p-purple);padding:0;min-height:64px"><div class="cface photo lt"></div><span class="mpl ${cl}"><span>Sonnet 5.5</span></span></div><div class="sm11 sec2" style="margin-top:4px">${c}${cl === '' ? ' <span class="rec">рекомендую</span>' : ''}</div></div>`).join('');
+    `<div><p class="cap">${t}</p><div class="sw cc p" style="--pc:var(--p-purple);padding:0;min-height:64px"><div class="cface photo dk"></div><span class="mpl ${cl}"><span>Sonnet 5.5</span></span></div><div class="sm11 sec2" style="margin-top:4px">${c}${cl === '' ? ' <span class="rec">рекомендую</span>' : ''}</div></div>`).join('');
 };
 const renderAll = () => { render6(); renderGal(); renderSum(); render7(); render7grid(); };
 renderAll();

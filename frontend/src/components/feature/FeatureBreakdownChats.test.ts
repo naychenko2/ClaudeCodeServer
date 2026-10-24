@@ -1,18 +1,21 @@
 // «Чаты группы» (ST-F10). Рендер-тесты на fakeDom: пустой список — блока нет;
 // подпись строки — «шаг · роль» из chatLabel, обрезанного id в тексте нет
-// (regex /[0-9a-f]{8}/); числа строки — formatDuration/formatTokens/formatMoney;
+// (regex /[0-9a-f]{8}/); чисел в строке чата нет (числа группы — в таблице, ST-F11);
 // архивный чат — C.textMuted и «в архиве», переход ровно один с ожидаемым chatId;
-// высота строки 34, на мобильной — 44; склонение счётчика.
+// высота строки 34, на мобильной — 44; склонение счётчика; список резется шестью
+// чатами, остаток — «ещё N» со склонением; блок отделён сверху рамкой, чип шага — 700.
 //
 // Мутации (проверены прогоном): (1) подпись брать из chatId, а не chatLabel —
 // краснеет тест «подпись — «шаг · роль», id в тексте нет»; (2) убрать `archived`
 // в rowStyle — краснеет тест приглушения архивного; (3) `isMobile` не передать в
 // rowStyle — краснеет тест высоты 44; (4) убрать filter(Boolean) — краснеет тест
-// пустого списка; (5) join(' · ') без formatMoney — краснеет тест «бесплатно».
+// пустого списка; (5) вернуть числа в строку (span с numbersText) — краснеет тест
+// «в строке чата нет чисел»; (6) убрать slice(MAX_ROWS) — краснеет тест среза
+// «7 чатов — 6 строк».
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { C, R, FS, SP } from '../../lib/design';
+import { C, R, SP } from '../../lib/design';
 import { FeatureBreakdownChats } from './FeatureBreakdownChats';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
@@ -118,26 +121,15 @@ describe('подпись строки (к1)', () => {
     expect(/[0-9a-f]{8}/.test(text), `в тексте найден id: ${text}`).toBe(false);
   });
 
-  it('числа строки — форматтеры: «12 мин · 5 тыс. · $1,20»', () => {
+  it('в строке чата нет чисел группы: ни «мин», ни «тыс.», ни «$», ни «нет учёта»', () => {
     const { container } = mountChats(mkGroup(), mkRun([mkExecutor({})]));
-    const row = findNodeByAttr(container, 'data-testid', `breakdown-chat-${CHAT_A}`);
-    const text = textOf(row);
-    expect(text).toContain('12 мин');
-    expect(text).toContain('5 тыс.');
-    expect(text).toContain('$1,20');
-  });
-
-  it('0 денег при токенах — «бесплатно», а не $0,00', () => {
-    const { container } = mountChats(mkGroup({ costUsd: 0 }), mkRun([mkExecutor({})]));
     const text = textOf(findNodeByAttr(container, 'data-testid', `breakdown-chat-${CHAT_A}`));
-    expect(text).toContain('бесплатно');
-    expect(text).not.toContain('$0,00');
-  });
-
-  it('без учёта — «нет учёта», пустых кусков нет', () => {
-    const { container } = mountChats(mkGroup({ tokens: null, costUsd: null }), mkRun([mkExecutor({})]));
-    const text = textOf(findNodeByAttr(container, 'data-testid', `breakdown-chat-${CHAT_A}`));
-    expect(text).toContain('12 мин · нет учёта · нет учёта');
+    // Подпись на месте — иначе проверка пустого текста была бы тривиальной.
+    expect(text).toContain('Ш2');
+    expect(text).toContain('доработка');
+    for (const bad of ['мин', 'тыс.', '$', 'нет учёта']) {
+      expect(text, `в строке найдено число «${bad}»: ${text}`).not.toContain(bad);
+    }
   });
 });
 
@@ -188,6 +180,39 @@ describe('высота строки и тач-цель (к3)', () => {
     // Кнопка перехода тоже тач-цель ≥ 40 (NavTargetButton).
     const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
     expect((btn!.style as Record<string, string>).minHeight).toBe('40px');
+  });
+});
+
+describe('срез списка и рамка блока (хвосты макета)', () => {
+  it('7 чатов — 6 строк и строка «ещё 1 чат»', () => {
+    const ids = Array.from({ length: 7 }, (_, i) => `c-${i}`);
+    const { container } = mountChats(mkGroup({ chatIds: ids }), mkRun([]));
+    const block = findNodeByAttr(container, 'data-testid', 'breakdown-chats')!;
+    expect(block.children[1].children.length, 'срез должен быть 6 строк').toBe(6);
+    expect(textOf(block)).toContain('ещё 1 чат');
+  });
+
+  it('8 чатов — «ещё 2 чата»; ровно 6 — строки «ещё» нет', () => {
+    const { container } = mountChats(
+      mkGroup({ chatIds: Array.from({ length: 8 }, (_, i) => `c-${i}`) }), mkRun([]),
+    );
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'breakdown-chats')!)).toContain('ещё 2 чата');
+
+    const six = mountChats(mkGroup({ chatIds: Array.from({ length: 6 }, (_, i) => `c-${i}`) }), mkRun([]));
+    expect(textOf(findNodeByAttr(six.container, 'data-testid', 'breakdown-chats')!)).not.toContain('ещё');
+  });
+
+  it('блок отделён сверху: border-top borderLight, padding-top 12', () => {
+    const { container } = mountChats(mkGroup({ chatIds: [CHAT_A] }), mkRun([mkExecutor({})]));
+    const style = findNodeByAttr(container, 'data-testid', 'breakdown-chats')!.style as Record<string, string>;
+    expect(style.borderTop).toBe(`1px solid ${C.borderLight}`);
+    expect(style.paddingTop).toBe(`${SP.md}px`);
+  });
+
+  it('чип шага — жирный 700 (макет .ref)', () => {
+    const { container } = mountChats(mkGroup({ chatIds: [CHAT_A] }), mkRun([mkExecutor({})]));
+    const row = findNodeByAttr(container, 'data-testid', `breakdown-chat-${CHAT_A}`)!;
+    expect((row.children[0].style as Record<string, string>).fontWeight).toBe('700');
   });
 });
 

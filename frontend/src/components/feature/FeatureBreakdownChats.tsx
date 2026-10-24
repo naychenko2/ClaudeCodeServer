@@ -1,9 +1,13 @@
 // «Чаты группы» — раскрытие строки таблицы «Кто и на чём работал» (волна 5, ST-F10;
 // макет feature-stats-breakdown-5.html §.chats, вариант C): список чатов выбранной
 // группы. Подпись строки — «шаг · роль» из chatLabel (FeatureBreakdownModel, ST-F8),
-// а не обрезанный id; числа группы — время/токены/деньги через lib-форматтеры.
-// Архивный чат — приглушён (C.textMuted) и помечен «в архиве» (состояние строит
-// NavTargetButton, единая точка правды для пометки). Пустой список — блока нет (null).
+// а не обрезанный id; чисел в строке чата нет: per-chat чисел в API нет, а числа
+// группы живут в строке таблицы (ST-F11) — в строке чата они читались бы как
+// метрики чата. Список резется шестью чатами, остаток — строка «ещё N» с
+// склонением (макет chatsOf, html:278-280). Блок отделён сверху от таблицы
+// (border-top + padding-top 12, макет .chats). Архивный чат — приглушён
+// (C.textMuted) и помечен «в архиве» (состояние строит NavTargetButton, единая
+// точка правды для пометки). Пустой список — блока нет (null).
 // Токены — только C.*/FS/SP/R; высота строки 34, на 360 — 44 (тач-цель), как в
 // макете .chat / .w360 .chat. Хуков здесь нет; переход — openChatById, как в ST-F6.
 
@@ -11,20 +15,26 @@ import { type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import { openChatById } from '../../lib/openChat';
-import { formatDuration } from './FeatureStatsBits';
-import { formatTokens } from './FeatureStatsFormat';
-import { chatLabel, formatMoney } from './FeatureBreakdownModel';
+import { chatLabel } from './FeatureBreakdownModel';
 import { NavTargetButton } from './NavTargetButton';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
 
 export interface FeatureBreakdownChatsProps {
-  // Выбранная группа: её чаты (chatIds) и её числа (минуты/токены/стоимость).
+  // Выбранная группа: её чаты (chatIds). Числа группы здесь не показываются —
+  // они живут в строке таблицы (ST-F11), per-chat чисел в API нет.
   group: FeatureBreakdownGroup;
   // Run для подписей: chatId → stepRef/taskRole через chatLabel.
   run: FeatureRun;
   isMobile?: boolean;
 }
+
+// Отделитель блока сверху от таблицы: border-top + padding-top 12 (макет .chats,
+// html:105).
+const BLOCK: CSSProperties = {
+  borderTop: `1px solid ${C.borderLight}`,
+  paddingTop: SP.md,
+};
 
 // Подпись секции: FS.xxs UPPERCASE textMuted (как в других блоках), счётчик
 // «N чатов» — со склонением (plural), как «N чатов ›» в записке.
@@ -57,20 +67,25 @@ function rowStyle(isMobile: boolean, archived: boolean): CSSProperties {
   };
 }
 
-// Шаг — моно-чип на bgSelected (макет .ref); роль — обычный текст.
+// Шаг — моно-чип на bgSelected, жирный 700 (макет .ref: `font:700 11px mono`);
+// роль — обычный текст.
 const REF: CSSProperties = {
-  fontSize: FS.xs, fontFamily: FONT.mono, background: C.bgSelected, color: C.textHeading,
+  fontSize: FS.xs, fontFamily: FONT.mono, fontWeight: 700,
+  background: C.bgSelected, color: C.textHeading,
   borderRadius: R.sm, padding: `0 ${SP.xs}px`, flexShrink: 0,
 };
 const ROLE: CSSProperties = {
   fontSize: FS.sm, fontFamily: FONT.sans, fontWeight: 600,
   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 };
-// Числа строки: FONT.mono FS.xs textSecondary (макет .chat — числа моно).
-const NUMS: CSSProperties = {
-  fontSize: FS.xs, fontFamily: FONT.mono, color: C.textSecondary,
-  flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+// Строка остатка «ещё N чат/чата/чатов»: FS.xs textMuted (макет html:279-280;
+// 6px из макета — ближайший шаг шкалы SP.xs).
+const MORE: CSSProperties = {
+  fontSize: FS.xs, color: C.textMuted, marginTop: SP.xs, fontFamily: FONT.sans,
 };
+
+// Срез списка — шесть чатов, как в макете (chatsOf, list.slice(0, 6)).
+const MAX_ROWS = 6;
 
 // Архивность чата: по исполнителю с этим chatId (chatArchived); исполнителя нет —
 // не архивный (о другом состоянии чата бэк в разбивке не сообщает).
@@ -89,28 +104,21 @@ function labelParts(chatId: string, run: FeatureRun): { ref: string | null; rest
   return { ref: null, rest: label };
 }
 
-// «12 мин · 5 тыс. · $1,20»; нет учёта — «нет учёта» (то же слово, что в ячейках
-// таблицы; «бесплатно» строит formatMoney).
-function numbersText(group: FeatureBreakdownGroup): string {
-  const parts = [formatDuration(group.minutes)];
-  parts.push(group.tokens == null ? 'нет учёта' : formatTokens(group.tokens));
-  parts.push(formatMoney(group));
-  return parts.join(' · ');
-}
-
 export function FeatureBreakdownChats({ group, run, isMobile = false }: FeatureBreakdownChatsProps) {
   // Хуков здесь нет; ранний return без хуков — безопасен (правило про хуки выше
   // return соблюдается vacuously).
   const chatIds = (group.chatIds ?? []).filter(Boolean);
   if (chatIds.length === 0) return null;
+  const shown = chatIds.slice(0, MAX_ROWS);
+  const hidden = chatIds.length - shown.length;
 
   return (
-    <div data-testid="breakdown-chats">
+    <div data-testid="breakdown-chats" style={BLOCK}>
       <div style={SEC_LABEL}>
         Чаты · {chatIds.length} {plural(chatIds.length, 'чат', 'чата', 'чатов')}
       </div>
       <div style={gridStyle(isMobile)}>
-        {chatIds.map((chatId: string) => {
+        {shown.map((chatId: string) => {
           const archived = isArchived(run, chatId);
           const { ref, rest } = labelParts(chatId, run);
           return (
@@ -122,7 +130,6 @@ export function FeatureBreakdownChats({ group, run, isMobile = false }: FeatureB
               {ref ? <span aria-hidden style={REF}>{ref}</span> : null}
               <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: SP.xs }}>
                 <span style={ROLE}>{rest}</span>
-                <span style={NUMS}>{numbersText(group)}</span>
               </span>
               <NavTargetButton
                 kind="chat"
@@ -136,6 +143,9 @@ export function FeatureBreakdownChats({ group, run, isMobile = false }: FeatureB
           );
         })}
       </div>
+      {hidden > 0 ? (
+        <div style={MORE}>ещё {hidden} {plural(hidden, 'чат', 'чата', 'чатов')}</div>
+      ) : null}
     </div>
   );
 }

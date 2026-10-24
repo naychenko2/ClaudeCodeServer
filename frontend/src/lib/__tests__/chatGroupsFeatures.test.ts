@@ -2,17 +2,18 @@
 //
 // Окружение node (без jsdom): тестируем ЧИСТУЮ функцию groupByFeatures,
 // не React-хук. Контракт — «Контракт индекса фич — утверждён (Александр, 18.10)»,
-// §3 «Правило дерева в «Фичах» — исправлено»:
-//   1. Группа чата — первая фича из chats[id].
+// §3, изменён 24.10 (решение Андрея, вариант 1):
+//   1. Группа чата — ВСЕ featureId из chats[id]: мультифичевый чат в каждой своей
+//      группе один раз, в строке — пометка «общий с …».
 //   2. У чата без фичи — группа родителя (рекурсивно); корень без фичи — «Без фичи».
-//   3. Ребро живёт только внутри группы; через границу фич ребёнок всплывает в корень.
+//   3. Ребро живёт в группе, где есть и родитель; иначе ребёнок всплывает в корень.
 //   4. ParentOverrideId не обрабатывается отдельно (уже в parentSessionId).
-//   5. Мультифичевый чат — в группе первой фичи, строка одна.
+//   5. Висячий featureId (нет в features[]) группы не создаёт — чат в «Без фичи».
 //
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
 import { describe, it, expect } from 'vitest';
-import { groupByFeatures, featureChipCounts, featureGroupTreeRows, otherFeatureCount, featureRoleFor, drawnClosedFeatures } from '../chatGroups';
+import { groupByFeatures, featureChipCounts, featureGroupTreeRows, sharedFeatureTitles, featureRoleFor, drawnClosedFeatures } from '../chatGroups';
 import type { FeatureBucket, FeatureChatLink, FeatureChip, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { Session } from '../../types';
 
@@ -95,31 +96,29 @@ describe('groupByFeatures: bucket merged', () => {
   });
 });
 
-describe('groupByFeatures: мультифичевый чат', () => {
-  it('стоит в группе первой фичи, строка одна (без дублей)', () => {
+describe('groupByFeatures: мультифичевый чат — в каждой своей группе', () => {
+  it('чат с двумя featureId присутствует в обеих группах ровно по одному разу', () => {
     const feats = [feature('X', 'running'), feature('Y', 'running')];
     const idx = index(feats, {
-      // cur — мультифичевый: X (key) и Y (curator); первая — X
+      // cur — мультифичевый: X (key) и Y (curator)
       'cur': [link('X', 'key'), link('Y', 'curator')],
     });
     const groups = groupByFeatures([chat('cur')], idx);
-    // одна группа (X); Y без чатов — секции нет
-    expect(groups).toHaveLength(1);
-    expect(groups[0].feature?.featureId).toBe('X');
-    // чат ровно в одной строке, без дубля
-    expect(allChatIds(groups)).toEqual(['cur']);
+    // Обе группы рисуются, и в каждой чат — ровно один раз (без дубля внутри группы)
+    expect(groups.map(g => g.feature?.featureId)).toEqual(['X', 'Y']);
+    for (const g of groups) expect(g.sessions.map(c => c.id)).toEqual(['cur']);
   });
 
-  it('перестановка chats[id] в индексе меняет группу (фронт следует за бэком, сам не выбирает)', () => {
+  it('перестановка chats[id] в индексе не меняет членство: чат в обеих группах', () => {
     const feats = [feature('X', 'running'), feature('Y', 'running')];
-    // cur — мультифичевый: X (key) и Y (curator).
-    // Порядок [X, Y] → первая фича X → группа X.
     const idxXY = index(feats, { 'cur': [link('X', 'key'), link('Y', 'curator')] });
-    expect(groupByFeatures([chat('cur')], idxXY)[0].feature?.featureId).toBe('X');
-    // Переставляем chats['cur'] на [Y, X] → первая фича Y → группа Y (фронт не «чинит»
-    // порядок, а следует за порядком, который отдал бэк).
     const idxYX = index(feats, { 'cur': [link('Y', 'curator'), link('X', 'key')] });
-    expect(groupByFeatures([chat('cur')], idxYX)[0].feature?.featureId).toBe('Y');
+    // Мутация «берётся первая фича» (старое правило) краснит этот тест:
+    // при ней в группах был бы только X (или только Y).
+    for (const idx of [idxXY, idxYX]) {
+      const ids = groupByFeatures([chat('cur')], idx).map(g => g.feature?.featureId).sort();
+      expect(ids).toEqual(['X', 'Y']);
+    }
   });
 });
 
@@ -213,15 +212,14 @@ describe('groupByFeatures: правило дерева (контракт §3)', 
     expect(gB!.sessions[0].parentSessionId).toBeNull();
   });
 
-  it('мультифичевый корень: строка одна, в группе первой фичи', () => {
+  it('мультифичевый корень: он в каждой своей группе', () => {
     const feats = [feature('X', 'running'), feature('Y', 'running')];
     const idx = index(feats, {
       'root': [link('X', 'key'), link('Y', 'curator')],
     });
     const groups = groupByFeatures([chat('root')], idx);
-    expect(groups).toHaveLength(1);
-    expect(groups[0].feature?.featureId).toBe('X');
-    expect(allChatIds(groups)).toEqual(['root']);
+    expect(groups.map(g => g.feature?.featureId)).toEqual(['X', 'Y']);
+    for (const g of groups) expect(g.sessions.map(c => c.id)).toEqual(['root']);
   });
 });
 
@@ -259,11 +257,11 @@ describe('featureChipCounts: счётчики по chips[]', () => {
 });
 
 // === C1: правило дерева на уровне рендера списка (не только чистая groupByFeatures) ===
-// Сценарий из контракта С0: оркестратор — куратор двух фич (A и B), исполнители обеих
-// висят под ним. groupByFeatures режет межфичевые рёбра: исполнители A остаются деревом
-// в группе A (под оркестратором), исполнитель B всплывает корнем в группе B. featureGroupTreeRows
-// строит «своё дерево» каждой группы — тест проверяет именно нарисованные строки (depth/вложенность),
-// а не только группировку (groupByFeatures даёт полный список, и её юнит-тест был зелёным).
+// Сценарий из контракта С0, изменённый 24.10: оркестратор — куратор двух фич (A и B),
+// исполнители обеих висят под ним. Мультифичевый оркестратор рисуется в каждой своей
+// группе, и ребро к исполнителю живёт в той группе, где есть и родитель: в группе A —
+// дерево orch→execA, в группе B — orch→execB. featureGroupTreeRows строит «своё дерево»
+// каждой группы — тест проверяет именно нарисованные строки (depth/вложенность).
 describe('featureGroupTreeRows: правило дерева (C1, уровень рендера)', () => {
   it('оркестратор двух фич + исполнители обеих → две группы, каждая со своим деревом', () => {
     // A — идёт (open), B — стоит (attention stopped → чип «Стоят»)
@@ -272,7 +270,7 @@ describe('featureGroupTreeRows: правило дерева (C1, уровень 
       { ...feature('B', 'attention'), attention: { kind: 'stopped', since: '2026-10-18T10:00:00Z', reason: null, personaId: null, sessionId: null }, chips: ['open', 'stopped'] },
     ];
     const idx = index(feats, {
-      // orch — мультифичевый куратор: A (первая) и B
+      // orch — мультифичевый куратор: A и B (в обеих группах)
       'orch': [link('A', 'curator'), link('B', 'curator')],
       'execA': [link('A', 'executor')],
       'execB': [link('B', 'executor')],
@@ -295,16 +293,19 @@ describe('featureGroupTreeRows: правило дерева (C1, уровень 
     expect(execARow.depth).toBe(1); // вложен под оркестратором (ребро внутри группы)
     // Ключевой (оркестратор) — первой строкой
     expect(rowsA[0].chat.id).toBe('orch');
-    // Исполнитель B (группа B) НЕ в дереве группы A: межфичевое ребро orch→execB обрезано.
-    // Мутация «рендер по segByRootId» (исходное дерево) кладёт execB под orch в группу A —
-    // это утверждение краснеет (C1: группа первой фичи не тянет детей второй).
+    // Исполнитель B НЕ в дереве группы A: он связан только с фичей B — группы A нет
+    // в его groupsOf. Мутация «рендер по segByRootId» (исходное дерево) кладёт execB
+    // под orch в группу A — это утверждение краснеет (C1: чужой исполнитель не тянется).
     expect(rowsA.find(r => r.chat.id === 'execB')).toBeUndefined();
 
-    // Группа B: исполнитель B — корень (ребро к оркестратору через границу фич обрезано)
+    // Группа B: оркестратор тоже здесь (мультифичевый — в каждой своей группе), и ребро
+    // orch→execB живёт: родитель в группе B. Исполнитель B — не корень, а ребёнок.
     const rowsB = featureGroupTreeRows(gB.sessions, null, null, noTreeOpts);
-    expect(rowsB).toHaveLength(1);
-    expect(rowsB[0].chat.id).toBe('execB');
-    expect(rowsB[0].depth).toBe(0); // не вложен под оркестратором
+    expect(rowsB).toHaveLength(2);
+    const orchRowB = rowsB.find(r => r.chat.id === 'orch')!;
+    const execBRow = rowsB.find(r => r.chat.id === 'execB')!;
+    expect(orchRowB.depth).toBe(0);
+    expect(execBRow.depth).toBe(1);
   });
 
   it('«Стоят» ведёт в группу второй фичи: стоящая фича — в своём дереве, а не в первой', () => {
@@ -318,12 +319,13 @@ describe('featureGroupTreeRows: правило дерева (C1, уровень 
     });
     const chats = [chat('orch'), chat('execB', { parentSessionId: 'orch' })];
     const groups = groupByFeatures(chats, idx);
-    // Чип «Стоят» — только фича B; её группа рисуется (исполнитель B — корень)
+    // Чип «Стоят» — только фича B; её группа рисуется: оркестратор (общий) + исполнитель B под ним
     expect(feats.filter(f => f.chips.includes('stopped')).map(f => f.featureId)).toEqual(['B']);
     const gB = groups.find(g => g.feature?.featureId === 'B')!;
     expect(gB).toBeDefined();
     const rowsB = featureGroupTreeRows(gB.sessions, null, null, noTreeOpts);
-    expect(rowsB.map(r => r.chat.id)).toEqual(['execB']);
+    expect(rowsB.map(r => r.chat.id).sort()).toEqual(['execB', 'orch']);
+    expect(rowsB.find(r => r.chat.id === 'execB')!.depth).toBe(1); // ребро живёт: родитель в группе B
     // Фича A (идёт) не в «Стоят», но её группа (оркестратор) тоже рисуется отдельно
     const gA = groups.find(g => g.feature?.featureId === 'A')!;
     expect(featureGroupTreeRows(gA.sessions, 'orch', null, noTreeOpts).map(r => r.chat.id)).toEqual(['orch']);
@@ -374,57 +376,60 @@ describe('M1: «Нет фич» — чаты без фичи', () => {
   });
 });
 
-// === M2: мультифичевый чат — чип «ещё N» ===
-// otherFeatureCount: число других фич чата (кроме первой, в группе которой он нарисован).
-// Мультифичевый чат (оркестратор/куратор нескольких фич) — «ещё N» на строке в группе
-// первой фичи: след, где живут его ключевые чаты остальных фич (C0, п.5).
-describe('M2: otherFeatureCount (чип «ещё N»)', () => {
-  it('мультифичевый чат: N = число других фич', () => {
+// === M2: общий чат — пометка «общий с …» (решение Андрея 24.10, вариант 1) ===
+// sharedFeatureTitles: названия других известных фич чата (кроме текущей группы).
+// Мультифичевый чат рисуется в группе каждой своей фичы; пометка называет остальные.
+describe('M2: sharedFeatureTitles (пометка «общий с …»)', () => {
+  it('названия других фич; текущая группа и висячие id не входят', () => {
     const feats = [feature('A', 'running'), feature('B', 'running'), feature('C', 'running')];
     const idx = index(feats, {
-      // orch — куратор трёх фич: A (первая), B, C → «ещё 2»
+      // orch — куратор трёх фич: в группе A пометка называет B и C
       'orch': [link('A', 'curator'), link('B', 'curator'), link('C', 'curator')],
-      // single — одна фича → «ещё 0»
+      // single — одна фича → пометки нет
       'single': [link('A', 'executor')],
-      // none — не в chats → 0
+      // ghost — висячий featureId (нет в features[]) → названия неизвестны, не упоминается
+      'ghost': [link('GHOST')],
+      // none — не в chats → пусто
     });
-    expect(otherFeatureCount('orch', idx)).toBe(2);
-    expect(otherFeatureCount('single', idx)).toBe(0);
-    expect(otherFeatureCount('none', idx)).toBe(0);
+    expect(sharedFeatureTitles('orch', 'A', idx)).toEqual(['Фича B', 'Фича C']);
+    expect(sharedFeatureTitles('single', 'A', idx)).toEqual([]);
+    expect(sharedFeatureTitles('ghost', 'A', idx)).toEqual([]);
+    expect(sharedFeatureTitles('none', 'A', idx)).toEqual([]);
   });
 });
 
 // === M3: роль чата в группе — по id САМОЙ строки, не замыканием корня ===
-// featureRoleFor: «ключевой» (ключевой чат фичи) и/или «ещё N» (чат в ещё N фичах).
-// Считается по id строки: ChatTreeBranch рекурсивно передаёт renderCard потомкам, и
-// замыкание роли корня лило её на всё поддерево (M3). Мутация (в отчёте): роль по
-// фиксированному id (корню) вместо id строки — «plain» (не ключевой, не мультифичевый)
-// получает «ключевой», тест краснеет.
-describe('M3: featureRoleFor (роль по id строки, не корня)', () => {
+// featureRoleFor: «ключевой» (ключевой чат фичи) и/или «общий с <названия>» (чат
+// показывается и в группах других своих фич). Считается по id строки: ChatTreeBranch
+// рекурсивно передаёт renderCard потомкам, и замыкание роли корня лило её на всё
+// поддерево (M3). Мутация (в отчёте): роль по фиксированному id (корню) вместо id
+// строки — «plain» (не ключевой, не мультифичевый) получает «ключевой», тест краснеет.
+describe('M3: featureRoleFor (роль по id строки, пометка «общий с …»)', () => {
   const feats = [feature('A', 'running'), feature('B', 'running'), feature('C', 'running')];
   const idx = index(feats, {
     // key — ключевой чат фичи A, ровно одна фича
     'key': [link('A', 'key')],
-    // multi — мультифичевый: A (первая) + B + C → «ещё 2»
+    // multi — мультифичевый: A + B + C → в группе A пометка «общий с Фича B, Фича C»
     'multi': [link('A', 'executor'), link('B', 'executor'), link('C', 'executor')],
     // plain — одна фича (A), не ключевой → метки нет
     'plain': [link('A', 'executor')],
   });
 
-  it('ключевой чат: «ключевой» (без других фич) / «ключевой · ещё N» (с другими)', () => {
+  it('ключевой чат: «ключевой» (без других фич) / «ключевой · общий с …» (с другими)', () => {
     // key — ровно A → «ключевой»
-    expect(featureRoleFor('key', 'key', idx)).toBe('ключевой');
-    // multi — A + B + C, ключевой = multi → «ключевой · ещё 2»
-    expect(featureRoleFor('multi', 'multi', idx)).toBe('ключевой · ещё 2');
+    expect(featureRoleFor('key', 'key', idx, 'A')).toBe('ключевой');
+    // multi — A + B + C, ключевой = multi → «ключевой · общий с Фича B, Фича C»
+    expect(featureRoleFor('multi', 'multi', idx, 'A')).toBe('ключевой · общий с Фича B, Фича C');
   });
 
-  it('не-ключевой мультифичевый: «ещё N»; обычный (одна фича) и вне индекса — метки нет', () => {
-    // multi не ключевой (keyId='key') → «ещё 2»
-    expect(featureRoleFor('multi', 'key', idx)).toBe('ещё 2');
+  it('не-ключевой мультифичевый: «общий с …» в каждой группе — с другими названиями', () => {
+    // multi не ключевой (keyId='key') → в группе A — B и C, в группе B — A и C
+    expect(featureRoleFor('multi', 'key', idx, 'A')).toBe('общий с Фича B, Фича C');
+    expect(featureRoleFor('multi', 'key', idx, 'B')).toBe('общий с Фича A, Фича C');
     // plain — одна фича, не ключевой → undefined
-    expect(featureRoleFor('plain', 'key', idx)).toBeUndefined();
+    expect(featureRoleFor('plain', 'key', idx, 'A')).toBeUndefined();
     // ghost — не в индексе → undefined
-    expect(featureRoleFor('ghost', 'key', idx)).toBeUndefined();
+    expect(featureRoleFor('ghost', 'key', idx, 'A')).toBeUndefined();
   });
 });
 

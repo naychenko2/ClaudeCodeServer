@@ -2557,6 +2557,36 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             holdProp.ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // Дефект 06aae1bf (гонка): два параллельных DELETE hold одной фичи. Окно гонки — между
+    // проверкой Hold и ClearHold в ручке: это обход задач владельца. Окно намеренно расширяется
+    // тысячами задач (создание напрямую в менеджере, не через HTTP) — при одновременной
+    // постановке двух запросов проигравший гарантированно попадает в гонку. Проигравший не
+    // имеет права отдавать 404 «Фича не найдена» на существующую фичу: ответ победителя — 200,
+    // проигравшего — 200 с пустыми списками или 409 «снимать нечего». Мутация: вернуть
+    // безусловный 404 при epic is null — тест краснеет на первой же попытке.
+    [Fact]
+    public async Task ClearHold_GonkaParallelnykhDelete_NeDaet404()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        for (int i = 0; i < 5000; i++)
+            tm.Create(null, OwnerId, new CreateTaskRequest(Title: "фон гонки " + i, FeatureId: epicId, Role: "step"));
+
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+            set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var responses = await Task.WhenAll(
+                _client.DeleteAsync($"/api/tasks/features/{epicId}/hold"),
+                _client.DeleteAsync($"/api/tasks/features/{epicId}/hold"));
+
+            foreach (var r in responses)
+                r.StatusCode.Should().NotBe(HttpStatusCode.NotFound,
+                    "проигравший в гонке не выдаёт 404 на существующую фичу");
+        }
+    }
+
     // R-HOLD-D (п.4, п.1): связка «ручка → возврат» на уровне HTTP. Сервисные тесты продолжения
     // не ловят ручки: удаление вызова из ClearFeatureHold оставляло их зелёными — связь
     // терялась. Здесь: после DELETE hold у помеченного шага пропадает пометка и в его чат

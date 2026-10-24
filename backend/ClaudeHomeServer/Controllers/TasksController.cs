@@ -967,7 +967,16 @@ public class TasksController(
         // Hold уже null.
         var holdReason = run.Epic.Hold!.Reason;
         var epic = tasks.ClearHold(featureId);
-        if (epic is null) return NotFound(new { error = "Фича не найдена" });
+        if (epic is null)
+        {
+            // Дефект 06aae1bf (гонка): снимок run (:923) взят при активном Hold, а конкурент
+            // успел снять его до этого ClearHold — фича на месте, требование уже выполнено
+            // победителем. 404 «Фича не найдена» здесь вводит в заблуждение: ответ — 200 с
+            // пустыми списками (пробуждение очереди — на стороне победителя). 404 остаётся
+            // только если эпик реально исчез (удалён между снимком и снятием).
+            if (tasks.GetById(featureId) is null) return NotFound(new { error = "Фича не найдена" });
+            return Ok(new { resumed = new List<string>(), expired = new List<string>() });
+        }
         // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
         // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
         // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски

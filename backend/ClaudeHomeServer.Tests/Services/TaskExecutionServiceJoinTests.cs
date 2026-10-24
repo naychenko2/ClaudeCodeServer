@@ -40,6 +40,8 @@ public class TaskExecutionServiceJoinTests : IDisposable
     private readonly UserStore _userStore;
     private readonly TestSessionBroadcaster _broadcaster;
     private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
+    private readonly ReviewTreePool _reviewPool;
+    private readonly string _slotBase;
 
     public TaskExecutionServiceJoinTests()
     {
@@ -79,8 +81,12 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var sessions = _sessions = CreateSessionManager(config, projectManager, userStore, appSettings, personas, knowledge, notesKb, broadcaster);
         _projects = projectManager;
 
+        _slotBase = Path.Combine(_dir, "slots");
+        _reviewPool = new ReviewTreePool(new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance),
+            (_, _) => _slotBase, (_, p) => p, NullLogger<ReviewTreePool>.Instance);
         _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notif,
-            NullLogger<TaskExecutionService>.Instance, config, subagentRuns: _subagentRuns, kb: notesKb);
+            NullLogger<TaskExecutionService>.Instance, config, subagentRuns: _subagentRuns, kb: notesKb,
+            reviewTrees: _reviewPool);
     }
 
     public void Dispose()
@@ -724,5 +730,113 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var fresh = _tasks.GetById(task.Id)!;
         fresh.ExecutorStoppedAt.Should().NotBeNull("401 снимает только перезапуск исполнителя");
         fresh.ExecutorStopReason.Should().Be(ExecutorStopClassifier.AuthFailedReason);
+    }
+
+    // ─── Слот ревью: аренда освобождается на каждом пути выхода ─────
+
+    private static string BuildSection(int dirty) => TaskExecutionService.BuildReviewTreeSection(
+        new ReviewTreeLease("/slot", "abc1234", Enumerable.Range(1, dirty).Select(i => $"f{i}.cs").ToList()));
+
+    [Fact]
+    public void ReviewTreeSection_ЧистоеДерево_НесётКоммитИПравила_БезСпискаПутей()
+    {
+        var text = BuildSection(0);
+
+        text.Should().Contain("Дерево ревью на коммите `abc1234`");
+        text.Should().Contain("не коммить").And.Contain("без `no_build`").And.Contain("переиспользуется");
+        text.Should().NotContain("не вошли");
+    }
+
+    [Fact]
+    public void ReviewTreeSection_ГрязныхРовноТридцать_БезХвостаЕщё()
+    {
+        var text = BuildSection(30);
+
+        text.Should().Contain("- f30.cs").And.Contain("не вошли").And.NotContain("…ещё");
+    }
+
+    [Fact]
+    public void ReviewTreeSection_ГрязныхТридцатьОдин_ОбрезаетсяДоТридцатиСХвостомЕщёОдин()
+    {
+        var text = BuildSection(31);
+
+        text.Should().Contain("- f30.cs").And.NotContain("f31.cs").And.Contain("…ещё 1");
+    }
+
+    private async Task<(string Wave, Project Project)> MkRepoWithWaveAsync()
+    {
+        var repo = Path.Combine(_dir, "repo");
+        var wave = Path.Combine(_dir, "wave");
+        Directory.CreateDirectory(repo);
+        var git = new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance);
+        await git.InitAsync(null, repo);
+        await RawGit(repo, "config", "user.email", "test@test");
+        await RawGit(repo, "config", "user.name", "Тест");
+        await File.WriteAllTextAsync(Path.Combine(repo, "a.txt"), "один\n");
+        await git.StageAllAsync(null, repo);
+        await git.CommitAsync(null, repo, "начальный коммит");
+        await git.WorktreeAddAsync(null, repo, wave, "feat/wave");
+        return (wave, new Project { Name = "Demo", RootPath = repo });
+    }
+
+    private static async Task RawGit(string root, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = root, UseShellExecute = false,
+            RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        await proc.WaitForExitAsync();
+    }
+
+    // Занимает оба слота волны двумя задачами и проверяет, что третья не получает слот
+    private async Task<(string A, string B, Func<Task<ReviewTreeLease?>> TryThird)> FillSlotsAsync()
+    {
+        var (wave, project) = await MkRepoWithWaveAsync();
+        var user = _userStore.Add("rv-owner-" + Guid.NewGuid().ToString("N")[..6], "password123", "user");
+        var a = _tasks.Create(null, user.Id, new CreateTaskRequest("Ревью A"));
+        var b = _tasks.Create(null, user.Id, new CreateTaskRequest("Ревью B"));
+        (await _reviewPool.TryAcquireAsync(user.Id, project, wave, a.Id)).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(user.Id, project, wave, b.Id)).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(user.Id, project, wave, "третья")).Should().BeNull();
+        return (a.Id, b.Id, () => _reviewPool.TryAcquireAsync(user.Id, project, wave, "третья"));
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_УдалениеЗадачи_ОсвобождаетСлот()
+    {
+        var (a, _, tryThird) = await FillSlotsAsync();
+
+        _tasks.Delete(a);
+
+        (await tryThird()).Should().NotBeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ЗавершениеЗадачи_ОсвобождаетСлотНезависимоОтДоставки()
+    {
+        var (a, _, tryThird) = await FillSlotsAsync();
+        // «Уже доставлено»: доставка завершится на CAS, слот к этому моменту обязан быть свободен
+        _tasks.TryMarkCompletionDelivered(a);
+
+        _tasks.Update(a, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        (await tryThird()).Should().NotBeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_СтопЧеловека_ОсвобождаетСлот()
+    {
+        var (a, _, tryThird) = await FillSlotsAsync();
+        _tasks.MarkClaudeStarted(a, "sess-rv", DateTime.UtcNow);
+
+        await _sut.MarkStoppedByUserAsync("sess-rv");
+
+        (await tryThird()).Should().NotBeNull();
     }
 }

@@ -82,6 +82,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // TaskExecutionService.TryDeliverCompletionAsync (join сигналов R/D, см. CompletionDelivered).
     public event Action<TaskItem>? TaskCompleted;
 
+    // Задача удалена (по id либо вместе с проектом): подписчик освобождает занятые под неё ресурсы
+    public event Action<TaskItem>? TaskDeleted;
+
     public TaskManager(IConfiguration config, IProjectEventLogService? events = null,
         ITaskNotificationDispatcher? notif = null, IPersonaLookup? personas = null,
         FeatureJournalStore? journal = null, ILogger<TaskManager>? log = null)
@@ -1469,7 +1472,14 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         DeleteJournalFor(task);
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskDeleted, $"Удалена задача «{task.Title}»");
+        RaiseTaskDeleted(task);
         return true;
+    }
+
+    private void RaiseTaskDeleted(TaskItem task)
+    {
+        try { TaskDeleted?.Invoke(task); }
+        catch (Exception ex) { _log?.LogError(ex, "Подписчик TaskDeleted упал на задаче {TaskId}", task.Id); }
     }
 
     // Зачистка при удалении проекта
@@ -1483,6 +1493,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             DeleteJournalFor(t);
         }
         if (removed.Count > 0) ScheduleSave();
+        foreach (var t in removed) RaiseTaskDeleted(t);
         return removed.Select(t => t.Id).ToList();
     }
 

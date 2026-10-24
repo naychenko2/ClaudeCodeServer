@@ -67,6 +67,9 @@ public sealed class ReviewTreePool
     // «a/b» и «a-b» давали один путь слота, и снос слотов одной волны уносил слот другой.
     internal static string SlotPrefix(string branch) => $"{branch.Replace('/', '~')}-review-";
 
+    // Кодирование до дельты-2: «/» → «-»
+    internal static string LegacySlotPrefix(string branch) => $"{branch.Replace('/', '-')}-review-";
+
     // null — оба слота волны заняты другими задачами. Повторный вызов той же задачи отдаёт
     // её же слот (заново сброшенный на актуальный коммит волны).
     public async Task<ReviewTreeLease?> TryAcquireAsync(
@@ -112,7 +115,7 @@ public sealed class ReviewTreePool
                 Directory.CreateDirectory(slotBase);
                 await _git.WorktreeAddDetachedAsync(ownerId, project.RootPath, slotPath, sha, ct);
             }
-            File.WriteAllBytes(MarkerPath(slotPath), []);
+            File.WriteAllText(MarkerPath(slotPath), branch);
             LinkNodeModules(ownerId, project.RootPath, slotPath);
         }
         catch
@@ -145,13 +148,43 @@ public sealed class ReviewTreePool
         var worktrees = await _git.WorktreeListAsync(ownerId, project.RootPath, ct);
         if (AfterWaveSnapshot is { } hook) await hook();
         var waveNorm = PathNormalizer.NormalizePath(waveTreePath);
-        var branch = worktrees.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == waveNorm)?.Branch
-            ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(waveTreePath));
+        var branch = worktrees.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == waveNorm)?.Branch;
         var slotBase = _worktreesBase(ownerId, project);
-        var prefix = SlotPrefix(branch);
 
-        for (var n = 1; n <= SlotsPerWave; n++)
-            await RemoveSlotAsync(ownerId, project, Path.Combine(slotBase, prefix + n), ct);
+        if (string.IsNullOrEmpty(branch))
+        {
+            // Регистрация дерева пропала: ветку не узнать, а имя каталога уже с «-» вместо «/». Слоты волны
+            // ищем среди зарегистрированных по тому же имени с точностью до «~» ↔ «-»
+            var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(waveTreePath));
+            var baseNorm = PathNormalizer.NormalizePath(slotBase);
+            var fallback = worktrees
+                .Where(w => PathNormalizer.NormalizePath(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(w.Path)) ?? "") == baseNorm)
+                .Select(w => Path.GetFileName(Path.TrimEndingDirectorySeparator(w.Path)))
+                .Where(n => IsSlotName(n) && Enumerable.Range(1, SlotsPerWave)
+                    .Any(i => n.Replace('~', '-') == $"{dirName}-review-{i}"))
+                .ToList();
+            foreach (var name in fallback)
+                await RemoveSlotAsync(ownerId, project, Path.Combine(slotBase, name), ct,
+                    ownBranch: name.Contains('~') ? null : dirName);
+            return;
+        }
+
+        // Слоты, созданные до смены кодирования, лежат под именем с «-»: сносим оба префикса
+        // — кроме случая, когда это же имя законно принадлежит другой живой волне (ветка «a-b» при сносе «a/b»)
+        var newPrefix = SlotPrefix(branch);
+        var legacy = LegacySlotPrefix(branch);
+        var prefixes = new List<string> { newPrefix };
+        if (legacy != newPrefix
+            && !worktrees.Any(w => PathNormalizer.NormalizePath(w.Path) != waveNorm
+                && !string.IsNullOrEmpty(w.Branch) && SlotPrefix(w.Branch) == legacy))
+            prefixes.Add(legacy);
+
+        foreach (var prefix in prefixes)
+            for (var n = 1; n <= SlotsPerWave; n++)
+                // Путь с «-» мог достаться ревью другой ветки («a/b» до обновления): трогаем его, только если он не
+                // чужой — см. RemoveSlotAsync.ownBranch
+                await RemoveSlotAsync(ownerId, project, Path.Combine(slotBase, prefix + n), ct,
+                    ownBranch: prefix.Contains('~') ? null : branch);
     }
 
     // Все слоты проекта: detached-дерево в базе деревьев проекта с именем «*-review-1|2»
@@ -224,7 +257,7 @@ public sealed class ReviewTreePool
 
         var slotPath = Path.Combine(slotBase, name);
         lock (_gate) _leases.TryAdd(slotPath, task.Id);
-        try { File.WriteAllBytes(MarkerPath(slotPath), []); }
+        try { if (!File.Exists(MarkerPath(slotPath))) File.WriteAllBytes(MarkerPath(slotPath), []); }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Маркер слота ревью {Slot} не записан", slotPath);
@@ -238,7 +271,11 @@ public sealed class ReviewTreePool
         return false;
     }
 
-    private async Task RemoveSlotAsync(string? ownerId, Project project, string slotPath, CancellationToken ct)
+    // ownBranch != null — путь неоднозначный (имя с «-»: слот ветки «a-b» или старый слот «a/b»). Слот не наш и
+    // не сносится, если в маркере записана другая ветка или он в аренде при пустом маркере (старый слот, в котором
+    // идёт живое ревью: ветка неизвестна). Аренда в этом случае остаётся.
+    private async Task RemoveSlotAsync(string? ownerId, Project project, string slotPath, CancellationToken ct,
+        string? ownBranch = null)
     {
         // Аренда снимается и путь закрывается от Reserve одним входом под замком: между проверкой и
         // снятием, а затем и до конца сноса путь другой задаче не достанется. Список деревьев читаем
@@ -246,6 +283,14 @@ public sealed class ReviewTreePool
         bool ours;
         lock (_gate)
         {
+            if (ownBranch is not null)
+            {
+                string? marker = null;
+                try { if (File.Exists(MarkerPath(slotPath))) marker = File.ReadAllText(MarkerPath(slotPath)).Trim(); }
+                catch (IOException) { /* нечитаемый маркер = пустой */ }
+                var held = _leases.ContainsKey(slotPath);
+                if (!string.IsNullOrEmpty(marker) ? marker != ownBranch : held) return;
+            }
             var leased = _leases.Remove(slotPath);
             ours = File.Exists(MarkerPath(slotPath)) || leased;
             _removing.Add(slotPath);

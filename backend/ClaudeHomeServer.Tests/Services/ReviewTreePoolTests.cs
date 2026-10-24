@@ -189,6 +189,59 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task RemoveSlotsOfWave_Слот_Со_Старым_Кодированием_Имени_Сносится_Вместе_С_Новым()
+    {
+        var pool = NewPool();
+        var fresh = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        var legacy = Path.Combine(_slotBase, "feat-wave-review-1");
+        await _git.WorktreeAddDetachedAsync(null, _repo, legacy, await _git.LocalTipAsync(null, _repo, "HEAD") ?? "HEAD");
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        (await InWorktreeList(fresh!.SlotPath)).Should().BeFalse();
+        (await InWorktreeList(legacy)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Ветка_Дерева_Не_Определена_Слоты_Волны_Сносятся_По_Имени_Каталога()
+    {
+        var pool = NewPool();
+        var slot = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        var unregistered = Path.Combine(_root, "feat-wave");
+        var foreign = Path.Combine(_slotBase, "other-review-1");
+        await _git.WorktreeAddDetachedAsync(null, _repo, foreign, await _git.LocalTipAsync(null, _repo, "HEAD") ?? "HEAD");
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, unregistered);
+
+        (await InWorktreeList(slot!.SlotPath)).Should().BeFalse();
+        (await InWorktreeList(foreign)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Старый_Слот_С_Живым_Ревью_Другой_Ветки_Не_Сносится()
+    {
+        // ревью ветки «feat/x» идёт в старом слоте «feat-x-review-1», после рестарта аренда восстановлена по пути
+        var legacy = Path.Combine(_slotBase, "feat-x-review-1");
+        await _git.WorktreeAddDetachedAsync(null, _repo, legacy, await _git.LocalTipAsync(null, _repo, "HEAD") ?? "HEAD");
+        var xWave = Path.Combine(_root, "wave-x");
+        await _git.WorktreeAddAsync(null, _repo, xWave, "feat-x");
+        var tasks = new List<TaskItem>
+        {
+            new() { Id = "live", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s", Status = TaskItemStatus.InProgress },
+        };
+        var pool = new ReviewTreePool(_git, (_, _) => _slotBase, (o, p) => _cwd(o, p), NullLogger<ReviewTreePool>.Instance,
+            () => tasks, _ => legacy, id => id == _project.Id ? _project : null);
+        await pool.RestoreLeasesAsync();
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, xWave);
+
+        (await InWorktreeList(legacy)).Should().BeTrue("слот с живым ревью другой ветки не наш");
+        // аренда цела: из двух слотов волны «feat-x» первый занят, второй один
+        (await pool.TryAcquireAsync(null, _project, xWave, "n1"))!.SlotPath.Should().NotBe(legacy);
+        (await pool.TryAcquireAsync(null, _project, xWave, "n2")).Should().BeNull();
+    }
+
+    [Fact]
     public async Task RemoveSlotsOfWave_Без_Слотов_Ничего_Не_Делает()
     {
         var pool = NewPool();

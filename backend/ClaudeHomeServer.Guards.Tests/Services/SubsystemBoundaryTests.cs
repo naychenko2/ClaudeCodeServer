@@ -1922,6 +1922,10 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.TeamProtocolMarkers",
         "ClaudeHomeServer.Services.ModelTier",
         "ClaudeHomeServer.Services.TranscriptRoots",
+        // Правила предгейта закрытия шага (NC-P1b): чистые функции без хранилища и git. Зовут их и
+        // вертикаль Tasks (TaskManager), и корневой TaskPregateService, а ссылка Main → Tasks
+        // обратной дороги не имеет, поэтому тип живёт в спине; namespace корневой, как у TranscriptRoots.
+        "ClaudeHomeServer.Services.PregateRules",
         "ClaudeHomeServer.Services.TextPathMentions",
         "ClaudeHomeServer.Services.AttachmentsGitExclude",
         "ClaudeHomeServer.Services.SnapshotIdGenerator",

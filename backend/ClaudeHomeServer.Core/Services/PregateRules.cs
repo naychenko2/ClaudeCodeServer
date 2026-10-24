@@ -1,6 +1,6 @@
 using ClaudeHomeServer.Models;
 
-namespace ClaudeHomeServer.Services.Tasks;
+namespace ClaudeHomeServer.Services;
 
 // Правила гейта «предгейт перед закрытием шага» (NC-P1b): чистые функции без хранилища и git.
 // Единственное место решения «можно ли закрыть» — вызывает только TaskManager на переходе в Done.

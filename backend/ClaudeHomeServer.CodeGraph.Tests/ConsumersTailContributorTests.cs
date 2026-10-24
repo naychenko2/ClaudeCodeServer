@@ -19,10 +19,11 @@ public class ConsumersTailContributorTests
         public bool IsServerToolEnabled(string? ownerId, Persona? persona, string toolKey) => true;
     }
 
-    private static CodeGraphNode Node(string id, string file) => new()
+    // location — «line N» у C#-узлов; у TS-узлов экстрактор SourceLocation не заполняет (null)
+    private static CodeGraphNode Node(string id, string file, string? location = "line 1") => new()
     {
         Id = id, Label = id[(id.LastIndexOf('.') + 1)..], FullyQualifiedName = id,
-        SourceFile = file, SourceLocation = "line 1", Kind = NodeKind.Class,
+        SourceFile = file, SourceLocation = location, Kind = NodeKind.Class,
     };
 
     private static CodeGraphEdge Edge(string from, string to) => new()
@@ -347,7 +348,8 @@ public class ConsumersTailContributorTests
 
     // Дерево из заданных файлов; у каждого — deps исходящих целей в чужих файлах и consumers потребителей
     private static async Task<(ConsumersTailContributor Sut, string Dir, string Data)> PrepareMany(
-        string[] files, int deps, int consumers, Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? dependencies = null)
+        string[] files, int deps, int consumers, Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? dependencies = null,
+        string? depLocation = "line 1")
     {
         var dir = Path.Combine(Path.GetTempPath(), "cgtail_" + Guid.NewGuid().ToString("N")[..10]);
         var data = Path.Combine(Path.GetTempPath(), "cgtail_data_" + Guid.NewGuid().ToString("N")[..10]);
@@ -364,7 +366,7 @@ public class ConsumersTailContributorTests
             for (var i = 0; i < deps; i++)
             {
                 var id = $"D.F{f}D{i:D2}";
-                nodes[id] = Node(id, $"dep/F{f}D{i:D2}.cs");
+                nodes[id] = Node(id, $"dep/F{f}D{i:D2}.cs", depLocation);
                 edges.Add(Edge(owner, id, i % 2 == 0 ? EdgeRelation.Calls : EdgeRelation.References));
             }
             for (var i = 0; i < consumers; i++)
@@ -397,6 +399,57 @@ public class ConsumersTailContributorTests
             text.Should().NotContain("Потребители", "входящих связей нет — подраздел не заводится");
         }
         finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task Зависимости_CSharpFormа_СтрокаИзLineN_ФайлДвоеточиеСтрока()
+    {
+        var (sut, dir, data) = await PrepareMany(["src/Lib.cs"], deps: 1, consumers: 0, depLocation: "line 42");
+        try
+        {
+            var text = (await sut.BuildAsync(Ctx(dir), "Правь src/Lib.cs"))!.Sections.Single().Text;
+
+            text.Should().Contain("- D.F0D00 — dep/F0D00.cs:42 (Calls)");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public async Task Зависимости_TsФорма_БезSourceLocation_ТолькоФайл()
+    {
+        // реальный фронтовый файл: TS-экстрактор строки не отдаёт, контракт честно сужен до «файл»
+        var (sut, dir, data) = await PrepareMany(["frontend/src/lib/api.ts"], deps: 1, consumers: 0, depLocation: null);
+        try
+        {
+            var text = (await sut.BuildAsync(Ctx(dir), "Правь frontend/src/lib/api.ts"))!.Sections.Single().Text;
+
+            text.Should().Contain("Зависимости frontend/src/lib/api.ts");
+            text.Should().Contain("- D.F0D00 — dep/F0D00.cs (Calls)", "строки нет — только файл, без «:»");
+            text.Should().NotContain("dep/F0D00.cs:");
+        }
+        finally { Cleanup(dir, data); }
+    }
+
+    [Fact]
+    public void Сторожа_ТаблицаУкладываетсяВПотолокПодраздела()
+    {
+        foreach (var e in ContractGuardMap.Entries)
+            (1 + ContractGuardMap.For(e.Prefix + "x.cs").Count)
+                .Should().BeLessThanOrEqualTo(ConsumersTailContributor.GuardLineLimit,
+                    $"подраздел «Сторожа по пути» для {e.Prefix} не должен упираться в потолок молча");
+        var rendered = ConsumersTailContributor.RenderGuards("backend/ClaudeHomeServer.Core/Services/Foo.cs")!;
+        rendered.Split('\n').Length.Should().BeLessThanOrEqualTo(ConsumersTailContributor.GuardLineLimit);
+    }
+
+    [Fact]
+    public void Сторожа_ПревышениеПотолка_РежетсяДоПотолкаСЕщёN()
+    {
+        // у Core четыре сторожа; потолок 3 строки → заголовок, один сторож и «ещё 3»
+        var lines = ConsumersTailContributor.RenderGuards("backend/ClaudeHomeServer.Core/Services/Foo.cs", maxLines: 3)!
+            .Split('\n');
+
+        lines.Length.Should().Be(3);
+        lines[^1].Should().StartWith("ещё ");
     }
 
     [Fact]
@@ -469,14 +522,17 @@ public class ConsumersTailContributorTests
     }
 
     [Fact]
-    public void КлассыИМетодыИзContractGuardMap_СуществуютВКоде()
+    public void КлассыИМетодыИзContractGuardMap_СуществуютВИсходникахСвоихПроектов()
     {
         // Корень репозитория — вверх от каталога тестовой сборки до backend/ClaudeHomeServer.slnx
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "backend", "ClaudeHomeServer.slnx")))
             root = root.Parent;
         root.Should().NotBeNull("тест ищет сторожей по исходникам репозитория");
-        var sources = Directory.EnumerateFiles(Path.Combine(root!.FullName, "backend"), "*.cs", SearchOption.AllDirectories)
+        // Классы сторожей живут в двух тестовых проектах; ищем только в них, а не по всему backend/
+        var projects = new[] { "ClaudeHomeServer.Tests", "ClaudeHomeServer.Guards.Tests" };
+        var sources = projects
+            .SelectMany(p => Directory.EnumerateFiles(Path.Combine(root!.FullName, "backend", p), "*.cs", SearchOption.AllDirectories))
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
                         && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
             .Select(File.ReadAllText).ToList();
@@ -487,10 +543,15 @@ public class ConsumersTailContributorTests
         {
             var cls = new System.Text.RegularExpressions.Regex($@"\bclass\s+{g.TestClass}\b");
             var body = sources.Where(src => cls.IsMatch(src)).ToList();
-            body.Should().NotBeEmpty($"класс сторожа {g.TestClass} должен существовать");
+            body.Should().NotBeEmpty($"класс сторожа {g.TestClass} должен существовать в тестовых проектах");
             if (g.TestMethod is not null)
-                body.Should().Contain(src => src.Contains(" " + g.TestMethod + "("),
-                    $"метод сторожа {g.TestClass}.{g.TestMethod} должен существовать");
+            {
+                // объявление метода: возвращаемый тип, имя и открывающая скобка, а не любое упоминание
+                var method = new System.Text.RegularExpressions.Regex(
+                    $@"\b(?:void|Task(?:<[^>]+>)?)\s+{g.TestMethod}\s*\(");
+                body.Should().Contain(src => method.IsMatch(src),
+                    $"метод сторожа {g.TestClass}.{g.TestMethod} должен быть объявлен");
+            }
         }
     }
 }

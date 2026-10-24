@@ -9,13 +9,14 @@ namespace ClaudeHomeServer.Services.CodeGraph;
 // Хук PreToolUse (ClaudeRuntimeSettings) по построению не работает у container-владельцев и на
 // Windows-хосте и не видит правок через Bash; здесь сервер сам берёт файлы, названные в тексте
 // первого хода, и отдаёт на каждый три подраздела: Зависимости (исходящие Calls|References с
-// «путь:строка» объявления, DependenciesByFileAsync), Сторожа по пути (ContractGuardMap) и
+// «файл:строка» объявления, а у TS-узлов — только «файл»: строку отдаёт провайдер, DependenciesByFileAsync), Сторожа по пути (ContractGuardMap) и
 // Потребители (входящие, NeighborsByFileAsync). Модель узкого контекста граф сама не спрашивает —
 // контракт соседнего слоя должен приходить сам.
 //
 // Секция идёт по ВСЕМ владельцам, в том числе там, где хук работает (local на Linux): правка через
 // Bash (printf >> file) хук Edit|Write не видит. Потолки: ≤ 20 строк на подраздел, ≤ 3 файла, ≤ 120 строк
-// на секцию; при превышении «ещё N», режутся сначала зависимости, затем потребители, сторожа — никогда.
+// на секцию, ≤ 10 строк на «Сторожа по пути»; при превышении «ещё N», при тесноте секции режутся сначала
+// зависимости, затем потребители, сторожа — никогда (их потолок держит тест на таблицу).
 // Один раз на первом ходе, только файлы постановки. Агент ничего не спрашивает;
 // нет графа, файл вне графа, ответ дольше 3 с, сбой — молчание.
 // Секция едет InTurnTail: нестабильный текст не должен попадать в системный блок.
@@ -24,6 +25,8 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     public const string SectionKey = "contracts-tail";
     internal const int LineLimit = 20;
     internal const int SectionLineLimit = 120;
+    // Потолок подраздела «Сторожа по пути»: заголовок + строки таблицы; сверх — «ещё N»
+    internal const int GuardLineLimit = 10;
     // Меньше двух строк подраздел не ужимается: заголовок и «ещё N»
     private const int MinSubsectionLines = 2;
     internal const int MaxFiles = 3;
@@ -340,7 +343,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     {
         var total = result.Total > 0 ? result.Total : result.Neighbors.Count;
         if (total <= 0) return null;
-        var lines = new List<string> { $"Зависимости {file} (что вызывает и на что ссылается, объявление — путь:строка; символов: {total}):" };
+        var lines = new List<string> { $"Зависимости {file} (что вызывает и на что ссылается, объявление — файл:строка, у TS только файл; символов: {total}):" };
         var room = Math.Max(maxLines - 1, 0);
         var show = result.Neighbors.Take(total <= room ? room : Math.Max(room - 1, 0)).ToList();
         foreach (var n in show) lines.Add($"- {n.Fqn} — {n.Location} ({n.Relation})");
@@ -348,12 +351,14 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         return string.Join('\n', lines.Take(Math.Max(maxLines, MinSubsectionLines)));
     }
 
-    // Сторожа по пути файла — таблица ContractGuardMap; не режутся никогда
-    internal static string? RenderGuards(string file)
+    // Сторожа по пути файла — таблица ContractGuardMap; сжатием секции не режутся, свой потолок — GuardLineLimit
+    internal static string? RenderGuards(string file, int maxLines = GuardLineLimit)
     {
         var guards = ContractGuardMap.For(file);
         if (guards.Count == 0) return null;
-        return $"Сторожа по пути {file} (краснеют при нарушении контракта слоя):\n"
-            + string.Join('\n', guards.Select(g => $"- {g.Prefix} → {g.Guard.Title}"));
+        var room = maxLines - 1;
+        var shown = guards.Take(guards.Count <= room ? room : room - 1).Select(g => $"- {g.Prefix} → {g.Guard.Title}").ToList();
+        if (guards.Count > shown.Count) shown.Add($"ещё {guards.Count - shown.Count}");
+        return $"Сторожа по пути {file} (краснеют при нарушении контракта слоя):\n" + string.Join('\n', shown);
     }
 }

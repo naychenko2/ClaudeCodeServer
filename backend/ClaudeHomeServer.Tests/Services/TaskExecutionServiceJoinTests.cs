@@ -86,7 +86,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
             (_, _) => _slotBase, (_, p) => p, NullLogger<ReviewTreePool>.Instance);
         _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notif,
             NullLogger<TaskExecutionService>.Instance, config, subagentRuns: _subagentRuns, kb: notesKb,
-            reviewTrees: _reviewPool);
+            projects: projectManager, reviewTrees: _reviewPool);
     }
 
     public void Dispose()
@@ -120,7 +120,8 @@ public class TaskExecutionServiceJoinTests : IDisposable
         return new SessionManager(projectManager, historyService, config, adapters, falCost, usage,
             appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            broadcaster: broadcaster);
+            broadcaster: broadcaster,
+            git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance));
     }
 
     private TaskItem CreateTrackedTask(string ownerId = "user-1")
@@ -838,5 +839,95 @@ public class TaskExecutionServiceJoinTests : IDisposable
         await _sut.MarkStoppedByUserAsync("sess-rv");
 
         (await tryThird()).Should().NotBeNull();
+    }
+
+    // ─── Слот ревью: запуск исполнителя ─────
+
+    private async Task<(TaskItem Task, Project Project, string Wave, string Sha)> ArrangeReviewLaunchAsync(
+        string role, bool withWorktree = true, string? deviceId = null)
+    {
+        var (wave, project) = await MkRepoWithWaveAsync();
+        var user = _userStore.Add("rv-run-" + Guid.NewGuid().ToString("N")[..6], "password123", "user");
+        if (deviceId is null) project = _projects.Create("Demo", project.RootPath, user.Id, user.Username);
+        else project = _projects.CreateLocal("Demo", project.RootPath, user.Id, deviceId);
+        var git = new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance);
+        var sha = (await git.LocalTipAsync(null, wave, "HEAD"))!;
+        var task = _tasks.Create(project.Id, user.Id, new CreateTaskRequest("Ревью волны",
+            WorktreePath: withWorktree ? wave : null));
+        var epic = _tasks.Create(project.Id, user.Id, new CreateTaskRequest("Эпик фичи"));
+        _tasks.Update(epic.Id, new UpdateTaskRequest(Role: TaskRoles.Feature));
+        _tasks.Update(task.Id, new UpdateTaskRequest(Role: role, FeatureId: epic.Id));
+        return (_tasks.GetById(task.Id)!, project, wave, sha);
+    }
+
+    private async Task<string> PromptOfAsync(TaskItem started)
+    {
+        var history = await _sessions.GetHistoryAsync(_tasks.GetById(started.Id)!.LinkedSessionId!);
+        return string.Join("\n", history.OfType<StoredUserMessage>().Select(m => m.Text));
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ЗапускРевью_ЧатВСлотеАбзацСShaВПостановке()
+    {
+        var (task, _, wave, sha) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+
+        await _sut.ExecuteAsync(task, auto: false);
+
+        var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
+        session.WorktreePath.Should().Be(Path.Combine(_slotBase, "feat-wave-review-1"));
+        session.WorktreePath.Should().NotBe(wave);
+        var prompt = await PromptOfAsync(task);
+        prompt.Should().Contain(sha).And.Contain("не коммить").And.NotContain("не вошли");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ГрязнаяВолна_ПутьФайлаВПостановкеСПометкой()
+    {
+        var (task, _, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        await File.WriteAllTextAsync(Path.Combine(wave, "dirty.txt"), "грязное\n");
+
+        await _sut.ExecuteAsync(task, auto: false);
+
+        var prompt = await PromptOfAsync(task);
+        prompt.Should().Contain("- dirty.txt").And.Contain("в проверяемый коммит не вошли");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_РольStep_ПулНеВызывается_ЧатВДереве_Волны()
+    {
+        var (task, _, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Step);
+
+        await _sut.ExecuteAsync(task, auto: false);
+
+        var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
+        session.WorktreePath.Should().Be(Path.GetFullPath(wave));
+        Directory.Exists(_slotBase).Should().BeFalse("слоты создаёт только пул");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_РевьюБезДерева_ПулНеВызывается()
+    {
+        var (task, _, _, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review, withWorktree: false);
+
+        await _sut.ExecuteAsync(task, auto: false);
+
+        _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!.WorktreePath.Should().BeNull();
+        Directory.Exists(_slotBase).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ЛокальныйПроект_ПулНеВызывается()
+    {
+        var (task, _, _, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review, deviceId: "dev-1");
+
+        try { await _sut.ExecuteAsync(task, auto: false); }
+        catch (Exception) { /* исполнение на устройстве в тесте недоступно — важно лишь, что слот не заведён */ }
+
+        Directory.Exists(_slotBase).Should().BeFalse();
     }
 }

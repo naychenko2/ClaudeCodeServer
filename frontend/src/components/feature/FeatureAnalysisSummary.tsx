@@ -113,6 +113,10 @@ export function FeatureAnalysisSummary({
     fontFamily: FONT.sans,
   };
 
+  // Тач-цель 40 на 360 (спека §«Мобильная 360»): размер остаётся sm/xs, высота — 40.
+  // Один стиль на все кнопки компонента (вердикт W5-R-F2c, п.3).
+  const btnStyle: CSSProperties | undefined = isMobile ? { minHeight: 40 } : undefined;
+
   // «Идёт»: текст-подсказка + три полосы-скелета, действие — «Остановить».
   if (phase === 'running') {
     return (
@@ -122,7 +126,7 @@ export function FeatureAnalysisSummary({
           <span style={{ flex: 1, minWidth: 0, color: C.textSecondary }}>Модель читает хронологию фичи…</span>
           <Button
             variant="ghost" size="sm" dataTestId="summary-stop"
-            style={isMobile ? { minHeight: 40 } : undefined}
+            style={btnStyle}
             onClick={onStop}
           >Остановить</Button>
         </div>
@@ -151,7 +155,7 @@ export function FeatureAnalysisSummary({
             // Тач-цель 40 на 360 без исключений (спека §«Мобильная 360», вердикт W5-R-F2a, п.1).
             <Button
               variant="secondary" size="sm" dataTestId="summary-retry"
-              style={isMobile ? { minHeight: 40 } : undefined}
+              style={btnStyle}
               onClick={onRetry}
             >Повторить</Button>
           ) : undefined}
@@ -167,8 +171,6 @@ export function FeatureAnalysisSummary({
   const stale = !!data?.generatedAt && !!run.lastActivityAt &&
     Date.parse(run.lastActivityAt) > Date.parse(data.generatedAt);
   const btnSize = isMobile ? 'sm' : 'xs';
-  // Тач-цель 40 на 360 (спека §«Мобильная 360»): размер остаётся sm, высота — 40.
-  const btnStyle = isMobile ? { minHeight: 40 } : undefined;
 
   return (
     <div data-testid="feature-analysis-summary" style={box}>

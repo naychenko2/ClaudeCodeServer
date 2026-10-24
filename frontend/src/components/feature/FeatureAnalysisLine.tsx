@@ -78,19 +78,26 @@ export function FeatureAnalysisLine({ run, marks, isMobile = false }: FeatureAna
     setSummaryRunning(false);
   }
 
-  useEffect(() => {
-    abortRef.current?.abort();
-  }, [run.featureId]);
+  // Cleanup-форма (вердикт W5-R-F2c, п.2): покрывает и смену фичи, и размонтирование —
+  // висящий запрос снимается в обоих случаях.
+  useEffect(() => () => abortRef.current?.abort(), [run.featureId]);
 
   // force=false — берётся кэш бэка; force=true — новый прогон («Обновить»).
   const fetchSummary = (force: boolean) => {
     if (summaryRunning) return;
     const ac = new AbortController();
+    const fid = run.featureId;
     abortRef.current = ac;
     setSummaryRunning(true);
     setSummaryError(null);
-    api.tasks.featureSummary(run.featureId, force, ac.signal)
-      .then(d => { setSummaryData(d); })
+    api.tasks.featureSummary(fid, force, ac.signal)
+      .then(d => {
+        // Ответ принимает только текущий запрос (вердикт W5-R-F2c, п.1): если фича
+        // сменилась (окно между коммитом рендера и эффектом отмены) или уже идёт
+        // другой запрос — старый ответ не липнет.
+        if (lastFeatureRef.current !== fid || abortRef.current !== ac) return;
+        setSummaryData(d);
+      })
       .catch(e => {
         if (ac.signal.aborted) return; // «Остановить» — не ошибка.
         const err = e as Error & { status?: number; body?: { error?: string } };

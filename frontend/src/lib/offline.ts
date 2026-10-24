@@ -355,6 +355,13 @@ function isNetworkError(e: unknown): boolean {
   return e instanceof TypeError;
 }
 
+// Отмена — по имени ошибки, а не по типу: потребитель (featurePage.ts:105) судит по
+// e.name === 'AbortError', и внутренняя проверка не должна расходиться с этим контрактом:
+// отмена не-DOMException иначе прошла бы мимо обеих проверок.
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && e.name === 'AbortError';
+}
+
 
 // --- Запрос ---
 
@@ -397,12 +404,13 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // Отметка «отменил вызывающий» нужна, чтобы его отмена не трактовалась как пропажа
   // связи — это не сетевой сбой, а намеренная отмена (её узнают featurePage и FeatureAnalysisLine).
   let abortedByCaller = false;
+  const onCallerAbort = () => { abortedByCaller = true; controller.abort(); };
   if (callerSignal) {
     if (callerSignal.aborted) {
       abortedByCaller = true;
       controller.abort();
     } else {
-      callerSignal.addEventListener('abort', () => { abortedByCaller = true; controller.abort(); });
+      callerSignal.addEventListener('abort', onCallerAbort);
     }
   }
 
@@ -466,11 +474,11 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     clearTimeout(timeoutId);
     // Отмена вызывающего — не пропажа связи и не наш таймаут: AbortError отдаём как есть,
     // кэш не подставляем (устаревший ответ под новой фичей — хуже, чем пустота).
-    if (e instanceof DOMException && e.name === 'AbortError' && abortedByCaller) {
+    if (isAbortError(e) && abortedByCaller) {
       throw e;
     }
     // AbortError от нашего таймаута трактуем как сетевую проблему
-    if (isNetworkError(e) || (e instanceof DOMException && e.name === 'AbortError')) {
+    if (isNetworkError(e) || isAbortError(e)) {
       // Свой таймаут на заведомо долгом запросе (явный timeoutMs) — не улика против
       // связи: сервер мог просто думать дольше отведённого. Состояние не трогаем,
       // иначе успешная, но медленная операция уводила бы приложение в офлайн.
@@ -489,7 +497,8 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
         // Гард «только из online» и сам пинг — внутри confirmOffline().
         await confirmOffline();
       }
-      // Кэш выручает GET независимо от причины обрыва — сначала пробуем его.
+      // Кэш выручает GET при сетевом обрыве или нашем таймауте — сначала пробуем его.
+      // Отмена вызывающим возвращена выше как есть — IDB-фолбэка для неё нет.
       // Кроме live-запросов: там подстановка прошлого ответа выдала бы лежащий сервер за
       // работающий, а вызывающему нужен именно факт обрыва.
       if (useOfflineCache) {
@@ -500,6 +509,10 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       throw new OfflineError(isGet ? 'Нет сохранённых данных для офлайн-доступа' : undefined);
     }
     throw e; // HTTP-ошибка или прочее — пробрасываем как есть
+  } finally {
+    // Сигнал вызывающего может жить дольше запроса (тот же signal передают в следующий
+    // вызов): снимаем слушателя, чтобы они не накапливались на нём.
+    if (callerSignal) callerSignal.removeEventListener('abort', onCallerAbort);
   }
 }
 

@@ -206,6 +206,46 @@ describe('request: signal вызывающего', () => {
       .rejects.toThrow('Aborted');
     expect(offline.isOnline()).toBe(true);
   });
+
+  it('отмена судится по имени, не по типу: Error-подобный AbortError — тоже отмена', async () => {
+    // Контракт по имени, как у потребителя (featurePage.ts:105 судит по e.name === 'AbortError'):
+    // в ряде окружений abort приходит Error с именем 'AbortError', а не DOMException.
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    }));
+
+    // Наш таймаут, обрывающий fetch такой ошибкой, должен трактоваться как таймаут
+    // (RequestTimeoutError), а не уходить в сырую ошибку или офлайн.
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', timeoutMs: 180_000 });
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('слушатель на signal вызывающего снимается: на долгоживущем signal не накапливается', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+    let added = 0;
+    let removed = 0;
+    // Сигнал, который переживает запрос: тот же signal передают в следующий вызов
+    const longLivedSignal = {
+      aborted: false,
+      addEventListener: (_type: string, _handler: () => void) => { added++; },
+      removeEventListener: (_type: string, _handler: () => void) => { removed++; },
+    } as unknown as AbortSignal;
+
+    for (let i = 0; i < 3; i++) {
+      await offline.request('/tasks/features/f1', { signal: longLivedSignal });
+    }
+
+    expect(added).toBe(3);
+    // Каждый слушатель снят в finally: на сигнале не остаётся ни одного
+    expect(removed).toBe(3);
+  });
 });
 
 // --- Подтверждающий пинг перед уходом в офлайн ---

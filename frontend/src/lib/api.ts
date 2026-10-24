@@ -1800,12 +1800,13 @@ export const api = {
     // force=false — берётся кэш бэка, если есть; force=true — новый прогон. 200 —
     // FeatureSummaryResult; 502 — модель не ответила (текст причины в error); 503 —
     // подсистема выключена; 404 — фичи нет. signal — «Остановить» в шапке резюме.
-    // timeoutMs 190 с — по конвенции модельные вызовы задают свой лимит (см. analyze-запросы
-    // выше): серверный бюджет 45/180 с (LocalActionCatalog), дефолт 30 с обрывал ход раньше.
+    // timeoutMs 240 с — по конвенции модельные вызовы задают свой лимит (см. analyze-запросы
+    // выше): серверный бюджет — цепочка локаль 45 с + облако 180 с = 225 с (LocalActionCatalog).
+    // 190 с покрывал один шаг, не цепочку; дефолт 30 с обрывал ход раньше.
     featureSummary: (fid: string, force?: boolean, signal?: AbortSignal) =>
       request<FeatureSummaryResult>(
         `/tasks/features/${encodeURIComponent(fid)}/summary${force ? '?force=true' : ''}`,
-        { method: 'POST', ...(signal ? { signal } : {}), timeoutMs: 190_000 },
+        { method: 'POST', ...(signal ? { signal } : {}), timeoutMs: 240_000 },
       ),
     // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{fid}/merge):
     // создаёт задачу role=merge с персоной DevopsExecutor и запускает её. Fail-closed:

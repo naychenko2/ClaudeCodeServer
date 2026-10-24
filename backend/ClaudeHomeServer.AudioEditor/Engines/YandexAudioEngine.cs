@@ -135,7 +135,7 @@ public sealed class YandexAudioEngine(ITtsEngine? tts) : IAudioEngine, IAudioQuo
         var voice = string.IsNullOrWhiteSpace(wanted)
             ? modelVoices.FirstOrDefault()
             : modelVoices.FirstOrDefault(v => string.Equals(v.Voice, wanted.Trim(), StringComparison.OrdinalIgnoreCase));
-        if (voice is null &&!string.IsNullOrWhiteSpace(wanted)
+        if (voice is null && !string.IsNullOrWhiteSpace(wanted)
             && tts.Voices.FirstOrDefault(v => string.Equals(v.Voice, wanted.Trim(), StringComparison.OrdinalIgnoreCase)) is { } foreign)
             return (null, foreign.Model == TtsEngineVoice.LiveTts
                 ? $"Голос «{ShortName(foreign)}» — из LiveTTS, выбери модель «SpeechKit LiveTTS»"

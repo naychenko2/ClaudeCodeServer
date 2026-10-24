@@ -356,15 +356,15 @@ public class TasksHttpDelegationGateTests : IDisposable
 
         _adapters.AgentDepth = 0;
         var byExecutor = await ServiceClient(executorSession).PutAsJsonAsync($"/api/tasks/{epicId}", body);
-        byExecutor.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        byExecutor.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await byExecutor.Content.ReadAsStringAsync()).Should().Contain(FeatureCloseDenied);
 
         var noSession = await ServiceClient(null).PutAsJsonAsync($"/api/tasks/{epicId}", body);
-        noSession.StatusCode.Should().Be(HttpStatusCode.BadRequest, "fail-closed: сервисный токен без сессии");
+        noSession.StatusCode.Should().Be(HttpStatusCode.Forbidden, "fail-closed: сервисный токен без сессии");
 
         _adapters.AgentDepth = 1;
         var delegated = await ServiceClient(humanSession).PutAsJsonAsync($"/api/tasks/{epicId}", body);
-        delegated.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        delegated.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await StatusOfAsync(epicId)).Should().NotBe("done");
 
         _adapters.AgentDepth = 0;

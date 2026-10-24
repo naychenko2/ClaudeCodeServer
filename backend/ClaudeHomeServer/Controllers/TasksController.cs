@@ -450,6 +450,10 @@ public class TasksController(
                 || (callerSessionHeader is not null && !DelegatedTurnGate.Decide(
                     sessions, UserId, callerSessionHeader, "Закрытие фичи",
                     alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
+            if (denyFeatureClose && task.Role == TaskRoles.Feature
+                && req.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done)
+                return StatusCode(StatusCodes.Status403Forbidden,
+                    new { error = TaskManager.FeatureCloseDeniedText });
             updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor, denyFeatureClose)
                 ?? throw new InvalidOperationException("Задача не найдена");
         }

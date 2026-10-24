@@ -1096,6 +1096,9 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // вечными. Ручка удаления зовёт RestoreFrozenChatsAfterFeatureDelete до Delete; здесь —
     // сама сервисная метода. Мутация: убрать RestoreFrozenExpiry в теле метода — краснеет
     // абзац про срок (он не вернулся), последний — чат пережил бы уборку.
+    // Хвост R-N2 (минор 2): в тесте есть и второй шаг с вечным чатом — заморозки у него
+    // нет, возвращать нечего. Мутация: убрать guard HoldFrozen в счётчике — restored
+    // станет 2 (RestoreFrozenExpiry возвращает unchanged запись, и она считалась бы возвратом).
     [Fact]
     public async Task FeatureDelete_RestoresFrozenChatExpiry()
     {
@@ -1108,6 +1111,14 @@ public class TaskExecutionServiceHoldTests : IDisposable
         _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
         _sessions.SetExpiry(chat.Id, 10); // срок, который поставил запуск исполнителя
         SetRunningTurn(chat.Id);
+        // Второй шаг — с вечным чатом (срока нет → FreezeExpiryForHold нечего сохранить):
+        // пауза его тоже помечает, но после удаления эпика возвращать нечего.
+        var eternalStep = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг с вечным чатом",
+            Role: "step", FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var eternalChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits,
+            name: "eternal", taskId: eternalStep.Id);
+        _tasks.MarkClaudeStarted(eternalStep.Id, eternalChat.Id, DateTime.UtcNow);
+        SetRunningTurn(eternalChat.Id);
 
         _tasks.SetHold(epic.Id, "manual");
         _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
@@ -1116,7 +1127,9 @@ public class TaskExecutionServiceHoldTests : IDisposable
 
         _tasks.Delete(epic.Id);
         var restored = _sut.RestoreFrozenChatsAfterFeatureDelete(epic.Id, user.Id);
-        restored.Should().Be(1, "эпик удалён на паузе: чату шага возвращён его срок");
+        restored.Should().Be(1, "возвращён только замороженный чат: вечному нечего возвращать");
+        _sessions.GetById(eternalChat.Id)!.ExpiresAfterMinutes.Should().BeNull(
+            "вечный чат не стал временным от несуществующей заморозки");
         _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10,
             "замороженный срок восстановлен — чат больше не вечный");
         await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
@@ -1203,9 +1216,13 @@ public class TaskExecutionServiceHoldTests : IDisposable
         _tasks.ClearHold(epic.Id);
 
         var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Manual);
-        resumed.Should().Be(1, "первый шаг продолжен до того, как встала новая пауза");
+        // Хвост R-N2 (минор 1): пометку ставит первая пауза, а ClearHold её не гасит
+        // (TaskManager.cs:1306-1308) — «останется ли она» само по себе ничего не доказывает.
+        // Поэтому проверка идёт ДО счётчика: без guard'а в цикле второй шаг был бы продолжен
+        // и ClearExecutorStopped снял бы пометку — краснеет именно этот абзац.
         _tasks.GetById(second.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldReason,
-            "guard цикла поймал новую паузу: второй шаг остаётся на паузе");
+            "guard цикла поймал новую паузу: второй шаг помечен паузой, а не «продолжен»");
+        resumed.Should().Be(1, "первый шаг продолжен до того, как встала новая пауза");
         secondAdapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
             "новая пауза держит продолжение второго шага");

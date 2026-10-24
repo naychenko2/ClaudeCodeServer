@@ -48,6 +48,9 @@ public partial class SessionManagerTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
     private readonly ClaudeSubscriptionPool _subPool;
     private readonly SessionManager _sut;
+    // Пустой реестр задач для гейта паузы в ReportBlockerAsync: гасится в Dispose фикстуры,
+    // а не в конструкторе — владелец ссылки (_sut) живёт дольше фикстуры-конструктора.
+    private readonly ClaudeHomeServer.Services.Tasks.TaskManager _taskStore;
     // Подставной шов графа кода: считает запросы прогрева дерева (ADR-003)
     private readonly RecordingGraphInspector _graphInspector = new();
 
@@ -212,14 +215,20 @@ public partial class SessionManagerTests : IDisposable
         // Реестр задач подключён пустым: гейт паузы в ReportBlockerAsync теперь обязательный
         // и без реестра падает сразу (R-HOLD-I). Пустой реестр — то же поведение: задач нет,
         // паузы нет, пробуждения идут как раньше.
-        // Реестр пустой и гасится сразу после фиксации (R-HOLD-I2, минор): TaskManager —
-        // IDisposable с таймером дебаунса, и на каждый экземпляр фиксации он утекал.
-        using var taskStore = new ClaudeHomeServer.Services.Tasks.TaskManager(config);
-        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster, graphInspector: _graphInspector, tasks: taskStore);
+        // Реестр пустой: TaskManager — IDisposable с таймером дебаунса, и без гашения на
+        // каждый экземпляр фиксации он утекал. Гасится в Dispose фикстуры (хвост R-N2,
+        // минор 4): using var гасил его в конструкторе, а _sut держит ссылку дольше —
+        // пригодность TaskManager после Dispose не документирована.
+        _taskStore = new ClaudeHomeServer.Services.Tasks.TaskManager(config);
+        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster, graphInspector: _graphInspector, tasks: _taskStore);
     }
 
     public void Dispose()
     {
+        // Реестр гасится ДО удаления каталога: Dispose досбрасывает несохранённое (Flush),
+        // и запись tasks.json идёт в _tempDir — после удаления она бы упала или оставила
+        // файлы в уже удаляемом каталоге.
+        _taskStore.Dispose();
         // Запись history.json идёт из fire-and-forget обработчиков SessionManager: тест
         // доходит до Dispose раньше дописывания — отсюда «Directory not empty» на Linux и
         // занятый {path}.{guid}.tmp на Windows. Ретрай живёт в общем хелпере.

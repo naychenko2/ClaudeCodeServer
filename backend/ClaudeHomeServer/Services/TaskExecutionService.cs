@@ -1355,7 +1355,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             if (t.FeatureId != featureId) continue;
             if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
             if (t.LinkedSessionId is null) continue;
-            if (_sessions.RestoreFrozenExpiry(t.LinkedSessionId) is not null) restored++;
+            // Хвост R-N2 (минор 2): RestoreFrozenExpiry возвращает запись и когда возвращать
+            // нечего (чат не замораживался — вечный) — так счётчик считал бы и пустые
+            // возвраты. Считаем только фактический: заморозка на чате есть.
+            if (_sessions.GetById(t.LinkedSessionId)?.HoldFrozenExpiresAfterMinutes is null) continue;
+            _sessions.RestoreFrozenExpiry(t.LinkedSessionId);
+            restored++;
         }
         return restored;
     }
@@ -1369,8 +1374,11 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // ДО удаления: после него задачи в реестре нет. Возвращает число восстановленных чатов.
     public int RestoreFrozenChatsBeforeDelete(TaskItem task)
     {
+        // Хвост R-N2 (минор 3): явный guard вместо task.OwnerId! на nullable-поле: без него
+        // GetByOwner(null) тихо не находит ничего, и отказ выглядит как «ничего не восстановлено».
+        // У эпика без владельца регистр поиска не определён — возвращаем 0 явно.
         if (task.Role == TaskRoles.Feature)
-            return RestoreFrozenChatsAfterFeatureDelete(task.Id, task.OwnerId!);
+            return task.OwnerId is null ? 0 : RestoreFrozenChatsAfterFeatureDelete(task.Id, task.OwnerId);
         // Отдельно — удаление шага на паузе: возвращаем срок его собственному чату.
         if (task.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason &&
             task.LinkedSessionId is not null)

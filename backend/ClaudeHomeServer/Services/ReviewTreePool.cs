@@ -287,19 +287,32 @@ public sealed class ReviewTreePool
             return;
 
         var slotPath = Path.Combine(slotBase, name);
-        lock (_gate) _leases.TryAdd(slotPath, task.Id);
-        // Маркер — только слоту пула: detached-дерево, зарегистрированное по этому пути. Дерево чата или волны
-        // на ветке с таким именем каталога маркера не получает (иначе его сносила бы уборка слотов)
-        if (File.Exists(MarkerPath(slotPath))) return;
-        try
+        // Дерево чата или волны на ветке с таким именем каталога слотом пула не является: аренду ему не ставим
+        // (иначе RemoveSlotAsync сочло бы его своим и снесло с --force) и маркер не пишем. Сбой чтения базы
+        // деревьев или незарегистрированный путь — аренда как раньше: безопаснее лишний раз занять слот
+        var hasMarker = File.Exists(MarkerPath(slotPath));
+        var detached = false;
+        if (!hasMarker)
         {
-            var key = (task.OwnerId, project.RootPath);
-            if (!trees.TryGetValue(key, out var list))
-                trees[key] = list = await _git.WorktreeListAsync(task.OwnerId, project.RootPath);
-            var norm = PathNormalizer.NormalizePath(slotPath);
-            if (list.Any(w => PathNormalizer.NormalizePath(w.Path) == norm && w.Branch is null))
-                File.WriteAllBytes(MarkerPath(slotPath), []);
+            try
+            {
+                var key = (task.OwnerId, project.RootPath);
+                if (!trees.TryGetValue(key, out var list))
+                    trees[key] = list = await _git.WorktreeListAsync(task.OwnerId, project.RootPath);
+                var norm = PathNormalizer.NormalizePath(slotPath);
+                var registered = list.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == norm);
+                if (registered is { Branch: not null }) return;
+                detached = registered is not null;
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Дерево слота ревью {Slot} не опознано", slotPath);
+            }
         }
+        lock (_gate) _leases.TryAdd(slotPath, task.Id);
+        // Маркер — только слоту пула: detached-дерево, зарегистрированное по этому пути
+        if (!detached) return;
+        try { File.WriteAllBytes(MarkerPath(slotPath), []); }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Маркер слота ревью {Slot} не записан", slotPath);

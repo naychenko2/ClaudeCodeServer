@@ -318,6 +318,7 @@ describe('шрифт числа героя (сверяется с design.ts)', (
     // React пишет число через px — сравниваем строку «34px» с токеном design.ts.
     expect(style.fontFamily).toBe(FONT.serif);
     expect(style.fontSize).toBe(`${FS.display}px`);
+    expect(style.fontWeight).toBe('700'); // макет .a-kpi .n: font:700 …
   });
 
   it('360 (isMobile): FS.h1', () => {

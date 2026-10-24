@@ -14,15 +14,18 @@
 //     «5 токенов», «1 раз» / «2 раза» (к3);
 //   · число плитки — FONT.serif, FS.h2 (на 360 — FS.xl), как в макете §Токены.
 //
-// Мутации (проверены прогоном): (1) убрать `if (spend)` в FeatureStatsPulseModel.ts:118
-// — краснеет тест «без spend нет плитки „Расход"»; (2) `isMobile ? 'repeat(2, 1fr)'`
-// → `'repeat(4, 1fr)'` — краснеет тест мобильной сетки; (3) `roundMark` возвращает 'ok'
-// и для 'withdrawn' — краснеет тест числа значков; (4) `pluralRu` без ветки mod10 === 1
-// — краснеет тест «1 возврат».
+// Мутации (проверены прогоном): (1) плитка «Расход» добавляется всегда (убрать guard
+// `if (spend)` в FeatureStatsPulseModel.ts:118 и пушить безусловно) — краснеет
+// DOM-утверждение `findNodeByAttr(..., 'tile-spend')` в тесте «без spend нет плитки
+// „Расход"»; (2) `isMobile ? 'repeat(2, 1fr)'` → `'repeat(4, 1fr)'` — краснеет тест
+// мобильной сетки; (3) `roundMark` возвращает 'ok' и для 'withdrawn' — краснеет тест
+// числа значков; (4) `plural` (lib/plural.ts) без ветки mod10 === 1 — краснеет тест
+// «1 возврат»; (5) `tile.count == null` → `tile.count ?? 0` — краснеет тест
+// «ожиданий не считалось».
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { C, FS, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT } from '../../lib/design';
 import { FeatureStatsTiles } from './FeatureStatsTiles';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes } from '../chat/__tests__/fakeDom';
 import type { FeatureRun, FeatureRound, FeatureStepChain } from '../../types/featureRun';
@@ -171,6 +174,25 @@ describe('состав плиток (к1)', () => {
   });
 });
 
+describe('ожидания: null и 0 разведены (вердикт, п.1)', () => {
+  it('waitingCount null — «ожиданий не считалось», а не «не было»', () => {
+    // Approx-режим бэка: waitingCount = null (в полной фикстуре — 2, здесь сбрасываем).
+    const stats = mkStats();
+    stats.timeline.totals.waitingCount = null;
+    const { container } = mountTiles(mkRun(), stats);
+    const hint = textOf(findNodeByAttr(container, 'data-testid', 'tile-waiting-hint'));
+    expect(hint).toBe('ожиданий не считалось');
+  });
+
+  it('waitingCount 0 — «ожиданий не было»', () => {
+    const stats = mkStats();
+    stats.timeline.totals.waitingCount = 0;
+    const { container } = mountTiles(mkRun(), stats);
+    const hint = textOf(findNodeByAttr(container, 'data-testid', 'tile-waiting-hint'));
+    expect(hint).toBe('ожиданий не было');
+  });
+});
+
 describe('раскладка (к2)', () => {
   it('десктоп: repeat(4, 1fr)', () => {
     const { container } = mountTiles(mkRun(), mkStats({ spend: mkSpend() }));
@@ -189,6 +211,7 @@ describe('раскладка (к2)', () => {
     const big = findNodeByAttr(desktop, 'data-testid', 'tile-work-big').style as Record<string, string>;
     expect(big.fontFamily).toBe(FONT.serif);
     expect(big.fontSize).toBe(`${FS.h2}px`);
+    expect(big.fontWeight).toBe('700'); // макет .a-kpi .n: font:700 …
 
     const mobile = mountTiles(mkRun(), mkStats(), true).container;
     const mBig = findNodeByAttr(mobile, 'data-testid', 'tile-work-big').style as Record<string, string>;
@@ -227,6 +250,22 @@ describe('ряд ✓/↩ в «Возвраты» (к3)', () => {
     expect(second.color).toBe(C.successText);
   });
 
+  it('стиль значка по макету: 14×14, R.sm, FS.xxs, font-style normal; ряд — отступ SP.sm', () => {
+    const run = mkRun({
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 1, withdrawn: 0, loops: 1 },
+      stepChains: [mkChain(['returned'])],
+    });
+    const { container } = mountTiles(run, mkStats());
+    const rounds = findNodeByAttr(container, 'data-testid', 'tile-rounds');
+    const mark = rounds.children[0].style as Record<string, string>;
+    expect(mark.width).toBe('14px');
+    expect(mark.height).toBe('14px');
+    expect(mark.borderRadius).toBe(`${R.sm}px`);
+    expect(mark.fontSize).toBe(`${FS.xxs}px`);
+    expect(mark.fontStyle).toBe('normal');
+    expect(rounds.style.marginTop).toBe(`${SP.sm}px`);
+  });
+
   it('все витки withdrawn/running — ряда значков нет', () => {
     const run = mkRun({ stepChains: [mkChain(['withdrawn', 'running'])] });
     const { container } = mountTiles(run, mkStats());
@@ -250,14 +289,20 @@ describe('склонение числительных (к3)', () => {
       });
       const { container } = mountTiles(run, mkStats());
       expect(textOf(findNodeByAttr(container, 'data-testid', 'tile-loops-big'))).toBe(String(n));
-      expect(textOf(findNodeByAttr(container, 'data-testid', 'tile-loops-hint'))).toContain(word);
+      const hint = textOf(findNodeByAttr(container, 'data-testid', 'tile-loops-hint'));
+      expect(hint).toContain(word);
+      // «1 возврат» — префикс «1 возвратов»: хвост проверяем явно, иначе мутация
+      // plural не краснит тест.
+      if (n === 1) expect(hint).not.toContain('1 возвратов');
     });
   }
 
   it('токены: 1 токен / 2 токена / 5 токенов', () => {
     for (const [tokens, word] of [[1, '1 токен'], [2, '2 токена'], [5, '5 токенов']] as const) {
       const { container } = mountTiles(mkRun(), mkStats({ spend: mkSpend({ inputTokens: tokens, outputTokens: 0 }) }));
-      expect(textOf(findNodeByAttr(container, 'data-testid', 'tile-spend-hint'))).toContain(word);
+      const hint = textOf(findNodeByAttr(container, 'data-testid', 'tile-spend-hint'));
+      expect(hint).toContain(word);
+      if (tokens === 1) expect(hint).not.toContain('1 токенов');
     }
   });
 

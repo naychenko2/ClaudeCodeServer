@@ -119,12 +119,14 @@ export function StatsHero({ run, stats, isMobile = false }: StatsHeroProps) {
           )}
         </div>
 
-        {/* Число героя: FONT.serif, FS.display (360 — FS.h1). */}
+        {/* Число героя: FONT.serif, FS.display (360 — FS.h1), fontWeight 700 —
+            как .a-kpi .n в макете feature-stats-5.html:157. */}
         <div
           data-testid="hero-big"
           style={{
             fontFamily: FONT.serif,
             fontSize: isMobile ? FS.h1 : FS.display,
+            fontWeight: 700,
             color: C.textHeading,
             lineHeight: 1.15,
           }}

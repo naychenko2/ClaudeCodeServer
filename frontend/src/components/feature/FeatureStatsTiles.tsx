@@ -7,6 +7,7 @@
 
 import { type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
+import { plural } from '../../lib/plural';
 import { formatDuration, kindBackground } from './FeatureStatsBits';
 import { formatUsd, formatTokens } from './FeatureStatsBlocks';
 import { tilesModel, type StatTile } from './FeatureStatsPulseModel';
@@ -17,16 +18,6 @@ export interface FeatureStatsTilesProps {
   run: FeatureRun;
   stats: FeatureStats;
   isMobile?: boolean;
-}
-
-// Склонение числительных: 1 возврат / 2 возврата / 5 возвратов. Формы даёт вызывающий.
-function pluralRu(n: number, one: string, few: string, many: string): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 14) return many;
-  if (mod10 === 1) return one;
-  if (mod10 >= 2 && mod10 <= 4) return few;
-  return many;
 }
 
 // Сетка: четыре в ряд, на 360 — две колонки (макет .a-kpis и .w360 .a-kpis).
@@ -56,11 +47,12 @@ const LABEL: CSSProperties = {
   fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, fontFamily: FONT.sans,
 };
 
-// Число плитки: FONT.serif, FS.h2 (на 360 — FS.xl) — как в макете §Токены.
+// Число плитки: FONT.serif, FS.h2 (на 360 — FS.xl), fontWeight 700 — как в макете
+// §Токены (.a-kpi .n: font:700 22px/1.2).
 function bigStyle(isMobile: boolean): CSSProperties {
   return {
     fontFamily: FONT.serif, fontSize: isMobile ? FS.xl : FS.h2, color: C.textHeading,
-    lineHeight: 1.2, margin: `${SP.xs}px 0 ${SP.xs}px`,
+    fontWeight: 700, lineHeight: 1.2, margin: `${SP.xs}px 0 ${SP.xs}px`,
   };
 }
 
@@ -68,10 +60,13 @@ function bigStyle(isMobile: boolean): CSSProperties {
 const HINT: CSSProperties = { fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans };
 
 // Пометка витка: ✓ — successBg/successText, ↩ — dangerBg/dangerText (макет §Токены).
+// Размеры по макету feature-stats-5.html:161 (14×14, радиус 4, кегль 9, зазор 3,
+// отступ 6): точных значений в шкалах нет — взяты ближайшие (R.sm=6, FS.xxs=10,
+// SP.xs=4/SP.sm=8); 14×14 вне шкалы — literal из макета.
 const MARK: CSSProperties = {
   width: 14, height: 14, borderRadius: R.sm,
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-  fontSize: FS.xxs, fontWeight: 700,
+  fontSize: FS.xxs, fontWeight: 700, fontStyle: 'normal',
 };
 
 // Что стоит в плитке: большое число и подпись. Порядок слов — из макета. Числительные
@@ -86,11 +81,17 @@ function tileContent(tile: StatTile): { big: string; hint: string | null } {
           : `агенты суммарно ${formatDuration(tile.agentsSum)}`,
       };
     case 'waiting': {
-      const count = tile.count ?? 0;
+      // null — бэк не считал (approx-режим), 0 — ожиданий действительно не было.
+      if (tile.count == null) {
+        return {
+          big: tile.minutes == null ? '—' : formatDuration(tile.minutes),
+          hint: 'ожиданий не считалось',
+        };
+      }
       return {
         big: tile.minutes == null ? '—' : formatDuration(tile.minutes),
-        hint: count > 0
-          ? `${count} ${pluralRu(count, 'раз', 'раза', 'раз')}` +
+        hint: tile.count > 0
+          ? `${tile.count} ${plural(tile.count, 'раз', 'раза', 'раз')}` +
             (tile.longest != null ? ` · дольше всего ${formatDuration(tile.longest)}` : '')
           : 'ожиданий не было',
       };
@@ -102,7 +103,7 @@ function tileContent(tile: StatTile): { big: string; hint: string | null } {
       return {
         big: String(tile.loops),
         hint: tile.loops > 0
-          ? `${tile.loops} ${pluralRu(tile.loops, 'возврат', 'возврата', 'возвратов')}${src}`
+          ? `${tile.loops} ${plural(tile.loops, 'возврат', 'возврата', 'возвратов')}${src}`
           : 'возвратов не было',
       };
     }
@@ -110,7 +111,7 @@ function tileContent(tile: StatTile): { big: string; hint: string | null } {
       return {
         // Частичный учёт — цена не настоящая: число не показываем, говорим прямо.
         big: tile.costPartial ? '—' : formatUsd(tile.costUsd),
-        hint: `${formatTokens(tile.tokens)} ${pluralRu(tile.tokens, 'токен', 'токена', 'токенов')}` +
+        hint: `${formatTokens(tile.tokens)} ${plural(tile.tokens, 'токен', 'токена', 'токенов')}` +
           (tile.costPartial ? ' · часть моделей без цены' : ''),
       };
   }
@@ -142,7 +143,7 @@ export function FeatureStatsTiles({ run, stats, isMobile = false }: FeatureStats
             {tile.key === 'loops' && tile.rounds.length > 0 && (
               <div
                 data-testid="tile-rounds"
-                style={{ display: 'flex', gap: SP.xs, marginTop: SP.xs, flexWrap: 'wrap' }}
+                style={{ display: 'flex', gap: SP.xs, marginTop: SP.sm, flexWrap: 'wrap' }}
               >
                 {tile.rounds.map((mark, i) => (
                   <i

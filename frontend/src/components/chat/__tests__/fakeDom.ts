@@ -47,7 +47,12 @@ class FNode {
 
   appendChild(child: FNode): FNode { this._link(child, this.childNodes.length); return child; }
   insertBefore(child: FNode, ref: FNode | null): FNode {
-    const i = ref ? this.childNodes.indexOf(ref) : this.childNodes.length;
+    // Real DOM: first remove the node, then insert before ref. If the node is
+    // already before ref, its removal shifts ref left by one — without this
+    // correction, reordering of keyed children (React moves them via insertBefore)
+    // ends up in the wrong order.
+    let i = ref ? this.childNodes.indexOf(ref) : this.childNodes.length;
+    if (child.parentNode === this && this.childNodes.indexOf(child) < i) i -= 1;
     this._link(child, Math.max(0, i));
     return child;
   }

@@ -62,13 +62,13 @@ export function ShareRing({ groups, measure, size = 140 }: ShareRingProps) {
   // Доли от суммы частей: их длины в точности заполняют окружность — без зазора
   // и перекрытия (в отличие от percentText, который может дать 101 %).
   const shares = sorted.map(g => (total > 0 ? arcValue(g, measure) / total : 0));
-  let offset = 0;
-  const arcs = sorted.map((g, i) => {
-    const len = shares[i] * L;
-    const arc = { key: g.key, i, dash: `${len} ${L}`, offset: -offset };
-    offset += len;
-    return arc;
-  });
+  // Смещение дуги — сумма долей перед ней (без переприсваивания счётчика).
+  const arcs = sorted.map((g, i) => ({
+    key: g.key,
+    i,
+    dash: `${shares[i] * L} ${L}`,
+    offset: -shares.slice(0, i).reduce((a, b) => a + b, 0) * L,
+  }));
 
   const big: CSSProperties = {
     fontFamily: FONT.serif,

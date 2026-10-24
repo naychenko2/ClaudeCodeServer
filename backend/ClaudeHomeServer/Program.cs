@@ -791,6 +791,10 @@ builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
 builder.Services.AddSingleton<ReviewTreePool>();
+// ProjectTreeLocator (шаг B1b фичы «Резолвинг ссылок по worktree»): единая точка резолвинга
+// относительных путей по деревьям проекта. Git — параметр с дефолтом: при выключенной
+// подсистеме локатор остаётся рабочим (анкер + корень), без 500.
+builder.Services.AddSingleton<ProjectTreeLocator>();
 // Шов ITaskExecutor (Core) → TaskExecutorAdapter → TaskExecutionService.
 // Адаптер резолвит TaskExecutionService через конструктор, DI форвардер ниже.
 builder.Services.AddSingleton<TaskExecutorAdapter>();

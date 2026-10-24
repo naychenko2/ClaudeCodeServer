@@ -144,12 +144,13 @@ public sealed class ReviewTreePool
 
     // После рестарта учёт аренд пуст, а чаты открытых ревью живут в своих слотах: без
     // восстановления вторая задача взяла бы слот ревьюера и сбросила его под ногами.
-    // Закрытые задачи аренду не получают — их слот свободен.
+    // Закрытые задачи и задачи с остановленным исполнителем аренду не получают — их слот свободен
+    // (на «Стопе» аренда снимается, поэтому после рестарта поведение то же).
     public Task RestoreLeasesAsync()
     {
         foreach (var task in _allTasks())
         {
-            if (task.Role != TaskRoles.Review || task.Status == TaskItemStatus.Done
+            if (task.Role != TaskRoles.Review || task.Status == TaskItemStatus.Done || task.ExecutorStoppedAt is not null
                 || task.LinkedSessionId is null || task.ProjectId is null) continue;
             if (_projectById(task.ProjectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) continue;
             if (_sessionWorktree(task.LinkedSessionId) is not { } wt) continue;

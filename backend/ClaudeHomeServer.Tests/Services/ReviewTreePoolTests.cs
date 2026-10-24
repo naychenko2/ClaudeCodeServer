@@ -247,6 +247,25 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task RestoreLeases_Не_Возвращает_Аренду_Остановленному_Ревью()
+    {
+        var slot1 = Path.Combine(_slotBase, "feat-wave-review-1");
+        var tasks = new List<TaskItem>
+        {
+            new() { Id = "stopped", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s-stopped",
+                    Status = TaskItemStatus.InProgress, ExecutorStoppedAt = DateTime.UtcNow },
+        };
+        var worktrees = new Dictionary<string, string> { ["s-stopped"] = slot1 };
+        var pool = new ReviewTreePool(_git, (_, _) => _slotBase, (o, p) => _cwd(o, p), NullLogger<ReviewTreePool>.Instance,
+            () => tasks, id => worktrees.GetValueOrDefault(id), id => id == _project.Id ? _project : null);
+
+        await pool.RestoreLeasesAsync();
+
+        var next = await pool.TryAcquireAsync(null, _project, _wave, "new");
+        next!.SlotPath.Should().Be(slot1);
+    }
+
+    [Fact]
     public async Task RestoreLeases_Игнорирует_Чат_Вне_Слота_Проекта()
     {
         var tasks = new List<TaskItem>

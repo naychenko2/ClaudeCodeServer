@@ -1100,7 +1100,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         timeline.TryGetProperty("to", out _).Should().BeTrue("timeline.to");
         timeline.TryGetProperty("stages", out _).Should().BeTrue("timeline.stages");
         timeline.TryGetProperty("segments", out _).Should().BeTrue("timeline.segments");
-        timeline.TryGetProperty("totals", out _).Should().BeTrue("timeline.totals");
+        var totals = timeline.GetProperty("totals");
+        // ST-B2: totals.longestWait (null или объект) — поле в контракте страницы.
+        totals.TryGetProperty("longestWait", out _).Should().BeTrue("totals.longestWait (null или объект)");
 
         // Б6: stats.breakdown (разрезы по персонам/моделям/ролям) и stats.longestNow на странице.
         var breakdown = stats.GetProperty("breakdown");

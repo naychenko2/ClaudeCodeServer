@@ -53,6 +53,9 @@ export interface FeatureTimeline {
     waitingCount: number | null;
     // Самое длинное ожидание (минуты); null — не было.
     longestWaitMinutes: number | null;
+    // Самый долгий эпизод ожидания (ST-B2): минуты + задача + начало (ISO);
+    // null — эпизодов нет или источник approx.
+    longestWait?: { minutes: number; taskId: string | null; from: string | null } | null;
     // Число ошибок; null — не считалось.
     errorCount: number | null;
     // Минут в ошибках; null — не считалось.

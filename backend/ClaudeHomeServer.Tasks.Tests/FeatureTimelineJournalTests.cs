@@ -226,6 +226,8 @@ public class FeatureTimelineJournalTests
         tl.Totals.WaitingMinutes.Should().Be(0);
         tl.Totals.WaitingCount.Should().Be(0);
         tl.Totals.LongestWaitMinutes.Should().Be(0);
+        // ST-B2: эпизодов ожидания нет → longestWait null.
+        tl.Totals.LongestWait.Should().BeNull();
         // error = точка stopped 12:00 = 0 мин; idle = 720 − 180 − 0 − 0 = 540 мин.
         tl.Totals.ErrorMinutes.Should().Be(0);
         tl.Totals.IdleMinutes.Should().Be(540);
@@ -392,9 +394,44 @@ public class FeatureTimelineJournalTests
         tl.Totals.WaitingCount.Should().Be(0, "эпизод, начавшийся за окном, не считается");
         tl.Totals.WaitingMinutes.Should().Be(0);
         tl.Totals.LongestWaitMinutes.Should().Be(0);
+        // ST-B2: эпизодов ожидания в окне нет → адрес тоже null.
+        tl.Totals.LongestWait.Should().BeNull();
         // Инвариант не сломан: всё окно — idle.
         (tl.Totals.WorkWallMinutes + tl.Totals.WaitingMinutes + tl.Totals.ErrorMinutes
             + tl.Totals.IdleMinutes).Should().Be(tl.Totals.ElapsedMinutes);
+    }
+
+    // ── 3f. ST-B2: longestWait — адрес самого долгого эпизода ────────────────────────────────
+
+    // Два эпизода ожидания в разных задачах: s1 10:00→11:00 (60 мин), s2 12:00→14:00 (120 мин).
+    // longestWait обязан указать на s2 с from=12:00, minutes == LongestWaitMinutes. Мутация
+    // «брать первый эпизод, а не самый длинный» (брать taskId/From первого) → TaskId s1 ≠ s2
+    // → краснеет.
+    [Fact]
+    public void Build_LongestWait_УказываетНаЗадачуСамогоДолгогоЭпизода()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic");
+        var s2 = Child("s2", "epic");
+
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
+            Entry("waiting", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1"),
+            Entry("waiting_cleared", new DateTime(2026, 10, 1, 11, 0, 0), taskId: "s1"),
+            Entry("waiting", new DateTime(2026, 10, 1, 12, 0, 0), taskId: "s2"),
+            Entry("waiting_cleared", new DateTime(2026, 10, 1, 14, 0, 0), taskId: "s2"));
+
+        var tl = FeatureTimeline.Build(Run(epic, s1, s2), journal, now);
+
+        tl.Totals.WaitingCount.Should().Be(2);
+        tl.Totals.LongestWaitMinutes.Should().Be(120);
+
+        var lw = tl.Totals.LongestWait;
+        lw.Should().NotBeNull("эпизоды ожидания есть");
+        lw!.Minutes.Should().Be(tl.Totals.LongestWaitMinutes);
+        lw!.TaskId.Should().Be("s2");
+        lw!.From.Should().Be(new DateTime(2026, 10, 1, 12, 0, 0));
     }
 
     // Ожидание, начавшееся ровно в `to` (момент закрытия), длится в окне ноль минут — не

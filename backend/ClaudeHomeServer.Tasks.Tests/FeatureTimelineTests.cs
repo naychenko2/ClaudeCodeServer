@@ -107,6 +107,8 @@ public class FeatureTimelineTests
         tl.Totals.IdleMinutes.Should().BeNull();
         tl.Totals.WaitingCount.Should().BeNull();
         tl.Totals.LongestWaitMinutes.Should().BeNull();
+        // ST-B2: в approx адреса эпизода нет — null.
+        tl.Totals.LongestWait.Should().BeNull();
         tl.Totals.ErrorCount.Should().BeNull();
         tl.Totals.ErrorMinutes.Should().BeNull();
     }
@@ -272,6 +274,8 @@ public class FeatureTimelineTests
         tl.Totals.IdleMinutes.Should().BeNull();
         tl.Totals.WaitingCount.Should().BeNull();
         tl.Totals.LongestWaitMinutes.Should().BeNull();
+        // ST-B2: в approx адреса эпизода нет — null.
+        tl.Totals.LongestWait.Should().BeNull();
         tl.Totals.ErrorCount.Should().BeNull();
         tl.Totals.ErrorMinutes.Should().BeNull();
     }

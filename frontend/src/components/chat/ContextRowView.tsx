@@ -623,8 +623,9 @@ export function ContextRowView(props: ContextRowViewProps) {
 
   return (
     // Десктоп — отступ сверху, как у прежней Git-полосы (10): тень губы вверх (SHADOW.liftSoft из
-    // composerLip) ложится на этот зазор, а не на низ ленты
-    <div data-context-row-host="" style={{ position: 'relative', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
+    // composerLip) ложится на этот зазор, а не на низ ленты. zIndex 1 — губа лежит над
+    // aurora-сиянием композера (z 0): свет поднимается от её кромки, а не рисуется поверх
+    <div data-context-row-host="" style={{ position: 'relative', zIndex: 1, margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
       <FlatChips.Provider value>

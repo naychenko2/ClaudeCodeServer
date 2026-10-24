@@ -3000,7 +3000,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             композера (ограничен CHAT_MAX_W и центрирован). Внешняя обёртка растянута
             left:0/right:0, и замер по ней всегда давал пересечение с углом кнопки —
             круг был ужат даже когда композер визуально далеко */}
-        <div ref={embedded ? undefined : composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
+        {/* data-composer-stack — по нему Composer находит верхнюю губу и поднимает над ней сияние */}
+        <div data-composer-stack="" ref={embedded ? undefined : composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
           {mode === 'bypass' && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px',

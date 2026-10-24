@@ -253,7 +253,7 @@ function StopIcon() {
 // верхней зоной — наружу торчит только верхний ореол, размытый blur'ом (filter
 // в классе). Дышит от голоса: прозрачность = f(--amp), переменную пишет
 // useMicLevel в rAF
-function Aurora({ color, bandRef }: { color: string; bandRef: React.RefObject<HTMLDivElement | null> }) {
+function Aurora({ color, bandRef, lift }: { color: string; bandRef: React.RefObject<HTMLDivElement | null>; lift: number }) {
   // Фокусы лент — у верхней кромки И у центра: свет клубится над серединой
   // карточки, к боковым кромкам градиенты гаснут (лево/право — чисто, ширина
   // ленты 90% в index.css). Стопы на 92%: гаснет совсем медленно — максимум света
@@ -263,7 +263,8 @@ function Aurora({ color, bandRef }: { color: string; bandRef: React.RefObject<HT
     { cls: 'band-3', style: { background: `radial-gradient(ellipse 55% 60% at 50% 58%, ${color}, transparent 88%)` } },
   ];
   return (
-    <div ref={bandRef} className="cc-aurora" style={{ zIndex: 0 }}>
+    // lift — подъём над верхней губой: слой целиком уезжает вверх, его низ прячется за губой
+    <div ref={bandRef} className="cc-aurora" style={{ zIndex: 0, transform: lift ? `translateY(${-lift}px)` : undefined }}>
       {bands.map(b => <div key={b.cls} className={`cc-aurora-band ${b.cls}`} style={b.style} />)}
     </div>
   );
@@ -1284,6 +1285,24 @@ export function Composer({
   // микрофонных фазах петли — та же эхо-дисциплина
   const auroraVisible = talkActive || (voiceMode && speechPhase !== 'idle');
   const auroraRef = useRef<HTMLDivElement>(null);
+  // Над карточкой стоит верхняя губа (строка контекста, ChatPanel): сияние встаёт от
+  // её верхней кромки, а не от кромки карточки — иначе свет ложится на саму губу.
+  // Сдвиг = расстояние от верха губы до верха карточки; меряем живьём, потому что
+  // высота губы на телефоне плавает, а между ней и карточкой бывает раскрывашка команды
+  const [auroraLift, setAuroraLift] = useState(0);
+  useLayoutEffect(() => {
+    const card = auroraVisible ? auroraRef.current?.parentElement : null;
+    const stack = card?.closest<HTMLElement>('[data-composer-stack]');
+    if (!card || !stack) { setAuroraLift(0); return; }
+    const measure = () => {
+      const lip = stack.querySelector<HTMLElement>('[data-context-row]');
+      setAuroraLift(lip ? Math.max(0, Math.round(card.getBoundingClientRect().top - lip.getBoundingClientRect().top)) : 0);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(stack);
+    return () => ro.disconnect();
+  }, [auroraVisible]);
   // Луп дыхания живёт всё время видимости сияния (пульсы звуков должны дышать и в
   // фазах хода/озвучки), поток амплитуды — только в микрофонных фазах петли,
   // речевой псевдо-паттерн — пока играет озвучка ответа (микрофон закрыт, честной
@@ -2541,6 +2560,7 @@ export function Composer({
             ? C.auroraUser
             : withAuroraAlpha(auroraColorHex, 1)}
           bandRef={auroraRef}
+          lift={auroraLift}
         />
       )}
       <div style={{ ...containerStyle, position: 'relative', zIndex: 2 }}>

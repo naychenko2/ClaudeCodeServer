@@ -87,9 +87,9 @@ public class TaskChangedBroadcastContractTests : IClassFixture<TestWebApplicatio
         // Один вызов ручки, два id: эпик (по Hold проектор считает paused) и помеченный шаг.
         var calls = 0;
         Task Post() { calls++; return controller.SetFeatureHold(epic.Id, new TasksController.FeatureHoldRequest("manual")); }
-        await _bc.AssertBroadcasts("task_changed", epic.Id, Post);
+        await _bc.AssertBroadcasts("task_changed", epic.Id, _owner, Post);
         _tasks.ClearHold(epic.Id); // повторная постановка — тот же сценарий для проверки шага
-        await _bc.AssertBroadcasts("task_changed", step.Id, Post);
+        await _bc.AssertBroadcasts("task_changed", step.Id, _owner, Post);
         calls.Should().Be(2);
     }
 
@@ -101,7 +101,7 @@ public class TaskChangedBroadcastContractTests : IClassFixture<TestWebApplicatio
         (await controller.SetFeatureHold(epic.Id, new TasksController.FeatureHoldRequest("manual")))
             .Should().BeOfType<OkObjectResult>();
 
-        await _bc.AssertBroadcasts("task_changed", epic.Id, async () =>
+        await _bc.AssertBroadcasts("task_changed", epic.Id, _owner, async () =>
             (await controller.ClearFeatureHold(epic.Id)).Should().BeOfType<OkObjectResult>());
     }
 
@@ -113,7 +113,7 @@ public class TaskChangedBroadcastContractTests : IClassFixture<TestWebApplicatio
         var step = CreateStep(epic.Id, chat.Id);
         _tasks.MarkExecutorStopped(step.Id, DateTime.UtcNow, ExecutorStopClassifier.FeatureHeldReason);
 
-        await _bc.AssertBroadcasts("task_changed", step.Id,
+        await _bc.AssertBroadcasts("task_changed", step.Id, _owner,
             () => _exec.ResumeFeatureTurnsAfterHold(epic.Id, _owner, FeatureHoldReasons.Manual));
 
         _tasks.GetById(step.Id)!.ExecutorStopReason.Should().BeNull("пометка паузы снята продолжением");
@@ -126,7 +126,7 @@ public class TaskChangedBroadcastContractTests : IClassFixture<TestWebApplicatio
         var step = CreateStep(epic.Id, "chat-gone-" + Guid.NewGuid().ToString("N")[..6]);
         _tasks.MarkExecutorStopped(step.Id, DateTime.UtcNow, ExecutorStopClassifier.FeatureHeldReason);
 
-        await _bc.AssertBroadcasts("task_changed", step.Id,
+        await _bc.AssertBroadcasts("task_changed", step.Id, _owner,
             () => _exec.ResumeFeatureTurnsAfterHold(epic.Id, _owner, FeatureHoldReasons.Manual));
 
         _tasks.GetById(step.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldExpiredReason);
@@ -140,9 +140,33 @@ public class TaskChangedBroadcastContractTests : IClassFixture<TestWebApplicatio
         var epic = CreateEpic();
         var other = CreateEpic();
 
-        var act = () => _bc.AssertBroadcasts("task_changed", other.Id,
+        var act = () => _bc.AssertBroadcasts("task_changed", other.Id, _owner,
             () => _bc.ToOwner(_owner, new Protocol.TaskChangedMessage("updated", epic)));
 
         await act.Should().ThrowAsync<XunitException>("событие ушло по эпику, а не по искомому id");
+    }
+
+    // Адресат: событие ушло в группу другого владельца — не засчитывается. Мутация — вернуть
+    // фильтр «ownerId is null || …» / убрать фильтр по OwnerId: этот тест краснеет.
+    [Fact]
+    public async Task AssertBroadcasts_ЧужойВладелец_НеЗасчитывается()
+    {
+        var epic = CreateEpic();
+
+        var act = () => _bc.AssertBroadcasts("task_changed", epic.Id, _owner,
+            () => _bc.ToOwner("other-owner", new Protocol.TaskChangedMessage("updated", epic)));
+
+        await act.Should().ThrowAsync<XunitException>("событие ушло в группу другого владельца");
+    }
+
+    // Неподдержанный тип отвергается и при пустом вещании, до выполнения действия.
+    [Fact]
+    public async Task AssertBroadcasts_НеподдержанныйТип_ОтвергаетсяНаПустомСписке()
+    {
+        var ran = false;
+        var act = () => _bc.AssertBroadcasts("session_changed", "x", _owner, () => { ran = true; return Task.CompletedTask; });
+
+        await act.Should().ThrowAsync<ArgumentException>();
+        ran.Should().BeFalse("тип проверяется до действия");
     }
 }

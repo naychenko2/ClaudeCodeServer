@@ -960,6 +960,25 @@ public class TaskExecutionServiceJoinTests : IDisposable
 
     [Fact]
     [Trait("Category", "Slow")]
+    public async Task ReviewTree_ТерминальнаяОстановкаИсполнителя_ОсвобождаетСлот()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        await _sut.ExecuteAsync(task, auto: false);
+        var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "вторая")).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().BeNull();
+
+        await _sut.OnSessionMessageAsync(session, new ErrorMessage(
+            "Failed to authenticate. API Error: 401 invalid access token or token expired",
+            ExpectResultFollows: true));
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+
+        _tasks.GetById(task.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.AuthFailedReason);
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().NotBeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
     public async Task ReviewTree_ФичаНаПаузе_ДержитСлот_ПотомExpiredОсвобождает()
     {
         var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);

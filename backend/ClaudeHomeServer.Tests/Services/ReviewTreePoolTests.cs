@@ -340,6 +340,49 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task RemoveSlotsOfProject_Слот_На_Ветке_Под_Арендой_Сносится_А_Дерево_Чата_На_Ветке_Нет()
+    {
+        var pool = NewPool();
+        var lease = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        // ревьюер заветвился в своём слоте
+        await RawGit(lease!.SlotPath, "checkout", "-b", "reviewer/work");
+        var chatTree = Path.Combine(_slotBase, "wt-x-review-2");
+        await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/x-review-2");
+
+        await pool.RemoveSlotsOfProjectAsync(null, _project);
+
+        (await InWorktreeList(lease.SlotPath)).Should().BeFalse("путь из карты аренд — наш слот, даже на ветке");
+        (await InWorktreeList(chatTree)).Should().BeTrue("не из аренд и на ветке — дерево чата");
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Слот_На_Ветке_Под_Арендой_Сносится()
+    {
+        var pool = NewPool();
+        var lease = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        await RawGit(lease!.SlotPath, "checkout", "-b", "reviewer/work2");
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        (await InWorktreeList(lease.SlotPath)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RemoveSlotsOfWave_Дерево_Чата_На_Ветке_Остаётся_А_Слот_Под_Арендой_Сносится()
+    {
+        // путь не слот (на ветке, не из аренд): снос его не трогает
+        var pool = NewPool();
+        var held = await pool.TryAcquireAsync(null, _project, _wave, "t1");
+        var chatTree = Path.Combine(_slotBase, "feat-wave-review-2");
+        await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/clash2");
+
+        await pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+
+        (await InWorktreeList(chatTree)).Should().BeTrue();
+        (await InWorktreeList(held!.SlotPath)).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task RestoreLeases_Игнорирует_Чат_Вне_Слота_Проекта()
     {
         var tasks = new List<TaskItem>

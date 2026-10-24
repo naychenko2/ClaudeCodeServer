@@ -749,6 +749,14 @@ public class TaskExecutionServiceJoinTests : IDisposable
     }
 
     [Fact]
+    public void ReviewTreeSection_ПредупреждаетЧтоПриПовторномЗапускеДеревоСбрасывается()
+    {
+        var text = BuildSection(0);
+
+        text.Should().Contain("переиспользуется и сбрасывается").And.Contain("незакоммиченные правки прошлого хода");
+    }
+
+    [Fact]
     public void ReviewTreeSection_ГрязныхРовноТридцать_БезХвостаЕщё()
     {
         var text = BuildSection(30);

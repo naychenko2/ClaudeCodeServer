@@ -137,7 +137,7 @@ public sealed class ReviewTreePool
             var norm = PathNormalizer.NormalizePath(w.Path);
             var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(w.Path));
             if (PathNormalizer.NormalizePath(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(w.Path)) ?? "") != baseNorm
-                || !IsSlotName(name) || w.Branch is not null) continue;
+                || !IsSlotName(name)) continue;
             await RemoveSlotAsync(ownerId, project, worktrees, Path.Combine(slotBase, name), ct);
         }
     }
@@ -153,7 +153,7 @@ public sealed class ReviewTreePool
         foreach (var task in _allTasks())
         {
             if (task.Role != TaskRoles.Review || task.Status == TaskItemStatus.Done
-                || task.ExecutorStoppedAt is not null && task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason
+                || (task.ExecutorStoppedAt is not null && task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason)
                 || task.LinkedSessionId is null || task.ProjectId is null) continue;
             if (_projectById(task.ProjectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) continue;
             if (_sessionWorktree(task.LinkedSessionId) is not { } wt) continue;
@@ -188,11 +188,14 @@ public sealed class ReviewTreePool
         IReadOnlyList<GitWorktreeInfo> worktrees, string slotPath, CancellationToken ct)
     {
         var norm = PathNormalizer.NormalizePath(slotPath);
-        lock (_gate) _leases.Remove(slotPath);
         var found = worktrees.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == norm);
+        bool leased;
+        lock (_gate) leased = _leases.ContainsKey(slotPath);
+        // Слот — detached; дерево на ветке (чата, волны) с похожим именем слотом не является.
+        // Исключение — путь из карты аренд: ревьюер мог заветвиться в своём слоте, он всё равно наш
+        if (found?.Branch is not null && !leased) return;
+        lock (_gate) _leases.Remove(slotPath);
         if (found is null) return;
-        // Слот — detached; дерево на ветке (чата, волны) с похожим именем слотом не является
-        if (found.Branch is not null) return;
         try { await _git.WorktreeRemoveAsync(ownerId, project.RootPath, slotPath, force: true, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

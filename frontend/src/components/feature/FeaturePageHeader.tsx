@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactNode } from 'react';
-import { ArrowRight, Check, GitBranch, ListChecks, MessageCircle, Pause, Play } from 'lucide-react';
+import { ArrowRight, Check, GitBranch, ListChecks, MessageCircle, Pause, Play, RotateCcw } from 'lucide-react';
 import { C, R, SHADOW, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { refetchFeaturePage } from '../../lib/featurePage';
 import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
@@ -552,7 +552,7 @@ function HoldConfirmModal({ now, busy, onClose, onConfirm }: { now: FeatureNow[]
 // Ручка бэка — обычная PUT /api/tasks/{epicId} {status:'done'}: гард B2 принимает
 // пользовательский JWT (кнопка в UI) и отказывает сервисный токен. Фича уходит в
 // группу «Закрытые», состояние «закрыта» — считает проектор (FeatureProjector),
-// страница обновляется перезапросом. «Возобновить» — отдельный шаг, кнопки нет.
+// страница обновляется перезапросом. «Возобновить» — отдельная функция ниже (F3).
 // Возвращает текст отказа или null при успехе: модалка при отказе остаётся открытой
 // и показывает причину в себе (хвост 1 вердикта F2-R), тост — только дополнение.
 async function doCloseFeature(epicId: string): Promise<string | null> {
@@ -570,12 +570,34 @@ async function doCloseFeature(epicId: string): Promise<string | null> {
   }
 }
 
+// Возобновление закрытой фичи (статусная модель, F3): та же PUT-ручка, status:'todo'.
+// Подтверждения нет — возобновление не разрушительное (решение продукта): файлы,
+// чаты и задачи никуда не денутся, проектор сам пересчитает состояние после refetch.
+// Гейт тот же, что у закрытия: только владелец проекта (canClose).
+async function doResumeFeature(epicId: string): Promise<string | null> {
+  try {
+    await api.tasks.update(epicId, { status: 'todo' });
+    showToast('Фича возобновлена', 'Эпик снова «В работе» — фича вернулась в активные.');
+    refetchFeaturePage(epicId);
+    return null;
+  } catch (e) {
+    const err = e as Error & { status?: number; body?: unknown };
+    const body = err.body as { error?: string } | undefined;
+    const msg = body?.error || err.message || 'сервер не ответил';
+    showToast('Не получилось', msg);
+    return msg;
+  }
+}
+
 // Модалка подтверждения закрытия: MODAL_W.confirm, «Отмена» (ghost) + «Закрыть»
 // (primary — действие конечное, но не опасное: мерж и задачи остаются на месте).
 // Фокус при открытии — на «Отмена» (тот же приём, что у модалки паузы).
 // При отказе бэка модалка НЕ закрывается — причина показывается в ней (хвост 1).
 // Если идут шаги (nowCount > 0) — предупреждение: закрытие эпика их не гасит,
 // фича уйдёт в «Закрытые» под работающими шагами (решение продукта, хвост 3).
+// Хвост 2 вердикта F2-R: пока запрос «в полёте» (busy), модалку закрыть нельзя —
+// крестик, Esc, оверлей и «Отмена» — no-op: диалог не должен закрыться до ответа
+// бэка, иначе причина отказа (хвост 1), которая живёт в модалке, исчезает вместе с ней.
 function CloseConfirmModal({ title, busy, error, nowCount, onClose, onConfirm }: {
   title: string;
   busy: boolean;
@@ -588,14 +610,15 @@ function CloseConfirmModal({ title, busy, error, nowCount, onClose, onConfirm }:
     const el = typeof document !== 'undefined' ? document.querySelector('[data-testid="feature-page-close-cancel"]') : null;
     (el as { focus?: () => void } | null)?.focus?.();
   }, []);
+  const tryClose = () => { if (busy) return; onClose(); };
   return (
     <Modal
       width={MODAL_W.confirm}
       title={`Закрыть «${title}»?`}
-      onClose={onClose}
+      onClose={tryClose}
       footer={
         <span style={{ display: 'flex', gap: SP.xs }}>
-          <Button size="sm" variant="ghost" dataTestId="feature-page-close-cancel" onClick={onClose}>Отмена</Button>
+          <Button size="sm" variant="ghost" dataTestId="feature-page-close-cancel" onClick={tryClose}>Отмена</Button>
           <Button size="sm" variant="primary" loading={busy} dataTestId="feature-page-close-confirm" onClick={onConfirm}>
             {busy ? 'Закрываю…' : 'Закрыть'}
           </Button>
@@ -638,8 +661,9 @@ export interface FeaturePageToolbarProps {
   tag: FeatureRunTag | null;
   // «Мерж…»: открыть общую модалку подтверждения (Ф6); undefined — без действия.
   onMerge?: () => void;
-  // «Закрыть фичу» (статусная модель, F2): true — только владелец проекта (гейт
-  // считает FeaturePage); бэковый гард — пользовательский JWT. undefined — кнопки нет.
+  // Гейт владельца для «Закрыть фичу» (F2) и «Возобновить» (F3): true — только
+  // владелец проекта (гейт считает FeaturePage); бэковый гард — пользовательский
+  // JWT. undefined — ни одной кнопки.
   canClose?: boolean;
 }
 
@@ -693,6 +717,10 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   // эпик не «Готово» — у закрытой фичи кнопки нет (состояние «закрыта» считает
   // проектор, элемент в группе «Закрытые» уже на месте).
   const canCloseNow = !!canClose && !!epic && epic.status !== 'done';
+  // Возобновление (F3): тот же гейт владельца, но только у закрытой фичи. Кнопки
+  // «Закрыть» и «Возобновить» взаимоисключающие по epic.status. Подтверждения нет:
+  // возобновление не разрушительное (решение продукта).
+  const canResumeNow = !!canClose && !!epic && epic.status === 'done';
   const [closeBusy, setCloseBusy] = useState(false);
   const [closeModal, setCloseModal] = useState(false);
   // Причина отказа бэка живёт в модалке (хвост 1): при отказе она остаётся открытой;
@@ -710,12 +738,28 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   const confirmClose = async () => {
     if (closeBusy || !epic) return;
     setCloseBusy(true);
-    const err = await doCloseFeature(epic.id);
-    setCloseBusy(false);
-    if (err) {
-      setCloseError(err);
-    } else {
-      setCloseModal(false);
+    // try/finally (хвост 3 вердикта F2-R): «в полёте» снимается всегда — и при
+    // успехе, и при отказе, и при неожиданном выбросе; иначе кнопка навсегда
+    // остаётся locked.
+    try {
+      const err = await doCloseFeature(epic.id);
+      if (err) {
+        setCloseError(err);
+      } else {
+        setCloseModal(false);
+      }
+    } finally {
+      setCloseBusy(false);
+    }
+  };
+  const [resumeBusy, setResumeBusy] = useState(false);
+  const resumeClick = async () => {
+    if (resumeBusy || !epic) return;
+    setResumeBusy(true);
+    try {
+      await doResumeFeature(epic.id);
+    } finally {
+      setResumeBusy(false);
     }
   };
 
@@ -774,12 +818,22 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
     });
   }
   // «Закрыть фичу…» — последний пункт (конечное действие, не первый по тапу).
+  // «Возобновить фичу» (F3) — тоже в конце: для закрытой фичи это главное действие,
+  // но в ряд на 360 оно не лезет (макет A: на мобиле действия — только в шторке).
   if (canCloseNow && isMobile) {
     items.push({
       key: 'close',
       icon: <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
       label: 'Закрыть фичу…',
       onClick: closeClick,
+    });
+  }
+  if (canResumeNow && isMobile) {
+    items.push({
+      key: 'resume',
+      icon: <RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+      label: 'Возобновить фичу',
+      onClick: () => void resumeClick(),
     });
   }
   // Пункта «Открыть ключевой чат» здесь нет (W4-1F): вход в ключевой чат — чип
@@ -831,6 +885,21 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
             onClick={closeClick}
           >
             {closeBusy ? 'Закрываю…' : 'Закрыть фичу'}
+          </Button>
+        </span>
+      )}
+      {canResumeNow && !isMobile && (
+        <span data-testid="feature-page-resume-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
+          <Button
+            size="sm"
+            variant="secondary"
+            leftIcon={<RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            loading={resumeBusy}
+            dataTestId="feature-page-resume-btn"
+            title="Возобновить фичу: эпик снова «В работе»"
+            onClick={() => void resumeClick()}
+          >
+            {resumeBusy ? 'Возобновляю…' : 'Возобновить'}
           </Button>
         </span>
       )}

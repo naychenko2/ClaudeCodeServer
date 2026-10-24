@@ -892,6 +892,108 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
   });
 });
 
+// === Строка «тихо» на Ганте (W5-F3b, спецификация features-overview-5.md §«Точка 6») ===
+// Мутации (в отчёте): (3) убрать строку из рендера → «строка после этапов, перед осью»
+// краснеет; (4) убрать пункт легенды → «в легенде „тихо“» краснеет; (5) убрать условие
+// isMobile у «· сжато» → «на 360 без „сжато“» краснеет.
+
+function mkQuietRun(): FeatureRun {
+  // Тот же конвейер, но бэк сказал «тихо ≥ 24 ч»: состояние берёт analysisLineState.
+  return { ...mkGanttRun(), quiet: true, lastActivityAt: '2026-10-20T17:10:00Z' };
+}
+
+function renderQuietGantt(isMobile = false) {
+  installFakeDom();
+  const { container } = mount(createElement(FeatureStatsTab, { stats: mkGanttStats(), run: mkQuietRun(), isMobile }));
+  return container;
+}
+
+// data-testid в порядке документа — проверить место строки (после этапов, до оси).
+function testIdsInOrder(n: FNodeLike2): string[] {
+  const out: string[] = [];
+  const walk = (x: FNodeLike2) => {
+    const id = x.attributes?.['data-testid'];
+    if (id) out.push(id);
+    for (const ch of x.childNodes) walk(ch);
+  }
+  walk(n);
+  return out;
+}
+
+describe('FeatureStatsTab: строка «тихо» на Ганте (W5-F3b)', () => {
+  beforeEach(() => {
+    clearFeatureStageFocus();
+  });
+  afterEach(() => {
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  it('«тихо» — последняя строка после этапов, перед осью; маркера «сейчас» нет', () => {
+    const c = renderQuietGantt();
+    const ids = testIdsInOrder(c);
+    const quietAt = ids.indexOf('gantt-quiet');
+    expect(quietAt, 'строка «тихо» есть').toBeGreaterThanOrEqual(0);
+    const lastRow = Math.max(...ids.map((id, i) => (id.startsWith('gantt-row-') ? i : -1)));
+    const axisAt = ids.indexOf('stats-axis');
+    expect(quietAt, 'строка после всех строк этапов').toBeGreaterThan(lastRow);
+    expect(quietAt, 'строка до оси').toBeLessThan(axisAt);
+    // В «тихо» текущего этапа нет: ни маркера, ни «сейчас» в легенде.
+    expect(findNodeByAttr(c, 'data-testid', 'gantt-now-marker'), 'маркера «сейчас» нет').toBeNull();
+    const legend = textNodes(findNodeByAttr(c, 'data-testid', 'stats-legend')!).join('');
+    expect(legend, 'в легенде нет «сейчас»').not.toContain('сейчас');
+  });
+
+  it('трек и имя — по токенам spec: имя «тихо» C.warningText 700, рамка dashed C.warning, штриховка C.warningBg', () => {
+    const c = renderQuietGantt();
+    const row = findNodeByAttr(c, 'data-testid', 'gantt-quiet')!;
+    const name = row.childNodes[0] as unknown as { style: Record<string, string> };
+    expect(textNodes(row.childNodes[0] as never).join('')).toBe('тихо');
+    expect(name.style.color, 'имя — C.warningText').toBe('var(--c-warning-text)');
+    expect(name.style.fontWeight).toBe('700');
+    const track = row.childNodes[1] as unknown as { style: Record<string, string> };
+    expect(track.style.height).toBe('16px');
+    expect(track.style.borderRadius, 'SP.xs = 4').toBe('4px');
+    expect(track.style.border).toContain('dashed');
+    expect(track.style.border).toContain('var(--c-warning)');
+    expect(track.style.background).toContain('repeating-linear-gradient(135deg');
+    expect(track.style.background).toContain('var(--c-warning-bg)');
+    // Центр трека: «{дата} → сейчас», моно, FS.xxs, C.warningText.
+    const inner = track.childNodes[0] as unknown as { style: Record<string, string> };
+    const innerText = textNodes(track.childNodes[0] as never).join('');
+    expect(innerText).toContain('→ сейчас');
+    expect(inner.style.fontFamily).toContain('JetBrains Mono');
+    expect(inner.style.fontSize).toBe('10px');
+    expect(inner.style.color).toBe('var(--c-warning-text)');
+    // Справа — длительность (от lastActivityAt до сейчас, реальное время — проверяем наличие).
+    expect(textNodes(row.childNodes[2] as never).join('')).toMatch(/\d+/);
+  });
+
+  it('«· сжато» — только на десктопе; на 360 — сетка 86px 1fr 52px и minHeight 40', () => {
+    const desktop = renderQuietGantt();
+    expect(textNodes(findNodeByAttr(desktop, 'data-testid', 'gantt-quiet')!).join('')).toContain('· сжато');
+    const mobile = renderQuietGantt(true);
+    const rowM = findNodeByAttr(mobile, 'data-testid', 'gantt-quiet')!;
+    expect(textNodes(rowM).join(''), 'на 360 без «сжато»').not.toContain('сжато');
+    const ms = (rowM as unknown as { style: Record<string, string> }).style;
+    expect(ms.gridTemplateColumns).toBe('86px 1fr 52px');
+    expect(ms.minHeight).toBe('40px');
+  });
+
+  it('легенда: пункт «тихо» с dashed-рамкой и фоном warningBg; в не-quiet — строки и пункта нет', () => {
+    const c = renderQuietGantt();
+    const item = findNodeByAttr(c, 'data-testid', 'gantt-legend-quiet')!;
+    expect(textNodes(item).join('')).toContain('тихо');
+    const swatch = item.childNodes[0] as unknown as { style: Record<string, string> };
+    expect(swatch.style.border).toContain('dashed');
+    expect(swatch.style.background).toBe('var(--c-warning-bg)');
+    // Не-quiet (обычный конвейер) — ни строки, ни пункта легенды.
+    const plain = renderGantt();
+    expect(findNodeByAttr(plain, 'data-testid', 'gantt-quiet'), 'в не-quiet строки нет').toBeNull();
+    expect(findNodeByAttr(plain, 'data-testid', 'gantt-legend-quiet'), 'в не-quiet пункта легенды нет').toBeNull();
+  });
+});
+
 // === Чистые функции: форматирование и переводы (блоки 2–3, Ф7b) ===
 
 describe('formatTokens', () => {

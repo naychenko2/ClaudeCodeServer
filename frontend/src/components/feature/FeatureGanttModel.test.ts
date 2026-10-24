@@ -11,7 +11,9 @@
 // (2) не фильтровать вердикт «accepted» → краснеет «возвраты»; (3) штриховать и при
 // «wait» → краснеет «зависла»; (4) пилюлю давать и закрытой фиче → краснеет «активный
 // этап»; (5) убрать поиск хвоста по attention.taskId → краснеет «зависла по taskId»;
-// (6) вернуть hasData по строкам run.stages → краснеет «hasData — по таймлайну».
+// (6) вернуть hasData по строкам run.stages → краснеет «hasData — по таймлайну»;
+// (7) давать строку «тихо» при любом состоянии → краснеет «не тихо — строки нет»;
+// (8) не гасить «сейчас» в quiet → краснеет «в тихой — маркера „сейчас“ нет».
 
 import { describe, it, expect } from 'vitest';
 import { buildGanttModel, type GanttModel, type GanttRow } from './FeatureGanttModel';
@@ -411,6 +413,67 @@ describe('пустая фича', () => {
     expect(model.axis).toBeNull();
     expect(model.returnTotal).toBe(0);
     expect(model.hasStalled).toBe(false);
+  });
+});
+
+// === Строка «тихо» на Ганте (W5-F3b, спецификация features-overview-5.md §«Точка 6») ===
+// Состояние — из общей analysisLineState: модель «тихо» сама не пересчитывает.
+describe('строка «тихо»: состояние из analysisLineState', () => {
+  it('«тихо»: from — lastActivityAt, минуты — до «сейчас» (12:00 19.10 → 12:00 20.10 = 1440)', () => {
+    const model = buildGanttModel(
+      mkRun({ quiet: true, lastActivityAt: '2026-10-19T12:00:00Z', stages: [mkStage('prod', 'done', 60)] }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).toEqual({ from: '2026-10-19T12:00:00Z', minutes: 1440 });
+  });
+
+  it('мутация: не тихая фича — строки нет (тот же run без quiet)', () => {
+    const model = buildGanttModel(
+      mkRun({ stages: [mkStage('prod', 'done', 60)] }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).toBeNull();
+  });
+
+  it('«stuck» побеждает «тихо»: есть staleAlertedAt — тихой строки нет, «сейчас» остаётся', () => {
+    const model = buildGanttModel(
+      mkRun({
+        quiet: true,
+        lastActivityAt: '2026-10-19T12:00:00Z',
+        stages: [mkStage('prod', 'active', 60)],
+        now: [{ taskId: 't-1', stage: 'prod', title: 'x', startedAt: '2026-10-20T11:00:00Z', staleAlertedAt: '2026-10-20T11:30:00Z' }],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).toBeNull();
+    expect(rowOf(model, 'prod').isCurrent).toBe(true);
+  });
+
+  it('в тихой — маркера «сейчас» на текущем этапе нет (текущего этапа нет)', () => {
+    const model = buildGanttModel(
+      mkRun({
+        quiet: true,
+        lastActivityAt: '2026-10-19T12:00:00Z',
+        stages: [mkStage('prod', 'active', 60, { tone: 'run' })],
+        now: [{ taskId: 't-1', stage: 'prod', title: 'x', startedAt: '2026-10-20T11:00:00Z' }],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).not.toBeNull();
+    expect(model.rows.every(r => !r.isCurrent && r.nowPill === null)).toBe(true);
+  });
+
+  it('нет lastActivityAt — ни даты, ни длительности (явный null, не выдуманное число)', () => {
+    const model = buildGanttModel(
+      mkRun({ quiet: true, stages: [mkStage('prod', 'done', 60)] }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).toEqual({ from: null, minutes: null });
   });
 });
 

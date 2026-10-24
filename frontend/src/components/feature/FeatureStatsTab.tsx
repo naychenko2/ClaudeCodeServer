@@ -471,6 +471,53 @@ function Gantt({
         );
       })}
 
+      {/* «Тихо» (W5-F3b, спецификация features-overview-5.md §«Точка 6»): последняя строка
+          после этапов, перед осью. Состояние — в модели (из analysisLineState), здесь
+          только показ. Сетка — та же, что у строк Ганта (имя · трек · минуты). */}
+      {gantt.quiet && (
+        <div
+          data-testid="gantt-quiet"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '86px 1fr 52px' : '110px 1fr 70px',
+            gap: isMobile ? SP.sm : SP.md,
+            alignItems: 'center',
+            minHeight: isMobile ? 40 : 28,
+          }}
+        >
+          <span
+            style={{
+              fontSize: FS.sm, fontWeight: 700, color: C.warningText,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >
+            тихо
+          </span>
+          <div
+            style={{
+              position: 'relative', height: 16, borderRadius: SP.xs,
+              border: `1px dashed ${C.warning}`,
+              background: `repeating-linear-gradient(135deg, transparent 0 4px, ${C.warningBg} 4px 8px)`,
+            }}
+          >
+            <span
+              style={{
+                position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: FONT.mono, fontSize: FS.xxs, color: C.warningText,
+                overflow: 'hidden', whiteSpace: 'nowrap',
+              }}
+            >
+              {gantt.quiet.from ? `${formatDateTime(gantt.quiet.from)} → сейчас` : 'сейчас'}{isMobile ? '' : ' · сжато'}
+            </span>
+          </div>
+          <span
+            style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.warningText, textAlign: 'right' }}
+          >
+            {gantt.quiet.minutes != null ? formatDuration(gantt.quiet.minutes) : ''}
+          </span>
+        </div>
+      )}
+
       <AxisLine axis={axis} />
       <CurrentRow current={current} />
 
@@ -495,6 +542,13 @@ function Gantt({
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span style={{ width: 2, height: 10, background: C.accent }} />
             сейчас
+          </span>
+        )}
+        {/* «Тихо» (W5-F3b): квадрат с той же рамкой и фоном, что трек строки. */}
+        {gantt.quiet && (
+          <span data-testid="gantt-legend-quiet" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, border: `1px dashed ${C.warning}`, background: C.warningBg }} />
+            тихо
           </span>
         )}
       </div>

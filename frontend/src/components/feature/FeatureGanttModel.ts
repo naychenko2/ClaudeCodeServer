@@ -9,6 +9,8 @@
 import type { FeatureRun, FeatureRound, StageKey, StageState } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
 import { stageLabel } from './FeatureStatsBits';
+// Состояние «тихо» — из общей строки анализа (W5-F1), не своя арифметика по датам.
+import { analysisLineState } from './FeatureAnalysisModel';
 
 // Вид сегмента полосы: виды таймлайна, а трековый review — отдельный вид (красится C.plan).
 export type GanttSegmentKind = 'work' | 'waiting' | 'idle' | 'error' | 'notWorking' | 'review';
@@ -90,6 +92,8 @@ export interface GanttModel {
   hasStalled: boolean;
   // Смержена/закрыта: ни «сейчас», ни «зависла»; самый долгий и флажки остаются.
   closed: boolean;
+  // Строка «тихо» (W5-F3b): null — состояния нет; иначе — начало тишины и её длительность.
+  quiet: GanttQuiet | null;
 }
 
 // Длительность интервала в минуты (0, если невалидно/отрицательно).
@@ -135,11 +139,27 @@ function collectReturnFlags(run: FeatureRun): GanttReturnFlag[] {
   return flags;
 }
 
+// «Тихо» (W5-F3b, спецификация features-overview-5.md §«Точка 6 · строка „тихо“ на Ганте»):
+// строка ПОСЛЕ всех этапов, перед осью. Состояние — из общей analysisLineState, модель
+// «тихо» сама не пересчитывает. null — состояние не «тихо»: строки и пункта легенды нет.
+export interface GanttQuiet {
+  // Начало тишины — run.lastActivityAt; null — даты нет (в треке без даты, длительности нет).
+  from: string | null;
+  // Минуты от lastActivityAt до `now` — длительность справа. null — даты нет.
+  minutes: number | null;
+}
+
 // Модель ступеней Ганта. `now` — текущее время (мс) для длительности пилюли; тесты дают
 // фиксированное, в работе — Date.now() на момент построения.
 export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now: number): GanttModel {
   const closed = run.closed === true;
   const tl = stats?.timeline;
+
+  // «Тихо» — из общей analysisLineState (не своя арифметика). В «тихо» текущего этапа нет:
+  // маркер «сейчас» не ставим (спецификация §«Точка 6»).
+  const quiet: GanttQuiet | null = analysisLineState(run, now).key === 'quiet'
+    ? { from: run.lastActivityAt ?? null, minutes: minutesSince(run.lastActivityAt, now) }
+    : null;
 
   const axis = tl?.from && tl?.to ? { from: tl.from, to: tl.to } : null;
 
@@ -199,7 +219,8 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
   }
 
   // «Сейчас»: первый InProgress-этап (бэк отдаёт now по убыванию старта). У закрытой — пусто.
-  const cur = closed ? null : (run.now?.[0] ?? null);
+  // В «тихо» — тоже пусто: маркера «сейчас» на этапе нет (W5-F3b).
+  const cur = closed || quiet ? null : (run.now?.[0] ?? null);
   if (cur) {
     const row = rows.find(r => r.key === cur.stage);
     if (row) {
@@ -260,5 +281,6 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
     returnTotal: flags.length,
     hasStalled,
     closed,
+    quiet,
   };
 }

@@ -974,9 +974,11 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         CountWorktreeListRuns(launcher.Specs).Should().Be(2, "после TTL — свежий прогон");
     }
 
-    // Ланчер, замедляющий `worktree add` на 300 мс: для теста гонки «читатель vs операция».
+    // Ланчер, замедляющий `worktree add` на ~2 с: для теста гонки «читатель vs операция».
+    // AddStarted поднимается в момент запуска команды — тест ждёт событие, а не слепую паузу.
     private sealed class DelayingAddLauncher : IProcessLauncher
     {
+        public TaskCompletionSource AddStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly IProcessLauncher _inner = LocalProcessRunner.Instance;
         public bool IsSandboxed => _inner.IsSandboxed;
         public bool TargetIsWindows => _inner.TargetIsWindows;
@@ -988,16 +990,26 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         {
             if (spec.Args.Contains("worktree") && spec.Args.Contains("add"))
             {
-                // Замедляем саму команду через sh, а не вызывающий поток: иначе
+                // Замедляем саму команду оболочкой, а не вызывающий поток: иначе
                 // гонки «читатель vs операция» не случается.
-                var script = "sleep 0.3; git " + string.Join(" ", spec.Args.Select(a => "'" + a + "'"));
-                return _inner.Start(new ProcessSpec
+                var git = "git " + string.Join(" ", spec.Args.Select(a => "\"" + a + "\""));
+                var delayed = new ProcessSpec
                 {
-                    FileName = "sh",
-                    Args = ["-c", script],
+                    FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                    Args = OperatingSystem.IsWindows()
+                        ? ["/c", "ping -n 3 127.0.0.1 >nul & " + git]
+                        : ["-c", "sleep 2; " + git],
                     WorkingDirectory = spec.WorkingDirectory,
                     Env = spec.Env,
-                });
+                    ClearEnv = spec.ClearEnv,
+                    StdioEncoding = spec.StdioEncoding,
+                    EnableRaisingEvents = spec.EnableRaisingEvents,
+                    RedirectStdin = spec.RedirectStdin,
+                    Track = false, // тестовый процесс: в реестр боевых PID его не пишем
+                };
+                var process = _inner.Start(delayed);
+                AddStarted.TrySetResult();
+                return process;
             }
             return _inner.Start(spec);
         }
@@ -1020,11 +1032,12 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
     [Fact]
     public async Task WorktreeList_Cached_ViditNovoeDerevoPosleAddVGonke()
     {
-        var g = new GitService(new DelayingAddFactory(new DelayingAddLauncher()));
+        var launcher = new DelayingAddLauncher();
+        var g = new GitService(new DelayingAddFactory(launcher));
         var wt = WtPath("race");
 
         var addTask = g.WorktreeAddAsync(null, _repo, wt, "wt/race");
-        await Task.Delay(100); // add уже в команде (задержка 300 мс), кэш инвалидирован
+        await launcher.AddStarted.Task.WaitAsync(TimeSpan.FromSeconds(30)); // add уже в команде (окно ~2 с), кэш инвалидирован
         await g.WorktreeListAsync(null, _repo, useCache: true); // читатель: пишет довоперационный снимок
 
         await addTask;

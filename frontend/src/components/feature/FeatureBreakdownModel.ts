@@ -5,12 +5,18 @@
 // цвета и разметка здесь отсутствуют.
 //
 // Ключи групп — сырые, как их отдаёт бэк (FeatureBreakdown.cs: personaId | modelFull |
-// taskRole); сопоставление с run.stages[].executors[] — по тем же полям.
+// taskRole); сопоставление с run.stages[].executors[] — по тем же полям, кроме моделей:
+// их ключ лежит в двух пространствах (см. normalizeModelKey ниже) и сопоставляется
+// нормализованным.
 
 import type { FeatureRun, FeatureStageExecutor } from '../../types/featureRun';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 import { roleLabel } from '../../lib/roleLabel';
-import { formatUsd } from './FeatureStatsFormat';
+import { formatUsd, percentText } from './FeatureStatsFormat';
+
+// Проценты живут в FeatureStatsFormat.ts (ST-F8); ре-экспорт — потребители
+// (ShareRing, тесты) импортируют percentText из этой модели.
+export { percentText };
 
 // === Сортировка по мере ===
 
@@ -46,13 +52,25 @@ export function formatMoney(group: FeatureBreakdownGroup): string {
   return formatUsd(group.costUsd);
 }
 
+// === Ключ модели ===
+
+// Ключ модели приходит из двух пространств: ось «модели» — из журнала (полный
+// журнал — «Claude Opus 5.5», без журнала — «Авто → Claude Opus 5.5»), снимок
+// исполнителя executors[].modelFull — всегда «Авто → …» (FeatureProjector.cs:437-440).
+// Сопоставляем и показываем нормализованное имя: снимаем префикс «Авто → » с обеих
+// сторон. Смена модели в чате (журнал — первый ход, снимок — текущий) этим не
+// лечится: ключи тогда разные модели, совпадения не будет.
+export function normalizeModelKey(key: string): string {
+  return key.startsWith('Авто → ') ? key.slice('Авто → '.length) : key;
+}
+
 // === Чипы «Модели и роли» ===
 
 export type Axis = 'personas' | 'models' | 'roles';
 
 export interface BreakdownChip {
   kind: 'model' | 'role' | 'persona';
-  // Сырой ключ: modelFull | taskRole | personaId — подписи строит вид.
+  // Ключ: нормализованная модель | taskRole | personaId — подписи строит вид.
   key: string;
 }
 
@@ -70,16 +88,23 @@ export function groupChips(axis: Axis, key: string, run: FeatureRun): BreakdownC
   for (const e of executorsOf(run)) {
     if (axis === 'personas') {
       if (e.personaId !== key) continue;
-      if (e.modelFull && !seen.has(`m:${e.modelFull}`)) {
-        seen.add(`m:${e.modelFull}`);
-        chips.push({ kind: 'model', key: e.modelFull });
+      if (e.modelFull) {
+        const model = normalizeModelKey(e.modelFull);
+        if (!seen.has(`m:${model}`)) {
+          seen.add(`m:${model}`);
+          chips.push({ kind: 'model', key: model });
+        }
       }
       if (e.taskRole && !seen.has(`r:${e.taskRole}`)) {
         seen.add(`r:${e.taskRole}`);
         chips.push({ kind: 'role', key: e.taskRole });
       }
     } else {
-      const match = axis === 'models' ? e.modelFull === key : e.taskRole === key;
+      // Модель — по нормализованному ключу: журнал «Claude Opus 5.5» находит
+      // исполнителя со снимком «Авто → Claude Opus 5.5» и наоборот.
+      const match = axis === 'models'
+        ? e.modelFull != null && normalizeModelKey(e.modelFull) === normalizeModelKey(key)
+        : e.taskRole === key;
       if (!match) continue;
       if (e.personaId && !seen.has(`p:${e.personaId}`)) {
         seen.add(`p:${e.personaId}`);
@@ -132,10 +157,4 @@ export function fewData(groups: FeatureBreakdownGroup[]): boolean {
   return groups.length < 2;
 }
 
-// === Проценты ===
-
-// Доля 0..1 → «42 %». Округление каждой доли независимо: сумма текстов может
-// дать 101 % — полосу кольца вид строит от суммы частей, а не из этих текстов.
-export function percentText(share: number): string {
-  return `${Math.round(share * 100)} %`;
-}
+// Проценты — в FeatureStatsFormat.ts (percentText), ре-экспорт выше.

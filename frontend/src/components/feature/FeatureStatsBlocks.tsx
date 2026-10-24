@@ -22,7 +22,7 @@ import { openTaskInSection } from '../../lib/tasks';
 import { formatDuration } from './FeatureStatsBits';
 // Форматтеры чисел живут в FeatureStatsFormat.ts (ST-F8); ре-экспорт сохранён —
 // потребители (Tiles, MiniSummary, тесты) импортируют их из этого блока.
-import { formatTokens, formatUsd } from './FeatureStatsFormat';
+import { formatTokens, formatUsd, percentText } from './FeatureStatsFormat';
 export { formatTokens, formatUsd };
 import { NavTargetPair, NavTargetButton } from './NavTargetButton';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
@@ -38,10 +38,11 @@ import type {
 
 // === Чистые помощники (node, без DOM) ===
 
-// Доля 0..1 → «31 %». null → '' (не считалась).
+// Доля 0..1 → «31 %». null → '' (не считалась). Реализация — percentText из
+// FeatureStatsFormat.ts (ST-F8), одна для всех процентов.
 export function sharePercent(share: number | null): string {
   if (share == null) return '';
-  return `${Math.round(share * 100)} %`;
+  return percentText(share);
 }
 
 // Ключ группы «роли» (сырой taskRole) → русская подпись (roleLabel).

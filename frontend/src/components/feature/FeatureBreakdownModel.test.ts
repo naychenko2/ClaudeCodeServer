@@ -2,21 +2,27 @@
 //
 // Покрытие: sortGroups — убывание по time/tokens/cost, null в конце, стабильность
 // среди null, вход не мутируется; formatMoney — «бесплатно» только при токенах,
-// «нет учёта» при null, иначе formatUsd; groupChips — модели/роли персоны, персоны
-// модели/роли, дедупликация, отсутствие executors — []; chatLabel — «Ш2 · доработка»
-// из executors, «шаг» для step без слова роли, «чат» когда исполнитель не найден;
-// liveChipText — running/«работает», waiting/«ждёт вас», running важнее, у закрытой
-// — null; fewData — <2 групп; percentText — округление каждой доли (сумма может
-// дать 101 %).
+// «нет учёта» при null, иначе formatUsd; normalizeModelKey — снятие префикса
+// «Авто → »; groupChips — модели/роли персоны (модель в чипе нормализована), персоны
+// модели/роли по нормализованному ключу (ключ журнала без префикса находит снимок
+// «Авто → …»), дедупликация, отсутствие executors — [], роль «feature» (группа
+// эпика) — chips []; chatLabel — «Ш2 · доработка» из executors, «шаг» для step без
+// слова роли, «чат» когда исполнитель не найден; liveChipText — running/«работает»,
+// waiting/«ждёт вас», running важнее, у закрытой — null; fewData — <2 групп;
+// percentText — ре-экспорт из FeatureStatsFormat, округление каждой доли
+// (сумма может дать 101 %).
 //
 // Мутации (в отчёте): (1) убрать ветку «бесплатно» в formatMoney — краснеет тест
 // «0 при токенах — «бесплатно»»; (2) `return 1` на `return -1` в sortGroups для
 // null — краснеет «null в конце»; (3) снять `run.closed === true ||` в liveChipText —
-// краснеет «у закрытой фичи — ничего».
+// краснеет «у закрытой фичи — ничего»; (4) вернуть строгое `e.modelFull === key`
+// в сопоставлении моделей — краснеет «ключ из журнала находит исполнителя со
+// снимком «Авто → …»».
 
 import { describe, it, expect } from 'vitest';
 import {
   sortGroups, formatMoney, groupChips, chatLabel, liveChipText, fewData, percentText,
+  normalizeModelKey,
 } from './FeatureBreakdownModel';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor } from '../../types/featureRun';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
@@ -144,6 +150,48 @@ describe('groupChips', () => {
 
   it('null modelFull — модельного чипа нет, ролевой остаётся', () => {
     expect(groupChips('personas', 'p-gleb', run)).toEqual([{ kind: 'role', key: 'review' }]);
+  });
+});
+
+describe('normalizeModelKey', () => {
+  it('снимает префикс «Авто → »; ключ без префикса — как есть', () => {
+    expect(normalizeModelKey('Авто → Claude Opus 5.5')).toBe('Claude Opus 5.5');
+    expect(normalizeModelKey('Claude Opus 5.5')).toBe('Claude Opus 5.5');
+    expect(normalizeModelKey('Авто')).toBe('Авто');
+  });
+});
+
+describe('groupChips — ключ модели (хвост ST-F8)', () => {
+  // Снимок бэка всегда «Авто → …» (FeatureProjector.cs:437-440); ключ оси — из
+  // журнала без префикса, а без журнала — с ним.
+  const snapRun = mkRun({
+    stages: [
+      mkStage([
+        mkExecutor({ personaId: 'p-kira', taskRole: 'rework', modelFull: 'Авто → Claude Opus 5.5', status: 'done' }),
+        mkExecutor({ personaId: 'p-kira', taskRole: 'review', modelFull: 'Авто → Claude Opus 5.5', status: 'done' }),
+      ]),
+    ],
+  });
+
+  it('ключ журнала «Claude Opus 5.5» находит исполнителя со снимком «Авто → …»', () => {
+    expect(groupChips('models', 'Claude Opus 5.5', snapRun)).toEqual([{ kind: 'persona', key: 'p-kira' }]);
+  });
+
+  it('ключ без журнала «Авто → …» тоже находит: нормализуются обе стороны', () => {
+    expect(groupChips('models', 'Авто → Claude Opus 5.5', snapRun)).toEqual([{ kind: 'persona', key: 'p-kira' }]);
+  });
+
+  it('чип модели персоны — нормализованная модель, дедуплицированная', () => {
+    expect(groupChips('personas', 'p-kira', snapRun)).toEqual([
+      { kind: 'model', key: 'Claude Opus 5.5' },
+      { kind: 'role', key: 'rework' },
+      { kind: 'role', key: 'review' },
+    ]);
+  });
+
+  it('ось ролей, ключ «feature» (группа эпика): исполнителей нет — chips [], строка не выпадает', () => {
+    expect(groupChips('roles', 'feature', snapRun)).toEqual([]);
+    expect(groupChips('roles', 'feature', mkRun())).toEqual([]);
   });
 });
 

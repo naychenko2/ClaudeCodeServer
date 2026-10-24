@@ -15,3 +15,9 @@ export function formatUsd(n: number | null): string {
   if (n == null) return '';
   return `$${n.toFixed(2).replace('.', ',')}`;
 }
+
+// Доля 0..1 → «42 %». Округление каждой доли независимо: сумма текстов может
+// дать 101 % — полосу кольца вид строит от суммы частей, а не из этих текстов.
+export function percentText(share: number): string {
+  return `${Math.round(share * 100)} %`;
+}

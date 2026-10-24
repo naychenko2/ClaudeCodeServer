@@ -19,8 +19,8 @@ public class ConsumersTailContributorTests
         public bool IsServerToolEnabled(string? ownerId, Persona? persona, string toolKey) => true;
     }
 
-    // location — «line N» у C#-узлов; у TS-узлов экстрактор SourceLocation не заполняет (null)
-    private static CodeGraphNode Node(string id, string file, string? location = "line 1") => new()
+    // location — «line N» у C#-узлов; у TS-узлов экстрактор SourceLocation не заполняет (пустая строка)
+    private static CodeGraphNode Node(string id, string file, string location = "line 1") => new()
     {
         Id = id, Label = id[(id.LastIndexOf('.') + 1)..], FullyQualifiedName = id,
         SourceFile = file, SourceLocation = location, Kind = NodeKind.Class,
@@ -349,7 +349,7 @@ public class ConsumersTailContributorTests
     // Дерево из заданных файлов; у каждого — deps исходящих целей в чужих файлах и consumers потребителей
     private static async Task<(ConsumersTailContributor Sut, string Dir, string Data)> PrepareMany(
         string[] files, int deps, int consumers, Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? dependencies = null,
-        string? depLocation = "line 1")
+        string depLocation = "line 1")
     {
         var dir = Path.Combine(Path.GetTempPath(), "cgtail_" + Guid.NewGuid().ToString("N")[..10]);
         var data = Path.Combine(Path.GetTempPath(), "cgtail_data_" + Guid.NewGuid().ToString("N")[..10]);
@@ -418,7 +418,7 @@ public class ConsumersTailContributorTests
     public async Task Зависимости_TsФорма_БезSourceLocation_ТолькоФайл()
     {
         // реальный фронтовый файл: TS-экстрактор строки не отдаёт, контракт честно сужен до «файл»
-        var (sut, dir, data) = await PrepareMany(["frontend/src/lib/api.ts"], deps: 1, consumers: 0, depLocation: null);
+        var (sut, dir, data) = await PrepareMany(["frontend/src/lib/api.ts"], deps: 1, consumers: 0, depLocation: "");
         try
         {
             var text = (await sut.BuildAsync(Ctx(dir), "Правь frontend/src/lib/api.ts"))!.Sections.Single().Text;

@@ -338,7 +338,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         return string.Join('\n', lines.Take(Math.Max(maxLines, MinSubsectionLines)));
     }
 
-    // Исходящие связи файла: строка «Fqn — путь:строка объявления (отношение)», названные в постановке — первыми
+    // Исходящие связи файла: строка «Fqn — файл[:строка] объявления (отношение)», названные в постановке — первыми
     internal static string? RenderDependencies(string file, CodeGraphNeighborsResultDto result, int maxLines = LineLimit)
     {
         var total = result.Total > 0 ? result.Total : result.Neighbors.Count;
@@ -357,7 +357,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         var guards = ContractGuardMap.For(file);
         if (guards.Count == 0) return null;
         var room = maxLines - 1;
-        var shown = guards.Take(guards.Count <= room ? room : room - 1).Select(g => $"- {g.Prefix} → {g.Guard.Title}").ToList();
+        var shown = guards.Take(Math.Max(guards.Count <= room ? room : room - 1, 0)).Select(g => $"- {g.Prefix} → {g.Guard.Title}").ToList();
         if (guards.Count > shown.Count) shown.Add($"ещё {guards.Count - shown.Count}");
         return $"Сторожа по пути {file} (краснеют при нарушении контракта слоя):\n" + string.Join('\n', shown);
     }

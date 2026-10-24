@@ -361,44 +361,13 @@ public class PersonasController(
         return Ok(updated);
     }
 
-    // AI-помощь с характером персоны: сгенерировать с нуля или улучшить/дополнить существующий
-    // (one-shot LLM). Возвращает структурированный контракт (P1) для подстановки в форму.
-    // Подбор голоса по характеру персоны. БЕЗ id: характер в момент подбора живёт в форме и
-    // ещё не сохранён, а у новой персоны id попросту нет.
-    //
-    // Три разных исхода, а не один: модель никого не выбрала (200 + voice: null), модель
-    // ответила мусором (502) и сбой вызова (502). Молчание вместо ответа годится фоновому
-    // месту вроде значка проекта — здесь человек нажал кнопку и ждёт реакции.
-    [HttpPost("ai/voice")]
-    public async Task<ActionResult> AiVoice([FromBody] AiVoiceRequest req)
-    {
-        try
-        {
-            // Подбор — общий с автоподбором при создании персоны (PersonasCrudService)
-            var pick = await _crud.PickVoiceAsync(UserId, req, HttpContext.RequestAborted);
-            switch (pick.Outcome)
-            {
-                case PersonasCrudService.VoicePickOutcome.NoneFits:
-                    return Ok(new { voice = (string?)null, role = (string?)null });
-                case PersonasCrudService.VoicePickOutcome.Unrecognized:
-                    _log.LogWarning("ai/voice: голос не распознан; сырой ответ: {Raw}",
-                        pick.Raw.Length > 600 ? pick.Raw[..600] + "…" : pick.Raw);
-                    return StatusCode(502, new { error = "Модель не выбрала голос из списка — попробуйте ещё раз" });
-                default:
-                    return Ok(new { voice = pick.Voice, role = pick.Role });
-            }
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(502, new { error = $"Не удалось подобрать голос: {ex.Message}" });
-        }
-    }
-
     // Кандидаты для кнопки «Подобрать под персону»: три обычных голоса и отдельно один
-    // живой (LiveTTS) — его форма показывает с явной ценой. Автоподбор при создании сюда
-    // не ходит: он по-прежнему берёт только обычные голоса (PickVoiceAsync).
+    // живой (LiveTTS) — его форма показывает с явной ценой. БЕЗ id: характер в момент подбора
+    // живёт в форме и ещё не сохранён, а у новой персоны id попросту нет. Автоподбор при
+    // создании сюда не ходит: он по-прежнему берёт только обычные голоса (PickVoiceAsync).
     //
-    // Пустой список — честный ответ (200): подходящих нет или показанные исчерпали каталог
+    // Пустой список — честный ответ (200): подходящих нет или показанные исчерпали каталог;
+    // мусор и сбой — 502 с текстом: человек нажал кнопку и ждёт реакции
     [HttpPost("ai/voice/candidates")]
     public async Task<ActionResult> AiVoiceCandidates([FromBody] AiVoiceCandidatesRequest req)
     {
@@ -425,6 +394,8 @@ public class PersonasController(
         }
     }
 
+    // AI-помощь с характером персоны: сгенерировать с нуля или улучшить/дополнить существующий
+    // (one-shot LLM). Возвращает структурированный контракт (P1) для подстановки в форму.
     [HttpPost("ai/character")]
     public async Task<ActionResult> AiCharacter([FromBody] AiCharacterRequest req)
     {

@@ -377,11 +377,10 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
           value={value}
           configured={configured}
           isMobile={isMobile}
-          // Темп переносим только на голос, который его умеет: у LiveTTS он был бы мёртвым
-          // значением в персоне
+          // Темп сохраняем как при выборе из списка: по контракту personas.md у LiveTTS он
+          // просто не уходит на сервер, а вернётся голос general — вернётся и темп
           onPick={(voice, role) => onChange({
-            voice, role: role ?? undefined,
-            speed: voiceSupportsSpeed(catalog.find(v => v.voice === voice)) ? value?.speed ?? null : null,
+            voice, role: role ?? undefined, speed: value?.speed ?? null,
           })}
           onOpenList={openList}
           onClose={() => setPickKey(0)}

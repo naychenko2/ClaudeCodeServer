@@ -923,7 +923,7 @@ public sealed class TasksToolset(
     // (TaskId == null) на глубине 0 проходит.
     private bool DenyFeatureClose(Session session, string ownerId) =>
         session.TaskId is not null
-        || !DelegatedTurnGate.Decide(sessions, ownerId, session.Id, "Закрытие фичи",
+        || !DelegatedTurnGate.Decide(sessions, ownerId, session.Id, "Закрытие/возобновление фичи",
             alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
             failOpenWhenUnknown: false).Allowed;
 

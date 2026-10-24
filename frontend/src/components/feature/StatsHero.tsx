@@ -3,7 +3,9 @@
 // рендер четырёх состояний: running / waiting / merged / few.
 // Чип — из featureRunStatusTag (замечание Глеба ST-F3, п. а: при attention.kind=
 // 'stopped' чип «стоит», а не «идёт»; п. б: state 'closed' — «закрыта», не «смержена»);
-// «только начала» — не run.state, а состояние героя (few), тон notStarted.
+// «только начали» (вердикт Глеба ST-F4, п. 2) — только когда ход и вправду идёт
+// (running/merging/merge_pending): состояния героя «few» нет среди 11 run.state.
+// Для paused/draft/not_started чип = тег run.state, а не «только начали».
 // Решение Андрея: в «ждёт вас» герой показывает только «ждёт N мин» и ghost
 // «Открыть задачу» — вопрос и кнопка чата остаются в строке анализа, здесь не дублируются.
 // Полосу состава строим от суммы частей (п. в): проценты totals могут дать 101 %,
@@ -26,24 +28,30 @@ export interface StatsHeroProps {
   isMobile?: boolean;
 }
 
-// Чип героя: единая точка правды — featureRunStatusTag. Исключение одно: «few» —
-// состояния героя нет среди 11 run.state, его подписывает тон notStarted.
+// Чип героя: единая точка правды — featureRunStatusTag. Исключение одно: «few» при
+// живом ходе — состояния героя нет среди 11 run.state, его подписывает тон notStarted.
+// Статусы, которые сами что-то говорят о фиче (пауза, черновик, «не начата», «стоит»),
+// «только начали» затирали — там чип остаётся тегом run.state (вердикт ST-F4, п. 2).
 function heroTag(run: FeatureRun, state: HeroState): FeatureRunTag {
-  if (state === 'few') return { label: 'только начали', tone: 'notStarted' };
+  const live = run.state === 'running' || run.state === 'merging' || run.state === 'merge_pending';
+  if (state === 'few' && live) return { label: 'только начали', tone: 'notStarted' };
   return featureRunStatusTag(run.state);
 }
 
 // Карточка: bgCard, рамка borderLight, SHADOW.card, R.lg; поля SP.lg (360 — SP.md),
-// две колонки 1fr 1.25fr (360 — одна).
-function heroStyle(isMobile: boolean): CSSProperties {
+// две колонки 1fr 1.25fr (360 — одна). В «ждёт вас» герой в тоне info: фон infoBg,
+// рамка info (макет feature-stats-5.html:133, feature-stats-5.md:95); остальные
+// состояния остаются на bgCard/borderLight (вердикт ST-F4, п. 3).
+function heroStyle(state: HeroState, isMobile: boolean): CSSProperties {
+  const live = state === 'waiting';
   return {
     display: 'grid',
     gridTemplateColumns: isMobile ? '1fr' : '1fr 1.25fr',
     gap: isMobile ? SP.md : SP.lg,
     padding: isMobile ? `${SP.md}px ${SP.md + 2}px` : `${SP.lg}px ${SP.lg + 2}px`,
     borderRadius: R.lg,
-    background: C.bgCard,
-    border: `1px solid ${C.borderLight}`,
+    background: live ? C.infoBg : C.bgCard,
+    border: `1px solid ${live ? C.info : C.borderLight}`,
     boxShadow: SHADOW.card,
     marginBottom: SP.md,
   };
@@ -79,9 +87,10 @@ export function StatsHero({ run, stats, isMobile = false }: StatsHeroProps) {
   } else if (state === 'merged') {
     const s = run.summary;
     big = formatDuration(s?.durationMinutes ?? totals.elapsedMinutes);
-    sub = s
-      ? `от разреза до мержа · ${s.tasks} задач · ${s.steps} шагов · ${s.loops} возврата`
-      : 'от разреза до закрытия';
+    // «до мержа» — только при реальном мерже (mergedAt есть); закрытая без мержа —
+    // «до закрытия» (вердикт ST-F4, п. 1). Counts — те же: их дал бэк по итогу.
+    sub = `от разреза до ${s?.mergedAt ? 'мержа' : 'закрытия'}` +
+      (s ? ` · ${s.tasks} задач · ${s.steps} шагов · ${s.loops} возврата` : '');
   } else if (state === 'few') {
     big = formatDuration(totals.elapsedMinutes);
     sub = 'идёт разрез · считать доли пока рано';
@@ -99,7 +108,7 @@ export function StatsHero({ run, stats, isMobile = false }: StatsHeroProps) {
   const partsSum = rows.reduce((a, r) => a + r.minutes, 0);
 
   return (
-    <div data-testid={`hero-${state}`} style={heroStyle(isMobile)}>
+    <div data-testid={`hero-${state}`} style={heroStyle(state, isMobile)}>
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginBottom: SP.sm }}>
           <StatusTag tag={tag} testId="hero-chip" />

@@ -12,13 +12,19 @@
 //   · число: FONT.serif + FS.display, на 360 — FS.h1 (сверяется с design.ts) (к3);
 //   · few: пунктир «что появится и когда», долей и полос состава нет (к3);
 //   · замечание (в): widths полос — от суммы частей (60+41 при elapsed 100 → 59.4+40.6
-//     = 100 %), проценты — «60 %»/«41 %», не 0.6 (замечание (г)).
+//     = 100 %), проценты — «60 %»/«41 %», не 0.6 (замечание (г));
+//   · вердикт ST-F4: closed без mergedAt — копирайт «до закрытия» (п.1); few на
+//     паузе/черновике — чип из run.state (п.2); «ждёт вас» — фон infoBg и рамка info
+//     (п.3); в герое нет текста вопроса attention.reason (п.4).
 //
 // Мутации (проверены прогоном): (1) `isMobile ? FS.h1 : FS.display` → всегда
 // FS.display — краснеет тест шрифта на 360; (2) `r.minutes / partsSum` →
 // `r.minutes / totals.elapsedMinutes` — краснеет тест ширины полосы (сумма 101 ≠ 100);
 // (3) убрать спецслучай 'few' в heroTag (чип из featureRunStatusTag) — краснеет
-// тест чипа «только начал».
+// тест чипа «только начал»; (4) `s?.mergedAt` → `s` в копирайте — краснеет тест
+// п.1; (5) `state === 'few' && live` → `state === 'few'` — краснеет тест п.2;
+// (6) всегда bgCard/borderLight в heroStyle — краснеет тест п.3; (7) добавить
+// attention.reason в подпись waiting — краснеет тест п.4.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -93,6 +99,25 @@ function mkStats(over: Partial<FeatureStats> = {}): FeatureStats {
   };
 }
 
+// «Мало данных»: один этап и 10 мин — герой в состоянии few.
+function fewStats(): FeatureStats {
+  return {
+    source: 'approx',
+    truncated: false,
+    timeline: {
+      from: '2026-10-24T10:00:00Z',
+      to: '2026-10-24T10:10:00Z',
+      stages: [],
+      segments: [{ from: '2026-10-24T10:00:00Z', to: '2026-10-24T10:10:00Z', kind: 'work', track: 'main', stage: 'cut', taskId: null }],
+      current: null,
+      totals: mkTotals({ elapsedMinutes: 10, workWallMinutes: 10 }),
+    },
+    breakdown: { personas: [], models: [], roles: [] },
+    longestNow: null,
+    spend: null,
+  };
+}
+
 // «Ждёт 42 мин» — since ровно 42 минуты назад от реального now (компонент сам
 // берёт Date.now()).
 function waitingRun(): FeatureRun {
@@ -151,26 +176,13 @@ describe('четыре состояния героя', () => {
     expect(textOf(findNodeByAttr(hero, 'data-testid', 'hero-chip'))).toBe('смержена');
     expect(textOf(findNodeByAttr(hero, 'data-testid', 'hero-big'))).toBe('6 ч');
     expect(textOf(hero)).toContain('12 задач');
+    // Реальный мерж (mergedAt) — копирайт «до мержа» (вердикт ST-F4, п. 1).
+    expect(textOf(hero)).toContain('от разреза до мержа');
   });
 
   it('few — testid hero-few, чип «только начали», пунктир без долей', () => {
     // Один этап и elapsed < 30 — «мало данных».
-    const stats: FeatureStats = {
-      source: 'approx',
-      truncated: false,
-      timeline: {
-        from: '2026-10-24T10:00:00Z',
-        to: '2026-10-24T10:10:00Z',
-        stages: [],
-        segments: [{ from: '2026-10-24T10:00:00Z', to: '2026-10-24T10:10:00Z', kind: 'work', track: 'main', stage: 'cut', taskId: null }],
-        current: null,
-        totals: mkTotals({ elapsedMinutes: 10, workWallMinutes: 10 }),
-      },
-      breakdown: { personas: [], models: [], roles: [] },
-      longestNow: null,
-      spend: null,
-    };
-    const { container } = mountHero(mkRun(), stats);
+    const { container } = mountHero(mkRun(), fewStats());
     const hero = findNodeByAttr(container, 'data-testid', 'hero-few');
     expect(hero, 'герой few не найден').toBeTruthy();
     expect(textOf(findNodeByAttr(hero, 'data-testid', 'hero-chip'))).toBe('только начали');
@@ -225,6 +237,45 @@ describe('замечания Глеба по ST-F3', () => {
   });
 });
 
+describe('вердикт Глеба ST-F4', () => {
+  it('п.1 closed без мержа — «от разреза до закрытия», не «до мержа»', () => {
+    const run = mkRun({
+      state: 'closed',
+      closed: true,
+      summary: { mergedAt: null, durationMinutes: 200, tasks: 3, steps: 1, loops: 0 },
+    });
+    const { container } = mountHero(run, mkStats());
+    const hero = findNodeByAttr(container, 'data-testid', 'hero-merged');
+    expect(textOf(hero)).toContain('от разреза до закрытия');
+    expect(textOf(hero)).not.toContain('до мержа');
+    // Counts бэка никуда не исчезают: они правдивы и без мержа.
+    expect(textOf(hero)).toContain('3 задач');
+  });
+
+  it('п.2 few на паузе и в черновике — чип из run.state, не «только начали»', () => {
+    for (const [state, label] of [['paused', 'на паузе'], ['draft', 'черновик']] as const) {
+      const { container } = mountHero(mkRun({ state }), fewStats());
+      const hero = findNodeByAttr(container, 'data-testid', 'hero-few');
+      expect(hero, `герой few для ${state} не найден`).toBeTruthy();
+      const chip = textOf(findNodeByAttr(hero, 'data-testid', 'hero-chip'));
+      expect(chip).toBe(label);
+      expect(chip).not.toBe('только начали');
+    }
+  });
+
+  it('п.3 «ждёт вас» — фон infoBg и рамка info; running — прежний bgCard/borderLight', () => {
+    const { container } = mountHero(waitingRun(), mkStats());
+    const wait = (findNodeByAttr(container, 'data-testid', 'hero-waiting').style as Record<string, string>);
+    expect(wait.background).toBe(C.infoBg);
+    expect(wait.border).toBe(`1px solid ${C.info}`);
+
+    const run = mountHero(mkRun(), mkStats()).container;
+    const style = findNodeByAttr(run, 'data-testid', 'hero-running').style as Record<string, string>;
+    expect(style.background).toBe(C.bgCard);
+    expect(style.border).toBe(`1px solid ${C.borderLight}`);
+  });
+});
+
 describe('состояние «ждёт вас» по решению Андрея', () => {
   it('ровно одна ghost-кнопка «Открыть задачу»; вопроса и кнопки чата нет', () => {
     const { container } = mountHero(waitingRun(), mkStats());
@@ -234,6 +285,8 @@ describe('состояние «ждёт вас» по решению Андре�
     expect(textOf(btn)).toBe('Открыть задачу');
     // Кнопок «Ответить в чате» в герое нет — только одна кнопка всего.
     expect(textOf(hero)).not.toContain('Ответить');
+    // И самого текста вопроса (attention.reason) — он остаётся в строке анализа (п. 4).
+    expect(textOf(hero)).not.toContain('Вопрос по шагу');
     const buttons = hero.children.flatMap(c => textNodes(c)).filter(t => t === 'Открыть задачу');
     expect(buttons.length).toBe(1);
   });

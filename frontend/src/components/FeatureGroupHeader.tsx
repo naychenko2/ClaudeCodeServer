@@ -254,7 +254,7 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
 
         {/* Строка 2: мини-рельса, стопка аватаров, статус, прогресс. lineHeight 17 (Р-1). */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, lineHeight: '17px', minWidth: 0 }}>
-          {!compact && <FeatureRail rail={feature.rail} closed={feature.bucket === 'closed' || feature.bucket === 'merged'} label={feature.bucket === 'merged' ? 'Этап: смержена' : undefined} />}
+          {!compact && <FeatureRail rail={feature.rail} closed={st.kind === 'done' || st.kind === 'closed'} label={feature.bucket === 'merged' ? 'Этап: смержена' : undefined} />}
           {avatars.length > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
               {avatars.map((p, i) => (

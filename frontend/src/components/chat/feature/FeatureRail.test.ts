@@ -104,6 +104,12 @@ describe('FeatureRail', () => {
     expect(render(noActive).includes('aria-label="Этап: не начат"')).toBe(true);
   });
 
+  it('опция label: «Этап: смержена» вместо «Этап: закрыта» у merged', () => {
+    const html = renderToStaticMarkup(createElement(FeatureRail, { rail: rail(), closed: true, label: 'Этап: смержена' }));
+    expect(html.includes('aria-label="Этап: смержена"')).toBe(true);
+    expect(html.includes('aria-label="Этап: закрыта"')).toBe(false);
+  });
+
   it('пустой и короткий rail не падают', () => {
     // Пустой: 0 сегментов, aria-label «не начат», не бросает.
     expect(() => render([])).not.toThrow();

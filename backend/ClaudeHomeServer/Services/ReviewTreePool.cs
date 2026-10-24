@@ -89,39 +89,54 @@ public sealed class ReviewTreePool
         var slotBase = _worktreesBase(ownerId, project);
         var prefix = SlotPrefix(branch);
 
-        var slotPath = Reserve(slotBase, prefix, taskId);
-        if (slotPath is null) return null;
-
-        try
+        // Слот на ветке без маркера — дерево чата/волны или слот, созданный до маркера, в котором заветвились:
+        // опознать его нельзя, поэтому чиним только слоты с маркером, а такой пропускаем и берём следующий
+        var skipped = new HashSet<string>(StringComparer.Ordinal);
+        string slotPath;
+        while (true)
         {
-            // Путь ГЛАЗАМИ CLI считаем ДО создания дерева: у container-пользователя ToRuntime
-            // отвергает путь вне монтирований, а исключение после worktree add оставило бы сироту
-            _ = _cwdForOwner(ownerId, slotPath);
+            var reserved = Reserve(slotBase, prefix, taskId, skipped);
+            if (reserved is null) return null;
+            slotPath = reserved;
 
-            var slotNorm = PathNormalizer.NormalizePath(slotPath);
-            if (worktrees.Any(w => PathNormalizer.NormalizePath(w.Path) == slotNorm))
+            try
             {
-                // Свой слот, в котором ревьюер заветвился в прошлый раз, возвращаем в detached;
-                // чужое дерево на ветке с таким именем по-прежнему отказ
-                await _git.ResetReviewWorktreeAsync(ownerId, project.RootPath, slotPath, sha,
-                    File.Exists(MarkerPath(slotPath)), ct);
+                // Путь ГЛАЗАМИ CLI считаем ДО создания дерева: у container-пользователя ToRuntime
+                // отвергает путь вне монтирований, а исключение после worktree add оставило бы сироту
+                _ = _cwdForOwner(ownerId, slotPath);
+
+                var slotNorm = PathNormalizer.NormalizePath(slotPath);
+                var existing = worktrees.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == slotNorm);
+                if (existing is not null)
+                {
+                    var hasMarker = File.Exists(MarkerPath(slotPath));
+                    if (existing.Branch is not null && !hasMarker)
+                    {
+                        skipped.Add(slotPath);
+                        ReleasePath(slotPath, taskId);
+                        continue;
+                    }
+                    // Свой слот, в котором ревьюер заветвился в прошлый раз, возвращаем в detached
+                    await _git.ResetReviewWorktreeAsync(ownerId, project.RootPath, slotPath, sha, hasMarker, ct);
+                }
+                else
+                {
+                    // Прогрев (WorktreeBuildWarmup) для слота намеренно не зовём: слот живёт между ревью и
+                    // obj/ переживает сброс, так что холодна только первая сборка в свежем слоте (60–90 с, один
+                    // раз на слот); прогрев принадлежит SessionManager, а тащить его в пул ради этого — лишний
+                    // шов и лишняя тяжёлая сборка при каждом заведении слота под гейтом OOM.
+                    Directory.CreateDirectory(slotBase);
+                    await _git.WorktreeAddDetachedAsync(ownerId, project.RootPath, slotPath, sha, ct);
+                }
+                File.WriteAllText(MarkerPath(slotPath), branch);
+                LinkNodeModules(ownerId, project.RootPath, slotPath);
             }
-            else
+            catch
             {
-                // Прогрев (WorktreeBuildWarmup) для слота намеренно не зовём: слот живёт между ревью и
-                // obj/ переживает сброс, так что холодна только первая сборка в свежем слоте (60–90 с, один
-                // раз на слот); прогрев принадлежит SessionManager, а тащить его в пул ради этого — лишний
-                // шов и лишняя тяжёлая сборка при каждом заведении слота под гейтом OOM.
-                Directory.CreateDirectory(slotBase);
-                await _git.WorktreeAddDetachedAsync(ownerId, project.RootPath, slotPath, sha, ct);
+                Release(taskId);
+                throw;
             }
-            File.WriteAllText(MarkerPath(slotPath), branch);
-            LinkNodeModules(ownerId, project.RootPath, slotPath);
-        }
-        catch
-        {
-            Release(taskId);
-            throw;
+            break;
         }
 
         return new ReviewTreeLease(slotPath, sha, snapshot.DirtyPaths);
@@ -134,6 +149,15 @@ public sealed class ReviewTreePool
         {
             foreach (var slot in _leases.Where(kv => kv.Value == taskId).Select(kv => kv.Key).ToList())
                 _leases.Remove(slot);
+        }
+    }
+
+    // Снимает аренду одного пути, если она у этой задачи: остальные слоты задачи не трогаем
+    private void ReleasePath(string slotPath, string taskId)
+    {
+        lock (_gate)
+        {
+            if (_leases.TryGetValue(slotPath, out var holder) && holder == taskId) _leases.Remove(slotPath);
         }
     }
 
@@ -157,15 +181,22 @@ public sealed class ReviewTreePool
             // ищем среди зарегистрированных по тому же имени с точностью до «~» ↔ «-»
             var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(waveTreePath));
             var baseNorm = PathNormalizer.NormalizePath(slotBase);
+            // Имя каталога выведено из пути дерева вслепую: слот, чей префикс законно принадлежит другой
+            // зарегистрированной волне (ветка «feat-wave» при сносе дерева «feat/wave»), не наш
+            var claimed = worktrees.Where(w => !string.IsNullOrEmpty(w.Branch))
+                .SelectMany(w => new[] { SlotPrefix(w.Branch!), LegacySlotPrefix(w.Branch!) })
+                .ToHashSet(StringComparer.Ordinal);
             var fallback = worktrees
                 .Where(w => PathNormalizer.NormalizePath(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(w.Path)) ?? "") == baseNorm)
                 .Select(w => Path.GetFileName(Path.TrimEndingDirectorySeparator(w.Path)))
                 .Where(n => IsSlotName(n) && Enumerable.Range(1, SlotsPerWave)
-                    .Any(i => n.Replace('~', '-') == $"{dirName}-review-{i}"))
+                        .Any(i => n.Replace('~', '-') == $"{dirName}-review-{i}")
+                    && !claimed.Any(c => Enumerable.Range(1, SlotsPerWave).Any(i => n == c + i)))
                 .ToList();
+            // В маркере — имя ветки («feat/wave»), а каталог дерева уже с «-»: сравниваем с точностью до «/» ↔ «-»
             foreach (var name in fallback)
                 await RemoveSlotAsync(ownerId, project, Path.Combine(slotBase, name), ct,
-                    ownBranch: name.Contains('~') ? null : dirName);
+                    ownMarker: name.Contains('~') ? null : m => m.Replace('/', '-') == dirName);
             return;
         }
 
@@ -182,9 +213,9 @@ public sealed class ReviewTreePool
         foreach (var prefix in prefixes)
             for (var n = 1; n <= SlotsPerWave; n++)
                 // Путь с «-» мог достаться ревью другой ветки («a/b» до обновления): трогаем его, только если он не
-                // чужой — см. RemoveSlotAsync.ownBranch
+                // чужой — см. RemoveSlotAsync.ownMarker
                 await RemoveSlotAsync(ownerId, project, Path.Combine(slotBase, prefix + n), ct,
-                    ownBranch: prefix.Contains('~') ? null : branch);
+                    ownMarker: prefix.Contains('~') ? null : m => m == branch);
     }
 
     // Все слоты проекта: detached-дерево в базе деревьев проекта с именем «*-review-1|2»
@@ -219,14 +250,15 @@ public sealed class ReviewTreePool
     // (на «Стопе» аренда снимается, поэтому после рестарта поведение то же). Исключение — пауза
     // фичи (feature_held): продолжение идёт в тот же чат, чей cwd — этот слот, поэтому аренда
     // живёт, пока жив чат. Терминальный feature_held_expired (чат удалён) под исключение не попадает.
-    public Task RestoreLeasesAsync()
+    public async Task RestoreLeasesAsync()
     {
         // Старт сервера не должен зависеть от восстановления аренд: сбой — в лог, дальше без аренд
         try
         {
+            var trees = new Dictionary<(string?, string), IReadOnlyList<GitWorktreeInfo>>();
             foreach (var task in _allTasks().ToList())
             {
-                try { RestoreLease(task); }
+                try { await RestoreLeaseAsync(task, trees); }
                 catch (Exception ex)
                 {
                     _log.LogWarning(ex, "Аренда слота задачи {TaskId} не восстановлена", task.Id);
@@ -237,10 +269,9 @@ public sealed class ReviewTreePool
         {
             _log.LogWarning(ex, "Аренды слотов ревью не восстановлены: не прочитан список задач");
         }
-        return Task.CompletedTask;
     }
 
-    private void RestoreLease(TaskItem task)
+    private async Task RestoreLeaseAsync(TaskItem task, Dictionary<(string?, string), IReadOnlyList<GitWorktreeInfo>> trees)
     {
         if (task.Role != TaskRoles.Review || task.Status == TaskItemStatus.Done
             || (task.ExecutorStoppedAt is not null && task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason)
@@ -257,7 +288,18 @@ public sealed class ReviewTreePool
 
         var slotPath = Path.Combine(slotBase, name);
         lock (_gate) _leases.TryAdd(slotPath, task.Id);
-        try { if (!File.Exists(MarkerPath(slotPath))) File.WriteAllBytes(MarkerPath(slotPath), []); }
+        // Маркер — только слоту пула: detached-дерево, зарегистрированное по этому пути. Дерево чата или волны
+        // на ветке с таким именем каталога маркера не получает (иначе его сносила бы уборка слотов)
+        if (File.Exists(MarkerPath(slotPath))) return;
+        try
+        {
+            var key = (task.OwnerId, project.RootPath);
+            if (!trees.TryGetValue(key, out var list))
+                trees[key] = list = await _git.WorktreeListAsync(task.OwnerId, project.RootPath);
+            var norm = PathNormalizer.NormalizePath(slotPath);
+            if (list.Any(w => PathNormalizer.NormalizePath(w.Path) == norm && w.Branch is null))
+                File.WriteAllBytes(MarkerPath(slotPath), []);
+        }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Маркер слота ревью {Slot} не записан", slotPath);
@@ -271,11 +313,12 @@ public sealed class ReviewTreePool
         return false;
     }
 
-    // ownBranch != null — путь неоднозначный (имя с «-»: слот ветки «a-b» или старый слот «a/b»). Слот не наш и
-    // не сносится, если в маркере записана другая ветка или он в аренде при пустом маркере (старый слот, в котором
-    // идёт живое ревью: ветка неизвестна). Аренда в этом случае остаётся.
+    // ownMarker != null — путь неоднозначный (имя с «-»: слот ветки «a-b» или старый слот «a/b»). Слот не наш и
+    // не сносится, если в маркере записано то, что ownMarker не признаёт, или он в аренде — при любом маркере:
+    // новый код слот «a/b» под «-» не занимает, так что держит его ревью другой волны или старый слот с живым
+    // ревью (ветка неизвестна). Аренда в этом случае остаётся.
     private async Task RemoveSlotAsync(string? ownerId, Project project, string slotPath, CancellationToken ct,
-        string? ownBranch = null)
+        Func<string, bool>? ownMarker = null)
     {
         // Аренда снимается и путь закрывается от Reserve одним входом под замком: между проверкой и
         // снятием, а затем и до конца сноса путь другой задаче не достанется. Список деревьев читаем
@@ -283,13 +326,13 @@ public sealed class ReviewTreePool
         bool ours;
         lock (_gate)
         {
-            if (ownBranch is not null)
+            if (ownMarker is not null)
             {
                 string? marker = null;
                 try { if (File.Exists(MarkerPath(slotPath))) marker = File.ReadAllText(MarkerPath(slotPath)).Trim(); }
                 catch (IOException) { /* нечитаемый маркер = пустой */ }
                 var held = _leases.ContainsKey(slotPath);
-                if (!string.IsNullOrEmpty(marker) ? marker != ownBranch : held) return;
+                if (held || (!string.IsNullOrEmpty(marker) && !ownMarker(marker))) return;
             }
             var leased = _leases.Remove(slotPath);
             ours = File.Exists(MarkerPath(slotPath)) || leased;
@@ -328,19 +371,19 @@ public sealed class ReviewTreePool
         catch (Exception ex) { _log.LogWarning(ex, "Маркер слота ревью {Slot} не удалён", slotPath); }
     }
 
-    private string? Reserve(string slotBase, string prefix, string taskId)
+    private string? Reserve(string slotBase, string prefix, string taskId, ISet<string> skipped)
     {
         lock (_gate)
         {
             for (var n = 1; n <= SlotsPerWave; n++)
             {
                 var path = Path.Combine(slotBase, prefix + n);
-                if (_leases.TryGetValue(path, out var holder) && holder == taskId) return path;
+                if (!skipped.Contains(path) && _leases.TryGetValue(path, out var holder) && holder == taskId) return path;
             }
             for (var n = 1; n <= SlotsPerWave; n++)
             {
                 var path = Path.Combine(slotBase, prefix + n);
-                if (_leases.ContainsKey(path) || _removing.Contains(path)) continue;
+                if (skipped.Contains(path) || _leases.ContainsKey(path) || _removing.Contains(path)) continue;
                 _leases[path] = taskId;
                 return path;
             }

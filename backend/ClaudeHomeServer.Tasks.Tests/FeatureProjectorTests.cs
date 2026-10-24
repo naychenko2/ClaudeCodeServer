@@ -1080,7 +1080,8 @@ public class FeatureProjectorTests
 
     // 6. Табличный: Closed = эпик Done; Bucket = f(state, эпик Done); ClosureAt по State — на всех 9 состояниях.
     //    Мутация: вернуть Closed = «merge Done || epic Done» (старая вторая точка) →
-    //    строка idle с частичным мержем (merge Done, финал не принят, эпик открыт) даст Closed=true при открытом эпике.
+    //    таблица падает на merged-строке с открытым эпиком (e1) — и на e10 (idle с частичным мержем:
+    //    merge Done, финал не принят, эпик открыт даст Closed=true при открытом эпике).
     [Fact]
     public void Закрытие_СогласованоСЭпиком()
     {

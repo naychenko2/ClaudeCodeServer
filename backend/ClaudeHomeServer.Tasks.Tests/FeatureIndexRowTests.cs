@@ -92,8 +92,9 @@ public class FeatureIndexRowTests
     // ── 1b. state: поле строки индекса (единая точка правда bucket) ───────────────────────────
 
     // Строка несёт state (FeatureRun.State); bucket выводится из него. Проверяем: state
-    // присутствует в строке и согласован с bucket (merging → running, merge_pending → attention,
-    // merged/closed → closed, running → running, not_started/idle → idle).
+    // присутствует в строке и согласован с bucket: merged → merged (эпик открыт) / closed (эпик Done),
+    // closed → closed, merging/running → running, stopped/waiting/merge_pending → attention,
+    // not_started/idle → idle.
     [Fact]
     public void Строка_State_ПрисутствуетИСогласованСBucket()
     {

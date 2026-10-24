@@ -143,7 +143,8 @@ public sealed partial class PersonasToolset(
             case "personas_set_default":
             {
                 // Анти-рекурсия — тот же гейт, что [DenyOnDelegatedTurn] на REST-паре;
-                // онбординг-гейт (только сессия знакомства) проверяет crud по callerSessionId.
+                // гейт по чату-вызывателю (онбординг — любая персона, обычный чат — только
+                // руководитель своего проекта) проверяет crud по callerSessionId.
                 // failOpenWhenUnknown: false формально недостижим (сессия резолвится выше
                 // TryResolve и сюда попадает только непустой id) — fail-closed защита на
                 // будущее, если гейт вынесут из-под резолва
@@ -160,15 +161,22 @@ public sealed partial class PersonasToolset(
             case "personas_create":
             {
                 if (ScopeDenial(arguments, null, isCreate: true) is { } createDenied) return Deny(createDenied);
-                var created = await crud.CreateAsync(ownerId, BuildCreateRequest(arguments, projectId), session.Id);
-                var createdResult = Unwrap(created);
-                // Автоподбор голоса best-effort: не вышел — персона создана без голоса, и модель
-                // должна об этом узнать, а не считать, что голос есть
-                if (!createdResult.IsError && !arguments.ContainsKey("voice")
-                    && (created.Result as ObjectResult)?.Value is Persona { Voice: null })
-                    return Text(createdResult.Text + "\n\nГолос подобрать не удалось — персона говорит "
-                        + "голосом инстанса. Задай его через personas_update (voice, voiceRole).");
-                return createdResult;
+                PersonasCrudService.AutoVoiceResult? autoVoice = null;
+                var createdResult = Unwrap(await crud.CreateAsync(ownerId,
+                    BuildCreateRequest(arguments, projectId), session.Id, onAutoVoice: r => autoVoice = r));
+                if (createdResult.IsError) return createdResult;
+                // Автоподбор голоса best-effort: без голоса персона говорит голосом инстанса, и
+                // модель должна знать почему. Голос задан явно (в т.ч. пустым) — подбора не было
+                return autoVoice switch
+                {
+                    PersonasCrudService.AutoVoiceResult.Failed => Text(createdResult.Text
+                        + "\n\nГолос подобрать не удалось — персона говорит голосом инстанса. "
+                        + "Задай его через personas_update (voice, voiceRole)."),
+                    PersonasCrudService.AutoVoiceResult.NoneFits => Text(createdResult.Text
+                        + "\n\nПодходящего голоса в каталоге не нашлось — персона говорит голосом "
+                        + "инстанса. Если нужен свой — задай через personas_update (voice, voiceRole)."),
+                    _ => createdResult,
+                };
             }
 
             case "personas_update":
@@ -192,7 +200,9 @@ public sealed partial class PersonasToolset(
                 var req = BuildUpdateRequest(arguments, projectId);
                 if (req is not null)
                 {
-                    var updated = Unwrap(await crud.UpdateAsync(ownerId, id, req, session.Id));
+                    // С голосом событие «updated» шлёт запись голоса — одно на всю правку
+                    var updated = Unwrap(await crud.UpdateAsync(ownerId, id, req, session.Id,
+                        broadcast: voicePatch is null));
                     if (updated.IsError || voicePatch is null) return updated;
                 }
                 // Голос — своим путём (у него своя запись и валидация, как PUT /voice)

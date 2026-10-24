@@ -330,7 +330,8 @@ public class SubsystemBoundaryTests
         // цепочки склейки в `VoiceResolver` (VoiceResolver.cs:16); связь «вертикаль →
         // спинка» (доменная модель пользователей и персон), а не на другую вертикаль.
         // `TtsVoiceCatalog` (Services/Tts) — статический каталог белого списка голосов;
-        // его используют СНАРУЖИ вертикали `PersonaManager` и `PersonasController`, но это
+        // его используют СНАРУЖИ вертикали `PersonaManager`, `PersonasCrudService` и схема
+        // MCP `PersonasToolset`, но это
         // сознательная обратная стрелка «спина → каталог вертикали», а не зависимость
         // самой вертикали Tts от чужой вертикали.
         new object[]

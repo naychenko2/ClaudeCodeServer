@@ -59,8 +59,10 @@ public sealed class PersonasCrudService(
 
     // --- Создание / правка / удаление / дефолт (тела POST/PUT/DELETE/make-default) ---
 
+    // onAutoVoice — исход автоподбора голоса, если он запускался (MCP сообщает его модели);
+    // голос был задан явно (в т.ч. пустым объектом) — не вызывается
     public async Task<ActionResult<Persona>> CreateAsync(string userId, CreatePersonaRequest req,
-        string? callerSessionId, CancellationToken ct = default)
+        string? callerSessionId, CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest("Не задано имя персоны");
@@ -165,13 +167,15 @@ public sealed class PersonasCrudService(
         if (req.AutoAvatar == true)
             persona = await TryAutoGenerateAvatarAsync(userId, persona, req.AvatarPrompt);
         // Голос: явный (непустой) — пишем как есть; явный пустой объект — «без голоса», не
-        // подбираем; не передан — подбираем по характеру (best-effort), если вызывающий не
-        // отказался флагом AutoVoice=false. Последним шагом — после всех прочих one-shot
-        // вызовов создания, так их порядок не меняется
+        // подбираем; не передан — подбираем по характеру (best-effort). Последним шагом —
+        // после всех прочих one-shot вызовов создания, так их порядок не меняется
         if (req.Voice is { IsEmpty: false } explicitVoice)
             persona = personas.SetVoice(persona.Id, userId, explicitVoice);
-        else if (req.Voice is null && req.AutoVoice != false)
-            persona = await TryAutoVoiceAsync(userId, persona, ct);
+        else if (req.Voice is null)
+        {
+            (persona, var autoVoice) = await TryAutoVoiceAsync(userId, persona, ct);
+            onAutoVoice?.Invoke(autoVoice);
+        }
         // Персона, созданная из онбординг-сессии (через MCP personas_create), запоминается на ней:
         // финализация досеет профиль дефолта ТОЛЬКО ей, а не выбранной существующей
         // (та прав не получает — молчаливая дозапись Access=Full+manage была бы эскалацией).
@@ -185,8 +189,10 @@ public sealed class PersonasCrudService(
         return Ok(persona);
     }
 
+    // broadcast: false — вызывающий доводит правку следующей мутацией (голос в MCP
+    // personas_update) и шлёт одно событие «updated» сам, по её итогу
     public async Task<ActionResult<Persona>> UpdateAsync(string userId, string id,
-        UpdatePersonaRequest req, string? callerSessionId)
+        UpdatePersonaRequest req, string? callerSessionId, bool broadcast = true)
     {
         if (personas.Get(id, userId) is not { } current) return NotFound();
         if (req.Scope == PersonaScope.Project && !ValidProject(userId, req.ProjectId))
@@ -257,7 +263,7 @@ public sealed class PersonasCrudService(
         // перезаписывающее его правки. Посторонние поля (цвет, модель, аватар, привязки) не снимают.
         if (isAssistantDraft && IsCharacterRelevantChange(beforeName, beforeRole, beforeGreeting, beforeContract, persona))
             users.SetAssistantPersona(userId, null);
-        await Broadcast(userId, "updated", id);
+        if (broadcast) await Broadcast(userId, "updated", id);
         return Ok(persona);
     }
 
@@ -1141,29 +1147,38 @@ public sealed class PersonasCrudService(
             : new VoicePick(VoicePickOutcome.Unrecognized, null, null, raw);
     }
 
+    // Исход автоподбора: голос выбран; модель честно сказала «ничего не подходит»; подбор не
+    // вышел (мусор в ответе или сбой вызова)
+    public enum AutoVoiceResult { Picked, NoneFits, Failed }
+
     // Автоподбор голоса свежесозданной персоне, best-effort: модель промолчала, ответила
     // мусором или упала — персона остаётся без голоса (говорит голосом инстанса), создание
-    // не срывается. Вызывающий узнаёт исход по persona.Voice
-    public async Task<Persona> TryAutoVoiceAsync(string userId, Persona persona, CancellationToken ct = default)
+    // не срывается
+    public async Task<(Persona Persona, AutoVoiceResult Result)> TryAutoVoiceAsync(string userId,
+        Persona persona, CancellationToken ct = default)
     {
         try
         {
             var pick = await PickVoiceAsync(userId, new AiVoiceRequest(persona.Name, persona.Role,
                 persona.Description, persona.Contract?.Character ?? persona.SystemPrompt,
                 persona.Contract?.Tone), ct);
-            if (pick.Outcome != VoicePickOutcome.Picked)
+            switch (pick.Outcome)
             {
-                if (pick.Outcome == VoicePickOutcome.Unrecognized)
+                case VoicePickOutcome.NoneFits:
+                    return (persona, AutoVoiceResult.NoneFits);
+                case VoicePickOutcome.Unrecognized:
                     log.LogWarning("автоподбор голоса: ответ не распознан для {Persona}; сырой ответ: {Raw}",
                         persona.Id, pick.Raw.Length > 600 ? pick.Raw[..600] + "…" : pick.Raw);
-                return persona;
+                    return (persona, AutoVoiceResult.Failed);
+                default:
+                    return (personas.SetVoice(persona.Id, userId,
+                        new PersonaVoice { Voice = pick.Voice, Role = pick.Role }), AutoVoiceResult.Picked);
             }
-            return personas.SetVoice(persona.Id, userId, new PersonaVoice { Voice = pick.Voice, Role = pick.Role });
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             log.LogWarning(ex, "автоподбор голоса для {Persona} не удался", persona.Id);
-            return persona;
+            return (persona, AutoVoiceResult.Failed);
         }
     }
 

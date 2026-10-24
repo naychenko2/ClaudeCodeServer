@@ -207,6 +207,35 @@ public class PersonasToolsetVoiceAndLeaderTests : IDisposable
     }
 
     [Fact]
+    public async Task Create_ТолькоПустоеАмплуа_БезПодбора_БезПриписки()
+    {
+        var (_, sessionId) = await ProjectChatAsync();
+
+        var result = await CallAsync(sessionId, "personas_create",
+            new { name = "Амплуа" + Guid.NewGuid().ToString("N")[..4], voiceRole = "" });
+
+        IsError(result).Should().BeFalse(TextOf(result));
+        _cheap.VoiceCalls.Should().Be(0, "voiceRole без voice — явный пустой голос, подбора нет");
+        TextOf(result).Should().NotContain("Голос подобрать не удалось")
+            .And.NotContain("Подходящего голоса");
+    }
+
+    [Fact]
+    public async Task Create_МодельОтветилаNone_ЧестнаяПриписка_АНеСбой()
+    {
+        _cheap.VoiceAnswer = "none";
+        var (_, sessionId) = await ProjectChatAsync();
+
+        var result = await CallAsync(sessionId, "personas_create",
+            new { name = "Никто" + Guid.NewGuid().ToString("N")[..4] });
+
+        IsError(result).Should().BeFalse(TextOf(result));
+        _cheap.VoiceCalls.Should().Be(1);
+        TextOf(result).Should().Contain("Подходящего голоса в каталоге не нашлось")
+            .And.NotContain("Голос подобрать не удалось");
+    }
+
+    [Fact]
     public async Task Create_НеверныйГолос_Отказ_ПерсонаНеСоздана()
     {
         var (_, sessionId) = await ProjectChatAsync();
@@ -229,6 +258,19 @@ public class PersonasToolsetVoiceAndLeaderTests : IDisposable
         var id = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
 
         Personas.Get(id, OwnerId)!.Voice!.Voice.Should().Be("julia");
+    }
+
+    // Форма: человек явно выбрал «голос инстанса» — шлёт пустой объект, подбора быть не должно
+    [Fact]
+    public async Task RestCreate_ПустойГолос_НеПодбирает()
+    {
+        var resp = await _client.PostAsJsonAsync("/api/personas",
+            new { name = "Инстанс" + Guid.NewGuid().ToString("N")[..4], voice = new { } });
+        resp.EnsureSuccessStatusCode();
+        var id = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        _cheap.VoiceCalls.Should().Be(0);
+        Personas.Get(id, OwnerId)!.Voice.Should().BeNull();
     }
 
     // --- Руководитель проекта из обычного чата ---

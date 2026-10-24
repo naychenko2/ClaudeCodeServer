@@ -1612,10 +1612,8 @@ public record CreatePersonaRequest(
     // Сфера для Scope.Sphere: обязательна и должна быть сферой владельца; при другом scope сбрасывается
     string? SphereId = null,
     // Голос (валидация как у PUT /voice). null — подобрать по характеру после создания
-    // (best-effort); пустой объект — создать без голоса, ничего не подбирая
-    PersonaVoice? Voice = null,
-    // false — не подбирать голос, даже если Voice не передан
-    bool? AutoVoice = null);
+    // (best-effort); пустой объект — создать без голоса (голос инстанса), ничего не подбирая
+    PersonaVoice? Voice = null);
 
 public record UpdatePersonaRequest(
     string? Name,

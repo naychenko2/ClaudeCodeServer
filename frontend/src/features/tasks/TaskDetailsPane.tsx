@@ -251,7 +251,12 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
   const stopVisual = task.status !== 'done' && isTerminalStop(task.executorStopReason)
     ? executorStopVisual(task.executorStopReason, deviceName)
     : null;
-  const claudeRunning = !!task.claudeStartedAt && !task.claudeResult && task.status !== 'done' && !deviceWaiting;
+  // «Ход идёт сейчас» — тот же предикат, что бэк FeatureProjector.IsTurnRunning: не
+  // «запускался когда-то», а идёт теперь: InProgress, есть claudeStartedAt, нет результата,
+  // исполнитель не встал (executorStoppedAt) и не ждёт человека (awaitingHumanSince).
+  // Без этих меток остановленный паузой фичи шаг светился бы «AI работает» (R-F7).
+  const claudeRunning = task.status === 'inProgress' && !!task.claudeStartedAt && !task.claudeResult
+    && !task.executorStoppedAt && !task.awaitingHumanSince && !deviceWaiting;
 
   // AI-хаб: контекстные действия задачи из палитры/подсказки. «Выполнить» — тот же
   // обработчик, что и кнопка (со стейтом «Запуск…»); генерация — вход в правку + авто-запуск.

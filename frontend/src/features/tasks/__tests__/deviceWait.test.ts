@@ -233,4 +233,35 @@ describe('панель деталей задачи', () => {
     expect(html).not.toContain('Фичу удержали на паузе');
     expect(noticeStyle(html)).toBe('');
   });
+
+  // R-F7: бэк FeatureProjector.IsTurnRunning считает шаг с executorStoppedAt stopped,
+  // а панель по старому предикату («startedAt есть, результата нет») всё равно рисовала
+  // спиннер «AI работает» рядом с плашкой паузы. Мутация: убрать !task.executorStoppedAt
+  // из предиката TaskDetailsPane.tsx:254 — этот тест краснеет.
+  it('остановленный паузой фичи исполнитель — без спиннера «AI работает»', () => {
+    const html = renderPane(task({
+      status: 'inProgress',
+      claudeStartedAt: '2026-10-23T10:00:00Z',
+      executorStoppedAt: '2026-10-23T10:05:00Z',
+      executorStopReason: 'feature_held',
+    }));
+    expect(html).not.toContain('AI работает над задачей');
+    expect(html).toContain('Фичу удержали на паузе');
+  });
+
+  // Тот же предикат, что бэк: явное ожидание человека — не идущий ход.
+  it('ждущий человека исполнитель — без спиннера «AI работает»', () => {
+    const html = renderPane(task({
+      status: 'inProgress',
+      claudeStartedAt: '2026-10-23T10:00:00Z',
+      awaitingHumanSince: '2026-10-23T10:05:00Z',
+    }));
+    expect(html).not.toContain('AI работает над задачей');
+  });
+
+  // Против стороны: ход, который действительно идёт, спиннер сохраняет.
+  it('идущий ход — спиннер «AI работает» есть', () => {
+    const html = renderPane(task({ status: 'inProgress', claudeStartedAt: '2026-10-23T10:00:00Z' }));
+    expect(html).toContain('AI работает над задачей');
+  });
 });

@@ -462,6 +462,14 @@ function pluralSteps(n: number): string {
   return 'шагов';
 }
 
+// Предупреждение в модалке закрытия (дефект a1067076): согласование по числу —
+// один шаг «Идет … он не остановится», несколько «Идут … они не остановятся».
+function runningWarning(n: number): string {
+  return n === 1
+    ? `Идет 1 шаг — он не остановится, фича перейдёт в «Закрытые».`
+    : `Идут ${n} ${pluralSteps(n)} — они не остановятся, фича перейдёт в «Закрытые».`;
+}
+
 // Подсказка пункта ⋯ (макет): «Прервёт N идущих шагов»; для одного — «1 идущий шаг».
 function runningHint(n: number): string {
   return n === 1 ? 'Прервёт 1 идущий шаг' : `Прервёт ${n} идущих ${pluralSteps(n)}`;
@@ -633,7 +641,7 @@ function CloseConfirmModal({ title, busy, error, nowCount, onClose, onConfirm }:
         </div>
         {nowCount > 0 && (
           <div style={{ fontSize: FS.sm, color: C.textSecondary }} data-testid="feature-page-close-running">
-            Идут {nowCount} {pluralSteps(nowCount)} — они не остановятся, фича перейдёт в «Закрытые».
+            {runningWarning(nowCount)}
           </div>
         )}
         <div style={{ fontSize: FS.sm, color: C.textSecondary }}>

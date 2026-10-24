@@ -1589,6 +1589,29 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     await act(async () => { (reactProps(cancel)!.onClick as () => void)(); });
   });
 
+  it('один идущий шаг: «Идет 1 шаг — он не остановится» (дефект a1067076)', async () => {
+    const pd = pageData();
+    pd.run = {
+      ...pd.run,
+      state: 'running',
+      epic: { id: 'f1', title: 'Моя фича', status: 'todo' },
+      now: [
+        { taskId: 't1', stage: 'prod', personaId: null, stepRef: 'S1', title: 'Реализация' },
+      ],
+    } as never;
+    mockGetFeature.result = pd;
+    owner();
+    const c = render({ projectOwnerId: 'u-own' });
+    await settle();
+    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
+    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    const warn = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-running');
+    expect(warn, 'строка предупреждения').not.toBeNull();
+    expect(textNodes(warn!).join(''), 'текст про один шаг').toContain('Идет 1 шаг — он не остановится, фича перейдёт в «Закрытые»');
+    const cancel = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-cancel')!;
+    await act(async () => { (reactProps(cancel)!.onClick as () => void)(); });
+  });
+
   it('запрос в полёте: кнопка тулбара disabled и «Закрываю…» (loading)', async () => {
     openPage();
     mockUpdateTask.pending = true; // запрос не разрешается — состояние «в полёте» держится

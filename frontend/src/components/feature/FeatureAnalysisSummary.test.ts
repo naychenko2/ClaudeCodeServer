@@ -293,8 +293,8 @@ describe('FeatureAnalysisSummary (W5-F2) через строку анализа'
     // Перерендер с новой фичей: состояние сброшено (коммит), отмена — в cleanup эффекта.
     act(() => { root.render(createElement(FeatureAnalysisLine, { run: mkRun('f-2') })); });
     expect(mockSummary.calls[0].signal?.aborted, 'запрос отменён').toBe(true);
-    // Ответ f-1 приходит после смены фичи — в окне, где проверка «текущий запрос» в .then
-    // должна его отвергнуть. Без неё summaryData липнет, и клик по новой фиче не запросил бы.
+    // Ответ f-1 приходит после смены фичи: проверка «текущая фича» в .then его отвергает.
+    // Без неё summaryData липнет, и клик по новой фиче не запросил бы.
     act(() => { mockSummary.resolve!(SUMMARY); });
     await flush();
     clickLineSummary(c);

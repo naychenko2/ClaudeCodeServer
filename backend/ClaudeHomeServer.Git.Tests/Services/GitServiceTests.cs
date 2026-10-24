@@ -928,6 +928,26 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         File.Exists(marker).Should().BeTrue();
     }
 
+    // Подкаталог главного дерева: git checkout --detach -f там проходит и уводит главное дерево с ветки,
+    // поэтому отказ обязан давать именно проверка принадлежности списку worktree.
+    [Fact]
+    public async Task ResetReview_Подкаталог_Главного_Дерева_Отказ_По_Списку_Worktree()
+    {
+        var sub = Path.Combine(_repo, "sub");
+        Directory.CreateDirectory(sub);
+        var marker = Path.Combine(sub, "keep.txt");
+        await File.WriteAllTextAsync(marker, "несохранённое\n");
+        var branchBefore = await _git.CurrentBranchAsync(null, _repo);
+
+        var sha = await HeadAsync();
+        var act = () => _git.ResetReviewWorktreeAsync(null, _repo, sub, sha);
+
+        (await act.Should().ThrowAsync<GitCommandException>())
+            .Which.Message.Should().Contain("Путь не числится среди worktree репозитория");
+        (await _git.CurrentBranchAsync(null, _repo)).Should().NotBeNull().And.Be(branchBefore);
+        File.Exists(marker).Should().BeTrue();
+    }
+
     [Fact]
     public async Task ResetReview_Clean_Без_X_Сохраняет_Игнорируемое()
     {

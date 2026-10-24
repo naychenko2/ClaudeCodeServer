@@ -83,8 +83,10 @@ public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration
             }
         }
         // Первый вызов — свежий расчёт (cached: false); ожидающий тот же расчёт — не повторный
-        // вызов модели (cached: true).
-        return started ? result : result with { Cached = true };
+        // вызов модели (cached: true). Счётчик событий ожидающий пересчитывает по своему run:
+        // число может вырасти без смены отпечатка (вердикт W4-R-ANB5, хвост-4), как при кэш-хите.
+        return started ? result
+            : result with { Cached = true, EventCount = FeatureProjector.BuildEvents(run, []).Count };
     }
 
     private async Task<FeatureSummaryResult> GenerateAsync(
@@ -122,10 +124,13 @@ public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration
         return stripped.ToString().Trim().ToLowerInvariant() == key;
     }
 
-    // Хвост W4-ANB (вердикт W4-R-ANB3): страховка формата. Ответ с тремя заголовками — как есть;
-    // ответ без них — приводится к структуре: существующие заголовки сохраняются, недостающие
-    // вставляются по порядку с пунктом «—» (пустой раздел — тоже часть структуры). Текст до
-    // первого заголовка остаётся под «Сделано» — фронт без заголовков всё равно теряет его.
+    // Хвост W4-ANB (вердикты W4-R-ANB3, W4-R-ANB5): страховка формата. Ответ с тремя
+    // заголовками — как есть; иначе он приводится к структуре: найденные заголовки
+    // разбираются по позициям — содержимое раздела строится от его заголовка до следующего
+    // найденного; недостающие разделы вставляются по порядку ключей целиком (заголовок +
+    // «—»), никогда между заголовком и его пунктами. Текст до первого заголовка становится
+    // содержимым «Сделано»: фронт любой текст до первого заголовка теряет (parseSummary
+    // в FeatureAnalysisSummary), поэтому его надо поставить под заголовок.
     private static string EnsureSections(string text)
     {
         var lines = text.Replace("\r\n", "\n").Split('\n');
@@ -136,19 +141,34 @@ public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration
                 if (found[k] < 0 && IsHeading(lines[i], SectionKeys[k])) found[k] = i;
         if (Array.TrueForAll(found, f => f >= 0)) return text;
 
+        // Позиция первого найденного заголовка; заголовков нет — конец текста.
+        int first = lines.Length;
+        for (int k = 0; k < SectionKeys.Length; k++)
+            if (found[k] >= 0 && found[k] < first) first = found[k];
+
         var sb = new StringBuilder();
-        int pos = 0;
         for (int k = 0; k < SectionKeys.Length; k++)
         {
-            if (found[k] >= 0)
-                while (pos <= found[k]) sb.AppendLine(lines[pos++]);
-            else
+            sb.AppendLine(SectionTitles[k]);
+            bool hasContent = false;
+            if (k == 0)
             {
-                sb.AppendLine(SectionTitles[k]);
-                sb.AppendLine("—");
+                // Преамбула до первого заголовка — содержимое «Сделано».
+                for (int i = 0; i < first; i++) sb.AppendLine(lines[i]);
+                hasContent = first > 0;
             }
+            if (found[k] >= 0)
+            {
+                // Содержимое раздела: строки от его заголовка до следующего найденного.
+                int end = lines.Length;
+                for (int j = found[k] + 1; j < lines.Length; j++)
+                    for (int m = 0; m < SectionKeys.Length; m++)
+                        if (found[m] == j) { end = j; break; }
+                for (int i = found[k] + 1; i < end; i++) sb.AppendLine(lines[i]);
+                hasContent = true;
+            }
+            if (!hasContent) sb.AppendLine("—");
         }
-        while (pos < lines.Length) sb.AppendLine(lines[pos++]);
         return sb.ToString();
     }
 

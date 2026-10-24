@@ -16,6 +16,7 @@ public class FeatureSummaryServiceTests
         public int Calls;
         public string Text = "резюме фичи";
         public Exception? Failure;
+        public TaskCompletionSource<OneShotResult>? Gate;
         // Последний prompt, отправленный модели: для проверки структуры промпта (хвост W4-ANB).
         public string LastPrompt = "";
 
@@ -39,6 +40,9 @@ public class FeatureSummaryServiceTests
             Calls++;
             LastPrompt = prompt;
             if (Failure is not null) throw Failure;
+            // Gate — расчёт не завершён, пока не откроют: для кейсов single-flight, где
+            // второй запрос реально встаёт в ожидание первого.
+            if (Gate is not null) return Gate.Task;
             return Task.FromResult(new OneShotResult(Text, null, 100));
         }
     }
@@ -201,6 +205,96 @@ public class FeatureSummaryServiceTests
         res.Text.Should().Contain("Где застряло", "пустой раздел — «—», колонки не теряются");
         res.Text.Should().Contain("Дальше");
         res.Text.Should().Contain("закрыт шаг Ш1", "содержимое ответа не выбрасывается");
+    }
+
+    // Вердикт W4-R-ANB5, MAJOR: раскладка мерится позициями, а не подстроками. Пункт
+    // найденного заголовка обязан стоять между своим заголовком и следующим — вставка
+    // недостающих разделов не вклинивается между заголовком и его пунктами.
+    private static int IndexOfLine(string text, string line)
+    {
+        var lines = text.Replace("\r\n", "\n").Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+            if (lines[i].Trim() == line) return i;
+        return -1;
+    }
+
+    [Fact]
+    public async Task ОдинЗаголовок_ПунктМеждуСвоимЗаголовкомИСледующим()
+    {
+        var stub = new StubRunner { Text = "Сделано\n- сделал X" };
+        var service = MakeService(stub);
+
+        var res = await service.SummarizeAsync("owner", "f1", OpenRun("f1"), false, CancellationToken.None);
+
+        int heading = IndexOfLine(res.Text, "Сделано");
+        int bullet = IndexOfLine(res.Text, "- сделал X");
+        int next = IndexOfLine(res.Text, "Где застряло");
+
+        heading.Should().Be(0, "ответ начинается с заголовка");
+        bullet.Should().BeGreaterThan(heading, "пункт стоит после своего заголовка");
+        bullet.Should().BeLessThan(next, "пункт до следующего заголовка — не вытолкнут в хвост");
+    }
+
+    [Fact]
+    public async Task ДваЗаголовка_КаждыйПунктПодСвоим()
+    {
+        var stub = new StubRunner { Text = "Сделано\n- сделал X\nДальше\n- дальше Y" };
+        var service = MakeService(stub);
+
+        var res = await service.SummarizeAsync("owner", "f1", OpenRun("f1"), false, CancellationToken.None);
+
+        int made = IndexOfLine(res.Text, "Сделано");
+        int x = IndexOfLine(res.Text, "- сделал X");
+        int stuck = IndexOfLine(res.Text, "Где застряло");
+        int further = IndexOfLine(res.Text, "Дальше");
+        int y = IndexOfLine(res.Text, "- дальше Y");
+
+        x.Should().BeGreaterThan(made, "пункт «Сделано» под своим заголовком");
+        x.Should().BeLessThan(stuck, "вставка недостающего раздела — после содержимого, не внутри");
+        y.Should().BeGreaterThan(further, "пункт «Дальше» под своим заголовком");
+    }
+
+    // Вердикт W4-R-ANB5, хвост-4: ожидающий single-flight получает тот же текст, но
+    // счётчик событий пересчитывает по своему run — число растёт без смены отпечатка
+    // (DroppedByHumanAt в выжимку не входит).
+    [Fact]
+    public async Task SingleFlight_Ожидающий_СвойСчётчикСобытий()
+    {
+        var now = new DateTime(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem { Id = "epic-s", Role = TaskRoles.Feature, Title = "фича-флайт", CreatedAt = now - TimeSpan.FromDays(3) };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic-s", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            CreatedAt = now - TimeSpan.FromDays(2),
+            ClaudeStartedAt = now - TimeSpan.FromDays(2),
+            CompletedAt = now - TimeSpan.FromDays(1),
+        };
+        var stepDropped = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic-s", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            CreatedAt = now - TimeSpan.FromDays(2),
+            ClaudeStartedAt = now - TimeSpan.FromDays(2),
+            CompletedAt = now - TimeSpan.FromDays(1),
+            DroppedByHumanAt = now - TimeSpan.FromHours(1),
+        };
+        var before = FeatureProjector.Build(epic, [epic, step], now);
+        var after = FeatureProjector.Build(epic, [epic, stepDropped], now);
+        FeatureSummaryDigest.Build(before).Fingerprint.Should().Be(FeatureSummaryDigest.Build(after).Fingerprint);
+
+        var stub = new StubRunner { Gate = new TaskCompletionSource<OneShotResult>() };
+        var service = MakeService(stub);
+
+        var a = service.SummarizeAsync("owner", "epic-s", before, false, CancellationToken.None);
+        var b = service.SummarizeAsync("owner", "epic-s", after, false, CancellationToken.None);
+        stub.Gate.SetResult(new OneShotResult(stub.Text, null, 100));
+        var results = await Task.WhenAll(a, b);
+
+        stub.Calls.Should().Be(1, "второй запрос ждёт первый, модель не зовётся дважды");
+        results[1].Cached.Should().BeTrue("ожидающий — тот же расчёт");
+        results[0].EventCount.Should().Be(4, "первый считает по своему run");
+        results[1].EventCount.Should().Be(5, "ожидающий пересчитывает по живому run: добавилось «dropped»");
     }
 
     // Ответ с тремя заголовками (в любой разметке, как понимает фронт) — возвращается как есть.

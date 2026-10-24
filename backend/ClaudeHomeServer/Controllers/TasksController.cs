@@ -860,7 +860,7 @@ public class TasksController(
         {
             var res = await summary.SummarizeAsync(UserId, featureId, run, force, ct);
             return Ok(new { text = res.Text, generatedAt = res.GeneratedAt, model = res.Model,
-                cached = res.Cached, usage = res.Usage });
+                cached = res.Cached, usage = res.Usage, eventCount = res.EventCount });
         }
         catch (InvalidOperationException ex)
         {

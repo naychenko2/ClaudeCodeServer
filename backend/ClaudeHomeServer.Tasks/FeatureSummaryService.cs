@@ -44,7 +44,10 @@ public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration
             }
             if (!_inFlight.TryGetValue(flightKey, out flight))
             {
-                flight = GenerateAsync(ownerId, featureId, digest, ct);
+                // Счётчик событий, на которых построено резюме: хронология run — те же события,
+                // что лента страницы фичи (BuildEvents; число не зависит от снимка сессий).
+                var eventCount = FeatureProjector.BuildEvents(run, []).Count;
+                flight = GenerateAsync(ownerId, featureId, digest, eventCount, ct);
                 _inFlight[flightKey] = flight;
                 started = true;
             }
@@ -79,17 +82,20 @@ public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration
     }
 
     private async Task<FeatureSummaryResult> GenerateAsync(
-        string ownerId, string featureId, string digest, CancellationToken ct)
+        string ownerId, string featureId, string digest, int eventCount, CancellationToken ct)
     {
+        // Хвост W4-ANB (отчёт Майи): промпт явно требует три раздела — фронт делит ответ по
+        // заголовкам «Сделано», «Где застряло», «Дальше» (parseSummary в FeatureAnalysisSummary).
         var prompt =
-            "Сделай короткое резюме хода фичи строго по фактам ниже: где работа сейчас, что " +
-            "сделано, из-за чего возвраты, чего ждёт. 3-6 пунктов markdown, без выдумывания " +
-            "и без оценок. Ответь ТОЛЬКО резюме.\n\n" + digest;
+            "Сделай короткое резюме хода фичи строго по фактам ниже. Ответь тремя разделами " +
+            "с заголовками строго «Сделано», «Где застряло», «Дальше» (каждый с новой строки), " +
+            "под каждым — пункты markdown. Если в разделе нечего сказать — пункт «—». Без " +
+            "выдумывания и без оценок. Ответь ТОЛЬКО этими тремя разделами.\n\n" + digest;
         var res = await cheap.RunDetailedAsync(LocalActionCatalog.FeatureSummary, prompt,
             config["Tasks:AiModel"] ?? "haiku", ownerId, ct: ct);
         if (string.IsNullOrWhiteSpace(res.Text))
             throw new InvalidOperationException("Модель вернула пустой ответ");
-        return new FeatureSummaryResult(res.Text, DateTime.UtcNow, res.Usage?.Model, false, res.Usage);
+        return new FeatureSummaryResult(res.Text, DateTime.UtcNow, res.Usage?.Model, false, res.Usage, eventCount);
     }
 
     private void Touch((string, string) key)
@@ -99,9 +105,11 @@ public sealed class FeatureSummaryService(ICheapTextRunner cheap, IConfiguration
     }
 }
 
-// Ответ ручки POST features/{id}/summary: { text, generatedAt, model, cached, usage }.
+// Ответ ручки POST features/{id}/summary: { text, generatedAt, model, cached, usage, eventCount }.
 // Model — модель фактического вызова (на локальном пути usage null → model null:
 // стоимости нет, модели в смысле тарификации тоже). Cached — результат из кэша или
-// того же идущего расчёта, без нового вызова модели.
+// того же идущего расчёта, без нового вызова модели. EventCount — число событий
+// хронологии, на которых построено резюме (лента событий страницы фичи, BuildEvents):
+// для шапки «по N событиям» и тега «устарело» (хвост W4-ANB, отчёт Майи).
 public sealed record FeatureSummaryResult(
-    string Text, DateTime GeneratedAt, string? Model, bool Cached, OneShotUsage? Usage);
+    string Text, DateTime GeneratedAt, string? Model, bool Cached, OneShotUsage? Usage, int EventCount);

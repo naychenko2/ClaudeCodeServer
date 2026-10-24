@@ -16,6 +16,8 @@ public class FeatureSummaryServiceTests
         public int Calls;
         public string Text = "резюме фичи";
         public Exception? Failure;
+        // Последний prompt, отправленный модели: для проверки структуры промпта (хвост W4-ANB).
+        public string LastPrompt = "";
 
         public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => true;
@@ -35,6 +37,7 @@ public class FeatureSummaryServiceTests
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
         {
             Calls++;
+            LastPrompt = prompt;
             if (Failure is not null) throw Failure;
             return Task.FromResult(new OneShotResult(Text, null, 100));
         }
@@ -168,6 +171,57 @@ public class FeatureSummaryServiceTests
         await act.Invoking(f => f()).Should().ThrowAsync<InvalidOperationException>();
     }
 
+    // Хвост W4-ANB (отчёт Майи): промпт явно требует три раздела — фронт делит ответ по этим
+    // заголовкам (parseSummary в FeatureAnalysisSummary).
+    [Fact]
+    public async Task Промпт_ТриРаздела_ЯвныеЗаголовки()
+    {
+        var stub = new StubRunner();
+        var service = MakeService(stub);
+
+        await service.SummarizeAsync("owner", "f1", OpenRun("f1"), false, CancellationToken.None);
+
+        stub.LastPrompt.Should().Contain("Сделано", "раздел «Сделано» — в промпте");
+        stub.LastPrompt.Should().Contain("Где застряло", "раздел «Где застряло» — в промпте");
+        stub.LastPrompt.Should().Contain("Дальше", "раздел «Дальше» — в промпте");
+    }
+
+    // Хвост W4-ANB: в ответе есть число событий, на которых построено резюме — хронология run
+    // (BuildEvents), та же, что лента событий страницы фичи.
+    [Fact]
+    public async Task Ответ_СчётчикСобытий_ИзХронологии()
+    {
+        var now = new DateTime(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem { Id = "epic-c", Role = TaskRoles.Feature, Title = "фича-счёт", CreatedAt = now - TimeSpan.FromDays(3) };
+        var step = new TaskItem
+        {
+            Id = "c1", FeatureId = "epic-c", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done,
+            CreatedAt = now - TimeSpan.FromDays(2),
+            ClaudeStartedAt = now - TimeSpan.FromDays(2),
+            CompletedAt = now - TimeSpan.FromDays(1),
+        };
+        var review = new TaskItem
+        {
+            Id = "cr1", FeatureId = "epic-c", Role = TaskRoles.Review, ReviewOf = ["c1"],
+            Status = TaskItemStatus.Done, CreatedAt = now - TimeSpan.FromDays(1),
+            CompletedAt = now - TimeSpan.FromHours(1),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Returned, Notes = "нет тестов" },
+        };
+        var run = FeatureProjector.Build(epic, [epic, step, review], now);
+        var service = MakeService(new StubRunner());
+
+        var res = await service.SummarizeAsync("owner", "epic-c", run, false, CancellationToken.None);
+
+        // Хронология: эпик — created; шаг — created, started, completed; ревью — created, returned.
+        res.EventCount.Should().Be(6, "резюме опирается на события хронологии");
+
+        // Повтор с тем же отпечатком — тот же результат, число не меняется.
+        var cached = await service.SummarizeAsync("owner", "epic-c", run, false, CancellationToken.None);
+        cached.Cached.Should().BeTrue();
+        cached.EventCount.Should().Be(6);
+    }
+
     // ─── Золотые проверки выжимки (разрез §4: «выжимку собирает одна чистая функция») ───────
     private static (string Digest, string Fingerprint) GoldenDigest()
     {
@@ -250,6 +304,39 @@ public class FeatureSummaryServiceTests
         digest.IndexOf("Итог:").Should().BeLessThan(digest.IndexOf("Шаги:"), "итог идёт до «Шагов»");
         digest.Should().Contain("Ш20", "последние цепочки показаны");
         digest.Should().Contain("ранних цепочек опущено", "старые цепочки свернуты, а не обрезаны слепым [..4000]");
+    }
+
+    // Вердикт W4-R-ANB2, minor-1: потолок 4000 и ветка обрезки по секциям — кейс, реально
+    // добирающийся до потолка: 10 цепочек × 3 витка по 200 символов. Длина ровно MaxDigestChars,
+    // хвост — многоточие, голова сохранена целиком.
+    [Fact]
+    public void Digest_Потолок4000_ОбрезкаМноготочием()
+    {
+        var now = new DateTime(2026, 10, 24, 12, 0, 0, DateTimeKind.Utc);
+        var chains = new List<FeatureStepChain>();
+        for (int i = 1; i <= 10; i++)
+            chains.Add(new FeatureStepChain
+            {
+                StepRef = $"Ш{i}",
+                Title = $"шаг {i}",
+                Outcome = "accepted",
+                Loops = 1,
+                Rounds = [new FeatureRound { N = 1, Verdict = "returned", Reason = new string('б', 200) },
+                    new FeatureRound { N = 2, Verdict = "returned", Reason = new string('б', 200) },
+                    new FeatureRound { N = 3, Verdict = "returned", Reason = new string('б', 200) }],
+            });
+        var run = new FeatureRun
+        {
+            FeatureId = "epic-max",
+            Epic = new TaskItem { Id = "epic-max", Role = TaskRoles.Feature, Title = "фича-потолок", CreatedAt = now - TimeSpan.FromDays(5) },
+            Attention = new FeatureAttention { Kind = "stopped", Since = now - TimeSpan.FromHours(2), Reason = "исполнитель встал" },
+            StepChains = chains,
+        };
+        var (digest, _) = FeatureSummaryDigest.Build(run);
+
+        digest.Length.Should().Be(FeatureSummaryDigest.MaxDigestChars, "голова в бюджет — «Шаги» добраны до потолка");
+        digest.Should().EndWith("…", "обрезка по середине цепочки помечена многоточием");
+        digest.Should().Contain("Тревога: stopped", "голова выжимки сохранена целиком");
     }
 
     // Отпечаток — по полному тексту: правка в хвосте истории (цепочка, опущенная в выжимке)

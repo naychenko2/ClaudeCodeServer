@@ -44,6 +44,8 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
     // потолка по 30 с давали худший случай ~60 с на кусок, а примерка голоса на фронте
     // ждёт 45 с. Сеттер — для тестов: ждать настоящие 30 с в прогоне незачем
     internal TimeSpan ChunkTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    // Часы дедлайна куска; сеттер — для тестов, чтобы не опираться на настенное время
+    internal TimeProvider Time { get; init; } = TimeProvider.System;
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_folderId);
 
@@ -117,8 +119,8 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
     {
         // Один дедлайн на кусок: Timeout клиента при ResponseHeadersRead тело не покрывает,
         // а отдельный потолок на тело складывался бы с ним, а не укладывался в него
-        using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        chunkCts.CancelAfter(client.Timeout);
+        using var deadline = new CancellationTokenSource(client.Timeout, Time);
+        using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, Endpoint);

@@ -381,19 +381,131 @@ public class YandexTtsServiceTests
     [Fact]
     public async Task Synthesize_ЗаголовкиПлюсТело_ОдинБюджетНаКусок()
     {
-        // Заголовки съели 1,5 с из 2 с бюджета, тело зависло: кусок обязан закончиться около
-        // 2 с, а не получить на тело ещё свои 2 с (два независимых потолка дали бы ~3,5 с)
-        var tts = MakeWithHandler(new SlowHeadersHandler(TimeSpan.FromMilliseconds(1500), HttpStatusCode.OK),
-            TimeSpan.FromSeconds(2));
+        // Время ручное: заголовки съели 29 с из 30 с бюджета, тело зависло. Ещё 1 с — и кусок
+        // обязан оборваться; отдельный потолок на тело дал бы ему свои 30 с, и кусок повис бы
+        var clock = new ManualClock();
+        var handler = new GatedHeadersHandler();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Yandex:SpeechKit:ApiKey"] = "key",
+            ["Yandex:SpeechKit:FolderId"] = "folder",
+        }).Build();
+        var tts = new YandexTtsService(new StubHttpFactory(handler), config, NullLogger<YandexTtsService>.Instance)
+        {
+            ChunkTimeout = TimeSpan.FromSeconds(30),
+            Time = clock,
+        };
 
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var res = await tts.SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0))
-            .WaitAsync(TimeSpan.FromSeconds(10));
-        sw.Stop();
+        var synth = tts.SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0));
+        await handler.HeadersRequested.WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(29));
+        handler.ReleaseHeaders();
+        await handler.BodyRequested.WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        var res = await synth.WaitAsync(TimeSpan.FromSeconds(10));
 
         res.Audio.Should().BeNull();
         res.BilledRequests.Should().Be(1, "200 пришёл — запрос оплачен, даже если тело не дочитали");
-        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3));
+    }
+
+    // Заголовки отдаются по команде теста, тело зависшее; оба момента видны тесту событиями
+    private sealed class GatedHeadersHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource _headersRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _bodyRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task HeadersRequested => _headersRequested.Task;
+        public Task BodyRequested => _bodyRequested.Task;
+        public void ReleaseHeaders() => _release.TrySetResult();
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            _headersRequested.TrySetResult();
+            await _release.Task;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new SignalingHangingContent(_bodyRequested) };
+        }
+    }
+
+    // Как HangingContent, но сообщает, что чтение тела началось
+    private sealed class SignalingHangingContent(TaskCompletionSource started) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) =>
+            SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+        protected override async Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context,
+            CancellationToken ct)
+        {
+            started.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    // Часы с ручным ходом: таймер срабатывает только от Advance, периодические не нужны
+    private sealed class ManualClock : TimeProvider
+    {
+        private readonly object _gate = new();
+        private readonly List<ManualTimer> _timers = [];
+        private DateTimeOffset _now = new(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() { lock (_gate) return _now; }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ManualTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            return timer;
+        }
+
+        public void Advance(TimeSpan by)
+        {
+            List<ManualTimer> due;
+            lock (_gate)
+            {
+                _now += by;
+                due = _timers.Where(t => t.DueAt <= _now).ToList();
+                foreach (var t in due) _timers.Remove(t);
+            }
+            foreach (var t in due) t.Fire();
+        }
+
+        private void Arm(ManualTimer timer, DateTimeOffset? at)
+        {
+            lock (_gate)
+            {
+                _timers.Remove(timer);
+                timer.DueAt = at;
+                if (at is not null) _timers.Add(timer);
+            }
+        }
+
+        private sealed class ManualTimer(ManualClock clock, TimerCallback callback, object? state) : ITimer
+        {
+            public DateTimeOffset? DueAt { get; set; }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                clock.Arm(this, dueTime == Timeout.InfiniteTimeSpan ? null : clock.GetUtcNow() + dueTime);
+                return true;
+            }
+
+            public void Fire() => callback(state);
+
+            public void Dispose() => clock.Arm(this, null);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     [Fact]

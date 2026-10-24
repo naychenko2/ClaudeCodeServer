@@ -466,15 +466,17 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, 
 }
 
 // Сводка этапа над лентой: «2 готово · 1 идёт · 1 ждёт · 1 в очереди» и полоса сегментов.
-// Числа — из stepProgress (бэк считает), здесь только показ; нет агрегата — сводки нет.
-function StageSummary({ run }: { run: FeatureRun }) {
+// Числа — по состояниям самих карточек, чтобы сводка не спорила с ними (корзина work без
+// идущей задачи — «ждёт», а не «идёт»); нет агрегата stepProgress — сводки нет.
+function StageSummary({ run, cards }: { run: FeatureRun; cards: ProdCard[] }) {
   const p = run.stepProgress;
   if (!p || p.total <= 0) return null;
+  const count = (s: ProdCardState) => cards.filter(c => c.state === s).length;
   const parts: Array<{ n: number; word: string; color: string | null }> = [
-    { n: p.accepted, word: 'готово', color: C.success },
-    { n: p.work, word: 'идёт', color: C.accent },
-    { n: p.review, word: 'ждёт', color: C.info },
-    { n: p.notCreated, word: 'в очереди', color: null },
+    { n: count('done'), word: 'готово', color: C.success },
+    { n: count('run'), word: 'идёт', color: C.accent },
+    { n: count('wait'), word: 'ждёт', color: C.info },
+    { n: count('queue'), word: 'в очереди', color: null },
   ];
   const shown = parts.filter(x => x.n > 0);
   return (
@@ -521,7 +523,7 @@ export function FeatureProdCardsView({
 
   return (
     <div data-testid="prod-stage" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-      <StageSummary run={run} />
+      <StageSummary run={run} cards={cards} />
       <div data-testid="prod-lane" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
         {cards.map(card => {
           const chain = chainByRef.get(card.stepRef);

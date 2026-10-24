@@ -366,6 +366,7 @@ describe('state карточки (A2)', () => {
       { status: 'идёт', outcome: 'running' },
     );
     expect(c.stopped).toBe(true);
+    expect(c.state).toBe('wait');
   });
 
   it('задача закрыта + идущий виток ревью (бэк: review, outcome running) — wait, не done и не run', () => {

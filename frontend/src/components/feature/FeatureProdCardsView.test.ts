@@ -6,7 +6,7 @@
 // Тесты: обычный цикл; возврат + доработка (клик по узлу → чат витка); активная
 // задача («сейчас» только над текущей карточкой, «текущий» узел — акцентная рамка,
 // пунктирный «ревью» — не узел-действие); пустая фича (карточек нет); шаг без данных
-// (код — не кнопка); статус — из stepStatusView; 2+ циклов — тон предупреждения;
+// (код — не кнопка); статус — слово из chain.status бэка; 2+ циклов — тон предупреждения;
 // поле касания 40 px на 360.
 //
 // Мутации (проверялись прогоном, см. отчёт):
@@ -138,7 +138,7 @@ describe('обычный цикл', () => {
     expect(chainLabels(card!)).toEqual(['работа', '→', 'Глеб: принят']);
     // «старт» живёт только в меню кода шага, не строкой карточки.
     expect(textNodes(card!).some(t => t === 'старт')).toBe(false);
-    // Статус — из stepStatusView: подпись и тон одной парой (successBg/successText).
+    // Статус: слово — из chain.status бэка, тон — из состояния карточки, одной парой (successBg/successText).
     const status = findNodeByAttr(card!, 'data-testid', 'prod-status')!;
     expect(textNodes(status)[0]).toBe('принят');
     expect(styleOf(status).background).toBe(C.successBg);
@@ -442,11 +442,13 @@ describe('состояние шага (A2)', () => {
     const r = run({
       steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
       stepProgress: { planState: 'cut', total: 1, accepted: 0, review: 0, work: 1, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 },
-      stepChains: [chain({ stepRef: 'Ш1', title: 'А', taskIds: ['s1'], status: 'закрыт без повторного ревью', outcome: 'returned', loops: 1, rounds: [round({ n: 1, verdict: 'returned' })] })],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'А', taskIds: ['s1'], status: 'ждёт повторного ревью', outcome: 'returned', loops: 1, rounds: [round({ n: 1, verdict: 'returned' })] })],
     });
     const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
     const b = findNodeByAttr(findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!, 'data-testid', 'prod-status')!;
-    expect(textNodes(b).join('')).toContain('закрыт без повторного ревью');
+    expect(textNodes(b).join('')).toContain('ждёт повторного ревью');
+    // Сводка не противоречит карточке: шаг в корзине work без идущей задачи — «ждёт», не «идёт».
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'prod-summary')!).join('')).toBe('1 ждёт');
   });
 
   it('иконка, плашка и тон карточки различают четыре состояния', () => {

@@ -182,6 +182,8 @@ function bucketOf(chain: FeatureStepChain, tasks: FeatureTask[], started: boolea
   if (chain.outcome === 'accepted') return 'accepted';
   if (!started) return 'notCreated';
   if (chain.outcome === 'pending') return 'review';
+  // Неполный агрегат (задач цепочки не хватает) «все закрыты» доказать не может — остаёмся в work:
+  // ложное «ждёт ревью» хуже, чем осторожное «ждёт»; полный агрегат даёт точный ответ.
   const allDone = chain.taskIds.length > 0 && chain.taskIds.length === tasks.length && tasks.every(t => t.status === 'done');
   if (chain.outcome === 'running' && allDone) return 'review';
   return 'work';
@@ -189,7 +191,8 @@ function bucketOf(chain: FeatureStepChain, tasks: FeatureTask[], started: boolea
 
 // Состояние шага — из корзины: accepted → done, withdrawn → withdrawn, review → wait,
 // notCreated → queue; work → run, если задача идёт и её исполнитель не остановлен (остановленный —
-// тревога stopped: wait), иначе wait (вернулся и ждёт доработки). run.now состояние не меняет.
+// тревога stopped: wait), иначе wait: корзина work без идущей задачи — «ждёт», а слово плашки
+// («закрыт без повторного ревью», «вернулся…») у бэка (chain.status). run.now состояние не меняет.
 function cardState(
   chain: FeatureStepChain, tasks: FeatureTask[], started: boolean,
 ): { state: ProdCardState; runTask: FeatureTask | null; stopped: boolean; review: boolean } {

@@ -86,7 +86,7 @@ public class TaskSchedulerService(
     // по источнику — типу, который поднимает сам гейт, — а не пересчётом предиката: plain
     // InvalidOperationException («У задачи нет владельца») рядом с удержанной фичей — не отказ по
     // правилу, и не должен попадать в тихую ветку.
-    internal static bool IsHoldRefusal(Exception ex) => ex is TaskManager.FeatureHoldException;
+    internal static bool IsHoldRefusal(Exception ex) => ex is FeatureHoldException;
 
     // Автозапуск Claude-исполнителя в момент срока: assignee=Claude, ещё не запускалась.
     // Устройство локального проекта офлайн — исполнитель сам ставит задачу в «ждёт устройство»

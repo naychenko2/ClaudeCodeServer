@@ -247,7 +247,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // Тип отказа — FeatureHoldException: планировщик отличает отказ по источнику, а не
         // пересчётом гейта (W4-HOLD-I).
         if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
-            throw new TaskManager.FeatureHoldException(holdRefusal);
+            throw new FeatureHoldException(holdRefusal);
 
         // Claim ДО гарда «одна сессия на задачу»: сам гард читает LinkedSessionId, который
         // этот же метод выставит только через несколько строк ниже (после подъёма CLI-процесса)
@@ -288,7 +288,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // вовсе (он здесь поднимается раньше MarkClaudeStarted, поэтому одной отметки
         // «не запущена» для доказательства мало).
         if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
-            throw new TaskManager.FeatureHoldException(holdRefusal);
+            throw new FeatureHoldException(holdRefusal);
 
         // Не более одной живой сессии на задачу
         if (task.LinkedSessionId is not null &&
@@ -1174,7 +1174,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         var featureTasks = _tasks.GetByOwner(ownerId).Where(t => t.FeatureId == featureId).ToList();
         // Та же цепочка, по которой проектор считает keySessionId: сессия задачи в ключевом чате
         // не прерывается, даже если её ход идёт.
-        var keyChain = FeatureProjector.KeyChain(epic, featureTasks);
+        var keyChain = FeatureKeyChain.Of(epic, featureTasks);
         var stopped = 0;
         foreach (var t in featureTasks)
         {
@@ -1220,7 +1220,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         var featureTasks = _tasks.GetByOwner(ownerId).Where(t => t.FeatureId == featureId).ToList();
         // Та же цепочка, что у прерывания: сессия задачи в ключевом чате не прерывалась,
         // и продолжение ей не шлётся.
-        var keyChain = FeatureProjector.KeyChain(epic, featureTasks);
+        var keyChain = FeatureKeyChain.Of(epic, featureTasks);
         var resumed = 0;
         // R-HOLD-J (п.3): шаги, чей чат исчез за паузу: их не продолжить, но в карточке
         // их считают отдельно — оркестратор должен знать, что их перезапускают штатно.

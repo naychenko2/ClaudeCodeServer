@@ -1357,14 +1357,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return task;
     }
 
-    // Отказ гейта паузы (W4-HOLD-I): отдельный тип — планировщик отличает отказ по источнику,
-    // а не пересчётом предиката: plain InvalidOperationException («У задачи нет владельца») рядом
-    // с удержанной фичей — не отказ по правилу, и не должен попадать в тихую ветку автозапуска.
-    // База — InvalidOperationException: существующие catch вызывающих не меняются.
-    public class FeatureHoldException : InvalidOperationException
-    {
-        public FeatureHoldException(string message) : base(message) { }
-    }
+    // FeatureHoldException переехал в Core (дефект 79d0fa9a): его бросает и корневой
+    // TaskExecutionService — ссылка корня на тип из вертикали ловится Root-сторожем.
 
     // Эпик фичи задачи — сфера гейта паузы (контракт §1 :170): без фичи, висячий FeatureId
     // (эпик не найден), чужой эпик — null, задача проходит как «без фичи». Owner учитывается

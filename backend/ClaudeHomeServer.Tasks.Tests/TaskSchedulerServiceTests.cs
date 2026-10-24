@@ -165,7 +165,7 @@ public class TaskSchedulerServiceTests
                 new Mock<ISessionBroadcaster>().Object,
                 new ThrowingExecutor(new()
                 {
-                    [held.Id] = new TaskManager.FeatureHoldException("Фича на паузе, снимите паузу на странице фичи."),
+                    [held.Id] = new FeatureHoldException("Фича на паузе, снимите паузу на странице фичи."),
                     [ownerless.Id] = new InvalidOperationException("У задачи нет владельца"),
                 }),
                 new Mock<IDailyBriefingRunner>().Object,

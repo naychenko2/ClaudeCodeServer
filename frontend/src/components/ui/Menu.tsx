@@ -49,7 +49,7 @@ export function popupMaxWidth(left: number, maxWidth: number, viewportWidth: num
   return Math.min(maxWidth, right - left);
 }
 
-export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, boundary, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, children }: {
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, boundary, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, header, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
@@ -92,6 +92,10 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   // прежнее. Для телефона 360, где меню встаёт над полосой, а не узкой карточкой у
   // триггера. С anchorSide не сочетается и игнорируется
   fullWidth?: boolean;
+  // Шапка над списком ВНЕ прокрутки (поиск, фильтры): в anchor-режиме прокручиваются только
+  // пункты. Липкая шапка внутри скролла не годится — внутренний отступ карточки идёт выше
+  // неё, и над полем поиска просвечивала строка списка
+  header?: ReactNode;
   children: ReactNode;
 }) {
   const opener = useRef<Element | null>(typeof document !== 'undefined' ? document.activeElement : null);
@@ -167,9 +171,14 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
         // maxHeight участвует только в расчёте openUp выше — без явного ограничения
         // здесь высокое содержимое (длинный список этапов плана) вылезало за экран,
         // а не обрезалось/скроллилось.
-        ...(anchorSide ? { maxHeight, overflow: 'hidden' } : anchor ? { maxHeight, overflow: 'auto' } : null),
+        ...(anchorSide ? { maxHeight, overflow: 'hidden' } : anchor ? { maxHeight, overflow: header ? 'hidden' : 'auto' } : null),
       }}>
-        {children}
+        {header == null ? children : (
+          <>
+            <div style={{ flexShrink: 0 }}>{header}</div>
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{children}</div>
+          </>
+        )}
       </div>
     </>
   );

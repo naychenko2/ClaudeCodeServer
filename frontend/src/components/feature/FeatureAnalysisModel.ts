@@ -10,7 +10,9 @@
 import { C } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
 import { formatClock, formatDateTime, formatDuration } from './FeatureStatsBits';
-import { featureRunStatusTag } from './FeaturePageHeader';
+// Тег статуса — общий модуль FeatureStatusTag (W5-F3a): модель не тянет шапку,
+// цикл FeaturePageHeader ⇄ FeatureAnalysisModel разомкнут.
+import { featureRunStatusTag } from './FeatureStatusTag';
 import type { FeatureNow, FeatureRun, FeatureState } from '../../types/featureRun';
 
 export type AnalysisKey =

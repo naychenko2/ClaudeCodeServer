@@ -19,10 +19,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { analysisLineState, stageLabelShort } from './FeatureAnalysisModel';
+import { featureRunStatusTag } from './FeatureStatusTag';
 import { C } from '../../lib/design';
 import type { FeatureRun, FeatureNow } from '../../types/featureRun';
 
-// Имена персон — мок: у чистой функции нет живого стора.
+// Имена персон — мок: у чистой функции нет живого стора. Модель больше не импортирует
+// шапку (тег статуса — в FeatureStatusTag), поэтому весь стор lib/personas ради
+// шапки в тест не тянется — мок только getPersonaById, который зовёт сама модель.
 vi.mock('../../lib/personas', () => ({
   getPersonaById: (id: string) => (id === 'p-1' ? { id: 'p-1', name: 'Кира' } : undefined),
 }));
@@ -228,6 +231,40 @@ describe('analysisLineState — состояния', () => {
       now: [mkNow({ stepRef: 'Ш1', personaId: 'нет-такой', title: 'Тема', nudgedAt: '2026-10-20T11:00:00Z' })],
     }), NOW);
     expect(st.strong).toBe('исполнитель не отвечает на Ш1');
+  });
+});
+
+// W5-F3a: тег статуса вынесен в общий модуль FeatureStatusTag — шапка и строка
+// анализа зовут его оттуда (цикл FeaturePageHeader ⇄ FeatureAnalysisModel разомкнут).
+// Сторож над исходником шапки: она не рисует тег сама и не копирует условия строки —
+// зовёт общую функцию analysisLineState (спека pt6: «общая функция из F1, не копия
+// условий»). Рендер-инфраструктуры (jsdom) во фронте нет — инвариант виден в разметке,
+// как с хвостом строки выше.
+describe('единственный источник статусного тега (W5-F3a)', () => {
+  const headerSrc = readFileSync(
+    join(process.cwd(), 'src/components/feature/FeaturePageHeader.tsx'),
+    'utf8',
+  );
+
+  it('шапка не определяет тег сама — он живёт в FeatureStatusTag', () => {
+    expect(/function featureRunStatusTag/.test(headerSrc), 'в шапке остался featureRunStatusTag — цикл не разомкнут').toBe(false);
+    expect(/function StatusTag/.test(headerSrc), 'в шапке остался рендер StatusTag').toBe(false);
+    expect(/from '\.\/FeatureStatusTag'/.test(headerSrc), 'шапка не зовит тег из FeatureStatusTag').toBe(true);
+  });
+
+  it('тег «стоит/тихо» в шапке — через analysisLineState, без копии условий строки', () => {
+    expect(/analysisLineState/.test(headerSrc), 'шапка не зовёт общую функцию состояния').toBe(true);
+    // Своей арифметики тревоги в шапке нет: ни отметок сторожа, ни флага quiet.
+    expect(/staleAlertedAt|run\.quiet/.test(headerSrc), 'в шапке появилась копия условий строки анализа').toBe(false);
+  });
+
+  it('состояние «other» строки показывает ровно ту же подпись, что тег в шапке', () => {
+    // Одна и та же функция с обеих сторон: label тега в шапке === strong строки.
+    for (const state of ['draft', 'paused', 'merge_pending', 'not_started'] as const) {
+      const st = analysisLineState(mkRun({ state }), NOW);
+      expect(st.key).toBe('other');
+      expect(st.strong).toBe(featureRunStatusTag(state).label);
+    }
   });
 });
 

@@ -143,6 +143,8 @@ export interface TypicalPercentiles {
 export interface TypicalFeatureStats {
   // Число смерженных фич в выборке (текущая не считается).
   count: number;
+  // Из них — фич с полным журналом: размер выборки ожидания.
+  waitingCount: number;
   // Длительность (минуты).
   duration: TypicalPercentiles;
   // Ожидание человека (минуты); null — не достаточно фич с журналом.

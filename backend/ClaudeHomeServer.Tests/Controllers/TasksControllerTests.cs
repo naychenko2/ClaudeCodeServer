@@ -1153,6 +1153,55 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         json.GetProperty("stats").GetProperty("truncated").GetBoolean().Should().BeFalse();
     }
 
+    // ST-B1 (хвост вердикта Глеба): контракт stats.typical в ответе GET features/{id}:
+    // count/waitingCount/duration/waiting/loops, внутри — median/p25/p75 (camelCase).
+    // Смерженных меньше трёх — typical null. Мутация «typical не в ответе» → TryGetProperty
+    // false → краснеет; «меньше трёх не null» → ValueKind не Null → краснеет.
+    [Fact]
+    public async Task GetFeature_Typical_КонтрактИNullПриМалоСмерженных()
+    {
+        var projectId = CreateProject("typical");
+        var cur = await CreateProjectTaskAsync(projectId, new { title = "текущая", role = "feature" });
+        var curId = cur.GetProperty("id").GetString()!;
+
+        // Две смерженные (финал принят + merge Done) — шкалы сравнения нет.
+        for (int i = 0; i < 2; i++)
+        {
+            var e = await CreateProjectTaskAsync(projectId, new { title = "фича " + i, role = "feature" });
+            var eid = e.GetProperty("id").GetString()!;
+            await CreateAcceptedFinalAsync(projectId, eid);
+            await CreateProjectTaskAsync(projectId,
+                new { title = "мерж", featureId = eid, role = "merge", status = "done" });
+        }
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{curId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var stats = page.GetProperty("stats");
+        stats.TryGetProperty("typical", out var typical).Should().BeTrue("поле typical в ответе");
+        typical.ValueKind.Should().Be(JsonValueKind.Null, "смерженных меньше трёх — null");
+
+        // Третья смерженная — числа по контракту. Журнал смерженной фичи полон (created),
+        // поэтому waitingCount = count.
+        var e3 = await CreateProjectTaskAsync(projectId, new { title = "фича 3", role = "feature" });
+        var eid3 = e3.GetProperty("id").GetString()!;
+        await CreateAcceptedFinalAsync(projectId, eid3);
+        await CreateProjectTaskAsync(projectId,
+            new { title = "мерж", featureId = eid3, role = "merge", status = "done" });
+
+        var page2 = await (await _client.GetAsync($"/api/tasks/features/{curId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var t = page2.GetProperty("stats").GetProperty("typical");
+        t.GetProperty("count").GetInt32().Should().Be(3);
+        t.GetProperty("waitingCount").GetInt32().Should().Be(3, "журнал каждой смерженной — полный");
+        foreach (var metric in new[] { "duration", "waiting", "loops" })
+        {
+            var m = t.GetProperty(metric);
+            m.TryGetProperty("median", out _).Should().BeTrue(metric + ".median");
+            m.TryGetProperty("p25", out _).Should().BeTrue(metric + ".p25");
+            m.TryGetProperty("p75", out _).Should().BeTrue(metric + ".p75");
+        }
+    }
+
     // ─── Б-mk-b: макеты фичи (mockups[] + mockupsUnavailable) в GET features/{id} ───────────
 
     // Сериализация IActionResult.GetFeature в camelCase-JSON (как wire): для прямых сборок

@@ -224,7 +224,7 @@ internal sealed class ThrowingExecutor(Dictionary<string, Exception> byTask) : I
 // предикате (тот же приём, что в других вертикалях).
 internal sealed class RecordingLogger<T>(List<(LogLevel Level, string Text, Exception? Ex)> sink) : ILogger<T>
 {
-    public IDisposable BeginScope<TState>(TState state) => new Noop();
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull => new Noop();
     public bool IsEnabled(LogLevel logLevel) => true;
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState message, Exception? exception,
         Func<TState, Exception?, string> formatter) => sink.Add((logLevel, formatter(message, exception), exception));

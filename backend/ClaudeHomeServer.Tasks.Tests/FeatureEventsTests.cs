@@ -28,7 +28,8 @@ public class FeatureEventsTests
     };
 
     // Дочерняя задача фичи (FeatureId = epicId).
-    private static TaskItem Child(string id, string epicId, string role = TaskRoles.Step,
+    // role nullable: безролевые задачи (role=null) тоже участвуют в ленте (W4-DES-B).
+    private static TaskItem Child(string id, string epicId, string? role = TaskRoles.Step,
         string? stepRef = null, TaskItemStatus status = TaskItemStatus.Todo,
         DateTime? completedAt = null, DateTime? startedAt = null,
         DateTime? stoppedAt = null, string? stopReason = null,

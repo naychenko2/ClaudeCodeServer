@@ -835,7 +835,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
         var claimed = typeof(TaskExecutionService).GetMethod("ExecuteClaimedAsync",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         Func<Task<TaskItem>> call = async () => await (Task<TaskItem>)
-            claimed.Invoke(_sut, new object[] { step, false, null })!;
+            claimed.Invoke(_sut, new object?[] { step, false, null })!;
         await call.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Фича на паузе*", "повторная проверка гейта после claim'а");
         LiveSessionCount().Should().Be(0, "повторный гейт до CreateAsync: чат задачи не создан");

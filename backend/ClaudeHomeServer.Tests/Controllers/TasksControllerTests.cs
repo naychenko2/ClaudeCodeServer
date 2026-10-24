@@ -1127,7 +1127,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     public async Task GetFeature_ЖурналаНет_ApproxБез500()
     {
         var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
-        var epicId = epic.GetProperty("id").GetString();
+        var epicId = epic.GetProperty("id").GetString()!;
 
         var controller = BuildController(git: null); // journal = null (дефолт)
         var result = await controller.GetFeature(epicId, null);
@@ -2685,7 +2685,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var winner = await Task.WhenAny(cardSent.Task, Task.Delay(5000));
         ReferenceEquals(winner, cardSent.Task).Should().BeTrue(
             "возврат завершился в потолок: карточка ушла в ключевой чат");
-        cardSent.Task.Result.Should().Contain("продолжен 1 шаг", "карточка считает продолженный шаг");
+        // .Result блокирует (xUnit1031) — TCS уже завершён, await тот же факт без блокировки.
+        var cardText = await cardSent.Task;
+        cardText.Should().Contain("продолжен 1 шаг", "карточка считает продолженный шаг");
 
         tm.GetById(stepId)!.ExecutorStopReason.Should().BeNull(
             "снятие паузы возвращает шаг в работу: пометка гасится");
@@ -2776,7 +2778,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var winner = await Task.WhenAny(cardSent.Task, Task.Delay(5000));
         ReferenceEquals(winner, cardSent.Task).Should().BeTrue(
             "карточка дошла до ключевского чата в потолок");
-        var text = cardSent.Task.Result;
+        // .Result блокирует (xUnit1031) — TCS уже завершён, await тот же факт без блокировки.
+        var text = await cardSent.Task;
         text.Should().Contain("Фича запущена", "снятие черновика будит оркестратора карточкой «фича запущена»");
         text.Should().NotContain("Пауза снята", "draft не даёт формулировку «пауза снята»");
         _factory.LlmAdapters.Adapters[keyChat].SentMessages.Count.Should().Be(1,
@@ -2818,7 +2821,9 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             var winner = await Task.WhenAny(serviceLogged.Task, Task.Delay(5000));
             ReferenceEquals(winner, serviceLogged.Task).Should().BeTrue(
                 "сбой карточки записан в лог сервиса в потолок, а не потерян молча");
-            serviceLogged.Task.Result.Should().Contain("Карточка в ключевой чат",
+            // .Result блокирует (xUnit1031) — TCS уже завершён, await тот же факт без блокировки.
+            var logged = await serviceLogged.Task;
+            logged.Should().Contain("Карточка в ключевой чат",
                 "catch карточки логирует отказ доставки");
         } finally {
             logField.SetValue(service, originalLog);

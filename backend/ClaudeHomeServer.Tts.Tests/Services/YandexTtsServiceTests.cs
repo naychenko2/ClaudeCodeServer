@@ -325,6 +325,77 @@ public class YandexTtsServiceTests
         res.Rub.Should().BeApproximately(0.25, 1e-6);
     }
 
+    // Тело, которое не приходит никогда: держит чтение, пока его не отменят
+    private sealed class HangingContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) =>
+            SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+        protected override async Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context,
+            CancellationToken ct) => await Task.Delay(Timeout.Infinite, ct);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    // Заголовки приходят с задержкой, тело — зависшее
+    private sealed class SlowHeadersHandler(TimeSpan delay, HttpStatusCode status) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            await Task.Delay(delay, ct);
+            return new HttpResponseMessage(status) { Content = new HangingContent() };
+        }
+    }
+
+    private static YandexTtsService MakeWithHandler(HttpMessageHandler handler, TimeSpan chunkTimeout)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Yandex:SpeechKit:ApiKey"] = "key",
+            ["Yandex:SpeechKit:FolderId"] = "folder",
+        }).Build();
+        return new YandexTtsService(new StubHttpFactory(handler), config, NullLogger<YandexTtsService>.Instance)
+        {
+            ChunkTimeout = chunkTimeout,
+        };
+    }
+
+    [Fact]
+    public async Task Synthesize_ЗависшееТелоОшибки_ОбрываетсяПоДедлайнуКуска()
+    {
+        // Отказ 500, а тело отказа не приходит: без дедлайна кусок висел бы вечно
+        var tts = MakeWithHandler(new SlowHeadersHandler(TimeSpan.Zero, HttpStatusCode.InternalServerError),
+            TimeSpan.FromMilliseconds(300));
+
+        var res = await tts.SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0))
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        res.Audio.Should().BeNull();
+        res.BilledRequests.Should().Be(0, "отказ Яндекс не тарифицирует");
+    }
+
+    [Fact]
+    public async Task Synthesize_ЗаголовкиПлюсТело_ОдинБюджетНаКусок()
+    {
+        // Заголовки съели 1,5 с из 2 с бюджета, тело зависло: кусок обязан закончиться около
+        // 2 с, а не получить на тело ещё свои 2 с (два независимых потолка дали бы ~3,5 с)
+        var tts = MakeWithHandler(new SlowHeadersHandler(TimeSpan.FromMilliseconds(1500), HttpStatusCode.OK),
+            TimeSpan.FromSeconds(2));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var res = await tts.SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0))
+            .WaitAsync(TimeSpan.FromSeconds(10));
+        sw.Stop();
+
+        res.Audio.Should().BeNull();
+        res.BilledRequests.Should().Be(1, "200 пришёл — запрос оплачен, даже если тело не дочитали");
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3));
+    }
+
     [Fact]
     public async Task Synthesize_LiveTtsСTextOnlyВКонце_АудиоИОплата()
     {

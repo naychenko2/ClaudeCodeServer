@@ -40,6 +40,11 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
     private readonly double _liveTtsRubPerRequest =
         config.GetValue<double?>("Yandex:SpeechKit:LiveTtsRubPerRequest") ?? 0.25;
 
+    // Бюджет ОДНОГО куска целиком — заголовки и тело под общим дедлайном. Два независимых
+    // потолка по 30 с давали худший случай ~60 с на кусок, а примерка голоса на фронте
+    // ждёт 45 с. Сеттер — для тестов: ждать настоящие 30 с в прогоне незачем
+    internal TimeSpan ChunkTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_folderId);
 
     // mp3-байты синтезированной речи; null — синтез не удался (не настроен, Яндекс ответил
@@ -60,7 +65,7 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
         if (!IsConfigured || string.IsNullOrWhiteSpace(text)) return TtsResult.Nothing;
 
         var client = http.CreateClient(HttpClientName);
-        client.Timeout = TimeSpan.FromSeconds(30);
+        client.Timeout = ChunkTimeout;
 
         // Модель в одном вызове одна — по голосу, поэтому и цена запроса одна на весь текст
         var price = TtsVoiceCatalog.ModelFor(voice.Voice) == TtsVoiceCatalog.LiveTts
@@ -110,6 +115,10 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
     private async Task<(byte[]? Audio, bool Accepted)> SynthesizeChunkAsync(HttpClient client,
         string chunk, VoiceChoice voice, CancellationToken ct)
     {
+        // Один дедлайн на кусок: Timeout клиента при ResponseHeadersRead тело не покрывает,
+        // а отдельный потолок на тело складывался бы с ним, а не укладывался в него
+        using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        chunkCts.CancelAfter(client.Timeout);
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, Endpoint);
@@ -119,10 +128,20 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
 
             // Только заголовки: тело читаем сами ПОСЛЕ проверки статуса, иначе сбой чтения тела
             // у принятого (200) запроса выглядел бы обрывом связи и выпадал из учёта
-            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, chunkCts.Token);
             if (!resp.IsSuccessStatusCode)
             {
-                var error = await resp.Content.ReadAsStringAsync(ct);
+                // Тело отказа — под тем же дедлайном, что и тело успеха: зависшее тело ошибки
+                // держало бы кусок без потолка. Не дочитали — статус в лог всё равно уходит
+                string error;
+                try
+                {
+                    error = await resp.Content.ReadAsStringAsync(chunkCts.Token);
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    error = "";
+                }
                 // 403 при живом ключе — два разных случая, и без отдельного сообщения причина
                 // полдня ищется не там: «Feature permission denied» — LiveTTS не включена на
                 // аккаунте/облаке; иначе почти всегда не та РОЛЬ (ключ-то работает в STT)
@@ -143,12 +162,9 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             // С этого места запрос оплачен: что бы ни случилось с чтением и разбором тела,
             // наружу уходит Accepted=true, иначе расход за принятый запрос потеряется.
             // Отмена клиентом посреди чтения — тоже «оплачено, аудио нет», а не исключение
-            // Timeout клиента при ResponseHeadersRead тело не покрывает — свой потолок на чтение
-            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            readCts.CancelAfter(client.Timeout);
             try
             {
-                var body = await resp.Content.ReadAsStringAsync(readCts.Token);
+                var body = await resp.Content.ReadAsStringAsync(chunkCts.Token);
                 var audio = ExtractAudio(body);
                 if (audio is null)
                     logger.LogWarning("SpeechKit ответил 200, но пригодного аудио в ответе нет: {Body}",

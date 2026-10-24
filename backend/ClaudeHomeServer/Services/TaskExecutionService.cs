@@ -365,7 +365,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // сессии до первого хода, cwd подставит EnsureProcessAsync. Невалидный путь не
         // должен ронять запуск: мягко деградируем в корень проекта.
         // Повторный запуск той же задачи: прежняя аренда в пуле остаётся — Reserve отдаст задаче
-        // её же слот
+        // её же слот. Единственный источник правды об аренде — пул; здесь держим лишь выданную
+        // сейчас аренду ради абзаца в постановке
         ReviewTreeLease? reviewLease = null;
         if (task.WorktreePath is not { } worktree || task.ProjectId is null)
             ReleaseReviewTree(task.Id);
@@ -851,10 +852,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
     }
 
-    private void ReleaseReviewTree(string taskId)
-    {
-        _reviewTrees?.Release(taskId);
-    }
+    private void ReleaseReviewTree(string taskId) => _reviewTrees?.Release(taskId);
 
     internal static string BuildReviewTreeSection(ReviewTreeLease lease)
     {
@@ -862,7 +860,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         sb.AppendLine();
         sb.AppendLine("## ДЕРЕВО РЕВЬЮ");
         sb.AppendLine($"Дерево ревью на коммите `{lease.Sha}`. Правки здесь никуда не уедут, не коммить. " +
-                      "При повторном запуске задачи это же дерево переиспользуется и сбрасывается (`checkout --detach -f` и `clean -fd`): незакоммиченные правки прошлого хода в нём пропадут. " +
+                      "При повторном запуске задачи берётся свободный слот волны (не обязательно тот же) и сбрасывается на актуальный коммит (`checkout --detach -f` и `clean -fd`): незакоммиченные правки прошлых ходов в нём пропадут. Оба слота заняты или слот не удалось сбросить — задача стартует в дереве волны, и этого абзаца в постановке нет. " +
                       "Первый прогон тестов — со сборкой, без `no_build`. " +
                       "Дерево освобождается после завершения задачи или «Стопа» исполнителя; на паузе фичи оно остаётся за тобой до снятия паузы.");
         if (lease.DirtyPaths.Count > 0)

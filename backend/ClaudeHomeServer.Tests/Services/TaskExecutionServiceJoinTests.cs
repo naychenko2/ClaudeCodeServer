@@ -42,6 +42,23 @@ public class TaskExecutionServiceJoinTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
     private readonly ReviewTreePool _reviewPool;
     private readonly string _slotBase;
+    // Шовные крючки: вклиниваются между шагами запуска исполнителя (см. тесты выхода аренды)
+    private Func<ServerMessage, Task>? _onOwnerBroadcast;
+    private Action? _onSlotCwd;
+
+    // Обёртка над тестовым рассыльщиком: даёт крючок на рассылку владельцу
+    private sealed class HookedBroadcaster(TestSessionBroadcaster inner, TaskExecutionServiceJoinTests t) : ISessionBroadcaster
+    {
+        public Task ToSession(string sessionId, ServerMessage message) => inner.ToSession(sessionId, message);
+        public Task ToSessionExcept(string sessionId, string c, ServerMessage message) => inner.ToSessionExcept(sessionId, c, message);
+        public Task ToProject(string projectId, ServerMessage message) => inner.ToProject(projectId, message);
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => inner.ToPreviewLog(projectId, serviceId, message);
+        public async Task ToOwner(string ownerId, ServerMessage message)
+        {
+            await inner.ToOwner(ownerId, message);
+            if (t._onOwnerBroadcast is { } hook) await hook(message);
+        }
+    }
 
     public TaskExecutionServiceJoinTests()
     {
@@ -83,8 +100,8 @@ public class TaskExecutionServiceJoinTests : IDisposable
 
         _slotBase = Path.Combine(_dir, "slots");
         _reviewPool = new ReviewTreePool(new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance),
-            (_, _) => _slotBase, (_, p) => p, NullLogger<ReviewTreePool>.Instance);
-        _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notif,
+            (_, _) => _slotBase, (_, p) => { _onSlotCwd?.Invoke(); return p; }, NullLogger<ReviewTreePool>.Instance);
+        _sut = new TaskExecutionService(_tasks, sessions, personas, new HookedBroadcaster(broadcaster, this), push, notif,
             NullLogger<TaskExecutionService>.Instance, config, subagentRuns: _subagentRuns, kb: notesKb,
             projects: projectManager, reviewTrees: _reviewPool);
     }
@@ -753,7 +770,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
     {
         var text = BuildSection(0);
 
-        text.Should().Contain("переиспользуется и сбрасывается").And.Contain("незакоммиченные правки прошлого хода");
+        text.Should().Contain("берётся свободный слот волны (не обязательно тот же)").And.Contain("незакоммиченные правки прошлых ходов").And.Contain("задача стартует в дереве волны");
     }
 
     [Fact]
@@ -883,7 +900,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         await _sut.ExecuteAsync(task, auto: false);
 
         var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
-        session.WorktreePath.Should().Be(Path.Combine(_slotBase, "feat-wave-review-1"));
+        session.WorktreePath.Should().Be(Path.Combine(_slotBase, "feat~wave-review-1"));
         session.WorktreePath.Should().NotBe(wave);
         var prompt = await PromptOfAsync(task);
         prompt.Should().Contain(sha).And.Contain("не коммить").And.NotContain("не вошли");
@@ -947,7 +964,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         // review-1 занят чужой задачей на время первого запуска: задача уходит в review-2
         (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "чужая")).Should().NotBeNull();
         await _sut.ExecuteAsync(task, auto: false);
-        var slot2 = Path.Combine(_slotBase, "feat-wave-review-2");
+        var slot2 = Path.Combine(_slotBase, "feat~wave-review-2");
         _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!.WorktreePath.Should().Be(slot2);
         _reviewPool.Release("чужая");
         await _sessions.DeleteAsync(_tasks.GetById(task.Id)!.LinkedSessionId!); // прежний чат отработал и ушёл
@@ -996,5 +1013,69 @@ public class TaskExecutionServiceJoinTests : IDisposable
 
         _tasks.GetById(task.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldExpiredReason);
         (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().NotBeNull();
+    }
+
+    // ─── Слот ревью: четыре пути выхода аренды (хвосты RV6) ─────
+    // Утечка аренды здесь = слот занят навсегда, ёмкость волны падает молча, поэтому каждый путь
+    // доказан одним и тем же: после выхода ОБА слота волны отдаются двум чужим задачам.
+
+    private async Task AssertBothSlotsFreeAsync(TaskItem task, Project project, string wave)
+    {
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "чужая-1")).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "чужая-2")).Should().NotBeNull(
+            "аренда задачи должна быть снята, иначе слот занят навсегда");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ПовторныйЗапускБезДерева_ОсвобождаетПрежнийСлот()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        await _sut.ExecuteAsync(task, auto: false);
+        await _sessions.DeleteAsync(_tasks.GetById(task.Id)!.LinkedSessionId!);
+        // дерево задачи сняли: повторный запуск идёт без него и прежняя аренда не нужна
+        _tasks.Update(task.Id, new UpdateTaskRequest(WorktreePath: ""));
+
+        await _sut.ExecuteAsync(_tasks.GetById(task.Id)!, auto: false);
+
+        (await PromptOfAsync(task)).Should().NotContain("ДЕРЕВО РЕВЬЮ", "слота у задачи больше нет — абзаца про него быть не должно");
+        await AssertBothSlotsFreeAsync(task, project, wave);
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_СбойПостановки_ОсвобождаетСлотИПомечаетОшибку()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        // между отметкой запуска и постановкой чат исчезает — SendMessageAsync бросает «Сессия не найдена»
+        _onOwnerBroadcast = async msg =>
+        {
+            if (msg is TaskChangedMessage { Task.LinkedSessionId: { } sid })
+            {
+                _onOwnerBroadcast = null;
+                await _sessions.DeleteAsync(sid);
+            }
+        };
+
+        var act = () => _sut.ExecuteAsync(task, auto: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        _tasks.GetById(task.Id)!.ClaudeResult.Should().Be("error");
+        await AssertBothSlotsFreeAsync(task, project, wave);
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_СлотНеПривязалсяКЧату_ОсвобождаетСлот()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        // проект исчезает посреди заведения слота: пул доводит слот до конца, а привязка к чату
+        // (она перечитывает проект) отказывает
+        _onSlotCwd = () => { _onSlotCwd = null; _projects.Delete(project.Id); };
+
+        try { await _sut.ExecuteAsync(task, auto: false); }
+        catch (Exception) { /* дальнейший ход без проекта не важен — важна судьба аренды */ }
+
+        await AssertBothSlotsFreeAsync(task, project, wave);
     }
 }

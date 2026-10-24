@@ -256,6 +256,22 @@ public class FeatureStepProgressTests
         chain.AcceptedAt.Should().BeNull("принятия нет");
     }
 
+    // Грязные данные: закрытая задача без CompletedAt. Фолбэк «?? nowUtc» подставил бы
+    // «сейчас» (плашка «0 мин»); без фолбэка — честный null. Мутация «вернуть ?? nowUtc»
+    // (FeatureStepAccounting.cs:226) краснит этот тест.
+    [Fact]
+    public void ГрязныеДанные_БезДатыЗакрытия_ОжиданияНет_НеСейчас()
+    {
+        var step = Step("s", "Ш1", 1);
+        step.CompletedAt = null;
+        var run = Run(Feature(), step);
+
+        var chain = run.StepChains.Single();
+        chain.Outcome.Should().Be("pending");
+        chain.WaitingSince.Should().BeNull("нет даты — null, а не «сейчас»");
+        chain.AcceptedAt.Should().BeNull();
+    }
+
     // AcceptedAt = CompletedAt витка-принятия. Мутация «featureRounds[0] вместо [^1]» краснит
     // этот тест: первый виток здесь returned (закрыт +6), принятие — второй (+13).
     [Fact]
@@ -313,7 +329,11 @@ public class FeatureStepProgressTests
 
         run.StepProgress.Withdrawn.Should().Be(1);
         run.StepProgress.Total.Should().Be(0);
-        run.StepChains.Single().Outcome.Should().Be("withdrawn");
+        var chain = run.StepChains.Single();
+        chain.Outcome.Should().Be("withdrawn");
+        // Снят — не ожидание и не принятие: оба поля null, плашка деградирует честно.
+        chain.WaitingSince.Should().BeNull();
+        chain.AcceptedAt.Should().BeNull();
     }
 
     [Fact]

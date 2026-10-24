@@ -113,23 +113,24 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Тревога: приоритет stopped → wait явный → merge.
         FeatureAttention? attention = null;
 
-        // waitTask — явный wait (AwaitingHumanSince, ждущий дольше всех); finalAccepted —
-        // для merge (attention) и для state (merge_pending/merged). Вынесены в scope метода:
-        // используются и в attention, и в расчёте state.
+        // waitTask — явный wait («ждущая» половина IsHeld, ниже рядом с IsTurnRunning:
+        // AwaitingHumanSince, ждущий дольше всех); finalAccepted — для merge (attention) и
+        // для state (merge_pending/merged). Вынесены в scope метода: используются и в
+        // attention, и в расчёте state.
         var waitTask = featureTasks
-            .Where(t => t.AwaitingHumanSince is not null)
+            .Where(t => IsHeld(t) && t.AwaitingHumanSince is not null)
             .OrderBy(t => t.AwaitingHumanSince)
             .FirstOrDefault();
         bool finalAccepted = IsFinalAccepted(final);
 
-        // 1. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
-        //    Guard «позже ClaudeStartedAt» — защита от stale-пометки: если исполнитель
-        //    перезапустили (MarkClaudeStarted сбрасывает ExecutorStoppedAt), но пометка
-        //    не успела сброситься, ClaudeStartedAt будет позже → stopped не показываем.
+        // 1. stopped: InProgress-задача, «держится» без ожидания человека — «остановленная»
+        //    половина IsHeld. Тот же guard «позже ClaudeStartedAt» (HasValidStopMark) — защита
+        //    от stale-пометки: если исполнитель перезапустили (MarkClaudeStarted сбрасывает
+        //    ExecutorStoppedAt), но пометка не успела сброситься, ClaudeStartedAt будет
+        //    позже → stopped не показываем.
         var stoppedTask = featureTasks
             .Where(t => t.Status == TaskItemStatus.InProgress
-                && t.ExecutorStoppedAt is not null
-                && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt))
+                && IsHeld(t) && t.AwaitingHumanSince is null)
             .OrderByDescending(t => t.ExecutorStoppedAt)
             .FirstOrDefault();
         if (stoppedTask is not null)
@@ -176,12 +177,15 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
-        // «Сейчас»: все InProgress-задачи фичи (эпик + дочерние), по убыванию ClaudeStartedAt.
-        // Эпик — контейнер фичи, не стадия конвейера: идущий эпик в «Сейчас» не показываем.
-        // У закрытой фичи список пуст (ни одна задача не InProgress). Вынесено до цикла стадий:
-        // nowCount нужен для ComputeState, а state — для гашения тревоги при паузе (R-HOLD-B1).
+        // «Сейчас»: только действительно идущие InProgress-задачи фичи (эпик + дочерние),
+        // по убыванию ClaudeStartedAt. «Держатся» (ждёт человека / исполнитель встал) — не
+        // «Сейчас» (дефект 4a241bee): их ловит Attention и ветки state выше, единое правило —
+        // IsHeld (рядом с IsTurnRunning). Эпик — контейнер фичи, не стадия конвейера: идущий
+        // эпик в «Сейчас» не показываем. У закрытой фичи список пуст (ни одна задача не
+        // InProgress). Вынесено до цикла стадий: nowCount нужен для ComputeState, а state —
+        // для гашения тревоги при паузе (R-HOLD-B1).
         var nowList = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress && !ReferenceEquals(t, epic))
+            .Where(t => t.Status == TaskItemStatus.InProgress && !ReferenceEquals(t, epic) && !IsHeld(t))
             .OrderByDescending(t => t.ClaudeStartedAt ?? t.CreatedAt)
             .Select(t => new FeatureNow
             {
@@ -1109,19 +1113,29 @@ public sealed class FeatureProjector(TaskManager tasks)
         && t.AwaitingHumanSince is null
         && t.ClaudeResult is null;
 
+    // «Задача держится, не идёт» (дефект 4a241bee, консалт f5edf92c): её держит человек
+    // (AwaitingHumanSince) или исполнитель встал (валидная пометка остановки). Статус здесь
+    // НЕ проверяется: зовущие сами ограничивают InProgress (nowList, stoppedTask, ветки
+    // ExecutorStatus), закрытые отсекаются CompletedAt/Done раньше. Защита от устаревшей
+    // пометки — та же, что у тревоги (HasValidStopMark): «устаревшая» пометка (раньше
+    // ClaudeStartedAt) — не остановка, задача идёт. Единая точка правды «держится»: её
+    // зовут nowList, половины stoppedTask/waitTask, LongestNow (FeatureBreakdown) и
+    // ветки ExecutorStatus — своих копий правила нигде нет.
+    internal static bool IsHeld(TaskItem t)
+        => t.AwaitingHumanSince is not null || HasValidStopMark(t);
+
     // Б2: статус исполнителя из полей задачи. Приоритет: running (ход идёт сейчас —
-    // IsTurnRunning) → waiting (AwaitingHumanSince) → stopped (ExecutorStoppedAt) → done (Done)
-    // → pending (остальное, в том числе не стартовала).
-    // waiting/stopped — тот же guard, что у тревоги: только InProgress-задачи; закрытая
-    // вручную (Done) задача со stale-пометками не «stopped»/«waiting» (тревоги по ней тоже нет).
+    // IsTurnRunning) → waiting (AwaitingHumanSince) → stopped (валидная пометка остановки)
+    // → done (Done) → pending (остальное, в том числе не стартовала).
+    // waiting/stopped — половины IsHeld (выше, рядом с IsTurnRunning), тот же guard, что у тревоги: только
+    // InProgress-задачи с валидной пометкой; закрытая вручную (Done) задача со stale-пометками
+    // не «stopped»/«waiting» (тревоги по ней тоже нет), как и у тревоги.
     private static string ExecutorStatus(TaskItem t)
     {
         if (IsTurnRunning(t))
             return "running";
-        if (t.Status == TaskItemStatus.InProgress && t.AwaitingHumanSince is not null)
-            return "waiting";
-        if (t.Status == TaskItemStatus.InProgress && t.ExecutorStoppedAt is not null)
-            return "stopped";
+        if (t.Status == TaskItemStatus.InProgress && IsHeld(t))
+            return t.AwaitingHumanSince is not null ? "waiting" : "stopped";
         if (t.Status == TaskItemStatus.Done)
             return "done";
         return "pending";

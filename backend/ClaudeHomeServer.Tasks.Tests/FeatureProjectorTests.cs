@@ -611,6 +611,198 @@ public class FeatureProjectorTests
         run.Now[0].Stage.Should().Be("prod");
     }
 
+    // ─── Дефект 4a241bee: «Сейчас» — только идущие (помощник IsHeld) ───────────────────────────
+
+    // c1: две ждущие (AwaitingHumanSince) и одна идущая — в Now только идущая. Мутация:
+    // убрать !IsHeld из nowList (FeatureProjector.cs) → ждущие вернутся в Now → краснеет.
+    [Fact]
+    public void Build_ДвеЖдущиеИОдущая_NowТолькоИдущая()
+    {
+        const string epicId = "epic-held-now";
+        var t = new DateTime(2026, 10, 17, 10, 0, 0);
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var w1 = new TaskItem
+        {
+            Id = "w1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = t, AwaitingHumanSince = t.AddMinutes(10), AwaitingHumanReason = "ждём подтверждения",
+        };
+        var w2 = new TaskItem
+        {
+            Id = "w2", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.InProgress, PersonaId = "Кира",
+            ClaudeStartedAt = t.AddHours(1), AwaitingHumanSince = t.AddMinutes(20), AwaitingHumanReason = "ждём подтверждения",
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш3",
+            Status = TaskItemStatus.InProgress, PersonaId = "Тимур",
+            ClaudeStartedAt = t.AddHours(2),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, w1, w2, r1]);
+
+        run.Now.Should().HaveCount(1, "ждущие — не «Сейчас»: только идущая r1");
+        run.Now[0].TaskId.Should().Be("r1");
+        // Инвариант: выпавшие из Now ловит ветка выше — state и тревога не теряются.
+        run.State.Should().Be(FeatureStates.Waiting, "ждущие ловит ветка Waiting — featureState не меняется");
+        run.Attention!.Kind.Should().Be("wait");
+        run.Attention!.TaskId.Should().Be("w1", "ждущий дольше всех — самый ранний AwaitingHumanSince");
+    }
+
+    // c2: свежая остановленная — не в Now (тревога stopped); устаревшая пометка
+    // (ExecutorStoppedAt < ClaudeStartedAt) — в Now, тревоги stopped нет. Мутация: снять
+    // stale-guard в IsHeld (оставить голый ExecutorStoppedAt) → в (б) Now станет пустым и
+    // появится тревога stopped → краснеет.
+    [Fact]
+    public void Build_СвежийСтоп_НеВNow_УстаревшаяПометка_ВNowБезТревоги()
+    {
+        var t = new DateTime(2026, 10, 17, 10, 0, 0);
+
+        // (а) Свежий стоп: старт 10:00, стоп 11:00 — остановлена, в «Сейчас» не попадает.
+        var epicA = new TaskItem { Id = "epic-a", Role = TaskRoles.Feature };
+        var stopped = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic-a", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = t, ExecutorStoppedAt = t.AddMinutes(30), ExecutorStopReason = "auth_failed",
+        };
+        var runA = FeatureProjector.Build(epicA, [epicA, stopped]);
+        runA.Now.Should().BeEmpty("свежая остановленная — не «Сейчас»");
+        runA.State.Should().Be(FeatureStates.Stopped);
+        runA.Attention!.Kind.Should().Be("stopped");
+
+        // (б) Устаревшая пометка: старт 11:00, стоп 10:00 (перезапуск, пометка не успела
+        // сброситься) — задача идёт: в Now, тревоги stopped нет.
+        var epicB = new TaskItem { Id = "epic-b", Role = TaskRoles.Feature };
+        var stale = new TaskItem
+        {
+            Id = "s2", FeatureId = "epic-b", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Кира",
+            ClaudeStartedAt = t.AddHours(1), ExecutorStoppedAt = t, ExecutorStopReason = "auth_failed",
+        };
+        var runB = FeatureProjector.Build(epicB, [epicB, stale]);
+        runB.Now.Should().HaveCount(1, "устаревшая пометка — не остановка: задача в «Сейчас»");
+        runB.Now[0].TaskId.Should().Be("s2");
+        runB.Attention.Should().BeNull("тревоги stopped по устаревшей пометке нет");
+        runB.State.Should().Be(FeatureStates.Running);
+    }
+
+    // c3: сужение Now не меняет featureState — таблица: только ждущие → waiting, только
+    // остановленные → stopped, смесь ждущей/остановленной с идущей → waiting/stopped,
+    // только идущие → running.
+    [Fact]
+    public void Build_СужениеNow_StateНеМеняется_Таблица()
+    {
+        var t = new DateTime(2026, 10, 17, 10, 0, 0);
+
+        TaskItem Wait(string id, string epicId, DateTime since) => new TaskItem
+        {
+            Id = id, FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = since.AddMinutes(-5), AwaitingHumanSince = since, AwaitingHumanReason = "ждём подтверждения",
+        };
+        TaskItem Stopped(string id, string epicId, DateTime start) => new TaskItem
+        {
+            Id = id, FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Кира",
+            ClaudeStartedAt = start, ExecutorStoppedAt = start.AddMinutes(30), ExecutorStopReason = "auth_failed",
+        };
+        TaskItem Running(string id, string epicId, DateTime start) => new TaskItem
+        {
+            Id = id, FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Тимур", ClaudeStartedAt = start,
+        };
+
+        // Только ждущие → waiting, Now пуст.
+        var e1 = new TaskItem { Id = "e1", Role = TaskRoles.Feature };
+        var run1 = FeatureProjector.Build(e1, [e1, Wait("w1", "e1", t), Wait("w2", "e1", t.AddHours(1))]);
+        run1.State.Should().Be(FeatureStates.Waiting);
+        run1.Now.Should().BeEmpty();
+
+        // Только остановленные → stopped, Now пуст.
+        var e2 = new TaskItem { Id = "e2", Role = TaskRoles.Feature };
+        var run2 = FeatureProjector.Build(e2, [e2, Stopped("s1", "e2", t), Stopped("s2", "e2", t.AddHours(1))]);
+        run2.State.Should().Be(FeatureStates.Stopped);
+        run2.Now.Should().BeEmpty();
+
+        // Смесь: ждущая + идущая → waiting (тревога выше running); в Now — только идущая.
+        var e3 = new TaskItem { Id = "e3", Role = TaskRoles.Feature };
+        var run3 = FeatureProjector.Build(e3, [e3, Wait("w1", "e3", t), Running("r1", "e3", t.AddHours(2))]);
+        run3.State.Should().Be(FeatureStates.Waiting);
+        run3.Now.Should().HaveCount(1);
+        run3.Now[0].TaskId.Should().Be("r1");
+
+        // Смесь: остановленная + идущая → stopped; в Now — только идущая.
+        var e4 = new TaskItem { Id = "e4", Role = TaskRoles.Feature };
+        var run4 = FeatureProjector.Build(e4, [e4, Stopped("s1", "e4", t), Running("r1", "e4", t.AddHours(2))]);
+        run4.State.Should().Be(FeatureStates.Stopped);
+        run4.Now[0].TaskId.Should().Be("r1");
+
+        // Только идущие → running.
+        var e5 = new TaskItem { Id = "e5", Role = TaskRoles.Feature };
+        var run5 = FeatureProjector.Build(e5, [e5, Running("r1", "e5", t)]);
+        run5.State.Should().Be(FeatureStates.Running);
+        run5.Now.Should().HaveCount(1);
+    }
+
+    // c5: сверка LongestNow и Now на одном входе: LongestNow.TaskId ∈ Now; при пустом Now —
+    // LongestNow null. Мутация: снять IsHeld в LongestNow (FeatureBreakdown.cs) → ждущая
+    // w1 (стартовала раньше всех) станет LongestNow → первая сверка краснеет.
+    [Fact]
+    public void Build_LongestNowСогласованСNow()
+    {
+        var t = new DateTime(2026, 10, 17, 9, 0, 0);
+        var now = new DateTime(2026, 10, 18, 0, 0, 0);
+
+        // Смесь: ждущая w1 (старт 09:00 — раньше всех), остановленная s1 (старт 09:30),
+        // идущая r1 (старт 10:00). Now = [r1], LongestNow = r1.
+        var epic = new TaskItem { Id = "epic-c5", Role = TaskRoles.Feature };
+        var w1 = new TaskItem
+        {
+            Id = "w1", FeatureId = "epic-c5", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = t, AwaitingHumanSince = t.AddMinutes(10),
+        };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = "epic-c5", Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.InProgress, PersonaId = "Кира",
+            ClaudeStartedAt = t.AddMinutes(30), ExecutorStoppedAt = t.AddMinutes(60), ExecutorStopReason = "auth_failed",
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = "epic-c5", Role = TaskRoles.Step, StepRef = "Ш3",
+            Status = TaskItemStatus.InProgress, PersonaId = "Тимур",
+            ClaudeStartedAt = t.AddHours(1),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, w1, s1, r1]);
+        var (_, longest) = FeatureBreakdown.Build(run, null, Array.Empty<FeatureIndexSession>(), null, now);
+
+        run.Now.Select(n => n.TaskId).Should().Contain(longest!.TaskId, "LongestNow — задача из Now");
+        longest!.TaskId.Should().Be("r1", "единственная действительно идущая");
+
+        // «Держатся все» → Now пуст → LongestNow null.
+        var epic2 = new TaskItem { Id = "epic-c5b", Role = TaskRoles.Feature };
+        var w2 = new TaskItem
+        {
+            Id = "w2", FeatureId = "epic-c5b", Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = t, AwaitingHumanSince = t.AddMinutes(10),
+        };
+        var s2 = new TaskItem
+        {
+            Id = "s2", FeatureId = "epic-c5b", Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.InProgress, PersonaId = "Кира",
+            ClaudeStartedAt = t.AddMinutes(30), ExecutorStoppedAt = t.AddMinutes(60), ExecutorStopReason = "auth_failed",
+        };
+        var run2 = FeatureProjector.Build(epic2, [epic2, w2, s2]);
+        run2.Now.Should().BeEmpty();
+        var (_, longest2) = FeatureBreakdown.Build(run2, null, Array.Empty<FeatureIndexSession>(), null, now);
+        longest2.Should().BeNull("ничего не идёт — «дольше всех сейчас» нет");
+    }
+
     // Финал accepted, merge-задачи нет → Attention = merge, since = CompletedAt финала.
     [Fact]
     public void Build_ФиналAcceptedБезМержа_AttentionMerge()

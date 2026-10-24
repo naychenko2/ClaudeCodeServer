@@ -510,6 +510,46 @@ public class FeatureIndexRowTests
             "уникальные персоны идущих, по убыванию старта; дубль alpha схлопнут");
     }
 
+    // Дефект 4a241bee: сужение Now по IsHeld — при «держатся все» now0 = null,
+    // nowPersonaIds = [], но attention ≠ null (тревога остаётся единственной точкой
+    // «держится», «ждёт вас» в now0 не синтезируем). При смеси — now0 = идущая.
+    // Мутация: вернуть ждущих в nowList (убрать !IsHeld) → now0 = w1 → краснеет.
+    [Fact]
+    public void Строка_ДержатсяВсе_Now0Null_ТревогаЕсть_ПриСмесиNow0Идущая()
+    {
+        var t = new DateTime(2026, 10, 17, 10, 0, 0);
+
+        // «Держатся все»: ждущая + остановленная — «Сейчас» пуст, тревога на месте.
+        var epic = Epic("epic-held-all");
+        var w1 = Child("w1", "epic-held-all", status: TaskItemStatus.InProgress);
+        w1.ClaudeStartedAt = t;
+        w1.AwaitingHumanSince = t.AddMinutes(10);
+        w1.PersonaId = "Денис";
+        var s1 = Child("s1", "epic-held-all", status: TaskItemStatus.InProgress);
+        s1.ClaudeStartedAt = t.AddHours(1);
+        s1.ExecutorStoppedAt = t.AddHours(2);
+        s1.PersonaId = "Кира";
+        var row = Row(epic, [epic, w1, s1]);
+        row.Now0.Should().BeNull("все держатся — «Сейчас» пуст, «ждёт вас» в now0 не синтезируем");
+        row.NowPersonaIds.Should().BeEmpty();
+        row.Attention.Should().NotBeNull("тревога (stopped приоритетнее wait) — вторая точка правды");
+        row.Bucket.Should().Be("attention");
+
+        // Смесь: ждущая + идущая — now0 = идущая, nowPersonaIds = [Тимур].
+        var epic2 = Epic("epic-held-mix");
+        var w2 = Child("w2", "epic-held-mix", status: TaskItemStatus.InProgress);
+        w2.ClaudeStartedAt = t;
+        w2.AwaitingHumanSince = t.AddMinutes(10);
+        w2.PersonaId = "Денис";
+        var r2 = Child("r2", "epic-held-mix", status: TaskItemStatus.InProgress);
+        r2.ClaudeStartedAt = t.AddHours(1);
+        r2.PersonaId = "Тимур";
+        var row2 = Row(epic2, [epic2, w2, r2]);
+        row2.Now0.Should().NotBeNull();
+        row2.Now0!.PersonaId.Should().Be("Тимур", "в now0 только идущая");
+        row2.NowPersonaIds.Should().Equal(["Тимур"]);
+    }
+
     // Чип «running»: появляется ровно когда bucket = running (идёт, без тревоги);
     // у закрытой и у тревожной фичи не появляется.
     [Fact]

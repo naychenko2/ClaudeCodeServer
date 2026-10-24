@@ -240,9 +240,10 @@ public sealed record FeatureBreakdown(
         // CompletedAt). Minutes = now − ClaudeStartedAt. ChatId — fail-closed (только из снимка).
         // Tokens/Share — из записей расхода (Б9b): токены задачи (вход+выход) и её доля в
         // суммарных токенах среза; null — записей расхода нет (нет данных). Ничего не идёт → null.
-        // Минор 5: «идущая» = InProgress БЕЗ waiting/stopped: задача, ждущая человека
-        // (AwaitingHumanSince) или остановленная (ExecutorStoppedAt), статусом InProgress, но
-        // реально не работает — в «дольше всех сейчас» не попадает.
+        // Минор 5 + дефект 4a241bee: «идущая» = InProgress БЕЗ «держится»: задача, ждущая
+        // человека или остановленная, статусом InProgress, но реально не работает — в «дольше
+        // всех сейчас» не попадает. Правило — единое, FeatureProjector.IsHeld (с защитой от
+        // устаревшей пометки), своей копии здесь нет.
         var totalTokens = records is null ? 0L : records.Sum(r => r.InputTokens + r.OutputTokens);
         // Токены по TaskId одним предпроходом (минор Б9b: раньше O(задачи×записи) —
         // на каждую идущую задачу скан ВСЕХ записей; теперь словарь, O(записи+задачи)).
@@ -259,7 +260,7 @@ public sealed record FeatureBreakdown(
         foreach (var t in tasks)
         {
             if (t.ClaudeStartedAt is null || t.CompletedAt is not null) continue;
-            if (t.AwaitingHumanSince is not null || t.ExecutorStoppedAt is not null) continue;
+            if (FeatureProjector.IsHeld(t)) continue;
             if (longestStart is null || t.ClaudeStartedAt.Value < longestStart.Value)
             {
                 longestStart = t.ClaudeStartedAt;

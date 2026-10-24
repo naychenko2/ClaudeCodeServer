@@ -2887,12 +2887,16 @@ export interface PersonaContract {
   instructions?: string;      // полный регламент роли (длинный markdown)
 }
 
-// Голос из каталога синтеза: канонический ключ, подпись для человека, пол и амплуа
+// Голос из каталога синтеза: канонический ключ, подпись для человека, пол и амплуа.
+// model — модель синтеза (general / livetts), speedSupported — настраивается ли темп;
+// старый сервер их не шлёт
 export interface TtsVoiceInfo {
   voice: string;
   label: string;
   gender: 'female' | 'male';
   roles: string[];
+  model?: string;
+  speedSupported?: boolean;
 }
 
 // configured=false — синтеза на сервере нет: предлагать слушать нечего

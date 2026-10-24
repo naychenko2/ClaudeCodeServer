@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Volume2, ChevronDown } from 'lucide-react';
 import { C, FS, SP, R, FIELD, FONT, SHADOW } from '../../lib/design';
-import { Button, IconButton, Menu, MenuItem, InlineSegmented } from '../../components/ui';
+import { Badge, Button, IconButton, Menu, MenuItem, InlineSegmented } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { api } from '../../lib/api';
 import { previewVoice, isSpeaking, VoicePreviewError } from '../../lib/tts';
 import type { PersonaVoice, TtsVoiceInfo } from '../../types';
+import { LIVE_TTS_BADGE, isLiveTtsVoice, voiceRoleLabel, voiceSupportsSpeed } from './voiceLabels';
 
 // Выбор голоса персоны: список голосов с прослушиванием, настроение и скорость.
 //
@@ -24,15 +25,6 @@ const SPEEDS = [
   { value: 'normal' as const, label: 'обычно', speed: 1.0 },
   { value: 'fast' as const, label: 'быстро', speed: 1.15 },
 ];
-
-// Подписи амплуа: ключи API человеку не показываем
-const ROLE_LABELS: Record<string, string> = {
-  good: 'доброе',
-  evil: 'злое',
-  strict: 'строгое',
-  friendly: 'дружелюбное',
-  whisper: 'шёпот',
-};
 
 // Активный сегмент — нейтральной плашкой, а не акцентом: оранжевого в карточке персоны и
 // так хватает (выбранная строка голоса плюс «Сохранить» в шапке)
@@ -122,8 +114,10 @@ export function PersonaVoicePicker({ value, onChange, describe, emptyLabel }: {
     if (isSpeaking()) { setError('Идёт озвучка ответа — дождитесь конца или остановите её'); return; }
     setError(null);
     setPlaying(voice ?? 'default');
+    // Темп шлём только голосу, который его умеет: LiveTTS сервер всё равно его не отправит
+    const withSpeed = voice && voiceSupportsSpeed(catalog?.find(v => v.voice === voice));
     try {
-      await previewVoice(voice ?? '', role, voice ? speed : undefined);
+      await previewVoice(voice ?? '', role, withSpeed ? speed : undefined);
     } catch (e) {
       if (alive.current) setError(e instanceof VoicePreviewError ? e.message : 'Не удалось послушать голос');
     } finally {
@@ -236,14 +230,21 @@ export function PersonaVoicePicker({ value, onChange, describe, emptyLabel }: {
             value={value?.role ?? ''}
             options={[
               { value: '', label: 'обычное', tone: SEGMENT_TONE },
-              ...roles.map(r => ({ value: r, label: ROLE_LABELS[r] ?? r, tone: SEGMENT_TONE })),
+              ...roles.map(r => ({ value: r, label: voiceRoleLabel(r), tone: SEGMENT_TONE })),
             ]}
             onChange={(r) => onChange({ ...value, voice: value?.voice, role: r || undefined })}
           />
         </SegmentRow>
       )}
 
-      {selected && (
+      {/* Темп сохранённый остаётся в персоне: вернётся обычный голос — вернётся и он */}
+      {selected && !voiceSupportsSpeed(selected) && (
+        <SegmentRow label="Скорость" isMobile={isMobile}>
+          <span style={{ fontSize: FS.xs, color: C.textMuted }}>темп у этого голоса не настраивается</span>
+        </SegmentRow>
+      )}
+
+      {selected && voiceSupportsSpeed(selected) && (
         <SegmentRow label="Скорость" isMobile={isMobile}>
           <InlineSegmented
             isMobile={isMobile}
@@ -331,7 +332,17 @@ function VoiceRows({ catalog, selected, playing, configured, isMobile, onPick, o
             >
               <MenuItem
                 label={
-                  <span style={{ color: v.voice === selected ? C.accent : undefined }}>{v.label}</span>
+                  // Голос LiveTTS — в своей группе по полу, но с меткой: выбирают по звучанию,
+                  // а цену видно до выбора. Подпись сжимается многоточием, метка — никогда
+                  <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+                    <span style={{
+                      color: v.voice === selected ? C.accent : undefined,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+                    }}>
+                      {v.label}
+                    </span>
+                    {isLiveTtsVoice(v) && <Badge tone="info" size="xs">{LIVE_TTS_BADGE}</Badge>}
+                  </span>
                 }
                 onClick={() => onPick(v)}
                 // Прослушивание — второе действие строки: в списке сравнивают ЧИСТЫЙ тембр,

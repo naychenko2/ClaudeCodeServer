@@ -4,6 +4,8 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -27,7 +29,36 @@ public class ProjectTreeLocatorTests : IAsyncLifetime, IDisposable
     private readonly Project _project;
 
     private ProjectTreeLocator Locator() =>
-        new(_git, new LocalOnlyFactory(), NullLogger<ProjectTreeLocator>.Instance);
+        new(new LocalOnlyFactory(), NullLogger<ProjectTreeLocator>.Instance, _git);
+
+    // Фабрика, у которой любой путь вне «монтирований» бросает в ToRuntime (имитация
+    // container-владельца, чья песочница не видит _root): для теста отказа анкера.
+    private sealed class NoMountsFactory : ILauncherFactory
+    {
+        private sealed class Mapper : IPathMapper
+        {
+            public string ToRuntime(string hostPath) => throw new InvalidOperationException("вне монтирований");
+            public string ToHost(string runtimePath) => runtimePath;
+        }
+
+        private sealed class Wrapped(IProcessLauncher inner) : IProcessLauncher
+        {
+            public bool IsSandboxed => inner.IsSandboxed;
+            public bool TargetIsWindows => inner.TargetIsWindows;
+            public IPathMapper Paths => new Mapper();
+            public string ClaudeCliCommand => inner.ClaudeCliCommand;
+            public string HostTempDir => inner.HostTempDir;
+            public string? McpApiUrlOverride => inner.McpApiUrlOverride;
+            public Process Start(ProcessSpec spec) => inner.Start(spec);
+            public void Kill(Process process, string? turnId = null) => inner.Kill(process, turnId);
+            public int EstimateCommandLineLength(ProcessSpec spec) => inner.EstimateCommandLineLength(spec);
+        }
+
+        private readonly IProcessLauncher _inner = LocalProcessRunner.Instance;
+        public IProcessLauncher Local => _inner;
+        public IProcessLauncher ForOwner(string? ownerId) => new Wrapped(_inner);
+        public IProcessLauncher ForProject(Project project) => new Wrapped(_inner);
+    }
 
     public ProjectTreeLocatorTests()
     {
@@ -180,5 +211,67 @@ public class ProjectTreeLocatorTests : IAsyncLifetime, IDisposable
         hit.Should().NotBeNull();
         hit!.IsAnchor.Should().BeFalse();
         hit!.Root.Should().Be(_repo);
+    }
+
+    // R-B1 п.1: при Subsystems:git:Enabled=false Register не вызывается — сервиса в
+    // контейнере нет. Локатор обязан резолвиться (дефолт null в конструкторе), иначе
+    // файловые маршруты дают 500 вместо деградации «анкер + RootPath».
+    // Мутация: убрать `= null` в конструкторе — GetRequiredService бросает, тест краснеет.
+    [Fact]
+    public void Resolves_Bez_GitServisa()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ILauncherFactory>(new LocalOnlyFactory());
+        services.AddSingleton<ILogger<ProjectTreeLocator>>(NullLogger<ProjectTreeLocator>.Instance);
+        // Как в Program.cs: активация через конструктор, GitService не регистрируется.
+        services.AddSingleton<ProjectTreeLocator>();
+
+        var locator = services.BuildServiceProvider().GetRequiredService<ProjectTreeLocator>();
+        locator.Should().NotBeNull();
+    }
+
+    // R-B1 п.1: без Git список worktree нечем проверить — корни [анкер?, RootPath],
+    // без исключения анкера и без исключения main. Мутация: убрать случай `list is null`
+    // в ветке анкера (требовать подтверждения списком) — анкер выпадет, тест краснеет.
+    [Fact]
+    public async Task Roots_Bez_Git_Daet_Anker_i_RootPath()
+    {
+        var noGit = new ProjectTreeLocator(new LocalOnlyFactory(), NullLogger<ProjectTreeLocator>.Instance);
+
+        var bare = await noGit.RootsAsync(null, _project);
+        bare.Should().HaveCount(1);
+        bare[0].Path.Should().Be(Path.GetFullPath(_repo));
+        bare[0].IsAnchor.Should().BeFalse();
+
+        // Анкер — настоящее linked-worktree, заведённое raw git мимо сервиса: сверить
+        // его нечем, держим как есть (fail-closed только для явно неподтверждённых).
+        var wt = Wt("nogit");
+        await RawGit("worktree", "add", "-b", "wt/nogit", wt);
+        var withAnchor = await noGit.RootsAsync(null, _project, wt);
+        withAnchor.Should().HaveCount(2);
+        withAnchor[0].IsAnchor.Should().BeTrue();
+        withAnchor[0].Path.Should().Be(Path.GetFullPath(wt));
+        withAnchor[1].Path.Should().Be(Path.GetFullPath(_repo));
+
+        await RawGit("worktree", "remove", "--force", wt);
+    }
+
+    // R-B1 п.3: анкер проходит ту же проверку монтирований, что элементы списка (:117):
+    // путь, который ToRuntime владельца бросает, не корень — даже если .git-ссылка верна
+    // и дерево есть на диске. Мутация: убрать ToRuntime-проверку в ветке анкера — тест краснеет.
+    [Fact]
+    public async Task Roots_Anker_Vne_Montirovaniy_Otvergaetsya()
+    {
+        var wt = Wt("nomounts");
+        await _git.WorktreeAddAsync(null, _repo, wt, "wt/nomounts");
+
+        var locator = new ProjectTreeLocator(new NoMountsFactory(), NullLogger<ProjectTreeLocator>.Instance, _git);
+        var roots = await locator.RootsAsync("owner", _project, wt);
+
+        roots.Should().NotContain(r => r.IsAnchor);
+        roots.Should().NotContain(r => PathNormalizer.NormalizePath(r.Path) == PathNormalizer.NormalizePath(wt));
+        roots.Should().Contain(r => PathNormalizer.NormalizePath(r.Path) == PathNormalizer.NormalizePath(_repo));
+
+        await _git.WorktreeRemoveAsync(null, _repo, wt, force: true);
     }
 }

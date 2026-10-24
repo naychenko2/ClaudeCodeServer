@@ -31,8 +31,10 @@ public sealed class ProjectTreeLocator
     private readonly ILogger<ProjectTreeLocator> _log;
 
     // Git — отключаемая подсистема: без неё локатор деградирует до прежнего поведения —
-    // анкер и корень, без поиска по worktree (fail-closed, без 500).
-    public ProjectTreeLocator(GitService? git, ILauncherFactory launchers, ILogger<ProjectTreeLocator> log)
+    // анкер и корень, без поиска по worktree (fail-closed, без 500). Дефолт null обязателен:
+    // при Subsystems:git:Enabled=false сервиса в контейнере нет, и резолв без значения
+    // по умолчанию бросает InvalidOperationException (как в FilesController).
+    public ProjectTreeLocator(ILauncherFactory launchers, ILogger<ProjectTreeLocator> log, GitService? git = null)
     {
         _git = git;
         _launchers = launchers;
@@ -88,10 +90,18 @@ public sealed class ProjectTreeLocator
                 }
                 else if (Directory.Exists(a) && IsLinkedWorktree(owner, a, main))
                 {
-                    var entry = list?.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == anchorNorm);
-                    // list == null — сверить нечем (нет Git / сбой): держим анкер как есть.
-                    // Git работает и анкера в списке нет — дерево снесли, оно не корень.
-                    if (list is null || entry is not null)
+                    // Тот же критерий, что у элементов списка ниже: путь анкера должен
+                    // быть в монтированиях владельца — иначе чтение внутри корня бросает.
+                    bool inMounts;
+                    try { _launchers.ForOwner(owner).Paths.ToRuntime(a); inMounts = true; }
+                    catch { inMounts = false; }
+
+                    var entry = inMounts
+                        ? list?.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == anchorNorm)
+                        : null;
+                    // list == null и анкер не бросил — сверить нечем (нет Git / сбой): держим как есть.
+                    // Git работает и анкера в списке нет, или путь вне монтирований — не корень.
+                    if (inMounts && (list is null || entry is not null))
                         roots.Add(new TreeRoot(a, entry?.Branch, true));
                     else
                         anchorNorm = null;

@@ -27,7 +27,7 @@ export function laneOfChain(lane?: string | null): 'back' | 'front' | 'other' {
 //   step     → «{stepRef} · {бэк|фронт}» (stepRef как есть; без линии — только stepRef);
 //   rework   → «доработка {stepRef}»;
 //   review   → «ревью»;  qa → «проверка»;  final → «финал»;  merge → «мерж»;
-//   cut      → «разрез»;  plan → «план»;  consult → «консультация»;
+//   cut      → «разрез»;  design → «дизайн»;  plan → «план»;  consult → «консультация»;
 //   прочее/null → пустая строка.
 export function roleLabel(taskRole: string | null, stepRef: string | null, lane: string | null): string {
   switch (taskRole) {
@@ -48,6 +48,8 @@ export function roleLabel(taskRole: string | null, stepRef: string | null, lane:
       return 'мерж';
     case 'cut':
       return 'разрез';
+    case 'design':
+      return 'дизайн';
     case 'plan':
       return 'план';
     case 'consult':

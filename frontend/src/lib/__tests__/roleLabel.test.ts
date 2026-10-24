@@ -13,6 +13,7 @@ describe('roleLabel: словарь по роли', () => {
   it('final → «финал»', () => expect(roleLabel('final', null, null)).toBe('финал'));
   it('merge → «мерж»', () => expect(roleLabel('merge', null, null)).toBe('мерж'));
   it('cut → «разрез»', () => expect(roleLabel('cut', null, null)).toBe('разрез'));
+  it('design → «дизайн»', () => expect(roleLabel('design', null, null)).toBe('дизайн'));
   it('plan → «план»', () => expect(roleLabel('plan', null, null)).toBe('план'));
   it('consult → «консультация»', () => expect(roleLabel('consult', null, null)).toBe('консультация'));
 });

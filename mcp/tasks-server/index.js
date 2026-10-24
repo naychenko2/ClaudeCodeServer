@@ -428,8 +428,10 @@ const FEATURE_ID_SCHEMA = {
 
 const ROLE_SCHEMA = {
   type: 'string',
-  enum: ['feature', 'cut', 'plan', 'step', 'rework', 'review', 'qa', 'final', 'merge', 'consult'],
-  description: 'Роль в фиче: feature · cut · plan · step · rework · review · qa · final · merge · consult',
+  // Паритет с TaskRoles.All (http-ветка TasksToolset.cs): порядок значений обязан
+  // совпадать — его сверяет TasksToolsetParityTests.EnumЗначения_СовпадаютПосимвольно.
+  enum: ['feature', 'cut', 'design', 'plan', 'step', 'rework', 'review', 'qa', 'final', 'merge', 'consult'],
+  description: 'Роль в фиче: feature · cut · design (задача дизайнера, этап необязателен) · plan · step · rework · review · qa · final · merge · consult',
 };
 
 const STEP_REF_SCHEMA = {

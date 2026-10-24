@@ -394,6 +394,37 @@ public class PersonasController(
         }
     }
 
+    // Кандидаты для кнопки «Подобрать под персону»: три обычных голоса и отдельно один
+    // живой (LiveTTS) — его форма показывает с явной ценой. Автоподбор при создании сюда
+    // не ходит: он по-прежнему берёт только обычные голоса (PickVoiceAsync).
+    //
+    // Пустой список — честный ответ (200): подходящих нет или показанные исчерпали каталог
+    [HttpPost("ai/voice/candidates")]
+    public async Task<ActionResult> AiVoiceCandidates([FromBody] AiVoiceCandidatesRequest req)
+    {
+        try
+        {
+            var pick = await _crud.PickVoiceCandidatesAsync(UserId, req.Persona, req.Exclude,
+                HttpContext.RequestAborted);
+            if (pick.Outcome == PersonasCrudService.VoicePickOutcome.Unrecognized)
+            {
+                _log.LogWarning("ai/voice/candidates: ответ не распознан; сырой ответ: {Raw}",
+                    pick.Raw.Length > 600 ? pick.Raw[..600] + "…" : pick.Raw);
+                return StatusCode(502, new { error = "Модель не выбрала голоса из списка — попробуйте ещё раз" });
+            }
+            return Ok(new
+            {
+                candidates = pick.Candidates.Select(c => new { voice = c.Voice, role = c.Role, why = c.Why }),
+                live = pick.Live is { } l ? new { voice = l.Voice, role = l.Role, why = l.Why } : null,
+                exhausted = pick.Exhausted,
+            });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !HttpContext.RequestAborted.IsCancellationRequested)
+        {
+            return StatusCode(502, new { error = $"Не удалось подобрать голоса: {ex.Message}" });
+        }
+    }
+
     [HttpPost("ai/character")]
     public async Task<ActionResult> AiCharacter([FromBody] AiCharacterRequest req)
     {
@@ -1697,6 +1728,14 @@ public record AiCharacterRequest(string? Name, string? Role, string? Description
 
 // Подбор голоса: всё нужное приходит в теле, потому что персона может быть ещё не сохранена
 public record AiVoiceRequest(string? Name, string? Role, string? Description, string? Character, string? Tone);
+
+// Подбор кандидатов для формы: то же описание персоны плюс уже показанные голоса
+// («Подобрать ещё» не должно возвращать их снова)
+public record AiVoiceCandidatesRequest(string? Name, string? Role, string? Description, string? Character,
+    string? Tone, IReadOnlyList<string>? Exclude = null)
+{
+    public AiVoiceRequest Persona => new(Name, Role, Description, Character, Tone);
+}
 
 // AutoBindings: null/true — подобрать привязки AI после создания (за флагом persona-bindings),
 // false — не подбирать.

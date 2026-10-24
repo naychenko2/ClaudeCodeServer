@@ -230,6 +230,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Трогал ли человек пикер: при создании «не выбран» (сервер подберёт голос) и явный
   // «голос по умолчанию» (не подбирать) — разные решения
   const [voiceTouched, setVoiceTouched] = useState(false);
+  // Панель подбора голоса открыта — подсказка поля прячется, иначе она уезжает под панель
+  const [voicePickOpen, setVoicePickOpen] = useState(false);
   const [avatar, setAvatar] = useState<Persona['avatar']>(persona?.avatar ?? { kind: 'initials', color: initial?.color ?? 'orange' });
   const [canGenerate, setCanGenerate] = useState(false);
   const [avatarPrompt, setAvatarPrompt] = useState('');
@@ -800,8 +802,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           </div>
           {/* Шире соседних полей: рядом с выбором голоса стоят ▶ и «Подобрать под персону» */}
           <div style={{ maxWidth: isMobile ? '100%' : 520 }}>
-            <Field label="Голос" hint="Как персона звучит в голосовом режиме">
+            <Field label="Голос" hint={voicePickOpen ? undefined : 'Как персона звучит в голосовом режиме'}>
               <PersonaVoicePicker
+                onPickPanelChange={setVoicePickOpen}
                 value={voice ?? null}
                 onChange={(v) => { setVoice(v); setVoiceTouched(true); }}
                 // Создание, пикер не трогали: голос подберёт сервер — так и подписываем

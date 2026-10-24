@@ -36,9 +36,8 @@ const SPEEDS = [
 // так хватает (выбранная строка голоса плюс «Сохранить» в шапке)
 const SEGMENT_TONE = { bg: C.bgWhite, fg: C.textPrimary };
 
-// Ширина списка — по полю, но не уже подписи с характером; высота — чтобы список не
-// занимал экран целиком и оставлял видимой строку выбора
-const LIST_MIN_WIDTH = 300;
+// Ширина списка — ровно по полю (длинный характер переносится, а не раздвигает попап под
+// кнопку ▶); высота — чтобы список не занимал экран целиком и оставлял видимой строку выбора
 const LIST_MAX_HEIGHT = 440;
 
 // Голос инстанса — персона без своего голоса
@@ -61,7 +60,7 @@ function speedKey(speed?: number | null): 'slow' | 'normal' | 'fast' {
   return speed > 1.05 ? 'fast' : 'normal';
 }
 
-export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, greeting }: {
+export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, greeting, onPickPanelChange }: {
   value: PersonaVoice | null;
   onChange: (v: PersonaVoice | null) => void;
   // Подпись строки, пока голос не выбран (по умолчанию — «Голос по умолчанию»)
@@ -70,6 +69,9 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
   describe?: () => PersonaDescription;
   // Приветствие персоны из формы: кандидатов подбора слушают её же фразой
   greeting?: string;
+  // Открыта ли панель подбора: форма прячет подсказку поля, иначе она уезжает под панель
+  // и отрывается от самого поля
+  onPickPanelChange?: (open: boolean) => void;
 }) {
   const isMobile = useIsMobile();
   const [catalog, setCatalog] = useState<TtsVoiceInfo[] | null>(null);
@@ -86,6 +88,8 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
   const [pickKey, setPickKey] = useState(0);
   const [pickBusy, setPickBusy] = useState(false);
   const alive = useRef(true);
+  const pickOpen = !!describe && pickKey > 0;
+  useEffect(() => { onPickPanelChange?.(pickOpen); }, [pickOpen, onPickPanelChange]);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -181,18 +185,18 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
   const items = catalog ? filterVoices(catalog, query, gender) : [];
   const resetFilters = () => { setQuery(''); setGender('all'); };
 
-  // Шапка списка: на десктопе — слот Menu вне прокрутки, в шторке — липнет к верху тела
+  // Шапка списка — вне прокрутки: на десктопе слотом header у Menu, в шторке — у Modal
   const header = (
     <div style={{
       display: 'flex', flexDirection: 'column', gap: SP.sm,
-      padding: isMobile ? `0 0 ${SP.sm}px` : `${SP.xs}px ${SP.xs}px ${SP.sm}px`,
-      ...(isMobile ? { position: 'sticky', top: -SP.sm, paddingTop: SP.sm, marginTop: -SP.sm, background: C.bgMain, zIndex: 1 } : null),
+      padding: isMobile ? 0 : `${SP.xs}px ${SP.xs}px ${SP.sm}px`,
     }}>
       <IconField
         icon={<Search size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
         value={query}
         onChange={setQuery}
-        placeholder="Имя или характер: «строгий», «шёпот»…"
+        // Коротко: попап шириной с поле (~270 px), длиннее — режется посреди слова
+        placeholder="Имя или характер"
         height={isMobile ? 44 : 36}
         radius={R.lg}
         fontSize={FS.md}
@@ -230,6 +234,7 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
                 isMobile={isMobile}
                 label={<span style={{ color: !value?.voice && !emptyLabel ? C.accent : undefined }}>{DEFAULT_LABEL}</span>}
                 hint="голос, который задан на сервере"
+                hintWrap
                 onClick={() => { close(); onChange(null); }}
               />
             </div>
@@ -326,8 +331,8 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
           onClose={close}
           anchor={anchor}
           anchorAlign="start"
-          minWidth={Math.max(anchor.width, LIST_MIN_WIDTH)}
-          maxWidth={Math.max(anchor.width, LIST_MIN_WIDTH)}
+          minWidth={anchor.width}
+          maxWidth={anchor.width}
           maxHeight={LIST_MAX_HEIGHT}
           header={header}
         >
@@ -335,11 +340,9 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
         </Menu>
       )}
       {open && catalog && isMobile && (
-        <Modal title="Голос персоны" onClose={close} footer={<Button variant="primary" fullWidth onClick={close}>Готово</Button>}>
-          <div>
-            {header}
-            {body}
-          </div>
+        <Modal title="Голос персоны" onClose={close} header={header}
+          footer={<Button variant="primary" fullWidth onClick={close}>Готово</Button>}>
+          {body}
         </Modal>
       )}
 
@@ -374,7 +377,12 @@ export function PersonaVoicePicker({ value, onChange, emptyLabel, describe, gree
           value={value}
           configured={configured}
           isMobile={isMobile}
-          onPick={(voice, role) => onChange({ voice, role: role ?? undefined, speed: value?.speed ?? null })}
+          // Темп переносим только на голос, который его умеет: у LiveTTS он был бы мёртвым
+          // значением в персоне
+          onPick={(voice, role) => onChange({
+            voice, role: role ?? undefined,
+            speed: voiceSupportsSpeed(catalog.find(v => v.voice === voice)) ? value?.speed ?? null : null,
+          })}
           onOpenList={openList}
           onClose={() => setPickKey(0)}
           onBusy={setPickBusy}
@@ -417,6 +425,8 @@ function VoiceRow({ v, on, role, isMobile, playing, configured, onPick, onRole, 
         isMobile={isMobile}
         label={<span style={{ color: on ? C.accent : undefined, fontWeight: on ? 600 : undefined }}>{voiceName(v)}</span>}
         hint={voiceTrait(v)}
+        // Попап шириной ровно с поле: характер переносится, а не режется многоточием
+        hintWrap
         onClick={onPick}
         // Прослушивание — второе действие строки: в списке сравнивают ЧИСТЫЙ тембр,
         // поэтому без амплуа (выбранное амплуа проверяется кнопкой у поля)

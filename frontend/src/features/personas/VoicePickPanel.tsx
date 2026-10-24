@@ -22,7 +22,12 @@ export type PersonaDescription = { name?: string; role?: string; description?: s
 type PickState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; candidates: VoiceCandidate[]; live: VoiceCandidate | null; exhausted: boolean; noMore: boolean; more: boolean };
+  | {
+    status: 'ready'; candidates: VoiceCandidate[]; live: VoiceCandidate | null; exhausted: boolean;
+    noMore: boolean; more: boolean;
+    // Сбой «Подобрать ещё» — у самой кнопки, а не в строке ошибок прослушки
+    moreError: string | null;
+  };
 
 const roleLabel = (role?: string | null) => (role ? voiceRoleLabel(role) : 'обычное');
 
@@ -66,17 +71,25 @@ export function VoicePickPanel({ describe, greeting, catalog, value, configured,
       const found = [...res.candidates, ...(res.live ? [res.live] : [])];
       shown.current = [...shown.current, ...found.map(c => c.voice)];
       setState(s => {
-        // «Подобрать ещё» ничего не нашло — прежняя тройка остаётся, кнопка уступает место
-        // «больше вариантов нет»
-        if (more && found.length === 0 && s.status === 'ready') return { ...s, more: false, noMore: true };
-        return { status: 'ready', candidates: res.candidates, live: res.live, exhausted: res.exhausted, noMore: false, more: false };
+        if (more && s.status === 'ready') {
+          // «Подобрать ещё» ничего не нашло — прежняя тройка остаётся, кнопка уступает место
+          // «больше вариантов нет»
+          if (found.length === 0) return { ...s, more: false, noMore: true, moreError: null };
+          // Нашёлся только живой — тройку не меняем на одну строку, обновляем лишь живой вариант
+          if (res.candidates.length === 0) {
+            return { ...s, live: res.live, exhausted: res.exhausted, more: false, moreError: null };
+          }
+        }
+        return {
+          status: 'ready', candidates: res.candidates, live: res.live, exhausted: res.exhausted,
+          noMore: false, more: false, moreError: null,
+        };
       });
     } catch (e) {
       if (!alive.current || id !== seq.current) return;
       const message = e instanceof Error ? e.message : 'Не удалось подобрать голоса';
       // Сбой «ещё» не стирает уже показанных кандидатов
-      setState(s => (more && s.status === 'ready' ? { ...s, more: false } : { status: 'error', message }));
-      if (more) setListenError(message);
+      setState(s => (more && s.status === 'ready' ? { ...s, more: false, moreError: message } : { status: 'error', message }));
     } finally {
       if (id === seq.current) {
         pending.current = false;
@@ -86,7 +99,7 @@ export function VoicePickPanel({ describe, greeting, catalog, value, configured,
   };
 
   const load = (more: boolean) => {
-    if (more) setState(s => (s.status === 'ready' ? { ...s, more: true } : s));
+    if (more) setState(s => (s.status === 'ready' ? { ...s, more: true, moreError: null } : s));
     else { shown.current = []; setState({ status: 'loading' }); }
     onBusy(true);
     void fetchCandidates(more);
@@ -214,11 +227,12 @@ export function VoicePickPanel({ describe, greeting, catalog, value, configured,
     <>
       <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>
         {sample
-          ? <>Нажмите на голос, чтобы выбрать. ▶ — послушать фразой персоны: «{sample}»</>
-          : 'Нажмите на голос, чтобы выбрать. ▶ — послушать.'}
+          ? <>Нажмите на голос, чтобы выбрать. Кнопка с динамиком — послушать фразой персоны: «{sample}»</>
+          : 'Нажмите на голос, чтобы выбрать. Кнопка с динамиком — послушать.'}
       </span>
       {all.map((x, i) => row(x.c, i, x.live))}
       {listenError && <span style={{ fontSize: FS.xs, color: C.danger }}>{listenError}</span>}
+      {state.moreError && <span style={{ fontSize: FS.xs, color: C.danger }}>{state.moreError}</span>}
       <div>
         {noMore
           ? <span style={{ fontSize: FS.xs, color: C.textMuted }}>Больше вариантов нет — остальные голоса в списке.</span>

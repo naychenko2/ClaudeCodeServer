@@ -911,7 +911,7 @@ public class TasksController(
     }
 
     [HttpDelete("features/{featureId}/hold")]
-    public IActionResult ClearFeatureHold(string featureId)
+    public async Task<IActionResult> ClearFeatureHold(string featureId)
     {
         if (IsServiceToken)
             return StatusCode(403, new { error = "Удержание фичи снимает только человек" });
@@ -977,6 +977,13 @@ public class TasksController(
             if (tasks.GetById(featureId) is null) return NotFound(new { error = "Фича не найдена" });
             return Ok(new { resumed = new List<string>(), expired = new List<string>() });
         }
+        // Дефект c41d7e02 (возврат QA): снятие паузы молчал — страница фичи оставалась «на
+        // паузе» до ручной перезагрузки: task_changed вещает только сервис продолжений по
+        // ПРОДОЛЖЕНным шагам (TaskExecutionService.cs:1343), а если прерванных не было —
+        // нечего продолжать, вещания нет вовсе. Тот же формат, что у постановки (:897):
+        // task_changed("updated") по эпику — с снятым Hold проектор считает состояние
+        // не-пауза, экран уходит с «на паузе» живьём.
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
         // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
         // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
         // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски

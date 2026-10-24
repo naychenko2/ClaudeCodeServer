@@ -2276,7 +2276,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         set.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var controller = BuildController(RealGit(), serviceToken: true);
-        var result = controller.ClearFeatureHold(epicId);
+        var result = await controller.ClearFeatureHold(epicId);
 
         result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
     }
@@ -2542,7 +2542,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var set = await controller.SetFeatureHold(epicId, new TasksController.FeatureHoldRequest("manual"));
         set.Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>();
 
-        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)controller.ClearFeatureHold(epicId)!;
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)await controller.ClearFeatureHold(epicId);
         result.StatusCode.Should().Be(200);
 
         var entries = journal.Read(OwnerId, epicId).Entries;
@@ -2555,6 +2555,63 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var body = await (await _client.GetAsync($"/api/tasks/{epicId}")).Content.ReadFromJsonAsync<JsonElement>();
         if (body.TryGetProperty("hold", out var holdProp))
             holdProp.ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    // Дефект c41d7e02 (возврат QA): DELETE hold молчал — страница фичи оставалась «на паузе»
+    // до ручной перезагрузки: task_changed вещает только сервис продолжений по ПРОДОЛЖЕНным
+    // шагам (TaskExecutionService.cs:1343), а если прерванных шагов не было — вещания нет
+    // вовсе. Фикс: ClearFeatureHold вещает эпик, тот же формат, что постановка (:897).
+    // Ловим через живой SignalR (прецедент: PostHold_BroadcastsTaskChanged_EpicAndMarkedStep).
+    // Мутация: убрать вещание в ClearFeatureHold — ожидание события таймит, тест краснеет.
+    [Fact]
+    public async Task ClearHold_BroadcastsTaskChanged_Epic()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        // Идущих ходов нет: продолжать нечего — именно ветка, где дефект виден.
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epicId}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Соединяемся ПОСЛЕ постановки: канал ловит только событие снятия — иначе в него
+        // попадёт task_changed самой паузы (её вещание проверяет другой тест).
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        var connection = new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "hubs/session"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
+                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+            })
+            .Build();
+
+        var got = new ConcurrentDictionary<string, JsonElement>();
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("message", msg =>
+        {
+            if (!msg.TryGetProperty("type", out var type) || type.GetString() != "task_changed") return;
+            if (msg.GetProperty("task").GetProperty("id").GetString() != epicId) return;
+            got[epicId] = msg;
+            done.TrySetResult(true);
+        });
+        try
+        {
+            await connection.StartAsync();
+            await connection.InvokeAsync("JoinUser", me.GetProperty("userId").GetString());
+
+            var response = await _client.DeleteAsync($"/api/tasks/features/{epicId}/hold");
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var winner = await Task.WhenAny(done.Task, Task.Delay(15_000));
+            winner.Should().Be(done.Task,
+                "снятие паузы обязано дойти до группы владельца живьём: task_changed по эпику");
+
+            // Эпик в событии — без Hold: с снятым Hold проектор (FeatureProjector.cs:1520)
+            // считает состояние не-пауза — экран по событию уходит с «на паузе».
+            got[epicId].GetProperty("action").GetString().Should().Be("updated");
+            if (got[epicId].GetProperty("task").TryGetProperty("hold", out var holdProp))
+                holdProp.ValueKind.Should().Be(JsonValueKind.Null);
+        }
+        finally { await connection.DisposeAsync(); }
     }
 
     // Дефект 06aae1bf (гонка): два параллельных DELETE hold одной фичи. Окно гонки — между
@@ -2755,7 +2812,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             set.StatusCode.Should().Be(HttpStatusCode.OK);
 
             var controller = BuildController(RealGit());
-            var result = controller.ClearFeatureHold(epicId);
+            var result = await controller.ClearFeatureHold(epicId);
             result.Should().BeOfType<OkObjectResult>(); // ответ не ждёт фон: сбой карточки локализован в сервисе
 
             var winner = await Task.WhenAny(serviceLogged.Task, Task.Delay(5000));

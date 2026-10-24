@@ -86,6 +86,13 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
                 // и уже оплаченные запросы просто исчезнут из учёта
                 return new TtsResult(null, billed, Rub(billed));
             }
+            catch (Exception ex)
+            {
+                // Непредвиденный сбой — тоже обычный отказ: вызывающий отдаст честный 502 (или
+                // русский текст в «Звуке») и запишет расход за уже принятые запросы, а не 500
+                logger.LogError(ex, "Непредвиденный сбой синтеза SpeechKit");
+                return new TtsResult(null, billed, Rub(billed));
+            }
             // Принятый запрос оплачен независимо от того, вытащили ли мы из ответа аудио
             if (accepted) billed++;
             // причина в логе; полкуска озвучки хуже честного фолбэка, но уже оплаченные
@@ -110,7 +117,9 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             req.Headers.TryAddWithoutValidation("x-folder-id", _folderId);
             req.Content = new StringContent(BuildPayload(chunk, voice), Encoding.UTF8, "application/json");
 
-            using var resp = await client.SendAsync(req, ct);
+            // Только заголовки: тело читаем сами ПОСЛЕ проверки статуса, иначе сбой чтения тела
+            // у принятого (200) запроса выглядел бы обрывом связи и выпадал из учёта
+            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
             if (!resp.IsSuccessStatusCode)
             {
                 var error = await resp.Content.ReadAsStringAsync(ct);
@@ -131,12 +140,27 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
                 return (null, false);
             }
 
-            var body = await resp.Content.ReadAsStringAsync(ct);
-            var audio = ExtractAudio(body);
-            if (audio is null)
-                logger.LogWarning("SpeechKit ответил 200, но пригодного аудио в ответе нет: {Body}",
-                    body.Length > 500 ? body[..500] : body);
-            return (audio, true);
+            // С этого места запрос оплачен: что бы ни случилось с чтением и разбором тела,
+            // наружу уходит Accepted=true, иначе расход за принятый запрос потеряется.
+            // Отмена клиентом посреди чтения — тоже «оплачено, аудио нет», а не исключение
+            // Timeout клиента при ResponseHeadersRead тело не покрывает — свой потолок на чтение
+            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            readCts.CancelAfter(client.Timeout);
+            try
+            {
+                var body = await resp.Content.ReadAsStringAsync(readCts.Token);
+                var audio = ExtractAudio(body);
+                if (audio is null)
+                    logger.LogWarning("SpeechKit ответил 200, но пригодного аудио в ответе нет: {Body}",
+                        body.Length > 500 ? body[..500] : body);
+                return (audio, true);
+            }
+            catch (Exception ex)
+            {
+                if (!ct.IsCancellationRequested)
+                    logger.LogWarning(ex, "SpeechKit ответил 200, но ответ не удалось прочитать или разобрать");
+                return (null, true);
+            }
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                                    && !ct.IsCancellationRequested)
@@ -176,9 +200,11 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
     }
 
     // Ответ v3 — поток JSON-объектов, по строке на кусок аудио; данные лежат в
-    // result.audioChunk.data (base64). Любая неожиданность — строка с ошибкой, строка без
-    // аудио, оборванный на середине поток — это отказ ЦЕЛИКОМ: половина фразы в ушах хуже
-    // честного фолбэка на голос браузера.
+    // result.audioChunk.data (base64). Строка без аудио (audioChunk нет или null) — не отказ:
+    // LiveTTS замыкает поток чанком chunkType TEXT_ONLY с audioChunk: null, его пропускаем.
+    // Остальные неожиданности — строка с ошибкой, кривой аудиочанк, оборванный на середине
+    // поток — отказ ЦЕЛИКОМ: половина фразы в ушах хуже честного фолбэка на голос браузера.
+    // Наружу не бросает: InvalidOperationException (не тот вид JSON-значения) — тоже отказ.
     internal static byte[]? ExtractAudio(string body)
     {
         if (string.IsNullOrWhiteSpace(body)) return null;
@@ -192,12 +218,16 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             try
             {
                 using var doc = JsonDocument.Parse(trimmed);
-                if (!doc.RootElement.TryGetProperty("result", out var result)) return null;
-                if (!result.TryGetProperty("audioChunk", out var piece)) return null;
-                if (!piece.TryGetProperty("data", out var data)) return null;
+                if (!doc.RootElement.TryGetProperty("result", out var result)
+                    || result.ValueKind != JsonValueKind.Object) return null;
+                // Чанк без аудио (TEXT_ONLY у LiveTTS) — пропускаем
+                if (!result.TryGetProperty("audioChunk", out var piece)
+                    || piece.ValueKind == JsonValueKind.Null) continue;
+                if (piece.ValueKind != JsonValueKind.Object
+                    || !piece.TryGetProperty("data", out var data)) return null;
                 audio.Write(data.GetBytesFromBase64());
             }
-            catch (Exception ex) when (ex is JsonException or FormatException)
+            catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException)
             {
                 return null;
             }

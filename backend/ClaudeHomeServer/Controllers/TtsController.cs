@@ -90,7 +90,11 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
         // синтезе тоже, а молчаливо потерянные деньги — худший вид неучтённых
         RecordSpend(req, voice, res);
         if (res.Audio is null)
-            return StatusCode(502, new { reason = "upstream" });
+            return StatusCode(502, new
+            {
+                reason = "upstream",
+                error = "Яндекс не озвучил текст: сервис недоступен или вернул непонятный ответ",
+            });
 
         return File(res.Audio, "audio/mpeg");
     }

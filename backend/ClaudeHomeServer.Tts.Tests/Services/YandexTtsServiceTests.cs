@@ -158,6 +158,38 @@ public class YandexTtsServiceTests
         YandexTtsService.ExtractAudio("""{"result":{}}""").Should().BeNull();
     }
 
+    // Форма ответа LiveTTS (снята живым запросом): аудиочанки AUDIO_ONLY, а замыкает поток
+    // чанк TEXT_ONLY с audioChunk: null. На нём разбор падал InvalidOperationException → 500
+    private static string LiveTtsAudioChunk(params byte[] bytes) =>
+        "{\"result\":{\"audioChunk\":{\"data\":\"" + Convert.ToBase64String(bytes) +
+        "\"},\"textChunk\":null,\"startMs\":\"0\",\"lengthMs\":\"480\",\"wordTimings\":[],\"chunkType\":\"AUDIO_ONLY\"}}";
+
+    private const string LiveTtsTextOnlyChunk =
+        """{"result":{"audioChunk":null,"textChunk":{"text":"Привет"},"startMs":"0","lengthMs":"0","wordTimings":[],"chunkType":"TEXT_ONLY"}}""";
+
+    [Fact]
+    public void Extract_LiveTts_ЧанкTextOnlyПропускается_АудиоСклеено()
+    {
+        var body = $"{LiveTtsAudioChunk(1, 2)}\n{LiveTtsAudioChunk(3)}\n{LiveTtsTextOnlyChunk}\n";
+        YandexTtsService.ExtractAudio(body).Should().Equal(1, 2, 3);
+    }
+
+    [Fact]
+    public void Extract_ТолькоTextOnly_Null()
+    {
+        // Чанк без аудио — не отказ, но если аудио нет вовсе, озвучки нет
+        YandexTtsService.ExtractAudio(LiveTtsTextOnlyChunk).Should().BeNull();
+    }
+
+    [Fact]
+    public void Extract_КривойВидЗначения_NullБезИсключения()
+    {
+        // data числом, audioChunk строкой — не тот вид JSON-значения: отказ, а не исключение мимо catch
+        YandexTtsService.ExtractAudio("""{"result":{"audioChunk":{"data":42}}}""").Should().BeNull();
+        YandexTtsService.ExtractAudio("""{"result":{"audioChunk":"x"}}""").Should().BeNull();
+        YandexTtsService.ExtractAudio("""{"result":null}""").Should().BeNull();
+    }
+
     // --- учёт оплаченных запросов: SpeechKit тарифицируется ЗА ЗАПРОС ---
 
     private sealed class StubHandler(Func<int, HttpResponseMessage> respond) : HttpMessageHandler
@@ -264,6 +296,47 @@ public class YandexTtsServiceTests
             .SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0));
 
         res.Audio.Should().BeNull();
+        res.BilledRequests.Should().Be(1);
+    }
+
+    // Тело, которое падает при чтении: 200 уже пришёл, а разобрать ответ не вышло
+    private sealed class ExplodingContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) =>
+            throw new InvalidOperationException("boom");
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    [Fact]
+    public async Task Synthesize_ИсключениеРазбора_НеТеряетЗаписьРасхода()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ExplodingContent() });
+
+        var res = await MakeLive(handler, liveTtsRubPerRequest: 0.25)
+            .SynthesizeAsync("Привет.", new VoiceChoice("sofia", null, 1.0));
+
+        res.Audio.Should().BeNull();
+        res.BilledRequests.Should().Be(1, "Яндекс ответил 200 — запрос оплачен, даже если разбор упал");
+        res.Rub.Should().BeApproximately(0.25, 1e-6);
+    }
+
+    [Fact]
+    public async Task Synthesize_LiveTtsСTextOnlyВКонце_АудиоИОплата()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($"{LiveTtsAudioChunk(1, 2, 3)}\n{LiveTtsTextOnlyChunk}",
+                Encoding.UTF8, "application/json"),
+        });
+
+        var res = await MakeLive(handler).SynthesizeAsync("Привет.", new VoiceChoice("sofia", null, 1.0));
+
+        res.Audio.Should().Equal(1, 2, 3);
         res.BilledRequests.Should().Be(1);
     }
 

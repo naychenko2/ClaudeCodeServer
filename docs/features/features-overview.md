@@ -55,7 +55,7 @@
 ([FeatureProjector.cs:1475](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs));
 значения объявлены в [FeatureRun.cs:373](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs).
 Приоритет: первый совпавший побеждает. `bucket` строки индекса и порядок `OrderRuns`
-выводятся из `state` — отдельного расчёта группы нет.
+выводятся из `state` и эпика `Done` (bucket = f(state, эпик Done)) — отдельного расчёта группы нет. Группы индекса: `attention` → `running` → `merged` → `idle` → `closed`. `merged` — смержена, эпик ещё открыт (чипы `open` + `merged`, `mergedAt` виден); `closed` — эпик `Done` (state `closed` либо `merged` с эпиком `Done`; чип `closed`).
 
 | `state` | откуда берётся |
 |---|---|

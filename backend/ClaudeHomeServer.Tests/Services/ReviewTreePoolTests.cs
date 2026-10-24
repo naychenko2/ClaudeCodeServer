@@ -481,6 +481,26 @@ public class ReviewTreePoolTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task RestoreLeases_Дерево_На_Ветке_С_Именем_Слота_Аренды_Не_Получает_И_Снос_Его_Не_Трогает()
+    {
+        var chatTree = Path.Combine(_slotBase, "feat~wave-review-1");
+        await _git.WorktreeAddAsync(null, _repo, chatTree, "feat/clash4");
+        var tasks = new List<TaskItem>
+        {
+            new() { Id = "open", Role = TaskRoles.Review, ProjectId = _project.Id, LinkedSessionId = "s", Status = TaskItemStatus.InProgress },
+        };
+        var pool = new ReviewTreePool(_git, (_, _) => _slotBase, (o, p) => _cwd(o, p), NullLogger<ReviewTreePool>.Instance,
+            () => tasks, _ => chatTree, id => id == _project.Id ? _project : null);
+
+        await pool.RestoreLeasesAsync();
+
+        File.Exists(chatTree + ReviewTreePool.MarkerSuffix).Should().BeFalse();
+        await pool.RemoveSlotsOfWaveAsync(null, _project, _wave);
+        await pool.RemoveSlotsOfProjectAsync(null, _project);
+        (await InWorktreeList(chatTree)).Should().BeTrue("дерево на ветке без аренды слотом пула не считается");
+    }
+
+    [Fact]
     public async Task Acquire_Слот_Без_Маркера_На_Ветке_Не_Занимает_Первый_Слот_Навсегда()
     {
         // слот создан до появления маркера, в нём заветвились: маркера нет, ветка есть

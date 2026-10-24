@@ -248,7 +248,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const gitAvail = useProjectFeature(project, ProjectFeature.Git);
   const mapAvail = useProjectFeature(project, ProjectFeature.MapHygiene);
   const me = useMe();
-  const isOwner = !project.ownerId || project.ownerId === me.userId;
+  const isOwner = project.ownerId === me.userId;
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
   const [groupId, setGroupId] = useState(project.groupId ?? '');

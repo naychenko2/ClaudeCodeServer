@@ -59,7 +59,7 @@ const ORIGIN_OPTIONS: { value: Session['origin']; label: string }[] = [
 // на включённом чипе — onAccent. Подписи — из FEATURE_CHIP_LABEL (единый источник).
 type FeatureToneChip = Exclude<FeatureChip, 'open' | 'closed'>;
 const FEATURE_TONE: Record<FeatureToneChip, string> = {
-  waiting: C.info, stopped: C.danger, merge: C.info, running: C.textHeading,
+  waiting: C.info, stopped: C.danger, merge: C.info, running: C.textHeading, merged: C.success,
 };
 
 const POPOVER_W = 320;

@@ -342,12 +342,15 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
   const f2 = feat('f2', ['open', 'stopped'], 'FICH_S');
   const f3 = feat('f3', ['open', 'merge'], 'FICH_M');
   const c1 = feat('c1', ['closed'], 'FICH_C');
+  // Смержена, ждёт закрытия: bucket=merged — открытая секция, чип «merged».
+  const g1 = { ...feat('g1', ['open', 'merged'], 'FICH_G'), bucket: 'merged' as const };
   const idx: import('../types/featureIndex').FeaturesIndex = {
-    features: [f1, f2, f3, c1],
+    features: [f1, f2, f3, g1, c1],
     chats: {
       's1': [{ featureId: 'f1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
       's2': [{ featureId: 'f2', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
       's3': [{ featureId: 'f3', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
+      's5': [{ featureId: 'g1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
       's4': [{ featureId: 'c1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
     },
   };
@@ -359,7 +362,7 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     indexCalls = 0;
     featuresIndexTest.setIndex('p1', idx);
     mockIndex = idx; // эффект useFeaturesIndex не сбрасывает индекс в EMPTY
-    mockSessions = [s('s1'), s('s2'), s('s3'), s('s4')];
+    mockSessions = [s('s1'), s('s2'), s('s3'), s('s4'), s('s5')];
     store.clear();
     store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', ...filters }));
     const container = new _FakeNode();
@@ -404,6 +407,14 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
     expect(hasFeatureTitle(container, 'FICH_W')).toBe(true);
     expect(hasFeatureTitle(container, 'FICH_S')).toBe(true);
     expect(hasFeatureTitle(container, 'FICH_M')).toBe(false);
+  });
+
+  it('смержена (bucket=merged) — в открытой секции без чипов; чип «Смержены» оставляет только её', async () => {
+    const all = await renderFeatures({});
+    expect(hasFeatureTitle(all, 'FICH_G')).toBe(true);
+    const only = await renderFeatures({ featureChips: ['merged'] });
+    expect(hasFeatureTitle(only, 'FICH_G')).toBe(true);
+    expect(hasFeatureTitle(only, 'FICH_W')).toBe(false);
   });
 
   it('крестик снимает чип: убирает «Ждут вас» → фича waiting исчезает, stopped остаётся', async () => {
@@ -491,131 +502,98 @@ describe('SessionList: Ф1.2 фильтр фич (OR / крестик / закр
   });
 });
 
-// === F3.3: строка «+N чат в группе «X»» (мультифичевый чат) — рендер-тесты ===
-// Глеб (R6): у строки не было ни одного теста рендера; мутация «otherLinks.length > 0 && →
-// false &&» (блок не рендерится) оставляла набор зелёным. Здесь: видимость, aria-label,
-// клик → onSelect, склонение (1/2/5), отсутствие дубля, где чат нарисован, и
-// согласованность счётчика. Мутация «не рендерить блок» краснит тест видимости.
-describe('SessionList: F3.3 строка «+N чат в группе …» (рендер)', () => {
-  const feat = (id: string, title: string, key: string | null, bucket: 'running' | 'closed') => ({
-    featureId: id, title, projectId: 'p1', bucket,
-    attention: null, rail: [], chips: [bucket === 'closed' ? 'closed' as const : 'open' as const],
+// === Общий ключевой чат фич — в каждой своей группе (решение Андрея 24.10, вариант 1) ===
+// Ф3.3 (ссылка «+N чат — в группе «X»») снята: мультифичевый чат теперь рисуется в
+// группе каждой своей фичы напрямую, с пометкой «общий с <другая фича>» в строке.
+// Здесь: обе группы содержат общий чат ровно по одному разу, метка «общий с …» видна
+// в каждой из них, ссылки «+N чат» больше нет. Мутация (в отчёте): groupOf по первой
+// фиче (старое правило) — группа одна, метка не находится → тест красный.
+describe('SessionList: общий чат фич — в обеих группах с меткой «общий с»', () => {
+  const feat = (id: string, title: string) => ({
+    featureId: id, title, projectId: 'p1', bucket: 'running' as const,
+    attention: null, rail: [], chips: ['open' as const],
     stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,
-    keySessionId: key, keyArchived: false, keyProjectId: 'p1', chatCount: 1,
+    keySessionId: null, keyArchived: false, keyProjectId: 'p1', chatCount: 2,
   });
+  // p.1: статус 'waiting' (живой) — карточка монтируется и метку «общий с» видно
+  // даже в свёрнутой группе (живые чаты выводятся наружу).
   const sess = (id: string): Session => ({
-    id, projectId: 'p1', mode: 'auto', status: 'finished', messageCount: 0,
+    id, projectId: 'p1', mode: 'auto', status: 'waiting', messageCount: 0,
     createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
     origin: 'manual',
   } as Session);
-
-  // Индекс: A (open, key chat-a) + B (closed, key chat-b); N мультифичевых чатов
-  // нарисованы в B (links[0]=fb), связаны и с A (links содержит fa) → «+N чат в группе B».
-  const buildIndex = (n: number) => {
-    const chats: Record<string, import('../types/featureIndex').FeatureChatLink[]> = {
-      'chat-a': [{ featureId: 'fa', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
-      'chat-b': [{ featureId: 'fb', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
-    };
-    for (let i = 1; i <= n; i++) {
-      chats[`chat-m${i}`] = [
-        { featureId: 'fb', kind: 'executor', taskRole: null, stepRef: null, lane: null },
-        { featureId: 'fa', kind: 'executor', taskRole: null, stepRef: null, lane: null },
-      ];
-    }
-    return { features: [feat('fa', 'Фича A', 'chat-a', 'running'), feat('fb', 'Фича B', 'chat-b', 'closed')], chats };
+  const link = (featureId: string) => ({ featureId, kind: 'executor' as const, taskRole: null, stepRef: null, lane: null });
+  // А и B — открытые фичи; chat-shared связан с обеими → общий чат в обеих группах
+  const idx = {
+    features: [feat('fa', 'Фича A'), feat('fb', 'Фича B')],
+    chats: {
+      'chat-a': [link('fa')],
+      'chat-b': [link('fb')],
+      'chat-shared': [link('fa'), link('fb')],
+    },
   };
 
-  const findAttr = (c: _FakeNode, attr: string, value: string): _FakeNode | null => {
-    const walk = (n: _FakeNode): _FakeNode | null => {
-      if (n._attrs[attr] === value) return n;
-      for (const ch of n.childNodes) { const r = walk(ch); if (r) return r; }
-      return null;
+  const findAllAttr = (c: _FakeNode, attr: string, value: string): _FakeNode[] => {
+    const out: _FakeNode[] = [];
+    const walk = (n: _FakeNode) => {
+      if (n._attrs[attr] === value) out.push(n);
+      for (const ch of n.childNodes) walk(ch);
     };
-    return walk(c);
+    walk(c);
+    return out;
   };
+  // Заголовок группы фичи: span несёт атрибут title={feature.title} (текстовые узлы
+  // в fake-DOM ненадёжны) — по нему и проверяем, что группа на экране
+  const hasFeatureTitle = (n: _FakeNode, title: string): boolean => {
+    if (n._attrs['title'] === title) return true;
+    for (const c of n.childNodes) if (hasFeatureTitle(c, title)) return true;
+    return false;
+  };
+  // Текст узла: React может ставить textContent прямо на элемент (без дочерних
+  // текстовых узлов) — берём и текст самого узла, и текст детей.
   const textOf = (n: _FakeNode): string => {
-    let out = '';
-    const walk = (x: _FakeNode) => { if (x.nodeType === 3) out += x.textContent; for (const c of x.childNodes) walk(c); };
-    walk(n);
+    let out = n.textContent || '';
+    for (const c of n.childNodes) out += textOf(c);
     return out;
   };
 
-  const renderAndExpandA = async (n: number, onSelect: (s: Session) => void) => {
+  // Рендер режима «Фичи» и раскрытие обеих групп (общий чат «живой» — выведен наружу)
+  const renderAndExpandAll = async () => {
     setAllFlags({ 'features-overview': true });
     featuresIndexTest.reset();
-    const idx = buildIndex(n);
     featuresIndexTest.setIndex('p1', idx);
     mockIndex = idx;
-    mockSessions = [sess('chat-a'), sess('chat-b'), ...Array.from({ length: n }, (_, i) => sess(`chat-m${i + 1}`))];
-    store.clear();
-    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
-    const container = new _FakeNode();
-    const root = createRoot(container);
-    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect })); });
-    const chevron = findAttr(container, 'data-testid', 'feature-group-chevron');
-    if (chevron) await act(async () => { container.fireClick(chevron); });
-    return { container, root };
-  };
-
-  it('видна в группе, где чат НЕ нарисован; aria-label; клик → onSelect(чат)', async () => {
-    const onSelect = vi.fn();
-    const { container, root } = await renderAndExpandA(1, onSelect);
-    const link = findAttr(container, 'data-testid', 'other-group-link-fb');
-    expect(link, 'строка «+1 чат — в группе «Фича B»» есть').not.toBeNull();
-    expect(link!._attrs['aria-label']).toBe('+1 чат — в группе «Фича B»');
-    expect(textOf(link!)).toContain('+1 чат — в группе «Фича B»');
-    // Клик → onSelect(мультифичевый чат). Точное число вызовов не валидируем: клик может
-    // булькнуть на предка (не валидируем здесь) — важно, что onSelect получил chat-m1.
-    await act(async () => { container.fireClick(link!); });
-    expect(onSelect.mock.calls.some(c => c[0]?.id === 'chat-m1'), 'onSelect(chat-m1)').toBe(true);
-    root.unmount();
-  });
-
-  it('склонение: 1 чат / 2 чата / 5 чатов', async () => {
-    for (const [n, expected] of [[1, '+1 чат'], [2, '+2 чата'], [5, '+5 чатов']] as const) {
-      const { container, root } = await renderAndExpandA(n, vi.fn());
-      const link = findAttr(container, 'data-testid', 'other-group-link-fb');
-      expect(link, `строка для n=${n} есть`).not.toBeNull();
-      expect(textOf(link!), `текст «${expected} …»`).toContain(expected);
-      root.unmount();
-    }
-  });
-
-  it('счётчик строки = число мультифичевых чатов (согласованность)', async () => {
-    const { container, root } = await renderAndExpandA(3, vi.fn());
-    const link = findAttr(container, 'data-testid', 'other-group-link-fb');
-    expect(link).not.toBeNull();
-    expect(textOf(link!)).toContain('+3 чата');
-    root.unmount();
-  });
-
-  it('нет строки и дубля, когда мультифичевый чат нарисован в ТЕКУЩЕЙ группе', async () => {
-    setAllFlags({ 'features-overview': true });
-    featuresIndexTest.reset();
-    // chat-multi нарисован в A (links[0]=fa) и связан с A и B → в группе A, не «чужой»
-    const idx = {
-      features: [feat('fa', 'Фича A', 'chat-a', 'running'), feat('fb', 'Фича B', 'chat-b', 'closed')],
-      chats: {
-        'chat-a': [{ featureId: 'fa', kind: 'curator', taskRole: null, stepRef: null, lane: null }],
-        'chat-b': [{ featureId: 'fb', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
-        'chat-multi': [
-          { featureId: 'fa', kind: 'executor', taskRole: null, stepRef: null, lane: null },
-          { featureId: 'fb', kind: 'executor', taskRole: null, stepRef: null, lane: null },
-        ],
-      },
-    };
-    featuresIndexTest.setIndex('p1', idx);
-    mockIndex = idx;
-    mockSessions = [sess('chat-a'), sess('chat-b'), sess('chat-multi')];
+    mockSessions = [sess('chat-a'), sess('chat-b'), sess('chat-shared')];
     store.clear();
     store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
     const container = new _FakeNode();
     const root = createRoot(container);
     await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: vi.fn() })); });
-    const chevron = findAttr(container, 'data-testid', 'feature-group-chevron');
-    if (chevron) await act(async () => { container.fireClick(chevron); });
-    // chat-multi нарисован в A → ссылки на «чужую» группу нет (и дубля нет)
-    expect(findAttr(container, 'data-testid', 'other-group-link-fb'), 'строки «+N чат» нет').toBeNull();
+    for (const chevron of findAllAttr(container, 'data-testid', 'feature-group-chevron')) {
+      await act(async () => { container.fireClick(chevron); });
+    }
+    return { container, root };
+  };
+
+  it('общий чат — в каждой группе ровно один раз; метка «общий с …» в обеих', async () => {
+    const { container, root } = await renderAndExpandAll();
+    // Обе группы на экране
+    expect(hasFeatureTitle(container, 'Фича A'), 'группа A есть').toBe(true);
+    expect(hasFeatureTitle(container, 'Фича B'), 'группа B есть').toBe(true);
+    // Метка «общий с» — ровно одна в каждой группе: в A — «общий с Фича B», в B — «общий с Фича A»
+    const marks = findAllAttr(container, 'data-testid', 'chat-feature-role').map(m => textOf(m));
+    expect(marks.filter(t => t === 'общий с Фича B').length, 'метка в группе A').toBe(1);
+    expect(marks.filter(t => t === 'общий с Фича A').length, 'метка в группе B').toBe(1);
+    // Ссылки F3.3 «+N чат — в группе …» больше нет
+    expect(findAllAttr(container, 'data-testid', 'other-group-link-fb').length, 'ссылки «+N чат» нет').toBe(0);
+    root.unmount();
+  });
+
+  it('однотематический чат — метки «общий с» не имеет', async () => {
+    const { container, root } = await renderAndExpandAll();
+    // chat-a связан только с A: его строка не несёт метки (общих меток ровно две — на shared)
+    const marks = findAllAttr(container, 'data-testid', 'chat-feature-role').map(m => textOf(m));
+    expect(marks.length).toBe(2);
     root.unmount();
   });
 });

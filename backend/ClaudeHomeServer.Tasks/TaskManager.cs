@@ -765,11 +765,35 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // ТОЛЬКО гардом против затирания снятой задачи: человек вправе вернуть снятую задачу
     // в работу и снять пометку, а агенту мы обязаны отказать внятно — иначе «200 OK и
     // ничего не изменилось» (находка фикс-волны 4, мутация в TaskManagerTests).
+    public const string FeatureCloseDeniedText =
+        "Фичу закрывает человек: прямая просьба ассистенту или переводом карточки в «Готово».";
+
+    /// <summary>Отказ закрыть эпик фичи не из чата человека; наследник InvalidOperationException — старые catch-и (400/Deny) его тоже ловят.</summary>
+    public sealed class FeatureCloseDeniedException() : InvalidOperationException(FeatureCloseDeniedText);
+
+    public const string FeatureReopenDeniedText =
+        "Фичу возобновляет человек: прямая просьба ассистенту или кнопка «Возобновить».";
+
+    /// <summary>Отказ возобновить закрытый эпик фичи не из чата человека; симметричен FeatureCloseDeniedException (дефект df85c799).</summary>
+    public sealed class FeatureReopenDeniedException() : InvalidOperationException(FeatureReopenDeniedText);
+
     public TaskItem? Update(string id, UpdateTaskRequest req, BoardColumn? effectiveColumn = null,
-        bool isAgentCall = false, bool callerIsExecutor = false)
+        bool isAgentCall = false, bool callerIsExecutor = false, bool denyFeatureClose = false,
+        bool denyFeatureReopen = false)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        // Эпик фичи закрывает только человек: чат-исполнитель любой задачи и делегированный ход (вызыватель
+        // считает denyFeatureClose) переводить role=feature в Done не вправе. Проверка до мутаций.
+        if (denyFeatureClose && task.Role == TaskRoles.Feature
+            && req.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done)
+            throw new FeatureCloseDeniedException();
+        // Симметричный гард (дефект df85c799): обратный переход Done → Todo для эпика фичи из чата
+        // исполнителя молча отменяет решение человека о закрытии. Предикат вызывающего тот же, что у
+        // закрытия (denyFeatureReopen): чат человека проходит. Проверка до мутаций.
+        if (denyFeatureReopen && task.Role == TaskRoles.Feature
+            && task.Status == TaskItemStatus.Done && req.Status is not null && req.Status != TaskItemStatus.Done)
+            throw new FeatureReopenDeniedException();
         var statusBefore = task.Status;
         // Снимок 6 полей ДО мутации — для журнала фичи (WriteJournalTransitions перед ScheduleSave).
         var before = Capture(task);

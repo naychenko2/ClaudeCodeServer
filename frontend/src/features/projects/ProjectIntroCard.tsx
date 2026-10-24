@@ -73,8 +73,8 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
     [personas, projectId],
   );
 
-  // Только владелец. !ownerId — владелец по умолчанию (старые проекты без поля)
-  const isOwner = !projectOwnerId || (!!me.userId && projectOwnerId === me.userId);
+  // Только владелец: API всегда отдаёт ownerId, фолбэка «старые проекты без поля» нет
+  const isOwner = !!me.userId && projectOwnerId === me.userId;
   const hasLead = !!defaultPersonaId;
   const scaffoldPending = presetKey === 'pending';
   // Кнопку «Выбрать из команды» показываем только когда команда непуста и это

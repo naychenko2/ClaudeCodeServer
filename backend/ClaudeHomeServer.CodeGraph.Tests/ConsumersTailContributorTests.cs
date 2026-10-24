@@ -69,8 +69,26 @@ public class ConsumersTailContributorTests
 
     private static void Cleanup(string dir, string data)
     {
-        Directory.Delete(dir, true);
-        Directory.Delete(data, true);
+        DeleteWithRetry(dir);
+        DeleteWithRetry(data);
+    }
+
+    // Фоновая перестройка графа (StartRebuildIfIdle) может ещё писать в каталог данных:
+    // повторяем удаление, пока она не отпустит файлы
+    private static void DeleteWithRetry(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(path)) Directory.Delete(path, true);
+                return;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                Thread.Sleep(100);
+            }
+        }
     }
 
     [Fact]

@@ -1541,6 +1541,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             task.GetProperty("role").GetString().Should().Be("merge");
             task.GetProperty("featureId").GetString().Should().Be(epicId);
             task.GetProperty("personaId").GetString().Should().Be(persona.Id);
+            // Закрытие эпика — только человеком: шаблон не велит исполнителю закрывать эпик
+            var description = task.GetProperty("description").GetString()!;
+            description.Should().Contain("Эпик не закрывать")
+                .And.NotContain("закрыть эпик");
         }
         finally
         {

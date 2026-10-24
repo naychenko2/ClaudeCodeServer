@@ -21,7 +21,8 @@ export function handlePressableKey<E extends PressKey>(e: E, onPress: (e: E) => 
 // без флага вид целиком задаёт вызывающий.
 export function PressableArea({
   onPress, title, children, feedback = false, className, style,
-  'aria-label': ariaLabel, 'aria-haspopup': ariaHaspopup,
+  'aria-label': ariaLabel, 'aria-haspopup': ariaHaspopup, 'aria-expanded': ariaExpanded,
+  'data-testid': testId,
 }: {
   onPress: (e: MouseEvent | KeyboardEvent) => void;
   title?: string;
@@ -31,6 +32,8 @@ export function PressableArea({
   style?: CSSProperties;
   'aria-label'?: string;
   'aria-haspopup'?: AriaAttributes['aria-haspopup'];
+  'aria-expanded'?: boolean;
+  'data-testid'?: string;
 }) {
   const cls = [feedback ? 'cc-pressable' : '', className ?? ''].filter(Boolean).join(' ');
   return (
@@ -42,6 +45,8 @@ export function PressableArea({
       title={title}
       aria-label={ariaLabel}
       aria-haspopup={ariaHaspopup}
+      aria-expanded={ariaExpanded}
+      data-testid={testId}
       className={cls || undefined}
       style={{ cursor: 'pointer', ...style }}
     >

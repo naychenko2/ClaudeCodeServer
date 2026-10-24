@@ -446,8 +446,27 @@ public class TasksController(
             var callerIsExecutor =
                 User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
                 && (callerSession is null || callerSession.TaskId == taskId);
-            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor)
+            // Закрытие и возобновление эпика фичи — только из чата человека. Предикат один для
+            // обеих дверей (дефект df85c799) и записан в спинке (FeatureTurnGate, Core): здесь
+            // только входы пути — тип токена и сессия-вызывающий. Отказ бросает TaskManager
+            // (FeatureCloseDenied/FeatureReopenDenied).
+            var denyFeature = FeatureTurnGate.DenyFeature(
+                User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind,
+                callerSession, callerSessionHeader,
+                () => !DelegatedTurnGate.Decide(
+                    sessions, UserId, callerSessionHeader, "Закрытие/возобновление фичи",
+                    alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
+            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor,
+                denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
                 ?? throw new InvalidOperationException("Задача не найдена");
+        }
+        catch (TaskManager.FeatureCloseDeniedException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
+        catch (TaskManager.FeatureReopenDeniedException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -1403,7 +1422,7 @@ public class TasksController(
             "Предусловие: финал фичи принят (проверено сервером).",
             "Push НЕ делать — только локальный мерж.",
             "При конфликте не разрешать молча: остановиться и доложить в отчёте задачи, что именно конфликтует.",
-            "После успешного мержа проверить git log/сборку по кратким критериям проекта и закрыть эпик через tasks_complete только если мерж прошёл чисто.",
+            "После успешного мержа проверить git log/сборку по кратким критериям проекта. Эпик не закрывать: фичу закрывает человек.",
             "Worktree и ветки не удалять — уборка по слову человека.");
     }
 

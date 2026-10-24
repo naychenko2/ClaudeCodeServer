@@ -27,6 +27,7 @@ import { openTaskInSection } from '../../lib/tasks';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureStats, FeatureTimeline, FeatureBreakdown, FeatureLongestNow, FeatureSpend } from '../../types/featureStats';
 import type { FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
+import { C, FS, FONT } from '../../lib/design';
 
 // === Мок навигации (задача) ===
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
@@ -967,17 +968,17 @@ describe('FeatureStatsTab: строка «тихо» на Ганте (W5-F3b)', 
     expect(innerText).toContain('→ сейчас');
     // Дата начала тишины в центре трека — из lastActivityAt (spec: «{дата} → сейчас»).
     expect(innerText, 'в центре трека — дата начала тишины').toContain(formatDateTime('2026-10-20T17:10:00Z'));
-    expect(inner.style.fontFamily).toContain('JetBrains Mono');
-    expect(inner.style.fontSize).toBe('10px');
-    expect(inner.style.color).toBe('var(--c-warning-text)');
+    expect(inner.style.fontFamily).toBe(FONT.mono);
+    expect(inner.style.fontSize).toBe(`${FS.xxs}px`);
+    expect(inner.style.color).toBe(C.warningText);
     // Справа — длительность: не только «число есть», но и типографика по spec —
     // FONT.mono FS.xs 700 C.warningText.
     const dur = row.childNodes[2] as unknown as { style: Record<string, string> };
     expect(textNodes(row.childNodes[2] as never).join('')).toMatch(/\d+/);
-    expect(dur.style.fontFamily).toContain('JetBrains Mono');
-    expect(dur.style.fontSize).toBe('11px');
+    expect(dur.style.fontFamily).toBe(FONT.mono);
+    expect(dur.style.fontSize).toBe(`${FS.xs}px`);
     expect(dur.style.fontWeight).toBe('700');
-    expect(dur.style.color).toBe('var(--c-warning-text)');
+    expect(dur.style.color).toBe(C.warningText);
   });
 
   it('«· сжато» — только на десктопе; на 360 — сетка 86px 1fr 52px и minHeight 40', () => {

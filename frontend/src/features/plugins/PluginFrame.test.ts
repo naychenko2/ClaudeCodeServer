@@ -455,7 +455,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
 
   it('вход сменился в другой вкладке: storage.* отвечает denied, запись не делается', async () => {
     const { container, sent, panelWin } = await mountWithBridge(
-      { ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, { cc_user_id: 'u2' }, 'u1');
+      { ...P_WITH_PANEL, granted: ['storage'] }, PANEL_1, { cc_token: 't', cc_user_id: 'u2' }, 'u1');
     callFromPanel(panelWin, 'storage.set', { key: 'city', value: 'Москва' });
     expect(sent[0]).toEqual({ source: 'ccs-host', v: 1, type: 'result', id: 'c1', ok: false, error: OWNER_CHANGED });
     const ls = (globalThis as { localStorage: { getItem: (k: string) => string | null } }).localStorage;
@@ -466,7 +466,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
   });
 
   it('вход сменился в другой вкладке: серверный вызов не уходит, панель получает denied', async () => {
-    const { sent, panelWin } = await mountWithBridge(P_WITH_PANEL, PANEL_1, { cc_user_id: 'u2' }, 'u1');
+    const { sent, panelWin } = await mountWithBridge(P_WITH_PANEL, PANEL_1, { cc_token: 't', cc_user_id: 'u2' }, 'u1');
     callFromPanel(panelWin, 'net:example.com/weather', { q: 'Ярославль' });
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
     expect(vi.mocked(api.plugins.call).mock.calls.length, 'на сервер от чужого имени не идём').toBe(0);
@@ -475,7 +475,7 @@ describe('PluginFrame: перехват storage.* на хосте', () => {
 
   it('владелец совпадает: серверный вызов уходит как обычно', async () => {
     vi.mocked(api.plugins.call).mockResolvedValue({ ok: true, result: { x: 1 } } as never);
-    const { sent, panelWin } = await mountWithBridge(P_WITH_PANEL, PANEL_1, { cc_user_id: 'u1' }, 'u1');
+    const { sent, panelWin } = await mountWithBridge(P_WITH_PANEL, PANEL_1, { cc_token: 't', cc_user_id: 'u1' }, 'u1');
     callFromPanel(panelWin, 'net:example.com/weather', { q: 'Ярославль' });
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
     expect(vi.mocked(api.plugins.call).mock.calls.length).toBe(1);

@@ -65,8 +65,7 @@ function readFrom(name: 'sessionStorage' | 'localStorage', key: string): string 
   }
 }
 
-function readStoredKey(key: string): string | null {
-  const raw = readFrom('sessionStorage', key) || readFrom('localStorage', key);
+function cleanStored(raw: string | null): string | null {
   if (!raw) return null;
   // Строки "null"/"undefined" — частый мусор: где-то в цепочке
   // `setItem(key, null|undefined)` молча сохранил их как строки.
@@ -76,8 +75,19 @@ function readStoredKey(key: string): string | null {
   return trimmed;
 }
 
+// Пара «токен + владелец» читается из ОДНОГО хранилища — того, откуда взят токен
+// (sessionStorage первым). Инвариант входа: токен в хранилище ⇒ id в том же хранилище;
+// id из другого хранилища чужой и не подхватывается (иначе сверка владельца обманута).
+function readStoredPair(): { token: string | null; userId: string | null } {
+  for (const name of ['sessionStorage', 'localStorage'] as const) {
+    const token = cleanStored(readFrom(name, 'cc_token'));
+    if (token) return { token, userId: cleanStored(readFrom(name, 'cc_user_id')) };
+  }
+  return { token: null, userId: null };
+}
+
 export function readStoredToken(): string | null {
-  return readStoredKey('cc_token');
+  return readStoredPair().token;
 }
 
 // Запись токена туда, откуда его читает readStoredToken (sessionStorage первым): режим входа
@@ -92,7 +102,7 @@ export function writeStoredToken(token: string): void {
 
 // Владелец вкладки по хранилищу; пара к readStoredToken, тот же порядок чтения.
 export function readStoredUserId(): string | null {
-  return readStoredKey('cc_user_id');
+  return readStoredPair().userId;
 }
 
 // --- Кэшированный токен (для частых вызовов, напр. avatarUrl) ---

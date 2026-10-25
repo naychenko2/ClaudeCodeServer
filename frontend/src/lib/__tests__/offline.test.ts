@@ -648,9 +648,17 @@ describe('readStoredToken / readStoredUserId: «сначала своё»', () =
   });
 
   it('мусорный id ("null") приравнивается к отсутствию', () => {
-    vi.stubGlobal('sessionStorage', storageStub({ cc_user_id: 'null' }));
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'свой', cc_user_id: 'null' }));
     vi.stubGlobal('localStorage', storageStub());
 
+    expect(offline.readStoredUserId()).toBeNull();
+  });
+
+  it('токен в sessionStorage без id там же, id в localStorage — id неизвестен, не чужой', () => {
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'токен-A' }));
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'токен-B', cc_user_id: 'u-b' }));
+
+    expect(offline.readStoredToken()).toBe('токен-A');
     expect(offline.readStoredUserId()).toBeNull();
   });
 

@@ -1202,8 +1202,10 @@ public class TasksController(
     }
 
     // Все задачи ПОЛНОГО run в одном списке: эпик + шаги + ревью + qa + финал + мерж +
-    // разрез + план. Единый хелпер (не две копии): новая роль в run не должна молча отстать
+    // разрез + дизайн + план. Единый хелпер (не две копии): новая роль в run не должна молча отстать
     // в одном из мест (автор макета / linkedFiles) — обе точки берут список отсюда.
+    // M1: design входит — иначе макеты от задач дизайнера не попадают ни в AllLinkedFiles,
+    // ни в OwnerTask (карточка фичи их не показывает).
     private static List<TaskItem> AllRunTasks(FeatureRun run)
     {
         var all = new List<TaskItem> { run.Epic };
@@ -1213,6 +1215,7 @@ public class TasksController(
         if (run.Final is not null) all.Add(run.Final);
         if (run.Merge is not null) all.Add(run.Merge);
         all.AddRange(run.Cut);
+        all.AddRange(run.Design);
         all.AddRange(run.Plan);
         return all;
     }

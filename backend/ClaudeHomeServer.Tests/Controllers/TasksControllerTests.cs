@@ -1314,6 +1314,43 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-mk");
     }
 
+    // M1: задача role=design входит в AllRunTasks — её linkedFiles доходят до каталога, а
+    // макет получает taskId/authorPersonaId от задачи дизайнера (иначе макеты от design в
+    // карточке фичи не показываются вовсе: их нет ни в AllLinkedFiles, ни в OwnerTask).
+    [Fact]
+    public async Task GetFeature_Mockups_Design_ЗадачаDesignДаётTaskId()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        // Задача дизайнера с linkedFiles на макет; PersonaId — напрямую в сторе (мимо валидации).
+        var design = await CreateTaskAsync(new
+        {
+            title = "макет", featureId = epicId, role = "design",
+            linkedFiles = new[] { "docs/mockups/x.html" },
+        });
+        var designId = design.GetProperty("id").GetString()!;
+        _factory.Services.GetRequiredService<TaskManager>().GetById(designId)!.PersonaId = "persona-dsg";
+        var dir = Path.Combine(_factory.TempDir, "mk_dsg_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var project = Projects.Create("mk-dsg-" + Guid.NewGuid().ToString("N")[..6], dir, OwnerId, "testuser");
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.ProjectId = project.Id;
+        // Та же проверка проектного фильтра, что в шаговом образце: задача design — в проекте эпика.
+        _factory.Services.GetRequiredService<TaskManager>().GetById(designId)!.ProjectId = project.Id;
+
+        var catalog = new FixedMockupCatalog(new MockupEntry(
+            Path: "docs/mockups/x.html", Title: "Макет", Status: null,
+            Files: [new MockupFile("docs/mockups/x.html", true)],
+            Source: MockupSource.LinkedFiles, ModifiedAt: null));
+        var controller = BuildController(git: null, catalog: catalog);
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        mockup.GetProperty("path").GetString().Should().Be("docs/mockups/x.html");
+        mockup.GetProperty("taskId").GetString().Should().Be(designId, "taskId — по задаче design");
+        mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-dsg");
+    }
+
     // ─── W4-5: каталог читает проверенное worktree эпика (п.5.1) ────────────────────────────
 
     // Каталог, запоминающий корень каждого вызова Find и возвращающий маркерную запись с ОДНИМ

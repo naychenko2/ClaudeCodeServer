@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using ClaudeHomeServer.Models;
@@ -1561,7 +1562,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     private static (string?, string) WorktreeCacheKey(string? ownerId, string mainRoot) =>
         (ownerId, PathNormalizer.NormalizePath(mainRoot));
 
-    private bool TryCached((string?, string) key, out IReadOnlyList<GitWorktreeInfo>? list)
+    private bool TryCached((string?, string) key, [NotNullWhen(true)] out IReadOnlyList<GitWorktreeInfo>? list)
     {
         if (_worktreeCache.TryGetValue(key, out var entry) && entry.ExpiresAt > Clock())
         {

@@ -919,12 +919,12 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
 
         var a = g.WorktreeListAsync(null, _repo, useCache: true);
         var b = g.WorktreeListAsync(null, _repo, useCache: true);
-        await Task.WhenAll(a, b);
+        var results = await Task.WhenAll(a, b);
 
         CountWorktreeListRuns(launcher.Specs).Should().Be(1,
             "single-flight: параллельные вызовы одного ключа — ровно один git-прогон");
-        a.Result.Should().BeEquivalentTo(b.Result);
-        a.Result.Should().Contain(w => w.Branch == "wt/cache", "полёт был реальным, не пустым");
+        results[0].Should().BeEquivalentTo(results[1]);
+        results[0].Should().Contain(w => w.Branch == "wt/cache", "полёт был реальным, не пустым");
 
         await g.WorktreeRemoveAsync(null, _repo, wt);
     }

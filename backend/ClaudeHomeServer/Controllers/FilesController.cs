@@ -113,7 +113,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
             // WorktreePath) или «дерево заявлено, но его нет в worktree list» (сносили после
             // мержа) — НЕ 404, а поиск по main и остальным worktree; ответ несёт branch и
             // isAnchor, фолбэк не тихий. Без параметров — корень проекта (прежнее поведение).
-            string root;
+            string? root;
             string? branch = null;
             bool isAnchor = false;
             if (!string.IsNullOrEmpty(featureId))

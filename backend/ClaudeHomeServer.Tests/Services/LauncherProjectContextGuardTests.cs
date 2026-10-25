@@ -14,8 +14,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// логический метод (тип верхнего уровня + метод; async-машины и замыкания сводятся к
 /// своему методу) и ТОЧНОЕ число вызовов в нём. Новый вызов, в том числе в уже разрешённом
 /// методе, краснеет. В allow-list — только места без проекта: системные one-shot, чат вне
-/// проекта, среда владельца (реестр MCP, файлы хоста, профиль CLI) и файловая группа за
-/// guard'ом 3.3, которую локальный проект не проходит.
+/// проекта, среда владельца (реестр MCP, файлы хоста, профиль CLI), файловая группа за
+/// guard'ом 3.3, которую локальный проект не проходит, и маппинг путей worktree
+/// (ProjectTreeLocator), где раннер не запускается.
 /// </summary>
 public class LauncherProjectContextGuardTests(ITestOutputHelper output)
 {
@@ -42,6 +43,11 @@ public class LauncherProjectContextGuardTests(ITestOutputHelper output)
         ["ClaudeHomeServer.Services.Git.GitService.WorktreeAddDetachedAsync"] = (1, "файловая группа за guard'ом 3.3"),
         ["ClaudeHomeServer.Services.Git.GitService.WorktreeListAsync"] = (1, "файловая группа за guard'ом 3.3"),
         ["ClaudeHomeServer.Services.Git.GitService.WorktreeRemoveAsync"] = (1, "файловая группа за guard'ом 3.3"),
+        // ProjectTreeLocator (B1b): ForOwner здесь — только маппинг путей worktree
+        // (ToRuntime/ToHost), раннер не запускается; локальный проект возвращается
+        // раньше этих строк (FilesOnServer), для серверного ForProject == среда владельца
+        ["ClaudeHomeServer.Services.ProjectTreeLocator.RootsAsync"] = (2, "маппинг путей корней worktree, раннер не запускается"),
+        ["ClaudeHomeServer.Services.ProjectTreeLocator.IsLinkedWorktree"] = (1, "маппинг пути gitdir, раннер не запускается"),
     };
 
     private static readonly Lazy<Dictionary<string, int>> Hits = new(Scan);

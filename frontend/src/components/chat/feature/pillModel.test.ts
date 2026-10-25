@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeatureNow, FeatureRun, FeatureStage, FeatureTask } from '../../../types/featureRun';
 import { buildPillModel } from './pillModel';
+import { featureRunStatusTag } from '../../feature/FeatureStatusTag';
 
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя.
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
@@ -220,6 +221,36 @@ describe('buildPillModel: очередь фич (holdReason=queue)', () => {
     expect(m.post).not.toContain('из');
     expect(m.bold).toBe('Не начата');
     expect(m.pre).toBe('');
+  });
+});
+
+// ── R-Q5D-A: единый источник подписи очереди (пилюля = тег) ───────────────────
+// Текст формата «N из M» — из общего хелпера queueLabel (chatGroups): пилюля и тег
+// статуса для одной очереди дают побайтно один текст. Пилюля набирает leading-слово
+// с большой (макет .tpp .x b) — сравниваем текст, регистр leading-слова — вопрос
+// рендера, не источника.
+
+describe('R-Q5D-A: подпись пилюли = подпись тега (один источник — queueLabel)', () => {
+  // Текст очереди из модели пилюли: leading-слово в нижний регистр + суффикс как есть.
+  const pillLabel = (m: NonNullable<ReturnType<typeof buildPillModel>>): string =>
+    m.bold.charAt(0).toLowerCase() + m.bold.slice(1) + m.post;
+
+  it('«в очереди · 5 из 7» — пилюля и тег побайтно равны', () => {
+    const m = buildPillModel([run({
+      state: 'paused',
+      hold: { reason: 'queue', since: '2026-10-25T10:00:00Z' },
+      queue: { position: 5, length: 7 },
+    })], false, null)!;
+    const tag = featureRunStatusTag('paused', null, { holdReason: 'queue', queue: { position: 5, length: 7 } });
+    expect(pillLabel(m)).toBe(tag.label);
+    expect(pillLabel(m)).toBe('в очереди · 5 из 7');
+  });
+
+  it('queue не пришёл: «в очереди» без цифр — так же, как тег', () => {
+    const m = buildPillModel([run({ state: 'paused', hold: { reason: 'queue' } })], false, null)!;
+    const tag = featureRunStatusTag('paused', null, { holdReason: 'queue' });
+    expect(pillLabel(m)).toBe(tag.label);
+    expect(pillLabel(m)).toBe('в очереди');
   });
 });
 

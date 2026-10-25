@@ -111,8 +111,9 @@ export function kindLabel(kind: SegmentKind): string {
 // Цвет вида — ТОЛЬКО токены C.* (макет: work=accent, waiting=info, idle=progress-track,
 // error=danger, notWorking=штриховка bgSelected/bgInset). Возвращает CSS-подложку.
 // 'queued' — не вид сегмента (их у бэка нет): доля состава «стояла в очереди» из
-// compositionRows (Q5F), окрашивается дымком ожидания — тот же язык, что у значка
-// ожидания и приглушённых сегментов очереди (C.smoke).
+// compositionRows (Q5F) — самостоятельный пятый вид разряды (R-Q3B-2, ADR-031
+// §«Время в очереди (queued)»), окрашивается дымком ожидания (C.smoke) — тот же язык,
+// что у кольца индикатора ожидания (WaitingIndicator).
 export function kindBackground(kind: SegmentKind | 'queued'): string {
   switch (kind) {
     case 'work': return C.accent;

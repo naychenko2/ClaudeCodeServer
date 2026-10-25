@@ -3,8 +3,9 @@
 // Покрытие: четыре состояния героя (running/waiting/merged/few) и приоритет
 // (merged выше всех, waiting выше few); порог few — ровно FEW_DATA_MIN (30 мин —
 // уже не few); состав времени: порядок строк, проценты от elapsed, null-поля не
-// дают строки; очередь (Q5F): с queuedMinutes — строка «в очереди» после простого и
-// сумма процентов 100, без неё (null/0/нет поля) — прежнее; плитки: 3 без spend,
+// дают строки; очередь (Q5F): с queuedMinutes — строка «в очереди» после простого,
+// без неё (null/0/нет поля) — прежнее; проценты округляются по частям — сумма может
+// дать 99 или 101; плитки: 3 без spend,
 // 4 со spend, токены — сумма всех четырёх видов; потери: карточка 1 из longestWait
 // (live при attention.kind='wait'),
 // карточка 2 — цепочка с максимальным loops (loops=0 — её нет), карточка 3 —
@@ -172,9 +173,10 @@ describe('compositionRows', () => {
     expect(compositionRows(mkTotals({ workWallMinutes: 10 })).length).toBe(0);
   });
 
-  // Q5F: очередь, вычтенная бэком из простоя (FeatureTimeline.cs, 13c6e9370), — отдельная
-  // доля; сумма видов = elapsed, сумма процентов = 100.
-  it('очередь есть: строка «в очереди» после простого, сумма процентов = 100 %', () => {
+  // Q5F: очередь — самостоятельный пятый вид разряды (R-Q3B-2, коммит 6c659e527, ADR-031
+  // §«Время в очереди (queued)»): строка после простого; сумма видов = elapsed (контракт
+  // TimelineTotals) — минуты, не проценты.
+  it('очередь есть: строка «в очереди» после простого', () => {
     const r = compositionRows(mkTotals({
       elapsedMinutes: 400, workWallMinutes: 240, waitingMinutes: 60, idleMinutes: 60, errorMinutes: 20, queuedMinutes: 20,
     }));
@@ -183,7 +185,16 @@ describe('compositionRows', () => {
     expect(r.map(x => x.minutes)).toEqual([240, 60, 60, 20, 20]);
     expect(r.map(x => x.percent)).toEqual([60, 15, 15, 5, 5]);
     expect(r.map(x => x.percentText)).toEqual(['60 %', '15 %', '15 %', '5 %', '5 %']);
-    expect(r.reduce((a, x) => a + x.percent, 0)).toBe(100);
+  });
+
+  // Округление по частям — поведение старое (не регресс Q5F): сумма процентов может дать
+  // 101 % (17+17+33+17+17); ширина сегментов в StatsHero мерится минутами, не процентами.
+  it('проценты округляются по частям: сумма 101 % допустима', () => {
+    const r = compositionRows(mkTotals({
+      elapsedMinutes: 6, workWallMinutes: 1, waitingMinutes: 1, idleMinutes: 2, errorMinutes: 1, queuedMinutes: 1,
+    }));
+    expect(r.map(x => x.percent)).toEqual([17, 17, 33, 17, 17]);
+    expect(r.reduce((a, x) => a + x.percent, 0)).toBe(101);
   });
 
   it('очереди нет (null / 0 / поля нет): строки и проценты — прежние', () => {

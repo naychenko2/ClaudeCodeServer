@@ -60,9 +60,11 @@ export interface FeatureTimeline {
     errorCount: number | null;
     // Минут в ошибках; null — не считалось.
     errorMinutes: number | null;
-    // Минут «стояла в очереди фич» (пересечение hold(reason=queue) с простоем); бэк вычитает
-    // их из idleMinutes — сумма видов остаётся равной elapsed. null — не считалось (approx).
-    // Опциональна: старые ответы бэка поля не несут.
+    // Минут «стояла в очереди фич» — самостоятельный пятый вид разряды (R-Q3B-2,
+    // ADR-031 §«Время в очереди (queued)»): бэк вычитает перекрытия очереди из
+    // work/waiting/error/idle, минуты queued у idleMinutes не отнимает; сумма видов
+    // остаётся равной elapsed. null — не считалось (approx). Опциональна: старые ответы
+    // бэка поля не несут.
     queuedMinutes?: number | null;
   };
 }

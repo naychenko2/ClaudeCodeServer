@@ -9,6 +9,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { FeatureRailSegment, FeatureRailKey } from '../../../types/featureIndex';
 import type { FeatureQueue } from '../../../types/featureRun';
+import { queueLabelParts } from '../../../lib/chatGroups';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { FeatureRail } from './FeatureRail';
 
 // 8 стадий в порядке жизненного цикла (cut → design → plan → … → merge); design —
@@ -177,5 +180,30 @@ describe('FeatureRail: очередь фич (waiting)', () => {
     const html = renderToStaticMarkup(createElement(FeatureRail, { rail: rail(), closed: true, waiting: true, queue: Q }));
     expect(html).toContain('aria-label="Этап: закрыта"');
     expect((html.match(/background:var\(--c-text-muted\)/g) ?? []).length).toBe(8);
+  });
+});
+
+// === R-Q5D-E: рельса берёт aria-суффикс из структурного API хелпера ===
+// Потребитель не разбирает строку подписи и не держит своей копии формата «N из M»:
+// суффикс приходит готовым полем queueLabelParts.ariaSuffix (единственный источник —
+// chatGroups). Мутация (в отчёте): вернуть в рельсу разбор строки по разделителю →
+// сторож краснеет; сдвинуть суффикс на свой текст → краснеют оба теста.
+
+describe('FeatureRail: R-Q5D-E — подпись из queueLabelParts', () => {
+  it('aria-суффикс рельсы = queueLabelParts(queue).ariaSuffix', () => {
+    const q: FeatureQueue = { position: 2, length: 3 };
+    const html = renderQ(rail(), true, q);
+    expect(html).toContain(`aria-label="Этап: Производство${queueLabelParts(q).ariaSuffix}"`);
+    // Без цифр — тоже из хелпера (null/нули).
+    const htmlNull = renderQ(rail(), true, null);
+    expect(htmlNull).toContain(`aria-label="Этап: Производство${queueLabelParts(null).ariaSuffix}"`);
+  });
+
+  it('в исходнике рельсы нет разбора строки подписи и своей копии «N из M»', () => {
+    const src = readFileSync(fileURLToPath(new URL('./FeatureRail.tsx', import.meta.url)), 'utf8');
+    expect(src, 'рельса разбирает строку подписи по разделителю').not.toContain("indexOf(' · ')");
+    expect(src, 'рельса берёт строку подписи вместо частей').not.toMatch(/\bqueueLabel\(/);
+    expect(src, 'рельса собирает своё «N из M»').not.toMatch(/\$\{[^}]*position/);
+    expect(src, 'рельса собирает своё «N из M»').not.toMatch(/\$\{[^}]*length/);
   });
 });

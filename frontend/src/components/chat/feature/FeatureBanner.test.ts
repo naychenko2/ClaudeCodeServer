@@ -38,7 +38,10 @@ import { setAllFlags } from '../../../lib/featureFlags';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps, textNodes } from '../__tests__/fakeDom';
 import { __test as runsTest } from '../../../lib/featureRuns';
 import type { FeatureAttention, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../../types/featureIndex';
-import type { FeatureRun, FeatureState } from '../../../types/featureRun';
+import type { FeatureQueue, FeatureRun, FeatureState } from '../../../types/featureRun';
+import { queueLabelParts } from '../../../lib/chatGroups';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 // m7: управляемый индекс фич — mock `api.tasks.featuresIndex` возвращает этот объект,
 // чтобы live-перезапрос (useFeaturesIndex) не затирал синхронный сид стора.
@@ -931,5 +934,50 @@ describe('FeatureBanner: клик по точке → переход (mount)', (
     // aria-label панели = заголовок ВЫБРАННОЙ фичи: f2, не f1.
     expect(panel!.getAttribute('aria-label'), 'выбрана f1 (порядок runs), а не f2 (порядок индекса)').toBe('Вторая фича');
     root.unmount();
+  });
+});
+
+// === R-Q5D-E: плашка берёт подпись из структурного API хелпера ===
+// Потребитель не разбирает строку подписи и не держит своей копии формата «N из M»:
+// жирное слово, суффикс и aria-суффикс приходят готовыми полями queueLabelParts
+// (единственный источник — chatGroups). Мутация (в отчёте): вернуть разбор строки по
+// разделителю и зашитое слово «В очереди» → сторож краснеет.
+
+describe('FeatureBanner: R-Q5D-E — подпись из queueLabelParts', () => {
+  beforeEach(() => {
+    __test.reset();
+    setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
+  });
+  afterEach(() => {
+    __test.reset();
+    setAllFlags({});
+  });
+
+  const queued = (queue: FeatureQueue | null) =>
+    feat('paused', { holdReason: 'queue', queue });
+
+  it('жирное слово и суффикс модели = queueLabelParts(queue).bold/.post', () => {
+    const q: FeatureQueue = { position: 2, length: 3 };
+    const parts = queueLabelParts(q);
+    const m = featureBannerRow(queued(q), link(), 'chat-exec');
+    expect(m.whereBold).toBe(parts.bold);
+    expect(m.wherePost).toBe(parts.post);
+    expect(m.where).toBe(`${parts.bold}${parts.post}`);
+  });
+
+  it('aria активной точки заканчивается на queueLabelParts(queue).ariaSuffix', () => {
+    const q: FeatureQueue = { position: 2, length: 3 };
+    seedIndex(queued(q), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const m = html.match(/<button[^>]*data-testid="feature-dot-prod"[^>]*>/);
+    expect(m, 'нет кнопки активной точки').not.toBeNull();
+    expect(m![0]).toContain(`aria-label="Этап: Производство${queueLabelParts(q).ariaSuffix}"`);
+  });
+
+  it('в исходнике плашки нет разбора строки подписи и своей копии слова «В очереди»', () => {
+    const src = readFileSync(fileURLToPath(new URL('./FeatureBanner.tsx', import.meta.url)), 'utf8');
+    expect(src, 'плашка разбирает строку подписи по разделителю').not.toContain("indexOf(' · ')");
+    expect(src, 'плашка берёт строку подписи вместо частей').not.toMatch(/\bqueueLabel\(/);
+    expect(src, 'плашка зашивает своё слово «В очереди»').not.toMatch(/bold:\s*'В очереди'/);
   });
 });

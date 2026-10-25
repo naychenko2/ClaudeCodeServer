@@ -1,4 +1,5 @@
 import { C, R, SP } from '../../../lib/design';
+import { queueLabelParts } from '../../../lib/chatGroups';
 import type { FeatureRailSegment } from '../../../types/featureIndex';
 import type { FeatureQueue } from '../../../types/featureRun';
 
@@ -105,11 +106,12 @@ function segmentStyle(seg: FeatureRailSegment, closed: boolean, waiting: boolean
   }
 }
 
-// Суффикс подписи очереди: « · в очереди N из M» (макет feature-queue-1). Нет queue
-// (бэк ещё не отдал) или нули — без цифр; позицию считает бэк, фронт не пересчитывает.
+// Суффикс подписи очереди: « · в очереди N из M» (макет feature-queue-1). Текст —
+// ГОТОВЫМ полем queueLabelParts.ariaSuffix (R-Q5D-E): своей копии формата «N из M»
+// в рельсе больше нет. Нет queue (бэк ещё не отдал) или нули — без цифр; позицию
+// считает бэк, фронт не пересчитывает.
 function queueSuffix(queue: FeatureQueue | null | undefined): string {
-  if (!queue || queue.position <= 0 || queue.length <= 0) return ' · в очереди';
-  return ` · в очереди ${queue.position} из ${queue.length}`;
+  return queueLabelParts(queue).ariaSuffix;
 }
 
 // aria-label всей рельсы: «Этап: {активный этап}» (макет) или «Этап: закрыта».

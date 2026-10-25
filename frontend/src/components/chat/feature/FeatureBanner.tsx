@@ -4,7 +4,7 @@ import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useFeaturesIndex, featureOf } from '../../../lib/featuresIndex';
 import { useFeatureRuns, useFeatureRunsLoading, useFeatureRunsError } from '../../../lib/featureRuns';
 import { openChatById } from '../../../lib/openChat';
-import { STAGE_NAME, queueLabel } from '../../../lib/chatGroups';
+import { STAGE_NAME, queueLabelParts } from '../../../lib/chatGroups';
 import { CHAT_ROLE_LABEL } from '../../../lib/featureChatRole';
 import { roleLabel } from '../../../lib/roleLabel';
 import { getPersonaById } from '../../../lib/personas';
@@ -74,17 +74,16 @@ function activeStageName(f: FeatureIndexFeature): string | null {
 //   merged → «смержена» (без даты, как в пилюле); merge_pending → «Мерж · ждёт согласия»;
 //   merging → «Мерж · идёт»; closed → «закрыта»; not_started/idle — своё слово;
 //   paused+queue → «В очереди · N из M» (волна 6): ТЕКСТ — из общего хелпера
-//   queueLabel (chatGroups, R-Q5C-A/R-Q5D-B): в рельсе нет своей копии формата
-//   «N из M»; holdReason/queue — поля строки индекса, позицию считает бэк.
+//   queueLabelParts (chatGroups, R-Q5C-A/R-Q5D-B/R-Q5D-E): в потребителях нет своей
+//   копии формата «N из M» и разбора строки; holdReason/queue — поля строки индекса,
+//   позицию считает бэк.
 // Возвращает { bold, post } — как модель statusPhrase: leading-слово и суффикс.
 function whereParts(f: FeatureIndexFeature): { bold: string; post: string } {
-  // Очередь (R-Q5D-B): строка из хелпера («в очереди · 2 из 3» | «в очереди»). Разбивка
-  // под макет .ph (feature-queue-1.html:423): leading-слово — с большой и жирным
-  // (рендерит <b>), суффикс « · 2 из 3» — как дал хелпер; без цифр — пустой.
+  // Очередь (R-Q5D-E): берём ГОТОВЫЕ части из хелпера («В очереди» + « · 2 из 3» | «») —
+  // строку подписи не разбираем (формат меняется только в хелпере).
   if (f.state === 'paused' && f.holdReason === 'queue') {
-    const label = queueLabel(f.queue);
-    const sep = label.indexOf(' · ');
-    return { bold: 'В очереди', post: sep >= 0 ? label.slice(sep) : '' };
+    const p = queueLabelParts(f.queue);
+    return { bold: p.bold, post: p.post };
   }
   const stage = activeStageName(f);
   // «Идут»: уникальные id из индекса (nowPersonaIds; фолбэк — now0.personaId).
@@ -240,15 +239,11 @@ const DOT_ACTIVE = 16;
 const DOT_R = 3;
 
 // Суффикс aria активной точки фичи в очереди: « · в очереди N из M» (макет
-// feature-queue-1.html:421-422, та же строка, что у FeatureRail). Текст — из общего
-// хелпера queueLabel («в очереди · 2 из 3» | «в очереди»): в рельсе нет своей копии
-// формата «N из M»; разделитель хелпера переставляется в ведущий (у точки — перед
-// словом). Позицию считает бэк, здесь не пересчитываем.
+// feature-queue-1.html:421-422, та же строка, что у FeatureRail). Текст — ГОТОВЫМ
+// полем queueLabelParts.ariaSuffix (R-Q5D-E): разбор строки и своя копия формата
+// «N из M» в потребителе больше не нужны. Позицию считает бэк, здесь не пересчитываем.
 function queueAriaSuffix(queue: FeatureQueue | null | undefined): string {
-  const label = queueLabel(queue);
-  const sep = label.indexOf(' · ');
-  const nums = sep >= 0 ? ' ' + label.slice(sep + 3) : '';
-  return ` · ${label.slice(0, sep >= 0 ? sep : label.length)}${nums}`;
+  return queueLabelParts(queue).ariaSuffix;
 }
 
 // Точка этапа: done — зелёная, active — вытянутая в цвет тона (фича в очереди —

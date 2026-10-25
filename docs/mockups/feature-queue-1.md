@@ -50,7 +50,7 @@
 
 Новый `SegmentKind` `queued` в `kindBackground` (`FeatureStatsBits.ts`):
 `repeating-linear-gradient(90deg, ${C.textMuted} 0 1px, transparent 1px 4px), ${C.bgInset}`.
-Засечки «по порядку» не путаются с диагональной штриховкой `notWorking`. Текст поверх — `C.textPrimary`. У открытого сегмента (`timeline.current`) — правая кромка `inset -2px 0 0 C.textSecondary`. Данные — `totals.queued` и интервал `held(queue)..hold_cleared(queue)` от бэка.
+Засечки «по порядку» не путаются с диагональной штриховкой `notWorking`. Текст поверх — `C.textPrimary`. У открытого сегмента (`timeline.current`) — правая кромка `inset -2px 0 0 C.textSecondary`. Данные — `totals.queuedMinutes` и интервал `held(queue)..hold_cleared(queue)` от бэка.
 
 ## Действия в ⋯
 
@@ -120,5 +120,5 @@
 ## Чего нет в API сейчас (для бэка)
 
 - `queue?: { position, length }` в `FeatureRun` и `FeatureIndexRow` — по контракту, шаг Q1.
-- `totals.queued` и интервалы `queued` в таймлайне — шаг Q3.
+- `totals.queuedMinutes` и интервалы `queued` в таймлайне — шаг Q3.
 - Признак автоснятия в событиях ленты (`by: "queue"`) — шаг Q3.

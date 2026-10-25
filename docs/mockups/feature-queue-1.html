@@ -454,7 +454,7 @@ document.getElementById('vocab').innerHTML = [
   [tag('draft', 'черновик'), 'draft · шаги ещё не запускались', false],
   [QTAG(2, 3), 'paused + queue · ждёт своей очереди', true],
   [tag('queue', 'запускается из очереди'), 'paused + queue, место свободно', true],
-  [`<span class="leg"><i class="k-queued"></i>в очереди</span>`, 'сегмент мини-полосы totals.queued', true],
+  [`<span class="leg"><i class="k-queued"></i>в очереди</span>`, 'сегмент мини-полосы totals.queuedMinutes', true],
 ].map(([t, d, n]) => `<div class="vc ${n?'new':''}">${t}<small>${d}</small>${n?'<span class="newb">новое</span>':''}</div>`).join('');
 
 document.getElementById('dkModal').innerHTML = `<div class="isl" style="min-height:320px">

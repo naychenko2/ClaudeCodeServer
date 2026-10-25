@@ -12,7 +12,7 @@ import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
-import { getFileContext } from '../../lib/ai/fileContext';
+import { getFileContext, useFileContext } from '../../lib/ai/fileContext';
 import {
   getFabObstacles, subscribeFabObstacle, isFabNoRaise, placeFab, unionBox, fabSpotBlocker, stepFabSettle, initialFabSettle,
   PLACE_HIDDEN, FAB_FULL, FAB_SMALL, FAB_EDGE_INSET, FAB_CLEARANCE, FAB_MOBILE_RIGHT,
@@ -308,6 +308,9 @@ export function AiLauncher() {
     return () => window.removeEventListener(NAV_CHANGE_EVENT, onNav);
   }, []);
 
+  // Признак «файл не из корня» приходит позже открытия палитры — подписка пересчитывает список
+  const fileCtx = useFileContext();
+
   // Список действий пересчитывается на каждый ввод, пока палитра открыта. Рекомендованные
   // (recs) получают уровень (recLevel) для бейджа/подсветки и поднимаются в начало группы.
   const items = useMemo(() => {
@@ -329,7 +332,7 @@ export function AiLauncher() {
     for (const it of base) { const z = zoneOf(it.action.section); if (!zoneRank.includes(z)) zoneRank.push(z); }
     return base.slice().sort((a, b) => zoneRank.indexOf(zoneOf(a.action.section)) - zoneRank.indexOf(zoneOf(b.action.section)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, q, online, semanticCaps, recs, gitRepo]);
+  }, [open, q, online, semanticCaps, recs, gitRepo, fileCtx]);
 
   // При открытии палитры — обновить рекомендации под текущее содержание
   useEffect(() => {

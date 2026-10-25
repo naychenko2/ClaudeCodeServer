@@ -18,6 +18,7 @@ import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FileViewer } from './FileViewer';
 import { api } from '../lib/api';
+import { getFileContext, subscribeFileContext } from '../lib/ai/fileContext';
 import type { Project } from '../types';
 import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, textNodes, reactProps } from './chat/__tests__/fakeDom';
 
@@ -378,6 +379,27 @@ describe('FileViewer: файл не из корня — только чтени�
   it('без sessionId: как раньше, доходит до toMarkdown', async () => {
     const md = await runToMarkdown(null, {});
     expect(md).toHaveBeenCalledWith('p1', 'docs/readme.txt');
+  });
+});
+
+// Признак для AI-палитры (lib/ai/fileContext): FileViewer сообщает fromRoot и снимает его при
+// размонтировании, оповещая подписчиков — открытая палитра пересчитает список.
+// Мутация: убрать `return () => clearFileContext(filePath)` из эффекта → тест краснеет.
+describe('FileViewer: признак fromRoot для AI-палитры', () => {
+  beforeEach(setupMocks);
+  afterEach(teardown);
+
+  it('публикует признак, а при размонтировании снимает его и оповещает подписчиков', async () => {
+    contentSpy!.mockResolvedValue({ content: 'x', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 1, branch: 'feat/x' });
+    const { root } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(getFileContext(), 'файл из дерева чата — не из корня').toEqual({ path: 'docs/readme.txt', fromRoot: false });
+    const fn = vi.fn();
+    const off = subscribeFileContext(fn);
+    await act(async () => { root.unmount(); });
+    off();
+    expect(fn, 'подписчики оповещены о сбросе').toHaveBeenCalled();
+    expect(getFileContext(), 'признак снят').toBeUndefined();
   });
 });
 

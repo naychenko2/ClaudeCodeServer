@@ -10,7 +10,9 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // Режим журнала — тот же гейт, что у FeatureTimeline (FeatureTimeline.cs:212): журнала нет /
 // он не начинается с created / Truncated → null. Приближённого режима здесь нет: точные
 // интервалы считаются только по полному журналу.
-
+//
+// Типы результата — публичные StageInterval/StageTurn (StageIntervals.cs, контракт
+// stats.timeline), сама функция — internal вертикали.
 internal static class FeatureStageIntervals
 {
     // Зазор склейки ходов одной стадии (GC-B1): следующий ход начался не позже GlueGap после
@@ -19,19 +21,6 @@ internal static class FeatureStageIntervals
 
     // Исходы, которыми интервал «заканчивается» (LastOutcome): этап оборвался на них.
     private static readonly HashSet<string> BadOutcomes = ["cancelled", "interrupted", "error"];
-
-    // Ход журнала внутри интервала: время, исход и модель — как записаны.
-    internal sealed record StageTurn(
-        string TaskId, DateTime From, DateTime To, string? Outcome, string? Model);
-
-    // Интервал стадии. From/To — границы, Minutes — FeatureTimeMath.Minutes(From, To).
-    // Live=true — интервал дотянут до «сейчас» (в нём живой хвост идущей задачи).
-    // LastOutcome — исход ПОСЛЕДНЕГО хода интервала, если он cancelled/interrupted/error,
-    // иначе null. TaskIds — id задач, чьи ходы вошли (уникальные, по первому появлению).
-    // Turns — ходы интервала в хронологическом порядке (живой хвост — не ход, его нет).
-    internal sealed record StageInterval(
-        DateTime From, DateTime To, int Minutes, bool Live,
-        string? LastOutcome, List<string> TaskIds, List<StageTurn> Turns);
 
     // Промежуток до склейки: закрытый ход или живой хвост (Turn null у хвоста).
     private sealed record Raw(DateTime From, DateTime To, string TaskId, bool Live, StageTurn? Turn);

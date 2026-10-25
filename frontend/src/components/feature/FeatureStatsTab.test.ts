@@ -22,7 +22,7 @@ import {
 } from './FeatureStatsBits';
 import {
   formatTokens, formatUsd, sharePercent, roleGroupLabel, modelGroupLabel, personaGroupLabel,
-} from './FeatureStatsBlocks';
+} from './FeatureStatsFormat';
 import { clearFeatureStageFocus, setFeaturePageTab, __test } from '../../lib/featurePage';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
@@ -1214,6 +1214,36 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
     const c = renderTab(mkFullStats({ source: 'approx' }));
     const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('');
     expect(all).toContain('не работали — ≈ 10 ч');
+  });
+
+  // Память «Подробнее»: раскрытие пишется в localStorage и читается при монтировании.
+  // Мутация: не писать localStorage в onToggle — тест краснеет.
+  it('«Подробнее» помнит раскрытие в localStorage[featureStats.moreOpen]', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+    });
+    try {
+      const c = renderTab(mkFullStats());
+      const more = findNodeByAttr(c, 'data-testid', 'stats-more')!;
+      expect(reactProps(more)!.open, 'по умолчанию свёрнуто').toBe(false);
+      act(() => {
+        (reactProps(more)!.onToggle as (e: unknown) => void)({ currentTarget: { open: true } });
+      });
+      expect(store.get('featureStats.moreOpen')).toBe('1');
+      // новый заход: раскрыто сразу
+      const c2 = renderTab(mkFullStats());
+      expect(reactProps(findNodeByAttr(c2, 'data-testid', 'stats-more')!)!.open).toBe(true);
+      const more2 = findNodeByAttr(c2, 'data-testid', 'stats-more')!;
+      act(() => {
+        (reactProps(more2)!.onToggle as (e: unknown) => void)({ currentTarget: { open: false } });
+      });
+      expect(store.get('featureStats.moreOpen')).toBe('0');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   // Мутация «всегда»: если раскрывашку рендерить без строк — тест краснеет.

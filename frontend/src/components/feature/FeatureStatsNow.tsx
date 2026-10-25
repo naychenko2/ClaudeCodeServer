@@ -67,7 +67,7 @@ function runningText(startedAt: string | null | undefined, nowMs: number): strin
 export function FeatureStatsNow({ run, isMobile = false, nav, nowMs }: FeatureStatsNowProps) {
   const marks = nav?.marks ?? EMPTY_NAV_MARKS;
   // Хук выше guard: ранний return не должен обрывать вызов хука
-  // (react-hooks/rules-of-hooks), как в LongestNow (FeatureStatsBlocks.tsx).
+  // (react-hooks/rules-of-hooks), как в прежнем LongestNow.
   // Правило «идёт» теперь на бэке (run.now сужён по IsHeld, коммит feea567e3),
   // клиентский фильтр здесь не нужен.
   const personas = usePersonas();

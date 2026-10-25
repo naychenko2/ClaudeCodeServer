@@ -137,7 +137,7 @@ export function groupChips(axis: Axis, key: string, run: FeatureRun): BreakdownC
 
 // Слово роли без шага: roleLabel с null stepRef/lane даёт чистое слово
 // («доработка», «ревью»…); для 'step' оно пусто — нейтральное «шаг», как в
-// roleGroupLabel (FeatureStatsBlocks.tsx). Макет рисует шаг и роль раздельными
+// roleGroupLabel (FeatureStatsFormat.ts). Макет рисует шаг и роль раздельными
 // частями («Ш2» + «доработка») — склеивает вид.
 function roleWord(taskRole: string | null): string {
   const label = roleLabel(taskRole, null, null);

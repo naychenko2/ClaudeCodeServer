@@ -9,7 +9,7 @@ import { type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import { formatDuration, kindBackground } from './FeatureStatsBits';
-import { formatUsd, formatTokens } from './FeatureStatsBlocks';
+import { formatUsd, formatTokens } from './FeatureStatsFormat';
 import { tilesModel, type StatTile } from './FeatureStatsPulseModel';
 import type { FeatureRun } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';

@@ -12,7 +12,7 @@ import {
   type TimelineModel, type TimelineSegment,
 } from './FeatureStatsBits';
 import { buildGanttModel, type GanttModel, type GanttSegmentKind } from './FeatureGanttModel';
-import { personaGroupLabel, modelGroupLabel, roleGroupLabel, formatTokens } from './FeatureStatsBlocks';
+import { personaGroupLabel, modelGroupLabel, roleGroupLabel, formatTokens } from './FeatureStatsFormat';
 import { usePersonas } from '../../lib/personas';
 import { useModels } from '../../lib/models';
 import { AGENT_COLORS } from '../AgentSelector';
@@ -31,8 +31,7 @@ import type { FeatureRun } from '../../types/featureRun';
 // «Главные потери» → Гант (ступени, W4-4F2) → «Кто и на чём работал» → свёрнутый
 // «Подробнее» (то, что новые блоки не покрывают: «не работали», эпизоды ошибок,
 // детали расхода). Без `run` (старые ответы) — прежняя полоса: герой, плитки, «сейчас»,
-// потери и разрез требуют конвейера. TotalsCards/LongestNow/Breakdown/Spend из
-// FeatureStatsBlocks здесь больше не рендерятся (сам файл — до ST-F14b).
+// потери и разрез требуют конвейера. Прежние блоки итогов/разрезов/расхода удалены в ST-F14б.
 //
 // Данные ТОЛЬКО из `stats` и `run` (features/{id}): фронт не пересчитывает, только раскладывает.
 // Честность: нет stats (старые данные) → пустое состояние с причиной, а не нули.
@@ -602,6 +601,15 @@ function TaskButtons({ model, nav, isMobile }: { model: TimelineModel; nav?: Fea
   );
 }
 
+// Раскрытие «Подробнее» помним между заходами (план ST-F14).
+export const MORE_OPEN_KEY = 'featureStats.moreOpen';
+function readMoreOpen(): boolean {
+  try { return localStorage.getItem(MORE_OPEN_KEY) === '1'; } catch { return false; }
+}
+function writeMoreOpen(open: boolean): void {
+  try { localStorage.setItem(MORE_OPEN_KEY, open ? '1' : '0'); } catch { /* приватный режим/квота */ }
+}
+
 // «Подробнее» (ST-F14a, макет feature-stats-5.md §«Правки фронта», п. 8): только то,
 // что новые блоки НЕ покрывают: «не работали» (в составе героя его нет), эпизоды
 // ошибок, детали расхода (кэш, «данные с», общие чаты, модели без цены). Нечего
@@ -641,9 +649,20 @@ function MoreDetails({ totals, spend, source, isMobile }: {
       rows.push(`моделей без цены: ${spend.hiddenCostModels.join(', ')}`);
     }
   }
+  const [open, setOpen] = useState(readMoreOpen);
   if (rows.length === 0) return null;
   return (
-    <details data-testid="stats-more" style={{ margin: `${SP.md}px 0 0` }}>
+    <details
+      data-testid="stats-more"
+      open={open}
+      onToggle={e => {
+        const next = (e.currentTarget as HTMLDetailsElement).open;
+        if (next === open) return;
+        setOpen(next);
+        writeMoreOpen(next);
+      }}
+      style={{ margin: `${SP.md}px 0 0` }}
+    >
       <summary
         data-testid="stats-more-summary"
         style={{ cursor: 'pointer', fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, fontFamily: FONT.sans }}
@@ -716,7 +735,7 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
   // ответы) — прежняя полоса: честная деградация, а не пустой блок.
   const gantt = run ? buildGanttModel(run, stats, Date.now()) : null;
 
-  // labelOf/colorOf — те же источники подписей, что у прежнего Breakdown (FeatureStatsBlocks):
+  // labelOf/colorOf — те же источники подписей, что у прежнего Breakdown:
   // персона → имя, роль → roleLabel, модель → modelLabel. Цвет — цвет аватара персоны
   // (AGENT_COLORS); остальным — '' (палитра ShareRing решает сама). Ось приходит от
   // оболочки разбивки: по ключу её не угадать (UUID недоступной персоны не отличить

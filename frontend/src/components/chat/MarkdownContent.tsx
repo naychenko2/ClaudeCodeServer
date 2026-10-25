@@ -236,6 +236,10 @@ export function resolveFileMention(
   let p = raw.trim().split(/[#?]/)[0];
   if (!p) return null;
   try { p = decodeURIComponent(p); } catch { /* не URL-экранирован — как есть */ }
+  // Внешний URL — не путь дерева (R-F2a MAJOR-1): `scheme://`, `www.` или `//host/…`
+  // (последнее ABS_PATH_RE приняла бы абсолютным путём). Без отсечения такая ссылка
+  // уходила в lazy-резолв и молчала текстом; теперь null — ссылка идёт в ReaderLinkWrap.
+  if (p.includes('://') || p.startsWith('www.') || p.startsWith('//')) return null;
   if (isFileLikeAbsPath(p)) {
     const label = relPathTree(p, project.rootPath, treePath);
     return { path: p, label: label !== p ? label : undefined };

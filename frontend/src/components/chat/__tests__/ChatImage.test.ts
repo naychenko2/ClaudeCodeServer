@@ -10,8 +10,10 @@ import { describe, it, expect, vi } from 'vitest';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-vi.mock('react-markdown', () => ({ default: () => null, defaultUrlTransform: (u: string) => u }));
-vi.mock('remark-gfm', () => ({ default: () => undefined }));
+// react-markdown и remark-gfm — настоящие: кейс R-F2a MAJOR-1 проверяет сам рендер
+// ссылки через components-хэндлер, а не только чистую функцию резолва.
+vi.mock('react-markdown', async (importOriginal) => importOriginal());
+vi.mock('remark-gfm', async (importOriginal) => importOriginal());
 vi.mock('react-syntax-highlighter', () => ({ Prism: () => null }));
 vi.mock('react-syntax-highlighter/dist/esm/styles/prism', () => ({ oneDark: {} }));
 vi.mock('../MermaidDiagram', () => ({ MermaidDiagram: () => null }));
@@ -40,8 +42,8 @@ vi.mock('../../../lib/api', () => ({
 const view = vi.hoisted(() => ({ ref: () => {}, inView: false }));
 vi.mock('../../../lib/useInView', () => ({ useInView: () => [view.ref, view.inView] }));
 
-import { ChatImage, DeferredFileLink, resolveFileMention } from '../MarkdownContent';
-import { ChatProjectContext, ChatSessionContext } from '../contexts';
+import { ChatImage, DeferredFileLink, MarkdownContent, resolveFileMention } from '../MarkdownContent';
+import { ChatProjectContext, ChatSessionContext, ChatOpenFileContext } from '../contexts';
 import type { ProjectFileIndex } from '../../../lib/projectFileIndex';
 
 const PROJECT = { id: 'p1', rootPath: '/home/u/proj' };
@@ -126,5 +128,26 @@ describe('resolveFileMention — порядок: индекс → абсолют
   it('голое имя и роут без расширения — не ссылка', () => {
     expect(resolveFileMention(INDEX, PROJECT, null, 'report.md')).toBeNull();
     expect(resolveFileMention(INDEX, PROJECT, null, '/api/mcp/calls')).toBeNull();
+  });
+
+  // R-F2a MAJOR-1: внешний URL похож на путь («//host/…» — даже на абсолютный), но
+  // дереву не принадлежит: резолв обязан отсечь его до lazy-ветки.
+  it('внешний URL — не путь дерева: ни ссылка, ни lazy', () => {
+    expect(resolveFileMention(INDEX, PROJECT, null, 'https://example.com/guide.md')).toBeNull();
+    expect(resolveFileMention(INDEX, PROJECT, null, 'www.example.com/guide.md')).toBeNull();
+    expect(resolveFileMention(INDEX, PROJECT, null, '//cdn.example.com/x.png')).toBeNull();
+  });
+});
+
+describe('Внешняя ссылка остаётся ссылкой (R-F2a MAJOR-1)', () => {
+  it('[x](https://example.com/guide.md) рендерится <a>, locate не зовётся', () => {
+    net.locate.length = 0;
+    const html = renderToStaticMarkup(createElement(ChatProjectContext.Provider, { value: PROJECT },
+      createElement(ChatOpenFileContext.Provider, { value: () => undefined },
+        createElement(MarkdownContent, { text: '[x](https://example.com/guide.md)' }))));
+    // Мутация: без отсечения URL в resolveFileMention href уходит в DeferredFileLink —
+    // остаётся голый текст, проверка <a> краснеет.
+    expect(html).toContain('<a href="https://example.com/guide.md"');
+    expect(net.locate.length).toBe(0);
   });
 });

@@ -17,6 +17,13 @@
 // фичи в очереди приглушена (C.textMuted, как в плашке группы) и её aria — «· в очереди
 // N из M» (макет feature-queue-1.html:421-423).
 //
+// R-Q5D-C (главное замечание RV-K-Q5D-B): разбивка — ТОЛЬКО в не-тревожных состояниях.
+// В тревожных (stopped — C.dangerText, waiting/merge_pending — C.info) фраза «где мы»
+// рисуется целым элементом тоном тревоги (макет баннера feature-banner-1.html:526):
+// тревога должна читаться тревогой. Ассерт текста фразы — по ВИДИМОМУ содержимому
+// span'а «где мы» (whereInner), не по всему html: aria-label всегда несёт целую фразу,
+// и toContain по html проходит даже когда leading-слово из рендера выброшено (c3).
+//
 // Окружение node (без jsdom): SSR — renderToStaticMarkup; mount — fakeDom.
 // Стор индекса и флаги заполняются напрямую (setIndex / setAllFlags) — useEffect-фетч
 // в SSR не идёт, компонент читает уже заполненный стор.
@@ -263,7 +270,9 @@ describe('FeatureBanner: очередь фич (подпись «В очеред
 
   // MAJOR-1 из RV-K-Q5D: рендер — РАЗБИВКОЙ, а не одним span'ом (макет .ban .ph b):
   // leading-слово в <b> цвета textHeading, суффикс — вне <b>, обычным начертанием.
-  // Мутация (в отчёте): вернуть {model.where} одним span'ом без <b> → тест красный
+  // Очередь — состояние НЕ-тревожное (whereTone run): при R-Q5D-C разбивка остаётся
+  // (ассерты «целой фразы» — только у тревожных wait/stop, в describe «Рендер с данными списка»).
+  // Мутация (в отчёте): выбросить <b> из run-ветки рендера → тест красный
   // (первый assert по <b>, второй — по суффиксу вне <b>).
   it('рендер (SSR): «В очереди» в <b> цвета textHeading, post « · 2 из 3» — вне <b> (макет .ban .ph b)', () => {
     seedIndex(queued(), link(), 'chat-exec', 'p1');
@@ -285,6 +294,19 @@ function renderBanner(sessionId: string, projectId: string | null, isMobile = fa
   return renderToStaticMarkup(createElement(FeatureBanner, { sessionId, projectId, isMobile }));
 }
 
+// Тег-открывашка span'а «где мы» (со style) и его ВИДИМОЕ содержимое — фраза так, как
+// её видит человек (не aria-label: тот всегда несёт целую where, R-Q5D-C/c3).
+function whereOpenTag(html: string): string {
+  const m = html.match(/<span data-testid="feature-where"[^>]*>/);
+  expect(m, 'нет «где мы»').not.toBeNull();
+  return m![0];
+}
+function whereInner(html: string): string {
+  const m = html.match(/<span data-testid="feature-where"[^>]*>([\s\S]*?)<\/span>/);
+  expect(m, 'нет «где мы»').not.toBeNull();
+  return m![1];
+}
+
 describe('FeatureBanner: рендер с данными списка (SSR)', () => {
   beforeEach(() => {
     __test.reset();
@@ -303,31 +325,51 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(html).toContain('Производство');
     expect(html).toContain('Открыть страницу фичи');
     expect(html).toContain('Ш2 · бэк');
+    // Не-тревожное состояние — разбивка осталась (R-Q5D-C/c2): leading-слово в <b>
+    // цвета textHeading (мутация: выбросить <b> из рендера run-ветки → краснеет).
+    expect(whereInner(html), 'leading-слово не в <b> цвета textHeading').toContain(`<b style="color:${C.textHeading}">Производство</b>`);
   });
 
-  it('ждёт вас: тон wait (C.infoBg), «Производство · ждёт вас», «Ответить»', () => {
+  // R-Q5D-C (c1/c3): фраза — ЦЕЛАЯ, по видимому содержимому span'а (не по aria-label):
+  // без <b>, тон C.info на всей фразе. Мутация (в отчёте): выбросить leading-слово из
+  // рендера тревожной ветки (: model.wherePost) → краснеет первый ассерт по видимому тексту.
+  it('ждёт вас: тон wait (C.infoBg), «Производство · ждёт вас» целой фразой в тоне C.info (R-Q5D-C), «Ответить»', () => {
     seedIndex(feat('waiting', { attention: attention('wait') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="wait"');
     expect(html).toContain('var(--c-info-bg)');
-    expect(html).toContain('Производство · ждёт вас');
+    expect(whereInner(html), '«ждёт вас» не целая видимая фраза (или с <b>)').toBe('Производство · ждёт вас');
+    expect(whereOpenTag(html), 'тон тревожной фразы не C.info').toContain(`color:${C.info}`);
     expect(html).toContain('Ответить');
   });
 
-  it('стоит: тон stop (C.dangerBg), «стоит» (без имени, если тревога без персоны), «Чат»', () => {
+  it('стоит: тон stop (C.dangerBg), «стоит» целой фразой в тоне C.dangerText (R-Q5D-C), «Чат»', () => {
     seedIndex(feat('stopped', { attention: attention('stopped') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="stop"');
     expect(html).toContain('var(--c-danger-bg)');
-    expect(html).toContain('>стоит<');
+    expect(whereInner(html), '«стоит» не целая видимая фраза (или с <b>)').toBe('стоит');
+    expect(whereOpenTag(html), 'тон тревожной фразы не C.dangerText').toContain(`color:${C.dangerText}`);
     expect(html).toContain('Чат');
   });
 
-  it('к мержу: тон wait, «Мерж · ждёт согласия», действие «Открыть» (НЕ «Мерж…»)', () => {
+  // Р-Q5D-C: вся тревожная фраза, включая имя, — тоном тревоги (главное замечание
+  // RV-K-Q5D-B: «стоит · Денис» не должно дробиться на тёмное «стоит» и красный суффикс).
+  it('стоит с персоной: «стоит · Денис» целой фразой в тоне C.dangerText (R-Q5D-C)', () => {
+    mockPersonas.length = 0;
+    mockPersonas.push({ id: 'p-denis', name: 'Денис' });
+    seedIndex(feat('stopped', { attention: attention('stopped', { personaId: 'p-denis' }) }), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    expect(whereInner(html), '«стоит · Денис» не целая видимая фраза (или с <b>)').toBe('стоит · Денис');
+    expect(whereOpenTag(html), 'тон тревожной фразы не C.dangerText').toContain(`color:${C.dangerText}`);
+  });
+
+  it('к мержу: тон wait, «Мерж · ждёт согласия» целой фразой в тоне C.info (R-Q5D-C), действие «Открыть» (НЕ «Мерж…»)', () => {
     seedIndex(feat('merge_pending', { attention: attention('merge') }), link(), 'chat-exec', 'p1');
     const html = renderBanner('chat-exec', 'p1');
     expect(html).toContain('data-banner-tone="wait"');
-    expect(html).toContain('Мерж · ждёт согласия');
+    expect(whereInner(html), '«Мерж · ждёт согласия» не целая видимая фраза (или с <b>)').toBe('Мерж · ждёт согласия');
+    expect(whereOpenTag(html), 'тон тревожной фразы не C.info').toContain(`color:${C.info}`);
     expect(html).toContain('Открыть');
     // «Мерж…» — только в попапе и на странице, НЕ на панели (задача, п.2).
     expect(html).not.toContain('Мерж…');

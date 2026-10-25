@@ -171,9 +171,11 @@ export interface FeatureBannerRow {
   // «{этап} · ждёт вас», «стоит · {имя}», «смержена», «В очереди · N из M» и т.д.
   where: string;
   // Разбивка подписи — leading-слово и суффикс (очередь: «В очереди» + « · 2 из 3»,
-  // текст — из queueLabel; прочие состояния — из statusPhrase). РЕНДЕРИТСЯ именно
-  // разбивкой: leading — <b> цвета C.textHeading, суффикс — рядом с рядом (макет
-  // feature-queue-1.html:423, .ban .ph b). `where` (bold+post) — для aria и точных текстов.
+  // текст — из queueLabel; прочие состояния — из statusPhrase). РЕНДЕРИТСЯ разбивкой
+  // только в не-тревожных состояниях (whereTone run): leading — <b> цвета C.textHeading,
+  // суффикс — рядом с рядом (макет feature-queue-1.html:423, .ban .ph b). В тревожных
+  // (wait/stop) рендерится целая `where` тоном span'а (R-Q5D-C, макет баннера).
+  // `where` (bold+post) — для aria и точных текстов.
   whereBold: string;
   wherePost: string;
   whereTone: 'wait' | 'stop' | 'run';
@@ -444,10 +446,18 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
         cursor: 'pointer',
       }}
     >
-      {/* Разбивка по макету .ban .ph b (R-Q5D-B, MAJOR-1 RV-K-Q5D): leading-слово — <b>
-          цвета textHeading (для очередь — «В очереди»), суффикс — обычным начертанием
-          и цветом ряда. */}
-      <b style={{ color: C.textHeading }}>{model.whereBold}</b>{model.wherePost}
+      {/* R-Q5D-C (главное замечание RV-K-Q5D-B): разбивка по макету .ban .ph b —
+          ТОЛЬКО в не-тревожных состояниях (whereTone run): leading-слово — <b> цвета
+          textHeading, суффикс — обычным начертанием (feature-queue-1.html:423).
+          Тревожные (wait/stop) — целая фраза одним элементом тоном span'а
+          (C.info / C.dangerText, 600): макет баннера feature-banner-1.html:526 +
+          .va .ph — тревога читается тревогой, а не обычной фразой с выделенным словом. */}
+      {model.whereTone === 'run' ? (
+        <>
+          <b style={{ color: C.textHeading }}>{model.whereBold}</b>
+          {model.wherePost}
+        </>
+      ) : model.where}
     </span>
   );
 

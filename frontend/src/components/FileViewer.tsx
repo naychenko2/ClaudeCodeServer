@@ -150,7 +150,7 @@ interface FileContent {
   // В каком дереве нашли файл (контракт B2): branch — имя ветки, isAnchor — true, если
   // это заявленное дерево-анкер. Для relay-пути (R-F1a) isAnchor может отсутствовать:
   // источник неизвестен — метку не показываем.
-  branch?: string;
+  branch?: string | null;
   isAnchor?: boolean;
 }
 
@@ -506,9 +506,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // записи. Каждое такое действие рисуется только при своём маршруте (deviceAgentRoutes.ts)
   const { route: filesRoute, can } = useProjectRoutes(project);
   const viaAgent = filesRoute === 'agent';
-  const canEdit = can('PUT files/content');
-  const canDelete = can('DELETE files');
-  const canRevert = can('POST files/revert');
+  // Файл из корня проекта (основного дерева): только с него разрешены правка, откат, дифф и
+  // история — они пишут и читают корень, а не дерево чата. branch в ответе непуст у любого
+  // неосновного дерева; без sessionId (и на relay-пути, где ветки нет) файл всегда из корня
+  const fromRoot = !sessionId || fileContent?.branch == null;
+  const canEdit = can('PUT files/content') && fromRoot;
+  const canDelete = can('DELETE files') && fromRoot;
+  const canRevert = can('POST files/revert') && fromRoot;
   const canStageHunk = can('POST git/stage-hunk');
   const canRestoreVersion = can('POST git/commits/{sha}/restore-file');
   const canToMarkdown = can('POST files/document/to-markdown');
@@ -716,17 +720,21 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     const contentPromise = isHostMode
       ? api.hostFiles.getContent(filePath)
       : api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined);
+    // Дифф — понятие проектного git-репо; у файла вне проекта его нет, а у файла из
+    // неосновного дерева он был бы корня, а не показанного содержимого. Поэтому ветка ответа
+    // известна только после содержимого: дифф запрашиваем следом и только для файла из корня
+    setDiff(null);
     contentPromise.then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
+      if (!isHostMode && !(sessionId && 'branch' in r && r.branch != null)) {
+        // diff недоступен офлайн — мягко игнорируем ошибку
+        fetchDiff().then(d => setDiff(d.diff)).catch(() => setDiff(null));
+      }
     }).catch(e => {
       if (isHostMode && (e as { status?: number })?.status === 403) setLoadForbidden(true);
       setLoadError(true);
     }).finally(() => setLoading(false));
-    // Дифф — понятие проектного git-репо; у файла вне проекта его нет
-    if (isHostMode) setDiff(null);
-    // diff недоступен офлайн — мягко игнорируем ошибку
-    else fetchDiff().then(r => setDiff(r.diff)).catch(() => setDiff(null));
   }, [project.id, filePath, gitStagePath, isHostMode, sessionId, fetchDiff]);
 
   // Blame — лениво при первом открытии вкладки «Авторы» (кэш до смены файла)
@@ -846,11 +854,11 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       const norm = filePath.replace(/\\/g, '/');
       if (!paths.some(p => p.replace(/\\/g, '/') === norm)) return;
       api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined).then(r => { setFileContent(r); setEditContent(r.content ?? ''); setLoadError(false); }).catch(() => {});
-      fetchDiff().then(r => setDiff(r.diff)).catch(() => {});
+      if (fromRoot) fetchDiff().then(r => setDiff(r.diff)).catch(() => {});
       setBlame(null);   // авторство устарело — перечитается при открытии вкладки
       setBlameError(false);
     });
-  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode, sessionId, fetchDiff]);
+  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode, sessionId, fetchDiff, fromRoot]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {
@@ -1216,7 +1224,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   } : null;
   // Вкладка «Авторы» (blame) — только для текстовых файлов в git-репо; в хост-режиме
   // git-вкладки скрыты целиком (файл вне проекта — своего репо/истории тут нет)
-  const showBlameTab = !isHostMode && inRepo && !loading && !loadError && !!fileContent && !fileContent.isBinary && !fileContent.isImage;
+  const showBlameTab = !isHostMode && fromRoot && inRepo && !loading && !loadError && !!fileContent && !fileContent.isBinary && !fileContent.isImage;
   const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
 
   const btnPrimary: React.CSSProperties = {
@@ -1259,6 +1267,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // fileContent.content обновляем, но iframe не перезагружаем (DrawioViewer грузит XML
   // только по событию init), поэтому редактор не сбрасывается.
   const handleDiagramSave = async (xml: string) => {
+    if (!fromRoot) return;
     try {
       await api.files.saveContent(project.id, filePath, xml);
       setFileContent(prev => prev ? { ...prev, content: xml } : prev);
@@ -1791,7 +1800,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             <Chip
               dense
               maxW={isMobile ? 120 : 220}
-              title={`Файл взят не из основного дерева, а из worktree ${fileContent!.branch}`}
+              title={`Файл взят не из основного дерева, а из worktree ${fileContent!.branch}. Правка и дифф доступны для файла из основного дерева`}
             >
               из дерева {fileContent!.branch}
             </Chip>

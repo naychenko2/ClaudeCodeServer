@@ -375,6 +375,18 @@ vi.mock('../components/ChatPanel', async () => {
     },
   };
 });
+// GitChangesRail — один из путей «открытие из дерева» (onOpenFile = handleOpenFileFromTree):
+// заглушка отдаёт тесту этот обработчик
+const treeCap = vi.hoisted(() => ({ onOpenFile: null as ((path: string) => void) | null }));
+vi.mock('../components/GitChangesRail', async () => {
+  const { createElement } = await import('react');
+  return {
+    GitChangesRail: (props: { onOpenFile?: (path: string) => void }) => {
+      treeCap.onOpenFile = props.onOpenFile ?? null;
+      return createElement('div', { 'data-testid': 'git-changes-stub' });
+    },
+  };
+});
 vi.mock('../components/FileViewer', async () => {
   const { createElement } = await import('react');
   return {
@@ -445,6 +457,7 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     wsState.leftTab = undefined;
     cap.chatOnOpenFile = null;
     cap.viewer = null;
+    treeCap.onOpenFile = null;
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -471,7 +484,7 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     expect(cap.viewer).toEqual({ filePath: 'docs/a.md', sessionId: 'chatA' });
   });
 
-  it('десктоп: файл из ленты чата открывается с sessionId этого чата (сплит и полный экран)', async () => {
+  it('десктоп: файл из ленты чата открывается с sessionId этого чата (десктопная раскладка; режим сплит/экран — по предпочтению, тут не проверяется)', async () => {
     (globalThis as any).window.innerWidth = 1600;
     mountPage();
     await act(async () => { vi.advanceTimersByTime(100); });
@@ -488,6 +501,24 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     act(() => { cap.chatOnOpenFile!('docs/a.md'); });
     await act(async () => { vi.advanceTimersByTime(100); });
     expect(cap.viewer).toEqual({ filePath: 'docs/a.md', sessionId: undefined });
+  });
+
+  // Хвост п.22 (FINAL, шаг П): открытие из дерева — единственный путь, где правка файла
+  // разрешена (FileViewer прячет её для файла из неосновного дерева), поэтому «пара»
+  // путь+чат обязана сбрасываться. Мутация: убрать setOpenFileChat(null) в
+  // handleOpenFileFromTree → viewer остаётся с sessionId прошлого открытия из чата → краснеет.
+  it('открытие из дерева сбрасывает пару: тот же файл, открытый из чата, затем из дерева — без sessionId', async () => {
+    (globalThis as any).window.innerWidth = 360;
+    wsState.leftTab = 'changes';
+    mountPage();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    act(() => { cap.chatOnOpenFile!('docs/a.md', 'chatA'); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(cap.viewer, 'контроль: из чата — с sessionId').toEqual({ filePath: 'docs/a.md', sessionId: 'chatA' });
+    expect(treeCap.onOpenFile, 'дерево отдало обработчик открытия').not.toBeNull();
+    act(() => { treeCap.onOpenFile!('docs/a.md'); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(cap.viewer, 'из дерева — корень проекта, пара сброшена').toEqual({ filePath: 'docs/a.md', sessionId: undefined });
   });
 
   // ChatPanel и стена в fake-DOM целиком не монтируются — их звенья проверяем по исходнику.

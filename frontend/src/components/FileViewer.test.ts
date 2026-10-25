@@ -22,6 +22,8 @@ import type { Project } from '../types';
 import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, textNodes, reactProps } from './chat/__tests__/fakeDom';
 
 vi.mock('../lib/toast', () => ({ showToast: () => {} }));
+// В node navigator.onLine не определён → «офлайн», а в офлайне «Править» не рисуется
+vi.mock('../hooks/useOnline', () => ({ useOnline: () => true }));
 // signalr: ensureGit (wireRealtime) строит соединение и читает localStorage — в node без
 // сервера/хранилища это падает. Все подписки — no-op (вернуты unsubscribe-fункции).
 vi.mock('../lib/signalr', () => ({
@@ -296,6 +298,50 @@ describe('FileViewer: проп sessionId и чип «из дерева <ветк
     await flush();
     expect(contentSpy!.mock.calls[0][3], 'без пропа — старая сигнатура вызова').toBeUndefined();
     expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'без дерева-метки').toBeNull();
+  });
+});
+
+// Шаг П (FINAL Б1): файл из неосновного дерева — только чтение. Правка, откат и дифф пишут
+// и читают КОРЕНЬ проекта, а не показанную версию worktree, поэтому при branch != null их нет.
+// Инвариант: branch == null ⇔ файл из корня. Мутации:
+//   • убрать `&& fromRoot` из canEdit → «Править» появляется при branch → тест краснеет;
+//   • убрать `sessionId && r.branch != null` из условия загрузки diff → getDiff зовётся
+//     при branch → тест про getDiff краснеет.
+describe('FileViewer: файл не из корня — только чтение (fromRoot)', () => {
+  beforeEach(setupMocks);
+  afterEach(teardown);
+
+  const diffSpy = () => vi.spyOn(api.files, 'getDiff').mockResolvedValue({ diff: '+a\n-b' });
+  const contentWith = (tree: { branch?: string | null }) => ({
+    content: 'hello world', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 11, ...tree,
+  });
+
+  it('branch задан: нет «Править» и вкладки Diff, getDiff не вызван, чип подсказывает про основное дерево', async () => {
+    const spy = diffSpy();
+    contentSpy!.mockResolvedValue(contentWith({ branch: 'feat/x', isAnchor: false } as never));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(findNodeByAttr(container as never, 'title', 'Править'), 'правка скрыта').toBeNull();
+    expect((textNodes(container as never).includes('Diff') ? {} : null), 'вкладка Diff скрыта').toBeNull();
+    expect(spy, 'дифф корня не запрашивается').not.toHaveBeenCalled();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'чип дерева на месте').not.toBeNull();
+  });
+
+  it('branch=null: «Править» и дифф есть', async () => {
+    const spy = diffSpy();
+    contentSpy!.mockResolvedValue(contentWith({ branch: null }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(findNodeByAttr(container as never, 'title', 'Править'), 'правка доступна').not.toBeNull();
+    expect(spy, 'дифф запрошен').toHaveBeenCalled();
+  });
+
+  it('без sessionId (и relay без ветки) — как из корня', async () => {
+    const spy = diffSpy();
+    const { container } = mountViewer(vi.fn());
+    await flush();
+    expect(findNodeByAttr(container as never, 'title', 'Править')).not.toBeNull();
+    expect(spy).toHaveBeenCalled();
   });
 });
 

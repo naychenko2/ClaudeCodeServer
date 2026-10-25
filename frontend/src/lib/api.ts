@@ -2825,7 +2825,7 @@ export const api = {
     // sessionId (F1a): резолвить путь в дереве чата; ответ несёт branch (в каком дереве
     // нашли) и isAnchor (true — файл найден в заявленном дереве-анкере, false — в другом).
     getContent: (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string }) =>
-      projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string; isAnchor: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`),
+      projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string | null; isAnchor?: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`),
     saveContent: (projectId: string, path: string, content: string) =>
       projectRequest<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
         method: 'PUT',

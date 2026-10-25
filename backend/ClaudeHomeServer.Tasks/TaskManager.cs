@@ -90,9 +90,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // постановщику. Текст — готовый, с выводом гейта
     public event Action<TaskItem, string>? PregateEscalated;
 
-    // Гейт «предгейт перед закрытием шага» (NC-P1b): включён, когда подсистема test-runs не выключена
-    // и есть читатель коммита дерева. Нет читателя (тесты без гейта) или выключенная подсистема —
-    // шаг закрывается как раньше
+    // Гейт «предгейт перед закрытием шага» (NC-P1b): включён, когда подсистема test-runs не выключена,
+    // есть читатель коммита дерева и взведён тумблер Pregate:GateOnClose (по умолчанию выкл — советующий
+    // режим: результат пишется и эскалируется, но закрытие не блокирует). Нет читателя (тесты без гейта)
+    // или выключенная подсистема — шаг закрывается как раньше
     private readonly IWorktreeHeadReader? _heads;
     private readonly bool _pregateGateOn;
 
@@ -103,7 +104,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         _heads = heads;
         _pregateGateOn = heads is not null
-            && SubsystemGate.IsEnabled(config, "test-runs");
+            && SubsystemGate.IsEnabled(config, "test-runs")
+            && config.GetValue<bool>("Pregate:GateOnClose");
         _events = events;
         _notif = notif;
         _personas = personas;
@@ -894,7 +896,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // коммиту. Роль и дерево берутся и «до», и «после» запроса: смена роли (step→cut) или сброс дерева
         // в том же запросе, что и закрытие, гейт не обходит
         var effWorktree = req.WorktreePath is null ? task.WorktreePath : Trimmed(req.WorktreePath);
-        if (_pregateGateOn && effective.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done
+        // Гейт — только для агентского пути: человек с доски закрывает без него (REST-дверь отличает его от агента)
+        if (_pregateGateOn && isAgentCall && effective.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done
             && PregateRules.GatedPath(task.Role, effRole, task.WorktreePath, effWorktree) is { } gatedPath)
         {
             var refusal = PregateRules.TreeSwapRefusal(task.WorktreePath, effWorktree)

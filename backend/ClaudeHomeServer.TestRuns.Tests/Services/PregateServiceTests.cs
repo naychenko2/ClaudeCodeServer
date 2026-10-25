@@ -182,6 +182,23 @@ public class PregateServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task СуммаПроверокДлиннееПотолка_ОдинПотолокНаПрогон_RefusedСВыполненными()
+    {
+        // Каждая проверка (≈0,4 с) короче потолка в 1 с, а четыре вместе — длиннее: потолок обязан быть общим
+        var launcher = Launcher(_ => { Thread.Sleep(400); return ("ok", 0); });
+        var service = new PregateService(launcher, new TestRunsOptions { CeilingSeconds = 1 },
+            new PregateOptions { Checks = [Check("c1"), Check("c2"), Check("c3"), Check("c4")] },
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeFalse();
+        verdict.Refusal.Should().Contain("общий потолок").And.Contain("Уже выполнено").And.Contain("c1");
+        verdict.Checks.Should().NotBeEmpty().And.HaveCountLessThan(4);
+        verdict.Checks.Select(c => c.Name).Should().StartWith(["c1"]);
+    }
+
+    [Fact]
     public async Task TreeBusy_RefusedAndRed()
     {
         var launcher = Launcher(_ => ("", 0));

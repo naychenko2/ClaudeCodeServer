@@ -2581,6 +2581,132 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
+    // ─── B3: голос фичи (PUT /api/tasks/features/{id}/note) ───────────────────────────────
+
+    // Сервисный токен → 403. Мутация (c4): убрать проверку IsServiceToken — ручка дойдёт до записи.
+    [Fact]
+    public async Task PutNote_ServiceToken_Returns403()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var controller = BuildController(RealGit(), serviceToken: true);
+
+        var result = await controller.SetFeatureNote(epicId, new TasksController.FeatureNoteRequest("текст"));
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note.Should().BeNull();
+    }
+
+    // Не-эпик → 400. Мутация: убрать проверку роли — вернётся 404 от проекции.
+    [Fact]
+    public async Task PutNote_NeEpik_400()
+    {
+        var step = await CreateTaskAsync(new { title = "обычная" });
+
+        var response = await _client.PutAsJsonAsync(
+            $"/api/tasks/features/{step.GetProperty("id").GetString()}/note", new { text = "x" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task PutNote_ChuzhayaFicha_404()
+    {
+        var created = await _stranger.PostAsJsonAsync("/api/tasks", new { title = "чужой эпик", role = "feature" });
+        var epicId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString();
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "x" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId!)!.Note.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PutNote_KrivoyId_404()
+    {
+        var response = await _client.PutAsJsonAsync("/api/tasks/features/a..b/note", new { text = "x" });
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // c2: At/StageAtWrite/StateAtWrite клиент не задаёт — лишние поля тела игнорируются, значения серверные.
+    // Мутация: принимать at из тела — тест краснеет.
+    [Fact]
+    public async Task PutNote_PolyaKlientaIgnoriruyutsya_ShtampujetServer()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var before = DateTime.UtcNow;
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "голос", at = "2001-01-01T00:00:00Z", stageAtWrite = "подделка", stateAtWrite = "подделка",
+            byUser = false, bySessionId = "чужая",
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var note = _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.Note!;
+        note.Text.Should().Be("голос");
+        note.At.Should().BeOnOrAfter(before);
+        note.StageAtWrite.Should().NotBe("подделка");
+        note.StateAtWrite.Should().NotBe("подделка").And.NotBeEmpty();
+        note.BySessionId.Should().BeNull();
+        note.ByUser.Should().BeTrue();
+    }
+
+    // c3 через HTTP: длинный текст режется до 600, пустой снимает голос.
+    [Fact]
+    public async Task PutNote_DlinnyjTekstRezhetsya_PustojSnimaet()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+
+        (await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = new string('я', 700) }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(epicId)!.Note!.Text.Should().HaveLength(600);
+
+        (await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "  " }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(epicId)!.Note.Should().BeNull();
+    }
+
+    // c4: после записи в группу владельца уходит task_changed(updated) с эпиком и его note.
+    // Мутация: убрать вещание в SetFeatureNote — ожидание таймит, тест краснеет.
+    [Fact]
+    public async Task PutNote_BroadcastsTaskChanged()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+        var connection = new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "hubs/session"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.Transports = HttpTransportType.LongPolling;
+                options.AccessTokenProvider = () => Task.FromResult<string?>(_factory.GetToken(
+                    TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+            })
+            .Build();
+        var got = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("message", msg =>
+        {
+            if (!msg.TryGetProperty("type", out var type) || type.GetString() != "task_changed") return;
+            if (msg.GetProperty("task").GetProperty("id").GetString() != epicId) return;
+            got.TrySetResult(msg);
+        });
+        try
+        {
+            await connection.StartAsync();
+            await connection.InvokeAsync("JoinUser", me.GetProperty("userId").GetString());
+
+            var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new { text = "вещаем" });
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var winner = await Task.WhenAny(got.Task, Task.Delay(15_000));
+            winner.Should().Be(got.Task, "запись голоса обязана дойти до группы владельца");
+            var msg = got.Task.Result;
+            msg.GetProperty("action").GetString().Should().Be("updated");
+            msg.GetProperty("task").GetProperty("note").GetProperty("text").GetString().Should().Be("вещаем");
+        }
+        finally { await connection.DisposeAsync(); }
+    }
+
     // 200 + в журнале ровно одна запись held с reason. Журнал пишет сам TaskManager (его
     // _journal из DI) — читаем зарегистрированный FeatureJournalStore той же сборки.
     [Fact]

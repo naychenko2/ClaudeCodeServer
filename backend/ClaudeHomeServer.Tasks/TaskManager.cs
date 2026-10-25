@@ -1436,6 +1436,25 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return task;
     }
 
+    // Голос фичи (волна 6, B3): только эпик (role=feature), иначе null. Пустой текст (после Trim)
+    // снимает голос; длиннее FeatureNote.MaxTextLength обрезается. At штампуем здесь, этап и
+    // состояние на момент записи передаёт вызывающий из проекции (клиентских значений нет).
+    public TaskItem? SetFeatureNote(string id, string? text, string? bySessionId, bool byUser,
+        string stageAtWrite, string stateAtWrite)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null || task.Role != TaskRoles.Feature) return null;
+        var trimmed = (text ?? "").Trim();
+        if (trimmed.Length > FeatureNote.MaxTextLength) trimmed = trimmed[..FeatureNote.MaxTextLength];
+        var now = DateTime.UtcNow;
+        task.Note = trimmed.Length == 0
+            ? null
+            : new FeatureNote(trimmed, now, bySessionId, byUser, stageAtWrite, stateAtWrite);
+        task.UpdatedAt = now;
+        ScheduleSave();
+        return task;
+    }
+
     // FeatureHoldException переехал в Core (дефект 79d0fa9a): его бросает и корневой
     // TaskExecutionService — ссылка корня на тип из вертикали ловится Root-сторожем.
 

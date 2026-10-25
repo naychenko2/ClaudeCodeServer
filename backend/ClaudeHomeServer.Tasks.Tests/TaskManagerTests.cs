@@ -1802,6 +1802,59 @@ public class TaskManagerTests : IDisposable
     // Формула отказа запуска исполнителя по задачам фичи с активным Hold. Мутация: убрать
     // вызов FeatureHoldRefusal в TaskExecutionService.ExecuteAsync — интеграционный тест
     // Hold_RefusesExecutorLaunch_ClearingPauseAllowsStart краснеет.
+    // ─── Голос фичи (B3): SetFeatureNote ─────────────────────────────────────────────
+    // Мутация (c3): убрать обрезку по MaxTextLength — тест длинного текста краснеет.
+    [Fact]
+    public void SetFeatureNote_ДлинныйТекст_ОбрезаетсяДо600()
+    {
+        var epic = CreateEpic("u");
+
+        var res = _sut.SetFeatureNote(epic.Id, new string('я', 700), "sess", false, "review", "running");
+
+        res!.Note!.Text.Should().HaveLength(600);
+    }
+
+    // Мутация (c3): вернуть пустую запись вместо null — тест краснеет.
+    [Theory]
+    [InlineData("")]
+    [InlineData("   \n ")]
+    [InlineData(null)]
+    public void SetFeatureNote_ПустойТекст_СнимаетГолос(string? text)
+    {
+        var epic = CreateEpic("u");
+        _sut.SetFeatureNote(epic.Id, "было", null, true, "prod", "running");
+
+        var res = _sut.SetFeatureNote(epic.Id, text, null, true, "prod", "running");
+
+        res!.Note.Should().BeNull();
+    }
+
+    [Fact]
+    public void SetFeatureNote_Эпик_ШтампуетАвторАтЭтапИСостояние()
+    {
+        var epic = CreateEpic("u");
+        var before = DateTime.UtcNow;
+
+        var note = _sut.SetFeatureNote(epic.Id, "  идёт ревью  ", "sess-1", false, "review", "running")!.Note!;
+
+        note.Text.Should().Be("идёт ревью");
+        note.At.Should().BeOnOrAfter(before);
+        note.BySessionId.Should().Be("sess-1");
+        note.ByUser.Should().BeFalse();
+        note.StageAtWrite.Should().Be("review");
+        note.StateAtWrite.Should().Be("running");
+    }
+
+    [Fact]
+    public void SetFeatureNote_НеЭпикИНетТакого_Null()
+    {
+        var step = _sut.Create(null, "u", new CreateTaskRequest("шаг"));
+
+        _sut.SetFeatureNote(step.Id, "текст", null, true, "", "").Should().BeNull();
+        _sut.SetFeatureNote("нет-такого", "текст", null, true, "", "").Should().BeNull();
+        step.Note.Should().BeNull();
+    }
+
     [Fact]
     public void FeatureHoldRefusal_ManualHold_РабочаяЗадачаФичиОтказана()
     {

@@ -991,6 +991,37 @@ public class TasksController(
         return Ok(new { interrupted = after?.Interrupted ?? [] });
     }
 
+    // ─── B3: голос фичи (PUT /api/tasks/features/{featureId}/note) ────────────────────────────
+    // Пишет человек (сервисный токен → 403, как у hold). At/StageAtWrite/StateAtWrite ставит
+    // сервер из проекции; пустой text снимает голос. Не-эпик → 400, чужой/кривой id → 404.
+
+    // Тело PUT note: только text — прочих полей FeatureNote у клиента нет.
+    public record FeatureNoteRequest(string? Text);
+
+    [HttpPut("features/{featureId}/note")]
+    public async Task<IActionResult> SetFeatureNote(string featureId, [FromBody] FeatureNoteRequest? req)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Голос фичи пишет оркестратор или человек" });
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var epic0 = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == featureId);
+        if (epic0 is null) return NotFound(new { error = "Фича не найдена" });
+        if (epic0.Role != TaskRoles.Feature)
+            return BadRequest(new { error = "Голос пишется только у фичи (role=feature)" });
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
+            run.Now.FirstOrDefault()?.Stage ?? "", run.State);
+        if (epic is null) return NotFound(new { error = "Фича не найдена" });
+        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
+        return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });
+    }
+
     [HttpDelete("features/{featureId}/hold")]
     public async Task<IActionResult> ClearFeatureHold(string featureId)
     {

@@ -12,18 +12,27 @@ import {
   type TimelineModel, type TimelineSegment,
 } from './FeatureStatsBits';
 import { buildGanttModel, type GanttModel, type GanttSegmentKind } from './FeatureGanttModel';
-import { TotalsCards, LongestNow, Breakdown, Spend } from './FeatureStatsBlocks';
+import { personaGroupLabel, modelGroupLabel, roleGroupLabel, formatTokens } from './FeatureStatsBlocks';
+import { usePersonas } from '../../lib/personas';
+import { useModels } from '../../lib/models';
+import { AGENT_COLORS } from '../AgentSelector';
+import { StatsHero } from './StatsHero';
+import { FeatureStatsTiles } from './FeatureStatsTiles';
+import { FeatureStatsNow } from './FeatureStatsNow';
+import { FeatureStatsLosses } from './FeatureStatsLosses';
+import { FeatureBreakdownBlock } from './FeatureBreakdownBlock';
 import { FeatureAnalysisLine } from './FeatureAnalysisLine';
 import { stageLabelShort } from './FeatureAnalysisModel';
-import type { FeatureStats } from '../../types/featureStats';
+import type { FeatureStats, FeatureSpend, FeatureStatsSource, FeatureTimeline } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
 
-// Вкладка «Статистика» (волна 3, Ф7a, макет features-overview-3-final §«Статистика»;
-// блок 1 — ступени Ганта по макету features-overview-4 §pt4, вариант А, W4-4F2).
-// БЛОК 1 — лента времени: ступени (у этапа своя строка: имя, полоса на общей оси с
-// разбивкой «работа · ожидание · простой», минуты справа), ось времени, «сейчас»,
-// легенда и значки точности. Без `run` (старые ответы) — прежняя полоса.
-// БЛОКИ 2 (карточки, «Дольше всех», разрезы, расход) — в Ф7b.
+// Вкладка «Статистика» (волна 5, ST-F14a; вариант A «Пульс» макета feature-stats-5).
+// Порядок: строка анализа → значки точности → герой → плитки → «Сейчас работают» →
+// «Главные потери» → Гант (ступени, W4-4F2) → «Кто и на чём работал» → свёрнутый
+// «Подробнее» (то, что новые блоки не покрывают: «не работали», эпизоды ошибок,
+// детали расхода). Без `run` (старые ответы) — прежняя полоса: герой, плитки, «сейчас»,
+// потери и разрез требуют конвейера. TotalsCards/LongestNow/Breakdown/Spend из
+// FeatureStatsBlocks здесь больше не рендерятся (сам файл — до ST-F14b).
 //
 // Данные ТОЛЬКО из `stats` и `run` (features/{id}): фронт не пересчитывает, только раскладывает.
 // Честность: нет stats (старые данные) → пустое состояние с причиной, а не нули.
@@ -593,7 +602,73 @@ function TaskButtons({ model, nav, isMobile }: { model: TimelineModel; nav?: Fea
   );
 }
 
+// «Подробнее» (ST-F14a, макет feature-stats-5.md §«Правки фронта», п. 8): только то,
+// что новые блоки НЕ покрывают: «не работали» (в составе героя его нет), эпизоды
+// ошибок, детали расхода (кэш, «данные с», общие чаты, модели без цены). Нечего
+// добавить — раскрывашки нет (пустой «Подробнее» не бывает).
+function MoreDetails({ totals, spend, source, isMobile }: {
+  totals: FeatureTimeline['totals'];
+  spend: FeatureSpend | null;
+  source: FeatureStatsSource;
+  isMobile: boolean;
+}) {
+  const rows: string[] = [];
+  const approx = source === 'approx' ? '≈ ' : '';
+  if (totals.notWorkingMinutes != null && totals.notWorkingMinutes > 0) {
+    rows.push(`не работали — ${approx}${formatDuration(totals.notWorkingMinutes)}`);
+  }
+  if (totals.errorCount != null && totals.errorCount > 0) {
+    rows.push(`ошибки: ${totals.errorCount} эпизодов`);
+  }
+  if (spend) {
+    // Кэш — отдельной строкой (в «Расход» плитки он не входит, там только вход+выход).
+    const cache = spend.cacheReadTokens + spend.cacheCreationTokens;
+    if (cache > 0) {
+      rows.push(`кэш: ${formatTokens(spend.cacheReadTokens)} чтение · ${formatTokens(spend.cacheCreationTokens)} создание`);
+    }
+    // «Данные с …» — только если расход ненулевой (иначе у пустой фичи это дата эпика).
+    const nonzero = spend.inputTokens + spend.outputTokens + cache > 0 || spend.costUsd > 0;
+    if (nonzero) rows.push(`данные с ${new Date(spend.from).toLocaleDateString('ru-RU')}`);
+    // Метод оценки shared — из spend.shared.method, не из source (расход и лента могут
+    // считаться разными способами) — то же правило, что в прежнем блоке Spend.
+    if (spend.shared) {
+      rows.push(
+        `в т. ч. доля общих чатов ≈ ${formatTokens(spend.shared.inputTokens + spend.shared.outputTokens)} токенов` +
+        ` (оценка, по ${spend.shared.method === 'journal' ? 'журналу' : 'задачам ≈'})`,
+      );
+    }
+    if (spend.costPartial && spend.hiddenCostModels.length > 0) {
+      rows.push(`моделей без цены: ${spend.hiddenCostModels.join(', ')}`);
+    }
+  }
+  if (rows.length === 0) return null;
+  return (
+    <details data-testid="stats-more" style={{ margin: `${SP.md}px 0 0` }}>
+      <summary
+        data-testid="stats-more-summary"
+        style={{ cursor: 'pointer', fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, fontFamily: FONT.sans }}
+      >
+        Подробнее
+      </summary>
+      <div
+        style={{
+          marginTop: SP.sm, padding: isMobile ? `${SP.sm}px ${SP.md}px` : `${SP.md}px ${SP.lg}px`,
+          background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+          display: 'flex', flexDirection: 'column', gap: SP.xs,
+          fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+        }}
+      >
+        {rows.map((r, i) => <span key={i} data-testid="stats-more-row">{r}</span>)}
+      </div>
+    </details>
+  );
+}
+
 export function FeatureStatsTab({ stats, run = null, featureId = null, featureTitle = null, marks, isMobile = false }: FeatureStatsTabProps) {
+  // Хуки выше ранних return: labelOf/colorOf нужны только с run, но хук не может
+  // быть условным (react-hooks/rules-of-hooks) — тот же приём, что в FeatureStatsNow.
+  const personas = usePersonas();
+  useModels(); // реактивность: догрузка каталога моделей меняет подписи
   const nav: FeatureNavCtx = { featureId, featureTitle, marks };
   // Строка анализа (W5-F1) — про фичу, а не про статистику: показываем и в пустых
   // состояниях вкладки, поэтому вынесена до ранних return. Без run (старые ответы) — нет.
@@ -633,30 +708,59 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
     );
   }
 
-  // БЛОКИ 2–3 (Ф7b): карточки итогов, «дольше всех», разрезы, расход.
-  // Данные ТОЛЬКО из stats; null-поля → блока/строки нет (не выдумываем).
+  // «Пульс» (ST-F14a): герой, плитки, «Сейчас работают», «Главные потери» — всё из
+  // run + stats; без run (старые ответы) этих блоков нет, остаётся прежняя полоса.
   const costPartial = stats.spend?.costPartial ?? false;
 
   // Ступени Ганта (W4-4F2) — из run (конвейера). Без run или без строк (старые
   // ответы) — прежняя полоса: честная деградация, а не пустой блок.
   const gantt = run ? buildGanttModel(run, stats, Date.now()) : null;
 
+  // labelOf/colorOf — те же источники подписей, что у прежнего Breakdown (FeatureStatsBlocks):
+  // персона → имя, роль → roleLabel, модель → modelLabel. Цвет — цвет аватара персоны
+  // (AGENT_COLORS); остальным — '' (палитра ShareRing решает сама). Ключ без признака
+  // оси читается по порядку проверки: персона, роль, модель.
+  const labelOf = (key: string): string => {
+    if (personas.some(p => p.id === key)) return personaGroupLabel(key, personas);
+    const role = roleGroupLabel(key);
+    if (role !== key) return role;
+    return modelGroupLabel(key);
+  };
+  const colorOf = (key: string): string => {
+    const c = personas.find(x => x.id === key)?.avatar?.color;
+    return c ? AGENT_COLORS[c] ?? '' : '';
+  };
+
   return (
     <div data-testid="feature-stats-tab" style={{ fontFamily: FONT.sans }}>
       {line}
       <AccuracyBadges source={stats.source} truncated={stats.truncated} />
+      {run && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, marginTop: SP.lg }}>
+          <StatsHero run={run} stats={stats} isMobile={isMobile} />
+          <FeatureStatsTiles run={run} stats={stats} isMobile={isMobile} />
+          <FeatureStatsNow run={run} isMobile={isMobile} />
+          <FeatureStatsLosses run={run} stats={stats} isMobile={isMobile} />
+        </div>
+      )}
       {gantt && gantt.rows.length > 0 ? (
         <Gantt gantt={gantt} axis={model.axis} current={model.current} isMobile={isMobile} />
       ) : (
         <Timeline model={model} isMobile={isMobile} />
       )}
       <TaskButtons model={model} nav={nav} isMobile={isMobile} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, marginTop: SP.lg }}>
-        <TotalsCards totals={stats.timeline.totals} source={stats.source} isMobile={isMobile} />
-        {stats.longestNow && <LongestNow ln={stats.longestNow} nav={nav} isMobile={isMobile} />}
-        <Breakdown breakdown={stats.breakdown} costPartial={costPartial} nav={nav} isMobile={isMobile} />
-        {stats.spend && <Spend spend={stats.spend} />}
-      </div>
+      {run && (
+        <div style={{ marginTop: SP.lg }}>
+          <FeatureBreakdownBlock
+            breakdown={stats.breakdown}
+            costPartial={costPartial}
+            run={run}
+            labelOf={labelOf}
+            colorOf={colorOf}
+          />
+        </div>
+      )}
+      <MoreDetails totals={stats.timeline.totals} spend={stats.spend} source={stats.source} isMobile={isMobile} />
     </div>
   );
 }

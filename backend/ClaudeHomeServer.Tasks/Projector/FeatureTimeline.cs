@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks.Journal;
 
@@ -189,6 +190,16 @@ public sealed record FeatureTimeline(
     // тестам — параметр maxSegments в Build (внутренний хук без глобального состояния).
     internal const int DefaultMaxSegments = 500;
 
+    // Интервалы этапов (GC-B2, «Хронология»/Гант): стадия → её интервалы работы из журнала
+    // ходов. null — режим approx (журнала нет / он не полный) или ходов не было. В JSON —
+    // intervalsByStage (camelCase).
+    //
+    // Свойство internal, а не параметр записи: тип StageInterval из GC-B1 (FeatureStageIntervals)
+    // internal, а параметр публичной записи должен быть публично доступен (CS0051). JsonInclude
+    // включает поле в сериализацию — наружу (stats.timeline) оно уходит JSON-ом, как и задумано.
+    [JsonInclude]
+    internal Dictionary<string, List<FeatureStageIntervals.StageInterval>>? IntervalsByStage { get; init; }
+
     public static FeatureTimeline Build(FeatureRun run, FeatureJournalReadResult? journal, DateTime now,
         int maxSegments = DefaultMaxSegments)
     {
@@ -214,7 +225,13 @@ public sealed record FeatureTimeline(
         if (isJournal)
         {
             var (journalSegments, journalTotals) = BuildJournal(run, journal!, from, to, now, maxSegments);
-            return new FeatureTimeline(from, to, stages, journalSegments, current, journalTotals);
+            // Интервалы этапов (GC-B2) — из того же полного журнала: гейт журнала у них тот же,
+            // поэтому в этом режиме словарь не null (пустой — если ходов в журнале нет).
+            var intervals = FeatureStageIntervals.Build(run, journal, now);
+            return new FeatureTimeline(from, to, stages, journalSegments, current, journalTotals)
+            {
+                IntervalsByStage = intervals,
+            };
         }
 
         // approx (Б5a): work — по задачам [ClaudeStartedAt, min(CompletedAt, ExecutorStoppedAt, now)).

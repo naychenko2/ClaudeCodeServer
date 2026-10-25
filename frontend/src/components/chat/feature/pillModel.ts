@@ -1,5 +1,5 @@
 import { getPersonaById } from '../../../lib/personas';
-import { STAGE_NAME, MERGE_PENDING_STATUS, queueLabel } from '../../../lib/chatGroups';
+import { STAGE_NAME, MERGE_PENDING_STATUS, queueLabelParts } from '../../../lib/chatGroups';
 import type { FeatureQueue, FeatureRun, FeatureState } from '../../../types/featureRun';
 
 // Тон пилюли (макет turn-plan-feature-popup-1, S[state].pill[0]):
@@ -85,16 +85,15 @@ export function statusPhrase(
     case 'idle': return { bold: 'Простаивает', post: '' };
     // Пауза/черновик (W4-HOLD-B1): не тревога — нейтральная подпись по состоянию.
     // Очередь фич (волна 6, feature-queue-1): пауза с причиной queue — тот же тон,
-    // тревоги нет (макет, таблица «Подпись»). ТЕКСТ — из общего хелпера queueLabel
-    // (chatGroups, R-Q5C-A/R-Q5D-A): в пилюле нет своей копии формата «N из M»
-    // (ревью RV-Q5C, major 1). Разбивка как в рельсе (FeatureBanner): leading-слово
-    // с большой и жирным (рендерит <b>), суффикс « · N из M» — как дал хелпер.
+    // тревоги нет (макет, таблица «Подпись»). ТЕКСТ — из общего хелпера queueLabelParts
+    // (chatGroups, R-Q5C-A/R-Q5D-D/R-Q5D-F): берём ГОТОВЫЕ части (жирное слово и суффикс),
+    // как в плашке (FeatureBanner, R-Q5D-E): в потребителе нет своей копии слова и формата
+    // «N из M» и нет разбора строки по разделителю (ревью RV-K-Q5D-B, минор 3).
     // Позицию считает бэк; queue не пришёл — без цифр (нулей не показываем).
     case 'paused': {
       if (hold?.holdReason === 'queue') {
-        const label = queueLabel(hold.queue);
-        const sep = label.indexOf(' · ');
-        return { bold: 'В очереди', post: sep >= 0 ? label.slice(sep) : '' };
+        const p = queueLabelParts(hold.queue);
+        return { bold: p.bold, post: p.post };
       }
       return { bold: 'На паузе', post: '' };
     }

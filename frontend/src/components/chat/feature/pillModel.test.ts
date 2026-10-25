@@ -4,10 +4,13 @@
 // Окружение node (без jsdom): getPersonaById — мок (hoisted-карта id→имя).
 // Чистая функция: рендер компонента (TurnPlanPill) — в TurnPlanPill.test.ts.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FeatureNow, FeatureRun, FeatureStage, FeatureTask } from '../../../types/featureRun';
+import type { FeatureNow, FeatureQueue, FeatureRun, FeatureStage, FeatureTask } from '../../../types/featureRun';
 import { buildPillModel } from './pillModel';
 import { featureRunStatusTag } from '../../feature/FeatureStatusTag';
+import { queueLabelParts } from '../../../lib/chatGroups';
 
 // Стор персон (lib/personas) — мок: hoisted-карта id→имя.
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
@@ -251,6 +254,44 @@ describe('R-Q5D-A: подпись пилюли = подпись тега (оди
     const tag = featureRunStatusTag('paused', null, { holdReason: 'queue' });
     expect(pillLabel(m)).toBe(tag.label);
     expect(pillLabel(m)).toBe('в очереди');
+  });
+});
+
+// ── R-Q5D-F: пилюля на структурный API хелпера (RV-K-Q5D-B, минор 3) ────────────
+// statusPhrase (общий источник слов пилюли и плашки) для очереди берёт ГОТОВЫЕ части
+// queueLabelParts: жирное слово и суффикс. В пилюле нет своей константы «В очереди»,
+// своей копии формата «N из M» и разбора строки по разделителю — третий источник
+// формулировки не мог вернуться. Тот же образец, что плашка (R-Q5D-E).
+// Мутация (в отчёте): вернуть разбор строки и зашитое слово в statusPhrase →
+// сторож исходника краснеет.
+
+describe('R-Q5D-F: части пилюли = структура queueLabelParts', () => {
+  it('bold и post пилюли = queueLabelParts(queue).bold/.post побайтно', () => {
+    const q: FeatureQueue = { position: 5, length: 7 };
+    const parts = queueLabelParts(q);
+    const m = buildPillModel([run({
+      state: 'paused',
+      hold: { reason: 'queue', since: '2026-10-25T10:00:00Z' },
+      queue: q,
+    })], false, null)!;
+    expect(m.bold).toBe(parts.bold);
+    expect(m.post).toBe(parts.post);
+    expect(m.bold + m.post).toBe(`${parts.bold}${parts.post}`);
+  });
+
+  it('queue не пришёл: части без цифр — ровно как у хелпера', () => {
+    const parts = queueLabelParts(null);
+    const m = buildPillModel([run({ state: 'paused', hold: { reason: 'queue' } })], false, null)!;
+    expect(m.bold).toBe(parts.bold);
+    expect(m.post).toBe(parts.post);
+    expect(m.post).toBe('');
+  });
+
+  it('в исходнике пилюли нет разбора строки и своей константы «В очереди»', () => {
+    const src = readFileSync(fileURLToPath(new URL('./pillModel.ts', import.meta.url)), 'utf8');
+    expect(src, 'пилюля разбирает строку подписи по разделителю').not.toContain("indexOf(' · ')");
+    expect(src, 'пилюля берёт строку подписи вместо частей').not.toMatch(/\bqueueLabel\(/);
+    expect(src, 'пилюля зашивает своё слово «В очереди»').not.toMatch(/'В очереди'/);
   });
 });
 

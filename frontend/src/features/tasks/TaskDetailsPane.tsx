@@ -26,6 +26,8 @@ import {
   PriorityFlag, SectionLabel, SubtaskCheck,
 } from './bits';
 import { useContextButton } from '../chatContext/useContextButton';
+import { FeatureBackChip } from '../../components/chat/FeatureBackChip';
+import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { TaskEditForm } from './TaskEditForm';
 import { AcceptanceBlock } from './AcceptanceBlock';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
@@ -161,6 +163,15 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
     () => sessions.find(s => s.id === task.linkedSessionId) ?? null,
     [sessions, task.linkedSessionId],
   );
+
+  // Дефект 4c4645e2: уход с задачи (закрыть или выбрать другую — панель перемонтируется
+  // по key={task.id}) гасит точку возврата так же, как у чата (обычный выбор чата гасит
+  // указатель в WorkspacePage.tsx:1453). Возврат самим чипом гасит обработатель
+  // cc-open-feature (WorkspacePage.tsx:1919) до этого unmount.
+  useEffect(() => () => {
+    const back = getBackNav();
+    if (back && back.fromKind === 'feature' && back.to.kind === 'task' && back.to.id === task.id) clearBackNav();
+  }, [task.id]);
 
   const color = projectColor(project ? project.id : null);
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
@@ -717,6 +728,8 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
           <BackButton onClick={onBack ?? (() => {})} style={{ flex: 1, minWidth: 0 }} title="Назад к списку">
             {headerTitleBlock}
           </BackButton>
+          {/* Дефект 4c4645e2: пришли с страницы фичи — тот же чип возврата, что в шапке чата. */}
+          <FeatureBackChip taskId={task.id} projectId={project?.id ?? null} isCompact />
           {chatContextButton}
           {executeButton}
           {editButton}
@@ -746,6 +759,8 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
       {/* Шапка — как тулбар чата: название/мета слева, действия справа */}
       <Toolbar>
         {headerTitleBlock}
+        {/* Дефект 4c4645e2: пришли с страницы фичи — тот же чип возврата, что в шапке чата. */}
+        <FeatureBackChip taskId={task.id} projectId={project?.id ?? null} />
         {chatContextButton}
         {executeButton}
         {editButton}

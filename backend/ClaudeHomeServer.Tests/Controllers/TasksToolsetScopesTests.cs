@@ -117,13 +117,16 @@ public class TasksToolsetScopesTests : IDisposable
             new { title = "мерж A", featureId = epicAId, role = "merge" });
         var mergeAId = mergeA.GetProperty("id").GetString()!;
 
-        // Фича B: только эпик (финала нет → не Ready).
-        var epicB = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+        // Фича B: только эпик (финала нет → не Ready). Заводим из другого чата:
+        // правило «один чат — одна фича» не даёт вести два эпика из одной сессии.
+        var sessionBId = await CreateSessionAsync(Client, project);
+        var epicB = await ToolJsonAsync(Client, "tasks", sessionBId, "tasks_create",
             new { title = "эпик B", role = "feature" });
         var epicBId = epicB.GetProperty("id").GetString()!;
 
-        // Перенос merge-задачи в B ⇒ isError (финал B не принят).
-        var answer = await CallToolAsync(Client, "tasks", sessionId, "tasks_update",
+        // Перенос merge-задачи в B ⇒ isError (финал B не принят). Зовём из чата фичи B,
+        // иначе гард привязки чата к фиче откажет раньше проверяемого правила.
+        var answer = await CallToolAsync(Client, "tasks", sessionBId, "tasks_update",
             new { id = mergeAId, featureId = epicBId });
         answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
         ToolText(answer).Should().Contain("Роль merge привязана к своей фиче");

@@ -29,6 +29,19 @@ public static class FeatureChatDoor
         : role?.Trim() == TaskRoles.Feature ? "new-feature:" + Guid.NewGuid().ToString("N")
         : null;
 
+    // Цель при ОБНОВЛЕНИИ: фича задачи ПОСЛЕ правки (значение из запроса, если прислано, иначе
+    // текущее; пустая строка — очистка) либо сама задача, если она станет эпиком. Возвращает
+    // цель только когда она отличается от текущей фичи задачи — иначе правка привязку не меняет.
+    public static string? UpdateTarget(TaskItem existing, string? reqFeatureId, string? reqRole)
+    {
+        var effFeatureId = reqFeatureId ?? existing.FeatureId;
+        var effRole = (reqRole ?? existing.Role)?.Trim();
+        var target = !string.IsNullOrEmpty(effFeatureId) ? effFeatureId
+            : effRole == TaskRoles.Feature ? existing.Id
+            : null;
+        return target is not null && target != TargetFeature(existing) ? target : null;
+    }
+
     // REST-вход: чат-вызыватель — по заголовку X-Caller-Session-Id. Нет заголовка (кнопка в UI),
     // чужая или несуществующая сессия — привязки нет, гард пропускает.
     public static string? DenyForHeader(

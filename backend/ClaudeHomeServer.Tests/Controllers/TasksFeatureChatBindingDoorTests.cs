@@ -295,6 +295,58 @@ public class TasksFeatureChatBindingDoorTests : IClassFixture<TestWebApplication
     }
 
     [Fact]
+    public async Task RestUpdate_MakeOwnTaskEpic_FromBoundChat_Conflict_RoleAndFeatureUnchanged()
+    {
+        var chat = await NewChat();
+        Epic("Фича A21", chat.Id);
+        var free = Tasks.Create(null, OwnerId, new CreateTaskRequest("свободная"));
+
+        var resp = await Rest(HttpMethod.Put, $"/api/tasks/{free.Id}", new { featureId = "", role = "feature" }, chat.Id);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        Tasks.GetById(free.Id)!.Role.Should().BeNull();
+        Tasks.GetById(free.Id)!.FeatureId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RestUpdate_MakeOwnTaskEpic_FromFreeChat_Ok()
+    {
+        var chat = await NewChat();
+        var free = Tasks.Create(null, OwnerId, new CreateTaskRequest("свободная"));
+
+        var resp = await Rest(HttpMethod.Put, $"/api/tasks/{free.Id}", new { featureId = "", role = "feature" }, chat.Id);
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        Tasks.GetById(free.Id)!.Role.Should().Be("feature");
+    }
+
+    [Fact]
+    public async Task McpUpdate_MakeOwnTaskEpic_FromBoundChat_Deny_RoleAndFeatureUnchanged()
+    {
+        var chat = await NewChat();
+        Epic("Фича A22", chat.Id);
+        var free = Tasks.Create(null, OwnerId, new CreateTaskRequest("свободная"));
+
+        var (isError, _) = await Mcp(chat.Id, "tasks_update", new { id = free.Id, featureId = "", role = "feature" });
+
+        isError.Should().BeTrue();
+        Tasks.GetById(free.Id)!.Role.Should().BeNull();
+        Tasks.GetById(free.Id)!.FeatureId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task McpUpdate_MakeOwnTaskEpic_FromFreeChat_Ok()
+    {
+        var chat = await NewChat();
+        var free = Tasks.Create(null, OwnerId, new CreateTaskRequest("свободная"));
+
+        var (isError, _) = await Mcp(chat.Id, "tasks_update", new { id = free.Id, featureId = "", role = "feature" });
+
+        isError.Should().BeFalse();
+        Tasks.GetById(free.Id)!.Role.Should().Be("feature");
+    }
+
+    [Fact]
     public async Task McpRunExecutor_TaskOfB_FromChatA_Deny_LauncherNotRecorded()
     {
         var chat = await NewChat();

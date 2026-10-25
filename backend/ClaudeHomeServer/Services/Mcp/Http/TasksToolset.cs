@@ -297,11 +297,11 @@ public sealed class TasksToolset(
                 var denied = TaskDenied(projectId, allowed, existing);
                 if (denied is not null) return Deny(denied);
 
-                // Смена featureId (не очистка и не то же значение) — та же дверь, что у создания
-                var newFeatureId = arguments.ContainsKey("featureId") ? StringArg(arguments, "featureId") : null;
-                if (!string.IsNullOrEmpty(newFeatureId) && newFeatureId != existing.FeatureId
-                    && FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
-                        context.OwnerId, session.Id, newFeatureId) is { } bound)
+                // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+                if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
+                        context.OwnerId, session.Id, FeatureChatDoor.UpdateTarget(existing,
+                            arguments.ContainsKey("featureId") ? StringArg(arguments, "featureId") : null,
+                            arguments.ContainsKey("role") ? StringArg(arguments, "role") : null)) is { } bound)
                     return Deny(bound);
 
                 // Целевой проект для валидации колонки/персоны: текущий, либо новый из projectId

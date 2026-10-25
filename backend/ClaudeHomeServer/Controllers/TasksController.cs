@@ -368,10 +368,10 @@ public class TasksController(
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
-        // Смена featureId (не очистка и не то же значение) — та же дверь, что у создания
-        if (!string.IsNullOrEmpty(req.FeatureId) && req.FeatureId != task.FeatureId
-            && FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
-                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), req.FeatureId) is { } bound)
+        // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+        if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(),
+                FeatureChatDoor.UpdateTarget(task, req.FeatureId, req.Role)) is { } bound)
             return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
 
         // Целевой проект для валидации колонки/персоны: текущий, либо новый из req.ProjectId

@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · страница фичи · Гант на «Хронологии»: четыре варианта</title>
+<!--
+  Макеты на выбор Андрею: как встроить Гант во вкладку «Хронология» страницы фичи
+  (#/project/{pid}/feature/{fid}, вкладка «Хронология»). Записка и спецификация — feature-gantt-6.md.
+  Код продукта не правится. Задача 3e31c7e1 (без featureId и stepRef: артефакт без роли).
+  Данные выдуманы, но опираются на поля, которые бэк уже отдаёт: stats.timeline.segments (from/to/kind/stage/taskId),
+  stats.timeline.current, run.stages (state, approxMinutes, executors, firstStartedAt, barEnd), run.stepProgress,
+  run.stepChains/rounds (возвраты), run.attention. Пометка .be «нужны данные» — поля в ответе нет.
+  A — «Сводная полоса»: одна строка над лентой, раскрывается в полный Гант.
+  B — «Компактный Гант»: карточка над лентой, будущие и пропущенные этапы свёрнуты в одну строку.
+  C — «Общая ось»: дорожка времени прямо в строке этапа ленты, ось липнет сверху.
+  D — «Лента | Гант»: переключатель вида и боковая панель деталей вместо подсказки.
+  Ни одна подсказка не стоит в потоке: поповер и шторка — слой поверх (.ov), раскладка под ними не двигается.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* / SHADOW.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-selected:0 0 0 3px var(--c-accent-light);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-selected:0 0 0 3px var(--c-accent-light);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-panel); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+.be { display:inline-flex; align-items:center; font:700 10px/16px "Hanken Grotesk",sans-serif; border-radius:6px; padding:0 6px;
+  background:var(--c-info-bg); color:var(--c-text-primary); border:1px dashed var(--c-info); white-space:nowrap; }
+.nomarks .be { display:none; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; gap:2px; align-items:center; background:var(--c-bg-selected); border-radius:10px; padding:2px; flex-wrap:wrap; }
+.mk .grp span { font-size:10px; text-transform:uppercase; color:var(--c-text-muted); padding:0 6px; }
+.mk .grp button { padding:4px 9px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); }
+.mk .grp button[aria-pressed="true"] { background:var(--c-bg-card); color:var(--c-text-heading); font-weight:600; box-shadow:var(--shadow-card); }
+.mk .meter { font-size:11px; color:var(--c-text-secondary); }
+.stage-wrap { padding:20px 16px 60px; display:flex; flex-direction:column; align-items:center; gap:10px; }
+.cap { max-width:1280px; width:100%; font-size:12px; color:var(--c-text-secondary); }
+.cap b { color:var(--c-text-heading); }
+
+/* ===== Кадр страницы фичи ===== */
+.frame { position:relative; width:1280px; max-width:100%; background:var(--c-bg-main); border:1px solid var(--c-border);
+  border-radius:12px; overflow:hidden; }
+.frame.m { width:360px; }
+.page { padding:16px 24px 24px; }
+.m .page { padding:12px; }
+.ftitle { font:700 22px/1.25 "PT Serif",Georgia,serif; color:var(--c-text-heading); margin:0 0 4px; }
+.m .ftitle { font-size:18px; }
+.aline { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; font-size:12px; color:var(--c-text-secondary); margin-bottom:10px; }
+.chip { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700; border-radius:999px; padding:2px 8px; }
+.chip.run { background:var(--c-accent-light); color:var(--c-accent); }
+.chip.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.chip.stop { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.chip.new { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.tabs { display:flex; gap:2px; border-bottom:1px solid var(--c-border-light); margin-bottom:12px; overflow:hidden; }
+.tabs span { padding:8px 12px; font-size:13px; color:var(--c-text-secondary); white-space:nowrap; }
+.m .tabs span { padding:8px 8px; font-size:12px; }
+.tabs span.on { color:var(--c-text-heading); font-weight:700; box-shadow:inset 0 -2px 0 var(--c-accent); }
+.note { display:flex; gap:8px; font-size:11px; color:var(--c-text-secondary); background:var(--c-bg-card);
+  border:1px solid var(--c-border-light); border-radius:8px; padding:4px 8px; margin-bottom:12px; }
+.prog { font-size:12px; color:var(--c-text-secondary); margin-bottom:8px; }
+
+/* ===== Общие части Ганта ===== */
+.gcard { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; box-shadow:var(--shadow-card);
+  padding:8px 12px 10px; margin-bottom:12px; }
+.m .gcard { padding:8px; }
+.ghead { display:flex; align-items:center; gap:8px; min-height:24px; }
+.ghead .t { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--c-text-muted); font-weight:700; }
+.ghead .s { font-size:12px; color:var(--c-text-secondary); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ghead .s b { color:var(--c-text-heading); }
+.gbtn { font-size:12px; color:var(--c-accent); font-weight:600; padding:2px 6px; border-radius:6px; white-space:nowrap; min-height:24px; }
+.m .gbtn { min-height:40px; padding:0 8px; }
+.gbtn:hover { background:var(--c-accent-light); }
+
+.grow { display:grid; align-items:center; gap:10px; min-height:22px; }
+.grow.sel .track { box-shadow:var(--shadow-selected); border-radius:6px; }
+.glabel { font-size:12px; font-weight:600; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.glabel.mut { color:var(--c-text-muted); font-weight:600; }
+.gdur { font-size:11px; color:var(--c-text-secondary); text-align:right; white-space:nowrap; }
+.track { position:relative; height:14px; }
+.track.ticks { background:repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), var(--c-border-light) calc(25% - 1px) 25%); }
+.seg { position:absolute; top:2px; height:10px; border-radius:3px; min-width:3px; display:block; }
+.seg.done { background:var(--c-success); }
+.seg.act { background:var(--c-accent); }
+.seg.wait { background:var(--c-info); }
+.seg:hover, .seg.hot { box-shadow:0 0 0 2px var(--c-bg-card), 0 0 0 4px var(--c-text-secondary); z-index:2; }
+.seg.pin { box-shadow:0 0 0 2px var(--c-bg-card), 0 0 0 4px var(--c-accent); z-index:3; }
+.seg:focus-visible { box-shadow:0 0 0 2px var(--c-bg-card), 0 0 0 4px var(--c-accent); z-index:3; }
+.dimmed .seg:not(.hot):not(.pin) { opacity:.35; }
+.pause { position:absolute; top:6px; height:0; border-top:1px dashed var(--c-text-muted); pointer-events:none; }
+.stall { position:absolute; top:2px; height:10px; border-radius:3px; pointer-events:none;
+  background:repeating-linear-gradient(135deg, var(--c-warning) 0 3px, var(--c-warning-bg) 3px 6px); }
+.ahead { position:absolute; top:2px; height:10px; border-radius:3px; border:1px dashed var(--c-dashed); pointer-events:none;
+  display:flex; align-items:center; justify-content:center; font:600 9px/1 "JetBrains Mono",monospace; color:var(--c-text-muted); overflow:hidden; white-space:nowrap; }
+.skipline { position:absolute; left:0; right:0; top:6px; border-top:1px dotted var(--c-dashed); }
+.skiplbl { position:absolute; left:0; top:0; font:600 10px/14px "JetBrains Mono",monospace; color:var(--c-text-muted); background:var(--c-bg-card); padding-right:6px; }
+.nowl { position:absolute; top:-3px; bottom:-3px; width:2px; border-radius:999px; background:var(--c-accent); pointer-events:none; z-index:4; }
+.nowl.wait { background:var(--c-info); }
+.nowl.stop { background:var(--c-warning); }
+.ret { position:absolute; top:-9px; transform:translateX(-50%); font:700 9px/1 "Hanken Grotesk",sans-serif; color:var(--c-danger-text); pointer-events:none; }
+.err { position:absolute; top:0; width:2px; height:14px; background:var(--c-danger); transform:translateX(-50%); pointer-events:none; }
+
+.axis { position:relative; height:16px; font:500 10px/16px "JetBrains Mono",monospace; color:var(--c-text-muted); }
+.axis span { position:absolute; transform:translateX(-50%); white-space:nowrap; }
+.axis span.l { transform:none; }
+.axis span.r { transform:translateX(-100%); }
+.axis span.now { color:var(--c-accent); font-weight:700; }
+.axis span.fut { color:var(--c-text-muted); font-style:italic; }
+
+/* План/факт: ступени шагов этапа */
+.pf { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.cells { display:inline-flex; gap:1px; }
+.cells i { width:5px; height:10px; border-radius:1px; background:transparent; border:1px dashed var(--c-dashed); }
+.cells i.d { background:var(--c-success); border-color:var(--c-success); }
+.cells i.w { background:var(--c-accent); border-color:var(--c-accent); }
+.pf .n { font:600 11px/1 "JetBrains Mono",monospace; color:var(--c-text-secondary); }
+.pfbar { display:flex; height:8px; border-radius:999px; overflow:hidden; background:transparent; border:1px dashed var(--c-dashed); }
+.pfbar i { display:block; height:100%; }
+.pfbar i.d { background:var(--c-success); } .pfbar i.w { background:var(--c-accent); }
+
+/* ===== Лента «Хронологии» (как FeatureTimelineTab) ===== */
+.ledger { position:relative; }
+.lrow { position:relative; padding-left:24px; padding-bottom:12px; border-radius:8px; transition:background .3s; }
+.lrow.flash { background:var(--c-accent-light); }
+.ldot { position:absolute; left:2px; top:8px; width:14px; height:14px; border-radius:50%; border:2px solid var(--c-progress-track); background:var(--c-bg-main); }
+.ldot.done { background:var(--c-success); border-color:var(--c-success); }
+.ldot.act { background:var(--c-accent); border-color:var(--c-accent); }
+.ldot.skip { border-style:dotted; border-color:var(--c-dashed); }
+.lline { position:absolute; left:8px; top:24px; bottom:0; width:2px; background:var(--c-border-light); }
+.lhead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; width:100%; min-height:26px; padding:4px 0; }
+.m .lhead { min-height:40px; }
+.lname { font-size:14px; font-weight:700; color:var(--c-text-heading); }
+.lname.mut { color:var(--c-text-muted); font-weight:600; }
+.lstat { font-size:11px; font-weight:600; color:var(--c-text-muted); }
+.lstat.info { color:var(--c-info); } .lstat.danger { color:var(--c-danger-text); } .lstat.run { color:var(--c-accent); }
+.ldur { margin-left:auto; font:500 11px "JetBrains Mono",monospace; color:var(--c-text-secondary); }
+.lbounds { font:500 11px "JetBrains Mono",monospace; color:var(--c-text-muted); }
+.lbody { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:8px; margin-top:4px; font-size:12px; color:var(--c-text-secondary); }
+.exe { display:flex; align-items:center; gap:8px; padding:4px 0; }
+.av { width:20px; height:20px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; color:var(--c-on-accent); flex-shrink:0; }
+.av.t { background:var(--c-info); } .av.g { background:var(--c-plan); } .av.p { background:var(--c-accent); } .av.e { background:var(--c-success); } .av.v { background:var(--c-warning); }
+
+/* C · общая ось: дорожка в строке ленты */
+.cgrid { display:grid; grid-template-columns:250px 1fr 104px; gap:12px; align-items:center; }
+.caxis { position:sticky; top:0; z-index:5; background:var(--c-bg-main); padding:4px 0 2px 24px; border-bottom:1px solid var(--c-border-light); margin-bottom:6px; }
+.crow .track { height:14px; }
+.m .cgrid { display:block; }
+.mhead { display:block; width:100%; padding:6px 44px 6px 0; min-height:44px; }
+.mhead .top { display:flex; align-items:center; gap:8px; }
+.mhead .track { margin-top:6px; height:10px; }
+.mhead .seg, .mhead .stall, .mhead .ahead { top:1px; height:8px; }
+.mhead .pause { top:5px; }
+.chev { position:absolute; right:0; top:2px; width:40px; height:40px; display:flex; align-items:center; justify-content:center; border-radius:8px; color:var(--c-text-secondary); font-size:14px; }
+
+/* D · переключатель и боковая панель */
+.seg2 { display:inline-flex; background:var(--c-bg-selected); border-radius:10px; padding:2px; margin-bottom:10px; }
+.seg2 button { padding:4px 12px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); min-height:28px; }
+.m .seg2 button { min-height:40px; padding:0 16px; }
+.seg2 button[aria-pressed="true"] { background:var(--c-bg-card); color:var(--c-text-heading); font-weight:700; box-shadow:var(--shadow-card); }
+.dwrap { display:grid; grid-template-columns:1fr 300px; gap:12px; align-items:start; }
+.m .dwrap { display:block; }
+.dside { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:12px; position:sticky; top:8px; min-height:260px; }
+.dside .empty { color:var(--c-text-muted); font-size:12px; border:1px dashed var(--c-dashed); border-radius:8px; padding:12px; }
+
+/* ===== Слой поверх: поповер и шторка (НЕ в потоке) ===== */
+.ov { position:absolute; inset:0; pointer-events:none; z-index:50; }
+.pop { position:absolute; width:288px; background:var(--c-bg-card); border:1px solid var(--c-border); border-radius:10px;
+  box-shadow:var(--shadow-dropdown); padding:10px 12px; pointer-events:auto; font-size:12px; color:var(--c-text-secondary); }
+.pop.preview { pointer-events:none; }
+.pop h4 { margin:0; font-size:13px; color:var(--c-text-heading); display:flex; gap:8px; align-items:baseline; padding-right:24px; }
+.pop h4 .mono { font-size:11px; color:var(--c-text-secondary); font-weight:500; }
+.pop .rowk { display:flex; justify-content:space-between; gap:8px; margin-top:4px; }
+.pop .rowk .mono { color:var(--c-text-primary); }
+.pop .sec { font-size:10px; text-transform:uppercase; color:var(--c-text-muted); font-weight:700; margin-top:8px; letter-spacing:.04em; }
+.pop .hint { margin-top:8px; font-size:11px; color:var(--c-text-muted); }
+.pop .x { position:absolute; right:6px; top:6px; width:24px; height:24px; border-radius:6px; display:flex; align-items:center; justify-content:center; color:var(--c-text-secondary); }
+.pop .x:hover { background:var(--c-bg-selected); }
+.acts { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+.btn { display:inline-flex; align-items:center; gap:4px; min-height:28px; padding:0 10px; border-radius:10px; font-size:12px; font-weight:600; border:1px solid var(--c-border); color:var(--c-text-heading); background:var(--c-bg-card); }
+.btn.pri { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+.btn.link { border-color:transparent; color:var(--c-accent); padding:0 4px; }
+.m .btn { min-height:40px; }
+.chain { display:flex; gap:3px; flex-wrap:wrap; margin-top:4px; }
+.chain span { font:600 10px/16px "JetBrains Mono",monospace; padding:0 5px; border-radius:6px; background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.chain span.on { background:var(--c-accent); color:var(--c-on-accent); }
+.backdrop { position:absolute; inset:0; background:var(--c-overlay); pointer-events:auto; }
+.sheet { position:absolute; left:0; right:0; bottom:0; max-height:78%; overflow:auto; background:var(--c-bg-card);
+  border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); padding:8px 16px 16px; pointer-events:auto; }
+.sheet .grab { width:36px; height:4px; border-radius:999px; background:var(--c-progress-track); margin:0 auto 10px; }
+.sheet h3 { margin:0; font-size:16px; color:var(--c-text-heading); }
+.ivl { display:flex; align-items:center; gap:8px; min-height:44px; border-bottom:1px solid var(--c-border-light); font-size:12px; }
+.ivl .sw { width:10px; height:10px; border-radius:3px; flex-shrink:0; }
+.ivl .mono { margin-left:auto; color:var(--c-text-secondary); font-size:11px; }
+.ivl.paus { min-height:24px; color:var(--c-text-muted); font-size:11px; border-bottom-style:dashed; }
+
+.empt { border:1px dashed var(--c-dashed); border-radius:8px; padding:8px 10px; font-size:12px; color:var(--c-text-muted); display:flex; gap:8px; align-items:center; }
+.legend { display:flex; flex-wrap:wrap; gap:4px 12px; margin-top:6px; font-size:11px; color:var(--c-text-muted); }
+.legend i { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:-1px; margin-right:4px; }
+</style>
+</head>
+<body>
+<div class="mk" id="mk">
+  <h1>Гант на «Хронологии»</h1>
+  <div class="grp" data-k="v"><span>вариант</span>
+    <button data-v="A">A · полоса</button><button data-v="B">B · компактный</button><button data-v="C">C · общая ось</button><button data-v="D">D · лента | Гант</button></div>
+  <div class="grp" data-k="s"><span>состояние</span>
+    <button data-v="empty">пустая</button><button data-v="active">идёт</button><button data-v="merged">смержена</button>
+    <button data-v="quiet">стоит / тихо</button><button data-v="skipped">этап пропущен</button><button data-v="many">много сегментов</button><button data-v="long">один длинный</button></div>
+  <div class="grp" data-k="t"><span>тема</span><button data-v="light">светлая</button><button data-v="dark">тёмная</button></div>
+  <div class="grp" data-k="w"><span>ширина</span><button data-v="1280">1280</button><button data-v="360">360</button></div>
+  <div class="grp" data-k="i"><span>интерактив</span>
+    <button data-v="live">живой</button><button data-v="hover">наведение</button><button data-v="pin">закреплено</button><button data-v="kbd">клавиатура</button><button data-v="touch">касание 360</button></div>
+  <div class="grp" data-k="n"><span>пометки</span><button data-v="on">да</button><button data-v="off">нет</button></div>
+  <span class="meter" id="meter"></span>
+</div>
+<div class="stage-wrap">
+  <div class="cap" id="cap"></div>
+  <div class="frame" id="frame"><div class="page" id="page"></div><div class="ov" id="ov"></div></div>
+</div>
+
+<script>
+/* ===== Данные: время в часах от старта разреза; база — 24.10 10:00 ===== */
+const NAMES = { cut:'Разрез', design:'Дизайн', plan:'План', prod:'Производство', review:'Ревью', qa:'Проверка', final:'Финальное ревью', merge:'Мерж' };
+const ORDER = ['cut','design','plan','prod','review','qa','final','merge'];
+const UNIT = { cut:'задача', design:'макет', plan:'план', prod:'шагов', review:'ревью шагов', qa:'проверка', final:'финал', merge:'мерж' };
+const P = { t:['Тимур','t'], g:['Глеб','g'], p:['Полина','p'], e:['Егор','e'], v:['Вера','v'], s:['Софья','p'], m:['Майя','g'], a:['Александр','e'] };
+const seg = (s,e,o={}) => Object.assign({ s, e, wait:0, idle:0, err:0, ret:[], who:'t', task:null }, o);
+const done1 = (k, s, e, who, task) => ({ k, st:'done', segs:[seg(s,e,{who,task})], plan:{ d:1, w:0, a:0 } });
+const pend = k => ({ k, st:'pending', segs:[], plan:null });
+
+const SC = {
+  empty: { title:'Сводка состояния фичи', chip:['new','только заведена'], line:'Разрез ещё не начат — Софья возьмёт его в работу.',
+    from:0, to:1, now:0, open:true, rows: ORDER.map(pend) },
+  active: { title:'Сводка состояния фичи', chip:['run','идёт · Производство'], line:'Ш4 у Тимура 1 ч 30 мин · Ш5 у Полины 40 мин',
+    from:0, to:10.5, now:10.5, open:true, rows:[
+      done1('cut',0,0.6,'s','разрез'),
+      done1('design',0.7,2.1,'m','макет'),
+      done1('plan',2.2,2.9,'e','план'),
+      { k:'prod', st:'active', plan:{ d:3, w:2, a:3 }, segs:[
+        seg(3.0,5.5,{who:'t',task:'Ш1–Ш2',wait:20,idle:12}),
+        seg(6.2,8.4,{who:'p',task:'Ш3',idle:8,ret:[{at:7.9,who:'g',step:'Ш3',why:'нет состояния ошибки'}]}),
+        seg(9.0,10.5,{who:'t',task:'Ш4–Ш5',live:true}) ] },
+      { k:'review', st:'active', plan:{ d:3, w:0, a:5 }, segs:[ seg(5.55,6.0,{who:'g',task:'ревью Ш1–Ш2'}), seg(8.45,8.95,{who:'g',task:'ревью Ш3'}) ] },
+      pend('qa'), pend('final'), pend('merge') ] },
+  merged: { title:'Сводка состояния фичи', chip:['ok','смержена 26.10'], line:'От разреза до мержа 1 д 6 ч · работали 11 ч 20 мин',
+    from:0, to:30, now:null, open:false, rows:[
+      done1('cut',0,0.5,'s','разрез'), done1('design',0.6,2.0,'m','макет'), done1('plan',2.1,2.8,'e','план'),
+      { k:'prod', st:'done', plan:{ d:8, w:0, a:0 }, segs:[ seg(3,7.5,{who:'t',task:'Ш1–Ш4',wait:25}), seg(22,26,{who:'p',task:'Ш5–Ш8',idle:15}) ] },
+      { k:'review', st:'done', plan:{ d:8, w:0, a:0 }, segs:[ seg(7.6,8.4,{who:'g',task:'ревью Ш1–Ш4'}), seg(26.1,26.8,{who:'g',task:'ревью Ш5–Ш8'}) ] },
+      done1('qa',27,28.1,'v','проверка'), done1('final',28.2,29.2,'a','финал'), done1('merge',29.3,30,'e','мерж') ] },
+  quiet: { title:'Сводка состояния фичи', chip:['stop','стоит 3 ч 40 мин'], line:'Ш4 у Тимура без движения с 17:20 — проверьте чат исполнителя',
+    from:0, to:11, now:11, open:true, stall:{ k:'prod', since:7.33 }, rows:[
+      done1('cut',0,0.6,'s','разрез'), done1('design',0.7,2.1,'m','макет'), done1('plan',2.2,2.9,'e','план'),
+      { k:'prod', st:'active', tone:'stop', plan:{ d:3, w:1, a:4 }, segs:[ seg(3.0,5.4,{who:'t',task:'Ш1–Ш3'}), seg(6.0,7.33,{who:'t',task:'Ш4',err:1}) ] },
+      { k:'review', st:'active', plan:{ d:3, w:0, a:5 }, segs:[ seg(5.45,5.95,{who:'g',task:'ревью Ш1–Ш3'}) ] },
+      pend('qa'), pend('final'), pend('merge') ] },
+  skipped: { title:'Сводка состояния фичи', chip:['run','идёт · Финальное ревью'], line:'Дизайн и Проверка не понадобились — этапов не было',
+    from:0, to:9, now:9, open:true, rows:[
+      done1('cut',0,0.5,'s','разрез'), { k:'design', st:'skipped', segs:[], plan:null }, done1('plan',0.6,1.2,'e','план'),
+      { k:'prod', st:'done', plan:{ d:4, w:0, a:0 }, segs:[ seg(1.3,6.2,{who:'t',task:'Ш1–Ш4',idle:20}) ] },
+      { k:'review', st:'done', plan:{ d:4, w:0, a:0 }, segs:[ seg(3.2,3.6,{who:'g',task:'ревью Ш1–Ш2'}), seg(6.3,7.0,{who:'g',task:'ревью Ш3–Ш4'}) ] },
+      { k:'qa', st:'skipped', segs:[], plan:null },
+      { k:'final', st:'active', tone:'wait', plan:{ d:0, w:1, a:0 }, segs:[ seg(7.2,8.1,{who:'a',task:'финал'}), seg(8.1,9,{who:'a',task:'финал · ждёт вас',wait:54,waitNow:true}) ] },
+      pend('merge') ] },
+  many: { title:'Сводка состояния фичи', chip:['run','идёт · Производство · 3 возврата'], line:'Ш3 на четвёртом витке — Глеб возвращал трижды',
+    from:0, to:14, now:14, open:true, rows:[
+      done1('cut',0,0.4,'s','разрез'), done1('design',0.5,1.5,'m','макет'), done1('plan',1.6,2.2,'e','план'),
+      { k:'prod', st:'active', plan:{ d:2, w:1, a:3 }, segs:[
+        seg(2.3,3.6,{who:'t',task:'Ш1'}), seg(4.0,5.0,{who:'t',task:'Ш2'}), seg(5.6,6.4,{who:'p',task:'Ш3 · виток 1'}),
+        seg(6.9,7.5,{who:'p',task:'Ш3 · виток 2',ret:[{at:6.9,who:'g',step:'Ш3',why:'тёмная тема: контраст бейджа'}]}),
+        seg(8.1,8.6,{who:'p',task:'Ш3 · виток 3',ret:[{at:8.1,who:'g',step:'Ш3',why:'мобиль 360: перелив'}]}),
+        seg(9.4,10.0,{who:'p',task:'Ш3 · виток 4',ret:[{at:9.4,who:'g',step:'Ш3',why:'фокус с клавиатуры'}]}),
+        seg(10.6,11.4,{who:'t',task:'Ш4'}), seg(12.0,12.6,{who:'t',task:'Ш4 · доработка'}), seg(13.1,14,{who:'t',task:'Ш5',live:true}) ] },
+      { k:'review', st:'active', plan:{ d:2, w:1, a:3 }, segs:[ seg(3.65,3.95,{who:'g',task:'ревью Ш1'}), seg(5.05,5.5,{who:'g',task:'ревью Ш2'}),
+        seg(6.45,6.85,{who:'g',task:'ревью Ш3 · 1'}), seg(7.55,8.05,{who:'g',task:'ревью Ш3 · 2'}), seg(8.65,9.35,{who:'g',task:'ревью Ш3 · 3'}), seg(11.45,11.9,{who:'g',task:'ревью Ш4'}) ] },
+      pend('qa'), pend('final'), pend('merge') ] },
+  long: { title:'Сводка состояния фичи', chip:['run','идёт · Производство'], line:'Один шаг, но большой: Ш1 у Тимура 1 д 14 ч',
+    from:0, to:40, now:40, open:true, rows:[
+      done1('cut',0,0.3,'s','разрез'), { k:'design', st:'skipped', segs:[], plan:null }, done1('plan',0.35,0.8,'e','план'),
+      { k:'prod', st:'active', plan:{ d:0, w:1, a:0 }, segs:[ seg(1.0,40,{who:'t',task:'Ш1',wait:40,idle:420,live:true}) ] },
+      pend('review'), pend('qa'), pend('final'), pend('merge') ] },
+};
+
+/* ===== Состояние макета ===== */
+const ST = { v:'C', s:'active', t:'light', w:'1280', i:'live', n:'on' };
+let pin = null;      // { r: stageKey, i: индекс сегмента } — закреплённый поповер
+let hover = null;    // поповер по наведению/фокусу
+let sel = null;      // выделенный этап (связь с лентой)
+let expandedA = false, openLedger = null, dMode = 'gantt', sheet = null;
+
+const $ = s => document.querySelector(s);
+const isM = () => ST.w === '360';
+const sc = () => SC[ST.s];
+const fmtT = h => { const d = new Date(Date.UTC(2026,9,24,10,0) + h*3600e3); const p = n => String(n).padStart(2,'0');
+  return `${p(d.getUTCDate())}.${p(d.getUTCMonth()+1)} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`; };
+const fmtClock = h => fmtT(h).slice(6);
+const fmtD = min => { min = Math.round(min); if (min < 60) return `${min} мин`; const h = Math.floor(min/60), m = min%60;
+  if (h >= 24) { const d = Math.floor(h/24), hh = h%24; return `${d} д${hh ? ' ' + hh + ' ч' : ''}`; } return `${h} ч${m ? ' ' + String(m).padStart(2,'0') + ' мин' : ''}`; };
+const segMin = s => (s.e - s.s) * 60;
+const rowMin = r => r.segs.reduce((a, s) => a + segMin(s), 0);
+const rowOf = k => sc().rows.find(r => r.k === k);
+// Доля оси: время занимает 0..TIME%, справа зона «впереди» (не масштаб времени).
+const TIME = () => (sc().now == null || ST.s === 'empty') ? 100 : 86;
+const X = h => { const c = sc(); return ((h - c.from) / (c.to - c.from)) * TIME(); };
+const planTotal = p => p ? p.d + p.w + p.a : 0;
+
+/* ===== Дорожка этапа ===== */
+function trackHTML(r, o = {}) {
+  const c = sc(); let h = '';
+  if (r.st === 'skipped') return `<div class="skipline"></div><span class="skiplbl">этапа не было</span>`;
+  r.segs.forEach((s, i) => {
+    const nx = r.segs[i+1];
+    if (nx && nx.s > s.e) h += `<span class="pause" style="left:${X(s.e)}%;width:${X(nx.s)-X(s.e)}%"></span>`;
+    // Цвет — состояние интервала, а не вид времени: идёт сейчас — accent, ждёт вас сейчас — info, прошлое — success.
+    const cls = s.waitNow ? 'wait' : s.live ? 'act' : 'done';
+    const isPin = pin && pin.r === r.k && pin.i === i, isHot = (hover && hover.r === r.k && hover.i === i) || (o.selK && o.selK === r.k);
+    const tag = o.interactive ? 'button' : 'span';
+    const attrs = o.interactive ? ` type="button" data-r="${r.k}" data-i="${i}" tabindex="${o.tab0 && i === 0 ? 0 : -1}" aria-label="${NAMES[r.k]}, интервал ${i+1} из ${r.segs.length}: ${fmtT(s.s)} – ${s.live || s.waitNow ? 'сейчас' : fmtClock(s.e)}, ${fmtD(segMin(s))}" aria-haspopup="dialog" aria-expanded="${isPin}"` : '';
+    h += `<${tag} class="seg ${cls}${isPin ? ' pin' : ''}${isHot ? ' hot' : ''}"${attrs} style="${o.thin ? 'top:1px;height:5px;' : ''}left:${X(s.s)}%;width:${Math.max(0.35, X(s.e)-X(s.s))}%"></${tag}>`;
+    s.ret.forEach(rt => { h += `<span class="ret" style="left:${X(rt.at)}%" aria-hidden="true">↩</span>`; });
+    if (s.err) h += `<span class="err" style="left:${X(s.e)}%" aria-hidden="true"></span>`;
+  });
+  if (c.stall && c.stall.k === r.k) h += `<span class="stall" style="left:${X(c.stall.since)}%;width:${X(c.now)-X(c.stall.since)}%"></span>`;
+  // Зона «впереди»: контур оставшегося (не масштаб времени), подпись — счётчик.
+  if (TIME() < 100 && !o.noAhead) {
+    const left = r.st === 'pending' ? TIME() + 1.5 : TIME() + 1.5;
+    if (r.st === 'pending') h += `<span class="ahead" style="left:${left}%;width:${100-left-1}%">${isM() ? '' : 'впереди'}</span>`;
+    else if (r.st === 'active' && r.plan && r.plan.a > 0) h += `<span class="ahead" style="left:${left}%;width:${100-left-1}%">ещё ${r.plan.a}</span>`;
+  }
+  if (c.now != null && r.st === 'active') {
+    const tone = r.tone === 'stop' ? ' stop' : (r.tone === 'wait' ? ' wait' : '');
+    h += `<span class="nowl${tone}" style="left:calc(${X(c.now)}% - 1px)"></span>`;
+  }
+  return h;
+}
+function axisHTML() {
+  const c = sc(); const T = TIME(); let h = `<span class="l" style="left:0">${fmtT(c.from)}</span>`;
+  if (ST.s === 'empty') return `<span class="l" style="left:0">ось появится с первым интервалом</span>`;
+  if (!isM()) for (const q of [0.33, 0.66]) h += `<span style="left:${T*q}%">${fmtClock(c.from + (c.to - c.from)*q)}</span>`;
+  if (c.now != null) h += `<span class="now ${T < 100 ? '' : 'r'}" style="left:${T}%">${isM() ? 'сейчас' : 'сейчас ' + fmtClock(c.now)}</span>`;
+  else h += `<span class="r" style="left:100%">${fmtT(c.to)}</span>`;
+  if (T < 100 && !isM()) h += `<span class="r fut" style="left:100%">впереди</span>`;
+  return h;
+}
+function cellsHTML(p, max = 10) {
+  if (!p) return '';
+  const tot = planTotal(p); if (!tot) return '';
+  if (tot > max || isM()) return `<span class="pf"><span class="n">${p.d}/${tot}</span></span>`;
+  let c = ''; for (let i = 0; i < tot; i++) c += `<i class="${i < p.d ? 'd' : i < p.d + p.w ? 'w' : ''}"></i>`;
+  return `<span class="pf" title="сделано ${p.d} · в работе ${p.w} · впереди ${p.a}"><span class="cells" aria-hidden="true">${c}</span><span class="n">${p.d}/${tot}</span></span>`;
+}
+function durLabel(r) {
+  if (r.st === 'skipped') return '—';
+  if (!r.segs.length) return '';
+  return fmtD(rowMin(r)) + (r.segs.length > 1 && !isM() ? ` · ${r.segs.length}×` : '');
+}
+
+/* ===== Строки Ганта (общие для A-развёрнутого, B, D) ===== */
+function ganttRows(o = {}) {
+  const c = sc(); const m = isM();
+  let rows = c.rows;
+  // B: будущие и пропущенные этапы — одной строкой
+  let foldNote = '';
+  if (o.fold) {
+    const pending = rows.filter(r => r.st === 'pending'), skipped = rows.filter(r => r.st === 'skipped');
+    rows = rows.filter(r => r.st !== 'pending' && r.st !== 'skipped');
+    const bits = [];
+    if (pending.length) bits.push(`впереди: ${pending.map(r => NAMES[r.k]).join(', ')}`);
+    if (skipped.length) bits.push(`не было: ${skipped.map(r => NAMES[r.k]).join(', ')}`);
+    if (bits.length) foldNote = `<div class="grow" style="grid-template-columns:${o.cols}"><span class="glabel mut">${pending.length + skipped.length} ${pending.length + skipped.length === 1 ? 'этап' : 'этапа'}</span><span style="font-size:11px;color:var(--c-text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${bits.join(' · ')}</span><span></span>${o.pf ? '<span></span>' : ''}</div>`;
+  }
+  let h = '';
+  rows.forEach((r, ri) => {
+    const mut = r.st === 'pending' || r.st === 'skipped';
+    const track = `<div class="track ticks" data-row="${r.k}">${trackHTML(r, { interactive: !m, tab0: r.k === firstK() })}</div>`;
+    const inner = `<span class="glabel${mut ? ' mut' : ''}">${NAMES[r.k]}</span>${track}${o.pf ? `<span>${cellsHTML(r.plan)}</span>` : ''}<span class="gdur mono">${durLabel(r)}</span>`;
+    if (m) h += `<button type="button" class="grow${sel === r.k ? ' sel' : ''}" data-sheet="${r.k}" style="grid-template-columns:${o.cols};width:100%;min-height:${o.mh || 28}px" aria-label="${NAMES[r.k]}: ${durLabel(r) || 'впереди'} — подробности">${inner}</button>`;
+    else h += `<div class="grow${sel === r.k ? ' sel' : ''}" style="grid-template-columns:${o.cols};min-height:${o.mh || 22}px">${inner}</div>`;
+  });
+  return h + foldNote;
+}
+function axisRow(cols, pf) {
+  return `<div class="grow" style="grid-template-columns:${cols};min-height:16px"><span></span><div class="axis">${axisHTML()}</div>${pf ? '<span></span>' : ''}<span></span></div>`;
+}
+function legend() {
+  return `<div class="legend"><span><i style="background:var(--c-success)"></i>сделано</span><span><i style="background:var(--c-accent)"></i>идёт сейчас</span>
+  <span><i style="border:1px dashed var(--c-dashed)"></i>впереди</span><span><i style="border-top:1px dashed var(--c-text-muted);height:0;width:14px;border-radius:0"></i>пауза</span>
+  <span><i style="background:repeating-linear-gradient(135deg,var(--c-warning) 0 3px,var(--c-warning-bg) 3px 6px)"></i>без движения</span><span style="color:var(--c-danger-text)">↩ возврат</span></div>`;
+}
+function emptyGantt() {
+  return `<div class="empt"><span aria-hidden="true">◷</span><span>Время этапов появится, когда начнётся разрез. Сейчас все 8 этапов впереди.</span></div>`;
+}
+
+/* ===== Вариант A: сводная полоса над лентой ===== */
+function varA() {
+  const c = sc(); const m = isM();
+  if (ST.s === 'empty') return `<div class="gcard">${emptyGantt()}</div>`;
+  const cur = c.rows.find(r => r.st === 'active');
+  const summary = cur ? `<b>${NAMES[cur.k]}</b> · ${cur.plan ? `${cur.plan.d} из ${planTotal(cur.plan)} ${UNIT[cur.k]}` : ''}${c.stall ? ' · без движения ' + fmtD((c.now - c.stall.since)*60) : ''}`
+    : c.now == null ? `<b>от разреза до мержа</b> · ${fmtD((c.to - c.from)*60)}` : '';
+  const main = c.rows.filter(r => r.k !== 'review'), par = c.rows.find(r => r.k === 'review');
+  let strip = '';
+  main.filter(r => r.segs.length).forEach(r => strip += trackHTML(r, { interactive: !m, noAhead: true, selK: sel, tab0: r.k === firstK() }));
+  const pstrip = par && par.segs.length ? trackHTML(par, { interactive: !m, noAhead: true, thin: true, selK: sel }) : '';
+  const aheadN = c.rows.filter(r => r.st === 'pending').length;
+  const aheadBox = TIME() < 100 ? `<span class="ahead" style="left:${TIME()+1.5}%;width:${100-TIME()-2.5}%">${aheadN ? (m ? '+' + aheadN : `ещё ${aheadN} эт.`) : ''}</span>` : '';
+  const stripBlock = `<div class="axis" style="margin-top:2px">${axisHTML()}</div>
+    <div class="track ticks${pin || hover || sel ? ' dimmed' : ''}" data-row="strip" style="height:14px">${strip}${aheadBox}</div>
+    <div class="track${pin || hover || sel ? ' dimmed' : ''}" data-row="strip-review" style="height:8px;margin-top:1px">${pstrip}</div>`;
+  const head = `<div class="ghead"><span class="t">Время</span><span class="s">${summary}</span>
+    <button type="button" class="gbtn" data-a="toggleA" aria-expanded="${expandedA}">${expandedA ? 'Свернуть' : (m ? 'Все 8' : 'Все 8 этапов')} ${expandedA ? '▴' : '▾'}</button></div>`;
+  const cols = m ? '72px 1fr 64px' : '120px 1fr 96px 110px';
+  const full = expandedA ? `<div style="margin-top:8px;border-top:1px solid var(--c-border-light);padding-top:6px">${axisRow(cols, !m)}${ganttRows({ cols, pf: !m, mh: m ? 32 : 22 })}${m ? '' : legend()}</div>` : '';
+  const tap = m ? `<button type="button" data-sheet="${cur ? cur.k : 'prod'}" style="display:block;width:100%;min-height:40px" aria-label="Время этапов — подробности">${stripBlock}</button>` : stripBlock;
+  return `<div class="gcard" data-gantt>${head}${expandedA ? full : tap}</div>`;
+}
+
+/* ===== Вариант B: компактный Гант над лентой ===== */
+function varB() {
+  if (ST.s === 'empty') return `<div class="gcard">${emptyGantt()}</div>`;
+  const m = isM(); const cols = m ? '72px 1fr 64px' : '120px 1fr 96px 110px';
+  return `<div class="gcard" data-gantt><div class="ghead"><span class="t">Время этапов</span><span class="s"></span>${m ? '' : '<span style="font-size:11px;color:var(--c-text-muted)">наведите — детали, нажмите — закрепить</span>'}</div>
+    ${axisRow(cols, !m)}${ganttRows({ cols, pf: !m, fold: true, mh: m ? 30 : 22 })}${m ? '' : legend()}</div>`;
+}
+
+/* ===== Лента «Хронологии» (A, B, D) ===== */
+function ledgerHTML(o = {}) {
+  const c = sc(); const m = isM(); let h = '';
+  c.rows.forEach((r, i) => {
+    const last = i === c.rows.length - 1;
+    const dot = r.st === 'done' ? 'done' : r.st === 'active' ? 'act' : r.st === 'skipped' ? 'skip' : '';
+    const stat = r.st === 'active' ? (r.tone === 'stop' ? ['danger','стоит'] : r.tone === 'wait' ? ['info','ждёт вас'] : ['run','идёт'])
+      : r.st === 'pending' ? ['','впереди'] : r.st === 'skipped' ? ['','не было'] : null;
+    const bounds = r.segs.length ? `${fmtT(r.segs[0].s)} – ${r.st === 'active' ? (r.tone === 'stop' ? 'стоит' : 'идёт') : fmtClock(r.segs[r.segs.length-1].e)}${r.segs.length > 1 ? ` · ${r.segs.length} ${r.segs.length < 5 ? 'интервала' : 'интервалов'}, паузы ${fmtD(pauseMin(r))}` : ''}` : '';
+    const open = openLedger === r.k;
+    const mut = r.st === 'pending' || r.st === 'skipped';
+    let head;
+    if (o.axis && !m) {
+      head = `<div class="cgrid crow${sel === r.k ? ' sel' : ''}"><button type="button" class="lhead" data-led="${r.k}" aria-expanded="${open}"><span class="lname${mut ? ' mut' : ''}">${NAMES[r.k]}</span>${stat ? `<span class="lstat ${stat[0]}">${stat[1]}</span>` : ''}<span style="margin-left:auto">${cellsHTML(r.plan, 8)}</span></button>
+        <div class="track ticks" data-row="${r.k}" style="${sel === r.k ? 'box-shadow:var(--shadow-selected);border-radius:6px' : ''}">${trackHTML(r, { interactive:true, tab0: r.k === firstK() })}</div><span class="gdur mono">${durLabel(r)}</span></div>`;
+    } else if (o.axis && m) {
+      head = `<button type="button" class="mhead" data-sheet="${r.k}" aria-label="${NAMES[r.k]}: ${durLabel(r) || (stat ? stat[1] : '')} — подробности"><span class="top"><span class="lname${mut ? ' mut' : ''}">${NAMES[r.k]}</span>${stat ? `<span class="lstat ${stat[0]}">${stat[1]}</span>` : ''}<span class="ldur">${cellsHTML(r.plan)} ${durLabel(r)}</span></span>
+        <div class="track${sel === r.k ? '' : ''}" style="${sel === r.k ? 'box-shadow:var(--shadow-selected);border-radius:6px' : ''}">${trackHTML(r)}</div></button>
+        <button type="button" class="chev" data-led="${r.k}" aria-expanded="${open}" aria-label="${open ? 'Свернуть' : 'Раскрыть'} этап ${NAMES[r.k]}">${open ? '▴' : '▾'}</button>`;
+    } else {
+      head = `<button type="button" class="lhead" data-led="${r.k}" aria-expanded="${open}"><span class="lname${mut ? ' mut' : ''}">${NAMES[r.k]}</span>${stat ? `<span class="lstat ${stat[0]}">${stat[1]}</span>` : ''}<span class="ldur">${r.segs.length ? '≈ ' + fmtD(rowMin(r)) : ''}</span></button>`;
+    }
+    const body = open ? `<div class="lbody">${r.plan ? `<div style="margin-bottom:6px">${planText(r)}</div>` : ''}${r.segs.length ? uniqWho(r).map(w => `<div class="exe"><span class="av ${P[w][1]}">${P[w][0][0]}</span><b style="color:var(--c-text-heading)">${P[w][0]}</b><span>${r.segs.filter(s => s.who === w).map(s => s.task).join(', ')}</span></div>`).join('') : 'Исполнителей нет'}</div>` : '';
+    h += `<div class="lrow${o.flash === r.k ? ' flash' : ''}" id="L-${r.k}" style="${o.axis && !m ? 'padding-left:24px' : ''}"><span class="ldot ${dot}"></span>${last ? '' : '<span class="lline"></span>'}${head}${bounds && !(o.axis && m) ? `<div class="lbounds">${bounds}</div>` : ''}${body}</div>`;
+  });
+  return `<div class="ledger">${h}</div>`;
+}
+const firstK = () => (sc().rows.find(r => r.segs.length) || {}).k;
+const uniqWho = r => [...new Set(r.segs.map(s => s.who))];
+const pauseMin = r => r.segs.slice(1).reduce((a, s, i) => a + Math.max(0, (s.s - r.segs[i].e) * 60), 0);
+const planText = r => { const p = r.plan, t = planTotal(p); return `<b style="color:var(--c-text-heading)">${p.d} из ${t}</b> ${UNIT[r.k]} · в работе ${p.w} · впереди ${p.a}`; };
+
+/* ===== Вариант C: общая ось с лентой ===== */
+function varC() {
+  const m = isM();
+  const ax = ST.s === 'empty' ? '' : (m ? `<div class="caxis" style="padding-left:24px"><div class="axis">${axisHTML()}</div></div>`
+    : `<div class="caxis"><div class="cgrid"><span style="font-size:10px;text-transform:uppercase;color:var(--c-text-muted);font-weight:700">Этап · сделано</span><div class="axis">${axisHTML()}</div><span></span></div></div>`);
+  return (ST.s === 'empty' ? emptyGantt().replace('class="empt"', 'class="empt" style="margin-bottom:12px"') : '') + ax + ledgerHTML({ axis:true, flash: flashK }) + (m || ST.s === 'empty' ? '' : `<div style="padding-left:24px">${legend()}</div>`);
+}
+
+/* ===== Вариант D: переключатель «Лента | Гант» и боковая панель ===== */
+function varD() {
+  const m = isM();
+  const sw = `<div class="seg2" role="group" aria-label="Вид"><button type="button" data-d="ledger" aria-pressed="${dMode==='ledger'}">Лента</button><button type="button" data-d="gantt" aria-pressed="${dMode==='gantt'}">Гант</button></div>`;
+  if (dMode === 'ledger') return sw + ledgerHTML({ flash: flashK });
+  if (ST.s === 'empty') return sw + emptyGantt();
+  const cols = m ? '72px 1fr 64px' : '120px 1fr 96px 110px';
+  const g = `<div class="gcard" data-gantt style="margin:0">${axisRow(cols, !m)}${ganttRows({ cols, pf: !m, mh: m ? 40 : 28 })}${m ? '' : legend()}</div>`;
+  if (m) return sw + g;
+  const cur = pin || hover;
+  const side = cur ? detailsHTML(cur.r, cur.i, true) : `<div class="empty">Выберите интервал на полосе — здесь появятся время, шаги, исполнители и возвраты. Стрелки ← → ↑ ↓ ходят по интервалам.</div>`;
+  return sw + `<div class="dwrap">${g}<aside class="dside" aria-live="polite">${side}</aside></div>`;
+}
+
+/* ===== Детали интервала (поповер, панель D, шторка) ===== */
+function detailsHTML(k, i, inPanel) {
+  const c = sc(), r = rowOf(k), s = r.segs[i]; if (!s) return '';
+  const end = s.live || s.waitNow ? c.now : s.e;
+  const work = Math.max(0, segMin(s) - s.wait - s.idle);
+  const nx = r.segs[i+1];
+  let h = `<h4>${NAMES[k]} <span class="mono">интервал ${i+1} из ${r.segs.length}</span></h4>
+    <div class="rowk"><span class="mono">${fmtT(s.s)} – ${s.live || s.waitNow ? 'сейчас' : fmtClock(end)}</span><b style="color:var(--c-text-heading)">${fmtD(segMin(s))}</b></div>`;
+  if (r.plan) { const t = planTotal(r.plan); h += `<div class="sec">план / факт этапа</div><div class="pfbar" style="margin-top:4px"><i class="d" style="width:${r.plan.d/t*100}%"></i><i class="w" style="width:${r.plan.w/t*100}%"></i></div><div class="rowk"><span>${planText(r)}</span></div>`; }
+  h += `<div class="sec">из чего сложилось</div><div class="rowk"><span>работа</span><span class="mono">${fmtD(work)}</span></div>`;
+  if (s.wait) h += `<div class="rowk"><span style="color:var(--c-info)">${s.waitNow ? 'ждёт вас сейчас' : 'ждали вас'}</span><span class="mono">${fmtD(s.wait)}</span></div>`;
+  if (s.idle) h += `<div class="rowk"><span>простой</span><span class="mono">${fmtD(s.idle)}</span></div>`;
+  if (s.err) h += `<div class="rowk"><span style="color:var(--c-danger-text)">ошибка исполнителя</span><span class="mono">${s.err}</span></div>`;
+  if (c.stall && c.stall.k === k && i === r.segs.length - 1) h += `<div class="rowk"><span style="color:var(--c-warning-text)">без движения после</span><span class="mono">${fmtD((c.now - c.stall.since)*60)}</span></div>`;
+  if (nx) h += `<div class="rowk"><span>пауза до следующего</span><span class="mono">${fmtD((nx.s - s.e)*60)}</span></div>`;
+  h += `<div class="sec">кто</div><div class="exe"><span class="av ${P[s.who][1]}">${P[s.who][0][0]}</span><b style="color:var(--c-text-heading)">${P[s.who][0]}</b><span>${s.task || ''}</span></div>`;
+  if (s.ret.length) h += `<div class="sec">возвраты</div>` + s.ret.map(rt => `<div class="rowk"><span><span style="color:var(--c-danger-text)">↩</span> ${P[rt.who][0]} вернул ${rt.step}: ${rt.why}</span></div>`).join('');
+  if (r.segs.length > 3) h += `<div class="chain" aria-label="Интервалы этапа">${r.segs.map((_, j) => `<span class="${j === i ? 'on' : ''}">${j+1}</span>`).join('')}</div>`;
+  const preview = !inPanel && !(pin && pin.r === k && pin.i === i);
+  if (preview) h += `<div class="hint">Нажмите — закрепить · Enter с клавиатуры</div>`;
+  else h += `<div class="acts"><button type="button" class="btn link" data-show="${k}">Показать в ленте ↓</button><button type="button" class="btn">Открыть задачу</button>${s.who ? '<button type="button" class="btn link">чат →</button>' : ''}</div>`;
+  return h;
+}
+function sheetHTML(k) {
+  const c = sc(), r = rowOf(k);
+  let h = `<div class="backdrop" data-a="closeSheet"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="${NAMES[k]}"><div class="grab"></div>
+    <div style="display:flex;align-items:center;gap:8px"><h3>${NAMES[k]}</h3><span class="mono" style="font-size:11px;color:var(--c-text-secondary)">${durLabel(r)}</span>
+    <button type="button" class="btn" data-a="closeSheet" style="margin-left:auto;min-width:40px;justify-content:center" aria-label="Закрыть">✕</button></div>`;
+  if (r.plan) { const t = planTotal(r.plan); h += `<div style="margin:8px 0 4px" class="pfbar"><i class="d" style="width:${r.plan.d/t*100}%"></i><i class="w" style="width:${r.plan.w/t*100}%"></i></div><div style="font-size:12px;color:var(--c-text-secondary)">${planText(r)}</div>`; }
+  if (r.st === 'skipped') h += `<div class="empt" style="margin-top:10px">Этапа не было: он необязательный, задач на него не заводили.</div>`;
+  else if (!r.segs.length) h += `<div class="empt" style="margin-top:10px">Этап впереди — время появится с первой задачей этапа.</div>`;
+  r.segs.forEach((s, i) => {
+    const col = s.waitNow ? 'var(--c-info)' : s.live ? 'var(--c-accent)' : 'var(--c-success)';
+    h += `<div class="ivl"><span class="sw" style="background:${col}"></span><span><b style="color:var(--c-text-heading)">${P[s.who][0]}</b> · ${s.task || ''}${s.ret.length ? ' <span style="color:var(--c-danger-text)">↩</span>' : ''}${s.wait ? ` <span style="color:var(--c-info)">· ждали ${fmtD(s.wait)}</span>` : ''}</span><span class="mono">${fmtClock(s.s)}–${s.live || s.waitNow ? 'сейчас' : fmtClock(s.e)}</span></div>`;
+    const nx = r.segs[i+1]; if (nx && nx.s > s.e) h += `<div class="ivl paus"><span class="sw"></span><span>пауза ${fmtD((nx.s - s.e)*60)}</span></div>`;
+  });
+  if (c.stall && c.stall.k === k) h += `<div class="ivl" style="color:var(--c-warning-text)"><span class="sw" style="background:var(--c-warning)"></span><span>без движения ${fmtD((c.now - c.stall.since)*60)}</span></div>`;
+  h += `<div class="acts" style="margin-top:12px"><button type="button" class="btn pri" data-show="${k}">Показать в ленте</button>${r.segs.length ? '<button type="button" class="btn">Открыть задачу</button>' : ''}</div></div>`;
+  return h;
+}
+
+/* ===== Сборка страницы ===== */
+let flashK = null, restoring = false;
+// Перерисовка не должна терять фокус: запоминаем элемент по data-атрибутам и возвращаем.
+function focusKey() { const a = document.activeElement; if (!a || !a.closest('#frame')) return null;
+  for (const k of ['data-r', 'data-sheet', 'data-led', 'data-a', 'data-d', 'data-show']) if (a.hasAttribute(k))
+    return k === 'data-r' ? `.seg[data-r="${a.dataset.r}"][data-i="${a.dataset.i}"]` : `#frame [${k}="${a.getAttribute(k)}"]`;
+  return null; }
+function render() {
+  const fk = focusKey();
+  document.documentElement.dataset.theme = ST.t;
+  document.body.classList.toggle('nomarks', ST.n === 'off');
+  const f = $('#frame'); f.classList.toggle('m', isM());
+  document.querySelectorAll('.mk .grp').forEach(g => g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(ST[g.dataset.k] === b.dataset.v))));
+  const c = sc();
+  const prog = c.rows.find(r => r.k === 'prod').plan;
+  const head = `<h2 class="ftitle">${c.title}</h2><div class="aline"><span class="chip ${c.chip[0]}">${c.chip[1]}</span><span>${c.line}</span></div>
+    <div class="tabs"><span class="on">Хронология</span><span>Задачи</span><span>Чаты</span><span>Статистика</span>${isM() ? '' : '<span>Макеты</span>'}</div>`;
+  const note = `<div class="note"><span aria-hidden="true">ⓘ</span><span>Порядок этапов и кто работал — точные. Полосы — интервалы задач этапа; между ними паузы. «≈» — по задачам этапа.</span></div>`;
+  const pg = prog ? `<div class="prog">Шаги: ${prog.d} из ${planTotal(prog)} приняты · ${prog.w} в работе · ${prog.a} впереди</div>` : '';
+  let body = '';
+  if (ST.v === 'A') body = varA() + note + pg + ledgerHTML({ flash: flashK });
+  if (ST.v === 'B') body = varB() + note + pg + ledgerHTML({ flash: flashK });
+  if (ST.v === 'C') body = note.replace('Полосы', 'Полосы справа') + pg + varC();
+  if (ST.v === 'D') body = note + varD();
+  $('#page').innerHTML = head + body;
+  renderOverlay();
+  const g = document.querySelector('[data-gantt]') || document.querySelector('.ledger');
+  const gh = document.querySelector('[data-gantt]');
+  $('#meter').textContent = gh ? `высота Ганта: ${Math.round(gh.getBoundingClientRect().height)} px` : (ST.v === 'C' ? 'высота Ганта: +0 px (живёт в строках ленты)' : '');
+  $('#cap').innerHTML = CAPS[ST.v];
+  if (fk && !document.activeElement.closest('#pop, .sheet')) { const el = document.querySelector(fk); if (el) { restoring = true; el.focus({ preventScroll:true }); restoring = false; } }
+  location.replace('#' + [ST.v, ST.s, ST.t, ST.w].join('-'));
+}
+const CAPS = {
+  A: '<b>A · Сводная полоса.</b> Над лентой одна строка: все интервалы на общей оси, ревью тонкой дорожкой снизу, справа контур «ещё N этапов». «Все 8 этапов» раскрывает полный Гант внутри той же карточки. Самый компактный вариант: 85 px на 1280 и 99 px на 360.',
+  B: '<b>B · Компактный Гант.</b> Карточка над лентой: строки по 22 px, будущие и пропущенные этапы свёрнуты в одну строку. Справа счётчик «сделано из плана». Для тех, кто хочет видеть всю картину одним взглядом.',
+  C: '<b>C · Общая ось (рекомендую).</b> Гант живёт в самих строках ленты: у каждого этапа справа его дорожка времени, ось липнет к верху. Своей высоты у Ганта нет, связь с лентой естественная: это одна и та же строка.',
+  D: '<b>D · Лента | Гант.</b> Переключатель вида. В режиме «Гант» вместо подсказки работает боковая панель деталей (1280) или шторка (360). Раскладка не прыгает ни при наведении, ни при клике, но ленту и Гант одновременно не видно.',
+};
+
+/* ===== Слой поверх ===== */
+function renderOverlay() {
+  const ov = $('#ov'); ov.innerHTML = '';
+  if (sheet && isM()) { ov.innerHTML = sheetHTML(sheet); return; }
+  if (ST.v === 'D' && dMode === 'gantt' && !isM()) return; // детали — в боковой панели
+  const cur = pin || hover; if (!cur || isM()) return;
+  const el = document.querySelector(`.seg[data-r="${cur.r}"][data-i="${cur.i}"]`); if (!el) return;
+  const fr = $('#frame').getBoundingClientRect(), b = el.getBoundingClientRect();
+  const pop = document.createElement('div');
+  pop.className = 'pop' + (pin ? '' : ' preview');
+  pop.setAttribute('role', pin ? 'dialog' : 'tooltip');
+  pop.id = 'pop';
+  pop.innerHTML = (pin ? '<button type="button" class="x" data-a="closePin" aria-label="Закрыть">✕</button>' : '') + detailsHTML(cur.r, cur.i, false);
+  ov.appendChild(pop);
+  // Под интервалом, по центру; у края кадра — прижать; нет места снизу — над интервалом.
+  const W = pop.offsetWidth, H = pop.offsetHeight;
+  let left = b.left - fr.left + b.width/2 - W/2; left = Math.max(8, Math.min(left, fr.width - W - 8));
+  let top = b.bottom - fr.top + 8; if (top + H > fr.height - 8) top = b.top - fr.top - H - 8;
+  pop.style.left = left + 'px'; pop.style.top = Math.max(8, top) + 'px';
+}
+
+/* ===== Интерактив ===== */
+function setPin(k, i) { pin = { r:k, i }; hover = null; sel = k; render(); focusPopX(); }
+function focusPopX() { const x = document.querySelector('#pop .x'); if (x) x.focus({ preventScroll:true }); }
+function closePin(refocus = true) { const p = pin; pin = null; hover = null; render(); if (refocus && p) { const el = document.querySelector(`.seg[data-r="${p.r}"][data-i="${p.i}"]`); if (el) el.focus({ preventScroll:true }); } }
+function showInLedger(k) {
+  sheet = null; pin = null; hover = null; sel = k; openLedger = k; flashK = k;
+  if (ST.v === 'D') dMode = 'ledger';
+  render();
+  const el = document.getElementById('L-' + k); if (el) el.scrollIntoView({ block:'center', behavior:'smooth' });
+  setTimeout(() => { flashK = null; const e = document.getElementById('L-' + k); if (e) e.classList.remove('flash'); }, 1400);
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('button, .backdrop');
+  const mk = e.target.closest('.mk .grp button');
+  if (mk) { const k = mk.parentElement.dataset.k; ST[k] = mk.dataset.v; applyI(k); render(); return; }
+  if (e.target.closest('#pop, .sheet') && !t) return;
+  if (!t) { if (pin) closePin(false); return; }
+  if (t.classList.contains('seg')) { const k = t.dataset.r, i = +t.dataset.i; if (pin && pin.r === k && pin.i === i) closePin(); else setPin(k, i); return; }
+  if (t.dataset.a === 'closePin') { closePin(); return; }
+  if (t.dataset.a === 'closeSheet') { sheet = null; render(); return; }
+  if (t.dataset.a === 'toggleA') { expandedA = !expandedA; render(); return; }
+  if (t.dataset.d) { dMode = t.dataset.d; pin = hover = null; render(); return; }
+  if (t.dataset.show) { showInLedger(t.dataset.show); return; }
+  if (t.dataset.sheet) { sheet = t.dataset.sheet; sel = t.dataset.sheet; render(); setTimeout(() => { const x = document.querySelector('.sheet [data-a="closeSheet"]'); if (x) x.focus(); }, 0); return; }
+  if (t.dataset.led) { const k = t.dataset.led; openLedger = openLedger === k ? null : k; sel = k; pin = hover = null;
+    if (ST.v === 'A' && !expandedA) { /* в A выделение подсвечивает интервалы этапа на полосе */ }
+    render(); return; }
+  if (pin && !t.closest('#pop')) closePin(false);
+});
+document.addEventListener('mouseover', e => {
+  if (ST.i !== 'live' || pin || isM()) return;
+  const s = e.target.closest('.seg[data-r]');
+  const nh = s ? { r:s.dataset.r, i:+s.dataset.i } : null;
+  if (JSON.stringify(nh) !== JSON.stringify(hover)) { hover = nh; render(); }
+});
+document.addEventListener('focusin', e => {
+  if (restoring) return;
+  const s = e.target.closest('.seg[data-r]'); if (!s || pin) return;
+  const nh = { r:s.dataset.r, i:+s.dataset.i };
+  if (JSON.stringify(nh) !== JSON.stringify(hover)) { hover = nh; render(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if (sheet) { const k = sheet; sheet = null; render(); const b = document.querySelector(`[data-sheet="${k}"]`); if (b) b.focus(); return; } if (pin) { closePin(); return; } if (hover) { hover = null; render(); } return; }
+  const s = e.target.closest('.seg[data-r]'); if (!s) return;
+  const rows = [...document.querySelectorAll('[data-row]')].filter(tr => tr.querySelector('.seg[data-r]'));
+  const segs = [...s.parentElement.querySelectorAll('.seg[data-r]')];
+  let next = null; const idx = segs.indexOf(s);
+  if (e.key === 'ArrowRight') next = segs[idx + 1];
+  if (e.key === 'ArrowLeft') next = segs[idx - 1];
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const ri = rows.indexOf(s.parentElement), tr = rows[ri + (e.key === 'ArrowDown' ? 1 : -1)];
+    if (tr) { const x = s.getBoundingClientRect().left; next = [...tr.querySelectorAll('.seg[data-r]')].sort((a, b) => Math.abs(a.getBoundingClientRect().left - x) - Math.abs(b.getBoundingClientRect().left - x))[0]; }
+  }
+  if (e.key === 'Home') next = segs[0];
+  if (e.key === 'End') next = segs[segs.length - 1];
+  if (next) { e.preventDefault(); next.focus(); }
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPin(s.dataset.r, +s.dataset.i); }
+});
+
+/* Демонстрация состояний интерактива: подставляет готовое состояние на интервал «Производство · 2». */
+function applyI(k) {
+  if (k !== 'i' && k !== 's' && k !== 'v' && k !== 'w') return;
+  pin = hover = null; sheet = null;
+  if (k === 'v' || k === 's') { expandedA = false; openLedger = (sc().rows.find(r => r.st === 'active') || {}).k || null; sel = null; dMode = 'gantt'; }
+  const target = () => { const r = sc().rows.find(r => r.segs.length > 1) || sc().rows.find(r => r.segs.length); return r ? { r:r.k, i: Math.min(1, r.segs.length - 1) } : null; };
+  if (ST.i === 'hover' || ST.i === 'kbd') { if (ST.w === '360') ST.w = '1280'; hover = target(); if (ST.v === 'A') expandedA = true; }
+  if (ST.i === 'pin') { if (ST.w === '360') ST.w = '1280'; pin = target(); if (pin) sel = pin.r; if (ST.v === 'A') expandedA = true; }
+  if (ST.i === 'touch') { ST.w = '360'; const t = target(); sheet = t ? t.r : 'prod'; sel = sheet; }
+  if (ST.i === 'kbd') setTimeout(() => { const h = hover; if (!h) return; const el = document.querySelector(`.seg[data-r="${h.r}"][data-i="${h.i}"]`); if (el) el.focus({ preventScroll:true }); }, 0);
+}
+
+/* Хеш вида #C-active-dark-360 сразу открывает комбинацию. */
+function fromHash() {
+  const p = location.hash.slice(1).split('-');
+  if (p[0] && /^[ABCD]$/.test(p[0])) ST.v = p[0];
+  if (p[1] && SC[p[1]]) ST.s = p[1];
+  if (p[2] === 'dark' || p[2] === 'light') ST.t = p[2];
+  if (p[3] === '360' || p[3] === '1280') ST.w = p[3];
+  pin = hover = null; sheet = null; sel = null; expandedA = false; dMode = 'gantt';
+  openLedger = (sc().rows.find(r => r.st === 'active') || {}).k || null;
+  render();
+}
+fromHash();
+window.addEventListener('hashchange', () => { if (location.hash.slice(1) !== [ST.v, ST.s, ST.t, ST.w].join('-')) fromHash(); });
+window.addEventListener('resize', () => renderOverlay());
+</script>
+</body>
+</html>

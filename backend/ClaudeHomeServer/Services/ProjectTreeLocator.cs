@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
@@ -13,6 +14,15 @@ public sealed record TreeRoot(string Path, string? Branch, bool IsAnchor);
 // анкером. «из дерева <ветка>» в интерфейсе строится именно из branch/isAnchor: фолбэк
 // есть, но он не тихий (мотив W4-LINK-B).
 public sealed record TreeHit(string Root, string FullPath, string? Branch, bool IsAnchor);
+
+// Результат пакетного резолва POST files/locate (шаг B2b): тот же hit, что у LocateAsync, плюс
+// число ДРУГИХ деревьев с тем же относительным путём. alternatives — число, а не список:
+// фронтам нужен сам факт неоднозначности, а не адреса (разрез bc27cbee §2).
+public sealed record LocatedPath(
+    string Path,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Branch,
+    bool IsAnchor,
+    int Alternatives);
 
 // Единственная точка резолвинга относительных путей по всем worktree проекта (фича
 // «Резолвинг ссылок по worktree», шаг B1b). Потребители — GetContent/Stream/Locate в
@@ -167,6 +177,59 @@ public sealed class ProjectTreeLocator
         }
 
         return bestOther;
+    }
+
+    // Пакетный резолв для POST files/locate (шаг B2b, разрез bc27cbee §1 потребитель 3): те же
+    // правила, что у LocateAsync (анкер → main → свежайший из остальных), но без раннего выхода —
+    // список корней строится один раз на запрос, а каждому найденному пути добавляется число
+    // других совпадений. Ненайденные пути в ответе отсутствуют: фронт держит их в отрицательном
+    // кэше (F1b). Абсолютный и пустой rel отклоняются так же, как у LocateAsync.
+    public async Task<IReadOnlyList<LocatedPath>> LocateManyAsync(
+        string? owner, Project project, IReadOnlyList<string> rels, string? anchor = null, CancellationToken ct = default)
+    {
+        var roots = await RootsAsync(owner, project, anchor, ct);
+        var mainNorm = PathNormalizer.NormalizePath(project.RootPath);
+        var result = new List<LocatedPath>();
+
+        foreach (var raw in rels)
+        {
+            if (string.IsNullOrWhiteSpace(raw) || Path.IsPathRooted(raw)) continue;
+
+            TreeHit? best = null;
+            DateTimeOffset bestMtime = default;
+            int total = 0;
+
+            foreach (var root in roots)
+            {
+                string full;
+                try { full = SafePath.Join(root.Path, raw); }
+                catch (UnauthorizedAccessException) { continue; }
+                if (!File.Exists(full)) continue;
+                total++;
+
+                if (best is null)
+                {
+                    best = new TreeHit(root.Path, full, root.Branch, root.IsAnchor);
+                    bestMtime = new FileInfo(full).LastWriteTimeUtc;
+                    continue;
+                }
+                // Порядок корней — анкер → main → остальные — уже решает приоритет: анкер
+                // побеждает любого, main — любого «остального»; среди остальных свежайший.
+                if (best.IsAnchor) continue;
+                if (PathNormalizer.NormalizePath(best.Root) == mainNorm) continue;
+                var mtime = new FileInfo(full).LastWriteTimeUtc;
+                if (mtime > bestMtime)
+                {
+                    best = new TreeHit(root.Path, full, root.Branch, false);
+                    bestMtime = mtime;
+                }
+            }
+
+            if (best is not null)
+                result.Add(new LocatedPath(raw, best.Branch, best.IsAnchor, total - 1));
+        }
+
+        return result;
     }
 
     // Признак настоящего linked-worktree этой репы: <wt>/.git — файл (в главной репе

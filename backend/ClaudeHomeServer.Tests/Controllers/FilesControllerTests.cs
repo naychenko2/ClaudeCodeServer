@@ -717,6 +717,93 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         (await response.Content.ReadAsStringAsync()).Should().Be("from chat tree", "stream — тот же резолв дерева, что content");
     }
 
+    // ─── Шаг B2b: POST /api/projects/{id}/files/locate — пакетный резолв с alternatives ───
+
+    // Лимит пакета — часть контракта (фронт батчит ≤50): 51 путь → 400, а не тихая обрезка.
+    // Мутация: убрать проверку в Locate — тест краснеет (запрос обработался бы 200).
+    [Fact]
+    public async Task Locate_51Пути_400()
+    {
+        var id = await CreateProjectAsync("LocateLimit");
+        var paths = Enumerable.Range(0, 51).Select(i => $"f{i}.md").ToList();
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/files/locate", new { paths });
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, "больше 50 путей — отказ, не обрезка");
+    }
+
+    // Путь есть в двух чужих деревьях (не в main), без sessionId: hit — свежайший из них,
+    // isAnchor=false, branch — его ветка, alternatives — число других совпадений (2−1=1).
+    // Ненайденный и абсолютный пути в ответе отсутствуют. Мутация: в ProjectTreeLocator.
+    // LocateManyAsync заменить `total - 1` на `0` (возвращать только первое совпадение) —
+    // assertions про alternatives краснеют.
+    [Fact]
+    public async Task Locate_ЧужоеДерево_МеткаВетки_Alternatives()
+    {
+        var mainRoot = Path.Combine(_tempDir, "locwt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(mainRoot);
+        var projectResp = await _client.PostAsJsonAsync("/api/projects", new { name = "LocateProject", rootPath = mainRoot });
+        projectResp.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await projectResp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, mainRoot);
+
+        var treeA = Path.Combine(_tempDir, "locwt_a_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(treeA);
+        var branchA = "feat/loc-a-" + Guid.NewGuid().ToString("N")[..6];
+        await git.WorktreeAddAsync(null, mainRoot, treeA, branchA);
+        var treeB = Path.Combine(_tempDir, "locwt_b_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(treeB);
+        var branchB = "feat/loc-b-" + Guid.NewGuid().ToString("N")[..6];
+        await git.WorktreeAddAsync(null, mainRoot, treeB, branchB);
+
+        File.WriteAllText(Path.Combine(treeA, "report.md"), "from tree A");
+        File.WriteAllText(Path.Combine(treeB, "report.md"), "from tree B");
+        // Детерминированный mtime: B свежнее A — hit обязан быть из B
+        var now = DateTime.UtcNow;
+        File.SetLastWriteTimeUtc(Path.Combine(treeA, "report.md"), now - TimeSpan.FromSeconds(10));
+        File.SetLastWriteTimeUtc(Path.Combine(treeB, "report.md"), now);
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/files/locate",
+            new { paths = new[] { "report.md", "missing.md", "/etc/passwd" } });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetArrayLength().Should().Be(1, "ненайденный и абсолютный пути — не в ответе");
+        var hit = body[0];
+        hit.GetProperty("path").GetString().Should().Be("report.md", "ключ ответа — ровно присланный путь");
+        hit.GetProperty("branch").GetString().Should().Be(branchB, "hit — свежайшее из чужих деревьев, с его веткой");
+        hit.GetProperty("isAnchor").GetBoolean().Should().BeFalse("анкера нет — hit не из заявленного дерева");
+        hit.GetProperty("alternatives").GetInt32().Should().Be(1, "одно другое совпадение");
+    }
+
+    // Анкер побеждает остальные совпадения: файл есть в дереве задачи чата, в main и в третьем
+    // дереве — hit из дерева чата (isAnchor=true, branch его ветка), alternatives = 3−1 = 2.
+    // Мутация: убрать приоритет анкера в LocateManyAsync (считать только main/остальные) —
+    // isAnchor и branch краснеют.
+    [Fact]
+    public async Task Locate_SessionId_АнкерПобеждает_AlternativesПоОстальным()
+    {
+        var (sessionId, worktree, branch, projectId, mainRoot) = await CreateChatWithTaskWorktreeAsync("locanchor");
+        var git = _factory.Services.GetRequiredService<GitService>();
+        var other = Path.Combine(_tempDir, "locanchor_other_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(other);
+        await git.WorktreeAddAsync(null, mainRoot, other, "feat/loc-other-" + Guid.NewGuid().ToString("N")[..6]);
+
+        File.WriteAllText(Path.Combine(worktree, "draft.md"), "from task tree");
+        File.WriteAllText(Path.Combine(mainRoot, "draft.md"), "from main tree");
+        File.WriteAllText(Path.Combine(other, "draft.md"), "from other tree");
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/files/locate",
+            new { paths = new[] { "draft.md" }, sessionId });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetArrayLength().Should().Be(1);
+        var hit = body[0];
+        hit.GetProperty("isAnchor").GetBoolean().Should().BeTrue("заявленное дерево чата — приоритет");
+        hit.GetProperty("branch").GetString().Should().Be(branch, "ответ несёт ветку анкера");
+        hit.GetProperty("alternatives").GetInt32().Should().Be(2, "ещё два совпадения — main и чужое дерево");
+    }
+
     [Fact]
     public async Task SaveContent_TextFile_Returns200()
     {

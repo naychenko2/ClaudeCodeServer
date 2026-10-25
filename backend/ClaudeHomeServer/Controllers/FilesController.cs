@@ -502,6 +502,32 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
+    // Шаг B2b (разрез bc27cbee §1 потребитель 3, §4): пакетный резолв относительных путей для
+    // «ленивого» индекса фронта. Hit — то же правило, что у content/stream (ProjectTreeLocator),
+    // анкер — заявленное дерево чата по sessionId. Ответ только по найденным путям: ненайденный
+    // остаётся в отрицательном кэше фронта. Лимит 50 — батчинг фронта (F1b): больше — отказ,
+    // не тихая обрезка.
+    [HttpPost("locate")]
+    public async Task<IActionResult> Locate(string projectId, [FromBody] LocateRequest req, CancellationToken ct)
+    {
+        var paths = req.Paths ?? [];
+        if (paths.Count > MaxLocatePaths)
+            return BadRequest(new { error = $"Не более {MaxLocatePaths} путей за запрос" });
+        try
+        {
+            var p = GetProject(projectId);
+            string? anchor = null;
+            if (!string.IsNullOrEmpty(req.SessionId))
+            {
+                var s = GetOwnedSession(projectId, req.SessionId);
+                if (s is null) return NotFound(new { error = "Чат не найден" });
+                anchor = ChatTreeRootForAsync(p, s);
+            }
+            return Ok(await locator.LocateManyAsync(UserId, p, paths, anchor, ct));
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
     // Отдаёт байты файла OnlyOffice Document Server (без Authorization — DS не знает API-ключ).
     // Защита: проверка download-токена, который DS получает через office-config.
     [HttpGet("office-download")]
@@ -839,9 +865,13 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 
     // Предельный размер скачивания save-from-url (совпадает с RequestSizeLimit)
     private const long MaxSaveFromUrlBytes = 200L * 1024 * 1024;
+
+    // Лимит пакета POST files/locate (шаг B2b): фронт батчит не более 50 «ленивых» путей (F1b)
+    private const int MaxLocatePaths = 50;
 }
 
 public record ChangedByRequest(List<string>? Paths);
+public record LocateRequest(List<string>? Paths, string? SessionId);
 public record SaveFromUrlRequest(string Url, string Path);
 public record ToMarkdownRequest(string Path, string? TargetDir = null, bool Enhance = false);
 public record OOCallbackPayload(int Status, string? Url, string? Key);

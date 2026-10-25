@@ -319,7 +319,7 @@ export const STAGE_NAME: Record<FeatureRailKey, string> = {
 // Значения — подмножество глифа FeatureGlyph (wait/stopped/run/loop/closed/done):
 // поэтому st.kind передаётся в FeatureGlyph БЕЗ каста, и tsc ловит рассинхрон.
 // Смерженная фича → 'done' (галочка, макет glyph('done')), закрытая без мержа → 'closed'.
-export type FeatureDisplayKind = 'wait' | 'stopped' | 'run' | 'loop' | 'closed' | 'done';
+export type FeatureDisplayKind = 'wait' | 'stopped' | 'run' | 'loop' | 'closed' | 'done' | 'queue';
 
 export interface FeatureDisplayState {
   // Глиф (FeatureGlyph): wait — ромб, stopped — квадрат, run/loop/closed/done.
@@ -373,6 +373,12 @@ export function featureDisplayState(
   }
   // Смержена, но ещё не закрыта (bucket=merged): ждёт закрытия.
   if (f.bucket === 'merged') return { kind: 'done', alarm: null, status: 'смержена, ждёт закрытия' };
+  // Очередь фич: пауза с причиной queue — тон паузы, тревоги нет. Позицию считает бэк;
+  // queue не пришёл — подпись без цифр.
+  if (f.holdReason === 'queue') {
+    const q = f.queue;
+    return { kind: 'queue', alarm: null, status: q && q.position > 0 && q.length > 0 ? `в очереди · ${q.position} из ${q.length}` : 'в очереди' };
+  }
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «ждёт согласия на мерж»,
   // merging → «идёт», waiting → «ждёт вас», stopped → «стоит». Без state (старые данные/кеш)
   // — запасной путь по attention (attention.kind), чтобы существующие тесты не упали.

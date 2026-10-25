@@ -9,10 +9,11 @@ import { C } from '../../../lib/design';
 //   done    — галочка (принято/пройдено)
 //   absent  — перечёркнутый круг (этапа/задачи нет в трекере)
 //   loop    — петля (доработка/возврат)
+//   queue   — круг с тремя полосами (в очереди; семья с hold, макет feature-queue-1)
 //
 // Пилюля для «идёт»/«закрыта» использует lucide `Route` (не эти глифы); ромб/квадрат
 // (wait/stopped) — отсюда. Выбор фичи (FeaturePicker) — все пять отсюда.
-export type FeatureGlyph = 'wait' | 'stopped' | 'run' | 'closed' | 'done' | 'absent' | 'loop';
+export type FeatureGlyph = 'wait' | 'stopped' | 'run' | 'closed' | 'done' | 'absent' | 'loop' | 'queue';
 
 export function FeatureGlyph({ kind, size = 12 }: { kind: FeatureGlyph; size?: number }) {
   const v = { width: size, height: size, viewBox: '0 0 16 16', 'aria-hidden': true as const };
@@ -58,6 +59,15 @@ export function FeatureGlyph({ kind, size = 12 }: { kind: FeatureGlyph; size?: n
         <svg {...v}>
           <path d="M12.6 9.2A4.8 4.8 0 1 1 11.3 4.4" fill="none" stroke={C.warning} strokeWidth="2.2" strokeLinecap="round" />
           <path d="M9.2 2.6 12.6 3.4 11.8 6.8" fill="none" stroke={C.warning} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'queue':
+      return (
+        <svg {...v}>
+          <circle cx="8" cy="8" r="7" fill={C.bgInset} stroke={C.textMuted} strokeWidth="1" />
+          <rect x="4.6" y="4.4" width="6.8" height="1.6" rx="0.8" fill={C.textSecondary} />
+          <rect x="4.6" y="7.2" width="6.8" height="1.6" rx="0.8" fill={C.textMuted} />
+          <rect x="4.6" y="10" width="6.8" height="1.6" rx="0.8" fill={C.textMuted} />
         </svg>
       );
   }

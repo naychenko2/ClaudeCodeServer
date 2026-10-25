@@ -10,12 +10,10 @@ public enum TaskPregateStatus
     // Прогон состоялся (зелёный или красный), результат записан в задачу
     Recorded,
     NotFound,
-    // Подсистема test-runs выключена — шва нет, гейт закрытия тоже выключен
+    // Подсистема test-runs выключена — шва нет, прогонять нечем
     Disabled,
     // Не шаг/доработка или нет собственного дерева: гейт задачу не касается
     NotApplicable,
-    // Серия красных исчерпана: решение за постановщиком
-    Exhausted,
     // Прогон не состоялся (дерево занято, потолок, «Стоп», нет git): результат не записан
     NotRun,
 }
@@ -24,7 +22,7 @@ public sealed record TaskPregateOutcome(TaskPregateStatus Status, string Text, P
 
 // Запуск предгейта шага (NC-P1b): общий для ручки POST /api/tasks/{id}/pregate и инструмента pregate.
 // Шов ITaskPregate опциональный (вертикаль TestRuns отключаемая), сам прогон ничего не знает о задачах:
-// здесь вердикт превращается в запись трекера, по которой TaskManager решает, закрывать ли шаг.
+// здесь вердикт превращается в запись трекера, которую видит ревьюер; закрытие шага запись не блокирует.
 public sealed class TaskPregateService(TaskManager tasks, ProjectManager projects, IWorktreeHeadReader heads,
     ITaskPregate? pregate = null)
 {
@@ -34,12 +32,9 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         if (task is null || task.OwnerId != ownerId)
             return new(TaskPregateStatus.NotFound, "Задача не найдена.");
         if (pregate is null)
-            return new(TaskPregateStatus.Disabled, "Предгейт выключен на этом сервере (подсистема test-runs): шаг закрывается без него.");
+            return new(TaskPregateStatus.Disabled, "Предгейт выключен на этом сервере (подсистема test-runs): предгейт не запускается.");
         if (!PregateRules.Applies(task.Role, task.WorktreePath))
             return new(TaskPregateStatus.NotApplicable, "Предгейт нужен только шагу или доработке с собственным деревом (role=step|rework и worktreePath).");
-        if (PregateRules.Exhausted(task.Pregate))
-            return new(TaskPregateStatus.Exhausted, "Предгейт красный два раза подряд по одной причине, третьего круга нет: "
-                + "решение за постановщиком (сбросить серию: tasks_update с resetPregate=true или PUT с resetPregate).\n" + task.Pregate!.Summary);
         var project = task.ProjectId is null ? null : projects.GetById(task.ProjectId);
         if (project is null)
             return new(TaskPregateStatus.NotRun, "Проект задачи не найден — предгейт не запущен.");
@@ -66,7 +61,7 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
             return new(TaskPregateStatus.NotRun, "Коммит дерева сменился во время прогона — результат не записан, прогони предгейт снова.");
 
         if (verdict.Unmeasured is { } unmeasured)
-            return new(TaskPregateStatus.NotRun, "Предгейт не дал вердикта, результат не записан и закрыть шаг нельзя — " + unmeasured + ".");
+            return new(TaskPregateStatus.NotRun, "Предгейт не дал вердикта, результат не записан — " + unmeasured + ".");
 
         var red = verdict.Checks.Where(c => c.Status == PregateStatus.Red).ToList();
         var summary = string.Join("\n", red.Select(c => $"✗ {c.Name}: {c.Detail}"));
@@ -80,7 +75,7 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
     private static string Format(PregateVerdict verdict, string sha, PregateRecord? record, bool nothing)
     {
         var text = new StringBuilder();
-        text.Append(nothing ? "Предгейт NotRun (проверять нечего, закрытие разрешено)"
+        text.Append(nothing ? "Предгейт NotRun (проверять нечего)"
                 : verdict.IsGreen ? "Предгейт ЗЕЛЁНЫЙ" : "Предгейт КРАСНЫЙ").Append(" по коммиту ")
             .Append(sha.Length > 8 ? sha[..8] : sha).Append('\n');
         foreach (var c in verdict.Checks)
@@ -92,7 +87,7 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         }
         if (!verdict.IsGreen)
             text.Append(record is { RedStreak: >= PregateRules.MaxRedStreak }
-                ? "Второй красный подряд по той же причине: доложи постановщику (chats_report_up, blocker: true), третьего круга нет."
+                ? "Второй красный подряд по той же причине: доложи постановщику (chats_report_up, blocker: true)."
                 : "Исправь причину, закоммить и прогони предгейт снова.");
         return text.ToString().TrimEnd();
     }

@@ -5,38 +5,27 @@ using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Гейт «предгейт перед закрытием шага» (NC-P1b): TaskManager.Update на переходе в Done
+// Предгейт шага (NC-P1b): запись результата, серия красных и эскалация; закрытие шага он не блокирует
 public class TaskManagerPregateTests : IDisposable
 {
     private const string Wt = "/tmp/wt-pregate";
     private const string Sha1 = "1111111111111111111111111111111111111111";
     private const string Sha2 = "2222222222222222222222222222222222222222";
 
-    private sealed class FakeHead(string? sha) : IWorktreeHeadReader
-    {
-        public string? Sha { get; set; } = sha;
-        public string? Head(string worktreePath) => Sha;
-        public bool? IsClean(string worktreePath) => true;
-        public IReadOnlyList<string>? ChangedFiles(string worktreePath) => null;
-    }
-
     private readonly string _dir;
-    private readonly FakeHead _head = new(Sha1);
     private TaskManager _sut;
 
     public TaskManagerPregateTests()
     {
         _dir = Path.Combine(Path.GetTempPath(), "pregate_tests_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
-        _sut = Build(null);
+        _sut = Build();
     }
 
-    private TaskManager Build(string? testRunsEnabled, bool gateOnClose = true)
+    private TaskManager Build()
     {
         var settings = new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") };
-        settings["Pregate:GateOnClose"] = gateOnClose ? "true" : "false";
-        if (testRunsEnabled is not null) settings["Subsystems:test-runs:Enabled"] = testRunsEnabled;
-        return new TaskManager(new ConfigurationBuilder().AddInMemoryCollection(settings).Build(), heads: _head);
+        return new TaskManager(new ConfigurationBuilder().AddInMemoryCollection(settings).Build());
     }
 
     public void Dispose()
@@ -56,269 +45,61 @@ public class TaskManagerPregateTests : IDisposable
     private static UpdateTaskRequest Close() => new(Status: TaskItemStatus.Done);
 
     [Fact]
-    public void Шаг_БезРезультатаПредгейта_НеЗакрывается()
+    public void Шаг_БезРезультатаПредгейта_Закрывается()
     {
         var task = Step();
 
-        var act = () => _sut.Update(task.Id, Close(), isAgentCall: true);
-
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("Предгейт не пройден");
-        _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
+        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
     }
 
     [Fact]
-    public void Шаг_КрасныйПредгейт_ОтказНесётВыводГейта()
+    public void Шаг_КрасныйПредгейт_Закрывается_ЗаписьСохраняется()
     {
         var task = Step();
         _sut.RecordPregate(task.Id, Sha1, false, "✗ build: error CS0246 в Foo.cs", "build");
 
-        var act = () => _sut.Update(task.Id, Close(), isAgentCall: true);
+        var closed = _sut.Update(task.Id, Close(), isAgentCall: true)!;
 
-        var msg = act.Should().Throw<InvalidOperationException>().Which.Message;
-        msg.Should().Contain("красный").And.Contain("error CS0246 в Foo.cs");
-        _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
+        closed.Status.Should().Be(TaskItemStatus.Done, "предгейт не блокирует закрытие");
+        closed.Pregate.Should().NotBeNull("запись результата видна ревьюеру");
+        closed.Pregate!.Summary.Should().Contain("error CS0246 в Foo.cs");
     }
 
     [Fact]
-    public void Шаг_ЗелёныйПоТекущемуSha_Закрывается()
-    {
-        var task = Step();
-        _sut.RecordPregate(task.Id, Sha1, true, "", null);
-
-        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
-    }
-
-    [Fact]
-    public void Шаг_NothingApplicableБезGreen_Закрывается()
-    {
-        var task = Step();
-        var record = _sut.RecordPregate(task.Id, Sha1, false, "NotRun: изменения не касаются ни одной проверки", null, nothingApplicable: true)!;
-
-        record.Green.Should().BeFalse();
-        record.NothingApplicable.Should().BeTrue();
-        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
-    }
-
-    [Fact]
-    public void Шаг_NothingApplicableПоСтаромуSha_ОтказУстарел()
-    {
-        var task = Step();
-        _sut.RecordPregate(task.Id, Sha1, false, "NotRun", null, nothingApplicable: true);
-        _head.Sha = Sha2;
-
-        var act = () => _sut.Update(task.Id, Close(), isAgentCall: true);
-
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("устарел");
-    }
-
-    [Fact]
-    public void Шаг_ЗелёныйПоСтаромуSha_ОтказУстарел()
-    {
-        var task = Step();
-        _sut.RecordPregate(task.Id, Sha1, true, "", null);
-        _head.Sha = Sha2;
-
-        var act = () => _sut.Update(task.Id, Close(), isAgentCall: true);
-
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("устарел");
-    }
-
-    [Fact]
-    public void Шаг_ShaНеПрочитан_ОтказFailClosed()
-    {
-        var task = Step();
-        _sut.RecordPregate(task.Id, Sha1, true, "", null);
-        _head.Sha = null;
-
-        var act = () => _sut.Update(task.Id, Close(), isAgentCall: true);
-
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("не удалось определить");
-    }
-
-    [Fact]
-    public void Доработка_ТожеПодГейтом()
+    public void Доработка_ЗакрываетсяБезПредгейта()
     {
         var task = Step(TaskRoles.Rework);
 
-        var act = () => _sut.Update(task.Id, Close(), isAgentCall: true);
-
-        act.Should().Throw<InvalidOperationException>();
+        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
     }
 
     [Fact]
-    public void СменаРолиВТомЖеЗапросе_ГейтНеОбходит()
-    {
-        var task = Step();
-
-        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Role: TaskRoles.Cut), isAgentCall: true);
-
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("Предгейт не пройден");
-        _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
-    }
-
-    [Fact]
-    public void СбросДереваВТомЖеЗапросе_ГейтНеОбходит()
-    {
-        var task = Step();
-
-        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: ""), isAgentCall: true);
-
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("Предгейт не пройден");
-    }
-
-    [Fact]
-    public void ПодменаДереваВТомЖеЗапросеЧтоЗакрытие_Отказ_ДажеПриТомЖеSha()
+    public void СменаДереваВТомЖеЗапросеЧтоЗакрытие_Закрывается_ДеревоМеняется()
     {
         var task = Step();
         _sut.RecordPregate(task.Id, Sha1, true, "", null);
 
-        var act = () => _sut.Update(task.Id,
-            new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: "/tmp/wt-other"), isAgentCall: true);
+        var closed = _sut.Update(task.Id,
+            new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: "/tmp/wt-other"), isAgentCall: true)!;
 
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("дерево шага меняется");
-        var after = _sut.GetById(task.Id)!;
-        after.Status.Should().NotBe(TaskItemStatus.Done);
-        after.WorktreePath.Should().Be(Wt);
+        closed.Status.Should().Be(TaskItemStatus.Done, "подмена дерева закрытие не блокирует");
+        closed.WorktreePath.Should().Be("/tmp/wt-other");
     }
 
     [Fact]
-    public void ТоЖеДеревоСКосойЧертой_НеПодмена()
+    public void Applies_РольИДерево()
     {
-        var task = Step();
-        _sut.RecordPregate(task.Id, Sha1, true, "", null);
-
-        _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: Wt + "/"), isAgentCall: true)!
-            .Status.Should().Be(TaskItemStatus.Done);
+        PregateRules.Applies(TaskRoles.Step, Wt).Should().BeTrue();
+        PregateRules.Applies(TaskRoles.Rework, Wt).Should().BeTrue();
+        PregateRules.Applies(TaskRoles.Cut, Wt).Should().BeFalse("не шаг и не доработка");
+        PregateRules.Applies(null, Wt).Should().BeFalse();
+        PregateRules.Applies(TaskRoles.Step, "").Should().BeFalse("дерева нет");
+        PregateRules.Applies(TaskRoles.Step, "  ").Should().BeFalse();
+        PregateRules.Applies(TaskRoles.Step, null).Should().BeFalse();
     }
 
     [Fact]
-    public void GateOnClose_Выкл_АгентЗакрываетШагБезЗелёногоПредгейта_ЗаписьСохраняется()
-    {
-        _sut = Build(null, gateOnClose: false);
-        var task = Step();
-        _sut.RecordPregate(task.Id, Sha1, false, "x", "build");
-
-        var closed = _sut.Update(task.Id, Close(), isAgentCall: true)!;
-
-        closed.Status.Should().Be(TaskItemStatus.Done, "советующий режим не блокирует закрытие");
-        closed.Pregate.Should().NotBeNull("запись результата не отключается");
-        closed.Pregate!.Sha.Should().Be(Sha1);
-    }
-
-    [Fact]
-    public void GateOnClose_Выкл_БезТумблераВКонфиге_ГейтНеВзведён()
-    {
-        var settings = new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") };
-        _sut = new TaskManager(new ConfigurationBuilder().AddInMemoryCollection(settings).Build(), heads: _head);
-        var task = Step();
-
-        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
-    }
-
-    [Fact]
-    public void GateOnClose_Вкл_ЧеловекЗакрываетБезГейта_АгентПолучаетОтказ()
-    {
-        var human = Step();
-        var agent = Step();
-
-        _sut.Update(human.Id, Close(), isAgentCall: false)!.Status.Should().Be(TaskItemStatus.Done);
-
-        var act = () => _sut.Update(agent.Id, Close(), isAgentCall: true);
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("Предгейт не пройден");
-    }
-
-    [Fact]
-    public void TreeSwapRefusal_ГраничныеСлучаи()
-    {
-        PregateRules.TreeSwapRefusal(Wt, "/tmp/other").Should().NotBeNull();
-        PregateRules.TreeSwapRefusal(Wt, Wt).Should().BeNull();
-        PregateRules.TreeSwapRefusal(Wt, null).Should().BeNull("дерево не меняют");
-        PregateRules.TreeSwapRefusal(null, Wt).Should().BeNull("у задачи не было дерева: записи предгейта нет, закрыть нельзя и так");
-    }
-
-    [Fact]
-    public void ГейтПоРолиДоИПосле()
-    {
-        PregateRules.GatedPath(TaskRoles.Step, TaskRoles.Cut, Wt, Wt).Should().Be(Wt, "роль была step");
-        PregateRules.GatedPath(TaskRoles.Cut, TaskRoles.Rework, Wt, Wt).Should().Be(Wt, "роль стала rework");
-        PregateRules.GatedPath(TaskRoles.Cut, TaskRoles.Review, Wt, Wt).Should().BeNull();
-        PregateRules.GatedPath(TaskRoles.Step, TaskRoles.Step, null, null).Should().BeNull("дерева нет");
-    }
-
-    [Fact]
-    public void СбросПредгейта_ЧеловекомНачинаетСерию_ИсполнителюОтказ()
-    {
-        var task = Step();
-        _sut.RecordPregate(task.Id, Sha1, false, "x", "build");
-        _sut.RecordPregate(task.Id, Sha1, false, "x", "build");
-        PregateRules.Exhausted(_sut.GetById(task.Id)!.Pregate).Should().BeTrue();
-
-        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(ResetPregate: true), isAgentCall: true, callerIsExecutor: true);
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("постановщиком");
-        _sut.GetById(task.Id)!.Pregate.Should().NotBeNull("отказ не трогает запись");
-
-        _sut.Update(task.Id, new UpdateTaskRequest(ResetPregate: true), isAgentCall: true);
-        var reset = _sut.GetById(task.Id)!;
-        reset.Pregate.Should().BeNull();
-        PregateRules.Exhausted(reset.Pregate).Should().BeFalse();
-    }
-
-    [Fact]
-    public void СбросПредгейта_НеИсчерпаннойСерии_Отказ()
-    {
-        var task = Step();
-        _sut.RecordPregate(task.Id, Sha1, false, "x", "build");
-
-        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(ResetPregate: true), isAgentCall: true);
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("исчерпанной");
-        _sut.GetById(task.Id)!.Pregate.Should().NotBeNull("отказ не трогает запись");
-    }
-
-    [Fact]
-    public void Applies_СогласованоСGatedPath_НаНеизменныхРолиИДереве()
-    {
-        foreach (var role in new[] { TaskRoles.Step, TaskRoles.Rework, TaskRoles.Cut, null })
-            foreach (var path in new[] { Wt, "", "  ", null })
-                PregateRules.Applies(role, path).Should().Be(PregateRules.GatedPath(role, role, path, path) is not null,
-                    $"роль {role}, дерево «{path}»");
-    }
-
-    [Fact]
-    public void ШагБезWorktree_ЗакрываетсяБезГейта()
-    {
-        var task = Step(worktree: null);
-
-        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
-    }
-
-    [Fact]
-    public void НеШагСWorktree_ЗакрываетсяБезГейта()
-    {
-        var task = Step(TaskRoles.Review);
-
-        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
-    }
-
-    [Fact]
-    public void ОбычнаяЗадача_ЗакрываетсяБезГейта()
-    {
-        var task = _sut.Create("p", "u", new CreateTaskRequest("обычная", WorktreePath: Wt));
-
-        _sut.Update(task.Id, Close())!.Status.Should().Be(TaskItemStatus.Done);
-    }
-
-    [Fact]
-    public void ТестРанВыключен_ШагЗакрываетсяКакРаньше()
-    {
-        _sut.Dispose();
-        _sut = Build("false");
-        var task = Step();
-
-        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
-    }
-
-    [Fact]
-    public void ВторойКрасныйПодрядПоТойЖеПричине_ДокладПостановщику_ИотказПросит()
+    public void ВторойКрасныйПодрядПоТойЖеПричине_ДокладПостановщику()
     {
         var task = Step();
         var escalations = new List<string>();
@@ -329,9 +110,7 @@ public class TaskManagerPregateTests : IDisposable
         var second = _sut.RecordPregate(task.Id, Sha1, false, "✗ build: warning CS8618", "build");
 
         second!.RedStreak.Should().Be(2);
-        escalations.Should().ContainSingle().Which.Should().Contain("Третьего круга нет").And.Contain("CS8618");
-        var act = () => _sut.Update(task.Id, Close(), isAgentCall: true);
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("chats_report_up");
+        escalations.Should().ContainSingle().Which.Should().Contain("решение постановщика").And.Contain("CS8618");
     }
 
     [Fact]
@@ -358,11 +137,4 @@ public class TaskManagerPregateTests : IDisposable
         _sut.RecordPregate(task.Id, Sha2, false, "x", "build")!.RedStreak.Should().Be(1);
     }
 
-    [Fact]
-    public void ТретьегоКругаНет_СерияИсчерпана()
-    {
-        PregateRules.Exhausted(new PregateRecord(Sha1, false, "x", DateTime.UtcNow, 2, "build")).Should().BeTrue();
-        PregateRules.Exhausted(new PregateRecord(Sha1, false, "x", DateTime.UtcNow, 1, "build")).Should().BeFalse();
-        PregateRules.Exhausted(new PregateRecord(Sha1, true, "", DateTime.UtcNow)).Should().BeFalse();
-    }
 }

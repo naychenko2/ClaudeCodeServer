@@ -184,18 +184,20 @@ public class PregateServiceTests : IDisposable
     [Fact]
     public async Task СуммаПроверокДлиннееПотолка_ОдинПотолокНаПрогон_RefusedСВыполненными()
     {
-        // Каждая проверка (≈0,4 с) короче потолка в 1 с, а четыре вместе — длиннее: потолок обязан быть общим
-        var launcher = Launcher(_ => { Thread.Sleep(400); return ("ok", 0); });
-        var service = new PregateService(launcher, new TestRunsOptions { CeilingSeconds = 1 },
-            new PregateOptions { Checks = [Check("c1"), Check("c2"), Check("c3"), Check("c4")] },
+        // Потолок 4 с, каждая проверка 1,5 с: первая укладывается с запасом 2,5 с даже под нагрузкой, а четыре вместе
+        // (6 с) не помещаются с запасом 2 с — потолок обязан быть общим. Пропущенная проверка выполненной не считается
+        var launcher = Launcher(_ => { Thread.Sleep(1500); return ("ok", 0); });
+        var service = new PregateService(launcher, new TestRunsOptions { CeilingSeconds = 4 },
+            new PregateOptions { Checks = [Check("skip", whenChanged: ["nope/"]), Check("c1"), Check("c2"), Check("c3"), Check("c4")] },
             new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
 
-        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+        var verdict = await service.RunAsync(Request(["src/a.cs"]), CancellationToken.None);
 
         verdict.IsGreen.Should().BeFalse();
         verdict.Refusal.Should().Contain("общий потолок").And.Contain("Уже выполнено").And.Contain("c1");
-        verdict.Checks.Should().NotBeEmpty().And.HaveCountLessThan(4);
-        verdict.Checks.Select(c => c.Name).Should().StartWith(["c1"]);
+        verdict.Refusal.Should().NotContain("skip — Skipped", "пропущенная проверка не выполнялась").And.Contain("Пропущено");
+        verdict.Checks.Should().NotBeEmpty().And.HaveCountLessThan(5);
+        verdict.Checks.Select(c => c.Name).Should().StartWith(["skip", "c1"]);
     }
 
     [Fact]

@@ -103,13 +103,22 @@ public sealed class PregateService : ITaskPregate
                 return PregateVerdict.Refused(ct.IsCancellationRequested
                     ? "Предгейт остановлен."
                     : $"Проверка «{check.Name}» не уложилась в общий потолок предгейта {_testRunsOptions.CeilingSeconds} с (вместе с очередью сборок). "
-                      + (results.Count == 0
-                          ? "Выполненных проверок нет."
-                          : "Уже выполнено: " + string.Join(", ", results.Select(r => $"{r.Name} — {r.Status}")) + "."),
+                      + Progress(results),
                     results);
             results.Add(result);
         }
         return new PregateVerdict(results);
+    }
+
+    // Пропущенные проверки (не касаются изменений) не выполнялись — выполненными не называются
+    private static string Progress(IReadOnlyList<PregateCheckResult> results)
+    {
+        var done = results.Where(r => r.Status != PregateStatus.Skipped).ToList();
+        var skipped = results.Count - done.Count;
+        var text = done.Count == 0
+            ? "Выполненных проверок нет."
+            : "Уже выполнено: " + string.Join(", ", done.Select(r => $"{r.Name} — {r.Status}")) + ".";
+        return skipped == 0 ? text : text + $" Пропущено как не касающихся изменений: {skipped}.";
     }
 
     private static bool Applies(PregateCheckOptions check, IReadOnlyCollection<string>? changed) =>

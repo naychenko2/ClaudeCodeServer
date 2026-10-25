@@ -1,5 +1,7 @@
 using System.Reflection;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.Extensions.Configuration;
 
@@ -170,6 +172,56 @@ public class FeatureQueuePolicyTests
         index.Features.Single(r => r.FeatureId == "epic-a").Queue.Should().Be(new FeatureQueueInfo(1, 2));
         index.Features.Single(r => r.FeatureId == "epic-b").Queue.Should().Be(new FeatureQueueInfo(2, 2));
         index.Features.Single(r => r.FeatureId == "epic-free").Queue.Should().BeNull();
+    }
+
+    // Ветка достройки очереди (ApplyQueue/extra): фича вне выборки индекса, но в очереди того же
+    // проекта, обязана попасть в расчёт. Чат p1 состоит в фиче «b» проекта p2 (executor) — в
+    // выборку по p1 попадает только «b»; «c» из очереди p2 стоит впереди неё и достраивается.
+    // Мутация: убрать `runs.Concat(extra)` в ApplyQueue → «b» получит (1, 1) вместо (2, 2).
+    [Fact]
+    public void Индекс_Queue_ФичаВнеВыборки_ДостраиваетсяИзОчередиПроекта()
+    {
+        var c = QueuedEpic("epic-c", T0, "p2");
+        var b = QueuedEpic("epic-b", T0.AddMinutes(1), "p2");
+        var step = new TaskItem { Id = "step-b", Role = TaskRoles.Step, FeatureId = "epic-b", ProjectId = "p2" };
+        var sessions = new[] { new FeatureIndexSession("chat-1", "step-b", "p1", false) };
+
+        var index = FeatureProjector.BuildIndexCore([c, b, step], sessions, projectId: "p1");
+
+        index.Features.Should().ContainSingle(r => r.FeatureId == "epic-b", "в выборку входит только фича чата проекта p1");
+        index.Features.Single().Queue.Should().Be(new FeatureQueueInfo(2, 2), "«c» вне выборки, но стоит в очереди p2 раньше");
+    }
+
+    // Одиночная фича через Project (WithQueue): позиция считается по очереди проекта, а не по [run].
+    // Мутация: убрать `runs.Concat(extra)` → «b» получит (1, 1) вместо (2, 2).
+    [Fact]
+    public void Project_ОдиночнаяФича_ПозицияПоОчередиПроекта()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "queue_q1_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(dir, "projects.json") })
+            .Build();
+        var sut = new TaskManager(config, journal: new FeatureJournalStore(Path.Combine(dir, "feature-journal")));
+        try
+        {
+            var first = sut.Create("p1", "u", new CreateTaskRequest("первая", Role: TaskRoles.Feature));
+            var second = sut.Create("p1", "u", new CreateTaskRequest("вторая", Role: TaskRoles.Feature));
+            var other = sut.Create("p2", "u", new CreateTaskRequest("чужого проекта", Role: TaskRoles.Feature));
+            sut.GetById(first.Id)!.Hold = new FeatureHold(FeatureHoldReasons.Queue, T0, null, true);
+            sut.GetById(second.Id)!.Hold = new FeatureHold(FeatureHoldReasons.Queue, T0.AddMinutes(1), null, true);
+            sut.GetById(other.Id)!.Hold = new FeatureHold(FeatureHoldReasons.Queue, T0.AddMinutes(-5), null, true);
+
+            var projector = new FeatureProjector(sut);
+
+            projector.Project(second.Id, "u")!.Queue.Should().Be(new FeatureQueueInfo(2, 2));
+            projector.Project(first.Id, "u")!.Queue.Should().Be(new FeatureQueueInfo(1, 2));
+            projector.Project(other.Id, "u")!.Queue.Should().Be(new FeatureQueueInfo(1, 1), "очередь p2 — своя");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* временный каталог */ }
+        }
     }
 
     // ── Limit ───────────────────────────────────────────────────────────────────────────────

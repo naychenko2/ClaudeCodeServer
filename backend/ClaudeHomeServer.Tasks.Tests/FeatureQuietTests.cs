@@ -56,6 +56,36 @@ public class FeatureQuietTests
         run.Quiet.Should().BeFalse("closed — не «тихо»");
     }
 
+    // Мутация: условие quiet с !terminal на !closed (FeatureProjector, строка quiet) — тест краснеет:
+    // у смерженной фичи с открытым эпиком closed=false, но она завершена, а не «стоит».
+    [Fact]
+    public void Quiet_СмерженаЭпикОткрыт_НеТихо()
+    {
+        var epic = Epic(Now - TimeSpan.FromDays(5));
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = "epic-q", Role = TaskRoles.Final, Title = "финал",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = Now - TimeSpan.FromDays(3) - TimeSpan.FromMinutes(10),
+            CompletedAt = Now - TimeSpan.FromDays(3),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = "epic-q", Role = TaskRoles.Merge, Title = "мерж",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = Now - TimeSpan.FromDays(2) - TimeSpan.FromMinutes(10),
+            CompletedAt = Now - TimeSpan.FromDays(2),
+        };
+        var run = FeatureProjector.Build(epic, [epic, final, merge], Now);
+
+        run.State.Should().Be(FeatureStates.Merged);
+        run.Now.Should().BeEmpty();
+        run.Closed.Should().BeFalse("эпик остаётся открытым");
+        run.Summary.Should().NotBeNull("итог у смерженной виден");
+        run.Quiet.Should().BeFalse("смержена — завершена, сигнал «тихо» к ней не применяется, хотя эпик не Done");
+    }
+
     [Fact]
     public void Quiet_ИдётЗадача_НеТихо()
     {

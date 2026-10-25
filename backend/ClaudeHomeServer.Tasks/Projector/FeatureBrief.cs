@@ -169,14 +169,19 @@ public static class FeatureBrief
     // Review — корзины шагов run.StepProgress. Лента p25–p75 — та же формула по тем же квантилям
     // выборки: k ≥ 0 и p25 ≤ медиана ≤ p75 по каждой метрике — порядок ленты не инвертируется,
     // округление одно по концу (Math.Round, как хвостовые числа FeatureTypical).
-    // Оценки нет в трёх случаях (разрез п.3 «Когда оценки нет»): состояние queued/paused/closed/draft
-    // (часы стоят или фича не идёт), план не нарезан (PlanState = pending — знаменатель шагов
-    // неизвестен), выборка не построена (n < 3 — FeatureTypical отдаёт шаговые метрики null).
+    // Оценки нет в случаях (разрез п.3 «Когда оценки нет»): состояние queued/paused/closed/draft
+    // (часы стоят или фича не идёт), план не нарезан или нарезан частично (PlanState = pending/partial:
+    // знаменатель шагов неизвестен или неполон — при partial NotCreated считает только шаги нарезанных
+    // планов, оценка вышла бы заниженной; решение Софьи: обещать число по неполному плану хуже, чем
+    // не обещать ничего), выборка не построена (n < 3 — FeatureTypical отдаёт шаговые метрики null).
+    // PlanState сравнивается только с константами FeatureStepAccounting.Plan* — определение значения
+    // одно, сравнение с литералом разъехало бы с ним молча.
     private static BriefEstimate? EstimateOf(FeatureRun run,
         FeatureTypical.TypicalFeatureStats? typical, string kind)
     {
         if (kind is Kinds.Queued or Kinds.Paused or Kinds.Closed or Kinds.Draft) return null;
-        if (run.StepProgress.PlanState == "pending") return null;
+        if (run.StepProgress.PlanState is FeatureStepAccounting.PlanPending or FeatureStepAccounting.PlanPartial)
+            return null;
         var steps = typical?.StepMinutes;
         var tails = typical?.TailMinutes;
         if (steps is null || tails is null) return null;

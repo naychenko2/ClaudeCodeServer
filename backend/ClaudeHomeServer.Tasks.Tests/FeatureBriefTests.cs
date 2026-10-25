@@ -13,7 +13,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • брать ElapsedMinutes вместо WorkWallMinutes — тот же тест красный;
 //  • убрать Take(MaxNext) — тест лимита красный; убрать фильтр pending — тест пропусков красный;
 //  • ReviewCoefficient 0.5 → 1 — тест формулы красный (k = 9 вместо 7, remaining = 120 вместо 100);
-//  • убрать фильтр PlanState — тест «нет плана» красный; убрать фильтр состояний — тесты веток красные;
+//  • убрать фильтр PlanState — тест «нет плана» красный; убрать ветку partial — тест «частичный план»
+//    красный; вернуть литералы вместо констант Plan* в EstimateOf — тест-сторож исходника красный;
+//    убрать фильтр состояний — тесты веток красные;
 //  • B5: убрать проверку стадии в StaleOf — тест «смена стадии» красный; убрать проверку категории —
 //    тест «переход на паузу» красный; отдать в BriefNote поле BySessionId — тест контракта красный.
 public class FeatureBriefTests
@@ -57,16 +59,17 @@ public class FeatureBriefTests
     // ─── фикстуры estimate (B2b) ───────────────────────────────────────────────────────────────
 
     // Run с нарезанным планом и известными корзинами знаменателя (Work/NotCreated/Review);
-    // hold — удержание для веток paused/queued (init-only поле, только через инициализатор).
+    // hold — удержание для веток paused/queued (init-only поле, только через инициализатор);
+    // planState — состояние плана для тестов веток «оценки нет» (по умолчанию нарезанный «cut»).
     private static FeatureRun RunWithPlan(string state, int work, int notCreated, int review,
-        FeatureHold? hold = null) => new()
+        FeatureHold? hold = null, string planState = "cut") => new()
     {
         FeatureId = "ep",
         State = state,
         Hold = hold,
         StepProgress = new FeatureStepProgress
         {
-            PlanState = "cut", Total = work + notCreated + review,
+            PlanState = planState, Total = work + notCreated + review,
             Work = work, NotCreated = notCreated, Review = review,
         },
     };
@@ -339,6 +342,49 @@ public class FeatureBriefTests
 
         FeatureBrief.Build(run, null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Estimate.Should().BeNull(
             "PlanState = pending — знаменатель шагов неизвестен");
+    }
+
+    // Возврат ревью B2b (п.1): partial — знаменатель шагов неполон (NotCreated считает только шаги
+    // нарезанных планов), оценка вышла бы заниженной. Решение Софьи: при частичном плане оценки нет,
+    // как при pending — обещать число по неполному плану хуже, чем не обещать ничего.
+    [Fact]
+    public void Estimate_НетКогдаПланНарезанЧастично()
+    {
+        var run = RunWithPlan(FeatureStates.Running, work: 1, notCreated: 2, review: 0, planState: "partial");
+
+        FeatureBrief.Build(run, null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Estimate.Should().BeNull(
+            "PlanState = partial — знаменатель шагов неполон, оценка занижена");
+    }
+
+    // Возврат ревью B2b (п.2): PlanState сравнивается только с константами FeatureStepAccounting.Plan*
+    // (те же задают значения). Сторож по исходнику: тело EstimateOf ссылается на константы и не несёт
+    // литералов "pending"/"partial" — сравнение с литералом разъехало бы со значением молча.
+    // Мутация: вернуть в FeatureBrief.cs `== "pending"` — тест красный.
+    [Fact]
+    public void Estimate_СравнениеPlanStateТолькоСКонстантами_ВИсходникеБезЛитералов()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        string? path = null;
+        while (dir is not null && path is null)
+        {
+            var candidate = Path.Combine(dir.FullName, "backend", "ClaudeHomeServer.Tasks",
+                "Projector", "FeatureBrief.cs");
+            if (File.Exists(candidate)) path = candidate;
+            dir = dir.Parent;
+        }
+        path.Should().NotBeNull("FeatureBrief.cs не найден от дерева сборки — сторож вне дерева не работает");
+
+        var source = File.ReadAllText(path!);
+        var start = source.IndexOf("static BriefEstimate? EstimateOf(", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(0, "EstimateOf обязана быть в FeatureBrief");
+        var end = source.IndexOf("static BriefNote? NoteOf(", start, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start, "граница тела EstimateOf — следующий член класса");
+
+        var body = source[start..end];
+        body.Should().Contain("FeatureStepAccounting.PlanPending").And.Contain("FeatureStepAccounting.PlanPartial",
+            "сравнение — с константами, которые задают значения PlanState");
+        body.Should().NotContain("\"pending\"").And.NotContain("\"partial\"",
+            "в теле EstimateOf нет литералов состояния плана");
     }
 
     [Fact]

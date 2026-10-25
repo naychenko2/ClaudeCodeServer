@@ -1,7 +1,7 @@
 // Строка «Предгейт» в карточке шага/доработки: зелёный — «зелёный по <sha7>, <HH:MM>»,
 // красный — «красный (серия N)», без записи и «нечего проверять» — «не прогонялся»,
 // у ролей не step|rework строки нет. Рендер через linkedom.
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { parseHTML } from 'linkedom';
 import type { Task } from '../../../types';
 
@@ -31,15 +31,38 @@ function render(task: Pick<Task, 'role' | 'pregate'>) {
   return host;
 }
 
-// Отметка без Z — локальное время: HH:MM ожидаем в любой TZ прогона
-const green = { sha: 'd9ddd429f1c0', green: true, summary: '', at: '2026-10-25T14:32:00', redStreak: 0, redKey: null, nothingApplicable: false };
-const red2 = { sha: 'd9ddd429f1c0', green: false, summary: '✗ build: error CS0246', at: '2026-10-25T15:10:00', redStreak: 2, redKey: 'build', nothingApplicable: false };
+// Отметка приходит с бэка в UTC с «Z» — как в проде. Зона просмотра фиксируется
+// в самом тесте: на CI (TZ=UTC) локальное время и UTC совпадают, и подмена
+// «локального» на «UTC» прошла бы незамеченной. Etc/GMT-3 — фиксированное
+// смещение +3 без перехода на летнее время.
+const TZ_TEST = 'Etc/GMT-3';
+const AT_GREEN = '2026-10-25T14:32:00.000Z';
+const green = { sha: 'd9ddd429f1c0', green: true, summary: '', at: AT_GREEN, redStreak: 0, redKey: null, nothingApplicable: false };
+const red2 = { sha: 'd9ddd429f1c0', green: false, summary: '✗ build: error CS0246', at: '2026-10-25T15:10:00.000Z', redStreak: 2, redKey: 'build', nothingApplicable: false };
+
+// Локальное время той же отметки — из той же строки, а не константой
+function localTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
 
 describe('PregateLine', () => {
-  it('зелёный: «зелёный по <sha7>, <HH:MM>»', () => {
+  let originalTz: string | undefined;
+  beforeAll(() => {
+    originalTz = process.env.TZ;
+    process.env.TZ = TZ_TEST;
+  });
+  afterAll(() => {
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  });
+
+  it('зелёный: «зелёный по <sha7>, <HH:MM>» — время в локальной зоне', () => {
+    const local = localTime(AT_GREEN);
+    // Зона должна отличаться от UTC, иначе проверка «локальное против UTC» пустая
+    expect(local).not.toBe('14:32');
     const el = render({ role: 'step', pregate: green });
     expect(el.querySelectorAll('[data-testid="pregate-line"]').length).toBe(1);
-    expect(el.textContent).toBe('Предгейт: зелёный по d9ddd42, 14:32');
+    expect(el.textContent).toBe(`Предгейт: зелёный по d9ddd42, ${local}`);
   });
 
   it('красный: «красный (серия N)» по redStreak, та же строка у rework', () => {

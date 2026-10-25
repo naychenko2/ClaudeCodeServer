@@ -40,6 +40,25 @@ public class TaskExecutionServiceJoinTests : IDisposable
     private readonly UserStore _userStore;
     private readonly TestSessionBroadcaster _broadcaster;
     private readonly ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog _subagentRuns = new();
+    private readonly ReviewTreePool _reviewPool;
+    private readonly string _slotBase;
+    // Шовные крючки: вклиниваются между шагами запуска исполнителя (см. тесты выхода аренды)
+    private Func<ServerMessage, Task>? _onOwnerBroadcast;
+    private Action? _onSlotCwd;
+
+    // Обёртка над тестовым рассыльщиком: даёт крючок на рассылку владельцу
+    private sealed class HookedBroadcaster(TestSessionBroadcaster inner, TaskExecutionServiceJoinTests t) : ISessionBroadcaster
+    {
+        public Task ToSession(string sessionId, ServerMessage message) => inner.ToSession(sessionId, message);
+        public Task ToSessionExcept(string sessionId, string c, ServerMessage message) => inner.ToSessionExcept(sessionId, c, message);
+        public Task ToProject(string projectId, ServerMessage message) => inner.ToProject(projectId, message);
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => inner.ToPreviewLog(projectId, serviceId, message);
+        public async Task ToOwner(string ownerId, ServerMessage message)
+        {
+            await inner.ToOwner(ownerId, message);
+            if (t._onOwnerBroadcast is { } hook) await hook(message);
+        }
+    }
 
     public TaskExecutionServiceJoinTests()
     {
@@ -79,8 +98,12 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var sessions = _sessions = CreateSessionManager(config, projectManager, userStore, appSettings, personas, knowledge, notesKb, broadcaster);
         _projects = projectManager;
 
-        _sut = new TaskExecutionService(_tasks, sessions, personas, broadcaster, push, notif,
-            NullLogger<TaskExecutionService>.Instance, config, subagentRuns: _subagentRuns, kb: notesKb);
+        _slotBase = Path.Combine(_dir, "slots");
+        _reviewPool = new ReviewTreePool(new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance),
+            (_, _) => _slotBase, (_, p) => { _onSlotCwd?.Invoke(); return p; }, NullLogger<ReviewTreePool>.Instance);
+        _sut = new TaskExecutionService(_tasks, sessions, personas, new HookedBroadcaster(broadcaster, this), push, notif,
+            NullLogger<TaskExecutionService>.Instance, config, subagentRuns: _subagentRuns, kb: notesKb,
+            projects: projectManager, reviewTrees: _reviewPool);
     }
 
     public void Dispose()
@@ -114,7 +137,8 @@ public class TaskExecutionServiceJoinTests : IDisposable
         return new SessionManager(projectManager, historyService, config, adapters, falCost, usage,
             appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
             bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            broadcaster: broadcaster);
+            broadcaster: broadcaster,
+            git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance));
     }
 
     private TaskItem CreateTrackedTask(string ownerId = "user-1")
@@ -724,5 +748,334 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var fresh = _tasks.GetById(task.Id)!;
         fresh.ExecutorStoppedAt.Should().NotBeNull("401 снимает только перезапуск исполнителя");
         fresh.ExecutorStopReason.Should().Be(ExecutorStopClassifier.AuthFailedReason);
+    }
+
+    // ─── Слот ревью: аренда освобождается на каждом пути выхода ─────
+
+    private static string BuildSection(int dirty) => TaskExecutionService.BuildReviewTreeSection(
+        new ReviewTreeLease("/slot", "abc1234", Enumerable.Range(1, dirty).Select(i => $"f{i}.cs").ToList()));
+
+    [Fact]
+    public void ReviewTreeSection_ЧистоеДерево_НесётКоммитИПравила_БезСпискаПутей()
+    {
+        var text = BuildSection(0);
+
+        text.Should().Contain("Дерево ревью на коммите `abc1234`");
+        text.Should().Contain("не коммить").And.Contain("без `no_build`").And.Contain("на паузе фичи оно остаётся за тобой");
+        text.Should().NotContain("не вошли");
+    }
+
+    [Fact]
+    public void ReviewTreeSection_ПредупреждаетЧтоПриПовторномЗапускеДеревоСбрасывается()
+    {
+        var text = BuildSection(0);
+
+        text.Should().Contain("берётся свободный слот волны (не обязательно тот же)").And.Contain("незакоммиченные правки прошлых ходов").And.Contain("задача стартует в дереве волны");
+    }
+
+    [Fact]
+    public void ReviewTreeSection_ГрязныхРовноТридцать_БезХвостаЕщё()
+    {
+        var text = BuildSection(30);
+
+        text.Should().Contain("- f30.cs").And.Contain("не вошли").And.NotContain("…ещё");
+    }
+
+    [Fact]
+    public void ReviewTreeSection_ГрязныхТридцатьОдин_ОбрезаетсяДоТридцатиСХвостомЕщёОдин()
+    {
+        var text = BuildSection(31);
+
+        text.Should().Contain("- f30.cs").And.NotContain("f31.cs").And.Contain("…ещё 1");
+    }
+
+    private async Task<(string Wave, Project Project)> MkRepoWithWaveAsync()
+    {
+        var repo = Path.Combine(_dir, "repo");
+        var wave = Path.Combine(_dir, "wave");
+        Directory.CreateDirectory(repo);
+        var git = new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance);
+        await git.InitAsync(null, repo);
+        await RawGit(repo, "config", "user.email", "test@test");
+        await RawGit(repo, "config", "user.name", "Тест");
+        await File.WriteAllTextAsync(Path.Combine(repo, "a.txt"), "один\n");
+        await git.StageAllAsync(null, repo);
+        await git.CommitAsync(null, repo, "начальный коммит");
+        await git.WorktreeAddAsync(null, repo, wave, "feat/wave");
+        return (wave, new Project { Name = "Demo", RootPath = repo });
+    }
+
+    private static async Task RawGit(string root, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = root, UseShellExecute = false,
+            RedirectStandardOutput = true, RedirectStandardError = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        await proc.WaitForExitAsync();
+    }
+
+    // Занимает оба слота волны двумя задачами и проверяет, что третья не получает слот
+    private async Task<(string A, string B, Func<Task<ReviewTreeLease?>> TryThird)> FillSlotsAsync()
+    {
+        var (wave, project) = await MkRepoWithWaveAsync();
+        var user = _userStore.Add("rv-owner-" + Guid.NewGuid().ToString("N")[..6], "password123", "user");
+        var a = _tasks.Create(null, user.Id, new CreateTaskRequest("Ревью A"));
+        var b = _tasks.Create(null, user.Id, new CreateTaskRequest("Ревью B"));
+        (await _reviewPool.TryAcquireAsync(user.Id, project, wave, a.Id)).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(user.Id, project, wave, b.Id)).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(user.Id, project, wave, "третья")).Should().BeNull();
+        return (a.Id, b.Id, () => _reviewPool.TryAcquireAsync(user.Id, project, wave, "третья"));
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_УдалениеЗадачи_ОсвобождаетСлот()
+    {
+        var (a, _, tryThird) = await FillSlotsAsync();
+
+        _tasks.Delete(a);
+
+        (await tryThird()).Should().NotBeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ЗавершениеЗадачи_ОсвобождаетСлотНезависимоОтДоставки()
+    {
+        var (a, _, tryThird) = await FillSlotsAsync();
+        // «Уже доставлено»: доставка завершится на CAS, слот к этому моменту обязан быть свободен
+        _tasks.TryMarkCompletionDelivered(a);
+
+        _tasks.Update(a, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        (await tryThird()).Should().NotBeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_СтопЧеловека_ОсвобождаетСлот()
+    {
+        var (a, _, tryThird) = await FillSlotsAsync();
+        _tasks.MarkClaudeStarted(a, "sess-rv", DateTime.UtcNow);
+
+        await _sut.MarkStoppedByUserAsync("sess-rv");
+
+        (await tryThird()).Should().NotBeNull();
+    }
+
+    // ─── Слот ревью: запуск исполнителя ─────
+
+    private async Task<(TaskItem Task, Project Project, string Wave, string Sha)> ArrangeReviewLaunchAsync(
+        string role, bool withWorktree = true, string? deviceId = null)
+    {
+        var (wave, project) = await MkRepoWithWaveAsync();
+        var user = _userStore.Add("rv-run-" + Guid.NewGuid().ToString("N")[..6], "password123", "user");
+        if (deviceId is null) project = _projects.Create("Demo", project.RootPath, user.Id, user.Username);
+        else project = _projects.CreateLocal("Demo", project.RootPath, user.Id, deviceId);
+        var git = new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance);
+        var sha = (await git.LocalTipAsync(null, wave, "HEAD"))!;
+        var task = _tasks.Create(project.Id, user.Id, new CreateTaskRequest("Ревью волны",
+            WorktreePath: withWorktree ? wave : null));
+        var epic = _tasks.Create(project.Id, user.Id, new CreateTaskRequest("Эпик фичи"));
+        _tasks.Update(epic.Id, new UpdateTaskRequest(Role: TaskRoles.Feature));
+        _tasks.Update(task.Id, new UpdateTaskRequest(Role: role, FeatureId: epic.Id));
+        return (_tasks.GetById(task.Id)!, project, wave, sha);
+    }
+
+    private async Task<string> PromptOfAsync(TaskItem started)
+    {
+        var history = await _sessions.GetHistoryAsync(_tasks.GetById(started.Id)!.LinkedSessionId!);
+        return string.Join("\n", history.OfType<StoredUserMessage>().Select(m => m.Text));
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ЗапускРевью_ЧатВСлотеАбзацСShaВПостановке()
+    {
+        var (task, _, wave, sha) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+
+        await _sut.ExecuteAsync(task, auto: false);
+
+        var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
+        session.WorktreePath.Should().Be(Path.Combine(_slotBase, "feat~wave-review-1"));
+        session.WorktreePath.Should().NotBe(wave);
+        var prompt = await PromptOfAsync(task);
+        prompt.Should().Contain(sha).And.Contain("не коммить").And.NotContain("не вошли");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ГрязнаяВолна_ПутьФайлаВПостановкеСПометкой()
+    {
+        var (task, _, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        await File.WriteAllTextAsync(Path.Combine(wave, "dirty.txt"), "грязное\n");
+
+        await _sut.ExecuteAsync(task, auto: false);
+
+        var prompt = await PromptOfAsync(task);
+        prompt.Should().Contain("- dirty.txt").And.Contain("в проверяемый коммит не вошли");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_РольStep_ПулНеВызывается_ЧатВДереве_Волны()
+    {
+        var (task, _, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Step);
+
+        await _sut.ExecuteAsync(task, auto: false);
+
+        var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
+        session.WorktreePath.Should().Be(Path.GetFullPath(wave));
+        Directory.Exists(_slotBase).Should().BeFalse("слоты создаёт только пул");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_РевьюБезДерева_ПулНеВызывается()
+    {
+        var (task, _, _, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review, withWorktree: false);
+
+        await _sut.ExecuteAsync(task, auto: false);
+
+        _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!.WorktreePath.Should().BeNull();
+        Directory.Exists(_slotBase).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ЛокальныйПроект_ПулНеВызывается()
+    {
+        var (task, _, _, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review, deviceId: "dev-1");
+
+        try { await _sut.ExecuteAsync(task, auto: false); }
+        catch (Exception) { /* исполнение на устройстве в тесте недоступно — важно лишь, что слот не заведён */ }
+
+        Directory.Exists(_slotBase).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ПовторныйЗапуск_ВозвращаетЗадачеЕёСлот()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        // review-1 занят чужой задачей на время первого запуска: задача уходит в review-2
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "чужая")).Should().NotBeNull();
+        await _sut.ExecuteAsync(task, auto: false);
+        var slot2 = Path.Combine(_slotBase, "feat~wave-review-2");
+        _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!.WorktreePath.Should().Be(slot2);
+        _reviewPool.Release("чужая");
+        await _sessions.DeleteAsync(_tasks.GetById(task.Id)!.LinkedSessionId!); // прежний чат отработал и ушёл
+
+        await _sut.ExecuteAsync(_tasks.GetById(task.Id)!, auto: false);
+
+        _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!.WorktreePath.Should().Be(slot2,
+            "повторный запуск получает свой же слот, а не освободившийся соседний");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ТерминальнаяОстановкаИсполнителя_ОсвобождаетСлот()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        await _sut.ExecuteAsync(task, auto: false);
+        var session = _sessions.GetById(_tasks.GetById(task.Id)!.LinkedSessionId!)!;
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "вторая")).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().BeNull();
+
+        await _sut.OnSessionMessageAsync(session, new ErrorMessage(
+            "Failed to authenticate. API Error: 401 invalid access token or token expired",
+            ExpectResultFollows: true));
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+
+        _tasks.GetById(task.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.AuthFailedReason);
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().NotBeNull();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ФичаНаПаузе_ДержитСлот_ПотомExpiredОсвобождает()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        await _sut.ExecuteAsync(task, auto: false);
+        var started = _tasks.GetById(task.Id)!;
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "вторая")).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().BeNull();
+        // пауза помечает шаг, но слот не отпускает
+        _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.FeatureHeldReason);
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().BeNull();
+
+        // чат исполнителя за паузу удалён — продолжения не будет
+        await _sessions.DeleteAsync(started.LinkedSessionId!);
+        await _sut.ResumeFeatureTurnsAfterHold(started.FeatureId!, started.OwnerId!, FeatureHoldReasons.Manual);
+
+        _tasks.GetById(task.Id)!.ExecutorStopReason.Should().Be(ExecutorStopClassifier.FeatureHeldExpiredReason);
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "третья")).Should().NotBeNull();
+    }
+
+    // ─── Слот ревью: четыре пути выхода аренды (хвосты RV6) ─────
+    // Утечка аренды здесь = слот занят навсегда, ёмкость волны падает молча, поэтому каждый путь
+    // доказан одним и тем же: после выхода ОБА слота волны отдаются двум чужим задачам.
+
+    private async Task AssertBothSlotsFreeAsync(TaskItem task, Project project, string wave)
+    {
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "чужая-1")).Should().NotBeNull();
+        (await _reviewPool.TryAcquireAsync(task.OwnerId, project, wave, "чужая-2")).Should().NotBeNull(
+            "аренда задачи должна быть снята, иначе слот занят навсегда");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_ПовторныйЗапускБезДерева_ОсвобождаетПрежнийСлот()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        await _sut.ExecuteAsync(task, auto: false);
+        await _sessions.DeleteAsync(_tasks.GetById(task.Id)!.LinkedSessionId!);
+        // дерево задачи сняли: повторный запуск идёт без него и прежняя аренда не нужна
+        _tasks.Update(task.Id, new UpdateTaskRequest(WorktreePath: ""));
+
+        await _sut.ExecuteAsync(_tasks.GetById(task.Id)!, auto: false);
+
+        (await PromptOfAsync(task)).Should().NotContain("ДЕРЕВО РЕВЬЮ", "слота у задачи больше нет — абзаца про него быть не должно");
+        await AssertBothSlotsFreeAsync(task, project, wave);
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_СбойПостановки_ОсвобождаетСлотИПомечаетОшибку()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        // между отметкой запуска и постановкой чат исчезает — SendMessageAsync бросает «Сессия не найдена»
+        _onOwnerBroadcast = async msg =>
+        {
+            if (msg is TaskChangedMessage { Task.LinkedSessionId: { } sid })
+            {
+                _onOwnerBroadcast = null;
+                await _sessions.DeleteAsync(sid);
+            }
+        };
+
+        var act = () => _sut.ExecuteAsync(task, auto: false);
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        _tasks.GetById(task.Id)!.ClaudeResult.Should().Be("error");
+        await AssertBothSlotsFreeAsync(task, project, wave);
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task ReviewTree_СлотНеПривязалсяКЧату_ОсвобождаетСлот()
+    {
+        var (task, project, wave, _) = await ArrangeReviewLaunchAsync(TaskRoles.Review);
+        // проект исчезает посреди заведения слота: пул доводит слот до конца, а привязка к чату
+        // (она перечитывает проект) отказывает
+        _onSlotCwd = () => { _onSlotCwd = null; _projects.Delete(project.Id); };
+
+        try { await _sut.ExecuteAsync(task, auto: false); }
+        catch (Exception) { /* дальнейший ход без проекта не важен — важна судьба аренды */ }
+
+        await AssertBothSlotsFreeAsync(task, project, wave);
     }
 }

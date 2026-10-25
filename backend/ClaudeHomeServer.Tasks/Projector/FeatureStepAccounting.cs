@@ -217,6 +217,20 @@ internal static class FeatureStepAccounting
                 outcome = hasRound ? "running" : "pending";
                 status = hasRound ? "идёт" : "ждёт ревью";
             }
+            // Моменты ожидания и принятия (макет A2, плашка карточки) — из существующих полей,
+            // новой точки правды нет.
+            // Ожидание: статус «ждёт ревью» = все задачи цепочки закрыты и витков нет; начинается
+            // в момент закрытия последней из них. «Идёт» (открытый виток) и «вернулся» — не
+            // ожидание: null, фронт честно деградирует без времени. Грязные данные (закрытая
+            // задача без даты) — тоже null, а не «сейчас»: плашка остаётся честной «без времени».
+            DateTime? waitingSince = bucket == Review && featureRounds.Count == 0
+                ? ordered.Max(t => t.CompletedAt)
+                : null;
+            // Принятие: момент закрытия последнего витка-принятия — ровно того, что признал шаг
+            // (lastVerdict выше). Только у принятого шага; виток закрыт всегда (инвариант
+            // TaskManager: вердикт только у Done-задачи), поэтому дата есть.
+            DateTime? acceptedAt = outcome == Accepted ? featureRounds[^1].CompletedAt : null;
+
             bucketByKey[key] = bucket;
             string lane = FeatureProjector.NormalizeLane(head.Lane);
             laneByKey[key] = lane;
@@ -235,6 +249,8 @@ internal static class FeatureStepAccounting
                 TaskIds = ordered.Select(t => t.Id).ToList(),
                 Outcome = outcome,
                 Status = status,
+                WaitingSince = waitingSince,
+                AcceptedAt = acceptedAt,
                 DurationMinutes = Math.Max(0, Math.Round((end - start).TotalMinutes)),
                 Source = source,
                 Loops = loops,

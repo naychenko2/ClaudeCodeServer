@@ -32,6 +32,10 @@ public sealed class TestRunsSubsystem : IAppSubsystem
         // Замер интерфейса стенда (ui_probe) — на том же конвейере; без регистрации тулсет получает null
         // в optional-параметр и инструмент всегда отказывает
         services.AddSingleton<UiProbeService>();
+        // Предгейт шага (шов ITaskPregate): набор проверок — секция Pregate:*; на том же конвейере.
+        // Выключенная подсистема шов не регистрирует — потребитель берёт его через GetService
+        services.AddSingleton(PregateOptions.From(config));
+        services.AddSingleton<ITaskPregate, PregateService>();
         // Подсказка «тесты — через run_tests»: выключенная подсистема не объявляет и секцию
         services.AddPromptSectionContributor<TestRunsHintContributor>();
         // Подсказка «сборка — через build» (сервер dev): та же форма, свой гейт HasDevMcp

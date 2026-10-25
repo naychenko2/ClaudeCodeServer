@@ -91,7 +91,7 @@ import type { FeatureIndexFeature } from '../types/featureIndex';
 import type { Session, Persona } from '../types';
 
 // === фикстуры ===
-const feat = (id: string, bucket: 'running' | 'closed', chips: string[]): FeatureIndexFeature => ({
+const feat = (id: string, bucket: FeatureIndexFeature['bucket'], chips: string[]): FeatureIndexFeature => ({
   featureId: id, title: `Фича ${id}`, projectId: 'p1', bucket,
   attention: null, rail: [], chips: chips as FeatureIndexFeature['chips'],
   stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,
@@ -164,6 +164,15 @@ describe('FilterBar: п.2 футер «Показать N фич» (360, реж�
     // «Показать 1 фич» — футер режима «Фичи»; в «Дни» его нет (ищет точную фразу,
     // не «Показать», чтобы не словить заголовок секции «Показать только»).
     expect(findByText(body, 'Показать 1 фич'), '«Показать N фич» в режиме «Дни» (только в «Фичи»)').toBeNull();
+  });
+});
+
+describe('FilterBar: чип «Смержены»', () => {
+  it('чип рисуется, счётчик — по chips[] (merged=1)', async () => {
+    const features = [feat('g1', 'merged', ['open', 'merged']), feat('f1', 'running', ['open'])];
+    expect(featureChipCounts(features).merged).toBe(1);
+    const body = await renderOpenBar(features);
+    expect(findByText(body, 'Смержены'), 'чип «Смержены» отсутствует').not.toBeNull();
   });
 });
 

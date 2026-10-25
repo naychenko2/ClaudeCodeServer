@@ -185,6 +185,12 @@ afterEach(() => {
   uninstallFakeDom();
 });
 
+// Компактная карточка свёрнута: кнопка кода с меню живёт в раскрытой части — сначала раскрываем.
+function openCardMenu(c: N, stepRef: string) {
+  act(() => { (reactProps(byId(c, `prod-card-${stepRef}`)[0] as never)!.onClick as () => void)(); });
+  act(() => { (reactProps(byId(c, `prod-code-${stepRef}`)[0] as never)!.onClick as () => void)(); });
+}
+
 // ═══ Хронология ══════════════════════════════════════════════════════════════
 // «Производство» — лента карточек (W4-2F3): строки исполнителей остаются в других
 // этапах, переходы шага живут в меню карточки («старт · чат · задача») — пометки
@@ -223,7 +229,7 @@ describe('пометки: Хронология', () => {
   it('меню карточки: «чат» помечен «в архиве» (чат шага архивный в агрегате)', () => {
     const c = render(createElement(FeatureTimelineTab, { run: mkRun() }));
     // Ш2: чат шага c-arch — chatArchived исполнителя в агрегате.
-    act(() => { (reactProps(byId(c, 'prod-code-Ш2')[0] as never)!.onClick as () => void)(); });
+    openCardMenu(c, 'Ш2');
     const body = (globalThis as { document: { body: never } }).document.body as N;
     expect(textOf(byId(body, 'prod-menu-chat')[0]).includes('в архиве'), 'Ш2: видимое «в архиве»').toBe(true);
   });
@@ -231,7 +237,7 @@ describe('пометки: Хронология', () => {
   it('меню карточки: «задача» помечена «закрыта» (задача шага done)', () => {
     const c = render(createElement(FeatureTimelineTab, { run: mkRun() }));
     // Ш3: задача шага t-c — status done → «закрыта».
-    act(() => { (reactProps(byId(c, 'prod-code-Ш3')[0] as never)!.onClick as () => void)(); });
+    openCardMenu(c, 'Ш3');
     const body = (globalThis as { document: { body: never } }).document.body as N;
     expect(textOf(byId(body, 'prod-menu-task')[0]).includes('закрыта'), 'Ш3: видимое «закрыта»').toBe(true);
   });
@@ -241,7 +247,7 @@ describe('пометки: Хронология', () => {
     const run = mkRun({ stepChains: [chain('Ш1', 't-a', 'c-extra')] });
     const marks = buildNavMarks(run, [chatLink('c-extra', 't-a', true)]);
     const c = render(createElement(FeatureTimelineTab, { run, marks }));
-    act(() => { (reactProps(byId(c, 'prod-code-Ш1')[0] as never)!.onClick as () => void)(); });
+    openCardMenu(c, 'Ш1');
     const body = (globalThis as { document: { body: never } }).document.body as N;
     expect(textOf(byId(body, 'prod-menu-chat')[0]).includes('в архиве'), 'меню: «в архиве» по marks страницы').toBe(true);
   });

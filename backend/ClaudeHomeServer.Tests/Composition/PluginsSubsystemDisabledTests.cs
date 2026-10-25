@@ -126,7 +126,7 @@ public class PluginsSubsystemDisabledTests
         services.AddSingleton<IProjectManager>(new Mock<IProjectManager>().Object);
 
         using var sp = services.BuildServiceProvider();
-        return sp.GetServices<IMcpToolset>().Single(t => t is PluginsToolset) as PluginsToolset;
+        return (PluginsToolset)sp.GetServices<IMcpToolset>().Single(t => t is PluginsToolset);
     }
 
     [Fact]

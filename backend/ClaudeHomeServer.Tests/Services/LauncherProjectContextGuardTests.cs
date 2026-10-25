@@ -39,6 +39,7 @@ public class LauncherProjectContextGuardTests(ITestOutputHelper output)
         ["ClaudeHomeServer.Services.Git.GitService.RunAsync"] = (1, "файловая группа за guard'ом 3.3"),
         ["ClaudeHomeServer.Services.Git.GitService.HostGitPath"] = (1, "файловая группа за guard'ом 3.3"),
         ["ClaudeHomeServer.Services.Git.GitService.WorktreeAddAsync"] = (1, "файловая группа за guard'ом 3.3"),
+        ["ClaudeHomeServer.Services.Git.GitService.WorktreeAddDetachedAsync"] = (1, "файловая группа за guard'ом 3.3"),
         ["ClaudeHomeServer.Services.Git.GitService.WorktreeListAsync"] = (1, "файловая группа за guard'ом 3.3"),
         ["ClaudeHomeServer.Services.Git.GitService.WorktreeRemoveAsync"] = (1, "файловая группа за guard'ом 3.3"),
     };

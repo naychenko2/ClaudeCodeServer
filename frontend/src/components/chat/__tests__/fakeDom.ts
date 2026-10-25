@@ -174,8 +174,12 @@ class FDoc {
     return t;
   }
   createComment(text: string) { return this.createTextNode(text); }
-  addEventListener() {}
-  removeEventListener() {}
+  // Подписка document — настоящая, не no-op: обработчик Esc у Modal (ui/Modal.tsx)
+  // и ключевые слушатели ⋯-шторки висят именно на document. С no-op здесь тесты про
+  // Esc проверяли бы вакуум: «не закрылась» верно и без всякого обработчика.
+  listeners: Record<string, Set<unknown>> = {};
+  addEventListener(t: string, f: unknown) { (this.listeners[t] ??= new Set()).add(f); }
+  removeEventListener(t: string, f: unknown) { this.listeners[t]?.delete(f); }
 }
 
 // ── Глобальные: window (matchMedia для useIsMobile, dispatchEvent) + document (порталы) ──

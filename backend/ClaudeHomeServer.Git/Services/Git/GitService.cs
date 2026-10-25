@@ -1428,6 +1428,53 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         finally { sem.Release(); }
     }
 
+    // Создать linked worktree с detached HEAD на указанном sha (слот ревью: ветки нет).
+    public async Task WorktreeAddDetachedAsync(string? ownerId, string mainRoot, string worktreePath, string sha, CancellationToken ct = default)
+    {
+        ValidateRevision(sha);
+        var paths = launchers.ForOwner(ownerId).Paths;
+        var runtimePath = paths.ToRuntime(worktreePath);
+        var sem = LockFor(mainRoot);
+        await sem.WaitAsync(ct);
+        try
+        {
+            await RunOkAsync(ownerId, mainRoot, ["worktree", "add", "--detach", runtimePath, sha],
+                timeoutMs: NetworkTimeoutMs, ct: ct);
+        }
+        finally { sem.Release(); }
+    }
+
+    // Защищённый сброс слота ревью на sha. До записи проверяем: путь числится в `worktree list`,
+    // это не основное дерево, не locked и HEAD detached — иначе отказ без единой записи на диск.
+    // clean БЕЗ -x: игнорируемое (obj/, bin/, node_modules) выживает, сборка остаётся инкрементальной.
+    // detachBranched: слот заведомо наш, и ревьюер заветвился в нём — возвращаем в detached вместо отказа.
+    public async Task ResetReviewWorktreeAsync(string? ownerId, string mainRoot, string path, string sha,
+        bool detachBranched = false, CancellationToken ct = default)
+    {
+        ValidateRevision(sha);
+        var wanted = PathNormalizer.NormalizePath(path);
+        if (wanted == PathNormalizer.NormalizePath(mainRoot))
+            throw new GitCommandException("Сброс основного дерева запрещён");
+        // Проверка и запись под одним локом: иначе параллельный worktree add/remove
+        // успевает изменить список между чтением и сбросом
+        var sem = LockFor(mainRoot);
+        await sem.WaitAsync(ct);
+        try
+        {
+            var list = await WorktreeListAsync(ownerId, mainRoot, ct);
+            var info = list.FirstOrDefault(w => PathNormalizer.NormalizePath(w.Path) == wanted)
+                ?? throw new GitCommandException("Путь не числится среди worktree репозитория");
+            if (info.Branch is not null && !detachBranched)
+                throw new GitCommandException("Дерево стоит на ветке — это не слот ревью");
+            if (info.Locked)
+                throw new GitCommandException("Дерево заблокировано (locked)");
+
+            await RunOkAsync(ownerId, path, ["checkout", "--detach", "-f", sha], timeoutMs: NetworkTimeoutMs, ct: ct);
+            await RunOkAsync(ownerId, path, ["clean", "-fd"], ct: ct);
+        }
+        finally { sem.Release(); }
+    }
+
     public async Task<IReadOnlyList<GitWorktreeInfo>> WorktreeListAsync(string? ownerId, string mainRoot, CancellationToken ct = default)
     {
         if (!IsGitRepo(mainRoot)) return [];

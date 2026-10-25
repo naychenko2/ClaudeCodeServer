@@ -12,13 +12,15 @@ import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 // Общий паттерн мобильной и десктопной раскладки: одна реализация, не копипаста.
 // `children` — контент центра (в мобильной ветке — тернарник чат/задача/персона,
 // в десктопе — весь набор центральных режимов DesktopWorkspace).
-export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, onOpenFile, yielded = false, children }: {
+export function FeatureCenter({ open, featureId, projectId, projectOwnerId, isMobile, onBack, onOpenFile, yielded = false, children }: {
   // Страница открыта (featureId ≠ null).
   open: boolean;
   // Id эпика открытой страницы; null — страница закрыта.
   featureId: string | null;
   // Проект (область запроса индекса); null — чат вне проектов.
   projectId: string | null;
+  // Владелец проекта — гейт кнопки «Закрыть фичу» (F2) на странице фичи.
+  projectOwnerId?: string | null;
   isMobile: boolean;
   // Исполнитель «← назад»: закрывает страницу и ведёт в target.
   onBack: (t: FeaturePageBackTarget) => void;
@@ -37,7 +39,7 @@ export function FeatureCenter({ open, featureId, projectId, isMobile, onBack, on
   // (R14, рамка, тень, зазор centerGap — ровно как centerIsland у файла), на мобиле —
   // без острова (как и файл). Чат под страницей остаётся в DOM (display:none, не unmount).
   const page = (
-    <FeaturePage featureId={featureId!} projectId={projectId} isMobile={isMobile} onBack={onBack} onOpenFile={onOpenFile} />
+    <FeaturePage featureId={featureId!} projectId={projectId} projectOwnerId={projectOwnerId} isMobile={isMobile} onBack={onBack} onOpenFile={onOpenFile} />
   );
   // Видимость центра и страницы — взаимоисключающая: страница открыта, но не
   // уступила (yielded=false) → центр скрыт, страница видна; уступила (yielded=true)

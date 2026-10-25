@@ -47,7 +47,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // осиротевший дефолт (как в AuthController.Me для личной)
         var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
             ? dpid : null;
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.SubjectRegistry, p.SubjectsSweepSince, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
+        // OwnerId — часть контракта (ревью F2): фронтовые гейты «только владелец» читают
+        // поле; API отдаёт только проекты запросившего, поэтому это всегда его id
+        return new { p.Id, p.OwnerId, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.SubjectRegistry, p.SubjectsSweepSince, Icon = ProjectIconDto(p.Icon), p.McpServersOn, p.HandsEnabled, HandsRefusal = HandsToggleRefusal(p, device), Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey, p.AutoImportDossiers, p.ArchiveAfterDays, p.DeviceId, Device = DeviceDto(device), Capabilities = ProjectCapabilities.For(p, device), FolderNotice = folderNotice };
     }
 
     // Можно ли включить руки проекта (ADR-016 §7): матрица без тумблера самого проекта —
@@ -552,6 +554,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
                 try { await git.WorktreeRemoveAsync(p.OwnerId, p.RootPath, wt, force: true); }
                 catch { /* дерево могло быть удалено руками — запись подчистит prune */ }
             }
+        }
+
+        // Слоты ревью волн проекта (detached-деревья рядом с деревьями чатов): сносим все разом —
+        // они покрывают и слоты снесённых выше деревьев волн, и осиротевшие. Локальному проекту
+        // слоты не выдаются, а серверный git до его дерева не дотянется
+        if (ProjectCapabilities.FilesOnServer(p)
+            && HttpContext.RequestServices.GetService<ReviewTreePool>() is { } reviewPool)
+        {
+            try { await reviewPool.RemoveSlotsOfProjectAsync(p.OwnerId, p); }
+            catch (Exception ex) { logger.LogWarning(ex, "Слоты ревью проекта {ProjectId} не снесены", id); }
         }
 
         // База знаний проекта: Dify-датасет + запись WorkspaceKnowledge. Датасет общий для

@@ -1173,6 +1173,7 @@ public class TaskManagerTests : IDisposable
         // Update merge-задачи БЕЗ смены роли и фичи (только заголовок) — гард молчит,
         // хотя финал уже не принят: роль не стала merge, фича не перенесена.
         var updated = _sut.Update(merge.Id, new UpdateTaskRequest(Title: "мерж (правка)"));
+        if (updated is null) throw new InvalidOperationException("Update merge-задачи вернул null");
 
         updated.Role.Should().Be(TaskRoles.Merge);
         updated.FeatureId.Should().Be(epic.Id);

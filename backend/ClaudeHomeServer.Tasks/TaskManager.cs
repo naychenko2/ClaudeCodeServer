@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.Extensions.Logging;
@@ -82,10 +83,27 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // TaskExecutionService.TryDeliverCompletionAsync (join сигналов R/D, см. CompletionDelivered).
     public event Action<TaskItem>? TaskCompleted;
 
+    // Задача удалена (по id либо вместе с проектом): подписчик освобождает занятые под неё ресурсы
+    public event Action<TaskItem>? TaskDeleted;
+
+    // Предгейт шага дал второй красный подряд по той же причине (NC-P1b): подписчик докладывает
+    // постановщику. Текст — готовый, с выводом гейта
+    public event Action<TaskItem, string>? PregateEscalated;
+
+    // Гейт «предгейт перед закрытием шага» (NC-P1b): включён, когда подсистема test-runs не выключена
+    // и есть читатель коммита дерева. Нет читателя (тесты без гейта) или выключенная подсистема —
+    // шаг закрывается как раньше
+    private readonly IWorktreeHeadReader? _heads;
+    private readonly bool _pregateGateOn;
+
     public TaskManager(IConfiguration config, IProjectEventLogService? events = null,
         ITaskNotificationDispatcher? notif = null, IPersonaLookup? personas = null,
-        FeatureJournalStore? journal = null, ILogger<TaskManager>? log = null)
+        FeatureJournalStore? journal = null, ILogger<TaskManager>? log = null,
+        IWorktreeHeadReader? heads = null)
     {
+        _heads = heads;
+        _pregateGateOn = heads is not null
+            && SubsystemGate.IsEnabled(config, "test-runs");
         _events = events;
         _notif = notif;
         _personas = personas;
@@ -747,11 +765,35 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // ТОЛЬКО гардом против затирания снятой задачи: человек вправе вернуть снятую задачу
     // в работу и снять пометку, а агенту мы обязаны отказать внятно — иначе «200 OK и
     // ничего не изменилось» (находка фикс-волны 4, мутация в TaskManagerTests).
+    public const string FeatureCloseDeniedText =
+        "Фичу закрывает человек: прямая просьба ассистенту или переводом карточки в «Готово».";
+
+    /// <summary>Отказ закрыть эпик фичи не из чата человека; наследник InvalidOperationException — старые catch-и (400/Deny) его тоже ловят.</summary>
+    public sealed class FeatureCloseDeniedException() : InvalidOperationException(FeatureCloseDeniedText);
+
+    public const string FeatureReopenDeniedText =
+        "Фичу возобновляет человек: прямая просьба ассистенту или кнопка «Возобновить».";
+
+    /// <summary>Отказ возобновить закрытый эпик фичи не из чата человека; симметричен FeatureCloseDeniedException (дефект df85c799).</summary>
+    public sealed class FeatureReopenDeniedException() : InvalidOperationException(FeatureReopenDeniedText);
+
     public TaskItem? Update(string id, UpdateTaskRequest req, BoardColumn? effectiveColumn = null,
-        bool isAgentCall = false, bool callerIsExecutor = false)
+        bool isAgentCall = false, bool callerIsExecutor = false, bool denyFeatureClose = false,
+        bool denyFeatureReopen = false)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
+        // Эпик фичи закрывает только человек: чат-исполнитель любой задачи и делегированный ход (вызыватель
+        // считает denyFeatureClose) переводить role=feature в Done не вправе. Проверка до мутаций.
+        if (denyFeatureClose && task.Role == TaskRoles.Feature
+            && req.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done)
+            throw new FeatureCloseDeniedException();
+        // Симметричный гард (дефект df85c799): обратный переход Done → Todo для эпика фичи из чата
+        // исполнителя молча отменяет решение человека о закрытии. Предикат вызывающего тот же, что у
+        // закрытия (denyFeatureReopen): чат человека проходит. Проверка до мутаций.
+        if (denyFeatureReopen && task.Role == TaskRoles.Feature
+            && task.Status == TaskItemStatus.Done && req.Status is not null && req.Status != TaskItemStatus.Done)
+            throw new FeatureReopenDeniedException();
         var statusBefore = task.Status;
         // Снимок 6 полей ДО мутации — для журнала фичи (WriteJournalTransitions перед ScheduleSave).
         var before = Capture(task);
@@ -848,6 +890,25 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // что и при применении полей ниже.
         var effFeatureId = req.FeatureId is null ? task.FeatureId : Trimmed(req.FeatureId);
         var effRole = req.Role is null ? task.Role : Trimmed(req.Role);
+        // Предгейт шага: закрытие step|rework с деревом требует свежего зелёного результата по текущему
+        // коммиту. Роль и дерево берутся и «до», и «после» запроса: смена роли (step→cut) или сброс дерева
+        // в том же запросе, что и закрытие, гейт не обходит
+        var effWorktree = req.WorktreePath is null ? task.WorktreePath : Trimmed(req.WorktreePath);
+        if (_pregateGateOn && effective.Status == TaskItemStatus.Done && task.Status != TaskItemStatus.Done
+            && PregateRules.GatedPath(task.Role, effRole, task.WorktreePath, effWorktree) is { } gatedPath)
+        {
+            var refusal = PregateRules.TreeSwapRefusal(task.WorktreePath, effWorktree)
+                ?? PregateRules.Refusal(task.Pregate, _heads!.Head(gatedPath));
+            if (refusal is not null) throw new InvalidOperationException(refusal);
+        }
+        // Сброс исчерпанной серии красных — решение постановщика или человека, не исполнителя шага
+        if (req.ResetPregate == true && callerIsExecutor)
+            throw new InvalidOperationException(
+                "Исполнитель не может сбросить результат предгейта своей задачи: после двух красных решение за постановщиком.");
+        // Сброс — только исчерпанной серии: иначе им стирали бы свежий зелёный или красный первого круга
+        if (req.ResetPregate == true && !PregateRules.Exhausted(task.Pregate))
+            throw new InvalidOperationException(
+                "Сбросить предгейт можно только после исчерпанной серии красных (два подряд по одной причине); сейчас серия не исчерпана.");
         var effVerdict = (req.Verification ?? task.Verification)?.Verdict;
         var effReviewOf = req.ReviewOf is null ? task.ReviewOf : req.ReviewOf;
         var effPersonaId = req.PersonaId is null ? task.PersonaId : (req.PersonaId == "" ? null : req.PersonaId);
@@ -912,6 +973,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             task.ModelTier = ModelTiers.TryParse(req.ModelTier, out var tier) ? tier : null;
         // Дерево чата-исполнителя: null = не менять, "" (и пробелы) = сбросить
         if (req.WorktreePath is not null) task.WorktreePath = Trimmed(req.WorktreePath);
+        if (req.ResetPregate == true) task.Pregate = null;
         if (req.WorktreeBranch is not null) task.WorktreeBranch = Trimmed(req.WorktreeBranch);
         if (req.ExecutorLaunchedBySessionId is not null) task.ExecutorLaunchedBySessionId = Trimmed(req.ExecutorLaunchedBySessionId);
         if (req.ExecutorLaunchedByPersonaId is not null) task.ExecutorLaunchedByPersonaId = Trimmed(req.ExecutorLaunchedByPersonaId);
@@ -1011,6 +1073,23 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             TaskCompleted?.Invoke(task);
         }
         return task;
+    }
+
+    // Записывает результат предгейта шага: sha — коммит, по которому гнали проверки; redKey —
+    // отпечаток причины красного (имена красных проверок). На втором красном подряд по той же
+    // причине поднимает PregateEscalated. null — задачи нет
+    public PregateRecord? RecordPregate(string id, string sha, bool green, string summary, string? redKey, bool nothingApplicable = false)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        var record = PregateRules.Next(task.Pregate, sha, green, summary, redKey, DateTime.UtcNow, nothingApplicable);
+        task.Pregate = record;
+        task.UpdatedAt = DateTime.UtcNow;
+        ScheduleSave();
+        if (!green && !nothingApplicable && record.RedStreak == PregateRules.MaxRedStreak)
+            PregateEscalated?.Invoke(task, $"Предгейт шага «{task.Title}» (id: {task.Id}) красный второй раз подряд по той же причине "
+                + $"(коммит {(sha.Length > 8 ? sha[..8] : sha)}). Третьего круга нет — нужно решение постановщика.\n{summary}");
+        return record;
     }
 
     // Следующий экземпляр регулярной задачи после завершения текущего.
@@ -1469,7 +1548,14 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         DeleteJournalFor(task);
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskDeleted, $"Удалена задача «{task.Title}»");
+        RaiseTaskDeleted(task);
         return true;
+    }
+
+    private void RaiseTaskDeleted(TaskItem task)
+    {
+        try { TaskDeleted?.Invoke(task); }
+        catch (Exception ex) { _log?.LogError(ex, "Подписчик TaskDeleted упал на задаче {TaskId}", task.Id); }
     }
 
     // Зачистка при удалении проекта
@@ -1483,6 +1569,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             DeleteJournalFor(t);
         }
         if (removed.Count > 0) ScheduleSave();
+        foreach (var t in removed) RaiseTaskDeleted(t);
         return removed.Select(t => t.Id).ToList();
     }
 
@@ -1745,6 +1832,9 @@ public record UpdateTaskRequest(
     // Исполнитель-чат своей задачи критерии не меняет (TaskManager.Update, callerIsExecutor)
     List<AcceptanceCriterion>? Acceptance = null,
     // Свидетельства: null = не менять, список = добавить/заменить по criterionId
-    List<AcceptanceEvidence>? Evidence = null);
+    List<AcceptanceEvidence>? Evidence = null,
+    // true — сбросить результат предгейта шага (серия красных начинается заново). Только постановщик или
+    // человек: исполнитель своей задачи получит отказ (NC-P1b)
+    bool? ResetPregate = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);

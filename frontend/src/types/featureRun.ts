@@ -217,6 +217,10 @@ export interface FeatureStepChain {
   rounds: FeatureRound[];
   // Б7: чат исполнителя шага (LinkedSessionId, fail-closed); null — нет.
   chatId: string | null;
+  // Когда шаг начал ждать ревью и когда принят (ISO). Поля делает бэк; пока их нет —
+  // лента показывает только слово состояния без времени.
+  waitingSince?: string | null;
+  acceptedAt?: string | null;
 }
 
 // Возвраты одного источника (ревью/проверка/финал) (бэк: `FeatureSourceReturns`).
@@ -362,8 +366,8 @@ export interface FeatureRun {
   // W4-ANB: «тихо» — не закрыта, ни одна задача не идёт, ≥24 ч без активности (граница включена).
   // Считает бэк (FeatureProjector.cs:494); фронт только показывает. Аддитивное: старые ответы не несут.
   quiet?: boolean;
-  // Закрыта: merge-задача Done или эпик Done.
+  // Закрыта: эпик Done (смерженная фича с открытым эпиком — не закрыта).
   closed?: boolean;
-  // Итог смерженной фичи: только у закрытой, иначе null.
+  // Итог смерженной фичи (у закрытой и у смерженной с открытым эпиком); иначе null.
   summary?: FeatureSummary | null;
 }

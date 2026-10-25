@@ -33,11 +33,14 @@ public sealed class TestsToolset(
     UiProbeService? probe = null,
     // Реестр «Сервисов» (вертикаль ProjectServices): по нему service резолвится в адрес живого стенда
     DevServerService? devServer = null,
-    ProjectServiceDiscovery? discovery = null) : IMcpParameterizedToolset
+    ProjectServiceDiscovery? discovery = null,
+    // Запуск предгейта шага (NC-P1b); нет — инструмент pregate отказывает
+    TaskPregateService? pregate = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.TestsName;
     public const string ToolName = "run_tests";
     public const string UiProbeName = "ui_probe";
+    public const string PregateName = "pregate";
 
     internal const string LocalProjectReason =
         "Тесты локального проекта прогоняй Bash'ем на устройстве: run_tests работает только с проектами на сервере.";
@@ -64,6 +67,7 @@ public sealed class TestsToolset(
         McpToolCallContext context, CancellationToken ct)
     {
         if (tool == UiProbeName) return await CallUiProbeAsync(arguments, context, ct);
+        if (tool == PregateName) return await CallPregateAsync(context, ct);
         if (tool != ToolName) throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         if (!_caller.TryResolveSession(context, Refusals, out var session, out var error)) return Deny(error);
         if (runs is null)
@@ -126,6 +130,18 @@ public sealed class TestsToolset(
         }
         // Упавшие тесты — штатный исход вызова, а не ошибка инструмента; ошибка — только отказ
         return new McpToolCallResult(runs.FormatResult(result), IsError: result.Refusal is not null);
+    }
+
+    // Предгейт шага своей задачи: проверки из секции Pregate идут в дереве шага, зелёный результат с sha
+    // коммита пишется в задачу и открывает tasks_complete. Задачу берём из сессии-вызывателя, не из аргумента
+    private async Task<McpToolCallResult> CallPregateAsync(McpToolCallContext context, CancellationToken ct)
+    {
+        if (!_caller.TryResolveSession(context, Refusals, out var session, out var error)) return Deny(error);
+        if (pregate is null) return Deny("Предгейт выключен на этом сервере — шаг закрывается без него.");
+        if (session.TaskId is not { } taskId) return Deny("Предгейт запускается из чата-исполнителя задачи: у этого чата задачи нет.");
+        var outcome = await pregate.RunAsync(context.OwnerId, taskId, session.Id, ct);
+        // Красный вердикт — штатный исход вызова, а не ошибка инструмента
+        return new McpToolCallResult(outcome.Text, IsError: outcome.Status != TaskPregateStatus.Recorded);
     }
 
     // ui_probe: те же гейты вызывателя, что у run_tests (процесс исполняет код из node_modules проекта)
@@ -649,6 +665,14 @@ public sealed class TestsToolset(
                     },
                 },
             }),
+        new(PregateName,
+            "Предгейт шага твоей задачи (role=step|rework с собственным деревом): детерминированные проверки из секции "
+            + "Pregate (tsc, lint:design, сборка с -warnaserror, сторожа границ, ui_probe) в дереве задачи. "
+            + "Зелёный результат с sha текущего коммита записывается в задачу, без него tasks_complete шага отказывает. "
+            + "Закоммить правки ДО вызова: результат привязан к коммиту. Второй красный подряд по той же причине — "
+            + "доклад постановщику (chats_report_up, blocker: true), третьего круга нет. Встаёт в общую очередь сборок, "
+            + "останавливается по «Стоп».",
+            new JsonObject { ["type"] = "object", ["properties"] = new JsonObject() }),
         new(UiProbeName,
             "Замер интерфейса УЖЕ ПОДНЯТОГО стенда цифрами (headless Chromium, только чтение, без скриншотов и "
             + "оценок): интерактивные элементы с любой стороной меньше порога, горизонтальное переполнение "

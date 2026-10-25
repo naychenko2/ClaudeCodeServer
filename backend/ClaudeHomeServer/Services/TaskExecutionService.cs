@@ -116,6 +116,11 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // (Tasks:ExecutorStaleMinutes, дефолт 15). Тем же порогом меряется и второй шаг —
     // молчание ПОСЛЕ напоминания.
     private readonly TimeSpan _staleAfter;
+    // Изолированное дерево ревью: слот на коммите волны вместо живого дерева исполнителя.
+    // null — пул не подключён (тесты без него): ревьюер стартует в дереве волны, как раньше.
+    private readonly ReviewTreePool? _reviewTrees;
+    // Потолок списка грязных путей дерева волны в постановке ревьюера
+    private const int ReviewDirtyPathsLimit = 30;
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
@@ -132,9 +137,11 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // исполнителя тихо пропускается (BuildNotesContextAsync).
         INoteSemanticIndex? kb = null,
         IProjectManager? projects = null,
-        Execution.IProjectDeviceGate? deviceGate = null)
+        Execution.IProjectDeviceGate? deviceGate = null,
+        ReviewTreePool? reviewTrees = null)
     {
         _deviceGate = deviceGate;
+        _reviewTrees = reviewTrees;
         _staleAfter = TimeSpan.FromMinutes(
             int.TryParse(config["Tasks:ExecutorStaleMinutes"], out var stale) && stale > 0 ? stale : 15);
         _subagentRuns = subagentRuns;
@@ -185,6 +192,25 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // раньше или позже R-сигнала (ResultMessage хода, точка A ниже) — TaskManager.Update
         // единственный путь в Done, поднимает событие ровно на переходе
         _tasks.TaskCompleted += OnTaskCompleted;
+        _tasks.TaskDeleted += t => ReleaseReviewTree(t.Id);
+        // Предгейт шага красный второй раз подряд по той же причине: доклад постановщику (NC-P1b)
+        _tasks.PregateEscalated += (t, text) => _ = ReportPregateEscalationAsync(t, text);
+    }
+
+    // Синхронное событие TaskManager → фон: доклад идёт чатом исполнителя вверх (ReportUpAsync сам
+    // вычисляет адресата), ошибки логируем — доставка не должна ронять вызов предгейта
+    private async Task ReportPregateEscalationAsync(TaskItem task, string text)
+    {
+        if (task.LinkedSessionId is null || task.OwnerId is null) return;
+        try
+        {
+            var result = await _sessions.ReportUpAsync(task.LinkedSessionId, "⛔ " + text, task.OwnerId, withTurn: true);
+            _log.LogInformation("Предгейт задачи {TaskId}: доклад постановщику — {Outcome}", task.Id, result);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Не удалось доложить постановщику о втором красном предгейте задачи {TaskId}", task.Id);
+        }
     }
 
     // Предусловие ухода цикла в фазу waiting. Задача «живая делегированная» = поставлена
@@ -356,18 +382,47 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // стартует сразу в нём. Дерево уже существует — только присваиваем поля свежей
         // сессии до первого хода, cwd подставит EnsureProcessAsync. Невалидный путь не
         // должен ронять запуск: мягко деградируем в корень проекта.
-        if (task.WorktreePath is { } worktree && task.ProjectId is not null
-            && !await _sessions.AttachWorktreeAsync(session.Id, worktree, task.WorktreeBranch))
-            _log.LogWarning("Дерево {Worktree} задачи {TaskId} не подошло (нет на диске либо не числится " +
-                "в git worktree list проекта) — исполнитель стартует в корне проекта", worktree, task.Id);
+        // Повторный запуск той же задачи: прежняя аренда в пуле остаётся — Reserve отдаст задаче
+        // её же слот. Единственный источник правды об аренде — пул; здесь держим лишь выданную
+        // сейчас аренду ради абзаца в постановке
+        ReviewTreeLease? reviewLease = null;
+        if (task.WorktreePath is not { } worktree || task.ProjectId is null)
+            ReleaseReviewTree(task.Id);
+        else
+        {
+            var attached = false;
+            if (await TryLeaseReviewTreeAsync(task, worktree) is { } lease)
+            {
+                if (await _sessions.AttachWorktreeAsync(session.Id, lease.SlotPath, null))
+                {
+                    attached = true;
+                    reviewLease = lease;
+                }
+                else
+                {
+                    ReleaseReviewTree(task.Id);
+                    _log.LogWarning("Слот ревью {Slot} задачи {TaskId} не привязался к чату — ревьюер " +
+                        "стартует в дереве волны", lease.SlotPath, task.Id);
+                }
+            }
+            if (!attached && !await _sessions.AttachWorktreeAsync(session.Id, worktree, task.WorktreeBranch))
+                _log.LogWarning("Дерево {Worktree} задачи {TaskId} не подошло (нет на диске либо не числится " +
+                    "в git worktree list проекта) — исполнитель стартует в корне проекта", worktree, task.Id);
+        }
 
         ApplyLauncher(task, launcher);
-        var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
-            ?? throw new InvalidOperationException("Задача удалена");
+        var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow);
+        if (updated is null)
+        {
+            ReleaseReviewTree(task.Id);
+            throw new InvalidOperationException("Задача удалена");
+        }
         await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", updated));
 
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
             ResolveCategoryProfilesPath(task), ResolveRulesTemplate(session.Id, task.OwnerId));
+        if (reviewLease is not null)
+            prompt += BuildReviewTreeSection(reviewLease);
         // Обогащение контекста семантически близкими заметками
         var notesBlock = await BuildNotesContextAsync(updated);
         prompt += notesBlock;
@@ -397,6 +452,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             // Отметка запуска уже стоит (без неё первые события хода не нашли бы задачу), а
             // постановка не ушла: итог «error», чтобы задача не выглядела идущей в работе
             _log.LogError(ex, "Постановка исполнителю задачи {TaskId} не отправлена", task.Id);
+            ReleaseReviewTree(task.Id);
             if (_tasks.MarkClaudeResult(task.Id, "error") is { } failed)
                 await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", failed));
             throw;
@@ -791,6 +847,51 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
     }
 
+    // Аренда слота ревью: только серверный проект и дерево волны, отличное от корня проекта.
+    // null — пул не нужен или слотов нет: вызывающий остаётся на дереве волны (старое поведение).
+    private async Task<ReviewTreeLease?> TryLeaseReviewTreeAsync(TaskItem task, string waveTree)
+    {
+        if (_reviewTrees is null || task.Role != TaskRoles.Review || task.ProjectId is null) return null;
+        if (_projects?.GetById(task.ProjectId) is not { } project || !ProjectCapabilities.FilesOnServer(project))
+            return null;
+        if (PathNormalizer.NormalizePath(waveTree) == PathNormalizer.NormalizePath(project.RootPath)) return null;
+        try
+        {
+            var lease = await _reviewTrees.TryAcquireAsync(task.OwnerId, project, waveTree, task.Id);
+            if (lease is null)
+                _log.LogInformation("Задача {TaskId}: оба слота ревью волны заняты — ревьюер стартует в дереве волны",
+                    task.Id);
+            return lease;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Задача {TaskId}: слот ревью не получен — ревьюер стартует в дереве волны", task.Id);
+            return null;
+        }
+    }
+
+    private void ReleaseReviewTree(string taskId) => _reviewTrees?.Release(taskId);
+
+    internal static string BuildReviewTreeSection(ReviewTreeLease lease)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("## ДЕРЕВО РЕВЬЮ");
+        sb.AppendLine($"Дерево ревью на коммите `{lease.Sha}`. Правки здесь никуда не уедут, не коммить. " +
+                      "При повторном запуске задачи берётся свободный слот волны (не обязательно тот же) и сбрасывается на актуальный коммит (`checkout --detach -f` и `clean -fd`): незакоммиченные правки прошлых ходов в нём пропадут. Оба слота заняты или слот не удалось сбросить — задача стартует в дереве волны, и этого абзаца в постановке нет. " +
+                      "Первый прогон тестов — со сборкой, без `no_build`. " +
+                      "Дерево освобождается после завершения задачи или «Стопа» исполнителя; на паузе фичи оно остаётся за тобой до снятия паузы.");
+        if (lease.DirtyPaths.Count > 0)
+        {
+            sb.AppendLine("Незакоммиченные правки дерева волны (эти правки в проверяемый коммит не вошли):");
+            foreach (var path in lease.DirtyPaths.Take(ReviewDirtyPathsLimit))
+                sb.AppendLine($"- {path}");
+            if (lease.DirtyPaths.Count > ReviewDirtyPathsLimit)
+                sb.AppendLine($"- …ещё {lease.DirtyPaths.Count - ReviewDirtyPathsLimit}");
+        }
+        return sb.ToString();
+    }
+
     // Секция КОНТЕКСТ — общая для обеих веток сборки (шаблон и встроенный фолбэк).
     private static void AppendContextSection(StringBuilder sb, TaskItem task)
     {
@@ -1142,6 +1243,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (task.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason) return null;
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.InterruptedByUserReason);
         if (stopped is null) return null;
+        ReleaseReviewTree(task.Id);
         await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
         return stopped;
     }
@@ -1268,6 +1370,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 }
                 if (marked is null) continue;
                 expired++;
+                // Чат удалён, продолжения не будет: слот, державшийся паузой, отдаём
+                ReleaseReviewTree(t.Id);
                 // R-HOLD-J (п.2): сбой рассылки не обрывает цикл: пометка уже сменена,
                 // остальные шаги продолжают, карточка оркестратору уходит.
                 try
@@ -1507,6 +1611,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     private async Task HandleExecutorStoppedAsync(TaskItem task, string reason)
     {
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, reason) ?? task;
+        ReleaseReviewTree(task.Id);
         await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
 
         var persona = stopped.PersonaId is not null ? _personas.Get(stopped.PersonaId, stopped.OwnerId!) : null;
@@ -1569,6 +1674,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // уводим в фон. Ошибки логируем — фоновая доставка не должна ронять вызывающий PUT/MCP-запрос.
     private void OnTaskCompleted(TaskItem task)
     {
+        // Слот ревью освобождаем сразу и независимо от того, доставлен ли уже доклад
+        ReleaseReviewTree(task.Id);
         _ = Task.Run(async () =>
         {
             try { await TryDeliverCompletionAsync(task); }

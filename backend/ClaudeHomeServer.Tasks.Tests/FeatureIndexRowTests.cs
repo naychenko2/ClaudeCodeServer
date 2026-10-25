@@ -92,8 +92,9 @@ public class FeatureIndexRowTests
     // ── 1b. state: поле строки индекса (единая точка правда bucket) ───────────────────────────
 
     // Строка несёт state (FeatureRun.State); bucket выводится из него. Проверяем: state
-    // присутствует в строке и согласован с bucket (merging → running, merge_pending → attention,
-    // merged/closed → closed, running → running, not_started/idle → idle).
+    // присутствует в строке и согласован с bucket: merged → merged (эпик открыт) / closed (эпик Done),
+    // closed → closed, merging/running → running, stopped/waiting/merge_pending → attention,
+    // not_started/idle → idle.
     [Fact]
     public void Строка_State_ПрисутствуетИСогласованСBucket()
     {
@@ -115,7 +116,7 @@ public class FeatureIndexRowTests
         rowP.State.Should().Be(FeatureStates.MergePending, "финал принят, мержа нет → state=merge_pending");
         rowP.Bucket.Should().Be("attention", "merge_pending → bucket=attention (ждёт мержа)");
 
-        // merged: merge Done + финал принят → state=merged, bucket=closed.
+        // merged: merge Done + финал принят → state=merged, bucket=merged (эпик открыт).
         var epicMg = Epic("epic-state-merged");
         var finalMg = Child("f1", "epic-state-merged", role: TaskRoles.Final, status: TaskItemStatus.Done);
         finalMg.CompletedAt = t;
@@ -123,7 +124,9 @@ public class FeatureIndexRowTests
         var mergeDone = Child("m1", "epic-state-merged", role: TaskRoles.Merge, status: TaskItemStatus.Done);
         var rowMg = Row(epicMg, [epicMg, finalMg, mergeDone]);
         rowMg.State.Should().Be(FeatureStates.Merged, "merge Done + финал принят → state=merged");
-        rowMg.Bucket.Should().Be("closed", "merged → bucket=closed");
+        rowMg.Bucket.Should().Be("merged", "merged при открытом эпике → bucket=merged");
+        rowMg.Chips.Should().Equal("open", "merged");
+        rowMg.Summary.Should().NotBeNull("у смерженной mergedAt виден");
 
         // closed: эпик Done, мержа нет → state=closed, bucket=closed.
         var epicC = Epic("epic-state-closed");

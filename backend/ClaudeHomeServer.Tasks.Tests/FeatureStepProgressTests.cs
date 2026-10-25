@@ -241,6 +241,69 @@ public class FeatureStepProgressTests
         run.StepChains.Single().Outcome.Should().Be("running");
     }
 
+    // ─── Ожидание и принятие (макет A2, плашка карточки) ──────────────────────────────────────
+
+    // WaitingSince = момент закрытия ПОСЛЕДНЕЙ задачи цепочки (шаг становится обозреваемым
+    // только когда всё закрыто), а не первого. Мутация «Min вместо Max» краснит этот тест.
+    [Fact]
+    public void ЖдётРевью_WaitingSince_МоментЗакрытияПоследнейЗадачи()
+    {
+        var run = Run(Feature(), Step("s", "Ш1", 1), Rework("w", "Ш1", 8));
+
+        var chain = run.StepChains.Single();
+        chain.Outcome.Should().Be("pending");
+        chain.WaitingSince.Should().Be(T0.AddMinutes(9), "ожидание начинается с закрытия доработки, не шага");
+        chain.AcceptedAt.Should().BeNull("принятия нет");
+    }
+
+    // Грязные данные: закрытая задача без CompletedAt. Фолбэк «?? nowUtc» подставил бы
+    // «сейчас» (плашка «0 мин»); без фолбэка — честный null. Мутация «вернуть ?? nowUtc»
+    // (FeatureStepAccounting.cs:226) краснит этот тест.
+    [Fact]
+    public void ГрязныеДанные_БезДатыЗакрытия_ОжиданияНет_НеСейчас()
+    {
+        var step = Step("s", "Ш1", 1);
+        step.CompletedAt = null;
+        var run = Run(Feature(), step);
+
+        var chain = run.StepChains.Single();
+        chain.Outcome.Should().Be("pending");
+        chain.WaitingSince.Should().BeNull("нет даты — null, а не «сейчас»");
+        chain.AcceptedAt.Should().BeNull();
+    }
+
+    // AcceptedAt = CompletedAt витка-принятия. Мутация «featureRounds[0] вместо [^1]» краснит
+    // этот тест: первый виток здесь returned (закрыт +6), принятие — второй (+13).
+    [Fact]
+    public void Принят_AcceptedAt_МоментЗакрытияПоследнегоПринятия_ОжиданияНет()
+    {
+        var run = Run(Feature(), Step("s", "Ш1", 1),
+            Verdict("r1", TaskRoles.Review, TaskVerdicts.Returned, 5, "s"),
+            Rework("w", "Ш1", 8),
+            Verdict("r2", TaskRoles.Review, TaskVerdicts.AcceptedWithRemarks, 12, "s"));
+
+        var chain = run.StepChains.Single();
+        chain.Outcome.Should().Be("accepted");
+        chain.AcceptedAt.Should().Be(T0.AddMinutes(13), "принял последний accepted-виток (r2)");
+        chain.WaitingSince.Should().BeNull("шаг не ждёт — принят");
+    }
+
+    // «Идёт» (открытый виток) и «закрыт без повторного ревью» (returned) — не ожидание:
+    // плашка деградирует честно, без времени.
+    [Fact]
+    public void ИдущийВитокИлиВозврат_НиОжиданияНиПринятия()
+    {
+        var running = Run(Feature(), Step("s", "Ш1", 1), Verdict("r", TaskRoles.Review, null, 5, "s")).StepChains.Single();
+        running.Outcome.Should().Be("running");
+        running.WaitingSince.Should().BeNull();
+        running.AcceptedAt.Should().BeNull();
+
+        var returned = Run(Feature(), Step("s", "Ш1", 1), Verdict("r", TaskRoles.Review, TaskVerdicts.Returned, 5, "s")).StepChains.Single();
+        returned.Outcome.Should().Be("returned");
+        returned.WaitingSince.Should().BeNull();
+        returned.AcceptedAt.Should().BeNull();
+    }
+
     // ─── Снятие шага (решение 3 ревью Александра) ──────────────────────────────────────────────
 
     [Fact]
@@ -266,7 +329,11 @@ public class FeatureStepProgressTests
 
         run.StepProgress.Withdrawn.Should().Be(1);
         run.StepProgress.Total.Should().Be(0);
-        run.StepChains.Single().Outcome.Should().Be("withdrawn");
+        var chain = run.StepChains.Single();
+        chain.Outcome.Should().Be("withdrawn");
+        // Снят — не ожидание и не принятие: оба поля null, плашка деградирует честно.
+        chain.WaitingSince.Should().BeNull();
+        chain.AcceptedAt.Should().BeNull();
     }
 
     [Fact]

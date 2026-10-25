@@ -100,7 +100,7 @@ public class TestsToolsetTests : IDisposable
     {
         var env = Build();
 
-        env.Toolset.ToolsFor(env.Context).Select(t => t.Name).Should().Equal("run_tests", "ui_probe");
+        env.Toolset.ToolsFor(env.Context).Select(t => t.Name).Should().Equal("run_tests", "pregate", "ui_probe");
         env.Toolset.ToolsFor(env.Context).Should().BeSameAs(env.Toolset.ToolsFor(env.Context),
             "состав статичный — не зависит ни от хода, ни от вызова");
         env.Toolset.Name.Should().Be(McpEndpoints.TestsName);

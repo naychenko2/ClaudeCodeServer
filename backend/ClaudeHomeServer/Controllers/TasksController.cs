@@ -30,7 +30,7 @@ namespace ClaudeHomeServer.Controllers;
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
     ISessionBroadcaster broadcaster, PersonaBindingsService bindings,
-    ISphereDirectory spheres) : ControllerBase
+    ISphereDirectory spheres, SessionManager sessions) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -57,6 +57,11 @@ public class ProjectTasksController(
             return BadRequest(new { error = "Название задачи не может быть пустым" });
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+
+        // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
+        if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
+            return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
 
         // Колонка доски → статус выводим из её категории
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
@@ -134,6 +139,8 @@ public class TasksController(
     // (гейт Subsystems:spend:Enabled) → stats.spend = null, не 500 (решение Андрея 20.10).
     // Вертикаль Tasks Spend не видит напрямую — только через этот шов (SubsystemBoundaryTests).
     ISpendFeatureReader? spend = null,
+    // NC-P1b: запуск предгейта шага; null (тесты без DI) — ручка честно отвечает 503
+    TaskPregateService? pregate = null,
     // W4-ANB (разрез §4): авторезюме фичи по кнопке. null — подсистема Tasks выключена
     // (гейт тот же, что у features) → честный 503, не 500 (ADR-014).
     FeatureSummaryService? summary = null) : ControllerBase
@@ -254,6 +261,11 @@ public class TasksController(
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
+        // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
+        if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
+            return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
+
         // Проект из тела (если он свой) — для резолва кастомной колонки. Чужой проект
         // игнорируем: личный эндпоинт не должен подменять статус по чужой доске.
         var project = bodyProjectId is not null && projects.GetById(bodyProjectId)?.OwnerId == UserId
@@ -361,6 +373,12 @@ public class TasksController(
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
+        // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+        if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(),
+                FeatureChatDoor.UpdateTarget(task, req.FeatureId, req.Role)) is { } bound)
+            return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
+
         // Целевой проект для валидации колонки/персоны: текущий, либо новый из req.ProjectId
         // (null в req = не менять; "" = сделать личной; guid = привязать к проекту)
         string? targetProjectId = task.ProjectId;
@@ -447,8 +465,27 @@ public class TasksController(
             var callerIsExecutor =
                 User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
                 && (callerSession is null || callerSession.TaskId == taskId);
-            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor)
+            // Закрытие и возобновление эпика фичи — только из чата человека. Предикат один для
+            // обеих дверей (дефект df85c799) и записан в спинке (FeatureTurnGate, Core): здесь
+            // только входы пути — тип токена и сессия-вызывающий. Отказ бросает TaskManager
+            // (FeatureCloseDenied/FeatureReopenDenied).
+            var denyFeature = FeatureTurnGate.DenyFeature(
+                User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind,
+                callerSession, callerSessionHeader,
+                () => !DelegatedTurnGate.Decide(
+                    sessions, UserId, callerSessionHeader, "Закрытие/возобновление фичи",
+                    alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
+            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor,
+                denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
                 ?? throw new InvalidOperationException("Задача не найдена");
+        }
+        catch (TaskManager.FeatureCloseDeniedException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
+        catch (TaskManager.FeatureReopenDeniedException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -541,10 +578,7 @@ public class TasksController(
     // источник для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/
     // удалённые id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
     // Session.Model (null/пусто — «Авто», слот; Б4). PersonaId — Session.PersonaId (W4-1B, оркестратор).
-    private List<FeatureIndexSession> SessionSnapshot() =>
-        sessions.GetAllOwnedBy(UserId)
-            .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId))
-            .ToList();
+    private List<FeatureIndexSession> SessionSnapshot() => FeatureChatDoor.Snapshot(sessions, UserId);
 
     // Б4/Б5b: готовая функция модели чата (label/full) для проекции фичи. Явная модель
     // (Session.Model) — её имя/метка. «Авто» — боевой резолвер ModelAssignmentResolver.ExecutorModel
@@ -1448,7 +1482,7 @@ public class TasksController(
             "Предусловие: финал фичи принят (проверено сервером).",
             "Push НЕ делать — только локальный мерж.",
             "При конфликте не разрешать молча: остановиться и доложить в отчёте задачи, что именно конфликтует.",
-            "После успешного мержа проверить git log/сборку по кратким критериям проекта и закрыть эпик через tasks_complete только если мерж прошёл чисто.",
+            "После успешного мержа проверить git log/сборку по кратким критериям проекта. Эпик не закрывать: фичу закрывает человек.",
             "Worktree и ветки не удалять — уборка по слову человека.");
     }
 
@@ -1480,6 +1514,10 @@ public class TasksController(
             var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
             var callerSession = callerSessionId is not null && sessions.GetById(callerSessionId) is { } cs
                 && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
+            if (callerSession is not null
+                && FeatureChatDoor.DenyReason(tasks, SessionSnapshot(), UserId, callerSession.Id,
+                    FeatureChatDoor.TargetFeature(task)) is { } bound)
+                return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
             return Ok(await executor.ExecuteAsync(task, auto: false,
                 new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId)));
         }
@@ -1487,6 +1525,24 @@ public class TasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    // Предгейт шага (NC-P1b): прогон проверок в дереве шага, зелёный результат с sha коммита пишется
+    // в задачу, без него шаг с деревом не закрыть (tasks_complete и PUT). Вызов синхронный: ответ — когда
+    // проверки кончились. 409 — прогон не применим или не состоялся, текст отказа в error
+    [HttpPost("{taskId}/pregate")]
+    public async Task<IActionResult> RunPregate(string taskId, CancellationToken ct)
+    {
+        if (pregate is null) return StatusCode(503, new { error = "Предгейт недоступен." });
+        var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault() ?? "";
+        var outcome = await pregate.RunAsync(UserId, taskId, callerSessionId, ct);
+        return outcome.Status switch
+        {
+            TaskPregateStatus.Recorded => Ok(new { green = outcome.Record!.Green, sha = outcome.Record.Sha, text = outcome.Text, record = outcome.Record }),
+            TaskPregateStatus.NotFound => NotFound(),
+            TaskPregateStatus.Disabled => StatusCode(503, new { error = outcome.Text }),
+            _ => Conflict(new { error = outcome.Text }),
+        };
     }
 
     [HttpDelete("{taskId}")]

@@ -790,6 +790,9 @@ builder.Services.AddSingleton<ITaskNotificationDispatcher>(sp => sp.GetRequiredS
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Запуск предгейта шага (NC-P1b): шов ITaskPregate опционален — вертикаль TestRuns отключаемая
+builder.Services.AddSingleton<TaskPregateService>();
+builder.Services.AddSingleton<ReviewTreePool>();
 // Шов ITaskExecutor (Core) → TaskExecutorAdapter → TaskExecutionService.
 // Адаптер резолвит TaskExecutionService через конструктор, DI форвардер ниже.
 builder.Services.AddSingleton<TaskExecutorAdapter>();
@@ -1597,6 +1600,9 @@ if (!inspectionMode)
 app.Services.GetRequiredService<JwtService>();
 // Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager
 app.Services.GetRequiredService<TeamWaveService>();
+// Слоты ревью: учёт аренд в памяти после рестарта пуст — вернуть аренды открытых ревью,
+// чаты которых пережили рестарт, иначе их слот отдали бы другой задаче и сбросили
+await app.Services.GetRequiredService<ReviewTreePool>().RestoreLeasesAsync();
 // Слушатель событий стора сторожей (watchdogs_changed): подписка встаёт в конструкторе
 app.Services.GetRequiredService<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
 // Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать

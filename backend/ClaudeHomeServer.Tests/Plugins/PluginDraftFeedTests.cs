@@ -253,7 +253,7 @@ public class PluginDraftFeedTests : IDisposable
         // AppendRecordAsync, а второй ещё ждёт замок (в AppendRecordAsync не попадёт) —
         // поэтому первый НЕ ждёт второго (иначе мёртвая петля): он просто пишет, второй
         // после освобождения замка увидит запись и пропустит.
-        public Task WriteGate;
+        public Task? WriteGate;
 
         public async Task<bool> AppendRecordAsync(string sessionId, StoredModuleRecord record, CancellationToken ct = default)
         {

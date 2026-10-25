@@ -3605,8 +3605,6 @@ class ВставкаБлокаTests(unittest.TestCase):
         self.assertEqual(self.прогнать(сырое, 5), сырое)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class КарантинСессииTests(unittest.TestCase):
@@ -3803,3 +3801,89 @@ class КарантинLoopTests(unittest.TestCase):
         self.assertEqual(len(self.Модель.принятые), 2)
         self.assertNotIn("cache_salt", self.Модель.принятые[1], "без карантина — без соли")
         self.assertEqual(proxy._карантин, {})
+
+
+class АтрибуцияПромахаTests(unittest.TestCase):
+    """Атрибуция промахов prefix cache (2026-10-24): отпечатки без тел, причина по двум соседним."""
+
+    def _doc(self, n, system="s", tools=None):
+        return {"model": "m", "system": system, "tools": tools or [],
+                "messages": [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"} for i in range(n)]}
+
+    def test_продолжение_истории_не_меняет_отпечаток_префикса(self):
+        a, b = proxy.fingerprint(self._doc(3)), proxy.fingerprint(self._doc(5))
+        self.assertEqual(a["system"], b["system"])
+        self.assertEqual(a["msgs"], b["msgs"][:3])
+        self.assertIn("история продолжает прошлую (3→5 сообщений)", proxy.miss_verdict(a, b, 100, 1000))
+        self.assertIn("вытеснены из кэша движка", proxy.miss_verdict(a, b, 100, 1000))
+
+    def test_смена_системной_части_называется(self):
+        a, b = proxy.fingerprint(self._doc(3)), proxy.fingerprint(self._doc(3, system="другая"))
+        вердикт = proxy.miss_verdict(a, b, 0, 1000)
+        self.assertIn("СИСТЕМНАЯ ЧАСТЬ ИЗМЕНИЛАСЬ", вердикт)
+        self.assertNotIn("вытеснены", вердикт)
+
+    def test_расхождение_истории_указывает_на_сообщение(self):
+        a = proxy.fingerprint(self._doc(5))
+        d = self._doc(5); d["messages"][2]["content"] = "переписано"
+        b = proxy.fingerprint(d)
+        self.assertIn("разошлась на сообщении 3 из 5 (в прошлом 5, совпали первые 2)", proxy.miss_verdict(a, b, 0, 1000))
+
+    def test_короче_прошлого_тоже_расхождение(self):
+        a, b = proxy.fingerprint(self._doc(6)), proxy.fingerprint(self._doc(4))
+        self.assertIn("разошлась на сообщении 5 из 4", proxy.miss_verdict(a, b, 0, 1000))
+
+    def test_состав_после_расхождения_без_содержимого(self):
+        a = proxy.fingerprint(self._doc(4))
+        d = self._doc(1)
+        d["messages"] = [
+            {"role": "user", "content": [{"type": "text", "text": "сводка " * 5000}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "name": "Read", "id": "t1", "input": {"file_path": "x"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "y" * 20000}]},
+        ]
+        d["tools"] = [{"name": f"t{i}", "description": "d" * 1000} for i in range(50)]
+        b = proxy.fingerprint(d)
+        вердикт = proxy.miss_verdict(a, b, 0, 1000)
+        self.assertIn("разошлась на сообщении 1 из 3", вердикт)
+        self.assertIn("#1 user 35K [text]", вердикт)
+        self.assertIn("#2 assistant 0K [tool_use Read]", вердикт)
+        self.assertIn("#3 user 20K [tool_result]", вердикт)
+        self.assertIn("tools 51K", вердикт)
+        self.assertNotIn("сводка", вердикт, "содержимого в строке быть не должно")
+
+    def test_состав_обрезается_до_шести(self):
+        a = proxy.fingerprint(self._doc(2))
+        d = self._doc(10); d["messages"][0]["content"] = "другое"
+        вердикт = proxy.miss_verdict(a, proxy.fingerprint(d), 0, 1000)
+        self.assertIn("#6 ", вердикт)
+        self.assertNotIn("#7 ", вердикт)
+        self.assertIn("… ещё 4", вердикт)
+
+    def test_первый_запрос_сессии(self):
+        self.assertIn("не видел", proxy.miss_verdict(None, proxy.fingerprint(self._doc(1)), 0, 10))
+
+    def test_attribute_miss_пишет_только_при_промахе_и_помнит_сессию(self):
+        proxy._отпечатки.clear()
+        усп = {"input_tokens": 1000, "cache_read_input_tokens": 990}
+        пром = {"input_tokens": 1000, "cache_read_input_tokens": 10}
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            proxy.attribute_miss("s1", proxy.fingerprint(self._doc(3)), усп, 0.3)
+        self.assertEqual(out.getvalue(), "", "99 % из кэша — не промах, строки нет")
+        self.assertEqual(proxy._отпечатки["s1"]["prompt"], 1000)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            proxy.attribute_miss("s1", proxy.fingerprint(self._doc(3, system="новая")), пром, 12.34)
+        строка = out.getvalue()
+        self.assertIn("промах кэша: сессия s1: из кэша 10 из 1000 (1%), prefill 12.3 с", строка)
+        self.assertIn("СИСТЕМНАЯ ЧАСТЬ ИЗМЕНИЛАСЬ", строка)
+        self.assertIn("промпт 1000→1000", строка)
+
+    def test_attribute_miss_без_usage_молчит(self):
+        proxy._отпечатки.clear()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            proxy.attribute_miss("s2", proxy.fingerprint(self._doc(1)), {}, None)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("s2", proxy._отпечатки)
+
+
+if __name__ == "__main__":
+    unittest.main()

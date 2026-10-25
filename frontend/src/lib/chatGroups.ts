@@ -1,7 +1,7 @@
 import type { ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureChip, FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
 import { sortTagsByRegistry } from './tagRegistry';
-import { sortKeyOf, ALL_FEATURE_FILTER_CHIPS, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
+import { sortKeyOf, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
 import { buildChatTreeRows, type ChatTreeRowData } from './chatTree';
 
 export interface ChatGroup {
@@ -204,15 +204,19 @@ export interface FeatureChatGroup {
   sessions: Session[];
 }
 
-// Группировка чатов для режима «Фичи». Правило дерева (контракт §3, «исправлено»):
-//   1. Группа чата — первая фича из index.chats[id] (список упорядочен по силе связи).
+// Группировка чатов для режима «Фичи». Правило дерева (контракт §3, изменено 24.10 —
+// решение Андрея, вариант 1):
+//   1. Группа чата — ВСЕ featureId из index.chats[id]: мультифичевый чат показывается
+//      в каждой своей группе один раз, с пометкой «общий с …» в строке.
 //   2. У чата без фичи — группа родителя по parentSessionId, рекурсивно; корень без
 //      фичи уходит в «Без фичи».
-//   3. Ребро родитель→ребёнок сохраняется, только если оба в одной группе; иначе
-//      ребёнок становится корнем в своей группе (всплывает — как у висячего родителя).
+//   3. Ребро родитель→ребёнок сохраняется, только если родитель тоже в этой группе;
+//      иначе ребёнок становится корнем в своей группе (всплывает — как у висячего родителя).
 //   4. ParentOverrideId не обрабатывается отдельно: он уже в parentSessionId и
 //      подчиняется п.3 — ручной родитель действует внутри фичи, через границу всплывает.
-//   5. Мультифичевый чат — в группе первой фичи, строка одна (без дублей).
+//   5. Висячий featureId (нет в features[]) группы не создаёт: у чата с ним своей
+//      группы нет, и он идёт по п.2 — в группу родителя (рекурсивно); в «Без фичи»
+//      уходит только если и цепочка родителей без фичи.
 //
 // Порядок групп = порядок features[] бэка (OrderRuns; фронт НЕ пересортировывает).
 // Закрытые фичи (bucket=closed) уже в конце OrderRuns — это и есть «отдельная секция»;
@@ -229,66 +233,71 @@ export function groupByFeatures(
   const byId = new Map(chats.map(c => [c.id, c]));
   const known = new Set(index.features.map(f => f.featureId));
 
-  // 1–2. Группа каждого чата: первая фича из chats[id], иначе группа родителя
-  // (рекурсивно), иначе null («Без фичи»). seen обрывает цикл parentSessionId.
-  const groupOf = new Map<string, string | null>();
-  const resolve = (id: string, seen: Set<string>): string | null => {
-    const cached = groupOf.get(id);
+  // 1–2. Группы каждого чата: все известные featureId из chats[id]; если их нет —
+  // группы родителя (рекурсивно), иначе пустой список (null → «Без фичи»). Висячие
+  // featureId (нет в features[]) группы не дают. seen обрывает цикл parentSessionId.
+  const groupsOf = new Map<string, string[]>();
+  const resolve = (id: string, seen: Set<string>): string[] => {
+    const cached = groupsOf.get(id);
     if (cached !== undefined) return cached;
-    if (seen.has(id)) return null;
+    if (seen.has(id)) return [];
     seen.add(id);
     const links = index.chats[id];
-    let g: string | null;
-    if (links && links.length > 0) {
-      g = links[0].featureId;
-    } else {
+    let g: string[] = links ? [...new Set(links.map(l => l.featureId).filter(fid => known.has(fid)))] : [];
+    if (g.length === 0) {
       const parent = byId.get(id)?.parentSessionId ?? null;
-      g = parent && parent !== id ? resolve(parent, seen) : null;
+      g = parent && parent !== id ? resolve(parent, seen) : [];
     }
-    groupOf.set(id, g);
+    groupsOf.set(id, g);
     return g;
   };
   for (const c of chats) resolve(c.id, new Set());
 
-  // 3. Эффективный parent: ребро держим, только если родитель в этой же группе
-  // (и есть во входе). Иначе null — чат становится корнем своей группы.
-  const effectiveParent = (c: Session): string | null => {
+  // 3. Эффективный parent для конкретной группы: ребро держим, только если родитель
+  // тоже в этой группе (и есть во входе). Иначе null — чат становится корнем группы.
+  const effectiveParent = (c: Session, group: string | null): string | null => {
     const pid = c.parentSessionId;
     if (!pid || pid === c.id) return null;
     if (!byId.has(pid)) return null;
-    return groupOf.get(pid) === groupOf.get(c.id) ? pid : null;
+    const pg = groupsOf.get(pid) ?? [];
+    return group === null ? (pg.length === 0 ? pid : null) : (pg.includes(group) ? pid : null);
   };
 
-  // 5. Разбивка по группам (ключ — featureId, null = «Без фичи»).
+  // 1, 5. Разбивка по группам (ключ — featureId, null = «Без фичи»): мультифичевый
+  // чат попадает в каждую свою группу ровно один раз.
   const byGroup = new Map<string | null, Session[]>();
   for (const c of chats) {
-    const g = groupOf.get(c.id) ?? null;
-    const bucket = byGroup.get(g);
-    if (bucket) bucket.push(c); else byGroup.set(g, [c]);
+    const gs = groupsOf.get(c.id) ?? [];
+    if (gs.length === 0) {
+      const bucket = byGroup.get(null);
+      if (bucket) bucket.push(c); else byGroup.set(null, [c]);
+    } else {
+      for (const g of gs) {
+        const bucket = byGroup.get(g);
+        if (bucket) bucket.push(c); else byGroup.set(g, [c]);
+      }
+    }
   }
 
   // Порядок внутри группы — по дате из sortKeyOf (стабильный порядок копий).
   const { field, dir } = sortKeyOf(sortOrder);
   const sortInGroup = (items: Session[]): Session[] =>
     [...items].sort((a, b) => dir * (new Date(a[field]).getTime() - new Date(b[field]).getTime()));
-  const withEffectiveParent = (items: Session[]): Session[] =>
-    sortInGroup(items).map(c => ({ ...c, parentSessionId: effectiveParent(c) }));
+  const withEffectiveParent = (items: Session[], group: string | null): Session[] =>
+    sortInGroup(items).map(c => ({ ...c, parentSessionId: effectiveParent(c, group) }));
 
   const groups: FeatureChatGroup[] = [];
   // Фичи — строго в порядке features[] (OrderRuns); закрытые уже в конце.
   for (const f of index.features) {
     const items = byGroup.get(f.featureId);
     if (!items) continue; // фича без чатов — секцию не рисуем
-    groups.push({ feature: f, title: f.title, sessions: withEffectiveParent(items) });
+    groups.push({ feature: f, title: f.title, sessions: withEffectiveParent(items, f.featureId) });
   }
-  // «Без фичи» — хвост: чаты без фичи (null) + висячие featureId (нет в features[]),
-  // иначе такие чаты потерялись бы (группа есть, строки фичи — нет).
-  const rest: Session[] = [...(byGroup.get(null) ?? [])];
-  for (const [g, items] of byGroup) {
-    if (g !== null && !known.has(g)) rest.push(...items);
-  }
-  if (rest.length) {
-    groups.push({ feature: null, title: 'Без фичи', sessions: withEffectiveParent(rest) });
+  // «Без фичи» — хвост: чаты, у которых нет ни своей известной фичи, ни группы
+  // родителя (в том числе с висячими featureId при пустой цепочке родителей).
+  const rest = byGroup.get(null);
+  if (rest && rest.length) {
+    groups.push({ feature: null, title: 'Без фичи', sessions: withEffectiveParent(rest, null) });
   }
   return groups;
 }
@@ -362,6 +371,8 @@ export function featureDisplayState(
     const merged = f.summary?.mergedAt != null;
     return { kind: merged ? 'done' : 'closed', alarm: null, status: merged ? 'смержена' : 'закрыта' };
   }
+  // Смержена, но ещё не закрыта (bucket=merged): ждёт закрытия.
+  if (f.bucket === 'merged') return { kind: 'done', alarm: null, status: 'смержена, ждёт закрытия' };
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «ждёт согласия на мерж»,
   // merging → «идёт», waiting → «ждёт вас», stopped → «стоит». Без state (старые данные/кеш)
   // — запасной путь по attention (attention.kind), чтобы существующие тесты не упали.
@@ -400,6 +411,7 @@ export function featureStatusTag(f: FeatureIndexFeature): FeatureStatusTag {
       ? { label: 'Смержена', tone: 'merged' }
       : { label: 'Без мержа', tone: 'closed' };
   }
+  if (f.bucket === 'merged') return { label: 'Смержена', tone: 'merged' };
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «К мержу», merging → «Идёт»,
   // waiting → «Ждёт вас», stopped → «Стоит». Без state (старые данные/кеш) — запасной путь
   // по attention (attention.kind), чтобы существующие тесты не упали.
@@ -515,26 +527,22 @@ export function featureGroupByOptions(inProject: boolean, featuresOverview: bool
 
 // === Чипы-фильтры фич (макет features-overview.html, .chips/.fch) ===
 // Ряд чипов над списком в режиме «Фичи»: Открытые · Ждут вас · Стоят · К мержу ·
-// Закрытые. Принадлежность фичи к чипу НЕ вычисляет фронт — бэк отдаёт готовый
+// Смержены · Закрытые (состав и порядок ряда — ALL_FEATURE_FILTER_CHIPS в chatFilters.ts). Принадлежность фичи к чипу НЕ вычисляет фронт — бэк отдаёт готовый
 // chips[] (контракт «Контракт индекса фич — утверждён (Александр, 18.10)»); фронт
 // только считает числа по chips[] и фильтрует список по выбранному чипу.
 
-// Подписи чипов: порядок = порядок ALL_FEATURE_FILTER_CHIPS (единый источник).
+// Подписи чипов (только текст): порядок ряда задаёт ALL_FEATURE_FILTER_CHIPS, не этот объект.
 // Экспортируется: секция «Фичи · что с ними» в FilterBar и строка снимаемых чипов
 // в SessionList берут подписи отсюда, а не заводят вторую точку правды.
 export const FEATURE_CHIP_LABEL: Record<FeatureChip, string> = {
   open: 'Открытые', waiting: 'Ждут вас', stopped: 'Стоят', merge: 'К мержу', closed: 'Закрытые',
-  running: 'Идут',
+  running: 'Идут', merged: 'Смержены',
 };
-
-// Определения чипов для рендера ряда: значение + подпись, в порядке ALL_FEATURE_FILTER_CHIPS.
-export const FEATURE_FILTER_CHIPS: { value: FeatureChip; label: string }[] =
-  ALL_FEATURE_FILTER_CHIPS.map(v => ({ value: v, label: FEATURE_CHIP_LABEL[v] }));
 
 // Число фич по каждому чипу: фронт считает по chips[] бэка (не вычисляет членство сам).
 // Одна фича может входить в несколько чипов (например, «открытая» и «ждёт вас»).
 export function featureChipCounts(features: FeatureIndexFeature[]): Record<FeatureChip, number> {
-  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0 };
+  const counts: Record<FeatureChip, number> = { open: 0, waiting: 0, stopped: 0, merge: 0, closed: 0, running: 0, merged: 0 };
   for (const f of features) for (const c of f.chips) counts[c]++;
   return counts;
 }
@@ -548,66 +556,62 @@ export function drawnClosedFeatures(features: FeatureIndexFeature[]): number {
   return features.filter(f => f.bucket === 'closed' && f.chatCount > 0).length;
 }
 
-// Число ДРУГИХ фич, к которым принадлежит чат (кроме первой, в группе которой он
-// нарисован). Мультифичевый чат (оркестратор/куратор нескольких фич) — «ещё N» на
-// строке в группе первой фичи: след, где живут его ключевые чаты остальных фич
-// (контракт С0, п.5 — иначе вторая фича остаётся без следа своего ключевого чата).
-// Чат ровно в одной группе (первой фичи), поэтому «другие» = все связи минус первая.
-export function otherFeatureCount(chatId: string, index: FeaturesIndex): number {
+// Карту фич по featureId строим ОДИН раз на объект индекса (WeakMap — живёт, пока
+// живёт сам index). Без неё sharedFeatureTitles на каждую строку списка делала
+// линейный .find по features[] для каждой ссылки чата (минор Глеба, 24.10).
+const featureTitleIndex = new WeakMap<FeaturesIndex, Map<string, FeatureIndexFeature>>();
+function titleIndex(index: FeaturesIndex): Map<string, FeatureIndexFeature> {
+  let m = featureTitleIndex.get(index);
+  if (!m) {
+    m = new Map(index.features.map(f => [f.featureId, f]));
+    featureTitleIndex.set(index, m);
+  }
+  return m;
+}
+
+// Названия ДРУГИХ известных фич чата (кроме текущей группы) — для пометки «общий с …»
+// (решение Андрея 24.10, вариант 1): мультифичевый чат показывается в группе каждой
+// своей фичы, а пометка называет остальные его группы. Висячие featureId (нет в
+// features[]) не упоминаются — их названия неизвестны.
+export function sharedFeatureTitles(chatId: string, groupId: string, index: FeaturesIndex): string[] {
   const links = index.chats[chatId];
-  if (!links || links.length <= 1) return 0;
-  return links.length - 1;
+  if (!links) return [];
+  const map = titleIndex(index);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const l of links) {
+    if (l.featureId === groupId || seen.has(l.featureId)) continue;
+    const f = map.get(l.featureId);
+    if (!f) continue;
+    seen.add(l.featureId);
+    out.push(f.title);
+  }
+  return out;
 }
 
 
-// Чаты «чужой» группы по id (F3.3, п.49): chatIds, связанные с текущей фичей в
-// индексе и нарисованные в группе другой фичи. Список (не счётчик) — чтобы
-// потребитель (OtherGroupLinks) пересчитал «+N чат» по ЖИВЫМ сессиям, а не по индексу.
-export function otherGroupChatIds(
-  currentFeatureId: string,
-  index: FeaturesIndex,
-  currentGroupSessions: Session[],
-): { featureId: string; featureTitle: string; chatIds: string[] }[] {
-  const currentIds = new Set(currentGroupSessions.map(s => s.id));
-  const featureById = new Map(index.features.map(f => [f.featureId, f]));
-  // Все чаты, связанные с текущей фичей в индексе
-  const linkedToCurrent: string[] = [];
-  for (const [chatId, links] of Object.entries(index.chats)) {
-    if (links.some(l => l.featureId === currentFeatureId)) {
-      linkedToCurrent.push(chatId);
-    }
-  }
-  // Для каждого такого чата: если он НЕ в текущей группе — он нарисован в другой.
-  // Группируем по фиче, в которой он нарисован (первая в chats[id] = группа).
-  const byOther = new Map<string, string[]>();
-  for (const chatId of linkedToCurrent) {
-    if (currentIds.has(chatId)) continue;
-    const links = index.chats[chatId];
-    if (!links || links.length === 0) continue;
-    const drawnIn = links[0].featureId;
-    if (drawnIn === currentFeatureId) continue;
-    if (!featureById.has(drawnIn)) continue;
-    const list = byOther.get(drawnIn) ?? [];
-    list.push(chatId);
-    byOther.set(drawnIn, list);
-  }
-  const result: { featureId: string; featureTitle: string; chatIds: string[] }[] = [];
-  for (const [fid, chatIds] of byOther) {
-    const f = featureById.get(fid)!;
-    result.push({ featureId: fid, featureTitle: f.title, chatIds });
-  }
-  return result;
-}
+// Ссылка «+N чат — в группе «X»» (F3.3) удалена: с 24.10 (решение Андрея, вариант 1)
+// мультифичевый чат рисуется в группе каждой своей фичы напрямую, и «чужой» группы
+// для него больше нет — ссылка дублировала бы сам чат.
 
 // Роль чата в группе фичи (макет features-overview.html, .fg .kids): «ключевой»
-// (ключевой чат фичи) и/или «ещё N» (чат принадлежит ещё N фичам — C0, п.5: след
-// других фич). Считается по id САМОЙ строки, а не замыканием корня: ChatTreeBranch
-// рекурсивно передаёт renderCard потомкам, и роль корня лилась на всё поддерево (M3).
-// undefined — метки нет (чат не ключевой и не мультифичевый).
-export function featureRoleFor(sessionId: string, keyId: string | null, index: FeaturesIndex): string | undefined {
-  const otherN = otherFeatureCount(sessionId, index);
-  if (sessionId === keyId) return otherN > 0 ? `ключевой · ещё ${otherN}` : 'ключевой';
-  return otherN > 0 ? `ещё ${otherN}` : undefined;
+// (ключевой чат фичи) и/или «общий с …» (чат показывается и в группах других
+// своих фич — решение Андрея 24.10, вариант 1). Считается по id САМОЙ строки, а не
+// замыканием корня: ChatTreeBranch рекурсивно передаёт renderCard потомкам, и роль
+// корня лилась на всё поддерево (M3). undefined — метки нет (чат не ключевой и не
+// мультифичевый).
+// Метка ограничена по длине (минор Глеба, 24.10): называем ПЕРВУЮ другую фичу,
+// остальные — счётчиком «· ещё N». Полный список на 360 px выталкивал имя чата
+// из строки; сам чип дополнительно обрезан maxWidth+ellipsis (ChatCard).
+export function featureRoleFor(
+  sessionId: string, keyId: string | null, index: FeaturesIndex, groupId: string,
+): string | undefined {
+  const others = sharedFeatureTitles(sessionId, groupId, index);
+  if (others.length === 0) return sessionId === keyId ? 'ключевой' : undefined;
+  const shared = others.length === 1
+    ? `общий с ${others[0]}`
+    : `общий с ${others[0]} · ещё ${others.length - 1}`;
+  return sessionId === keyId ? `ключевой · ${shared}` : shared;
 }
 
 // Подсказка у метки «ключевой» (волна 2, Ф3.2): что значит «ключевой чат» —

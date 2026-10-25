@@ -595,11 +595,15 @@ public class LocalModelStatsHistoryTests
     // Блок 2 (ADR-030): запись без finished, чьё последнее событие старше старта процесса → interrupted.
     // Живой ход (после старта) остаётся running. Мутация: убрать проверку ProcessStart — interrupted
     // превращается в running, тест краснеет.
+    // Дефект 477415dc: «now» фиксирован в Harness, а не взят из реальных часов — 7-дневное окно
+    // индекса отсчитывается от него. Без этого записи 2026-10-15 выпадали из окна, и тест краснел
+    // с 22.10 (мутация: вернуть time: null — records пуст, тест краснеет).
     [Fact]
     public async Task ПрерванныйХод_ПослеРестарта_Interrupted()
     {
+        var now = new DateTimeOffset(2026, 10, 15, 13, 0, 0, TimeSpan.Zero);
         var processStart = new DateTimeOffset(2026, 10, 15, 12, 0, 0, TimeSpan.Zero);
-        using var h = new Harness("test-source", null, time: null, processStart: processStart);
+        using var h = new Harness("test-source", null, time: new FixedTimeProvider(now), processStart: processStart);
 
         // До рестарта: enqueued+started в 10:00, finished НЕ записан → interrupted
         h.WriteBareRunning("p_old", "test-source", "2026-10-15T10:00:00Z", "2026-10-15");

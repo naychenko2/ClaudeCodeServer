@@ -88,10 +88,11 @@ public sealed class FeatureRun
     // активности (LastActivityAt; её никогда не было — с создания эпика) прошло ≥ порога.
     // Граница включена: ровно 24 часа — «тихо». Строка индекса берёт это поле, не пересчитывает.
     public bool Quiet { get; init; }
-    // Закрыта: выводится из State (merged или closed) — единая точка правды
-    // (старое «merge Done || epic Done» — вторая точка, закрывало фичу частичным мержем).
+    // Закрыта = эпик Done: State closed, либо merged с эпиком Done. Смержена с открытым эпиком
+    // (State merged) — не закрыта: bucket «merged», Summary у неё есть. Частичный мерж
+    // (merge Done, финал не принят, эпик открыт) фичу не смерживает.
     public bool Closed { get; init; }
-    // Итог смерженной фичи: только у закрытой, иначе null.
+    // Итог смерженной фичи: у State ∈ {merged, closed}, иначе null.
     public FeatureSummary? Summary { get; init; }
 }
 
@@ -332,6 +333,11 @@ public sealed class FeatureStepChain
     public string Outcome { get; init; } = "pending";
     // Шапка деталей шага (строка по-русски): принят | идёт | ждёт ревью | снят с выкладки | закрыт без повторного ревью.
     public string Status { get; init; } = "";
+    // С чего шаг ждёт ревью (макет A2, плашка «ждёт ревью · N ч»): момент закрытия последней
+    // задачи цепочки, когда витков ещё нет. null — шаг не в ожидании (идёт, вернулся, принят).
+    public DateTime? WaitingSince { get; init; }
+    // Дата принятия (макет A2): момент закрытия последнего витка-принятия; null — шаг не принят.
+    public DateTime? AcceptedAt { get; init; }
     // Длительность (минуты): от старта первой задачи цепочки (ClaudeStartedAt, иначе CreatedAt)
     // до закрытия последней; у идущей — до сейчас.
     public double DurationMinutes { get; init; }

@@ -488,7 +488,7 @@ public class SessionStatusTests : IDisposable
         // Приватный метод вызываем рефлексией (прецедент — ChatContinueServiceTests: _sessions/Pending).
         var entry = GetEntry(sut, s.Id);
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        var head = (SessionManager.QueuedMessage)pending[0];
+        var head = (SessionManager.QueuedMessage)pending[0]!;
         var deliver = typeof(SessionManager).GetMethod("DeliverPendingAsync",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         await (Task)deliver.Invoke(sut, [s.Id, entry, head])!;

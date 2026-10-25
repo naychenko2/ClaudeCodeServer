@@ -283,7 +283,9 @@ public sealed partial class NpmBuildService
             var candidate = Path.Combine(dir, "node_modules");
             if (Directory.Exists(candidate))
             {
-                if (!TestRunService.ResolvesInside(rootFull, candidate))
+                // Worktree: node_modules — ссылка на node_modules основного дерева того же репозитория
+                if (!TestRunService.ResolvesInside(rootFull, candidate)
+                    && !TestRunService.LinkedModulesInRepository(rootFull, candidate, ""))
                 {
                     error = $"{Shown(rootFull, candidate)} ведёт символической ссылкой за пределы проекта — "
                         + "такие зависимости не запускаем.";

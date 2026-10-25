@@ -622,7 +622,8 @@ describe('FeatureTimelineTab: лента «Производства»', () => {
     // Задача видна один раз: ни строки исполнителя, ни строки шага.
     expect(findNodeByAttr(body, 'data-testid', 'timeline-executor'), 'строки «исполнитель» в «Производстве» нет').toBeNull();
     expect(findNodeByAttr(body, 'data-testid', 'feature-step-Ш1'), 'строки «шаг» нет').toBeNull();
-    // Цепочка «работа → принят» — узлы карточки.
+    // Цепочка «работа → принят» — узлы карточки, живут в раскрытой части: раскрываем кликом по карточке.
+    act(() => { (reactProps(findNodeByAttr(body, 'data-testid', 'prod-card-Ш1')!)!.onClick as () => void)(); });
     expect(findNodeByAttr(body, 'data-testid', 'prod-chain'), 'цепочки карточки').not.toBeNull();
     expect(textNodes(findNodeByAttr(body, 'data-testid', 'prod-status')!).join('')).toBe('принят');
   });
@@ -676,6 +677,7 @@ describe('FeatureTimelineTab: лента «Производства»', () => {
   // === 4. 360: isMobile доходит до ленты — зона касания 40 px на самой кнопке ===
   it('360: узел ленты — кнопка сама 40 px по вертикали, видимая капсула 20 px', () => {
     const c = renderTab(prodRun(), true);
+    act(() => { (reactProps(findNodeByAttr(c, 'data-testid', 'prod-card-Ш1')!)!.onClick as () => void)(); });
     const node = findNodeByAttr(c, 'data-testid', 'prod-node');
     expect(node, 'узел-кнопка с чатом').not.toBeNull();
     const st = (reactProps(node as never)!.style ?? {}) as Record<string, string>;

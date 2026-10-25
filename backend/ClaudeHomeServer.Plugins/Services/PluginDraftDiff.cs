@@ -112,23 +112,26 @@ public class PluginDraftDiff
 
         foreach (var rel in allPaths)
         {
+            // Флаги inDraft/inInstalled: компилятор не выводит из них non-null для out
+            // значений TryGetValue (CS8602), поэтому «!» на первом разыменании — контракт
+            // TryGetValue гарантирует, что value заполнен при true.
             bool inDraft = draftFiles.TryGetValue(rel, out var d);
             bool inInstalled = installedFiles.TryGetValue(rel, out var i);
 
             if (inDraft && !inInstalled)
             {
                 // Добавлен: путь + размер, без содержимого.
-                added.Add(new PluginDraftDiffFile(rel, d.Size, false, false, null));
+                added.Add(new PluginDraftDiffFile(rel, d!.Size, false, false, null));
             }
             else if (!inDraft && inInstalled)
             {
                 // Удалён: путь + размер (версии пакета), без содержимого.
-                removed.Add(new PluginDraftDiffFile(rel, i.Size, false, false, null));
+                removed.Add(new PluginDraftDiffFile(rel, i!.Size, false, false, null));
             }
             else
             {
                 // В обоих: идентичны по байтам → без изменений.
-                if (d.Bytes.AsSpan().SequenceEqual(i.Bytes))
+                if (d!.Bytes.AsSpan().SequenceEqual(i!.Bytes))
                     continue;
 
                 // Бинарный (NUL) или больше 256 КБ → «изменён, N байт», без содержимого.

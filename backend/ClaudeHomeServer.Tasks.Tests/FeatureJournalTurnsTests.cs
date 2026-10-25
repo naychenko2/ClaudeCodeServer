@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.Tasks;
@@ -243,6 +244,8 @@ public class FeatureJournalTurnsTests : IDisposable
         services.AddSingleton<IConfiguration>(config);
         // Main-зависимость (в проде — Program.cs): шина ходов.
         services.AddSingleton<ITurnEventBus, TurnEventBus>();
+        // Main-зависимость GitWorktreeHeadReader (в проде — Program.cs): фабрика запускателей.
+        services.AddSingleton(new Moq.Mock<ILauncherFactory>().Object);
         // Штатная регистрация подсистемы: TaskManager, FeatureJournalStore,
         // FeatureTurnJournalSubscriber (AddGatedHostedService), TaskSchedulerService.
         new TasksSubsystem().Register(services, config);

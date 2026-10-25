@@ -876,6 +876,129 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         await _git.WorktreeRemoveAsync(null, _repo, wt);
     }
 
+    // ---------- Слот ревью: detached worktree и защищённый сброс ----------
+
+    private async Task<string> HeadAsync() => (await _git.LocalTipAsync(null, _repo, "HEAD"))!;
+
+    [Fact]
+    public async Task ResetReview_Дерево_На_Ветке_Отказ_Ничего_Не_Пишет()
+    {
+        var wt = WtPath("rv_branch");
+        await _git.WorktreeAddAsync(null, _repo, wt, "wt/rv-branch");
+        var dirty = Path.Combine(wt, "dirty.txt");
+        await File.WriteAllTextAsync(dirty, "несохранённое\n");
+        var headBefore = await _git.LocalTipAsync(null, wt, "HEAD");
+
+        var sha = await HeadAsync();
+        var act = () => _git.ResetReviewWorktreeAsync(null, _repo, wt, sha);
+
+        await act.Should().ThrowAsync<GitCommandException>();
+        File.Exists(dirty).Should().BeTrue();
+        (await _git.LocalTipAsync(null, wt, "HEAD")).Should().Be(headBefore);
+        await _git.WorktreeRemoveAsync(null, _repo, wt, force: true);
+    }
+
+    [Fact]
+    public async Task ResetReview_Основное_Дерево_Отказ_Даже_При_Detached_HEAD()
+    {
+        var sha = await HeadAsync();
+        await RawGit("checkout", "--detach");
+        var dirty = Path.Combine(_repo, "dirty.txt");
+        await File.WriteAllTextAsync(dirty, "несохранённое\n");
+
+        var act = () => _git.ResetReviewWorktreeAsync(null, _repo, _repo, sha);
+
+        await act.Should().ThrowAsync<GitCommandException>();
+        File.Exists(dirty).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ResetReview_Путь_Не_Из_Worktree_List_Отказ()
+    {
+        var stranger = WtPath("rv_stranger");
+        Directory.CreateDirectory(stranger);
+        _extraDirs.Add(stranger);
+        var marker = Path.Combine(stranger, "keep.txt");
+        await File.WriteAllTextAsync(marker, "чужое\n");
+
+        var sha = await HeadAsync();
+        var act = () => _git.ResetReviewWorktreeAsync(null, _repo, stranger, sha);
+
+        await act.Should().ThrowAsync<GitCommandException>();
+        File.Exists(marker).Should().BeTrue();
+    }
+
+    // Подкаталог главного дерева: git checkout --detach -f там проходит и уводит главное дерево с ветки,
+    // поэтому отказ обязан давать именно проверка принадлежности списку worktree.
+    [Fact]
+    public async Task ResetReview_Подкаталог_Главного_Дерева_Отказ_По_Списку_Worktree()
+    {
+        var sub = Path.Combine(_repo, "sub");
+        Directory.CreateDirectory(sub);
+        var marker = Path.Combine(sub, "keep.txt");
+        await File.WriteAllTextAsync(marker, "несохранённое\n");
+        var branchBefore = await _git.CurrentBranchAsync(null, _repo);
+
+        var sha = await HeadAsync();
+        var act = () => _git.ResetReviewWorktreeAsync(null, _repo, sub, sha);
+
+        (await act.Should().ThrowAsync<GitCommandException>())
+            .Which.Message.Should().Contain("Путь не числится среди worktree репозитория");
+        (await _git.CurrentBranchAsync(null, _repo)).Should().NotBeNull().And.Be(branchBefore);
+        File.Exists(marker).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ResetReview_Locked_Дерево_Отказ_Ничего_Не_Пишет()
+    {
+        var sha = await HeadAsync();
+        var wt = WtPath("rv_locked");
+        await _git.WorktreeAddDetachedAsync(null, _repo, wt, sha);
+        await RawGit("worktree", "lock", wt);
+        var dirty = Path.Combine(wt, "dirty.txt");
+        await File.WriteAllTextAsync(dirty, "несохранённое\n");
+
+        var act = () => _git.ResetReviewWorktreeAsync(null, _repo, wt, sha);
+
+        (await act.Should().ThrowAsync<GitCommandException>())
+            .Which.Message.Should().Contain("заблокировано");
+        File.Exists(dirty).Should().BeTrue();
+        await RawGit("worktree", "unlock", wt);
+        await _git.WorktreeRemoveAsync(null, _repo, wt, force: true);
+    }
+
+    [Fact]
+    public async Task ResetReview_Clean_Без_X_Сохраняет_Игнорируемое()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, ".gitignore"), "obj/\nnode_modules/\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "gitignore");
+        var sha = await HeadAsync();
+
+        var wt = WtPath("rv_slot");
+        await _git.WorktreeAddDetachedAsync(null, _repo, wt, sha);
+        (await _git.WorktreeListAsync(null, _repo)).Should().Contain(w => w.Branch == null && w.Head == sha
+            && Path.GetFullPath(w.Path) == Path.GetFullPath(wt));
+
+        Directory.CreateDirectory(Path.Combine(wt, "obj"));
+        Directory.CreateDirectory(Path.Combine(wt, "node_modules"));
+        var obj = Path.Combine(wt, "obj", "x.txt");
+        var nm = Path.Combine(wt, "node_modules", "y");
+        var stray = Path.Combine(wt, "stray.txt");
+        await File.WriteAllTextAsync(obj, "o");
+        await File.WriteAllTextAsync(nm, "n");
+        await File.WriteAllTextAsync(stray, "s");
+        await File.WriteAllTextAsync(Path.Combine(wt, "a.txt"), "испорчено\n");
+
+        await _git.ResetReviewWorktreeAsync(null, _repo, wt, sha);
+
+        File.Exists(obj).Should().BeTrue();
+        File.Exists(nm).Should().BeTrue();
+        File.Exists(stray).Should().BeFalse();
+        (await File.ReadAllTextAsync(Path.Combine(wt, "a.txt"))).Should().Be("один\nдва\nтри\n");
+        await _git.WorktreeRemoveAsync(null, _repo, wt, force: true);
+    }
+
     // Прямой git в произвольной папке (конфиг тестового worktree); env — для коммитов
     // с заданной датой (GIT_AUTHOR_DATE/GIT_COMMITTER_DATE)
     private static Task RawGitIn(string dir, params string[] args) => RawGitIn(dir, null, args);

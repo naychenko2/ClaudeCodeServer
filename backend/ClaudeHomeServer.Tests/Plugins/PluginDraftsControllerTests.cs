@@ -314,17 +314,17 @@ public class PluginDraftsControllerTests : IDisposable
     // HTTP-ответе отсутствует).
 
     [Fact]
-    public void List_HttpОтвет_CamelCaseСDisplayName()
+    public async Task List_HttpОтвет_CamelCaseСDisplayName()
     {
         var factory = new TestWebApplicationFactory();
         try
         {
             var client = factory.CreateAuthenticatedClient();
             // Флаги plugins-mvp / plugins-build-yourself: дефолт off — включаем через боевой API
-            client.PutAsJsonAsync("/api/feature-flags/plugins-mvp", new { enabled = true })
-                .GetAwaiter().GetResult().EnsureSuccessStatusCode();
-            client.PutAsJsonAsync("/api/feature-flags/plugins-build-yourself", new { enabled = true })
-                .GetAwaiter().GetResult().EnsureSuccessStatusCode();
+            (await client.PutAsJsonAsync("/api/feature-flags/plugins-mvp", new { enabled = true }))
+                .EnsureSuccessStatusCode();
+            (await client.PutAsJsonAsync("/api/feature-flags/plugins-build-yourself", new { enabled = true }))
+                .EnsureSuccessStatusCode();
 
             var owner = factory.Services.GetRequiredService<UserStore>()
                 .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
@@ -372,9 +372,9 @@ public class PluginDraftsControllerTests : IDisposable
             File.WriteAllText(Path.Combine(plainRoot, ".claude-plugin", "plugin.json"),
                 JsonSerializer.Serialize(new { name = "plain", version = "1.0.0" }));
 
-            var res = client.GetAsync("/api/plugins/drafts").GetAwaiter().GetResult();
+            var res = await client.GetAsync("/api/plugins/drafts");
             res.StatusCode.Should().Be(HttpStatusCode.OK, "флаги включены, подсистема активна");
-            var json = res.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            var json = await res.Content.ReadAsStringAsync();
 
             json.Should().Contain("\"slug\":\"pkg\"", "ключи HTTP — camelCase");
             json.Should().Contain($"\"id\":\"{derivedId}\"", "id выведен сервером (raw manifest.id не читается)");

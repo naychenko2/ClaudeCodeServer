@@ -57,6 +57,8 @@ public sealed class TasksSubsystem : IAppSubsystem
         // Microsoft DI порядок регистраций не учитывает при резолве, но singleton-резолв
         // случается лениво — на первом обращении из контроллера либо hosted-сервиса;
         // к тому моменту DI гарантирует все зависимости.
+        // Читатель коммита дерева для гейта предгейта (NC-P1b); без него TaskManager закрывает шаги как раньше
+        services.AddSingleton<ClaudeHomeServer.Services.Composition.IWorktreeHeadReader, GitWorktreeHeadReader>();
         services.AddSingleton<TaskManager>();
         // Форвардер, а не вторая регистрация: иначе второй экземпляр `TaskManager`
         // перезаписывает статические резолверы на `Session` и иерархия чатов для новых задач

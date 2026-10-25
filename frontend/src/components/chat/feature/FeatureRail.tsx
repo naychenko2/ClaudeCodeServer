@@ -107,10 +107,10 @@ function railAriaLabel(rail: FeatureRailSegment[], closed: boolean): string {
   return `Этап: ${STAGE_NAME[active.key]}`;
 }
 
-// props: rail — 8 сегментов индекса (бэк); closed — фича закрыта (приглушить рельсу).
-export function FeatureRail({ rail, closed = false }: { rail: FeatureRailSegment[]; closed?: boolean }) {
+// props: rail — 8 сегментов индекса (бэк); closed — терминальная фича (merged/closed): приглушить рельсу; label — своя подпись вместо «Этап: закрыта».
+export function FeatureRail({ rail, closed = false, label: labelOverride }: { rail: FeatureRailSegment[]; closed?: boolean; label?: string }) {
   // Рельса «глупая»: не считает, только раскладывает rail[].
-  const label = railAriaLabel(rail, closed);
+  const label = labelOverride ?? railAriaLabel(rail, closed);
   return (
     <span
       role="img"

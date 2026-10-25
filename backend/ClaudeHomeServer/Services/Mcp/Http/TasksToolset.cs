@@ -189,6 +189,13 @@ public sealed class TasksToolset(
                 if (modelTier.Length > 0 && !ModelTiers.IsValidWireValue(modelTier))
                     return Deny(ModelTiers.WireError);
 
+                // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding; текст
+                // отказа общий с REST)
+                if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
+                        context.OwnerId, session.Id, FeatureChatDoor.CreateTarget(
+                            OptionalArg(arguments, "featureId"), OptionalArg(arguments, "role"))) is { } bound)
+                    return Deny(bound);
+
                 // Целевой проект: по умолчанию текущий; явный projectId, отличный от
                 // текущего, требует полной (не readonly) привязки
                 var targetProjectId = OptionalArg(arguments, "projectId") ?? projectId;
@@ -289,6 +296,13 @@ public sealed class TasksToolset(
                     return Deny($"Задача {id} не найдена.");
                 var denied = TaskDenied(projectId, allowed, existing);
                 if (denied is not null) return Deny(denied);
+
+                // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+                if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
+                        context.OwnerId, session.Id, FeatureChatDoor.UpdateTarget(existing,
+                            arguments.ContainsKey("featureId") ? StringArg(arguments, "featureId") : null,
+                            arguments.ContainsKey("role") ? StringArg(arguments, "role") : null)) is { } bound)
+                    return Deny(bound);
 
                 // Целевой проект для валидации колонки/персоны: текущий, либо новый из projectId
                 string? targetProjectId = existing.ProjectId;
@@ -392,6 +406,8 @@ public sealed class TasksToolset(
                     // исполнителю менять критерии — в TaskManager.Update (здесь только разбор)
                     Acceptance: AcceptanceArg(arguments),
                     Evidence: EvidenceArg(arguments),
+                    // Сброс серии красных предгейта: решает постановщик, исполнителю TaskManager откажет
+                    ResetPregate: arguments["resetPregate"] is JsonValue rp && rp.TryGetValue<bool>(out var reset) && reset ? true : null,
                     PlanSteps: planSteps);
                 TaskItem updated;
                 try
@@ -399,11 +415,16 @@ public sealed class TasksToolset(
                     // Агентский путь (MCP): isAgentCall=true — гард против затирания
                     // DroppedByHumanAt выдаёт внятный 400 вместо молчаливого 200 OK
                     // (фикс-волна 4 team-blocker-honest)
-                    // Исполнитель здесь = сессия привязана к задаче (session.TaskId == id), claim typ=svc
-                    // не сверяется: MCP всегда идёт под сервисным токеном, и эта дверь строже REST
-                    // (TasksController.Update). Правила двух дверей должны оставаться согласованными.
+                    // Исполнитель здесь = сессия привязана к задаче (session.TaskId == id). MCP всегда
+                    // идёт под сервисным токеном и claim typ=svc не сверяет; REST (TasksController.Update)
+                    // сверяет callerSession.TaskId только под сервисным токеном. Закрытие эпика обе двери
+                    // запрещают по общему признаку: исполнитель задачи или делегированный ход.
+                    // Один предикат для обоих гардов эпика (закрытие и возобновление, дефект df85c799):
+                    // отказ бросает TaskManager, здесь он превращается в content-ошибку.
+                    bool denyFeature = DenyFeatureClose(session, context.OwnerId);
                     updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
-                        callerIsExecutor: session.TaskId == id)
+                        callerIsExecutor: session.TaskId == id,
+                        denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -471,7 +492,8 @@ public sealed class TasksToolset(
                         // Агентский путь (MCP): защита от затирания снятой задачи —
                         // tasks_complete на снятой задаче вернёт 400 вместо молчаливого 200 OK
                         isAgentCall: true,
-                        callerIsExecutor: session.TaskId == id)
+                        callerIsExecutor: session.TaskId == id,
+                        denyFeatureClose: DenyFeatureClose(session, context.OwnerId))
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
                 }
                 catch (InvalidOperationException ex)
@@ -528,6 +550,13 @@ public sealed class TasksToolset(
                 {
                     DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
                     return Deny(scopeDenied);
+                }
+                // Чат, ведущий фичу, не запускает исполнителя задачи чужой фичи
+                if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
+                        context.OwnerId, session.Id, FeatureChatDoor.TargetFeature(task)) is { } chatBound)
+                {
+                    DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
+                    return Deny(chatBound);
                 }
                 try
                 {
@@ -911,6 +940,15 @@ public sealed class TasksToolset(
 
     private static McpToolCallResult Json<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOpts));
+
+    // Закрытие/возобновление эпика фичи — только человеком: сам предикат в спинке
+    // (FeatureTurnGate, Core), здесь только параметры MCP-двери: всегда сервисный токен,
+    // сессия-вызывающий известна, вызов без неё — отказ (fail-closed).
+    private bool DenyFeatureClose(Session session, string ownerId) =>
+        FeatureTurnGate.DenyFeature(true, session, session.Id,
+            () => !DelegatedTurnGate.Decide(sessions, ownerId, session.Id, "Закрытие/возобновление фичи",
+                alsoWhenExecutorSuppressed: false, allowInTeamImplement: false,
+                failOpenWhenUnknown: false).Allowed);
 
     private static McpToolCallResult Deny(string text) => new(text, IsError: true);
 
@@ -1298,6 +1336,12 @@ public sealed class TasksToolset(
                     ["reviewOf"] = ReviewOfSchema(),
                     ["acceptance"] = AcceptanceSchema(),
                     ["evidence"] = EvidenceSchema(),
+                    ["resetPregate"] = new JsonObject
+                    {
+                        ["type"] = "boolean",
+                        ["description"] = "true — сбросить результат предгейта шага (серия красных начинается заново). "
+                            + "Только после исчерпанной серии (два красных подряд) — иначе отказ; это решение постановщика, исполнитель своей задачи получит отказ.",
+                    },
                     ["planSteps"] = PlanStepsSchema(),
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),

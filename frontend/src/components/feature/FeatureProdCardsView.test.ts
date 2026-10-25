@@ -6,7 +6,7 @@
 // Тесты: обычный цикл; возврат + доработка (клик по узлу → чат витка); активная
 // задача («сейчас» только над текущей карточкой, «текущий» узел — акцентная рамка,
 // пунктирный «ревью» — не узел-действие); пустая фича (карточек нет); шаг без данных
-// (код — не кнопка); статус — из stepStatusView; 2+ циклов — тон предупреждения;
+// (код — не кнопка); статус — слово из chain.status бэка; 2+ циклов — тон предупреждения;
 // поле касания 40 px на 360.
 //
 // Мутации (проверялись прогоном, см. отчёт):
@@ -102,6 +102,12 @@ function styleOf(node: unknown): Record<string, string> {
   return (reactProps(node as never)!.style ?? {}) as Record<string, string>;
 }
 
+// Раскрыть карточку шага кликом по всей карточке (цепочка, меню кода и причина — в раскрытой части).
+function expand(container: unknown, stepRef: string) {
+  const card = findNodeByAttr(container as never, 'data-testid', `prod-card-${stepRef}`)!;
+  act(() => { (reactProps(card)!.onClick as () => void)(); });
+}
+
 beforeEach(() => {
   installFakeDom();
   personaMap.set('p-kira', 'Кира');
@@ -124,6 +130,7 @@ describe('обычный цикл', () => {
       })],
     });
     const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    expand(container, 'Ш1');
     const card = findNodeByAttr(container, 'data-testid', 'prod-card-Ш1');
     expect(card).not.toBeNull();
     expect(findAll(container, 'data-testid', 'prod-card-Ш1').length).toBe(1);
@@ -131,14 +138,15 @@ describe('обычный цикл', () => {
     expect(chainLabels(card!)).toEqual(['работа', '→', 'Глеб: принят']);
     // «старт» живёт только в меню кода шага, не строкой карточки.
     expect(textNodes(card!).some(t => t === 'старт')).toBe(false);
-    // Статус — из stepStatusView: подпись и тон одной парой (successBg/successText).
+    // Статус: слово — из chain.status бэка, тон — из состояния карточки, одной парой (successBg/successText).
     const status = findNodeByAttr(card!, 'data-testid', 'prod-status')!;
     expect(textNodes(status)[0]).toBe('принят');
     expect(styleOf(status).background).toBe(C.successBg);
     expect(styleOf(status).color).toBe(C.successText);
-    // Карточка: фон C.bgCard, рамка borderLight, радиус R.xl, padding SP.sm × SP.md.
+    // Готово — на втором плане: без фона, рамка borderLight, padding SP.sm × SP.md; название приглушено.
     const st = styleOf(card!);
-    expect(st.background).toBe(C.bgCard);
+    expect(st.background).toBe('transparent');
+    expect(styleOf(findNodeByAttr(card!, 'data-testid', 'prod-title')!).color).toBe(C.textSecondary);
     expect(st.border).toBe(`1px solid ${C.borderLight}`);
     expect(st.padding).toBe('8px 12px');
   });
@@ -155,6 +163,7 @@ describe('обычный цикл', () => {
       stepChains: [chain({ stepRef: 'Ш1', taskIds: ['s1'], status: 'принят', outcome: 'accepted' })],
     });
     const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    expand(container, 'Ш1');
     const plain = findNodeByAttr(container, 'data-testid', 'prod-node-plain');
     expect(plain).not.toBeNull();
     expect(plain!.nodeName).toBe('SPAN');
@@ -179,6 +188,7 @@ describe('возврат и доработка', () => {
 
   it('цепочка «работа → вернул → доработка», причина возврата — строкой под цепочкой', () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: returnedRun(1), featureId: 'F' }));
+    expand(container, 'Ш1');
     const card = findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!;
     expect(chainLabels(card)).toEqual(['работа', '→', 'Глеб: вернул', '→', 'доработка']);
     const reason = findNodeByAttr(card, 'data-testid', 'prod-reason')!;
@@ -189,6 +199,7 @@ describe('возврат и доработка', () => {
 
   it('клик по узлу возврата открывает reviewChatId этого витка', async () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: returnedRun(1), featureId: 'F' }));
+    expand(container, 'Ш1');
     const node = findNodeByAttr(container, 'aria-label', 'Открыть чат витка: Глеб: вернул');
     expect(node).not.toBeNull();
     expect(node!.nodeName).toBe('BUTTON');
@@ -221,6 +232,7 @@ describe('возврат и доработка', () => {
       })],
     });
     const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    expand(container, 'Ш1');
     const cur = findNodeByAttr(container, 'aria-label', 'Открыть чат витка: работа')!;
     expect(styleOf(cur).border).toBe(`1px solid ${C.accent}`);
     expect(styleOf(cur).boxShadow).toBe(SHADOW.focus);
@@ -247,15 +259,16 @@ describe('активная задача', () => {
     ],
   });
 
-  it('«сейчас» — только над текущей карточкой; её рамка accentMuted и кромка accent', () => {
+  it('«сейчас» — только над текущей карточкой; идёт — фон bgCard и кромка accent, готово — без фона и кромки', () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
     expect(findAll(container, 'data-testid', 'prod-nowline').length).toBe(1);
     const current = findNodeByAttr(container, 'data-testid', 'prod-card-Ш2')!;
     const st = styleOf(current);
-    expect(st.border).toBe(`1px solid ${C.accentMuted}`);
+    expect(st.background).toBe(C.bgCard);
     expect(st.boxShadow).toBe(`inset 3px 0 0 ${C.accent}`);
-    // Карточка без «сейчас» — обычная рамка, без кромки.
+    // Карточка без «сейчас» (готова) — без фона и кромки.
     const past = findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!;
+    expect(styleOf(past).background).toBe('transparent');
     expect(styleOf(past).border).toBe(`1px solid ${C.borderLight}`);
     expect(styleOf(past).boxShadow).toBeUndefined();
   });
@@ -264,7 +277,7 @@ describe('активная задача', () => {
     const rr = run({
       steps: [
         task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }),
-        task({ id: 's2', status: 'inProgress', stepRef: 'Ш2', claudeStartedAt: '2026-10-21T09:00:00Z' }),
+        task({ id: 's2', status: 'done', stepRef: 'Ш2', claudeStartedAt: '2026-10-21T09:00:00Z' }),
       ],
       stepChains: [
         chain({ stepRef: 'Ш2', title: 'Ждёт', taskIds: ['s2'], status: 'ждёт ревью', outcome: 'pending' }),
@@ -303,6 +316,7 @@ describe('код шага', () => {
       stepChains: [chain({ stepRef: 'Ш1', title: 'Сделать X', personaId: 'p-kira', taskIds: ['s1'], status: 'принят', outcome: 'accepted', chatId: 'chat-kira' })],
     });
     const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    expand(container, 'Ш1');
     const code = findNodeByAttr(container, 'data-testid', 'prod-code-Ш1')!;
     expect(code.nodeName).toBe('BUTTON');
     expect(code.getAttribute('aria-label')).toBe('Шаг Ш1: старт, чат и задача');
@@ -333,6 +347,7 @@ describe('код шага', () => {
     // Пометки — из агрегата: задача s1 done → закрыта; чат chat-live не архивирован.
     const marks = buildNavMarks(r);
     const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F', marks }));
+    expand(container, 'Ш1');
     act(() => { (reactProps(findNodeByAttr(container, 'data-testid', 'prod-code-Ш1') as never)!.onClick as () => void)(); });
     const body = (globalThis as { document: { body: never } }).document.body as never;
     const chatItem = findAll(body, 'data-testid', 'prod-menu-chat')[0] as never;
@@ -358,6 +373,7 @@ describe('360', () => {
       })],
     });
     const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F', isMobile: true }));
+    expand(container, 'Ш1');
     const nodes = findAll(container, 'data-testid', 'prod-node');
     expect(nodes.length).toBe(2);
     for (const n of nodes) {
@@ -374,10 +390,10 @@ describe('360', () => {
     const chainEl = findNodeByAttr(container, 'data-testid', 'prod-chain')!;
     expect(styleOf(chainEl as never).gap).toBe('20px 4px');
     expect(styleOf(chainEl as never).marginTop).toBe(12);
-    // Название уходит на вторую строку шапки (flexBasis 100%).
-    const header = findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!.children[0];
-    const title = header.children[1];
-    expect(styleOf(title as never).flex).toBe('1 1 100%');
+    // Строка 1 — иконка, код, название (одна строка с обрезкой), шеврон с зоной касания 40 px.
+    const row1 = findNodeByAttr(container, 'data-testid', 'prod-row1')!;
+    expect(styleOf(findNodeByAttr(row1, 'data-testid', 'prod-title')!).whiteSpace).toBe('nowrap');
+    expect(styleOf(row1.children[3] as never).width).toBe(40);
   });
 
   // Минор R4f: сход пальца с узла — pointerup вне узла, браузер посылает узлу
@@ -389,6 +405,7 @@ describe('360', () => {
       stepChains: [chain({ stepRef: 'Ш2', title: 'Идущий', personaId: 'p-kira', taskIds: ['s2'], status: 'идёт', outcome: 'running', chatId: 'chat-kira' })],
     });
     const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F', isMobile: true }));
+    expand(container, 'Ш2');
     const node = findNodeByAttr(container, 'data-testid', 'prod-node')!;
     const pill = (node as { childNodes: unknown[] }).childNodes[0];
     const handlers = reactProps(node)!;
@@ -399,5 +416,125 @@ describe('360', () => {
     act(() => { (handlers.onPointerCancel as () => void)(); });
     // Залипания нет: капсула вернулась в свой тон.
     expect(styleOf(pill).background).toBe(C.bgWhite);
+  });
+});
+
+// === Макет A2: состояние видно сразу ===
+
+describe('состояние шага (A2)', () => {
+  const five = () => run({
+    steps: [
+      task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }),
+      task({ id: 's2', status: 'inProgress', stepRef: 'Ш2', claudeStartedAt: new Date(Date.now() - 40 * 60000).toISOString() }),
+      task({ id: 's3', status: 'done', stepRef: 'Ш3', claudeStartedAt: '2026-10-22T10:00:00Z' }),
+      task({ id: 's4', status: 'todo', stepRef: 'Ш4' }),
+    ],
+    stepProgress: { planState: 'cut', total: 4, accepted: 1, review: 1, work: 1, notCreated: 1, withdrawn: 0, unlinkedReworks: 0 },
+    stepChains: [
+      chain({ stepRef: 'Ш1', title: 'А', taskIds: ['s1'], status: 'принят', outcome: 'accepted' }),
+      chain({ stepRef: 'Ш2', title: 'Б', taskIds: ['s2'], status: 'идёт', outcome: 'running' }),
+      chain({ stepRef: 'Ш3', title: 'В', taskIds: ['s3'], status: 'ждёт ревью', outcome: 'pending' }),
+      chain({ stepRef: 'Ш4', title: 'Г', taskIds: ['s4'], status: '', outcome: 'pending' }),
+    ],
+  });
+
+  it('плашка «закрыт без повторного ревью» — слово берётся из chain.status бэка', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepProgress: { planState: 'cut', total: 1, accepted: 0, review: 0, work: 1, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 },
+      stepChains: [chain({ stepRef: 'Ш1', title: 'А', taskIds: ['s1'], status: 'ждёт повторного ревью', outcome: 'returned', loops: 1, rounds: [round({ n: 1, verdict: 'returned' })] })],
+    });
+    const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    const b = findNodeByAttr(findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!, 'data-testid', 'prod-status')!;
+    expect(textNodes(b).join('')).toContain('ждёт повторного ревью');
+    // Сводка не противоречит карточке: шаг в корзине work без идущей задачи — «ждёт», не «идёт».
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'prod-summary')!).join('')).toBe('1 ждёт');
+  });
+
+  it('иконка, плашка и тон карточки различают четыре состояния', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: five(), featureId: 'F' }));
+    const icon = (ref: string) => findNodeByAttr(findNodeByAttr(container, 'data-testid', `prod-card-${ref}`)!, 'data-testid', 'prod-state-icon')!;
+    const badge = (ref: string) => findNodeByAttr(findNodeByAttr(container, 'data-testid', `prod-card-${ref}`)!, 'data-testid', 'prod-status')!;
+    const card = (ref: string) => styleOf(findNodeByAttr(container, 'data-testid', `prod-card-${ref}`)!);
+    expect(['Ш1', 'Ш2', 'Ш3', 'Ш4'].map(r => icon(r).getAttribute('data-state'))).toEqual(['done', 'run', 'wait', 'queue']);
+    expect(icon('Ш1').getAttribute('aria-label')).toBe('Готово');
+    expect(icon('Ш3').getAttribute('aria-label')).toBe('Ждёт');
+    expect(icon('Ш4').getAttribute('aria-label')).toBe('В очереди');
+    // Идёт — дышащая точка (LiveDot с подписью состояния).
+    expect(findNodeByAttr(icon('Ш2'), 'aria-label', 'Идёт')).not.toBeNull();
+    // Плашка: слово + чем занят + сколько (времени приёма/ожидания в агрегате нет — только слово).
+    expect(textNodes(badge('Ш1')).join('')).toBe('принят');
+    expect(textNodes(badge('Ш2')).join('')).toBe('идёт · работа · 40 мин');
+    expect(textNodes(badge('Ш3')).join('')).toBe('ждёт ревью');
+    expect(textNodes(badge('Ш4')).join('')).toBe('в очереди');
+    // Тон: готово/очередь без фона, очередь — пунктирная рамка, идёт — accent, ждёт — info.
+    expect(card('Ш1').background).toBe('transparent');
+    expect(card('Ш4').background).toBe('transparent');
+    expect(card('Ш4').border).toBe(`1px dashed ${C.dashed}`);
+    expect(card('Ш2').boxShadow).toBe(`inset 3px 0 0 ${C.accent}`);
+    expect(card('Ш3').boxShadow).toBe(`inset 3px 0 0 ${C.info}`);
+  });
+
+  it('есть waitingSince/acceptedAt — плашка с временем', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepChains: [
+        chain({ stepRef: 'Ш1', taskIds: ['s1'], status: 'принят', outcome: 'accepted', acceptedAt: '2026-10-23T12:00:00Z' }),
+        chain({ stepRef: 'Ш2', taskIds: ['s1'], status: 'ждёт ревью', outcome: 'pending', waitingSince: new Date(Date.now() - 15 * 60000).toISOString() }),
+      ],
+    });
+    const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    const text = (ref: string) => textNodes(findNodeByAttr(findNodeByAttr(container, 'data-testid', `prod-card-${ref}`)!, 'data-testid', 'prod-status')!).join('');
+    expect(text('Ш1')).toBe('принят · 23.10');
+    expect(text('Ш2')).toBe('ждёт ревью · 15 мин');
+  });
+
+  it('мини-трек: сегмент на узел — ok/ret/cur/pend', () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }), task({ id: 's2', status: 'inProgress', role: 'rework', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T12:00:00Z' })],
+      stepChains: [chain({ stepRef: 'Ш1', taskIds: ['s1', 's2'], status: 'идёт', outcome: 'running', loops: 1, rounds: [round({ n: 1, verdict: 'returned' })] })],
+    });
+    const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    const track = findNodeByAttr(container, 'data-testid', 'prod-track')!;
+    expect(track.children.map(c => c.getAttribute('data-testid'))).toEqual(['prod-seg-ok', 'prod-seg-ret', 'prod-seg-cur']);
+    const cur = track.children[2] as never;
+    expect(reactProps(cur)!.className).toBe('cc-live-dot');
+    expect(styleOf(cur).width).toBe(12);
+    expect(styleOf(cur).height).toBe(6);
+    expect(styleOf(track.children[1] as never).background).toBe(C.warning);
+  });
+
+  it('сводка этапа — числа из stepProgress и полоса сегментов', () => {
+    const { container } = mount(createElement(FeatureProdCardsView, { run: five(), featureId: 'F' }));
+    const sum = findNodeByAttr(container, 'data-testid', 'prod-summary')!;
+    expect(textNodes(sum).join('')).toBe('1 готово · 1 идёт · 1 ждёт · 1 в очереди');
+    expect(findAll(sum, 'data-testid', 'prod-summary-seg').length).toBe(4);
+    // Без stepProgress сводки нет.
+    const { container: c2 } = mount(createElement(FeatureProdCardsView, { run: { ...five(), stepProgress: undefined }, featureId: 'F' }));
+    expect(findNodeByAttr(c2, 'data-testid', 'prod-summary')).toBeNull();
+  });
+
+  it('карточка целиком — кнопка с aria-expanded: клик раскрывает и сворачивает, клик по узлу не сворачивает', async () => {
+    const r = run({
+      steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
+      stepChains: [chain({ stepRef: 'Ш1', title: 'Сделать X', taskIds: ['s1'], status: 'принят', outcome: 'accepted', chatId: 'c', rounds: [round({ n: 1, verdict: 'accepted', reviewChatId: 'chat-gleb' })] })],
+    });
+    const { container } = mount(createElement(FeatureProdCardsView, { run: r, featureId: 'F' }));
+    const card = () => findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!;
+    expect(card().getAttribute('role')).toBe('button');
+    expect(card().getAttribute('aria-label')).toBe('Шаг Ш1, Готово: Сделать X');
+    expect(card().getAttribute('aria-expanded')).toBe('false');
+    expect(findNodeByAttr(container, 'data-testid', 'prod-chain')).toBeNull();
+    // Space/Enter на самой карточке раскрывают.
+    const prevent = vi.fn();
+    act(() => { (reactProps(card())!.onKeyDown as (e: unknown) => void)({ key: 'Enter', target: card(), currentTarget: card(), preventDefault: prevent }); });
+    expect(card().getAttribute('aria-expanded')).toBe('true');
+    expect(findNodeByAttr(container, 'data-testid', 'prod-chain')).not.toBeNull();
+    // Клик по узлу цепочки (всплывает в раскрытую часть) карточку не сворачивает.
+    const stop = vi.fn();
+    act(() => { (reactProps(findNodeByAttr(container, 'data-testid', 'prod-details')!)!.onClick as (e: unknown) => void)({ stopPropagation: stop }); });
+    expect(stop).toHaveBeenCalled();
+    act(() => { (reactProps(card())!.onClick as () => void)(); });
+    expect(card().getAttribute('aria-expanded')).toBe('false');
   });
 });

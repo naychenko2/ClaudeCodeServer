@@ -10,6 +10,12 @@ using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services;
 
+/// <summary>Исход единого снятия удержания фичи.</summary>
+public enum FeatureHoldReleaseOutcome { Released, Repeated, NotHeld, NotFound }
+
+/// <summary>Результат <see cref="TaskExecutionService.ReleaseFeatureHold"/>: исход и пробуждение очереди (id задач).</summary>
+public sealed record FeatureHoldRelease(FeatureHoldReleaseOutcome Outcome, List<string> Resumed, List<string> Expired);
+
 /// <summary>
 /// Алиасы тиров моделей владельца (opus/sonnet/haiku) для таблицы уровней в постановке.
 /// Пустой алиас = за слотом стоит модель, чей тир алиасом не выражается (сторонний
@@ -1295,6 +1301,83 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             stopped++;
         }
         return stopped;
+    }
+
+    // Единое снятие удержания фичи (тело бывшей ручки DELETE hold): порядок — подсчёт
+    // resumed/expired → ClearHold → task_changed по эпику → фоновое продолжение ходов.
+    // holdReason — причина Hold из снимка проектора, взятого до снятия (null — Hold уже снят).
+    public async Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, string? holdReason)
+    {
+        if (holdReason is null)
+        {
+            // W4-SEAM R1 (тупик после сбоя продолжения): если доставка продолжения упала
+            // (catch в ResumeFeatureTurnsAfterHold), шаг остаётся помеченный feature_held при
+            // уже снятом Hold: карточка «шаг ждёт снятия паузы», фича stopped, а повторный
+            // DELETE hold давал бы 409 «снимать нечего» — тупик. Если такие шаги есть,
+            // повторное снятие не 409, а повтор продолжения: метод идемпотентен по пометке.
+            // Причина снятой паузы из состояния не восстанавливается — карточка повторяется
+            // в общей формулировке (manual).
+            var stuck = _tasks.GetByOwner(ownerId).Any(t => t.FeatureId == featureId
+                && t.Status == TaskItemStatus.InProgress
+                && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason);
+            if (!stuck) return new FeatureHoldRelease(FeatureHoldReleaseOutcome.NotHeld, [], []);
+            _ = ResumeFeatureTurnsAfterHold(featureId, ownerId, FeatureHoldReasons.Manual);
+            // W4-SEAM2 (хвост R-SEAM2 п.2): пустые resumed/expired здесь неотличимы от
+            // «нечего делать» — исход помечается явно: продолжение повторено,
+            // а не «паузы не было».
+            return new FeatureHoldRelease(FeatureHoldReleaseOutcome.Repeated, [], []);
+        }
+
+        // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. Состав считается
+        // ДО снятия паузы (находка R-HOLD-H): пока Hold активен, FeatureHoldRefusal не-null ровно
+        // для задач, которым запуск блокирует пауза — это и есть те, кому снятие открывает запуск.
+        // После ClearHold гейт тавтологически «разрешает» и предикат перестал бы фильтровать.
+        // expired — те, чьё ожидание устройства просрочено потолком (общий предикат
+        // ProjectCapabilities.DeviceWaitExpired, как в sweep TaskExecutionService); закрытые не
+        // пробуждаются — как в GetDeviceWaiting. Форма — как у hold: списки id. Эпик в выборку
+        // не входит (FeatureId == null): его никто не запускает.
+        var now = DateTime.UtcNow;
+        var resumed = new List<string>();
+        var expired = new List<string>();
+        foreach (var t in _tasks.GetByOwner(ownerId))
+        {
+            if (t.FeatureId != featureId || t.Status == TaskItemStatus.Done) continue;
+            if (ProjectCapabilities.DeviceWaitExpired(t, now))
+                expired.Add(t.Id);
+            else if (_tasks.FeatureHoldRefusal(t) is not null)
+                resumed.Add(t.Id);
+        }
+
+        // Дефект bec00347: формулировка карточки зависит от причины удержания — её берут из
+        // снимка проектора до ClearHold: у живого эпика после снятия Hold уже null.
+        var epic = _tasks.ClearHold(featureId);
+        if (epic is null)
+        {
+            // Дефект 06aae1bf (гонка): снимок взят при активном Hold, а конкурент успел снять
+            // его до этого ClearHold — фича на месте, требование уже выполнено победителем.
+            // 404 «Фича не найдена» здесь вводит в заблуждение: исход — пустые списки
+            // (пробуждение очереди — на стороне победителя). NotFound остаётся только если
+            // эпик реально исчез (удалён между снимком и снятием).
+            if (_tasks.GetById(featureId) is null)
+                return new FeatureHoldRelease(FeatureHoldReleaseOutcome.NotFound, [], []);
+            return new FeatureHoldRelease(FeatureHoldReleaseOutcome.Released, [], []);
+        }
+        // Дефект c41d7e02 (возврат QA): снятие паузы молчал — страница фичи оставалась «на
+        // паузе» до ручной перезагрузки: task_changed вещает только продолжение по
+        // ПРОДОЛЖЕНным шагам, а если прерванных не было — вещания нет вовсе. Тот же формат, что
+        // у постановки: task_changed("updated") по эпику — с снятым Hold проектор считает
+        // состояние не-пауза, экран уходит с «на паузе» живьём.
+        await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", epic));
+        // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
+        // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
+        // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
+        // разрешены». resumed/expired — пробуждение очереди (R-HOLD-H), продолженные шаги в неё
+        // не входят (они уже в работе).
+        // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой локализован в
+        // ResumeFeatureTurnsAfterHold: каждая ветка продолжения обёрнута и логируется там, а
+        // после W4-HOLD-J метод на известных путях не бросает (R-HOLD-K2 п.1).
+        _ = ResumeFeatureTurnsAfterHold(featureId, ownerId, holdReason);
+        return new FeatureHoldRelease(FeatureHoldReleaseOutcome.Released, resumed, expired);
     }
 
     // Возврат прерванных паузой ходов при её снятии (W4-HOLD-D, контракт §1 :231): продолжение

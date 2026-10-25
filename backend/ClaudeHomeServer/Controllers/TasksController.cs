@@ -1003,80 +1003,16 @@ public class TasksController(
 
         var run = features.Project(featureId, UserId);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
-        if (run.Epic.Hold is null)
+        // Тело снятия (подсчёт resumed/expired, вещание, продолжение ходов, повтор после
+        // сбоя продолжения) — один общий метод сервиса: другой копии у ручки быть не должно.
+        var release = await executor.ReleaseFeatureHold(featureId, UserId, run.Epic.Hold?.Reason);
+        return release.Outcome switch
         {
-            // W4-SEAM R1 (тупик после сбоя продолжения): если доставка продолжения упала
-            // (catch в ResumeFeatureTurnsAfterHold), шаг остаётся помеченный feature_held при
-            // уже снятом Hold: карточка «шаг ждёт снятия паузы», фича stopped, а повторный
-            // DELETE hold давал бы 409 «снимать нечего» — тупик. Если такие шаги есть,
-            // повторное снятие не 409, а повтор продолжения: метод идемпотентен по пометке.
-            // Причина снятой паузы из состояния не восстанавливается — карточка повторяется
-            // в общей формулировке (manual).
-            var stuck = tasks.GetByOwner(UserId).Any(t => t.FeatureId == featureId
-                && t.Status == TaskItemStatus.InProgress
-                && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason);
-            if (!stuck) return Conflict(new { error = "Фича не удержана: снимать нечего" });
-            _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, FeatureHoldReasons.Manual);
-            // W4-SEAM2 (хвост R-SEAM2 п.2): пустые resumed/expired здесь неотличимы от
-            // «нечего делать» — ответ повтора помечается явно: продолжение повторено,
-            // а не «паузы не было».
-            return Ok(new { resumed = new List<string>(), expired = new List<string>(), repeated = true });
-        }
-
-        // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. Состав считается
-        // ДО снятия паузы (находка R-HOLD-H): пока Hold активен, FeatureHoldRefusal не-null ровно
-        // для задач, которым запуск блокирует пауза — это и есть те, кому снятие открывает запуск.
-        // После ClearHold гейт тавтологически «разрешает» и предикат перестал бы фильтровать.
-        // expired — те, чьё ожидание устройства просрочено потолком (общий предикат
-        // ProjectCapabilities.DeviceWaitExpired, как в sweep TaskExecutionService); закрытые не
-        // пробуждаются — как в GetDeviceWaiting. Форма — как у hold: списки id. Эпик в выборку
-        // не входит (FeatureId == null): его никто не запускает.
-        var now = DateTime.UtcNow;
-        var resumed = new List<string>();
-        var expired = new List<string>();
-        foreach (var t in tasks.GetByOwner(UserId))
-        {
-            if (t.FeatureId != featureId || t.Status == TaskItemStatus.Done) continue;
-            if (ProjectCapabilities.DeviceWaitExpired(t, now))
-                expired.Add(t.Id);
-            else if (tasks.FeatureHoldRefusal(t) is not null)
-                resumed.Add(t.Id);
-        }
-
-        // Дефект bec00347: формулировка карточки зависит от причины удержания — её берут из
-        // снимка run, собранного проектором до ClearHold (:910): у живого эпика после снятия
-        // Hold уже null.
-        var holdReason = run.Epic.Hold!.Reason;
-        var epic = tasks.ClearHold(featureId);
-        if (epic is null)
-        {
-            // Дефект 06aae1bf (гонка): снимок run (:923) взят при активном Hold, а конкурент
-            // успел снять его до этого ClearHold — фича на месте, требование уже выполнено
-            // победителем. 404 «Фича не найдена» здесь вводит в заблуждение: ответ — 200 с
-            // пустыми списками (пробуждение очереди — на стороне победителя). 404 остаётся
-            // только если эпик реально исчез (удалён между снимком и снятием).
-            if (tasks.GetById(featureId) is null) return NotFound(new { error = "Фича не найдена" });
-            return Ok(new { resumed = new List<string>(), expired = new List<string>() });
-        }
-        // Дефект c41d7e02 (возврат QA): снятие паузы молчал — страница фичи оставалась «на
-        // паузе» до ручной перезагрузки: task_changed вещает только сервис продолжений по
-        // ПРОДОЛЖЕНным шагам (TaskExecutionService.cs:1343), а если прерванных не было —
-        // нечего продолжать, вещания нет вовсе. Тот же формат, что у постановки (:897):
-        // task_changed("updated") по эпику — с снятым Hold проектор считает состояние
-        // не-пауза, экран уходит с «на паузе» живьём.
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
-        // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
-        // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
-        // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
-        // разрешены». Ответ не меняется: resumed/expired — пробуждение очереди (R-HOLD-H),
-        // продолженные шаги в неё не входят (они уже в работе).
-        // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой локализован в сервисе:
-        // каждая ветка продолжения обёртана и логируется там (TaskExecutionService.cs:1233,
-        // :1247, :1263, DeliverKeyChatCardAsync :1374), поэтому ручка вызов не оборачивает:
-        // после W4-HOLD-J сервис на известных путях не бросает, обёртка ручки была мёртвым
-        // покрытием (R-HOLD-K2 п.1).
-        _ = executor.ResumeFeatureTurnsAfterHold(featureId, UserId, holdReason);
-        return Ok(new { resumed, expired });
+            FeatureHoldReleaseOutcome.NotHeld => Conflict(new { error = "Фича не удержана: снимать нечего" }),
+            FeatureHoldReleaseOutcome.NotFound => NotFound(new { error = "Фича не найдена" }),
+            FeatureHoldReleaseOutcome.Repeated => Ok(new { resumed = release.Resumed, expired = release.Expired, repeated = true }),
+            _ => Ok(new { resumed = release.Resumed, expired = release.Expired }),
+        };
     }
 
     // Любая задача фичи хоть раз запускалась — «первый запуска шага» состоялся. Тот же состав

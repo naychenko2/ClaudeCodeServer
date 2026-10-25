@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePlansTab, plansTabCount } from './FeaturePlansTab';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import { api } from '../../lib/api';
+import { getBackNav, clearBackNav, featureBackNavFromTask } from '../../lib/featureBackNav';
 import type { FeaturePage } from '../../types/featureIndex';
 import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
 
@@ -443,17 +444,24 @@ describe('FeaturePlansTab', () => {
     const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, featureId: 'f1', projectId: 'proj-page' }));
     click(container as FNode, 'plan-row');
     await flush();
+    clearBackNav();
     click(container as FNode, 'nav-target-task');
     expect(mockOpenTask.calls).toEqual([{ id: 'plan-t', projectId: 'proj-epic' }]);
+    // Точка возврата: на задаче рисуется чип «← к фиче · Планы».
+    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'plan-t' }, fromTab: 'plans' });
+    expect(featureBackNavFromTask('plan-t')).toMatchObject({ featureId: 'f1', tab: 'plans' });
   });
 
   it('карточка макета: «задача макета» → openTaskInSection с projectId эпика', async () => {
     const page = pageData({ mockups: [mockup({ taskId: 'mock-t' })] });
     (page.run as { epic?: unknown }).epic = { id: 'f1', title: 'Фича', status: 'todo', projectId: 'proj-epic' };
-    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, featureId: 'f1' }));
     click(container as FNode, 'mockup-row');
     await flush();
+    clearBackNav();
     click(container as FNode, 'nav-target-task');
     expect(mockOpenTask.calls).toEqual([{ id: 'mock-t', projectId: 'proj-epic' }]);
+    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'mock-t' }, fromTab: 'plans' });
+    expect(featureBackNavFromTask('mock-t')).toMatchObject({ featureId: 'f1', tab: 'plans' });
   });
 });

@@ -291,9 +291,11 @@ export interface MockupCardProps {
   marks?: NavMarks;
   // Проект эпика фичи — переход в задачу макета открывается в нём, а не в личном «Календаре».
   taskProjectId?: string | null;
+  // Переход в задачу макета (вкладка «Планы» пишет точку возврата); без него — прямое открытие.
+  onOpenTask?: (taskId: string) => void;
 }
 
-export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replaced = false, marks = EMPTY_NAV_MARKS, taskProjectId = null }: MockupCardProps) {
+export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replaced = false, marks = EMPTY_NAV_MARKS, taskProjectId = null, onOpenTask }: MockupCardProps) {
   const main = mainHtmlFile(mockup);
   const nMaster = notInMaster(mockup);
   const persona = mockup.authorPersonaId ? getPersonaById(mockup.authorPersonaId) : undefined;
@@ -328,7 +330,7 @@ export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replac
               kind="task"
               taskId={taskId}
               taskClosed={marks.taskClosed(taskId)}
-              onOpen={() => openTaskInSection({ id: taskId, projectId: taskProjectId ?? undefined })}
+              onOpen={() => (onOpenTask ? onOpenTask(taskId) : openTaskInSection({ id: taskId, projectId: taskProjectId ?? undefined }))}
               title="Открыть задачу макета"
               isMobile={isMobile}
             />

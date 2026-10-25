@@ -510,6 +510,9 @@ describe('FeatureRunView: переход в задачу несёт проект
     expect(btn, 'кнопка «задача» исполнителя').not.toBeNull();
     act(() => { (reactProps(btn!)!.onClick as () => void)(); });
     expect(mockOpenTask.calls).toEqual([{ id: 'task-x', projectId: 'proj-A' }]);
+    // Панель в чате: точка возврата на фичу (без вкладки в чипе), чип на задаче читает её.
+    expect(backNav.getBackNav()).toMatchObject({ fromKind: 'feature', to: { kind: 'task', id: 'task-x' }, showTab: false });
+    expect(backNav.featureBackNavFromTask('task-x')).not.toBeNull();
     root.unmount();
     uninstallFakeDom();
   });

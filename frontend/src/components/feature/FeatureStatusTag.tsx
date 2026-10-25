@@ -103,10 +103,27 @@ const TAG_STYLE: Record<FeatureRunTagTone, CSSProperties> = {
   draft:    { background: 'transparent', color: C.textSecondary, border: `1px dashed ${C.textMuted}` },
 };
 
+// Тег очереди — «в очереди» или «в очереди · N из M»; признак читаем по подписи,
+// чтобы не расширять контракт FeatureRunTag (его сверяют toEqual в соседних тестах).
+const QUEUE_LABEL = /^в очереди(?: · (\d+ из \d+))?$/;
+
+// Глиф очереди (макет feature-queue-1, «Тег и глиф»): три полосы 12×2.4, rx 1.2,
+// по y 2.5 / 6.8 / 11.1; currentColor и opacity — на самих полосах, не на обёртке.
+function QueueGlyph() {
+  return (
+    <svg data-testid="queue-glyph" aria-hidden width={10} height={10} viewBox="0 0 14 14" style={{ flexShrink: 0 }}>
+      <rect x={1} y={2.5} width={12} height={2.4} rx={1.2} fill="currentColor" />
+      <rect x={1} y={6.8} width={12} height={2.4} rx={1.2} fill="currentColor" opacity={0.55} />
+      <rect x={1} y={11.1} width={12} height={2.4} rx={1.2} fill="currentColor" opacity={0.55} />
+    </svg>
+  );
+}
+
 // Тег: 11/600, поля 1 7, R.sm, строка 16 (макет §1). Точка — у «ждёт вас»/«к мержу».
 // «На паузе» — глиф «‖» 10 px currentColor перед подписью (макет feature-hold-1);
 // «черновик» — поля 0 6: пунктирная рамка занимает место, её компенсируют полем.
 export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string }) {
+  const queue = tag.tone === 'hold' ? QUEUE_LABEL.exec(tag.label) : null;
   return (
     <span
       data-testid={testId}
@@ -118,7 +135,8 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
         ...TAG_STYLE[tag.tone],
       }}
     >
-      {tag.tone === 'hold' && (
+      {queue && <QueueGlyph />}
+      {tag.tone === 'hold' && !queue && (
         <span aria-hidden style={{ display: 'inline-flex', color: 'currentColor' }}>
           <Pause size={10} strokeWidth={ICON_STROKE} />
         </span>
@@ -126,7 +144,12 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
       {tag.dot && (
         <span aria-hidden style={{ width: 6, height: 6, borderRadius: R.full, background: C.info, flexShrink: 0 }} />
       )}
-      {tag.label}
+      {queue && queue[1] ? (
+        <>
+          в очереди ·{' '}
+          <span data-testid="queue-nums" style={{ fontFamily: FONT.mono }}>{queue[1]}</span>
+        </>
+      ) : tag.label}
     </span>
   );
 }

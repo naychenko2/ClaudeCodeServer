@@ -5,7 +5,7 @@
 import { useSyncExternalStore } from 'react';
 import type { Me, Project, Session } from '../types';
 import { api } from './api';
-import { OfflineError, RequestTimeoutError } from './offline';
+import { OfflineError, RequestTimeoutError, readStoredUserId } from './offline';
 import { onMessage } from './signalr';
 
 interface MeState {
@@ -120,6 +120,16 @@ export async function refreshMe(): Promise<void> {
 }
 
 export function getMeSnapshot(): MeState { return _me; }
+
+// «Одна вкладка — один владелец»: хранилище (readStoredUserId) называет того же
+// человека, чьи данные показывает вкладка (снимок /auth/me). Сравнивать нечем, пока
+// одно из значений неизвестно (/me ещё не пришёл, id не записан) — это не расхождение.
+export function isTabOwnerConsistent(): boolean {
+  const stored = readStoredUserId();
+  const mine = _me.userId;
+  if (!stored || !mine) return true;
+  return stored === mine;
+}
 
 export function useMe(): MeState {
   return useSyncExternalStore(

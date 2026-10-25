@@ -173,7 +173,11 @@ vi.mock('./lib/uiInspector', () => ({
 }));
 
 // ── lib-модули со side-эффектами: no-op ──
-vi.mock('./lib/offline', () => ({ __esModule: true, initConnectivity: () => {} }));
+vi.mock('./lib/offline', () => ({
+  __esModule: true, initConnectivity: () => {}, invalidateTokenCache: () => {},
+  readStoredToken: () => (globalThis as any).localStorage.getItem('cc_token'),
+  readStoredUserId: () => (globalThis as any).localStorage.getItem('cc_user_id'),
+}));
 vi.mock('./lib/selectionScope', () => ({ __esModule: true, installSelectionScopes: () => {} }));
 vi.mock('./lib/sync', () => ({
   __esModule: true, runOfflineSnapshot: () => Promise.resolve(), syncProjectFiles: () => Promise.resolve(), drainOfflineQueues: () => Promise.resolve(),

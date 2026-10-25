@@ -7,6 +7,7 @@
 import { useSyncExternalStore } from 'react';
 import type { Persona } from '../types';
 import { api } from './api';
+import { readStoredUserId } from './offline';
 import { joinUser, onMessage, onReconnected } from './signalr';
 
 let _personas: Persona[] = [];
@@ -22,7 +23,7 @@ function emit() {
 }
 
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 

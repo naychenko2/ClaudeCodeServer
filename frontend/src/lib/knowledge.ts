@@ -6,6 +6,7 @@
 import { useSyncExternalStore } from 'react';
 import type { KnowledgeBaseSummary } from '../types';
 import { api } from './api';
+import { readStoredUserId } from './offline';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { invalidateBindingTargets } from '../features/personas/bindingMeta';
 
@@ -23,7 +24,7 @@ function emit() {
 }
 
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 

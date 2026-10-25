@@ -93,15 +93,17 @@ enable/disable, uninstall, запись/удаление секрета) — п�
 один раз, и панель не видела 0.1.0 → 0.2.0, пока карточку не переоткрыли).
 
 Инварианты (нарушение = дефект):
-1. **Одно событие на операцию.** Обычно событие испускает хранилище — `PluginStore`
-   (`SaveInstalled`/`Update`/`Update<T>`) и `PluginSecretsStore` (`Set`/`RemoveSecret`/
-   `RemovePlugin`): все записи установки/секретов идут через них, поэтому новая ручка
-   не сможет «забыть» испустить событие. `Update<T>`/`RemoveSecret`/`RemovePlugin` —
-   только при фактическом изменении (no-op не шумит). Единственное исключение —
-   `PluginUninstall.Uninstall`: каскад пишет в оба хранилища с `fireEvent: false` и
-   испускает одно `plugins_changed` сам, в конце (`PluginUninstall.cs:93-96`); удаление
-   несуществующего плагина (`false`) события не даёт. Итог: операция — одно событие,
-   не по событию на каждую запись (тест `Uninstall_Каскад_РовноОдноСобытие`).
+1. **Одно событие на операцию** — не по событию на каждую запись. Обычно его испускает
+   хранилище — `PluginStore` (`SaveInstalled`/`Update`/`Update<T>`) и `PluginSecretsStore`
+   (`Set`/`RemoveSecret`/`RemovePlugin`): все записи установки/секретов идут через них,
+   поэтому новая ручка не сможет «забыть» испустить событие. `Update<T>`/`RemoveSecret`/
+   `RemovePlugin` — только при фактическом изменении (no-op не шумит). Операция, пишущая
+   в оба хранилища, сама собирает события в одно: `PluginUninstall.Uninstall` зовёт
+   `SaveInstalled`/`RemovePlugin` с `fireEvent: false` (параметр отключает событие
+   записи, а не операции) и испускает единственное `plugins_changed` в конце каскада
+   (`Services/PluginUninstall.cs:95-96`). Удаление несуществующего плагина (`false`)
+   события не даёт. Тест — `Uninstall_Каскад_РовноОдноСобытие`
+   (`PluginUninstallTests.cs:283`).
 2. **Владелец — из записи, без полезной нагрузки.** `plugins_changed` уходит
    `ISessionBroadcaster.ToOwner(ownerId)` (Core-шов, как `plugin_draft_changed` в
    `PluginDraftWatcher`) — чужой владелец ничего не получает; полезной нагрузки нет,

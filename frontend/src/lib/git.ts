@@ -5,6 +5,7 @@
 import { useSyncExternalStore } from 'react';
 import type { GitStatus, GitBranchInfo, GitLogEntry, GitStashEntry, GitRemoteInfo, ChangedBySession } from '../types';
 import { api, getGitSessionContext } from './api';
+import { readStoredUserId } from './offline';
 import { plural } from './plural';
 import { joinUser, onFilesChanged, onGitStatusChanged, onReconnected } from './signalr';
 
@@ -79,7 +80,7 @@ function patch(projectId: string, p: Partial<GitProjectState>) {
 }
 
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 

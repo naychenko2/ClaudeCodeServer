@@ -49,8 +49,8 @@ function feat(over: Partial<FeatureIndexFeature> = {}): FeatureIndexFeature {
   };
 }
 
-function attention(kind: FeatureAttention['kind']): FeatureAttention {
-  return { kind, since: null, reason: null, personaId: null, sessionId: null };
+function attention(kind: FeatureAttention['kind'], personaId: string | null = null): FeatureAttention {
+  return { kind, since: null, reason: null, personaId, sessionId: null };
 }
 
 // Минимальный чат: для раскладки важны id, status, parentSessionId.
@@ -219,7 +219,8 @@ describe('FeatureGroupHeader: state (merge_pending / merging)', () => {
 
 describe('FeatureGroupHeader: клики (шеvron vs тело)', () => {
   it('клик по шеврону: stopPropagation + onToggle, onOpen НЕ зовёт', () => {
-    let toggled = 0, opened = 0, stopped = 0;
+    let toggled = 0, stopped = 0;
+    const opened = 0;
     // featureGroupChevronClick — чистая функция: вызываю её с фейковым событием.
     featureGroupChevronClick(
       () => { toggled++; },
@@ -295,7 +296,7 @@ describe('featureQuickAction: «Ответить» / «К мержу» / «Кл�
 
 // === Стопка аватаров (featureAvatarPersonaIds) ===
 
-describe('featureAvatarPersonaIds: nowPersonaIds с фолбэком на now0', () => {
+describe('featureAvatarPersonaIds: nowPersonaIds с фолбэком на now0, затем на attention.personaId', () => {
   it('nowPersonaIds непустой → из него (в порядке убывания старта)', () => {
     const f = feat({ nowPersonaIds: ['p1', 'p2'] });
     expect(featureAvatarPersonaIds(f)).toEqual(['p1', 'p2']);
@@ -311,8 +312,26 @@ describe('featureAvatarPersonaIds: nowPersonaIds с фолбэком на now0',
     expect(featureAvatarPersonaIds(f)).toEqual(['p9']);
   });
 
-  it('ни nowPersonaIds, ни now0 → пусто (аватаров нет)', () => {
+  it('ни nowPersonaIds, ни now0, ни attention.personaId → пусто (аватаров нет)', () => {
     expect(featureAvatarPersonaIds(feat())).toEqual([]);
+  });
+
+  // ST-FA (дефект 4a241bee): после сужения run.now у фичи, где все исполнители
+  // ждут человека, nowPersonaIds и now0 пусты — стопка не должна пустеть.
+  it('nowPersonaIds и now0 пусты, attention.personaId задан → фолбэк на attention.personaId', () => {
+    const f = feat({ bucket: 'attention', attention: attention('wait', 'p7') });
+    expect(featureAvatarPersonaIds(f)).toEqual(['p7']);
+  });
+
+  // Приоритет: живой now не уступает тревоге.
+  it('nowPersonaIds непустой при заданном attention.personaId → прежнее поведение, не фолбэк', () => {
+    const f = feat({ nowPersonaIds: ['p1'], attention: attention('wait', 'p7') });
+    expect(featureAvatarPersonaIds(f)).toEqual(['p1']);
+  });
+
+  it('attention есть, но без personaId → пусто (фолбэк только если id задан)', () => {
+    const f = feat({ bucket: 'attention', attention: attention('stopped') });
+    expect(featureAvatarPersonaIds(f)).toEqual([]);
   });
 
   it('рендер: пустой nowPersonaIds → аватар из now0 (PersonaAvatar в DOM)', () => {
@@ -320,6 +339,13 @@ describe('featureAvatarPersonaIds: nowPersonaIds с фолбэком на now0',
     const html = renderHeader(f, { personaById: (id: string) => (id === 'p9' ? persona('p9', 'Кира') : undefined) });
     // Аватар персоны p9 (инициалы) рендерится; PersonaFace рисует инициалы имени («Кира» → «КИ»).
     expect(html).toContain('КИ');
+  });
+
+  it('рендер: пустой now при attention.personaId → аватар из attention (PersonaAvatar в DOM)', () => {
+    const f = feat({ bucket: 'attention', attention: attention('wait', 'p7') });
+    const html = renderHeader(f, { personaById: (id: string) => (id === 'p7' ? persona('p7', 'Тимур') : undefined) });
+    // Инициалы персоны p7 («Тимур» → «ТИ») — стопка не пустая.
+    expect(html).toContain('ТИ');
   });
 
   it('рендер: nowPersonaIds → стопка (несколько аватаров, нахлёст −5 со второго)', () => {

@@ -257,7 +257,7 @@ describe('вердикт Глеба ST-F4', () => {
     expect(textOf(hero)).toContain('от разреза до закрытия');
     expect(textOf(hero)).not.toContain('до мержа');
     // Counts бэка никуда не исчезают: они правдивы и без мержа.
-    expect(textOf(hero)).toContain('3 задач');
+    expect(textOf(hero)).toContain('3 задачи');
   });
 
   it('п.2 few на паузе и в черновике — чип из run.state, не «только начали»', () => {
@@ -285,6 +285,16 @@ describe('вердикт Глеба ST-F4', () => {
 });
 
 describe('состояние «ждёт вас» по решению Андрея', () => {
+  it('склонение счётчиков итога: 1 / 2 / 5 / 11 / 21', () => {
+    const cases: Array<[number, string]> = [[1, '1 задача · 1 шаг · 1 возврат'], [2, '2 задачи · 2 шага · 2 возврата'],
+      [5, '5 задач · 5 шагов · 5 возвратов'], [11, '11 задач · 11 шагов · 11 возвратов'], [21, '21 задача · 21 шаг · 21 возврат']];
+    for (const [n, expected] of cases) {
+      const run = mkRun({ state: 'merged', summary: { mergedAt: '2026-10-20T16:00:00Z', durationMinutes: 60, tasks: n, steps: n, loops: n } });
+      const { container } = mountHero(run, mkStats());
+      expect(textOf(findNodeByAttr(container, 'data-testid', 'hero-merged'))).toContain(expected);
+    }
+  });
+
   it('ровно одна ghost-кнопка «Открыть задачу»; вопроса и кнопки чата нет', () => {
     const { container } = mountHero(waitingRun(), mkStats());
     const hero = findNodeByAttr(container, 'data-testid', 'hero-waiting');

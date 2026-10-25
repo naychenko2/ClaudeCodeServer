@@ -221,6 +221,35 @@ describe('labelOf получает ось от оболочки', () => {
   });
 });
 
+describe('чипы персон в разрезах моделей и ролей', () => {
+  // Чип персоны подписывается осью «персоны», а не текущей: UUID недоступной
+  // персоны не должен попадать в подпись сырым.
+  const UUID = '940349f7-0000-4000-8000-000000000001';
+  const axisLabel = (key: string, axis: string): string =>
+    axis === 'personas' ? (key === 'kira' ? 'Кира' : 'персона недоступна') : `${axis}:${key}`;
+  const run = { ...mkRun(), stages: [{ executors: [
+    { personaId: 'kira', modelFull: 'opus', taskRole: 'step' },
+    { personaId: UUID, modelFull: 'opus', taskRole: 'step' },
+  ] }] } as unknown as FeatureRun;
+
+  for (const mobile of [false, true]) {
+    it(`${mobile ? 'карточки' : 'таблица'}: имя персоны и «персона недоступна», не UUID`, () => {
+      mobileFlag.value = mobile;
+      try {
+        const { container } = mount(createElement(FeatureBreakdownBlock, {
+          breakdown: BREAKDOWN, costPartial: false, run, labelOf: axisLabel, isMobile: mobile,
+        }));
+        const btn = findButtonByLabel(headNode(container)!, 'модели')!;
+        act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+        const text = textOf(container);
+        expect(text).toContain('Кира');
+        expect(text).toContain('персона недоступна');
+        expect(text).not.toContain(UUID);
+      } finally { mobileFlag.value = false; }
+    });
+  }
+});
+
 describe('один набор групп для кольца, таблицы и карточек (к1, к3)', () => {
   it('hiddenKeys отсекается один раз: скрытой группы нет и в кольце, и в таблице', () => {
     const { container } = mountBlock({ hiddenKeys: ['feature'] });

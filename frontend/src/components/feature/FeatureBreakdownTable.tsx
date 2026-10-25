@@ -43,6 +43,8 @@ export interface FeatureBreakdownTableProps {
   // Часть моделей без цены (spend.costPartial): «Всего» не может быть «бесплатно».
   costPartial?: boolean;
   labelOf?: (key: string) => string;
+  // Подпись персоны в чипах связи: чипы персон живут в разрезах моделей и ролей, где labelOf — не про персон.
+  personaLabelOf?: (key: string) => string;
   // Цвет группы: у персон — цвет персоны; фолбэк — палитра по порядку (как у ShareRing).
   colorOf?: (key: string) => string;
   // Ключи строк, которые не рисуем (роль key='feature' — вид ещё не решил).
@@ -117,8 +119,9 @@ function measureCell(
 }
 
 export function FeatureBreakdownTable({
-  groups, axis, run, labelOf, colorOf, hiddenKeys, measure: measureProp, onMeasureChange, isMobile = false, nav, costPartial = false,
+  groups, axis, run, labelOf, personaLabelOf: personaLabelOfProp, colorOf, hiddenKeys, measure: measureProp, onMeasureChange, isMobile = false, nav, costPartial = false,
 }: FeatureBreakdownTableProps) {
+  const personaLabelOf = personaLabelOfProp ?? labelOf;
   // Хуки выше раннего return: мера сортировки (если оболочка её не ведёт) и раскрытая строка.
   const [ownMeasure, setOwnMeasure] = useState<Measure>('time');
   const measure = measureProp ?? ownMeasure;
@@ -207,12 +210,12 @@ export function FeatureBreakdownTable({
                     {chips.map(c => c.kind === 'persona' ? (
                       <span key={`${c.kind}:${c.key}`} style={{ ...CHIP, border: 'none' }}>
                         <span aria-hidden style={{ ...CHIP_AV, background: chipColor(c.key, colorOf) }}>
-                          {(labelOf ? labelOf(c.key) : c.key).charAt(0).toUpperCase()}
+                          {(personaLabelOf ? personaLabelOf(c.key) : c.key).charAt(0).toUpperCase()}
                         </span>
-                        {chipLabel(c, labelOf)}
+                        {chipLabel(c, personaLabelOf)}
                       </span>
                     ) : (
-                      <span key={`${c.kind}:${c.key}`} style={CHIP}>{chipLabel(c, labelOf)}</span>
+                      <span key={`${c.kind}:${c.key}`} style={CHIP}>{chipLabel(c, personaLabelOf)}</span>
                     ))}
                   </div>
                 </td>

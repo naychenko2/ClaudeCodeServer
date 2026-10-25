@@ -59,6 +59,19 @@ function mkNow(over: Partial<FeatureNow> = {}): FeatureNow {
   return { taskId: 't-1', stage: 'prod', title: 'Тема шага', ...over };
 }
 
+describe('analysisLineState — склонение счётчиков done', () => {
+  it('1 / 2 / 5 / 11 / 21', () => {
+    const cases: Array<[number, string]> = [[1, '1 шаг, 1 возврат.'], [2, '2 шага, 2 возврата.'],
+      [5, '5 шагов, 5 возвратов.'], [11, '11 шагов, 11 возвратов.'], [21, '21 шаг, 21 возврат.']];
+    for (const [n, tail] of cases) {
+      const st = analysisLineState(mkRun({
+        state: 'merged', summary: { mergedAt: '2026-10-19T10:00:00Z', durationMinutes: 120, steps: n, loops: n },
+      }), NOW);
+      expect(st.tail).toBe(tail);
+    }
+  });
+});
+
 describe('analysisLineState — состояния', () => {
   it('done — смержена с итогом: бейдж, дата мержа, счётчики', () => {
     const st = analysisLineState(mkRun({
@@ -68,7 +81,7 @@ describe('analysisLineState — состояния', () => {
     expect(st.key).toBe('done');
     expect(st.badge?.text).toBe('смержена');
     expect(st.strong).toContain('шла 2 ч');
-    expect(st.tail).toBe('3 шагов, 2 возвратов.');
+    expect(st.tail).toBe('3 шага, 2 возврата.');
     // Действие одно — «Анализ моделью».
     expect(st.actions.length).toBe(1);
     expect(st.actions[0].kind).toBe('analysis');

@@ -17,6 +17,7 @@ import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import { openTaskInSection } from '../../lib/tasks';
+import { plural } from '../../lib/plural';
 import { formatDuration, formatDateTime, minutesSince, kindBackground } from './FeatureStatsBits';
 import { FEW_DATA_MIN, pickHeroState, compositionRows, type HeroState } from './FeatureStatsPulseModel';
 import type { FeatureRun } from '../../types/featureRun';
@@ -92,7 +93,7 @@ export function StatsHero({ run, stats, isMobile = false }: StatsHeroProps) {
     // «до мержа» — только при реальном мерже (mergedAt есть); закрытая без мержа —
     // «до закрытия» (вердикт ST-F4, п. 1). Counts — те же: их дал бэк по итогу.
     sub = `от разреза до ${s?.mergedAt ? 'мержа' : 'закрытия'}` +
-      (s ? ` · ${s.tasks} задач · ${s.steps} шагов · ${s.loops} возврата` : '');
+      (s ? ` · ${s.tasks} ${plural(s.tasks, 'задача', 'задачи', 'задач')} · ${s.steps} ${plural(s.steps, 'шаг', 'шага', 'шагов')} · ${s.loops} ${plural(s.loops, 'возврат', 'возврата', 'возвратов')}` : '');
   } else if (state === 'few') {
     big = formatDuration(totals.elapsedMinutes);
     sub = 'идёт разрез · считать доли пока рано';

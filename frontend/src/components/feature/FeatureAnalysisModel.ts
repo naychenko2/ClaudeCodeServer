@@ -9,6 +9,7 @@
 
 import { C } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
+import { plural } from '../../lib/plural';
 import { executorStopVisual } from '../../lib/tasks';
 import { formatClock, formatDateTime, formatDuration, minutesSince } from './FeatureStatsBits';
 // Тег статуса — общий модуль FeatureStatusTag (W5-F3a): модель не тянет шапку,
@@ -96,7 +97,7 @@ export function analysisLineState(run: FeatureRun, nowMs: number): AnalysisLineS
     return {
       key: 'done', tone: 'neutral', dashed: false, badge,
       strong: `${when}шла ${formatDuration(s.durationMinutes)}`,
-      tail: `${s.steps} шагов, ${s.loops} возвратов.`,
+      tail: `${s.steps} ${plural(s.steps, 'шаг', 'шага', 'шагов')}, ${s.loops} ${plural(s.loops, 'возврат', 'возврата', 'возвратов')}.`,
       actions: [ANALYSIS_ACTION],
     };
   }

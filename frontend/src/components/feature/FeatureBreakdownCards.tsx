@@ -47,6 +47,8 @@ export interface FeatureBreakdownCardsProps {
   run: FeatureRun;
   // Человекочитаемое имя группы (как у таблицы и ShareRing); фолбэк — сам ключ.
   labelOf?: (key: string) => string;
+  // Подпись персоны в чипах связи: чипы персон живут в разрезах моделей и ролей, где labelOf — не про персон.
+  personaLabelOf?: (key: string) => string;
   // Цвет группы: у персон — цвет персоны; фолбэк — палитра по порядку.
   colorOf?: (key: string) => string;
   // Ключи групп, которые не рисуем (роль key='feature' — вид ещё не решил).
@@ -118,8 +120,9 @@ function measureText(g: FeatureBreakdownGroup, measure: Measure): string {
 }
 
 export function FeatureBreakdownCards({
-  groups, axis, measure, run, labelOf, colorOf, hiddenKeys, nav,
+  groups, axis, measure, run, labelOf, personaLabelOf: personaLabelOfProp, colorOf, hiddenKeys, nav,
 }: FeatureBreakdownCardsProps) {
+  const personaLabelOf = personaLabelOfProp ?? labelOf;
   // Хук выше раннего return: раскрытая группа — состояние карточек; мера приходит
   // из props, поэтому при её смене состояние раскрытия не сбрасывается (к3).
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
@@ -182,12 +185,12 @@ export function FeatureBreakdownCards({
               {chips.map(c => c.kind === 'persona' ? (
                 <span key={`${c.kind}:${c.key}`} data-testid={`breakdown-chip-${c.kind}:${c.key}`} style={{ ...CHIP, border: 'none' }}>
                   <span aria-hidden style={{ ...CHIP_AV, background: chipColor(c.key, colorOf) }}>
-                    {(labelOf ? labelOf(c.key) : c.key).charAt(0).toUpperCase()}
+                    {(personaLabelOf ? personaLabelOf(c.key) : c.key).charAt(0).toUpperCase()}
                   </span>
-                  {chipLabel(c, labelOf)}
+                  {chipLabel(c, personaLabelOf)}
                 </span>
               ) : (
-                <span key={`${c.kind}:${c.key}`} data-testid={`breakdown-chip-${c.kind}:${c.key}`} style={CHIP}>{chipLabel(c, labelOf)}</span>
+                <span key={`${c.kind}:${c.key}`} data-testid={`breakdown-chip-${c.kind}:${c.key}`} style={CHIP}>{chipLabel(c, personaLabelOf)}</span>
               ))}
             </div>
             <div style={MS}>

@@ -97,6 +97,8 @@ export function FeatureBreakdownBlock({
   const visible = (breakdown[axis] ?? []).filter(g => !hidden.has(g.key));
   // Подписи детям — с уже выбранной осью.
   const labelOf = labelOfAxis ? (key: string) => labelOfAxis(key, axis) : undefined;
+  // Чипы персон в разрезах моделей и ролей подписываются по оси персон, а не текущей.
+  const personaLabelOf = labelOfAxis ? (key: string) => labelOfAxis(key, 'personas') : undefined;
 
   // «Без расхода»: ни токенов, ни денег ни у одной группы — опции меры
   // приглушены, плашка объясняет причину (состояние записки «без расхода»).
@@ -181,7 +183,7 @@ export function FeatureBreakdownBlock({
           </div>
           <FeatureBreakdownCards
             groups={visible} axis={axis} measure={effMeasure} run={run}
-            labelOf={labelOf} colorOf={colorOf} nav={nav}
+            labelOf={labelOf} personaLabelOf={personaLabelOf} colorOf={colorOf} nav={nav}
           />
         </div>
       ) : (
@@ -196,7 +198,7 @@ export function FeatureBreakdownBlock({
           <div style={{ flex: 1, minWidth: 0 }}>
             <FeatureBreakdownTable
               groups={visible} axis={axis} run={run} measure={effMeasure} onMeasureChange={setMeasure}
-              labelOf={labelOf} colorOf={colorOf} nav={nav} isMobile={isMobile} costPartial={costPartial}
+              labelOf={labelOf} personaLabelOf={personaLabelOf} colorOf={colorOf} nav={nav} isMobile={isMobile} costPartial={costPartial}
             />
           </div>
         </div>

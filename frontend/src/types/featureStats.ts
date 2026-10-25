@@ -7,8 +7,42 @@
 // Все поля nullable-терпимы там, где бэк может не иметь данных (null — нет
 // значения); UI обязан пережить отсутствие любого (старые ответы не несут stats).
 
+import type { StageKey } from './featureRun';
+
 // Источник чисел: 'approx' — приближённо по полям задач; 'journal' — по журналу ходов.
 export type FeatureStatsSource = 'approx' | 'journal';
+
+// Ход внутри интервала стадии (бэк: `FeatureStageIntervals.StageTurn`): закрытый ход
+// задачи. Живой хвост идущей задачи — НЕ ход, его тут нет.
+export interface StageTurn {
+  // Id задачи, чей ход.
+  taskId: string;
+  // Начало/конец хода (ISO-строки).
+  from: string;
+  to: string;
+  // Исход хода (finished/cancelled/interrupted/error…); null — не зафиксирован.
+  outcome: string | null;
+  // Модель хода; null — не известна.
+  model: string | null;
+}
+
+// Интервал работы стадии (бэк: `FeatureStageIntervals.StageInterval`): склейка
+// смежных ходов одной стадии. From/To — границы, Minutes — минуты стены между ними.
+export interface StageInterval {
+  // Начало/конец интервала (ISO-строки).
+  from: string;
+  to: string;
+  // Минуты (бэк: FeatureTimeMath.Minutes(From, To)).
+  minutes: number;
+  // true — интервал дотянут до «сейчас» (в нём живой хвост идущей задачи).
+  live: boolean;
+  // Исход ПОСЛЕДНЕГО хода интервала, если он cancelled/interrupted/error; иначе null.
+  lastOutcome: string | null;
+  // Id задач, чьи ходы вошли в интервал (уникальные, по первому появлению).
+  taskIds: string[];
+  // Ходы интервала в хронологическом порядке.
+  turns: StageTurn[];
+}
 
 // Таймлайн фичи: интервалы стадий, сегменты (работа/ожидание/простой/ошибка)
 // по двум трекам (main/review), текущее состояние и итоги по минутам.
@@ -20,6 +54,11 @@ export interface FeatureTimeline {
   // Границы полосы стадии: ключ + старт/край (barEnd — правый край полосы, W5-DEF;
   // null — активности не было).
   stages: { key: string; startedAt: string | null; barEnd: string | null }[];
+  // Интервалы работы по стадиям (GC-B2, «Хронология»/Гант): стадия → её интервалы из
+  // журнала ходов (бэк: `FeatureTimeline.IntervalsByStage`, [JsonInclude]). null —
+  // режим approx (журнала нет / он не полный) или ходов не было. Аддитивное: старые
+  // ответы поля не несут — UI обязан пережить отсутствие.
+  intervalsByStage?: Partial<Record<StageKey, StageInterval[]>> | null;
   // Сегменты: непрерывные куски времени с видом, треком, стадией и задачей.
   segments: {
     from: string;

@@ -14,6 +14,7 @@
 // использует карточка. Все поля аддитивны и nullable — UI обязан пережить
 // отсутствие любого (старые задачи без разметки не несут feature-полей).
 import type { StepProgress } from '../lib/featureProgress';
+import type { AcceptanceCriterion, AcceptanceEvidence } from './index';
 
 export interface FeatureTask {
   id: string;
@@ -43,6 +44,18 @@ export interface FeatureTask {
   awaitingHumanSince?: string | null;
   awaitingHumanReason?: string | null;
   verification?: { verdict?: string | null; notes?: string | null } | null;
+  // Критерии приёмки (бэк: `TaskItem.Acceptance`): id стабилен (на него ссылается
+  // свидетельство), text — измеримая формулировка. Уже приходит в JSON — просто не
+  // было описано.
+  acceptance?: AcceptanceCriterion[];
+  // Свидетельства по критериям (бэк: `TaskItem.Evidence`): связь по criterionId,
+  // how/result — чем проверяли и что получилось.
+  evidence?: AcceptanceEvidence[];
+  // Структурный список шагов плана (бэк: `TaskItem.PlanSteps`): знаменатель «сколько
+  // всего» для честного прогресса. На записи бэк допускает его только у role=plan
+  // (валидация TaskManager); на выдаче по роли не фильтрует: null, если не заполнен.
+  // Аддитивное: старые задачи поля не несут.
+  planSteps?: { stepRef: string; title: string; lane?: string | null }[] | null;
 }
 
 // Исход витка: строго пять значений (бэк: `FeatureRound.Verdict`).
@@ -370,4 +383,9 @@ export interface FeatureRun {
   closed?: boolean;
   // Итог смерженной фичи (у закрытой и у смерженной с открытым эпиком); иначе null.
   summary?: FeatureSummary | null;
+  // «Хвосты после мержа» (GC-B4, бэк: `FeatureRun.PostMergeTails`): id любой незакрытой
+  // дочерней задачи фичи, кроме merge, по CreatedAt. Тревогу не поднимают — висят
+  // отдельной строкой. У недоведённой до терминального состояния фичи — пустой список.
+  // Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
+  postMergeTails?: string[];
 }

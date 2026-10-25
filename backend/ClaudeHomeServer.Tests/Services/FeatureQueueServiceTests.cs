@@ -4,6 +4,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -23,6 +24,7 @@ public class FeatureQueueServiceTests : IDisposable
     private static readonly TimeSpan Watchdog = TimeSpan.FromSeconds(15);
 
     private readonly string _dir;
+    private readonly FeatureJournalStore _journal;
     private readonly TaskManager _tasks;
     private readonly RecordingReleaser _releaser;
     private readonly FeatureQueueService _sut;
@@ -32,7 +34,10 @@ public class FeatureQueueServiceTests : IDisposable
         _dir = Path.Combine(Path.GetTempPath(), "feature_queue_tests_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
         var config = Config(_dir, limit: null);
-        _tasks = new TaskManager(config);
+        // Журнал фич включён в фикстуру: тесты шва Q3B (R-Q3B-1) читают настоящий hold_cleared,
+        // который ClearHold пишет в журнал, а не только состояние Hold.
+        _journal = new FeatureJournalStore(Path.Combine(_dir, "feature-journal"));
+        _tasks = new TaskManager(config, journal: _journal);
         _releaser = new RecordingReleaser(_tasks);
         _sut = new FeatureQueueService(_tasks, new FeatureProjector(_tasks), _releaser, config,
             NullLogger<FeatureQueueService>.Instance);
@@ -191,6 +196,44 @@ public class FeatureQueueServiceTests : IDisposable
         HoldOf(q3)!.Reason.Should().Be(FeatureHoldReasons.Queue, "третья ждёт: занято два слота из двух");
     }
 
+    // ── Шов Q3B: автоснятие помечается by=queue (R-Q3B-1, MAJOR-1 из RV-Q3B-Q4) ─────────────
+
+    // Единственное место в бою, где автоснятие помечается by=queue, — вызов IFeatureHoldReleaser
+    // в FeatureQueueService. Тест на шов: снятие идёт через сервис (как в бою, не прямым
+    // ClearHold), проверяются и переданный в шов by, и запись hold_cleared в журнале.
+    // Мутация: FeatureHoldBy.Queue → null в вызове (или потеря параметра при смене интерфейса) —
+    // в журнале hold_cleared без by, лента не показывает «Фича запущена из очереди» — тест краснеет.
+    [Fact]
+    public async Task Rebalance_ГоловаОчереди_ЖурналПишетHoldClearedСByQueue()
+    {
+        var queued = Queued("u", "p1", 0);
+
+        var released = await _sut.RebalanceAsync("u", "p1");
+
+        released.Should().Equal(queued.Id);
+        _releaser.Calls.Should().ContainSingle("голова снята ровно один раз")
+            .Which.By.Should().Be(FeatureHoldBy.Queue, "автоснятие помечает снятие by=queue");
+        var cleared = _journal.Read("u", queued.Id).Entries.Single(e => e.Kind == "hold_cleared");
+        cleared.Reason.Should().Be(FeatureHoldReasons.Queue);
+        cleared.By.Should().Be(FeatureHoldBy.Queue, "без by лента не покажет «Фича запущена из очереди»");
+    }
+
+    // Ручной путь (DELETE hold) зовёт тот же шов без by — default параметра интерфейса, как в
+    // TaskExecutionService. Запись в журнале — без by: ручное снятие лента не считает
+    // «запущенным из очереди». Мутация: by появился в ручном вызове — тест краснеет.
+    [Fact]
+    public async Task РучноеСнятие_ТотЖеШов_ЖурналПишетHoldClearedБезBy()
+    {
+        var queued = Queued("u", "p1", 0);
+
+        var result = await _releaser.ReleaseFeatureHold(queued.Id, "u", _tasks.GetById(queued.Id)!.Hold);
+
+        result.Outcome.Should().Be(FeatureHoldReleaseOutcome.Released);
+        var cleared = _journal.Read("u", queued.Id).Entries.Single(e => e.Kind == "hold_cleared");
+        cleared.Reason.Should().Be(FeatureHoldReasons.Queue);
+        cleared.By.Should().BeNull("ручное снятие поле by не пишет");
+    }
+
     // ── И6: изоляция по владельцу и проекту ─────────────────────────────────────────────────
 
     // Два владельца × два проекта, слоты свободны везде. Освобождение слота в P1 у A снимает
@@ -339,11 +382,16 @@ public class FeatureQueueServiceTests : IDisposable
     // Записывающая реализация шва снятия: тот же ClearHold, что у настоящего пути, без чатов.
     private sealed class RecordingReleaser(TaskManager tasks) : IFeatureHoldReleaser
     {
+        public sealed record Call(string FeatureId, string? By);
+
         public ConcurrentQueue<string> Released { get; } = new();
+        // Что реально передано в шов, включая by: тесты шва Q3B утверждают по этому.
+        public ConcurrentQueue<Call> Calls { get; } = new();
         public Action? OnRelease { get; set; }
 
         public Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold, string? by = null)
         {
+            Calls.Enqueue(new Call(featureId, by));
             var epic = tasks.ClearHold(featureId, by);
             if (epic is null)
                 return Task.FromResult(new FeatureHoldRelease(FeatureHoldReleaseOutcome.NotHeld, [], []));

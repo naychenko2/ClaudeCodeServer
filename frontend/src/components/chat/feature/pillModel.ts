@@ -1,6 +1,6 @@
 import { getPersonaById } from '../../../lib/personas';
 import { STAGE_NAME, MERGE_PENDING_STATUS } from '../../../lib/chatGroups';
-import type { FeatureRun, FeatureState } from '../../../types/featureRun';
+import type { FeatureQueue, FeatureRun, FeatureState } from '../../../types/featureRun';
 
 // Тон пилюли (макет turn-plan-feature-popup-1, S[state].pill[0]):
 //   wait    — ждёт вас / ждёт согласия (текст C.info);
@@ -67,16 +67,36 @@ function mergingName(run: FeatureRun): string {
 // state, активная стадия и имена (идущие/упавший/мерж).
 //   running → «{этап} · {идущие}»; waiting → «{этап} · ждёт вас»;
 //   stopped → «стоит · {имя}»; merged → «смержена» (без даты, как в пилюле).
+// Удержание для фразы (те же данные, что FeatureHoldInfo в FeatureStatusTag и поля
+// holdReason/queue строки индекса): причина и место в очереди. Позицию считает бэк.
+export interface StatusPhraseHold {
+  holdReason?: string | null;
+  queue?: FeatureQueue | null;
+}
+
 export function statusPhrase(
   state: FeatureState,
   stage: string | null,
   names: { running?: string; stopped?: string; merging?: string },
+  hold?: StatusPhraseHold,
 ): { bold: string; post: string } {
   switch (state) {
     case 'not_started': return { bold: 'Не начата', post: '' };
     case 'idle': return { bold: 'Простаивает', post: '' };
     // Пауза/черновик (W4-HOLD-B1): не тревога — нейтральная подпись по состоянию.
-    case 'paused': return { bold: 'На паузе', post: '' };
+    // Очередь фич (волна 6, feature-queue-1): пауза с причиной queue — тот же тон,
+    // тревоги нет; «В очереди» + « · N из M» (макет, таблица «Подпись»). Позицию
+    // считает бэк; queue не пришёл — без цифр (нулей не показываем).
+    case 'paused': {
+      if (hold?.holdReason === 'queue') {
+        const q = hold.queue;
+        return {
+          bold: 'В очереди',
+          post: q && q.position > 0 && q.length > 0 ? ` · ${q.position} из ${q.length}` : '',
+        };
+      }
+      return { bold: 'На паузе', post: '' };
+    }
     case 'draft': return { bold: 'Черновик', post: '' };
     case 'running': return { bold: stage ?? 'Разрез', post: names.running ? ` · ${names.running}` : '' };
     case 'waiting': return { bold: stage ?? 'Разрез', post: ' · ждёт вас' };
@@ -108,6 +128,16 @@ export function buildPillModel(runs: FeatureRun[], loading: boolean, error: stri
     case 'idle': {
       const p = statusPhrase('idle', null, {});
       return { state: 'idle', tone: 'neutral', pre: '', bold: p.bold, post: p.post, ariaExtra: null };
+    }
+    case 'paused': {
+      // Очередь фич (волна 6, feature-queue-1): пауза с причиной queue — те же слова,
+      // что у рельсы в чате (statusPhrase, общий источник). manual — как прежде
+      // (запасной путь ниже): задача про очередь подпись ручной паузы не меняет.
+      if (run.hold?.reason === 'queue') {
+        const p = statusPhrase('paused', null, {}, { holdReason: 'queue', queue: run.queue });
+        return { state: 'paused', tone: 'neutral', pre: 'фича · ', bold: p.bold, post: p.post, ariaExtra: null };
+      }
+      break;
     }
     case 'running': {
       const p = statusPhrase('running', stage, { running: runningNames(run) });

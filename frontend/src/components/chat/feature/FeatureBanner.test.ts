@@ -209,6 +209,54 @@ describe('featureBannerRow: «где мы», действие, тон, роль'
   });
 });
 
+// === 1б: очередь фич (волна 6) — «В очереди · N из M» в подписи «где мы» ===
+// Макет feature-queue-1, таблица «Подпись»: рельса в чате — bold «В очереди»,
+// post « · 2 из 3» (тот же statusPhrase, что у пилюли). Источник — holdReason/queue
+// строки индекса (позицию считает бэк). Нет queue (бэк не отдал) — без цифр.
+
+describe('FeatureBanner: очередь фич (подпись «В очереди · N из M»)', () => {
+  beforeEach(() => {
+    __test.reset();
+    setAllFlags({ 'turn-plan-feature-mode': true, 'features-overview': true });
+  });
+  afterEach(() => {
+    __test.reset();
+    setAllFlags({});
+  });
+
+  const queued = (over: Partial<FeatureIndexFeature> = {}) =>
+    feat('paused', { holdReason: 'queue', queue: { position: 2, length: 3 }, ...over });
+
+  it('holdReason=queue: bold «В очереди», post « · 2 из 3» (разбивка модели)', () => {
+    const m = featureBannerRow(queued(), link(), 'chat-exec');
+    expect(m.whereBold).toBe('В очереди');
+    expect(m.wherePost).toBe(' · 2 из 3');
+    expect(m.where).toBe('В очереди · 2 из 3');
+  });
+
+  it('queue не пришёл (бэк ещё не отдал) → «В очереди» без цифр', () => {
+    const m = featureBannerRow(queued({ queue: null }), link(), 'chat-exec');
+    expect(m.whereBold).toBe('В очереди');
+    expect(m.wherePost).toBe('');
+    expect(m.where).toBe('В очереди');
+  });
+
+  it('holdReason=manual → прежняя подпись «На паузе», без «В очереди» (даже с queue в данных)', () => {
+    const m = featureBannerRow(feat('paused', { holdReason: 'manual', queue: { position: 2, length: 3 } }), link(), 'chat-exec');
+    expect(m.where).toBe('На паузе');
+    expect(m.where).not.toContain('В очереди');
+  });
+
+  it('рендер (SSR): «В очереди · 2 из 3» в плашке, тон не тревожный (run)', () => {
+    const f = queued();
+    seedIndex(f, link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    expect(html).toContain('В очереди · 2 из 3');
+    // Тон тот же, что у обычной паузы (не wait/stop): тревоги очередь не поднимает.
+    expect(html).toContain('data-banner-tone="run"');
+  });
+});
+
 // === 2: рендер панели с настоящими данными списка (SSR) ===
 
 function renderBanner(sessionId: string, projectId: string | null, isMobile = false): string {

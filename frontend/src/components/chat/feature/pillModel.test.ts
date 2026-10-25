@@ -183,6 +183,46 @@ describe('buildPillModel: 9 состояний (макет S[state].pill)', () =
   });
 });
 
+// ── Очередь фич (волна 6, feature-queue-1): «В очереди · N из M» ──────────────
+// Пауза с причиной queue — тот же тон, тревоги нет (макет feature-queue-1, таблица
+// «Подпись»). Позицию считает бэк (run.queue), фронт только показывает.
+
+describe('buildPillModel: очередь фич (holdReason=queue)', () => {
+  it('queue {2,3} → «фича · В очереди · 2 из 3», нейтральный', () => {
+    const m = buildPillModel([run({
+      state: 'paused',
+      hold: { reason: 'queue', since: '2026-10-25T10:00:00Z' },
+      queue: { position: 2, length: 3 },
+    })], false, null)!;
+    expect(m.state).toBe('paused');
+    expect(m.tone).toBe('neutral');
+    expect(m.pre).toBe('фича · ');
+    expect(m.bold).toBe('В очереди');
+    expect(m.post).toBe(' · 2 из 3');
+    expect(m.ariaExtra).toBeNull();
+  });
+
+  it('queue не пришёл (бэк ещё не отдал) → «В очереди» без цифр', () => {
+    const m = buildPillModel([run({ state: 'paused', hold: { reason: 'queue' } })], false, null)!;
+    expect(m.bold).toBe('В очереди');
+    expect(m.post).toBe('');
+  });
+
+  it('holdReason=manual → прежние значения: не очередь (даже с queue в данных)', () => {
+    const m = buildPillModel([run({
+      state: 'paused',
+      hold: { reason: 'manual', since: '2026-10-25T10:00:00Z' },
+      queue: { position: 2, length: 3 },
+    })], false, null)!;
+    // Поведение прежней паузы (запасной путь модели) — задача Q5D его не меняет;
+    // главное: подпись очереди не протекла в manual.
+    expect(m.bold).not.toContain('В очереди');
+    expect(m.post).not.toContain('из');
+    expect(m.bold).toBe('Не начата');
+    expect(m.pre).toBe('');
+  });
+});
+
 // ── loading / error (run ещё нет): «фича · …» ───────────────────────────────
 
 describe('buildPillModel: загрузка / ошибка (run ещё нет)', () => {

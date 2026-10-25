@@ -71,8 +71,11 @@ function activeStageName(f: FeatureIndexFeature): string | null {
 //   running → «{этап} · {идущие}» (имена — nowPersonaIds индекса, фолбэк now0.personaId);
 //   waiting → «{этап} · ждёт вас»; stopped → «стоит · {имя}» (имя — из тревоги);
 //   merged → «смержена» (без даты, как в пилюле); merge_pending → «Мерж · ждёт согласия»;
-//   merging → «Мерж · идёт»; closed → «закрыта»; not_started/idle — своё слово.
-function whereText(f: FeatureIndexFeature): string {
+//   merging → «Мерж · идёт»; closed → «закрыта»; not_started/idle — своё слово;
+//   paused+queue → «В очереди · N из M» (волна 6, очередь фич; holdReason/queue — поля
+//   строки индекса, позицию считает бэк).
+// Возвращает { bold, post } — как модель statusPhrase: leading-слово и суффикс.
+function whereParts(f: FeatureIndexFeature): { bold: string; post: string } {
   const stage = activeStageName(f);
   // «Идут»: уникальные id из индекса (nowPersonaIds; фолбэк — now0.personaId).
   const nowIds = (f.nowPersonaIds && f.nowPersonaIds.length > 0)
@@ -81,11 +84,10 @@ function whereText(f: FeatureIndexFeature): string {
   // merging: имя из attention.personaId недостижимо (при state=merging тревоги нет,
   // FeatureProjector.cs:1663) — подпись остаётся «Мерж · идёт» без имени; имя потребует
   // поля merge.personaId в строке индекса (бэк-шаг).
-  const p = statusPhrase(f.state, stage, {
+  return statusPhrase(f.state, stage, {
     running: uniquePersonaNames(nowIds),
     stopped: f.attention?.personaId ? (getPersonaById(f.attention.personaId)?.name ?? '') : '',
-  });
-  return `${p.bold}${p.post}`;
+  }, { holdReason: f.holdReason, queue: f.queue });
 }
 
 // Тон текста «где мы»: тревога (wait/stop) — цветная, иначе обычный.
@@ -156,8 +158,13 @@ export interface FeatureBannerRow {
   glyph: GlyphKind;
   dots: StageDot[];
   // «Где мы»: слова из statusPhrase (общий источник с пилюлей): «{этап} · {идущие}»,
-  // «{этап} · ждёт вас», «стоит · {имя}», «смержена» и т.д.
+  // «{этап} · ждёт вас», «стоит · {имя}», «смержена», «В очереди · N из M» и т.д.
   where: string;
+  // Разбивка подписи — та же, что поля модели statusPhrase (leading-слово и суффикс):
+  // очередь — bold «В очереди», post « · 2 из 3» (макет feature-queue-1, «Рельса в чате»).
+  // Рисует строку `where` (bold+post); разбивка — для теста и точных текстов.
+  whereBold: string;
+  wherePost: string;
   whereTone: 'wait' | 'stop' | 'run';
   action: BannerAction;
   role: string;
@@ -166,11 +173,14 @@ export interface FeatureBannerRow {
 
 export function featureBannerRow(f: FeatureIndexFeature, link: FeatureChatLink, sessionId: string): FeatureBannerRow {
   const { role, isKey } = roleOf(f, link, sessionId);
+  const p = whereParts(f);
   return {
     tone: bannerTone(f),
     glyph: bannerGlyph(f),
     dots: stageDots(f),
-    where: whereText(f),
+    where: `${p.bold}${p.post}`,
+    whereBold: p.bold,
+    wherePost: p.post,
     whereTone: whereTone(f),
     action: mainAction(f),
     role,

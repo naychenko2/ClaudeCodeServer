@@ -355,10 +355,47 @@ export const MERGE_PENDING_STATUS = 'ждёт согласия на мерж';
 // Позицию и длину считает бэк (FeatureQueuePolicy), фронт не пересчитывает. Зовут её тег
 // статуса (FeatureStatusTag) и статус строки индекса (featureDisplayState) — один формат
 // на все места (ревью RV-Q5C, major 1).
+//
+// R-Q5D-D (ревью RV-K-Q5D-B, миноры 2–4): подпись собирается из queueLabelParts —
+// структура (жирное слово, суффикс, aria-суффикс) отдаётся ПОЛЯМИ: потребители (пилюля,
+// плашка, рельса) берут части, а не разбирают строку по разделителю. Смена разделителя
+// в хелпере не может молча убрать цифры из подписи и aria: тест «цифры в каждой части»
+// (chatGroups.test.ts) краснеет на такую смену.
+export interface QueueLabelParts {
+  // Полная строка подписи: «в очереди · 2 из 3» | «в очереди» (строчная — для статусных
+  // текстов: тег статуса, статус строки индекса).
+  label: string;
+  // Ведущее слово «В очереди» (с большой — рендерится <b> в пилюле и плашке, макет .ph).
+  bold: string;
+  // Суффикс « · 2 из 3» ровно как дал хелпер; без цифр — пустая строка.
+  post: string;
+  // aria-суффикс рельсы и точки: « · в очереди 2 из 3» (те же слова, в aria-порядке;
+  // без цифр — « · в очереди», как делали FeatureRail/FeatureBanner до этого шага).
+  ariaSuffix: string;
+}
+
+// Слово и разделитель — единственные константы формулировки (здесь же и единственное
+// место её смены). Жирное слово выводится из строчного: один источник формулировки —
+// раньше «В очереди» было зашито константой в pillModel/FeatureBanner (третий источник,
+// RV-K-Q5D-B минор 3).
+const QUEUE_WORD = 'в очереди';
+const QUEUE_SEP = ' · ';
+
+export function queueLabelParts(queue?: FeatureQueue | null): QueueLabelParts {
+  const withNums = !!queue && queue.position > 0 && queue.length > 0;
+  const nums = withNums ? `${queue.position} из ${queue.length}` : '';
+  return {
+    label: withNums ? `${QUEUE_WORD}${QUEUE_SEP}${nums}` : QUEUE_WORD,
+    bold: QUEUE_WORD.charAt(0).toUpperCase() + QUEUE_WORD.slice(1),
+    post: withNums ? `${QUEUE_SEP}${nums}` : '',
+    ariaSuffix: withNums ? `${QUEUE_SEP}${QUEUE_WORD} ${nums}` : `${QUEUE_SEP}${QUEUE_WORD}`,
+  };
+}
+
+// Строка подписи = label структуры (тот же формат, что до R-Q5D-D: поведение тегов
+// и статусов не меняется).
 export function queueLabel(queue?: FeatureQueue | null): string {
-  return queue && queue.position > 0 && queue.length > 0
-    ? `в очереди · ${queue.position} из ${queue.length}`
-    : 'в очереди';
+  return queueLabelParts(queue).label;
 }
 
 // enrich — необязательное «кто · сколько» (макет: «стоит · Денис · 25 мин»):

@@ -133,7 +133,9 @@ public class TasksController(
     // Б9b: шов расхода фичи (Core, ISpendFeatureReader): null — подсистема Spend выключена
     // (гейт Subsystems:spend:Enabled) → stats.spend = null, не 500 (решение Андрея 20.10).
     // Вертикаль Tasks Spend не видит напрямую — только через этот шов (SubsystemBoundaryTests).
-    ISpendFeatureReader? spend = null) : ControllerBase
+    ISpendFeatureReader? spend = null,
+    // NC-P1b: запуск предгейта шага; null (тесты без DI) — ручка честно отвечает 503
+    TaskPregateService? pregate = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -1459,6 +1461,24 @@ public class TasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    // Предгейт шага (NC-P1b): прогон проверок в дереве шага, зелёный результат с sha коммита пишется
+    // в задачу, без него шаг с деревом не закрыть (tasks_complete и PUT). Вызов синхронный: ответ — когда
+    // проверки кончились. 409 — прогон не применим или не состоялся, текст отказа в error
+    [HttpPost("{taskId}/pregate")]
+    public async Task<IActionResult> RunPregate(string taskId, CancellationToken ct)
+    {
+        if (pregate is null) return StatusCode(503, new { error = "Предгейт недоступен." });
+        var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault() ?? "";
+        var outcome = await pregate.RunAsync(UserId, taskId, callerSessionId, ct);
+        return outcome.Status switch
+        {
+            TaskPregateStatus.Recorded => Ok(new { green = outcome.Record!.Green, sha = outcome.Record.Sha, text = outcome.Text, record = outcome.Record }),
+            TaskPregateStatus.NotFound => NotFound(),
+            TaskPregateStatus.Disabled => StatusCode(503, new { error = outcome.Text }),
+            _ => Conflict(new { error = outcome.Text }),
+        };
     }
 
     [HttpDelete("{taskId}")]

@@ -218,6 +218,70 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
         }, []);
     }
 
+    /// <summary>
+    /// Зависимости файла: исходящие связи Calls|References типов, объявленных в файле, на узлы ДРУГИХ
+    /// файлов (хвост «Контракты» первого хода). Каждая строка Neighbors — один символ-цель с местом
+    /// объявления: «файл:строка», если провайдер отдаёт строку (C#), иначе только «файл» (TS-экстрактор
+    /// SourceLocation не заполняет); Total — число уникальных целей. Цели без узла в графе (внешние типы) пропускаются: без
+    /// объявления строки нет. Результата нет (Result = null), если файла нет в графе.
+    /// </summary>
+    public async Task<CodeGraphNeighborsOutcome> DependenciesByFileAsync(
+        string rootPath, string file, int limit, CancellationToken ct)
+    {
+        var index = await GetIndexAsync(rootPath, ct);
+        if (index is null) return new CodeGraphNeighborsOutcome(false, null, []);
+
+        var wanted = NormalizeFile(file);
+        if (wanted.Length == 0) return new CodeGraphNeighborsOutcome(true, null, []);
+
+        var declaredIds = index.Nodes.Values
+            .Where(n => NormalizeFile(n.SourceFile).Equals(wanted, StringComparison.OrdinalIgnoreCase))
+            .Select(n => n.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        if (declaredIds.Count == 0) return new CodeGraphNeighborsOutcome(true, null, []);
+
+        var targets = new Dictionary<string, (GraphNodeDto Node, HashSet<string> Relations)>(StringComparer.Ordinal);
+        foreach (var id in declaredIds)
+        {
+            foreach (var e in index.Outgoing.GetValueOrDefault(id) ?? [])
+            {
+                if (!e.Relation.Equals("Calls", StringComparison.OrdinalIgnoreCase)
+                    && !e.Relation.Equals("References", StringComparison.OrdinalIgnoreCase)) continue;
+                if (declaredIds.Contains(e.Target) || !index.Nodes.TryGetValue(e.Target, out var target)) continue;
+                if (NormalizeFile(target.SourceFile).Equals(wanted, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!targets.TryGetValue(e.Target, out var acc))
+                    targets[e.Target] = acc = (target, new HashSet<string>(StringComparer.Ordinal));
+                acc.Relations.Add(e.Relation);
+            }
+        }
+
+        var neighbors = targets.Values
+            .OrderByDescending(t => index.Degree.GetValueOrDefault(t.Node.Id))
+            .ThenBy(t => t.Node.FullyQualifiedName, StringComparer.Ordinal)
+            .Take(Clamp(limit))
+            .Select(t => new CodeGraphNeighborDto
+            {
+                Id = t.Node.Id,
+                Fqn = string.IsNullOrWhiteSpace(t.Node.FullyQualifiedName) ? t.Node.Label : t.Node.FullyQualifiedName,
+                Kind = t.Node.Kind,
+                Location = Location(t.Node),
+                Direction = "out",
+                Relation = string.Join("+", t.Relations.Order(StringComparer.Ordinal)),
+                Confidence = "",
+            })
+            .ToList();
+
+        return new CodeGraphNeighborsOutcome(true, new CodeGraphNeighborsResultDto
+        {
+            Node = new CodeGraphNodeBriefDto { Id = wanted, Fqn = wanted, Kind = "File", Location = wanted, Degree = targets.Count },
+            Neighbors = neighbors,
+            Total = targets.Count,
+            TotalIn = 0,
+            TotalOut = targets.Count,
+            IsStale = StaleAndRefresh(rootPath, index),
+        }, []);
+    }
+
     private static string NormalizeFile(string? path)
     {
         var p = (path ?? "").Trim().Replace('\\', '/');

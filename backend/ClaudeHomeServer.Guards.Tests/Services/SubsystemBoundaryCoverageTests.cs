@@ -25,6 +25,8 @@ public class SubsystemBoundaryCoverageTests
     // Подробности см. в комментарии к статическому конструктору SubsystemBoundaryTests.
     static SubsystemBoundaryCoverageTests()
     {
+        // Главная сборка: вертикали, оставшиеся в Main (Power, Team, Auth…), без неё не видны в фильтрованном прогоне
+        _ = typeof(ClaudeHomeServer.Services.SessionManager).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Yandex.YandexSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Reader.ReaderService).Assembly;

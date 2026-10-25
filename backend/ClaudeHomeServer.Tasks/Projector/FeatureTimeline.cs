@@ -59,13 +59,16 @@ public sealed record TimelineLongestWait(
 // ожидание 20 с + ошибка 10 с в окне 2 мин → 1+1+1+0 = 3 ≠ 2).
 //
 // NotWorking = Elapsed − WorkWall: в journal это ВКЛЮЧАЕТ минуты ожидания и ошибок
-// (не-work = waiting + error + idle), в approx — все промежутки (waiting/error не различаем).
+// (не-work = waiting + error + idle + queued), в approx — все промежутки (waiting/error не различаем).
 public sealed record TimelineTotals(
     // Общее время: To − From (минуты).
     int ElapsedMinutes,
-    // Работа по часам стены: ОБЪЕДИНЕНИЕ work-интервалов (параллельные не складываются).
+    // Работа по часам стены: ОБЪЕДИНЕНИЕ сегментов work МИНУС минуты очереди фич (R-Q3B-2):
+    // параллельные не складываются; минуты в очереди принадлежат очереди, а не работе.
     int WorkWallMinutes,
-    // Сумма work-интервалов (параллельные складываются) — «агентные» минуты.
+    // Сумма started-периодов (параллельные складываются) МИНУС минуты очереди фич (R-Q3B-5,
+    // симметрично WorkWall) — «агентные» минуты: очередь их не раздувает (параллельные агенты
+    // складываются по-прежнему).
     int AgentsSumMinutes,
     // Простой: Elapsed − WorkWall (в approx = все промежутки, включая ночную паузу > 2 ч).
     int NotWorkingMinutes,
@@ -366,7 +369,7 @@ public sealed record FeatureTimeline(
                 // поэтому и самое длинное ожидание обрезаем тем же `to` (иначе: закрыта 08:30,
                 // waiting 08:00 без cleared, now=20:00 → Waiting=30, LongestWait=720).
                 // Net-длительность (R-Q3B-4): минуты внутри очереди — не ожидание человека.
-                var net = NetWaitingSpan(e.At, wEnd <= to ? wEnd : to, queueIntervals);
+                var net = NetSpan(e.At, wEnd <= to ? wEnd : to, queueIntervals);
                 if (longestWaitFrom is null || net > longestWait)
                 {
                     longestWait = net;
@@ -382,7 +385,7 @@ public sealed record FeatureTimeline(
             {
                 var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;
-                var net = NetWaitingSpan(e.At, dEnd <= to ? dEnd : to, queueIntervals);
+                var net = NetSpan(e.At, dEnd <= to ? dEnd : to, queueIntervals);
                 if (longestWaitFrom is null || net > longestWait)
                 {
                     longestWait = net;
@@ -501,12 +504,16 @@ public sealed record FeatureTimeline(
         // задача = один период [started, done|stopped|now] (started-период), ходы ВНУТРИ него
         // не пересчитываются — иначе started-период и его ходы шли бы двойным счётом (проба:
         // started 08:00 + ход 08:00–08:10 + Done → 20 мин против 10 в approx).
+        // Очередь вычитается симметрично WorkWall (R-Q3B-5, Major-1 ревью RV-K-Q3B-2): минуты
+        // внутри очереди фич — не рабочие минуты агента, иначе плитка «работали 1 ч» получает
+        // подпись «агентов суммарно 2 ч» (проба: started 09:00…11:00 + очередь 09:00–10:00 →
+        // gross 120 против net 60).
         var agentsSpan = TimeSpan.Zero;
         foreach (var w in startedIntervals)
         {
             var s = FeatureTimeMath.Clamp(w.Start, from, to);
             var e = FeatureTimeMath.Clamp(w.End, from, to);
-            if (e > s) agentsSpan += e - s;
+            if (e > s) agentsSpan += NetSpan(s, e, queueIntervals);
         }
         var agentsSum = FeatureTimeMath.CeilMinutes(agentsSpan);
         var notWorking = Math.Max(0, elapsed - workWall);
@@ -517,9 +524,9 @@ public sealed record FeatureTimeline(
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
             WorkWallMinutes: workWall,
-            // AgentsSum = сумма started-периодов, обрезанных по окну [from, to] (параллельные
-            // складываются) — та же семантика, что в approx (минор 10): одна задача = один
-            // период, не объединение.
+            // AgentsSum = net started-периодов, обрезанных по окну [from, to] (параллельные
+            // складываются, очередь вычтена — R-Q3B-5) — та же семантика, что в approx (минор 10):
+            // одна задача = один период, не объединение; в approx очередь не видна (нет журнала).
             AgentsSumMinutes: agentsSum,
             NotWorkingMinutes: notWorking,
             WaitingMinutes: waitingMin,
@@ -589,11 +596,12 @@ public sealed record FeatureTimeline(
         return result;
     }
 
-    // Net-длительность интервала ожидания [start, end) (R-Q3B-4): сырой интервал минус
-    // пересечения с интервалами очереди — пока фича стояла в очереди, она ждала место, а не
-    // человека. start/end уже обрезаны к [from, to]; интервалы очереди не пересекаются между
-    // собой (построение QueueIntervals), поэтому пересечения не складываются дважды и net ≥ 0.
-    private static TimeSpan NetWaitingSpan(
+    // Net-длительность интервала [start, end): сырой интервал минус пересечения с интервалами
+    // очереди — пока фича стояла в очереди, она ждала место, а не человека (R-Q3B-4, waiting) и
+    // не работала (R-Q3B-5, AgentsSum). start/end уже обрезаны к [from, to]; интервалы очереди
+    // не пересекаются между собой (построение QueueIntervals), поэтому пересечения не
+    // складываются дважды и net ≥ 0.
+    private static TimeSpan NetSpan(
         DateTime start, DateTime end, List<(DateTime Start, DateTime End)> queueIntervals)
     {
         var net = end - start;

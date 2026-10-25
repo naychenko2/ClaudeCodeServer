@@ -223,6 +223,30 @@ public class FeatureQueueTraceTests
             .Should().Be(t.ElapsedMinutes);
     }
 
+    // R-Q3B-5 (Major-1 ревью RV-K-Q3B-2): очередь вычитается и из «агентов суммарно» — по тем же
+    // net-интервалам, что и workWall. Тот же сценарий, что выше: started 09:00…11:00 + очередь
+    // 09:00–10:00 → workWall=60, а gross-подсчёт давал agentsSum=120: плитка «работали 1 ч» с
+    // подписью «агентов суммарно 2 ч» — числа противоречат друг другу. После фикса: agentsSum=60.
+    // Мутация «вернуть gross-сумму started-периодов (без NetSpan)» → 120 ≠ 60 → красный.
+    [Fact]
+    public void Build_ОчередьПоверхStarted_AgentsSumТожеNet_НеБольшеWorkWall()
+    {
+        var journal = Full(
+            new FeatureJournalEntry
+            {
+                At = T0.AddHours(1), StartedAt = T0.AddHours(1), Kind = "started", TaskId = "epic",
+            },
+            Held(T0.AddHours(1), FeatureHoldReasons.Queue),
+            Cleared(T0.AddHours(2), FeatureHoldReasons.Queue, FeatureHoldBy.Queue));
+
+        var t = FeatureTimeline.Build(EpicRun(), journal, T0.AddHours(3)).Totals;
+
+        t.WorkWallMinutes.Should().Be(60);
+        t.AgentsSumMinutes.Should().Be(60, "агентные минуты — net, как у work: минуты в очереди не работа");
+        t.AgentsSumMinutes.Should().BeLessThanOrEqualTo(t.WorkWallMinutes,
+            "один агент: после вычета очереди «агентов суммарно» не больше «работали»");
+    }
+
     [Fact]
     public void BuildEvents_ByQueue_ДаётСобытиеЗапущенаИзОчереди()
     {

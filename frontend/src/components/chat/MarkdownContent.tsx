@@ -29,6 +29,13 @@ const ABS_PATH_RE = /^[A-Za-z]:[\\/]|^\//;
 // ссылками на несуществующий файл и ведут в 404 хост-вьювера.
 const WINDOWS_ABS_PATH_RE = /^[A-Za-z]:[\\/]/;
 
+// Внешний URL — не путь дерева (R-F2a MAJOR-1): `scheme://`, `www.` или `//host/…`
+// (последнее ABS_PATH_RE приняла бы абсолютным путём). Общий guard для обеих веток
+// `a`-хэндлера: resolveFileMention и featureLinks (читалка фичи, W4-LINK-F).
+function isExternalUrl(p: string): boolean {
+  return p.includes('://') || p.startsWith('www.') || p.startsWith('//');
+}
+
 // A1: абсолютный путь становится ссылкой без проверки существования в индексе — но
 // только если это Windows-путь (диск) либо POSIX-путь, похожий на файл (есть расширение).
 // Голый POSIX-роут без расширения (/api/mcp/calls, /hubs/session) — обычный текст.
@@ -236,10 +243,9 @@ export function resolveFileMention(
   let p = raw.trim().split(/[#?]/)[0];
   if (!p) return null;
   try { p = decodeURIComponent(p); } catch { /* не URL-экранирован — как есть */ }
-  // Внешний URL — не путь дерева (R-F2a MAJOR-1): `scheme://`, `www.` или `//host/…`
-  // (последнее ABS_PATH_RE приняла бы абсолютным путём). Без отсечения такая ссылка
-  // уходила в lazy-резолв и молчала текстом; теперь null — ссылка идёт в ReaderLinkWrap.
-  if (p.includes('://') || p.startsWith('www.') || p.startsWith('//')) return null;
+  // Внешний URL отсекается общим isExternalUrl (R-F2a MAJOR-1). Без отсечения такая
+  // ссылка уходила в lazy-резолв и молчала текстом; теперь null — она идёт в ReaderLinkWrap.
+  if (isExternalUrl(p)) return null;
   if (isFileLikeAbsPath(p)) {
     const label = relPathTree(p, project.rootPath, treePath);
     return { path: p, label: label !== p ? label : undefined };
@@ -500,7 +506,9 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
               return <FileLink path={path} onOpen={featureLinks.openFile}>{children}</FileLink>;
             }
             const rel = href.trim().split(/[#?]/)[0];
-            if (rel && !ABS_PATH_RE.test(rel) && rel.includes('/') && FILE_LIKE_MENTION.test(rel)) {
+            // Внешний URL — не файл дерева фичи (та же форма, что R-F2a MAJOR-1): общий
+            // guard отсекает его до FileLink, ссылка falls through в ReaderLinkWrap.
+            if (rel && !isExternalUrl(rel) && !ABS_PATH_RE.test(rel) && rel.includes('/') && FILE_LIKE_MENTION.test(rel)) {
               return <FileLink path={rel} onOpen={featureLinks.openFile}>{children}</FileLink>;
             }
           }

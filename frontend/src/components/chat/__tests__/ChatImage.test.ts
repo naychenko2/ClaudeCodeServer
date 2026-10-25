@@ -43,7 +43,7 @@ const view = vi.hoisted(() => ({ ref: () => {}, inView: false }));
 vi.mock('../../../lib/useInView', () => ({ useInView: () => [view.ref, view.inView] }));
 
 import { ChatImage, DeferredFileLink, MarkdownContent, resolveFileMention } from '../MarkdownContent';
-import { ChatProjectContext, ChatSessionContext, ChatOpenFileContext } from '../contexts';
+import { ChatProjectContext, ChatSessionContext, ChatOpenFileContext, FeatureLinkContext } from '../contexts';
 import type { ProjectFileIndex } from '../../../lib/projectFileIndex';
 
 const PROJECT = { id: 'p1', rootPath: '/home/u/proj' };
@@ -149,5 +149,44 @@ describe('Внешняя ссылка остаётся ссылкой (R-F2a MAJ
     // остаётся голый текст, проверка <a> краснеет.
     expect(html).toContain('<a href="https://example.com/guide.md"');
     expect(net.locate.length).toBe(0);
+  });
+});
+
+// Ветки featureLinks (читалка фичи, W4-LINK-F) стоит перед mentionOf: без общего
+// isExternalUrl внешний URL проходил `!ABS_PATH_RE && includes('/') && FILE_LIKE_MENTION`
+// и становился FileLink с несуществующим путём (дефект той же формы, что MAJOR-1).
+describe('Внешний URL в контексте featureLinks — не FileLink', () => {
+  const opened: string[] = [];
+  const FEATURE_LINKS = {
+    featureId: 'f1',
+    projectId: 'p1',
+    openFile: (path: string) => opened.push(path),
+    openDocument: (id: string) => opened.push(id),
+  };
+
+  function renderInReader(text: string): string {
+    return renderToStaticMarkup(createElement(ChatProjectContext.Provider, { value: PROJECT },
+      createElement(ChatOpenFileContext.Provider, { value: () => undefined },
+        createElement(FeatureLinkContext.Provider, { value: FEATURE_LINKS },
+          createElement(MarkdownContent, { text })))));
+  }
+
+  it('[x](https://example.com/guide.md) рендерится <a>, FileLink не появляется', () => {
+    const html = renderInReader('[x](https://example.com/guide.md)');
+    // Мутация: убрать isExternalUrl в ветке featureLinks — href уходит в FileLink
+    // (span с title="Открыть …"), обе проверки краснеют.
+    expect(html).toContain('<a href="https://example.com/guide.md"');
+    expect(html).not.toContain('Открыть');
+  });
+
+  it('www. и //host-формы тоже не становятся FileLink', () => {
+    const html = renderInReader('[y](www.example.com/guide.md) [z](//cdn.example.com/x.png)');
+    expect(html).not.toContain('Открыть');
+  });
+
+  it('относительный путь дерева фичи — по-прежнему FileLink (guard не ломает цель ветки)', () => {
+    const html = renderInReader('[w](docs/plan.md)');
+    // Мутация: если guard отсекает всё подряд, этот кейс краснеет.
+    expect(html).toContain('Открыть docs/plan.md');
   });
 });

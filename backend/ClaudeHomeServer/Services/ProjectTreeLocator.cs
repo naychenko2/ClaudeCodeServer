@@ -112,7 +112,7 @@ public sealed class ProjectTreeLocator
                     // list == null и анкер не бросил — сверить нечем (нет Git / сбой): держим как есть.
                     // Git работает и анкера в списке нет, или путь вне монтирований — не корень.
                     if (inMounts && (list is null || entry is not null))
-                        roots.Add(new TreeRoot(a, entry?.Branch, true));
+                        roots.Add(new TreeRoot(a, entry?.Branch ?? Path.GetFileName(a), true));
                     else
                         anchorNorm = null;
                 }
@@ -135,7 +135,8 @@ public sealed class ProjectTreeLocator
                 // Путь вне монтирований владельца — не наше дерево: catch
                 // «hostPath = path» из WorktreeListAsync здесь не наследуется.
                 try { _launchers.ForOwner(owner).Paths.ToRuntime(path); } catch { continue; }
-                roots.Add(new TreeRoot(path, w.Branch, false));
+                // Инвариант «branch == null ⇔ корень»: у detached-дерева ветки нет — берём имя папки.
+                roots.Add(new TreeRoot(path, w.Branch ?? Path.GetFileName(path), false));
             }
         }
 

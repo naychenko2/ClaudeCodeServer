@@ -197,6 +197,51 @@ public class ProjectTreeLocatorTests : IAsyncLifetime, IDisposable
         await _git.WorktreeRemoveAsync(null, _repo, wtNew, force: true);
     }
 
+    // Инвариант «branch == null ⇔ файл из RootPath»: у detached linked-worktree (слот
+    // ReviewTreePool) ветки нет, но метка обязана быть — имя папки, иначе фронт примет
+    // файл за «из корня». Мутация: вернуть `w.Branch` / `entry?.Branch` без `?? GetFileName`
+    // в ProjectTreeLocator — тест краснеет.
+    [Fact]
+    public async Task Locate_DetachedДерево_ВеткаНеNull_ЧужоеИАнкер()
+    {
+        var wt = Wt("detached");
+        await RawGit("worktree", "add", "--detach", wt);
+        await File.WriteAllTextAsync(Path.Combine(wt, "only-detached.txt"), "из detached\n");
+
+        var other = await Locator().LocateAsync(null, _project, "only-detached.txt");
+        other.Should().NotBeNull();
+        other!.IsAnchor.Should().BeFalse();
+        other.Root.Should().Be(wt);
+        other.Branch.Should().Be(Path.GetFileName(wt), "detached без ветки — метка по имени папки, не null");
+
+        var anchored = await Locator().LocateAsync(null, _project, "only-detached.txt", wt);
+        anchored.Should().NotBeNull();
+        anchored!.IsAnchor.Should().BeTrue();
+        anchored.Branch.Should().Be(Path.GetFileName(wt));
+
+        await RawGit("worktree", "remove", "--force", wt);
+    }
+
+    // Анкер вне списка git (нет Git-сервиса) и detached: ветка — по имени папки;
+    // анкер, равный корню, остаётся с branch == null.
+    [Fact]
+    public async Task Roots_Anker_БезGit_Detached_ИмяПапки_АнкерКорень_Null()
+    {
+        var noGit = new ProjectTreeLocator(new LocalOnlyFactory(), NullLogger<ProjectTreeLocator>.Instance);
+        var wt = Wt("nogit-detached");
+        await RawGit("worktree", "add", "--detach", wt);
+
+        var withAnchor = await noGit.RootsAsync(null, _project, wt);
+        withAnchor[0].IsAnchor.Should().BeTrue();
+        withAnchor[0].Branch.Should().Be(Path.GetFileName(wt));
+
+        var rootAnchor = await noGit.RootsAsync(null, _project, _repo);
+        rootAnchor[0].IsAnchor.Should().BeTrue();
+        rootAnchor[0].Branch.Should().BeNull("анкер == корень — это сам корень");
+
+        await RawGit("worktree", "remove", "--force", wt);
+    }
+
     // Осознанная смена W4-LINK-B: дерево задачи снесли после мержа — не 404, а поиск
     // по main с меткой isAnchor=false (главный сценарий фичи — чат задачи после мержа).
     [Fact]

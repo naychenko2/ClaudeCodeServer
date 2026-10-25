@@ -731,6 +731,25 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest, "больше 50 путей — отказ, не обрезка");
     }
 
+    // Чужой (другого проекта) и несуществующий sessionId → 404, а не молчаливый фолбэк без анкера.
+    // Мутация: снять GetOwnedSession в Locate (anchor = null) — тест краснеет (200).
+    [Fact]
+    public async Task Locate_SessionId_ЧужойИлиНесуществующий_404()
+    {
+        var projectId = await CreateProjectAsync("LocateForeignSession");
+        var otherId = await CreateProjectAsync("LocateOtherProject");
+        var foreign = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(otherId, ClaudeMode.Auto, name: "chat in another project");
+
+        var r1 = await _client.PostAsJsonAsync($"/api/projects/{projectId}/files/locate",
+            new { paths = new[] { "a.md" }, sessionId = foreign.Id });
+        r1.StatusCode.Should().Be(HttpStatusCode.NotFound, "чат другого проекта");
+
+        var r2 = await _client.PostAsJsonAsync($"/api/projects/{projectId}/files/locate",
+            new { paths = new[] { "a.md" }, sessionId = "no-such-session" });
+        r2.StatusCode.Should().Be(HttpStatusCode.NotFound, "несуществующий чат");
+    }
+
     // Путь есть в двух чужих деревьях (не в main), без sessionId: hit — свежайший из них,
     // isAnchor=false, branch — его ветка, alternatives — число других совпадений (2−1=1).
     // Ненайденный и абсолютный пути в ответе отсутствуют. Мутация: в ProjectTreeLocator.

@@ -406,6 +406,31 @@ public class FeatureEventsTests
         Find(events, "completed", "d1").At.Should().Be(new DateTime(2026, 10, 3, 11, 0, 0));
     }
 
+    // ── 11. projectId: проект самой задачи (хвосты 5634609f п.26) ────────────────────────────
+
+    // Задача чужого проекта несёт свой ProjectId во всех своих событиях; личная задача и личная
+    // эпик — null. Мутация (Add передаёт null вместо t.ProjectId) красит.
+    [Fact]
+    public void BuildEvents_ProjectId_ЧужойПроектИСвой_NullДляЛичной()
+    {
+        // Личная эпик (ProjectId не задан) → null; закрыта, чтобы было событие «closed».
+        var epic = Epic("epic", status: TaskItemStatus.Done, completedAt: new DateTime(2026, 10, 4, 9, 0, 0));
+        var foreign = Child("foreign", "epic", status: TaskItemStatus.Done,
+            completedAt: new DateTime(2026, 10, 3, 9, 0, 0));
+        foreign.ProjectId = "proj-other";
+        var own = Child("own", "epic", status: TaskItemStatus.Done,
+            completedAt: new DateTime(2026, 10, 3, 10, 0, 0)); // личная задача → null
+
+        var events = FeatureProjector.BuildEvents(Run(epic, foreign, own), Sessions());
+
+        // Все события задачи чужого проекта несут проект самой задачи.
+        Find(events, "created", "foreign").ProjectId.Should().Be("proj-other");
+        Find(events, "completed", "foreign").ProjectId.Should().Be("proj-other");
+        // Личная задача и личная эпик — null (фронт уйдёт в «Календарь», не в чужой раздел).
+        Find(events, "completed", "own").ProjectId.Should().BeNull();
+        Find(events, "closed", "epic").ProjectId.Should().BeNull();
+    }
+
     // ─── Truncate: кириллица (BMP) и суррогатные пары (эмодзи) ───────────────────────────────
 
     // null → null; ≤ 200 → как есть; > 200 (BMP, 1 кодовая точка = 1 единица) → ровно 200.

@@ -636,11 +636,11 @@ public sealed class FeatureProjector(TaskManager tasks)
         string? SessionOf(TaskItem t) => t.LinkedSessionId is not null && live.Contains(t.LinkedSessionId)
             ? t.LinkedSessionId : null;
         // Событие задачи: kind/at/reason/round задаёт вид, остальное (role/stepRef/personaId/
-        // sessionId) — атрибуты самой задачи. Порядок аргументов — контракт §2:
-        // at, kind, taskId, role, stepRef?, personaId?, sessionId?, round?, reason?.
+        // sessionId/projectId) — атрибуты самой задачи. Порядок аргументов — контракт §2:
+        // at, kind, taskId, role, stepRef?, personaId?, sessionId?, round?, reason?, projectId?.
         void Add(TaskItem t, string kind, DateTime at, string? reason, int? round = null) =>
             events.Add(new FeatureEvent(at, kind, t.Id, t.Role, t.StepRef, t.PersonaId,
-                SessionOf(t), round, reason));
+                SessionOf(t), round, reason, t.ProjectId));
 
         foreach (var t in tasks)
         {
@@ -1472,10 +1472,12 @@ public sealed class FeatureProjector(TaskManager tasks)
             TaskItem? task = s.TaskId is not null && byTaskId.TryGetValue(s.TaskId, out var t) ? t : null;
             (string? label, string? full) = (null, null);
             if (modelResolver is not null) (label, full) = modelResolver(s);
+            // ProjectId — проект задачи этого чата (п.26 хвостов); у чистых curator/orchestrator
+            // (TaskId нет / чужой id) — null, как прочие атрибуты задачи.
             chats.Add(new FeatureChat(
                 s.Id, link.Kind, s.TaskId, s.Archived,
                 task?.PersonaId, task?.Role, task?.StepRef, task?.Lane,
-                label, full));
+                label, full, task?.ProjectId));
         }
         return chats;
     }

@@ -327,6 +327,9 @@ public sealed class FeatureStepChain
     // Чат шага (Б7: LinkedSessionId задачи-шага, fail-closed: наружу только если в снимке
     // сессий владельца; чужой/удалённый/неизвестный чат → null).
     public string? ChatId { get; init; }
+    // Проект задачи-шага (TaskItem.ProjectId головы цепочки; хвосты 5634609f п.26: переход
+    // «в задачу» берёт проект эпика как приближение); null — задача личная.
+    public string? ProjectId { get; init; }
     // Задачи цепочки (шаг + доработки) в порядке времени.
     public List<string> TaskIds { get; init; } = [];
     // Исход: accepted | withdrawn | returned | running | pending.

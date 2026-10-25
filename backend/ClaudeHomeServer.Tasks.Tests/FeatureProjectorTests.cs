@@ -3879,4 +3879,52 @@ public class FeatureProjectorTests
         withoutDesign.Should().NotContain(c => c.Id == "chat-design-w4c",
             "прежняя область (без Design) теряет чат design-задачи");
     }
+
+    // ─── Хвосты 5634609f п.26: projectId самой задачи в строках фичи ─────────────────────────
+    // Переход «в задачу» из вкладок фичи не берёт проект эпика как приближение: строка чата и
+    // карточка шага несут проект задачи; null — личная задача (фронт уйдёт в «Календарь»).
+
+    // chats[]: чат задачи чужого проекта → ProjectId задачи; чат личной задачи → null.
+    // Мутация (BuildFeatureChats передаёт null вместо task?.ProjectId) красит.
+    [Fact]
+    public void BuildFeatureChats_ProjectId_ЧужойПроектИСвой_NullДляЛичной()
+    {
+        var epic = new TaskItem { Id = "epic-w5p1", Role = TaskRoles.Feature, ProjectId = "proj-epic" };
+        var foreign = new TaskItem
+        {
+            Id = "s-w5p1", FeatureId = "epic-w5p1", Role = TaskRoles.Step, ProjectId = "proj-other",
+        };
+        var own = new TaskItem { Id = "s-w5p2", FeatureId = "epic-w5p1", Role = TaskRoles.Step }; // личная
+        var sessions = new[]
+        {
+            new FeatureIndexSession("chat-foreign-w5p1", "s-w5p1", "proj-other", false),
+            new FeatureIndexSession("chat-own-w5p1", "s-w5p2", null, false),
+        };
+
+        var chats = FeatureProjector.BuildFeatureChats(epic, [epic, foreign, own], sessions, null);
+
+        chats.Single(c => c.Id == "chat-foreign-w5p1").ProjectId.Should().Be("proj-other",
+            "проект задачи, а не эпика (у эпика здесь свой проект)");
+        chats.Single(c => c.Id == "chat-own-w5p1").ProjectId.Should().BeNull("личная задача — null");
+    }
+
+    // Цепочка шага: ProjectId задачи-шага (головы цепочки); личная задача-шаг — null.
+    // Мутация (FeatureStepAccounting не заполняет ProjectId) красит.
+    [Fact]
+    public void Build_StepChain_ProjectId_ЧужойПроектИСвой_NullДляЛичной()
+    {
+        const string epicId = "epic-w5p2";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, ProjectId = "proj-epic" };
+        var foreign = new TaskItem
+        {
+            Id = "s-w5p2", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1", ProjectId = "proj-other",
+        };
+        var own = new TaskItem { Id = "s-w5p3", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш2" }; // личная
+
+        var run = FeatureProjector.Build(epic, [epic, foreign, own]);
+
+        run.StepChains.Single(c => c.StepRef == "Ш1").ProjectId.Should().Be("proj-other",
+            "карточка шага несёт проект задачи-шага, а не эпика");
+        run.StepChains.Single(c => c.StepRef == "Ш2").ProjectId.Should().BeNull("личная задача — null");
+    }
 }

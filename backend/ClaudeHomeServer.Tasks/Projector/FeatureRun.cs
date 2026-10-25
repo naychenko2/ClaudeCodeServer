@@ -96,15 +96,16 @@ public sealed class FeatureRun
     public FeatureSummary? Summary { get; init; }
 }
 
-// Документ фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»): разрез (cut), план (plan)
-// или консультация (consult) — СПИСОК из GET features/{id}, без текста. Текст (ResultMarkdown)
-// в ответ не попадает: вкладка берёт список, а текст подгружает по клику (GET /api/tasks/{id}).
-// role — из TaskItem.Role как есть (cut/plan/consult; step сюда не попадает). hasText — есть ли
-// ResultMarkdown (после Trim); mockupPaths — пути макетов из ResultMarkdown (docs/mockups/….{html,md}).
+// Документ фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»): разрез (cut), дизайн (design),
+// план (plan) или консультация (consult) — СПИСОК из GET features/{id}, без текста. Текст
+// (ResultMarkdown) в ответ не попадает: вкладка берёт список, а текст подгружает по клику
+// (GET /api/tasks/{id}). role — из TaskItem.Role как есть (cut/design/plan/consult; step сюда не
+// попадает). hasText — есть ли ResultMarkdown (после Trim); mockupPaths — пути макетов из
+// ResultMarkdown (docs/mockups/….{html,md}).
 public sealed record FeaturePlan(
     // Id задачи-документа.
     string TaskId,
-    // Роль как есть: cut | plan | consult.
+    // Роль как есть: cut | design | plan | consult.
     string Role,
     // Название задачи.
     string Title,

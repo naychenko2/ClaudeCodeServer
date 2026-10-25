@@ -5,8 +5,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 
 // Золотые тесты документов фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»):
 // FeatureProjector.BuildPlans — чистая проекция FeatureRun → List<FeaturePlan> БЕЗ хранилища.
-// Покрытие: порядок (роль cut → plan → consult, внутри роли по CreatedAt), роль как есть
-// (step с заголовком «Разрез» не попадает), hasText (пустой/пробельный ResultMarkdown → false),
+// Покрытие: порядок (роль cut → design → plan → consult, внутри роли по CreatedAt), роль как есть
+// (step с заголовком «Разрез» не попадает), design в документах (М2: роль, hasText, mockupPaths,
+// не дедуплицируется), hasText (пустой/пробельный ResultMarkdown → false),
 // mockupPaths (путь с «..» отброшен, дубли схлопнуты, потолок 20). Мутации:
 //   • BuildPlans(SlimRun(run)) → у всех hasText=false (Slim обнуляет ResultMarkdown) — краснеет;
 //   • убрать фильтр «..» → путь с «..» появляется — краснеет.
@@ -81,7 +82,51 @@ public class FeaturePlansTests
         plans[3].Role.Should().Be("consult");
     }
 
-    // ── 2. step с заголовком «Разрез» не попадает (роль как есть, догадок по заголовку нет) ──
+    // ── 2. М2: design в документах — роль, hasText и mockupPaths как у остальных ролей ────────
+
+    // Задача role=design даёт запись plans[] с role="design"; hasText и mockupPaths считаются
+    // по её ResultMarkdown тем же правилом, что у cut/plan/consult.
+    [Fact]
+    public void BuildPlans_Design_Попадает_Role_HasText_mockupPaths()
+    {
+        var epic = Epic("epic");
+        var design = Child("d1", "epic", TaskRoles.Design, "Макет панели",
+            resultMarkdown: "Отчёт дизайнера: см. docs/mockups/panel-a.html и docs/mockups/panel-b.md.");
+
+        var plans = FeatureProjector.BuildPlans(Run(epic, design));
+
+        var p = plans.Single();
+        p.TaskId.Should().Be("d1");
+        p.Role.Should().Be("design");
+        p.HasText.Should().BeTrue();
+        p.MockupPaths.Should().Equal("docs/mockups/panel-a.html", "docs/mockups/panel-b.md");
+    }
+
+    // Полный порядок ролей: cut → design → plan → consult; внутри design — по CreatedAt (не по
+    // порядку вызывающего); design не дедуплицируется — обе задачи в списке.
+    [Fact]
+    public void BuildPlans_Порядок_С_Design_Роль_И_ВнутриРолиПоCreatedAt()
+    {
+        var epic = Epic("epic");
+        var c1 = Child("c1", "epic", TaskRoles.Cut, "Разрез",
+            createdAt: new DateTime(2026, 10, 1, 9, 0, 0));
+        var d2 = Child("d2", "epic", TaskRoles.Design, "Макет 2",
+            createdAt: new DateTime(2026, 10, 1, 10, 0, 0));
+        var d1 = Child("d1", "epic", TaskRoles.Design, "Макет 1",
+            createdAt: new DateTime(2026, 10, 1, 11, 0, 0));
+        var p1 = Child("p1", "epic", TaskRoles.Plan, "План",
+            createdAt: new DateTime(2026, 10, 1, 12, 0, 0));
+        var k1 = Child("k1", "epic", TaskRoles.Consult, "Консультация",
+            createdAt: new DateTime(2026, 10, 1, 13, 0, 0));
+
+        // Задачи даны вперемешку — порядок должен выводиться из роли и CreatedAt.
+        var plans = FeatureProjector.BuildPlans(Run(epic, k1, p1, d2, c1, d1));
+
+        plans.Select(p => p.TaskId).Should().Equal("c1", "d2", "d1", "p1", "k1");
+        plans.Select(p => p.Role).Should().Equal("cut", "design", "design", "plan", "consult");
+    }
+
+    // ── 3. step с заголовком «Разрез» не попадает (роль как есть, догадок по заголовку нет) ──
 
     [Fact]
     public void BuildPlans_Step_СЗаголовкомРазрез_НеПопадает()
@@ -96,7 +141,7 @@ public class FeaturePlansTests
         plans.Select(p => p.TaskId).Should().Equal("c1");
     }
 
-    // ── 3. hasText: пустой/пробельный ResultMarkdown → false; текст → true ──────────────────
+    // ── 4. hasText: пустой/пробельный ResultMarkdown → false; текст → true ──────────────────
 
     [Fact]
     public void BuildPlans_HasText_ПустойИПробельный_False()
@@ -115,7 +160,7 @@ public class FeaturePlansTests
         plans.Single(p => p.TaskId == "d").HasText.Should().BeFalse();
     }
 
-    // ── 4. mockupPaths: путь с «..» отброшен, дубли схлопнуты, потолок 20 ────────────────────
+    // ── 5. mockupPaths: путь с «..» отброшен, дубли схлопнуты, потолок 20 ────────────────────
 
     // Путь с «..» (pathtraversal) отброшен; валидные пути — в порядке появления.
     [Fact]
@@ -164,7 +209,7 @@ public class FeaturePlansTests
         plans.Single().MockupPaths[^1].Should().Be("docs/mockups/m20.md");
     }
 
-    // ── 5. Мутация: BuildPlans(SlimRun(run)) → у всех hasText=false ─────────────────────────
+    // ── 6. Мутация: BuildPlans(SlimRun(run)) → у всех hasText=false ─────────────────────────
 
     // Slim обнуляет ResultMarkdown (контракт master): если BuildPlans считать по SlimRun(run),
     // у ВСЕХ hasText=false (хотя в полном run текст есть) → тест краснеет.
@@ -182,7 +227,7 @@ public class FeaturePlansTests
         FeatureProjector.BuildPlans(slim).Single().HasText.Should().BeFalse();
     }
 
-    // ── 6. Мутация: убрать фильтр «..» → путь с «..» появляется ────────────────────────────
+    // ── 7. Мутация: убрать фильтр «..» → путь с «..» появляется ────────────────────────────
 
     // Если не отбрасывать пути с «..», docs/mockups/../leak.md попадёт в список → тест краснеет.
     // Проверяем, что текущая реализация «..» отбрасывает (т.е. фильтр работает).

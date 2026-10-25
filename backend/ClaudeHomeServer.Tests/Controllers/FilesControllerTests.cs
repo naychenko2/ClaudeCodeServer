@@ -315,6 +315,33 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.NotFound, "featureId не ищет по чужим деревьям");
     }
 
+    // Дополнение к контракту (ревью F1a, п.7): при обоих параметрах сразу featureId
+    // выигрывает, sessionId игнорируется. Файл есть и в дереве эпика, и в своём дереве чата:
+    // с featureId+sessionId читается дерево эпика. Мутация: поставить ветку sessionId
+    // раньше featureId в GetContent — тест краснеет (прочиталось дерево чата).
+    [Fact]
+    public async Task GetContent_FeatureIdИSessionId_Одновременно_FeatureIdВыигрывает()
+    {
+        var (epicId, epicTree, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("both");
+        var git = _factory.Services.GetRequiredService<GitService>();
+        var chatTree = Path.Combine(_tempDir, "both_chat_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(chatTree);
+        await git.WorktreeAddAsync(null, mainRoot, chatTree, "feat/both-" + Guid.NewGuid().ToString("N")[..6]);
+
+        File.WriteAllText(Path.Combine(epicTree, "draft.md"), "from feature tree");
+        File.WriteAllText(Path.Combine(chatTree, "draft.md"), "from chat tree");
+
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto, name: "chat with own tree");
+        (await sessions.AttachWorktreeAsync(session.Id, chatTree)).Should().BeTrue("дерево чата на диске и в worktree list");
+
+        var response = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path=draft.md&featureId={epicId}&sessionId={session.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("from feature tree", "featureId явный — он и решает; sessionId игнорируется");
+    }
+
     // Хвост резолва W4-LINK-B3: асимметрия решена — правило «дерево == корень» единое. Дерево
     // эпика — корень проекта: эпик работает в корне, читается корень (как у дерева чата), а не
     // 404, как было до унификации. Мутация: убрать обход корня в FilesController.TreeRootForAsync

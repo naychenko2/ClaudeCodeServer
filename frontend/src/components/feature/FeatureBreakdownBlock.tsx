@@ -196,7 +196,7 @@ export function FeatureBreakdownBlock({
           <div style={{ flex: 1, minWidth: 0 }}>
             <FeatureBreakdownTable
               groups={visible} axis={axis} run={run} measure={effMeasure} onMeasureChange={setMeasure}
-              labelOf={labelOf} colorOf={colorOf} nav={nav} isMobile={isMobile}
+              labelOf={labelOf} colorOf={colorOf} nav={nav} isMobile={isMobile} costPartial={costPartial}
             />
           </div>
         </div>

@@ -32,12 +32,11 @@ export function sharePercent(share: number | null): string {
 }
 
 // Ключ группы «роли» (сырой taskRole) → русская подпись (roleLabel).
-// 'step' без stepRef/lane → roleLabel пуст → нейтральное «шаг»; 'feature' → «координация».
+// 'step' без stepRef/lane → roleLabel пуст → нейтральное «шаг».
 // Единственная функция подписи роли для кольца, таблицы, карточек, чипов и подписей чатов.
 export function roleGroupLabel(key: string): string {
   const l = roleLabel(key, null, null);
   if (l) return l;
-  if (key === 'feature') return 'координация';
   return key === 'step' ? 'шаг' : key;
 }
 

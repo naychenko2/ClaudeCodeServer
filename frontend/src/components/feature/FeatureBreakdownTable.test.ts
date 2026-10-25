@@ -109,12 +109,14 @@ function mountTable(
     labelOf?: (k: string) => string;
     colorOf?: (k: string) => string;
     hiddenKeys?: string[];
+    costPartial?: boolean;
   } = {},
 ) {
   return mount(createElement(FeatureBreakdownTable, {
     groups,
     axis: extra.axis ?? 'personas',
     run: extra.run ?? mkRun(),
+    costPartial: extra.costPartial,
     labelOf: extra.labelOf,
     colorOf: extra.colorOf,
     hiddenKeys: extra.hiddenKeys,
@@ -299,6 +301,17 @@ describe('полоса меры и состояния ячеек (к2)', () => {
     const cells = findNodeByAttr(container, 'data-testid', 'breakdown-total')!.children;
     expect(textOf(cells[3])).toBe('—');
     expect(textOf(cells[4])).toBe('—');
+  });
+
+  it('costPartial=true при известных ценах: «Всего» — деньги с пометкой, не «бесплатно»', () => {
+    const groups = [mkGroup('a', 60, 1000, 0), mkGroup('b', 30, 500, 0)];
+    const free = mountTable(groups);
+    expect(textOf(findNodeByAttr(free.container, 'data-testid', 'breakdown-total')!.children[4])).toContain('бесплатно');
+    const { container } = mountTable(groups, { costPartial: true });
+    const cell = findNodeByAttr(container, 'data-testid', 'breakdown-total')!.children[4];
+    expect(textOf(cell)).not.toContain('бесплатно');
+    expect(textOf(cell)).toContain('$0,00');
+    expect(findNodeByAttr(cell, 'data-testid', 'breakdown-total-partial')).not.toBeNull();
   });
 
   it('hiddenKeys: скрытая строка не рендерится и не входит в «Всего»', () => {

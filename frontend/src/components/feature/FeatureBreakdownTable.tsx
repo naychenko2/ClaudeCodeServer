@@ -40,6 +40,8 @@ export interface FeatureBreakdownTableProps {
   run: FeatureRun;
   // Человекочитаемое имя группы (контракт тот же, что у ShareRing): сырой ключ (UUID)
   // в таблице не читается. Фолбэк — сам ключ.
+  // Часть моделей без цены (spend.costPartial): «Всего» не может быть «бесплатно».
+  costPartial?: boolean;
   labelOf?: (key: string) => string;
   // Цвет группы: у персон — цвет персоны; фолбэк — палитра по порядку (как у ShareRing).
   colorOf?: (key: string) => string;
@@ -115,7 +117,7 @@ function measureCell(
 }
 
 export function FeatureBreakdownTable({
-  groups, axis, run, labelOf, colorOf, hiddenKeys, measure: measureProp, onMeasureChange, isMobile = false, nav,
+  groups, axis, run, labelOf, colorOf, hiddenKeys, measure: measureProp, onMeasureChange, isMobile = false, nav, costPartial = false,
 }: FeatureBreakdownTableProps) {
   // Хуки выше раннего return: мера сортировки (если оболочка её не ведёт) и раскрытая строка.
   const [ownMeasure, setOwnMeasure] = useState<Measure>('time');
@@ -134,6 +136,7 @@ export function FeatureBreakdownTable({
   const sorted = sortGroups(visible, measure);
   const maxOf = (m: Measure) => measureMax(visible, m);
   const totalOf = (m: Measure) => measureTotal(visible, m) ?? 0;
+  const totalCost = totalMoney(visible, costPartial);
   const hasOf = (m: Measure) => measureTotal(visible, m) != null;
 
   // Раскрыта только видимая строка: скрытую группу состояние не удерживает.
@@ -242,8 +245,8 @@ export function FeatureBreakdownTable({
             </td>
             <td style={TD_TOTAL}>
               <span style={VAL}>
-                {!hasOf('cost') ? '—' : totalMoney(visible).text}
-                {hasOf('cost') && totalMoney(visible).partial ? (
+                {!hasOf('cost') ? '—' : totalCost.text}
+                {hasOf('cost') && totalCost.partial ? (
                   <small data-testid="breakdown-total-partial" style={{ display: 'block', color: C.textMuted, fontWeight: 400 }}>
                     не по всем
                   </small>

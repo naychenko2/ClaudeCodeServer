@@ -137,6 +137,24 @@ export function analysisLineState(run: FeatureRun, nowMs: number): AnalysisLineS
     };
   }
 
+  // 4а. stopped — выше quiet (простой не прячется своей причиной, правило бэка FeatureProjector): исполнитель остановлен: это не «ждёт вас», а остановка с причиной;
+  // машинный код причины (auth_failed…) переводится в человеческий текст.
+  if (run.attention?.kind === 'stopped') {
+    const actions: AnalysisAction[] = [];
+    if (run.attention.linkedSessionId) {
+      actions.push({ kind: 'openChat', label: 'Открыть чат', sessionId: run.attention.linkedSessionId, variant: 'secondary' });
+    }
+    actions.push(ANALYSIS_ACTION);
+    const since = minutesSince(run.attention.since, nowMs);
+    return {
+      key: 'stopped', tone: 'danger', dashed: false,
+      badge: { tone: 'danger', icon: 'Clock', text: since != null ? `стоит ${formatDuration(since)}` : 'стоит' },
+      strong: 'Остановлена',
+      tail: `${executorStopVisual(run.attention.reason).text}.`,
+      actions,
+    };
+  }
+
   // 4. quiet — run.quiet: «Ни одна задача не идёт с …». Рамка пунктиром.
   if (run.quiet === true) {
     const actions: AnalysisAction[] = [];
@@ -152,24 +170,6 @@ export function analysisLineState(run: FeatureRun, nowMs: number): AnalysisLineS
         ? `Ни одна задача не идёт с ${formatDateTime(run.lastActivityAt)}.`
         : 'Ни одна задача не идёт.',
       tail: '',
-      actions,
-    };
-  }
-
-  // 5а. stopped — исполнитель остановлен: это не «ждёт вас», а остановка с причиной;
-  // машинный код причины (auth_failed…) переводится в человеческий текст.
-  if (run.attention?.kind === 'stopped') {
-    const actions: AnalysisAction[] = [];
-    if (run.attention.linkedSessionId) {
-      actions.push({ kind: 'openChat', label: 'Открыть чат', sessionId: run.attention.linkedSessionId, variant: 'secondary' });
-    }
-    actions.push(ANALYSIS_ACTION);
-    const since = minutesSince(run.attention.since, nowMs);
-    return {
-      key: 'stopped', tone: 'danger', dashed: false,
-      badge: { tone: 'danger', icon: 'Clock', text: since != null ? `стоит ${formatDuration(since)}` : 'стоит' },
-      strong: 'Остановлена',
-      tail: `${executorStopVisual(run.attention.reason).text}.`,
       actions,
     };
   }

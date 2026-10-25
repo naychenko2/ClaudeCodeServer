@@ -208,6 +208,16 @@ describe('analysisLineState — состояния', () => {
     expect(st.actions[0].kind).toBe('openChat');
   });
 
+  it('stopped при quiet=true — остановка не прячется «Ни одна задача не идёт»', () => {
+    const st = analysisLineState(mkRun({
+      quiet: true,
+      lastActivityAt: '2026-10-18T11:00:00Z',
+      attention: { kind: 'stopped', reason: 'auth_failed', since: '2026-10-18T11:00:00Z' },
+    }), NOW);
+    expect(st.key).toBe('stopped');
+    expect(st.strong).toBe('Остановлена');
+  });
+
   it('stopped — неизвестная причина: общая формулировка, не сырой код', () => {
     const st = analysisLineState(mkRun({ attention: { kind: 'stopped', reason: 'new_code_x' } }), NOW);
     expect(st.tail).toBe('Исполнение прервано.');

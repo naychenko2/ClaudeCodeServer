@@ -17,6 +17,7 @@ import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import { openTaskInSection } from '../../lib/tasks';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { plural } from '../../lib/plural';
 import { formatDuration, formatDateTime, minutesSince, kindBackground } from './FeatureStatsBits';
 import { FEW_DATA_MIN, pickHeroState, compositionRows, type HeroState } from './FeatureStatsPulseModel';
@@ -145,7 +146,11 @@ export function StatsHero({ run, stats, isMobile = false }: StatsHeroProps) {
             <Button
               variant="ghost" size={isMobile ? 'md' : 'sm'} fullWidth={isMobile}
               dataTestId="hero-open-task"
-              onClick={() => openTaskInSection({ id: taskId, projectId: run.epic?.projectId ?? undefined })}
+              onClick={() => {
+                // Точка возврата «← к фиче · Статистика»: герой живёт во вкладке, вкладка — текущая.
+                recordFeatureReturn(run.featureId, { kind: 'task', id: taskId }, run.epic?.title ?? null);
+                openTaskInSection({ id: taskId, projectId: run.epic?.projectId ?? undefined });
+              }}
             >
               Открыть задачу
             </Button>

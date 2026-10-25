@@ -30,6 +30,7 @@ import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { C, FS, FONT } from '../../lib/design';
 import { StatsHero } from './StatsHero';
+import { getBackNav } from '../../lib/featureBackNav';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
@@ -316,6 +317,18 @@ describe('состояние «ждёт вас» по решению Андре�
     act(() => { props.onClick(); });
     expect(mockOpenTask.length).toBe(1);
     expect(mockOpenTask[0].id).toBe('t-1');
+  });
+
+  // Дефект ce6653fe: переход из героя пишет точку возврата «← к фиче» (чип в задаче).
+  // Мутация «убрать recordFeatureReturn в onClick героя» красит этот тест.
+  it('клик «Открыть задачу» пишет точку возврата к фиче', () => {
+    const { container } = mountHero(waitingRun(), mkStats());
+    const btn = findNodeByAttr(container, 'data-testid', 'hero-open-task');
+    act(() => { (reactProps(btn) as { onClick: () => void }).onClick(); });
+    const back = getBackNav();
+    expect(back, 'точки возврата нет').not.toBeNull();
+    expect(back!.from).toBe('f-1');
+    expect(back!.to).toEqual({ kind: 'task', id: 't-1' });
   });
 
   it('без задачи и эпика — кнопки перехода нет', () => {

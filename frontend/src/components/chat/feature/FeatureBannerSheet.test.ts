@@ -483,6 +483,26 @@ describe('FeatureBannerSheet: рендер (fakeDom, десктоп)', () => {
     root.unmount();
   });
 
+  // Дефект eefa6698: переход в задачу из шторки обязан писать точку возврата (чип «← к фиче»).
+  // Мутация «убрать recordFeatureReturn в onOpen задачи» красит этот тест.
+  it('клик «задача» исполнителя → точка возврата к фиче без вкладки', async () => {
+    const run = mkRun('f1', 'Тестовая фича');
+    const { root, container } = mount(createElement(FeatureBannerSheet, {
+      runs: [run], isMobile: false, onClose: () => {},
+    }));
+    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-task');
+    expect(btn, 'кнопка задачи исполнителя в шторке').not.toBeNull();
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); await Promise.resolve(); });
+    const raw = backNav.getBackNav();
+    expect(raw, 'точки возврата нет').not.toBeNull();
+    expect(raw!.from).toBe('f1');
+    expect(raw!.to.kind).toBe('task');
+    expect(raw!.fromTitle).toBe('Тестовая фича');
+    expect(raw!.showTab, 'из шторки — БЕЗ вкладки').toBe(false);
+    root.unmount();
+  });
+
   // Ревью Ф9b, зам. 2: если чат НЕ открылся (openChatById → false, тост «Чат не найден»),
   // указатель не перезаписывается на несуществующий чат — прежняя точка возврата жива.
   // Мутация «записать возврат до открытия» красит этот тест.

@@ -157,7 +157,10 @@ function ExecutorRow({ x, isMobile, projectId, featureId, featureTitle = null, m
           taskId={x.taskId}
           taskClosed={marks.taskClosed(x.taskId)}
           isMobile={isMobile}
-          onOpen={() => { openTaskInSection({ id: x.taskId, projectId: projectId ?? undefined }); }}
+          onOpen={() => {
+            recordFeatureReturn(featureId, { kind: 'task', id: x.taskId }, featureTitle, undefined, false);
+            openTaskInSection({ id: x.taskId, projectId: projectId ?? undefined });
+          }}
         />
       </span>
     </div>

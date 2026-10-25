@@ -27,12 +27,13 @@ export interface BriefTextOptions {
 }
 
 // Родительный падеж имени для «у {Имя}» (макет: «— у Глеба»). Эвристика для частых
-// кириллических имён: «…ь»→«…я», «…я»→«…и», «…а»→«…ы», твёрдая согласная→+«а»;
+// кириллических имён: «…ь»/«…й»→«…я» (Игорь→Игоря, Дмитрий→Дмитрия),
+// «…я»/«…е»→«…и», «…а»→«…ы», твёрдая согласная→+«а»;
 // некириллическое окончание — как есть.
 export function genitiveName(name: string): string {
   const last = name.slice(-1).toLowerCase();
-  if (last === 'ь') return `${name.slice(0, -1)}я`;
-  if (last === 'я') return `${name.slice(0, -1)}и`;
+  if (last === 'ь' || last === 'й') return `${name.slice(0, -1)}я`;
+  if (last === 'я' || last === 'е') return `${name.slice(0, -1)}и`;
   if (last === 'а') return `${name.slice(0, -1)}ы`;
   if (/[а-яё]/.test(last)) return `${name}а`;
   return name;
@@ -112,8 +113,10 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
 export function briefNextText(brief: FeatureBrief, nameOf?: PersonaNameResolver): string | null {
   if (brief.kind === 'closed') return 'Ничего — фича закрыта';
 
-  // Ждём согласие на мерж: следующий шаг один и известен — мерж (макет wait).
-  if (brief.kind === 'waiting_you' && (!brief.next.length || brief.next[0].stage === 'merge')) {
+  // Строка про мерж — только когда мерж действительно ожидается: причина «мерж»
+  // (бэк кладёт такой код) или следующий шаг — merge (макет wait). При другой
+  // причине — общий префикс ниже; при пустом next строки нет (R-F2: не выдумывать мерж).
+  if (brief.kind === 'waiting_you' && (brief.reason === 'мерж' || brief.next[0]?.stage === 'merge')) {
     return 'После вашего «да» — мерж в master';
   }
 

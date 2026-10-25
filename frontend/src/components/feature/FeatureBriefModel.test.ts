@@ -142,6 +142,16 @@ describe('Дальше: строка из next', () => {
   it('next пуст — строки нет', () => {
     expect(briefNextText(brief({ kind: 'running', next: [] }), nameOf)).toBeNull();
   });
+
+  it('waiting_you с причиной не «мерж» и пустым next — строки нет, мерж не выдумывается (R-F2)', () => {
+    const b = brief({ kind: 'waiting_you', reason: 'нужен твой ответ по макету', next: [] });
+    expect(briefNextText(b, nameOf)).toBeNull();
+  });
+
+  it('waiting_you с причиной не «мерж» и следующим шагом — общий префикс без слова «мерж»', () => {
+    const b = brief({ kind: 'waiting_you', reason: 'нужен твой ответ по макету', next: [{ stage: 'design', personaId: null }] });
+    expect(briefNextText(b, nameOf)).toBe('После вашего «да» — дизайн');
+  });
 });
 
 // ── 3. «Оценка» ─────────────────────────────────────────────────────────────────────
@@ -263,6 +273,11 @@ describe('genitiveName', () => {
     expect(genitiveName('Софья')).toBe('Софьи');
     expect(genitiveName('Денис')).toBe('Дениса');
     expect(genitiveName('Игорь')).toBe('Игоря');
+  });
+  it('имена на «-й» — «я», не «+а» (R-F2: не «Дмитрийа»)', () => {
+    expect(genitiveName('Дмитрий')).toBe('Дмитрия');
+    expect(genitiveName('Сергей')).toBe('Сергея');
+    expect(genitiveName('Алексей')).toBe('Алексея');
   });
   it('некириллическое окончание — как есть', () => {
     expect(genitiveName('Alex')).toBe('Alex');

@@ -1342,10 +1342,16 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
     expect(trigger, 'триггер ⋯').not.toBeNull();
     await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
-    const item = findNodeByAttr((globalThis as any).document.body, 'role', 'menuitem');
-    expect(item, 'пункт шторки').not.toBeNull();
-    const itemText = textNodes(item!).join('');
-    expect(itemText).toContain('Поставить на паузу');
+    // Порядок шторки (макет feature-queue-1): «В очередь…», затем «Поставить на паузу…».
+    const items: string[] = [];
+    const walk = (x: any) => {
+      if (x.getAttribute?.('role') === 'menuitem') items.push(textNodes(x).join(''));
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk((globalThis as any).document.body);
+    expect(items[0], 'первый пункт — «В очередь…»').toContain('В очередь');
+    const itemText = items[1];
+    expect(itemText, 'второй пункт шторки').toContain('Поставить на паузу');
     expect(itemText).toContain('Прервёт 1 идущий шаг');
   });
 
@@ -1816,5 +1822,156 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     expect(item, 'пункт «Возобновить фичу»').not.toBeNull();
     await act(async () => { (reactProps(item)!.onClick as () => void)(); });
     expect(mockUpdateTask.calls, 'клик в шторке — PUT todo').toEqual([{ id: 'f1', dto: { status: 'todo' } }]);
+  });
+});
+
+// === Q5B: очередь фич — действия в шторке ⋯ (макет feature-queue-1) ===
+// Мутации (в отчёте): (1) 'queue' → 'manual' в doQueueIn → тест «В очередь» красный;
+// (2) 'manual' → 'queue' в doQueueOut → тест «Вынуть» красный;
+// (3) clearFeatureHold → setFeatureHold в doRunOutOfQueue → тест «вне очереди» красный;
+// (4) убрать merge_pending из QUEUE_DENIED → тест недоступности красный.
+describe('Q5B: очередь фич в шапке', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    personaMap.set('p-kira', 'Кира');
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    mockHold.calls = [];
+    mockHold.pending = false;
+    mockHold.error = null;
+    mockHold.resumed = [];
+    mockHold.expired = [];
+    mockHold.emptyBody = false;
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+  const queuePage = (state: FeatureState, over: Record<string, unknown> = {}) => {
+    const pd = pageData();
+    pd.run = { ...pd.run, state, ...over } as never;
+    mockGetFeature.result = pd;
+  };
+  const menuLabels = (): string[] => {
+    const out: string[] = [];
+    const walk = (x: AnyNode) => {
+      if ((x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'menuitem') out.push(textNodes(x).join(''));
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk((globalThis as any).document.body as unknown as AnyNode);
+    return out;
+  };
+  const menuItem = (label: string): AnyNode | null => {
+    let found: AnyNode | null = null;
+    const walk = (x: AnyNode) => {
+      if (!found && (x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'menuitem'
+        && textNodes(x).join('').includes(label)) found = x;
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk((globalThis as any).document.body as unknown as AnyNode);
+    return found;
+  };
+  const openMenu = async (c: AnyNode) => {
+    const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
+    expect(trigger, 'триггер ⋯').not.toBeNull();
+    await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
+  };
+  const QUEUED = { hold: { reason: 'queue', since: '2026-10-19T11:00:00Z' }, queue: { position: 2, length: 3 }, now: [] };
+
+  it('«В очередь…» шлёт POST hold {queue}; идущих ходов нет — без модалки', async () => {
+    queuePage('running', { now: [] });
+    const c = render({});
+    await settle();
+    await openMenu(c);
+    const item = menuItem('В очередь');
+    expect(item, 'пункт «В очередь…»').not.toBeNull();
+    await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'POST', reason: 'queue' }]);
+  });
+
+  it('«В очередь…» при идущих ходах: подсказка, модалка, POST hold {queue} после подтверждения', async () => {
+    queuePage('running', { now: [{ taskId: 't1', stage: 'prod', personaId: 'p-kira', stepRef: 'W2-A', title: 'Шаг' }] });
+    const c = render({});
+    await settle();
+    await openMenu(c);
+    const item = menuItem('В очередь')!;
+    expect(textNodes(item).join('')).toContain('Прервёт 1 идущий шаг — продолжатся при запуске из очереди');
+    await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+    expect(mockHold.calls, 'до подтверждения запроса нет').toEqual([]);
+    const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-queue-confirm');
+    expect(confirm, 'модалка подтверждения').not.toBeNull();
+    await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'POST', reason: 'queue' }]);
+  });
+
+  it('«Вынуть из очереди» шлёт POST hold {manual}, не DELETE', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    await openMenu(c);
+    expect(menuItem('В очередь…'), 'в очереди «В очередь…» нет').toBeNull();
+    const item = menuItem('Вынуть из очереди');
+    expect(item, 'пункт «Вынуть из очереди»').not.toBeNull();
+    await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'POST', reason: 'manual' }]);
+  });
+
+  it('«Запустить вне очереди…» — всегда подтверждение, затем DELETE hold', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-unpause'), 'главной кнопки «Снять паузу» у очереди нет').toBeNull();
+    await openMenu(c);
+    const item = menuItem('Запустить вне очереди');
+    expect(item, 'пункт «Запустить вне очереди…»').not.toBeNull();
+    await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+    expect(mockHold.calls, 'до подтверждения запроса нет').toEqual([]);
+    expect(textNodes((globalThis as any).document.body).join(' ')).toContain('вторая');
+    const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-bypass-confirm');
+    expect(confirm, 'модалка подтверждения').not.toBeNull();
+    await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
+    expect(mockHold.calls).toEqual([{ fid: 'f1', method: 'DELETE' }]);
+  });
+
+  it.each([
+    ['draft', { hold: { reason: 'draft', since: '2026-10-19T11:00:00Z' } }, true],
+    ['paused', { hold: { reason: 'manual', since: '2026-10-19T11:00:00Z' } }, true],
+    ['merge_pending', {}, false],
+    ['merging', {}, false],
+    ['merged', {}, false],
+    ['closed', {}, false],
+  ] as [FeatureState, Record<string, unknown>, boolean][])('«В очередь…»: состояние %s, hold %j → доступно %s', async (state, over, expected) => {
+    queuePage(state, { now: [], ...over });
+    const c = render({});
+    await settle();
+    const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
+    if (trigger) await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
+    expect(menuLabels().some(l => l.includes('В очередь'))).toBe(expected);
   });
 });

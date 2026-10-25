@@ -5,16 +5,18 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 
 // ─── Записи графика (JSON camelCase) ─────────────────────────────────────────────────────────
 
-// Стадия на графике: ключ конвейера + границы (старт/конец). Границы — из FeatureStage
-// (FirstStartedAt/LastCompletedAt): старт = минимальный ClaudeStartedAt задач стадии,
-// конец = максимальный CompletedAt (только если все задачи стадии закрыты), иначе null.
+// Стадия на графике: ключ конвейера + границы полосы. Границы — из FeatureStage
+// (FirstStartedAt/BarEnd): старт = минимальный ClaudeStartedAt задач стадии, край полосы —
+// BarEnd (W5-DEF): стадия в работе — «сейчас»; вставшая — момент остановки; закрытая —
+// max CompletedAt; null — активности не было. Конец стадии (LastCompletedAt) — отдельная
+// семантика, на график не выходит (W5-DEF-хвост п.4: имя совпадает с семантикой).
 public sealed record TimelineStage(
     // Ключ стадии: cut | plan | prod | review | qa | final | merge.
     string Key,
     // Начало стадии; null — ни одна задача стадии не стартовала.
     DateTime? StartedAt,
-    // Конец стадии; null — стадия ещё не завершилась (не все задачи Done).
-    DateTime? EndedAt);
+    // Правый край полосы (BarEnd); null — активности не было.
+    DateTime? BarEnd);
 
 // Сегмент времени: интервал [From, To] с видом, треком, стадией и (опц.) задачей.
 // Kind: "work" | "waiting" | "idle" | "error" | "notWorking" (в approx только work/notWorking).
@@ -36,6 +38,14 @@ public sealed record TimelineCurrent(
     // CompletedAt финала (merge_pending).
     DateTime Since,
     string? TaskId);
+
+// Самый долгий эпизод ожидания (ST-B2): минуты — то же число, что LongestWaitMinutes;
+// TaskId — задача, в которой был эпизод; From — начало эпизода (ISO). Сам объект null —
+// эпизодов ожидания нет или режим approx; внутри него From заполнен всегда.
+public sealed record TimelineLongestWait(
+    int Minutes,
+    string? TaskId,
+    DateTime From);
 
 // Итоги по минутам. В approx Waiting*/Idle*/Error* = null (не различаем без журнала).
 //
@@ -61,11 +71,14 @@ public sealed record TimelineTotals(
     int? IdleMinutes,
     int? WaitingCount,
     int? LongestWaitMinutes,
+    // Самый долгий эпизод ожидания с задачей и началом (ST-B2); null — эпизодов нет или approx.
+    TimelineLongestWait? LongestWait,
     int? ErrorCount,
     int? ErrorMinutes);
 
 // Статистика фичи (GET features/{id}, поле stats): источник (approx/journal), признак
-// обрезки, график, разрезы («кто и на чём работали»), «дольше всех сейчас» и расход.
+// обрезки, график, разрезы («кто и на чём работали»), «дольше всех сейчас», расход и
+// «типичная фича проекта» (ST-B1).
 public sealed record FeatureStats(
     // approx | journal.
     string Source,
@@ -78,7 +91,10 @@ public sealed record FeatureStats(
     FeatureLongestNow? LongestNow = null,
     // Расход фичи (Б9b); null — подсистема Spend выключена (шов ISpendFeatureReader не
     // зарегистрирован → расход «≈», не 500; решение Андрея 20.10).
-    FeatureSpend? Spend = null);
+    FeatureSpend? Spend = null,
+    // «Типичная фича проекта» (ST-B1): медиана и p25–p75 по смерженным фичам того же проекта
+    // и владельца; null — смерженных меньше трёх.
+    FeatureTypical.TypicalFeatureStats? Typical = null);
 
 // Расход фичи (GET features/{id}, stats.spend; Б9b): токены (вход/выход/кэш) + стоимость.
 // Атрибуция (шов ISpendFeatureReader): записи, чья задача — задача фичи, ИЛИ чей чат — чат
@@ -183,9 +199,9 @@ public sealed record FeatureTimeline(
         var to = ClosureAt(run) ?? now;
         if (to < from) to = from;
 
-        // Стадии: из готовых FeatureStage (FirstStartedAt/LastCompletedAt уже вычислены).
+        // Стадии: из готовых FeatureStage (FirstStartedAt/BarEnd уже вычислены).
         var stages = run.Stages
-            .Select(s => new TimelineStage(s.Key, s.FirstStartedAt, s.LastCompletedAt))
+            .Select(s => new TimelineStage(s.Key, s.FirstStartedAt, s.BarEnd))
             .ToList();
 
         // «Сейчас»: из тревоги фичи (waiting/stopped/merge_pending) — в обоих режимах.
@@ -247,6 +263,7 @@ public sealed record FeatureTimeline(
             IdleMinutes: null,
             WaitingCount: null,
             LongestWaitMinutes: null,
+            LongestWait: null,
             ErrorCount: null,
             ErrorMinutes: null);
 
@@ -308,6 +325,10 @@ public sealed record FeatureTimeline(
         var waitingIntervals = new List<JournalInterval>();
         var waitingCount = 0;
         var longestWait = TimeSpan.Zero;
+        // ST-B2: адрес самого долгого эпизода (задача + начало). Первый эпизод фиксируется
+        // всегда (даже нулевой длины), дальше — строго больший; при равенстве — первый.
+        string? longestWaitTaskId = null;
+        DateTime? longestWaitFrom = null;
         foreach (var e in journal.Entries)
         {
             // waiting: ожидание человека waiting…(waiting_cleared | now).
@@ -322,7 +343,13 @@ public sealed record FeatureTimeline(
                 // тянется до now, а не до закрытия — интервалы sweep'ом режутся к [from, to],
                 // поэтому и самое длинное ожидание обрезаем тем же `to` (иначе: закрыта 08:30,
                 // waiting 08:00 без cleared, now=20:00 → Waiting=30, LongestWait=720).
-                longestWait = Max(longestWait, (wEnd <= to ? wEnd : to) - e.At);
+                var wSpan = (wEnd <= to ? wEnd : to) - e.At;
+                if (longestWaitFrom is null || wSpan > longestWait)
+                {
+                    longestWait = wSpan;
+                    longestWaitTaskId = e.TaskId;
+                    longestWaitFrom = e.At;
+                }
                 waitingIntervals.Add(new JournalInterval(e.At, wEnd, "waiting", PriorityWaiting, LabelOf(e.TaskId), e.TaskId));
             }
             // waiting: ожидание устройства device_wait…(device_wait_cleared | now). Контракт
@@ -332,7 +359,13 @@ public sealed record FeatureTimeline(
             {
                 var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;
-                longestWait = Max(longestWait, (dEnd <= to ? dEnd : to) - e.At);
+                var dSpan = (dEnd <= to ? dEnd : to) - e.At;
+                if (longestWaitFrom is null || dSpan > longestWait)
+                {
+                    longestWait = dSpan;
+                    longestWaitTaskId = e.TaskId;
+                    longestWaitFrom = e.At;
+                }
                 waitingIntervals.Add(new JournalInterval(e.At, dEnd, "waiting", PriorityWaiting, LabelOf(e.TaskId), e.TaskId));
             }
         }
@@ -435,6 +468,9 @@ public sealed record FeatureTimeline(
         }
         var agentsSum = FeatureTimeMath.CeilMinutes(agentsSpan);
         var notWorking = Math.Max(0, elapsed - workWall);
+        // Хвост ревью ST-B2: самое долгое ожидание округляется один раз каноническим
+        // хелпером — LongestWaitMinutes и LongestWait.Minutes берут одно и то же число.
+        var lwMinutes = FeatureTimeMath.CeilMinutes(longestWait);
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
             WorkWallMinutes: workWall,
@@ -446,7 +482,12 @@ public sealed record FeatureTimeline(
             WaitingMinutes: waitingMin,
             IdleMinutes: idleMin,
             WaitingCount: waitingCount,
-            LongestWaitMinutes: (int)Math.Ceiling(longestWait.TotalMinutes),
+            LongestWaitMinutes: lwMinutes,
+            // ST-B2: минуты — то же число, что LongestWaitMinutes (то же округление); адрес
+            // — задача и начало самого долгого эпизода. null — эпизодов ожидания нет.
+            LongestWait: longestWaitFrom is null
+                ? null
+                : new TimelineLongestWait(lwMinutes, longestWaitTaskId, longestWaitFrom.Value),
             ErrorCount: errorCount,
             ErrorMinutes: errorMin);
 

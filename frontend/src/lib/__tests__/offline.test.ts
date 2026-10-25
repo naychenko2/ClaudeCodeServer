@@ -161,6 +161,132 @@ describe('request: свой таймаут', () => {
   });
 });
 
+// --- Signal вызывающего: «Остановить» должен реально обрывать запрос (W5-F2b, вердикт W5-R-F2) ---
+// Раньше внутренний контроллер таймаута перетирал переданный signal: отмена «Остановить»
+// и смена fid доходили только до компонента, а fetch висел до своего таймаута.
+describe('request: signal вызывающего', () => {
+  // fetch, который висит до любой отмены и реджектит по abort — как настоящий
+  function hangUntilAnyAbort() {
+    return (_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      if (init.signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    });
+  }
+
+  it('abort() вызывающего обрывает запрос AbortError, связь не трогается', async () => {
+    fetchMock.mockImplementation(hangUntilAnyAbort());
+    const ac = new AbortController();
+
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', signal: ac.signal });
+    ac.abort();
+    await expect(promise).rejects.toThrow('Aborted');
+
+    // Отмена человека — не сетевой сбой: приложение остаётся онлайн
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('signal вызывающего не глушит внутренний таймаут: timeoutMs по-прежнему срабатывает', async () => {
+    fetchMock.mockImplementation(hangUntilAnyAbort());
+    const ac = new AbortController();
+
+    const promise = offline.request('/tasks/features/f1/summary', {
+      method: 'POST', body: '{}', signal: ac.signal, timeoutMs: 180_000,
+    });
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+  });
+
+  it('уже отменённый signal — сразу AbortError, без ожидания таймаута', async () => {
+    fetchMock.mockImplementation(hangUntilAnyAbort());
+    const ac = new AbortController();
+    ac.abort();
+
+    await expect(offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', signal: ac.signal }))
+      .rejects.toThrow('Aborted');
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('отмена судится по имени, не по типу: Error-подобный AbortError — тоже отмена', async () => {
+    // Контракт по имени, как у потребителя (featurePage.ts:105 судит по e.name === 'AbortError'):
+    // в ряде окружений abort приходит Error с именем 'AbortError', а не DOMException.
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    }));
+
+    // Наш таймаут, обрывающий fetch такой ошибкой, должен трактоваться как таймаут
+    // (RequestTimeoutError), а не уходить в сырую ошибку или офлайн.
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', timeoutMs: 180_000 });
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('слушатель на signal вызывающего снимается: на долгоживущем signal не остаётся записи', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+    // Сигнал, который переживает запрос: тот же signal передают в следующий вызов.
+    // Считаем не вызовы add/remove, а состояние реестра слушателей: Map по типу,
+    // и после каждого запроса запись 'abort' должна быть удалена по ключу.
+    const handlers = new Map<string, () => void>();
+    const longLivedSignal = {
+      aborted: false,
+      addEventListener: (type: string, handler: () => void) => { handlers.set(type, handler); },
+      removeEventListener: (type: string, handler: () => void) => {
+        if (handlers.get(type) === handler) handlers.delete(type);
+      },
+    } as unknown as AbortSignal;
+
+    for (let i = 0; i < 3; i++) {
+      await offline.request('/tasks/features/f1', { signal: longLivedSignal });
+      // Каждый слушатель снят в finally: на сигнале не остаётся ни одного
+      expect(handlers.has('abort')).toBe(false);
+    }
+    expect(handlers.size).toBe(0);
+  });
+
+  it('отмена вызывающим Error-подобным AbortError (не DOMException) возвращается как есть', async () => {
+    // Ветка «отмена вызывающим» (offline.ts:477) закрыта name-контрактом: отмена,
+    // пришедшая не как DOMException, тоже опознаётся по имени и не трактуется как пропажа связи.
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    }));
+    const ac = new AbortController();
+
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', signal: ac.signal });
+    ac.abort();
+
+    const err = await promise.catch((e: unknown) => e);
+    expect((err as Error).name).toBe('AbortError');
+    // Намеренная отмена — не сетевой сбой: состояние не трогаем, OfflineError нет
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('isAbortError судит по имени без instanceof: объект с name="AbortError" — отмена', async () => {
+    // Потребитель (featurePage.ts:105) судит по e.name === 'AbortError'; слой не должен
+    // быть строже. Наш таймаут, обрывающий fetch объектом не-Error с именем 'AbortError',
+    // обязан дать RequestTimeoutError, а не проткнуть сырой объект (с instanceof-гейтом
+    // он проходил мимо обеих веток).
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject({ name: 'AbortError', message: 'Aborted' }));
+    }));
+
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', timeoutMs: 180_000 });
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+    expect(offline.isOnline()).toBe(true);
+  });
+});
+
 // --- Подтверждающий пинг перед уходом в офлайн ---
 // Раньше ЛЮБОЙ единичный провал fetch единолично ставил офлайн, а зонд через
 // секунды возвращал онлайн — на планшете это давало мигание индикатора при

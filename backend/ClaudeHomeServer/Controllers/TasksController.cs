@@ -140,7 +140,10 @@ public class TasksController(
     // Вертикаль Tasks Spend не видит напрямую — только через этот шов (SubsystemBoundaryTests).
     ISpendFeatureReader? spend = null,
     // NC-P1b: запуск предгейта шага; null (тесты без DI) — ручка честно отвечает 503
-    TaskPregateService? pregate = null) : ControllerBase
+    TaskPregateService? pregate = null,
+    // W4-ANB (разрез §4): авторезюме фичи по кнопке. null — подсистема Tasks выключена
+    // (гейт тот же, что у features) → честный 503, не 500 (ADR-014).
+    FeatureSummaryService? summary = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -851,18 +854,62 @@ public class TasksController(
             From: (spendTotals.From ?? DateOnly.FromDateTime(run.Epic.CreatedAt)).ToString("yyyy-MM-dd"),
             Shared: shared);
         var (breakdown, longestNow) = FeatureBreakdown.Build(run, journalResult, snapshot, resolver, now, spendRecords);
+        // ST-B1: «типичная фича проекта» — медиана и p25–p75 длительности, ожидания и возвратов
+        // по смерженным фичам того же проекта и владельца (текущая исключена; null — смерженных
+        // меньше трёх). Длительность и возвраты — из уже посчитанного Summary/Verdicts (чистая
+        // проекция, кэш на ревизию данных); ожидание — только из полного журнала. Выборка и
+        // стоимость — в комментарии FeatureTypical.cs.
+        var typical = FeatureTypical.Build(owner, UserId, run.Epic.ProjectId, run.Epic.Id,
+            fid => journal?.Read(UserId, fid), now);
         var stats = new FeatureStats(
             Source: journalComplete ? "journal" : "approx",
             Truncated: journalResult?.Truncated ?? false,
             Timeline: FeatureTimeline.Build(run, journalResult, now),
             Breakdown: breakdown,
             LongestNow: longestNow,
-            Spend: featureSpend);
+            Spend: featureSpend,
+            Typical: typical);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
         return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
             mockups, mockupsUnavailable });
+    }
+
+    // ─── W4-ANB: резюме фичи (POST /api/tasks/features/{featureId}/summary) ──────────────────
+    // Авторезюме по кнопке (разрез §4): вход модели — детерминированная выжимка FeatureRun
+    // (FeatureSummaryDigest), исполнитель — место «feature-summary» (по умолчанию локаль,
+    // админский выбор в «Поставщиках моделей»). Кэш в памяти процесса: тот же отпечаток
+    // выжимки отдаётся без вызова модели (cached: true); ?force=true — пересчёт. Автоматического
+    // запуска нет (решение Андрея): только по кнопке. 404 — тело как у GET features/{id};
+    // 503 — подсистема выключена; 502 — отказ модели (таймаут — LlmTimeoutException) с причиной.
+    [HttpPost("features/{featureId}/summary")]
+    public async Task<IActionResult> FeatureSummary(string featureId, [FromQuery] bool force = false,
+        CancellationToken ct = default)
+    {
+        if (features is null || summary is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        // Владелец из claim, как у GetFeature: нет эпика/чужой/удалён → один 404. Выжимка
+        // считается по облегчённому run: причина витка живёт в Rounds[].Reason (Slim гасит
+        // Verification.Notes у задач, не у витков) — отдельного ProjectFull не нужно.
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        try
+        {
+            var res = await summary.SummarizeAsync(UserId, featureId, run, force, ct);
+            return Ok(new { text = res.Text, generatedAt = res.GeneratedAt, model = res.Model,
+                cached = res.Cached, usage = res.Usage, eventCount = res.EventCount });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // LlmTimeoutException — потомок InvalidOperationException: причина в сообщении
+            // («не ответил за отведённое время» / «вернула пустой ответ»).
+            return StatusCode(502, new { error = ex.Message });
+        }
     }
 
     // ─── W4-HOLD-B2: удержание фичи (POST/DELETE /api/tasks/features/{featureId}/hold) ────────

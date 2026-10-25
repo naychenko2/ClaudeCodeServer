@@ -55,7 +55,7 @@ function chat(over: Partial<FeatureChatLink> = {}): FeatureChatLink {
 }
 
 function pageWith(chats: FeatureChatLink[]): FeaturePage {
-  return { run: {} as FeaturePage['run'], events: [], eventsTotal: 0, chats };
+  return { run: { epic: { id: 'f1', title: 'Фича', status: 'doing', projectId: 'proj-1' } } as unknown as FeaturePage['run'], events: [], eventsTotal: 0, chats };
 }
 
 // Корни всех mount'ов: unmount в afterEach (иначе два живых корня дёргают общий стор).
@@ -279,7 +279,8 @@ describe('Навигация «чат · задача» (макет §9а)', () 
     const taskBtn = findNodeByAttr(container, 'data-testid', 'nav-target-task')!;
     const taskClick = reactProps(taskBtn)!.onClick as () => void;
     await act(async () => { taskClick(); });
-    expect(mockOpenTask.calls).toEqual([{ id: 't-9' }]);
+    // projectId эпика обязателен: без него переход уводит в личный «Календарь».
+    expect(mockOpenTask.calls).toEqual([{ id: 't-9', projectId: 'proj-1' }]);
 
     const chatBtn = findNodeByAttr(container, 'data-testid', 'nav-target-chat')!;
     const chatClick = reactProps(chatBtn)!.onClick as () => void;

@@ -32,8 +32,11 @@ describe('roleLabel: step → «{stepRef} · {линия}»', () => {
   it('stepRef null + линия null → пусто', () => expect(roleLabel('step', null, null)).toBe(''));
 });
 
+describe('roleLabel: эпик фичи → «координация»', () => {
+  it('feature → «координация»', () => expect(roleLabel('feature', null, null)).toBe('координация'));
+});
+
 describe('roleLabel: null/прочее → пусто', () => {
   it('taskRole null → «»', () => expect(roleLabel(null, 'Ш2', 'back')).toBe(''));
-  it('taskRole «feature» (эпик, не в словаре) → «»', () => expect(roleLabel('feature', null, null)).toBe(''));
   it('taskRole «unknown» → «»', () => expect(roleLabel('unknown', null, null)).toBe(''));
 });

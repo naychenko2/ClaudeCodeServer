@@ -83,6 +83,11 @@ public sealed class FeatureRun
     public FeatureStepProgress StepProgress { get; init; } = new();
     // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
     public DateTime? LastActivityAt { get; init; }
+    // W4-ANB (разрез §4, решение Андрея 24.10): «тихо» — фича стоит без движения ≥ 24 часов.
+    // Выводится здесь (единая точка правды): не закрыта, сейчас ничего не идёт, и с последней
+    // активности (LastActivityAt; её никогда не было — с создания эпика) прошло ≥ порога.
+    // Граница включена: ровно 24 часа — «тихо». Строка индекса берёт это поле, не пересчитывает.
+    public bool Quiet { get; init; }
     // Закрыта = эпик Done: State closed, либо merged с эпиком Done. Смержена с открытым эпиком
     // (State merged) — не закрыта: bucket «merged», Summary у неё есть. Частичный мерж
     // (merge Done, финал не принят, эпик открыт) фичу не смерживает.
@@ -132,6 +137,12 @@ public sealed class FeatureNow
     public DateTime? StartedAt { get; init; }
     // Связанный чат исполнителя.
     public string? LinkedSessionId { get; init; }
+    // W4-ANB (разрез §4): отметки сторожа зависшего исполнителя (TaskExecutionService.ClassifyStall),
+    // поля задачи как есть. «Зависла» — StaleAlertedAt != null (сторож уже позвал человека);
+    // предупреждение — NudgedAt != null («окликнули, ждём»). Обе сбрасываются перезапуском
+    // исполнителя (MarkClaudeStarted), поэтому признак живой.
+    public DateTime? NudgedAt { get; init; }
+    public DateTime? StaleAlertedAt { get; init; }
 }
 
 // Тревога фичи: один элемент либо null. Приоритет: stopped → wait явный → merge.
@@ -220,12 +231,19 @@ public sealed class FeatureStage
     public string? Verdict { get; init; }
     // Начало стадии (Б2): минимальный ClaudeStartedAt задач стадии; null — ни одна не стартовала.
     public DateTime? FirstStartedAt { get; init; }
-    // Конец стадии (Б2): максимальный CompletedAt — ТОЛЬКО если все задачи стадии закрыты (Done),
-    // иначе null (стадия ещё не завершилась).
+    // Конец стадии (Б2): максимальный CompletedAt всех задач, ТОЛЬКО если все задачи закрыты
+    // (Done); незакрытая стадия конца не имеет — null. По этому концу живут длительность
+    // (ApproxMinutes), пересечения и интервалы (StageLastCompletedAt). Край полосы Ганта —
+    // отдельное поле BarEnd (W5-DEF-хвост): две семантики разведены, поле не смешивает их.
     public DateTime? LastCompletedAt { get; init; }
+    // Правый край полосы Ганта (W5-DEF): стадия в работе (есть незакрытая задача, которая не
+    // встала — идёт, ждёт человека/устройства или дала результат) — now; вставшая — момент
+    // остановки; не в работе — максимум CompletedAt закрытых задач. null — активности не было.
+    public DateTime? BarEnd { get; init; }
     // Длительность по часам стены (Б2, минуты): ОБЪЕДИНЕНИЕ интервалов [ClaudeStartedAt,
-    // CompletedAt ?? now] задач стадии — параллельные задачи не складываются; округление вверх
-    // до минуты. Пустая стадия (ни одна задача не стартовала) → 0.
+    // CompletedAt] задач стадии — вставшая задача обрывается на ExecutorStoppedAt (валидной
+    // пометке остановки), идущая открыта до now; параллельные задачи не складываются;
+    // округление вверх до минуты. Пустая стадия (ни одна задача не стартовала) → 0.
     public int ApproxMinutes { get; init; }
     // Пересечение с идущим (Б2): интервалы стадии пересекаются с интервалами задач ДРУГОЙ стадии,
     // которая ещё идёт (имеет ≥1 задачу, не все Done). Стадия без интервалов — false.

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactNode } from 'react';
-import { ArrowRight, Check, GitBranch, ListChecks, MessageCircle, Pause, Play, RotateCcw } from 'lucide-react';
+import { ArrowRight, Check, Clock, GitBranch, ListChecks, MessageCircle, Moon, Pause, Play, RotateCcw } from 'lucide-react';
 import { C, R, SHADOW, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { refetchFeaturePage } from '../../lib/featurePage';
 import { stepProgressFromRun, type StepProgress } from '../../lib/featureProgress';
@@ -10,7 +10,7 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
-import { formatDuration, MERGE_PENDING_STATUS, type FeatureStatusTag } from '../../lib/chatGroups';
+import { formatDuration } from '../../lib/chatGroups';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { executorStopVisual, openTaskInSection } from '../../lib/tasks';
@@ -22,104 +22,61 @@ import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { taskCounters } from './featurePageBody';
 import { NavTargetButton } from './NavTargetButton';
+import { StatusTag, type FeatureRunTag } from './FeatureStatusTag';
+import { analysisLineState } from './FeatureAnalysisModel';
+import { setFeaturePageTab } from '../../lib/featurePage';
 
-// === Тег статуса (макет §3) ===
+// Статусный тег живёт в FeatureStatusTag.tsx (W5-F3a): шапка и строка анализа зовут
+// его оттуда — модель больше не тянет модуль шапки, цикл FeaturePageHeader ⇄
+// FeatureAnalysisModel разомкнут. Рё-экспорт — совместимость для существующих
+// потребителей (страница, view исполнения, тесты): их импорты не меняются.
+export { featureRunStatusTag, toRunTag, StatusTag, type FeatureRunTag, type FeatureRunTagTone } from './FeatureStatusTag';
+
+// === Тег «стоит»/«тихо» в шапке (спека pt6, W5-F3a) ===
 //
-// Единая точка правды — run.state (11 значений, бэк Б1 + W4-HOLD-B1): из него бэк
-// выводит bucket строки индекса и порядок; тег с ними не расходится.
-// Таблица макета — 8 подписей: `idle` («ничего не идёт, не ждёт, не закрыта»)
-// показывается как `not_started` — для пользователя фича ещё не началась.
-// `stageName` — имя активной стадии (тег «идёт · {этап}»); null — просто «идёт».
-// Тон `loop` («Доработка») run.state не возвращает — только фолбэк по индексу.
-// `paused`/`draft` (W4-HOLD-F2, feature-hold-1.md §«Теги»): при паузе тон активной
-// стадии на бэке остаётся «run» — тег обязан показать «на паузе», а не «идёт»
-// (пункт вердикта ревью); тон hold — bgInset + кромка border, НЕ тревожный.
-export type FeatureRunTagTone = 'notStarted' | 'run' | 'wait' | 'stop' | 'merge' | 'loop' | 'merged' | 'closed' | 'hold' | 'draft';
-export interface FeatureRunTag {
-  label: string;
-  tone: FeatureRunTagTone;
-  // Точка 6 (C.info) у «ждёт вас» / «ждёт согласия на мерж».
-  dot?: boolean;
-}
-
-export function featureRunStatusTag(state: FeatureState, stageName?: string | null): FeatureRunTag {
-  switch (state) {
-    case 'not_started':
-    case 'idle':
-      return { label: 'не начата', tone: 'notStarted' };
-    case 'running':
-      return { label: stageName ? `идёт · ${stageName}` : 'идёт', tone: 'run' };
-    case 'waiting':
-      return { label: 'ждёт вас', tone: 'wait', dot: true };
-    case 'stopped':
-      return { label: 'стоит', tone: 'stop' };
-    case 'paused':
-      // Тон активной стадии при паузе на бэке остаётся «run» — stageName сюда не
-      // подмешиваем: при паузе нет «идёт», есть «на паузе» (вердикт ревью W4-HOLD-F2).
-      return { label: 'на паузе', tone: 'hold' };
-    case 'draft':
-      return { label: 'черновик', tone: 'draft' };
-    case 'merge_pending':
-      return { label: MERGE_PENDING_STATUS, tone: 'merge', dot: true };
-    case 'merging':
-      return { label: 'мерж · идёт', tone: 'run' };
-    case 'merged':
-      return { label: 'смержена', tone: 'merged' };
-    case 'closed':
-      return { label: 'закрыта без мержа', tone: 'closed' };
-  }
-}
-
-// Старый тег индекса (featureStatusTag, 7 тонов) → тег страницы: тоны совпадают
-// один в один (loop — только фолбэк по индексу, run.state его не возвращает).
-export function toRunTag(t: FeatureStatusTag): FeatureRunTag {
-  return { label: t.label, tone: t.tone as FeatureRunTagTone };
-}
-
-// Тон → вид (макет §3): не начата/закрыта — bgSelected/textSecondary; идёт —
-// bgSelected/textHeading; ждёт/мерж — infoBg/textPrimary (+точка); стоит —
-// dangerBg/dangerText + inset-кромка; доработка — warningBg/warningText;
-// смержена — successBg/successText. «На паузе» — bgInset + inset-кромка border
-// (плашка «утоплена», не тревожная); «черновик» — прозрачный фон, пунктир
-// textMuted (не C.dashed: в тёмной теме сливается с фоном, замечание M1).
-const TAG_STYLE: Record<FeatureRunTagTone, CSSProperties> = {
-  notStarted: { background: C.bgSelected, color: C.textSecondary },
-  run:      { background: C.bgSelected, color: C.textHeading },
-  wait:     { background: C.infoBg, color: C.textPrimary },
-  stop:     { background: C.dangerBg, color: C.dangerText, boxShadow: `inset 0 0 0 1px ${C.danger}` },
-  merge:    { background: C.infoBg, color: C.textPrimary },
-  loop:     { background: C.warningBg, color: C.warningText },
-  merged:   { background: C.successBg, color: C.successText },
-  closed:   { background: C.bgSelected, color: C.textSecondary },
-  hold:     { background: C.bgInset, color: C.textPrimary, boxShadow: `inset 0 0 0 1px ${C.border}` },
-  draft:    { background: 'transparent', color: C.textSecondary, border: `1px dashed ${C.textMuted}` },
-};
-
-// Тег: 11/600, поля 1 7, R.sm, строка 16 (макет §1). Точка — у «ждёт вас»/«к мержу».
-// «На паузе» — глиф «‖» 10 px currentColor перед подписью (макет feature-hold-1);
-// «черновик» — поля 0 6: пунктирная рамка занимает место, её компенсируют полем.
-export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string }) {
+// Только эти два состояния строки анализа. Состояние, тон и текст — из
+// analysisLineState (общая функция F1), не копия условий: что показывает строка,
+// то показывает и шапка. Тег нужен, потому что страница открывается на
+// «Хронологии»: до тревоги надо добраться одним нажатием — клик ведёт на
+// «Статистику». Наведение — внутреннее кольцо currentColor (макет), фокус с
+// клавиатуры — SHADOW.focus. На 360 — высота 40, поля 0 SP.sm+2 (цель касания).
+// На вкладке «Статистика» тег остаётся: он ещё и сигнал.
+function AnalysisTag({ run, isMobile }: { run: FeatureRun; isMobile: boolean }) {
+  // Хуки до раннего return: состояние может измениться между рендерами, число
+  // хуков не должно плыть (прецедент: LeadChip).
+  const [hover, setHover] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const st = analysisLineState(run, Date.now());
+  if (st.key !== 'stuck' && st.key !== 'quiet') return null;
+  const danger = st.key === 'stuck';
+  const Icon = danger ? Clock : Moon;
   return (
-    <span
-      data-testid={testId}
+    <button
+      type="button"
+      data-testid="feature-page-analysis-tag"
+      title="Перейти к анализу на «Статистике»"
+      aria-label="Перейти к анализу на «Статистике»"
+      onClick={() => setFeaturePageTab('stats')}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      // Фокус — только с клавиатуры (:focus-visible): после тапа кольцо не залипает
+      // (прецедент: LeadChip).
+      onFocus={(e: FocusEvent<HTMLButtonElement>) => setFocused(e.currentTarget.matches(':focus-visible'))}
+      onBlur={() => setFocused(false)}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
         fontSize: FS.xs, fontWeight: 600, fontFamily: FONT.sans, lineHeight: '16px',
-        ...(tag.tone === 'draft' ? { padding: `0 6px` } : { padding: `${SP.xxs}px ${SP.xs}px` }),
-        borderRadius: R.sm, whiteSpace: 'nowrap',
-        ...TAG_STYLE[tag.tone],
+        padding: isMobile ? `0 ${SP.sm + 2}px` : `${SP.xxs}px ${SP.sm}px`,
+        minHeight: isMobile ? 40 : undefined,
+        borderRadius: R.max, whiteSpace: 'nowrap', border: 'none', cursor: 'pointer',
+        background: danger ? C.dangerBg : C.warningBg,
+        color: danger ? C.dangerText : C.warningText,
+        boxShadow: focused ? SHADOW.focus : hover ? 'inset 0 0 0 1px currentColor' : 'none',
       }}
     >
-      {tag.tone === 'hold' && (
-        <span aria-hidden style={{ display: 'inline-flex', color: 'currentColor' }}>
-          <Pause size={10} strokeWidth={ICON_STROKE} />
-        </span>
-      )}
-      {tag.dot && (
-        <span aria-hidden style={{ width: 6, height: 6, borderRadius: R.full, background: C.info, flexShrink: 0 }} />
-      )}
-      {tag.label}
-    </span>
+      <Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      {st.badge?.text}
+    </button>
   );
 }
 
@@ -414,6 +371,7 @@ export function FeaturePageHeader({ run, feature, isMobile, tag }: FeaturePageHe
         }}
       >
         {isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
+        {isMobile && run && <AnalysisTag run={run} isMobile={isMobile} />}
         {branchBtn}
         {age && <span>{age}</span>}
         <span data-testid="feature-page-taskcount">{tasks}</span>
@@ -854,6 +812,7 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   return (
     <>
       {!isMobile && tag && <StatusTag tag={tag} testId="feature-page-status" />}
+      {!isMobile && run && <AnalysisTag run={run} isMobile={isMobile} />}
       {canPause && !isMobile && (
         <span data-testid="feature-page-pause-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
           <Button

@@ -47,7 +47,12 @@ class FNode {
 
   appendChild(child: FNode): FNode { this._link(child, this.childNodes.length); return child; }
   insertBefore(child: FNode, ref: FNode | null): FNode {
-    const i = ref ? this.childNodes.indexOf(ref) : this.childNodes.length;
+    // Как в настоящем DOM: сначала узел снимается, потом вставляется перед ref. Если узел
+    // уже стоял перед ref, его снятие сдвигает ref влево на один — без этой
+    // поправки перестановка детей с ключами (React двигает их через insertBefore)
+    // даёт неверный порядок.
+    let i = ref ? this.childNodes.indexOf(ref) : this.childNodes.length;
+    if (child.parentNode === this && this.childNodes.indexOf(child) < i) i -= 1;
     this._link(child, Math.max(0, i));
     return child;
   }

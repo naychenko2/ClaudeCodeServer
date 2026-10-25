@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.IdentityModel.Tokens.Jwt;
 using System.Reflection;
 using System.Security.Claims;
+using System.Globalization;
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
@@ -26,6 +27,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -157,7 +159,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
     // serviceToken (W4-HOLD-B2): claim typ=svc — тот же признак, что в PluginBridgeController;
     // для проверки отказа 403 на ручках hold/clear.
     private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
-        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false)
+        ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false,
+        FeatureSummaryService? summary = null)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -174,7 +177,8 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             git: git,
             catalog: catalog,
             journal: journal,
-            spend: spend);
+            spend: spend,
+            summary: summary);
         var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, OwnerId) };
         if (serviceToken) claims.Add(new("typ", "svc"));
         var identity = new ClaimsIdentity(claims, "test");
@@ -1097,7 +1101,14 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         timeline.TryGetProperty("to", out _).Should().BeTrue("timeline.to");
         timeline.TryGetProperty("stages", out _).Should().BeTrue("timeline.stages");
         timeline.TryGetProperty("segments", out _).Should().BeTrue("timeline.segments");
-        timeline.TryGetProperty("totals", out _).Should().BeTrue("timeline.totals");
+        var totals = timeline.GetProperty("totals");
+        // ST-B2: totals.longestWait (null или объект) — поле в контракте страницы.
+        totals.TryGetProperty("longestWait", out _).Should().BeTrue("totals.longestWait (null или объект)");
+        // Хвост ST-B2: from — валидная ISO-8601 строка (фронт парсит её как Date), не null и не
+        // «не-дата». Мутация «from = null» → TryParse false → краснеет.
+        DateTime.TryParse(timeline.GetProperty("from").GetString(),
+            CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _)
+            .Should().BeTrue("timeline.from разбирается как ISO-8601");
 
         // Б6: stats.breakdown (разрезы по персонам/моделям/ролям) и stats.longestNow на странице.
         var breakdown = stats.GetProperty("breakdown");
@@ -1140,6 +1151,55 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         // journal = null → source=approx (не 500).
         json.GetProperty("stats").GetProperty("source").GetString().Should().Be("approx");
         json.GetProperty("stats").GetProperty("truncated").GetBoolean().Should().BeFalse();
+    }
+
+    // ST-B1 (хвост вердикта Глеба): контракт stats.typical в ответе GET features/{id}:
+    // count/waitingCount/duration/waiting/loops, внутри — median/p25/p75 (camelCase).
+    // Смерженных меньше трёх — typical null. Мутация «typical не в ответе» → TryGetProperty
+    // false → краснеет; «меньше трёх не null» → ValueKind не Null → краснеет.
+    [Fact]
+    public async Task GetFeature_Typical_КонтрактИNullПриМалоСмерженных()
+    {
+        var projectId = CreateProject("typical");
+        var cur = await CreateProjectTaskAsync(projectId, new { title = "текущая", role = "feature" });
+        var curId = cur.GetProperty("id").GetString()!;
+
+        // Две смерженные (финал принят + merge Done) — шкалы сравнения нет.
+        for (int i = 0; i < 2; i++)
+        {
+            var e = await CreateProjectTaskAsync(projectId, new { title = "фича " + i, role = "feature" });
+            var eid = e.GetProperty("id").GetString()!;
+            await CreateAcceptedFinalAsync(projectId, eid);
+            await CreateProjectTaskAsync(projectId,
+                new { title = "мерж", featureId = eid, role = "merge", status = "done" });
+        }
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{curId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var stats = page.GetProperty("stats");
+        stats.TryGetProperty("typical", out var typical).Should().BeTrue("поле typical в ответе");
+        typical.ValueKind.Should().Be(JsonValueKind.Null, "смерженных меньше трёх — null");
+
+        // Третья смерженная — числа по контракту. Журнал смерженной фичи полон (created),
+        // поэтому waitingCount = count.
+        var e3 = await CreateProjectTaskAsync(projectId, new { title = "фича 3", role = "feature" });
+        var eid3 = e3.GetProperty("id").GetString()!;
+        await CreateAcceptedFinalAsync(projectId, eid3);
+        await CreateProjectTaskAsync(projectId,
+            new { title = "мерж", featureId = eid3, role = "merge", status = "done" });
+
+        var page2 = await (await _client.GetAsync($"/api/tasks/features/{curId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var t = page2.GetProperty("stats").GetProperty("typical");
+        t.GetProperty("count").GetInt32().Should().Be(3);
+        t.GetProperty("waitingCount").GetInt32().Should().Be(3, "журнал каждой смерженной — полный");
+        foreach (var metric in new[] { "duration", "waiting", "loops" })
+        {
+            var m = t.GetProperty(metric);
+            m.TryGetProperty("median", out _).Should().BeTrue(metric + ".median");
+            m.TryGetProperty("p25", out _).Should().BeTrue(metric + ".p25");
+            m.TryGetProperty("p75", out _).Should().BeTrue(metric + ".p75");
+        }
     }
 
     // ─── Б-mk-b: макеты фичи (mockups[] + mockupsUnavailable) в GET features/{id} ───────────
@@ -2214,6 +2274,129 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
         mergeBody.Should().Be(getBody, "m2: тело 404 мержа совпадает с телом 404 GET (FeatureIdPattern)");
         mergeBody.Should().Contain("Фича не найдена");
+    }
+
+    // ─── W4-ANB: резюме фичи (POST /api/tasks/features/{id}/summary) ────────────────────────
+    // Контракт ручки: 404 — тело как у GET; 502 — отказ модели с причиной; повторный вызов
+    // с тем же отпечатком — из кэша (cached: true). Поведение сервиса (single-flight, LRU,
+    // force) — FeatureSummaryServiceTests в Tasks.Tests; здесь только HTTP-контракт.
+
+    // Заглушка дешёвого раннера со счётчиком вызовов (тот же приём, что в handoff-тестах).
+    private sealed class SummaryStubRunner : ICheapTextRunner
+    {
+        public int Calls;
+        public string Text = "резюме";
+        public Exception? Failure;
+
+        public bool UsesLocal(string actionKey) => true;
+        public bool HasFreeRoute(string actionKey) => true;
+        public bool HasRoute(string actionKey) => true;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "local=stub";
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(Text);
+
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult<string?>(Text);
+
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Calls++;
+            if (Failure is not null) throw Failure;
+            return Task.FromResult(new OneShotResult(Text, null, 100));
+        }
+    }
+
+    // Нестандартный id (символ вне FeatureIdPattern) → тот же 404, что у GET features/{id}.
+    [Fact]
+    public async Task FeatureSummary_НестандартныйId_404КакGet()
+    {
+        var resp = await _client.PostAsync("/api/tasks/features/abc.def/summary", null);
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await resp.Content.ReadAsStringAsync()).Should().Contain("Фича не найдена");
+    }
+
+    // Отказ модели (таймаут) → честный 502 с причиной, а не 500 и не пустое резюме.
+    [Fact]
+    public async Task FeatureSummary_ОтказМодели_502СПричиной()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var stub = new SummaryStubRunner { Failure = new LlmTimeoutException("не ответил за отведённое время") };
+        var summary = new FeatureSummaryService(stub, _factory.Services.GetRequiredService<IConfiguration>());
+        var controller = BuildController(RealGit(), summary: summary);
+
+        var result = await controller.FeatureSummary(epicId, false);
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(502);
+    }
+
+    // К2: повторный вызов с тем же состоянием фичи — cached: true, модель не зовётся второй раз.
+    [Fact]
+    public async Task FeatureSummary_ПовторныйВызов_БезВторогоВызоваМодели()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var stub = new SummaryStubRunner();
+        var summary = new FeatureSummaryService(stub, _factory.Services.GetRequiredService<IConfiguration>());
+        var controller = BuildController(RealGit(), summary: summary);
+
+        var first = await controller.FeatureSummary(epicId, false);
+        first.Should().BeOfType<OkObjectResult>();
+        var json = JsonSerializer.SerializeToElement(((OkObjectResult)first!).Value!,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        json.GetProperty("cached").GetBoolean().Should().BeFalse("первый вызов считает");
+        // Хвост W4-ANB (вердикт W4-R-ANB3): ответ ручки всегда структурирован — несвязный текст
+        // заглушки приводится к трём разделам, содержимое сохраняется.
+        var text = json.GetProperty("text").GetString();
+        text.Should().Contain("Сделано");
+        text.Should().Contain("Где застряло");
+        text.Should().Contain("Дальше");
+        text.Should().Contain("резюме", "текст модели не теряется при страховке формата");
+        // W4-R-ANB3, minor-1: поле eventCount в контракте ручки — не только cached/text.
+        // Эпик только создан — в ленте ровно одно событие (created).
+        json.GetProperty("eventCount").GetInt32().Should().Be(1, "счётчик хронологии в ответе первой ручки");
+
+        var second = await controller.FeatureSummary(epicId, false);
+        var json2 = JsonSerializer.SerializeToElement(((OkObjectResult)second!).Value!,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        json2.GetProperty("cached").GetBoolean().Should().BeTrue("тот же отпечаток — из кэша");
+        json2.GetProperty("eventCount").GetInt32().Should().Be(1, "кэш несёт тот же счётчик");
+        stub.Calls.Should().Be(1, "повторный вызов не зовёт модель");
+    }
+
+    // Хвост W4-ANB (вердикт W4-R-ANB4, minor): пара Project/ProjectFull закреплена end-to-end:
+    // eventsTotal страницы (полный run) = eventCount резюме (облегчённый run). Одна фича —
+    // одно число, включая события вердикта (не только created).
+    [Fact]
+    public async Task FeatureSummary_EventCount_РавенEventsTotalСтраницы()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString();
+        await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
+        await CreateTaskAsync(new
+        {
+            title = "ревью", featureId = epicId, role = "review",
+            status = "done", verification = new { verdict = "returned", notes = "нет тестов" },
+        });
+
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var eventsTotal = page.GetProperty("eventsTotal").GetInt32();
+        // Хронология: эпик created, шаг created, ревью created + returned — 4 события.
+        eventsTotal.Should().Be(4);
+
+        var stub = new SummaryStubRunner();
+        var summary = new FeatureSummaryService(stub, _factory.Services.GetRequiredService<IConfiguration>());
+        var controller = BuildController(RealGit(), summary: summary);
+        var result = await controller.FeatureSummary(epicId!, false);
+        var json = JsonSerializer.SerializeToElement(((OkObjectResult)result!).Value!,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+
+        json.GetProperty("eventCount").GetInt32().Should().Be(eventsTotal,
+            "счётчик резюме = eventsTotal страницы: облегчённый run даёт то же число, что полный");
     }
 
     [Fact]

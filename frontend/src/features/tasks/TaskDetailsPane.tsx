@@ -3,7 +3,7 @@
 // сегмент статуса под шапкой (узкий контейнер) или закреплённый сегмент снизу
 // (мобила). Режим редактирования — инлайн, вместо деталей (TaskEditForm).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, SquareStack, Trash2, Unplug, X } from 'lucide-react';
 import type { Project, Session, Task, TaskStatus, TaskPriority, UpdateTaskDto } from '../../types';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
@@ -26,6 +26,8 @@ import {
   PriorityFlag, SectionLabel, SubtaskCheck,
 } from './bits';
 import { useContextButton } from '../chatContext/useContextButton';
+import { FeatureBackChip } from '../../components/chat/FeatureBackChip';
+import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { TaskEditForm } from './TaskEditForm';
 import { AcceptanceBlock } from './AcceptanceBlock';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
@@ -161,6 +163,26 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
     () => sessions.find(s => s.id === task.linkedSessionId) ?? null,
     [sessions, task.linkedSessionId],
   );
+
+  // Дефект 4c4645e2: уход с задачи (закрыть или выбрать другую — панель перемонтируется
+  // по key={task.id}) гасит точку возврата так же, как у чата (обычный выбор чата гасит
+  // указатель в WorkspacePage.tsx:1453). Возврат чипом («← к фиче») гасит обработчик
+  // cc-open-feature в WorkspacePage (ветка !fromChat), и к unmount панели указателя уже нет.
+  // StrictMode (dev) сразу после монтирования гоняет cleanup и повторно ставит эффект:
+  // гасим в микрозадаче и только если эффект с тем же id не переподключился.
+  const mountedTaskId = useRef<string | null>(null);
+  useEffect(() => {
+    const id = task.id;
+    mountedTaskId.current = id;
+    return () => {
+      mountedTaskId.current = null;
+      queueMicrotask(() => {
+        if (mountedTaskId.current === id) return;
+        const back = getBackNav();
+        if (back && back.fromKind === 'feature' && back.to.kind === 'task' && back.to.id === id) clearBackNav();
+      });
+    };
+  }, [task.id]);
 
   const color = projectColor(project ? project.id : null);
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
@@ -717,6 +739,8 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
           <BackButton onClick={onBack ?? (() => {})} style={{ flex: 1, minWidth: 0 }} title="Назад к списку">
             {headerTitleBlock}
           </BackButton>
+          {/* Дефект 4c4645e2: пришли с страницы фичи — тот же чип возврата, что в шапке чата. */}
+          <FeatureBackChip taskId={task.id} projectId={project?.id ?? null} isCompact />
           {chatContextButton}
           {executeButton}
           {editButton}
@@ -746,6 +770,8 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
       {/* Шапка — как тулбар чата: название/мета слева, действия справа */}
       <Toolbar>
         {headerTitleBlock}
+        {/* Дефект 4c4645e2: пришли с страницы фичи — тот же чип возврата, что в шапке чата. */}
+        <FeatureBackChip taskId={task.id} projectId={project?.id ?? null} />
         {chatContextButton}
         {executeButton}
         {editButton}

@@ -72,6 +72,9 @@ public sealed class TasksSubsystem : IAppSubsystem
         // Журнал событий фичи (волна 3, Б8a): append-only JSONL, источник точной статистики.
         // Зависимость только на IConfiguration (DataPath) — новых швов нет.
         services.AddSingleton<FeatureJournalStore>();
+        // Авторезюме фичи по кнопке (W4-ANB, разрез §4): кэш LRU в памяти процесса, single-flight.
+        // Шов Tasks → Llm (ICheapTextRunner) уже declared — тот же, что у TaskAiService.
+        services.AddSingleton<FeatureSummaryService>();
         // Журнал ходов фичи (волна 3, Б8c): подписчик TurnCompleted пишет строку kind=turn
         // для ходов сессий, привязанных к задаче фичи. IHostedService (Tasks, не Main —
         // граница подсистем держится): явная регистрация, НЕ побочный эффект TaskSchedulerService

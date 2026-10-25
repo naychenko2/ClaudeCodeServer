@@ -8,7 +8,9 @@
 
 import type { FeatureRun, FeatureRound, StageKey, StageState } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
-import { stageLabel } from './FeatureStatsBits';
+import { stageLabel, minutesSince } from './FeatureStatsBits';
+// Состояние «тихо» — из общей строки анализа (W5-F1), не своя арифметика по датам.
+import { analysisLineState } from './FeatureAnalysisModel';
 
 // Вид сегмента полосы: виды таймлайна, а трековый review — отдельный вид (красится C.plan).
 export type GanttSegmentKind = 'work' | 'waiting' | 'idle' | 'error' | 'notWorking' | 'review';
@@ -54,7 +56,8 @@ export interface GanttRow {
   isSkipped: boolean;
   // Длительность этапа — approxMinutes бэка (фронт не пересчитывает).
   minutes: number;
-  // Границы полосы на оси: firstStartedAt / lastCompletedAt; null — этапа нет в данных.
+  // Границы полосы на оси: firstStartedAt / barEnd (край полосы, W5-DEF); null — этапа нет
+  // в данных. Конец стадии (lastCompletedAt) — отдельная семантика, полосу не рисует.
   from: string | null;
   to: string | null;
   // Сегменты полосы в хронологическом порядке (main + review).
@@ -90,6 +93,8 @@ export interface GanttModel {
   hasStalled: boolean;
   // Смержена/закрыта: ни «сейчас», ни «зависла»; самый долгий и флажки остаются.
   closed: boolean;
+  // Строка «тихо» (W5-F3b): null — состояния нет; иначе — начало тишины и её длительность.
+  quiet: GanttQuiet | null;
 }
 
 // Длительность интервала в минуты (0, если невалидно/отрицательно).
@@ -98,14 +103,6 @@ function spanMinutes(from: string, to: string): number {
   const b = new Date(to).getTime();
   if (Number.isNaN(a) || Number.isNaN(b)) return 0;
   return Math.max(0, Math.round((b - a) / 60000));
-}
-
-// Минуты от ISO-момента до `now` (округление вверх, min 0); null/невалидно — null.
-function minutesSince(iso: string | null | undefined, now: number): number | null {
-  if (!iso) return null;
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return null;
-  return Math.max(0, Math.ceil((now - t) / 60000));
 }
 
 // Витки-возвраты: цепочки шагов + стадии qa/final. «Принят с замечаниями» — тоже возврат
@@ -135,6 +132,16 @@ function collectReturnFlags(run: FeatureRun): GanttReturnFlag[] {
   return flags;
 }
 
+// «Тихо» (W5-F3b, спецификация features-overview-5.md §«Точка 6 · строка „тихо“ на Ганте»):
+// строка ПОСЛЕ всех этапов, перед осью. Состояние — из общей analysisLineState, модель
+// «тихо» сама не пересчитывает. null — состояние не «тихо»: строки и пункта легенды нет.
+export interface GanttQuiet {
+  // Начало тишины — run.lastActivityAt; null — даты нет (в треке без даты, длительности нет).
+  from: string | null;
+  // Минуты от lastActivityAt до `now` — длительность справа. null — даты нет.
+  minutes: number | null;
+}
+
 // Модель ступеней Ганта. `now` — текущее время (мс) для длительности пилюли; тесты дают
 // фиксированное, в работе — Date.now() на момент построения.
 export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now: number): GanttModel {
@@ -142,6 +149,12 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
   // «Сейчас» и тревога гаснут по state (как в баннере): смерженная фича с открытым эпиком не идёт.
   const finished = closed || run.state === 'merged' || run.state === 'closed';
   const tl = stats?.timeline;
+
+  // «Тихо» — из общей analysisLineState (не своя арифметика). В «тихо» текущего этапа нет:
+  // маркер «сейчас» не ставим (спецификация §«Точка 6»).
+  const quiet: GanttQuiet | null = analysisLineState(run, now).key === 'quiet'
+    ? { from: run.lastActivityAt ?? null, minutes: minutesSince(run.lastActivityAt, now) }
+    : null;
 
   const axis = tl?.from && tl?.to ? { from: tl.from, to: tl.to } : null;
 
@@ -177,7 +190,7 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
         isSkipped: skipped,
         minutes: skipped ? 0 : (s.approxMinutes ?? 0),
         from: skipped ? null : (s.firstStartedAt ?? null),
-        to: skipped ? null : (s.lastCompletedAt ?? null),
+        to: skipped ? null : (s.barEnd ?? null),
         segments,
         breakdown,
         isLongest: false,
@@ -201,7 +214,8 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
   }
 
   // «Сейчас»: первый InProgress-этап (бэк отдаёт now по убыванию старта). У закрытой — пусто.
-  const cur = finished ? null : (run.now?.[0] ?? null);
+  // В «тихо» — тоже пусто: маркера «сейчас» на этапе нет (W5-F3b).
+  const cur = finished || quiet ? null : (run.now?.[0] ?? null);
   if (cur) {
     const row = rows.find(r => r.key === cur.stage);
     if (row) {
@@ -262,5 +276,6 @@ export function buildGanttModel(run: FeatureRun, stats: FeatureStats | null, now
     returnTotal: flags.length,
     hasStalled,
     closed,
+    quiet,
   };
 }

@@ -2575,6 +2575,31 @@ describe('WorkspacePage: центр — страница фичи соседом
     void container;
   });
 
+  // Парный к предыдущему: указатель «фича → задача» автоскрытие НЕ гасит — задача на экране,
+  // чип «← к фиче» на ней ведёт обратно. Мутация: безусловный clearBackNav() в автоскрытии → краснеет.
+  it('автоскрытие: страница → задача из фичи — указатель «фича → задача» жив', async () => {
+    (globalThis as any).window.location.hash = '';
+    (globalThis as any).window.history.state = null;
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    // Как строка задачи на вкладке «Задачи» фичи: точка возврата, затем открытие задачи.
+    recordFeatureReturn('f1', { kind: 'task', id: 'task1' }, 'Моя фича', undefined, false);
+    (globalThis as any).sessionStorage.setItem('cc_pending_task', 'p1|task1');
+    act(() => { (globalThis as any).window.dispatchEvent(new Event('cc-pending-task')); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'),
+      'страница не закрыта при открытии задачи').toBeNull();
+    const back = backNavTest.getBackNav();
+    expect(back, 'указатель «фича → задача» погашен автоскрытием').not.toBeNull();
+    expect(back?.fromKind).toBe('feature');
+    expect(back?.to).toEqual({ kind: 'task', id: 'task1' });
+  });
+
   // M1 (полный цикл): страница открыта → открывается окно (переход otherCenterOpen false→true)
   // → НАСТОЯЩЕЕ закрытие (openFeatureId сброшен, адрес без /feature/). Закрыли окно → страница
   // НЕ «воскресает» (в старом гейте openFeatureId оставался и страница возвращалась сама).

@@ -72,6 +72,7 @@ function mkStage(over: Partial<FeatureStage> = {}): FeatureStage {
     longestStepRef: null,
     firstStartedAt: null,
     lastCompletedAt: null,
+    barEnd: null,
     approxMinutes: 0,
     overlapsActive: false,
     executors: [],
@@ -113,8 +114,8 @@ function mkRun(stages: FeatureStage[], over: Partial<FeatureRun> = {}): FeatureR
 // Семь этапов в порядке жизненного цикла (для рендер-тестов).
 function fullStages(): FeatureStage[] {
   return [
-    mkStage({ key: 'cut', state: 'done', firstStartedAt: '2026-10-19T17:20:00Z', lastCompletedAt: '2026-10-19T17:55:00Z', approxMinutes: 35 }),
-    mkStage({ key: 'plan', state: 'done', firstStartedAt: '2026-10-19T17:58:00Z', lastCompletedAt: '2026-10-19T18:30:00Z', approxMinutes: 30 }),
+    mkStage({ key: 'cut', state: 'done', firstStartedAt: '2026-10-19T17:20:00Z', lastCompletedAt: '2026-10-19T17:55:00Z', barEnd: '2026-10-19T17:55:00Z', approxMinutes: 35 }),
+    mkStage({ key: 'plan', state: 'done', firstStartedAt: '2026-10-19T17:58:00Z', lastCompletedAt: '2026-10-19T18:30:00Z', barEnd: '2026-10-19T18:30:00Z', approxMinutes: 30 }),
     mkStage({ key: 'prod', state: 'active', tone: 'run', firstStartedAt: '2026-10-20T10:05:00Z', approxMinutes: 290,
       executors: [mkExec({ personaId: 'p1', taskId: 't-prod', taskRole: 'step', stepRef: 'Ш1', lane: 'back', status: 'running', chatId: 'chat-1', modelLabel: 'Opus', modelFull: 'Opus 4.5' })] }),
     mkStage({ key: 'review', state: 'active', tone: 'run', overlapsActive: true, firstStartedAt: '2026-10-20T11:20:00Z', approxMinutes: 75 }),
@@ -176,6 +177,13 @@ describe('stageBoundsLabel', () => {
   it('только старт → «с dd.mm · ЧЧ:ММ»', () => {
     const s = mkStage({ firstStartedAt: '2026-10-20T10:05:00Z' });
     expect(stageBoundsLabel(s)).toBe(`с ${localDate('2026-10-20T10:05:00Z')} · ${localTime('2026-10-20T10:05:00Z')}`);
+  });
+  // W5-DEF-хвост п.3: идущая стадия не даёт фиктивный конец — край полосы (barEnd) в
+  // подпись не выходит. Мутация: читать barEnd вместо lastCompletedAt — тест краснеет.
+  it('active с barEnd: конца нет → «с dd.mm · ЧЧ:ММ»', () => {
+    const s = mkStage({ state: 'active', tone: 'run', firstStartedAt: '2026-10-20T10:05:00Z', barEnd: '2026-10-20T12:00:00Z' });
+    expect(stageBoundsLabel(s), 'у идущей стадии конца не печатают').toBe(
+      `с ${localDate('2026-10-20T10:05:00Z')} · ${localTime('2026-10-20T10:05:00Z')}`);
   });
   it('без старта → null', () => {
     expect(stageBoundsLabel(mkStage())).toBeNull();

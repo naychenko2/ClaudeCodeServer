@@ -1,4 +1,5 @@
-// Вкладка «Статистика» (волна 3, Ф7a, макет features-overview-3-final §«Статистика»).
+// Вкладка «Статистика» (волна 3, Ф7a, макет features-overview-3-final §«Статистика»;
+// сборка «Пульса» — ST-F14a по макету feature-stats-5, вариант A).
 // БЛОК 1 — лента времени: линейка этапов, сегменты (∝ минутам), СЖАТИЕ пауз > 2 ч
 // («разрыв · N ч»), дорожка ревью, ось + «сейчас», легенда, значки точности, «задача».
 //
@@ -8,25 +9,27 @@
 //
 // Мутации (в отчёте): (1) порог 2 ч → 20 ч → «сжатие паузы» краснеет;
 // (2) потерять track=review → «дорожка ревью» краснеет; (3) подменить цель клика
-// (focusFeatureStage('') вместо key) → «клик → этап» краснеет; (4) убрать «≈» при approx
-// → «значок точности» краснеет; (5) сегмент waiting как work → «сегменты по видам» краснеет.
+// (focusFeatureStage('') вместо key) → «клик → этап» краснеет; (4) убрать «≈» из фразы
+// точности / вернуть повтор → тесты «точность:» краснеют; (5) сегмент waiting как work
+// → «сегменты по видам» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FeatureStatsTab } from './FeatureStatsTab';
+import { FeatureStatsTab, MORE_OPEN_KEY } from './FeatureStatsTab';
 import {
   formatDuration, formatClock, formatDateTime, kindLabel, kindBackground,
   buildTimelineModel, nowFraction, nowCompressedFraction, PAUSE_BREAK_MIN,
 } from './FeatureStatsBits';
 import {
   formatTokens, formatUsd, sharePercent, roleGroupLabel, modelGroupLabel, personaGroupLabel,
-} from './FeatureStatsBlocks';
+} from './FeatureStatsFormat';
 import { clearFeatureStageFocus, setFeaturePageTab, __test } from '../../lib/featurePage';
-import { openTaskInSection } from '../../lib/tasks';
+import { getBackNav } from '../../lib/featureBackNav';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
-import type { FeatureStats, FeatureTimeline, FeatureBreakdown, FeatureLongestNow, FeatureSpend } from '../../types/featureStats';
+import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
 import type { FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
+import { C, FS, SP, FONT } from '../../lib/design';
 
 // === Мок навигации (задача) ===
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
@@ -84,9 +87,9 @@ function mkTimeline(over: Partial<FeatureTimeline> = {}): FeatureTimeline {
     from: '2026-10-19T17:20:00Z',
     to: '2026-10-20T12:30:00Z',
     stages: [
-      { key: 'cut', startedAt: '2026-10-19T17:20:00Z', endedAt: '2026-10-19T17:55:00Z' },
-      { key: 'plan', startedAt: '2026-10-19T17:58:00Z', endedAt: '2026-10-19T18:30:00Z' },
-      { key: 'prod', startedAt: '2026-10-20T10:05:00Z', endedAt: null },
+      { key: 'cut', startedAt: '2026-10-19T17:20:00Z', barEnd: '2026-10-19T17:55:00Z' },
+      { key: 'plan', startedAt: '2026-10-19T17:58:00Z', barEnd: '2026-10-19T18:30:00Z' },
+      { key: 'prod', startedAt: '2026-10-20T10:05:00Z', barEnd: null },
     ],
     segments: [
       seg('2026-10-19T17:20:00Z', '2026-10-19T17:55:00Z', 'work', 'cut', { taskId: 't-cut' }),
@@ -405,9 +408,9 @@ describe('nowCompressedFraction: «сейчас» на сжатой шкале',
 
 type FNodeLike = { nodeType: number; nodeName: string; childNodes: FNodeLike[]; attributes?: Record<string, string> };
 
-function renderTab(stats: FeatureStats | null, isMobile = false) {
+function renderTab(stats: FeatureStats | null, isMobile = false, run: FeatureRun | null = null, featureId: string | null = null) {
   installFakeDom();
-  const { container } = mount(createElement(FeatureStatsTab, { stats, isMobile }));
+  const { container } = mount(createElement(FeatureStatsTab, { stats, isMobile, run, featureId }));
   return container;
 }
 
@@ -589,30 +592,27 @@ describe('FeatureStatsTab: рендер', () => {
     expect(focus!.key).toBe('cut');
   });
 
-  // === 5. Значки точности: source=approx → «≈» + «по задачам (≈)» ===
-  it('значок точности: approx → бейдж «≈» и подпись «по задачам (≈)»', () => {
+  // === 5. Строка точности (Майя, P1): одна фраза без повтора ===
+  it('точность: approx → одна фраза «≈ по задачам — числа приблизительные»', () => {
     const c = renderTab(mkStats({ source: 'approx' }));
-    // Бейдж «≈» — отдельный узел (мутац
-    const badge = findNodeByAttr(c, 'data-testid', 'stats-accuracy-approx');
-    expect(badge, 'бейдж «≈»').not.toBeNull();
-    expect(textNodes(badge!).join('')).toBe('≈');
-    // Подпись.
-    const acc = findNodeByAttr(c, 'data-testid', 'stats-accuracy')!;
-    expect(textNodes(acc).join('')).toContain('по задачам (≈)');
+    const t = textNodes(findNodeByAttr(c, 'data-testid', 'stats-accuracy')!).join('');
+    expect(t, 'точная фраза approx-источника').toBe('≈ по задачам — числа приблизительные');
   });
 
-  // Мутация (4): убрать «≈» из бейджа (→ «по задачам») → бейдж перестаёт быть «≈» → red.
-  it('мутация: approx-бейдж = «≈» (подменить → red)', () => {
-    const c = renderTab(mkStats({ source: 'approx' }));
-    const badge = findNodeByAttr(c, 'data-testid', 'stats-accuracy-approx')!;
-    expect(textNodes(badge).join(''), 'бейдж точности — «≈»').toBe('≈');
-  });
-
-  it('значок точности: journal → «по журналу» (без «≈»)', () => {
+  // Мутация (4): убрать «≈» из фразы → тест выше краснеет.
+  it('точность: journal → «по журналу ходов», без «≈»', () => {
     const c = renderTab(mkStats({ source: 'journal' }));
-    const acc = findNodeByAttr(c, 'data-testid', 'stats-accuracy')!;
-    const t = textNodes(acc).join('');
-    expect(t).toContain('по журналу');
+    const t = textNodes(findNodeByAttr(c, 'data-testid', 'stats-accuracy')!).join('');
+    expect(t, 'точная фраза journal-источника').toBe('по журналу ходов');
+  });
+
+  // Прежняя реализация говорила «по журналу по журналу» и «по задачам (≈) ≈» — этот тест
+  // ловит повтор: источник назван ровно один раз. Мутация: вернуть дубль → краснеет.
+  it('точность: без повтора — источник назван ровно один раз', () => {
+    const c = renderTab(mkStats({ source: 'journal', truncated: true }));
+    const t = textNodes(findNodeByAttr(c, 'data-testid', 'stats-accuracy')!).join('');
+    expect((t.match(/по журналу/g) ?? []).length, 'повтор «по журналу»').toBe(1);
+    expect((t.match(/по задачам/g) ?? []).length, '«по задачам» при journal-источнике').toBe(0);
   });
 
   it('truncated → «журнал обрезан»', () => {
@@ -631,8 +631,16 @@ describe('FeatureStatsTab: рендер', () => {
   });
 
   // === 7. «Задача»: taskId сегмента → NavTargetButton «задача» ===
-  it('«задача»: по каждому этапу с taskId — кнопка; клик → openTaskInSection(taskId)', async () => {
-    const c = renderTab(mkStats());
+  // Дефект ee6825ff: без projectId openTaskInSection ведёт в личный «Календарь».
+  // Мутация: убрать projectId из вызова → тест краснеет.
+  it('«задача»: по каждому этапу с taskId — кнопка; клик → openTaskInSection(taskId, projectId эпика)', async () => {
+    const run: FeatureRun = {
+      featureId: 'f-cut', state: 'running', steps: [], reviews: [], qa: [], final: null, merge: null,
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      progress: 0, ready: false,
+      epic: { id: 'e-1', title: 'Эпик', projectId: 'proj-1' },
+    };
+    const c = renderTab(mkStats(), false, run, 'f-cut');
     const tasks = findNodeByAttr(c, 'data-testid', 'stats-tasks');
     expect(tasks, 'ряд «задача»').not.toBeNull();
     // Кнопок «задача» = число этапов с taskId (cut/plan/prod = 3).
@@ -643,9 +651,17 @@ describe('FeatureStatsTab: рендер', () => {
     };
     walk(tasks!);
     expect(btns.length, '3 кнопки «задача» (по этапам с taskId)').toBe(3);
-    // Клик по ПЕРВОЙ (cut) → openTaskInSection({ id: 't-cut' }).
+    // Клик по ПЕРВОЙ (cut) → openTaskInSection({ id: 't-cut', projectId: 'proj-1' }).
     await act(async () => { (reactProps(btns[0]!)!.onClick as () => void)(); });
     expect(mockOpenTask.calls.some(x => x.id === 't-cut'), 'клик открыл задачу t-cut').toBe(true);
+    // Дефект ee6825ff: переход несёт projectId — задача открывается в разделе проекта,
+    // а не в личном «Календаре».
+    expect(mockOpenTask.calls[0], 'в навигацию уходит projectId эпика').toEqual({ id: 't-cut', projectId: 'proj-1' });
+    // recordFeatureReturn у перехода: записана точка возврата «к фиче».
+    const back = getBackNav();
+    expect(back?.from, 'точка возврата — фича').toBe('f-cut');
+    expect(back?.fromKind, 'дискриминатор — feature').toBe('feature');
+    expect(back?.to, 'цель возврата — задача t-cut').toEqual({ kind: 'task', id: 't-cut' });
   });
 
   // === 8. Пустые состояния ===
@@ -696,7 +712,7 @@ describe('FeatureStatsTab: рендер', () => {
 function mkGanttStage(key: StageKey, state: StageState, minutes: number, over: Partial<FeatureStage> = {}): FeatureStage {
   return {
     key, state, passes: 0, taskIds: [], rounds: [],
-    firstStartedAt: null, lastCompletedAt: null, approxMinutes: minutes,
+    firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: minutes,
     overlapsActive: false, executors: [], ...over,
   };
 }
@@ -712,13 +728,13 @@ function mkGanttRun(): FeatureRun {
     ready: false,
     closed: false,
     stages: [
-      mkGanttStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:20:00Z', lastCompletedAt: '2026-10-19T17:55:00Z' }),
+      mkGanttStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:20:00Z', lastCompletedAt: '2026-10-19T17:55:00Z', barEnd: '2026-10-19T17:55:00Z' }),
       mkGanttStage('design', 'skipped', 0),
-      mkGanttStage('plan', 'done', 32, { firstStartedAt: '2026-10-19T17:58:00Z', lastCompletedAt: '2026-10-19T18:30:00Z' }),
-      mkGanttStage('prod', 'done', 370, { firstStartedAt: '2026-10-20T10:05:00Z', lastCompletedAt: '2026-10-20T16:15:00Z' }),
-      mkGanttStage('review', 'done', 40, { firstStartedAt: '2026-10-20T11:20:00Z', lastCompletedAt: '2026-10-20T12:00:00Z' }),
-      mkGanttStage('qa', 'done', 15, { firstStartedAt: '2026-10-20T16:20:00Z', lastCompletedAt: '2026-10-20T16:35:00Z' }),
-      mkGanttStage('final', 'done', 12, { firstStartedAt: '2026-10-20T16:40:00Z', lastCompletedAt: '2026-10-20T16:52:00Z' }),
+      mkGanttStage('plan', 'done', 32, { firstStartedAt: '2026-10-19T17:58:00Z', lastCompletedAt: '2026-10-19T18:30:00Z', barEnd: '2026-10-19T18:30:00Z' }),
+      mkGanttStage('prod', 'done', 370, { firstStartedAt: '2026-10-20T10:05:00Z', lastCompletedAt: '2026-10-20T16:15:00Z', barEnd: '2026-10-20T16:15:00Z' }),
+      mkGanttStage('review', 'done', 40, { firstStartedAt: '2026-10-20T11:20:00Z', lastCompletedAt: '2026-10-20T12:00:00Z', barEnd: '2026-10-20T12:00:00Z' }),
+      mkGanttStage('qa', 'done', 15, { firstStartedAt: '2026-10-20T16:20:00Z', lastCompletedAt: '2026-10-20T16:35:00Z', barEnd: '2026-10-20T16:35:00Z' }),
+      mkGanttStage('final', 'done', 12, { firstStartedAt: '2026-10-20T16:40:00Z', lastCompletedAt: '2026-10-20T16:52:00Z', barEnd: '2026-10-20T16:52:00Z' }),
       mkGanttStage('merge', 'active', 4, { firstStartedAt: '2026-10-20T17:00:00Z', tone: 'run' }),
     ],
     now: [{ taskId: 't-merge', stage: 'merge', title: 'Мерж', startedAt: '2026-10-20T17:00:00Z' }],
@@ -814,7 +830,7 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
     expect(findNodeByAttr(revBar, 'data-kind', 'review'), 'сегмент review на строке review').not.toBeNull();
   });
 
-  // === 3b. Активный этап без lastCompletedAt: полоса до «сейчас» (мутация: убрать
+  // === 3b. Активный этап без края (barEnd): полоса до «сейчас» (мутация: убрать
   // фолбэк right на axis.to — полоса merge исчезает, тест краснеет) ===
   it('активный этап: полоса дотягивается до правого края оси (текущего момента)', () => {
     const c = renderGantt();
@@ -892,6 +908,146 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
   });
 });
 
+// === Строка «тихо» на Ганте (W5-F3b, спецификация features-overview-5.md §«Точка 6») ===
+// Мутации (в отчёте): (3) убрать строку из рендера → «строка после этапов, перед осью»
+// краснеет; (4) убрать пункт легенды → «в легенде „тихо“» краснеет; (5) убрать условие
+// isMobile у «· сжато» → «на 360 без „сжато“» краснеет; (6) убрать дату из центра трека →
+// «дата начала тишины» краснеет; (7) снять типографику правой колонки (mono/xs/700) →
+// «типографика правой колонки» краснеет; (8) рисовать «{дата} → сейчас» и при from=null →
+// «без даты» краснеет; (9) строить Гант и без stats → «без stats — Ганта нет» краснеет.
+
+function mkQuietRun(): FeatureRun {
+  // Тот же конвейер, но бэк сказал «тихо ≥ 24 ч»: состояние берёт analysisLineState.
+  return { ...mkGanttRun(), quiet: true, lastActivityAt: '2026-10-20T17:10:00Z' };
+}
+
+function renderQuietGantt(isMobile = false) {
+  installFakeDom();
+  const { container } = mount(createElement(FeatureStatsTab, { stats: mkGanttStats(), run: mkQuietRun(), isMobile }));
+  return container;
+}
+
+// data-testid в порядке документа — проверить место строки (после этапов, до оси).
+function testIdsInOrder(n: FNodeLike): string[] {
+  const out: string[] = [];
+  const walk = (x: FNodeLike) => {
+    const id = x.attributes?.['data-testid'];
+    if (id) out.push(id);
+    for (const ch of x.childNodes) walk(ch);
+  }
+  walk(n);
+  return out;
+}
+
+describe('FeatureStatsTab: строка «тихо» на Ганте (W5-F3b)', () => {
+  beforeEach(() => {
+    clearFeatureStageFocus();
+  });
+  afterEach(() => {
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  it('«тихо» — последняя строка после этапов, перед осью; маркера «сейчас» нет', () => {
+    const c = renderQuietGantt();
+    const ids = testIdsInOrder(c);
+    const quietAt = ids.indexOf('gantt-quiet');
+    expect(quietAt, 'строка «тихо» есть').toBeGreaterThanOrEqual(0);
+    const lastRow = Math.max(...ids.map((id, i) => (id.startsWith('gantt-row-') ? i : -1)));
+    const axisAt = ids.indexOf('stats-axis');
+    expect(quietAt, 'строка после всех строк этапов').toBeGreaterThan(lastRow);
+    expect(quietAt, 'строка до оси').toBeLessThan(axisAt);
+    // В «тихо» текущего этапа нет: ни маркера, ни «сейчас» в легенде.
+    expect(findNodeByAttr(c, 'data-testid', 'gantt-now-marker'), 'маркера «сейчас» нет').toBeNull();
+    const legend = textNodes(findNodeByAttr(c, 'data-testid', 'stats-legend')!).join('');
+    expect(legend, 'в легенде нет «сейчас»').not.toContain('сейчас');
+  });
+
+  it('трек и имя — по токенам spec: имя «тихо» C.warningText 700, рамка dashed C.warning, штриховка C.warningBg', () => {
+    const c = renderQuietGantt();
+    const row = findNodeByAttr(c, 'data-testid', 'gantt-quiet')!;
+    const name = row.childNodes[0] as unknown as { style: Record<string, string> };
+    expect(textNodes(row.childNodes[0] as never).join('')).toBe('тихо');
+    expect(name.style.color, 'имя — C.warningText').toBe('var(--c-warning-text)');
+    expect(name.style.fontWeight).toBe('700');
+    const track = row.childNodes[1] as unknown as { style: Record<string, string> };
+    expect(track.style.height).toBe('16px');
+    expect(track.style.borderRadius, 'SP.xs = 4').toBe('4px');
+    expect(track.style.border).toContain('dashed');
+    expect(track.style.border).toContain('var(--c-warning)');
+    expect(track.style.background).toContain('repeating-linear-gradient(135deg');
+    expect(track.style.background).toContain('var(--c-warning-bg)');
+    // Центр трека: «{дата} → сейчас», моно, FS.xxs, C.warningText.
+    const inner = track.childNodes[0] as unknown as { style: Record<string, string> };
+    const innerText = textNodes(track.childNodes[0] as never).join('');
+    expect(innerText).toContain('→ сейчас');
+    // Дата начала тишины в центре трека — из lastActivityAt (spec: «{дата} → сейчас»).
+    expect(innerText, 'в центре трека — дата начала тишины').toContain(formatDateTime('2026-10-20T17:10:00Z'));
+    expect(inner.style.fontFamily).toBe(FONT.mono);
+    expect(inner.style.fontSize).toBe(`${FS.xxs}px`);
+    expect(inner.style.color).toBe(C.warningText);
+    // Справа — длительность: не только «число есть», но и типографика по spec —
+    // FONT.mono FS.xs 700 C.warningText.
+    const dur = row.childNodes[2] as unknown as { style: Record<string, string> };
+    expect(textNodes(row.childNodes[2] as never).join('')).toMatch(/\d+/);
+    expect(dur.style.fontFamily).toBe(FONT.mono);
+    expect(dur.style.fontSize).toBe(`${FS.xs}px`);
+    expect(dur.style.fontWeight).toBe('700');
+    expect(dur.style.color).toBe(C.warningText);
+  });
+
+  it('«· сжато» — только на десктопе; на 360 — сетка 86px 1fr 52px и minHeight 40', () => {
+    const desktop = renderQuietGantt();
+    expect(textNodes(findNodeByAttr(desktop, 'data-testid', 'gantt-quiet')!).join('')).toContain('· сжато');
+    const mobile = renderQuietGantt(true);
+    const rowM = findNodeByAttr(mobile, 'data-testid', 'gantt-quiet')!;
+    expect(textNodes(rowM).join(''), 'на 360 без «сжато»').not.toContain('сжато');
+    const ms = (rowM as unknown as { style: Record<string, string> }).style;
+    expect(ms.gridTemplateColumns).toBe('86px 1fr 52px');
+    expect(ms.minHeight).toBe('40px');
+  });
+
+  it('легенда: пункт «тихо» с dashed-рамкой и фоном warningBg; в не-quiet — строки и пункта нет', () => {
+    const c = renderQuietGantt();
+    const item = findNodeByAttr(c, 'data-testid', 'gantt-legend-quiet')!;
+    expect(textNodes(item).join('')).toContain('тихо');
+    const swatch = item.childNodes[0] as unknown as { style: Record<string, string> };
+    expect(swatch.style.border).toContain('dashed');
+    expect(swatch.style.background).toBe('var(--c-warning-bg)');
+    // Не-quiet (обычный конвейер) — ни строки, ни пункта легенды.
+    const plain = renderGantt();
+    expect(findNodeByAttr(plain, 'data-testid', 'gantt-quiet'), 'в не-quiet строки нет').toBeNull();
+    expect(findNodeByAttr(plain, 'data-testid', 'gantt-legend-quiet'), 'в не-quiet пункта легенды нет').toBeNull();
+  });
+
+  // П.3 вердикта W5-R-F3b: ветка quiet.from === null (период без начала) — «сейчас»
+  // в центре трека без даты, правая колонка пустая. Мутация: всегда рисовать
+  // formatDateTime(from) даже при null → краснеет «без даты».
+  it('без lastActivityAt — в центре трека «сейчас» без даты, правая колонка пустая', () => {
+    const run: FeatureRun = { ...mkGanttRun(), quiet: true }; // начала тишины нет
+    installFakeDom();
+    const { container } = mount(createElement(FeatureStatsTab, { stats: mkGanttStats(), run, isMobile: false }));
+    const row = findNodeByAttr(container, 'data-testid', 'gantt-quiet');
+    expect(row, 'строка «тихо» всё равно есть').not.toBeNull();
+    const inner = textNodes((row as never).childNodes[1].childNodes[0] as never).join('');
+    expect(inner).toContain('сейчас');
+    expect(inner, 'без начала периода — никакой даты и стрелки').not.toContain('→');
+    expect(textNodes((row as never).childNodes[2] as never).join(''), 'длительности нет').toBe('');
+  });
+
+  // П.4 вердикта: без stats Ганта нет — строка «тихо» не рисуется; сигнал несёт строка
+  // анализа. Осознанная деградация: закреплена тестом, а не случайностью.
+  it('без stats — Ганта и строки «тихо» нет; сигнал несёт строка анализа с бейджем «тихо»', () => {
+    installFakeDom();
+    const { container } = mount(createElement(FeatureStatsTab, { stats: null, run: mkQuietRun(), isMobile: false }));
+    expect(findNodeByAttr(container, 'data-testid', 'stats-gantt'), 'Ганта нет').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'gantt-quiet'), 'строки «тихо» нет').toBeNull();
+    const line = findNodeByAttr(container, 'data-testid', 'feature-analysis-line');
+    expect(line, 'строка анализа на месте').not.toBeNull();
+    expect(textNodes(line as never).join(''), 'сигнал «тихо» — в строке анализа').toContain('тихо');
+  });
+});
+
 // === Чистые функции: форматирование и переводы (блоки 2–3, Ф7b) ===
 
 describe('formatTokens', () => {
@@ -932,6 +1088,7 @@ describe('roleGroupLabel', () => {
     expect(roleGroupLabel('cut')).toBe('разрез');
     expect(roleGroupLabel('plan')).toBe('план');
     expect(roleGroupLabel('rework')).toBe('доработка');
+    expect(roleGroupLabel('feature')).toBe('координация');
     expect(roleGroupLabel('consult')).toBe('консультация');
     // 'step' без stepRef/lane → roleLabel пуст → «шаг» (не сырой 'step').
     expect(roleGroupLabel('step')).toBe('шаг');
@@ -998,341 +1155,189 @@ function mkFullStats(over: Partial<FeatureStats> = {}): FeatureStats {
   };
 }
 
-// Найти узел по его точному текстовому содержимому (для кнопок SegmentedControl без data-testid).
-type FNodeLike2 = { nodeType: number; nodeName: string; childNodes: FNodeLike2[]; attributes?: Record<string, string> };
-function findNodeByText(container: FNodeLike2, text: string): FNodeLike2 | null {
-  const stack: FNodeLike2[] = [container];
-  while (stack.length) {
-    const n = stack.pop()!;
-    if (textNodes(n as never).join('').trim() === text) return n;
-    for (const ch of n.childNodes) stack.push(ch);
-  }
-  return null;
-}
+// === Сборка «Пульса» (ST-F14a, вариант A макета feature-stats-5) ===
+// Порядок на вкладке: строка анализа → значки точности → герой → плитки →
+// «Сейчас работают» → «Главные потери» → Гант → «Кто и на чём работал» → свёрнутый
+// «Подробнее». Без run (старые ответы) — прежняя полоса: пульс-блоки требуют
+// конвейера. «Подробнее» — только то, что новые блоки не покрывают.
+//
+// Мутации (проверены прогоном): (1) убрать FeatureStatsLosses из рендера → тест
+// порядка краснеет (stats-losses выпадает из цепочки); (2) renderTab без run →
+// тест «без run — прежняя полоса» краснеет, если пульс-блоки рендерятся и без run.
 
-describe('FeatureStatsTab: блоки 2–3 (Ф7b)', () => {
+describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
   beforeEach(() => {
     mockOpenTask.calls = [];
-    mockOpenChat.calls = [];
     clearFeatureStageFocus();
+    setFeaturePageTab('stats');
   });
   afterEach(() => {
     uninstallFakeDom();
     vi.restoreAllMocks();
   });
 
-  // === Карточки итогов ===
-  it('«Всего прошло» + «Работа»: значения из totals (журнал)', () => {
+  // Фикстура НЕ в порядке выдачи: run — этапы cut→design→plan→… (порядок данных
+  // не равен порядку блоков), а проверяется именно порядок блоков в DOM.
+  it('порядок блоков: точность → герой → плитки → «Сейчас» → потери → Гант → разрез → «Подробнее»', () => {
+    const c = renderTab(mkFullStats(), false, mkGanttRun());
+    const seq = testIdsInOrder(c);
+    const want = [
+      'stats-accuracy', 'hero-running', 'stats-tiles', 'stats-now', 'stats-losses',
+      'stats-gantt', 'feature-breakdown-block', 'stats-more',
+    ];
+    let prev = -1;
+    for (const id of want) {
+      const i = seq.indexOf(id);
+      expect(i, `блок ${id} на вкладке`).toBeGreaterThanOrEqual(0);
+      expect(i, `блок ${id} — после предыдущего`).toBeGreaterThan(prev);
+      prev = i;
+    }
+  });
+
+  // Мутация (1): без FeatureStatsLosses в рендере — 'stats-losses' не находится.
+  it('«Главные потери» стоят между «Сейчас работают» и Гантом', () => {
+    const c = renderTab(mkFullStats(), false, mkGanttRun());
+    const seq = testIdsInOrder(c);
+    expect(seq.indexOf('stats-now'), '«Сейчас» до потерь').toBeLessThan(seq.indexOf('stats-losses'));
+    expect(seq.indexOf('stats-losses'), 'потери до Ганта').toBeLessThan(seq.indexOf('stats-gantt'));
+  });
+
+  // Мутация (2): без run — старая полоса, пульс-блоков нет.
+  it('без run — нет героя, плиток, «Сейчас», потерь и разреза; прежняя полоса на месте', () => {
     const c = renderTab(mkFullStats());
-    const all = textNodes(c).join('');
-    expect(all).toContain('Всего прошло');
-    expect(all).toContain('Работа');
-    // «Всего прошло»: значение карточки — по data-testid (stats-card-0), НЕ toContain по всему
-    // тексту (там «15 ч» ловилось ещё и подписью разрыва «15 ч 35 мин»).
-    const card0 = findNodeByAttr(c, 'data-testid', 'stats-card-0')!;
-    expect(textNodes(card0).join(''), 'значение «Всего прошло» = 15 ч (900 мин)').toContain('15 ч');
-    // «Работа»: 300 мин → «5 ч»; «агенты в сумме 8 ч 40 мин» (520): в журнале число точное, без «≈».
-    expect(all).toContain('5 ч');
-    expect(all).toContain('агенты в сумме 8 ч 40 мин');
-    expect(all).not.toContain('агенты в сумме ≈');
+    for (const id of ['hero-running', 'stats-tiles', 'stats-now', 'stats-losses', 'feature-breakdown-block']) {
+      expect(findNodeByAttr(c, 'data-testid', id), `${id} без run`).toBeNull();
+    }
+    expect(findNodeByAttr(c, 'data-testid', 'stats-timeline'), 'лента без run').not.toBeNull();
   });
 
-  it('journal: «Ожидание»/«Простой»/«Ошибки» — только если не null', () => {
+  // «Подробнее» несёт ровно то, что не покрыто новыми блоками.
+  it('«Подробнее»: «не работали», эпизоды ошибок и детали расхода (кэш, общие чаты, цены)', () => {
     const c = renderTab(mkFullStats());
-    const all = textNodes(c).join('');
-    expect(all).toContain('Ожидание');
-    expect(all).toContain('Простой');
-    expect(all).toContain('Ошибки');
-  });
-
-  // Мутация: null у waitingMinutes → карточки «Ожидание» нет (не «0 мин»).
-  it('мутация: null у waitingMinutes → карточки «Ожидание» нет', () => {
-    const s = mkFullStats();
-    s.timeline.totals.waitingMinutes = null;
-    const c = renderTab(s);
-    const all = textNodes(c).join('');
-    expect(all).not.toContain('Ожидание');
-  });
-
-  it('approx: «Всего прошло» (точно) + «Работа ≈»; без «Ожидание»/«Простой»/«Ошибки»', () => {
-    const s = mkFullStats({ source: 'approx' });
-    // В approx прошлые ожидания/простой/ошибки не считаются → null.
-    s.timeline.totals.waitingMinutes = null;
-    s.timeline.totals.idleMinutes = null;
-    s.timeline.totals.errorMinutes = null;
-    const c = renderTab(s);
-    const all = textNodes(c).join('');
-    expect(all).toContain('Всего прошло');
-    expect(all).toContain('≈ 5 ч'); // работа ≈
-    expect(all).not.toContain('Ожидание');
-    expect(all).not.toContain('Простой');
-    expect(all).not.toContain('Ошибки');
-  });
-
-  // === «Дольше всех» ===
-  it('longestNow: персона · шаг · минуты · доля · токены', () => {
-    const c = renderTab(mkFullStats());
-    const node = findNodeByAttr(c, 'data-testid', 'stats-longest');
-    expect(node, 'блок «дольше всех»').not.toBeNull();
-    const all = textNodes(node!).join('');
-    expect(all).toContain('Дольше всех сейчас');
-    expect(all).toContain('Кира'); // имя персоны (не UUID)
-    expect(all).toContain('шаг Ш3');
-    expect(all).toContain('1 ч 10 мин'); // 70 мин
-    expect(all).toContain('31 % фичи'); // share
-    expect(all).toContain('640 тыс. токенов'); // tokens
-  });
-
-  it('longestNow=null → блока нет', () => {
-    const c = renderTab(mkFullStats({ longestNow: null }));
-    expect(findNodeByAttr(c, 'data-testid', 'stats-longest'), 'нет блока').toBeNull();
-  });
-
-  // Мутация: personaId недоступна → «персона недоступна» (не UUID).
-  it('мутация: longestNow с неизвестным personaId → «персона недоступна»', () => {
-    const s = mkFullStats();
-    s.longestNow = { ...s.longestNow!, personaId: 'unknown-persona' };
-    const c = renderTab(s);
-    const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-longest')!).join('');
-    expect(all).toContain('персона недоступна');
-  });
-
-  // === Разрезы ===
-  it('разрезы: заголовок + ось «персоны» (имена, не UUID) + токены', () => {
-    const c = renderTab(mkFullStats());
-    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown');
-    expect(bd, 'блок разрезов').not.toBeNull();
-    const all = textNodes(bd!).join('');
-    expect(all).toContain('Кто и на чём работал');
-    expect(all).toContain('Кира');
-    expect(all).toContain('Денис');
-    expect(all).toContain('640 тыс.'); // токены крупно
-  });
-
-  // Минор: минуты группы в разрезе (formatDuration(g.minutes)) — раньше без теста (мутация зелёная).
-  it('разрезы: минуты группы показываются (p-kira 200 мин → «3 ч 20 мин»)', () => {
-    const c = renderTab(mkFullStats());
-    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
-    const all = textNodes(bd).join('');
-    // p-kira: minutes=200 → «3 ч 20 мин»; p-denis: minutes=125 → «2 ч 05 мин».
-    expect(all, 'минуты p-kira').toContain('3 ч 20 мин');
-    expect(all, 'минуты p-denis').toContain('2 ч 05 мин');
-  });
-
-  it('мутация: ось «модели» — modelFull → читаемое имя (Opus, не raw id)', () => {
-    const c = renderTab(mkFullStats());
-    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
-    // Переключаю ось на «модели».
-    const btn = findNodeByText(bd as never, 'модели');
-    expect(btn, 'кнопка оси «модели»').not.toBeNull();
-    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
-    const all = textNodes(bd).join('');
-    expect(all, 'модель claude-opus-4-8 → «Opus»').toContain('Opus');
-    expect(all, 'не сырой id модели').not.toContain('claude-opus-4-8');
-  });
-
-  it('мутация: ось «роли» — taskRole → roleLabel (русские подписи, не сырой key)', () => {
-    const c = renderTab(mkFullStats());
-    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
-    const btn = findNodeByText(bd as never, 'роли');
-    expect(btn, 'кнопка оси «роли»').not.toBeNull();
-    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
-    const all = textNodes(bd).join('');
-    // 'step' → «шаг», 'review' → «ревью» (не сырые 'step'/'review').
-    expect(all, '«шаг» для step').toContain('шаг');
-    expect(all, '«ревью» для review').toContain('ревью');
-  });
-
-  it('мутация: costPartial → пометка «цена по части моделей недоступна»', () => {
-    const c = renderTab(mkFullStats()); // spend.costPartial = true
-    const node = findNodeByAttr(c, 'data-testid', 'stats-breakdown-cost-partial');
-    expect(node, 'пометка costPartial').not.toBeNull();
-    expect(textNodes(node!).join('')).toContain('цена по части моделей недоступна');
-  });
-
-  it('мутация: costPartial=false → пометки нет', () => {
-    const s = mkFullStats();
-    s.spend = { ...s.spend!, costPartial: false, hiddenCostModels: [] };
-    const c = renderTab(s);
-    expect(findNodeByAttr(c, 'data-testid', 'stats-breakdown-cost-partial'), 'без пометки').toBeNull();
-  });
-
-  it('разрезы: costUsd=null у группы → цены нет; чаты раскрываются с «чат»', () => {
-    const c = renderTab(mkFullStats());
-    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
-    // Группы (personas): [p-kira (costUsd=12.5), p-denis (costUsd=null)].
-    const groups = findAllByAttr(bd, 'data-testid', 'stats-break-group');
-    expect(groups.length, 'две группы').toBe(2);
-    // Открываю группу с costUsd=null (p-denis, вторая) — клик по строке.
-    const denisBtn = findFirstButton(groups[1] as never);
-    expect(denisBtn, 'кнопка-строка группы p-denis').not.toBeNull();
-    act(() => { (reactProps(denisBtn as never)!.onClick as () => void)(); });
-    // costUsd=null → на строке группы НЕТ цены (stats-break-cost). Мутация «показывать цену
-    // при null» добавит stats-break-cost → тест краснеет.
-    expect(findNodeByAttr(groups[1], 'data-testid', 'stats-break-cost'), 'цены нет при costUsd=null').toBeNull();
-    // Чаты раскрываются: строка чата + кнопка «чат».
-    const chats = findNodeByAttr(groups[1], 'data-testid', 'stats-break-chats');
-    expect(chats, 'список чатов группы').not.toBeNull();
-    expect(findNodeByAttr(chats!, 'data-testid', 'stats-break-chat'), 'строка чата').not.toBeNull();
-    expect(findNodeByAttr(chats!, 'data-testid', 'nav-target-chat'), 'кнопка «чат»').not.toBeNull();
-  });
-
-  it('зонд: пустые breakdown (все оси) → «Пока нечего разрезать»', () => {
-    const s = mkFullStats();
-    s.breakdown = { personas: [], models: [], roles: [] };
-    const c = renderTab(s);
-    const all = textNodes(c).join('');
-    expect(all).toContain('Пока нечего разрезать');
-  });
-
-  it('зонд: 1000 групп + длинные названия — рендер не падает', () => {
-    const s = mkFullStats();
-    const big: FeatureBreakdown = {
-      personas: Array.from({ length: 1000 }, (_, i) => ({
-        key: `p-${i}`, minutes: 10, tokens: null, costUsd: null, chatIds: [],
-      })),
-      models: [], roles: [],
-    };
-    s.breakdown = big;
-    const c = renderTab(s);
-    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown');
-    expect(bd, 'блок разрезов рендерится').not.toBeNull();
-  });
-
-  // === Расход ===
-  it('spend: токены (вход+выход) крупно · кэш мелко · цена · from · shared', () => {
-    const c = renderTab(mkFullStats());
-    const sp = findNodeByAttr(c, 'data-testid', 'stats-spend');
-    expect(sp, 'блок расхода').not.toBeNull();
-    const all = textNodes(sp!).join('');
-    // input 1 000 000 + output 200 000 = 1 200 000 → «1,2М».
-    expect(all).toContain('1,2М');
-    expect(all).toContain('токенов (вход + выход)');
-    // Кэш (мелко, отдельной строкой): чтение 500 000 → «500 тыс.», создание 100 000 → «100 тыс.».
-    expect(all).toContain('кэш:');
-    expect(all).toContain('500 тыс. чтение');
-    expect(all).toContain('100 тыс. создание');
-    // Цена 15.6 → «$15,60» + пометка costPartial (hiddenCostModels).
-    expect(all).toContain('$15,60');
-    expect(all).toContain('часть моделей без цены: Qwen');
-    // from (расход ненулевой → показываем).
-    expect(all).toContain('данные с');
-    // shared: 100 000 + 50 000 = 150 000 → «150 тыс.» + «оценка, по журналу».
+    const more = findNodeByAttr(c, 'data-testid', 'stats-more');
+    expect(more, 'раскрывашка есть').not.toBeNull();
+    const all = textNodes(more!).join('');
+    expect(all).toContain('не работали — 10 ч');
+    expect(all).toContain('ошибки: 2 эпизода');
+    expect(all).toContain('кэш: 500 тыс. чтение · 100 тыс. создание');
     expect(all).toContain('доля общих чатов');
-    expect(all).toContain('150 тыс.');
+    expect(all).toContain('150 тыс. токенов');
     expect(all).toContain('оценка, по журналу');
+    expect(all).toContain('моделей без цены: Qwen');
   });
 
-  // === Item 11: shared — «150 тыс. токенов» (число = токены, не часы) ===
-  it('shared: «в т. ч. доля общих чатов ≈ 150 тыс. токенов» (число = токены, не часы)', () => {
-    const c = renderTab(mkFullStats());
-    const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
-    expect(textNodes(shared).join(''), 'shared несёт «токенов» после числа').toContain('150 тыс. токенов');
+  // Мутация: константа 'эпизодов' вместо plural() краснит 1/2/21.
+  it.each([[1, 'эпизод'], [2, 'эпизода'], [5, 'эпизодов'], [11, 'эпизодов'], [21, 'эпизод']])(
+    '«Подробнее»: ошибки — %i %s',
+    (n, word) => {
+      const base = mkFullStats();
+      const c = renderTab(mkFullStats({
+        timeline: { ...base.timeline, totals: { ...base.timeline.totals, errorCount: n } },
+      }));
+      const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n');
+      expect(all).toMatch(new RegExp(`ошибки: ${n} ${word}(?!\\p{L})`, 'u'));
+    },
+  );
+
+  it('approx: «не работали» с «≈» (та же точность, что у работы)', () => {
+    const c = renderTab(mkFullStats({ source: 'approx' }));
+    const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('');
+    expect(all).toContain('не работали — ≈ 10 ч');
   });
 
-  it('spend=null → блока нет (без ошибки)', () => {
-    const c = renderTab(mkFullStats({ spend: null }));
-    expect(findNodeByAttr(c, 'data-testid', 'stats-spend'), 'нет блока расхода').toBeNull();
+  // Память «Подробнее»: раскрытие пишется в localStorage и читается при монтировании.
+  // Мутация: не писать localStorage в onToggle — тест краснеет.
+  it('«Подробнее» помнит раскрытие в localStorage[featureStats.moreOpen]', () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v); },
+      removeItem: (k: string) => { store.delete(k); },
+    });
+    try {
+      const c = renderTab(mkFullStats());
+      const more = findNodeByAttr(c, 'data-testid', 'stats-more')!;
+      expect(reactProps(more)!.open, 'по умолчанию свёрнуто').toBe(false);
+      act(() => {
+        (reactProps(more)!.onToggle as (e: unknown) => void)({ currentTarget: { open: true } });
+      });
+      expect(store.get(MORE_OPEN_KEY)).toBe('1');
+      // новый заход: раскрыто сразу
+      const c2 = renderTab(mkFullStats());
+      expect(reactProps(findNodeByAttr(c2, 'data-testid', 'stats-more')!)!.open).toBe(true);
+      const more2 = findNodeByAttr(c2, 'data-testid', 'stats-more')!;
+      act(() => {
+        (reactProps(more2)!.onToggle as (e: unknown) => void)({ currentTarget: { open: false } });
+      });
+      expect(store.get(MORE_OPEN_KEY)).toBe('0');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
-  // Минор: правило «данные с …» — только если расход НЕРО (иначе у пустой фичи это дата эпика).
-  it('расход нулевой (0 токенов, $0) → строки «данные с …» нет', () => {
-    const s = mkFullStats();
-    s.spend = {
-      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0,
-      costUsd: 0, costPartial: false, hiddenCostModels: [],
-      from: '2026-10-19T17:20:00Z', shared: null,
-    };
-    const c = renderTab(s);
-    expect(findNodeByAttr(c, 'data-testid', 'stats-spend-from'), '«данные с …» нет при нулевом расходе').toBeNull();
+  // Гарды чтения: localStorage недоступен или в значении мусор — свёрнуто, без падения.
+  // Мутация: снять try/catch в readMoreOpen или сравнивать не строго — тест краснеет.
+  it('«Подробнее»: getItem бросает → свёрнуто без краша', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => { throw new Error('приватный режим'); },
+      setItem: () => { throw new Error('приватный режим'); },
+      removeItem: () => {},
+    });
+    try {
+      const c = renderTab(mkFullStats());
+      expect(reactProps(findNodeByAttr(c, 'data-testid', 'stats-more')!)!.open).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
-  // Мутация: кэш НЕ в крупную цифру (крупная = вход+выход, кэш отдельной строкой).
-  it('мутация: крупная цифра = вход+выход (1,2М), кэш не смешан в неё', () => {
-    const c = renderTab(mkFullStats());
-    const sp = findNodeByAttr(c, 'data-testid', 'stats-spend')!;
-    const big = findNodeByAttr(sp, 'data-testid', 'stats-spend-tokens')!;
-    // Крупная цифра ровно вход+выход (1 200 000 → «1,2М»), кэш (600 тыс.) в неё не входит.
-    expect(textNodes(big).join('')).toBe('1,2М');
+  it('«Подробнее»: мусор в значении («да») → свёрнуто', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k === MORE_OPEN_KEY ? 'да' : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    try {
+      const c = renderTab(mkFullStats());
+      expect(reactProps(findNodeByAttr(c, 'data-testid', 'stats-more')!)!.open).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
-  // Мутация: shared помечен «оценка» (не просто число).
-  it('мутация: shared помечен «оценка, по …»', () => {
-    const c = renderTab(mkFullStats());
-    const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
-    const t = textNodes(shared).join('');
-    expect(t).toContain('оценка, по');
+  // Мутация «всегда»: если раскрывашку рендерить без строк — тест краснеет.
+  it('нечего добавить — «Подробнее» нет (null-итоги, расхода нет)', () => {
+    const c = renderTab(mkStats());
+    expect(findNodeByAttr(c, 'data-testid', 'stats-more'), 'пустой раскрывашки нет').toBeNull();
   });
 
-  it('мутация: approx → shared «оценка, по задачам ≈»', () => {
-    const s = mkFullStats({ source: 'approx' });
-    s.spend = { ...s.spend!, shared: { ...s.spend!.shared!, method: 'approx' } };
-    const c = renderTab(s);
-    const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
-    expect(textNodes(shared).join('')).toContain('оценка, по задачам ≈');
+  // Мобила: isMobile доезжает до плиток (сетка 2 колонки на 360).
+  it('на 360 плитки — сетка 2 колонки (isMobile доходит до блока)', () => {
+    const c = renderTab(mkFullStats(), true, mkGanttRun());
+    const tiles = findNodeByAttr(c, 'data-testid', 'stats-tiles') as unknown as { style: Record<string, string> };
+    expect(tiles.style.gridTemplateColumns, '2 колонки на 360').toBe('repeat(2, 1fr)');
   });
 
-  // === Мажор 5: подпись метода shared — из spend.shared.method, НЕ из stats.source ===
-  it('source=journal + shared.method=approx → «оценка, по задачам ≈» (метод ≠ source)', () => {
-    const s = mkFullStats({ source: 'journal' }); // source=journal
-    s.spend = { ...s.spend!, shared: { ...s.spend!.shared!, method: 'approx' } }; // method=approx
-    const c = renderTab(s);
-    const shared = findNodeByAttr(c, 'data-testid', 'stats-spend-shared')!;
-    // Если бы подпись бралась из source (journal) → было бы «по журналу»; из method (approx) → «по задачам ≈».
-    expect(textNodes(shared).join(''), 'метод shared — из spend.shared.method').toContain('оценка, по задачам ≈');
+  // П2 (QA: на 360 summary «Подробнее» был 17 px): карточка-строка высотой ≥ 44 (макет .more)
+  // с кольцом фокуса. Мутация: убрать minHeight → тест краснеет.
+  it('«Подробнее» — карточка-строка высотой ≥ 44 с кольцом фокуса', () => {
+    const c = renderTab(mkFullStats(), true, mkGanttRun());
+    const sum = findNodeByAttr(c, 'data-testid', 'stats-more-summary');
+    expect(sum, 'summary «Подробнее» отсутствует').toBeTruthy();
+    const st = (sum as unknown as { style: Record<string, string> }).style;
+    expect(st.minHeight, 'тач-цель ниже 44 px').toBe('44px');
+    expect(st.background, 'строка не карточка').toBe(C.bgCard);
+    // React пишет className в атрибут «class» (тот же приём, что FeatureBreakdownTable).
+    expect((sum as unknown as { getAttribute: (k: string) => string | null }).getAttribute('class'), 'нет класса кольца фокуса').toContain('cc-stats-more');
   });
 
-  // === «Не работали»: значение = totals.notWorkingMinutes (600 → «10 ч»; мутация «0» красит) ===
-  it('«Не работали»: значение = totals.notWorkingMinutes (600 → «10 ч», не «0 мин»)', () => {
-    const c = renderTab(mkFullStats());
-    const card = findNodeByAttr(c, 'data-testid', 'stats-card-2')!;
-    const t = textNodes(card).join('');
-    expect(t, 'карточка «Не работали»').toContain('Не работали');
-    expect(t, 'значение 10 ч (600 мин), не «0 мин»').toContain('10 ч');
-  });
-
-  // === «время · токены»: при «токены» полоса и доля группы меняются (мутация «метрика игнорируется» красит) ===
-  it('«время · токены»: при «токены» полоса и доля группы меняются (метрика не игнорируется)', () => {
-    const c = renderTab(mkFullStats());
-    const bd = findNodeByAttr(c, 'data-testid', 'stats-breakdown')!;
-    // p-denis = 2-я группа (personas: [p-kira, p-denis]).
-    let groups = findAllByAttr(bd, 'data-testid', 'stats-break-group');
-    const denis = groups[1]!;
-    const shareBefore = textNodes(findNodeByAttr(denis, 'data-testid', 'stats-break-share')!).join('');
-    const barBefore = (findNodeByAttr(denis, 'data-testid', 'stats-break-bar') as unknown as { style: Record<string, string> }).style.width ?? '';
-    // Переключаю метрику на «токены».
-    const btn = findNodeByText(bd as never, 'токены');
-    expect(btn, 'кнопка метрики «токены»').not.toBeNull();
-    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
-    groups = findAllByAttr(bd, 'data-testid', 'stats-break-group');
-    const denis2 = groups[1]!;
-    const shareAfter = textNodes(findNodeByAttr(denis2, 'data-testid', 'stats-break-share')!).join('');
-    const barAfter = (findNodeByAttr(denis2, 'data-testid', 'stats-break-bar') as unknown as { style: Record<string, string> }).style.width ?? '';
-    // p-denis: время (125/325=38%, полоса 125/200=62.5%) → токены (300000/940000=32%, полоса 300000/640000=46.875%).
-    expect(shareBefore, 'доля p-denis (время)').toBe('38 %');
-    expect(shareAfter, 'доля p-denis (токены) — изменилась').toBe('32 %');
-    expect(barBefore, 'полоса p-denis (время)').toBe('62.5%');
-    expect(barAfter, 'полоса p-denis (токены) — изменилась').toBe('46.875%');
+  // П2 задачи: isMobile передаётся со страницы в блок разбивки (плотные поля на 360).
+  // Мутация: убрать isMobile из вызова → сработает detectedMobile (десктоп в тестах) → red.
+  it('на 360 isMobile доходит до блока разбивки (плотный padding)', () => {
+    const c = renderTab(mkFullStats(), true, mkGanttRun());
+    const block = findNodeByAttr(c, 'data-testid', 'feature-breakdown-block');
+    expect(block, 'блок разбивки отсутствует').toBeTruthy();
+    const st = (block as unknown as { style: Record<string, string> }).style;
+    expect(st.padding, 'разбивка не в мобильном раскладе').toBe(`${SP.md}px`);
   });
 });
-
-// Первый <button> внутри узла (кнопка-строка группы разреза). nodeName в fakeDom — в верхнем.
-function findFirstButton(n: FNodeLike2): FNodeLike2 | null {
-  if (n.nodeType === 1 && n.nodeName.toLowerCase() === 'button') return n;
-  for (const ch of n.childNodes) {
-    const r = findFirstButton(ch);
-    if (r) return r;
-  }
-  return null;
-}
-
-// Все узлы с атрибутом attr=value в поддереве (findNodeByAttr даёт только первый).
-function findAllByAttr(n: FNodeLike2, attr: string, value: string): FNodeLike2[] {
-  const out: FNodeLike2[] = [];
-  const walk = (x: FNodeLike2) => {
-    if (x.nodeType === 1 && (x.attributes?.[attr] ?? null) === value) out.push(x);
-    for (const ch of x.childNodes) walk(ch);
-  };
-  walk(n);
-  return out;
-}

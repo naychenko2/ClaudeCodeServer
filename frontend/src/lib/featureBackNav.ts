@@ -141,6 +141,24 @@ export function useFeatureBackNav(sessionId: string | null): FeatureBackNavInfo 
   return useSyncExternalStore(subscribe, () => featureBackNavFrom(sessionId), () => featureBackNavFrom(sessionId));
 }
 
+// «← к фиче {название}» для экрана открытой задачи (дефект 4c4645e2): задача открыта
+// переходом ИЗ страницы фичи (recordFeatureReturn с to.kind='task') и текущая задача —
+// цель перехода. Тот же снимок FeatureBackNavInfo и тот же кэш по ссылке на _back, что
+// у чата: чип на задаче — тот же компонент, без нового стиля.
+export function featureBackNavFromTask(taskId: string | null): FeatureBackNavInfo | null {
+  if (!taskId || !_back || _back.fromKind !== 'feature' || _back.to.kind !== 'task' || _back.to.id !== taskId) return null;
+  if (_infoSrc !== _back) {
+    _infoSrc = _back;
+    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'timeline', showTab: _back.showTab ?? true };
+  }
+  return _info;
+}
+
+// Хук: «← к фиче {название}» для панели деталей задачи (null, пока перехода из фичи не было).
+export function useFeatureBackNavForTask(taskId: string | null): FeatureBackNavInfo | null {
+  return useSyncExternalStore(subscribe, () => featureBackNavFromTask(taskId), () => featureBackNavFromTask(taskId));
+}
+
 // Тестовые швы (не публичное API).
 export const __test = {
   reset() { _back = null; _listeners.clear(); },
@@ -150,5 +168,6 @@ export const __test = {
   getBackNav,
   backNavFrom,
   featureBackNavFrom,
+  featureBackNavFromTask,
   normalizeBackTarget,
 };

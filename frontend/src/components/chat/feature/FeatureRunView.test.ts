@@ -53,7 +53,11 @@ vi.mock('../../../lib/openChat', () => ({
   openChatById: async (_id: string) => openChatMock.result,
 }));
 
-beforeEach(() => { personaMap.clear(); mobileFlag.value = false; toastMock.calls.length = 0; openChatMock.result = true; backNav.reset(); });
+// openTaskInSection (lib/tasks) — запись вызовов: переход в задачу обязан нести проект эпика.
+const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
+vi.mock('../../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
+
+beforeEach(() => { mockOpenTask.calls = []; personaMap.clear(); mobileFlag.value = false; toastMock.calls.length = 0; openChatMock.result = true; backNav.reset(); });
 
 // Задача-заглушка (подмножество TaskItem, как несёт GET /api/tasks/features).
 function task(over: Partial<FeatureTask> = {}): FeatureTask {
@@ -84,6 +88,13 @@ function nowItem(over: Partial<FeatureNow> = {}): FeatureNow {
 }
 
 // === statusLineFor: тон/заголовок/действие на 9 состояний (чистая функция) ===
+describe('шапка: состояние вне словаря', () => {
+  it('неизвестный state не роняет рендер — тег «статус неизвестен»', () => {
+    const html = render(run({ state: 'нет-такого' as FeatureRun['state'] }));
+    expect(html).toContain('статус неизвестен');
+  });
+});
+
 describe('statusLineFor: 9 состояний', () => {
   const now = Date.parse('2026-10-20T12:00:00Z');
 
@@ -483,5 +494,26 @@ describe('TurnPlanPill: K-3 (меню пилюли: fullWidth только на 
     const card = openPillMenu(true);
     expect(card, 'карточка меню (мобила) не найдена').not.toBeNull();
     expect(card!.style.right, 'мобила: right:8px (fullWidth on)').toBe('8px');
+  });
+});
+
+describe('FeatureRunView: переход в задачу несёт проект эпика', () => {
+  it('клик «задача» исполнителя → openTaskInSection({ id, projectId эпика })', () => {
+    const stages: FeatureStage[] = [
+      { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [],
+        executors: [{ personaId: null, taskId: 'task-x', taskRole: null, stepRef: null, lane: null, status: 'running', chatId: null, chatArchived: false, modelLabel: null, modelFull: null }] },
+    ];
+    installFakeDom();
+    const r = run({ state: 'running', stages, epic: task({ id: 'epic-1', title: 'Пульт', projectId: 'proj-A' }) });
+    const { root, container } = mount(createElement(FeatureRunView, { run: r }));
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-task');
+    expect(btn, 'кнопка «задача» исполнителя').not.toBeNull();
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(mockOpenTask.calls).toEqual([{ id: 'task-x', projectId: 'proj-A' }]);
+    // Панель в чате: точка возврата на фичу (без вкладки в чипе), чип на задаче читает её.
+    expect(backNav.getBackNav()).toMatchObject({ fromKind: 'feature', to: { kind: 'task', id: 'task-x' }, showTab: false });
+    expect(backNav.featureBackNavFromTask('task-x')).not.toBeNull();
+    root.unmount();
+    uninstallFakeDom();
   });
 });

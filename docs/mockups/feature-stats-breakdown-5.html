@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · «Статистика» · блок «Кто и на чём работал»: три подачи</title>
+<!--
+  Макеты на выбор Андрею: блок «Кто и на чём работал» вкладки «Статистика» (Breakdown; позднее — FeatureBreakdownBlock.tsx).
+  Содержание блока не меняется: разрезы персоны / модели / роли, время, токены, деньги, доли, чаты группы.
+  Меняется подача. Записка — feature-stats-breakdown-5.md. Блок стоит на вкладке после «Главных потерь»
+  (вариант A из feature-stats-5). Код продукта не правится.
+  Привязка: featureId 8d33d18b-c6f6-4311-8ddb-e5a627f38fb2, задача aae59264 (role=design, stepRef нет).
+  Данные: stats.breakdown.{personas,models,roles}[] (key, minutes, tokens, costUsd, chatIds), stats.spend.costPartial,
+  run.stages[].executors[] (chatId ↔ stepRef, taskRole, status, modelLabel) — для подписей чатов и «работает сейчас».
+  A — «Кольцо»: доля одним кольцом, легенда-список рядом, выбранная группа раскрывает чаты.
+  B — «Три полосы»: все три разреза сразу, по полосе 100 %; выбор в одной подсвечивает связанное в других.
+  C — «Таблица»: строка на группу, все три меры видны сразу полосами в ячейках, сортировка по колонке.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css (как в feature-stats-5), семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  /* Цвета персон — данные (AGENT_COLORS в AgentSelector.tsx), не токены темы */
+  --p-orange:#D97757; --p-purple:#6C5CB0; --p-brown:#8A6A28; --p-blue:#3E7CA6; --p-green:#5E8B4E;
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-panel); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.be { display:inline-flex; align-items:center; font:700 10px/16px "Hanken Grotesk",sans-serif; border-radius:6px; padding:0 6px;
+  background:var(--c-info-bg); color:var(--c-text-primary); border:1px dashed var(--c-info); max-width:100%; }
+.nomarks .be { display:none; }
+.mk { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.note { padding:10px 16px 0; font-size:12px; color:var(--c-text-secondary); max-width:1280px; }
+#out { display:flex; flex-wrap:wrap; gap:24px; padding:16px; align-items:flex-start; }
+.cap { font-size:11px; color:var(--c-text-muted); margin:0 0 6px 2px; }
+.frame { background:var(--c-bg-main); color:var(--c-text-primary); border:1px solid var(--c-border); border-radius:12px; overflow:hidden; }
+.w1280 .frame { width:1280px; } .w360 .frame { width:360px; }
+.page { padding:16px 32px 32px; } .w360 .page { padding:12px 12px 24px; }
+.above { height:44px; border:1px dashed var(--c-dashed); border-radius:10px; color:var(--c-text-muted); font-size:11px; display:flex; align-items:center; padding:0 12px; margin-bottom:24px; }
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; box-shadow:var(--shadow-card); padding:16px; }
+.w360 .card { padding:12px; }
+.bh { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.bh .t { font:700 16px/1.3 "PT Serif",Georgia,serif; color:var(--c-text-heading); margin-right:auto; }
+.w360 .bh .t { width:100%; }
+.seg { display:inline-flex; padding:2px; border-radius:9px; background:var(--c-bg-selected); gap:2px; }
+.seg span { padding:4px 10px; border-radius:7px; font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.w360 .seg span { padding:10px 10px; }
+.seg span.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.seg span.off { color:var(--c-text-muted); opacity:.6; }
+.av { width:22px; height:22px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:10px; font-weight:700; color:var(--c-on-accent); flex-shrink:0; }
+.sw { width:12px; height:12px; border-radius:4px; display:inline-block; flex-shrink:0; }
+.muted { color:var(--c-text-muted); }
+.ref { font:700 11px "JetBrains Mono",monospace; padding:1px 6px; border-radius:6px; background:var(--c-bg-selected); color:var(--c-text-heading); white-space:nowrap; }
+.chip { display:inline-flex; align-items:center; gap:5px; height:20px; padding:0 7px; border-radius:999px; font-size:10px; font-weight:600; white-space:nowrap; }
+.chip .d { width:6px; height:6px; border-radius:50%; background:currentColor; }
+.t-run { background:var(--c-accent-light); color:var(--c-accent); } .t-wait { background:var(--c-info-bg); color:var(--c-info); }
+.live { animation:pulse 1.6s ease-in-out infinite; } @keyframes pulse { 50% { opacity:.4; } }
+.partial { font-size:11px; color:var(--c-warning-text); background:var(--c-warning-bg); border-radius:8px; padding:6px 10px; margin-bottom:12px; }
+.empty { border:1px dashed var(--c-dashed); border-radius:10px; padding:20px; text-align:center; color:var(--c-text-muted); font-size:12px; }
+.empty b { display:block; font:700 15px "PT Serif",Georgia,serif; color:var(--c-text-heading); margin-bottom:4px; }
+/* Чаты выбранной группы (общий для всех вариантов) */
+.chats { margin-top:12px; border-top:1px solid var(--c-border-light); padding-top:12px; }
+.chats h5 { margin:0 0 8px; font-size:12px; color:var(--c-text-heading); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.chats .list { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.w360 .chats .list { grid-template-columns:1fr; }
+.chat { display:flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--c-border-light); border-radius:8px; background:var(--c-bg-white); font-size:12px; min-height:34px; }
+.w360 .chat { min-height:44px; }
+.chat .go { margin-left:auto; color:var(--c-accent); font-weight:600; font-size:11px; white-space:nowrap; }
+.chat.arch { color:var(--c-text-muted); }
+
+/* A · Кольцо */
+.a-wrap { display:grid; grid-template-columns:220px 1fr; gap:32px; align-items:center; }
+.w360 .a-wrap { grid-template-columns:1fr; gap:12px; justify-items:center; }
+.a-ring { position:relative; width:220px; height:220px; }
+.w360 .a-ring { width:180px; height:180px; }
+.a-ring svg { width:100%; height:100%; transform:rotate(-90deg); }
+.a-ring .c { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; }
+.a-ring .c b { font:700 22px/1.15 "PT Serif",Georgia,serif; color:var(--c-text-heading); }
+.w360 .a-ring .c b { font-size:20px; }
+.a-ring .c span { font-size:11px; color:var(--c-text-muted); max-width:120px; }
+.a-list { width:100%; display:flex; flex-direction:column; gap:2px; }
+.a-row { display:grid; grid-template-columns:22px 1fr auto auto 46px; gap:10px; align-items:center; padding:7px 10px; border-radius:8px; min-height:38px; }
+.w360 .a-row { grid-template-columns:22px 1fr auto 40px; min-height:44px; gap:8px; padding:6px 8px; }
+.w360 .a-row .x2 { display:none; }
+.a-row.sel { background:var(--c-accent-light); box-shadow:inset 3px 0 0 var(--c-accent); }
+.a-row .nm { font-weight:600; color:var(--c-text-heading); display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap; }
+.a-row .nm small { font-weight:400; color:var(--c-text-muted); font-size:11px; }
+.a-row .v { font:600 12px "JetBrains Mono",monospace; color:var(--c-text-primary); text-align:right; white-space:nowrap; }
+.a-row .x2 { font:11px "JetBrains Mono",monospace; color:var(--c-text-muted); text-align:right; white-space:nowrap; }
+.a-row .p { font:700 12px "JetBrains Mono",monospace; color:var(--c-text-heading); text-align:right; }
+
+/* B · Три полосы */
+.b-axis { margin-bottom:18px; }
+.b-axis:last-of-type { margin-bottom:0; }
+.b-al { display:flex; align-items:baseline; gap:8px; font-size:12px; font-weight:600; color:var(--c-text-heading); margin-bottom:6px; }
+.b-al span { font-weight:400; color:var(--c-text-muted); font-size:11px; }
+.b-bar { display:flex; gap:2px; height:36px; border-radius:10px; overflow:hidden; }
+.w360 .b-bar { height:40px; }
+.b-bar i { display:flex; align-items:center; gap:6px; padding:0 8px; font-style:normal; font-size:11px; font-weight:700; color:var(--c-on-accent); white-space:nowrap; overflow:hidden; min-width:4px; transition:opacity .15s; }
+.b-bar i.dim { opacity:.28; }
+.b-bar i.sel { box-shadow:inset 0 0 0 2px var(--c-text-heading); }
+.b-bar i.light { color:var(--c-text-heading); }
+.b-leg { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:6px; font-size:11px; color:var(--c-text-secondary); }
+.b-leg span { display:inline-flex; align-items:center; gap:5px; }
+.b-leg b { font-family:"JetBrains Mono",monospace; color:var(--c-text-heading); font-weight:600; }
+.b-leg .dim { opacity:.4; }
+.b-link { font-size:11px; color:var(--c-text-muted); margin:-10px 0 14px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+
+/* C · Таблица */
+.c-tab { width:100%; border-collapse:separate; border-spacing:0; }
+.c-tab th { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); text-align:left; padding:0 10px 8px; white-space:nowrap; }
+.c-tab th.s { color:var(--c-text-heading); } .c-tab th.s::after { content:" ↓"; color:var(--c-accent); }
+.c-tab td { padding:8px 10px; border-top:1px solid var(--c-border-light); vertical-align:middle; }
+.c-tab tr.sel td { background:var(--c-accent-light); }
+.c-tab tr.sel td:first-child { box-shadow:inset 3px 0 0 var(--c-accent); }
+.c-nm { display:flex; align-items:center; gap:8px; font-weight:600; color:var(--c-text-heading); }
+.c-nm small { display:block; font-weight:400; font-size:11px; color:var(--c-text-muted); }
+.c-cell { display:flex; align-items:center; gap:8px; min-width:150px; }
+.c-cell .bar { flex:1; height:8px; border-radius:999px; background:var(--c-bg-selected); overflow:hidden; }
+.c-cell .bar i { display:block; height:100%; border-radius:999px; }
+.c-cell .v { font:600 12px "JetBrains Mono",monospace; color:var(--c-text-heading); width:84px; text-align:right; white-space:nowrap; }
+.c-cell .v small { color:var(--c-text-muted); font-weight:400; }
+.c-tot td { font-weight:700; color:var(--c-text-heading); border-top:2px solid var(--c-border); }
+.c-chips { display:flex; gap:4px; flex-wrap:wrap; }
+.mdl { font-size:10px; padding:1px 6px; border-radius:6px; border:1px solid var(--c-border); color:var(--c-text-secondary); white-space:nowrap; }
+/* C на 360: строка-карточка */
+.c-m { display:flex; flex-direction:column; gap:6px; }
+.c-mr { padding:10px; border:1px solid var(--c-border-light); border-radius:10px; background:var(--c-bg-white); }
+.c-mr.sel { border-color:var(--c-accent); background:var(--c-accent-light); }
+.c-mr .top { display:flex; align-items:center; gap:8px; font-weight:600; color:var(--c-text-heading); }
+.c-mr .top .p { margin-left:auto; font:700 13px "JetBrains Mono",monospace; }
+.c-mr .ms { display:grid; grid-template-columns:62px 1fr 74px; gap:4px 8px; align-items:center; margin-top:8px; font-size:11px; color:var(--c-text-muted); }
+.c-mr .ms .bar { height:6px; border-radius:999px; background:var(--c-bg-selected); overflow:hidden; }
+.c-mr .ms .bar i { display:block; height:100%; border-radius:999px; }
+.c-mr .ms .v { font:600 11px "JetBrains Mono",monospace; color:var(--c-text-heading); text-align:right; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>«Кто и на чём работал» · 3 подачи</h1>
+  <div class="grp"><span class="lbl">Вариант</span><div class="pills" data-k="v">
+    <button data-v="A" class="on">A · Кольцо</button><button data-v="B">B · Три полосы</button><button data-v="C">C · Таблица</button></div></div>
+  <div class="grp"><span class="lbl">Состояние</span><div class="pills" data-k="s">
+    <button data-v="running" class="on">идёт</button><button data-v="waiting">ждёт вас</button><button data-v="merged">смержена</button><button data-v="thin">мало данных</button><button data-v="nocost">без расхода</button></div></div>
+  <div class="grp"><span class="lbl">Разрез</span><div class="pills" data-k="a">
+    <button data-v="personas" class="on">персоны</button><button data-v="models">модели</button><button data-v="roles">роли</button></div></div>
+  <div class="grp"><span class="lbl">Мера</span><div class="pills" data-k="me">
+    <button data-v="time" class="on">время</button><button data-v="tokens">токены</button><button data-v="cost">деньги</button></div></div>
+  <div class="grp"><span class="lbl">Тема</span><div class="pills" data-k="t">
+    <button data-v="light">светлая</button><button data-v="dark">тёмная</button><button data-v="both" class="on">обе</button></div></div>
+  <div class="grp"><span class="lbl">Ширина</span><div class="pills" data-k="w">
+    <button data-v="1280">1280</button><button data-v="360">360</button><button data-v="both" class="on">обе</button></div></div>
+  <div class="grp"><span class="lbl">Пометки</span><div class="pills" data-k="m">
+    <button data-v="on" class="on">«нужны данные»</button><button data-v="off">скрыть</button></div></div>
+</div>
+<div class="note" id="note"></div>
+<div id="out"></div>
+<script>
+const fmt = m => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), r = m % 60;
+  if (!h) return r + ' мин'; if (!r) return h + ' ч'; return h + ' ч ' + String(r).padStart(2, '0') + ' мин'; };
+const tok = n => n == null ? '—' : n >= 1e6 ? (n / 1e6).toFixed(1).replace('.', ',') + 'М' : Math.round(n / 1000) + ' тыс.';
+const usd = n => n == null ? '—' : n === 0 ? 'бесплатно' : '$' + n.toFixed(2).replace('.', ',');
+const BE = t => ` <span class="be">нужны данные${t ? ': ' + t : ''}</span>`;
+// Цвета групп: у персон — их цвет (AGENT_COLORS, данные), у моделей и ролей — по порядку из токенов.
+const PAL = ['var(--c-accent)', 'var(--c-info)', 'var(--c-plan)', 'var(--c-success)', 'var(--c-warning)', 'var(--c-progress-track)'];
+const LIGHT = new Set(['var(--c-progress-track)', 'var(--c-warning)']);
+const PC = { timur: 'var(--p-blue)', polina: 'var(--p-purple)', denis: 'var(--p-green)', gleb: 'var(--p-brown)', egor: 'var(--p-orange)', sofya: 'var(--p-orange)', vera: 'var(--p-green)', alex: 'var(--p-brown)', kira: 'var(--p-purple)' };
+const PN = { timur: ['Тимур', 'бэкенд'], polina: ['Полина', 'фронтенд'], denis: ['Денис', 'бэкенд · локальная'], gleb: ['Глеб', 'ревью'], egor: ['Егор', 'план'], sofya: ['Софья', 'координатор'], vera: ['Вера', 'проверка'], alex: ['Александр', 'финал'], kira: ['Кира', 'фронтенд · локальная'] };
+// g: [key, minutes, tokens, cost, chats:[[подпись, роль, архив?]], связи {models:[], roles:[], personas:[]}, live: 'run'|'wait'|null]
+const RUN = {
+  personas: [
+    ['timur', 262, 3.1e6, 6.10, [['Ш1', 'шаг'], ['Ш2', 'шаг'], ['Ш2', 'доработка'], ['Ш5', 'шаг'], ['Ш6', 'шаг']], { models: ['opus'], roles: ['step', 'rework'] }, null],
+    ['polina', 190, 2.2e6, 4.30, [['Ш4', 'шаг']], { models: ['sonnet'], roles: ['step'] }, 'run'],
+    ['denis', 175, 1.9e6, 0, [['Ш3', 'шаг'], ['Ш3', 'доработка']], { models: ['qwen'], roles: ['step', 'rework'] }, 'run'],
+    ['gleb', 65, 1.4e6, 2.40, [['Ш1', 'ревью'], ['Ш2', 'ревью'], ['Ш2', 'ревью · 2-й виток'], ['Ш3', 'ревью'], ['Ш5', 'ревью']], { models: ['opus'], roles: ['review'] }, 'run'],
+    ['egor', 60, 0.9e6, 1.10, [['План', 'план', true]], { models: ['sonnet'], roles: ['plan'] }, null],
+    ['sofya', 18, 0.3e6, 0.30, [['Разрез', 'разрез', true]], { models: ['haiku'], roles: ['cut'] }, null],
+  ],
+  models: [
+    ['opus', 327, 4.5e6, 8.50, [], { personas: ['timur', 'gleb'], roles: ['step', 'rework', 'review'] }],
+    ['sonnet', 250, 3.1e6, 5.40, [], { personas: ['polina', 'egor'], roles: ['step', 'plan'] }],
+    ['qwen', 175, 1.9e6, 0, [], { personas: ['denis'], roles: ['step', 'rework'] }],
+    ['haiku', 18, 0.3e6, 0.30, [], { personas: ['sofya'], roles: ['cut'] }],
+  ],
+  roles: [
+    ['step', 470, 5.6e6, 8.20, [], { personas: ['timur', 'polina', 'denis'], models: ['opus', 'sonnet', 'qwen'] }],
+    ['rework', 130, 1.6e6, 1.90, [], { personas: ['timur', 'denis'], models: ['opus', 'qwen'] }],
+    ['review', 65, 1.4e6, 2.40, [], { personas: ['gleb'], models: ['opus'] }],
+    ['plan', 60, 0.9e6, 1.10, [], { personas: ['egor'], models: ['sonnet'] }],
+    ['cut', 18, 0.3e6, 0.30, [], { personas: ['sofya'], models: ['haiku'] }],
+    // Роль feature — работа координатора на эпике: строка «координация», не прячется (сверка 25.10).
+    ['feature', 12, 0.2e6, 0.20, [], { personas: ['sofya'], models: ['haiku'] }],
+  ],
+};
+const MN = { opus: ['Opus 5.5', 'облако'], sonnet: ['Sonnet 5.5', 'облако'], qwen: ['Qwen 3.8', 'локальная · бесплатно'], haiku: ['Haiku 5.5', 'облако'] };
+const RN = { step: ['шаг', ''], rework: ['доработка', ''], review: ['ревью', ''], plan: ['план', ''], cut: ['разрез', ''], feature: ['координация', ''], qa: ['проверка', ''], final: ['финал', ''], merge: ['мерж', ''] };
+const clone = o => JSON.parse(JSON.stringify(o));
+const WAIT = clone(RUN); WAIT.personas[1][6] = 'wait';
+const MERGED = clone(RUN);
+MERGED.personas.forEach(g => g[6] = null);
+MERGED.personas.push(['vera', 40, 0.8e6, 2.30, [['Проверка', 'проверка', true]], { models: ['sonnet'], roles: ['qa'] }, null],
+  ['kira', 45, 0.6e6, 0, [['Ш7', 'шаг', true]], { models: ['qwen'], roles: ['step'] }, null],
+  ['alex', 45, 0.7e6, 1.40, [['Финал', 'финал', true]], { models: ['opus'], roles: ['final'] }, null]);
+MERGED.personas[0][1] = 262; MERGED.personas[1][1] = 205; MERGED.personas[2][1] = 212; MERGED.personas[3][1] = 100; MERGED.personas[3][3] = 3.10;
+MERGED.personas.sort((a, b) => b[1] - a[1]);
+MERGED.models = [['opus', 407, 5.6e6, 10.90, [], { personas: ['timur', 'gleb', 'alex'], roles: ['step', 'rework', 'review', 'final'] }], ['sonnet', 245, 3.5e6, 7.70, [], { personas: ['polina', 'egor', 'vera'], roles: ['step', 'plan', 'qa'] }],
+  ['qwen', 257, 2.5e6, 0, [], { personas: ['denis', 'kira'], roles: ['step', 'rework'] }], ['haiku', 48, 0.5e6, 0.50, [], { personas: ['sofya'], roles: ['cut', 'merge'] }]];
+MERGED.roles = [['step', 560, 6.4e6, 9.90, [], { personas: ['timur', 'polina', 'denis', 'kira'], models: ['opus', 'sonnet', 'qwen'] }], ['rework', 150, 1.8e6, 2.10, [], { personas: ['timur', 'denis', 'polina'], models: ['opus', 'qwen', 'sonnet'] }],
+  ['review', 100, 1.9e6, 3.10, [], { personas: ['gleb'], models: ['opus'] }], ['plan', 60, 0.9e6, 1.10, [], { personas: ['egor'], models: ['sonnet'] }], ['final', 45, 0.7e6, 1.40, [], { personas: ['alex'], models: ['opus'] }],
+  ['qa', 40, 0.8e6, 2.30, [], { personas: ['vera'], models: ['sonnet'] }], ['cut', 18, 0.3e6, 0.30, [], { personas: ['sofya'], models: ['haiku'] }], ['merge', 30, 0.2e6, 0.20, [], { personas: ['sofya'], models: ['haiku'] }]];
+MERGED.roles.sort((a, b) => b[1] - a[1]);
+const THIN = { personas: [['sofya', 12, 0.1e6, 0.18, [['Разрез', 'разрез']], { models: ['haiku'], roles: ['cut'] }, 'run']], models: [['haiku', 12, 0.1e6, 0.18, [], { personas: ['sofya'], roles: ['cut'] }]], roles: [['cut', 12, 0.1e6, 0.18, [], { personas: ['sofya'], models: ['haiku'] }]] };
+const NOCOST = clone(RUN); for (const ax of ['personas', 'models', 'roles']) NOCOST[ax].forEach(g => { g[2] = null; g[3] = null; });
+NOCOST.nocost = true;
+const DATA = { running: RUN, waiting: WAIT, merged: MERGED, thin: THIN, nocost: NOCOST };
+const AXN = { personas: 'персоны', models: 'модели', roles: 'роли' };
+
+function nameOf(ax, k) { return ax === 'personas' ? PN[k] : ax === 'models' ? MN[k] : RN[k]; }
+function colorOf(ax, k, i) { return ax === 'personas' ? PC[k] : PAL[i % PAL.length]; }
+function markOf(ax, k, i) {
+  return ax === 'personas' ? `<span class="av" style="background:${PC[k]}">${PN[k][0][0]}</span>` : `<span class="sw" style="background:${colorOf(ax, k, i)}"></span>`;
+}
+function liveChip(g) { return g[6] === 'run' ? '<span class="chip t-run"><span class="d live"></span>работает</span>' : g[6] === 'wait' ? '<span class="chip t-wait"><span class="d"></span>ждёт вас</span>' : ''; }
+const MET = { time: 1, tokens: 2, cost: 3 };
+const MET_GEN = { time: 'времени', tokens: 'токенов', cost: 'денег' };
+// Действующая мера: без учёта расхода — время (как effectiveMeasure в коде).
+const effMet = D => D.nocost ? 'time' : st.me;
+const valOf = (g, met) => met === 'time' ? g[1] : met === 'tokens' ? (g[2] || 0) : (g[3] || 0);
+const fmtVal = (g, met) => met === 'time' ? fmt(g[1]) : met === 'tokens' ? tok(g[2]) : usd(g[3]);
+function metSeg(D, met, m) {
+  const off = D.nocost ? 'off' : '';
+  met = st.v === 'C' ? effMet(D) : met;
+  return `<span class="seg"><span class="${met === 'time' ? 'on' : ''}">время</span><span class="${met === 'tokens' ? 'on' : ''} ${off}" title="${off ? 'нет учёта расхода' : ''}">токены</span><span class="${met === 'cost' ? 'on' : ''} ${off}">деньги</span></span>`;
+}
+function axSeg(ax) { return `<span class="seg">${Object.keys(AXN).map(k => `<span class="${k === ax ? 'on' : ''}">${AXN[k]}</span>`).join('')}</span>`; }
+function partial(D) { return D.nocost ? `<div class="partial">Токены и деньги недоступны: у этой фичи нет учёта расхода. Доли — по времени.</div>` : ''; }
+// Чаты выбранной группы: подпись = шаг · роль (executors[].chatId ↔ stepRef/taskRole), а не обрезанный id.
+function chatsOf(D, ax, g) {
+  let list = g[4];
+  if (ax !== 'personas') { list = []; for (const p of D.personas) if ((g[5].personas || []).includes(p[0])) for (const c of p[4]) if (ax === 'models' || RN[g[0]][0] === c[1].split(' ')[0]) list.push(c.concat([p[0]])); }
+  if (!list.length) return '';
+  const nm = nameOf(ax, g[0])[0];
+  return `<div class="chats"><h5>Чаты · ${nm} <span class="muted" style="font-weight:400">${list.length}</span></h5><div class="list">${list.slice(0, 6).map(c =>
+    `<button class="chat ${c[2] ? 'arch' : ''}">${c[3] ? `<span class="av" style="background:${PC[c[3]]};width:18px;height:18px">${PN[c[3]][0][0]}</span>` : ''}<span class="ref">${c[0]}</span><span>${c[1]}</span>${c[2] ? '<span class="muted" style="font-size:10px">в архиве</span>' : ''}<span class="go">чат →</span></button>`).join('')}</div>
+    ${list.length > 6 ? `<div class="muted" style="font-size:11px;margin-top:6px">ещё ${list.length - 6}</div>` : ''}</div>`;
+}
+function head(ax, D, m, extra) {
+  return `<div class="bh"><span class="t">Кто и на чём работал</span>${extra || ''}${axSeg(ax)}${metSeg(D, 'time', m)}</div>${partial(D)}`;
+}
+function emptyBlock() { return `<div class="empty"><b>Пока нечего разрезать</b>Разрезы появятся, когда исполнителей станет больше одного. Сейчас работает только Софья — разрез, 12 мин.</div>`; }
+
+// ===== A · Кольцо =====
+function renderA(D, ax, m) {
+  const gs = D[ax];
+  if (gs.length < 2) return `<div class="card">${head(ax, D, m)}${emptyBlock()}</div>`;
+  const tot = gs.reduce((a, g) => a + g[1], 0);
+  const R = 70, L = 2 * Math.PI * R; let off = 0;
+  const arcs = gs.map((g, i) => { const len = g[1] / tot * L; const gap = 3;
+    const s = `<circle cx="90" cy="90" r="${R}" fill="none" stroke="${colorOf(ax, g[0], i)}" stroke-width="${i === 0 ? 26 : 20}" stroke-dasharray="${Math.max(0, len - gap)} ${L}" stroke-dashoffset="${-off}"/>`; off += len; return s; }).join('');
+  const sel = gs[0];
+  const cost = D.nocost ? null : gs.reduce((a, g) => a + (g[3] || 0), 0);
+  const ring = `<div class="a-ring"><svg viewBox="0 0 180 180"><circle cx="90" cy="90" r="${R}" fill="none" stroke="var(--c-bg-selected)" stroke-width="20"/>${arcs}</svg>
+    <div class="c"><b>${fmt(tot).replace(' ч ', ' ч<br>')}</b><span>${AXN[ax]} суммарно${cost != null ? ' · ' + usd(cost) : ''}</span></div></div>`;
+  const rows = gs.map((g, i) => { const [n, sub] = nameOf(ax, g[0]);
+    return `<button class="a-row ${g === sel ? 'sel' : ''}">${markOf(ax, g[0], i)}<span class="nm">${n}${sub ? `<small>${sub}</small>` : ''}${ax === 'personas' ? liveChip(g) : ''}</span>
+      <span class="v">${fmt(g[1])}</span><span class="x2">${D.nocost ? '' : tok(g[2]) + ' · ' + usd(g[3])}</span><span class="p">${Math.round(g[1] / tot * 100)} %</span></button>`; }).join('');
+  return `<div class="card">${head(ax, D, m)}<div class="a-wrap">${ring}<div class="a-list">${rows}</div></div>${chatsOf(D, ax, sel)}</div>`;
+}
+
+// ===== B · Три полосы =====
+function renderB(D, ax, m) {
+  if (D.personas.length < 2) return `<div class="card"><div class="bh"><span class="t">Кто и на чём работал</span>${metSeg(D, 'time', m)}</div>${emptyBlock()}</div>`;
+  const sel = D[ax][0];
+  const rel = sel[5];
+  const bars = ['personas', 'models', 'roles'].map(a => {
+    const gs = D[a]; const tot = gs.reduce((s, g) => s + g[1], 0);
+    const isSel = a === ax;
+    const on = g => isSel ? g === sel : (rel[a] || []).includes(g[0]);
+    const segs = gs.map((g, i) => { const c = colorOf(a, g[0], i); const w = g[1] / tot * 100;
+      const lbl = w > (m ? 22 : 9) ? `${nameOf(a, g[0])[0]}${w > (m ? 34 : 14) ? ` <span style="opacity:.8;font-weight:500">${Math.round(w)} %</span>` : ''}` : '';
+      return `<i class="${on(g) ? (isSel ? 'sel' : '') : 'dim'} ${LIGHT.has(c) ? 'light' : ''}" style="flex:${g[1]};background:${c}" title="${nameOf(a, g[0])[0]} · ${fmt(g[1])}">${lbl}</i>`; }).join('');
+    const leg = gs.map((g, i) => `<span class="${on(g) ? '' : 'dim'}">${a === 'personas' ? `<span class="av" style="background:${PC[g[0]]};width:14px;height:14px;font-size:8px">${PN[g[0]][0][0]}</span>` : `<span class="sw" style="background:${colorOf(a, g[0], i)};width:10px;height:10px"></span>`}${nameOf(a, g[0])[0]} <b>${fmt(g[1])}</b>${a === 'personas' && g[6] ? ` <span class="${g[6] === 'run' ? 'live' : ''}" style="color:${g[6] === 'run' ? 'var(--c-accent)' : 'var(--c-info)'}">●</span>` : ''}</span>`).join('');
+    return `<div class="b-axis"><div class="b-al">${AXN[a][0].toUpperCase() + AXN[a].slice(1)}<span>${fmt(tot)}${D.nocost ? '' : ' · ' + usd(gs.reduce((s, g) => s + (g[3] || 0), 0))}</span></div><div class="b-bar">${segs}</div><div class="b-leg">${leg}</div></div>`;
+  }).join('');
+  const [sn] = nameOf(ax, sel[0]);
+  const link = `<div class="b-link" style="margin:0 0 14px">Выбрано: <b style="color:var(--c-text-heading)">${sn}</b> — в других полосах подсвечено, где ${ax === 'personas' ? 'он работал' : 'это встречается'}. Связь — без минут${BE('время по парам «персона × модель», «персона × роль»')}</div>`;
+  return `<div class="card"><div class="bh"><span class="t">Кто и на чём работал</span>${metSeg(D, 'time', m)}</div>${partial(D)}${link}${bars}${chatsOf(D, ax, sel)}</div>`;
+}
+
+// ===== C · Таблица =====
+function renderC(D, ax, m) {
+  // Единый выбор (сверка 25.10): мера шапки = сортировка таблицы и карточек = доля в карточке;
+  // клик по заголовку колонки на 1280 переключает ту же меру в шапке.
+  const met = effMet(D), K = MET[met];
+  const gs = D[ax].slice().sort((a, b) => (b[K] || 0) - (a[K] || 0));
+  if (gs.length < 2) return `<div class="card">${head(ax, D, m)}${emptyBlock()}</div>`;
+  const mx = k => Math.max(...gs.map(g => g[k] || 0), 1);
+  const tot = k => gs.reduce((a, g) => a + (g[k] || 0), 0);
+  const sel = gs[0];
+  const rel = (g) => ax === 'personas' ? [...(g[5].models || []).map(x => `<span class="mdl">${MN[x][0]}</span>`), ...(g[5].roles || []).map(x => `<span class="mdl">${RN[x][0]}</span>`)].join('')
+    : (g[5].personas || []).map(x => `<span class="av" style="background:${PC[x]};width:18px;height:18px;font-size:9px" title="${PN[x][0]}">${PN[x][0][0]}</span>`).join('');
+  const cell = (g, k, i) => { const v = g[k]; const c = colorOf(ax, g[0], i);
+    if (v == null) return `<div class="c-cell"><span class="muted" style="font-size:11px">нет учёта</span></div>`;
+    return `<div class="c-cell"><span class="bar"><i style="width:${v / mx(k) * 100}%;background:${c}"></i></span><span class="v">${k === 1 ? fmt(v) : k === 2 ? tok(v) : usd(v)} <small>${Math.round(v / (tot(k) || 1) * 100)}%</small></span></div>`; };
+  if (m) {
+    const rows = gs.map((g, i) => { const [n] = nameOf(ax, g[0]);
+      const ms = [[1, 'время'], [2, 'токены'], [3, 'деньги']].map(([k, l]) => g[k] == null ? `<span>${l}</span><span class="muted">нет учёта</span><span></span>` :
+        `<span>${l}</span><span class="bar"><i style="width:${g[k] / mx(k) * 100}%;background:${colorOf(ax, g[0], i)}"></i></span><span class="v">${k === 1 ? fmt(g[k]) : k === 2 ? tok(g[k]) : usd(g[k])}</span>`).join('');
+      return `<button class="c-mr ${g === sel ? 'sel' : ''}"><div class="top">${markOf(ax, g[0], i)}${n}${ax === 'personas' ? liveChip(g) : ''}<span class="p">${Math.round((g[K] || 0) / (tot(K) || 1) * 100)} %</span></div>
+        <div class="c-chips" style="margin-top:6px">${rel(g)}</div><div class="ms">${ms}</div></button>`; }).join('');
+    return `<div class="card">${head(ax, D, m)}<div class="muted" style="font-size:11px;margin-bottom:8px">По убыванию ${MET_GEN[met]} · сортировка — в шапке</div><div class="c-m">${rows}</div>${chatsOf(D, ax, sel)}</div>`;
+  }
+  const relTitle = ax === 'personas' ? 'Модели и роли' : 'Кто';
+  const rows = gs.map((g, i) => { const [n, sub] = nameOf(ax, g[0]);
+    return `<tr class="${g === sel ? 'sel' : ''}"><td><div class="c-nm">${markOf(ax, g[0], i)}<div>${n}${sub ? `<small>${sub}</small>` : ''}</div>${ax === 'personas' ? liveChip(g) : ''}</div></td>
+      <td><div class="c-chips">${rel(g)}</div></td><td>${cell(g, 1, i)}</td><td>${cell(g, 2, i)}</td><td>${cell(g, 3, i)}</td><td style="text-align:right"><span style="color:var(--c-accent);font-size:12px;font-weight:600">${(g[4].length || '') && g[4].length + ' чат.'} ›</span></td></tr>`; }).join('');
+  const totRow = `<tr class="c-tot"><td>Всего</td><td></td><td class="mono">${fmt(tot(1))}</td><td class="mono">${D.nocost ? '—' : tok(tot(2))}</td><td class="mono">${D.nocost ? '—' : usd(tot(3))}</td><td></td></tr>`;
+  return `<div class="card">${head(ax, D, m, '')}<table class="c-tab"><thead><tr><th>${AXN[ax]}</th><th>${relTitle}</th>${[['time', 'время'], ['tokens', 'токены'], ['cost', 'деньги']].map(([k, l]) => `<th class="${k === met ? 's' : ''}">${l}</th>`).join('')}<th></th></tr></thead><tbody>${rows}${totRow}</tbody></table>${chatsOf(D, ax, sel)}</div>`;
+}
+
+const st = { v: 'A', s: 'running', a: 'personas', me: 'time', t: 'both', w: 'both', m: 'on' };
+const NOTES = {
+  A: 'A · «Кольцо»: доля группы — кольцом с итогом в центре, рядом список: время, токены, деньги, %. Самая крупная группа выбрана и раскрывает чаты с подписями шагов. Живые персоны отмечены «работает» / «ждёт вас».',
+  B: 'B · «Три полосы»: все три разреза сразу, каждый — полоса 100 %. Выбор группы в одной полосе подсвечивает связанное в двух других (Тимур → Opus 5.5 → шаг, доработка). Переключатель разреза не нужен.',
+  C: 'C · «Таблица»: строка на группу, время, токены и деньги видны одновременно — полосами в ячейках с долей; колонка «модели и роли» связывает разрезы; итоговая строка. На 360 — карточки с тремя мини-полосами.',
+};
+function render() {
+  document.body.classList.toggle('nomarks', st.m === 'off');
+  document.getElementById('note').textContent = NOTES[st.v];
+  const D = DATA[st.s];
+  const themes = st.t === 'both' ? ['light', 'dark'] : [st.t];
+  const widths = st.w === 'both' ? ['1280', '360'] : [st.w];
+  const fn = { A: renderA, B: renderB, C: renderC }[st.v];
+  const out = [];
+  for (const w of widths) for (const t of themes)
+    out.push(`<div class="w${w}"><div class="cap">${st.v} · ${AXN[st.a]} · ${w} · ${t === 'light' ? 'светлая' : 'тёмная'}</div>
+      <div class="frame" data-theme="${t}"><div class="page"><div class="above">… выше — герой, плитки, «Главные потери» и этапы (feature-stats-5, вариант A)</div>${fn(D, st.a, w === '360')}</div></div></div>`);
+  document.getElementById('out').innerHTML = out.join('');
+}
+document.querySelectorAll('.pills').forEach(p => p.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  p.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  st[p.dataset.k] = b.dataset.v; render();
+}));
+// #B-merged-dark-360-models — вариант, состояние, тема, ширина, разрез.
+const h = location.hash.slice(1).split('-');
+if (h[0]) { st.v = h[0]; st.s = h[1] || st.s; st.t = h[2] || st.t; st.w = h[3] || st.w; st.a = h[4] || st.a;
+  document.querySelectorAll('.pills').forEach(p => p.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.v === st[p.dataset.k]))); }
+render();
+</script>
+</body>
+</html>

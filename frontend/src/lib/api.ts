@@ -815,6 +815,23 @@ export function panelEntryPath(entry: unknown): string | null {
   return segs.map(s => encodeURIComponent(s)).join('/');
 }
 
+// Резюме фичи (W5-F2, «Точка 6 · резюме»): результат модельного анализа хронологии.
+// text — markdown с разделами «Сделано», «Где застряло», «Дальше» (или голые пункты
+// без заголовков — пока так просит промпт feature-summary); model=null — локальная
+// модель; cached — результат взят из кэша бэка, без нового прогона. Ошибки: 502 —
+// модель не ответила (причина в error), 503 — подсистема выключена, 404 — фичи нет.
+export interface FeatureSummaryResult {
+  text: string;
+  generatedAt: string;
+  model: string | null;
+  cached: boolean;
+  usage?: unknown;
+  // Число событий хронологии, на которых построено резюме (W4-ANB): для шапки
+  // «по N событиям» (бейдж устаревания — без числа). Бэк отдаёт всегда; optional —
+  // защита от ответов старой версии сервера.
+  eventCount?: number;
+}
+
 // Projects
 export const api = {
   auth: {
@@ -1782,6 +1799,24 @@ export const api = {
       request<FeaturePage>(
         `/tasks/features/${encodeURIComponent(fid)}${eventsLimit ? `?eventsLimit=${encodeURIComponent(eventsLimit)}` : ''}`,
         signal ? { signal } : undefined,
+      ),
+    // Резюме фичи моделью (W5-F2, «Точка 6 · резюме»): POST summary[?force=true].
+    // force=false — берётся кэш бэка, если есть; force=true — новый прогон. 200 —
+    // FeatureSummaryResult; 502 — модель не ответила (текст причины в error); 503 —
+    // подсистема выключена; 404 — фичи нет. signal — «Остановить» в шапке резюме.
+    // Клиентский таймаут 240 с — по конвенции модельные вызовы задают свой лимит (см. analyze-
+    // запросы выше). Серверный бюджет цепочки выше: локаль 45 с + облако 180 с (LocalActionCatalog),
+    // а при таймаоте облачного шага он повторяется один раз (CheapTextRunner.cs:381-386) — до 405 с;
+    // на маршруте Model — ещё больше. Клиентский таймаут обрывает только ожидание ответа: сервер
+    // продолжает считать и кладёт результат в свой кэш (FeatureSummaryService.cs:76), когда
+    // доработает (до ~405 с). Повтор запроса до этой записи встаёт в single-flight и ждёт тот же
+    // расчёт (FeatureSummaryService.cs:51-59), а не даёт мгновенный кэш-хит; хит — только после
+    // попадания в кэш. Это не задуманное поведение, а известная проблема: на HTTP/1.1 отмена
+    // клиента не доходит до модельного вызова, работа продолжается (открытый дефект 1f065f3c).
+    featureSummary: (fid: string, force?: boolean, signal?: AbortSignal) =>
+      request<FeatureSummaryResult>(
+        `/tasks/features/${encodeURIComponent(fid)}/summary${force ? '?force=true' : ''}`,
+        { method: 'POST', ...(signal ? { signal } : {}), timeoutMs: 240_000 },
       ),
     // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{fid}/merge):
     // создаёт задачу role=merge с персоной DevopsExecutor и запускает её. Fail-closed:

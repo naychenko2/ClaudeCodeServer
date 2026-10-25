@@ -19,6 +19,8 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { getPersonaById } from '../../lib/personas';
 import { dateOnly, hhmm } from '../chat/feature/featureTime';
 import { splitMockups, isCurrentOfGroup } from '../../lib/mockupVersions';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { openTaskInSection } from '../../lib/tasks';
 import { RoleGlyph } from './FeaturePlanReader';
 import { FeaturePlanReader } from './FeaturePlanReader';
 import { Button } from '../ui/Button';
@@ -112,6 +114,13 @@ function GroupHeader({ label, count, isMobile }: { label: string; count: number;
 
 export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat, marks: marksProp, featureId = null, projectId = null }: FeaturePlansTabProps) {
   const marks = useMemo(() => marksProp ?? buildNavMarks(page.run, page.chats), [marksProp, page]);
+  // Проект эпика — область перехода в задачу; нет эпика — проект страницы.
+  const taskProjectId = page.run.epic?.projectId ?? projectId;
+  // Переход в задачу документа/макета: точка возврата «← к фиче · Планы» + адрес с проектом эпика.
+  const openTask = (taskId: string) => {
+    if (featureId) recordFeatureReturn(featureId, { kind: 'task', id: taskId }, page.run.epic?.title ?? null, 'plans');
+    openTaskInSection({ id: taskId, projectId: taskProjectId ?? undefined });
+  };
   // Документы: порядок cut → plan → consult (макет). Дедуп планов (решение Андрея):
   // переписанный план — показываем ПОСЛЕДНИЙ по createdAt; разрезы и консультации — все.
   const plans = useMemo(() => {
@@ -159,8 +168,8 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
           Все документы
         </Button>
         {selectedPlan
-          ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile={isMobile} onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} marks={marks} featureId={featureId} projectId={projectId} documents={plans} onOpenDocument={id => setSelected({ kind: 'plan', id })} />
-          : <MockupCard mockup={selectedMockup!} plans={plans} onOpenFile={onOpenFile} isMobile={isMobile} replaced={selectedMockupReplaced} marks={marks} />}
+          ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile={isMobile} onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask ?? openTask} marks={marks} featureId={featureId} projectId={projectId} taskProjectId={taskProjectId} documents={plans} onOpenDocument={id => setSelected({ kind: 'plan', id })} />
+          : <MockupCard mockup={selectedMockup!} plans={plans} onOpenFile={onOpenFile} isMobile={isMobile} replaced={selectedMockupReplaced} marks={marks} taskProjectId={taskProjectId} onOpenTask={openTask} />}
       </div>
     );
   }

@@ -73,7 +73,7 @@ function run(over: Partial<FeatureRun>): FeatureRun {
 function prodStage(executors: Array<{ taskId: string; chatId: string | null }>): FeatureStage {
   return {
     key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: [], runningSince: null, rounds: [],
-    longestStepRef: null, firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false,
+    longestStepRef: null, firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: 0, overlapsActive: false,
     executors: executors.map(x => ({
       personaId: 'p-kira', taskId: x.taskId, taskRole: 'rework', stepRef: 'Ш1', lane: null,
       status: 'done', chatId: x.chatId, chatArchived: false, modelLabel: 'Qwen', modelFull: 'qwen-3.8',
@@ -311,6 +311,7 @@ describe('код шага', () => {
 
   it('клик по коду открывает меню «старт · чат · задача»; клик по «чат» ведёт в чат исполнителя', async () => {
     const r = run({
+      epic: { id: 'F', title: 'Фича', status: 'doing', projectId: 'proj-1' } as FeatureRun['epic'],
       steps: [task({ id: 's1', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' })],
       stages: [prodStage([{ taskId: 's1', chatId: 'chat-kira' }])],
       stepChains: [chain({ stepRef: 'Ш1', title: 'Сделать X', personaId: 'p-kira', taskIds: ['s1'], status: 'принят', outcome: 'accepted', chatId: 'chat-kira' })],
@@ -326,14 +327,20 @@ describe('код шага', () => {
     expect(findAll(body, 'data-testid', 'prod-menu-start').length).toBe(1);
     // Пункт меню — обёртка с кнопкой внутри: кликаем по кнопке.
     const chatItem = findAll(body, 'data-testid', 'prod-menu-chat')[0] as { children: never[] };
-    const taskItem = findAll(body, 'data-testid', 'prod-menu-task')[0];
+    const taskItem = findAll(body, 'data-testid', 'prod-menu-task')[0] as unknown as { children: never[] };
     expect(chatItem).toBeTruthy();
     expect(taskItem).toBeTruthy();
     expect(textNodes(chatItem as never).join('')).toContain('Чат Кира · работа');
     expect(textNodes(taskItem as never).join('')).toContain('Карточка задачи Ш1');
     // Пункт закрывает меню и ведёт в чат — проверяем переход.
-    await act(async () => { (reactProps(chatItem.children[0] as never)!.onClick as () => void)(); });
+    // Обработчики берём до кликов: после первого клика меню закрывается и узлы уходят.
+    const clickChat = reactProps(chatItem.children[0] as never)!.onClick as () => void;
+    const clickTask = reactProps(taskItem.children[0] as never)!.onClick as () => void;
+    await act(async () => { clickChat(); });
     expect(mockOpenChat.calls).toEqual(['chat-kira']);
+    // Пункт «Карточка задачи» ведёт в проект эпика, а не в личный «Календарь».
+    await act(async () => { clickTask(); });
+    expect(mockOpenTask.calls).toEqual([{ id: expect.any(String), projectId: 'proj-1' }]);
   });
 
   // Минор R4e: пометки меню — только из marks, не безусловно. Мутация «показывать

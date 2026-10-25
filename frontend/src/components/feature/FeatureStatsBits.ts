@@ -85,6 +85,16 @@ export function formatDuration(minutes: number): string {
   return `${h} ч ${String(r).padStart(2, '0')} мин`;
 }
 
+// Минуты от ISO-момента до `nowMs` (округление, min 0); null — даты нет или она нечитаемая.
+// ОБЩИЙ помощник длительности (W5-R-F3b): бейдж строки анализа и правая колонка Ганта
+// читают его — две разные арифметики (round против ceil) расходились на минуту.
+export function minutesSince(iso: string | null | undefined, nowMs: number): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  return Math.max(0, Math.round((nowMs - t) / 60000));
+}
+
 // === Подписи и цвета видов сегментов ===
 
 // Подпись вида (макет KIND): work/waiting/idle/error/notWorking.

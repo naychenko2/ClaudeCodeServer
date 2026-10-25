@@ -454,7 +454,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       const c = render({});
       await settle();
       act(() => { setFeaturePageTab('stats'); });
-      expect(navFlags(c, 'stats-longest')).toEqual([{ chatArchived: true, taskClosed: true }]);
+      expect(navFlags(c, 'loss-longest-nav')).toEqual([{ chatArchived: true, taskClosed: true }]);
     });
 
     it('вкладка «Задачи»: закрытая и архивная строки помечены', async () => {
@@ -470,7 +470,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     for (const [tab, rowPrefix, label, btnId] of [
       ['events', 'event-row-', 'События', 'nav-target-chat'],
       ['tasks', 'task-row-t-done', 'Задачи', 'nav-target-chat'],
-      ['stats', 'stats-longest', 'Статистика', 'nav-target-chat'],
+      ['stats', 'loss-longest-nav', 'Статистика', 'nav-target-chat'],
       // «Статистика»: кнопки задач под лентой времени (TaskButtons) — отдельный путь записи.
       ['stats', 'stats-tasks', 'Статистика', 'nav-target-task'],
     ] as const) {

@@ -17,8 +17,9 @@ export interface FeatureTimeline {
   from: string;
   // Конец таймлайна (ISO-строка).
   to: string;
-  // Интервалы стадий: ключ стадии + её старт/конец (null — не началось/не закончилось).
-  stages: { key: string; startedAt: string | null; endedAt: string | null }[];
+  // Границы полосы стадии: ключ + старт/край (barEnd — правый край полосы, W5-DEF;
+  // null — активности не было).
+  stages: { key: string; startedAt: string | null; barEnd: string | null }[];
   // Сегменты: непрерывные куски времени с видом, треком, стадией и задачей.
   segments: {
     from: string;
@@ -52,6 +53,9 @@ export interface FeatureTimeline {
     waitingCount: number | null;
     // Самое длинное ожидание (минуты); null — не было.
     longestWaitMinutes: number | null;
+    // Самый долгий эпизод ожидания (ST-B2): минуты + задача + начало (ISO, всегда заполнено);
+    // null — эпизодов нет или источник approx.
+    longestWait?: { minutes: number; taskId: string | null; from: string } | null;
     // Число ошибок; null — не считалось.
     errorCount: number | null;
     // Минут в ошибках; null — не считалось.
@@ -126,6 +130,29 @@ export interface FeatureSpend {
   } | null;
 }
 
+// Квантили одной метрики: медиана и p25–p75 (линейная интерполяция, тип 7).
+export interface TypicalPercentiles {
+  median: number;
+  p25: number;
+  p75: number;
+}
+
+// «Типичная фича проекта» (ST-B1): медиана и p25–p75 по СМЕРЖЕННЫМ фичам того же проекта и
+// владельца; текущая фича в выборку не входит. null — смерженных меньше трёх (шкалы сравнения
+// нет). Ожидание — null, если меньше трёх смерженных фич имеют полный журнал.
+export interface TypicalFeatureStats {
+  // Число смерженных фич в выборке (текущая не считается).
+  count: number;
+  // Из них — фич с полным журналом: размер выборки ожидания.
+  waitingCount: number;
+  // Длительность (минуты).
+  duration: TypicalPercentiles;
+  // Ожидание человека (минуты); null — не достаточно фич с журналом.
+  waiting: TypicalPercentiles | null;
+  // Число возвратов.
+  loops: TypicalPercentiles;
+}
+
 // Статистика фичи (только в GET features/{id}).
 export interface FeatureStats {
   // Источник чисел: approx — приближённо; journal — по журналу ходов.
@@ -140,4 +167,7 @@ export interface FeatureStats {
   longestNow: FeatureLongestNow | null;
   // Расход; null — не считался.
   spend: FeatureSpend | null;
+  // «Типичная фича проекта»; null — смерженных меньше трёх. Опциональна: старые ответы
+  // поля не несут.
+  typical?: TypicalFeatureStats | null;
 }

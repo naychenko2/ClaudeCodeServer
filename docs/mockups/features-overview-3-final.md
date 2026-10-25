@@ -153,7 +153,7 @@
 | название, глиф, ветка, возраст, число задач | `run.epic`, индекс: `branch`, `createdAt`, `taskCount` | — |
 | тег и состояние фичи | индекс `bucket`/`attention.kind`, `run.attention`, `run.merge`, `run.closed` | **аддитивно `run.state`** (8 значений) — одна точка правды для тега, плашки и вкладок |
 | блок тревоги | `run.attention` (kind, since, reason, personaId, linkedSessionId), `run.now` | `kind: "merge"` в `run.attention`; **`taskId`** того, о ком тревога |
-| этапы: порядок, состояние, исполнители | `run.stages[]` | `firstStartedAt`, `lastCompletedAt`, `approxMinutes`, `overlapsActive`; **у исполнителя этапа `chatId` и `taskId`** |
+| этапы: порядок, состояние, исполнители | `run.stages[]` | `firstStartedAt`, `lastCompletedAt` (конец только закрытой стадии), `barEnd` (правый край полосы Ганта), `approxMinutes`, `overlapsActive`; **у исполнителя этапа `chatId` и `taskId`** |
 | шаги и витки | `run.stepChains[]` (`rounds[]`: verdict, reason, reviewer) | **у шага `taskId`, `chatId`; у витка `reviewTaskId`, `reviewChatId`** |
 | роль | ключ этапа, `lane`, `taskRole` | `roleLabel` у этапа, шага и ссылки чата |
 | чаты фичи | индекс: `chats`, `keySessionId`, `keyArchived` | у ссылки чата `archived`, `modelLabel`, `modelFull`, **`taskId`** |

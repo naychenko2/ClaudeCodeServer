@@ -650,9 +650,13 @@ export function featureQuickAction(f: FeatureIndexFeature): string | null {
 
 // Стопка аватаров «кто сейчас» (макет .l2): по nowPersonaIds (волна 2, массив идущих
 // персон, по убыванию старта); если массив пуст/отсутствует (старый ответ бэка) —
-// фолбэк на now0 (одна InProgress-задача волны 1). Чистая функция.
+// фолбэк на now0 (одна InProgress-задача волны 1); если и там пусто (после сужения
+// run.now у фичи, где все исполнители ждут человека — дефект 4a241bee) — фолбэк на
+// attention.personaId (кто остановился/ждёт). Чистая функция. Правило «идёт» не
+// трогается — это только выбор показа.
 export function featureAvatarPersonaIds(f: FeatureIndexFeature): string[] {
   if (f.nowPersonaIds && f.nowPersonaIds.length > 0) return f.nowPersonaIds;
   if (f.now0?.personaId) return [f.now0.personaId];
+  if (f.attention?.personaId) return [f.attention.personaId];
   return [];
 }

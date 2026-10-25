@@ -18,6 +18,7 @@ import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
+import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex, FeaturePage as FeaturePageData } from '../../types/featureIndex';
 import type { FeatureRun, FeatureState, FeatureAttention } from '../../types/featureRun';
@@ -75,6 +76,7 @@ vi.mock('../../lib/personas', () => ({
   ensurePersonasLoaded: () => Promise.resolve(),
   getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
   usePersonasVersion: () => 0,
+  usePersonas: () => [],
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
 vi.mock('../../lib/signalr', async (importOriginal) => {
@@ -703,5 +705,117 @@ describe('Ф6: «Мерж…» на странице фичи', () => {
     };
     expect(has('cc-sheet-card'), '360: нет шторки (cc-sheet-card)').toBe(true);
     expect(has('cc-modal-card'), '360: карточка вместо шторки').toBe(false);
+  });
+});
+
+// ═══ 6. Тег «стоит/тихо» в шапке (спека pt6, W5-F3a) ══════════════════════════════
+//
+// Тег рисуется только для двух состояний строки анализа (stuck/quiet) — состояние
+// берётся из той же analysisLineState, что и строка. Подпись = st.badge.text,
+// тон danger↔Clock / warning↔Moon, клик → вкладка «Статистика». На 360 —
+// minHeight 40 (цель касания), на десктопе — не фиксируется.
+// Мутации (в отчёте): (1) setFeaturePageTab('stats') → 'chats' в FeaturePageHeader —
+// краснеет тест «клик»; (2) убрать в AnalysisTag гейт «не stuck/quiet» — краснеет
+// «рисуется только для stuck/quiet».
+
+describe('Тег «стоит/тихо» в шапке (pt6)', () => {
+  const TAG = 'feature-page-analysis-tag';
+
+  // Первый <svg> в поддереве (глиф lucide).
+  function firstSvg(n: AnyNode): AnyNode | null {
+    if (n.nodeType === 1 && n.nodeName === 'SVG') return n;
+    for (const c of n.childNodes) {
+      const hit = firstSvg(c);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  const styleOf = (n: AnyNode): Record<string, unknown> =>
+    (n as unknown as { style: Record<string, unknown> }).style;
+  const attr = (n: AnyNode, a: string): string | null =>
+    (n as unknown as { getAttribute: (a: string) => string | null }).getAttribute(a);
+
+  // «Зависла»: сторож позвал человека (staleAlertedAt), активности 3 часа —
+  // бейдж «стоит 3 ч».
+  const stuckRun = () => pageData({
+    state: 'stopped',
+    lastActivityAt: new Date(NOW - 3 * 3_600_000).toISOString(),
+    now: [{
+      taskId: 't-1', stage: 'prod', title: 'Шаг', stepRef: 'Ш1',
+      staleAlertedAt: new Date(NOW - 24 * 3_600_000).toISOString(),
+    }],
+  });
+  // «Тихо»: флаг бэка quiet=true, 24 ч тишины — бейдж «тихо 24 ч».
+  const quietRun = () => pageData({
+    quiet: true,
+    lastActivityAt: new Date(NOW - 24 * 3_600_000).toISOString(),
+  });
+
+  it('тег рисуется только для stuck/quiet: другие состояния — нет', async () => {
+    const cases: [string, Partial<FeatureRun>, boolean][] = [
+      ['moving — задача идёт', { now: [{ taskId: 't-1', stage: 'prod', title: 'Шаг', startedAt: new Date(NOW - 30 * 60000).toISOString() }] }, false],
+      ['nudged — окликнули, молчит', { now: [{ taskId: 't-1', stage: 'prod', title: 'Шаг', nudgedAt: new Date(NOW - 3 * 3_600_000).toISOString() }] }, false],
+      ['attention — ждёт вас', { state: 'waiting', attention: attention('wait') }, false],
+      ['merged — смержена', { state: 'merged' }, false],
+      ['draft — черновик', { state: 'draft' }, false],
+      ['stuck — зависла', stuckRun().run, true],
+      ['quiet — тихо', quietRun().run, true],
+    ];
+    for (const [label, runOver, expectTag] of cases) {
+      mockGetFeature.result = pageData(runOver);
+      const c = render({});
+      await settle();
+      const tag = findNodeByAttr(c, 'data-testid', TAG);
+      expect(tag !== null, `${label}: тег должен быть ${expectTag ? 'на месте' : 'отсутствовать'}`).toBe(expectTag);
+    }
+  });
+
+  it('stuck: подпись = badge.text «стоит 3 ч», тон danger, глиф Clock', async () => {
+    mockGetFeature.result = stuckRun();
+    const c = render({});
+    await settle();
+    const tag = findNodeByAttr(c, 'data-testid', TAG);
+    expect(tag).not.toBeNull();
+    expect(textNodes(tag!).join('')).toBe('стоит 3 ч');
+    expect(styleOf(tag!).background, 'тон не danger').toBe(C.dangerBg);
+    const svg = firstSvg(tag!);
+    expect(svg).not.toBeNull();
+    expect(attr(svg!, 'class'), 'глиф не Clock').toContain('lucide-clock');
+  });
+
+  it('quiet: подпись = badge.text «тихо 24 ч», тон warning, глиф Moon', async () => {
+    mockGetFeature.result = quietRun();
+    const c = render({});
+    await settle();
+    const tag = findNodeByAttr(c, 'data-testid', TAG);
+    expect(tag).not.toBeNull();
+    expect(textNodes(tag!).join('')).toBe('тихо 24 ч');
+    expect(styleOf(tag!).background, 'тон не warning').toBe(C.warningBg);
+    const svg = firstSvg(tag!);
+    expect(svg).not.toBeNull();
+    expect(attr(svg!, 'class'), 'глиф не Moon').toContain('lucide-moon');
+  });
+
+  it('клик → вкладка «Статистика» (setFeaturePageTab("stats"))', async () => {
+    mockGetFeature.result = stuckRun();
+    const c = render({});
+    await settle();
+    const tag = findNodeByAttr(c, 'data-testid', TAG);
+    expect(tag).not.toBeNull();
+    const p = reactProps(tag!) as { onClick?: (e: unknown) => void } | null;
+    await act(async () => { p?.onClick?.({}); });
+    const stats = tabByLabel(c, 'Статистика');
+    expect(stats, 'вкладки «Статистика» нет на странице').not.toBeNull();
+    expect(attr(stats!, 'aria-selected'), 'клик не перевёл на «Статистику»').toBe('true');
+  });
+
+  it('360: minHeight 40 (цель касания)', async () => {
+    mockGetFeature.result = quietRun();
+    const c = render({ isMobile: true });
+    await settle();
+    const tag = findNodeByAttr(c, 'data-testid', TAG);
+    expect(tag).not.toBeNull();
+    expect(String(styleOf(tag!).minHeight), 'на 360 у тега нет высоты 40').toContain('40');
   });
 });

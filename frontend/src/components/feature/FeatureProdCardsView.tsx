@@ -159,9 +159,9 @@ function stepHasMenu(card: ProdCard, chain: FeatureStepChain | undefined): boole
 
 // Нет данных шага (не начат: ни старта, ни чата, ни задачи) — код остаётся обычным
 // текстом без рамки, не кнопкой: открывать нечего.
-function StepCode({ card, chain, featureId, featureTitle, marks, isMobile, nameOf, text }: {
+function StepCode({ card, chain, featureId, featureTitle, projectId, marks, isMobile, nameOf, text }: {
   text: string;
-  card: ProdCard; chain: FeatureStepChain | undefined; featureId: string; featureTitle?: string | null; marks: NavMarks; isMobile: boolean;
+  card: ProdCard; chain: FeatureStepChain | undefined; featureId: string; featureTitle?: string | null; projectId?: string; marks: NavMarks; isMobile: boolean;
   nameOf: (id: string) => string | null;
 }) {
   const plain: CSSProperties = {
@@ -248,7 +248,7 @@ function StepCode({ card, chain, featureId, featureTitle, marks, isMobile, nameO
                 onClick={() => {
                   setOpen(false);
                   recordFeatureReturn(featureId, { kind: 'task', id: taskId }, featureTitle);
-                  openTaskInSection({ id: taskId });
+                  openTaskInSection({ id: taskId, projectId });
                 }}
               />
             </span>
@@ -342,9 +342,9 @@ function MiniTrack({ nodes }: { nodes: ProdNode[] }) {
   );
 }
 
-function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, isMobile, nameOf }: {
+function ProdCardView({ card, chain, executors, featureId, featureTitle, projectId, marks, isMobile, nameOf }: {
   card: ProdCard; chain: FeatureStepChain | undefined; executors: FeatureStageExecutor[];
-  featureId: string; featureTitle?: string | null; marks: NavMarks; isMobile: boolean;
+  featureId: string; featureTitle?: string | null; projectId?: string; marks: NavMarks; isMobile: boolean;
   nameOf: (id: string) => string | null;
 }) {
   const [open, setOpen] = useState(false);
@@ -435,7 +435,7 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, marks, 
             <ExecutorAvatar personaId={card.personaId} />
             {name && <span style={{ fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'nowrap' }}>{name}</span>}
             {model && <ModelChip label={model.label} full={model.full} isMobile={isMobile} />}
-            <StepCode text="старт · чат · задача" card={card} chain={chain} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} nameOf={nameOf} />
+            <StepCode text="старт · чат · задача" card={card} chain={chain} featureId={featureId} featureTitle={featureTitle} projectId={projectId} marks={marks} isMobile={isMobile} nameOf={nameOf} />
           </div>
 
           {/* 360: строки цепочки не наезжают зонами касания — вертикальный зазор
@@ -513,6 +513,8 @@ export function FeatureProdCardsView({
   // Имя персоны — один источник для всей ленты: резолвер, который получает
   // buildProdCards (по умолчанию — getPersonaById). Шапка и меню зовут его же.
   const nameOf = personaName ?? ((id: string) => getPersonaById(id)?.name ?? null);
+  // У шага проекта в данных нет — берём проект эпика, иначе переход уводит в личный «Календарь».
+  const projectId = run.epic?.projectId ?? undefined;
   const cards = buildProdCards(run, nameOf);
   if (cards.length === 0) return null;
 
@@ -535,7 +537,7 @@ export function FeatureProdCardsView({
                   <span style={{ flex: 1, height: 1, background: C.accentMuted }} />
                 </div>
               )}
-              <ProdCardView card={card} chain={chain} executors={prodExecutors} featureId={featureId} featureTitle={featureTitle} marks={marks} isMobile={isMobile} nameOf={nameOf} />
+              <ProdCardView card={card} chain={chain} executors={prodExecutors} featureId={featureId} featureTitle={featureTitle} projectId={projectId} marks={marks} isMobile={isMobile} nameOf={nameOf} />
             </Fragment>
           );
         })}

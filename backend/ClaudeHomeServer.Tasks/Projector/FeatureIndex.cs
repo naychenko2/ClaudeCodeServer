@@ -126,7 +126,10 @@ public sealed record FeatureIndexRow(
     string? HoldReason,
     // Момент постановки удержания (FeatureHold.Since, R-HOLD-B1): длительность «на паузе · {dur}»
     // в макете (блокер фронта HOLE-F2). Аддитивное поле: null — удержания нет.
-    DateTime? HoldSince);
+    DateTime? HoldSince,
+    // W4-ANB (разрез §4): «тихо» — фича стоит без движения ≥ 24 часов (решение Андрея, 24.10).
+    // Берётся из FeatureRun.Quiet (единая точка правды), не пересчитывается здесь.
+    bool Quiet);
 
 // Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
 // нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя

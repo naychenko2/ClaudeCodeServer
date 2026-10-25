@@ -1,7 +1,7 @@
 import { C, FONT, FS } from '../../lib/design';
 import { ICON_SIZE } from '../ui/icons';
 import { BackButton } from '../ui';
-import { useFeatureBackNav } from '../../lib/featureBackNav';
+import { useFeatureBackNav, useFeatureBackNavForTask } from '../../lib/featureBackNav';
 import { setFeaturePageTab, FEATURE_TAB_LABEL } from '../../lib/featurePage';
 
 // «← к фиче «{название}» · {вкладка}» (Ф-pl-b + Ф9b): чат открыт переходом ИЗ страницы
@@ -15,8 +15,16 @@ import { setFeaturePageTab, FEATURE_TAB_LABEL } from '../../lib/featurePage';
 // minor 1: название вкладки — из ЕДИНОГО словаря FEATURE_TAB_LABEL (чип и полоса не разъезжаются).
 // minor 4: длинное название — обрезка с многоточием (min-width:0 + text-overflow), полное
 // название в title/aria-label (кнопка может сжиматься: flexShrink:1 + overflow:hidden).
-export function FeatureBackChip({ sessionId, projectId, isCompact = false }: { sessionId: string; projectId?: string | null; isCompact?: boolean }) {
-  const featureBack = useFeatureBackNav(sessionId);
+//
+// дефект 4c4645e2: тот же чип стоит и на экране открытой задачи (taskId — цель перехода
+// {kind:'task'}): тот же компонент, тот же клик (cc-open-feature), без нового стиля.
+// Оба хука зовутся безусловно (useSyncExternalStore), чип берётся из того, что совпало.
+export function FeatureBackChip({ sessionId, taskId, projectId, isCompact = false }: { sessionId?: string | null; taskId?: string | null; projectId?: string | null; isCompact?: boolean }) {
+  // Оба хука — безусловно, без `??` в одном выражении: иначе при совпадении чата
+  // второй не вызывается, и React роняет рендер («fewer hooks than expected»).
+  const chatBack = useFeatureBackNav(sessionId ?? null);
+  const taskBack = useFeatureBackNavForTask(taskId ?? null);
+  const featureBack = chatBack ?? taskBack;
   // Личный чат (нет проекта): воркспейса нет, запасному переходу некуда вести — чип был бы
   // мёртвым. Не рисуем.
   if (!featureBack || !projectId) return null;

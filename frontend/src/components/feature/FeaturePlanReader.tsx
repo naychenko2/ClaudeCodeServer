@@ -186,13 +186,16 @@ export interface FeaturePlanReaderProps {
   // и проект — область запроса. Без них ссылки между документами не оживают.
   featureId?: string | null;
   projectId?: string | null;
+  // Проект эпика фичи — для перехода в задачу (projectId страницы нужен для чтения файлов;
+  // при ручном диплинке на чужой проект они расходятся). Без него — projectId страницы.
+  taskProjectId?: string | null;
   // Другие документы фичи — для резолва [[wikilinks]] по заголовку.
   documents?: FeaturePlan[];
   // Открыть другой документ фичи в этой же читалке.
   onOpenDocument?: (taskId: string) => void;
 }
 
-export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMockup, onOpenTask, marks = EMPTY_NAV_MARKS, featureId = null, projectId = null, documents = [], onOpenDocument }: FeaturePlanReaderProps) {
+export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMockup, onOpenTask, marks = EMPTY_NAV_MARKS, featureId = null, projectId = null, taskProjectId = null, documents = [], onOpenDocument }: FeaturePlanReaderProps) {
   const [state, setState] = useState<TextState>(() => _textCache.get(textCacheKey(plan)) ?? { status: 'loading' });
   const [reload, setReload] = useState(0);
   // Открытый по ссылке целевой документ (W4-LINK-F): текст читается через резолв
@@ -333,7 +336,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
               kind="task"
               taskId={plan.taskId}
               taskClosed={marks.taskClosed(plan.taskId)}
-              onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
+              onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId, projectId: taskProjectId ?? projectId ?? undefined }))}
               title="Открыть задачу документа"
               isMobile={isMobile}
             />
@@ -446,7 +449,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
               showNoChat={false}
               taskId={plan.taskId}
               taskClosed={marks.taskClosed(plan.taskId)}
-              onOpenTask={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
+              onOpenTask={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId, projectId: taskProjectId ?? projectId ?? undefined }))}
               taskTitle="Открыть задачу документа"
               isMobile={isMobile}
             />
@@ -471,7 +474,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
               kind="task"
               taskId={plan.taskId}
               taskClosed={marks.taskClosed(plan.taskId)}
-              onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
+              onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId, projectId: taskProjectId ?? projectId ?? undefined }))}
               title="Открыть задачу документа"
               isMobile={isMobile}
             />

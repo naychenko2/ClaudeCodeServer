@@ -1016,7 +1016,9 @@ const windowWidth = useWindowWidth();
     // Окно НЕ позже страницы (штамп окна ≤ штампа страницы) → страница ПОВЕРХ (M2), не чиним.
     if (windowStampRef.current <= pageStampRef.current) return;
     setOpenFeatureId(null);
-    clearBackNav();
+    // Гасим только указатель «чат → страница фичи» (его цель закрыта). Указатель
+    // «фича → задача/чат» — возврат ИЗ фичи: цель на экране, чип ведёт на страницу.
+    if (getBackNav()?.fromKind === 'chat') clearBackNav();
     const view = isMobile ? 'chat' : 'sidebar';
     // Автоскрытие убирает ТОЛЬКО сегмент feature: адрес нового окна (file/task/commit/doc/
     // board…) берём из текущего снимка, а не затираем null (m2: navReplace писал

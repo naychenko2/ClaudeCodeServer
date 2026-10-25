@@ -49,8 +49,10 @@ export function stageStatusLabel(stage: FeatureStage): StageStatus | null {
   return { text: 'не было', tone: 'muted' };
 }
 
-// Границы этапа (макет §5): обе метки — «dd.mm · ЧЧ:ММ – ЧЧ:ММ»; только старт — «с dd.mm · ЧЧ:ММ»;
-// старта нет — null. Время — местный пояс (featureTime: локальные геттеры).
+// Границы этапа (макет §5): обе метки — «dd.mm · ЧЧ:ММ – ЧЧ:ММ» — только у закрытой стадии
+// (конец = lastCompletedAt, есть лишь когда все задачи Done); идущая стадия — «с dd.mm · ЧЧ:ММ»
+// без конца (W5-DEF-хвост п.3): край полосы (barEnd) в подпись не выходит. Старта нет — null.
+// Время — местный пояс (featureTime: локальные геттеры).
 export function stageBoundsLabel(stage: FeatureStage): string | null {
   const start = dateOnly(stage.firstStartedAt);
   if (!start) return null;

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { setFeaturePageTab, focusFeatureStage } from '../../lib/featurePage';
 import { openTaskInSection } from '../../lib/tasks';
 import { EmptyState } from '../ui/EmptyState';
@@ -12,16 +12,27 @@ import {
   type TimelineModel, type TimelineSegment,
 } from './FeatureStatsBits';
 import { buildGanttModel, type GanttModel, type GanttSegmentKind } from './FeatureGanttModel';
-import { TotalsCards, LongestNow, Breakdown, Spend } from './FeatureStatsBlocks';
-import type { FeatureStats } from '../../types/featureStats';
+import { personaGroupLabel, modelGroupLabel, roleGroupLabel, formatTokens } from './FeatureStatsFormat';
+import { plural } from '../../lib/plural';
+import { usePersonas } from '../../lib/personas';
+import { useModels } from '../../lib/models';
+import { AGENT_COLORS } from '../AgentSelector';
+import { StatsHero } from './StatsHero';
+import { FeatureStatsTiles } from './FeatureStatsTiles';
+import { FeatureStatsNow } from './FeatureStatsNow';
+import { FeatureStatsLosses } from './FeatureStatsLosses';
+import { FeatureBreakdownBlock } from './FeatureBreakdownBlock';
+import { FeatureAnalysisLine } from './FeatureAnalysisLine';
+import { stageLabelShort } from './FeatureAnalysisModel';
+import type { FeatureStats, FeatureSpend, FeatureStatsSource, FeatureTimeline } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
 
-// Вкладка «Статистика» (волна 3, Ф7a, макет features-overview-3-final §«Статистика»;
-// блок 1 — ступени Ганта по макету features-overview-4 §pt4, вариант А, W4-4F2).
-// БЛОК 1 — лента времени: ступени (у этапа своя строка: имя, полоса на общей оси с
-// разбивкой «работа · ожидание · простой», минуты справа), ось времени, «сейчас»,
-// легенда и значки точности. Без `run` (старые ответы) — прежняя полоса.
-// БЛОКИ 2 (карточки, «Дольше всех», разрезы, расход) — в Ф7b.
+// Вкладка «Статистика» (волна 5, ST-F14a; вариант A «Пульс» макета feature-stats-5).
+// Порядок: строка анализа → значки точности → герой → плитки → «Сейчас работают» →
+// «Главные потери» → Гант (ступени, W4-4F2) → «Кто и на чём работал» → свёрнутый
+// «Подробнее» (то, что новые блоки не покрывают: «не работали», эпизоды ошибок,
+// детали расхода). Без `run` (старые ответы) — прежняя полоса: герой, плитки, «сейчас»,
+// потери и разрез требуют конвейера. Прежние блоки итогов/разрезов/расхода удалены в ST-F14б.
 //
 // Данные ТОЛЬКО из `stats` и `run` (features/{id}): фронт не пересчитывает, только раскладывает.
 // Честность: нет stats (старые данные) → пустое состояние с причиной, а не нули.
@@ -48,21 +59,21 @@ function segLabel(seg: TimelineSegment): string {
   return formatDuration(seg.minutes);
 }
 
-// Значки точности (макет: «≈ по задачам (≈)» / «по журналу»; «журнал обрезан»).
+// Строка точности (Майя, P1): одна фраза FS.xs textMuted без повтора:
+// «≈ по задачам — числа приблизительные» / «по журналу ходов»; при trunc —
+// отдельная «журнал обрезан».
 function AccuracyBadges({ source, truncated }: { source: 'approx' | 'journal'; truncated: boolean }) {
-  // approx → «≈» + «по задачам (≈)»; journal → «по журналу».
-  const main = source === 'approx'
-    ? <span data-testid="stats-accuracy-approx" style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary }}>≈</span>
-    : <span data-testid="stats-accuracy-journal" style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary }}>по журналу</span>;
+  const phrase = source === 'approx'
+    ? '≈ по задачам — числа приблизительные'
+    : 'по журналу ходов';
   return (
     <div
       data-testid="stats-accuracy"
       style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', marginBottom: SP.sm, fontFamily: FONT.sans }}
     >
-      <span style={{ fontSize: FS.xs, color: C.textSecondary }}>
-        {source === 'approx' ? 'по задачам (≈)' : 'по журналу'}
+      <span data-testid="stats-accuracy-phrase" style={{ fontSize: FS.xs, color: C.textMuted }}>
+        {phrase}
       </span>
-      {main}
       {truncated && (
         <span data-testid="stats-accuracy-truncated" style={{ fontSize: FS.xs, color: C.warningText }}>
           журнал обрезан
@@ -316,8 +327,9 @@ function Gantt({
     <div data-testid="stats-gantt" style={{ fontFamily: FONT.sans }}>
       {gantt.rows.map((row) => {
         const left = axisFrac(row.from);
-        // Правый край: lastCompletedAt; у активного этапа конца нет — текущий момент
-        // (axis.to): полоса дотягивается до «сейчас», а не исчезает.
+        // Правый край: row.to — край полосы (barEnd из модели Ганта); если края нет —
+        // для текущего этапа текущий момент (axis.to): полоса дотягивается до «сейчас»,
+        // а не исчезает.
         const right = axisFrac(row.to ?? (row.isCurrent ? axis.to : null));
         // Минимальная видимая ширина полосы (макет: min-width 3px) — чтобы этап в
         // 4 минуты не превратился в щель.
@@ -469,6 +481,53 @@ function Gantt({
         );
       })}
 
+      {/* «Тихо» (W5-F3b, спецификация features-overview-5.md §«Точка 6»): последняя строка
+          после этапов, перед осью. Состояние — в модели (из analysisLineState), здесь
+          только показ. Сетка — та же, что у строк Ганта (имя · трек · минуты). */}
+      {gantt.quiet && (
+        <div
+          data-testid="gantt-quiet"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '86px 1fr 52px' : '110px 1fr 70px',
+            gap: isMobile ? SP.sm : SP.md,
+            alignItems: 'center',
+            minHeight: isMobile ? 40 : 28,
+          }}
+        >
+          <span
+            style={{
+              fontSize: FS.sm, fontWeight: 700, color: C.warningText,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >
+            тихо
+          </span>
+          <div
+            style={{
+              position: 'relative', height: 16, borderRadius: SP.xs,
+              border: `1px dashed ${C.warning}`,
+              background: `repeating-linear-gradient(135deg, transparent 0 4px, ${C.warningBg} 4px 8px)`,
+            }}
+          >
+            <span
+              style={{
+                position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: FONT.mono, fontSize: FS.xxs, color: C.warningText,
+                overflow: 'hidden', whiteSpace: 'nowrap',
+              }}
+            >
+              {gantt.quiet.from ? `${formatDateTime(gantt.quiet.from)} → сейчас` : 'сейчас'}{isMobile ? '' : ' · сжато'}
+            </span>
+          </div>
+          <span
+            style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.warningText, textAlign: 'right' }}
+          >
+            {gantt.quiet.minutes != null ? formatDuration(gantt.quiet.minutes) : ''}
+          </span>
+        </div>
+      )}
+
       <AxisLine axis={axis} />
       <CurrentRow current={current} />
 
@@ -495,13 +554,22 @@ function Gantt({
             сейчас
           </span>
         )}
+        {/* «Тихо» (W5-F3b): квадрат с той же рамкой и фоном, что трек строки. */}
+        {gantt.quiet && (
+          <span data-testid="gantt-legend-quiet" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, border: `1px dashed ${C.warning}`, background: C.warningBg }} />
+            тихо
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
 // «Задача» по taskId сегмента/этапа: NavTargetButton (открывает задачу в «Задачах»).
-function TaskButtons({ model, nav, isMobile }: { model: TimelineModel; nav?: FeatureNavCtx; isMobile: boolean }) {
+// run нужен для projectId: задачи фичи лежат в проекте её эпика (тот же путь, что
+// StatsHero:147) — без projectId openTaskInSection ведёт в личный «Календарь» (дефект ee6825ff).
+function TaskButtons({ model, run, nav, isMobile }: { model: TimelineModel; run?: FeatureRun | null; nav?: FeatureNavCtx; isMobile: boolean }) {
   const marks = nav?.marks ?? EMPTY_NAV_MARKS;
   // Собираем уникальные taskId по этапам (из сегментов) — по одному «задача» на этап.
   const byStage = new Map<string, string | null>();
@@ -527,7 +595,7 @@ function TaskButtons({ model, nav, isMobile }: { model: TimelineModel; nav?: Fea
             isMobile={isMobile}
             onOpen={() => {
               if (nav?.featureId && taskId) recordFeatureReturn(nav.featureId, { kind: 'task', id: taskId }, nav.featureTitle);
-              openTaskInSection({ id: taskId! });
+              openTaskInSection({ id: taskId!, projectId: run?.epic?.projectId ?? undefined });
             }}
           />
         </span>
@@ -536,26 +604,129 @@ function TaskButtons({ model, nav, isMobile }: { model: TimelineModel; nav?: Fea
   );
 }
 
-// Короткая подпись этапа для ряда «задача» (без полного имени, чтобы влезло).
-function stageLabelShort(key: string): string {
-  const names: Record<string, string> = {
-    cut: 'Разрез', plan: 'План', prod: 'Производство', review: 'Ревью',
-    qa: 'Проверка', final: 'Финал', merge: 'Мерж',
-  };
-  return names[key] ?? key;
+// Раскрытие «Подробнее» помним между заходами (план ST-F14).
+export const MORE_OPEN_KEY = 'featureStats.moreOpen';
+function readMoreOpen(): boolean {
+  try { return localStorage.getItem(MORE_OPEN_KEY) === '1'; } catch { return false; }
+}
+function writeMoreOpen(open: boolean): void {
+  try { localStorage.setItem(MORE_OPEN_KEY, open ? '1' : '0'); } catch { /* приватный режим/квота */ }
+}
+
+// Кольцо фокуса строки «Подробнее» (P2): инлайн-стиль не умеет :focus-visible —
+// класс инжектится один раз (тот же приём, что ui/Chip и FeatureBreakdownShared).
+const MORE_FOCUS_CLASS = 'cc-stats-more';
+if (typeof document !== 'undefined' && !document.getElementById('cc-stats-more-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-stats-more-style';
+  el.textContent = `.${MORE_FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
+}
+
+// «Подробнее» (ST-F14a, макет feature-stats-5.md §«Правки фронта», п. 8): только то,
+// что новые блоки НЕ покрывают: «не работали» (в составе героя его нет), эпизоды
+// ошибок, детали расхода (кэш, «данные с», общие чаты, модели без цены). Нечего
+// добавить — раскрывашки нет (пустой «Подробнее» не бывает).
+function MoreDetails({ totals, spend, source, isMobile }: {
+  totals: FeatureTimeline['totals'];
+  spend: FeatureSpend | null;
+  source: FeatureStatsSource;
+  isMobile: boolean;
+}) {
+  const rows: string[] = [];
+  const approx = source === 'approx' ? '≈ ' : '';
+  if (totals.notWorkingMinutes != null && totals.notWorkingMinutes > 0) {
+    rows.push(`не работали — ${approx}${formatDuration(totals.notWorkingMinutes)}`);
+  }
+  if (totals.errorCount != null && totals.errorCount > 0) {
+    rows.push(`ошибки: ${totals.errorCount} ${plural(totals.errorCount, 'эпизод', 'эпизода', 'эпизодов')}`);
+  }
+  if (spend) {
+    // Кэш — отдельной строкой подробно; в итог плитки «Расход» он тоже входит (tilesModel).
+    const cache = spend.cacheReadTokens + spend.cacheCreationTokens;
+    if (cache > 0) {
+      rows.push(`кэш: ${formatTokens(spend.cacheReadTokens)} чтение · ${formatTokens(spend.cacheCreationTokens)} создание`);
+    }
+    // «Данные с …» — только если расход ненулевой (иначе у пустой фичи это дата эпика).
+    const nonzero = spend.inputTokens + spend.outputTokens + cache > 0 || spend.costUsd > 0;
+    if (nonzero) rows.push(`данные с ${new Date(spend.from).toLocaleDateString('ru-RU')}`);
+    // Метод оценки shared — из spend.shared.method, не из source (расход и лента могут
+    // считаться разными способами) — то же правило, что в прежнем блоке Spend.
+    if (spend.shared) {
+      rows.push(
+        `в т. ч. доля общих чатов ≈ ${formatTokens(spend.shared.inputTokens + spend.shared.outputTokens)} токенов` +
+        ` (оценка, по ${spend.shared.method === 'journal' ? 'журналу' : 'задачам ≈'})`,
+      );
+    }
+    if (spend.costPartial && spend.hiddenCostModels.length > 0) {
+      rows.push(`моделей без цены: ${spend.hiddenCostModels.join(', ')}`);
+    }
+  }
+  const [open, setOpen] = useState(readMoreOpen);
+  if (rows.length === 0) return null;
+  return (
+    <details
+      data-testid="stats-more"
+      open={open}
+      onToggle={e => {
+        const next = (e.currentTarget as HTMLDetailsElement).open;
+        if (next === open) return;
+        setOpen(next);
+        writeMoreOpen(next);
+      }}
+      style={{ margin: `${SP.md}px 0 0` }}
+    >
+      <summary
+        data-testid="stats-more-summary"
+        className={MORE_FOCUS_CLASS}
+        style={{
+          // Карточка-строка по макету .more: высота ≥ 44 (тач-цель на 360), рамка и
+          // фон карточки; кольцо фокуса — класс MORE_FOCUS_CLASS (:focus-visible).
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm,
+          minHeight: 44, padding: `${SP.md}px ${SP.lg}px`,
+          background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+          cursor: 'pointer', fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, fontFamily: FONT.sans,
+        }}
+      >
+        <span>Подробнее</span>
+        <span aria-hidden>▾</span>
+      </summary>
+      <div
+        style={{
+          marginTop: SP.sm, padding: isMobile ? `${SP.sm}px ${SP.md}px` : `${SP.md}px ${SP.lg}px`,
+          background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+          display: 'flex', flexDirection: 'column', gap: SP.xs,
+          fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+        }}
+      >
+        {rows.map((r, i) => <span key={i} data-testid="stats-more-row">{r}</span>)}
+      </div>
+    </details>
+  );
 }
 
 export function FeatureStatsTab({ stats, run = null, featureId = null, featureTitle = null, marks, isMobile = false }: FeatureStatsTabProps) {
+  // Хуки выше ранних return: labelOf/colorOf нужны только с run, но хук не может
+  // быть условным (react-hooks/rules-of-hooks) — тот же приём, что в FeatureStatsNow.
+  const personas = usePersonas();
+  useModels(); // реактивность: догрузка каталога моделей меняет подписи
   const nav: FeatureNavCtx = { featureId, featureTitle, marks };
+  // Строка анализа (W5-F1) — про фичу, а не про статистику: показываем и в пустых
+  // состояниях вкладки, поэтому вынесена до ранних return. Без run (старые ответы) — нет.
+  const line = run ? <FeatureAnalysisLine run={run} marks={marks} isMobile={isMobile} /> : null;
+
   // Пустое состояние: stats нет (старые данные) — причина, а не нули.
   if (!stats) {
     return (
-      <EmptyState
-        compact
-        icon="📊"
-        title="Статистики пока нет"
-        subtitle="Появится, когда будет посчитано время фичи."
-      />
+      <>
+        {line}
+        <EmptyState
+          compact
+          icon="📊"
+          title="Статистики пока нет"
+          subtitle="Появится, когда будет посчитано время фичи."
+        />
+      </>
     );
   }
 
@@ -566,38 +737,73 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
   // Пустое состояние: нет ни сегментов, ни текущего состояния (макет: «Считать пока нечего»).
   if (!model.hasData) {
     return (
-      <EmptyState
-        compact
-        icon="📊"
-        title="Считать пока нечего"
-        subtitle="Статистика появится с первой задачей исполнителя."
-      />
+      <>
+        {line}
+        <EmptyState
+          compact
+          icon="📊"
+          title="Считать пока нечего"
+          subtitle="Статистика появится с первой задачей исполнителя."
+        />
+      </>
     );
   }
 
-  // БЛОКИ 2–3 (Ф7b): карточки итогов, «дольше всех», разрезы, расход.
-  // Данные ТОЛЬКО из stats; null-поля → блока/строки нет (не выдумываем).
+  // «Пульс» (ST-F14a): герой, плитки, «Сейчас работают», «Главные потери» — всё из
+  // run + stats; без run (старые ответы) этих блоков нет, остаётся прежняя полоса.
   const costPartial = stats.spend?.costPartial ?? false;
 
   // Ступени Ганта (W4-4F2) — из run (конвейера). Без run или без строк (старые
   // ответы) — прежняя полоса: честная деградация, а не пустой блок.
   const gantt = run ? buildGanttModel(run, stats, Date.now()) : null;
 
+  // labelOf/colorOf — те же источники подписей, что у прежнего Breakdown:
+  // персона → имя, роль → roleLabel, модель → modelLabel. Цвет — цвет аватара персоны
+  // (AGENT_COLORS); остальным — '' (палитра ShareRing решает сама). Ось приходит от
+  // оболочки разбивки: по ключу её не угадать (UUID недоступной персоны не отличить
+  // от id модели — он ушёл бы в подпись сырым).
+  const labelOf = (key: string, axis: 'personas' | 'models' | 'roles'): string => {
+    if (axis === 'personas') return personaGroupLabel(key, personas);
+    if (axis === 'roles') return roleGroupLabel(key);
+    return modelGroupLabel(key);
+  };
+  const colorOf = (key: string): string => {
+    const c = personas.find(x => x.id === key)?.avatar?.color;
+    return c ? AGENT_COLORS[c] ?? '' : '';
+  };
+
   return (
     <div data-testid="feature-stats-tab" style={{ fontFamily: FONT.sans }}>
+      {line}
       <AccuracyBadges source={stats.source} truncated={stats.truncated} />
+      {run && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, marginTop: SP.lg }}>
+          <StatsHero run={run} stats={stats} isMobile={isMobile} />
+          <FeatureStatsTiles run={run} stats={stats} isMobile={isMobile} />
+          <FeatureStatsNow run={run} nav={nav} isMobile={isMobile} />
+          <FeatureStatsLosses run={run} stats={stats} nav={nav} isMobile={isMobile} />
+        </div>
+      )}
       {gantt && gantt.rows.length > 0 ? (
         <Gantt gantt={gantt} axis={model.axis} current={model.current} isMobile={isMobile} />
       ) : (
         <Timeline model={model} isMobile={isMobile} />
       )}
-      <TaskButtons model={model} nav={nav} isMobile={isMobile} />
-      <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, marginTop: SP.lg }}>
-        <TotalsCards totals={stats.timeline.totals} source={stats.source} isMobile={isMobile} />
-        {stats.longestNow && <LongestNow ln={stats.longestNow} nav={nav} isMobile={isMobile} />}
-        <Breakdown breakdown={stats.breakdown} costPartial={costPartial} nav={nav} isMobile={isMobile} />
-        {stats.spend && <Spend spend={stats.spend} />}
-      </div>
+      <TaskButtons model={model} run={run} nav={nav} isMobile={isMobile} />
+      {run && (
+        <div style={{ marginTop: SP.lg }}>
+          <FeatureBreakdownBlock
+            breakdown={stats.breakdown}
+            costPartial={costPartial}
+            run={run}
+            labelOf={labelOf}
+            colorOf={colorOf}
+            nav={nav}
+            isMobile={isMobile}
+          />
+        </div>
+      )}
+      <MoreDetails totals={stats.timeline.totals} spend={stats.spend} source={stats.source} isMobile={isMobile} />
     </div>
   );
 }

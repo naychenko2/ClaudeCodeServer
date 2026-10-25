@@ -114,9 +114,9 @@ function mkStats(over: Partial<FeatureStats> = {}): FeatureStats {
       from: '2026-10-19T17:20:00Z',
       to: '2026-10-20T12:30:00Z',
       stages: [
-        { key: 'cut', startedAt: '2026-10-19T17:20:00Z', endedAt: '2026-10-19T17:55:00Z' },
-        { key: 'plan', startedAt: '2026-10-19T17:58:00Z', endedAt: '2026-10-19T18:30:00Z' },
-        { key: 'prod', startedAt: '2026-10-20T10:05:00Z', endedAt: null },
+        { key: 'cut', startedAt: '2026-10-19T17:20:00Z', barEnd: '2026-10-19T17:55:00Z' },
+        { key: 'plan', startedAt: '2026-10-19T17:58:00Z', barEnd: '2026-10-19T18:30:00Z' },
+        { key: 'prod', startedAt: '2026-10-20T10:05:00Z', barEnd: null },
       ],
       segments: [
         { from: '2026-10-19T17:20:00Z', to: '2026-10-19T17:55:00Z', kind: 'work', track: 'main', stage: 'cut', taskId: 't-cut' },

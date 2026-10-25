@@ -136,7 +136,7 @@ function mkRun(over: Record<string, unknown> = {}): FeatureRun {
     progress: 0, ready: false,
     stages: [{
       key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: ['t-a', 't-b', 't-c'], rounds: [],
-      firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false,
+      firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: 0, overlapsActive: false,
       executors: [
         ex('t-a', 'Ш1', 'c-live', false, 'running'),
         ex('t-b', 'Ш2', 'c-arch', true, 'running'),
@@ -206,9 +206,9 @@ describe('пометки: Хронология', () => {
     const run = mkRun({
       stages: [
         { key: 'prod', state: 'active', tone: 'run', passes: 1, taskIds: ['t-a', 't-b', 't-c'], rounds: [],
-          firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
+          firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
         { key: 'review', state: 'active', tone: 'run', passes: 0, taskIds: [], rounds: [],
-          firstStartedAt: null, lastCompletedAt: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
+          firstStartedAt: null, lastCompletedAt: null, barEnd: null, approxMinutes: 0, overlapsActive: false, executors: EXEC },
       ],
     });
     const c = render(createElement(FeatureTimelineTab, { run }));
@@ -300,8 +300,8 @@ function mkStats(): FeatureStats {
     timeline: {
       from: '2026-10-19T17:20:00Z', to: '2026-10-20T12:30:00Z',
       stages: [
-        { key: 'plan', startedAt: '2026-10-19T17:58:00Z', endedAt: '2026-10-19T18:30:00Z' },
-        { key: 'prod', startedAt: '2026-10-20T10:05:00Z', endedAt: null },
+        { key: 'plan', startedAt: '2026-10-19T17:58:00Z', barEnd: '2026-10-19T18:30:00Z' },
+        { key: 'prod', startedAt: '2026-10-20T10:05:00Z', barEnd: null },
       ],
       segments: [
         seg('2026-10-19T17:58:00Z', '2026-10-19T18:30:00Z', 'plan', 't-b'),   // открыта
@@ -332,32 +332,83 @@ describe('пометки: Статистика', () => {
     expect(btns.map(b => attr(b, 'aria-label').includes('(задача закрыта)'))).toEqual([false, true]);
   });
 
-  it('«Дольше всех сейчас»: чат c-arch в архиве, задача t-b открыта → B', () => {
-    const c = render(createElement(FeatureStatsTab, { stats, featureId: 'f1', marks: marks() }));
-    expectFlags(byId(c, 'stats-longest')[0], B, 'дольше всех');
+  // Вкладка «Пульс» (ST-F14a) рисуется только с run: блоки «Сейчас работают»,
+  // «Главные потери» и разрез «Кто и на чём работал» получают пометки и контекст возврата.
+  const NOW_ROW = { taskId: 't-b', stage: 'prod', personaId: null, stepRef: 'Ш2', title: 't-b', startedAt: '2026-10-20T10:00:00Z', linkedSessionId: 'c-arch' };
+  const pulseStats = (): FeatureStats => {
+    const st = mkStats();
+    st.breakdown.personas.push({ key: 'p2', minutes: 5, tokens: null, costUsd: null, chatIds: [] } as never);
+    return st;
+  };
+  const renderTab = (extra: Record<string, unknown> = {}) => render(createElement(FeatureStatsTab, {
+    stats: pulseStats(), run: mkRun({ now: [NOW_ROW] }), featureId: 'f1', featureTitle: 'Моя фича', marks: marks(), ...extra,
+  }));
+  const click = (n: N) => act(() => { (reactProps(n as never)!.onClick as () => void)(); });
+  const expectBack = (to: { kind: 'chat' | 'task'; id: string }) => {
+    expect(backNav.getBackNav()).toMatchObject({
+      from: 'f1', fromKind: 'feature', fromTab: 'stats', fromTitle: 'Моя фича', to,
+    });
+  };
+
+  it('«Дольше всех сейчас» (карточка 3 «Потерь»): чат c-arch в архиве, задача t-b открыта → B', () => {
+    const c = renderTab();
+    expectFlags(byId(c, 'loss-longest-nav')[0], B, 'дольше всех');
+  });
+
+  it('«Дольше всех сейчас»: клик по «чат» и по «задача» пишет точку возврата с вкладкой «Статистика»', () => {
+    pageStore.reset(); backNav.reset();
+    setFeaturePageTab('stats');
+    const c = renderTab();
+    const nav = byId(c, 'loss-longest-nav')[0];
+    click(byId(nav, 'nav-target-chat')[0]);
+    expectBack({ kind: 'chat', id: 'c-arch' });
+    backNav.reset();
+    click(byId(nav, 'nav-target-task')[0]);
+    expectBack({ kind: 'task', id: 't-b' });
+  });
+
+  it('«Сейчас работают»: чат c-arch помечен «в архиве»', () => {
+    const c = renderTab();
+    expectFlags(byId(c, 'now-row-t-b')[0], { chat: 'archived', task: 'none' }, 'сейчас работают');
+  });
+
+  it('«Сейчас работают»: клик по чату пишет точку возврата с вкладкой «Статистика»', () => {
+    pageStore.reset(); backNav.reset();
+    setFeaturePageTab('stats');
+    const c = renderTab();
+    click(byId(byId(c, 'now-row-t-b')[0], 'nav-target-chat')[0]);
+    expectBack({ kind: 'chat', id: 'c-arch' });
   });
 
   it('разрез (чаты группы): c-live живой, c-arch в архиве', () => {
-    const c = render(createElement(FeatureStatsTab, { stats, featureId: 'f1', marks: marks() }));
-    const group = byId(c, 'stats-break-group')[0];
-    const open = collect(group, n => n.nodeName === 'BUTTON')[0];
-    act(() => { (reactProps(open as never)!.onClick as () => void)(); });
-    const rows = byId(c, 'stats-break-chat');
-    expect(rows.length).toBe(2);
-    expect(rows.map(r => flagsOf(r).chat)).toEqual(['live', 'archived']);
+    const c = renderTab();
+    click(byId(c, 'breakdown-chats-toggle-p1')[0]);
+    expect(byIdPrefix(c, 'breakdown-chat-').length, 'строк чатов группы').toBe(2);
+    const live = byId(c, 'breakdown-chat-c-live')[0];
+    const arch = byId(c, 'breakdown-chat-c-arch')[0];
+    expect([flagsOf(live).chat, flagsOf(arch).chat]).toEqual(['live', 'archived']);
   });
 
   it('клик по чату в разрезе пишет точку возврата с вкладкой «Статистика»', () => {
     pageStore.reset(); backNav.reset();
     setFeaturePageTab('stats');
-    const c = render(createElement(FeatureStatsTab, { stats, featureId: 'f1', featureTitle: 'Моя фича', marks: marks() }));
-    const group = byId(c, 'stats-break-group')[0];
-    act(() => { (reactProps(collect(group, n => n.nodeName === 'BUTTON')[0] as never)!.onClick as () => void)(); });
-    const second = byId(c, 'stats-break-chat')[1];
-    act(() => { (reactProps(byId(second, 'nav-target-chat')[0] as never)!.onClick as () => void)(); });
-    expect(backNav.getBackNav()).toMatchObject({
-      from: 'f1', fromKind: 'feature', fromTab: 'stats', fromTitle: 'Моя фича', to: { kind: 'chat', id: 'c-arch' },
-    });
+    const c = renderTab();
+    click(byId(c, 'breakdown-chats-toggle-p1')[0]);
+    click(byId(byId(c, 'breakdown-chat-c-arch')[0], 'nav-target-chat')[0]);
+    expectBack({ kind: 'chat', id: 'c-arch' });
+  });
+
+  it('разрез по персонам: недоступная персона — «персона недоступна», не сырой UUID', () => {
+    const st = mkStats();
+    st.breakdown.personas = [
+      { key: '11111111-aaaa-bbbb-cccc-000000000001', minutes: 20, tokens: null, costUsd: null, chatIds: [] },
+      { key: '22222222-aaaa-bbbb-cccc-000000000002', minutes: 10, tokens: null, costUsd: null, chatIds: [] },
+    ] as never;
+    const c = renderTab({ stats: st });
+    const text = textOf(byId(c, 'feature-breakdown-block')[0]);
+    expect(text).toContain('персона недоступна');
+    expect(text).not.toContain('11111111-aaaa');
+    expect(text).not.toContain('22222222-aaaa');
   });
 });
 

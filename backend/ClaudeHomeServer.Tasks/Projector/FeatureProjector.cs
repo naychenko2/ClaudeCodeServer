@@ -10,6 +10,12 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // <see cref="TaskManager"/> для REST: без второго источника правды, только выборка задач.
 public sealed class FeatureProjector(TaskManager tasks)
 {
+    // W4-ANB (разрез §4, решение Андрея 24.10): порог «тихо» — 24 часа без активности. Та же
+    // длительность, что у NudgeWindow сторожа зависшего исполнителя (TaskExecutionService):
+    // страница и уведомления не расходятся. Порог константа, не конфиг: это решение продукта,
+    // а не настройка машины.
+    internal static readonly TimeSpan QuietThreshold = TimeSpan.FromHours(24);
+
     // Чистая проекция: эпик + ВСЕ задачи фичи (эпик + дочерние) → конвейер.
     // featureTasks — в порядке, в котором их отдал вызывающий (фикстура/трекер): шаги/ревью/
     // проверки сохраняют этот порядок, финал/мерж берутся как последние по этому порядку.
@@ -109,21 +115,22 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // waitTask — явный wait (AwaitingHumanSince, ждущий дольше всех); finalAccepted —
         // для merge (attention) и для state (merge_pending/merged). Вынесены в scope метода:
-        // используются и в attention, и в расчёте state.
+        // используются и в attention, и в расчёте state. IsHeld тут не нужен:
+        // AwaitingHumanSince сам делает задачу held.
         var waitTask = featureTasks
             .Where(t => t.AwaitingHumanSince is not null)
             .OrderBy(t => t.AwaitingHumanSince)
             .FirstOrDefault();
         bool finalAccepted = IsFinalAccepted(final);
 
-        // 1. stopped: InProgress-задача с ExecutorStoppedAt позже ClaudeStartedAt.
-        //    Guard «позже ClaudeStartedAt» — защита от stale-пометки: если исполнитель
-        //    перезапустили (MarkClaudeStarted сбрасывает ExecutorStoppedAt), но пометка
-        //    не успела сброситься, ClaudeStartedAt будет позже → stopped не показываем.
+        // 1. stopped: InProgress-задача с валидной пометкой остановки (HasValidStopMark) —
+        //    «остановленная» половина IsHeld. Задача с обоими маркерами (ещё и ждёт человека)
+        //    остаётся stopped: приоритет stopped → wait (:113), причина остановки видна.
+        //    Тот же guard «позже ClaudeStartedAt» (HasValidStopMark) — защита от stale-пометки:
+        //    если исполнитель перезапустили (MarkClaudeStarted сбрасывает ExecutorStoppedAt),
+        //    но пометка не успела сброситься, ClaudeStartedAt будет позже → stopped не показываем.
         var stoppedTask = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress
-                && t.ExecutorStoppedAt is not null
-                && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt))
+            .Where(t => t.Status == TaskItemStatus.InProgress && HasValidStopMark(t))
             .OrderByDescending(t => t.ExecutorStoppedAt)
             .FirstOrDefault();
         if (stoppedTask is not null)
@@ -170,12 +177,15 @@ public sealed class FeatureProjector(TaskManager tasks)
             };
         }
 
-        // «Сейчас»: все InProgress-задачи фичи (эпик + дочерние), по убыванию ClaudeStartedAt.
-        // Эпик — контейнер фичи, не стадия конвейера: идущий эпик в «Сейчас» не показываем.
-        // У закрытой фичи список пуст (ни одна задача не InProgress). Вынесено до цикла стадий:
-        // nowCount нужен для ComputeState, а state — для гашения тревоги при паузе (R-HOLD-B1).
+        // «Сейчас»: только действительно идущие InProgress-задачи фичи (эпик + дочерние),
+        // по убыванию ClaudeStartedAt. «Держатся» (ждёт человека / исполнитель встал) — не
+        // «Сейчас» (дефект 4a241bee): их ловит Attention и ветки state выше, единое правило —
+        // IsHeld (рядом с IsTurnRunning). Эпик — контейнер фичи, не стадия конвейера: идущий
+        // эпик в «Сейчас» не показываем. У закрытой фичи список пуст (ни одна задача не
+        // InProgress). Вынесено до цикла стадий: nowCount нужен для ComputeState, а state —
+        // для гашения тревоги при паузе (R-HOLD-B1).
         var nowList = featureTasks
-            .Where(t => t.Status == TaskItemStatus.InProgress && !ReferenceEquals(t, epic))
+            .Where(t => t.Status == TaskItemStatus.InProgress && !ReferenceEquals(t, epic) && !IsHeld(t))
             .OrderByDescending(t => t.ClaudeStartedAt ?? t.CreatedAt)
             .Select(t => new FeatureNow
             {
@@ -186,6 +196,10 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Title = t.Title,
                 StartedAt = t.ClaudeStartedAt,
                 LinkedSessionId = LiveSession(t.LinkedSessionId)?.Id, // Б7: fail-closed (только если в снимке)
+                // W4-ANB (разрез §4): отметки сторожа как есть — тот же источник, что уведомления
+                // («зависла» = StaleAlertedAt, предупреждение = NudgedAt); второй порог не заводим.
+                NudgedAt = t.ExecutorNudgedAt,
+                StaleAlertedAt = t.ExecutorStaleAlertedAt,
             })
             .ToList();
 
@@ -390,8 +404,10 @@ public sealed class FeatureProjector(TaskManager tasks)
 
             // Б2: границы, длительность, пересечение с идущим, исполнители.
             var firstStartedAt = StageFirstStartedAt(tasks);
-            var lastCompletedAt = StageLastCompletedAt(tasks);
-            var approxMinutes = StageApproxMinutes(tasks, nowUtc, lastCompletedAt);
+            // Конец ЗАКРЫТОЙ стадии — для длительности и пересечения: у незакрытой конца нет,
+            // её интервалы открыты до now. Край полосы Ганта — StageBarEnd (W5-DEF).
+            var closedStageEnd = StageLastCompletedAt(tasks);
+            var approxMinutes = StageApproxMinutes(tasks, nowUtc, closedStageEnd);
             var overlapsActive = StageOverlapsActive(i, stageDefs, nowUtc);
             var executors = tasks.Select(t =>
             {
@@ -441,7 +457,11 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Verdict = StageVerdict(tasks),
                 // Б2: границы, длительность (объединение интервалов), пересечение, исполнители.
                 FirstStartedAt = firstStartedAt,
-                LastCompletedAt = lastCompletedAt,
+                // Конец стадии — только у закрытой (для минут/пересечений); край полосы Ганта
+                // — отдельное поле (W5-DEF-хвост): у незакрытой стадии тоже есть, иначе Гант
+                // не рисует строку-полосу у стадии, которая шла параллельно.
+                LastCompletedAt = closedStageEnd,
+                BarEnd = StageBarEnd(tasks, nowUtc),
                 ApproxMinutes = approxMinutes,
                 OverlapsActive = overlapsActive,
                 Executors = executors,
@@ -477,6 +497,16 @@ public sealed class FeatureProjector(TaskManager tasks)
         bool closed = featureState == FeatureStates.Closed
             || (featureState == FeatureStates.Merged && epic.Status == TaskItemStatus.Done);
 
+        // W4-ANB (разрез §4, решение Андрея 24.10): «тихо» — фича стоит и не двигается ≥ 24 часов.
+        // Якорь: LastActivityAt; активности не было никогда — создание эпика (свежий черновик
+        // не «тихо», а молчание с момента создания — тоже тишина). Завершённая фича (merged/closed) не «тихо»:
+        // она закрыта или смержена, сигнал не про стояние. Идущая задача (nowList) — не тишина: работа
+        // идёт, её зависание — отдельный признак (NudgedAt/StaleAlertedAt выше). nowList уже
+        // гашён паузой (R-HOLD-D): фича на паузе без движения — «тихо»: сам факт простоя
+        // не прячется его причиной, state=paused различает их на фронте.
+        var quietAnchor = lastActivityAt ?? epic.CreatedAt;
+        bool quiet = !terminal && nowList.Count == 0 && nowUtc - quietAnchor >= QuietThreshold;
+
         // Итог смерженной фичи (у закрытой и у смерженной с открытым эпиком); иначе null.
         FeatureSummary? summary = null;
         if (terminal)
@@ -491,9 +521,11 @@ public sealed class FeatureProjector(TaskManager tasks)
                 ? merge.CompletedAt
                 : null;
             // Длительность: от старта первой задачи (ClaudeStartedAt, иначе CreatedAt) до mergedAt.
+            // Конец — nowUtc того же расчёта, а не отдельный DateTime.UtcNow: значение уходит
+            // в кэш stats.typical и не должно «застывать» между запросами (п.4 хвостов ST-R-B1).
             var firstStart = featureTasks
                 .Min(t => t.ClaudeStartedAt ?? t.CreatedAt);
-            var end = mergedAt ?? lastActivityAt ?? DateTime.UtcNow;
+            var end = mergedAt ?? lastActivityAt ?? nowUtc;
             var duration = Math.Max(0, Math.Round((end - firstStart).TotalMinutes));
             summary = new FeatureSummary
             {
@@ -543,6 +575,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             StepsTotal = stepsTotal,
             StepProgress = stepProgress,
             LastActivityAt = lastActivityAt,
+            Quiet = quiet,
             Closed = closed,
             Summary = summary,
         };
@@ -618,13 +651,11 @@ public sealed class FeatureProjector(TaskManager tasks)
             if (t.ClaudeStartedAt is not null)
                 Add(t, "started", t.ClaudeStartedAt.Value, null);
 
-            // stopped — только у незакрытой (InProgress) задачи и только когда ExecutorStoppedAt >
-            // ClaudeStartedAt (то же правило, что у Attention: guard от stale-пометки).
+            // stopped — только у незакрытой (InProgress) задачи с валидной пометкой остановки
+            // (HasValidStopMark — то же правило, что у Attention: guard от stale-пометки).
             // reason = ExecutorStopReason.
-            if (t.Status == TaskItemStatus.InProgress
-                && t.ExecutorStoppedAt is not null
-                && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt))
-                Add(t, "stopped", t.ExecutorStoppedAt.Value, Truncate(t.ExecutorStopReason));
+            if (t.Status == TaskItemStatus.InProgress && HasValidStopMark(t))
+                Add(t, "stopped", t.ExecutorStoppedAt!.Value, Truncate(t.ExecutorStopReason));
 
             // waiting — «ждёт вас» (AwaitingHumanSince); reason = AwaitingHumanReason.
             if (t.AwaitingHumanSince is not null)
@@ -811,6 +842,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         StepsTotal = run.StepsTotal,
         StepProgress = run.StepProgress,
         LastActivityAt = run.LastActivityAt,
+        Quiet = run.Quiet,
         Closed = run.Closed,
         Summary = run.Summary,
     };
@@ -944,10 +976,12 @@ public sealed class FeatureProjector(TaskManager tasks)
     private static DateTime? StageFirstStartedAt(List<TaskItem> tasks)
         => tasks.Where(t => t.ClaudeStartedAt is not null).Min(t => t.ClaudeStartedAt);
 
-    // Б2: конец стадии — максимальный CompletedAt, ТОЛЬКО если все задачи стадии закрыты (Done),
-    // иначе null. Done-задача без CompletedAt (аномалия данных) в max не входит (ранее
-    // подставлялся CreatedAt — конец мог оказаться позже реального: новая задача, созданная
-    // позже закрытия старой).
+    // Б2: конец ЗАКРЫТОЙ стадии — максимальный CompletedAt, ТОЛЬКО если все задачи стадии
+    // закрыты (Done), иначе null. Это stageEnd для длительности и пересечения: у незакрытой
+    // стадии конца нет, её интервалы открыты до now. Край полосы Ганта — StageBarEnd.
+    // Done-задача без CompletedAt (аномалия данных) в max не входит (ранее подставлялся
+    // CreatedAt — конец мог оказаться позже реального: новая задача, созданная позже
+    // закрытия старой).
     private static DateTime? StageLastCompletedAt(List<TaskItem> tasks)
     {
         if (tasks.Count == 0 || !tasks.All(t => t.Status == TaskItemStatus.Done))
@@ -959,15 +993,50 @@ public sealed class FeatureProjector(TaskManager tasks)
         return completed.Count > 0 ? completed.Max() : null;
     }
 
+    // Пометка остановки валидна, только если позже старта — тот же guard, что у Attention
+    // (:132) и журнала (:649): после перезапуска MarkClaudeStarted сбрасывает пометку, но
+    // она может не успеть сброситься; «устаревшая» пометка (раньше ClaudeStartedAt) — не остановка.
+    private static bool HasValidStopMark(TaskItem t)
+        => t.ExecutorStoppedAt is not null
+        && (t.ClaudeStartedAt is null || t.ExecutorStoppedAt > t.ClaudeStartedAt);
+
+    // W5-DEF (правый край полосы Ганта; хвост ревью 4aea41632 п.5). Край покрывает интервал,
+    // в котором стадия была в работе. Стадия в работе — есть незакрытая (не Done) задача без
+    // валидной пометки остановки (в том числе с «устаревшей» пометкой — она не остановка):
+    // ход реально идёт, ждёт человека/устройства или дал результат и не закрыт — тот же верх
+    // минуты, что у IntervalOf (интервал незакрытой задачи открыт до now): край = now. Вставшая
+    // стадия — край по моменту остановки (последняя активность). Не в работе — max CompletedAt
+    // закрытых (совпадает с концом стадии). Активности не было — null. Длительность не
+    // затрагивается: её stageEnd — конец закрытой стадии (StageLastCompletedAt), край полосы
+    // интервалы не растягивает.
+    private static DateTime? StageBarEnd(List<TaskItem> tasks, DateTime now)
+    {
+        if (tasks.Count == 0)
+            return null;
+        if (tasks.Any(t => t.Status == TaskItemStatus.InProgress && !HasValidStopMark(t)))
+            return now;
+        DateTime? end = null;
+        foreach (var t in tasks)
+        {
+            var e = t.Status == TaskItemStatus.Done ? t.CompletedAt
+                : HasValidStopMark(t) ? t.ExecutorStoppedAt : null;
+            if (e is not null && (end is null || e > end)) end = e;
+        }
+        return end;
+    }
+
     // Б2: интервал задачи: [ClaudeStartedAt, конец]. Не стартовала (нет ClaudeStartedAt) →
-    // интервала нет. Конец: CompletedAt; если его нет — now (задача идёт) или конец стадии
-    // (stageEnd: Done-задача без CompletedAt в закрытой стадии не растягивает интервал до now,
-    // иначе длительность закрытой стадии росла со временем). Конец раньше начала (аномалия)
-    // → нулевая длительность.
+    // интервала нет. Конец: CompletedAt; у вставшей (InProgress с валидной пометкой остановки)
+    // — момент остановки (минуты вставшей стадии не растут до now); иначе — now (задача идёт)
+    // или конец стадии (stageEnd: Done-задача без CompletedAt в закрытой стадии не растягивает
+    // интервал до now, иначе длительность закрытой стадии росла со временем). Конец раньше
+    // начала (аномалия) → нулевая длительность.
     private static (DateTime start, DateTime end)? IntervalOf(TaskItem t, DateTime now, DateTime? stageEnd = null)
     {
         if (t.ClaudeStartedAt is null) return null;
-        var end = t.CompletedAt ?? (t.Status == TaskItemStatus.Done ? stageEnd : null) ?? now;
+        var end = t.CompletedAt
+            ?? (t.Status == TaskItemStatus.Done ? stageEnd : null)
+            ?? (t.Status == TaskItemStatus.InProgress && HasValidStopMark(t) ? t.ExecutorStoppedAt!.Value : now);
         return (t.ClaudeStartedAt.Value, end < t.ClaudeStartedAt.Value ? t.ClaudeStartedAt.Value : end);
     }
 
@@ -1048,19 +1117,34 @@ public sealed class FeatureProjector(TaskManager tasks)
         && t.AwaitingHumanSince is null
         && t.ClaudeResult is null;
 
+    // «Задача держится, не идёт» (дефект 4a241bee, консалт f5edf92c): её держит человек
+    // (AwaitingHumanSince) или исполнитель встал (валидная пометка остановки). Статус здесь
+    // НЕ проверяется: зовущие сами ограничивают InProgress (nowList, ветки ExecutorStatus),
+    // закрытые отсекаются CompletedAt/Done раньше (LongestNow). Защита от устаревшей
+    // пометки — та же, что у тревоги (HasValidStopMark): «устаревшая» пометка (раньше
+    // ClaudeStartedAt) — не остановка, задача идёт. Единая точка правды «держится»: её
+    // зовут nowList, LongestNow (FeatureBreakdown) и ветки ExecutorStatus; stoppedTask и
+    // waitTask её не зовут — их половины расписаны прямо (:118–119, :133). Своей копии
+    // правила нигде нет.
+    internal static bool IsHeld(TaskItem t)
+        => t.AwaitingHumanSince is not null || HasValidStopMark(t);
+
     // Б2: статус исполнителя из полей задачи. Приоритет: running (ход идёт сейчас —
-    // IsTurnRunning) → waiting (AwaitingHumanSince) → stopped (ExecutorStoppedAt) → done (Done)
-    // → pending (остальное, в том числе не стартовала).
-    // waiting/stopped — тот же guard, что у тревоги: только InProgress-задачи; закрытая
-    // вручную (Done) задача со stale-пометками не «stopped»/«waiting» (тревоги по ней тоже нет).
+    // IsTurnRunning) → stopped (валидная пометка остановки) → waiting (AwaitingHumanSince)
+    // → done (Done) → pending (остальное, в том числе не стартовала). stopped раньше wait —
+    // тот же приоритет, что у тревоги и state (хвост 4a241bee): у задачи с обоими маркерами
+    // тон стадии и чип исполнителя не расходятся.
+    // waiting/stopped — половины IsHeld (выше, рядом с IsTurnRunning), тот же guard, что у тревоги: только
+    // InProgress-задачи с валидной пометкой; закрытая вручную (Done) задача со stale-пометками
+    // не «stopped»/«waiting» (тревоги по ней тоже нет), как и у тревоги. InProgress-задача со
+    // stale-пометкой тоже не «stopped» — попадает в «pending»: ход не идёт, остановки нет
+    // (фиксировано тестом Build_Stage_УстаревшаяПометка_СтатусPending).
     private static string ExecutorStatus(TaskItem t)
     {
         if (IsTurnRunning(t))
             return "running";
-        if (t.Status == TaskItemStatus.InProgress && t.AwaitingHumanSince is not null)
-            return "waiting";
-        if (t.Status == TaskItemStatus.InProgress && t.ExecutorStoppedAt is not null)
-            return "stopped";
+        if (t.Status == TaskItemStatus.InProgress && IsHeld(t))
+            return HasValidStopMark(t) ? "stopped" : "waiting";
         if (t.Status == TaskItemStatus.Done)
             return "done";
         return "pending";
@@ -1459,7 +1543,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.StepProgress.Withdrawn,
             run.StepProgress.UnlinkedReworks,
             run.Hold?.Reason,
-            run.Hold?.Since);
+            run.Hold?.Since,
+            run.Quiet);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки

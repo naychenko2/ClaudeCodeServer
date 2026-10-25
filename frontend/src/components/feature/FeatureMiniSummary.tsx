@@ -9,8 +9,27 @@
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { formatDuration, buildTimelineModel, kindBackground } from './FeatureStatsBits';
-import { formatTokens, formatUsd, AccuracyBadge } from './FeatureStatsBlocks';
+import { formatTokens, formatUsd } from './FeatureStatsFormat';
 import type { FeatureStats } from '../../types/featureStats';
+
+// Значок точности «≈» (приблизительные данные).
+function AccuracyBadge({ kind }: { kind: 'ap' }) {
+  return (
+    <span
+      data-testid={`stats-acc-${kind}`}
+      style={{
+        fontFamily: FONT.mono,
+        fontSize: FS.xxs, fontWeight: 700,
+        background: C.bgSelected, color: C.textMuted,
+        borderRadius: R.sm, padding: '0 4px',
+        whiteSpace: 'nowrap', flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center',
+      }}
+    >
+      ≈
+    </span>
+  );
+}
 
 export interface FeatureMiniSummaryProps {
   // Статистика фичи; null — бэк ещё не посчитал (строки нет).

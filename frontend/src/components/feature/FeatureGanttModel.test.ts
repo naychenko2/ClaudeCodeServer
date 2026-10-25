@@ -11,10 +11,16 @@
 // (2) не фильтровать вердикт «accepted» → краснеет «возвраты»; (3) штриховать и при
 // «wait» → краснеет «зависла»; (4) пилюлю давать и закрытой фиче → краснеет «активный
 // этап»; (5) убрать поиск хвоста по attention.taskId → краснеет «зависла по taskId»;
-// (6) вернуть hasData по строкам run.stages → краснеет «hasData — по таймлайну».
+// (6) вернуть hasData по строкам run.stages → краснеет «hasData — по таймлайну»;
+// (7) давать строку «тихо» при любом состоянии → краснеет «не тихо — строки нет»;
+// (8) не гасить «сейчас» в quiet → краснеет «в тихой — маркера „сейчас“ нет»;
+// (9) разная арифметика длительности в двух местах (ceil в модели) → краснеет
+// «длительность одна».
 
 import { describe, it, expect } from 'vitest';
 import { buildGanttModel, type GanttModel, type GanttRow } from './FeatureGanttModel';
+import { analysisLineState } from './FeatureAnalysisModel';
+import { formatDuration } from './FeatureStatsBits';
 import type { FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
 
@@ -48,6 +54,7 @@ function mkStage(key: StageKey, state: StageState, minutes: number, over: Partia
     rounds: [],
     firstStartedAt: null,
     lastCompletedAt: null,
+    barEnd: null,
     approxMinutes: minutes,
     overlapsActive: false,
     executors: [],
@@ -89,7 +96,7 @@ describe('обычный путь: строки этапов, длительно
   const model = buildGanttModel(
     mkRun({
       stages: [
-        mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z' }),
+        mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z', barEnd: '2026-10-19T17:35:00Z' }),
         mkStage('plan', 'done', 32),
         mkStage('prod', 'active', 55, { firstStartedAt: '2026-10-20T10:00:00Z', tone: 'run' }),
         mkStage('review', 'pending', 0),
@@ -170,6 +177,28 @@ describe('обычный путь: строки этапов, длительно
     const stages = [mkStage('prod', 'active', 10)];
     expect(buildGanttModel(mkRun({ stages }), withCur, NOW).hasData).toBe(true);
     expect(buildGanttModel(mkRun({ stages, closed: true }), withCur, NOW).hasData).toBe(false);
+  });
+});
+
+// === Край полосы (W5-DEF-хвост п.1): полоса читает barEnd, не конец стадии ===
+
+describe('край полосы: to — barEnd (отдельное поле), не lastCompletedAt', () => {
+  // Мутация: читать lastCompletedAt вместо barEnd (старое поведение) — первая проверка
+  // краснеет: у идущей стадии конца стадии нет, полоса бы пропала при минутах.
+  it('идущая стадия: to = barEnd; закрытая: to = barEnd (совпадает с концом)', () => {
+    const model = buildGanttModel(
+      mkRun({
+        stages: [
+          mkStage('prod', 'active', 55, { firstStartedAt: '2026-10-20T10:00:00Z', tone: 'run', barEnd: '2026-10-20T11:00:00Z' }),
+          mkStage('review', 'done', 40, { firstStartedAt: '2026-10-20T11:20:00Z', lastCompletedAt: '2026-10-20T12:00:00Z', barEnd: '2026-10-20T12:00:00Z' }),
+        ],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(rowOf(model, 'prod').from).toBe('2026-10-20T10:00:00Z');
+    expect(rowOf(model, 'prod').to, 'полоса читает поле края, а не конец стадии').toBe('2026-10-20T11:00:00Z');
+    expect(rowOf(model, 'review').to).toBe('2026-10-20T12:00:00Z');
   });
 });
 
@@ -433,6 +462,88 @@ describe('пустая фича', () => {
   });
 });
 
+// === Строка «тихо» на Ганте (W5-F3b, спецификация features-overview-5.md §«Точка 6») ===
+// Состояние — из общей analysisLineState: модель «тихо» сама не пересчитывает.
+describe('строка «тихо»: состояние из analysisLineState', () => {
+  it('«тихо»: from — lastActivityAt, минуты — до «сейчас» (12:00 19.10 → 12:00 20.10 = 1440)', () => {
+    const model = buildGanttModel(
+      mkRun({ quiet: true, lastActivityAt: '2026-10-19T12:00:00Z', stages: [mkStage('prod', 'done', 60)] }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).toEqual({ from: '2026-10-19T12:00:00Z', minutes: 1440 });
+  });
+
+  it('мутация: не тихая фича — строки нет (тот же run без quiet)', () => {
+    const model = buildGanttModel(
+      mkRun({ stages: [mkStage('prod', 'done', 60)] }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).toBeNull();
+  });
+
+  it('«stuck» побеждает «тихо»: есть staleAlertedAt — тихой строки нет, «сейчас» остаётся', () => {
+    const model = buildGanttModel(
+      mkRun({
+        quiet: true,
+        lastActivityAt: '2026-10-19T12:00:00Z',
+        stages: [mkStage('prod', 'active', 60)],
+        now: [{ taskId: 't-1', stage: 'prod', title: 'x', startedAt: '2026-10-20T11:00:00Z', staleAlertedAt: '2026-10-20T11:30:00Z' }],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).toBeNull();
+    expect(rowOf(model, 'prod').isCurrent).toBe(true);
+  });
+
+  it('в тихой — маркера «сейчас» на текущем этапе нет (текущего этапа нет)', () => {
+    const model = buildGanttModel(
+      mkRun({
+        quiet: true,
+        lastActivityAt: '2026-10-19T12:00:00Z',
+        stages: [mkStage('prod', 'active', 60, { tone: 'run' })],
+        now: [{ taskId: 't-1', stage: 'prod', title: 'x', startedAt: '2026-10-20T11:00:00Z' }],
+      }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).not.toBeNull();
+    expect(model.rows.every(r => !r.isCurrent && r.nowPill === null)).toBe(true);
+  });
+
+  it('нет lastActivityAt — ни даты, ни длительности (явный null, не выдуманное число)', () => {
+    const model = buildGanttModel(
+      mkRun({ quiet: true, stages: [mkStage('prod', 'done', 60)] }),
+      mkStats([]),
+      NOW,
+    );
+    expect(model.quiet).toEqual({ from: null, minutes: null });
+  });
+
+  // W5-R-F3b, п.1: длительность — один общий помощник (FeatureStatsBits.minutesSince).
+  // Мутация: вернуть в модели ceil вместо общего round — краснеет: 100.4 мин —
+  // round 100 («1 ч 40 мин»), ceil 101 («1 ч 41 мин») — бейдж и колонка расходятся.
+  it('длительность одна: бейдж строки анализа = правая колонка Ганта (round, не ceil)', () => {
+    const run = mkRun({
+      quiet: true,
+      // Ровно 100.4 мин до NOW: round и ceil дают разные минуты — именно тот случай,
+      // где две арифметики расходятся («тихо 1 ч 40 мин» против «1 ч 41 мин»).
+      lastActivityAt: new Date(NOW - 100.4 * 60000).toISOString(),
+      stages: [mkStage('prod', 'done', 60)],
+    });
+    const model = buildGanttModel(run, mkStats([]), NOW);
+    expect(model.quiet!.minutes).toBe(100);
+    const state = analysisLineState(run, NOW);
+    expect(state.key).toBe('quiet');
+    expect(
+      state.badge!.text,
+      'бейдж анализа и правая колонка Ганта — одна и та же длительность',
+    ).toBe('тихо ' + formatDuration(model.quiet!.minutes));
+  });
+});
+
 // === Этап «пропущен» (W4-DES-B: design без задач) ===
 // Мутация: не обнулять minutes/segments при skipped (брать значения бэка как есть) —
 // краснеет «skipped — без минут, границ и сегментов».
@@ -441,9 +552,9 @@ describe('skipped: строка «этапа не было», без минут'
     const model = buildGanttModel(
       mkRun({
         stages: [
-          mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z' }),
+          mkStage('cut', 'done', 35, { firstStartedAt: '2026-10-19T17:00:00Z', lastCompletedAt: '2026-10-19T17:35:00Z', barEnd: '2026-10-19T17:35:00Z' }),
           // Бэк может принести approxMinutes и даже границы — модель их обнуляет явно.
-          mkStage('design', 'skipped', 7, { firstStartedAt: '2026-10-19T17:36:00Z', lastCompletedAt: '2026-10-19T17:43:00Z' }),
+          mkStage('design', 'skipped', 7, { firstStartedAt: '2026-10-19T17:36:00Z', lastCompletedAt: '2026-10-19T17:43:00Z', barEnd: '2026-10-19T17:43:00Z' }),
           mkStage('prod', 'active', 55, { firstStartedAt: '2026-10-20T10:00:00Z' }),
         ],
       }),

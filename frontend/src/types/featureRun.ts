@@ -174,8 +174,12 @@ export interface FeatureStage {
   verdict?: FeatureRoundVerdict | null;
   // Б2: начало стадии (мин. ClaudeStartedAt задач стадии); null — ни одна не стартовала.
   firstStartedAt: string | null;
-  // Б2: конец стадии (макс. CompletedAt); null — стадия ещё не завершилась (не все Done).
+  // Б2: конец стадии — макс. CompletedAt, только если все задачи Done; незакрытая стадия —
+  // null. Семантика для минут/пересечений; край полосы Ганта — отдельное поле barEnd.
   lastCompletedAt: string | null;
+  // Правый край полосы Ганта (W5-DEF): стадия в работе — «сейчас»; вставшая — момент
+  // остановки; закрытая — макс. CompletedAt; null — активности не было.
+  barEnd: string | null;
   // Б2: длительность по часам стены (минуты): объединение интервалов задач стадии
   // (параллельные не складываются); пустая стадия → 0.
   approxMinutes: number;
@@ -262,6 +266,10 @@ export interface FeatureNow {
   startedAt?: string | null;
   // Связанный чат исполнителя.
   linkedSessionId?: string | null;
+  // W4-ANB: сторож окликнул исполнителя (NudgedAt бэка, FeatureRun.cs:143). Аддитивное.
+  nudgedAt?: string | null;
+  // W4-ANB: исполнитель не ответил на оклик, сторож позвал человека (StaleAlertedAt, FeatureRun.cs:144).
+  staleAlertedAt?: string | null;
 }
 
 // Тревога фичи (бэк: `FeatureAttention`): один элемент либо null.
@@ -355,6 +363,9 @@ export interface FeatureRun {
   stepProgress?: StepProgress;
   // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
   lastActivityAt?: string | null;
+  // W4-ANB: «тихо» — не закрыта, ни одна задача не идёт, ≥24 ч без активности (граница включена).
+  // Считает бэк (FeatureProjector.cs:494); фронт только показывает. Аддитивное: старые ответы не несут.
+  quiet?: boolean;
   // Закрыта: эпик Done (смерженная фича с открытым эпиком — не закрыта).
   closed?: boolean;
   // Итог смерженной фичи (у закрытой и у смерженной с открытым эпиком); иначе null.

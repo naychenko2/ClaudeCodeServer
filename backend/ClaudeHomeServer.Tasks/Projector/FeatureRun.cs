@@ -94,6 +94,10 @@ public sealed class FeatureRun
     public bool Closed { get; init; }
     // Итог смерженной фичи: у State ∈ {merged, closed}, иначе null.
     public FeatureSummary? Summary { get; init; }
+    // GC-B4: «хвосты после мержа» — незакрытые дочерние задачи фичи (кроме merge) у
+    // смерженной/закрытой фичи, по порядку CreatedAt. Хвосты НЕ держат «ждёт вас»: из-за них
+    // тревога не поднимается, а сами хвосты фронт показывает отдельной строкой.
+    public List<string> PostMergeTails { get; init; } = [];
 }
 
 // Документ фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»): разрез (cut), план (plan)

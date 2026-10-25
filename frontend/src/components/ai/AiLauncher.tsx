@@ -12,6 +12,7 @@ import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
+import { getFileContext } from '../../lib/ai/fileContext';
 import {
   getFabObstacles, subscribeFabObstacle, isFabNoRaise, placeFab, unionBox, fabSpotBlocker, stepFabSettle, initialFabSettle,
   PLACE_HIDDEN, FAB_FULL, FAB_SMALL, FAB_EDGE_INSET, FAB_CLEARANCE, FAB_MOBILE_RIGHT,
@@ -287,7 +288,7 @@ export function AiLauncher() {
     // иначе статус из прежнего проекта «протёк» бы в новый
     const pid = nav?.screen === 'project' ? nav.project?.id : undefined;
     const git = gitRepo && pid && gitRepo.projectId === pid ? { isRepo: gitRepo.isRepo } : undefined;
-    return { nav, online, flag: getFlag, subsystem: isSubsystemEnabled, caps: { semantic: semanticCaps }, chat: getChatContext(), git };
+    return { nav, online, flag: getFlag, subsystem: isSubsystemEnabled, caps: { semantic: semanticCaps }, chat: getChatContext(), git, file: getFileContext() };
   };
 
   const [fabHover, setFabHover] = useState(false);

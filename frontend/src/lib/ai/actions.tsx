@@ -55,6 +55,9 @@ export interface AiActionCtx {
   // Гейтит git-действия, чтобы AI не предлагал их (в палитре и в LLM-рекомендациях)
   // в проекте без git.
   git?: { isRepo: boolean };
+  // Открытый файл не из корня проекта (из дерева чата) — запись в корень недоступна.
+  // Сообщает FileViewer; undefined — признак не выяснен, файл считается корневым.
+  file?: { path: string; fromRoot: boolean };
 }
 
 export interface AiAction {
@@ -130,6 +133,9 @@ const fileOpen = (c: AiActionCtx) => c.nav?.screen === 'project' && !!c.nav.file
 const DOC_EXTS = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'htm', 'html']);
 const fileExt = (c: AiActionCtx) => (c.nav?.file?.split('.').pop() ?? '').toLowerCase();
 const docOpen = (c: AiActionCtx) => fileOpen(c) && DOC_EXTS.has(fileExt(c));
+// Файл открыт из дерева чата (не из корня) — действия, пишущие в корень, недоступны
+const fileReadOnly = (c: AiActionCtx) => c.file?.path === c.nav?.file && c.file?.fromRoot === false;
+const docWritableOpen = (c: AiActionCtx) => docOpen(c) && !fileReadOnly(c);
 // Суть/выжимка осмысленны и для текстовых файлов (markdown, txt, код) — не только бинарных документов
 const TEXT_EXTS = new Set(['md', 'markdown', 'mdx', 'txt', 'text', 'rst', 'tex', 'json', 'yaml', 'yml', 'log', 'ini', 'cfg', 'toml']);
 const summarizableOpen = (c: AiActionCtx) => fileOpen(c) && (DOC_EXTS.has(fileExt(c)) || TEXT_EXTS.has(fileExt(c)));
@@ -457,7 +463,7 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'file.toMarkdown', title: 'Сохранить как Markdown', hint: 'трансформировать документ в .md рядом',
     section: 'project', sectionLabel: 'Проект', icon: IcBookPlus,
-    when: docOpen, contextual: docOpen,
+    when: docWritableOpen, contextual: docWritableOpen,
     run: () => dispatchAiRun('file.toMarkdown'),
   },
   {

@@ -8,8 +8,7 @@
 // — краснеет тест «пустой run.now — блока нет»; (3) `C.borderLight` в rowStyle →
 // `C.border` — краснеет тест токенов; (4) `isMobile` не передать в NavTargetButton —
 // краснеет тест тач-цели; (5) `minutesSince` без round → «1 ч 05 мин» не сходится
-// с фикстурой — краснеет тест часов; (6) убрать фильтр `isHeldNow` — краснеет тест
-// «ждущая/остановленная задача не рисуется».
+// с фикстурой — краснеет тест часов.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -101,55 +100,6 @@ describe('когда блока нет (к2)', () => {
   });
 });
 
-describe('тревога — не «идёт» (доработка ST-F6)', () => {
-  it('задача, ждущая человека (attention.kind=wait), не рисуется — блока нет', () => {
-    const run = mkRun({
-      state: 'waiting',
-      now: [mkNow()],
-      attention: { kind: 'wait', taskId: 't-1', since: new Date(NOW - 3 * 60_000).toISOString(), reason: 'ждёт ответа' },
-    });
-    const { container } = mountNow(run);
-    expect(findNodeByAttr(container, 'data-testid', 'stats-now')).toBeNull();
-  });
-
-  it('остановленная задача (attention.kind=stopped) не рисуется — блока нет', () => {
-    const run = mkRun({
-      state: 'stopped',
-      now: [mkNow()],
-      attention: { kind: 'stopped', taskId: 't-1', since: new Date(NOW - 10 * 60_000).toISOString(), reason: 'исполнитель встал' },
-    });
-    const { container } = mountNow(run);
-    expect(findNodeByAttr(container, 'data-testid', 'stats-now')).toBeNull();
-  });
-
-  it('смешанный run.now: убирается только задача тревоги, остальные строки остаются', () => {
-    const run = mkRun({
-      now: [
-        mkNow({ taskId: 't-1' }),
-        mkNow({ taskId: 't-2', personaId: 'p-denis', stepRef: 'Ш2', startedAt: new Date(NOW - 4 * 60_000).toISOString() }),
-      ],
-      attention: { kind: 'wait', taskId: 't-1', reason: 'ждёт человека' },
-    });
-    const { container } = mountNow(run);
-    const block = findNodeByAttr(container, 'data-testid', 'stats-now');
-    expect(block, 'блок пропал целиком').toBeTruthy();
-    expect(findNodeByAttr(block!, 'data-testid', 'now-row-t-1'), 'строка t-1 должна быть убрана').toBeNull();
-    const row2 = findNodeByAttr(block!, 'data-testid', 'now-row-t-2');
-    expect(row2, 'строка t-2 отсутствует').toBeTruthy();
-    expect(textOf(row2)).toContain('Денис');
-    expect(textOf(row2)).toContain('идёт 4 мин');
-  });
-
-  it('тревога «merge» не фильтрует: строка остаётся', () => {
-    const run = mkRun({
-      now: [mkNow()],
-      attention: { kind: 'merge', taskId: 't-1', reason: 'мерж' },
-    });
-    const { container } = mountNow(run);
-    expect(findNodeByAttr(container, 'data-testid', 'now-row-t-1')).toBeTruthy();
-  });
-});
-
 describe('строка на элемент run.now (к1)', () => {
   it('одна строка на элемент: аватар, имя, шаг, «идёт 7 мин», кнопка «чат»', () => {
     const run = mkRun({ now: [mkNow()] });
@@ -230,13 +180,13 @@ describe('строка на элемент run.now (к1)', () => {
 });
 
 describe('мобильная раскладка (к3)', () => {
-  it('isMobile — тач-цель «чат» 40 px, строка во всю ширину', () => {
+  it('isMobile — тач-цель «чат» 44 px, строка во всю ширину', () => {
     const run = mkRun({ now: [mkNow()] });
     const { container } = mountNow(run, true);
     const row = findNodeByAttr(container, 'data-testid', 'now-row-t-1');
     const btn = findNodeByAttr(row!, 'data-testid', 'nav-target-chat');
     const style = btn!.style as Record<string, string>;
-    expect(style.minHeight).toBe('40px');
+    expect(style.minHeight).toBe('44px');
     expect((row!.style as Record<string, string>).width).toBe('100%');
   });
 

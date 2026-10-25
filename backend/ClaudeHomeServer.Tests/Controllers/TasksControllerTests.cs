@@ -1202,6 +1202,132 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         }
     }
 
+    // ─── B1b: brief (сводка состояния фичи) в GET features/{id} ─────────────────────────────────
+
+    // Корень репозитория от каталога сборки (тот же приём, что PromptBenchTests): для исходникового
+    // сторожа GetFeature. .git — папка или файл: в git-worktree это файл-указатель.
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null
+               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
+               && !File.Exists(Path.Combine(dir.FullName, ".git")))
+            dir = dir.Parent;
+        return dir?.FullName ?? throw new InvalidOperationException("Корень репозитория не найден");
+    }
+
+    // B1b: brief — аддитивное поле: верхние ключи ответа = прежние + brief (снапшот). Значения brief
+    // взяты из тех же экземпляров run/timeline, что пошли в ответ: done — счётчики run этого же
+    // ответа, elapsed — workWallMinutes timeline этого же stats, kind — функция state этого же run
+    // (свежий эпик + pending-шаг → not_started → idle, таблица B1a). В B1b нет голоса/оценки/очереди.
+    // Мутации: «brief нет в ответе» → снапшот без ключа (краснеет); «brief по своему run/stats» →
+    // расхождение значений (краснеет); «estimate не null» → краснеет.
+    [Fact]
+    public async Task GetFeature_Brief_КлючиСнапшотИЗначенияИзТогоЖеRun()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
+
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        // Снапшот верхних ключей: прежние восемь + brief, ничего больше.
+        body.EnumerateObject().Select(p => p.Name).OrderBy(x => x, StringComparer.Ordinal)
+            .Should().Equal("brief", "chats", "events", "eventsTotal", "mockups",
+                "mockupsUnavailable", "plans", "run", "stats");
+
+        var brief = body.GetProperty("brief");
+        // Поля контракта (разрез п.6).
+        foreach (var field in new[] { "kind", "now", "reason", "done", "next",
+            "elapsedMinutes", "estimate", "queue", "note", "computedAt" })
+            brief.TryGetProperty(field, out _).Should().BeTrue("brief." + field);
+
+        // B1b: без голоса, оценки и номера очереди.
+        brief.GetProperty("estimate").ValueKind.Should().Be(JsonValueKind.Null);
+        brief.GetProperty("queue").ValueKind.Should().Be(JsonValueKind.Null);
+        brief.GetProperty("note").ValueKind.Should().Be(JsonValueKind.Null);
+
+        // Тот же экземпляр run: done — счётчики run этого же ответа, не отдельный счёт.
+        var run = body.GetProperty("run");
+        var done = brief.GetProperty("done");
+        done.GetProperty("stepsAccepted").GetInt32().Should().Be(run.GetProperty("stepsAccepted").GetInt32());
+        done.GetProperty("stepsTotal").GetInt32().Should().Be(run.GetProperty("stepsTotal").GetInt32());
+        done.GetProperty("loops").GetInt32().Should().Be(run.GetProperty("verdicts").GetProperty("loops").GetInt32());
+        done.GetProperty("planState").GetString()
+            .Should().Be(run.GetProperty("stepProgress").GetProperty("planState").GetString());
+
+        // Тот же экземпляр timeline: elapsed — workWallMinutes stats этого же ответа.
+        var work = body.GetProperty("stats").GetProperty("timeline").GetProperty("totals")
+            .GetProperty("workWallMinutes").GetInt32();
+        brief.GetProperty("elapsedMinutes").GetInt32().Should().Be(work);
+
+        // kind — функция состояния (таблица B1a): свежий эпик + pending-шаг → not_started → idle.
+        run.GetProperty("state").GetString().Should().Be("not_started");
+        brief.GetProperty("kind").GetString().Should().Be(FeatureBrief.Kinds.Idle);
+
+        // next — не больше трёх (контракт).
+        brief.GetProperty("next").GetArrayLength().Should().BeLessThanOrEqualTo(FeatureBrief.MaxNext);
+    }
+
+    // B1b: brief только на странице фичи: строка индекса и features?sessionId= brief не несут
+    // (лёгкий путь, урок MAJOR-1). Мутация «brief в индексе/списке» → краснеет.
+    [Fact]
+    public async Task GetFeature_Brief_ИндексИСписокБез()
+    {
+        var sessionId = await CreatePersonalChatAsync(OwnerId);
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
+        var epicId = epic.GetProperty("id").GetString()!;
+
+        // Страница: brief на месте (страховка от «brief нигде не появляется»).
+        var page = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        page.TryGetProperty("brief", out _).Should().BeTrue("страница несёт brief");
+
+        // Индекс: строка фичи brief не несёт.
+        var index = await GetIndexAsync();
+        var row = index.GetProperty("features").EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        row.TryGetProperty("brief", out _).Should().BeFalse("индекс brief не несёт");
+
+        // Список: run brief не несёт.
+        var list = await (await _client.GetAsync($"/api/tasks/features?sessionId={sessionId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var listRun = list.EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        listRun.TryGetProperty("brief", out _).Should().BeFalse("список brief не несёт");
+    }
+
+    // B1b: в GetFeature нет второго расчёта: в теле метода базовые числа вызовов — ProjectFull
+    // (текущая фича + каждый участник общего чата), FeatureTimeline.Build / FeatureTypical.Build /
+    // FeatureBrief.Build — по одному. Мутация «ProjectFull/FeatureTimeline.Build ещё раз для brief»
+    // → краснеет. Сторож исходника: FeatureProjector sealed, рантаймового счётчика без правки
+    // вне списка файлов задачи не построить.
+    [Fact]
+    public void GetFeature_НетВторогоРасчёта_БазовыеЧислаВызовов()
+    {
+        var src = File.ReadAllText(Path.Combine(RepoRoot(),
+            "backend", "ClaudeHomeServer", "Controllers", "TasksController.cs"));
+        var start = src.IndexOf("public async Task<IActionResult> GetFeature(", StringComparison.Ordinal);
+        var end = src.IndexOf("[HttpPost(\"features/{featureId}/summary\")]", start, StringComparison.Ordinal);
+        (start >= 0 && end > start).Should().BeTrue("тело GetFeature найдено");
+        var body = src[start..end];
+
+        static int Count(string haystack, string needle)
+        {
+            var n = 0;
+            for (var i = 0; (i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0; i += needle.Length)
+                n++;
+            return n;
+        }
+
+        Count(body, "ProjectFull(").Should().Be(2,
+            "текущая фича + участник общего чата: второй ProjectFull для brief запрещён (разрез п.7)");
+        Count(body, "FeatureTimeline.Build(").Should().Be(1, "один timeline: тот же экземпляр в stats и brief");
+        Count(body, "FeatureTypical.Build(").Should().Be(1);
+        Count(body, "FeatureBrief.Build(").Should().Be(1, "один расчёт сводки");
+    }
+
     // ─── Б-mk-b: макеты фичи (mockups[] + mockupsUnavailable) в GET features/{id} ───────────
 
     // Сериализация IActionResult.GetFeature в camelCase-JSON (как wire): для прямых сборок

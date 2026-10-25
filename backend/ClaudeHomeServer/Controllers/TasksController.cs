@@ -642,6 +642,8 @@ public class TasksController(
     // (features == null) → честный 503 (ADR-014, как у GetFeatures/GetFeaturesIndex). Ручка
     // от фич-флагов не зависит. ?eventsLimit=: не задан → 100; "all"/"0" → все; N (целое > 0)
     // → N; прочее → 100.
+    // B1b: ответ получает аддитивное поле brief (сводка состояния, разрез п.6) — FeatureBrief.Build
+    // над теми же run/timeline, что идут в stats; индекс и список brief не несут.
     // п.7: белый список символов id фичи (как resumeSessionId): GUID/строка id без спецсимволов.
     // Нестандартный id (слеш, «..», >128) → 404 «Фича не найдена» (тело как у «нет эпика»).
     private static readonly System.Text.RegularExpressions.Regex FeatureIdPattern =
@@ -861,19 +863,26 @@ public class TasksController(
         // стоимость — в комментарии FeatureTypical.cs.
         var typical = FeatureTypical.Build(owner, UserId, run.Epic.ProjectId, run.Epic.Id,
             fid => journal?.Read(UserId, fid), now);
+        // B1b: timeline — локальная: тот же экземпляр идёт в stats и в brief (FeatureBrief),
+        // второй FeatureTimeline.Build запрещён (разрез п.7: «те же экземпляры»).
+        var timeline = FeatureTimeline.Build(run, journalResult, now);
         var stats = new FeatureStats(
             Source: journalComplete ? "journal" : "approx",
             Truncated: journalResult?.Truncated ?? false,
-            Timeline: FeatureTimeline.Build(run, journalResult, now),
+            Timeline: timeline,
             Breakdown: breakdown,
             LongestNow: longestNow,
             Spend: featureSpend,
             Typical: typical);
+        // B1b: brief — сводка состояния фичи (разрез п.6): чистая функция над теми же run/timeline,
+        // что пошли в stats: ни второго ProjectFull, ни второго FeatureTimeline.Build (разрез п.7).
+        // В B1b нет голоса и оценки: estimate/queue/note — null (FeatureBrief, B1a).
+        var brief = FeatureBrief.Build(run, timeline, now);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
         return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
-            mockups, mockupsUnavailable });
+            brief, mockups, mockupsUnavailable });
     }
 
     // ─── W4-ANB: резюме фичи (POST /api/tasks/features/{featureId}/summary) ──────────────────

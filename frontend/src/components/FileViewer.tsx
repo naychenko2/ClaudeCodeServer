@@ -1014,8 +1014,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       else if (a === 'file.extract') void runDocAi('extract');
       else if (a === 'file.tags') void runDocAi('tags');
       else if (a === 'file.convert') void runDocAi('convert');
-      // Результат ложится файлом рядом: с другого устройства записи нет
-      else if (a === 'file.toMarkdown' && !isHostMode && canToMarkdown) void (async () => {
+      // Результат ложится файлом рядом: с другого устройства записи нет; бэк читает корень проекта,
+      // поэтому для файла из дерева чата (fromRoot=false) действие недоступно
+      else if (a === 'file.toMarkdown' && !isHostMode && canToMarkdown && fromRoot) void (async () => {
         beginAiBusy();
         try {
           const r = await api.files.toMarkdown(project.id, filePath);
@@ -1027,7 +1028,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, fileContent, canToMarkdown]);
+  }, [filePath, fileContent, canToMarkdown, fromRoot]);
 
   const handleClose = async () => {
     // draw.io / Excalidraw в режиме edit — сохраняем текущие правки перед закрытием.

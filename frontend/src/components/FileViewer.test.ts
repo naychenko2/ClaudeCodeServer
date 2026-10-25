@@ -343,6 +343,33 @@ describe('FileViewer: файл не из корня — только чтени�
     expect(findNodeByAttr(container as never, 'title', 'Править')).not.toBeNull();
     expect(spy).toHaveBeenCalled();
   });
+
+  // Бэк to-markdown читает и пишет КОРЕНЬ проекта: для файла из дерева чата действие недоступно.
+  // Мутация: убрать `&& fromRoot` из ветки file.toMarkdown → первый тест краснеет.
+  const runToMarkdown = async (tree: { branch?: string | null } | null, extra: Record<string, unknown>) => {
+    const md = vi.spyOn(api.files, 'toMarkdown').mockResolvedValue({ savedPath: 'docs/readme.md' } as never);
+    if (tree) contentSpy!.mockResolvedValue(contentWith(tree));
+    const { win } = mountViewer(vi.fn(), false, extra);
+    await flush();
+    await act(async () => { win.window.dispatchEvent({ type: 'cc-ai-run', detail: { action: 'file.toMarkdown' } }); });
+    await flush();
+    return md;
+  };
+
+  it('branch задан: «Сохранить как Markdown» не доходит до api.files.toMarkdown', async () => {
+    const md = await runToMarkdown({ branch: 'feat/x' }, { sessionId: 'sess-1' });
+    expect(md).not.toHaveBeenCalled();
+  });
+
+  it('branch=null: действие доходит до toMarkdown', async () => {
+    const md = await runToMarkdown({ branch: null }, { sessionId: 'sess-1' });
+    expect(md).toHaveBeenCalledWith('p1', 'docs/readme.txt');
+  });
+
+  it('без sessionId: как раньше, доходит до toMarkdown', async () => {
+    const md = await runToMarkdown(null, {});
+    expect(md).toHaveBeenCalledWith('p1', 'docs/readme.txt');
+  });
 });
 
 // Кнопка закрытия (X) — ToolbarIconButton с title «Закрыть»; ищем по title.

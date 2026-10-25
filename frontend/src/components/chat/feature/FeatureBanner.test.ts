@@ -972,6 +972,9 @@ describe('FeatureBanner: R-Q5D-E — подпись из queueLabelParts', () =>
     const m = html.match(/<button[^>]*data-testid="feature-dot-prod"[^>]*>/);
     expect(m, 'нет кнопки активной точки').not.toBeNull();
     expect(m![0]).toContain(`aria-label="Этап: Производство${queueLabelParts(q).ariaSuffix}"`);
+    // c3: цифры позиции закреплены ЯВНО (не только сравнением с хелпером): молча
+    // исчезнуть из aria они не могут.
+    expect(m![0]).toContain('в очереди 2 из 3');
   });
 
   it('в исходнике плашки нет разбора строки подписи и своей копии слова «В очереди»', () => {
@@ -979,5 +982,7 @@ describe('FeatureBanner: R-Q5D-E — подпись из queueLabelParts', () =>
     expect(src, 'плашка разбирает строку подписи по разделителю').not.toContain("indexOf(' · ')");
     expect(src, 'плашка берёт строку подписи вместо частей').not.toMatch(/\bqueueLabel\(/);
     expect(src, 'плашка зашивает своё слово «В очереди»').not.toMatch(/bold:\s*'В очереди'/);
+    // c2: своей реализации aria-суффикса в потребителе нет — строка одна (в хелпере).
+    expect(src, 'у плашки своя функция aria-суффикса').not.toContain('queueAriaSuffix');
   });
 });

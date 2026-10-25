@@ -238,14 +238,6 @@ const DOT = 6;
 const DOT_ACTIVE = 16;
 const DOT_R = 3;
 
-// Суффикс aria активной точки фичи в очереди: « · в очереди N из M» (макет
-// feature-queue-1.html:421-422, та же строка, что у FeatureRail). Текст — ГОТОВЫМ
-// полем queueLabelParts.ariaSuffix (R-Q5D-E): разбор строки и своя копия формата
-// «N из M» в потребителе больше не нужны. Позицию считает бэк, здесь не пересчитываем.
-function queueAriaSuffix(queue: FeatureQueue | null | undefined): string {
-  return queueLabelParts(queue).ariaSuffix;
-}
-
 // Точка этапа: done — зелёная, active — вытянутая в цвет тона (фича в очереди —
 // приглушённая C.textMuted, R-Q5D-B), pending — дорожка, absent — пунктирный контур.
 // Кликабельные (done/active) — <button>, ведут на страницу фичи (вкладка
@@ -267,7 +259,7 @@ function StageDotView({ dot, onOpen, inQueue = false, queue = null }: {
   else style = { ...base, width: DOT, background: C.progressTrack };
 
   if (!dot.clickable) return <i data-testid={`feature-dot-${dot.key}`} aria-hidden="true" style={style} />;
-  const ariaLabel = `Этап: ${STAGE_NAME[dot.key]}${dot.state === 'active' && inQueue ? queueAriaSuffix(queue) : ''}`;
+  const ariaLabel = `Этап: ${STAGE_NAME[dot.key]}${dot.state === 'active' && inQueue ? queueLabelParts(queue).ariaSuffix : ''}`;
   return (
     <button
       type="button"

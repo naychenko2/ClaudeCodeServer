@@ -197,6 +197,9 @@ describe('FeatureRail: R-Q5D-E — подпись из queueLabelParts', () => {
     // Без цифр — тоже из хелпера (null/нули).
     const htmlNull = renderQ(rail(), true, null);
     expect(htmlNull).toContain(`aria-label="Этап: Производство${queueLabelParts(null).ariaSuffix}"`);
+    // c3: цифры позиции закреплены ЯВНО (не только сравнением с хелпером): молча
+    // исчезнуть из aria они не могут.
+    expect(html).toContain('в очереди 2 из 3');
   });
 
   it('в исходнике рельсы нет разбора строки подписи и своей копии «N из M»', () => {
@@ -205,5 +208,7 @@ describe('FeatureRail: R-Q5D-E — подпись из queueLabelParts', () => {
     expect(src, 'рельса берёт строку подписи вместо частей').not.toMatch(/\bqueueLabel\(/);
     expect(src, 'рельса собирает своё «N из M»').not.toMatch(/\$\{[^}]*position/);
     expect(src, 'рельса собирает своё «N из M»').not.toMatch(/\$\{[^}]*length/);
+    // c2: своей реализации суффикса в потребителе нет — строка одна (в хелпере).
+    expect(src, 'у рельсы своя функция суффикса').not.toContain('queueSuffix');
   });
 });

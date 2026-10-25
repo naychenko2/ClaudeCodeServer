@@ -106,20 +106,12 @@ function segmentStyle(seg: FeatureRailSegment, closed: boolean, waiting: boolean
   }
 }
 
-// Суффикс подписи очереди: « · в очереди N из M» (макет feature-queue-1). Текст —
-// ГОТОВЫМ полем queueLabelParts.ariaSuffix (R-Q5D-E): своей копии формата «N из M»
-// в рельсе больше нет. Нет queue (бэк ещё не отдал) или нули — без цифр; позицию
-// считает бэк, фронт не пересчитывает.
-function queueSuffix(queue: FeatureQueue | null | undefined): string {
-  return queueLabelParts(queue).ariaSuffix;
-}
-
 // aria-label всей рельсы: «Этап: {активный этап}» (макет) или «Этап: закрыта».
 // Активного нет (все pending/absent) — «Этап: не начат».
 // waiting (фича в очереди): к подписи добавляется «· в очереди N из M».
 function railAriaLabel(rail: FeatureRailSegment[], closed: boolean, waiting: boolean, queue: FeatureQueue | null | undefined): string {
   if (closed) return 'Этап: закрыта';
-  const suffix = waiting ? queueSuffix(queue) : '';
+  const suffix = waiting ? queueLabelParts(queue).ariaSuffix : '';
   const active = rail.find(s => s.state === 'active');
   if (!active) return `Этап: не начат${suffix}`;
   return `Этап: ${STAGE_NAME[active.key]}${suffix}`;

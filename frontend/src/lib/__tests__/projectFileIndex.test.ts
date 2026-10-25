@@ -92,7 +92,7 @@ describe('lookupProjectFile — голое имя и частичный путь
 });
 
 // Пакетный кэш locate (F1b): дебаунс 50 мс, пакет ≤ 50, TTL 60 с, отрицательные
-// ответы тоже кэшируются, ключ — путь + sessionId. Каждый тест берёт свой projectId,
+// ответы тоже кэшируются, ключ — projectId + путь + sessionId. Каждый тест берёт свой projectId,
 // чтобы состояние модуля не перетекло между кейсами.
 function spyLocate(responder: (paths: string[]) => LocatedFile[]) {
   const calls: string[][] = [];
@@ -147,6 +147,27 @@ describe('locateFile — пакетный кэш', () => {
     const p2 = locateFile('proj-neg', 'docs/missing.md', 'sess-3');
     vi.advanceTimersByTime(50);
     await p2;
+    expect(calls.length).toBe(2);
+  });
+
+  it('два projectId при одном sessionId=null → два вызова, ответы не смешиваются', async () => {
+    vi.useFakeTimers();
+    const foundA: LocatedFile = { path: 'docs/only-in-a.md', isAnchor: false };
+    const calls: Array<{ projectId: string; paths: string[] }> = [];
+    vi.spyOn(api.files, 'locate').mockImplementation((projectId: string, paths: string[]) => {
+      calls.push({ projectId, paths });
+      return Promise.resolve(projectId === 'proj-a' ? [foundA] : []);
+    });
+    const p1 = locateFile('proj-a', 'docs/only-in-a.md');
+    const p2 = locateFile('proj-b', 'docs/only-in-a.md');
+    vi.advanceTimersByTime(50);
+    const r1 = await p1;
+    const r2 = await p2;
+    expect(calls.length).toBe(2); // без projectId в ключах второй вызов не был бы нужен
+    expect(r1).toEqual(foundA); // находка проекта A не досталась проекту B
+    expect(r2).toBeNull(); // «не найдено» проекта B не затенило проект A
+    const again = await locateFile('proj-a', 'docs/only-in-a.md'); // тот же проект — из кэша
+    expect(again).toEqual(foundA);
     expect(calls.length).toBe(2);
   });
 

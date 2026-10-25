@@ -108,8 +108,8 @@ export function lookupProjectFile(index: ProjectFileIndex, raw: string, rootPath
 // упоминания копятся в пакет, дебаунс 50 мс доливает их в текущий пакет, жёсткий
 // потолок 50 (сервер 400) flush'ит пакет сразу. Ответы и «не найдено» кэшируются на
 // TTL индекса (60 с) — повторное упоминание того же пути в том же чате в сеть не идёт.
-// Ключ кэша — нормализованный путь + sessionId: один rel в разных чатах может
-// резолвиться в разные файлы (анкер — дерево чата).
+// Ключ кэша — projectId + нормализованный путь + sessionId: один rel в разных
+// проектах и разных чатах резолвится в разные файлы (анкер — дерево чата).
 export type LocatedFile = { path: string; branch?: string; isAnchor: boolean; alternatives?: number };
 
 const LOCATE_DEBOUNCE_MS = 50;
@@ -124,10 +124,10 @@ const _locateBatches = new Map<string, LocateBatch>();
 // Promise запроса, который ещё не ответил: повтор того же пути в полёте — не второй вызов.
 const _locateInFlight = new Map<string, Promise<LocatedFile | null>>();
 
-// Ключ — нормализованный путь (слэши, без хвостовых, в нижнем регистре) + sessionId.
-function locateKey(path: string, sessionId: string | undefined): string {
+// Ключ — projectId + нормализованный путь (слэши, без хвостовых, в нижнем регистре) + sessionId.
+function locateKey(projectId: string, path: string, sessionId: string | undefined): string {
   const norm = path.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
-  return `${sessionId ?? ''}\u0000${norm}`;
+  return `${projectId}\u0000${sessionId ?? ''}\u0000${norm}`;
 }
 
 function flushLocate(batchKey: string) {
@@ -140,7 +140,7 @@ function flushLocate(batchKey: string) {
   api.files.locate(projectId, entries.map(e => e.path), sessionId || undefined)
     .then(res => {
       const byKey = new Map<string, LocatedFile>();
-      for (const item of res) byKey.set(locateKey(item.path, sessionId), item);
+      for (const item of res) byKey.set(locateKey(projectId, item.path, sessionId), item);
       const at = Date.now();
       for (const e of entries) {
         const hit = byKey.get(e.key) ?? null; // «не найдено» — тоже ответ, тоже кэш
@@ -159,7 +159,7 @@ function flushLocate(batchKey: string) {
 // Из кэша отвечает сразу; иначе путь доливается в пакет и уходит после дебаунса —
 // или сразу, если пакет набрал 50. Ответ — найденная запись или null.
 export function locateFile(projectId: string, path: string, sessionId?: string): Promise<LocatedFile | null> {
-  const key = locateKey(path, sessionId);
+  const key = locateKey(projectId, path, sessionId);
   const cached = _locateCache.get(key);
   if (cached && Date.now() - cached.at < LOCATE_TTL_MS) return Promise.resolve(cached.hit);
   const inflight = _locateInFlight.get(key);

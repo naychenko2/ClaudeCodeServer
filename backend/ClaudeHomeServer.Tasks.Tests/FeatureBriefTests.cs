@@ -4,14 +4,16 @@ using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Tasks.Tests;
 
-// Волна 6, шаг B1a: FeatureBrief.Build — чистая функция над готовыми FeatureRun/FeatureTimeline.
-// Эталон считан руками из сценария каждого теста.
+// Волна 6, шаги B1a+B2b: FeatureBrief.Build — чистая функция над готовыми FeatureRun/FeatureTimeline
+// и выборкой FeatureTypical. Эталон считан руками из сценария каждого теста.
 //
 // Мутации (проверены прогоном, см. отчёт задачи):
 //  • убрать строку из FeatureBrief.KindByState — тест таблицы краснеет;
 //  • считать done своим счётом (StepProgress.Accepted вместо run.StepsAccepted) — тест «done/elapsed» красный;
 //  • брать ElapsedMinutes вместо WorkWallMinutes — тот же тест красный;
-//  • убрать Take(MaxNext) — тест лимита красный; убрать фильтр pending — тест пропусков красный.
+//  • убрать Take(MaxNext) — тест лимита красный; убрать фильтр pending — тест пропусков красный;
+//  • ReviewCoefficient 0.5 → 1 — тест формулы красный (k = 9 вместо 7, remaining = 120 вместо 100);
+//  • убрать фильтр PlanState — тест «нет плана» красный; убрать фильтр состояний — тесты веток красные.
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -50,7 +52,37 @@ public class FeatureBriefTests
         Key = key, State = state, PersonaIds = personas.ToList(),
     };
 
-    // ─── kind: полная таблица ────────────────────────────────────────────────────────────────
+    // ─── фикстуры estimate (B2b) ───────────────────────────────────────────────────────────────
+
+    // Run с нарезанным планом и известными корзинами знаменателя (Work/NotCreated/Review);
+    // hold — удержание для веток paused/queued (init-only поле, только через инициализатор).
+    private static FeatureRun RunWithPlan(string state, int work, int notCreated, int review,
+        FeatureHold? hold = null) => new()
+    {
+        FeatureId = "ep",
+        State = state,
+        Hold = hold,
+        StepProgress = new FeatureStepProgress
+        {
+            PlanState = "cut", Total = work + notCreated + review,
+            Work = work, NotCreated = notCreated, Review = review,
+        },
+    };
+
+    // Выборка FeatureTypical для тестов estimate: значимы только шаговые метрики и StepCount,
+    // остальное — пустышки (FeatureBrief их не читает). Count намеренно больше StepCount:
+    // тесты тогда доказывают, что sampleSize — шаговая выборка, а не число смерженных.
+    private static FeatureTypical.TypicalFeatureStats TypicalOf(
+        double stepMedian, double stepP25, double stepP75,
+        double tailMedian, double tailP25, double tailP75, int stepCount) =>
+        new(Count: stepCount + 2, WaitingCount: 0,
+            Duration: new FeatureTypical.TypicalPercentiles(0, 0, 0), Waiting: null,
+            Loops: new FeatureTypical.TypicalPercentiles(0, 0, 0),
+            StepCount: stepCount,
+            StepMinutes: new FeatureTypical.TypicalPercentiles(stepMedian, stepP25, stepP75),
+            TailMinutes: new FeatureTypical.TypicalPercentiles(tailMedian, tailP25, tailP75));
+
+    // ─── kind: полная таблица ──────────────────────────────────────────────────────────────────
 
     // Все константы FeatureStates берутся рефлексией: новое состояние без строки в таблице —
     // красный тест (и в ожиданиях теста, и в FeatureBrief.KindByState).
@@ -77,7 +109,7 @@ public class FeatureBriefTests
     {
         foreach (var state in AllStates())
         {
-            var brief = FeatureBrief.Build(RunOf(state), null, NOW);
+            var brief = FeatureBrief.Build(RunOf(state), null, null, NOW);
             brief.Kind.Should().Be(ExpectedKinds[state], $"состояние {state}");
         }
     }
@@ -88,21 +120,21 @@ public class FeatureBriefTests
         var manual = new FeatureHold(FeatureHoldReasons.Manual, NOW, null, true);
         var queue = new FeatureHold(FeatureHoldReasons.Queue, NOW, null, true);
 
-        FeatureBrief.Build(RunOf(FeatureStates.Paused, manual), null, NOW).Kind.Should().Be("paused");
-        FeatureBrief.Build(RunOf(FeatureStates.Paused, queue), null, NOW).Kind.Should().Be("queued");
+        FeatureBrief.Build(RunOf(FeatureStates.Paused, manual), null, null, NOW).Kind.Should().Be("paused");
+        FeatureBrief.Build(RunOf(FeatureStates.Paused, queue), null, null, NOW).Kind.Should().Be("queued");
         // queue вне состояния paused (например, ошибочные данные) категорию не меняет.
-        FeatureBrief.Build(RunOf(FeatureStates.Running, queue), null, NOW).Kind.Should().Be("running");
+        FeatureBrief.Build(RunOf(FeatureStates.Running, queue), null, null, NOW).Kind.Should().Be("running");
     }
 
     [Fact]
     public void Kind_НеизвестноеСостояниеБросаетИсключениеАНеПодставляетКатегорию()
     {
-        var act = () => FeatureBrief.Build(RunOf("фиктивное_состояние"), null, NOW);
+        var act = () => FeatureBrief.Build(RunOf("фиктивное_состояние"), null, null, NOW);
 
         act.Should().Throw<InvalidOperationException>().WithMessage("*фиктивное_состояние*");
     }
 
-    // ─── done и elapsed: значения run/timeline как есть ──────────────────────────────────────
+    // ─── done и elapsed: значения run/timeline как есть ────────────────────────────────────────
 
     [Fact]
     public void DoneИElapsed_БерутсяИзRunИTimelineБезСвоегоСчёта()
@@ -118,7 +150,7 @@ public class FeatureBriefTests
             StepProgress = new FeatureStepProgress { PlanState = "cut", Total = 6, Accepted = 5 },
         };
 
-        var brief = FeatureBrief.Build(run, TimelineOf(elapsed: 40, workWall: 17), NOW);
+        var brief = FeatureBrief.Build(run, TimelineOf(elapsed: 40, workWall: 17), null, NOW);
 
         brief.Done.StepsAccepted.Should().Be(run.StepsAccepted).And.Be(2);
         brief.Done.StepsTotal.Should().Be(6);
@@ -130,10 +162,10 @@ public class FeatureBriefTests
     [Fact]
     public void Elapsed_БезTimelineNull()
     {
-        FeatureBrief.Build(RunOf(FeatureStates.Idle), null, NOW).ElapsedMinutes.Should().BeNull();
+        FeatureBrief.Build(RunOf(FeatureStates.Idle), null, null, NOW).ElapsedMinutes.Should().BeNull();
     }
 
-    // ─── next: ≤ 3, без skipped/absent ───────────────────────────────────────────────────────
+    // ─── next: ≤ 3, без skipped/absent ─────────────────────────────────────────────────────────
 
     [Fact]
     public void Next_НеБольшеТрёх()
@@ -145,7 +177,7 @@ public class FeatureBriefTests
             Stage("final", "pending"), Stage("merge", "pending"),
         ]);
 
-        var next = FeatureBrief.Build(run, null, NOW).Next;
+        var next = FeatureBrief.Build(run, null, null, NOW).Next;
 
         next.Should().HaveCount(3);
         next.Select(n => n.Stage).Should().Equal("review", "qa", "final");
@@ -169,7 +201,7 @@ public class FeatureBriefTests
             Stage("merge", "pending"),
         ]);
 
-        var next = FeatureBrief.Build(run, null, NOW).Next;
+        var next = FeatureBrief.Build(run, null, null, NOW).Next;
 
         next.Select(n => n.Stage).Should().Equal("final", "merge");
     }
@@ -180,10 +212,10 @@ public class FeatureBriefTests
         var run = RunOf(FeatureStates.Merged);
         run.Stages.AddRange([Stage("cut", "done"), Stage("prod", "done"), Stage("merge", "done")]);
 
-        FeatureBrief.Build(run, null, NOW).Next.Should().BeEmpty();
+        FeatureBrief.Build(run, null, null, NOW).Next.Should().BeEmpty();
     }
 
-    // ─── now и reason ────────────────────────────────────────────────────────────────────────
+    // ─── now и reason ──────────────────────────────────────────────────────────────────────────
 
     [Fact]
     public void Now_ПерваяЗаписьNow_ПриЕёОтсутствииAttention_ИначеNull()
@@ -199,7 +231,7 @@ public class FeatureBriefTests
         });
         withNow.Now.Add(new FeatureNow { TaskId = "t2", Stage = "prod" });
         withNow.StepChains.Add(new FeatureStepChain { StepRef = "Ш3", Lane = "back" });
-        var b1 = FeatureBrief.Build(withNow, null, NOW);
+        var b1 = FeatureBrief.Build(withNow, null, null, NOW);
         b1.Now.Should().BeEquivalentTo(new FeatureBrief.BriefNow("review", "t1", "gleb", "Ш3", "back", since));
 
         // Now пуст — берётся Attention; стадия — активная стадия конвейера.
@@ -212,12 +244,12 @@ public class FeatureBriefTests
             },
         };
         withAttention.Stages.Add(Stage("prod", "active"));
-        var b2 = FeatureBrief.Build(withAttention, null, NOW);
+        var b2 = FeatureBrief.Build(withAttention, null, null, NOW);
         b2.Now.Should().BeEquivalentTo(new FeatureBrief.BriefNow("prod", "t3", "denis", null, null, since));
         b2.Reason.Should().Be("упал");
 
         // Ни Now, ни Attention.
-        FeatureBrief.Build(RunOf(FeatureStates.Idle), null, NOW).Now.Should().BeNull();
+        FeatureBrief.Build(RunOf(FeatureStates.Idle), null, null, NOW).Now.Should().BeNull();
     }
 
     [Fact]
@@ -226,20 +258,133 @@ public class FeatureBriefTests
         var manual = new FeatureHold(FeatureHoldReasons.Manual, NOW, null, true);
         var queue = new FeatureHold(FeatureHoldReasons.Queue, NOW, null, true);
 
-        FeatureBrief.Build(RunOf(FeatureStates.Paused, manual), null, NOW).Reason.Should().Be("manual");
-        FeatureBrief.Build(RunOf(FeatureStates.Paused, queue), null, NOW).Reason.Should().Be("queue");
-        FeatureBrief.Build(RunOf(FeatureStates.Running), null, NOW).Reason.Should().BeNull();
+        FeatureBrief.Build(RunOf(FeatureStates.Paused, manual), null, null, NOW).Reason.Should().Be("manual");
+        FeatureBrief.Build(RunOf(FeatureStates.Paused, queue), null, null, NOW).Reason.Should().Be("queue");
+        FeatureBrief.Build(RunOf(FeatureStates.Running), null, null, NOW).Reason.Should().BeNull();
     }
 
-    // ─── заглушки B1a и время расчёта ────────────────────────────────────────────────────────
+    // ─── estimate (B2b): формула, лента, источник ───────────────────────────────────────────────
+
+    // Фикстура: k = Work(3) + NotCreated(2) + 0.5 × Review(4) = 7. Эталон считан руками:
+    // remaining = 10 × 7 + 30 = 100; p25 = 8 × 7 + 20 = 76; p75 = 12 × 7 + 40 = 124.
+    // Мутация ReviewCoefficient 0.5 → 1: k = 9, remaining = 120 — тест красный.
+    [Fact]
+    public void Estimate_ФормулаПоМедианамЛентаПоКвантилям_ИсточникИВыборка()
+    {
+        var run = RunWithPlan(FeatureStates.Running, work: 3, notCreated: 2, review: 4);
+        var typical = TypicalOf(stepMedian: 10, stepP25: 8, stepP75: 12,
+            tailMedian: 30, tailP25: 20, tailP75: 40, stepCount: 5);
+
+        var e = FeatureBrief.Build(run, null, typical, NOW).Estimate;
+
+        e.Should().NotBeNull();
+        e!.RemainingMinutes.Should().Be(100, "10 × 7 + 30");
+        e.P25.Should().Be(76, "8 × 7 + 20");
+        e.P75.Should().Be(124, "12 × 7 + 40");
+        e.P25.Should().BeLessThanOrEqualTo(e.RemainingMinutes);
+        e.RemainingMinutes.Should().BeLessThanOrEqualTo(e.P75);
+        e.Source.Should().Be("history");
+        e.SampleSize.Should().Be(5, "n выборки — StepCount (шаговая выборка), не Count смерженных");
+    }
+
+    // waiting_you и error — оцениваются (разрез п.4: «да, с пометкой «часы стоят»» — пометка фронта).
+    [Fact]
+    public void Estimate_ЖдётВасИОшибкаТожеОцениваются()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        var waiting = FeatureBrief.Build(RunWithPlan(FeatureStates.Waiting, 0, 1, 1), null, typical, NOW).Estimate;
+        waiting.Should().NotBeNull();
+        waiting!.RemainingMinutes.Should().Be(45, "10 × (0 + 1 + 0.5) + 30");
+
+        var error = FeatureBrief.Build(RunWithPlan(FeatureStates.Stopped, 1, 0, 0), null, typical, NOW).Estimate;
+        error.Should().NotBeNull();
+        error!.RemainingMinutes.Should().Be(40, "10 × 1 + 30");
+    }
+
+    // idle — оценивается, если есть план (разрез п.4: «да, если есть план»).
+    [Fact]
+    public void Estimate_IdleСПланомЕсть_СостояниеЕёНеБлокирует()
+    {
+        var e = FeatureBrief.Build(RunWithPlan(FeatureStates.Idle, work: 0, notCreated: 2, review: 0),
+            null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Estimate;
+
+        e.Should().NotBeNull();
+        e!.RemainingMinutes.Should().Be(50, "10 × 2 + 30");
+    }
+
+    // ─── estimate: ветки «оценки нет» (разрез п.3), по тесту на ветку ──────────────────────────
 
     [Fact]
-    public void ЗаглушкиB1a_QueueEstimateNoteNull_ComputedAtРавенNow()
+    public void Estimate_НетКогдаВыборкиМеньшеТрёх()
     {
-        var brief = FeatureBrief.Build(RunOf(FeatureStates.Running), null, NOW);
+        var run = RunWithPlan(FeatureStates.Running, work: 1, notCreated: 0, review: 0);
+        // Ровно тот вывод FeatureTypical при n < 3: шаговые метрики null.
+        var few = new FeatureTypical.TypicalFeatureStats(
+            Count: 2, WaitingCount: 0,
+            Duration: new FeatureTypical.TypicalPercentiles(0, 0, 0), Waiting: null,
+            Loops: new FeatureTypical.TypicalPercentiles(0, 0, 0),
+            StepCount: 2, StepMinutes: null, TailMinutes: null);
+
+        FeatureBrief.Build(run, null, few, NOW).Estimate.Should().BeNull("n < 3 — метрик выборки нет");
+        FeatureBrief.Build(run, null, null, NOW).Estimate.Should().BeNull("выборки нет вовсе");
+    }
+
+    [Fact]
+    public void Estimate_НетКогдаПланНеНарезан()
+    {
+        var run = RunOf(FeatureStates.Running); // PlanState по умолчанию "pending"
+
+        FeatureBrief.Build(run, null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Estimate.Should().BeNull(
+            "PlanState = pending — знаменатель шагов неизвестен");
+    }
+
+    [Fact]
+    public void Estimate_НетУОчереди()
+    {
+        var run = RunWithPlan(FeatureStates.Paused, 1, 1, 1,
+            new FeatureHold(FeatureHoldReasons.Queue, NOW, null, true));
+
+        FeatureBrief.Build(run, null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW)
+            .Estimate.Should().BeNull("queued — фичу не ведут");
+    }
+
+    [Fact]
+    public void Estimate_НетНаПаузе()
+    {
+        var run = RunWithPlan(FeatureStates.Paused, 1, 1, 1,
+            new FeatureHold(FeatureHoldReasons.Manual, NOW, null, true));
+
+        FeatureBrief.Build(run, null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW)
+            .Estimate.Should().BeNull("paused — часы стоят");
+    }
+
+    [Fact]
+    public void Estimate_НетУЗакрытойФичи_МерженнойИЗакрытойВручную()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        FeatureBrief.Build(RunWithPlan(FeatureStates.Merged, 1, 1, 1), null, typical, NOW)
+            .Estimate.Should().BeNull("closed по мержу — вместо оценки итог Summary");
+        FeatureBrief.Build(RunWithPlan(FeatureStates.Closed, 1, 1, 1), null, typical, NOW)
+            .Estimate.Should().BeNull("closed вручную — та же категория");
+    }
+
+    [Fact]
+    public void Estimate_НетУЧерновика()
+    {
+        FeatureBrief.Build(RunWithPlan(FeatureStates.Draft, 1, 1, 1), null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW)
+            .Estimate.Should().BeNull("draft — фичу готовят, работа не разрешена");
+    }
+
+    // ─── заглушки и время расчёта ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Заглушки_QueueNoteNull_ComputedAtРавенNow()
+    {
+        var brief = FeatureBrief.Build(RunOf(FeatureStates.Running), null, null, NOW);
 
         brief.Queue.Should().BeNull();
-        brief.Estimate.Should().BeNull();
         brief.Note.Should().BeNull();
         brief.ComputedAt.Should().Be(NOW);
     }

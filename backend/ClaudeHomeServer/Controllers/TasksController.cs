@@ -874,10 +874,10 @@ public class TasksController(
             LongestNow: longestNow,
             Spend: featureSpend,
             Typical: typical);
-        // B1b: brief — сводка состояния фичи (разрез п.6): чистая функция над теми же run/timeline,
-        // что пошли в stats: ни второго ProjectFull, ни второго FeatureTimeline.Build (разрез п.7).
-        // В B1b нет голоса и оценки: estimate/queue/note — null (FeatureBrief, B1a).
-        var brief = FeatureBrief.Build(run, timeline, now);
+        // B1b: brief — сводка состояния фичи (разрез п.6): чистая функция над теми же run/timeline/typical,
+        // что пошли в stats: ни второго ProjectFull, ни второго FeatureTimeline.Build, ни второго
+        // FeatureTypical.Build (разрез п.7). B2b: estimate считается над этим же typical; queue/note — null.
+        var brief = FeatureBrief.Build(run, timeline, typical, now);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);

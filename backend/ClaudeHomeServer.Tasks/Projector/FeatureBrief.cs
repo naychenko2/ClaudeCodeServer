@@ -2,13 +2,16 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Tasks.Projector;
 
-// ─── Волна 6: «Сводка состояния фичи» (GET features/{id} → brief), шаг B1a ─────────────────────
-// Чистая функция над УЖЕ посчитанными объектами страницы фичи (FeatureRun и FeatureTimeline):
-// ни чтения стора, ни журнала, ни собственного вывода состояния. Новой арифметики нет —
+// ─── Волна 6: «Сводка состояния фичи» (GET features/{id} → brief), шаги B1a+B2b ────────────────
+// Чистая функция над УЖЕ посчитанными объектами страницы фичи (FeatureRun, FeatureTimeline и
+// выборкой FeatureTypical): ни чтения стора, ни журнала, ни собственного вывода состояния.
 // kind — словарь от run.State (+ Hold.Reason), now — run.Now[0] либо Attention, done — счётчики
 // run, elapsed — работа по часам стены из timeline.Totals.
 //
-// B1a: без «голоса» и оценки — note, estimate и queue всегда null (их заполнят шаги Б-2/Б-3/очередь).
+// B2b: estimate — формула разреза п.3 над чужой выборкой: вызывающий передаёт тот же typical,
+// что пошёл в stats; своего прохода по смерженным фичам здесь нет (EstimateOf).
+//
+// B1a: без «голоса» — note всегда null (шаг Б-3); queue всегда null (за скобками этой волны).
 public static class FeatureBrief
 {
     // Категории сводки (brief.kind, JSON camelCase-совместимые строки как в контракте разреза п. 4).
@@ -27,6 +30,13 @@ public static class FeatureBrief
     // Максимум элементов brief.next.
     public const int MaxNext = 3;
 
+    // Коэффициент «на ревью» (разрез п.3): виток ревью стоит половины работы шага. Это константа,
+    // не настройка: тест считает числа фикстуры по 0.5 (мутация 0.5 → 1 даёт красный).
+    public const double ReviewCoefficient = 0.5;
+
+    // estimate.source: единственный источник v1 — история проекта (разрез п.3).
+    public const string EstimateSource = "history";
+
     // «Сейчас»: = run.Now[0] либо Attention (без Now).
     public sealed record BriefNow(
         string Stage, string? TaskId, string? PersonaId, string? StepRef, string? Lane, DateTime? Since);
@@ -37,9 +47,11 @@ public static class FeatureBrief
     // «Дальше»: ближайшие не начатые стадии.
     public sealed record BriefNext(string Stage, string? PersonaId);
 
-    // Заглушки полей следующих шагов: типы появятся вместе с их расчётом, в B1a — всегда null.
+    // estimate (B2b): «осталось», минуты — формула EstimateOf; p25–p75 — та же формула по тем же
+    // квантилям выборки; sampleSize — n шаговой выборки (FeatureTypical.StepCount).
     public sealed record BriefEstimate(
         int RemainingMinutes, int P25, int P75, string Source, int SampleSize);
+    // Заглушки: queue — шов очереди (за скобками этой волны), note — голос оркестратора (шаг Б-3).
     public sealed record BriefQueue(int Position, int Total);
     public sealed record BriefNote(
         string Text, DateTime At, string? ByPersonaId, bool ByUser, string StageAtWrite, bool Stale);
@@ -75,9 +87,11 @@ public static class FeatureBrief
         [FeatureStates.Closed] = Kinds.Closed,
     };
 
-    // timeline — null, если статистики нет (elapsedMinutes тогда null). Состояние вне таблицы —
-    // InvalidOperationException: молча подставлять категорию нельзя (фронт сам не маппит).
-    public static Brief Build(FeatureRun run, FeatureTimeline? timeline, DateTime now)
+    // timeline — null, если статистики нет (elapsedMinutes тогда null). typical — чужая выборка,
+    // тот же экземпляр, что пошёл в stats; null или без шаговых метрик — estimate null. Состояние
+    // вне таблицы — InvalidOperationException: молча подставлять категорию нельзя (фронт сам не маппит).
+    public static Brief Build(FeatureRun run, FeatureTimeline? timeline,
+        FeatureTypical.TypicalFeatureStats? typical, DateTime now)
     {
         ArgumentNullException.ThrowIfNull(run);
 
@@ -90,7 +104,7 @@ public static class FeatureBrief
             new BriefDone(run.StepsAccepted, run.StepsTotal, run.Verdicts.Loops, run.StepProgress.PlanState),
             NextOf(run),
             timeline?.Totals.WorkWallMinutes,
-            Estimate: null,
+            EstimateOf(run, typical, kind),
             Queue: null,
             Note: null,
             now);
@@ -145,5 +159,32 @@ public static class FeatureBrief
             .Take(MaxNext)
             .Select(s => new BriefNext(s.Key, s.PersonaIds.FirstOrDefault()))
             .ToList();
+    }
+
+    // estimate (B2b, разрез п.3): «осталось» ≈ stepMinutes × (Work + NotCreated + 0.5 × Review) + tailMinutes,
+    // где stepMinutes/tailMinutes — медианы выборки FeatureTypical (чужой, см. Build), Work/NotCreated/
+    // Review — корзины шагов run.StepProgress. Лента p25–p75 — та же формула по тем же квантилям
+    // выборки: k ≥ 0 и p25 ≤ медиана ≤ p75 по каждой метрике — порядок ленты не инвертируется,
+    // округление одно по концу (Math.Round, как хвостовые числа FeatureTypical).
+    // Оценки нет в трёх случаях (разрез п.3 «Когда оценки нет»): состояние queued/paused/closed/draft
+    // (часы стоят или фича не идёт), план не нарезан (PlanState = pending — знаменатель шагов
+    // неизвестен), выборка не построена (n < 3 — FeatureTypical отдаёт шаговые метрики null).
+    private static BriefEstimate? EstimateOf(FeatureRun run,
+        FeatureTypical.TypicalFeatureStats? typical, string kind)
+    {
+        if (kind is Kinds.Queued or Kinds.Paused or Kinds.Closed or Kinds.Draft) return null;
+        if (run.StepProgress.PlanState == "pending") return null;
+        var steps = typical?.StepMinutes;
+        var tails = typical?.TailMinutes;
+        if (steps is null || tails is null) return null;
+
+        double k = run.StepProgress.Work + run.StepProgress.NotCreated
+            + ReviewCoefficient * run.StepProgress.Review;
+        return new BriefEstimate(
+            (int)Math.Round(steps.Median * k + tails.Median),
+            (int)Math.Round(steps.P25 * k + tails.P25),
+            (int)Math.Round(steps.P75 * k + tails.P75),
+            EstimateSource,
+            typical!.StepCount);
     }
 }

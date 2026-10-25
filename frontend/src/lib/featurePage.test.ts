@@ -287,7 +287,7 @@ const BRIEF: FeatureBrief = {
   now: { stage: 'review', taskId: 't-rev', personaId: 'p-gleb', stepRef: 'Ш3', lane: 'back', since: '2026-10-25T10:00:00Z' },
   reason: null,
   done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' },
-  next: [{ stage: 'qa', personaId: 'p-vera' }, { stage: 'final' }],
+  next: [{ stage: 'qa', personaId: 'p-vera' }, { stage: 'final', personaId: null }],
   elapsedMinutes: 120,
   estimate: { remainingMinutes: 90, p25: 60, p75: 140, source: 'history', sampleSize: 4 },
   queue: { position: 2, total: 3 },

@@ -44,13 +44,16 @@ export type FeatureBriefKind =
   | 'queued' | 'draft' | 'idle' | 'closed';
 
 // «Сейчас»: первая запись `run.Now` или `Attention`; null — фича не идёт.
+// Поля, которых бэк не имеет (record BriefNow: nullable TaskId/PersonaId/StepRef/
+// Lane/Since), — `string | null` по образцу FeatureAttention (types/featureIndex.ts):
+// бывает null — фронт не должен падать.
 export interface FeatureBriefNow {
   stage: string;
-  taskId: string;
-  personaId?: string;
-  stepRef?: string;
-  lane?: string;
-  since?: string;
+  taskId: string | null;
+  personaId: string | null;
+  stepRef: string | null;
+  lane: string | null;
+  since: string | null;
 }
 
 // «Сделано»: из `StepProgress` и `Verdicts`.
@@ -65,7 +68,8 @@ export interface FeatureBriefDone {
 // строку «После ревью — проверка…» собирает фронт из этого массива (п. 4).
 export interface FeatureBriefNext {
   stage: string;
-  personaId?: string;
+  // Исполнитель стадии ещё не назначен — null (фронт не должен падать).
+  personaId: string | null;
 }
 
 // Оценка времени v1 по истории проекта (п. 3); null — «оценки пока нет».
@@ -87,7 +91,8 @@ export interface FeatureBriefQueue {
 export interface FeatureBriefNote {
   text: string;
   at: string;
-  byPersonaId?: string;
+  // Голос писал человек (byUser) — персоны нет: null (фронт не должен падать).
+  byPersonaId: string | null;
   byUser: boolean;
   stageAtWrite: string;
   stale: boolean;

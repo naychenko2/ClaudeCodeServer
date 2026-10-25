@@ -2,7 +2,7 @@
 // шаг F5, макет docs/mockups/feature-summary-1).
 //
 // Блок — только композиция: слова — FeatureBriefModel (F2), тег состояния — FeatureStatusTag
-// (единая точка правды тега), полоска/ось/итоги — FeatureMiniSummary (F4), легенда —
+// (единая точка правды тега), полоска/ось/итоги — FeatureBriefTimeline (F4), легенда —
 // FeatureBriefLegend (F3). Ничего не пересчитывает: не трогает напрямую ни поля состояния,
 // ни полосы стадий, ни полей таймлайна — статы отдаёт общей модели ленты целиком
 // (Grep-сторож в тесте).
@@ -20,7 +20,7 @@ import {
   briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, updatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
   type PersonaNameResolver,
 } from './FeatureBriefModel';
-import { MiniTimeline, MiniTimelineAxis, SummaryRow } from './FeatureMiniSummary';
+import { MiniTimeline, MiniTimelineAxis, SummaryRow } from './FeatureBriefTimeline';
 import { FeatureBriefLegend } from './FeatureBriefLegend';
 import { buildTimelineModel, stageLabel, type SegmentKind } from './FeatureStatsBits';
 import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';

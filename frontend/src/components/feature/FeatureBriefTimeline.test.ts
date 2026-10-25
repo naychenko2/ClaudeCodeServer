@@ -1,6 +1,7 @@
-// Элементы мини-сводки (волна 3, Ф8) на вкладке «Хронология» — после F6 (волна 6 «Сводка»)
-// НЕ отдельным блоком, а ВНУТРИ карточки «Сводка» (FeatureBriefBlock → LifeSection →
-// SummaryRow/MiniTimeline/MiniTimelineAxis — те же экспорты этого файла).
+// Таймлайн-элементы карточки «Сводка» (MiniTimeline/MiniTimelineAxis/SummaryRow из
+// FeatureBriefTimeline) — рендерятся ВНУТРИ карточки (FeatureBriefBlock → LifeSection) на
+// вкладке «Хронология». Файл переименован из FeatureMiniSummary.test.ts (F7): корень
+// мини-сводки удалён, тест описывает элементы карточки, а не его.
 // Рендер-тесты ЧЕРЕЗ страницу фичи (FeaturePage) с НАСТОЯЩИМ ответом `features/{id}`
 // (mock api.tasks.getFeature → page.stats; без brief — карточка в состоянии «Сводка
 // не загрузилась», полоска и итоги под ней рисуются — макет §3):
@@ -18,7 +19,7 @@ import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { FeaturePage } from './FeaturePage';
-import { MiniTimeline, MiniTimelineAxis, SummaryRow } from './FeatureMiniSummary';
+import { MiniTimeline, MiniTimelineAxis, SummaryRow } from './FeatureBriefTimeline';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
@@ -110,7 +111,7 @@ function pageData(stats: FeatureStats | null): FeaturePageData {
   };
 }
 
-// Статистика для мини-сводки: таймлайн (totals + current + segments) + расход.
+// Статистика для карточки «Сводка»: таймлайн (totals + current + segments) + расход.
 function mkStats(over: Partial<FeatureStats> = {}): FeatureStats {
   return {
     source: 'journal',
@@ -168,7 +169,7 @@ async function settle() {
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
 }
 
-describe('Элементы мини-сводки (Ф8) внутри блока «Сводка» (F6) через страницу фичи', () => {
+describe('Таймлайн-элементы карточки «Сводка» через страницу фичи', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -181,7 +182,7 @@ describe('Элементы мини-сводки (Ф8) внутри блока �
     mockGetFeature.pending = false;
     mockGetFeature.error = null;
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
-    setFeaturePageTab('timeline'); // дефолтная вкладка — «Хронология» (там мини-сводка)
+    setFeaturePageTab('timeline'); // дефолтная вкладка — «Хронология» (там карточка «Сводка»)
   });
   afterEach(() => {
     vi.useRealTimers();

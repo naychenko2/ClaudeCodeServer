@@ -1,43 +1,17 @@
-// Мини-сводка времени на вкладке «Хронология» (волна 3, Ф8, макет features-overview-3-final):
-// тонкая лента (8 px, без подписей) + строка итогов (всего прошло · работа ≈ · ждёт/не работали)
-// + токены «вход+выход» и цена (при надёжных данных) + «Статистика ›» + пояснительная строка.
+// Таймлайн-элементы карточки «Сводка» (FeatureBriefBlock): тонкая лента (8 px, без подписей) +
+// ось «создана…/сейчас…» + строка итогов (работа ≈ · ждёт/не работали · токены · цена).
+//
+// Вынесены из FeatureMiniSummary (F7): его корень — отдельная мини-сводка — после F6 (волна 6
+// «Сводка состояния фичи») не рендерился нигде, карточка заменила его; живы только эти экспорты.
 //
 // Данные — ТЕ ЖЕ stats (features/{id}), что во вкладке «Статистика»; фронт не пересчитывает.
 // Честность: stats === null → строки нет (без нулей); «≈» при source=approx;
-// «принято N из M» и «все готово» НЕ показываем (прогресс — отдельный шаг Ф-pr).
+// «принято N из M» и «все готово» НЕ показываем (прогресс — строка «Сделано» карточки).
 
 import { C, R, FS, SP, FONT } from '../../lib/design';
-import { Button } from '../ui/Button';
 import { formatDuration, formatDateTime, formatClock, buildTimelineModel, kindBackground } from './FeatureStatsBits';
 import { formatTokens, formatUsd } from './FeatureStatsFormat';
 import type { FeatureStats } from '../../types/featureStats';
-
-// Значок точности «≈» (приблизительные данные).
-function AccuracyBadge({ kind }: { kind: 'ap' }) {
-  return (
-    <span
-      data-testid={`stats-acc-${kind}`}
-      style={{
-        fontFamily: FONT.mono,
-        fontSize: FS.xxs, fontWeight: 700,
-        background: C.bgSelected, color: C.textMuted,
-        borderRadius: R.sm, padding: '0 4px',
-        whiteSpace: 'nowrap', flexShrink: 0,
-        display: 'inline-flex', alignItems: 'center',
-      }}
-    >
-      ≈
-    </span>
-  );
-}
-
-export interface FeatureMiniSummaryProps {
-  // Статистика фичи; null — бэк ещё не посчитал (строки нет).
-  stats: FeatureStats | null;
-  // Клик → вкладка «Статистика».
-  onOpenStats: () => void;
-  isMobile?: boolean;
-}
 
 // Тонкая лента (8 px): сегменты в масштабе, без подписей.
 export function MiniTimeline({ stats }: { stats: FeatureStats }) {
@@ -151,58 +125,6 @@ export function SummaryRow({ stats }: { stats: FeatureStats }) {
           <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{formatUsd(cost)}</b>
         </span>
       )}
-    </div>
-  );
-}
-
-// Мини-сводка: лента + строка итогов + «Статистика ›» + пояснение.
-// stats === null → null (строки нет, честно).
-export function FeatureMiniSummary({ stats, onOpenStats, isMobile = false }: FeatureMiniSummaryProps) {
-  // Честность: stats нет → строки нет (без нулей).
-  if (!stats) return null;
-
-  const isApprox = stats.source === 'approx';
-
-  return (
-    <div
-      data-testid="feature-page-mini-summary"
-      style={{
-        background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
-        padding: `${SP.sm}px ${SP.sm}px`, marginBottom: SP.md, fontFamily: FONT.sans,
-      }}
-    >
-      {/* Тонкая лента (8 px, без подписей). */}
-      <MiniTimeline stats={stats} />
-
-      {/* Строка итогов + «Статистика ›». */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <SummaryRow stats={stats} />
-        </div>
-        {/* Кнопка-кит (не самодельный <button>): «Статистика ›» → вкладка «Статистика». */}
-        <Button
-          variant="ghost"
-          size="xs"
-          dataTestId="mini-summary-go-stats"
-          ariaLabel="Открыть вкладку «Статистика»"
-          onClick={onOpenStats}
-          style={{
-            background: 'transparent', border: 'none', color: C.accent,
-            fontSize: FS.xs, whiteSpace: 'nowrap', flexShrink: 0,
-            minHeight: isMobile ? 40 : undefined,
-          }}
-        >
-          Статистика ›
-        </Button>
-      </div>
-
-      {/* Значок точности + пояснительная строка. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginTop: SP.xs, flexWrap: 'wrap' }}>
-        {isApprox && <AccuracyBadge kind="ap" />}
-        <span style={{ fontSize: FS.xxs, color: C.textMuted, fontFamily: FONT.sans }}>
-          Порядок этапов, их состояние и кто работал — точные; «≈» — по задачам этапа. Ревью идёт по шагам вместе с производством.
-        </span>
-      </div>
     </div>
   );
 }

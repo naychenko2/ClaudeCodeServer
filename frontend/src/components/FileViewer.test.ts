@@ -57,11 +57,11 @@ function wireWindow() {
   return { win, doc };
 }
 
-function mountViewer(onClose: () => void, isMobile = false) {
+function mountViewer(onClose: () => void, isMobile = false, extra: Record<string, unknown> = {}) {
   installFakeDom();
   const { win, doc } = wireWindow();
   const { root, container } = mount(createElement(FileViewer, {
-    project, filePath: 'docs/readme.txt', onClose, isMobile,
+    project, filePath: 'docs/readme.txt', onClose, isMobile, ...extra,
   }));
   return { root, container, win, doc };
 }
@@ -92,30 +92,41 @@ function findButtonByText(container: unknown, text: string): { getAttribute: (k:
   return hit;
 }
 
+// Окружение прогона: таймеры, storage, заглуки api.files. Ответ getContent по умолчанию
+// БЕЗ branch/isAnchor — это и есть случай «источник неизвестен» (relay-путь, R-F1a);
+// тесты метки дерева переопредивают его сами. contentSpy держится снаружи, чтобы их
+// можно было переписать и посмотреть, что реально ушло в вызов.
+let contentSpy: { mockResolvedValue: (v: unknown) => void; mock: { calls: unknown[][] } } | null = null;
+
+function setupMocks() {
+  vi.useFakeTimers();
+  // localStorage/sessionStorage — node их не несёт; ensureGit → joinUserGroup их читает.
+  const store: Record<string, string> = {};
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => (k in store ? store[k] : null),
+    setItem: (k: string, v: string) => { store[k] = String(v); },
+    removeItem: (k: string) => { delete store[k]; },
+    clear: () => { for (const k of Object.keys(store)) delete store[k]; },
+    key: () => null, get length() { return Object.keys(store).length; },
+  };
+  (globalThis as any).sessionStorage = (globalThis as any).localStorage;
+  contentSpy = vi.spyOn(api.files, 'getContent').mockResolvedValue({
+    content: 'hello world', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 11,
+  }) as never;
+  vi.spyOn(api.files, 'getDiff').mockResolvedValue({ diff: null });
+  vi.spyOn(api.files, 'fileUrl').mockReturnValue('http://localhost:5000/files/x');
+}
+
+function teardown() {
+  vi.useRealTimers();
+  uninstallFakeDom();
+  vi.restoreAllMocks();
+  contentSpy = null;
+}
+
 describe('FileViewer: Esc / закрытие / имя в шапке', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    // localStorage/sessionStorage — node их не несёт; ensureGit → joinUserGroup их читает.
-    const store: Record<string, string> = {};
-    (globalThis as any).localStorage = {
-      getItem: (k: string) => (k in store ? store[k] : null),
-      setItem: (k: string, v: string) => { store[k] = String(v); },
-      removeItem: (k: string) => { delete store[k]; },
-      clear: () => { for (const k of Object.keys(store)) delete store[k]; },
-      key: () => null, get length() { return Object.keys(store).length; },
-    };
-    (globalThis as any).sessionStorage = (globalThis as any).localStorage;
-    vi.spyOn(api.files, 'getContent').mockResolvedValue({
-      content: 'hello world', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 11,
-    });
-    vi.spyOn(api.files, 'getDiff').mockResolvedValue({ diff: null });
-    vi.spyOn(api.files, 'fileUrl').mockReturnValue('http://localhost:5000/files/x');
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    uninstallFakeDom();
-    vi.restoreAllMocks();
-  });
+  beforeEach(setupMocks);
+  afterEach(teardown);
 
   // MAJOR-1: один Esc → ровно один вызов onClose. Дубль useEscapeClose (старый локальный
   // Esc в FileViewer) звал handleClose ДВАЖДЫ; мутация «вернуть второй useEscapeClose»
@@ -233,6 +244,58 @@ describe('FileViewer: Esc / закрытие / имя в шапке', () => {
     rootDiv.offsetParent = { tagName: 'BODY' };
     esc(win);
     expect(onClose, 'видимый центр — Esc закрывает').toHaveBeenCalledTimes(1);
+  });
+});
+
+// F2b (фича «Резолвинг ссылок по worktree»): проп sessionId доходит до эндпоинта, а файл,
+// пришедший НЕ из заявленного дерева, помечен в шапке чипом «из дерева <ветка>» — фолбэк
+// по worktree есть, но он не тихий (разрез bc27cbee §1). Мутации:
+//   • убрать `isAnchor === false` из treeChipVisible → тест «при undefined isAnchor чипа
+//     нет» краснеет (метка появляется на неизвестном источнике);
+//   • не передать sessionId в getContent → тест про аргумент краснеет.
+describe('FileViewer: проп sessionId и чип «из дерева <ветка>»', () => {
+  beforeEach(setupMocks);
+  afterEach(teardown);
+
+  const contentWith = (tree: { branch?: string; isAnchor?: boolean }) => ({
+    content: 'hello world', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 11, ...tree,
+  });
+
+  it('при isAnchor=false виден чип с именем ветки, sessionId ушёл в getContent', async () => {
+    contentSpy!.mockResolvedValue(contentWith({ branch: 'feat/worktree-material-links', isAnchor: false }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    // Проп доходит до эндпоинта: 4-й аргумент getContent — { sessionId }
+    expect(contentSpy!.mock.calls[0][3], 'sessionId передан opts-аргументом getContent').toEqual({ sessionId: 'sess-1' });
+    const chip = findNodeByAttr(container, 'data-testid', 'file-tree-chip');
+    expect(chip, 'чип «из дерева <ветка>» в шапке').not.toBeNull();
+    expect(textNodes(chip as never).join(''), 'в чипе имя ветки').toContain('из дерева feat/worktree-material-links');
+  });
+
+  // Хвост R-F1a: для relay-пути branch есть, а isAnchor может отсутствовать — источник
+  // неизвестен, выдумывать метку нельзя. Мутация «убрать isAnchor === false из
+  // treeChipVisible» даёт чип здесь же → тест краснеет.
+  it('при undefined isAnchor чипа нет', async () => {
+    contentSpy!.mockResolvedValue(contentWith({ branch: 'feat/worktree-material-links' }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'источник неизвестен — метки нет').toBeNull();
+  });
+
+  // Файл из заявленного дерева-анкера — ничего не скрываем, но и не маркируем
+  it('при isAnchor=true (файл из анкера) чипа нет', async () => {
+    contentSpy!.mockResolvedValue(contentWith({ branch: 'main', isAnchor: true }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'файл из анкера — метки нет').toBeNull();
+  });
+
+  // Без пропа вызов остаётся прежним (старые вызывающие не меняются)
+  it('без sessionId в getContent нет opts-аргумента', async () => {
+    const { container } = mountViewer(vi.fn());
+    await flush();
+    expect(contentSpy!.mock.calls[0][3], 'без пропа — старая сигнатура вызова').toBeUndefined();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'без дерева-метки').toBeNull();
   });
 });
 

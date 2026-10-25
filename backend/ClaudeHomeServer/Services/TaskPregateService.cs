@@ -42,8 +42,11 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         // Потолок прогона — от первого касания дерева: git-проверки (Head/IsClean/ChangedFiles)
         // входят в тот же бюджет, что и сами проверки. Иначе сумма (git + проверки) могла бы
         // перевалить MCP_TOOL_TIMEOUT хода, а ход обязан успеть ответить модели.
+        // Значение приходит из шва (чужая реализация): мусор в нём — 0 (мгновенный отказ),
+        // отрицательное (исключение на ручке) или слишком большое (нарушение инварианта
+        // «потолок < MCP_TOOL_TIMEOUT») — в CancelAfter не годится, поэтому чистится на границе.
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        limit.CancelAfter(TimeSpan.FromSeconds(pregate.CeilingSeconds));
+        limit.CancelAfter(TimeSpan.FromSeconds(PregateCeiling.Sanitize(pregate.CeilingSeconds)));
         var sha = heads.Head(task.WorktreePath!);
         if (sha is null)
             return new(TaskPregateStatus.NotRun, "Не удалось определить текущий коммит дерева шага — предгейт не запущен.");

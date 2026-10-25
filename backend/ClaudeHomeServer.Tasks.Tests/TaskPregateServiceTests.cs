@@ -141,6 +141,37 @@ public class TaskPregateServiceTests : IDisposable
         _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
     }
 
+    // Потолок из шва — чужая реализация: значение вне (0; 540] в CancelAfter не годится
+    // (0 — мгновенный отказ, отрицательное — исключение на ручке, больше MCP_TOOL_TIMEOUT —
+    // нарушение инварианта «ответ модели должен успеть уйти»). Чистится на границе шва.
+    // Задержка на git-проверке делает отказ мгновенным потолком детерминированным.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task МусорныйПотолокИзШва_ПрогонНеПадает(int ceilingSeconds)
+    {
+        _pregate.CeilingSeconds = ceilingSeconds;
+        _reader.Delay = TimeSpan.FromMilliseconds(200);
+
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.Recorded,
+            "потолок из шва чистится на границе: прогон идёт, а не отменяется и не роняет ручку");
+        _pregate.Request.Should().NotBeNull("проверки запустились: потолок не сорвал прогон");
+    }
+
+    // Правило границы целиком — тут: допустимое значение как есть, мусор — безопасный потолок
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(540, 540)]
+    [InlineData(0, 540)]
+    [InlineData(-1, 540)]
+    [InlineData(541, 540)]
+    public void ПотолокЧиститсяНаГраницеШва(int given, int expected)
+    {
+        PregateCeiling.Sanitize(given).Should().Be(expected);
+    }
+
     [Fact]
     public async Task HeadСменилсяВоВремяПрогона_РезультатНеЗаписан()
     {

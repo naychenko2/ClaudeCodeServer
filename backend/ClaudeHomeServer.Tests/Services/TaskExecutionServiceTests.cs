@@ -448,6 +448,21 @@ public class TaskExecutionServiceTests
         plain.Should().NotContain("pregate", "у задачи без своего дерева предгейт не применяется");
     }
 
+    // Рабочая ветка постановки — шаблон правил (SystemPrompts/task-executor-rules.md): серверный
+    // дефолт есть всегда, значит почти каждый шаг идёт именно туда. Правило предгейта обязано
+    // доезжать и в ней — иначе шаг не получит контракт «закоммить → pregate → tasks_complete».
+    [Fact]
+    public void BuildPrompt_СШаблономПравил_ЕстьПорядокПредгейта()
+    {
+        var step = new TaskItem { Title = "t", Role = TaskRoles.Step, WorktreePath = Path.Combine(Path.GetTempPath(), "tree") };
+
+        var prompt = TaskExecutionService.BuildPrompt(step, new Persona { Name = "Вера" },
+            rulesTemplate: "## ПРАВИЛА\n- правило проекта\n");
+
+        prompt.Should().Contain("## ПРЕДГЕЙТ", "правило предгейта обязано быть и в ветке с шаблоном правил");
+        prompt.Should().Contain("pregate").And.Contain("tasks_complete").And.Contain("закоммить");
+    }
+
     [Fact]
     public void BuildPrompt_СПерсоной_ДелегированиеБезПолныхПрофилей()
     {

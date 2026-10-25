@@ -20,6 +20,19 @@ public interface ITaskPregate
     int CeilingSeconds { get; }
 }
 
+// Потолок прогона предгейта: значение, безопасное для CancelAfter и меньше MCP_TOOL_TIMEOUT
+// (600 с). Потребитель берёт потолок из шва, а шов — чужая реализация: значение вне (0; 540]
+// в CancelAfter не годится (0 — мгновенный отказ, отрицательное — исключение), а больше
+// MCP_TOOL_TIMEOUT нарушает инвариант «ответ модели должен успеть уйти».
+public static class PregateCeiling
+{
+    public const int MaxSeconds = 540;
+
+    // Допустимое значение — как есть; мусор (0, отрицательное, слишком большое) — безопасный
+    // потолок по умолчанию, а не исключение на ручке
+    public static int Sanitize(int seconds) => seconds is > 0 and <= MaxSeconds ? seconds : MaxSeconds;
+}
+
 // UiRoutes — маршруты для ui-probe из постановки задачи (строка «UI-маршруты: …»); пусто — замер невозможен
 public sealed record PregateRequest(Project Project, string WorkingDirectory, string SessionId,
     IReadOnlyCollection<string>? ChangedFiles = null, IReadOnlyList<string>? UiRoutes = null);

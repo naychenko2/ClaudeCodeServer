@@ -1,11 +1,14 @@
-// Мини-сводка времени на вкладке «Хронология» (волна 3, Ф8, макет features-overview-3-final).
+// Элементы мини-сводки (волна 3, Ф8) на вкладке «Хронология» — после F6 (волна 6 «Сводка»)
+// НЕ отдельным блоком, а ВНУТРИ карточки «Сводка» (FeatureBriefBlock → LifeSection →
+// SummaryRow/MiniTimeline/MiniTimelineAxis — те же экспорты этого файла).
 // Рендер-тесты ЧЕРЕЗ страницу фичи (FeaturePage) с НАСТОЯЩИМ ответом `features/{id}`
-// (mock api.tasks.getFeature → page.stats):
-//   · stats=null → строки нет (без нулей);
+// (mock api.tasks.getFeature → page.stats; без brief — карточка в состоянии «Сводка
+// не загрузилась», полоска и итоги под ней рисуются — макет §3):
+//   · stats=null и brief=null → ни блока, ни строки (без нулей);
 //   · source=approx → «≈»;
 //   · costPartial → цены нет;
-//   · клик «Статистика ›» → вкладка «Статистика»;
-//   · нет «принято N из M» / «все готово».
+//   · клик «Статистика ›» (brief-go-stats) → вкладка «Статистика»;
+//   · нет «принято N из M» / «все готово» в строке итогов.
 //
 // Окружение node (без jsdom): fakeDom (mount) + mock api (tasks.getFeature) + управляемые
 // сторы (featurePage, featuresIndex, featureBackNav) — тот же приём, что FeaturePage.test.ts.
@@ -165,7 +168,7 @@ async function settle() {
   await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
 }
 
-describe('FeatureMiniSummary (Ф8) через страницу фичи', () => {
+describe('Элементы мини-сводки (Ф8) внутри блока «Сводка» (F6) через страницу фичи', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -186,12 +189,13 @@ describe('FeatureMiniSummary (Ф8) через страницу фичи', () => 
     vi.restoreAllMocks();
   });
 
-  // === 1. stats=null → строки нет (без нулей) ===
-  it('stats=null → мини-сводки нет (мутация «рисуем нули» красит)', async () => {
+  // === 1. stats=null и brief=null → ни блока, ни строки (без нулей) ===
+  it('stats=null → блока и строки итогов нет (мутация «рисуем нули» красит)', async () => {
     mockGetFeature.result = pageData(null);
     const c = render();
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-mini-summary'), 'строки нет при stats=null').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-brief-block'), 'блока нет при stats=null и brief=null').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'mini-summary-row'), 'строки итогов нет при stats=null').toBeNull();
   });
 
   // === 2. source=approx → «≈» ===
@@ -216,25 +220,25 @@ describe('FeatureMiniSummary (Ф8) через страницу фичи', () => 
     expect(textNodes(row).join(''), 'цены нет при costPartial').not.toContain('$15,60');
   });
 
-  // === 4. клик «Статистика ›» → вкладка «Статистика» ===
+  // === 4. клик «Статистика ›» в хвосте карточки → вкладка «Статистика» ===
   it('клик «Статистика ›» → вкладка «Статистика» (мутация «другая вкладка» красит)', async () => {
     mockGetFeature.result = pageData(mkStats());
     const c = render();
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'mini-summary-go-stats');
-    expect(btn, 'кнопка «Статистика ›»').not.toBeNull();
+    const btn = findNodeByAttr(c, 'data-testid', 'brief-go-stats');
+    expect(btn, 'кнопка «Статистика ›» в хвосте карточки').not.toBeNull();
     act(() => { (reactProps(btn!)!.onClick as () => void)(); });
     expect(pageTest.tab(), 'вкладка после клика').toBe('stats');
   });
 
-  // === 5. нет «принято N из M» / «все готово» ===
-  it('нет «принято N из M» / «все готово» в мини-сводке', async () => {
+  // === 5. нет «принято N из M» / «все готово» в строке итогов (прогресс — «Сделано» карточки, не строка) ===
+  it('нет «принято N из M» / «все готово» в строке итогов', async () => {
     mockGetFeature.result = pageData(mkStats());
     const c = render();
     await settle();
-    const mini = findNodeByAttr(c, 'data-testid', 'feature-page-mini-summary');
-    expect(mini, 'мини-сводка есть').not.toBeNull();
-    const all = textNodes(mini!).join('');
+    const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row');
+    expect(row, 'строка итогов есть в хвосте карточки').not.toBeNull();
+    const all = textNodes(row!).join('');
     expect(all, 'нет «принято N из M»').not.toContain('принято');
     expect(all, 'нет «все готово»').not.toContain('все готово');
   });

@@ -76,6 +76,7 @@ vi.mock('../../lib/personas', () => ({
   ensurePersonasLoaded: () => Promise.resolve(),
   getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined),
   usePersonasVersion: () => 0,
+  usePersonas: () => [],
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
 vi.mock('../../lib/signalr', async (importOriginal) => {

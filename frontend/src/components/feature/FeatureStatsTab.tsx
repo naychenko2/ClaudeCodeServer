@@ -718,12 +718,12 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
 
   // labelOf/colorOf — те же источники подписей, что у прежнего Breakdown (FeatureStatsBlocks):
   // персона → имя, роль → roleLabel, модель → modelLabel. Цвет — цвет аватара персоны
-  // (AGENT_COLORS); остальным — '' (палитра ShareRing решает сама). Ключ без признака
-  // оси читается по порядку проверки: персона, роль, модель.
-  const labelOf = (key: string): string => {
-    if (personas.some(p => p.id === key)) return personaGroupLabel(key, personas);
-    const role = roleGroupLabel(key);
-    if (role !== key) return role;
+  // (AGENT_COLORS); остальным — '' (палитра ShareRing решает сама). Ось приходит от
+  // оболочки разбивки: по ключу её не угадать (UUID недоступной персоны не отличить
+  // от id модели — он ушёл бы в подпись сырым).
+  const labelOf = (key: string, axis: 'personas' | 'models' | 'roles'): string => {
+    if (axis === 'personas') return personaGroupLabel(key, personas);
+    if (axis === 'roles') return roleGroupLabel(key);
     return modelGroupLabel(key);
   };
   const colorOf = (key: string): string => {
@@ -739,8 +739,8 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, marginTop: SP.lg }}>
           <StatsHero run={run} stats={stats} isMobile={isMobile} />
           <FeatureStatsTiles run={run} stats={stats} isMobile={isMobile} />
-          <FeatureStatsNow run={run} isMobile={isMobile} />
-          <FeatureStatsLosses run={run} stats={stats} isMobile={isMobile} />
+          <FeatureStatsNow run={run} nav={nav} isMobile={isMobile} />
+          <FeatureStatsLosses run={run} stats={stats} nav={nav} isMobile={isMobile} />
         </div>
       )}
       {gantt && gantt.rows.length > 0 ? (
@@ -757,6 +757,7 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
             run={run}
             labelOf={labelOf}
             colorOf={colorOf}
+            nav={nav}
           />
         </div>
       )}

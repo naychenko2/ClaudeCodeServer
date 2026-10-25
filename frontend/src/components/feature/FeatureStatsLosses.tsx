@@ -15,6 +15,11 @@ import { formatDuration } from './FeatureStatsBits';
 import { lossesModel, type LossCard, type RoundMark } from './FeatureStatsPulseModel';
 import { setFeaturePageTab, focusFeatureStage } from '../../lib/featurePage';
 import { usePersonas } from '../../lib/personas';
+import { openChatById } from '../../lib/openChat';
+import { openTaskInSection } from '../../lib/tasks';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { EMPTY_NAV_MARKS, type FeatureNavCtx } from '../../lib/featureNavMarks';
+import { NavTargetPair } from './NavTargetButton';
 import type { FeatureRun } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
 
@@ -22,6 +27,8 @@ export interface FeatureStatsLossesProps {
   run: FeatureRun;
   stats: FeatureStats;
   isMobile?: boolean;
+  // Контекст возврата и пометки для переходов «чат» / «задача» карточки «Дольше всех сейчас».
+  nav?: FeatureNavCtx;
   // Фиксированное «сейчас» (тесты); в работе — Date.now().
   nowMs?: number;
 }
@@ -158,7 +165,9 @@ function cardText(card: LossCard, personas: ReturnType<typeof usePersonas>): { b
   }
 }
 
-export function FeatureStatsLosses({ run, stats, isMobile = false, nowMs }: FeatureStatsLossesProps) {
+export function FeatureStatsLosses({ run, stats, isMobile = false, nav, nowMs }: FeatureStatsLossesProps) {
+  const marks = nav?.marks ?? EMPTY_NAV_MARKS;
+  const ln = stats.longestNow;
   // Хук выше любого раннего return (замечание Глеба по ST-F6): guards здесь нет —
   // пустое состояние рисуется пунктиром, а не null.
   const personas = usePersonas();
@@ -233,6 +242,27 @@ export function FeatureStatsLosses({ run, stats, isMobile = false, nowMs }: Feat
                 style={cardStyle(card.kind === 'wait' && card.live, isMobile)}
               >
                 {body}
+                {/* Переходы «чат» и «задача» — как у прежнего LongestNow (карточка 3 «сейчас»). */}
+                {card.kind === 'longest' && ln && (
+                  <div data-testid="loss-longest-nav" style={{ marginTop: SP.sm }}>
+                    <NavTargetPair
+                      chatId={ln.chatId}
+                      chatArchived={marks.chatArchived(ln.chatId)}
+                      onOpenChat={() => {
+                        if (!ln.chatId) return;
+                        if (nav?.featureId) recordFeatureReturn(nav.featureId, { kind: 'chat', id: ln.chatId }, nav.featureTitle);
+                        void openChatById(ln.chatId);
+                      }}
+                      taskId={ln.taskId}
+                      taskClosed={marks.taskClosed(ln.taskId)}
+                      onOpenTask={() => {
+                        if (nav?.featureId) recordFeatureReturn(nav.featureId, { kind: 'task', id: ln.taskId }, nav.featureTitle);
+                        openTaskInSection({ id: ln.taskId });
+                      }}
+                      isMobile={isMobile}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}

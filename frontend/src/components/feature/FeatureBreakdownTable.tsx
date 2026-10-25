@@ -30,6 +30,7 @@ import {
 import { FeatureBreakdownChats } from './FeatureBreakdownChats';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
+import type { FeatureNavCtx } from '../../lib/featureNavMarks';
 
 export interface FeatureBreakdownTableProps {
   // Разрез выбранной оси (stats.breakdown[axis]).
@@ -46,6 +47,8 @@ export interface FeatureBreakdownTableProps {
   hiddenKeys?: string[];
   // Передаётся только раскрытым чатам: сама таблица — десктопная (ST-F12 — карточки).
   isMobile?: boolean;
+  // Контекст возврата для переходов в чаты раскрытой группы.
+  nav?: FeatureNavCtx;
 }
 
 // Шапка: FS.xxs UPPERCASE textMuted (макет .c-tab th). Кнопка внутри th — с явным сбросом
@@ -108,7 +111,7 @@ function measureCell(
 }
 
 export function FeatureBreakdownTable({
-  groups, axis, run, labelOf, colorOf, hiddenKeys, isMobile = false,
+  groups, axis, run, labelOf, colorOf, hiddenKeys, isMobile = false, nav,
 }: FeatureBreakdownTableProps) {
   // Хуки выше раннего return: мера сортировки и раскрытая строка — состояние таблицы.
   const [measure, setMeasure] = useState<Measure>('time');
@@ -242,7 +245,7 @@ export function FeatureBreakdownTable({
           </tr>
         </tbody>
       </table>
-      {expandedGroup ? <FeatureBreakdownChats group={expandedGroup} run={run} isMobile={isMobile} /> : null}
+      {expandedGroup ? <FeatureBreakdownChats group={expandedGroup} run={run} isMobile={isMobile} nav={nav} /> : null}
     </div>
   );
 }

@@ -10,6 +10,8 @@ import { type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { usePersonas } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { EMPTY_NAV_MARKS, type FeatureNavCtx } from '../../lib/featureNavMarks';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { minutesSince, formatDuration } from './FeatureStatsBits';
 import { NavTargetButton } from './NavTargetButton';
@@ -18,6 +20,8 @@ import type { FeatureNow, FeatureRun } from '../../types/featureRun';
 export interface FeatureStatsNowProps {
   run: FeatureRun;
   isMobile?: boolean;
+  // Контекст возврата и пометки («в архиве»); без него — без записи точки и без пометок.
+  nav?: FeatureNavCtx;
   // Фиксированное «сейчас» (тесты); в работе — Date.now().
   nowMs?: number;
 }
@@ -60,7 +64,8 @@ function runningText(startedAt: string | null | undefined, nowMs: number): strin
   return `идёт ${formatDuration(mins)}`;
 }
 
-export function FeatureStatsNow({ run, isMobile = false, nowMs }: FeatureStatsNowProps) {
+export function FeatureStatsNow({ run, isMobile = false, nav, nowMs }: FeatureStatsNowProps) {
+  const marks = nav?.marks ?? EMPTY_NAV_MARKS;
   // Хук выше guard: ранний return не должен обрывать вызов хука
   // (react-hooks/rules-of-hooks), как в LongestNow (FeatureStatsBlocks.tsx).
   // Правило «идёт» теперь на бэке (run.now сужён по IsHeld, коммит feea567e3),
@@ -105,9 +110,14 @@ export function FeatureStatsNow({ run, isMobile = false, nowMs }: FeatureStatsNo
               <NavTargetButton
                 kind="chat"
                 chatId={n.linkedSessionId ?? null}
+                chatArchived={marks.chatArchived(n.linkedSessionId)}
                 title={`Открыть чат исполнителя`}
                 isMobile={isMobile}
-                onOpen={() => { void openChatById(n.linkedSessionId ?? ''); }}
+                onOpen={() => {
+                  if (!n.linkedSessionId) return;
+                  if (nav?.featureId) recordFeatureReturn(nav.featureId, { kind: 'chat', id: n.linkedSessionId }, nav.featureTitle);
+                  void openChatById(n.linkedSessionId);
+                }}
               />
             </div>
           );

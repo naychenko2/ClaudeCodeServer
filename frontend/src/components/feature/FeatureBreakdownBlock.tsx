@@ -25,6 +25,7 @@ import { FeatureBreakdownTable } from './FeatureBreakdownTable';
 import { FeatureBreakdownCards } from './FeatureBreakdownCards';
 import type { FeatureBreakdown } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
+import type { FeatureNavCtx } from '../../lib/featureNavMarks';
 
 export interface FeatureBreakdownBlockProps {
   // Разбивка целиком: оболочка сама берёт разрез выбранной оси.
@@ -34,11 +35,15 @@ export interface FeatureBreakdownBlockProps {
   // Run для чипов и живых статусов: дочерние читают его сами.
   run: FeatureRun;
   // Человекочитаемое имя группы — прокидывается в кольцо, таблицу и карточки.
-  labelOf?: (key: string) => string;
+  // Ось известна оболочке и передаётся вторым аргументом: ключ без признака оси
+  // (UUID персоны, id модели, роль) однозначно не читается.
+  labelOf?: (key: string, axis: Axis) => string;
   // Цвет группы — прокидывается так же.
   colorOf?: (key: string) => string;
   // Ключи, которые не рисуем нигде (роль feature — вопрос к виду).
   hiddenKeys?: string[];
+  // Контекст возврата: переходы в чаты групп пишут точку «← к фиче · Статистика».
+  nav?: FeatureNavCtx;
 }
 
 const AXIS_WORD: Record<Axis, string> = { personas: 'персоны', models: 'модели', roles: 'роли' };
@@ -76,7 +81,7 @@ const EMPTY: CSSProperties = {
 };
 
 export function FeatureBreakdownBlock({
-  breakdown, costPartial, run, labelOf, colorOf, hiddenKeys,
+  breakdown, costPartial, run, labelOf: labelOfAxis, colorOf, hiddenKeys, nav,
 }: FeatureBreakdownBlockProps) {
   // Хуки выше любого return: разрез и мера — состояние оболочки.
   const [axis, setAxis] = useState<Axis>('personas');
@@ -87,6 +92,8 @@ export function FeatureBreakdownBlock({
   // таблица и карточки работают с одним и тем же списком.
   const hidden = new Set(hiddenKeys ?? []);
   const visible = (breakdown[axis] ?? []).filter(g => !hidden.has(g.key));
+  // Подписи детям — с уже выбранной осью.
+  const labelOf = labelOfAxis ? (key: string) => labelOfAxis(key, axis) : undefined;
 
   // «Без расхода»: ни токенов, ни денег ни у одной группы — опции меры
   // приглушены, плашка объясняет причину (состояние записки «без расхода»).
@@ -156,7 +163,7 @@ export function FeatureBreakdownBlock({
           </div>
           <FeatureBreakdownCards
             groups={visible} axis={axis} measure={effMeasure} run={run}
-            labelOf={labelOf} colorOf={colorOf}
+            labelOf={labelOf} colorOf={colorOf} nav={nav}
           />
         </div>
       ) : (
@@ -176,7 +183,7 @@ export function FeatureBreakdownBlock({
           <div style={{ flex: 1, minWidth: 0 }}>
             <FeatureBreakdownTable
               groups={visible} axis={axis} run={run}
-              labelOf={labelOf} colorOf={colorOf}
+              labelOf={labelOf} colorOf={colorOf} nav={nav}
             />
           </div>
         </div>

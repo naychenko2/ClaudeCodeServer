@@ -195,6 +195,14 @@ describe('четыре состояния героя', () => {
   });
 });
 
+describe('состояние вне словаря', () => {
+  it('неизвестный run.state — нейтральный чип, герой не падает', () => {
+    const run = mkRun({ state: 'нет-такого' as FeatureRun['state'] });
+    const { container } = mountHero(run, mkStats());
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'hero-chip'))).toBe('статус неизвестен');
+  });
+});
+
 describe('замечания Глеба по ST-F3', () => {
   it('(а) attention.kind=stopped — чип «стоит», не «идёт»', () => {
     const run = mkRun({

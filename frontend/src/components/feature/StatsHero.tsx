@@ -35,7 +35,9 @@ export interface StatsHeroProps {
 function heroTag(run: FeatureRun, state: HeroState): FeatureRunTag {
   const live = run.state === 'running' || run.state === 'merging' || run.state === 'merge_pending';
   if (state === 'few' && live) return { label: 'только начали', tone: 'notStarted' };
-  return featureRunStatusTag(run.state);
+  // Состояние вне словаря (бэк опередил фронт): featureRunStatusTag отдаёт undefined —
+  // нейтральный тег вместо падения вкладки.
+  return featureRunStatusTag(run.state) ?? { label: 'статус неизвестен', tone: 'notStarted' };
 }
 
 // Карточка: bgCard, рамка borderLight, SHADOW.card, R.lg; поля SP.lg (360 — SP.md),

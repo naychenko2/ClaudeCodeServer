@@ -208,6 +208,19 @@ describe('разрез и мера (к1, к3)', () => {
   });
 });
 
+describe('labelOf получает ось от оболочки', () => {
+  it('подпись строки считается с текущей осью: персоны → models после переключения', () => {
+    const axisLabel = (key: string, axis: string): string => `${axis}:${key}`;
+    const { container } = mount(createElement(FeatureBreakdownBlock, {
+      breakdown: BREAKDOWN, costPartial: false, run: mkRun(), labelOf: axisLabel,
+    }));
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'breakdown-row-kira'))).toContain('personas:kira');
+    const btn = findButtonByLabel(headNode(container)!, 'модели')!;
+    act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'breakdown-row-opus'))).toContain('models:opus');
+  });
+});
+
 describe('один набор групп для кольца, таблицы и карточек (к1, к3)', () => {
   it('hiddenKeys отсекается один раз: скрытой группы нет и в кольце, и в таблице', () => {
     const { container } = mountBlock({ hiddenKeys: ['feature'] });

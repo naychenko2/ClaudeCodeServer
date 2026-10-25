@@ -15,6 +15,8 @@ import { type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { plural } from '../../lib/plural';
 import { openChatById } from '../../lib/openChat';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
+import type { FeatureNavCtx } from '../../lib/featureNavMarks';
 import { chatLabel } from './FeatureBreakdownModel';
 import { NavTargetButton } from './NavTargetButton';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
@@ -27,6 +29,8 @@ export interface FeatureBreakdownChatsProps {
   // Run для подписей: chatId → stepRef/taskRole через chatLabel.
   run: FeatureRun;
   isMobile?: boolean;
+  // Контекст возврата: переход в чат пишет точку «← к фиче · Статистика».
+  nav?: FeatureNavCtx;
 }
 
 // Отделитель блока сверху от таблицы: border-top + padding-top 12 (макет .chats,
@@ -104,7 +108,7 @@ function labelParts(chatId: string, run: FeatureRun): { ref: string | null; rest
   return { ref: null, rest: label };
 }
 
-export function FeatureBreakdownChats({ group, run, isMobile = false }: FeatureBreakdownChatsProps) {
+export function FeatureBreakdownChats({ group, run, isMobile = false, nav }: FeatureBreakdownChatsProps) {
   // Хуков здесь нет; ранний return без хуков — безопасен (правило про хуки выше
   // return соблюдается vacuously).
   const chatIds = (group.chatIds ?? []).filter(Boolean);
@@ -137,7 +141,10 @@ export function FeatureBreakdownChats({ group, run, isMobile = false }: FeatureB
                 chatArchived={archived}
                 title="Открыть чат"
                 isMobile={isMobile}
-                onOpen={() => { void openChatById(chatId); }}
+                onOpen={() => {
+                  if (nav?.featureId) recordFeatureReturn(nav.featureId, { kind: 'chat', id: chatId }, nav.featureTitle);
+                  void openChatById(chatId);
+                }}
               />
             </div>
           );

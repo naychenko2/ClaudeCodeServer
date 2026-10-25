@@ -35,6 +35,7 @@ import {
 import { FeatureBreakdownChats } from './FeatureBreakdownChats';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
+import type { FeatureNavCtx } from '../../lib/featureNavMarks';
 
 export interface FeatureBreakdownCardsProps {
   // Разрез выбранной оси (stats.breakdown[axis]).
@@ -50,6 +51,8 @@ export interface FeatureBreakdownCardsProps {
   colorOf?: (key: string) => string;
   // Ключи групп, которые не рисуем (роль key='feature' — вид ещё не решил).
   hiddenKeys?: string[];
+  // Контекст возврата для переходов в чаты раскрытой группы.
+  nav?: FeatureNavCtx;
 }
 
 // Мера в подписи над карточками: «По убыванию времени / токенов / денег».
@@ -115,7 +118,7 @@ function measureText(g: FeatureBreakdownGroup, measure: Measure): string {
 }
 
 export function FeatureBreakdownCards({
-  groups, axis, measure, run, labelOf, colorOf, hiddenKeys,
+  groups, axis, measure, run, labelOf, colorOf, hiddenKeys, nav,
 }: FeatureBreakdownCardsProps) {
   // Хук выше раннего return: раскрытая группа — состояние карточек; мера приходит
   // из props, поэтому при её смене состояние раскрытия не сбрасывается (к3).
@@ -224,7 +227,7 @@ export function FeatureBreakdownCards({
                 {chatIds.length} {plural(chatIds.length, 'чат', 'чата', 'чатов')} ›
               </button>
             ) : null}
-            {open ? <FeatureBreakdownChats group={g} run={run} isMobile={true} /> : null}
+            {open ? <FeatureBreakdownChats group={g} run={run} isMobile={true} nav={nav} /> : null}
           </div>
         );
       })}

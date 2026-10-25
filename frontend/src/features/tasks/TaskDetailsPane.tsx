@@ -166,8 +166,8 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
 
   // Дефект 4c4645e2: уход с задачи (закрыть или выбрать другую — панель перемонтируется
   // по key={task.id}) гасит точку возврата так же, как у чата (обычный выбор чата гасит
-  // указатель в WorkspacePage.tsx:1453). Возврат самим чипом гасит обработатель
-  // cc-open-feature (WorkspacePage.tsx:1919) до этого unmount.
+  // указатель в WorkspacePage.tsx:1453). Возврат чипом («← к фиче») гасит обработчик
+  // cc-open-feature в WorkspacePage (ветка !fromChat), и к unmount панели указателя уже нет.
   // StrictMode (dev) сразу после монтирования гоняет cleanup и повторно ставит эффект:
   // гасим в микрозадаче и только если эффект с тем же id не переподключился.
   const mountedTaskId = useRef<string | null>(null);

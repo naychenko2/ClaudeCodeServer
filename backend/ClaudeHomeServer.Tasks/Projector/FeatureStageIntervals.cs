@@ -36,6 +36,19 @@ internal static class FeatureStageIntervals
     // Промежуток до склейки: закрытый ход или живой хвост (Turn null у хвоста).
     private sealed record Raw(DateTime From, DateTime To, string TaskId, bool Live, StageTurn? Turn);
 
+    // Накопление интервала при склейке (GC-B1): изменяемый рабочий буфер — ходы и id задач
+    // дописываются в один список (Add), StageInterval материализуется один раз после прохода.
+    // Прежняя запись через `with { Turns = [..last.Turns, r.Turn] }` копировала весь
+    // накопленный список на каждой склейке — O(n²) (18k ходов → 18 с).
+    private sealed class Accum
+    {
+        public DateTime From;
+        public DateTime To;
+        public bool Live;
+        public readonly List<string> TaskIds = [];
+        public readonly List<StageTurn> Turns = [];
+    }
+
     /// <summary>
     /// Стадия → её интервалы (по From). Пустой словарь — в журнале нет ни одного хода стадии.
     /// null — журнал не полный (тот же гейт, что режим journal в FeatureTimeline).
@@ -94,36 +107,35 @@ internal static class FeatureStageIntervals
         var result = new Dictionary<string, List<StageInterval>>();
         foreach (var (stage, list) in raw)
         {
-            var merged = new List<StageInterval>();
+            var merged = new List<Accum>();
             foreach (var r in list.OrderBy(r => r.From))
             {
                 var last = merged.Count > 0 ? merged[^1] : null;
                 if (last is not null && r.From <= last.To + GlueGap)
                 {
-                    merged[^1] = last with
-                    {
-                        To = r.To > last.To ? r.To : last.To,
-                        Live = last.Live || r.Live,
-                        TaskIds = AppendUnique(last.TaskIds, r.TaskId),
-                        Turns = r.Turn is not null ? [..last.Turns, r.Turn] : last.Turns,
-                    };
+                    if (r.To > last.To) last.To = r.To;
+                    last.Live |= r.Live;
+                    if (!last.TaskIds.Contains(r.TaskId)) last.TaskIds.Add(r.TaskId);
+                    if (r.Turn is not null) last.Turns.Add(r.Turn);
                 }
                 else
                 {
-                    merged.Add(new StageInterval(
-                        r.From, r.To, 0, r.Live, null, [r.TaskId],
-                        r.Turn is not null ? [r.Turn] : []));
+                    var a = new Accum { From = r.From, To = r.To, Live = r.Live };
+                    a.TaskIds.Add(r.TaskId);
+                    if (r.Turn is not null) a.Turns.Add(r.Turn);
+                    merged.Add(a);
                 }
             }
 
-            result[stage] = merged.Select(iv =>
+            result[stage] = merged.Select(a =>
             {
                 // LastOutcome — исход последнего хода (Turns уже в порядке From); живой
                 // хвост ходом не считается — он ничего не «заканчивает».
-                var lastOutcome = iv.Turns.Count > 0 && BadOutcomes.Contains(iv.Turns[^1].Outcome ?? "")
-                    ? iv.Turns[^1].Outcome
+                var lastOutcome = a.Turns.Count > 0 && BadOutcomes.Contains(a.Turns[^1].Outcome ?? "")
+                    ? a.Turns[^1].Outcome
                     : null;
-                return iv with { Minutes = FeatureTimeMath.Minutes(iv.From, iv.To), LastOutcome = lastOutcome };
+                return new StageInterval(a.From, a.To, FeatureTimeMath.Minutes(a.From, a.To),
+                    a.Live, lastOutcome, a.TaskIds, a.Turns);
             }).ToList();
         }
 
@@ -144,7 +156,4 @@ internal static class FeatureStageIntervals
         foreach (var t in run.Design) yield return t;
         foreach (var t in run.Plan) yield return t;
     }
-
-    private static List<string> AppendUnique(List<string> ids, string id) =>
-        ids.Contains(id) ? ids : [..ids, id];
 }

@@ -2813,15 +2813,17 @@ export const api = {
     search: (projectId: string, q: string) =>
       projectRequest<FileEntry[]>(`/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`),
     // Где путь реально лежит в деревьях проекта (анкер + worktree). paths ≤ 50,
-    // иначе сервер 400; в ответе только найденные пути. Формат — TreeHit бэкенда.
+    // иначе сервер 400; в ответе только найденные пути. Формат — DTO endpoints
+    // files/locate (не TreeHit: TreeHit — внутренний тип локатора, без path и
+    // alternatives). alternatives — число других совпадений (совпадений − 1).
     locate: (projectId: string, paths: string[], sessionId?: string) =>
-      projectRequest<{ path: string; branch?: string; isAnchor: boolean; alternatives?: string[] }[]>(
+      projectRequest<{ path: string; branch?: string; isAnchor: boolean; alternatives?: number }[]>(
         `/projects/${projectId}/files/locate`,
         { method: 'POST', body: JSON.stringify({ paths, ...(sessionId ? { sessionId } : {}) }) },
       ),
     // featureId (W4-5B2): читать из проверенного дерева эпика; без него — корень проекта.
     // sessionId (F1a): резолвить путь в дереве чата; ответ несёт branch (в каком дереве
-    // нашли) и isAnchor (файл из основного дерева).
+    // нашли) и isAnchor (true — файл найден в заявленном дереве-анкере, false — в другом).
     getContent: (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string }) =>
       projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string; isAnchor: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`),
     saveContent: (projectId: string, path: string, content: string) =>

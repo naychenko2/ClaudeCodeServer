@@ -37,7 +37,7 @@ export function pickHeroState(run: FeatureRun, stats: FeatureStats): HeroState {
 
 // === Состав времени ===
 
-export type CompositionKind = 'work' | 'waiting' | 'idle' | 'error';
+export type CompositionKind = 'work' | 'waiting' | 'idle' | 'error' | 'queued';
 
 export interface CompositionRow {
   kind: CompositionKind;
@@ -52,18 +52,23 @@ const COMP_LABEL: Record<CompositionKind, string> = {
   work: 'работа',
   waiting: 'ждали вас',
   idle: 'простой',
+  queued: 'в очереди',
   error: 'ошибки',
 };
 
-// Строки «из чего сложилось время» в порядке макета: работа, ожидание, простой, ошибки.
-// Поле null (не считалось) или ноль — строки нет. Процент — от elapsed.
+// Строки «из чего сложилось время» в порядке макета (работа, ожидание, простой, ошибки);
+// «в очереди» — сразу после простого: бэк вычитает очередь из idle (FeatureTimeline.cs,
+// 13c6e9370), и эти две строки — два вида одного простоя. Без queuedMinutes (null/0/нет
+// поля) строки нет — поведение прежнее. Процент — от elapsed; с очередью сумма видов
+// равна elapsed (контракт TimelineTotals), поэтому сумма процентов — 100 %.
 export function compositionRows(totals: FeatureTimeline['totals']): CompositionRow[] {
   const elapsed = totals.elapsedMinutes;
   if (!elapsed) return [];
-  const parts: Array<[CompositionKind, number | null]> = [
+  const parts: Array<[CompositionKind, number | null | undefined]> = [
     ['work', totals.workWallMinutes],
     ['waiting', totals.waitingMinutes],
     ['idle', totals.idleMinutes],
+    ['queued', totals.queuedMinutes],
     ['error', totals.errorMinutes],
   ];
   return parts

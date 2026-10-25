@@ -3,8 +3,10 @@
 // Покрытие: четыре состояния героя (running/waiting/merged/few) и приоритет
 // (merged выше всех, waiting выше few); порог few — ровно FEW_DATA_MIN (30 мин —
 // уже не few); состав времени: порядок строк, проценты от elapsed, null-поля не
-// дают строки; плитки: 3 без spend, 4 со spend, токены — сумма всех четырёх
-// видов; потери: карточка 1 из longestWait (live при attention.kind='wait'),
+// дают строки; очередь (Q5F): с queuedMinutes — строка «в очереди» после простого и
+// сумма процентов 100, без неё (null/0/нет поля) — прежнее; плитки: 3 без spend,
+// 4 со spend, токены — сумма всех четырёх видов; потери: карточка 1 из longestWait
+// (live при attention.kind='wait'),
 // карточка 2 — цепочка с максимальным loops (loops=0 — её нет), карточка 3 —
 // longestNow, у закрытой — этап с максимальным approxMinutes; пустая модель —
 // empty=true.
@@ -168,6 +170,29 @@ describe('compositionRows', () => {
 
   it('elapsed 0 — пустой список', () => {
     expect(compositionRows(mkTotals({ workWallMinutes: 10 })).length).toBe(0);
+  });
+
+  // Q5F: очередь, вычтенная бэком из простоя (FeatureTimeline.cs, 13c6e9370), — отдельная
+  // доля; сумма видов = elapsed, сумма процентов = 100.
+  it('очередь есть: строка «в очереди» после простого, сумма процентов = 100 %', () => {
+    const r = compositionRows(mkTotals({
+      elapsedMinutes: 400, workWallMinutes: 240, waitingMinutes: 60, idleMinutes: 60, errorMinutes: 20, queuedMinutes: 20,
+    }));
+    expect(r.map(x => x.kind)).toEqual(['work', 'waiting', 'idle', 'queued', 'error']);
+    expect(r.map(x => x.label)).toEqual(['работа', 'ждали вас', 'простой', 'в очереди', 'ошибки']);
+    expect(r.map(x => x.minutes)).toEqual([240, 60, 60, 20, 20]);
+    expect(r.map(x => x.percent)).toEqual([60, 15, 15, 5, 5]);
+    expect(r.map(x => x.percentText)).toEqual(['60 %', '15 %', '15 %', '5 %', '5 %']);
+    expect(r.reduce((a, x) => a + x.percent, 0)).toBe(100);
+  });
+
+  it('очереди нет (null / 0 / поля нет): строки и проценты — прежние', () => {
+    const base = { elapsedMinutes: 400, workWallMinutes: 240, waitingMinutes: 60, idleMinutes: 60, errorMinutes: 20 };
+    for (const over of [{ queuedMinutes: null }, { queuedMinutes: 0 }, {}]) {
+      const r = compositionRows(mkTotals({ ...base, ...over }));
+      expect(r.map(x => x.kind)).toEqual(['work', 'waiting', 'idle', 'error']);
+      expect(r.map(x => x.percent)).toEqual([60, 15, 15, 5]);
+    }
   });
 });
 

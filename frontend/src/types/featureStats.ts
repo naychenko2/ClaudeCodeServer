@@ -60,6 +60,10 @@ export interface FeatureTimeline {
     errorCount: number | null;
     // Минут в ошибках; null — не считалось.
     errorMinutes: number | null;
+    // Минут «стояла в очереди фич» (пересечение hold(reason=queue) с простоем); бэк вычитает
+    // их из idleMinutes — сумма видов остаётся равной elapsed. null — не считалось (approx).
+    // Опциональна: старые ответы бэка поля не несут.
+    queuedMinutes?: number | null;
   };
 }
 

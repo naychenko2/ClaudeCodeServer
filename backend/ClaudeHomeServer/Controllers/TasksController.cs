@@ -143,7 +143,10 @@ public class TasksController(
     TaskPregateService? pregate = null,
     // W4-ANB (разрез §4): авторезюме фичи по кнопке. null — подсистема Tasks выключена
     // (гейт тот же, что у features) → честный 503, не 500 (ADR-014).
-    FeatureSummaryService? summary = null) : ControllerBase
+    FeatureSummaryService? summary = null,
+    // Очередь фич (волна 6): пересчёт очереди проекта после постановки/снятия удержания.
+    // null — подсистема Tasks выключена (тот же гейт, что у features) → пересчёта нет.
+    FeatureQueueService? queue = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -958,9 +961,10 @@ public class TasksController(
         // первого запуска шага, иначе 409»). Тот же предикат anyStarted, что в проекторе.
         if (reason == FeatureHoldReasons.Draft && FeatureAnyStarted(featureId))
             return Conflict(new { error = "Draft только до первого запуска шага" });
-        // Manual/queue поверх draft: фича не начиналась — останавливать нечего, черновик
-        // снимают clear, а не переклейкой в паузу.
-        if (reason != FeatureHoldReasons.Draft && run.Epic.Hold?.Reason == FeatureHoldReasons.Draft)
+        // Manual поверх draft: фича не начиналась — останавливать нечего, черновик снимают clear,
+        // а не переклейкой в паузу. Queue поверх draft разрешён (волна 6): «поставить в очередь»
+        // — штатный путь черновика, фича встаёт в очередь проекта вместо немедленного запуска.
+        if (reason == FeatureHoldReasons.Manual && run.Epic.Hold?.Reason == FeatureHoldReasons.Draft)
             return Conflict(new { error = "Фича в черновике: ручное удержание поверх draft" });
 
         var epic = tasks.SetHold(featureId, reason);
@@ -988,6 +992,9 @@ public class TasksController(
         // но набор interrupted пересчитывается: guard только на записи Hold, цикл пометки
         // живёт на каждом вызове — ходы, начатые после первой паузы, добавляются.
         var after = features.Project(featureId, UserId);
+        // Очередь проекта: черновик, ставший queue, и пауза на слоте меняют занятость — пересчёт
+        // (сбой внутри сервиса глотается: ответ ручки от него не зависит).
+        if (queue is not null) await queue.RebalanceAsync(UserId, epic.ProjectId);
         return Ok(new { interrupted = after?.Interrupted ?? [] });
     }
 
@@ -1005,13 +1012,18 @@ public class TasksController(
         if (run is null) return NotFound(new { error = "Фича не найдена" });
         // Тело снятия (подсчёт resumed/expired, вещание, продолжение ходов, повтор после
         // сбоя продолжения) — один общий метод сервиса: другой копии у ручки быть не должно.
-        var release = await executor.ReleaseFeatureHold(featureId, UserId, run.Epic.Hold?.Reason);
+        var release = await executor.ReleaseFeatureHold(featureId, UserId, run.Epic.Hold);
+        // Освободившийся слот (снята пауза/черновик — занятость фичи изменилась): очередь проекта
+        // пересчитывается и после неуспешного исхода — пересчёт идемпотентен.
+        if (queue is not null) await queue.RebalanceAsync(UserId, run.Epic.ProjectId);
         return release.Outcome switch
         {
             FeatureHoldReleaseOutcome.NotHeld => Conflict(new { error = "Фича не удержана: снимать нечего" }),
             FeatureHoldReleaseOutcome.NotFound => NotFound(new { error = "Фича не найдена" }),
             FeatureHoldReleaseOutcome.Repeated => Ok(new { resumed = release.Resumed, expired = release.Expired, repeated = true }),
-            _ => Ok(new { resumed = release.Resumed, expired = release.Expired }),
+            FeatureHoldReleaseOutcome.Released => Ok(new { resumed = release.Resumed, expired = release.Expired }),
+            // Новый исход без явной ветки не должен молча стать «успехом» с пустыми списками.
+            _ => throw new InvalidOperationException($"Неизвестный исход снятия удержания: {release.Outcome}"),
         };
     }
 

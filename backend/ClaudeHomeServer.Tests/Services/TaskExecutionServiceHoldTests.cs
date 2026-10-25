@@ -665,6 +665,50 @@ public class TaskExecutionServiceHoldTests : IDisposable
             Times.Once(), "в ключевой чат уходит ровно одна карточка");
     }
 
+    // Очередь фич (волна 6): снятие queue — карточка «Фича запущена из очереди» с ходом и без
+    // подавления действий. Мутация: удалить ветку Queue — карточка уйдёт в общей ветке
+    // «Пауза снята: прерванных шагов нет», и Verify по тексту краснеет.
+    [Fact]
+    public async Task ClearHold_QueueStartsFeature_SendsQueueCardToKeyChat()
+    {
+        var user = _userStore.Add("hold-queue-wake", "password123", "user");
+        var keyChat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "key");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича в очереди", Role: "feature",
+            SourceSessionId: keyChat.Id));
+        var keyAdapter = SetRunningTurn(keyChat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+        _tasks.ClearHold(epic.Id);
+
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Queue);
+        resumed.Should().Be(0);
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("Фича запущена из очереди") && t.Contains("разбери доклады")),
+            It.IsAny<IReadOnlyList<string>>(), 0, false, It.IsAny<string>()),
+            Times.Once(), "оркестратор будится карточкой из очереди, действия не подавлены");
+        keyAdapter.Verify(a => a.SendMessageAsync(
+            It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>(),
+            It.IsAny<string>()),
+            Times.Once(), "в ключевой чат уходит ровно одна карточка");
+    }
+
+    // M1 (хвост RV-Q2): признак «фича удержана» — наличие Hold, а не его Reason. Битый tasks.json
+    // даёт Hold с пустой причиной; прежний вывод признака из Reason отвечал NotHeld, и паузу
+    // нельзя было снять. Мутация: вернуть `if (hold?.Reason is null)` в ReleaseFeatureHold —
+    // исход NotHeld, Hold остаётся, тест краснеет.
+    [Fact]
+    public async Task ReleaseFeatureHold_HoldСПустойПричиной_Снимается()
+    {
+        var user = _userStore.Add("hold-null-reason", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича с битым Hold", Role: "feature"));
+        epic.Hold = new FeatureHold(null!, DateTime.UtcNow, null, true);
+
+        var release = await _sut.ReleaseFeatureHold(epic.Id, user.Id, epic.Hold);
+
+        release.Outcome.Should().Be(FeatureHoldReleaseOutcome.Released);
+        _tasks.GetById(epic.Id)!.Hold.Should().BeNull("битую паузу можно снять кнопкой");
+    }
+
     // R-HOLD-D (п.3, критерий c3): согласование числительных со «шаг» — то же правило, что
     // pluralSteps на фронте (FeaturePageHeader.tsx:457): решает последняя цифра, 11 — исключение.
     // Таблица покрывает весь диапазон 5–99. Мутации: вернуть прежнюю inline-форму (до правки

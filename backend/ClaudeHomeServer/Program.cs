@@ -790,6 +790,8 @@ builder.Services.AddSingleton<ITaskNotificationDispatcher>(sp => sp.GetRequiredS
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Очередь фич (волна 6): регистрируется только при включённой подсистеме задач.
+builder.Services.AddFeatureQueue(builder.Configuration);
 // Запуск предгейта шага (NC-P1b): шов ITaskPregate опционален — вертикаль TestRuns отключаемая
 builder.Services.AddSingleton<TaskPregateService>();
 builder.Services.AddSingleton<ReviewTreePool>();

@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Services;
 public enum FeatureHoldReleaseOutcome { Released, Repeated, NotHeld, NotFound }
 
 /// <summary>Результат <see cref="TaskExecutionService.ReleaseFeatureHold"/>: исход и пробуждение очереди (id задач).</summary>
-public sealed record FeatureHoldRelease(FeatureHoldReleaseOutcome Outcome, List<string> Resumed, List<string> Expired);
+public sealed record FeatureHoldRelease(FeatureHoldReleaseOutcome Outcome, IReadOnlyList<string> Resumed, IReadOnlyList<string> Expired);
 
 /// <summary>
 /// Алиасы тиров моделей владельца (opus/sonnet/haiku) для таблицы уровней в постановке.
@@ -43,7 +43,7 @@ public sealed record ExecutorLauncher(string? SessionId, string? PersonaId);
 // Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
 // автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
 // и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
-public class TaskExecutionService : Execution.IDeviceOnlineHandler
+public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHoldReleaser
 {
     private readonly TaskManager _tasks;
     private readonly SessionManager _sessions;
@@ -1305,10 +1305,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
     // Единое снятие удержания фичи (тело бывшей ручки DELETE hold): порядок — подсчёт
     // resumed/expired → ClearHold → task_changed по эпику → фоновое продолжение ходов.
-    // holdReason — причина Hold из снимка проектора, взятого до снятия (null — Hold уже снят).
-    public async Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, string? holdReason)
+    // hold — Hold эпика из снимка проектора, взятого до снятия (null — Hold уже снят). Признак
+    // «фича удержана» — само наличие Hold, а не его Reason: битый tasks.json может дать Hold с
+    // пустой причиной (STJ non-nullable не проверяет), и вывод признака из Reason оставил бы
+    // такую паузу несъёмной (409 «снимать нечего»).
+    public async Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold)
     {
-        if (holdReason is null)
+        if (hold is null)
         {
             // W4-SEAM R1 (тупик после сбоя продолжения): если доставка продолжения упала
             // (catch в ResumeFeatureTurnsAfterHold), шаг остаётся помеченный feature_held при
@@ -1349,7 +1352,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
 
         // Дефект bec00347: формулировка карточки зависит от причины удержания — её берут из
-        // снимка проектора до ClearHold: у живого эпика после снятия Hold уже null.
+        // снимка проектора до ClearHold: у живого эпика после снятия Hold уже null. Пустая
+        // причина битых данных трактуется как ручная пауза.
+        var holdReason = hold.Reason ?? FeatureHoldReasons.Manual;
         var epic = _tasks.ClearHold(featureId);
         if (epic is null)
         {
@@ -1558,6 +1563,21 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                 "Фича запущена: черновик снят, фича активна. Начни конвейер по плану; " +
                 "разбери доклады, накопленные за паузу.");
             return resumed; // у черновика прерванных ходов не бывает — 0
+        }
+        if (holdReason == FeatureHoldReasons.Queue)
+        {
+            // Очередь фич (волна 6): слот проекта освободился, голову очереди снял
+            // FeatureQueueService (или человек кнопкой) — оркестратора будят так же, как при
+            // снятии черновика: конвейер по плану стартует с него. Продолженные и истёкшие шаги
+            // названы в хвосте: очередь держит и уже начатую фичу.
+            var queueTail = resumed > 0 ? $" Продолжены прерванные ходы: {resumed} {PluralSteps(resumed)}." : "";
+            if (expired > 0)
+                queueTail += $" {expired} {PluralSteps(expired)} не продолжены — чат исполнителя исчез, " +
+                    "их нужно перезапустить штатным tasks_run_executor.";
+            await DeliverKeyChatCardAsync(key,
+                "Фича запущена из очереди: слот проекта освободился, пауза снята, запуски разрешены." +
+                queueTail + " Начни конвейер по плану; разбери доклады, накопленные за ожидание.");
+            return resumed;
         }
         if (resumed == 0) {
             if (expired > 0) {

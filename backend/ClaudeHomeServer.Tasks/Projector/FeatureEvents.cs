@@ -7,8 +7,10 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // для сравнения в золотых тестах.
 //
 // Контракт типа (разрез §2): { at, kind, taskId, role, stepRef?, personaId?, sessionId?, round?,
-// reason? }. role/stepRef/personaId — атрибуты задачи (у всех видов); round — номер витка, только
-// у вердиктов (из FeatureRound); sessionId — чат, наружу только если в снимке владельца.
+// reason?, projectId? }. role/stepRef/personaId — атрибуты задачи (у всех видов); round — номер витка, только
+// у вердиктов (из FeatureRound); sessionId — чат, наружу только если в снимке владельца;
+// projectId — проект самой задачи (хвосты 5634609f п.26: без него фронт берёт проект эпика
+// как приближение, а задача фичи может лежать в другом проекте или быть личной).
 public sealed record FeatureEvent(
     // Момент события (UTC): CreatedAt/ClaudeStartedAt/ExecutorStoppedAt/AwaitingHumanSince/
     // DroppedByHumanAt/CompletedAt — по смыслу вида.
@@ -33,4 +35,6 @@ public sealed record FeatureEvent(
     int? Round,
     // Причина (≤200 символов): ExecutorStopReason (stopped) / AwaitingHumanReason (waiting) /
     // Verification.Notes (вердикты); у остальных видов null.
-    string? Reason);
+    string? Reason,
+    // Проект задачи, к которой относится событие (TaskItem.ProjectId); null — личная задача.
+    string? ProjectId);

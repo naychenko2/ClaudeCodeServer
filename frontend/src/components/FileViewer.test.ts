@@ -252,8 +252,8 @@ describe('FileViewer: Esc / закрытие / имя в шапке', () => {
 // F2b (фича «Резолвинг ссылок по worktree»): проп sessionId доходит до эндпоинта, а файл,
 // пришедший НЕ из заявленного дерева, помечен в шапке чипом «из дерева <ветка>» — фолбэк
 // по worktree есть, но он не тихий (разрез bc27cbee §1). Мутации:
-//   • убрать `isAnchor === false` из treeChipVisible → тест «при undefined isAnchor чипа
-//     нет» краснеет (метка появляется на неизвестном источнике);
+//   • вернуть `fileContent?.isAnchor === false` в treeChipVisible → тесты «при undefined
+//     isAnchor и branch чип есть» и «при isAnchor=true и branch чип есть» краснеют;
 //   • не передать sessionId в getContent → тест про аргумент краснеет.
 describe('FileViewer: проп sessionId и чип «из дерева <ветка>»', () => {
   beforeEach(setupMocks);
@@ -274,22 +274,31 @@ describe('FileViewer: проп sessionId и чип «из дерева <ветк
     expect(textNodes(chip as never).join(''), 'в чипе имя ветки').toContain('из дерева feat/worktree-material-links');
   });
 
-  // Хвост R-F1a: для relay-пути branch есть, а isAnchor может отсутствовать — источник
-  // неизвестен, выдумывать метку нельзя. Мутация «убрать isAnchor === false из
-  // treeChipVisible» даёт чип здесь же → тест краснеет.
-  it('при undefined isAnchor чипа нет', async () => {
+  // Хвост R-F1a: для relay-пути branch есть, а isAnchor может отсутствовать — файл всё равно
+  // не из корня, чип нужен.
+  it('при undefined isAnchor и branch чип есть (файл не из корня — только чтение)', async () => {
     contentSpy!.mockResolvedValue(contentWith({ branch: 'feat/worktree-material-links' }));
     const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
     await flush();
-    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'источник неизвестен — метки нет').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'файл не из корня — метка есть').not.toBeNull();
   });
 
-  // Файл из заявленного дерева-анкера — ничего не скрываем, но и не маркируем
-  it('при isAnchor=true (файл из анкера) чипа нет', async () => {
+  // Файл из дерева-анкера (чат с привязкой к дереву) тоже открыт только для чтения —
+  // чип с объяснением обязателен, текст подсказки — про «дерево вашего чата»
+  it('при isAnchor=true и branch чип есть, подсказка про дерево вашего чата', async () => {
     contentSpy!.mockResolvedValue(contentWith({ branch: 'main', isAnchor: true }));
     const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
     await flush();
-    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'файл из анкера — метки нет').toBeNull();
+    const chip = findNodeByAttr(container, 'data-testid', 'file-tree-chip');
+    expect(chip, 'файл из анкера — метка есть').not.toBeNull();
+    expect(findNodeByAttr(container, 'title', 'Файл открыт из дерева вашего чата (main), только чтение. Правка и дифф доступны для файла из основного дерева'), 'своя подсказка').not.toBeNull();
+  });
+
+  it('при branch=null (файл из корня) чипа нет', async () => {
+    contentSpy!.mockResolvedValue(contentWith({ branch: null as never, isAnchor: true }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'файл из корня — метки нет').toBeNull();
   });
 
   // Без пропа вызов остаётся прежним (старые вызывающие не меняются)

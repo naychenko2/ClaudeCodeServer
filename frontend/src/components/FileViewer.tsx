@@ -40,6 +40,7 @@ import { DocPropsPanel } from '../features/docs/DocPropsPanel';
 import { useDocProps } from '../features/docs/useDocProps';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
+import { setFileContext, clearFileContext } from '../lib/ai/fileContext';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion, useNotesByFile } from '../lib/notes';
 import { useSubsystem } from '../lib/subsystems';
 import { useSlot, useSlotItem } from '../lib/subsystems/registry';
@@ -510,6 +511,11 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // история — они пишут и читают корень, а не дерево чата. branch в ответе непуст у любого
   // неосновного дерева; без sessionId (и на relay-пути, где ветки нет) файл всегда из корня
   const fromRoot = !sessionId || fileContent?.branch == null;
+  // Палитре AI нужен тот же признак: «Сохранить как Markdown» пишет в корень (см. lib/ai/fileContext)
+  useEffect(() => {
+    setFileContext(filePath, fromRoot);
+    return () => clearFileContext(filePath);
+  }, [filePath, fromRoot]);
   const canEdit = can('PUT files/content') && fromRoot;
   const canDelete = can('DELETE files') && fromRoot;
   const canRevert = can('POST files/revert') && fromRoot;
@@ -1692,10 +1698,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     </aside>
   ) : null;
   const diffChipVisible = showChips && !!diffStats && tab === 'diff';
-  // Метка чужого дерева (разрез bc27cbee §1): файл пришёл не из заявленного дерева — фолбэк
-  // по worktree есть, и он не тихий. isAnchor undefined (relay-путь, R-F1a) — источник
-  // неизвестен, метки нет; из анкера (isAnchor=true) — тоже.
-  const treeChipVisible = showChips && !loading && !loadError && fileContent?.isAnchor === false && !!fileContent?.branch;
+  // Метка дерева: файл не из корня (fromRoot=false, branch непуст) — виден всегда, и из
+  // анкера тоже: иначе просмотрщик без кнопок правки остаётся без объяснения. Своё дерево
+  // чата (isAnchor !== false) и чужое (isAnchor=false) различаются только текстом подсказки.
+  const treeChipVisible = showChips && !loading && !loadError && !fromRoot;
   const badgesVisible = commentsChipVisible || diffChipVisible || treeChipVisible || showTabs;
 
   // Заметка vault — полноценный NoteView (теги, ✨-связи, перенос, правка через
@@ -1801,7 +1807,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             <Chip
               dense
               maxW={isMobile ? 120 : 220}
-              title={`Файл взят не из основного дерева, а из worktree ${fileContent!.branch}. Правка и дифф доступны для файла из основного дерева`}
+              title={fileContent!.isAnchor === false
+                ? `Файл взят не из основного дерева, а из worktree ${fileContent!.branch}. Правка и дифф доступны для файла из основного дерева`
+                : `Файл открыт из дерева вашего чата (${fileContent!.branch}), только чтение. Правка и дифф доступны для файла из основного дерева`}
             >
               из дерева {fileContent!.branch}
             </Chip>

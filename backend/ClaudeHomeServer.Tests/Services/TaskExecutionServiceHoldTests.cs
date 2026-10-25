@@ -692,6 +692,40 @@ public class TaskExecutionServiceHoldTests : IDisposable
             Times.Once(), "в ключевой чат уходит ровно одна карточка");
     }
 
+    // Очередь фич (Q4): фича может стоять в очереди дольше суток. Срок чата прерванного шага
+    // (10 мин) на удержании queue снят, через 25 ч уборка чат не сносит, а снятие удержания
+    // продолжает шаг (не feature_held_expired) и возвращает срок с якорем «сейчас».
+    // Мутация: убрать FreezeExpiryForHold в InterruptFeatureTurnsOnHold — тик на 25 ч сносит
+    // чат, первый и последующие абзацы краснеют.
+    [Fact]
+    public async Task QueueHold_25Hours_ClearingContinuesStepNotExpired()
+    {
+        var user = _userStore.Add("hold-queue-ttl", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича в очереди", Role: "feature"));
+        var step = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг в очереди", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress, ExecutionExpiresAfterMinutes: 10));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec", taskId: step.Id);
+        _tasks.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        _sessions.SetExpiry(chat.Id, 10);
+        SetRunningTurn(chat.Id);
+
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+        _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
+        SetIdle(chat.Id);
+
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().BeNull("на удержании queue срок снят");
+        await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
+            .TickAsync(DateTime.UtcNow.AddHours(25));
+        _sessions.GetById(chat.Id).Should().NotBeNull("25 ч в очереди: замороженный чат жив");
+
+        _tasks.ClearHold(epic.Id);
+        var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Queue);
+
+        resumed.Should().Be(1, "шаг продолжен в прежнем чате");
+        _tasks.GetById(step.Id)!.ExecutorStopReason.Should().NotBe(ExecutorStopClassifier.FeatureHeldExpiredReason);
+        _sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10, "срок возвращён после снятия");
+    }
+
     // M1 (хвост RV-Q2): признак «фича удержана» — наличие Hold, а не его Reason. Битый tasks.json
     // даёт Hold с пустой причиной; прежний вывод признака из Reason отвечал NotHeld, и паузу
     // нельзя было снять. Мутация: вернуть `if (hold?.Reason is null)` в ReleaseFeatureHold —

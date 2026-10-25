@@ -1309,7 +1309,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     // «фича удержана» — само наличие Hold, а не его Reason: битый tasks.json может дать Hold с
     // пустой причиной (STJ non-nullable не проверяет), и вывод признака из Reason оставил бы
     // такую паузу несъёмной (409 «снимать нечего»).
-    public async Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold)
+    public async Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold, string? by = null)
     {
         if (hold is null)
         {
@@ -1355,7 +1355,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // снимка проектора до ClearHold: у живого эпика после снятия Hold уже null. Пустая
         // причина битых данных трактуется как ручная пауза.
         var holdReason = hold.Reason ?? FeatureHoldReasons.Manual;
-        var epic = _tasks.ClearHold(featureId);
+        var epic = _tasks.ClearHold(featureId, by);
         if (epic is null)
         {
             // Дефект 06aae1bf (гонка): снимок взят при активном Hold, а конкурент успел снять

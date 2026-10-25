@@ -74,7 +74,10 @@ public sealed record TimelineTotals(
     // Самый долгий эпизод ожидания с задачей и началом (ST-B2); null — эпизодов нет или approx.
     TimelineLongestWait? LongestWait,
     int? ErrorCount,
-    int? ErrorMinutes);
+    int? ErrorMinutes,
+    // «Простояла в очереди фич» (held(queue)..hold_cleared): вычтено из простоя, отдельно от
+    // него и от паузы человека. Только в journal; в approx — null.
+    int? QueuedMinutes = null);
 
 // Статистика фичи (GET features/{id}, поле stats): источник (approx/journal), признак
 // обрезки, график, разрезы («кто и на чём работали»), «дольше всех сейчас», расход и
@@ -450,6 +453,11 @@ public sealed record FeatureTimeline(
         // Целые минуты по видам: сумма = elapsed ровно (контракт TimelineTotals).
         var (workWall, waitingMin, errorMin, idleMin) =
             FeatureTimeMath.LargestRemainderMinutes(elapsed, workSpan, waitingSpan, errorSpan, idleSpan);
+        // Очередь фич: пересечение интервалов held(queue)..hold_cleared с простоем (idle). Минуты
+        // вычитаются из idle — сумма видов остаётся равной elapsed.
+        var queuedMin = Math.Min(idleMin, (int)Math.Round(
+            QueuedIdleSpan(journal.Entries, segments, from, to, now).TotalMinutes, MidpointRounding.AwayFromZero));
+        idleMin -= queuedMin;
 
         // AgentsSum — «агентные» минуты ВНУТРИ окна фичи [from, to] (решение Александра, шов
         // 63a69b77 п.2в): сумма started-периодов (параллельные складываются), НЕ объединение (то
@@ -489,7 +497,8 @@ public sealed record FeatureTimeline(
                 ? null
                 : new TimelineLongestWait(lwMinutes, longestWaitTaskId, longestWaitFrom.Value),
             ErrorCount: errorCount,
-            ErrorMinutes: errorMin);
+            ErrorMinutes: errorMin,
+            QueuedMinutes: queuedMin);
 
         // Сегменты для графика: склейка по потолку ПОСЛЕ итогов (major 1): при > maxSegments —
         // склеиваем ближайшие пары (MergeToCap), вид склеенного — доминирующий по времени.
@@ -524,6 +533,33 @@ public sealed record FeatureTimeline(
     // b ≥ next_p ⇔ b > p). Приоритет — по виду: выигрывает самый «конкретный» активный вид.
     // Track/stage: work — из taskId (стадия задачи), иначе main/""; taskId — у одиночного work.
     // internal — для теста эквивалентности (новый линейный sweep == старый O(n²) на случайных входах).
+    // Время в очереди фич внутри простоя: held(reason=queue) открывает интервал, его закрывает
+    // ближайший hold_cleared или другой held (смена причины), иначе — now. Half-open [from, to).
+    private static TimeSpan QueuedIdleSpan(
+        IReadOnlyList<FeatureJournalEntry> entries, List<TimelineSegment> segments,
+        DateTime from, DateTime to, DateTime now)
+    {
+        var holds = entries.Where(e => e.Kind is "held" or "hold_cleared").OrderBy(e => e.At).ToList();
+        var total = TimeSpan.Zero;
+        for (var i = 0; i < holds.Count; i++)
+        {
+            if (holds[i].Kind != "held" || holds[i].Reason != FeatureHoldReasons.Queue) continue;
+            var start = holds[i].At;
+            var end = i + 1 < holds.Count ? holds[i + 1].At : now;
+            var qs = FeatureTimeMath.Clamp(start, from, to);
+            var qe = FeatureTimeMath.Clamp(end, from, to);
+            if (qe <= qs) continue;
+            foreach (var s in segments)
+            {
+                if (s.Kind != "idle") continue;
+                var os = s.From > qs ? s.From : qs;
+                var oe = s.To < qe ? s.To : qe;
+                if (oe > os) total += oe - os;
+            }
+        }
+        return total;
+    }
+
     internal static List<TimelineSegment> Sweep(List<JournalInterval> intervals, DateTime from, DateTime to)
     {
         // Границы: from, to + обрезанные start/end всех интервалов.

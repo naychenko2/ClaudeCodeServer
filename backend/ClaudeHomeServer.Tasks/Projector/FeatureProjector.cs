@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Tasks.Journal;
 
 namespace ClaudeHomeServer.Services.Tasks.Projector;
 
@@ -590,7 +591,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     // не заводим.
     internal static List<FeatureEvent> BuildEvents(
         FeatureRun run,
-        IReadOnlyCollection<FeatureIndexSession> sessions)
+        IReadOnlyCollection<FeatureIndexSession> sessions,
+        IReadOnlyList<FeatureJournalEntry>? journal = null)
     {
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(sessions);
@@ -694,6 +696,13 @@ public sealed class FeatureProjector(TaskManager tasks)
                 }
             }
         }
+
+        // «Запущена из очереди» (волна 6): автоснятие очереди пишет hold_cleared с by=queue —
+        // в полях TaskItem следа нет, поэтому событие берётся из журнала (если он передан).
+        if (journal is not null)
+            foreach (var e in journal)
+                if (e.Kind == "hold_cleared" && e.By == FeatureHoldBy.Queue)
+                    Add(run.Epic, "started_from_queue", e.At, "Фича запущена из очереди");
 
         // Порядок: at desc, при равенстве — taskId (детерминизм).
         return events

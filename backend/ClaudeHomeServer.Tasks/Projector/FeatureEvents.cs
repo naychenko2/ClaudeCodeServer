@@ -14,7 +14,7 @@ public sealed record FeatureEvent(
     // DroppedByHumanAt/CompletedAt — по смыслу вида.
     DateTime At,
     // Вид события: created | started | stopped | waiting | accepted | accepted_with_remarks |
-    // returned | withdrawn | completed | dropped | merged | closed.
+    // returned | withdrawn | completed | dropped | merged | closed | started_from_queue.
     string Kind,
     // Id задачи, к которой относится событие.
     string TaskId,

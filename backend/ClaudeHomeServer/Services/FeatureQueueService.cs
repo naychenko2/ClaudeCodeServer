@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services;
 // реализацию; в проде это сам TaskExecutionService (другой копии тела снятия быть не должно).
 public interface IFeatureHoldReleaser
 {
-    Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold);
+    Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold, string? by = null);
 }
 
 // Очередь фич (волна 6, разрез Александра 25.10 §4–§7): очередь — не сущность, а удержание
@@ -153,7 +153,7 @@ public sealed class FeatureQueueService(
             var current = tasks.GetById(head.FeatureId)?.Hold;
             if (current is null || current.Reason != FeatureHoldReasons.Queue) continue;
 
-            var result = await releaser.ReleaseFeatureHold(head.FeatureId, ownerId, current);
+            var result = await releaser.ReleaseFeatureHold(head.FeatureId, ownerId, current, FeatureHoldBy.Queue);
             if (result.Outcome != FeatureHoldReleaseOutcome.Released) break;
             released.Add(head.FeatureId);
         }

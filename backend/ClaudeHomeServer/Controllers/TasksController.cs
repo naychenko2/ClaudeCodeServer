@@ -674,7 +674,8 @@ public class TasksController(
         // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по
         // ПОЛНОМУ run: reason вердикта = Verification.Notes, который Slim обнуляет для
         // списков/ответа (контракт master). run в ответе облегчён (SlimRun) — тот же контракт.
-        var all = FeatureProjector.BuildEvents(run, snapshot);
+        var journalResult = journal?.Read(UserId, featureId);
+        var all = FeatureProjector.BuildEvents(run, snapshot, journalResult?.Entries);
         var eventsTotal = all.Count;
         var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
         // Б-pl: документы фичи (вкладка «Планы и макеты») — СПИСОК (без текста) по ПОЛНОМУ run
@@ -704,7 +705,6 @@ public class TasksController(
         // (StartsWithCreated && !Truncated) → timeline в точном режиме (work/waiting/error/idle)
         // и модели breakdown из журнала; иначе approx (по задачам). Выключенный журнал →
         // source=approx, не 500 (Read сам не бросает: fail-closed на кривой id/отсутствие файла).
-        var journalResult = journal?.Read(UserId, featureId);
         var journalComplete = journalResult is { StartsWithCreated: true, Truncated: false };
         // Б6: breakdown (разрезы по персонам/моделям/ролям) + longestNow («дольше всех сейчас») —
         // тоже по ПОЛНОМУ run, на том же снимке владельца (fail-closed) и now. Журнал полный →

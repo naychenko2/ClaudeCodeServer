@@ -342,9 +342,9 @@ public class FeatureQueueServiceTests : IDisposable
         public ConcurrentQueue<string> Released { get; } = new();
         public Action? OnRelease { get; set; }
 
-        public Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold)
+        public Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold, string? by = null)
         {
-            var epic = tasks.ClearHold(featureId);
+            var epic = tasks.ClearHold(featureId, by);
             if (epic is null)
                 return Task.FromResult(new FeatureHoldRelease(FeatureHoldReleaseOutcome.NotHeld, [], []));
             Released.Enqueue(featureId);

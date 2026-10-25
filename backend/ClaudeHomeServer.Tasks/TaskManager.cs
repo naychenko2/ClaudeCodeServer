@@ -1418,7 +1418,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // Снятие паузы (W4-HOLD-D): только снимает состояние Hold — пометку feature_held НЕ
     // гасит: возврат прерванных шагов в работу (продолжение в тех же сессиях) — отдельный
     // шаг D с проверкой живости чата. Без него снятие паузы оставило бы задачи «остановленными».
-    public TaskItem? ClearHold(string id)
+    public TaskItem? ClearHold(string id, string? by = null)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null || task.Role != TaskRoles.Feature || task.Hold is null) return null;
@@ -1431,6 +1431,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             Kind = "hold_cleared",
             TaskId = task.Id,
             Reason = reason,
+            By = by,
         });
         ScheduleSave();
         return task;

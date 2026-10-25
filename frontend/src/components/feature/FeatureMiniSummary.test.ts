@@ -13,7 +13,9 @@
 import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { FeaturePage } from './FeaturePage';
+import { MiniTimeline, MiniTimelineAxis, SummaryRow } from './FeatureMiniSummary';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
@@ -248,5 +250,31 @@ describe('FeatureMiniSummary (Ф8) через страницу фичи', () => 
     expect(all, 'есть «ждёт вас»').toContain('ждёт вас');
     // Мутация «ждёт вас 45 мин» (вычисленное число) красит: после «ждёт вас» нет цифры.
     expect(all, 'после «ждёт вас» нет вычисленного числа минут').not.toMatch(/ждёт вас\s+\d/);
+  });
+
+  // === 7. строка итогов без «идёт N» / «шла N» (оно переехало в «Оценку») ===
+  it('строка итогов не содержит «идёт» / «шла» (мутация «вернуть идёт N» красит)', async () => {
+    mockGetFeature.result = pageData(mkStats());
+    const c = render();
+    await settle();
+    const all = textNodes(findNodeByAttr(c, 'data-testid', 'mini-summary-row')!).join('');
+    expect(all).not.toContain('идёт');
+    expect(all).not.toContain('шла');
+    expect(all, 'работа и ждёт остались').toContain('работа');
+  });
+
+  // === 8. экспорты для блока сводки: полоска, ось, итоги ===
+  it('экспортирует полоску, ось и итоги; ось: «сейчас» у идущей, «закрыта» у закрытой', () => {
+    const run = mkStats();
+    const html = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: run }));
+    expect(html).toContain('создана');
+    expect(html).toContain('сейчас');
+    const closed = mkStats();
+    closed.timeline = { ...closed.timeline, current: null };
+    const htmlClosed = renderToStaticMarkup(createElement(MiniTimelineAxis, { stats: closed }));
+    expect(htmlClosed).toContain('закрыта');
+    expect(htmlClosed).not.toContain('сейчас');
+    expect(renderToStaticMarkup(createElement(MiniTimeline, { stats: run }))).toContain('mini-timeline');
+    expect(renderToStaticMarkup(createElement(SummaryRow, { stats: run }))).toContain('mini-summary-row');
   });
 });

@@ -8,7 +8,7 @@
 
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
-import { formatDuration, buildTimelineModel, kindBackground } from './FeatureStatsBits';
+import { formatDuration, formatDateTime, formatClock, buildTimelineModel, kindBackground } from './FeatureStatsBits';
 import { formatTokens, formatUsd } from './FeatureStatsFormat';
 import type { FeatureStats } from '../../types/featureStats';
 
@@ -40,7 +40,7 @@ export interface FeatureMiniSummaryProps {
 }
 
 // Тонкая лента (8 px): сегменты в масштабе, без подписей.
-function MiniTimeline({ stats }: { stats: FeatureStats }) {
+export function MiniTimeline({ stats }: { stats: FeatureStats }) {
   const closed = stats.timeline.current == null;
   const model = buildTimelineModel(stats.timeline, stats.source, stats.truncated, closed);
   if (!model.hasData) return null;
@@ -84,12 +84,31 @@ function MiniTimeline({ stats }: { stats: FeatureStats }) {
   );
 }
 
-// Строка итогов: «идёт N · работа ≈ N · ждёт вас N» + токены + цена.
-function SummaryRow({ stats }: { stats: FeatureStats }) {
+// Ось под полоской: «создана … / сейчас …», у закрытой — «закрыта …».
+export function MiniTimelineAxis({ stats }: { stats: FeatureStats }) {
+  const tl = stats.timeline;
+  const closed = tl.current == null;
+  const from = formatDateTime(tl.from);
+  const to = closed ? formatDateTime(tl.to) : formatClock(tl.to);
+  if (!from && !to) return null;
+  return (
+    <div
+      data-testid="mini-timeline-axis"
+      style={{
+        display: 'flex', justifyContent: 'space-between', gap: SP.sm,
+        fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, marginBottom: SP.xs,
+      }}
+    >
+      <span>{from && `создана ${from}`}</span>
+      <span>{to && `${closed ? 'закрыта' : 'сейчас'} ${to}`}</span>
+    </div>
+  );
+}
+
+// Строка итогов: «работа ≈ N · ждёт вас N» + токены + цена.
+export function SummaryRow({ stats }: { stats: FeatureStats }) {
   const t = stats.timeline.totals;
   const isApprox = stats.source === 'approx';
-  const closed = stats.timeline.current == null;
-  const verb = closed ? 'шла' : 'идёт';
 
   // «Ждёт вас» / «не работали» — только из данных бэка (фронт не пересчитывает):
   //   journal + waitingMinutes != null → «ждала вас N» (N = totals.waitingMinutes);
@@ -118,9 +137,6 @@ function SummaryRow({ stats }: { stats: FeatureStats }) {
         fontSize: FS.sm, color: C.textSecondary, fontFamily: FONT.sans,
       }}
     >
-      <span>
-        {verb} <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{formatDuration(t.elapsedMinutes)}</b>
-      </span>
       <span>
         работа <b style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textHeading }}>{isApprox ? '≈ ' : ''}{formatDuration(t.workWallMinutes)}</b>
       </span>

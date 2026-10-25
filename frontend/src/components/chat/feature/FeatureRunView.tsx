@@ -715,7 +715,7 @@ export function FeatureRunView({
     if (opened) recordFeatureReturn(run.featureId, { kind: 'chat', id: chatId }, run.epic?.title ?? null, undefined, false);
     onClose?.();
   };
-  const openTask = (taskId: string) => { openTaskInSection({ id: taskId }); onClose?.(); };
+  const openTask = (taskId: string) => { openTaskInSection({ id: taskId, projectId: run.epic?.projectId ?? undefined }); onClose?.(); };
 
   // === Мерж (Ф6): общая модалка подтверждения → POST /merge ===
   // pending (кнопка «Запускаю…» заблокирована), успех (тост, диалог закрывается),

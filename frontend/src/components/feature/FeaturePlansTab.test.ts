@@ -35,6 +35,10 @@ vi.mock('../../lib/api', () => ({
   },
 }));
 
+// openTaskInSection (lib/tasks) — запись вызовов: переход в задачу обязан нести проект эпика.
+const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
+vi.mock('../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
+
 function plan(over: Partial<FeaturePlan> = {}): FeaturePlan {
   return {
     taskId: 't1', role: 'plan', title: 'План', authorPersonaId: null,
@@ -130,6 +134,7 @@ describe('FeaturePlansTab', () => {
     mockTaskGet.result = { resultMarkdown: 'текст' };
     mockTaskGet.error = null;
     mockTaskGet.calls = [];
+    mockOpenTask.calls = [];
   });
   afterEach(() => {
     uninstallFakeDom();
@@ -429,5 +434,26 @@ describe('FeaturePlansTab', () => {
     const desktop = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
     expect(colsOf(desktop.container as FNode, 'plans-grid-docs')).toBe('repeat(3, minmax(0, 1fr))');
     expect(colsOf(desktop.container as FNode, 'plans-grid-mockups')).toBe('repeat(3, minmax(0, 1fr))');
+  });
+
+  // === Переход в задачу: проект эпика, а не личный «Календарь» и не проект страницы ===
+  it('читалка плана: «задача» → openTaskInSection с projectId эпика (не страницы)', async () => {
+    const page = pageData({ plans: [plan({ taskId: 'plan-t' })] });
+    (page.run as { epic?: unknown }).epic = { id: 'f1', title: 'Фича', status: 'todo', projectId: 'proj-epic' };
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, featureId: 'f1', projectId: 'proj-page' }));
+    click(container as FNode, 'plan-row');
+    await flush();
+    click(container as FNode, 'nav-target-task');
+    expect(mockOpenTask.calls).toEqual([{ id: 'plan-t', projectId: 'proj-epic' }]);
+  });
+
+  it('карточка макета: «задача макета» → openTaskInSection с projectId эпика', async () => {
+    const page = pageData({ mockups: [mockup({ taskId: 'mock-t' })] });
+    (page.run as { epic?: unknown }).epic = { id: 'f1', title: 'Фича', status: 'todo', projectId: 'proj-epic' };
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    click(container as FNode, 'mockup-row');
+    await flush();
+    click(container as FNode, 'nav-target-task');
+    expect(mockOpenTask.calls).toEqual([{ id: 'mock-t', projectId: 'proj-epic' }]);
   });
 });

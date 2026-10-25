@@ -112,6 +112,8 @@ function GroupHeader({ label, count, isMobile }: { label: string; count: number;
 
 export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat, marks: marksProp, featureId = null, projectId = null }: FeaturePlansTabProps) {
   const marks = useMemo(() => marksProp ?? buildNavMarks(page.run, page.chats), [marksProp, page]);
+  // Проект эпика — область перехода в задачу; нет эпика — проект страницы.
+  const taskProjectId = page.run.epic?.projectId ?? projectId;
   // Документы: порядок cut → plan → consult (макет). Дедуп планов (решение Андрея):
   // переписанный план — показываем ПОСЛЕДНИЙ по createdAt; разрезы и консультации — все.
   const plans = useMemo(() => {
@@ -159,8 +161,8 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
           Все документы
         </Button>
         {selectedPlan
-          ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile={isMobile} onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} marks={marks} featureId={featureId} projectId={projectId} documents={plans} onOpenDocument={id => setSelected({ kind: 'plan', id })} />
-          : <MockupCard mockup={selectedMockup!} plans={plans} onOpenFile={onOpenFile} isMobile={isMobile} replaced={selectedMockupReplaced} marks={marks} />}
+          ? <FeaturePlanReader plan={selectedPlan} mockups={mockups} isMobile={isMobile} onOpenMockup={p => setSelected({ kind: 'mockup', path: p })} onOpenTask={onOpenTask} marks={marks} featureId={featureId} projectId={projectId} taskProjectId={taskProjectId} documents={plans} onOpenDocument={id => setSelected({ kind: 'plan', id })} />
+          : <MockupCard mockup={selectedMockup!} plans={plans} onOpenFile={onOpenFile} isMobile={isMobile} replaced={selectedMockupReplaced} marks={marks} taskProjectId={taskProjectId} />}
       </div>
     );
   }

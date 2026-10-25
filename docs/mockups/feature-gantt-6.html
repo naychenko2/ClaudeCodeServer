@@ -596,7 +596,9 @@ function render() {
   $('#meter').textContent = gh ? `высота Ганта: ${Math.round(gh.getBoundingClientRect().height)} px` : (ST.v === 'C' ? 'высота Ганта: +0 px (живёт в строках ленты)' : '');
   $('#cap').innerHTML = CAPS[ST.v];
   if (fk && !document.activeElement.closest('#pop, .sheet')) { const el = document.querySelector(fk); if (el) { restoring = true; el.focus({ preventScroll:true }); restoring = false; } }
-  location.replace('#' + [ST.v, ST.s, ST.t, ST.w].join('-'));
+  /* location.hash, а не location.replace: в iframe предпросмотра (srcDoc) replace сносит документ.
+     history.replaceState здесь тоже не годится — SecurityError в srcDoc-документе. */
+  location.hash = [ST.v, ST.s, ST.t, ST.w].join('-');
 }
 const CAPS = {
   A: '<b>A · Сводная полоса.</b> Над лентой одна строка: все интервалы на общей оси, ревью тонкой дорожкой снизу, справа контур «ещё N этапов». «Все 8 этапов» раскрывает полный Гант внутри той же карточки. Самый компактный вариант: 85 px на 1280 и 99 px на 360.',

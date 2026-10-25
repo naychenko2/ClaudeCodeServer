@@ -74,6 +74,19 @@ public class TaskManagerPregateTests : IDisposable
     }
 
     [Fact]
+    public void СменаДереваВТомЖеЗапросеЧтоЗакрытие_Закрывается_ДеревоМеняется()
+    {
+        var task = Step();
+        _sut.RecordPregate(task.Id, Sha1, true, "", null);
+
+        var closed = _sut.Update(task.Id,
+            new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: "/tmp/wt-other"), isAgentCall: true)!;
+
+        closed.Status.Should().Be(TaskItemStatus.Done, "подмена дерева закрытие не блокирует");
+        closed.WorktreePath.Should().Be("/tmp/wt-other");
+    }
+
+    [Fact]
     public void Applies_РольИДерево()
     {
         PregateRules.Applies(TaskRoles.Step, Wt).Should().BeTrue();

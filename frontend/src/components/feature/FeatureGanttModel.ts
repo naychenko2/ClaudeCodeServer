@@ -6,9 +6,12 @@
 // и stats.timeline; чего нет в данных — явный null. Рендер (W4-4F2) ничего не считает —
 // только читает эту модель.
 
-import type { FeatureRun, FeatureRound, StageKey, StageState } from '../../types/featureRun';
+import type { FeatureRun, StageKey, StageState } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
 import { stageLabel, minutesSince } from './FeatureStatsBits';
+// Флажки возвратов переехали в модель дорожек (GC-F2): общий collectReturnFlags,
+// поведение не менялось.
+import { collectReturnFlags, type GanttReturnFlag } from './FeatureLaneModel';
 // Состояние «тихо» — из общей строки анализа (W5-F1), не своя арифметика по датам.
 import { analysisLineState } from './FeatureAnalysisModel';
 
@@ -20,20 +23,6 @@ export interface GanttSegment {
   to: string;
   kind: GanttSegmentKind;
   minutes: number;
-}
-
-// Флажок возврата: виток с вердиктом returned/accepted_with_remarks и закрытым completedAt.
-export interface GanttReturnFlag {
-  // completedAt витка — точка флажка на оси времени.
-  at: string;
-  roundN: number;
-  // PersonaId оценившего — для tooltip «{Имя} вернул {Ш3}».
-  who: string | null;
-  // Код возвращённого шага (у витков цепочки; у витков qa/final — null, шага в данных нет).
-  stepRef: string | null;
-  // Причина: Verification.Notes.
-  reason: string | null;
-  reviewChatId: string | null;
 }
 
 // Части пилюли «сейчас» на активном этапе; текст собирает рендер (десктоп/360 — разный).
@@ -103,33 +92,6 @@ function spanMinutes(from: string, to: string): number {
   const b = new Date(to).getTime();
   if (Number.isNaN(a) || Number.isNaN(b)) return 0;
   return Math.max(0, Math.round((b - a) / 60000));
-}
-
-// Витки-возвраты: цепочки шагов + стадии qa/final. «Принят с замечаниями» — тоже возврат
-// (работа вернулась к исполнителю); незакрытый виток (completedAt null) — не флажок.
-function collectReturnFlags(run: FeatureRun): GanttReturnFlag[] {
-  const flags: GanttReturnFlag[] = [];
-  const push = (r: FeatureRound, stepRef: string | null) => {
-    if ((r.verdict === 'returned' || r.verdict === 'accepted_with_remarks') && r.completedAt) {
-      flags.push({
-        at: r.completedAt,
-        roundN: r.n,
-        who: r.personaId ?? null,
-        stepRef,
-        reason: r.reason ?? null,
-        reviewChatId: r.reviewChatId ?? null,
-      });
-    }
-  };
-  for (const chain of run.stepChains ?? []) {
-    for (const r of chain.rounds ?? []) push(r, chain.stepRef ?? null);
-  }
-  for (const s of run.stages ?? []) {
-    if (s.key !== 'qa' && s.key !== 'final') continue;
-    for (const r of s.rounds ?? []) push(r, null);
-  }
-  flags.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
-  return flags;
 }
 
 // «Тихо» (W5-F3b, спецификация features-overview-5.md §«Точка 6 · строка „тихо“ на Ганте»):

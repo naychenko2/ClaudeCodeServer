@@ -368,6 +368,26 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         body.GetProperty("title").GetString().Should().Be("найди меня");
     }
 
+    // Запись предгейта видна в карточке задачи: ревьюер смотрит GET /api/tasks/{id} и должен
+    // увидеть вердикт и коммит, к которому он привязан.
+    [Fact]
+    public async Task GetById_УЗадачиСПредгейтом_ОтдаётВердиктИSha()
+    {
+        var task = await CreateTaskAsync(new { title = "шаг с предгейтом" });
+        var id = task.GetProperty("id").GetString()!;
+        var sha = "abcdef1234567890abcdef1234567890abcdef12";
+        _factory.Services.GetRequiredService<TaskManager>()
+            .RecordPregate(id, sha, green: true, summary: "", redKey: null);
+
+        var response = await _client.GetAsync($"/api/tasks/{id}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var pregate = body.GetProperty("pregate");
+        pregate.GetProperty("green").GetBoolean().Should().BeTrue();
+        pregate.GetProperty("sha").GetString().Should().Be(sha);
+    }
+
     [Fact]
     public async Task Update_МеняетПоля()
     {

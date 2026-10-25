@@ -28,7 +28,14 @@ public class TaskPregateServiceTests : IDisposable
         public Queue<string?> Heads { get; } = new();
         public bool? Clean { get; set; } = true;
         public IReadOnlyList<string>? Changed { get; set; } = ["frontend/a.tsx"];
-        public string? Head(string worktreePath) => Heads.Count > 1 ? Heads.Dequeue() : Heads.Peek();
+        // Задержка на git-проверке: имитация медленного дерева, чтобы проверить, что потолок
+        // прогона идёт ДО них (иначе сумма git + проверки перевалила бы MCP_TOOL_TIMEOUT)
+        public TimeSpan Delay { get; set; } = TimeSpan.Zero;
+        public string? Head(string worktreePath)
+        {
+            if (Delay > TimeSpan.Zero) Thread.Sleep(Delay);
+            return Heads.Count > 1 ? Heads.Dequeue() : Heads.Peek();
+        }
         public bool? IsClean(string worktreePath) => Clean;
         public IReadOnlyList<string>? ChangedFiles(string worktreePath) => Changed;
     }
@@ -37,6 +44,7 @@ public class TaskPregateServiceTests : IDisposable
     {
         public PregateRequest? Request { get; private set; }
         public IReadOnlyList<PregateCheckResult> Checks { get; set; } = [new PregateCheckResult("tsc", PregateStatus.Green)];
+        public int CeilingSeconds { get; set; } = 540;
         public Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct)
         {
             Request = request;
@@ -114,6 +122,23 @@ public class TaskPregateServiceTests : IDisposable
         outcome.Status.Should().Be(TaskPregateStatus.Recorded);
         _pregate.Request!.ChangedFiles.Should().Equal("frontend/a.tsx");
         _tasks.GetById(_task.Id)!.Pregate!.Sha.Should().Be(Sha1);
+    }
+
+    // Потолок прогона ставится ДО git-проверок дерева: иначе сумма (git + проверки) считалась бы
+    // отдельно и могла перевалить MCP_TOOL_TIMEOUT хода. Медленное дерево съедает потолок —
+    // проверки тогда уже не запускаются.
+    [Fact]
+    public async Task ПотолокИстёкНаGitПроверках_ПроверкиНеЗапускались()
+    {
+        _pregate.CeilingSeconds = 1;
+        _reader.Delay = TimeSpan.FromSeconds(2);
+
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.NotRun);
+        outcome.Text.Should().Contain("Потолок");
+        _pregate.Request.Should().BeNull("проверки не запускались: потолок истёк на git-проверках");
+        _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
     }
 
     [Fact]

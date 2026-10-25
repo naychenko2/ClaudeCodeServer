@@ -67,6 +67,10 @@ public sealed class PregateService : ITaskPregate
         _uiProbe = uiProbe;
     }
 
+    // Потолок прогона объявляем наружу: потребитель (TaskPregateService) ставит его ДО своих
+    // git-проверок дерева, чтобы бюджет хода (MCP_TOOL_TIMEOUT) считался целиком
+    public int CeilingSeconds => _testRunsOptions.CeilingSeconds;
+
     public async Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct)
     {
         if (_options.Checks.Count == 0) return new PregateVerdict([]);

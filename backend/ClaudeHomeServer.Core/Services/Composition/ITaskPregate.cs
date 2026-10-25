@@ -13,6 +13,11 @@ public interface ITaskPregate
     // проверка с фильтром WhenChanged пропускается, если ни один файл не подходит; null — фильтр
     // не применяется (идут все проверки)
     Task<PregateVerdict> RunAsync(PregateRequest request, CancellationToken ct);
+
+    // Потолок одного прогона, с. Потребитель ставит его ДО своих проверок дерева (git): бюджет
+    // хода (MCP_TOOL_TIMEOUT) должен считать и git, и проверки целиком, иначе сумма перевалит его.
+    // Потолок обязателен быть МЕНЬШЕ MCP_TOOL_TIMEOUT — ответ модели должен успеть уйти.
+    int CeilingSeconds { get; }
 }
 
 // UiRoutes — маршруты для ui-probe из постановки задачи (строка «UI-маршруты: …»); пусто — замер невозможен

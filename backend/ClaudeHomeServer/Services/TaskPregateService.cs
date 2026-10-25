@@ -12,7 +12,7 @@ public enum TaskPregateStatus
     NotFound,
     // Подсистема test-runs выключена — шва нет, прогонять нечем
     Disabled,
-    // Не шаг/доработка или нет собственного дерева: гейт задачу не касается
+    // Не шаг/доработка или нет собственного дерева: предгейт задачу не касается
     NotApplicable,
     // Прогон не состоялся (дерево занято, потолок, «Стоп», нет git): результат не записан
     NotRun,
@@ -38,6 +38,12 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         var project = task.ProjectId is null ? null : projects.GetById(task.ProjectId);
         if (project is null)
             return new(TaskPregateStatus.NotRun, "Проект задачи не найден — предгейт не запущен.");
+
+        // Потолок прогона — от первого касания дерева: git-проверки (Head/IsClean/ChangedFiles)
+        // входят в тот же бюджет, что и сами проверки. Иначе сумма (git + проверки) могла бы
+        // перевалить MCP_TOOL_TIMEOUT хода, а ход обязан успеть ответить модели.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(pregate.CeilingSeconds));
         var sha = heads.Head(task.WorktreePath!);
         if (sha is null)
             return new(TaskPregateStatus.NotRun, "Не удалось определить текущий коммит дерева шага — предгейт не запущен.");
@@ -52,9 +58,12 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
         if (!clean.Value)
             return new(TaskPregateStatus.NotRun, "В дереве шага есть незакоммиченные или неотслеживаемые изменения: "
                 + "результат привязывается к коммиту, а проверки идут по файлам. Закоммить правки и прогони предгейт снова.");
+        // Потолок истёк на git-проверках — проверки уже не запустить: бюджет хода общий
+        if (limit.IsCancellationRequested)
+            return new(TaskPregateStatus.NotRun, "Потолок предгейта истёк на проверках дерева — предгейт не запущен.");
 
         var verdict = await pregate.RunAsync(new PregateRequest(project, task.WorktreePath!, sessionId,
-            heads.ChangedFiles(task.WorktreePath!), PregateRules.UiRoutes(task.Description)), ct);
+            heads.ChangedFiles(task.WorktreePath!), PregateRules.UiRoutes(task.Description)), limit.Token);
         if (verdict.Refusal is { } refusal)
             return new(TaskPregateStatus.NotRun, "Предгейт не состоялся: " + refusal);
         if (!string.Equals(heads.Head(task.WorktreePath!), sha, StringComparison.OrdinalIgnoreCase))

@@ -1355,6 +1355,7 @@ public sealed class TasksToolset(
             "Пометить задачу выполненной (status → done) и сразу прикрепить итог: " +
             "resultMarkdown (что сделано) и linkedFiles (итоговые файлы). Для дефекта — " +
             "verification (кто проверил) или outcome (внутренний путь closedWithoutCheck). " +
+            "Шаг с деревом: перед закрытием прогони `pregate` — вердикт увидит ревьюер. " +
             "Это ТОЛЬКО смена статуса — исполнителя запускает tasks_run_executor.",
             new JsonObject
             {

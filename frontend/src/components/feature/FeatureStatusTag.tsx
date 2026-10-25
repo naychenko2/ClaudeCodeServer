@@ -20,7 +20,7 @@ import { Pause } from 'lucide-react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
 import { ICON_STROKE } from '../ui/icons';
 import { MERGE_PENDING_STATUS, type FeatureStatusTag } from '../../lib/chatGroups';
-import type { FeatureState } from '../../types/featureRun';
+import type { FeatureQueue, FeatureState } from '../../types/featureRun';
 
 export type FeatureRunTagTone = 'notStarted' | 'run' | 'wait' | 'stop' | 'merge' | 'loop' | 'merged' | 'closed' | 'hold' | 'draft';
 export interface FeatureRunTag {
@@ -33,7 +33,20 @@ export interface FeatureRunTag {
 // Тег для состояния вне словаря (бэк опередил фронт).
 export const UNKNOWN_RUN_TAG: FeatureRunTag = { label: 'статус неизвестен', tone: 'notStarted' };
 
-export function featureRunStatusTag(state: FeatureState, stageName?: string | null): FeatureRunTag {
+// Удержание для подписи паузы: причина и место в очереди (позицию считает бэк).
+export interface FeatureHoldInfo {
+  holdReason?: string | null;
+  queue?: FeatureQueue | null;
+}
+
+// «в очереди · 2 из 3»; без queue (бэк ещё не отдал) — просто «в очереди», нулей не показываем.
+function queueLabel(queue?: FeatureQueue | null): string {
+  return queue && queue.position > 0 && queue.length > 0
+    ? `в очереди · ${queue.position} из ${queue.length}`
+    : 'в очереди';
+}
+
+export function featureRunStatusTag(state: FeatureState, stageName?: string | null, hold?: FeatureHoldInfo): FeatureRunTag {
   switch (state) {
     case 'not_started':
     case 'idle':
@@ -47,6 +60,7 @@ export function featureRunStatusTag(state: FeatureState, stageName?: string | nu
     case 'paused':
       // Тон активной стадии при паузе на бэке остаётся «run» — stageName сюда не
       // подмешиваем: при паузе нет «идёт», есть «на паузе» (вердикт ревью W4-HOLD-F2).
+      if (hold?.holdReason === 'queue') return { label: queueLabel(hold.queue), tone: 'hold' };
       return { label: 'на паузе', tone: 'hold' };
     case 'draft':
       return { label: 'черновик', tone: 'draft' };

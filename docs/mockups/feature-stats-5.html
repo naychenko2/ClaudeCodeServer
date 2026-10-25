@@ -410,8 +410,9 @@ function renderA(D, m) {
   } else if (D.key === 'waiting') {
     eyebrow = `<span class="chip t-wait"><span class="d"></span>ждёт вас</span><span class="muted" style="font-size:12px">с ${clock(D.attention.since)}</span>`;
     big = fmt(D.attention.dur); sub = `фича стоит, пока нет ответа · всего прошло ${fmt(D.elapsed)}`;
-    extra = `<div class="a-ask">${av(D.attention.who)} <b>${P[D.attention.who].n}</b> · ${D.attention.step}<br>${D.attention.text}</div>
-      <div class="a-actions"><button class="btn pri">Ответить в чате</button><button class="btn gh">Открыть задачу</button></div>`;
+    // Решение Андрея (сверка 25.10): вопрос исполнителя и «Ответить в чате» живут в строке анализа
+    // над вкладкой (FeatureAnalysisLine) и в герое не дублируются — здесь только «Открыть задачу».
+    extra = `<div class="a-actions"><button class="btn gh">Открыть задачу</button></div>`;
   } else if (D.key === 'merged') {
     eyebrow = `<span class="chip t-ok">✓ смержена</span><span class="muted" style="font-size:12px">24.10 · ${D.summary.at}</span>`;
     big = fmt(D.elapsed); sub = `от разреза до мержа · ${D.summary.tasks} задач · ${D.summary.steps} шагов · ${D.summary.loops} возврата`;

@@ -187,6 +187,8 @@ button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
     <button data-v="running" class="on">идёт</button><button data-v="waiting">ждёт вас</button><button data-v="merged">смержена</button><button data-v="thin">мало данных</button><button data-v="nocost">без расхода</button></div></div>
   <div class="grp"><span class="lbl">Разрез</span><div class="pills" data-k="a">
     <button data-v="personas" class="on">персоны</button><button data-v="models">модели</button><button data-v="roles">роли</button></div></div>
+  <div class="grp"><span class="lbl">Мера</span><div class="pills" data-k="me">
+    <button data-v="time" class="on">время</button><button data-v="tokens">токены</button><button data-v="cost">деньги</button></div></div>
   <div class="grp"><span class="lbl">Тема</span><div class="pills" data-k="t">
     <button data-v="light">светлая</button><button data-v="dark">тёмная</button><button data-v="both" class="on">обе</button></div></div>
   <div class="grp"><span class="lbl">Ширина</span><div class="pills" data-k="w">
@@ -229,10 +231,12 @@ const RUN = {
     ['review', 65, 1.4e6, 2.40, [], { personas: ['gleb'], models: ['opus'] }],
     ['plan', 60, 0.9e6, 1.10, [], { personas: ['egor'], models: ['sonnet'] }],
     ['cut', 18, 0.3e6, 0.30, [], { personas: ['sofya'], models: ['haiku'] }],
+    // Роль feature — работа координатора на эпике: строка «координация», не прячется (сверка 25.10).
+    ['feature', 12, 0.2e6, 0.20, [], { personas: ['sofya'], models: ['haiku'] }],
   ],
 };
 const MN = { opus: ['Opus 5.5', 'облако'], sonnet: ['Sonnet 5.5', 'облако'], qwen: ['Qwen 3.8', 'локальная · бесплатно'], haiku: ['Haiku 5.5', 'облако'] };
-const RN = { step: ['шаг', ''], rework: ['доработка', ''], review: ['ревью', ''], plan: ['план', ''], cut: ['разрез', ''], qa: ['проверка', ''], final: ['финал', ''], merge: ['мерж', ''] };
+const RN = { step: ['шаг', ''], rework: ['доработка', ''], review: ['ревью', ''], plan: ['план', ''], cut: ['разрез', ''], feature: ['координация', ''], qa: ['проверка', ''], final: ['финал', ''], merge: ['мерж', ''] };
 const clone = o => JSON.parse(JSON.stringify(o));
 const WAIT = clone(RUN); WAIT.personas[1][6] = 'wait';
 const MERGED = clone(RUN);
@@ -261,10 +265,14 @@ function markOf(ax, k, i) {
 }
 function liveChip(g) { return g[6] === 'run' ? '<span class="chip t-run"><span class="d live"></span>работает</span>' : g[6] === 'wait' ? '<span class="chip t-wait"><span class="d"></span>ждёт вас</span>' : ''; }
 const MET = { time: 1, tokens: 2, cost: 3 };
+const MET_GEN = { time: 'времени', tokens: 'токенов', cost: 'денег' };
+// Действующая мера: без учёта расхода — время (как effectiveMeasure в коде).
+const effMet = D => D.nocost ? 'time' : st.me;
 const valOf = (g, met) => met === 'time' ? g[1] : met === 'tokens' ? (g[2] || 0) : (g[3] || 0);
 const fmtVal = (g, met) => met === 'time' ? fmt(g[1]) : met === 'tokens' ? tok(g[2]) : usd(g[3]);
 function metSeg(D, met, m) {
   const off = D.nocost ? 'off' : '';
+  met = st.v === 'C' ? effMet(D) : met;
   return `<span class="seg"><span class="${met === 'time' ? 'on' : ''}">время</span><span class="${met === 'tokens' ? 'on' : ''} ${off}" title="${off ? 'нет учёта расхода' : ''}">токены</span><span class="${met === 'cost' ? 'on' : ''} ${off}">деньги</span></span>`;
 }
 function axSeg(ax) { return `<span class="seg">${Object.keys(AXN).map(k => `<span class="${k === ax ? 'on' : ''}">${AXN[k]}</span>`).join('')}</span>`; }
@@ -324,7 +332,10 @@ function renderB(D, ax, m) {
 
 // ===== C · Таблица =====
 function renderC(D, ax, m) {
-  const gs = D[ax];
+  // Единый выбор (сверка 25.10): мера шапки = сортировка таблицы и карточек = доля в карточке;
+  // клик по заголовку колонки на 1280 переключает ту же меру в шапке.
+  const met = effMet(D), K = MET[met];
+  const gs = D[ax].slice().sort((a, b) => (b[K] || 0) - (a[K] || 0));
   if (gs.length < 2) return `<div class="card">${head(ax, D, m)}${emptyBlock()}</div>`;
   const mx = k => Math.max(...gs.map(g => g[k] || 0), 1);
   const tot = k => gs.reduce((a, g) => a + (g[k] || 0), 0);
@@ -338,19 +349,19 @@ function renderC(D, ax, m) {
     const rows = gs.map((g, i) => { const [n] = nameOf(ax, g[0]);
       const ms = [[1, 'время'], [2, 'токены'], [3, 'деньги']].map(([k, l]) => g[k] == null ? `<span>${l}</span><span class="muted">нет учёта</span><span></span>` :
         `<span>${l}</span><span class="bar"><i style="width:${g[k] / mx(k) * 100}%;background:${colorOf(ax, g[0], i)}"></i></span><span class="v">${k === 1 ? fmt(g[k]) : k === 2 ? tok(g[k]) : usd(g[k])}</span>`).join('');
-      return `<button class="c-mr ${g === sel ? 'sel' : ''}"><div class="top">${markOf(ax, g[0], i)}${n}${ax === 'personas' ? liveChip(g) : ''}<span class="p">${Math.round(g[1] / tot(1) * 100)} %</span></div>
+      return `<button class="c-mr ${g === sel ? 'sel' : ''}"><div class="top">${markOf(ax, g[0], i)}${n}${ax === 'personas' ? liveChip(g) : ''}<span class="p">${Math.round((g[K] || 0) / (tot(K) || 1) * 100)} %</span></div>
         <div class="c-chips" style="margin-top:6px">${rel(g)}</div><div class="ms">${ms}</div></button>`; }).join('');
-    return `<div class="card">${head(ax, D, m)}<div class="muted" style="font-size:11px;margin-bottom:8px">По убыванию времени · сортировка — в шапке</div><div class="c-m">${rows}</div>${chatsOf(D, ax, sel)}</div>`;
+    return `<div class="card">${head(ax, D, m)}<div class="muted" style="font-size:11px;margin-bottom:8px">По убыванию ${MET_GEN[met]} · сортировка — в шапке</div><div class="c-m">${rows}</div>${chatsOf(D, ax, sel)}</div>`;
   }
   const relTitle = ax === 'personas' ? 'Модели и роли' : 'Кто';
   const rows = gs.map((g, i) => { const [n, sub] = nameOf(ax, g[0]);
     return `<tr class="${g === sel ? 'sel' : ''}"><td><div class="c-nm">${markOf(ax, g[0], i)}<div>${n}${sub ? `<small>${sub}</small>` : ''}</div>${ax === 'personas' ? liveChip(g) : ''}</div></td>
       <td><div class="c-chips">${rel(g)}</div></td><td>${cell(g, 1, i)}</td><td>${cell(g, 2, i)}</td><td>${cell(g, 3, i)}</td><td style="text-align:right"><span style="color:var(--c-accent);font-size:12px;font-weight:600">${(g[4].length || '') && g[4].length + ' чат.'} ›</span></td></tr>`; }).join('');
   const totRow = `<tr class="c-tot"><td>Всего</td><td></td><td class="mono">${fmt(tot(1))}</td><td class="mono">${D.nocost ? '—' : tok(tot(2))}</td><td class="mono">${D.nocost ? '—' : usd(tot(3))}</td><td></td></tr>`;
-  return `<div class="card">${head(ax, D, m, '')}<table class="c-tab"><thead><tr><th>${AXN[ax]}</th><th>${relTitle}</th><th class="s">время</th><th>токены</th><th>деньги</th><th></th></tr></thead><tbody>${rows}${totRow}</tbody></table>${chatsOf(D, ax, sel)}</div>`;
+  return `<div class="card">${head(ax, D, m, '')}<table class="c-tab"><thead><tr><th>${AXN[ax]}</th><th>${relTitle}</th>${[['time', 'время'], ['tokens', 'токены'], ['cost', 'деньги']].map(([k, l]) => `<th class="${k === met ? 's' : ''}">${l}</th>`).join('')}<th></th></tr></thead><tbody>${rows}${totRow}</tbody></table>${chatsOf(D, ax, sel)}</div>`;
 }
 
-const st = { v: 'A', s: 'running', a: 'personas', t: 'both', w: 'both', m: 'on' };
+const st = { v: 'A', s: 'running', a: 'personas', me: 'time', t: 'both', w: 'both', m: 'on' };
 const NOTES = {
   A: 'A · «Кольцо»: доля группы — кольцом с итогом в центре, рядом список: время, токены, деньги, %. Самая крупная группа выбрана и раскрывает чаты с подписями шагов. Живые персоны отмечены «работает» / «ждёт вас».',
   B: 'B · «Три полосы»: все три разреза сразу, каждый — полоса 100 %. Выбор группы в одной полосе подсвечивает связанное в двух других (Тимур → Opus 5.5 → шаг, доработка). Переключатель разреза не нужен.',

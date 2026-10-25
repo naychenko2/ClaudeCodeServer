@@ -58,6 +58,8 @@ public class FeaturePlansTests
     // ── 1. Порядок: роль (cut → plan → consult), внутри роли по CreatedAt ───────────────────
 
     // cut (c2 раньше, c1 позже) → plan → consult; внутри cut — по CreatedAt (c2, c1).
+    // Порядок входа фикстуры ПРОТИВОРЕЧИТ порядку CreatedAt (c1 подаётся раньше c2):
+    // без OrderBy внутри роли результат вышел бы «c1, c2» и тест покраснел.
     [Fact]
     public void BuildPlans_Порядок_Роль_И_ВнутриРолиПоCreatedAt()
     {
@@ -71,7 +73,7 @@ public class FeaturePlansTests
         var k1 = Child("k1", "epic", TaskRoles.Consult, "Консультация",
             createdAt: new DateTime(2026, 10, 1, 12, 0, 0));
 
-        var plans = FeatureProjector.BuildPlans(Run(epic, c2, c1, p1, k1));
+        var plans = FeatureProjector.BuildPlans(Run(epic, c1, c2, p1, k1));
 
         // Порядок: cut (c2, c1 по CreatedAt) → plan (p1) → consult (k1).
         plans.Select(p => p.TaskId).Should().Equal("c2", "c1", "p1", "k1");
@@ -119,8 +121,10 @@ public class FeaturePlansTests
         var k1 = Child("k1", "epic", TaskRoles.Consult, "Консультация",
             createdAt: new DateTime(2026, 10, 1, 13, 0, 0));
 
-        // Задачи даны вперемешку — порядок должен выводиться из роли и CreatedAt.
-        var plans = FeatureProjector.BuildPlans(Run(epic, k1, p1, d2, c1, d1));
+        // Задачи даны вперемешку, а внутри design порядок входа ПРОТИВОРЕЧИТ порядку CreatedAt
+        // (d1 11:00 подаётся раньше d2 10:00): без OrderBy внутри роли вышло бы «d1, d2» и
+        // тест покраснел.
+        var plans = FeatureProjector.BuildPlans(Run(epic, k1, p1, d1, c1, d2));
 
         plans.Select(p => p.TaskId).Should().Equal("c1", "d2", "d1", "p1", "k1");
         plans.Select(p => p.Role).Should().Equal("cut", "design", "design", "plan", "consult");

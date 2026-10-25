@@ -5,8 +5,8 @@
 // кольцо, таблица и карточки видят ОДИН набор групп; плашка costPartial стоит
 // рядом с кольцом, колонца кольца фиксирована 140 px и не растягивается плашками
 // (М2); «без расхода» — плашка «нет учёта» и приглушённые опции меры;
-// меньше двух групп — «Пока нечего разрезать»; мобила — карточки, без кольца и
-// таблицы. Числа — те, что отдаёт модель ST-F8; пересчёт в оболочке не проверяем.
+// меньше двух групп — «Пока нечего разрезать»; мобила — кольцо 180 над карточками, без
+// таблицы; недоступная мера — disabled. Числа — те, что отдаёт модель ST-F8; пересчёт в оболочке не проверяем.
 //
 // Мутации (проверены прогоном):
 // - убрать фильтр hiddenKeys в оболочке (дать ShareRing сырые группы) — краснеет
@@ -216,7 +216,9 @@ describe('один набор групп для кольца, таблицы и 
     expect(aria).toContain('Кира');
     expect(aria).toContain('Тимур');
     expect(aria).toContain('Вера');
-    expect(aria, 'скрытый ключ в aria-label кольца').not.toContain('фича');
+    // Список меток дуг целиком: скрытой группы среди них нет (не подстрока слова).
+    const labels = aria.replace(/^[^:]*:\s*/, '').split(', ').map(p => p.split(' — ')[0]).sort();
+    expect(labels).toEqual(['Вера', 'Кира', 'Тимур']);
     expect(findNodeByAttr(container, 'data-testid', 'breakdown-row-feature'), 'скрытая строка в таблице').toBeNull();
     // Одинаковое множество: дуг в кольце ровно столько, сколько строк в таблице.
     expect(ringArcCount(container)).toBe(3);
@@ -286,11 +288,13 @@ describe('плашки (к2)', () => {
 });
 
 describe('мобила (к1)', () => {
-  it('на 360 — карточки, без кольца и таблицы; плашки остаются', () => {
+  it('на 360 — карточки и кольцо 180 над ними, без таблицы; плашки остаются', () => {
     mobileFlag.value = true;
     const { container } = mountBlock({ costPartial: true });
     expect(findNodeByAttr(container, 'data-testid', 'feature-breakdown-cards'), 'карточек нет').toBeTruthy();
-    expect(findNodeByAttr(container, 'data-testid', 'share-ring'), 'кольца на мобиле').toBeNull();
+    const ring = findNodeByAttr(container, 'data-testid', 'share-ring');
+    expect(ring, 'кольца на мобиле нет').toBeTruthy();
+    expect(ring!.style.width).toBe('180px');
     expect(findNodeByAttr(container, 'data-testid', 'feature-breakdown-table'), 'таблицы на мобиле').toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'breakdown-cost-partial'), 'плашки costPartial').toBeTruthy();
   });
@@ -304,5 +308,58 @@ describe('мобила (к1)', () => {
     for (const key of ['feature', 'kira', 'timur', 'vera']) {
       expect(findNodeByAttr(container, 'data-testid', `share-pct-${key}`), `доли карточки ${key}`).toBeTruthy();
     }
+  });
+
+  it('на 360 мера «токены»: порядок и доли карточек — по токенам, а не по времени', () => {
+    mobileFlag.value = true;
+    const { container } = mountBlock({ hiddenKeys: ['feature'] });
+    click(findButtonByLabel(headNode(container)!, 'токены'));
+    const cards = findNodeByAttr(container, 'data-testid', 'feature-breakdown-cards')!;
+    const order = cards.children
+      .filter(c => (c.getAttribute('data-testid') ?? '').startsWith('breakdown-card-'))
+      .map(c => (c.getAttribute('data-testid') as string).slice('breakdown-card-'.length));
+    expect(order).toEqual(['timur', 'kira', 'vera']); // по времени было бы kira, timur, vera
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'share-pct-timur'))).toBe('75 %');
+    expect(ringAria(container)).toContain('Доли по токенам');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'breakdown-cards-caption'))).toContain('токенов');
+  });
+});
+
+describe('недоступная мера и смена оси (решение дизайна, F6)', () => {
+  const MIXED: FeatureBreakdown = {
+    personas: PERSONAS.map(g => ({ ...g, tokens: null, costUsd: null })),
+    models: MODELS,
+    roles: ROLES,
+  };
+
+  it('сегмент недоступной меры — disabled', () => {
+    const { container } = mountBlock({ breakdown: MIXED });
+    const head = headNode(container)!;
+    expect((reactProps(findButtonByLabel(head, 'токены') as never) as { disabled?: boolean }).disabled).toBe(true);
+    expect((reactProps(findButtonByLabel(head, 'деньги') as never) as { disabled?: boolean }).disabled).toBe(true);
+    expect((reactProps(findButtonByLabel(head, 'время') as never) as { disabled?: boolean }).disabled).toBeFalsy();
+  });
+
+  it('выбор «токены» живёт между осями: на оси без токенов — время, на оси с токенами — снова токены', () => {
+    const { container } = mountBlock({ breakdown: MIXED, hiddenKeys: ['feature'] });
+    click(findButtonByLabel(headNode(container)!, 'модели'));
+    click(findButtonByLabel(headNode(container)!, 'токены'));
+    expect(ringAria(container)).toContain('Доли по токенам');
+    click(findButtonByLabel(headNode(container)!, 'персоны'));
+    expect(ringAria(container)).toContain('Доли по времени');
+    expect((findButtonByLabel(headNode(container)!, 'время') as unknown as { style: Record<string, string> }).style.background).toBe(C.accent);
+    click(findButtonByLabel(headNode(container)!, 'модели'));
+    expect(ringAria(container)).toContain('Доли по токенам');
+  });
+
+  it('пустой разрез: слова оси, а не «исполнителей» на любой оси', () => {
+    const one: FeatureBreakdown = { personas: PERSONAS, models: [MODELS[0]], roles: [] };
+    const { container } = mountBlock({ breakdown: one });
+    click(findButtonByLabel(headNode(container)!, 'модели'));
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'breakdown-empty'))).toContain('когда моделей станет больше одной');
+    click(findButtonByLabel(headNode(container)!, 'роли'));
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'breakdown-empty'))).toContain('когда ролей станет больше одной');
+    click(findButtonByLabel(headNode(container)!, 'персоны'));
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-empty')).toBeNull();
   });
 });

@@ -8,7 +8,7 @@ import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 // «Навигация в один клик»): ОДНА пара кнопок на всю страницу фичи — где назван чат
 // или задача, цели стоят рядом, у каждой своя иконка (облачко / список), подпись и
 // подсказка «Открыть чат «…»». Наведение/фокус — как у кнопок кита (accentLight /
-// bgSelected, SHADOW.focus); на 360 тач-цель ≥ 40. Обе темы — через токены C.*/FS/R.
+// bgSelected, SHADOW.focus); на 360 тач-цель ≥ 44. Обе темы — через токены C.*/FS/R.
 //
 // Состояния (единая точка правды — этот компонент):
 //   chat:  chatId == null  → «чата нет» (неактивный текст, НЕ кнопка);
@@ -92,7 +92,7 @@ export function NavTargetButton({
 
   const style: CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
-    height: isMobile ? 40 : 24, minHeight: isMobile ? 40 : undefined,
+    height: isMobile ? 44 : 24, minHeight: isMobile ? 44 : undefined,
     padding: '0 7px',
     border: `1px ${marked ? 'dashed' : 'solid'} ${hover ? (isChat ? C.accentMuted : C.borderLight) : (marked ? C.dashed : C.borderLight)}`,
     background: isChat ? (hover ? C.accentLight : C.bgWhite) : (hover ? C.bgSelected : C.bgWhite),
@@ -102,7 +102,7 @@ export function NavTargetButton({
     cursor: 'pointer',
   };
   // На 360 в плотных строках — только иконка (макет §9а, minor 8): подпись в aria-label,
-  // видимый текст не рисуем (иначе «чат»/«задача» не влезает в 40×40).
+  // видимый текст не рисуем (иначе «чат»/«задача» не влезает в 44×44).
   const showText = !isMobile;
   return (
     <button

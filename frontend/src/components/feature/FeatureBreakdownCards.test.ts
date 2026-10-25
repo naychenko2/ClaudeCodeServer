@@ -198,11 +198,14 @@ describe('карточка на группу (к1)', () => {
   it('на 360 нет фиксированных ширинок больше 328 px: карточка — 100%', () => {
     const { container } = mountCards(GROUPS);
     const root = cardsRoot(container)!;
-    expect(styleOf(root.children[0]).width).toBe('100%');
+    expect(styleOf(cardNode(container, 'kira')!).width).toBe('100%');
     const fixed: string[] = [];
     const walk = (n: typeof root): void => {
-      const w = styleOf(n).width;
-      if (w && w !== '100%' && parseFloat(w) > 328) fixed.push(w);
+      // Ни width, ни minWidth в px больше 328 (план ST-F12).
+      for (const prop of ['width', 'minWidth']) {
+        const w = styleOf(n)[prop];
+        if (w && w !== '100%' && parseFloat(w) > 328) fixed.push(`${prop}: ${w}`);
+      }
       for (const c of n.children) walk(c);
     };
     walk(root);
@@ -214,6 +217,14 @@ describe('карточка на группу (к1)', () => {
     expect(cardOrder(container)).toEqual(['kira', 'timur', 'vera']);
     const { container: c2 } = mountCards(GROUPS, { measure: 'tokens' });
     expect(cardOrder(c2)).toEqual(['timur', 'kira', 'vera']);
+  });
+
+  it('подпись над карточками называет меру сортировки', () => {
+    const cap = (m: 'time' | 'tokens' | 'cost') =>
+      textOf(findNodeByAttr(mountCards(GROUPS, { measure: m }).container, 'data-testid', 'breakdown-cards-caption'));
+    expect(cap('time')).toBe('По убыванию времени · сортировка — в шапке');
+    expect(cap('tokens')).toContain('токенов');
+    expect(cap('cost')).toContain('денег');
   });
 
   it('hiddenKeys: скрытая группа не рендерится и не входит в долю', () => {
@@ -238,12 +249,15 @@ describe('три мини-полосы 6 px — из модели (к1)', () => 
       expect(parseFloat(styleOf(bar).height)).toBe(6);
     }
     // Максимумы: время 120, токены 3000, деньги 5 — доли полос от них.
-    expect(parseFloat(styleOf(findNodeByAttr(card, 'data-testid', 'measure-bar-time').children[0]).width)).toBeCloseTo(60 / 120 * 100, 3);
-    expect(parseFloat(styleOf(findNodeByAttr(card, 'data-testid', 'measure-bar-tokens').children[0]).width)).toBe(100);
+    // Ширина — именно в процентах («50px» не проходит).
+    const widthOf = (c: Parameters<typeof findNodeByAttr>[0], m: string): string =>
+      styleOf(findNodeByAttr(c, 'data-testid', `measure-bar-${m}`)!.children[0]).width;
+    expect(widthOf(card, 'time')).toMatch(/^50(\.0+)?%$/);
+    expect(widthOf(card, 'tokens')).toBe('100%');
     const kira = cardNode(container, 'kira')!;
-    expect(parseFloat(styleOf(findNodeByAttr(kira, 'data-testid', 'measure-bar-time').children[0]).width)).toBe(100);
-    expect(parseFloat(styleOf(findNodeByAttr(kira, 'data-testid', 'measure-bar-tokens').children[0]).width)).toBeCloseTo(1000 / 3000 * 100, 3);
-    expect(parseFloat(styleOf(findNodeByAttr(kira, 'data-testid', 'measure-bar-cost').children[0]).width)).toBe(0);
+    expect(widthOf(kira, 'time')).toBe('100%');
+    expect(widthOf(kira, 'tokens')).toMatch(/^33\.3+\d*%$/);
+    expect(widthOf(kira, 'cost')).toBe('0%');
   });
 
   it('время: «2 ч» форматером, процент percentText от суммы; полоса — не от суммы, а от максимума', () => {
@@ -264,7 +278,9 @@ describe('три мини-полосы 6 px — из модели (к1)', () => 
     expect(findNodeByAttr(vera, 'data-testid', 'measure-bar-tokens')).toBeNull();
     expect(findNodeByAttr(vera, 'data-testid', 'measure-bar-cost')).toBeNull();
     // Время у Веры есть — его строка с полосой (30/120 = 25 %).
-    expect(findNodeByAttr(vera, 'data-testid', 'measure-bar-time')).toBeTruthy();
+    const veraBar = findNodeByAttr(vera, 'data-testid', 'measure-bar-time');
+    expect(veraBar).toBeTruthy();
+    expect(styleOf(veraBar!.children[0]).width).toBe('25%');
     expect(findNodeByAttr(vera, 'data-testid', 'share-pct-vera')).toBeNull();
   });
 
@@ -327,6 +343,8 @@ describe('живые чипы (к3)', () => {
     const { container } = mountCards(GROUPS, { run: RUN_LIVE });
     expect(textOf(findNodeByAttr(container, 'data-testid', 'live-chip-kira'))).toContain('работает');
     expect(textOf(findNodeByAttr(container, 'data-testid', 'live-chip-timur'))).toContain('ждёт вас');
+    const dot = findNodeByAttr(findNodeByAttr(container, 'data-testid', 'live-chip-kira')!, 'role', 'status');
+    expect(dot!.parentElement!.getAttribute('aria-hidden')).toBe('true');
     expect(findNodeByAttr(container, 'data-testid', 'live-chip-vera')).toBeNull();
     const { container: closed } = mountCards(GROUPS, { run: mkRun({ state: 'merged', stages: RUN_LIVE.stages }) });
     expect(findNodeByAttr(closed, 'data-testid', 'live-chip-kira')).toBeNull();
@@ -345,6 +363,13 @@ describe('кнопка чатов: тач-цель и UA-сброс (к1, к3)',
     expect(st.font).toBe('inherit');
     expect(st.background).toBe('none');
     expect(st.border).toBe('none');
+  });
+
+  it('aria-expanded отражает раскрытие', () => {
+    const { container } = mountCards(GROUPS, { run: RUN_LIVE });
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-chats-toggle-kira')!.getAttribute('aria-expanded')).toBe('false');
+    click(findNodeByAttr(container, 'data-testid', 'breakdown-chats-toggle-kira'));
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-chats-toggle-kira')!.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('склонение: 1 чат, 3 чата, 5 чатов; без чатов — кнопки нет', () => {

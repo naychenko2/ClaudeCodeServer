@@ -177,9 +177,9 @@ describe('высота строки и тач-цель (к3)', () => {
     const style = row!.style as Record<string, string>;
     expect(style.height).toBe('44px');
     expect(style.width).toBe('100%');
-    // Кнопка перехода тоже тач-цель ≥ 40 (NavTargetButton).
+    // Кнопка перехода тоже тач-цель ≥ 44 (NavTargetButton).
     const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat');
-    expect((btn!.style as Record<string, string>).minHeight).toBe('40px');
+    expect((btn!.style as Record<string, string>).minHeight).toBe('44px');
   });
 });
 

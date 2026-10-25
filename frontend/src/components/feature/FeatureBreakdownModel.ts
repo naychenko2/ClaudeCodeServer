@@ -30,6 +30,23 @@ export function measureValue(g: FeatureBreakdownGroup, measure: Measure): number
   return g.costUsd;
 }
 
+// Сумма меры по группам; null — ни у одной группы данных нет (не 0).
+export function measureTotal(groups: FeatureBreakdownGroup[], measure: Measure): number | null {
+  if (!groups.some(g => measureValue(g, measure) != null)) return null;
+  return groups.reduce((a, g) => a + (measureValue(g, measure) ?? 0), 0);
+}
+
+// Максимум колонки — база полос (минимум 1, чтобы не делить на 0).
+export function measureMax(groups: FeatureBreakdownGroup[], measure: Measure): number {
+  return Math.max(...groups.map(g => measureValue(g, measure) ?? 0), 1);
+}
+
+// Действующая мера: если у выбранной нет данных ни у одной группы — время. Единственное
+// место правила: оболочка блока и кольцо берут его отсюда.
+export function effectiveMeasure(groups: FeatureBreakdownGroup[], measure: Measure): Measure {
+  return measureTotal(groups, measure) == null ? 'time' : measure;
+}
+
 // Группы по мере по убыванию; null (без учёта) — в конце, порядок среди них
 // сохраняется (стабильная сортировка). Вход не мутируется.
 export function sortGroups(groups: FeatureBreakdownGroup[], measure: Measure): FeatureBreakdownGroup[] {

@@ -15,15 +15,18 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { C, FS, SP, R, FONT } from '../../lib/design';
 import { plural } from '../../lib/plural';
-import { roleLabel } from '../../lib/roleLabel';
 import { Dot } from '../ui/Dot';
 import { LiveDot } from '../ui/LiveDot';
 import { formatDuration } from './FeatureStatsBits';
 import { formatTokens } from './FeatureStatsFormat';
 import {
-  type Axis, type Measure, type BreakdownChip,
+  type Axis, type Measure,
   sortGroups, formatMoney, groupChips, liveChipText, fewData, percentText, measureValue,
+  measureTotal, measureMax,
 } from './FeatureBreakdownModel';
+import {
+  MEASURES, MEASURE_WORD, groupColor, chipColor, chipLabel, CHIP, CHIP_AV, AV, SW, liveChipStyle,
+} from './FeatureBreakdownShared';
 import { FeatureBreakdownChats } from './FeatureBreakdownChats';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
@@ -45,25 +48,6 @@ export interface FeatureBreakdownTableProps {
   isMobile?: boolean;
 }
 
-// Палитра групп — та же, что у ShareRing: если colorOf не передан.
-const ARC_COLORS = [C.accent, C.info, C.plan, C.success, C.warning, C.progressTrack];
-
-const MEASURE_WORD: Record<Measure, string> = { time: 'время', tokens: 'токены', cost: 'деньги' };
-const MEASURES: Measure[] = ['time', 'tokens', 'cost'];
-
-function groupColor(key: string, index: number, colorOf?: (k: string) => string): string {
-  return colorOf ? colorOf(key) : ARC_COLORS[index % ARC_COLORS.length];
-}
-
-// Подпись чипа: модель — нормализованное имя (groupChips уже снимает «Авто → »); роль —
-// слово roleLabel без шага; для 'step' roleLabel пуст — нейтральное «шаг» (тот же приём,
-// что в roleWord модели).
-function chipLabel(chip: BreakdownChip, labelOf?: (k: string) => string): string {
-  if (chip.kind === 'model') return chip.key;
-  if (chip.kind === 'role') return roleLabel(chip.key, null, null) || (chip.key === 'step' ? 'шаг' : chip.key);
-  return labelOf ? labelOf(chip.key) : chip.key;
-}
-
 // Шапка: FS.xxs UPPERCASE textMuted (макет .c-tab th). Кнопка внутри th — с явным сбросом
 // UA-стилей (урок ST-F7): без font/cursor/textAlign браузер центрирует текст и даёт
 // cursor: default.
@@ -71,7 +55,8 @@ const TH: CSSProperties = {
   fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5,
   color: C.textMuted, textAlign: 'left', padding: `0 ${SP.sm}px ${SP.xs}px`, whiteSpace: 'nowrap',
 };
-const TH_BTN: CSSProperties = { ...TH, background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' };
+// Отступы th уже задал TH — у кнопки их нет (иначе двойной отступ).
+const TH_BTN: CSSProperties = { ...TH, padding: 0, background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' };
 
 const TD: CSSProperties = {
   padding: `${SP.sm}px ${SP.md}px`,
@@ -89,35 +74,6 @@ const VAL: CSSProperties = {
   color: C.textHeading, width: 84, textAlign: 'right', whiteSpace: 'nowrap',
 };
 
-// Имя группы: аватар персоны 22 (цвет группы, буква) или квадрат 12 для модели/роли
-// (макет .av / .sw).
-const AV: CSSProperties = {
-  width: 22, height: 22, borderRadius: R.full, display: 'inline-flex',
-  alignItems: 'center', justifyContent: 'center',
-  fontSize: FS.xs, fontWeight: 700, color: C.onAccent, flexShrink: 0,
-};
-const SW: CSSProperties = { width: 12, height: 12, borderRadius: R.sm, flexShrink: 0 };
-
-// Чипы «Модели и роли»: нейтральные рамки (макет .mdl); персона — аватар + имя.
-const CHIP: CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: SP.xs,
-  fontSize: FS.xxs, padding: `1px ${SP.xs}px`,
-  border: `1px solid ${C.border}`, color: C.textSecondary,
-  borderRadius: R.sm, whiteSpace: 'nowrap',
-};
-const CHIP_AV: CSSProperties = {
-  width: 18, height: 18, borderRadius: R.full, display: 'inline-flex',
-  alignItems: 'center', justifyContent: 'center',
-  fontSize: FS.xxs, fontWeight: 700, color: C.onAccent, flexShrink: 0,
-};
-
-// Живые чипы персоны (макет .chip): «работает» — accent на accentLight с пульсом,
-// «ждёт вас» — info на infoBg.
-const LIVE: CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: SP.xs, height: 20,
-  padding: `0 ${SP.xs}px`, borderRadius: R.max, fontSize: FS.xxs, fontWeight: 600,
-};
-
 // «N чатов ›» — акцентная ссылка раскрытия (макет: accent, 12px).
 const CHAT_LINK: CSSProperties = {
   background: 'none', border: 'none', cursor: 'pointer',
@@ -131,7 +87,7 @@ function measureCell(
   measure: Measure,
   max: number,
   color: string,
-  total: number,
+  total: number | null,
 ): ReactNode {
   const v = measureValue(g, measure);
   if (v == null) {
@@ -145,7 +101,7 @@ function measureCell(
       </span>
       <span style={VAL}>
         {value}
-        <small style={{ color: C.textMuted, fontWeight: 400 }}> {percentText(total > 0 ? v / total : 0)}</small>
+        <small style={{ color: C.textMuted, fontWeight: 400 }}> {percentText(total != null && total > 0 ? v / total : 0)}</small>
       </span>
     </div>
   );
@@ -159,6 +115,7 @@ export function FeatureBreakdownTable({
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
   // Скрытые строки отсекаются до guard'а и до «Всего»: чего не рисуем — в итогах нет.
+  // (Оболочка уже отдаёт отфильтрованный набор; фильтр здесь — для автономного вызова.)
   const hidden = new Set(hiddenKeys ?? []);
   const visible = groups.filter(g => !hidden.has(g.key));
 
@@ -166,11 +123,13 @@ export function FeatureBreakdownTable({
   if (fewData(visible)) return null;
 
   const sorted = sortGroups(visible, measure);
-  const maxOf = (m: Measure) => Math.max(...visible.map(g => measureValue(g, m) ?? 0), 1);
-  const totalOf = (m: Measure) => visible.reduce((a, g) => a + (measureValue(g, m) ?? 0), 0);
-  const hasOf = (m: Measure) => visible.some(g => measureValue(g, m) != null);
+  const maxOf = (m: Measure) => measureMax(visible, m);
+  const totalOf = (m: Measure) => measureTotal(visible, m) ?? 0;
+  const hasOf = (m: Measure) => measureTotal(visible, m) != null;
 
+  // Раскрыта только видимая строка: скрытую группу состояние не удерживает.
   const expandedGroup = expandedKey ? visible.find(g => g.key === expandedKey) ?? null : null;
+  const openKey = expandedGroup ? expandedGroup.key : null;
   const axisWord = axis === 'personas' ? 'персоны' : axis === 'models' ? 'модели' : 'роли';
 
   return (
@@ -181,12 +140,14 @@ export function FeatureBreakdownTable({
             <th style={TH}>{axisWord}</th>
             <th style={TH}>{axis === 'personas' ? 'Модели и роли' : 'Кто'}</th>
             {MEASURES.map(m => (
-              <th
-                key={m}
-                aria-sort={measure === m ? 'descending' : 'none'}
-                style={measure === m ? { ...TH, color: C.textHeading } : TH}
-              >
-                <button type="button" data-testid={`breakdown-sort-${m}`} style={TH_BTN} onClick={() => setMeasure(m)}>
+              <th key={m} aria-sort={measure === m ? 'descending' : undefined} style={TH}>
+                <button
+                  type="button"
+                  data-testid={`breakdown-sort-${m}`}
+                  aria-label={`Сортировать по: ${MEASURE_WORD[m]}`}
+                  style={measure === m ? { ...TH_BTN, color: C.textHeading } : TH_BTN}
+                  onClick={() => setMeasure(m)}
+                >
                   {MEASURE_WORD[m]}
                   {measure === m ? <span aria-hidden style={{ color: C.accent }}> ↓</span> : null}
                 </button>
@@ -196,13 +157,13 @@ export function FeatureBreakdownTable({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((g, i) => {
-            const color = groupColor(g.key, i, colorOf);
+          {sorted.map(g => {
+            const color = groupColor(g.key, visible, colorOf);
             const label = labelOf ? labelOf(g.key) : g.key;
             const live = axis === 'personas' ? liveChipText(run, g.key) : null;
             const chips = groupChips(axis, g.key, run);
             const chatIds = (g.chatIds ?? []).filter(Boolean);
-            const selected = expandedKey === g.key;
+            const selected = openKey === g.key;
             return (
               <tr
                 key={g.key}
@@ -218,13 +179,9 @@ export function FeatureBreakdownTable({
                     )}
                     <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{label}</span>
                     {live ? (
-                      <span
-                        data-testid={`live-chip-${g.key}`}
-                        style={live === 'работает'
-                          ? { ...LIVE, background: C.accentLight, color: C.accent }
-                          : { ...LIVE, background: C.infoBg, color: C.info }}
-                      >
-                        {live === 'работает' ? <LiveDot color={C.accent} size={6} label="работает" /> : <Dot color={C.info} size={6} />}
+                      <span data-testid={`live-chip-${g.key}`} style={liveChipStyle(live)}>
+                        {/* Точка декоративна: слово рядом уже говорит «работает». */}
+                        {live === 'работает' ? <span aria-hidden><LiveDot color={C.accent} size={6} /></span> : <Dot color={C.info} size={6} />}
                         {live}
                       </span>
                     ) : null}
@@ -234,7 +191,7 @@ export function FeatureBreakdownTable({
                   <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
                     {chips.map(c => c.kind === 'persona' ? (
                       <span key={`${c.kind}:${c.key}`} style={{ ...CHIP, border: 'none' }}>
-                        <span aria-hidden style={{ ...CHIP_AV, background: groupColor(c.key, 0, colorOf) }}>
+                        <span aria-hidden style={{ ...CHIP_AV, background: chipColor(c.key, colorOf) }}>
                           {(labelOf ? labelOf(c.key) : c.key).charAt(0).toUpperCase()}
                         </span>
                         {chipLabel(c, labelOf)}
@@ -252,6 +209,7 @@ export function FeatureBreakdownTable({
                     <button
                       type="button"
                       data-testid={`breakdown-chats-toggle-${g.key}`}
+                      aria-expanded={selected}
                       style={CHAT_LINK}
                       onClick={() => setExpandedKey(selected ? null : g.key)}
                     >
@@ -267,15 +225,15 @@ export function FeatureBreakdownTable({
             <td style={TD_TOTAL} />
             <td style={TD_TOTAL}><span style={VAL}>{formatDuration(totalOf('time'))}</span></td>
             <td style={TD_TOTAL}>
-              <span style={VAL}>{hasOf('tokens') ? formatTokens(totalOf('tokens')) : 'нет учёта'}</span>
+              <span style={VAL}>{hasOf('tokens') ? formatTokens(totalOf('tokens')) : '—'}</span>
             </td>
             <td style={TD_TOTAL}>
               <span style={VAL}>
-                {formatMoney({
+                {!hasOf('cost') ? '—' : formatMoney({
                   key: '',
                   minutes: 0,
                   tokens: hasOf('tokens') ? totalOf('tokens') : 0,
-                  costUsd: hasOf('cost') ? totalOf('cost') : null,
+                  costUsd: totalOf('cost'),
                   chatIds: [],
                 })}
               </span>

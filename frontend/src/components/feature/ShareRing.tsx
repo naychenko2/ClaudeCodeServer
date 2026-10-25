@@ -8,7 +8,8 @@
 // часовой; между ненулевыми дугами зазор 3 px (макет :294) — если ненулевая дуга
 // одна (доминантная группа 100 %), зазора нет, дуга замыкает круг. Дуга самой
 // крупной группы — толстая (макет: 26 против 20). Цвета — палитра записки
-// (§Токены): accent, info, plan, success, warning, progressTrack по порядку,
+// (§Токены): accent, info, plan, success, warning, progressTrack по порядку ВХОДА
+// групп (не сортировки по мере — цвет дуги совпадает с цветом строки таблицы),
 // цикл при большем числе групп; вызывающий может задать цвет группы сам (colorOf —
 // у персон цвет персоны). В центре — итог выбранной меры; если у меры нет данных
 // (null у всех групп) — фолбэк на время (состояние «без расхода» записки).
@@ -23,12 +24,11 @@ import { type CSSProperties } from 'react';
 import { C, FS, SP, FONT } from '../../lib/design';
 import { formatDuration } from './FeatureStatsBits';
 import { formatTokens } from './FeatureStatsFormat';
-import { formatMoney, percentText, sortGroups, measureValue, type Measure } from './FeatureBreakdownModel';
+import {
+  formatMoney, percentText, sortGroups, measureValue, measureTotal, effectiveMeasure, type Measure,
+} from './FeatureBreakdownModel';
+import { groupColor } from './FeatureBreakdownShared';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
-
-// Палитра дуг — токены дизайн-системы в порядке записки (§Токены, «Цвета групп»).
-// Если групп больше, чем цветов — цикл (так же в макете, colorOf :258).
-const ARC_COLORS = [C.accent, C.info, C.plan, C.success, C.warning, C.progressTrack];
 
 // Зазор между дугами — 3 px по макету (:294).
 const ARC_GAP = 3;
@@ -52,26 +52,22 @@ export interface ShareRingProps {
   axisLabel?: string;
 }
 
-// Сумма меры по всем группам; null — ни у одной группы данных нет (тот же
-// принцип, что cost в макете §A).
-function measureTotal(groups: FeatureBreakdownGroup[], measure: Measure): number | null {
-  if (!groups.some(g => measureValue(g, measure) != null)) return null;
-  return groups.reduce((a, g) => a + (measureValue(g, measure) ?? 0), 0);
-}
-
 export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisLabel }: ShareRingProps) {
   if (groups.length < 2) return null;
 
   // Фолбэк на время — только когда у меры нет данных ни у одной группы (null у
-  // всех, состояние «без расхода» записки). Нулевая сумма — это данные: мера
-  // остаётся выбранной, дуги нулевые (пустое кольцо), центр — «бесплатно».
-  const effMeasure: Measure = measureTotal(groups, measure) == null ? 'time' : measure;
+  // всех, состояние «без расхода» записки); правило живёт в модели. Нулевая сумма
+  // денег — данные: мера остаётся выбранной, дуги нулевые (виден трек), центр —
+  // «бесплатно» и «все модели локальные» (решение дизайна). Нулевое время или
+  // токены — данных нет: дуг нет, центр «нет данных».
+  const effMeasure: Measure = effectiveMeasure(groups, measure);
 
   // Порядок — как в таблице (сортировка по мере), первая дуга — самая крупная и
   // толстая. Вход не мутируется (sortGroups копирует).
   const sorted = sortGroups(groups, effMeasure);
   const raw = sorted.map(g => measureValue(g, effMeasure) ?? 0);
   const total = raw.reduce((a, b) => a + b, 0);
+  const noData = total === 0 && effMeasure !== 'cost';
 
   // Геометрия макета (R=70 при viewBox 180, :292) в долях диаметра: толстая дуга
   // 0.15, обычная 0.11; радиус — с запасом, чтобы толстая дуга не вышла за viewBox.
@@ -91,7 +87,7 @@ export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisL
   const shares = raw.map(v => (total > 0 ? v / total : 0));
   // Смещение — сумма длин перед дугой (префиксная сумма, без mutable-счётчика:
   // eslint.design запрещает переприсваивание после рендера).
-  const arcs = sorted.map((g, i) => ({
+  const arcs = noData ? [] : sorted.map((g, i) => ({
     key: g.key,
     i,
     dash: `${Math.max(0, lens[i] - gap)} ${L}`,
@@ -119,13 +115,14 @@ export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisL
   const moneyText = totalCost == null
     ? 'нет учёта'
     : formatMoney({ key: '', minutes: 0, tokens: totalTokens, costUsd: totalCost, chatIds: [] });
-  const bigText =
+  const free = effMeasure === 'cost' && total === 0 && totalTokens > 0;
+  const bigText = noData ? 'нет данных' :
     effMeasure === 'time'
       ? formatDuration(raw.reduce((a, b) => a + b, 0))
       : effMeasure === 'tokens'
         ? formatTokens(raw.reduce((a, b) => a + b, 0))
         : moneyText;
-  const smallText = axisLabel
+  const smallText = noData ? '' : free ? 'все модели локальные' : axisLabel
     ? `${axisLabel} суммарно${effMeasure === 'cost' || totalCost == null ? '' : ' · ' + moneyText}`
     : effMeasure === 'cost' ? '' : moneyText;
 
@@ -147,7 +144,7 @@ export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisL
             cy={size / 2}
             r={r}
             fill="none"
-            stroke={colorOf ? colorOf(key) : ARC_COLORS[i % ARC_COLORS.length]}
+            stroke={groupColor(key, groups, colorOf)}
             strokeWidth={i === 0 ? thick : base}
             strokeDasharray={dash}
             strokeDashoffset={off}

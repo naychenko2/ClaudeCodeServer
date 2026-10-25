@@ -8,7 +8,10 @@
 // Мутации (проверены прогоном): (1) убрать sortGroups (порядок из входа) — краснеет
 // тест сортировки по токенам; (2) убрать guard fewData — краснеет тест «<2 групп → null»;
 // (3) не фильтровать hiddenKeys — краснеет тест «скрытый ключ не рендерится»;
-// (4) снять сброс TH_BTN (font/cursor) — краснеет тест сброса UA-стилей заголовков.
+// (4) снять сброс TH_BTN (font/cursor) — краснеет тест сброса UA-стилей заголовков;
+// (5) sortGroups(visible, measure) → [...visible] — краснеют и «по умолчанию — время по
+// убыванию» (фикстура не отсортирована по времени), и сортировка по токенам;
+// (6) normalizeModelKey «как есть» — краснеет not.toContain('Авто') в тесте чипов.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -29,12 +32,13 @@ function mkGroup(
 }
 
 // Кира — локальная модель (0 при токенах → «бесплатно»), Тимур — самый дорогой по
-// токенам, Вера — без учёта. Порядок входа не отсортирован по деньгам, чтобы
-// сортировка проверялась, а не совпадала с входом.
+// токенам, Вера — без учёта. Порядок входа не совпадает ни с одним порядком по мере
+// (ни по времени, ни по токенам, ни по деньгам): сортировка проверяется, а не
+// совпадает с входом.
 const GROUPS = [
+  mkGroup('vera', 30, null, null, ['c5', 'c6', 'c7', 'c8', 'c9']),
   mkGroup('kira', 120, 1000, 0, ['c1', 'c2', 'c3']),
   mkGroup('timur', 60, 3000, 5.0, ['c4']),
-  mkGroup('vera', 30, null, null, ['c5', 'c6', 'c7', 'c8', 'c9']),
 ];
 
 function mkExecutor(over: Partial<FeatureStageExecutor> = {}): FeatureStageExecutor {
@@ -205,6 +209,17 @@ describe('колонки, строки и «Всего» (к1)', () => {
     expect(styleOf(avatar).background).toBe(C.success);
   });
 
+  it('кнопка сортировки: доступное имя «Сортировать по: …», подпись не красится на th, отступа нет', () => {
+    const { container } = mountTable(GROUPS);
+    const btn = findNodeByAttr(container, 'data-testid', 'breakdown-sort-tokens')!;
+    expect(btn.getAttribute('aria-label')).toBe('Сортировать по: токены');
+    expect(styleOf(btn).color).toBe(C.textMuted);
+    expect(parseFloat(styleOf(btn).padding)).toBe(0);
+    const active = findNodeByAttr(container, 'data-testid', 'breakdown-sort-time')!;
+    expect(styleOf(active).color).toBe(C.textHeading);
+    expect(styleOf(active.parentElement).color).toBe(C.textMuted);
+  });
+
   it('UA-сброс заголовков сортировки: cursor, align, font (урок ST-F7)', () => {
     const { container } = mountTable(GROUPS);
     const btn = findNodeByAttr(container, 'data-testid', 'breakdown-sort-time');
@@ -224,8 +239,9 @@ describe('сортировка и aria-sort (к1)', () => {
     const table = tableNode(container)!;
     const ths = table.querySelectorAll('th');
     expect(ths[2].getAttribute('aria-sort')).toBe('descending');
-    expect(ths[3].getAttribute('aria-sort')).toBe('none');
-    expect(ths[4].getAttribute('aria-sort')).toBe('none');
+    // aria-sort ставится только активной колонке.
+    expect(ths[3].getAttribute('aria-sort')).toBeNull();
+    expect(ths[4].getAttribute('aria-sort')).toBeNull();
   });
 
   it('клик по «токены»: порядок по токенам, null — в конце; aria-sort переезжает', () => {
@@ -234,7 +250,7 @@ describe('сортировка и aria-sort (к1)', () => {
     expect(rowOrder(container)).toEqual(['timur', 'kira', 'vera']);
     const ths = tableNode(container)!.querySelectorAll('th');
     expect(ths[3].getAttribute('aria-sort')).toBe('descending');
-    expect(ths[2].getAttribute('aria-sort')).toBe('none');
+    expect(ths[2].getAttribute('aria-sort')).toBeNull();
   });
 
   it('клик по «деньги»: порядок по деньгам; «бесплатно» (0) — выше без учёта', () => {
@@ -276,6 +292,13 @@ describe('полоса меры и состояния ячеек (к2)', () => {
     expect(textOf(cells[4])).not.toContain('$0,00');
   });
 
+  it('«Всего» без учёта — «—», как в макете', () => {
+    const { container } = mountTable([mkGroup('a', 60, null, null), mkGroup('b', 30, null, null)]);
+    const cells = findNodeByAttr(container, 'data-testid', 'breakdown-total')!.children;
+    expect(textOf(cells[3])).toBe('—');
+    expect(textOf(cells[4])).toBe('—');
+  });
+
   it('hiddenKeys: скрытая строка не рендерится и не входит в «Всего»', () => {
     const { container } = mountTable(GROUPS, { hiddenKeys: ['vera'] });
     expect(findNodeByAttr(container, 'data-testid', 'breakdown-row-vera')).toBeNull();
@@ -291,7 +314,24 @@ describe('чипы «Модели и роли» (к3)', () => {
     const cells = rowCells(container, 'kira')!;
     const text = textOf(cells[1]);
     expect(text).toContain('Qwen 3.8'); // «Авто → » снят normalizeModelKey
+    expect(text).not.toContain('Авто');
     expect(text).toContain('шаг');
+  });
+
+  it('без colorOf чипы-персоны разных исполнителей получают заливку, а не пустой фон', () => {
+    const run = mkRun({
+      stages: [mkStage([
+        mkExecutor({ personaId: 'kira', taskRole: 'step', modelFull: 'Qwen' }),
+        mkExecutor({ personaId: 'timur', taskRole: 'step', modelFull: 'Qwen' }),
+      ])],
+    });
+    const { container } = mountTable(
+      [mkGroup('Qwen', 60, 1, 0), mkGroup('Opus', 30, 1, 0)],
+      { axis: 'models', run },
+    );
+    const avatars = rowCells(container, 'Qwen')![1].querySelectorAll('span').filter(s => styleOf(s).width === '18px');
+    expect(avatars.length).toBe(2);
+    for (const a of avatars) expect(styleOf(a).background).toMatch(/^var\(--c-/);
   });
 
   it('без executors — чипов нет, строка живая (не падение)', () => {
@@ -307,6 +347,9 @@ describe('живые чипы (к3)', () => {
     const { container } = mountTable(GROUPS, { run: RUN_LIVE });
     expect(textOf(findNodeByAttr(container, 'data-testid', 'live-chip-kira'))).toContain('работает');
     expect(textOf(findNodeByAttr(container, 'data-testid', 'live-chip-timur'))).toContain('ждёт вас');
+    // Точка не читается скринридером отдельно: слово «работает» уже есть рядом.
+    const dot = findNodeByAttr(findNodeByAttr(container, 'data-testid', 'live-chip-kira')!, 'role', 'status');
+    expect(dot!.parentElement!.getAttribute('aria-hidden')).toBe('true');
     expect(findNodeByAttr(container, 'data-testid', 'live-chip-vera')).toBeNull();
   });
 

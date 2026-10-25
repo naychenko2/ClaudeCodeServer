@@ -10,14 +10,16 @@
 // hiddenKeys один раз здесь: кольцо, таблица и карточки видят один и тот же
 // набор. Арифметика — только из FeatureBreakdownModel (ST-F8); компонент
 // ничего не пересчитывает. Строка роли feature и чип «ждёт вас» здесь не
-// решаются: hiddenKeys и liveChipText остаются на контракдах ST-F11/ST-F12.
+// решаются: hiddenKeys и liveChipText остаются на контрактах ST-F11/ST-F12.
+// Детям hiddenKeys не прокидывается: набор групп отфильтрован один раз здесь. На 360
+// кольцо 180 px стоит по центру над карточками (решение дизайна).
 
 import { useState, type CSSProperties } from 'react';
 import { C, FS, SP, R, FONT, SHADOW } from '../../lib/design';
 import { SegmentedControl } from '../ui/Segmented';
 import { useIsMobile } from '../../lib/breakpoints';
 import { formatDuration } from './FeatureStatsBits';
-import { type Axis, type Measure, fewData, measureValue } from './FeatureBreakdownModel';
+import { type Axis, type Measure, fewData, measureValue, effectiveMeasure } from './FeatureBreakdownModel';
 import { ShareRing } from './ShareRing';
 import { FeatureBreakdownTable } from './FeatureBreakdownTable';
 import { FeatureBreakdownCards } from './FeatureBreakdownCards';
@@ -40,6 +42,12 @@ export interface FeatureBreakdownBlockProps {
 }
 
 const AXIS_WORD: Record<Axis, string> = { personas: 'персоны', models: 'модели', roles: 'роли' };
+// Чего должно стать больше одного (пустое состояние зависит от оси, а не только от «исполнителей»).
+const AXIS_MORE: Record<Axis, string> = {
+  personas: 'исполнителей станет больше одного',
+  models: 'моделей станет больше одной',
+  roles: 'ролей станет больше одной',
+};
 
 // Карточка блока (макет .card): bgCard, borderLight, R.lg, SHADOW.card; на 360 — SP.md.
 const CARD: CSSProperties = {
@@ -90,10 +98,7 @@ export function FeatureBreakdownBlock({
   // фолбэк на время. Решается здесь один раз: шапка, кольцо и карточки видят одну
   // меру (раньше кольцо молча фолбэчил внутри себя, а карточки и шапка оставались
   // на выбранной — доли в карточках исчезали).
-  const effMeasure: Measure =
-    measure === 'tokens' ? (tokensAvailable ? 'tokens' : 'time')
-    : measure === 'cost' ? (costAvailable ? 'cost' : 'time')
-    : 'time';
+  const effMeasure: Measure = effectiveMeasure(visible, measure);
 
   const head = (
     <div data-testid="breakdown-head" style={HEAD}>
@@ -109,15 +114,15 @@ export function FeatureBreakdownBlock({
         ]}
       />
       <SegmentedControl
-        // Показываем действующую меру, а не сырой выбор: приглушённый клик
-        // не должен создавать противоречия «шапка — деньги, кольцо — время».
+        // Показываем действующую меру, а не сырой выбор. Недоступная мера —
+        // disabled (решение дизайна): клик по ней ничего не сбрасывает.
         value={effMeasure}
         onChange={setMeasure}
         touch={isMobile}
         options={[
           { value: 'time', label: 'время' },
-          { value: 'tokens', label: 'токены', muted: !tokensAvailable, title: !tokensAvailable ? 'токены недоступны без учёта расхода' : undefined },
-          { value: 'cost', label: 'деньги', muted: !costAvailable, title: !costAvailable ? 'деньги недоступны без учёта расхода' : undefined },
+          { value: 'tokens', label: 'токены', disabled: !tokensAvailable, title: !tokensAvailable ? 'токены недоступны без учёта расхода' : undefined },
+          { value: 'cost', label: 'деньги', disabled: !costAvailable, title: !costAvailable ? 'деньги недоступны без учёта расхода' : undefined },
         ]}
       />
     </div>
@@ -134,17 +139,24 @@ export function FeatureBreakdownBlock({
           </b>
           <span style={{ fontSize: FS.xs, color: C.textMuted }}>
             {visible.length === 1
-              ? `Разрезы появятся, когда исполнителей станет больше одного. Сейчас виден только ${labelOf ? labelOf(visible[0].key) : visible[0].key} — ${formatDuration(visible[0].minutes)}.`
-              : 'Разрезы появятся, когда исполнителей станет больше одного.'}
-            </span>
+              ? `Разрезы появятся, когда ${AXIS_MORE[axis]}. Сейчас виден только ${labelOf ? labelOf(visible[0].key) : visible[0].key} — ${formatDuration(visible[0].minutes)}.`
+              : `Разрезы появятся, когда ${AXIS_MORE[axis]}.`}
+          </span>
         </div>
       ) : isMobile ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, marginTop: SP.md }}>
           {noCost && <div data-testid="breakdown-no-cost" style={PLATE}>Токены и деньги недоступны: у этой фичи нет учёта расхода. Доли — по времени</div>}
           {costPartial && <div data-testid="breakdown-cost-partial" style={PLATE}>цена по части моделей недоступна</div>}
+          {/* Кольцо 180 по центру над карточками (решение дизайна, записка §360). */}
+          <div style={{ display: 'flex', justifyContent: 'center' }}>
+            <ShareRing
+              groups={visible} measure={effMeasure} size={180}
+              labelOf={labelOf} colorOf={colorOf} axisLabel={AXIS_WORD[axis]}
+            />
+          </div>
           <FeatureBreakdownCards
             groups={visible} axis={axis} measure={effMeasure} run={run}
-            labelOf={labelOf} colorOf={colorOf} hiddenKeys={hiddenKeys}
+            labelOf={labelOf} colorOf={colorOf}
           />
         </div>
       ) : (
@@ -164,7 +176,7 @@ export function FeatureBreakdownBlock({
           <div style={{ flex: 1, minWidth: 0 }}>
             <FeatureBreakdownTable
               groups={visible} axis={axis} run={run}
-              labelOf={labelOf} colorOf={colorOf} hiddenKeys={hiddenKeys}
+              labelOf={labelOf} colorOf={colorOf}
             />
           </div>
         </div>

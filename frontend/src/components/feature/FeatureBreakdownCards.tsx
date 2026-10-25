@@ -20,15 +20,18 @@
 import { useState, Fragment, type CSSProperties } from 'react';
 import { C, FS, SP, R, FONT } from '../../lib/design';
 import { plural } from '../../lib/plural';
-import { roleLabel } from '../../lib/roleLabel';
 import { Dot } from '../ui/Dot';
 import { LiveDot } from '../ui/LiveDot';
 import { formatDuration } from './FeatureStatsBits';
 import { formatTokens } from './FeatureStatsFormat';
 import {
-  type Axis, type Measure, type BreakdownChip,
+  type Axis, type Measure,
   sortGroups, formatMoney, groupChips, liveChipText, fewData, percentText, measureValue,
+  measureTotal, measureMax,
 } from './FeatureBreakdownModel';
+import {
+  MEASURES, MEASURE_WORD, groupColor, chipColor, chipLabel, CHIP, CHIP_AV, AV, SW, liveChipStyle,
+} from './FeatureBreakdownShared';
 import { FeatureBreakdownChats } from './FeatureBreakdownChats';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
@@ -49,24 +52,10 @@ export interface FeatureBreakdownCardsProps {
   hiddenKeys?: string[];
 }
 
-// Палитра групп — та же, что у таблицы и ShareRing: если colorOf не передан.
-const ARC_COLORS = [C.accent, C.info, C.plan, C.success, C.warning, C.progressTrack];
-
-const MEASURE_WORD: Record<Measure, string> = { time: 'время', tokens: 'токены', cost: 'деньги' };
-const MEASURES: Measure[] = ['time', 'tokens', 'cost'];
-
-function groupColor(key: string, index: number, colorOf?: (k: string) => string): string {
-  return colorOf ? colorOf(key) : ARC_COLORS[index % ARC_COLORS.length];
-}
-
-// Подпись чипа — как в таблице (ST-F11): модель — нормализованное имя (groupChips
-// уже снял «Авто → »); роль — слово roleLabel без шага; для 'step' оно пусто —
-// нейтральное «шаг».
-function chipLabel(chip: BreakdownChip, labelOf?: (k: string) => string): string {
-  if (chip.kind === 'model') return chip.key;
-  if (chip.kind === 'role') return roleLabel(chip.key, null, null) || (chip.key === 'step' ? 'шаг' : chip.key);
-  return labelOf ? labelOf(chip.key) : chip.key;
-}
+// Мера в подписи над карточками: «По убыванию времени / токенов / денег».
+const MEASURE_GEN: Record<Measure, string> = { time: 'времени', tokens: 'токенов', cost: 'денег' };
+// Подпись над карточками (макет :343): muted 11 px, отступ снизу 8.
+const CAPTION: CSSProperties = { fontSize: FS.xs, color: C.textMuted, marginBottom: SP.sm };
 
 // Карточка: bgWhite, рамка borderLight, R.lg, padding SP.sm (макет .c-mr).
 // Ширина — только '100%': фиксированных ширинок больше 328 px на 360 нет (к1).
@@ -81,12 +70,6 @@ const CARD: CSSProperties = {
 const CARD_OPEN: CSSProperties = { ...CARD, border: `1px solid ${C.accent}`, background: C.accentLight };
 
 const TOP: CSSProperties = { display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' };
-const AV: CSSProperties = {
-  width: 22, height: 22, borderRadius: R.full, display: 'inline-flex',
-  alignItems: 'center', justifyContent: 'center',
-  fontSize: FS.xs, fontWeight: 700, color: C.onAccent, flexShrink: 0,
-};
-const SW: CSSProperties = { width: 12, height: 12, borderRadius: R.sm, flexShrink: 0 };
 const NAME: CSSProperties = { fontSize: FS.base, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0 };
 // Доля по выбранной мере: mono 700 (макет .top .p).
 const PCT: CSSProperties = {
@@ -94,26 +77,9 @@ const PCT: CSSProperties = {
   color: C.textHeading, whiteSpace: 'nowrap',
 };
 
-// Живые чипы персоны — те же, что в таблице (макет .chip).
-const LIVE: CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: SP.xs, height: 20,
-  padding: `0 ${SP.xs}px`, borderRadius: R.max, fontSize: FS.xxs, fontWeight: 600,
-};
-
 // Чипы связи разрезов — те же, что в таблице (макет .c-chips): нейтральная рамка;
 // персона — аватар + имя.
 const CHIPS: CSSProperties = { display: 'flex', gap: SP.xs, flexWrap: 'wrap', marginTop: SP.xs };
-const CHIP: CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', gap: SP.xs,
-  fontSize: FS.xxs, padding: `1px ${SP.xs}px`,
-  border: `1px solid ${C.border}`, color: C.textSecondary,
-  borderRadius: R.sm, whiteSpace: 'nowrap',
-};
-const CHIP_AV: CSSProperties = {
-  width: 18, height: 18, borderRadius: R.full, display: 'inline-flex',
-  alignItems: 'center', justifyContent: 'center',
-  fontSize: FS.xxs, fontWeight: 700, color: C.onAccent, flexShrink: 0,
-};
 
 // Три мини-полосы 6 px (макет .c-mr .ms): сетка 62px/1fr/74px — подпись, полоса от
 // МАКСИМУМА колонки (как ячейки таблицы), значение (mono). Без учёта — слово в
@@ -155,7 +121,8 @@ export function FeatureBreakdownCards({
   // из props, поэтому при её смене состояние раскрытия не сбрасывается (к3).
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
-  // Скрытые группы отсекаются до guard'а: чего не рисуем — в долях нет.
+  // Скрытые группы отсекаются до guard'а: чего не рисуем — в долях нет. (Оболочка
+  // уже отдаёт отфильтрованный набор; фильтр здесь — для автономного вызова.)
   const hidden = new Set(hiddenKeys ?? []);
   const visible = groups.filter(g => !hidden.has(g.key));
 
@@ -163,20 +130,25 @@ export function FeatureBreakdownCards({
   if (fewData(visible)) return null;
 
   const sorted = sortGroups(visible, measure);
-  const total = visible.reduce((a, g) => a + (measureValue(g, measure) ?? 0), 0);
+  const total = measureTotal(visible, measure) ?? 0;
   // Максимум колонки — база мини-полос (как ячейки таблицы ST-F11), не сумма.
-  const maxOf = (m: Measure) => Math.max(...visible.map(g => measureValue(g, m) ?? 0), 1);
+  const maxOf = (m: Measure) => measureMax(visible, m);
+  // Раскрыта только видимая группа: скрытую состояние не удерживает.
+  const openKey = visible.some(g => g.key === expandedKey) ? expandedKey : null;
 
   return (
     <div data-testid="feature-breakdown-cards">
-      {sorted.map((g, i) => {
-        const color = groupColor(g.key, i, colorOf);
+      <div data-testid="breakdown-cards-caption" style={CAPTION}>
+        По убыванию {MEASURE_GEN[measure]} · сортировка — в шапке
+      </div>
+      {sorted.map(g => {
+        const color = groupColor(g.key, visible, colorOf);
         const label = labelOf ? labelOf(g.key) : g.key;
         const live = axis === 'personas' ? liveChipText(run, g.key) : null;
         const chips = groupChips(axis, g.key, run);
         const v = measureValue(g, measure);
         const chatIds = (g.chatIds ?? []).filter(Boolean);
-        const open = expandedKey === g.key;
+        const open = openKey === g.key;
         return (
           <div
             key={g.key}
@@ -191,13 +163,9 @@ export function FeatureBreakdownCards({
               )}
               <span style={NAME}>{label}</span>
               {live ? (
-                <span
-                  data-testid={`live-chip-${g.key}`}
-                  style={live === 'работает'
-                    ? { ...LIVE, background: C.accentLight, color: C.accent }
-                    : { ...LIVE, background: C.infoBg, color: C.info }}
-                >
-                  {live === 'работает' ? <LiveDot color={C.accent} size={6} label="работает" /> : <Dot color={C.info} size={6} />}
+                <span data-testid={`live-chip-${g.key}`} style={liveChipStyle(live)}>
+                  {/* Точка декоративна: слово рядом уже говорит «работает». */}
+                  {live === 'работает' ? <span aria-hidden><LiveDot color={C.accent} size={6} /></span> : <Dot color={C.info} size={6} />}
                   {live}
                 </span>
               ) : null}
@@ -210,7 +178,7 @@ export function FeatureBreakdownCards({
             <div data-testid={`breakdown-chips-${g.key}`} style={CHIPS}>
               {chips.map(c => c.kind === 'persona' ? (
                 <span key={`${c.kind}:${c.key}`} data-testid={`breakdown-chip-${c.kind}:${c.key}`} style={{ ...CHIP, border: 'none' }}>
-                  <span aria-hidden style={{ ...CHIP_AV, background: groupColor(c.key, 0, colorOf) }}>
+                  <span aria-hidden style={{ ...CHIP_AV, background: chipColor(c.key, colorOf) }}>
                     {(labelOf ? labelOf(c.key) : c.key).charAt(0).toUpperCase()}
                   </span>
                   {chipLabel(c, labelOf)}
@@ -249,6 +217,7 @@ export function FeatureBreakdownCards({
               <button
                 type="button"
                 data-testid={`breakdown-chats-toggle-${g.key}`}
+                aria-expanded={open}
                 style={CHAT_BTN}
                 onClick={() => setExpandedKey(open ? null : g.key)}
               >

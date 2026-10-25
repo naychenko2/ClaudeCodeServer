@@ -189,19 +189,19 @@ describe('NavTargetPair', () => {
   });
 });
 
-// ═══ 4. 360: тач-цель ≥ 40 (minHeight 40) ═══════════════════════════════════════
+// ═══ 4. 360: тач-цель ≥ 44 (minHeight 44) ═══════════════════════════════════════
 describe('NavTargetButton: 360', () => {
-  it('на 360 кнопка чата — minHeight 40 (тач-цель)', () => {
+  it('на 360 кнопка чата — minHeight 44 (тач-цель)', () => {
     const { container } = renderChat({ chatId: 'c1', isMobile: true });
     const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat')!;
-    expect((btn as unknown as { style: Record<string, string> }).style.minHeight).toBe('40px');
+    expect((btn as unknown as { style: Record<string, string> }).style.minHeight).toBe('44px');
   });
-  it('на 360 кнопка задачи — minHeight 40 (тач-цель)', () => {
+  it('на 360 кнопка задачи — minHeight 44 (тач-цель)', () => {
     const { container } = renderTask({ taskId: 't1', isMobile: true });
     const btn = findNodeByAttr(container, 'data-testid', 'nav-target-task')!;
-    expect((btn as unknown as { style: Record<string, string> }).style.minHeight).toBe('40px');
+    expect((btn as unknown as { style: Record<string, string> }).style.minHeight).toBe('44px');
   });
-  it('десктоп (360=false) — без minHeight 40 (высота 24)', () => {
+  it('десктоп (360=false) — без minHeight 44 (высота 24)', () => {
     const { container } = renderChat({ chatId: 'c1' });
     const btn = findNodeByAttr(container, 'data-testid', 'nav-target-chat')!;
     expect((btn as unknown as { style: Record<string, string> }).style.height).toBe('24px');

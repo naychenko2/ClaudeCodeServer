@@ -20,11 +20,18 @@
 //   · role="img" и aria-label «имя — доля», имена из labelOf, а не сырой ключ
 //     (UUID) (к3).
 //
+//   · нулевая сумма «деньги» при tokens>0 — трек без дуг, «бесплатно» и «все модели
+//     локальные»; нулевое время/токены — дуг нет, центр «нет данных» (решение дизайна);
+//   · цвет дуги — по порядку ВХОДА групп, а не сортировки по мере (дуга ↔ строка).
+//
 // Мутации (проверены прогоном): (1) offset всегда 0 — краснеет тест смещений дуг
 // («дуги заполняют окружность»); (2) убрать guard `groups.length < 2` — краснеет
 // тест «<2 групп — кольца нет»; (3) фолбэк меры убрать (effMeasure = measure) —
 // краснеет тест «меры без данных — фолбэк на время»; (4) gap всегда 3 — краснеет
-// тест «доминантная 100 % без зазора».
+// тест «доминантная 100 % без зазора»; (5) снять Math.max(0, …) в длине дуги —
+// краснеет тест «доля короче зазора»; (6) в moneyText вместо tokens: totalTokens
+// поставить tokens: 0 — краснеют «бесплатно» (центр и вторая строка); (7) цвет по
+// индексу сортировки вместо индекса входа — краснеет тест «цвет не зависит от меры».
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -63,6 +70,7 @@ function mountRing(
 
 // Кольцо — обёртка div[data-testid], внутри неё svg; атрибуты и дуги — на svg.
 type FNodeLike = {
+  nodeName: string;
   children: FNodeLike[];
   getAttribute(n: string): string | null;
   style?: Record<string, string>;
@@ -74,7 +82,7 @@ function ringSvg(container: ReturnType<typeof mount>['container']): FNodeLike | 
   return wrap.children.find(c => c.nodeName === 'SVG') ?? null;
 }
 
-type FNodeArc = { dash: number; offset: number; stroke: string; width: number };
+type FNodeArc = { dash: number; offset: number; stroke: string | null; width: number };
 
 // Дуги — все circle в svg, кроме фонового круга (его находим по data-testid,
 // а не по slice(1): порядок детей не часть контракта).
@@ -162,8 +170,8 @@ describe('число дуг и их длины (к1)', () => {
     expect(a[1].dash).toBe(0);
   });
 
-  it('total=0 — дуги нулевые, но рендер не пустой', () => {
-    const { container } = mountRing([mkGroup('a', 0, 0, 0), mkGroup('b', 0, 0, 0)], 'time');
+  it('total=0 по деньгам — дуги нулевые, но рендер не пустой (трек виден)', () => {
+    const { container } = mountRing([mkGroup('a', 5, 10, 0), mkGroup('b', 5, 10, 0)], 'cost');
     expect(findNodeByAttr(container, 'data-testid', 'share-ring')).not.toBeNull();
     const a = arcs(container);
     expect(a.length).toBe(2);
@@ -231,6 +239,18 @@ describe('цвета (к2)', () => {
     expect(a[0].stroke).toBe(C.success);
     expect(a[1].stroke).toBe(C.warning);
     expect(a[2].stroke).toBe(C.progressTrack);
+  });
+
+  it('цвет не зависит от меры: порядок входа, а не сортировки (дуга ↔ строка таблицы)', () => {
+    // Вход kira(мало), timur(много): по времени первая дуга — timur, но цвет timur
+    // остаётся вторым цветом палитры, как и строка таблицы.
+    const input = [mkGroup('kira', 10, 5000, 1), mkGroup('timur', 90, 100, 9)];
+    const byTime = arcs(mountRing(input, 'time').container);
+    const byTokens = arcs(mountRing(input, 'tokens').container);
+    expect(byTime[0].stroke).toBe(C.info);   // timur — крупнейшая по времени
+    expect(byTokens[0].stroke).toBe(C.accent); // kira — крупнейшая по токенам
+    expect(byTime[1].stroke).toBe(C.accent);
+    expect(byTokens[1].stroke).toBe(C.info);
   });
 
   it('больше групп, чем цветов — цикл палитры', () => {
@@ -308,6 +328,22 @@ describe('«бесплатно» и фолбэк только при null (до�
     const { container } = mountRing(FREE, 'cost');
     expect(ringSvg(container)!.getAttribute('aria-label')).toContain('Доли по деньгам');
     for (const arc of arcs(container)) expect(arc.dash).toBe(0);
+  });
+
+  it('нулевая сумма «деньги»: вторая строка — «все модели локальные», дуг с длиной нет', () => {
+    const { container } = mountRing(FREE, 'cost', undefined, { axisLabel: 'персоны' });
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-cost'))).toBe('все модели локальные');
+    expect(findNodeByAttr(container, 'data-testid', 'share-ring-bg')).not.toBeNull();
+    for (const arc of arcs(container)) expect(arc.dash).toBe(0);
+  });
+
+  it('нулевое время или токены — дуг нет, центр «нет данных»', () => {
+    const zero = [mkGroup('a', 0, 0, 0), mkGroup('b', 0, 0, 0)];
+    for (const measure of ['time', 'tokens'] as const) {
+      const { container } = mountRing(zero, measure);
+      expect(arcs(container).length).toBe(0);
+      expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-total'))).toBe('нет данных');
+    }
   });
 
   it('null у всех — фолбэк на время (aria-label и дуги по минутам)', () => {

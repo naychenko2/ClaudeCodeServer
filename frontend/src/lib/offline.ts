@@ -34,7 +34,7 @@ const BASE = '/api';
 //
 // cc_token из localStorage/sessionStorage читают ВСЕ места, где формируется
 // Authorization (REST-запросы, прямые fetch для FormData, SignalR для WebSocket).
-// Раньше каждый зов делал `localStorage.getItem('cc_token') || sessionStorage…`
+// Раньше каждый зов читал cc_token из двух хранилищ вручную
 // и потом тернарник `token ? { Authorization: \`Bearer ${token}\` } : {}` —
 // а если в storage лежит строка `"null"`/`"undefined"` или пустая строка
 // (например, из-за миграции/внешнего вмешательства), она truthy, и запрос
@@ -48,16 +48,36 @@ const BASE = '/api';
 // разыскиваем (по QA-гипотезе — окно между cc-unauthorized и приходом
 // токена после /auth/me; реальный путь может быть и в миграции данных) —
 // защищаем чтение на выходе.
-export function readStoredToken(): string | null {
-  if (typeof localStorage === 'undefined') return null;
-  const raw = localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token');
+//
+// Порядок чтения — «сначала своё»: sessionStorage (вход этой вкладки без «запомнить
+// меня») раньше localStorage (общий на профиль). Иначе вход другого человека в соседней
+// вкладке с «запомнить меня» подменил бы владельца запросов в этой вкладке
+// («одна вкладка — один владелец», docs/architecture/plugins.md).
+function readStoredKey(key: string): string | null {
+  let raw: string | null;
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    raw = sessionStorage.getItem(key) || localStorage.getItem(key);
+  } catch {
+    // Хранилище отключено (приватный режим, dom.storage.enabled=false) — токена нет
+    return null;
+  }
   if (!raw) return null;
   // Строки "null"/"undefined" — частый мусор: где-то в цепочке
-  // `setItem('cc_token', null|undefined)` молча сохранил их как строки.
+  // `setItem(key, null|undefined)` молча сохранил их как строки.
   // Пустая строка сюда не попадёт (отсечена выше), но на всяч — trim().
   const trimmed = raw.trim();
   if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
   return trimmed;
+}
+
+export function readStoredToken(): string | null {
+  return readStoredKey('cc_token');
+}
+
+// Владелец вкладки по хранилищу; пара к readStoredToken, тот же порядок чтения.
+export function readStoredUserId(): string | null {
+  return readStoredKey('cc_user_id');
 }
 
 // --- Кэшированный токен (для частых вызовов, напр. avatarUrl) ---
@@ -73,7 +93,7 @@ function wireTokenCache(): void {
   _tokenCacheWired = true;
   // Другая вкладка сменила токен (logout/login в соседней вкладке)
   window.addEventListener('storage', e => {
-    if (e.key === 'cc_token' || e.key === null) _cachedToken = undefined;
+    if (e.key === 'cc_token' || e.key === 'cc_user_id' || e.key === null) _cachedToken = undefined;
   });
   // Токен отозван сервером (401) — сбрасываем кэш
   window.addEventListener('cc-unauthorized', () => { _cachedToken = undefined; });

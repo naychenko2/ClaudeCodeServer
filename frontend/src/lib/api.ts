@@ -3181,9 +3181,7 @@ export const api = {
   //   400 → текст пуст или больше потолка (256 КБ)
   plans: {
     buildMap: async (plan: string): Promise<PlanMap | null> => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const res = await fetch('/api/plans/map', {
         method: 'POST',
         headers: {

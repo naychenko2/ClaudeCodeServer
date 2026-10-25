@@ -15,6 +15,7 @@
 import { useSyncExternalStore } from 'react';
 import type { Project, Session, ServerMessage } from '../../types';
 import { api } from '../../lib/api';
+import { readStoredUserId } from '../../lib/offline';
 import { joinProject, joinUser, onMessage, onReconnected } from '../../lib/signalr';
 import { isArchivedChat } from '../../lib/chatFilters';
 
@@ -117,7 +118,7 @@ function schedulePut() {
 // когда storage недоступен/пуст (док воркспейса зовёт initWall без id).
 function currentOwnerId(): string | undefined {
   try {
-    const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+    const uid = readStoredUserId();
     if (uid) return uid;
   } catch { /* storage недоступен */ }
   return _ownerId;

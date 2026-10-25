@@ -27,7 +27,7 @@ import { panelDisplayName, pluginDisplayName } from './panelNaming';
 import { handleStorageCall, type StorageOp } from './hostOps/storage';
 // Владелец — из состояния авторизации хоста (ответ /auth/me), тот же источник,
 // что в pluginStorageLifecycle.ts: F2-d, единый способ в перехвате и цикле.
-import { getMeSnapshot } from '../../lib/defaultPersona';
+import { getMeSnapshot, isTabOwnerConsistent } from '../../lib/defaultPersona';
 
 // === Панель плагина (S5): одна панель = одна карточка ===
 // Десктоп: карточка — обычная панель рельса (PanelZone рисует её через PanelShell),
@@ -99,6 +99,8 @@ type BridgeState = 'waiting' | 'alive' | BridgeErrorCode;
 // Потолок одновременных вызовов одного фрейма и размер args (ADR-031 §3.4:
 // «числа фиксирует шаг 3.2 в CLAUDE.md вертикали» — зафиксировано там).
 const MAX_INFLIGHT_CALLS = 8;
+// Вход сменился в другой вкладке (одна вкладка — один владелец): отказ без обращения к серверу и хранилищу
+const OWNER_CHANGED_ERROR = { code: 'denied', message: 'Вход сменился в другой вкладке' } as const;
 const MAX_ARGS_BYTES = 64 * 1024;
 
 export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, showTitle = true }: {
@@ -313,6 +315,10 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
     // плагина и владелец берутся только из состояния хоста.
     if (msg.op.startsWith('storage.')) {
       logEvent(`← call ${msg.id} ${msg.op} (host)`);
+      if (!isTabOwnerConsistent()) {
+        postToFrame(buildResultMessage(msg.id, false, OWNER_CHANGED_ERROR));
+        return;
+      }
       // Владелец — из состояния авторизации хоста (getMeSnapshot, ответ /auth/me),
       // не из cc_user_id в хранилище: id есть сразу после входа, независимо от
       // «запомни меня». Пустой id — fail-closed: unavailable, ни одной записи.
@@ -344,6 +350,11 @@ export function PluginFrame({ project, plugin, panel, onOpenPlugins, onClose, sh
         // поломка. Человек, отозвавший право, знает об этом сам. Отказы по net: и
         // прочим доменам идут серверной веткой ниже и плашку дают, как раньше.
       }
+      return;
+    }
+    // Вход сменился в другой вкладке: на сервер от чужого имени не идём (docs/architecture/plugins.md)
+    if (!isTabOwnerConsistent()) {
+      postToFrame(buildResultMessage(msg.id, false, OWNER_CHANGED_ERROR));
       return;
     }
     inflightRef.current++;

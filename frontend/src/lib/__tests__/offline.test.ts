@@ -629,3 +629,28 @@ describe('display-состояние: гистерезис и тихий воз�
     expect(fn).toHaveBeenCalledTimes(3); // отписались — уведомлений нет
   });
 });
+
+describe('readStoredToken / readStoredUserId: «сначала своё»', () => {
+  it('свой токен в sessionStorage побеждает чужой в localStorage', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'чужой', cc_user_id: 'u-b' }));
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'свой', cc_user_id: 'u-a' }));
+
+    expect(offline.readStoredToken()).toBe('свой');
+    expect(offline.readStoredUserId()).toBe('u-a');
+  });
+
+  it('нет своего — читается общий localStorage («запомнить меня»)', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'общий', cc_user_id: 'u-b' }));
+    vi.stubGlobal('sessionStorage', storageStub());
+
+    expect(offline.readStoredToken()).toBe('общий');
+    expect(offline.readStoredUserId()).toBe('u-b');
+  });
+
+  it('мусорный id ("null") приравнивается к отсутствию', () => {
+    vi.stubGlobal('sessionStorage', storageStub({ cc_user_id: 'null' }));
+    vi.stubGlobal('localStorage', storageStub());
+
+    expect(offline.readStoredUserId()).toBeNull();
+  });
+});

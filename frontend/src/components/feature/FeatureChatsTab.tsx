@@ -72,12 +72,13 @@ const KEY_TIP = 'Ключевой чат — здесь куратор ведё�
 // пара «чат · задача». Ключевой — фон accentLight; архивный — имя приглушено.
 // Навигация: чат — openChatById (chat.id), задача — openTaskInSection (taskId);
 // точка возврата «страница фичи → чат/задача» — recordFeatureReturn (Ф9b).
-function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS }: {
+function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null, projectId, marks = EMPTY_NAV_MARKS }: {
   chat: FeatureChatLink;
   isKey: boolean;
   isMobile: boolean;
   featureId: string;
   featureTitle?: string | null;
+  projectId?: string;
   marks?: NavMarks;
 }) {
   const [hover, setHover] = useState(false);
@@ -94,7 +95,7 @@ function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null, marks 
   const openTask = () => {
     if (!chat.taskId) return;
     recordFeatureReturn(featureId, { kind: 'task', id: chat.taskId }, featureTitle);
-    openTaskInSection({ id: chat.taskId });
+    openTaskInSection({ id: chat.taskId, projectId });
   };
 
   return (
@@ -166,12 +167,13 @@ function ChatRow({ chat, isKey, isMobile, featureId, featureTitle = null, marks 
 
 // Раздел «Архивные · N» (макет §9а, .archb): свёрнутые архивные чаты; раскрытие по
 // клику/клавиатуре (aria-expanded), шеврон поворачивается. N = число архивных.
-function ArchivedSection({ chats, keySessionId, isMobile, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS }: {
+function ArchivedSection({ chats, keySessionId, isMobile, featureId, featureTitle = null, projectId, marks = EMPTY_NAV_MARKS }: {
   chats: FeatureChatLink[];
   keySessionId: string | null;
   isMobile: boolean;
   featureId: string;
   featureTitle?: string | null;
+  projectId?: string;
   marks?: NavMarks;
 }) {
   const [open, setOpen] = useState(false);
@@ -203,7 +205,7 @@ function ArchivedSection({ chats, keySessionId, isMobile, featureId, featureTitl
       {open && (
         <div data-testid="chats-archived-body" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, marginTop: SP.xxs }}>
           {sorted.map(c => (
-            <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} marks={marks} />
+            <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} projectId={projectId} marks={marks} />
           ))}
         </div>
       )}
@@ -230,6 +232,8 @@ export function FeatureChatsTab({ page, keySessionId = null, featureId, marks: m
   const archived = all.filter(c => c.archived);
   // Название фичи (epic.title) — для «← к фиче {название}» в шапке чата (Ф-pl-b).
   const featureTitle = page.run.epic?.title ?? null;
+  // У чата проекта в данных нет — берём проект эпика, иначе переход в задачу уводит в «Календарь».
+  const projectId = page.run.epic?.projectId ?? undefined;
 
   // Пустое: нет чатов вовсе.
   if (all.length === 0) {
@@ -243,10 +247,10 @@ export function FeatureChatsTab({ page, keySessionId = null, featureId, marks: m
   return (
     <div data-testid="chats" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
       {live.map(c => (
-        <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} marks={marks} />
+        <ChatRow key={c.id} chat={c} isKey={isKeyChat(c, keySessionId)} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} projectId={projectId} marks={marks} />
       ))}
       {archived.length > 0 && (
-        <ArchivedSection chats={archived} keySessionId={keySessionId} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} marks={marks} />
+        <ArchivedSection chats={archived} keySessionId={keySessionId} isMobile={isMobile} featureId={featureId} featureTitle={featureTitle} projectId={projectId} marks={marks} />
       )}
     </div>
   );

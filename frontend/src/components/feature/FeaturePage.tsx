@@ -315,7 +315,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           ) : tab === 'tasks' ? (
             <FeatureTasksTab run={okRun} featureId={featureId} marks={marks} isMobile={isMobile} />
           ) : tab === 'events' ? (
-            <FeatureEventsTab events={page.page.events} eventsTotal={page.page.eventsTotal} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} marks={marks} isMobile={isMobile} />
+            <FeatureEventsTab events={page.page.events} eventsTotal={page.page.eventsTotal} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} projectId={page.page.run.epic?.projectId ?? undefined} marks={marks} isMobile={isMobile} />
           ) : (
             // «Статистика» (Ф7a): ступени Ганта из run + stats (features/{id}); stats null — пустое состояние.
             <FeatureStatsTab stats={page.page.stats ?? null} run={okRun} featureId={featureId} featureTitle={page.page.run.epic?.title ?? null} marks={marks} isMobile={isMobile} />

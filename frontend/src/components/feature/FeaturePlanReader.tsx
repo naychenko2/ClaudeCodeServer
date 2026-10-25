@@ -333,7 +333,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
               kind="task"
               taskId={plan.taskId}
               taskClosed={marks.taskClosed(plan.taskId)}
-              onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
+              onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId, projectId: projectId ?? undefined }))}
               title="Открыть задачу документа"
               isMobile={isMobile}
             />
@@ -446,7 +446,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
               showNoChat={false}
               taskId={plan.taskId}
               taskClosed={marks.taskClosed(plan.taskId)}
-              onOpenTask={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
+              onOpenTask={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId, projectId: projectId ?? undefined }))}
               taskTitle="Открыть задачу документа"
               isMobile={isMobile}
             />
@@ -471,7 +471,7 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
               kind="task"
               taskId={plan.taskId}
               taskClosed={marks.taskClosed(plan.taskId)}
-              onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId }))}
+              onOpen={() => (onOpenTask ? onOpenTask(plan.taskId) : openTaskInSection({ id: plan.taskId, projectId: projectId ?? undefined }))}
               title="Открыть задачу документа"
               isMobile={isMobile}
             />

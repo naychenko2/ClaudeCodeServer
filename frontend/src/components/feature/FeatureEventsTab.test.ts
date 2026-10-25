@@ -89,12 +89,13 @@ function ev(over: Partial<FeatureEvent> = {}): FeatureEvent {
 
 // Корни всех mount'ов: unmount в afterEach (иначе два живых корня дёргают общий стор).
 const roots: import('react-dom/client').Root[] = [];
-function render(props: { events: FeatureEvent[]; eventsTotal?: number; isMobile?: boolean }) {
+function render(props: { events: FeatureEvent[]; eventsTotal?: number; isMobile?: boolean; projectId?: string }) {
   installFakeDom();
   const { root, container } = mount(createElement(FeatureEventsTab, {
     events: props.events,
     eventsTotal: props.eventsTotal ?? props.events.length,
     featureId: 'f1',
+    projectId: props.projectId,
     isMobile: props.isMobile ?? false,
   }));
   roots.push(root);
@@ -367,12 +368,13 @@ describe('Группировка по дням в рендере', () => {
 describe('Навигация «чат · задача» (макет §9а)', () => {
   it('клик «задача» → openTaskInSection(taskId); клик «чат» → openChatById(sessionId)', async () => {
     const e = ev({ kind: 'accepted', stepRef: 'Ш1', personaId: 'p-gleb', sessionId: 'chat-g', taskId: 't-r1' });
-    const container = render({ events: [e] });
+    const container = render({ events: [e], projectId: 'proj-1' });
 
     const taskBtn = findNodeByAttr(container, 'data-testid', 'nav-target-task')!;
     const taskClick = reactProps(taskBtn)!.onClick as () => void;
     await act(async () => { taskClick(); });
-    expect(mockOpenTask.calls).toEqual([{ id: 't-r1' }]);
+    // projectId обязателен: без него переход уводит в личный «Календарь».
+    expect(mockOpenTask.calls).toEqual([{ id: 't-r1', projectId: 'proj-1' }]);
 
     const chatBtn = findNodeByAttr(container, 'data-testid', 'nav-target-chat')!;
     const chatClick = reactProps(chatBtn)!.onClick as () => void;

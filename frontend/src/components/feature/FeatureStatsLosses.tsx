@@ -63,6 +63,16 @@ function cardStyle(live: boolean, isMobile: boolean): CSSProperties {
   };
 }
 
+// Кольцо фокуса клавиатуры у живой карточки (P2): инлайн-стиль не умеет :focus-visible —
+// класс инжектится один раз (тот же приём, что ui/Chip и FeatureBreakdownShared).
+const LOSS_FOCUS_CLASS = 'cc-loss-card';
+if (typeof document !== 'undefined' && !document.getElementById('cc-loss-card-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-loss-card-style';
+  el.textContent = `.${LOSS_FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
+}
+
 // Сброс UA-стилей для карточки-ссылки (2): `<button>` по умолчанию центрирует текст
 // и даёт cursor: default — без этого числа и контекст стоят по центру, у карточек 1
 // и 3 — слева. Тот же приём, что в строках этапов (FeatureRunView) и чипах перехода.
@@ -227,6 +237,7 @@ export function FeatureStatsLosses({ run, stats, isMobile = false, nav, nowMs }:
                   key={`${card.no}-${card.kind}`}
                   type="button"
                   data-testid={`loss-card-${card.no}`}
+                  className={LOSS_FOCUS_CLASS}
                   aria-label={`Открыть цепочку шага ${card.stepRef}`}
                   onClick={() => focusStep(run, card.stepRef)}
                   style={{ ...cardStyle(false, isMobile), ...LINK_CARD_EXTRA }}
@@ -258,7 +269,9 @@ export function FeatureStatsLosses({ run, stats, isMobile = false, nav, nowMs }:
                       taskClosed={marks.taskClosed(ln.taskId)}
                       onOpenTask={() => {
                         if (nav?.featureId) recordFeatureReturn(nav.featureId, { kind: 'task', id: ln.taskId }, nav.featureTitle);
-                        openTaskInSection({ id: ln.taskId });
+                        // projectId — проект эпика фичи (тот же путь, что StatsHero:147):
+                        // без него задача уходит в личный «Календарь» (дефект ee6825ff).
+                        openTaskInSection({ id: ln.taskId, projectId: run.epic?.projectId ?? undefined });
                       }}
                       isMobile={isMobile}
                     />

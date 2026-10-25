@@ -10,13 +10,15 @@
 // карточке 2»; (3) убрать ветку empty — краснеет тест «пустое — пунктир»; (4) убрать
 // LINK_CARD_EXTRA из стиля карточки-ссылки — краснеет тест «карточка-ссылка —
 // textAlign left, cursor pointer» (fakeDom не знает вычисленных стилей, UA-центрирование
-// без явного сброса прошёл бы молча).
+// без явного сброса прошёл бы молча); (5) убрать projectId из openTaskInSection — краснеет
+// тест «переход „задача“» (дефект ee6825ff).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { C, R, FS, SP } from '../../lib/design';
 import { FeatureStatsLosses } from './FeatureStatsLosses';
 import { formatTokens } from './FeatureStatsFormat';
+import { getBackNav } from '../../lib/featureBackNav';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun, FeatureStage, FeatureStepChain } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
@@ -28,6 +30,11 @@ const mockPersonas = vi.hoisted(() => [
 // Переход карточки 2 — моким: считаем вызовы, а не состояние стора.
 const mockTab = vi.hoisted(() => ({ calls: [] as string[] }));
 const mockFocus = vi.hoisted(() => ({ calls: [] as string[] }));
+// Переход «задача» карточки 3 — моким: проверяем аргументы (дефект ee6825ff).
+const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
+vi.mock('../../lib/tasks', () => ({
+  openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); },
+}));
 vi.mock('../../lib/personas', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/personas')>();
   return { ...orig, usePersonas: () => mockPersonas };
@@ -297,6 +304,16 @@ describe('карточка 2 — витки (к1, к2)', () => {
     expect(st.textAlign, 'текст карточки-ссылки центрируется UA').toBe('left');
     expect(st.cursor, 'курсор карточки-ссылки не pointer').toBe('pointer');
   });
+
+  // П2: кольцо фокуса клавиатуры на живой карточке — :focus-visible не выразить инлайн-
+  // стилем, поэтому проверяется класс инжекта (M1' — как в ChatCard).
+  it('карточка-ссылка — класс кольца фокуса (cc-loss-card)', () => {
+    const run = mkRun({ stepChains: [mkChain()], stages: [mkStage()] });
+    const { container } = mountLosses(run, mkStats());
+    const card = findNodeByAttr(container, 'data-testid', 'loss-card-2');
+    // React пишет className в атрибут «class» (тот же приём, что FeatureBreakdownTable).
+    expect((card as unknown as { getAttribute: (k: string) => string | null }).getAttribute('class'), 'класса кольца фокуса нет').toContain('cc-loss-card');
+  });
 });
 
 describe('карточка 3 (к1)', () => {
@@ -327,6 +344,26 @@ describe('карточка 3 (к1)', () => {
     const text = textOf(findNodeByAttr(container, 'data-testid', 'loss-card-3'));
     expect(text).toContain('доля расхода не считалась');
     expect(text).not.toContain('%');
+  });
+
+  // Дефект ee6825ff: без projectId задача уходит в личный «Календарь». Мутация (5):
+  // убрать projectId из openTaskInSection — тест краснеет.
+  it('переход «задача»: openTaskInSection с projectId эпика и точкой возврата', async () => {
+    mockOpenTask.calls.length = 0;
+    const run = mkRun({ epic: { id: 'e-1', title: 'Эпик', projectId: 'proj-1' } });
+    const stats = mkStats({
+      longestNow: { taskId: 't-live', chatId: 's-1', personaId: 'p-kira', stepRef: 'ST-F6', minutes: 90, tokens: 1200, share: 0.42 },
+    });
+    const { container } = mount(createElement(FeatureStatsLosses, { run, stats, nav: { featureId: 'f-1', featureTitle: 'Фича' }, nowMs: NOW }));
+    const btn = findNodeByAttr(container, 'data-testid', 'nav-target-task');
+    expect(btn, 'перехода «задача» нет').toBeTruthy();
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(mockOpenTask.calls, 'openTaskInSection не вызван').toEqual([{ id: 't-live', projectId: 'proj-1' }]);
+    // recordFeatureReturn у перехода: записана точка возврата «к фиче».
+    const back = getBackNav();
+    expect(back?.from, 'точка возврата — фича f-1').toBe('f-1');
+    expect(back?.fromKind, 'дискриминатор — feature').toBe('feature');
+    expect(back?.to, 'цель — задача t-live').toEqual({ kind: 'task', id: 't-live' });
   });
 
   it('закрытая фича — «Самый долгий этап» по max approxMinutes', () => {

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { C, R, FS, SP, FONT } from '../../lib/design';
+import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { setFeaturePageTab, focusFeatureStage } from '../../lib/featurePage';
 import { openTaskInSection } from '../../lib/tasks';
 import { EmptyState } from '../ui/EmptyState';
@@ -58,21 +58,21 @@ function segLabel(seg: TimelineSegment): string {
   return formatDuration(seg.minutes);
 }
 
-// Значки точности (макет: «≈ по задачам (≈)» / «по журналу»; «журнал обрезан»).
+// Строка точности (Майя, P1): одна фраза FS.xs textMuted без повтора:
+// «≈ по задачам — числа приблизительные» / «по журналу ходов»; при trunc —
+// отдельная «журнал обрезан».
 function AccuracyBadges({ source, truncated }: { source: 'approx' | 'journal'; truncated: boolean }) {
-  // approx → «≈» + «по задачам (≈)»; journal → «по журналу».
-  const main = source === 'approx'
-    ? <span data-testid="stats-accuracy-approx" style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary }}>≈</span>
-    : <span data-testid="stats-accuracy-journal" style={{ fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary }}>по журналу</span>;
+  const phrase = source === 'approx'
+    ? '≈ по задачам — числа приблизительные'
+    : 'по журналу ходов';
   return (
     <div
       data-testid="stats-accuracy"
       style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', marginBottom: SP.sm, fontFamily: FONT.sans }}
     >
-      <span style={{ fontSize: FS.xs, color: C.textSecondary }}>
-        {source === 'approx' ? 'по задачам (≈)' : 'по журналу'}
+      <span data-testid="stats-accuracy-phrase" style={{ fontSize: FS.xs, color: C.textMuted }}>
+        {phrase}
       </span>
-      {main}
       {truncated && (
         <span data-testid="stats-accuracy-truncated" style={{ fontSize: FS.xs, color: C.warningText }}>
           журнал обрезан
@@ -566,7 +566,9 @@ function Gantt({
 }
 
 // «Задача» по taskId сегмента/этапа: NavTargetButton (открывает задачу в «Задачах»).
-function TaskButtons({ model, nav, isMobile }: { model: TimelineModel; nav?: FeatureNavCtx; isMobile: boolean }) {
+// run нужен для projectId: задачи фичи лежат в проекте её эпика (тот же путь, что
+// StatsHero:147) — без projectId openTaskInSection ведёт в личный «Календарь» (дефект ee6825ff).
+function TaskButtons({ model, run, nav, isMobile }: { model: TimelineModel; run?: FeatureRun | null; nav?: FeatureNavCtx; isMobile: boolean }) {
   const marks = nav?.marks ?? EMPTY_NAV_MARKS;
   // Собираем уникальные taskId по этапам (из сегментов) — по одному «задача» на этап.
   const byStage = new Map<string, string | null>();
@@ -592,7 +594,7 @@ function TaskButtons({ model, nav, isMobile }: { model: TimelineModel; nav?: Fea
             isMobile={isMobile}
             onOpen={() => {
               if (nav?.featureId && taskId) recordFeatureReturn(nav.featureId, { kind: 'task', id: taskId }, nav.featureTitle);
-              openTaskInSection({ id: taskId! });
+              openTaskInSection({ id: taskId!, projectId: run?.epic?.projectId ?? undefined });
             }}
           />
         </span>
@@ -608,6 +610,16 @@ function readMoreOpen(): boolean {
 }
 function writeMoreOpen(open: boolean): void {
   try { localStorage.setItem(MORE_OPEN_KEY, open ? '1' : '0'); } catch { /* приватный режим/квота */ }
+}
+
+// Кольцо фокуса строки «Подробнее» (P2): инлайн-стиль не умеет :focus-visible —
+// класс инжектится один раз (тот же приём, что ui/Chip и FeatureBreakdownShared).
+const MORE_FOCUS_CLASS = 'cc-stats-more';
+if (typeof document !== 'undefined' && !document.getElementById('cc-stats-more-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-stats-more-style';
+  el.textContent = `.${MORE_FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
 }
 
 // «Подробнее» (ST-F14a, макет feature-stats-5.md §«Правки фронта», п. 8): только то,
@@ -665,9 +677,18 @@ function MoreDetails({ totals, spend, source, isMobile }: {
     >
       <summary
         data-testid="stats-more-summary"
-        style={{ cursor: 'pointer', fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, fontFamily: FONT.sans }}
+        className={MORE_FOCUS_CLASS}
+        style={{
+          // Карточка-строка по макету .more: высота ≥ 44 (тач-цель на 360), рамка и
+          // фон карточки; кольцо фокуса — класс MORE_FOCUS_CLASS (:focus-visible).
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm,
+          minHeight: 44, padding: `${SP.md}px ${SP.lg}px`,
+          background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+          cursor: 'pointer', fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, fontFamily: FONT.sans,
+        }}
       >
-        Подробнее
+        <span>Подробнее</span>
+        <span aria-hidden>▾</span>
       </summary>
       <div
         style={{
@@ -767,7 +788,7 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
       ) : (
         <Timeline model={model} isMobile={isMobile} />
       )}
-      <TaskButtons model={model} nav={nav} isMobile={isMobile} />
+      <TaskButtons model={model} run={run} nav={nav} isMobile={isMobile} />
       {run && (
         <div style={{ marginTop: SP.lg }}>
           <FeatureBreakdownBlock
@@ -777,6 +798,7 @@ export function FeatureStatsTab({ stats, run = null, featureId = null, featureTi
             labelOf={labelOf}
             colorOf={colorOf}
             nav={nav}
+            isMobile={isMobile}
           />
         </div>
       )}

@@ -9,8 +9,9 @@
 //
 // Мутации (в отчёте): (1) порог 2 ч → 20 ч → «сжатие паузы» краснеет;
 // (2) потерять track=review → «дорожка ревью» краснеет; (3) подменить цель клика
-// (focusFeatureStage('') вместо key) → «клик → этап» краснеет; (4) убрать «≈» при approx
-// → «значок точности» краснеет; (5) сегмент waiting как work → «сегменты по видам» краснеет.
+// (focusFeatureStage('') вместо key) → «клик → этап» краснеет; (4) убрать «≈» из фразы
+// точности / вернуть повтор → тесты «точность:» краснеют; (5) сегмент waiting как work
+// → «сегменты по видам» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -24,10 +25,11 @@ import {
   formatTokens, formatUsd, sharePercent, roleGroupLabel, modelGroupLabel, personaGroupLabel,
 } from './FeatureStatsFormat';
 import { clearFeatureStageFocus, setFeaturePageTab, __test } from '../../lib/featurePage';
+import { getBackNav } from '../../lib/featureBackNav';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
 import type { FeatureRun, FeatureStage, StageKey, StageState } from '../../types/featureRun';
-import { C, FS, FONT } from '../../lib/design';
+import { C, FS, SP, FONT } from '../../lib/design';
 
 // === Мок навигации (задача) ===
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
@@ -406,9 +408,9 @@ describe('nowCompressedFraction: «сейчас» на сжатой шкале',
 
 type FNodeLike = { nodeType: number; nodeName: string; childNodes: FNodeLike[]; attributes?: Record<string, string> };
 
-function renderTab(stats: FeatureStats | null, isMobile = false, run: FeatureRun | null = null) {
+function renderTab(stats: FeatureStats | null, isMobile = false, run: FeatureRun | null = null, featureId: string | null = null) {
   installFakeDom();
-  const { container } = mount(createElement(FeatureStatsTab, { stats, isMobile, run }));
+  const { container } = mount(createElement(FeatureStatsTab, { stats, isMobile, run, featureId }));
   return container;
 }
 
@@ -590,30 +592,27 @@ describe('FeatureStatsTab: рендер', () => {
     expect(focus!.key).toBe('cut');
   });
 
-  // === 5. Значки точности: source=approx → «≈» + «по задачам (≈)» ===
-  it('значок точности: approx → бейдж «≈» и подпись «по задачам (≈)»', () => {
+  // === 5. Строка точности (Майя, P1): одна фраза без повтора ===
+  it('точность: approx → одна фраза «≈ по задачам — числа приблизительные»', () => {
     const c = renderTab(mkStats({ source: 'approx' }));
-    // Бейдж «≈» — отдельный узел (мутац
-    const badge = findNodeByAttr(c, 'data-testid', 'stats-accuracy-approx');
-    expect(badge, 'бейдж «≈»').not.toBeNull();
-    expect(textNodes(badge!).join('')).toBe('≈');
-    // Подпись.
-    const acc = findNodeByAttr(c, 'data-testid', 'stats-accuracy')!;
-    expect(textNodes(acc).join('')).toContain('по задачам (≈)');
+    const t = textNodes(findNodeByAttr(c, 'data-testid', 'stats-accuracy')!).join('');
+    expect(t, 'точная фраза approx-источника').toBe('≈ по задачам — числа приблизительные');
   });
 
-  // Мутация (4): убрать «≈» из бейджа (→ «по задачам») → бейдж перестаёт быть «≈» → red.
-  it('мутация: approx-бейдж = «≈» (подменить → red)', () => {
-    const c = renderTab(mkStats({ source: 'approx' }));
-    const badge = findNodeByAttr(c, 'data-testid', 'stats-accuracy-approx')!;
-    expect(textNodes(badge).join(''), 'бейдж точности — «≈»').toBe('≈');
-  });
-
-  it('значок точности: journal → «по журналу» (без «≈»)', () => {
+  // Мутация (4): убрать «≈» из фразы → тест выше краснеет.
+  it('точность: journal → «по журналу ходов», без «≈»', () => {
     const c = renderTab(mkStats({ source: 'journal' }));
-    const acc = findNodeByAttr(c, 'data-testid', 'stats-accuracy')!;
-    const t = textNodes(acc).join('');
-    expect(t).toContain('по журналу');
+    const t = textNodes(findNodeByAttr(c, 'data-testid', 'stats-accuracy')!).join('');
+    expect(t, 'точная фраза journal-источника').toBe('по журналу ходов');
+  });
+
+  // Прежняя реализация говорила «по журналу по журналу» и «по задачам (≈) ≈» — этот тест
+  // ловит повтор: источник назван ровно один раз. Мутация: вернуть дубль → краснеет.
+  it('точность: без повтора — источник назван ровно один раз', () => {
+    const c = renderTab(mkStats({ source: 'journal', truncated: true }));
+    const t = textNodes(findNodeByAttr(c, 'data-testid', 'stats-accuracy')!).join('');
+    expect((t.match(/по журналу/g) ?? []).length, 'повтор «по журналу»').toBe(1);
+    expect((t.match(/по задачам/g) ?? []).length, '«по задачам» при journal-источнике').toBe(0);
   });
 
   it('truncated → «журнал обрезан»', () => {
@@ -632,8 +631,16 @@ describe('FeatureStatsTab: рендер', () => {
   });
 
   // === 7. «Задача»: taskId сегмента → NavTargetButton «задача» ===
-  it('«задача»: по каждому этапу с taskId — кнопка; клик → openTaskInSection(taskId)', async () => {
-    const c = renderTab(mkStats());
+  // Дефект ee6825ff: без projectId openTaskInSection ведёт в личный «Календарь».
+  // Мутация: убрать projectId из вызова → тест краснеет.
+  it('«задача»: по каждому этапу с taskId — кнопка; клик → openTaskInSection(taskId, projectId эпика)', async () => {
+    const run: FeatureRun = {
+      featureId: 'f-cut', state: 'running', steps: [], reviews: [], qa: [], final: null, merge: null,
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      progress: 0, ready: false,
+      epic: { id: 'e-1', title: 'Эпик', projectId: 'proj-1' },
+    };
+    const c = renderTab(mkStats(), false, run, 'f-cut');
     const tasks = findNodeByAttr(c, 'data-testid', 'stats-tasks');
     expect(tasks, 'ряд «задача»').not.toBeNull();
     // Кнопок «задача» = число этапов с taskId (cut/plan/prod = 3).
@@ -644,9 +651,17 @@ describe('FeatureStatsTab: рендер', () => {
     };
     walk(tasks!);
     expect(btns.length, '3 кнопки «задача» (по этапам с taskId)').toBe(3);
-    // Клик по ПЕРВОЙ (cut) → openTaskInSection({ id: 't-cut' }).
+    // Клик по ПЕРВОЙ (cut) → openTaskInSection({ id: 't-cut', projectId: 'proj-1' }).
     await act(async () => { (reactProps(btns[0]!)!.onClick as () => void)(); });
     expect(mockOpenTask.calls.some(x => x.id === 't-cut'), 'клик открыл задачу t-cut').toBe(true);
+    // Дефект ee6825ff: переход несёт projectId — задача открывается в разделе проекта,
+    // а не в личном «Календаре».
+    expect(mockOpenTask.calls[0], 'в навигацию уходит projectId эпика').toEqual({ id: 't-cut', projectId: 'proj-1' });
+    // recordFeatureReturn у перехода: записана точка возврата «к фиче».
+    const back = getBackNav();
+    expect(back?.from, 'точка возврата — фича').toBe('f-cut');
+    expect(back?.fromKind, 'дискриминатор — feature').toBe('feature');
+    expect(back?.to, 'цель возврата — задача t-cut').toEqual({ kind: 'task', id: 't-cut' });
   });
 
   // === 8. Пустые состояния ===
@@ -1288,5 +1303,28 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
     const c = renderTab(mkFullStats(), true, mkGanttRun());
     const tiles = findNodeByAttr(c, 'data-testid', 'stats-tiles') as unknown as { style: Record<string, string> };
     expect(tiles.style.gridTemplateColumns, '2 колонки на 360').toBe('repeat(2, 1fr)');
+  });
+
+  // П2 (QA: на 360 summary «Подробнее» был 17 px): карточка-строка высотой ≥ 44 (макет .more)
+  // с кольцом фокуса. Мутация: убрать minHeight → тест краснеет.
+  it('«Подробнее» — карточка-строка высотой ≥ 44 с кольцом фокуса', () => {
+    const c = renderTab(mkFullStats(), true, mkGanttRun());
+    const sum = findNodeByAttr(c, 'data-testid', 'stats-more-summary');
+    expect(sum, 'summary «Подробнее» отсутствует').toBeTruthy();
+    const st = (sum as unknown as { style: Record<string, string> }).style;
+    expect(st.minHeight, 'тач-цель ниже 44 px').toBe('44px');
+    expect(st.background, 'строка не карточка').toBe(C.bgCard);
+    // React пишет className в атрибут «class» (тот же приём, что FeatureBreakdownTable).
+    expect((sum as unknown as { getAttribute: (k: string) => string | null }).getAttribute('class'), 'нет класса кольца фокуса').toContain('cc-stats-more');
+  });
+
+  // П2 задачи: isMobile передаётся со страницы в блок разбивки (плотные поля на 360).
+  // Мутация: убрать isMobile из вызова → сработает detectedMobile (десктоп в тестах) → red.
+  it('на 360 isMobile доходит до блока разбивки (плотный padding)', () => {
+    const c = renderTab(mkFullStats(), true, mkGanttRun());
+    const block = findNodeByAttr(c, 'data-testid', 'feature-breakdown-block');
+    expect(block, 'блок разбивки отсутствует').toBeTruthy();
+    const st = (block as unknown as { style: Record<string, string> }).style;
+    expect(st.padding, 'разбивка не в мобильном раскладе').toBe(`${SP.md}px`);
   });
 });

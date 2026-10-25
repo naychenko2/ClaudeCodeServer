@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Threading;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Execution;
@@ -874,6 +876,179 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         File.Exists(Path.Combine(_repo, "wt-файл.txt")).Should().BeFalse();
 
         await _git.WorktreeRemoveAsync(null, _repo, wt);
+    }
+
+    // ---------- Кэш списка worktree (B1a) ----------
+    // Записывает каждый ProcessSpec: по нему считаем ровно прогоны `worktree list` —
+    // proof того, что параллельные вызовы дают один прогон, а add/remove инвалидируют.
+
+    private sealed class RecordingLauncher : IProcessLauncher
+    {
+        private readonly IProcessLauncher _inner = LocalProcessRunner.Instance;
+        public ConcurrentQueue<ProcessSpec> Specs { get; } = new();
+        public bool IsSandboxed => _inner.IsSandboxed;
+        public bool TargetIsWindows => _inner.TargetIsWindows;
+        public IPathMapper Paths => _inner.Paths;
+        public string ClaudeCliCommand => _inner.ClaudeCliCommand;
+        public string HostTempDir => _inner.HostTempDir;
+        public string? McpApiUrlOverride => _inner.McpApiUrlOverride;
+        public Process Start(ProcessSpec spec) { Specs.Enqueue(spec); return _inner.Start(spec); }
+        public void Kill(Process process, string? turnId = null) => _inner.Kill(process, turnId);
+        public int EstimateCommandLineLength(ProcessSpec spec) => _inner.EstimateCommandLineLength(spec);
+    }
+
+    private sealed class RecordingFactory(RecordingLauncher launcher) : ILauncherFactory
+    {
+        public IProcessLauncher Local => launcher;
+        public IProcessLauncher ForOwner(string? ownerId) => launcher;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => launcher;
+    }
+
+    private static int CountWorktreeListRuns(ConcurrentQueue<ProcessSpec> specs) =>
+        specs.Count(s => s.Args.Contains("worktree") && s.Args.Contains("list"));
+
+    // Single-flight: два параллельных кэшированных вызова одного (owner, mainRoot) —
+    // один прогон git, результат свежий (с добавленным worktree).
+    [Fact]
+    public async Task WorktreeList_Cached_ПараллельныеВызовыДаютОдинПрогон()
+    {
+        var launcher = new RecordingLauncher();
+        var g = new GitService(new RecordingFactory(launcher));
+        var wt = WtPath("cache");
+        await g.WorktreeAddAsync(null, _repo, wt, "wt/cache");
+
+        var a = g.WorktreeListAsync(null, _repo, useCache: true);
+        var b = g.WorktreeListAsync(null, _repo, useCache: true);
+        var results = await Task.WhenAll(a, b);
+
+        CountWorktreeListRuns(launcher.Specs).Should().Be(1,
+            "single-flight: параллельные вызовы одного ключа — ровно один git-прогон");
+        results[0].Should().BeEquivalentTo(results[1]);
+        results[0].Should().Contain(w => w.Branch == "wt/cache", "полёт был реальным, не пустым");
+
+        await g.WorktreeRemoveAsync(null, _repo, wt);
+    }
+
+    // Инвалидация: после add и remove кэш не должен отдать довоперационный список.
+    // Без инвалидации второй вызов вернул бы кэш без «wt/inv» — тест краснеет.
+    [Fact]
+    public async Task WorktreeList_Cached_ИнвалидируетсяПослеAddИRemove()
+    {
+        var launcher = new RecordingLauncher();
+        var g = new GitService(new RecordingFactory(launcher));
+        var wt = WtPath("inv");
+
+        var first = await g.WorktreeListAsync(null, _repo, useCache: true);
+        first.Should().NotContain(w => w.Branch == "wt/inv");
+
+        await g.WorktreeAddAsync(null, _repo, wt, "wt/inv");
+        var second = await g.WorktreeListAsync(null, _repo, useCache: true);
+        second.Should().Contain(w => w.Branch == "wt/inv", "после add — новый список сразу");
+
+        await g.WorktreeRemoveAsync(null, _repo, wt);
+        var third = await g.WorktreeListAsync(null, _repo, useCache: true);
+        third.Should().NotContain(w => w.Branch == "wt/inv", "после remove — удалённый не возвращается");
+
+        CountWorktreeListRuns(launcher.Specs).Should().Be(3,
+            "add и remove инвалидируют: каждый следующий вызов — реальный прогон");
+    }
+
+    // Истечение TTL на управляемых часах: внутри — попадание (прогонов нет), за пределами —
+    // ре-прогон. Без проверки срока второй вызов внутри TTL дал бы второй прогон.
+    [Fact]
+    public async Task WorktreeList_Cached_ИстекаетTTL_И_Перепроверяет()
+    {
+        var launcher = new RecordingLauncher();
+        var g = new GitService(new RecordingFactory(launcher));
+        var t0 = DateTimeOffset.UtcNow;
+        var now = t0;
+        g.Clock = () => now;
+
+        await g.WorktreeListAsync(null, _repo, useCache: true); // прогон 1
+        now += TimeSpan.FromSeconds(10); // внутри TTL 20 с
+        await g.WorktreeListAsync(null, _repo, useCache: true); // попадание
+        CountWorktreeListRuns(launcher.Specs).Should().Be(1, "внутри TTL — не должно быть нового прогона");
+
+        now += TimeSpan.FromSeconds(15); // t0+25 > t0+20 — TTL истёк
+        await g.WorktreeListAsync(null, _repo, useCache: true); // ре-прогон
+        CountWorktreeListRuns(launcher.Specs).Should().Be(2, "после TTL — свежий прогон");
+    }
+
+    // Ланчер, замедляющий `worktree add` на ~2 с: для теста гонки «читатель vs операция».
+    // AddStarted поднимается в момент запуска команды — тест ждёт событие, а не слепую паузу.
+    private sealed class DelayingAddLauncher : IProcessLauncher
+    {
+        public TaskCompletionSource AddStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly IProcessLauncher _inner = LocalProcessRunner.Instance;
+        public bool IsSandboxed => _inner.IsSandboxed;
+        public bool TargetIsWindows => _inner.TargetIsWindows;
+        public IPathMapper Paths => _inner.Paths;
+        public string ClaudeCliCommand => _inner.ClaudeCliCommand;
+        public string HostTempDir => _inner.HostTempDir;
+        public string? McpApiUrlOverride => _inner.McpApiUrlOverride;
+        public Process Start(ProcessSpec spec)
+        {
+            if (spec.Args.Contains("worktree") && spec.Args.Contains("add"))
+            {
+                // Замедляем саму команду оболочкой, а не вызывающий поток: иначе
+                // гонки «читатель vs операция» не случается.
+                var git = "git " + string.Join(" ", spec.Args.Select(a => "\"" + a + "\""));
+                var delayed = new ProcessSpec
+                {
+                    FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                    // Windows: сырая командная строка по контракту RawArguments, иначе .NET
+                    // экранирует внутренние кавычки как \" и cmd.exe их не понимает.
+                    RawArguments = OperatingSystem.IsWindows()
+                        ? ShellCommandLine.WindowsCmdArguments("ping -n 3 127.0.0.1 >nul & " + git)
+                        : null,
+                    Args = OperatingSystem.IsWindows() ? [] : ["-c", "sleep 2; " + git],
+                    WorkingDirectory = spec.WorkingDirectory,
+                    Env = spec.Env,
+                    ClearEnv = spec.ClearEnv,
+                    StdioEncoding = spec.StdioEncoding,
+                    EnableRaisingEvents = spec.EnableRaisingEvents,
+                    RedirectStdin = spec.RedirectStdin,
+                    Track = false, // тестовый процесс: в реестр боевых PID его не пишем
+                };
+                var process = _inner.Start(delayed);
+                AddStarted.TrySetResult();
+                return process;
+            }
+            return _inner.Start(spec);
+        }
+        public void Kill(Process process, string? turnId = null) => _inner.Kill(process, turnId);
+        public int EstimateCommandLineLength(ProcessSpec spec) => _inner.EstimateCommandLineLength(spec);
+    }
+
+    private sealed class DelayingAddFactory(DelayingAddLauncher launcher) : ILauncherFactory
+    {
+        public IProcessLauncher Local => launcher;
+        public IProcessLauncher ForOwner(string? ownerId) => launcher;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => launcher;
+    }
+
+    // R-B1 п.2: гонка «читатель vs операция». Без инвалидации ПОСЛЕ команды читатель,
+    // стартовавший после довоперационной инвалидации и прогнавший list до конца add,
+    // кладёт в кэш довоперационный снимок (поколение ещё не двигалось) — и до истечения
+    // TTL локатор не видит новое дерево. Мутация: убрать второй InvalidateWorktreeCache
+    // в finally WorktreeAddAsync — тест краснеет.
+    [Fact]
+    public async Task WorktreeList_Cached_ViditNovoeDerevoPosleAddVGonke()
+    {
+        var launcher = new DelayingAddLauncher();
+        var g = new GitService(new DelayingAddFactory(launcher));
+        var wt = WtPath("race");
+
+        var addTask = g.WorktreeAddAsync(null, _repo, wt, "wt/race");
+        await launcher.AddStarted.Task.WaitAsync(TimeSpan.FromSeconds(30)); // add уже в команде (окно ~2 с), кэш инвалидирован
+        await g.WorktreeListAsync(null, _repo, useCache: true); // читатель: пишет довоперационный снимок
+
+        await addTask;
+        var after = await g.WorktreeListAsync(null, _repo, useCache: true);
+        after.Should().Contain(w => w.Branch == "wt/race",
+            "после завершения add кэш не должен отдавать довоперационный снимок");
+
+        await g.WorktreeRemoveAsync(null, _repo, wt);
     }
 
     // ---------- Слот ревью: detached worktree и защищённый сброс ----------

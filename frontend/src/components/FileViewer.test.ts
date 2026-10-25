@@ -18,10 +18,13 @@ import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FileViewer } from './FileViewer';
 import { api } from '../lib/api';
+import { getFileContext, subscribeFileContext } from '../lib/ai/fileContext';
 import type { Project } from '../types';
 import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, textNodes, reactProps } from './chat/__tests__/fakeDom';
 
 vi.mock('../lib/toast', () => ({ showToast: () => {} }));
+// В node navigator.onLine не определён → «офлайн», а в офлайне «Править» не рисуется
+vi.mock('../hooks/useOnline', () => ({ useOnline: () => true }));
 // signalr: ensureGit (wireRealtime) строит соединение и читает localStorage — в node без
 // сервера/хранилища это падает. Все подписки — no-op (вернуты unsubscribe-fункции).
 vi.mock('../lib/signalr', () => ({
@@ -57,11 +60,11 @@ function wireWindow() {
   return { win, doc };
 }
 
-function mountViewer(onClose: () => void, isMobile = false) {
+function mountViewer(onClose: () => void, isMobile = false, extra: Record<string, unknown> = {}) {
   installFakeDom();
   const { win, doc } = wireWindow();
   const { root, container } = mount(createElement(FileViewer, {
-    project, filePath: 'docs/readme.txt', onClose, isMobile,
+    project, filePath: 'docs/readme.txt', onClose, isMobile, ...extra,
   }));
   return { root, container, win, doc };
 }
@@ -92,30 +95,41 @@ function findButtonByText(container: unknown, text: string): { getAttribute: (k:
   return hit;
 }
 
+// Окружение прогона: таймеры, storage, заглуки api.files. Ответ getContent по умолчанию
+// БЕЗ branch/isAnchor — это и есть случай «источник неизвестен» (relay-путь, R-F1a);
+// тесты метки дерева переопредивают его сами. contentSpy держится снаружи, чтобы их
+// можно было переписать и посмотреть, что реально ушло в вызов.
+let contentSpy: { mockResolvedValue: (v: unknown) => void; mock: { calls: unknown[][] } } | null = null;
+
+function setupMocks() {
+  vi.useFakeTimers();
+  // localStorage/sessionStorage — node их не несёт; ensureGit → joinUserGroup их читает.
+  const store: Record<string, string> = {};
+  (globalThis as any).localStorage = {
+    getItem: (k: string) => (k in store ? store[k] : null),
+    setItem: (k: string, v: string) => { store[k] = String(v); },
+    removeItem: (k: string) => { delete store[k]; },
+    clear: () => { for (const k of Object.keys(store)) delete store[k]; },
+    key: () => null, get length() { return Object.keys(store).length; },
+  };
+  (globalThis as any).sessionStorage = (globalThis as any).localStorage;
+  contentSpy = vi.spyOn(api.files, 'getContent').mockResolvedValue({
+    content: 'hello world', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 11,
+  }) as never;
+  vi.spyOn(api.files, 'getDiff').mockResolvedValue({ diff: null });
+  vi.spyOn(api.files, 'fileUrl').mockReturnValue('http://localhost:5000/files/x');
+}
+
+function teardown() {
+  vi.useRealTimers();
+  uninstallFakeDom();
+  vi.restoreAllMocks();
+  contentSpy = null;
+}
+
 describe('FileViewer: Esc / закрытие / имя в шапке', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    // localStorage/sessionStorage — node их не несёт; ensureGit → joinUserGroup их читает.
-    const store: Record<string, string> = {};
-    (globalThis as any).localStorage = {
-      getItem: (k: string) => (k in store ? store[k] : null),
-      setItem: (k: string, v: string) => { store[k] = String(v); },
-      removeItem: (k: string) => { delete store[k]; },
-      clear: () => { for (const k of Object.keys(store)) delete store[k]; },
-      key: () => null, get length() { return Object.keys(store).length; },
-    };
-    (globalThis as any).sessionStorage = (globalThis as any).localStorage;
-    vi.spyOn(api.files, 'getContent').mockResolvedValue({
-      content: 'hello world', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 11,
-    });
-    vi.spyOn(api.files, 'getDiff').mockResolvedValue({ diff: null });
-    vi.spyOn(api.files, 'fileUrl').mockReturnValue('http://localhost:5000/files/x');
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-    uninstallFakeDom();
-    vi.restoreAllMocks();
-  });
+  beforeEach(setupMocks);
+  afterEach(teardown);
 
   // MAJOR-1: один Esc → ровно один вызов onClose. Дубль useEscapeClose (старый локальный
   // Esc в FileViewer) звал handleClose ДВАЖДЫ; мутация «вернуть второй useEscapeClose»
@@ -233,6 +247,159 @@ describe('FileViewer: Esc / закрытие / имя в шапке', () => {
     rootDiv.offsetParent = { tagName: 'BODY' };
     esc(win);
     expect(onClose, 'видимый центр — Esc закрывает').toHaveBeenCalledTimes(1);
+  });
+});
+
+// F2b (фича «Резолвинг ссылок по worktree»): проп sessionId доходит до эндпоинта, а файл,
+// пришедший НЕ из заявленного дерева, помечен в шапке чипом «из дерева <ветка>» — фолбэк
+// по worktree есть, но он не тихий (разрез bc27cbee §1). Мутации:
+//   • вернуть `fileContent?.isAnchor === false` в treeChipVisible → тесты «при undefined
+//     isAnchor и branch чип есть» и «при isAnchor=true и branch чип есть» краснеют;
+//   • не передать sessionId в getContent → тест про аргумент краснеет.
+describe('FileViewer: проп sessionId и чип «из дерева <ветка>»', () => {
+  beforeEach(setupMocks);
+  afterEach(teardown);
+
+  const contentWith = (tree: { branch?: string; isAnchor?: boolean }) => ({
+    content: 'hello world', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 11, ...tree,
+  });
+
+  it('при isAnchor=false виден чип с именем ветки, sessionId ушёл в getContent', async () => {
+    contentSpy!.mockResolvedValue(contentWith({ branch: 'feat/worktree-material-links', isAnchor: false }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    // Проп доходит до эндпоинта: 4-й аргумент getContent — { sessionId }
+    expect(contentSpy!.mock.calls[0][3], 'sessionId передан opts-аргументом getContent').toEqual({ sessionId: 'sess-1' });
+    const chip = findNodeByAttr(container, 'data-testid', 'file-tree-chip');
+    expect(chip, 'чип «из дерева <ветка>» в шапке').not.toBeNull();
+    expect(textNodes(chip as never).join(''), 'в чипе имя ветки').toContain('из дерева feat/worktree-material-links');
+  });
+
+  // Хвост R-F1a: для relay-пути branch есть, а isAnchor может отсутствовать — файл всё равно
+  // не из корня, чип нужен.
+  it('при undefined isAnchor и branch чип есть (файл не из корня — только чтение)', async () => {
+    contentSpy!.mockResolvedValue(contentWith({ branch: 'feat/worktree-material-links' }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'файл не из корня — метка есть').not.toBeNull();
+  });
+
+  // Файл из дерева-анкера (чат с привязкой к дереву) тоже открыт только для чтения —
+  // чип с объяснением обязателен, текст подсказки — про «дерево вашего чата»
+  it('при isAnchor=true и branch чип есть, подсказка про дерево вашего чата', async () => {
+    contentSpy!.mockResolvedValue(contentWith({ branch: 'main', isAnchor: true }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    const chip = findNodeByAttr(container, 'data-testid', 'file-tree-chip');
+    expect(chip, 'файл из анкера — метка есть').not.toBeNull();
+    expect(findNodeByAttr(container, 'title', 'Файл открыт из дерева вашего чата (main), только чтение. Правка и дифф доступны для файла из основного дерева'), 'своя подсказка').not.toBeNull();
+  });
+
+  it('при branch=null (файл из корня) чипа нет', async () => {
+    contentSpy!.mockResolvedValue(contentWith({ branch: null as never, isAnchor: true }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'файл из корня — метки нет').toBeNull();
+  });
+
+  // Без пропа вызов остаётся прежним (старые вызывающие не меняются)
+  it('без sessionId в getContent нет opts-аргумента', async () => {
+    const { container } = mountViewer(vi.fn());
+    await flush();
+    expect(contentSpy!.mock.calls[0][3], 'без пропа — старая сигнатура вызова').toBeUndefined();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'без дерева-метки').toBeNull();
+  });
+});
+
+// Шаг П (FINAL Б1): файл из неосновного дерева — только чтение. Правка, откат и дифф пишут
+// и читают КОРЕНЬ проекта, а не показанную версию worktree, поэтому при branch != null их нет.
+// Инвариант: branch == null ⇔ файл из корня. Мутации:
+//   • убрать `&& fromRoot` из canEdit → «Править» появляется при branch → тест краснеет;
+//   • убрать `sessionId && r.branch != null` из условия загрузки diff → getDiff зовётся
+//     при branch → тест про getDiff краснеет.
+describe('FileViewer: файл не из корня — только чтение (fromRoot)', () => {
+  beforeEach(setupMocks);
+  afterEach(teardown);
+
+  const diffSpy = () => vi.spyOn(api.files, 'getDiff').mockResolvedValue({ diff: '+a\n-b' });
+  const contentWith = (tree: { branch?: string | null }) => ({
+    content: 'hello world', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 11, ...tree,
+  });
+
+  it('branch задан: нет «Править» и вкладки Diff, getDiff не вызван, чип подсказывает про основное дерево', async () => {
+    const spy = diffSpy();
+    contentSpy!.mockResolvedValue(contentWith({ branch: 'feat/x', isAnchor: false } as never));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(findNodeByAttr(container as never, 'title', 'Править'), 'правка скрыта').toBeNull();
+    expect((textNodes(container as never).includes('Diff') ? {} : null), 'вкладка Diff скрыта').toBeNull();
+    expect(spy, 'дифф корня не запрашивается').not.toHaveBeenCalled();
+    expect(findNodeByAttr(container, 'data-testid', 'file-tree-chip'), 'чип дерева на месте').not.toBeNull();
+  });
+
+  it('branch=null: «Править» и дифф есть', async () => {
+    const spy = diffSpy();
+    contentSpy!.mockResolvedValue(contentWith({ branch: null }));
+    const { container } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(findNodeByAttr(container as never, 'title', 'Править'), 'правка доступна').not.toBeNull();
+    expect(spy, 'дифф запрошен').toHaveBeenCalled();
+  });
+
+  it('без sessionId (и relay без ветки) — как из корня', async () => {
+    const spy = diffSpy();
+    const { container } = mountViewer(vi.fn());
+    await flush();
+    expect(findNodeByAttr(container as never, 'title', 'Править')).not.toBeNull();
+    expect(spy).toHaveBeenCalled();
+  });
+
+  // Бэк to-markdown читает и пишет КОРЕНЬ проекта: для файла из дерева чата действие недоступно.
+  // Мутация: убрать `&& fromRoot` из ветки file.toMarkdown → первый тест краснеет.
+  const runToMarkdown = async (tree: { branch?: string | null } | null, extra: Record<string, unknown>) => {
+    const md = vi.spyOn(api.files, 'toMarkdown').mockResolvedValue({ savedPath: 'docs/readme.md' } as never);
+    if (tree) contentSpy!.mockResolvedValue(contentWith(tree));
+    const { win } = mountViewer(vi.fn(), false, extra);
+    await flush();
+    await act(async () => { win.window.dispatchEvent({ type: 'cc-ai-run', detail: { action: 'file.toMarkdown' } }); });
+    await flush();
+    return md;
+  };
+
+  it('branch задан: «Сохранить как Markdown» не доходит до api.files.toMarkdown', async () => {
+    const md = await runToMarkdown({ branch: 'feat/x' }, { sessionId: 'sess-1' });
+    expect(md).not.toHaveBeenCalled();
+  });
+
+  it('branch=null: действие доходит до toMarkdown', async () => {
+    const md = await runToMarkdown({ branch: null }, { sessionId: 'sess-1' });
+    expect(md).toHaveBeenCalledWith('p1', 'docs/readme.txt');
+  });
+
+  it('без sessionId: как раньше, доходит до toMarkdown', async () => {
+    const md = await runToMarkdown(null, {});
+    expect(md).toHaveBeenCalledWith('p1', 'docs/readme.txt');
+  });
+});
+
+// Признак для AI-палитры (lib/ai/fileContext): FileViewer сообщает fromRoot и снимает его при
+// размонтировании, оповещая подписчиков — открытая палитра пересчитает список.
+// Мутация: убрать `return () => clearFileContext(filePath)` из эффекта → тест краснеет.
+describe('FileViewer: признак fromRoot для AI-палитры', () => {
+  beforeEach(setupMocks);
+  afterEach(teardown);
+
+  it('публикует признак, а при размонтировании снимает его и оповещает подписчиков', async () => {
+    contentSpy!.mockResolvedValue({ content: 'x', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 1, branch: 'feat/x' });
+    const { root } = mountViewer(vi.fn(), false, { sessionId: 'sess-1' });
+    await flush();
+    expect(getFileContext(), 'файл из дерева чата — не из корня').toEqual({ path: 'docs/readme.txt', fromRoot: false });
+    const fn = vi.fn();
+    const off = subscribeFileContext(fn);
+    await act(async () => { root.unmount(); });
+    off();
+    expect(fn, 'подписчики оповещены о сбросе').toHaveBeenCalled();
+    expect(getFileContext(), 'признак снят').toBeUndefined();
   });
 });
 

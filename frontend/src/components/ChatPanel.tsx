@@ -111,7 +111,8 @@ interface Props {
   session: Session;
   // Отсутствует для чата вне проекта (project-less) — тогда скрываем файловые возможности
   project?: Project;
-  onOpenFile?: (path: string) => void;
+  // sessionId — чат-источник: FileViewer читает файл из дерева задачи этого чата (резолв по worktree)
+  onOpenFile?: (path: string, sessionId?: string) => void;
   // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки (флаг link-reader).
   // Отсутствует — MarkdownContent не рисует кнопку вовсе, лента как без фичи
   onOpenReader?: (url: string) => void;
@@ -242,7 +243,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
+export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -252,6 +253,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // ширине) не трогаем — фокус поднимает экранную клавиатуру поверх ленты; стену тоже
   // (embedded): там курсор забирает только активная колонка, сигналом composerFocusSignal.
   const isTouch = useIsTouch();
+  // Все пути открытия файла из ленты несут id этого чата (дерево задачи чата)
+  const onOpenFile = useMemo(
+    () => (onOpenFileProp ? (path: string) => onOpenFileProp(path, session.id) : undefined),
+    [onOpenFileProp, session.id],
+  );
   const [emptyChatFocus, setEmptyChatFocus] = useState(0);
   // M2: главное действие плашки фичи, когда ждут В ЭТОМ чате — фокус в композер
   // (ответ пишут здесь, не на странице фичи). Счётчик монотонен, как emptyChatFocus.

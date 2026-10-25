@@ -83,7 +83,9 @@ interface Props {
   openCommitSha: string | null;
   openCommitFile?: string | null;
   onCloseCommit: () => void;
-  onOpenFileFromChat: (path: string) => void;
+  onOpenFileFromChat: (path: string, sessionId?: string) => void;
+  // Чат, из ленты которого открыт файл: FileViewer читает его из дерева задачи этого чата
+  openFileSessionId?: string;
   onCloseFile: () => void;
   // Ридер ссылок — открывается по кнопке-компаньону у внешней ссылки в чате, живёт
   // в центре как просмотр файла: split с чатом либо на всю контентную зону
@@ -649,7 +651,7 @@ export function DesktopWorkspace(p: Props) {
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
             {contextTabs}
             <div style={{ flex: 1, overflow: 'hidden' }}>
-              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} />
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} sessionId={p.openFileSessionId} />
             </div>
           </Island>
         </div>
@@ -658,7 +660,7 @@ export function DesktopWorkspace(p: Props) {
       {!fileSplit && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {/* На планшете и на узком центре сплита нет — тумблер режима не показываем */}
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet || !p.fileFullscreen ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} />
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet || !p.fileFullscreen ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} sessionId={p.openFileSessionId} />
         </div>
       )}
       </div>

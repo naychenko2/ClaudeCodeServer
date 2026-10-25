@@ -13,10 +13,13 @@ import { readStoredToken } from '../../lib/offline';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ImageLightbox } from '../ui/ImageLightbox';
 import { relPathTree } from '../../lib/paths';
-import { useProjectFileIndex, lookupProjectFile, FILE_LIKE_MENTION } from '../../lib/projectFileIndex';
+import {
+  useProjectFileIndex, lookupProjectFile, locateFile, FILE_LIKE_MENTION,
+  type LocatedFile, type ProjectFileIndex,
+} from '../../lib/projectFileIndex';
 import { withImageLimit } from '../../lib/concurrency';
 import { useInView } from '../../lib/useInView';
-import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext, FeatureLinkContext } from './contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatOpenFileContext, ChatSessionContext, FeatureLinkContext } from './contexts';
 
 // Абсолютный путь (Windows-диск или POSIX) — для A1: упоминание вне корня проекта тоже
 // становится ссылкой (открытие само покажет ошибку, если файла на самом деле нет).
@@ -25,6 +28,13 @@ const ABS_PATH_RE = /^[A-Za-z]:[\\/]|^\//;
 // (FILE_LIKE_MENTION) — иначе роуты вида /api/mcp/calls, /hubs/session становятся
 // ссылками на несуществующий файл и ведут в 404 хост-вьювера.
 const WINDOWS_ABS_PATH_RE = /^[A-Za-z]:[\\/]/;
+
+// Внешний URL — не путь дерева (R-F2a MAJOR-1): `scheme://`, `www.` или `//host/…`
+// (последнее ABS_PATH_RE приняла бы абсолютным путём). Общий guard для обеих веток
+// `a`-хэндлера: resolveFileMention и featureLinks (читалка фичи, W4-LINK-F).
+function isExternalUrl(p: string): boolean {
+  return p.includes('://') || p.startsWith('www.') || p.startsWith('//');
+}
 
 // A1: абсолютный путь становится ссылкой без проверки существования в индексе — но
 // только если это Windows-путь (диск) либо POSIX-путь, похожий на файл (есть расширение).
@@ -57,13 +67,16 @@ function cacheImage(key: string, dataUrl: string): void {
 const _imageInflight = new Map<string, Promise<string | null>>();
 
 // Загрузка картинки проекта как data-URL с дедупом и модульным кэшем.
+// sessionId (F2a, разрез §4) идёт в files.content: бэкенд резолвит rel в дереве чата,
+// а не в анкере проекта; ключ кэша тоже содержит sessionId — один rel в разных чатах
+// может резолвиться в разные файлы. Резолвера здесь нет: путь передаётся как есть.
 // null — контент не картинка либо сбой. Реальный fetch к одному cacheKey — ровно один.
-function loadProjectImage(projectId: string, rel: string, cacheKey: string): Promise<string | null> {
+function loadProjectImage(projectId: string, rel: string, cacheKey: string, sessionId?: string): Promise<string | null> {
   const hit = _imageCache.get(cacheKey);
   if (hit) return Promise.resolve(hit);
   const flying = _imageInflight.get(cacheKey);
   if (flying) return flying;
-  const p = withImageLimit(() => api.files.getContent(projectId, rel))
+  const p = withImageLimit(() => api.files.getContent(projectId, rel, undefined, sessionId ? { sessionId } : undefined))
     .then(r => {
       if (r.isImage && r.base64) {
         const dataUrl = `data:${r.mimeType ?? 'image/png'};base64,${r.base64}`;
@@ -92,37 +105,40 @@ export function ChatImage({ src, alt }: { src?: string; alt?: string }) {
   const project = useContext(ChatProjectContext);
   // /api/proxy?... — уже проксированный URL (от urlTransform)
   const isRemote = !!src && /^(https?:|data:|\/api\/proxy)/i.test(src);
-  // Примитивы (id/rel/ключ), а не объект project — в зависимостях эффекта: смена ССЫЛКИ
-  // projectCtx при неизменных id/rootPath не должна дёргать перезагрузку картинки.
+  // Примитивы (id/rel/ключ), а не объект project: смена ССЫЛКИ projectCtx при неизменных
+  // id/rootPath не должна дёргать перезагрузку картинки.
   const projectId = !isRemote ? project?.id ?? null : null;
   const rel = src && !isRemote && project ? toProjectRelative(src, project.rootPath) : null;
-  const cacheKey = projectId && rel ? `${projectId}|${rel}` : null;
+  // Ключ кэша дополняется sessionId чата (F2a, §4): один rel в разных чатах резолвится
+  // в разные файлы — общий ключ смешал бы картинки из разных деревьев.
+  const sessionId = useContext(ChatSessionContext);
+  const cacheKey = projectId && rel ? `${projectId}|${sessionId ?? ''}|${rel}` : null;
   // Кэш читаем на рендере, а не через setState в эффекте: после перемонтирования картинка
   // должна стоять сразу, без промежуточного «Загрузка…» — это и есть мигание.
   const cached = cacheKey ? _imageCache.get(cacheKey) ?? null : null;
-  const [resolved, setResolved] = useState<string | null>(null);
+  // resolved — вместе с ключом: если src сменится во время запроса (стримящийся текст),
+  // ответ старого ключа не должен подставиться в новую картинку.
+  const [resolved, setResolved] = useState<{ key: string; url: string } | null>(null);
   const [failed, setFailed] = useState(false);
   const [lightbox, setLightbox] = useState(false);
   // Не фетчим, пока картинка вне viewport: лента не виртуализирована, и без этого все картинки
   // разных сообщений фетчатся разом, забивая пул браузера. Remote (http/data/proxy) тут не нужен —
-  // они идут через нативный <img loading="lazy">, а эффект для них делает ранний return по !projectId.
+  // они идут через нативный <img loading="lazy">, а для них ранний return по !projectId.
   const [wrapRef, inView] = useInView({ rootMargin: '300px' });
 
-  useEffect(() => {
-    if (!projectId || !rel || !cacheKey || cached || !inView) return;
-    let cancelled = false;
-    // Через loadProjectImage: параллельные рендеры дедуплицируются в один fetch, а withImageLimit
-    // (внутри) ограничивает общую параллельность — слоты под health-ping остаются свободными.
-    loadProjectImage(projectId, rel, cacheKey)
+  // Фетч стартует на рендере, а не в эффекте: loadProjectImage дедуплицирует по cacheKey
+  // (повторные рендеры переиспользуют тот же промис), поэтому перерисовки ленты не плодят
+  // запросы. При таком порядке вызов видим тестам, которые рендерят компонент через
+  // renderToStaticMarkup, — эффект в SSR не выполняется.
+  if (!isRemote && projectId && rel && cacheKey && !cached && !failed && inView) {
+    loadProjectImage(projectId, rel, cacheKey, sessionId ?? undefined)
       .then(dataUrl => {
-        if (cancelled) return;
-        if (dataUrl) setResolved(dataUrl);
+        if (dataUrl) setResolved({ key: cacheKey, url: dataUrl });
         else setFailed(true);
       });
-    return () => { cancelled = true; };
-  }, [projectId, rel, cacheKey, cached, inView]);
+  }
 
-  const finalSrc = isRemote ? src : cached ?? resolved;
+  const finalSrc = isRemote ? src : cached ?? (resolved?.key === cacheKey ? resolved.url : null);
 
   // ref — на КАЖДУЮ ветку: пока картинки нет, в DOM только плейсхолдер, и без ref на нём
   // IntersectionObserver ничего не наблюдает → inView вечно false → fetch не стартует никогда
@@ -181,6 +197,63 @@ export function FileLink({ path, onOpen, mono, title, children }: {
       {children}
     </span>
   );
+}
+
+// «Ленивое» упоминание: его нет в индексе и оно не абсолютное — резолвит пакетный
+// кэш locate (F1b). Пока ответа нет (или ответ «не найдено»), текст остаётся обычным:
+// второго резолвера здесь нет — порядок проверок в resolveFileMention, тут только
+// ожидание ответа. Для локальных проектов locate не уходит в сеть: projectRequest
+// отказывает POST files/locate до сети (его нет в маршрутах агента/ретранслятора).
+export function DeferredFileLink({ raw, children, mono }: {
+  raw: string;
+  children: ReactNode;
+  mono?: boolean;
+}) {
+  const project = useContext(ChatProjectContext);
+  const onOpenFile = useContext(ChatOpenFileContext);
+  const sessionId = useContext(ChatSessionContext);
+  const [hit, setHit] = useState<LocatedFile | null>(null);
+  useEffect(() => {
+    if (!project?.id || !onOpenFile) return;
+    let cancelled = false;
+    locateFile(project.id, raw, sessionId ?? undefined)
+      .then(h => { if (!cancelled) setHit(h); });
+    return () => { cancelled = true; };
+  }, [project?.id, onOpenFile, raw, sessionId]);
+  if (hit) return <FileLink path={hit.path} onOpen={onOpenFile!} mono={mono}>{children}</FileLink>;
+  if (mono) return <code style={INLINE_CODE}>{children}</code>;
+  return <>{children}</>;
+}
+
+// Порядок резолва упоминания пути (F2a, разрез §4): индекс → абсолютный путь (A1) →
+// «ленивый» кэш locate. Результат: {path} — файл есть в индексе основного дерева;
+// {path,label} — абсолютный путь, существование не проверяем (A1: открытие само
+// покажет ошибку); {lazy} — относительный путь, похожий на файл, которого нет в
+// индексе: ссылка станет ссылкой только после ответа locate (DeferredFileLink).
+// null — обычный текст. Инвариант «ссылка рендерится только на существующий файл»
+// сохраняется: до ответа locate ссылки нет.
+export function resolveFileMention(
+  index: ProjectFileIndex,
+  project: { rootPath: string },
+  treePath: string | null,
+  raw: string,
+): { path: string; label?: string } | { lazy: string } | null {
+  const known = lookupProjectFile(index, raw, project.rootPath);
+  if (known) return { path: known };
+  let p = raw.trim().split(/[#?]/)[0];
+  if (!p) return null;
+  try { p = decodeURIComponent(p); } catch { /* не URL-экранирован — как есть */ }
+  // Внешний URL отсекается общим isExternalUrl (R-F2a MAJOR-1). Без отсечения такая
+  // ссылка уходила в lazy-резолв и молчала текстом; теперь null — она идёт в ReaderLinkWrap.
+  if (isExternalUrl(p)) return null;
+  if (isFileLikeAbsPath(p)) {
+    const label = relPathTree(p, project.rootPath, treePath);
+    return { path: p, label: label !== p ? label : undefined };
+  }
+  // Голое имя без слэша в locate не отправляем: его резолвит B1 по индексу, а
+  // угадывать по голому имени между деревьями — не наш случай.
+  if (p.includes('/') && FILE_LIKE_MENTION.test(p)) return { lazy: p };
+  return null;
 }
 
 // Служебные маркеры протоколов — не для глаз: завершение цикла «до готово»
@@ -361,22 +434,9 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
   }, [project]);
 
   const components = useMemo<Components>(() => {
-    // Упоминание пути → файл проекта: точный/суффиксный путь из индекса (lookupProjectFile,
-    // включая B1) либо, если индекс молчит, абсолютный путь — тоже ссылка без проверки
-    // существования (A1; открытие само покажет ошибку, если файла на самом деле нет).
-    // label — короткий текст для абсолютного пути внутри активного дерева/корня чата.
     // Вне проекта и без обработчика открытия фича молчит — текст как раньше.
-    const resolveFileMention = (raw?: string | null): { path: string; label?: string } | null => {
-      if (!project || !onOpenFile || !raw) return null;
-      const known = lookupProjectFile(fileIndex, raw, project.rootPath);
-      if (known) return { path: known };
-      let p = raw.trim().split(/[#?]/)[0];
-      if (!p) return null;
-      try { p = decodeURIComponent(p); } catch { /* не URL-экранирован — как есть */ }
-      if (!isFileLikeAbsPath(p)) return null;
-      const label = relPathTree(p, project.rootPath, treePath);
-      return { path: p, label: label !== p ? label : undefined };
-    };
+    const mentionOf = (raw?: string | null) =>
+      project && onOpenFile ? resolveFileMention(fileIndex, project, treePath, raw ?? '') : null;
     return {
         ...STATIC_COMPONENTS,
         code: ({ className, children, ...props }) => {
@@ -417,9 +477,13 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
               </CodeBlockFrame>
             );
           }
-          // Путь к файлу проекта в бэктиках — кликабельная ссылка на просмотр
-          const mention = resolveFileMention(text);
-          if (mention) return <FileLink path={mention.path} onOpen={onOpenFile!} mono>{mention.label ?? children}</FileLink>;
+          // Путь к файлу проекта в бэктиках — кликабельная ссылка на просмотр;
+          // «ленивый» относительный путь — ссылка только после ответа locate (F2a).
+          const mention = mentionOf(text);
+          if (mention) {
+            if ('lazy' in mention) return <DeferredFileLink raw={mention.lazy} mono>{children}</DeferredFileLink>;
+            return <FileLink path={mention.path} onOpen={onOpenFile!} mono>{mention.label ?? children}</FileLink>;
+          }
           return (
             <code style={INLINE_CODE} {...props}>
               {children}
@@ -442,14 +506,21 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
               return <FileLink path={path} onOpen={featureLinks.openFile}>{children}</FileLink>;
             }
             const rel = href.trim().split(/[#?]/)[0];
-            if (rel && !ABS_PATH_RE.test(rel) && rel.includes('/') && FILE_LIKE_MENTION.test(rel)) {
+            // Внешний URL — не файл дерева фичи (та же форма, что R-F2a MAJOR-1): общий
+            // guard отсекает его до FileLink, ссылка falls through в ReaderLinkWrap.
+            if (rel && !isExternalUrl(rel) && !ABS_PATH_RE.test(rel) && rel.includes('/') && FILE_LIKE_MENTION.test(rel)) {
               return <FileLink path={rel} onOpen={featureLinks.openFile}>{children}</FileLink>;
             }
           }
           // Ссылка на файл проекта ([гайд](docs/…)) открывает его на просмотр, а не наружу.
           // Текст ссылки — как написал автор markdown, label из resolveFileMention сюда не идёт.
-          const mention = resolveFileMention(href);
-          if (mention) return <FileLink path={mention.path} onOpen={onOpenFile!}>{children}</FileLink>;
+          // «Ленивый» относительный путь остаётся обычным текстом, пока locate не ответил:
+          // битых ссылок на несуществующие файлы не остаётся (разрез §4).
+          const mention = mentionOf(href);
+          if (mention) {
+            if ('lazy' in mention) return <DeferredFileLink raw={mention.lazy}>{children}</DeferredFileLink>;
+            return <FileLink path={mention.path} onOpen={onOpenFile!}>{children}</FileLink>;
+          }
           // Внешняя ссылка: сам <a>, перехват клика в панель «Чтение» и кнопка-компаньон
           // живут в ReaderLinkWrap (ADR-006 §2/§5)
           return <ReaderLinkWrap href={href}>{children}</ReaderLinkWrap>;

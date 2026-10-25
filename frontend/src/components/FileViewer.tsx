@@ -40,6 +40,7 @@ import { DocPropsPanel } from '../features/docs/DocPropsPanel';
 import { useDocProps } from '../features/docs/useDocProps';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
+import { setFileContext, clearFileContext } from '../lib/ai/fileContext';
 import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion, useNotesByFile } from '../lib/notes';
 import { useSubsystem } from '../lib/subsystems';
 import { useSlot, useSlotItem } from '../lib/subsystems/registry';
@@ -58,7 +59,7 @@ import { C, FONT, FS, MODAL_W, R, SHADOW, SP, TB } from '../lib/design';
 import { ToolbarIconButton, PillSwitch } from './Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
-import { Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
+import { Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem, Chip } from './ui';
 import { DiffView } from './DiffView';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
 // Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
@@ -130,6 +131,10 @@ interface Props {
   changedBy?: ChangedBySession[];
   // Переход в чат по клику на имя из «Также меняли»
   onOpenChat?: (sessionId: string) => void;
+  // Резолвить относительный путь в дереве этого чата (фича «Резолвинг ссылок по worktree»,
+  // шаг F2b): файл и картинки внутри md читаются из worktree чата, а не из анкера проекта.
+  // Не задано — старое поведение (корень проекта), вызывающие без чата не меняются.
+  sessionId?: string;
 }
 
 interface FileContent {
@@ -143,6 +148,11 @@ interface FileContent {
   mimeType?: string;
   base64?: string;
   fileSize?: number;
+  // В каком дереве нашли файл (контракт B2): branch — имя ветки, isAnchor — true, если
+  // это заявленное дерево-анкер. Для relay-пути (R-F1a) isAnchor может отсутствовать:
+  // источник неизвестен — метку не показываем.
+  branch?: string | null;
+  isAnchor?: boolean;
 }
 
 // Сервер или ретранслятор — решает api.files.fileUrl (у агента поток идёт мимо, см. agentStreamUrl)
@@ -407,7 +417,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb, handlers }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat, sessionId }: Props) {
   const online = useOnline();
   // Подсистема заметок выключена: vault-рендер (NoteView), редактор заметки, граф
   // связей и комментарии документа пропадают. Файл из папки notes/*.md показывается
@@ -497,9 +507,18 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // записи. Каждое такое действие рисуется только при своём маршруте (deviceAgentRoutes.ts)
   const { route: filesRoute, can } = useProjectRoutes(project);
   const viaAgent = filesRoute === 'agent';
-  const canEdit = can('PUT files/content');
-  const canDelete = can('DELETE files');
-  const canRevert = can('POST files/revert');
+  // Файл из корня проекта (основного дерева): только с него разрешены правка, откат, дифф и
+  // история — они пишут и читают корень, а не дерево чата. branch в ответе непуст у любого
+  // неосновного дерева; без sessionId (и на relay-пути, где ветки нет) файл всегда из корня
+  const fromRoot = !sessionId || fileContent?.branch == null;
+  // Палитре AI нужен тот же признак: «Сохранить как Markdown» пишет в корень (см. lib/ai/fileContext)
+  useEffect(() => {
+    setFileContext(filePath, fromRoot);
+    return () => clearFileContext(filePath);
+  }, [filePath, fromRoot]);
+  const canEdit = can('PUT files/content') && fromRoot;
+  const canDelete = can('DELETE files') && fromRoot;
+  const canRevert = can('POST files/revert') && fromRoot;
   const canStageHunk = can('POST git/stage-hunk');
   const canRestoreVersion = can('POST git/commits/{sha}/restore-file');
   const canToMarkdown = can('POST files/document/to-markdown');
@@ -529,10 +548,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // Логотип и скриншоты README лежат рядом в репозитории: путь в src относителен документа,
   // грузить их надо через файловый эндпоинт. Нужен обеим веткам рендера markdown — и с
   // комментариями к документу, и без модуля заметок
+  // Картинки внутри md резолвятся в том же дереве, что и сам документ (F2b): иначе отчёт
+  // открылся бы из дерева чата, а его скриншоты — из main
   const resolveMarkdownImage = (src: string): string | undefined => {
     const target = resolveDocImage(filePath, src);
     if (!target) return undefined;
-    return viaAgent ? resolveAgentImage(target) : api.files.fileUrl(project.id, target);
+    return viaAgent ? resolveAgentImage(target) : api.files.fileUrl(project.id, target, sessionId);
   };
   // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage
   const gitSt = useGitState(project.id);
@@ -700,19 +721,27 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setVersionSha(null);
     setVersionDiff(null);
     setRestoreConfirmSha(null);
-    const contentPromise = isHostMode ? api.hostFiles.getContent(filePath) : api.files.getContent(project.id, filePath);
+    // sessionId (F2b): читать из дерева чата; featureId здесь нет — FileViewer не читает
+    // документы эпика, только путь, названный вызывающим
+    const contentPromise = isHostMode
+      ? api.hostFiles.getContent(filePath)
+      : api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined);
+    // Дифф — понятие проектного git-репо; у файла вне проекта его нет, а у файла из
+    // неосновного дерева он был бы корня, а не показанного содержимого. Поэтому ветка ответа
+    // известна только после содержимого: дифф запрашиваем следом и только для файла из корня
+    setDiff(null);
     contentPromise.then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
+      if (!isHostMode && !(sessionId && 'branch' in r && r.branch != null)) {
+        // diff недоступен офлайн — мягко игнорируем ошибку
+        fetchDiff().then(d => setDiff(d.diff)).catch(() => setDiff(null));
+      }
     }).catch(e => {
       if (isHostMode && (e as { status?: number })?.status === 403) setLoadForbidden(true);
       setLoadError(true);
     }).finally(() => setLoading(false));
-    // Дифф — понятие проектного git-репо; у файла вне проекта его нет
-    if (isHostMode) setDiff(null);
-    // diff недоступен офлайн — мягко игнорируем ошибку
-    else fetchDiff().then(r => setDiff(r.diff)).catch(() => setDiff(null));
-  }, [project.id, filePath, gitStagePath, isHostMode, fetchDiff]);
+  }, [project.id, filePath, gitStagePath, isHostMode, sessionId, fetchDiff]);
 
   // Blame — лениво при первом открытии вкладки «Авторы» (кэш до смены файла)
   useEffect(() => {
@@ -777,7 +806,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       // Содержимое файла изменилось — перечитать файл и diff, вернуться на «Файл»
       setTab('file');
       setLoading(true);
-      api.files.getContent(project.id, filePath).then(r => {
+      api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined).then(r => {
         setFileContent(r);
         setEditContent(r.content ?? '');
       }).catch(() => {}).finally(() => setLoading(false));
@@ -830,12 +859,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       if (projectId !== project.id || editing || isDrawioEditing) return;
       const norm = filePath.replace(/\\/g, '/');
       if (!paths.some(p => p.replace(/\\/g, '/') === norm)) return;
-      api.files.getContent(project.id, filePath).then(r => { setFileContent(r); setEditContent(r.content ?? ''); setLoadError(false); }).catch(() => {});
-      fetchDiff().then(r => setDiff(r.diff)).catch(() => {});
+      api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined).then(r => { setFileContent(r); setEditContent(r.content ?? ''); setLoadError(false); }).catch(() => {});
+      if (fromRoot) fetchDiff().then(r => setDiff(r.diff)).catch(() => {});
       setBlame(null);   // авторство устарело — перечитается при открытии вкладки
       setBlameError(false);
     });
-  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode, fetchDiff]);
+  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode, sessionId, fetchDiff, fromRoot]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {
@@ -877,7 +906,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const handleRevert = async () => {
     try {
       await api.files.revert(project.id, filePath);
-      const r = await api.files.getContent(project.id, filePath);
+      const r = await api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined);
       setFileContent(r);
       setEditContent(r.content ?? '');
       setDiff(null);
@@ -991,8 +1020,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       else if (a === 'file.extract') void runDocAi('extract');
       else if (a === 'file.tags') void runDocAi('tags');
       else if (a === 'file.convert') void runDocAi('convert');
-      // Результат ложится файлом рядом: с другого устройства записи нет
-      else if (a === 'file.toMarkdown' && !isHostMode && canToMarkdown) void (async () => {
+      // Результат ложится файлом рядом: с другого устройства записи нет; бэк читает корень проекта,
+      // поэтому для файла из дерева чата (fromRoot=false) действие недоступно
+      else if (a === 'file.toMarkdown' && !isHostMode && canToMarkdown && fromRoot) void (async () => {
         beginAiBusy();
         try {
           const r = await api.files.toMarkdown(project.id, filePath);
@@ -1004,7 +1034,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, fileContent, canToMarkdown]);
+  }, [filePath, fileContent, canToMarkdown, fromRoot]);
 
   const handleClose = async () => {
     // draw.io / Excalidraw в режиме edit — сохраняем текущие правки перед закрытием.
@@ -1201,7 +1231,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   } : null;
   // Вкладка «Авторы» (blame) — только для текстовых файлов в git-репо; в хост-режиме
   // git-вкладки скрыты целиком (файл вне проекта — своего репо/истории тут нет)
-  const showBlameTab = !isHostMode && inRepo && !loading && !loadError && !!fileContent && !fileContent.isBinary && !fileContent.isImage;
+  const showBlameTab = !isHostMode && fromRoot && inRepo && !loading && !loadError && !!fileContent && !fileContent.isBinary && !fileContent.isImage;
   const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
 
   const btnPrimary: React.CSSProperties = {
@@ -1223,7 +1253,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // base64), и полагаться на эти поля нельзя. Вне проекта URL файла нет
   const isMidiViewing = !loading && !loadError && tab === 'file' && isMidi && !isHostMode && !!fileContent;
   const loadMidi = async () => {
-    const url = viaAgent ? await agentStreamUrl(project.id, filePath) : api.files.fileUrl(project.id, filePath);
+    const url = viaAgent ? await agentStreamUrl(project.id, filePath) : api.files.fileUrl(project.id, filePath, sessionId);
     const r = await fetch(url);
     if (!r.ok) throw new Error(`Не удалось загрузить MIDI-файл (код ${r.status})`);
     return r.arrayBuffer();
@@ -1244,6 +1274,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // fileContent.content обновляем, но iframe не перезагружаем (DrawioViewer грузит XML
   // только по событию init), поэтому редактор не сбрасывается.
   const handleDiagramSave = async (xml: string) => {
+    if (!fromRoot) return;
     try {
       await api.files.saveContent(project.id, filePath, xml);
       setFileContent(prev => prev ? { ...prev, content: xml } : prev);
@@ -1667,7 +1698,11 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     </aside>
   ) : null;
   const diffChipVisible = showChips && !!diffStats && tab === 'diff';
-  const badgesVisible = commentsChipVisible || diffChipVisible || showTabs;
+  // Метка дерева: файл не из корня (fromRoot=false, branch непуст) — виден всегда, и из
+  // анкера тоже: иначе просмотрщик без кнопок правки остаётся без объяснения. Своё дерево
+  // чата (isAnchor !== false) и чужое (isAnchor=false) различаются только текстом подсказки.
+  const treeChipVisible = showChips && !loading && !loadError && !fromRoot;
+  const badgesVisible = commentsChipVisible || diffChipVisible || treeChipVisible || showTabs;
 
   // Заметка vault — полноценный NoteView (теги, ✨-связи, перенос, правка через
   // notes-API с переименованием): тот же функционал, что в разделе «Заметки».
@@ -1765,6 +1800,21 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         {/* Бейджи + вкладки — несжимаемый блок */}
         {badgesVisible && (
         <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
+        {/* Файл открыт не из заявленного дерева, а из worktree чата: метка ветки в шапке.
+            Обёртка — только flex-держатель (flexShrink:0), сам чип из ui-кита */}
+        {treeChipVisible && (
+          <span data-testid="file-tree-chip" style={{ display: 'flex', flexShrink: 0 }}>
+            <Chip
+              dense
+              maxW={isMobile ? 120 : 220}
+              title={fileContent!.isAnchor === false
+                ? `Файл взят не из основного дерева, а из worktree ${fileContent!.branch}. Правка и дифф доступны для файла из основного дерева`
+                : `Файл открыт из дерева вашего чата (${fileContent!.branch}), только чтение. Правка и дифф доступны для файла из основного дерева`}
+            >
+              из дерева {fileContent!.branch}
+            </Chip>
+          </span>
+        )}
         {/* Комментарии к документу (флаг doc-annotations): счётчик в тулбаре */}
         {commentsChipVisible && commentCounts && (
           <span

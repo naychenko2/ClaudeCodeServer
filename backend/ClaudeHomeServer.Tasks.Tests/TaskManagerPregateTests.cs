@@ -31,9 +31,10 @@ public class TaskManagerPregateTests : IDisposable
         _sut = Build(null);
     }
 
-    private TaskManager Build(string? testRunsEnabled)
+    private TaskManager Build(string? testRunsEnabled, bool gateOnClose = true)
     {
         var settings = new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") };
+        settings["Pregate:GateOnClose"] = gateOnClose ? "true" : "false";
         if (testRunsEnabled is not null) settings["Subsystems:test-runs:Enabled"] = testRunsEnabled;
         return new TaskManager(new ConfigurationBuilder().AddInMemoryCollection(settings).Build(), heads: _head);
     }
@@ -149,7 +150,7 @@ public class TaskManagerPregateTests : IDisposable
     {
         var task = Step();
 
-        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Role: TaskRoles.Cut));
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, Role: TaskRoles.Cut), isAgentCall: true);
 
         act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("Предгейт не пройден");
         _sut.GetById(task.Id)!.Status.Should().NotBe(TaskItemStatus.Done);
@@ -160,7 +161,7 @@ public class TaskManagerPregateTests : IDisposable
     {
         var task = Step();
 
-        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: ""));
+        var act = () => _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: ""), isAgentCall: true);
 
         act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("Предгейт не пройден");
     }
@@ -188,6 +189,42 @@ public class TaskManagerPregateTests : IDisposable
 
         _sut.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done, WorktreePath: Wt + "/"), isAgentCall: true)!
             .Status.Should().Be(TaskItemStatus.Done);
+    }
+
+    [Fact]
+    public void GateOnClose_Выкл_АгентЗакрываетШагБезЗелёногоПредгейта_ЗаписьСохраняется()
+    {
+        _sut = Build(null, gateOnClose: false);
+        var task = Step();
+        _sut.RecordPregate(task.Id, Sha1, false, "x", "build");
+
+        var closed = _sut.Update(task.Id, Close(), isAgentCall: true)!;
+
+        closed.Status.Should().Be(TaskItemStatus.Done, "советующий режим не блокирует закрытие");
+        closed.Pregate.Should().NotBeNull("запись результата не отключается");
+        closed.Pregate!.Sha.Should().Be(Sha1);
+    }
+
+    [Fact]
+    public void GateOnClose_Выкл_БезТумблераВКонфиге_ГейтНеВзведён()
+    {
+        var settings = new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") };
+        _sut = new TaskManager(new ConfigurationBuilder().AddInMemoryCollection(settings).Build(), heads: _head);
+        var task = Step();
+
+        _sut.Update(task.Id, Close(), isAgentCall: true)!.Status.Should().Be(TaskItemStatus.Done);
+    }
+
+    [Fact]
+    public void GateOnClose_Вкл_ЧеловекЗакрываетБезГейта_АгентПолучаетОтказ()
+    {
+        var human = Step();
+        var agent = Step();
+
+        _sut.Update(human.Id, Close(), isAgentCall: false)!.Status.Should().Be(TaskItemStatus.Done);
+
+        var act = () => _sut.Update(agent.Id, Close(), isAgentCall: true);
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("Предгейт не пройден");
     }
 
     [Fact]

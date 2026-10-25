@@ -77,6 +77,9 @@ public sealed class PregateService : ITaskPregate
                 + PhasePipeline.BusyWaitHint);
 
         var results = new List<PregateCheckResult>();
+        // Потолок — один на весь прогон (очередь сборок входит в него, как у run_tests): сумма проверок
+        // обязана укладываться в MCP_TOOL_TIMEOUT хода, иначе CLI отваливается, а прогон держит замок дерева
+        using var limit = PhasePipeline.Ceiling(_testRunsOptions.CeilingSeconds, ct);
         foreach (var check in _options.Checks)
         {
             if (!Applies(check, request.ChangedFiles))
@@ -85,9 +88,6 @@ public sealed class PregateService : ITaskPregate
                 continue;
             }
 
-            // Потолок — на каждую проверку отдельно (очередь сборок входит в него, как у run_tests): долгая
-            // сборка не съедает запас тестов-сторожей, а суммарное время ограничено числом проверок конфига
-            using var limit = PhasePipeline.Ceiling(_testRunsOptions.CeilingSeconds, ct);
             PregateCheckResult? result;
             try
             {
@@ -102,7 +102,10 @@ public sealed class PregateService : ITaskPregate
             if (result is null)
                 return PregateVerdict.Refused(ct.IsCancellationRequested
                     ? "Предгейт остановлен."
-                    : $"Проверка «{check.Name}» не уложилась в потолок {_testRunsOptions.CeilingSeconds} с (вместе с очередью сборок).",
+                    : $"Проверка «{check.Name}» не уложилась в общий потолок предгейта {_testRunsOptions.CeilingSeconds} с (вместе с очередью сборок). "
+                      + (results.Count == 0
+                          ? "Выполненных проверок нет."
+                          : "Уже выполнено: " + string.Join(", ", results.Select(r => $"{r.Name} — {r.Status}")) + "."),
                     results);
             results.Add(result);
         }

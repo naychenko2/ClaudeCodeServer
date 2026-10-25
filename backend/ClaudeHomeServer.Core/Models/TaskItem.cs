@@ -182,7 +182,7 @@ public class TaskItem
     public List<AcceptanceEvidence> Evidence { get => _evidence; set => _evidence = value ?? []; }
     private List<AcceptanceCriterion> _acceptance = [];
     // Последний результат предгейта шага (NC-P1b): кладёт только TaskManager.RecordPregate по вердикту
-    // ITaskPregate. Аддитивное поле: старые задачи читаются с null. Гейт закрытия шага — PregateRules
+    // ITaskPregate. Аддитивное поле: старые задачи читаются с null. Закрытие шага не блокирует — PregateRules
     public PregateRecord? Pregate { get; set; }
     private List<AcceptanceEvidence> _evidence = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;

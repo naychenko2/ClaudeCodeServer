@@ -68,7 +68,7 @@ public class TaskPregateServiceTests : IDisposable
         var root = Path.Combine(_dir, "proj");
         Directory.CreateDirectory(root);
         var project = _projects.Create("п", root, owner.Id, "tester");
-        _tasks = new TaskManager(config, heads: _reader);
+        _tasks = new TaskManager(config);
         var epic = _tasks.Create(project.Id, owner.Id, new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
         _task = _tasks.Create(project.Id, owner.Id, new CreateTaskRequest("шаг", FeatureId: epic.Id, Role: TaskRoles.Step,
             StepRef: "B1", WorktreePath: _dir));
@@ -129,7 +129,7 @@ public class TaskPregateServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ВсеПроверкиПропущены_ИзмененияВнеЗон_NotRunЗаписанЗакрытиеРазрешено()
+    public async Task ВсеПроверкиПропущены_ИзмененияВнеЗон_NotRunЗаписан()
     {
         _reader.Changed = ["docs/заметка.md"];
         _pregate.Checks =
@@ -162,7 +162,7 @@ public class TaskPregateServiceTests : IDisposable
         var outcome = await Run();
 
         outcome.Status.Should().Be(TaskPregateStatus.NotRun);
-        outcome.Text.Should().Contain("ui_probe 360/1280").And.Contain("Origin").And.Contain("закрыть шаг нельзя");
+        outcome.Text.Should().Contain("ui_probe 360/1280").And.Contain("Origin").And.Contain("результат не записан");
         _tasks.GetById(_task.Id)!.Pregate.Should().BeNull();
     }
 
@@ -177,6 +177,21 @@ public class TaskPregateServiceTests : IDisposable
 
         (await Run()).Status.Should().Be(TaskPregateStatus.Recorded);
         _tasks.GetById(_task.Id)!.Pregate!.Green.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ПослеДвухКрасныхПодряд_ПредгейтЗапускаетсяСнова()
+    {
+        _pregate.Checks = [new PregateCheckResult("tsc", PregateStatus.Red, "error TS2322")];
+        await Run();
+        await Run();
+        _tasks.GetById(_task.Id)!.Pregate!.RedStreak.Should().Be(2);
+
+        _pregate.Checks = [new PregateCheckResult("tsc", PregateStatus.Green)];
+        var outcome = await Run();
+
+        outcome.Status.Should().Be(TaskPregateStatus.Recorded, "третьего отказа «серия исчерпана» больше нет");
+        _tasks.GetById(_task.Id)!.Pregate!.Green.Should().BeTrue();
     }
 
     [Fact]

@@ -521,4 +521,12 @@ describe('FeatureGroupHeader: очередь фич (глиф queue, «в оче
     expect(m![0]).toContain('var(--c-text-primary)');
     expect(html).not.toContain('border-left-width:3px');
   });
+
+  it('holdReason manual → прежний вид: не очередь, кромки слева нет', () => {
+    const f = feat({ state: 'paused', holdReason: 'manual', queue: { position: 2, length: 3 } });
+    expect(featureDisplayState(f).kind).not.toBe('queue');
+    const html = renderHeader(f);
+    expect(html).not.toContain('в очереди');
+    expect(html).not.toContain('border-left-width:3px');
+  });
 });

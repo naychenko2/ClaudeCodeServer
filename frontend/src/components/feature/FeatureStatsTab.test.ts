@@ -906,6 +906,32 @@ describe('FeatureStatsTab: ступени Ганта (W4-4F2)', () => {
     // Тач-цель строки — 40 px (как в других мобильных контролах).
     expect(rs.minHeight).toBe('40px');
   });
+
+  // === 8. Схлопнутые полосы (прод 25.10): строка — <button> с display:grid, а кнопка
+  // по умолчанию ужимается по содержимому. Дорожка (1fr) содержит только абсолютные
+  // полосы, поэтому без width:100% колонка 1fr схлопывается в ~0, и все полосы всех
+  // этапов падают в minWidth:3 в одну точку. ===
+  it('строка этапа растянута на всю ширину (width 100%) — иначе колонка полосы схлопывается', () => {
+    for (const mobile of [false, true]) {
+      const c = renderGantt(mobile);
+      const row = findNodeByAttr(c, 'data-testid', 'gantt-row-prod')!;
+      const rs = (row as unknown as { style: Record<string, string> }).style;
+      expect(rs.width, `ширина строки (mobile=${mobile})`).toBe('100%');
+    }
+  });
+
+  it('полосы разных этапов разложены по оси: left растёт в порядке этапов, не в одной точке', () => {
+    const c = renderGantt();
+    const lefts = ['cut', 'plan', 'prod', 'qa', 'merge'].map((key) => {
+      const bar = findNodeByAttr(c, 'data-testid', `gantt-bar-${key}`)!;
+      const s = (bar as unknown as { style: Record<string, string> }).style;
+      return { key, left: parseFloat(s.left), width: parseFloat(s.width) };
+    });
+    for (let i = 1; i < lefts.length; i++) {
+      expect(lefts[i]!.left, `${lefts[i]!.key} правее ${lefts[i - 1]!.key}`).toBeGreaterThan(lefts[i - 1]!.left);
+    }
+    expect(lefts.every((l) => l.width > 0 && l.left + l.width <= 100.001), 'полосы внутри оси').toBe(true);
+  });
 });
 
 // === Строка «тихо» на Ганте (W5-F3b, спецификация features-overview-5.md §«Точка 6») ===

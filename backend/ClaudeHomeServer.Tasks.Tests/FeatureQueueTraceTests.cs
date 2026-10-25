@@ -120,6 +120,71 @@ public class FeatureQueueTraceTests
         t.QueuedMinutes.Should().Be(0);
     }
 
+    // Сценарий MAJOR-2 ревью RV-Q3B-Q4: фича «ждёт вас» (waiting без cleared) → поставлена в
+    // очередь → 3 часа в очереди. Интервал очереди считается ЦЕЛИКОМ в queued и вычитается из
+    // waiting: три часа не попадают в waitingMinutes (не двойной счёт).
+    [Fact]
+    public void Build_ОчередьПоверхОжидания_QueuedЦеликом_ИзWaitingВычтено()
+    {
+        var journal = Full(
+            new FeatureJournalEntry { At = T0.AddHours(1), Kind = "waiting", TaskId = "epic" },
+            Held(T0.AddHours(1), FeatureHoldReasons.Queue),
+            Cleared(T0.AddHours(4), FeatureHoldReasons.Queue, FeatureHoldBy.Queue));
+
+        var t = FeatureTimeline.Build(EpicRun(), journal, T0.AddHours(4)).Totals;
+
+        t.ElapsedMinutes.Should().Be(240);
+        t.QueuedMinutes.Should().Be(180, "весь интервал held(queue)..hold_cleared, а не только перекрытие с idle");
+        t.WaitingMinutes.Should().Be(0, "ожидание целиком внутри очереди — его минуты вычтены из waiting");
+        t.IdleMinutes.Should().Be(60);
+        (t.WorkWallMinutes + t.WaitingMinutes + t.ErrorMinutes + t.IdleMinutes + t.QueuedMinutes)
+            .Should().Be(t.ElapsedMinutes);
+    }
+
+    // Частичное перекрытие: очередь [09:00,10:30) поверх ожидания [09:00,12:00): в queued —
+    // 90 мин очереди, оставшиеся 90 мин ожидания остаются в waiting.
+    [Fact]
+    public void Build_ОчередьЧастьОжидания_ОстатокОстаётсяВWaiting()
+    {
+        var journal = Full(
+            new FeatureJournalEntry { At = T0.AddHours(1), Kind = "waiting", TaskId = "epic" },
+            Held(T0.AddHours(1), FeatureHoldReasons.Queue),
+            Cleared(T0.AddHours(2.5), FeatureHoldReasons.Queue, FeatureHoldBy.Queue));
+
+        var t = FeatureTimeline.Build(EpicRun(), journal, T0.AddHours(4)).Totals;
+
+        t.ElapsedMinutes.Should().Be(240);
+        t.QueuedMinutes.Should().Be(90);
+        t.WaitingMinutes.Should().Be(90, "ожидание 09:00–12:00 минус перекрытая очередью часть 09:00–10:30");
+        t.IdleMinutes.Should().Be(60);
+        (t.WorkWallMinutes + t.WaitingMinutes + t.ErrorMinutes + t.IdleMinutes + t.QueuedMinutes)
+            .Should().Be(t.ElapsedMinutes);
+    }
+
+    // Перекрытие с незакрытым started-периодом (исполнитель убит без stopped): минуты очереди
+    // вычитаются из work, а не остаются неучтёнными.
+    [Fact]
+    public void Build_ОчередьПоверхНезакрытогоStarted_ВычитаетсяИзWork()
+    {
+        var started = new FeatureJournalEntry
+        {
+            At = T0.AddHours(1), StartedAt = T0.AddHours(1), Kind = "started", TaskId = "epic",
+        };
+        var journal = Full(
+            started,
+            Held(T0.AddHours(1), FeatureHoldReasons.Queue),
+            Cleared(T0.AddHours(2), FeatureHoldReasons.Queue, FeatureHoldBy.Queue));
+
+        var t = FeatureTimeline.Build(EpicRun(), journal, T0.AddHours(3)).Totals;
+
+        t.ElapsedMinutes.Should().Be(180);
+        t.QueuedMinutes.Should().Be(60);
+        t.WorkWallMinutes.Should().Be(60, "started 09:00…now минус перекрытая очередью часть 09:00–10:00");
+        t.IdleMinutes.Should().Be(60);
+        (t.WorkWallMinutes + t.WaitingMinutes + t.ErrorMinutes + t.IdleMinutes + t.QueuedMinutes)
+            .Should().Be(t.ElapsedMinutes);
+    }
+
     [Fact]
     public void BuildEvents_ByQueue_ДаётСобытиеЗапущенаИзОчереди()
     {

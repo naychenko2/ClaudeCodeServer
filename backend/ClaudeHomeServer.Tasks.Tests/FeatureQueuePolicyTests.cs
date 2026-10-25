@@ -1,7 +1,6 @@
 using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks;
-using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.Extensions.Configuration;
 
@@ -199,12 +198,15 @@ public class FeatureQueuePolicyTests
     {
         var dir = Path.Combine(Path.GetTempPath(), "queue_q1_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(dir, "projects.json") })
-            .Build();
-        var sut = new TaskManager(config, journal: new FeatureJournalStore(Path.Combine(dir, "feature-journal")));
         try
         {
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(dir, "projects.json") })
+                .Build();
+            // Dispose гасит таймер дебаунса и делает Flush — иначе он переживает тест и после
+            // удаления каталога заново пишет tasks.json. Гашение — внутри try: оно случается
+            // до finally, удаляющего каталог.
+            using var sut = new TaskManager(config);
             var first = sut.Create("p1", "u", new CreateTaskRequest("первая", Role: TaskRoles.Feature));
             var second = sut.Create("p1", "u", new CreateTaskRequest("вторая", Role: TaskRoles.Feature));
             var other = sut.Create("p2", "u", new CreateTaskRequest("чужого проекта", Role: TaskRoles.Feature));

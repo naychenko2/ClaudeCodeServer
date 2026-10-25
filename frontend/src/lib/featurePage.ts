@@ -27,6 +27,86 @@ import { onMessage } from './signalr';
 import { getFlag, FLAGS } from './featureFlags';
 import type { FeaturePage } from '../types/featureIndex';
 import type { ServerMessage } from '../types';
+import type { PlanState } from './featureProgress';
+
+// ── Сводка состояния фичи (волна 6 «Обзор фич», шаг F1) ──────────────────────────
+//
+// Фронтальное зеркало бэкового проектора `FeatureBrief.Build`: контракт — заметка
+// «Волна 6 «Обзор фич» — сводка состояния фичи, разрез (Александр, 25.10)», п. 6.
+// Бэк считает всё (`kind` — таблица от `run.State`, `now` — `run.Now[0]`/Attention,
+// `done` — `StepProgress`, `elapsed` — `stats.timeline`, `estimate`, `stale`);
+// фронт ничего не пересчитывает — только переводит ключи в слова (шаг F2/F5).
+// Здесь только форма данных, логики нет.
+
+// Категория состояния блока — словарь бэка (п. 4 разреза), восемь значений.
+export type FeatureBriefKind =
+  | 'running' | 'waiting_you' | 'error' | 'paused'
+  | 'queued' | 'draft' | 'idle' | 'closed';
+
+// «Сейчас»: первая запись `run.Now` или `Attention`; null — фича не идёт.
+export interface FeatureBriefNow {
+  stage: string;
+  taskId: string;
+  personaId?: string;
+  stepRef?: string;
+  lane?: string;
+  since?: string;
+}
+
+// «Сделано»: из `StepProgress` и `Verdicts`.
+export interface FeatureBriefDone {
+  stepsAccepted: number;
+  stepsTotal: number;
+  loops: number;
+  planState: PlanState;
+}
+
+// «Дальше»: первая pending-стадия после активной (≤3, skipped/absent пропущены);
+// строку «После ревью — проверка…» собирает фронт из этого массива (п. 4).
+export interface FeatureBriefNext {
+  stage: string;
+  personaId?: string;
+}
+
+// Оценка времени v1 по истории проекта (п. 3); null — «оценки пока нет».
+export interface FeatureBriefEstimate {
+  remainingMinutes: number;
+  p25: number;
+  p75: number;
+  source: 'history';
+  sampleSize: number;
+}
+
+// Позиция в очереди фич (п. 5); null — очередь не готова, показываем без номера.
+export interface FeatureBriefQueue {
+  position: number;
+  total: number;
+}
+
+// Голос оркестратора (п. 1–2): `text` наружу только владельцу; `stale` считает бэк.
+export interface FeatureBriefNote {
+  text: string;
+  at: string;
+  byPersonaId?: string;
+  byUser: boolean;
+  stageAtWrite: string;
+  stale: boolean;
+}
+
+// Блок «Сводка» страницы фичи: аддитивное поле `brief` ответа
+// `GET /api/tasks/features/{featureId}` (в `FeaturePage` — опционально).
+export interface FeatureBrief {
+  kind: FeatureBriefKind;
+  now: FeatureBriefNow | null;
+  reason: string | null;
+  done: FeatureBriefDone;
+  next: FeatureBriefNext[];
+  elapsedMinutes: number | null;
+  estimate: FeatureBriefEstimate | null;
+  queue: FeatureBriefQueue | null;
+  note: FeatureBriefNote | null;
+  computedAt: string;
+}
 
 // Состояние страницы фичи.
 //   loading  — первичный запрос в полёте (страница открыта, данных ещё нет);

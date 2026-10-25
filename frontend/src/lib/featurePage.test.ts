@@ -13,6 +13,7 @@ import { api } from './api';
 import { setAllFlags } from './featureFlags';
 import type { Task } from '../types';
 import type { FeaturePage } from '../types/featureIndex';
+import type { FeatureBrief } from './featurePage';
 
 // showToast диспатчит window-событие, в node-окружении его нет — no-op-мок на случай
 // транзитного импорта (сам стор фичи тост больше не шлёт).
@@ -268,6 +269,66 @@ describe('смена fid: устаревший запрос отменяется
     expect(seen[0].signal, 'signal не ушёл в getFeature').toBe(c1.signal);
     // AbortError отменённого запроса не роняет состояние в error (fid сменился → _fid ≠ fid).
     expect(__test.state(), 'состояние упало в error после отмены').toEqual({ status: 'loading' });
+  });
+});
+
+// ── 5. brief (волна 6, F1): поле опционально — ответ с brief и без него ───────────
+//
+// Тайп-сторож (tsc -b компилирует этот файл): `withoutBrief` компилируется только
+// если brief в FeaturePage опционален; `withBrief` — литерал со ВСЕМИ полями
+// контракта разреза п. 6 — компилируется только если FeatureBrief совпадает с ним
+// поле в поле (лишний или отсутствующий поле в типе → tsc красный).
+// Рантайм: стор пропускает ответ как есть — с brief и без него.
+
+// Полный brief по контракту разреза п. 6 (полем в поле).
+const BRIEF: FeatureBrief = {
+  kind: 'running',
+  now: { stage: 'review', taskId: 't-rev', personaId: 'p-gleb', stepRef: 'Ш3', lane: 'back', since: '2026-10-25T10:00:00Z' },
+  reason: null,
+  done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' },
+  next: [{ stage: 'qa', personaId: 'p-vera' }, { stage: 'final' }],
+  elapsedMinutes: 120,
+  estimate: { remainingMinutes: 90, p25: 60, p75: 140, source: 'history', sampleSize: 4 },
+  queue: { position: 2, total: 3 },
+  note: { text: 'Идём по плану', at: '2026-10-25T09:00:00Z', byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'prod', stale: false },
+  computedAt: '2026-10-25T10:05:00Z',
+};
+
+describe('brief: ответ страницы с brief и без него', () => {
+  let getFeatureSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    __test.reset();
+    setAllFlags({ [FLAG]: true });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __test.reset();
+    vi.useRealTimers();
+  });
+
+  it('ответ без brief разбирается без ошибки (поле опционально)', async () => {
+    // Тайп-утверждение: старая страница (без brief) — валидный FeaturePage.
+    const withoutBrief: FeaturePage = page('epic-1');
+    getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockResolvedValue(withoutBrief);
+    __test.setFid('epic-1');
+    __test.fetchPage('epic-1', true);
+    await vi.runAllTimersAsync();
+    expect(__test.state()).toEqual({ status: 'ok', page: withoutBrief });
+  });
+
+  it('ответ с полным brief разбирается, brief проходит как есть', async () => {
+    // Тайп-утверждение: литерал с brief по контракту п. 6 — валидный FeaturePage.
+    const withBrief: FeaturePage = { ...page('epic-1'), brief: BRIEF };
+    getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockResolvedValue(withBrief);
+    __test.setFid('epic-1');
+    __test.fetchPage('epic-1', true);
+    await vi.runAllTimersAsync();
+    const state = __test.state();
+    expect(state.status).toBe('ok');
+    // Стор не пересчитывает и не выбрасывает brief: он доходит до UI без изменений.
+    if (state.status === 'ok') expect(state.page.brief).toEqual(BRIEF);
   });
 });
 

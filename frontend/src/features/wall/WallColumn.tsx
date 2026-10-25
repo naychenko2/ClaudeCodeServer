@@ -39,7 +39,7 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
   focused: boolean;
   onZoom: () => void;
   // Клик по файлу в ленте → оверлей стены; передаётся только колонкам с проектом
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, sessionId?: string) => void;
 }) {
   const status = chatStatus(session);
   // Множество id чатов на стене — для плашки «Ветка от …» в ChatPanel внутри колонки.

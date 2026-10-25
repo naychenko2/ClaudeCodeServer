@@ -453,6 +453,9 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     return () => window.removeEventListener('cc-draft-reply', onDraftReply);
   }, [project.id]);
   const [openFile, setOpenFile] = useState<string | null>(() => loadWorkspaceState(project.id)?.openFile ?? null);
+  // Чат, из ленты которого открыт файл: пара привязана к пути, любой другой openFile её гасит сам
+  const [openFileChat, setOpenFileChat] = useState<{ path: string; sessionId: string } | null>(null);
+  const openFileSessionId = openFileChat && openFileChat.path === openFile ? openFileChat.sessionId : undefined;
   // Монотонный счётчик событий «открыли» (страница фичи / файл) — владелец порядка
   // «последнее действие выигрывает». Счётчик — ref (не состояние): порядок определяется
   // в МОМЕНТ действия (повторное открытие того же файла/той же фичи — тоже событие),
@@ -2034,6 +2037,7 @@ const windowWidth = useWindowWidth();
 
   // из дерева файлов → режим по глобальному предпочтению; опциональная строка для скролла
   const handleOpenFileFromTree = (filePath: string, line?: number) => {
+    setOpenFileChat(null);
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
@@ -2073,7 +2077,8 @@ const windowWidth = useWindowWidth();
 
   // из чата → на десктопе режим по глобальному предпочтению; на планшете/мобайле
   // сплита нет — всегда fullscreen
-  const handleOpenFileFromChat = (filePath: string) => {
+  const handleOpenFileFromChat = (filePath: string, sessionId?: string) => {
+    setOpenFileChat(sessionId ? { path: filePath, sessionId } : null);
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
@@ -2470,7 +2475,7 @@ const windowWidth = useWindowWidth();
             страница и файл делили экран 50/50 (MAJOR-2). */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden', display: pageOnTop ? 'none' : 'block' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} sessionId={openFileSessionId} />
           </div>
         )}
         {/* Ридер ссылок из контекста чата — та же контентная зона, что у файла.
@@ -2578,6 +2583,7 @@ const windowWidth = useWindowWidth();
           attachedFiles={attachedFiles}
           onAttachedFilesChange={setAttachedFiles}
           openFile={openFile}
+          openFileSessionId={openFileSessionId}
           openFileDiffMode={openFileDiffMode}
           gitStagePath={gitStagePath}
           fileFullscreen={fileFullscreen}

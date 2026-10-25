@@ -5,8 +5,8 @@
 // выбранная задаёт центр кольца (десктоп) и сортировку карточек (мобила); если у
 // неё нет данных ни у одной видимой группы, действующая мера — время (М1): оболочка
 // решает это здесь один раз и передаёт её и кольцу, и карточкам — шапка, кольцо и
-// карточки показывают одну и ту же меру; у таблицы
-// сортировка своя — по заголовкам колонок (ST-F11). Группы фильтруются по
+// карточки показывают одну и ту же меру; таблица
+// сортируется по ней же, а заголовок колонки переключает её (единая мера). Группы фильтруются по
 // hiddenKeys один раз здесь: кольцо, таблица и карточки видят один и тот же
 // набор. Арифметика — только из FeatureBreakdownModel (ST-F8); компонент
 // ничего не пересчитывает. Строка роли feature и чип «ждёт вас» здесь не
@@ -44,6 +44,8 @@ export interface FeatureBreakdownBlockProps {
   hiddenKeys?: string[];
   // Контекст возврата: переходы в чаты групп пишут точку «← к фиче · Статистика».
   nav?: FeatureNavCtx;
+  // Мобильная раскладка: страница передаёт своё значение; не передан — useIsMobile.
+  isMobile?: boolean;
 }
 
 const AXIS_WORD: Record<Axis, string> = { personas: 'персоны', models: 'модели', roles: 'роли' };
@@ -81,12 +83,13 @@ const EMPTY: CSSProperties = {
 };
 
 export function FeatureBreakdownBlock({
-  breakdown, costPartial, run, labelOf: labelOfAxis, colorOf, hiddenKeys, nav,
+  breakdown, costPartial, run, labelOf: labelOfAxis, colorOf, hiddenKeys, nav, isMobile: isMobileProp,
 }: FeatureBreakdownBlockProps) {
   // Хуки выше любого return: разрез и мера — состояние оболочки.
   const [axis, setAxis] = useState<Axis>('personas');
   const [measure, setMeasure] = useState<Measure>('time');
-  const isMobile = useIsMobile();
+  const detectedMobile = useIsMobile();
+  const isMobile = isMobileProp ?? detectedMobile;
 
   // ОДИН набор групп: hiddenKeys отсекаются здесь один раз — дальше кольцо,
   // таблица и карточки работают с одним и тем же списком.
@@ -149,6 +152,12 @@ export function FeatureBreakdownBlock({
   return (
     <div data-testid="feature-breakdown-block" style={{ ...CARD, padding: `${(isMobile ? SP.md : SP.lg)}px` }}>
       {head}
+      {/* Плашки причин — на всю ширину под шапкой, а не в узкой колонке кольца. */}
+      {!fewData(visible) && (
+        <div data-testid="breakdown-plates" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, marginTop: SP.sm }}>
+          {plates}
+        </div>
+      )}
       {fewData(visible) ? (
         // Меньше двух групп: сравнивать нечего — пунктир с объяснением, а не таблица.
         <div data-testid="breakdown-empty" style={{ ...EMPTY, marginTop: SP.md }}>
@@ -163,7 +172,6 @@ export function FeatureBreakdownBlock({
         </div>
       ) : isMobile ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, marginTop: SP.md }}>
-          {plates}
           {/* Кольцо 180 по центру над карточками (решение дизайна, записка §360). */}
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <ShareRing
@@ -178,12 +186,8 @@ export function FeatureBreakdownBlock({
         </div>
       ) : (
         <div style={{ display: 'flex', gap: SP.lg, alignItems: 'flex-start', marginTop: SP.md }}>
-          {/* Колонца кольца: плашки «без расхода» стоят рядом с кольцом (пункт
-             задачи). Ширина фиксирована — размер кольца (М2): без неё длинный текст
-             плашки растягивал колонку до max-content (~430 px) и ломал раскладку 1280;
-             теперь текст переносится внутри колонки. */}
+          {/* Колонка кольца: ширина фиксирована — размер кольца (М2). */}
           <div data-testid="breakdown-ring-col" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, width: 140 }}>
-            {plates}
             <ShareRing
               groups={visible} measure={effMeasure} size={140}
               labelOf={labelOf} colorOf={colorOf} axisLabel={AXIS_WORD[axis]} costPartial={costPartial}
@@ -191,8 +195,8 @@ export function FeatureBreakdownBlock({
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <FeatureBreakdownTable
-              groups={visible} axis={axis} run={run}
-              labelOf={labelOf} colorOf={colorOf} nav={nav}
+              groups={visible} axis={axis} run={run} measure={effMeasure} onMeasureChange={setMeasure}
+              labelOf={labelOf} colorOf={colorOf} nav={nav} isMobile={isMobile}
             />
           </div>
         </div>

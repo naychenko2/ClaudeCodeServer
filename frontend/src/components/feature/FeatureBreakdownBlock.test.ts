@@ -246,15 +246,17 @@ describe('один набор групп для кольца, таблицы и 
 });
 
 describe('плашки (к2)', () => {
-  it('costPartial: плашка «цена по части моделей недоступна» стоит рядом с кольцом', () => {
+  it('costPartial: плашка «цена по части моделей недоступна» — на всю ширину под шапкой, а не в колонке кольца', () => {
     const { container } = mountBlock({ costPartial: true });
     const plate = findNodeByAttr(container, 'data-testid', 'breakdown-cost-partial');
     const ring = findNodeByAttr(container, 'data-testid', 'share-ring');
     expect(plate, 'плашки costPartial').toBeTruthy();
     expect(ring, 'кольца нет').toBeTruthy();
     expect(textOf(plate!)).toContain('цена по части моделей недоступна');
-    // Рядом — в той же колонце, что и кольцо (общий родитель).
-    expect(plate!.parentElement!.contains(ring!)).toBe(true);
+    // Плашки — отдельным блоком под шапкой, вне колонки кольца (140 px).
+    const col = findNodeByAttr(container, 'data-testid', 'breakdown-ring-col')!;
+    expect(col.contains(plate!)).toBe(false);
+    expect(plate!.parentElement!.getAttribute('data-testid')).toBe('breakdown-plates');
   });
 
   it('costPartial=false — плашки нет', () => {
@@ -387,5 +389,57 @@ describe('недоступная мера и смена оси (решение �
     expect(textOf(findNodeByAttr(container, 'data-testid', 'breakdown-empty'))).toContain('когда ролей станет больше одной');
     click(findButtonByLabel(headNode(container)!, 'персоны'));
     expect(findNodeByAttr(container, 'data-testid', 'breakdown-empty')).toBeNull();
+  });
+});
+
+describe('единая мера, «Всего» и isMobile (доработка части 1)', () => {
+  function sortedMeasureOfTable(container: ReturnType<typeof mount>['container']): string | null {
+    for (const m of ['time', 'tokens', 'cost']) {
+      const btn = findNodeByAttr(container, 'data-testid', `breakdown-sort-${m}`);
+      if (btn && btn.parentElement?.getAttribute('aria-sort') === 'descending') return m;
+    }
+    return null;
+  }
+
+  it('мера шапки = сортировка таблицы; заголовок таблицы переключает и шапку', () => {
+    const { container } = mountBlock();
+    expect(sortedMeasureOfTable(container)).toBe('time');
+    click(findButtonByLabel(headNode(container)!, 'токены'));
+    expect(sortedMeasureOfTable(container)).toBe('tokens');
+    click(findNodeByAttr(container, 'data-testid', 'breakdown-sort-cost'));
+    expect(sortedMeasureOfTable(container)).toBe('cost');
+    // Шапка видит ту же меру: кольцо считает по деньгам.
+    expect(ringAria(container)).toContain('деньгам');
+  });
+
+  it('«Всего» в разрезе с частично неизвестной ценой — не «бесплатно», а сумма известной части', () => {
+    const partialRoles: FeatureBreakdown = {
+      personas: PERSONAS,
+      models: MODELS,
+      roles: [mkGroup('step', 120, 1000, 0, ['c1']), mkGroup('review', 60, 3000, null, ['c2'])],
+    };
+    const { container } = mountBlock({ breakdown: partialRoles });
+    click(findButtonByLabel(headNode(container)!, 'роли'));
+    const total = findNodeByAttr(container, 'data-testid', 'breakdown-total')!;
+    expect(textOf(total)).not.toContain('бесплатно');
+    expect(textOf(total)).toContain('$0,00');
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-total-partial')).toBeTruthy();
+  });
+
+  it('«Всего»: цена известна у всех групп и нулевая — «бесплатно»', () => {
+    const allFree: FeatureBreakdown = {
+      personas: [mkGroup('kira', 120, 1000, 0), mkGroup('timur', 60, 3000, 0)],
+      models: [], roles: [],
+    };
+    const { container } = mountBlock({ breakdown: allFree });
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'breakdown-total')!)).toContain('бесплатно');
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-total-partial')).toBeNull();
+  });
+
+  it('isMobile пропом перебивает useIsMobile: десктоп-хук, но мобильная раскладка (нет таблицы)', () => {
+    const { container } = mount(createElement(FeatureBreakdownBlock, {
+      breakdown: BREAKDOWN, costPartial: false, run: mkRun(), labelOf, isMobile: true,
+    }));
+    expect(findNodeByAttr(container, 'data-testid', 'feature-breakdown-table')).toBeNull();
   });
 });

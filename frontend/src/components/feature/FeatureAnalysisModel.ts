@@ -9,6 +9,7 @@
 
 import { C } from '../../lib/design';
 import { getPersonaById } from '../../lib/personas';
+import { executorStopVisual } from '../../lib/tasks';
 import { formatClock, formatDateTime, formatDuration, minutesSince } from './FeatureStatsBits';
 // Тег статуса — общий модуль FeatureStatusTag (W5-F3a): модель не тянет шапку,
 // цикл FeaturePageHeader ⇄ FeatureAnalysisModel разомкнут.
@@ -16,7 +17,7 @@ import { featureRunStatusTag, UNKNOWN_RUN_TAG } from './FeatureStatusTag';
 import type { FeatureNow, FeatureRun, FeatureState } from '../../types/featureRun';
 
 export type AnalysisKey =
-  | 'done' | 'stuck' | 'nudged' | 'quiet' | 'attention' | 'idle' | 'moving' | 'other';
+  | 'done' | 'stuck' | 'nudged' | 'quiet' | 'stopped' | 'attention' | 'idle' | 'moving' | 'other';
 
 // Тон короба: neutral — C.bgCard/рамка borderLight; warning — warningBg/warning;
 // danger — dangerBg/dangerBorder. quiet — warningBg + пунктирная рамка (dashed).
@@ -151,6 +152,24 @@ export function analysisLineState(run: FeatureRun, nowMs: number): AnalysisLineS
         ? `Ни одна задача не идёт с ${formatDateTime(run.lastActivityAt)}.`
         : 'Ни одна задача не идёт.',
       tail: '',
+      actions,
+    };
+  }
+
+  // 5а. stopped — исполнитель остановлен: это не «ждёт вас», а остановка с причиной;
+  // машинный код причины (auth_failed…) переводится в человеческий текст.
+  if (run.attention?.kind === 'stopped') {
+    const actions: AnalysisAction[] = [];
+    if (run.attention.linkedSessionId) {
+      actions.push({ kind: 'openChat', label: 'Открыть чат', sessionId: run.attention.linkedSessionId, variant: 'secondary' });
+    }
+    actions.push(ANALYSIS_ACTION);
+    const since = minutesSince(run.attention.since, nowMs);
+    return {
+      key: 'stopped', tone: 'danger', dashed: false,
+      badge: { tone: 'danger', icon: 'Clock', text: since != null ? `стоит ${formatDuration(since)}` : 'стоит' },
+      strong: 'Остановлена',
+      tail: `${executorStopVisual(run.attention.reason).text}.`,
       actions,
     };
   }

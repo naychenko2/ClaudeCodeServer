@@ -195,6 +195,24 @@ describe('analysisLineState — состояния', () => {
     expect(st.strong).toBe('Ждёт вас · мерж');
   });
 
+  it('stopped — остановка отделена от «ждёт вас», код причины переведён', () => {
+    const st = analysisLineState(mkRun({
+      attention: { kind: 'stopped', reason: 'auth_failed', since: '2026-10-19T11:00:00Z', linkedSessionId: 'c-3' },
+    }), NOW);
+    expect(st.key).toBe('stopped');
+    expect(st.tone).toBe('danger');
+    expect(st.strong).toBe('Остановлена');
+    expect(st.strong + st.tail).not.toContain('Ждёт вас');
+    expect(st.tail).toBe('Не удалось авторизоваться у провайдера модели.');
+    expect(st.tail).not.toContain('auth_failed');
+    expect(st.actions[0].kind).toBe('openChat');
+  });
+
+  it('stopped — неизвестная причина: общая формулировка, не сырой код', () => {
+    const st = analysisLineState(mkRun({ attention: { kind: 'stopped', reason: 'new_code_x' } }), NOW);
+    expect(st.tail).toBe('Исполнение прервано.');
+  });
+
   it('idle — нет run.now, нет quiet, state idle: «Ждёт · dur»', () => {
     const st = analysisLineState(mkRun({
       state: 'idle',

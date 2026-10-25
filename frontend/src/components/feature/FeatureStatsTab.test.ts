@@ -1073,7 +1073,7 @@ describe('roleGroupLabel', () => {
     expect(roleGroupLabel('cut')).toBe('разрез');
     expect(roleGroupLabel('plan')).toBe('план');
     expect(roleGroupLabel('rework')).toBe('доработка');
-    expect(roleGroupLabel('feature')).toBe('координация фичи');
+    expect(roleGroupLabel('feature')).toBe('координация');
     expect(roleGroupLabel('consult')).toBe('консультация');
     // 'step' без stepRef/lane → roleLabel пуст → «шаг» (не сырой 'step').
     expect(roleGroupLabel('step')).toBe('шаг');

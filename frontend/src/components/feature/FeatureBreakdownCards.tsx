@@ -30,7 +30,7 @@ import {
   measureTotal, measureMax,
 } from './FeatureBreakdownModel';
 import {
-  MEASURES, MEASURE_WORD, groupColor, chipColor, chipLabel, CHIP, CHIP_AV, AV, SW, liveChipStyle,
+  MEASURES, MEASURE_WORD, BREAKDOWN_FOCUS_CLASS, groupColor, chipColor, chipLabel, CHIP, CHIP_AV, AV, SW, liveChipStyle,
 } from './FeatureBreakdownShared';
 import { FeatureBreakdownChats } from './FeatureBreakdownChats';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
@@ -219,6 +219,7 @@ export function FeatureBreakdownCards({
             {chatIds.length > 0 ? (
               <button
                 type="button"
+                className={BREAKDOWN_FOCUS_CLASS}
                 data-testid={`breakdown-chats-toggle-${g.key}`}
                 aria-expanded={open}
                 style={CHAT_BTN}

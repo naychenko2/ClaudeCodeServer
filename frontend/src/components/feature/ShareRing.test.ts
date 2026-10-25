@@ -37,7 +37,7 @@ import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { C } from '../../lib/design';
 import { ShareRing } from './ShareRing';
-import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes } from '../chat/__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 
 const GAP = 3;
@@ -267,16 +267,33 @@ describe('цвета (к2)', () => {
   });
 });
 
+describe('подпись центра влезает в отверстие (a6d79b68)', () => {
+  const LONG = [mkGroup('a', 450, 1000, 7.0), mkGroup('b', 320, 800, 5.0)];
+
+  it('время «12 ч 50 мин» — две строки: «12 ч» и «50 мин»', () => {
+    const { container } = mountRing(LONG, 'time');
+    const total = findNodeByAttr(container, 'data-testid', 'share-ring-total')!;
+    expect(textNodes(total)).toEqual(['12 ч', '50 мин']);
+  });
+
+  it('подпись не шире ~0,6 диаметра кольца (140 → 84, 180 → 108)', () => {
+    const w140 = findNodeByAttr(mountRing(LONG, 'time').container, 'data-testid', 'share-ring-label')!;
+    expect(reactProps(w140)!.style).toMatchObject({ maxWidth: 84 });
+    const w180 = findNodeByAttr(mountRing(LONG, 'time', 180).container, 'data-testid', 'share-ring-label')!;
+    expect(reactProps(w180)!.style).toMatchObject({ maxWidth: 108 });
+  });
+});
+
 describe('центр по мере (к2, к3)', () => {
   it('мера «время»: крупная строка — время, вторая — деньги', () => {
     const { container } = mountRing(GROUPS, 'time');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-total'))).toBe('3 ч 20 мин');
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'share-ring-total')!)).toEqual(['3 ч', '20 мин']);
     expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-cost'))).toBe('$12,00');
   });
 
   it('axisLabel: вторая строка — «персоны суммарно · …» (макет :298)', () => {
     const { container } = mountRing(GROUPS, 'time', undefined, { axisLabel: 'персоны' });
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-total'))).toBe('3 ч 20 мин');
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'share-ring-total')!)).toEqual(['3 ч', '20 мин']);
     expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-cost'))).toBe('персоны суммарно · $12,00');
   });
 
@@ -305,7 +322,7 @@ describe('центр по мере (к2, к3)', () => {
     const L = 2 * Math.PI * ringRadius(container);
     const a = arcs(container);
     expect(Math.abs(a[0].dash + GAP - (67 / 200) * L)).toBeLessThan(1e-6); // доли по минутам
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-total'))).toBe('3 ч 20 мин');
+    expect(textNodes(findNodeByAttr(container, 'data-testid', 'share-ring-total')!)).toEqual(['3 ч', '20 мин']);
     const svg = ringSvg(container)!;
     expect(svg.getAttribute('aria-label')).toContain('Доли по времени');
   });

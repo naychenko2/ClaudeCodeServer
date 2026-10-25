@@ -15,7 +15,9 @@
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { C } from '../../lib/design';
+import { C, SP } from '../../lib/design';
+import { roleGroupLabel } from './FeatureStatsFormat';
+import { chipLabel } from './FeatureBreakdownShared';
 import { FeatureBreakdownTable } from './FeatureBreakdownTable';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
@@ -400,5 +402,38 @@ describe('«N чатов ›» и раскрытие (к3)', () => {
     expect(styleOf(row).background).toBe(C.accentLight);
     const firstCell = row!.children[0];
     expect(styleOf(firstCell).boxShadow).toContain(C.accent);
+  });
+});
+
+describe('доработка части 1: прокрутка, отступы, фокус, роль feature', () => {
+  it('таблица в обёртке overflowX: auto; th и td с одним отступом SP.md', () => {
+    const { container } = mountTable(GROUPS);
+    const root = findNodeByAttr(container, 'data-testid', 'feature-breakdown-table')!;
+    expect(styleOf(root.children[0]).overflowX).toBe('auto');
+    const th = tableNode(container)!.querySelectorAll('th')[0];
+    const td = rowCells(container, 'kira')![0];
+    expect(styleOf(th).paddingLeft ?? styleOf(th).padding).toContain(String(SP.md));
+    expect(styleOf(td).paddingLeft ?? styleOf(td).padding).toContain(String(SP.md));
+  });
+
+  it('сырые кнопки таблицы получают класс focus-visible', () => {
+    const { container } = mountTable(GROUPS);
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-sort-time')!.getAttribute('class')).toContain('cc-breakdown-btn');
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-chats-toggle-kira')!.getAttribute('class')).toContain('cc-breakdown-btn');
+  });
+
+  it('controlled: measure/onMeasureChange ведут сортировку и сообщают о клике', () => {
+    const calls: string[] = [];
+    const { container } = mount(createElement(FeatureBreakdownTable, {
+      groups: GROUPS, axis: 'personas', run: mkRun(), measure: 'tokens', onMeasureChange: (m: string) => calls.push(m),
+    }));
+    expect(rowOrder(container)).toEqual(['timur', 'kira', 'vera']);
+    click(findNodeByAttr(container, 'data-testid', 'breakdown-sort-cost'));
+    expect(calls).toEqual(['cost']);
+  });
+
+  it('роль feature подписана «координация» и в таблице, и в чипах', () => {
+    expect(roleGroupLabel('feature')).toBe('координация');
+    expect(chipLabel({ kind: 'role', key: 'feature' })).toBe('координация');
   });
 });

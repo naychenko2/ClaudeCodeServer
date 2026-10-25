@@ -3,13 +3,23 @@
 // в три файла — правка подписи роли или стиля чипа разъезжалась.
 
 import type { CSSProperties } from 'react';
-import { C, FS, SP, R } from '../../lib/design';
-import { roleLabel } from '../../lib/roleLabel';
+import { C, FS, SP, R, SHADOW } from '../../lib/design';
+import { roleGroupLabel } from './FeatureStatsFormat';
 import type { Measure, BreakdownChip } from './FeatureBreakdownModel';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
 
 // Палитра групп — токены записки (§Токены), по порядку; больше групп, чем цветов — цикл.
 export const ARC_COLORS = [C.accent, C.info, C.plan, C.success, C.warning, C.progressTrack];
+
+// Кольцо фокуса клавиатуры у сырых кнопок блока (заголовки таблицы, «N чатов ›»):
+// инлайн-стиль не умеет :focus-visible — класс инжектится один раз (как в ui/IconButton).
+export const BREAKDOWN_FOCUS_CLASS = 'cc-breakdown-btn';
+if (typeof document !== 'undefined' && !document.getElementById('cc-breakdown-btn-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-breakdown-btn-style';
+  el.textContent = `.${BREAKDOWN_FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
+}
 
 export const MEASURES: Measure[] = ['time', 'tokens', 'cost'];
 export const MEASURE_WORD: Record<Measure, string> = { time: 'время', tokens: 'токены', cost: 'деньги' };
@@ -34,10 +44,10 @@ export function chipColor(key: string, colorOf?: (k: string) => string | undefin
 }
 
 // Подпись чипа: модель — нормализованное имя (groupChips уже снимает «Авто → »); роль —
-// слово roleLabel без шага; для 'step' roleLabel пуст — нейтральное «шаг».
+// roleGroupLabel (слово роли без шага, 'feature' — «координация»).
 export function chipLabel(chip: BreakdownChip, labelOf?: (k: string) => string): string {
   if (chip.kind === 'model') return chip.key;
-  if (chip.kind === 'role') return roleLabel(chip.key, null, null) || (chip.key === 'step' ? 'шаг' : chip.key);
+  if (chip.kind === 'role') return roleGroupLabel(chip.key);
   return labelOf ? labelOf(chip.key) : chip.key;
 }
 

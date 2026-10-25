@@ -26,7 +26,7 @@ import { C, FS, SP, FONT } from '../../lib/design';
 import { formatDuration } from './FeatureStatsBits';
 import { formatTokens } from './FeatureStatsFormat';
 import {
-  formatMoney, percentText, sortGroups, measureValue, measureTotal, effectiveMeasure, type Measure,
+  totalMoney, percentText, sortGroups, measureValue, measureTotal, effectiveMeasure, type Measure,
 } from './FeatureBreakdownModel';
 import { groupColor } from './FeatureBreakdownShared';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
@@ -109,23 +109,29 @@ export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisL
     color: C.textMuted,
     fontFamily: FONT.sans,
     marginTop: SP.xs,
+    lineHeight: 1.2,
   };
+  // Подпись центра не шире ~0,6 диаметра кольца: иначе вылезает за отверстие
+  // (дефект a6d79b68: 134 px при отверстии 88).
+  const maxLabelW = Math.floor(size * 0.6);
 
   // Центр по мере (макет :298): крупная строка — итог выбранной меры; вторая —
   // «<разрез> суммарно» и деньги, если они есть и не совпадают с крупной строкой.
   const totalCost = measureTotal(groups, 'cost');
   const totalTokens = groups.reduce((a, g) => a + (g.tokens ?? 0), 0);
-  const moneyText = totalCost == null
-    ? 'нет учёта'
-    : formatMoney({ key: '', minutes: 0, tokens: totalTokens, costUsd: totalCost, chatIds: [] });
+  const money = totalMoney(groups, costPartial);
+  const moneyText = money.text;
   const free = effMeasure === 'cost' && total === 0 && totalTokens > 0;
-  const allLocal = free && !costPartial;
+  const allLocal = free && !money.partial;
   const bigText = noData ? 'нет данных' :
     effMeasure === 'time'
       ? formatDuration(raw.reduce((a, b) => a + b, 0))
       : effMeasure === 'tokens'
         ? formatTokens(raw.reduce((a, b) => a + b, 0))
         : moneyText;
+  // Время — в две строки («12 ч» / «50 мин»): одной строкой не помещается в отверстие.
+  const timeParts = effMeasure === 'time' && !noData ? /^(\d+ ч) (\d+ мин)$/.exec(bigText) : null;
+  const bigLines = timeParts ? [timeParts[1], timeParts[2]] : [bigText];
   const smallText = noData ? '' : allLocal ? 'все модели локальные' : axisLabel
     ? `${axisLabel} суммарно${effMeasure === 'cost' || totalCost == null ? '' : ' · ' + moneyText}`
     : effMeasure === 'cost' ? '' : moneyText;
@@ -163,8 +169,12 @@ export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisL
           alignItems: 'center', justifyContent: 'center', textAlign: 'center',
         }}
       >
-        <b data-testid="share-ring-total" style={big}>{bigText}</b>
-        <span data-testid="share-ring-cost" style={small}>{smallText}</span>
+        <div data-testid="share-ring-label" style={{ maxWidth: maxLabelW, overflowWrap: 'anywhere' }}>
+          <b data-testid="share-ring-total" style={{ ...big, display: 'block' }}>
+            {bigLines.map(l => <span key={l} data-testid="share-ring-total-line" style={{ display: 'block' }}>{l}</span>)}
+          </b>
+          <span data-testid="share-ring-cost" style={{ ...small, display: 'block' }}>{smallText}</span>
+        </div>
       </div>
     </div>
   );

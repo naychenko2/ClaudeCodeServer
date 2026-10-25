@@ -11,8 +11,7 @@
 
 import type { FeatureRun, FeatureStageExecutor } from '../../types/featureRun';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
-import { roleLabel } from '../../lib/roleLabel';
-import { formatUsd, percentText } from './FeatureStatsFormat';
+import { formatUsd, percentText, roleGroupLabel } from './FeatureStatsFormat';
 
 // Проценты живут в FeatureStatsFormat.ts (ST-F8); ре-экспорт — потребители
 // (ShareRing, тесты) импортируют percentText из этой модели.
@@ -68,6 +67,22 @@ export function formatMoney(group: FeatureBreakdownGroup): string {
   if (group.costUsd == null) return 'нет учёта';
   if (group.costUsd === 0 && (group.tokens ?? 0) > 0) return 'бесплатно';
   return formatUsd(group.costUsd);
+}
+
+// Итог денег по группам для строки «Всего» и центра кольца. «Бесплатно» только когда цена
+// известна у ВСЕХ групп (и она нулевая при токенах); если у части групп цены нет
+// (costUsd == null) или бэк пометил costPartial — это сумма известной части (formatUsd) и
+// признак partial, а не «бесплатно».
+export function totalMoney(
+  groups: FeatureBreakdownGroup[],
+  costPartial = false,
+): { text: string; partial: boolean } {
+  const total = measureTotal(groups, 'cost');
+  if (total == null) return { text: 'нет учёта', partial: false };
+  const partial = costPartial || groups.some(g => g.costUsd == null);
+  if (partial) return { text: formatUsd(total), partial: true };
+  const tokens = groups.reduce((a, g) => a + (g.tokens ?? 0), 0);
+  return { text: formatMoney({ key: '', minutes: 0, tokens, costUsd: total, chatIds: [] }), partial: false };
 }
 
 // === Ключ модели ===
@@ -135,14 +150,13 @@ export function groupChips(axis: Axis, key: string, run: FeatureRun): BreakdownC
 
 // === Подписи чатов ===
 
-// Слово роли без шага: roleLabel с null stepRef/lane даёт чистое слово
+// Слово роли без шага (roleGroupLabel — единая подпись роли; неизвестная роль — пусто)
 // («доработка», «ревью»…); для 'step' оно пусто — нейтральное «шаг», как в
 // roleGroupLabel (FeatureStatsFormat.ts). Макет рисует шаг и роль раздельными
 // частями («Ш2» + «доработка») — склеивает вид.
 function roleWord(taskRole: string | null): string {
-  const label = roleLabel(taskRole, null, null);
-  if (label) return label;
-  return taskRole === 'step' ? 'шаг' : '';
+  const label = taskRole ? roleGroupLabel(taskRole) : '';
+  return label === taskRole ? '' : label;
 }
 
 // Подпись строки чата (записка §«Нужны данные»): исполнитель с этим chatId —

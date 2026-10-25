@@ -22,10 +22,10 @@ import { formatTokens } from './FeatureStatsFormat';
 import {
   type Axis, type Measure,
   sortGroups, formatMoney, groupChips, liveChipText, fewData, percentText, measureValue,
-  measureTotal, measureMax,
+  measureTotal, measureMax, totalMoney,
 } from './FeatureBreakdownModel';
 import {
-  MEASURES, MEASURE_WORD, groupColor, chipColor, chipLabel, CHIP, CHIP_AV, AV, SW, liveChipStyle,
+  MEASURES, MEASURE_WORD, BREAKDOWN_FOCUS_CLASS, groupColor, chipColor, chipLabel, CHIP, CHIP_AV, AV, SW, liveChipStyle,
 } from './FeatureBreakdownShared';
 import { FeatureBreakdownChats } from './FeatureBreakdownChats';
 import type { FeatureBreakdownGroup } from '../../types/featureStats';
@@ -45,6 +45,10 @@ export interface FeatureBreakdownTableProps {
   colorOf?: (key: string) => string;
   // Ключи строк, которые не рисуем (роль key='feature' — вид ещё не решил).
   hiddenKeys?: string[];
+  // Мера сортировки: если задана оболочкой — она же мера шапки и карточек (единая мера),
+  // заголовок колонки переключает её через onMeasureChange. Без пропа — своё состояние.
+  measure?: Measure;
+  onMeasureChange?: (m: Measure) => void;
   // Передаётся только раскрытым чатам: сама таблица — десктопная (ST-F12 — карточки).
   isMobile?: boolean;
   // Контекст возврата для переходов в чаты раскрытой группы.
@@ -56,7 +60,7 @@ export interface FeatureBreakdownTableProps {
 // cursor: default.
 const TH: CSSProperties = {
   fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5,
-  color: C.textMuted, textAlign: 'left', padding: `0 ${SP.sm}px ${SP.xs}px`, whiteSpace: 'nowrap',
+  color: C.textMuted, textAlign: 'left', padding: `0 ${SP.md}px ${SP.xs}px`, whiteSpace: 'nowrap',
 };
 // Отступы th уже задал TH — у кнопки их нет (иначе двойной отступ).
 const TH_BTN: CSSProperties = { ...TH, padding: 0, background: 'none', border: 'none', cursor: 'pointer', font: 'inherit' };
@@ -70,11 +74,11 @@ const TD: CSSProperties = {
 const TD_TOTAL: CSSProperties = { ...TD, borderTop: `2px solid ${C.border}`, fontWeight: 700, color: C.textHeading };
 
 // Ячейка меры: полоса 8 px от максимума колонки + значение (mono) + доля (макет .c-cell).
-const CELL: CSSProperties = { display: 'flex', alignItems: 'center', gap: SP.sm, minWidth: 150 };
-const BAR: CSSProperties = { flex: 1, height: 8, borderRadius: R.max, background: C.bgSelected, overflow: 'hidden' };
+const CELL: CSSProperties = { display: 'flex', alignItems: 'center', gap: SP.sm };
+const BAR: CSSProperties = { flex: 1, minWidth: 16, height: 8, borderRadius: R.max, background: C.bgSelected, overflow: 'hidden' };
 const VAL: CSSProperties = {
   fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 600,
-  color: C.textHeading, width: 84, textAlign: 'right', whiteSpace: 'nowrap',
+  color: C.textHeading, minWidth: 72, textAlign: 'right', whiteSpace: 'nowrap',
 };
 
 // «N чатов ›» — акцентная ссылка раскрытия (макет: accent, 12px).
@@ -104,17 +108,19 @@ function measureCell(
       </span>
       <span style={VAL}>
         {value}
-        <small style={{ color: C.textMuted, fontWeight: 400 }}> {percentText(total != null && total > 0 ? v / total : 0)}</small>
+        <small style={{ display: 'block', color: C.textMuted, fontWeight: 400 }}>{percentText(total != null && total > 0 ? v / total : 0)}</small>
       </span>
     </div>
   );
 }
 
 export function FeatureBreakdownTable({
-  groups, axis, run, labelOf, colorOf, hiddenKeys, isMobile = false, nav,
+  groups, axis, run, labelOf, colorOf, hiddenKeys, measure: measureProp, onMeasureChange, isMobile = false, nav,
 }: FeatureBreakdownTableProps) {
-  // Хуки выше раннего return: мера сортировки и раскрытая строка — состояние таблицы.
-  const [measure, setMeasure] = useState<Measure>('time');
+  // Хуки выше раннего return: мера сортировки (если оболочка её не ведёт) и раскрытая строка.
+  const [ownMeasure, setOwnMeasure] = useState<Measure>('time');
+  const measure = measureProp ?? ownMeasure;
+  const setMeasure = (m: Measure) => { setOwnMeasure(m); onMeasureChange?.(m); };
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
   // Скрытые строки отсекаются до guard'а и до «Всего»: чего не рисуем — в итогах нет.
@@ -137,6 +143,8 @@ export function FeatureBreakdownTable({
 
   return (
     <div data-testid="feature-breakdown-table">
+      {/* Узкая панель: таблица прокручивается по горизонтали, а не вылезает за край. */}
+      <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0 }}>
         <thead>
           <tr>
@@ -146,6 +154,7 @@ export function FeatureBreakdownTable({
               <th key={m} aria-sort={measure === m ? 'descending' : undefined} style={TH}>
                 <button
                   type="button"
+                  className={BREAKDOWN_FOCUS_CLASS}
                   data-testid={`breakdown-sort-${m}`}
                   aria-label={`Сортировать по: ${MEASURE_WORD[m]}`}
                   style={measure === m ? { ...TH_BTN, color: C.textHeading } : TH_BTN}
@@ -211,6 +220,7 @@ export function FeatureBreakdownTable({
                   {chatIds.length > 0 ? (
                     <button
                       type="button"
+                      className={BREAKDOWN_FOCUS_CLASS}
                       data-testid={`breakdown-chats-toggle-${g.key}`}
                       aria-expanded={selected}
                       style={CHAT_LINK}
@@ -232,19 +242,19 @@ export function FeatureBreakdownTable({
             </td>
             <td style={TD_TOTAL}>
               <span style={VAL}>
-                {!hasOf('cost') ? '—' : formatMoney({
-                  key: '',
-                  minutes: 0,
-                  tokens: hasOf('tokens') ? totalOf('tokens') : 0,
-                  costUsd: totalOf('cost'),
-                  chatIds: [],
-                })}
+                {!hasOf('cost') ? '—' : totalMoney(visible).text}
+                {hasOf('cost') && totalMoney(visible).partial ? (
+                  <small data-testid="breakdown-total-partial" style={{ display: 'block', color: C.textMuted, fontWeight: 400 }}>
+                    не по всем
+                  </small>
+                ) : null}
               </span>
             </td>
             <td style={TD_TOTAL} />
           </tr>
         </tbody>
       </table>
+      </div>
       {expandedGroup ? <FeatureBreakdownChats group={expandedGroup} run={run} isMobile={isMobile} nav={nav} /> : null}
     </div>
   );

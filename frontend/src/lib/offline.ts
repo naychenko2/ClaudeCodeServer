@@ -53,15 +53,20 @@ const BASE = '/api';
 // меня») раньше localStorage (общий на профиль). Иначе вход другого человека в соседней
 // вкладке с «запомнить меня» подменил бы владельца запросов в этой вкладке
 // («одна вкладка — один владелец», docs/architecture/plugins.md).
-function readStoredKey(key: string): string | null {
-  let raw: string | null;
+// Каждое хранилище читается отдельно: отсутствие или отказ одного (SecurityError,
+// окружение без sessionStorage) не прячет значение из другого.
+function readFrom(name: 'sessionStorage' | 'localStorage', key: string): string | null {
   try {
-    if (typeof localStorage === 'undefined') return null;
-    raw = sessionStorage.getItem(key) || localStorage.getItem(key);
+    if (typeof globalThis[name] === 'undefined') return null;
+    return globalThis[name].getItem(key) || null;
   } catch {
-    // Хранилище отключено (приватный режим, dom.storage.enabled=false) — токена нет
+    // Хранилище отключено (приватный режим, dom.storage.enabled=false)
     return null;
   }
+}
+
+function readStoredKey(key: string): string | null {
+  const raw = readFrom('sessionStorage', key) || readFrom('localStorage', key);
   if (!raw) return null;
   // Строки "null"/"undefined" — частый мусор: где-то в цепочке
   // `setItem(key, null|undefined)` молча сохранил их как строки.
@@ -73,6 +78,16 @@ function readStoredKey(key: string): string | null {
 
 export function readStoredToken(): string | null {
   return readStoredKey('cc_token');
+}
+
+// Запись токена туда, откуда его читает readStoredToken (sessionStorage первым): режим входа
+// вкладки не меняется, а токен чужого владельца в общий localStorage не попадает.
+export function writeStoredToken(token: string): void {
+  const own = readFrom('sessionStorage', 'cc_token') !== null;
+  const shared = readFrom('localStorage', 'cc_token') !== null;
+  if (!own && shared) localStorage.setItem('cc_token', token);
+  else sessionStorage.setItem('cc_token', token);
+  invalidateTokenCache();
 }
 
 // Владелец вкладки по хранилищу; пара к readStoredToken, тот же порядок чтения.

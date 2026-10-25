@@ -5,10 +5,10 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  agoText, briefEstimateText, briefNextText, briefNowText, genitiveName,
+  agoText, briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, genitiveName,
   updatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
 } from './FeatureBriefModel';
-import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
+import type { FeatureBrief, FeatureBriefDone, FeatureBriefKind } from '../../lib/featurePage';
 
 // «Сейчас» по часам макета: 25.10.2026 14:10 (локальное).
 const NOW = new Date(2026, 9, 25, 14, 10).getTime();
@@ -113,6 +113,58 @@ describe('Сейчас: строки восьми kind', () => {
   });
 });
 
+// ── 1a. Подстрока «Сейчас» (слова модели, перенесены из блока, R-F5) ────────────────
+
+describe('Подстрока «Сейчас»', () => {
+  it('running — «с ЧЧ:ММ · N мин» из now.since (макет «с какого времени · сколько длится»)', () => {
+    const b = brief({ kind: 'running', now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 58) } });
+    expect(briefSubText(b, NOW)).toBe('с 13:58 · 12 мин');
+  });
+
+  it('waiting_you — «ждёт N · без вас фича стоит»', () => {
+    const b = brief({ kind: 'waiting_you', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) } });
+    expect(briefSubText(b, NOW)).toBe('ждёт 30 мин · без вас фича стоит');
+  });
+
+  it('paused — «на паузе N · исполнители не запускаются»', () => {
+    const b = brief({ kind: 'paused', reason: 'manual', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) } });
+    expect(briefSubText(b, NOW)).toBe('на паузе 30 мин · исполнители не запускаются');
+  });
+
+  it('closed — «фича закрыта»', () => {
+    expect(briefSubText(brief({ kind: 'closed' }), NOW)).toBe('фича закрыта');
+  });
+
+  it('нет since (running/waiting_you) и kinds без подстроки — null', () => {
+    expect(briefSubText(brief({ kind: 'running' }), NOW)).toBeNull();
+    expect(briefSubText(brief({ kind: 'waiting_you' }), NOW)).toBeNull();
+    expect(briefSubText(brief({ kind: 'queued' }), NOW)).toBeNull();
+  });
+});
+
+// ── 1b. «Сделано» (слова модели, перенесены из блока, R-F5) ─────────────────────────
+
+describe('Сделано', () => {
+  const textOf = (d: FeatureBriefDone) => briefDoneText(d).map(p => p.text).join('');
+
+  it('«2 из 5 шагов приняты · 1 виток правок»: числа — mono-части, связный текст — обычные', () => {
+    const parts = briefDoneText({ stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' });
+    expect(parts.map(p => p.text).join('')).toBe('2 из 5 шагов приняты · 1 виток правок');
+    expect(parts.map(p => p.mono)).toEqual([true, false, true, false]);
+  });
+
+  it('loops = 0 — хвоста про витки нет', () => {
+    expect(textOf({ stepsAccepted: 5, stepsTotal: 5, loops: 0, planState: 'cut' })).toBe('5 из 5 шагов приняты');
+  });
+
+  it('склонение разряда: 1 виток / 2 витка / 5 витков / 11 витков', () => {
+    expect(textOf({ stepsAccepted: 1, stepsTotal: 5, loops: 1, planState: 'cut' })).toContain('1 виток правок');
+    expect(textOf({ stepsAccepted: 1, stepsTotal: 5, loops: 2, planState: 'cut' })).toContain('2 витка правок');
+    expect(textOf({ stepsAccepted: 1, stepsTotal: 5, loops: 5, planState: 'cut' })).toContain('5 витков правок');
+    expect(textOf({ stepsAccepted: 1, stepsTotal: 5, loops: 11, planState: 'cut' })).toContain('11 витков правок');
+  });
+});
+
 // ── 2. «Дальше» из next[] ───────────────────────────────────────────────────────────
 
 describe('Дальше: строка из next', () => {
@@ -163,7 +215,7 @@ describe('Оценка', () => {
       estimate: { remainingMinutes: 150, p25: 120, p75: 180, source: 'history', sampleSize: 4 },
     });
     expect(briefEstimateText(b)).toEqual({
-      header: 'Оценка', main: '≈ 2 ч 30 мин осталось', fact: 'идёт 1 ч 10 мин',
+      header: 'Оценка', main: '≈ 2 ч 30 мин осталось', mainMuted: false, fact: 'идёт 1 ч 10 мин',
     });
   });
 
@@ -176,13 +228,31 @@ describe('Оценка', () => {
     expect(briefEstimateText(b).fact).toBe('идёт 4 ч 20 мин');
   });
 
-  it('estimate = null — «Оценки пока нет» во всех не-закрытых kind; «≈ 0» нигде (критерий c3)', () => {
-    const kinds: FeatureBriefKind[] = ['running', 'waiting_you', 'error', 'paused', 'queued', 'draft', 'idle'];
+  it('estimate = null — «Оценки пока нет» во всех не-закрытых kind, кроме queued; «≈ 0» нигде (критерий c3)', () => {
+    const kinds: FeatureBriefKind[] = ['running', 'waiting_you', 'error', 'paused', 'draft', 'idle'];
     for (const kind of kinds) {
       const v = briefEstimateText(brief({ kind, elapsedMinutes: 70 }));
       expect(v.main, kind).toBe('Оценки пока нет');
       expect(v.main, kind).not.toMatch(/≈\s*0/);
     }
+  });
+
+  it('queued — «Оценка — после старта» (приглушённая) + «в очереди 25 мин» (макет queue, R-F2→F5)', () => {
+    const v = briefEstimateText(brief({ kind: 'queued', elapsedMinutes: 25 }));
+    expect(v).toEqual({ header: 'Оценка', main: 'Оценка — после старта', mainMuted: true, fact: 'в очереди 25 мин' });
+  });
+
+  it('queued с пришедшей оценкой — всё равно «после старта»: фича не началась (решение продукта)', () => {
+    const v = briefEstimateText(brief({
+      kind: 'queued', elapsedMinutes: 25,
+      estimate: { remainingMinutes: 40, p25: 30, p75: 50, source: 'history', sampleSize: 4 },
+    }));
+    expect(v.main).toBe('Оценка — после старта');
+    expect(v.main).not.toMatch(/≈/);
+  });
+
+  it('queued без elapsed — факта «в очереди» нет', () => {
+    expect(briefEstimateText(brief({ kind: 'queued' })).fact).toBeNull();
   });
 
   it('estimate с нулевым остатком — «≈ 0» не печатается', () => {
@@ -194,7 +264,7 @@ describe('Оценка', () => {
 
   it('closed — подпись меняется на «Итог»: «шла 6 ч 40 мин» (макет closed)', () => {
     const b = brief({ kind: 'closed', elapsedMinutes: 400 });
-    expect(briefEstimateText(b)).toEqual({ header: 'Итог', main: 'шла 6 ч 40 мин', fact: null });
+    expect(briefEstimateText(b)).toEqual({ header: 'Итог', main: 'шла 6 ч 40 мин', mainMuted: false, fact: null });
   });
 
   it('closed без длительности — «Оценки пока нет»', () => {

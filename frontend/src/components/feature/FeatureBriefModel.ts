@@ -7,12 +7,15 @@
 //
 // Строки: макет docs/mockups/feature-summary-1.md (состояния §2 и §«Токены поимённо»);
 // для kind, которых в макете нет (error/draft/idle) — строки разреза п. 4.
-// Оценки нет → нейтральное «Оценки пока нет» (решение плана: макет и разрез называют
-// разные причины, контракт причину не несёт). «≈ 0» не печатается нигде.
+// Оценки нет → «Оценки пока нет»; для queued — «Оценка — после старта»: для очереди
+// оценки нет не от нехватки данных, а потому что фича не началась (решение Софьи,
+// R-F2→F5). «≈ 0» не печатается нигде.
+// Слова подстроки «Сейчас» и строки «Сделано» — тоже здесь (R-F5: единый источник
+// формулировки; блок только вызывает модель и красит числа моно).
 
-import { formatClock, formatDate, formatDuration, stageLabel } from './FeatureStatsBits';
+import { formatClock, formatDate, formatDuration, minutesSince, stageLabel } from './FeatureStatsBits';
 import { laneWord } from '../../lib/roleLabel';
-import type { FeatureBrief, FeatureBriefKind, FeatureBriefNote } from '../../lib/featurePage';
+import type { FeatureBrief, FeatureBriefDone, FeatureBriefKind, FeatureBriefNote } from '../../lib/featurePage';
 
 // Резолвер имени персоны по personaId (данные вызывают: usePersonas/getPersonaById).
 // null — имя неизвестно: часть строки с именем опускается, строка остаётся валидной
@@ -104,6 +107,64 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
   }
 }
 
+// ── «Сейчас»: подстрока ─────────────────────────────────────────────────────────────
+// Макет: «с какого времени · сколько длится». Только данные контракта (now.since) и
+// общие форматтеры (та же арифметика, что «N назад» ниже); статические части фраз
+// макета, не утверждающие фактов вне контракта. Нет since — подстроки нет.
+export function briefSubText(brief: FeatureBrief, nowMs: number): string | null {
+  const since = brief.now?.since;
+  switch (brief.kind) {
+    case 'running': {
+      if (!since) return null;
+      const dur = minutesSince(since, nowMs);
+      return dur != null ? `с ${formatClock(since)} · ${formatDuration(dur)}` : `с ${formatClock(since)}`;
+    }
+    case 'waiting_you': {
+      if (!since) return null;
+      const dur = minutesSince(since, nowMs);
+      return dur != null ? `ждёт ${formatDuration(dur)} · без вас фича стоит` : 'без вас фича стоит';
+    }
+    case 'paused': {
+      if (!since) return null;
+      const dur = minutesSince(since, nowMs);
+      return dur != null ? `на паузе ${formatDuration(dur)} · исполнители не запускаются` : 'исполнители не запускаются';
+    }
+    case 'closed':
+      return 'фича закрыта';
+    default:
+      return null;
+  }
+}
+
+// ── «Сделано» ───────────────────────────────────────────────────────────────────────
+// Счётчики done как есть (макет: «2 из 5 шагов приняты · 1 виток правок»). Разряда
+// «План готов» нет: формулировка состояния очереди, её здесь не выдумываем.
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const d = n % 10, h = n % 100;
+  if (d === 1 && h !== 11) return one;
+  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return few;
+  return many;
+}
+
+// Часть строки «Сделано»: mono — число (макет §«Токены поимённо»: числа mono 600
+// textHeading), остальное — связный текст. Блок красит mono-части моно, слов не добавляет.
+export interface BriefDonePart {
+  text: string;
+  mono: boolean;
+}
+
+export function briefDoneText(done: FeatureBriefDone): BriefDonePart[] {
+  const parts: BriefDonePart[] = [
+    { text: `${done.stepsAccepted} из ${done.stepsTotal}`, mono: true },
+    { text: ' шагов приняты', mono: false },
+  ];
+  if (done.loops > 0) {
+    parts.push({ text: ` · ${done.loops}`, mono: true });
+    parts.push({ text: ` ${pluralRu(done.loops, 'виток', 'витка', 'витков')} правок`, mono: false });
+  }
+  return parts;
+}
+
 // ── «Дальше» ────────────────────────────────────────────────────────────────────────
 // Строка из массива next (разрез п. 4: «После ревью — проверка (Вера), затем
 // финальное ревью и мерж» собирается на фронте из next ≤3). Префикс — по kind:
@@ -150,10 +211,13 @@ export interface BriefEstimateView {
   // Подпись блока: «Оценка»; у закрытой меняется на «Итог» (макет §2 closed).
   header: string;
   // Главная строка: «≈ 2 ч 30 мин осталось» / «Осталось — за вами» / «Оценки пока нет» /
-  // closed: «шла 6 ч 40 мин».
+  // queued: «Оценка — после старта» / closed: «шла 6 ч 40 мин».
   main: string;
-  // Второстепенный факт: «идёт N» по готовому elapsedMinutes (разбивка «из них ждёт
-  // вас / пауза» — вне контракта, не показываем — решение плана).
+  // true — main не значение, а обещание: блок красит её приглушённым (макет queue:
+  // «Оценка — после старта» (C.textMuted)).
+  mainMuted: boolean;
+  // Второстепенный факт: «идёт N» по готовому elapsedMinutes; для queued — «в очереди N»
+  // (макет). Разбивка «из них ждёт вас / пауза» — вне контракта, не показываем — решение плана.
   fact: string | null;
 }
 
@@ -164,7 +228,14 @@ export function briefEstimateText(brief: FeatureBrief): BriefEstimateView {
 
   if (brief.kind === 'closed') {
     // Итог: «шла 6 ч 40 мин» по elapsedMinutes; «по плану было ≈ 5 ч» — v2, не делаем.
-    return { header: 'Итог', main: elapsed ? `шла ${elapsed}` : NO_ESTIMATE, fact: null };
+    return { header: 'Итог', main: elapsed ? `шла ${elapsed}` : NO_ESTIMATE, mainMuted: false, fact: null };
+  }
+
+  if (brief.kind === 'queued') {
+    // Для очереди оценки нет не от нехватки данных, а потому что фича не началась
+    // (решение Софьи, R-F2→F5): строка — обещание, не значение (макет: без «осталось»,
+    // приглушённая); факт — «в очереди N» по elapsedMinutes, а не «идёт N».
+    return { header: 'Оценка', main: 'Оценка — после старта', mainMuted: true, fact: elapsed ? `в очереди ${elapsed}` : null };
   }
 
   const est = brief.estimate;
@@ -182,7 +253,7 @@ export function briefEstimateText(brief: FeatureBrief): BriefEstimateView {
   } else {
     main = `≈ ${formatDuration(est.remainingMinutes)} осталось`;
   }
-  return { header: 'Оценка', main, fact: elapsed ? `идёт ${elapsed}` : null };
+  return { header: 'Оценка', main, mainMuted: false, fact: elapsed ? `идёт ${elapsed}` : null };
 }
 
 // ── «N мин/ч назад» ────────────────────────────────────────────────────────────────

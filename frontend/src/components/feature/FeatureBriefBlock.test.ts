@@ -1,7 +1,8 @@
 // Тесты карточки «Сводка» (волна 6, шаг F5, макет feature-summary-1):
-// · 8 kind: строка «Сейчас» в DOM равна выходу briefNowText (F2), тег — выходу
-//   featureRunStatusTag (единая точка правды тега); ожидаемых строк в тесте нет —
-//   они берутся из тех же моделей, что и в блоке;
+// · 8 kind: строка «Сейчас» в DOM равна выходу briefNowText (F2), подстрока «Сейчас» и
+//   «Сделано» — выходам briefSubText/briefDoneText (R-F5: слова перенесены в модель),
+//   тег — выходу featureRunStatusTag (единая точка правды тега); ожидаемых строк в тесте
+//   нет — они берутся из тех же моделей, что и в блоке;
 // · служебные состояния: скелетон с aria-busy, «Сводка не загрузилась» + полоска,
 //   brief = null и статов нет → блока нет;
 // · «Мерж…» / «Открыть финальное ревью» — только waiting_you и только isMobile;
@@ -19,7 +20,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FeatureBriefBlock } from './FeatureBriefBlock';
-import { briefNowText } from './FeatureBriefModel';
+import { briefDoneText, briefEstimateText, briefNowText, briefSubText } from './FeatureBriefModel';
 import { featureRunStatusTag } from './FeatureStatusTag';
 import { stageLabel } from './FeatureStatsBits';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
@@ -165,10 +166,10 @@ describe('FeatureBriefBlock: восемь kind', () => {
     expect(line.attributes['aria-live'], 'переход этапа зачитается').toBe('polite');
   });
 
-  it('подстрока «Сейчас» — «с ЧЧ:ММ · N мин» из now.since (макет «с какого времени · сколько длится»)', () => {
+  it('подстрока «Сейчас» в DOM равна выходу briefSubText (слова модели, R-F5)', () => {
     const b = brief({ kind: 'running', now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 58) } });
     const { c } = render({ brief: b, nameOf });
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-now-sub')!).join('')).toBe('с 13:58 · 12 мин');
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-now-sub')!).join('')).toBe(briefSubText(b, NOW));
   });
 
   it('running без now — строки «Сейчас» и подстроки нет (поля нет — строку не рисуем)', () => {
@@ -181,16 +182,23 @@ describe('FeatureBriefBlock: восемь kind', () => {
 // ── 2. «Сделано» и «Оценка» ──────────────────────────────────────────────────────────
 
 describe('«Сделано» и «Оценка»', () => {
-  it('«Сделано» — счётчики done как есть: «2 из 5 … · 1 виток правок»', () => {
-    const { c } = render({ brief: brief({ done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' } }) });
-    const all = textNodes(findNodeByAttr(c, 'data-testid', 'brief-done-line')!).join('');
-    expect(all).toContain('2 из 5 шагов приняты');
-    expect(all).toContain('1 виток правок');
+  it('«Сделано» в DOM равно выходу briefDoneText (слова модели, R-F5)', () => {
+    const b = brief({ done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' } });
+    const { c } = render({ brief: b });
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-done-line')!).join('')).toBe(briefDoneText(b.done).map(p => p.text).join(''));
   });
 
   it('loops = 0 — хвоста про витки нет', () => {
-    const { c } = render({ brief: brief({ done: { stepsAccepted: 5, stepsTotal: 5, loops: 0, planState: 'cut' } }) });
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-done-line')!).join('')).not.toContain('виток');
+    const b = brief({ done: { stepsAccepted: 5, stepsTotal: 5, loops: 0, planState: 'cut' } });
+    const { c } = render({ brief: b });
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-done-line')!).join('')).toBe(briefDoneText(b.done).map(p => p.text).join(''));
+  });
+
+  it('queued — «Оценка» карточки: строки модели («Оценка — после старта», «в очереди 25 мин»)', () => {
+    const b = brief({ kind: 'queued', elapsedMinutes: 25 });
+    const { c } = render({ brief: b });
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-main')!).join('')).toBe(briefEstimateText(b).main);
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'brief-estimate-fact')!).join('')).toBe(briefEstimateText(b).fact);
   });
 
   it('«Оценка»: «≈ … осталось» + «идёт N» из elapsedMinutes (макет run)', () => {
@@ -379,5 +387,11 @@ describe('Grep-сторож (инвариант 3: фронт не пересч�
     expect(/run\.state/.test(src), 'блок трогает поле состояния напрямую').toBe(false);
     expect(/\.stages/.test(src), 'блок трогает полосу стадий').toBe(false);
     expect(/stats\.timeline/.test(src), 'блок трогает таймлайн напрямую').toBe(false);
+  });
+
+  it('перенесённых слов в исходнике блока нет: формулировка живёт в модели (R-F5)', () => {
+    for (const w of ['шагов приняты', 'без вас фича стоит', 'исполнители не запускаются', 'фича закрыта', 'Оценки пока нет', 'Оценка — после старта']) {
+      expect(src.includes(w), `блок содержит «${w}»`).toBe(false);
+    }
   });
 });

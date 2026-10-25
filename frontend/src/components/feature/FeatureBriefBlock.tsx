@@ -9,21 +9,20 @@
 //
 // Состояния (макет §2–3): loading — скелетон с aria-busy; brief = null при живых статах —
 // «Сводка не загрузилась» + «Повторить», полоска остаётся; brief = null и статов нет —
-// блока нет; иначе — карточка состояния. Подстрока «Сейчас» (макет «с какого времени ·
-// сколько длится») собирается из now.since общими форматтерами; фактов вне контракта
-// не выдумываем.
+// блока нет; иначе — карточка состояния. Подстрока «Сейчас» и строка «Сделано» — тоже
+// строки модели (R-F5): блок только вызывает модель и красит mono-части моно.
 
 import type { CSSProperties, ReactNode } from 'react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { StatusTag, featureRunStatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import {
-  briefEstimateText, briefNextText, briefNowText, updatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
+  briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, updatedText, voiceRoleText, voiceStaleLabel, voiceWhenText,
   type PersonaNameResolver,
 } from './FeatureBriefModel';
 import { MiniTimeline, MiniTimelineAxis, SummaryRow } from './FeatureMiniSummary';
 import { FeatureBriefLegend } from './FeatureBriefLegend';
-import { buildTimelineModel, formatClock, formatDuration, minutesSince, stageLabel, type SegmentKind } from './FeatureStatsBits';
+import { buildTimelineModel, stageLabel, type SegmentKind } from './FeatureStatsBits';
 import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
 import type { FeatureStats } from '../../types/featureStats';
 
@@ -77,45 +76,6 @@ export function briefTag(brief: FeatureBrief, mergedAt: string | null): FeatureR
     case 'closed':
       return featureRunStatusTag(mergedAt ? 'merged' : 'closed');
   }
-}
-
-// ── Подстрока «Сейчас» ───────────────────────────────────────────────────────────────
-// Макет: «с какого времени · сколько длится». Только данные контракта (now.since) и общие
-// форматтеры (та же арифметика, что «N назад» в F2); статические части фраз макета, не
-// утверждающие фактов вне контракта. Нет since — подстроки нет.
-function briefSubText(brief: FeatureBrief, nowMs: number): string | null {
-  const since = brief.now?.since;
-  switch (brief.kind) {
-    case 'running': {
-      if (!since) return null;
-      const dur = minutesSince(since, nowMs);
-      return dur != null ? `с ${formatClock(since)} · ${formatDuration(dur)}` : `с ${formatClock(since)}`;
-    }
-    case 'waiting_you': {
-      if (!since) return null;
-      const dur = minutesSince(since, nowMs);
-      return dur != null ? `ждёт ${formatDuration(dur)} · без вас фича стоит` : 'без вас фича стоит';
-    }
-    case 'paused': {
-      if (!since) return null;
-      const dur = minutesSince(since, nowMs);
-      return dur != null ? `на паузе ${formatDuration(dur)} · исполнители не запускаются` : 'исполнители не запускаются';
-    }
-    case 'closed':
-      return 'фича закрыта';
-    default:
-      return null;
-  }
-}
-
-// «Сделано»: счётчики done как есть (макет: «2 из 5 шагов приняты · 1 виток правок»);
-// числа — mono 600 textHeading (дизайн-система). Разряда нет: «План готов» из макета —
-// формулировка состояния очереди, её здесь не выдумываем.
-function pluralRu(n: number, one: string, few: string, many: string): string {
-  const d = n % 10, h = n % 100;
-  if (d === 1 && h !== 11) return one;
-  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return few;
-  return many;
 }
 
 // ── Глифы состояний (16 px, макет §«Глифы»: цвета — токены) ──────────────────────────
@@ -330,7 +290,7 @@ export function FeatureBriefBlock({
     </div>
   );
 
-  const d = brief.done;
+  const doneParts = briefDoneText(brief.done);
   const mono: CSSProperties = { fontFamily: FONT.mono, fontWeight: 600, color: C.textHeading };
   const factLabel = (text: string) => <div style={LABEL}>{text}</div>;
   const factCell = (label: string, value: ReactNode) => (
@@ -387,14 +347,16 @@ export function FeatureBriefBlock({
       >
         {factCell('Сделано', (
           <div data-testid="brief-done-line" style={{ fontSize: FS.base, color: C.textPrimary }}>
-            <b style={mono}>{d.stepsAccepted} из {d.stepsTotal}</b> шагов приняты
-            {d.loops > 0 && <> · <b style={mono}>{d.loops}</b> {pluralRu(d.loops, 'виток', 'витка', 'витков')} правок</>}
+            {doneParts.map((p, i) => (p.mono
+              ? <b key={i} style={mono}>{p.text}</b>
+              : <span key={i}>{p.text}</span>))}
           </div>
         ))}
         {factCell('Дальше', nextText && <div data-testid="brief-next-line" style={{ fontSize: FS.base, color: C.textPrimary }}>{nextText}</div>)}
         {factCell(est.header, (
           <div>
-            <div data-testid="brief-estimate-main" style={{ fontSize: FS.base, color: C.textPrimary }}>{est.main}</div>
+            {/* mainMuted (queued): строка-обещание, не значение — приглушённый (макет queue). */}
+            <div data-testid="brief-estimate-main" style={{ fontSize: FS.base, color: est.mainMuted ? C.textMuted : C.textPrimary }}>{est.main}</div>
             {est.fact && <div data-testid="brief-estimate-fact" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{est.fact}</div>}
           </div>
         ))}

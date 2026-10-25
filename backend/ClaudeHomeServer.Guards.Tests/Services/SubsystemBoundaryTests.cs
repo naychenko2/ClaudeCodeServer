@@ -56,6 +56,8 @@ public class SubsystemBoundaryTests
     // своя сборка, и форс-референс нужен на каждую.
     static SubsystemBoundaryTests()
     {
+        // Главная сборка: вертикали, оставшиеся в Main (Power, Team, Auth…), без неё не видны в фильтрованном прогоне
+        _ = typeof(ClaudeHomeServer.Services.SessionManager).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Video.VideoSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Yandex.YandexSubsystem).Assembly;
         _ = typeof(ClaudeHomeServer.Services.Reader.ReaderService).Assembly;
@@ -1920,6 +1922,10 @@ public class SubsystemBoundaryTests
         "ClaudeHomeServer.Services.TeamProtocolMarkers",
         "ClaudeHomeServer.Services.ModelTier",
         "ClaudeHomeServer.Services.TranscriptRoots",
+        // Правила предгейта закрытия шага (NC-P1b): чистые функции без хранилища и git. Зовут их и
+        // вертикаль Tasks (TaskManager), и корневой TaskPregateService, а ссылка Main → Tasks
+        // обратной дороги не имеет, поэтому тип живёт в спине; namespace корневой, как у TranscriptRoots.
+        "ClaudeHomeServer.Services.PregateRules",
         "ClaudeHomeServer.Services.TextPathMentions",
         "ClaudeHomeServer.Services.AttachmentsGitExclude",
         "ClaudeHomeServer.Services.SnapshotIdGenerator",

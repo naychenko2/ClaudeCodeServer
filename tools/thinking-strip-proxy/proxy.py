@@ -420,13 +420,41 @@ def _хеш(значение):
     return hashlib.sha256(json.dumps(значение, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
+def _размер(значение):
+    """Размер в символах канонического JSON — мерка «сколько места занимает», без содержимого."""
+    return len(json.dumps(значение, ensure_ascii=False, sort_keys=True))
+
+
+def _состав(m):
+    """Что за сообщение, без текста: роль, виды блоков (имя инструмента у tool_use), размер.
+    Пример: «user 180K [tool_result, text]», «assistant 2K [tool_use Read]»."""
+    if not isinstance(m, dict):
+        return f"? {_размер(m) // 1000}K"
+    content = m.get("content")
+    виды = []
+    if isinstance(content, list):
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            t = b.get("type") or "?"
+            if t == "tool_use" and b.get("name"):
+                t = f"tool_use {b['name']}"
+            if t not in виды:
+                виды.append(t)
+    elif isinstance(content, str):
+        виды = ["text"]
+    return f"{m.get('role', '?')} {_размер(m) // 1000}K [{', '.join(виды)}]"
+
+
 def fingerprint(doc):
     """Отпечаток тела ПОСЛЕ правок прокси: системная часть (model + system + tools) и хеш каждого
     сообщения. Сравнение соседних отпечатков одной сессии говорит, где разошёлся префикс, не
-    храня самих тел."""
+    храня самих тел. Рядом — размеры (символы) и состав: чем набит контекст после расхождения."""
     msgs = doc.get("messages") if isinstance(doc.get("messages"), list) else []
     return {"system": _хеш([doc.get("model"), doc.get("system"), doc.get("tools")]),
-            "msgs": [_хеш(m) for m in msgs]}
+            "system_chars": (_размер(doc.get("system")), _размер(doc.get("tools"))),
+            "msgs": [_хеш(m) for m in msgs],
+            "состав": [_состав(m) for m in msgs]}
 
 
 def miss_verdict(прошлый, отпечаток, чтение, промпт):
@@ -448,6 +476,14 @@ def miss_verdict(прошлый, отпечаток, чтение, промпт)
     else:
         части.append(f"история разошлась на сообщении {общих + 1} из {len(b)} "
                      f"(в прошлом {len(a)}, совпали первые {общих})")
+        состав = отпечаток.get("состав") or []
+        хвост = состав[общих:общих + 6]
+        if хвост:
+            части.append("состав после расхождения: " + "; ".join(f"#{общих + 1 + i} {x}" for i, x in enumerate(хвост))
+                         + (f"; … ещё {len(состав) - общих - 6}" if len(состав) - общих > 6 else ""))
+    sc = отпечаток.get("system_chars")
+    if sc:
+        части.append(f"системная часть {sc[0] // 1000}K симв + tools {sc[1] // 1000}K")
     if прошлый.get("prompt"):
         части.append(f"промпт {прошлый['prompt']}→{промпт}")
     return "; ".join(части)

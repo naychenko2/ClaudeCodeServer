@@ -5,20 +5,30 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
-// Секция «Потребители файлов из постановки» хвостом первого хода исполнителя задачи — без хука.
+// Секция «Контракты файлов из постановки» хвостом первого хода исполнителя задачи — без хука.
 // Хук PreToolUse (ClaudeRuntimeSettings) по построению не работает у container-владельцев и на
 // Windows-хосте и не видит правок через Bash; здесь сервер сам берёт файлы, названные в тексте
-// первого хода, и спрашивает граф тем же режимом «по файлу» (NeighborsByFileAsync).
+// первого хода, и отдаёт на каждый три подраздела: Зависимости (исходящие Calls|References с
+// «файл:строка» объявления, а у TS-узлов — только «файл»: строку отдаёт провайдер, DependenciesByFileAsync), Сторожа по пути (ContractGuardMap) и
+// Потребители (входящие, NeighborsByFileAsync). Модель узкого контекста граф сама не спрашивает —
+// контракт соседнего слоя должен приходить сам.
 //
 // Секция идёт по ВСЕМ владельцам, в том числе там, где хук работает (local на Linux): правка через
-// Bash (printf >> file) хук Edit|Write не видит. Дубль «хук + хвост» принят: ≤ 20 строк на файл (до 3 файлов — ≤ 61 строки
-// на секцию: заголовок плюс 3 блока по 20), один раз на первом ходе, только файлы постановки; срабатывают они в разные моменты.
-// Агент ничего не спрашивает; нет графа, файл вне графа, ответ дольше 3 с, сбой — молчание.
+// Bash (printf >> file) хук Edit|Write не видит. Потолки: ≤ 20 строк на подраздел, ≤ 3 файла, ≤ 120 строк
+// на секцию, ≤ 10 строк на «Сторожа по пути»; при превышении «ещё N», при тесноте секции режутся сначала
+// зависимости, затем потребители, сторожа — никогда (их потолок держит тест на таблицу).
+// Один раз на первом ходе, только файлы постановки. Агент ничего не спрашивает;
+// нет графа, файл вне графа, ответ дольше 3 с, сбой — молчание.
 // Секция едет InTurnTail: нестабильный текст не должен попадать в системный блок.
 public sealed class ConsumersTailContributor : IPromptSectionContributor
 {
-    public const string SectionKey = "consumers-tail";
+    public const string SectionKey = "contracts-tail";
     internal const int LineLimit = 20;
+    internal const int SectionLineLimit = 120;
+    // Потолок подраздела «Сторожа по пути»: заголовок + строки таблицы; сверх — «ещё N»
+    internal const int GuardLineLimit = 10;
+    // Меньше двух строк подраздел не ужимается: заголовок и «ещё N»
+    private const int MinSubsectionLines = 2;
     internal const int MaxFiles = 3;
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(3);
 
@@ -42,6 +52,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     private readonly ILogger<ConsumersTailContributor> _log;
     private readonly TimeSpan _timeout;
     private readonly Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>> _neighbors;
+    private readonly Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>> _dependencies;
 
     public ConsumersTailContributor(CodeGraphService graphs, CodeGraphQueryService queries,
         IPersonaServerToolGate toolGate, ILogger<ConsumersTailContributor> log, TimeSpan? timeout = null)
@@ -52,7 +63,8 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
     // Шов для тестов: источник ответа графа подменяется, чтобы проверять потолок без гонок с таймером
     internal ConsumersTailContributor(CodeGraphService graphs, CodeGraphQueryService queries,
         IPersonaServerToolGate toolGate, ILogger<ConsumersTailContributor> log, TimeSpan? timeout,
-        Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? neighbors)
+        Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? neighbors,
+        Func<string, string, CancellationToken, Task<CodeGraphNeighborsOutcome>>? dependencies = null)
     {
         _timeout = timeout ?? DefaultTimeout;
         _graphs = graphs;
@@ -60,10 +72,12 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         _log = log;
         _neighbors = neighbors
             ?? ((root, file, ct) => queries.NeighborsByFileAsync(root, file, CodeGraphQueryService.MaxLimit, ct));
+        _dependencies = dependencies
+            ?? ((root, file, ct) => queries.DependenciesByFileAsync(root, file, CodeGraphQueryService.MaxLimit, ct));
     }
 
     public string Key => SectionKey;
-    public string Title => "Потребители файлов задачи";
+    public string Title => "Контракты файлов задачи";
     public int Order => 620;
     public string Group => "project";
 
@@ -92,7 +106,7 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         catch (Exception ex)
         {
             // молчание: секция не должна ни ронять, ни тормозить ход
-            _log.LogDebug(ex, "Потребители файлов задачи не получены");
+            _log.LogDebug(ex, "Контракты файлов задачи не получены");
             return null;
         }
         finally
@@ -110,33 +124,100 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         {
             var files = ExtractFiles(turnText, root, ct);
             if (files.Count == 0) return null;
-            var blocks = new List<string>();
+            var parts = new List<FileContract>();
             foreach (var file in files)
             {
-                var (result, note) = await QueryAsync(file, root, mainRoot, ct);
-                if (result is { Total: > 0 } && Render(file, result, note) is { } block) blocks.Add(block);
+                var contract = await QueryAsync(file, root, mainRoot, turnText, ct);
+                if (contract is not null) parts.Add(contract);
             }
-            return blocks.Count == 0
+            return parts.Count == 0
                 ? null
-                : "## Потребители файлов из постановки (по графу кода)\n" + string.Join("\n\n", blocks);
+                : "## Контракты файлов из постановки (по графу кода)\n" + Compose(parts);
         }
         // Покинутая после потолка задача завершается отменой: её никто не ждёт, исключение не должно оставаться ненаблюдаемым
         catch (OperationCanceledException) { return null; }
     }
 
-    private async Task<(CodeGraphNeighborsResultDto? Result, string? Note)> QueryAsync(
-        string file, string root, string? mainRoot, CancellationToken ct)
-    {
-        var outcome = await _neighbors(root, file, ct);
-        if (outcome.HasGraph) return (outcome.Result, null);
+    // Что граф знает про один файл постановки; null — файла нет в графе (или графа нет): молчание
+    private sealed record FileContract(
+        string File, string? Note, CodeGraphNeighborsResultDto? Consumers, CodeGraphNeighborsResultDto? Dependencies);
 
-        // Граф дерева ещё не построен: просим постройку и пока отвечаем по основному дереву с пометкой
-        _graphs.StartRebuildIfIdle(root);
-        if (string.IsNullOrWhiteSpace(mainRoot)
-            || PathNormalizer.NormalizePath(mainRoot) == PathNormalizer.NormalizePath(root))
-            return (null, null);
-        var fallback = await _neighbors(mainRoot, file, ct);
-        return fallback.HasGraph ? (fallback.Result, BuildingNote) : (null, null);
+    private async Task<FileContract?> QueryAsync(
+        string file, string root, string? mainRoot, string turnText, CancellationToken ct)
+    {
+        var usedRoot = root;
+        string? note = null;
+        var outcome = await _neighbors(root, file, ct);
+        if (!outcome.HasGraph)
+        {
+            // Граф дерева ещё не построен: просим постройку и пока отвечаем по основному дереву с пометкой
+            _graphs.StartRebuildIfIdle(root);
+            if (string.IsNullOrWhiteSpace(mainRoot)
+                || PathNormalizer.NormalizePath(mainRoot) == PathNormalizer.NormalizePath(root))
+                return null;
+            outcome = await _neighbors(mainRoot, file, ct);
+            if (!outcome.HasGraph) return null;
+            usedRoot = mainRoot;
+            note = BuildingNote;
+        }
+        var dependencies = await _dependencies(usedRoot, file, ct);
+        var deps = dependencies.HasGraph ? dependencies.Result : null;
+        // Файл вне графа (оба режима без результата) — молчим; сторожа по пути одни, без графа, секцию не заводят
+        if (outcome.Result is null && deps is null) return null;
+        return new FileContract(file, note, outcome.Result, deps is null ? null : WithMentionedFirst(deps, turnText));
+    }
+
+    // Символы, названные в тексте постановки, идут первыми: задача правит или вызывает именно их
+    private static CodeGraphNeighborsResultDto WithMentionedFirst(CodeGraphNeighborsResultDto result, string turnText)
+    {
+        bool Mentioned(CodeGraphNeighborDto n)
+        {
+            var cut = Math.Max(n.Fqn.LastIndexOf('.'), n.Fqn.LastIndexOf(':'));
+            var name = cut >= 0 ? n.Fqn[(cut + 1)..] : n.Fqn;
+            return name.Length > 2 && Regex.IsMatch(turnText, $@"(?<![\w]){Regex.Escape(name)}(?![\w])");
+        }
+        return new CodeGraphNeighborsResultDto
+        {
+            Node = result.Node,
+            Neighbors = result.Neighbors.OrderByDescending(Mentioned).ToList(),
+            Total = result.Total,
+            TotalIn = result.TotalIn,
+            TotalOut = result.TotalOut,
+            ByRelation = result.ByRelation,
+            IsStale = result.IsStale,
+        };
+    }
+
+    // Блоки файлов склеиваются пустой строкой. Потолок секции: сперва ужимаются зависимости (их модель
+    // может добрать Read-ом), затем потребители; сторожа не ужимаются никогда
+    private static string Compose(List<FileContract> parts)
+    {
+        var depCaps = parts.Select(_ => LineLimit).ToArray();
+        var consCaps = parts.Select(_ => LineLimit).ToArray();
+        string[] Blocks() => parts.Select((p, i) => RenderFile(p, depCaps[i], consCaps[i])).ToArray();
+        // +1 — заголовок секции, плюс по пустой строке между блоками
+        int Total(string[] blocks) => 1 + blocks.Sum(b => b.Split('\n').Length) + (blocks.Length - 1);
+
+        var blocks = Blocks();
+        foreach (var caps in new[] { depCaps, consCaps })
+        {
+            for (var i = parts.Count - 1; i >= 0 && Total(blocks) > SectionLineLimit; i--)
+            {
+                caps[i] = MinSubsectionLines;
+                blocks = Blocks();
+            }
+        }
+        return string.Join("\n\n", blocks);
+    }
+
+    private static string RenderFile(FileContract p, int depLines, int consLines)
+    {
+        var lines = new List<string>();
+        if (p.Note is not null) lines.Add(p.Note);
+        if (p.Dependencies is { Total: > 0 } deps && RenderDependencies(p.File, deps, depLines) is { } d) lines.Add(d);
+        if (RenderGuards(p.File) is { } g) lines.Add(g);
+        if (p.Consumers is { Total: > 0 } cons && Render(p.File, cons, null, consLines) is { } c) lines.Add(c);
+        return string.Join('\n', lines);
     }
 
     // Файлы постановки, существующие в дереве: путь от корня дерева, без «..», не больше MaxFiles.
@@ -236,8 +317,9 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         return Regex.IsMatch(parts[^1], @"(Tests?\.cs|\.(test|spec)\.[jt]sx?)$");
     }
 
-    // Тот же вид и те же потолки, что у хука: ≤ 20 строк, тесты вперёд (до 4), дальше «ещё N»
-    internal static string? Render(string file, CodeGraphNeighborsResultDto result, string? note)
+    // Тот же вид и те же потолки, что у хука: ≤ maxLines строк, тесты вперёд (до 4), дальше «ещё N»
+    internal static string? Render(
+        string file, CodeGraphNeighborsResultDto result, string? note, int maxLines = LineLimit)
     {
         var total = result.Total > 0 ? result.Total : result.Neighbors.Count;
         if (total <= 0) return null;
@@ -248,11 +330,35 @@ public sealed class ConsumersTailContributor : IPromptSectionContributor
         var lines = new List<string>();
         if (note is not null) lines.Add(note);
         lines.Add($"Потребители {file} (файлов: {total}, тестов среди них: {tests.Count}):");
-        var room = LineLimit - lines.Count;
-        var show = ordered.Take(total <= room ? room : room - 1).ToList();
+        var room = Math.Max(maxLines - lines.Count, 0);
+        var show = ordered.Take(total <= room ? room : Math.Max(room - 1, 0)).ToList();
         foreach (var (path, relation) in show)
             lines.Add($"- {path}{(IsTest(path) ? " [тест]" : "")} ({relation})");
         if (total - show.Count > 0) lines.Add($"ещё {total - show.Count}");
-        return string.Join('\n', lines.Take(LineLimit));
+        return string.Join('\n', lines.Take(Math.Max(maxLines, MinSubsectionLines)));
+    }
+
+    // Исходящие связи файла: строка «Fqn — файл[:строка] объявления (отношение)», названные в постановке — первыми
+    internal static string? RenderDependencies(string file, CodeGraphNeighborsResultDto result, int maxLines = LineLimit)
+    {
+        var total = result.Total > 0 ? result.Total : result.Neighbors.Count;
+        if (total <= 0) return null;
+        var lines = new List<string> { $"Зависимости {file} (что вызывает и на что ссылается, объявление — файл:строка, у TS только файл; символов: {total}):" };
+        var room = Math.Max(maxLines - 1, 0);
+        var show = result.Neighbors.Take(total <= room ? room : Math.Max(room - 1, 0)).ToList();
+        foreach (var n in show) lines.Add($"- {n.Fqn} — {n.Location} ({n.Relation})");
+        if (total - show.Count > 0) lines.Add($"ещё {total - show.Count}");
+        return string.Join('\n', lines.Take(Math.Max(maxLines, MinSubsectionLines)));
+    }
+
+    // Сторожа по пути файла — таблица ContractGuardMap; сжатием секции не режутся, свой потолок — GuardLineLimit
+    internal static string? RenderGuards(string file, int maxLines = GuardLineLimit)
+    {
+        var guards = ContractGuardMap.For(file);
+        if (guards.Count == 0) return null;
+        var room = maxLines - 1;
+        var shown = guards.Take(Math.Max(guards.Count <= room ? room : room - 1, 0)).Select(g => $"- {g.Prefix} → {g.Guard.Title}").ToList();
+        if (guards.Count > shown.Count) shown.Add($"ещё {guards.Count - shown.Count}");
+        return $"Сторожа по пути {file} (краснеют при нарушении контракта слоя):\n" + string.Join('\n', shown);
     }
 }

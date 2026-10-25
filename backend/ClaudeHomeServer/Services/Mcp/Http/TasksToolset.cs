@@ -189,6 +189,13 @@ public sealed class TasksToolset(
                 if (modelTier.Length > 0 && !ModelTiers.IsValidWireValue(modelTier))
                     return Deny(ModelTiers.WireError);
 
+                // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding; текст
+                // отказа общий с REST)
+                if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
+                        context.OwnerId, session.Id, FeatureChatDoor.CreateTarget(
+                            OptionalArg(arguments, "featureId"), OptionalArg(arguments, "role"))) is { } bound)
+                    return Deny(bound);
+
                 // Целевой проект: по умолчанию текущий; явный projectId, отличный от
                 // текущего, требует полной (не readonly) привязки
                 var targetProjectId = OptionalArg(arguments, "projectId") ?? projectId;
@@ -289,6 +296,13 @@ public sealed class TasksToolset(
                     return Deny($"Задача {id} не найдена.");
                 var denied = TaskDenied(projectId, allowed, existing);
                 if (denied is not null) return Deny(denied);
+
+                // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+                if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
+                        context.OwnerId, session.Id, FeatureChatDoor.UpdateTarget(existing,
+                            arguments.ContainsKey("featureId") ? StringArg(arguments, "featureId") : null,
+                            arguments.ContainsKey("role") ? StringArg(arguments, "role") : null)) is { } bound)
+                    return Deny(bound);
 
                 // Целевой проект для валидации колонки/персоны: текущий, либо новый из projectId
                 string? targetProjectId = existing.ProjectId;
@@ -392,6 +406,8 @@ public sealed class TasksToolset(
                     // исполнителю менять критерии — в TaskManager.Update (здесь только разбор)
                     Acceptance: AcceptanceArg(arguments),
                     Evidence: EvidenceArg(arguments),
+                    // Сброс серии красных предгейта: решает постановщик, исполнителю TaskManager откажет
+                    ResetPregate: arguments["resetPregate"] is JsonValue rp && rp.TryGetValue<bool>(out var reset) && reset ? true : null,
                     PlanSteps: planSteps);
                 TaskItem updated;
                 try
@@ -534,6 +550,13 @@ public sealed class TasksToolset(
                 {
                     DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
                     return Deny(scopeDenied);
+                }
+                // Чат, ведущий фичу, не запускает исполнителя задачи чужой фичи
+                if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
+                        context.OwnerId, session.Id, FeatureChatDoor.TargetFeature(task)) is { } chatBound)
+                {
+                    DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
+                    return Deny(chatBound);
                 }
                 try
                 {
@@ -1313,6 +1336,12 @@ public sealed class TasksToolset(
                     ["reviewOf"] = ReviewOfSchema(),
                     ["acceptance"] = AcceptanceSchema(),
                     ["evidence"] = EvidenceSchema(),
+                    ["resetPregate"] = new JsonObject
+                    {
+                        ["type"] = "boolean",
+                        ["description"] = "true — сбросить результат предгейта шага (серия красных начинается заново). "
+                            + "Только после исчерпанной серии (два красных подряд) — иначе отказ; это решение постановщика, исполнитель своей задачи получит отказ.",
+                    },
                     ["planSteps"] = PlanStepsSchema(),
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),

@@ -790,6 +790,8 @@ builder.Services.AddSingleton<ITaskNotificationDispatcher>(sp => sp.GetRequiredS
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Запуск предгейта шага (NC-P1b): шов ITaskPregate опционален — вертикаль TestRuns отключаемая
+builder.Services.AddSingleton<TaskPregateService>();
 builder.Services.AddSingleton<ReviewTreePool>();
 // ProjectTreeLocator (шаг B1b фичы «Резолвинг ссылок по worktree»): единая точка резолвинга
 // относительных путей по деревьям проекта. Git — параметр с дефолтом: при выключенной

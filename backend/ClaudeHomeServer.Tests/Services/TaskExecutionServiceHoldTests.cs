@@ -4,6 +4,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Knowledge;
@@ -26,6 +27,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public class TaskExecutionServiceHoldTests : IDisposable
 {
     private readonly string _dir;
+    private readonly FeatureJournalStore _journal;
     private readonly TaskManager _tasks;
     private readonly NotificationStore _notifStore;
     private readonly TaskExecutionService _sut;
@@ -59,7 +61,10 @@ public class TaskExecutionServiceHoldTests : IDisposable
         var projectManager = new ProjectManager(config, userStore, appSettings);
         var personas = new PersonaManager(config);
         _personas = personas;
-        _tasks = new TaskManager(config, personas: personas);
+        // Журнал фич включён в фикстуру (R-Q3B-3): тест среднего звена читает настоящий
+        // hold_cleared, который прод-TaskExecutionService пишет через ClearHold в журнал.
+        _journal = new FeatureJournalStore(Path.Combine(_dir, "feature-journal"));
+        _tasks = new TaskManager(config, personas: personas, journal: _journal);
 
         var broadcaster = new TestSessionBroadcaster();
 
@@ -741,6 +746,30 @@ public class TaskExecutionServiceHoldTests : IDisposable
 
         release.Outcome.Should().Be(FeatureHoldReleaseOutcome.Released);
         _tasks.GetById(epic.Id)!.Hold.Should().BeNull("битую паузу можно снять кнопкой");
+    }
+
+    // R-Q3B-3 (хвост MAJOR-1 из RV-K-Q3B-1): среднее звено боевой цепочки
+    // FeatureQueueService.cs:156 → TaskExecutionService.cs:1358 → TaskManager.ClearHold → журнал.
+    // Тест в FeatureQueueServiceTests закрывает только первое звено: там снятие идёт через
+    // RecordingReleaser — тестовую реализацию шва, которая сама пересылает by в ClearHold.
+    // Здесь настоящий TaskExecutionService и настоящий FeatureJournalStore: вызов с by=queue
+    // обязан оставить в журнале hold_cleared с by. Мутация: TaskExecutionService.cs:1358 →
+    // _tasks.ClearHold(featureId) — последний By краснеет.
+    [Fact]
+    public async Task ReleaseFeatureHold_ByQueue_JournalWritesHoldClearedWithBy()
+    {
+        var user = _userStore.Add("hold-by-queue", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича в очереди", Role: "feature"));
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Queue);
+
+        var release = await _sut.ReleaseFeatureHold(epic.Id, user.Id, _tasks.GetById(epic.Id)!.Hold,
+            FeatureHoldBy.Queue);
+
+        release.Outcome.Should().Be(FeatureHoldReleaseOutcome.Released);
+        var cleared = _journal.Read(user.Id, epic.Id).Entries.Single(e => e.Kind == "hold_cleared");
+        cleared.Reason.Should().Be(FeatureHoldReasons.Queue);
+        cleared.By.Should().Be(FeatureHoldBy.Queue,
+            "без by на среднем звене журнал теряет «запущено из очереди», totals.queued не считается");
     }
 
     // R-HOLD-D (п.3, критерий c3): согласование числительных со «шаг» — то же правило, что

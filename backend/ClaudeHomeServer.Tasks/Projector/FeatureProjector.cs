@@ -838,6 +838,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         Interrupted = run.Interrupted,
         State = run.State,
         Attention = run.Attention,
+        Queue = run.Queue,
         StepsAccepted = run.StepsAccepted,
         StepsTotal = run.StepsTotal,
         StepProgress = run.StepProgress,
@@ -1155,7 +1156,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : Build(epic, FeatureTasks(epic, owner));
+        return epic is null ? null : WithQueue(Build(epic, FeatureTasks(epic, owner)), owner);
     }
 
     // Одна фича по id эпика — ПОЛНЫЙ (необлегчённый) run: для страницы фичи (GetFeature).
@@ -1170,7 +1171,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver);
+        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver), owner);
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
@@ -1182,10 +1183,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
-        return owner
+        var runs = owner
             .Where(t => t.Role == TaskRoles.Feature)
             .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
             .ToList();
+        ApplyQueue(runs, owner);
+        return runs;
     }
 
     // Фичи чата (REST ?sessionId=): правило членства ЕДИНОЕ — FeatureChatMembership (W4-CHT-B,
@@ -1209,6 +1212,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             .Where(t => t.Role == TaskRoles.Feature && featureIds.Contains(t.Id))
             .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
             .ToList();
+        ApplyQueue(runs, owner);
         var ordered = OrderRuns(runs);
         // Фича, чья задача — TaskId чата, первой ВНУЗИ своего класса (открытые/закрытые),
         // не поверх класса (W4-CHT-B §2): закрытая «своя» фича не прыгает выше открытых.
@@ -1310,6 +1314,29 @@ public sealed class FeatureProjector(TaskManager tasks)
         return result;
     }
 
+    // Очередь фич (волна 6): место в очереди проекта проставляется после сборки run, когда виден
+    // весь набор. Очередь проекта может быть шире набора вызывающего (индекс чата, одна фича):
+    // недостающие фичи в очереди достраиваются из задач владельца — позиция не зависит от того,
+    // какую выборку показывают (иначе «вторая из трёх» расходилась бы с порядком, по которому
+    // очередь снимает следующую).
+    private static void ApplyQueue(IReadOnlyList<FeatureRun> runs, IReadOnlyList<TaskItem> owner)
+    {
+        if (!owner.Any(t => t.Role == TaskRoles.Feature && t.Hold?.Reason == FeatureHoldReasons.Queue)) return;
+        var known = runs.Select(r => r.FeatureId).ToHashSet(StringComparer.Ordinal);
+        var extra = owner
+            .Where(t => t.Role == TaskRoles.Feature && t.Hold?.Reason == FeatureHoldReasons.Queue && !known.Contains(t.Id))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner)));
+        var positions = FeatureQueuePolicy.Positions(runs.Concat(extra));
+        foreach (var run in runs)
+            run.Queue = positions.GetValueOrDefault(run.FeatureId);
+    }
+
+    private static FeatureRun WithQueue(FeatureRun run, IReadOnlyList<TaskItem> owner)
+    {
+        ApplyQueue([run], owner);
+        return run;
+    }
+
     // Эпик + все его дочерние (FeatureId == epic.Id) из уже отобранных задач владельца.
     private static List<TaskItem> FeatureTasks(TaskItem epic, IReadOnlyList<TaskItem> owner)
     {
@@ -1397,6 +1424,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var runs = survivingEpics
             .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now, sessions))
             .ToList();
+        ApplyQueue(runs, owner);
         var rows = OrderRuns(runs)
             .Select(run => BuildRow(run, FeatureTasks(run.Epic, byFeature), sessions,
                 ChatCount(map, run.FeatureId)))
@@ -1544,7 +1572,8 @@ public sealed class FeatureProjector(TaskManager tasks)
             run.StepProgress.UnlinkedReworks,
             run.Hold?.Reason,
             run.Hold?.Since,
-            run.Quiet);
+            run.Quiet,
+            run.Queue);
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки
@@ -1598,6 +1627,27 @@ public sealed class FeatureProjector(TaskManager tasks)
     // закрыты, подготовка разрешена (R-HOLD-G2 находка 2).
     public static bool IsPaused(TaskItem epic) =>
         epic.Hold is not null && epic.Hold.Reason is FeatureHoldReasons.Manual or FeatureHoldReasons.Queue;
+
+    // «Занимает ли фича слот очереди» (волна 6, разрез §1) — ЕДИНСТВЕННОЕ выражение правила. Явная
+    // ветка на каждое значение FeatureStates (тест перечисляет константы): новое состояние без
+    // решения здесь не пройдёт. Уступают слот закончившиеся фичи, мерж (merge_pending/merging —
+    // решение 19.10 п. 5), пауза и черновик; stopped/waiting держат слот (ответ человека иначе
+    // поднял бы лишнюю фичу). Неизвестное значение занимает слот (fail-closed).
+    public static bool OccupiesSlot(FeatureRun run) => run.State switch
+    {
+        FeatureStates.Merged => false,
+        FeatureStates.Closed => false,
+        FeatureStates.MergePending => false,
+        FeatureStates.Merging => false,
+        FeatureStates.Paused => false,
+        FeatureStates.Draft => false,
+        FeatureStates.Stopped => true,
+        FeatureStates.Waiting => true,
+        FeatureStates.Running => true,
+        FeatureStates.Idle => true,
+        FeatureStates.NotStarted => true,
+        _ => true,
+    };
 
     // «Черновик»: любое удержание, не пауза — включая причину вне словаря (фоллбэк). Гейт для
     // такого Hold ведёт себя идентично: пропускает только роли подготовки (HoldPrepRoles).

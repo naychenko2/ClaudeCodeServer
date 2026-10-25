@@ -581,6 +581,7 @@ public class FeatureStepProgressTests
         // FeatureHold (W4-HOLD-B1) — позиционная запись без конструктора без параметров:
         // образец собирается явно, дальше тест сверяет, что SlimRun перенёс его по ссылке.
         if (t == typeof(FeatureHold)) return new FeatureHold("sentinel-" + name, new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc), "chat-s", true);
+        if (t == typeof(FeatureQueueInfo)) return new FeatureQueueInfo(2, 3);
         return Activator.CreateInstance(t)
             ?? throw new InvalidOperationException($"Не удалось собрать образец для {name}: {type}");
     }

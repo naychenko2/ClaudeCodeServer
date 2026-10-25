@@ -16,6 +16,7 @@ import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { C, R, FS, SP } from '../../lib/design';
 import { FeatureStatsLosses } from './FeatureStatsLosses';
+import { formatTokens } from './FeatureStatsFormat';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun, FeatureStage, FeatureStepChain } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
@@ -314,6 +315,7 @@ describe('карточка 3 (к1)', () => {
     expect(text).toContain('ST-F6 · 1 ч 30 мин');
     expect(text).toContain('Кира');
     expect(text).toContain('42 %');
+    expect(text, 'токены карточки').toContain(formatTokens(1200));
     expect(text, 'доля записана долей, а не процентом').not.toContain('0.42');
   });
 

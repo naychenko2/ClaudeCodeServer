@@ -629,7 +629,7 @@ function MoreDetails({ totals, spend, source, isMobile }: {
     rows.push(`ошибки: ${totals.errorCount} эпизодов`);
   }
   if (spend) {
-    // Кэш — отдельной строкой (в «Расход» плитки он не входит, там только вход+выход).
+    // Кэш — отдельной строкой подробно; в итог плитки «Расход» он тоже входит (tilesModel).
     const cache = spend.cacheReadTokens + spend.cacheCreationTokens;
     if (cache > 0) {
       rows.push(`кэш: ${formatTokens(spend.cacheReadTokens)} чтение · ${formatTokens(spend.cacheCreationTokens)} создание`);

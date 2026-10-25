@@ -4,7 +4,7 @@
 // Ничего не пересчитываем: минуты — только из minutesSince (FeatureStatsBits).
 // run.now пуст или фича merged/closed — блока нет (компонент возвращает null,
 // как в макете: `D.now && D.now.length && D.key !== 'merged'`).
-// Токены — только C.*/FS/SP/R; тач-цель переходов на 360 ≥ 40 даёт NavTargetButton.
+// Токены — только C.*/FS/SP/R; тач-цель переходов на 360 (44) даёт NavTargetButton.
 
 import { type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';

@@ -12,6 +12,7 @@ import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { ICON_SIZE } from '../ui/icons';
 import { plural } from '../../lib/plural';
 import { formatDuration } from './FeatureStatsBits';
+import { formatTokens } from './FeatureStatsFormat';
 import { lossesModel, type LossCard, type RoundMark } from './FeatureStatsPulseModel';
 import { setFeaturePageTab, focusFeatureStage } from '../../lib/featurePage';
 import { usePersonas } from '../../lib/personas';
@@ -156,7 +157,7 @@ function cardText(card: LossCard, personas: ReturnType<typeof usePersonas>): { b
       const share = shareText(card.share);
       return {
         big: `${card.stepRef ? `${card.stepRef} · ` : ''}${formatDuration(card.minutes)}`,
-        ctx: `${personName(card.personaId, personas)}${share ? ` · ${share} расхода фичи` : ' · доля расхода не считалась'}`,
+        ctx: `${personName(card.personaId, personas)}${card.tokens != null ? ` · ${formatTokens(card.tokens)}` : ''}${share ? ` · ${share} расхода фичи` : ' · доля расхода не считалась'}`,
       };
     }
     case 'stage': {

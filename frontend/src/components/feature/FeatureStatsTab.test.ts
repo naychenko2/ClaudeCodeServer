@@ -15,7 +15,7 @@
 import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FeatureStatsTab } from './FeatureStatsTab';
+import { FeatureStatsTab, MORE_OPEN_KEY } from './FeatureStatsTab';
 import {
   formatDuration, formatClock, formatDateTime, kindLabel, kindBackground,
   buildTimelineModel, nowFraction, nowCompressedFraction, PAUSE_BREAK_MIN,
@@ -1073,6 +1073,7 @@ describe('roleGroupLabel', () => {
     expect(roleGroupLabel('cut')).toBe('разрез');
     expect(roleGroupLabel('plan')).toBe('план');
     expect(roleGroupLabel('rework')).toBe('доработка');
+    expect(roleGroupLabel('feature')).toBe('координация фичи');
     expect(roleGroupLabel('consult')).toBe('консультация');
     // 'step' без stepRef/lane → roleLabel пуст → «шаг» (не сырой 'step').
     expect(roleGroupLabel('step')).toBe('шаг');
@@ -1232,7 +1233,7 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
       act(() => {
         (reactProps(more)!.onToggle as (e: unknown) => void)({ currentTarget: { open: true } });
       });
-      expect(store.get('featureStats.moreOpen')).toBe('1');
+      expect(store.get(MORE_OPEN_KEY)).toBe('1');
       // новый заход: раскрыто сразу
       const c2 = renderTab(mkFullStats());
       expect(reactProps(findNodeByAttr(c2, 'data-testid', 'stats-more')!)!.open).toBe(true);
@@ -1240,7 +1241,37 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
       act(() => {
         (reactProps(more2)!.onToggle as (e: unknown) => void)({ currentTarget: { open: false } });
       });
-      expect(store.get('featureStats.moreOpen')).toBe('0');
+      expect(store.get(MORE_OPEN_KEY)).toBe('0');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Гарды чтения: localStorage недоступен или в значении мусор — свёрнуто, без падения.
+  // Мутация: снять try/catch в readMoreOpen или сравнивать не строго — тест краснеет.
+  it('«Подробнее»: getItem бросает → свёрнуто без краша', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => { throw new Error('приватный режим'); },
+      setItem: () => { throw new Error('приватный режим'); },
+      removeItem: () => {},
+    });
+    try {
+      const c = renderTab(mkFullStats());
+      expect(reactProps(findNodeByAttr(c, 'data-testid', 'stats-more')!)!.open).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('«Подробнее»: мусор в значении («да») → свёрнуто', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k === MORE_OPEN_KEY ? 'да' : null),
+      setItem: () => {},
+      removeItem: () => {},
+    });
+    try {
+      const c = renderTab(mkFullStats());
+      expect(reactProps(findNodeByAttr(c, 'data-testid', 'stats-more')!)!.open).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }

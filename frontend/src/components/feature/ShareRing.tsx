@@ -18,7 +18,8 @@
 //
 // Контракт costPartial: центр показывает сумму только по группам с надёжной ценой
 // (null-цены в сумму не входят). Что цена известна лишь по части моделей, говорит
-// не кольцо, а оболочка (ST-F13): плашка «цена по части моделей недоступна».
+// не кольцо, а оболочка (ST-F13): плашка «цена по части моделей недоступна»; кольцу
+// признак нужен лишь затем, чтобы не утверждать «все модели локальные».
 
 import { type CSSProperties } from 'react';
 import { C, FS, SP, FONT } from '../../lib/design';
@@ -34,7 +35,7 @@ import type { FeatureBreakdownGroup } from '../../types/featureStats';
 const ARC_GAP = 3;
 
 // Мера в aria-label: «доли по времени», «доли по токенам», «доли по деньгам».
-const MEASURE_WORD: Record<Measure, string> = { time: 'времени', tokens: 'токенам', cost: 'деньгам' };
+const MEASURE_WORD_ARIA: Record<Measure, string> = { time: 'времени', tokens: 'токенам', cost: 'деньгам' };
 
 export interface ShareRingProps {
   groups: FeatureBreakdownGroup[];
@@ -50,9 +51,11 @@ export interface ShareRingProps {
   colorOf?: (key: string) => string;
   // Название разреза для второй строки центра («персоны суммарно · …», макет :298).
   axisLabel?: string;
+  // Цена известна только по части моделей: «бесплатно» тогда не значит «все локальные».
+  costPartial?: boolean;
 }
 
-export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisLabel }: ShareRingProps) {
+export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisLabel, costPartial }: ShareRingProps) {
   if (groups.length < 2) return null;
 
   // Фолбэк на время — только когда у меры нет данных ни у одной группы (null у
@@ -116,13 +119,14 @@ export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisL
     ? 'нет учёта'
     : formatMoney({ key: '', minutes: 0, tokens: totalTokens, costUsd: totalCost, chatIds: [] });
   const free = effMeasure === 'cost' && total === 0 && totalTokens > 0;
+  const allLocal = free && !costPartial;
   const bigText = noData ? 'нет данных' :
     effMeasure === 'time'
       ? formatDuration(raw.reduce((a, b) => a + b, 0))
       : effMeasure === 'tokens'
         ? formatTokens(raw.reduce((a, b) => a + b, 0))
         : moneyText;
-  const smallText = noData ? '' : free ? 'все модели локальные' : axisLabel
+  const smallText = noData ? '' : allLocal ? 'все модели локальные' : axisLabel
     ? `${axisLabel} суммарно${effMeasure === 'cost' || totalCost == null ? '' : ' · ' + moneyText}`
     : effMeasure === 'cost' ? '' : moneyText;
 
@@ -130,7 +134,9 @@ export function ShareRing({ groups, measure, size = 140, labelOf, colorOf, axisL
     <div data-testid="share-ring" style={{ position: 'relative', width: size, height: size }}>
       <svg
         role="img"
-        aria-label={`Доли по ${MEASURE_WORD[effMeasure]}: ${sorted.map((g, i) => `${labelOf ? labelOf(g.key) : g.key} — ${percentText(shares[i])}`).join(', ')}`}
+        aria-label={noData
+          ? `Доли по ${MEASURE_WORD_ARIA[effMeasure]}: нет данных`
+          : `Доли по ${MEASURE_WORD_ARIA[effMeasure]}: ${sorted.map((g, i) => `${labelOf ? labelOf(g.key) : g.key} — ${percentText(shares[i])}`).join(', ')}`}
         style={{ transform: 'rotate(-90deg)' }}
         width={size}
         height={size}

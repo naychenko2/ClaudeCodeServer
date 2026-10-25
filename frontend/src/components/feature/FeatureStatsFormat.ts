@@ -36,6 +36,7 @@ export function sharePercent(share: number | null): string {
 export function roleGroupLabel(key: string): string {
   const l = roleLabel(key, null, null);
   if (l) return l;
+  if (key === 'feature') return 'координация фичи';
   return key === 'step' ? 'шаг' : key;
 }
 

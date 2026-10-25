@@ -30,7 +30,7 @@ export interface NavTargetButtonProps {
   label?: string;
   // Подсказка («Открыть чат «…»», «Открыть задачу…»).
   title?: string;
-  // Тач-цель ≥ 40 на 360.
+  // Тач-цель 44 на 360.
   isMobile?: boolean;
   // === Состояния ===
   // chat: null → «чата нет» (неактивный текст, не кнопка); undefined/строка — есть.
@@ -155,7 +155,7 @@ export interface NavTargetPairProps {
   onOpenTask?: () => void;
   // Подсказка задачи («Открыть задачу…»).
   taskTitle?: string;
-  // Тач-цель ≥ 40 на 360.
+  // Тач-цель 44 на 360.
   isMobile?: boolean;
 }
 

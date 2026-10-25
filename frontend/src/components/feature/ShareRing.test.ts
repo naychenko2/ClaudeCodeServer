@@ -63,7 +63,7 @@ function mountRing(
   groups: FeatureBreakdownGroup[],
   measure: 'time' | 'tokens' | 'cost',
   size?: number,
-  extra?: { labelOf?: (k: string) => string; colorOf?: (k: string) => string; axisLabel?: string },
+  extra?: { labelOf?: (k: string) => string; colorOf?: (k: string) => string; axisLabel?: string; costPartial?: boolean },
 ) {
   return mount(createElement(ShareRing, { groups, measure, size, ...extra }));
 }
@@ -335,6 +335,17 @@ describe('«бесплатно» и фолбэк только при null (до�
     expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-cost'))).toBe('все модели локальные');
     expect(findNodeByAttr(container, 'data-testid', 'share-ring-bg')).not.toBeNull();
     for (const arc of arcs(container)) expect(arc.dash).toBe(0);
+  });
+
+  it('нулевая сумма «деньги» при costPartial — «все модели локальные» не утверждаем', () => {
+    const { container } = mountRing(FREE, 'cost', undefined, { axisLabel: 'персоны', costPartial: true });
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'share-ring-cost'))).not.toContain('локальные');
+  });
+
+  it('нет данных — aria-label не перечисляет «0 %», а говорит «нет данных»', () => {
+    const zero = [mkGroup('a', 0, 0, 0), mkGroup('b', 0, 0, 0)];
+    const { container } = mountRing(zero, 'time');
+    expect(ringSvg(container)!.getAttribute('aria-label')).toBe('Доли по времени: нет данных');
   });
 
   it('нулевое время или токены — дуг нет, центр «нет данных»', () => {

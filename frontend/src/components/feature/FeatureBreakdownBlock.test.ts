@@ -287,6 +287,19 @@ describe('плашки (к2)', () => {
     expect(cost!.getAttribute('title')).toBe('деньги недоступны без учёта расхода');
   });
 
+  it('смешанный случай: токенов нет, деньги есть — видна плашка причины про токены', () => {
+    const mixed: FeatureBreakdown = {
+      personas: PERSONAS.map(g => ({ ...g, tokens: null, costUsd: 1 })),
+      models: [],
+      roles: [],
+    };
+    const { container } = mountBlock({ breakdown: mixed });
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-no-cost')).toBeNull();
+    const plate = findNodeByAttr(container, 'data-testid', 'breakdown-measure-unavailable');
+    expect(plate, 'плашка причины').toBeTruthy();
+    expect(textOf(plate!)).toContain('Токены недоступны');
+  });
+
   it('меньше двух групп: «Пока нечего разрезать» с объяснением, без кольца и таблицы', () => {
     const { container } = mountBlock({
       breakdown: { personas: [mkGroup('kira', 120, 1000, 0, ['c1'])], models: [], roles: [] },

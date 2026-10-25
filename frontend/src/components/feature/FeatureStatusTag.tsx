@@ -30,6 +30,9 @@ export interface FeatureRunTag {
   dot?: boolean;
 }
 
+// Тег для состояния вне словаря (бэк опередил фронт).
+export const UNKNOWN_RUN_TAG: FeatureRunTag = { label: 'статус неизвестен', tone: 'notStarted' };
+
 export function featureRunStatusTag(state: FeatureState, stageName?: string | null): FeatureRunTag {
   switch (state) {
     case 'not_started':
@@ -55,6 +58,9 @@ export function featureRunStatusTag(state: FeatureState, stageName?: string | nu
       return { label: 'смержена', tone: 'merged' };
     case 'closed':
       return { label: 'закрыта без мержа', tone: 'closed' };
+    default:
+      // Состояние вне словаря (бэк опередил фронт) — нейтральный тег, а не undefined.
+      return UNKNOWN_RUN_TAG;
   }
 }
 

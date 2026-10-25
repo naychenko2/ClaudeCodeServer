@@ -12,7 +12,7 @@ import { getPersonaById } from '../../lib/personas';
 import { formatClock, formatDateTime, formatDuration, minutesSince } from './FeatureStatsBits';
 // Тег статуса — общий модуль FeatureStatusTag (W5-F3a): модель не тянет шапку,
 // цикл FeaturePageHeader ⇄ FeatureAnalysisModel разомкнут.
-import { featureRunStatusTag } from './FeatureStatusTag';
+import { featureRunStatusTag, UNKNOWN_RUN_TAG } from './FeatureStatusTag';
 import type { FeatureNow, FeatureRun, FeatureState } from '../../types/featureRun';
 
 export type AnalysisKey =
@@ -198,10 +198,11 @@ export function analysisLineState(run: FeatureRun, nowMs: number): AnalysisLineS
 
   // 8. other — всё остальное (not_started, draft, paused, merge_pending…): тег статуса.
   // Неизвестный/отсутствующий state (старые данные) — тега нет, как и в шапке: пустая фраза.
+  const tag = featureRunStatusTag(run.state as FeatureState);
   return {
     key: 'other', tone: 'neutral', dashed: false,
     dot: { color: C.textMuted, glow: false },
-    strong: featureRunStatusTag(run.state as FeatureState)?.label ?? '',
+    strong: tag === UNKNOWN_RUN_TAG ? '' : tag.label,
     tail: '',
     actions: [ANALYSIS_ACTION],
   };

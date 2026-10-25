@@ -149,7 +149,7 @@ B стоит держать на будущее для «Хронологии»,
 
 1. `FeatureStatsTab.tsx`. Новый порядок: строка точности (`AccuracyBadges`) мелко над героем, затем
    `StatsHero`, плитки, «Сейчас работают», «Главные потери», «Этапы» (`Gantt`) и `<details>` «Подробнее».
-2. **Новый `StatsHero`** (в `FeatureStatsBlocks.tsx` или отдельным файлом).
+2. **Новый `StatsHero`** (исторически в `FeatureStatsBlocks.tsx`, снесён в ST-F14б; теперь отдельный `StatsHero.tsx`).
    - Ветка по `run.state` / `run.attention`: running, waiting, merged/closed и «мало данных».
    - Мало данных — когда `segments` есть только у одного этапа или `elapsedMinutes` < 30
      (порог — константа рядом, согласовать с Софьей).

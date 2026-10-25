@@ -19,7 +19,7 @@ import { C, FS, SP, R, FONT, SHADOW } from '../../lib/design';
 import { SegmentedControl } from '../ui/Segmented';
 import { useIsMobile } from '../../lib/breakpoints';
 import { formatDuration } from './FeatureStatsBits';
-import { type Axis, type Measure, fewData, measureValue, effectiveMeasure } from './FeatureBreakdownModel';
+import { type Axis, type Measure, fewData, measureTotal, effectiveMeasure } from './FeatureBreakdownModel';
 import { ShareRing } from './ShareRing';
 import { FeatureBreakdownTable } from './FeatureBreakdownTable';
 import { FeatureBreakdownCards } from './FeatureBreakdownCards';
@@ -97,8 +97,8 @@ export function FeatureBreakdownBlock({
 
   // «Без расхода»: ни токенов, ни денег ни у одной группы — опции меры
   // приглушены, плашка объясняет причину (состояние записки «без расхода»).
-  const tokensAvailable = visible.some(g => measureValue(g, 'tokens') != null);
-  const costAvailable = visible.some(g => measureValue(g, 'cost') != null);
+  const tokensAvailable = measureTotal(visible, 'tokens') != null;
+  const costAvailable = measureTotal(visible, 'cost') != null;
   const noCost = !tokensAvailable && !costAvailable;
 
   // Действующая мера (М1): если у выбранной нет данных ни у одной видимой группы —
@@ -106,6 +106,17 @@ export function FeatureBreakdownBlock({
   // меру (раньше кольцо молча фолбэчил внутри себя, а карточки и шапка оставались
   // на выбранной — доли в карточках исчезали).
   const effMeasure: Measure = effectiveMeasure(visible, measure);
+
+  // Плашки причин: нет обеих мер — общая; нет одной (смешанный случай) — своя: title
+  // на disabled-кнопке в браузерах не показывается, причина должна быть видна.
+  const plates = (
+    <>
+      {noCost && <div data-testid="breakdown-no-cost" style={PLATE}>Токены и деньги недоступны: у этой фичи нет учёта расхода. Доли — по времени</div>}
+      {!noCost && !tokensAvailable && <div data-testid="breakdown-measure-unavailable" style={PLATE}>Токены недоступны: нет учёта токенов</div>}
+      {!noCost && !costAvailable && <div data-testid="breakdown-measure-unavailable" style={PLATE}>Деньги недоступны: нет учёта расхода</div>}
+      {costPartial && <div data-testid="breakdown-cost-partial" style={PLATE}>цена по части моделей недоступна</div>}
+    </>
+  );
 
   const head = (
     <div data-testid="breakdown-head" style={HEAD}>
@@ -152,13 +163,12 @@ export function FeatureBreakdownBlock({
         </div>
       ) : isMobile ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, marginTop: SP.md }}>
-          {noCost && <div data-testid="breakdown-no-cost" style={PLATE}>Токены и деньги недоступны: у этой фичи нет учёта расхода. Доли — по времени</div>}
-          {costPartial && <div data-testid="breakdown-cost-partial" style={PLATE}>цена по части моделей недоступна</div>}
+          {plates}
           {/* Кольцо 180 по центру над карточками (решение дизайна, записка §360). */}
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <ShareRing
               groups={visible} measure={effMeasure} size={180}
-              labelOf={labelOf} colorOf={colorOf} axisLabel={AXIS_WORD[axis]}
+              labelOf={labelOf} colorOf={colorOf} axisLabel={AXIS_WORD[axis]} costPartial={costPartial}
             />
           </div>
           <FeatureBreakdownCards
@@ -173,11 +183,10 @@ export function FeatureBreakdownBlock({
              плашки растягивал колонку до max-content (~430 px) и ломал раскладку 1280;
              теперь текст переносится внутри колонки. */}
           <div data-testid="breakdown-ring-col" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, width: 140 }}>
-            {noCost && <div data-testid="breakdown-no-cost" style={PLATE}>Токены и деньги недоступны: у этой фичи нет учёта расхода. Доли — по времени</div>}
-            {costPartial && <div data-testid="breakdown-cost-partial" style={PLATE}>цена по части моделей недоступна</div>}
+            {plates}
             <ShareRing
               groups={visible} measure={effMeasure} size={140}
-              labelOf={labelOf} colorOf={colorOf} axisLabel={AXIS_WORD[axis]}
+              labelOf={labelOf} colorOf={colorOf} axisLabel={AXIS_WORD[axis]} costPartial={costPartial}
             />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>

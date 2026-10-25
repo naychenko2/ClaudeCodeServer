@@ -322,7 +322,7 @@ describe('чипы «Модели и роли» (к3)', () => {
     const run = mkRun({
       stages: [mkStage([
         mkExecutor({ personaId: 'kira', taskRole: 'step', modelFull: 'Qwen' }),
-        mkExecutor({ personaId: 'timur', taskRole: 'step', modelFull: 'Qwen' }),
+        mkExecutor({ personaId: 'vera', taskRole: 'step', modelFull: 'Qwen' }),
       ])],
     });
     const { container } = mountTable(
@@ -332,6 +332,8 @@ describe('чипы «Модели и роли» (к3)', () => {
     const avatars = rowCells(container, 'Qwen')![1].querySelectorAll('span').filter(s => styleOf(s).width === '18px');
     expect(avatars.length).toBe(2);
     for (const a of avatars) expect(styleOf(a).background).toMatch(/^var\(--c-/);
+    // Мутация: один цвет на все чипы (chipColor → ARC_COLORS[0]) — тест краснеет.
+    expect(styleOf(avatars[0]).background, 'фоны разных исполнителей различаются').not.toBe(styleOf(avatars[1]).background);
   });
 
   it('без executors — чипов нет, строка живая (не падение)', () => {

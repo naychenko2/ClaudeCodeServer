@@ -84,6 +84,13 @@ function nowItem(over: Partial<FeatureNow> = {}): FeatureNow {
 }
 
 // === statusLineFor: тон/заголовок/действие на 9 состояний (чистая функция) ===
+describe('шапка: состояние вне словаря', () => {
+  it('неизвестный state не роняет рендер — тег «статус неизвестен»', () => {
+    const html = render(run({ state: 'нет-такого' as FeatureRun['state'] }));
+    expect(html).toContain('статус неизвестен');
+  });
+});
+
 describe('statusLineFor: 9 состояний', () => {
   const now = Date.parse('2026-10-20T12:00:00Z');
 

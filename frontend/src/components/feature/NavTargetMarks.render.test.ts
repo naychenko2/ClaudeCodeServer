@@ -377,6 +377,7 @@ describe('пометки: Статистика', () => {
   it('разрез (чаты группы): c-live живой, c-arch в архиве', () => {
     const c = renderTab();
     click(byId(c, 'breakdown-chats-toggle-p1')[0]);
+    expect(byIdPrefix(c, 'breakdown-chat-').length, 'строк чатов группы').toBe(2);
     const live = byId(c, 'breakdown-chat-c-live')[0];
     const arch = byId(c, 'breakdown-chat-c-arch')[0];
     expect([flagsOf(live).chat, flagsOf(arch).chat]).toEqual(['live', 'archived']);

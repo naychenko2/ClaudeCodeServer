@@ -130,7 +130,7 @@ export type LossCard =
   // 2. Шаг с наибольшим числом витков.
   | { no: 2; kind: 'loops'; title: string; stepRef: string; stepTitle: string; loops: number; rounds: RoundMark[]; durationMinutes: number }
   // 3. Сейчас: задача, идущая дольше всех.
-  | { no: 3; kind: 'longest'; title: string; stepRef: string | null; personaId: string | null; minutes: number; share: number | null }
+  | { no: 3; kind: 'longest'; title: string; stepRef: string | null; personaId: string | null; minutes: number; tokens: number | null; share: number | null }
   // 3. У закрытой фичи — самый долгий этап.
   | { no: 3; kind: 'stage'; title: string; stageKey: string; stageLabel: string; minutes: number };
 
@@ -199,6 +199,7 @@ export function lossesModel(run: FeatureRun, stats: FeatureStats, nowMs: number)
       stepRef: longest.stepRef ?? null,
       personaId: longest.personaId ?? null,
       minutes: longest.minutes,
+      tokens: longest.tokens ?? null,
       share: longest.share ?? null,
     });
   } else if (run.closed === true || run.state === 'merged' || run.state === 'closed') {

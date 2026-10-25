@@ -657,6 +657,9 @@ export interface Task {
   // Критерии приёмки и свидетельства по ним (пусто/нет — задача без критериев)
   acceptance?: AcceptanceCriterion[];
   evidence?: AcceptanceEvidence[];
+  // Последний результат предгейта (бэк TaskItem.Pregate): бывает только у шага/доработки;
+  // null/нет — не прогонялся. Аддитивно: старые задачи читаются без поля.
+  pregate?: PregateRecord | null;
   // Исход дефекта: 'closedWithoutCheck' — внутренний путь закрытия без проверки
   outcome?: DefectOutcome | null;
   // Фикс-волна 4 team-blocker-honest: метки от терминального отказа хода исполнителя
@@ -767,6 +770,20 @@ export interface DefectRepro {
 // Критерий приёмки задачи и свидетельство его выполнения (связь по criterionId)
 export interface AcceptanceCriterion { id: string; text: string }
 export interface AcceptanceEvidence { criterionId: string; how: string; result: string }
+
+// Результат предгейта шага (бэк record PregateRecord): sha — коммит, по которому гнали проверки;
+// green — вердикт; summary — вывод красных проверок; at — момент (UTC);
+// redStreak — сколько красных подряд по одному redKey (зелёный обнуляет);
+// nothingApplicable — «нечего проверять» (green при этом false, «зелёным» не считается).
+export interface PregateRecord {
+  sha: string;
+  green: boolean;
+  summary: string;
+  at: string;
+  redStreak: number;
+  redKey?: string | null;
+  nothingApplicable?: boolean;
+}
 
 // Подтверждение проверки: personaId == null означает проверку человеком (UI-форма
 // владельца задачи), не-null — конкретной персоной (чаще всего — исполнившей дефект).

@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions, INoteAccessor? notes = null,
+public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions, ProjectTreeLocator locator, INoteAccessor? notes = null,
     // W4-5B2 (п.5.2): чтение файла из проверенного дерева эпика (?featureId=). Tasks и Git —
     // отключаемые подсистемы: нет Tasks — маршрут featureId отказывает 404 (fail-closed); нет
     // Git — отказывает заявленное дерево, а отсутствие дерева читает корень (общее правило
@@ -105,33 +105,40 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         try
         {
             var p = GetProject(projectId);
-            // W4-5B2 (п.5.2): ?featureId= — чтение из проверенного дерева эпика, по образцу
-            // GitController.RootFor(?sessionId=). W4-LINK-B (п.14, рев.1): ?sessionId= — сначала
-            // СВОЁ дерево чата (Session.WorktreePath — тот же полем, по которому EffectiveRoot
-            // подменяет cwd хода), затем цепочка по задаче (Session.TaskId → TaskItem.WorktreePath),
-            // затем корень. Правило заявленного дерева одно — TreeRootForAsync (хвост резолва
-            // W4-LINK-B3): «дерева нет» (пустой WorktreePath — норма для задачи) или «дерево
-            // равно корню» → читаем корень; «дерево есть, но не проверено» → 404 без тихого
-            // фолбэка на main: пользователь смотрит не то. featureId явный — он и решает;
-            // без параметров — корень проекта (прежнее поведение).
-            string? root;
-            if (!string.IsNullOrEmpty(featureId)) root = await FeatureTreeRootForAsync(p, featureId);
+            // W4-5B2 (п.5.2): ?featureId= остаётся СТРОГИМ: чтение из проверенного дерева
+            // эпика по правилу TreeRootForAsync, без поиска по чужим деревьям (тест
+            // «featureId не ищет по чужим деревьям»).
+            // W4-LINK-B (п.14, смена решения W4-LINK-B — шаг B2a): ?sessionId= — заявленное
+            // дерево чата приходит анкером в ProjectTreeLocator: «дерева нет» (пустой
+            // WorktreePath) или «дерево заявлено, но его нет в worktree list» (сносили после
+            // мержа) — НЕ 404, а поиск по main и остальным worktree; ответ несёт branch и
+            // isAnchor, фолбэк не тихий. Без параметров — корень проекта (прежнее поведение).
+            string root;
+            string? branch = null;
+            bool isAnchor = false;
+            if (!string.IsNullOrEmpty(featureId))
+            {
+                root = await FeatureTreeRootForAsync(p, featureId);
+                if (root is null) return NotFound(new { error = "Дерево не найдено" });
+            }
             else if (!string.IsNullOrEmpty(sessionId))
             {
-                // UserId null (нет JWT) — владельца нет, чат не находится: тот же приём,
-                // что в GitController.RootFor (?sessionId=), а не NRE в GetOwned.
-                var s = UserId is null ? null : sessions.GetOwned(sessionId, UserId);
-                if (s is null || s.ProjectId != p.Id) return NotFound(new { error = "Чат не найден" });
-                root = await ChatTreeRootForAsync(p, s);
+                var s = GetOwnedSession(projectId, sessionId);
+                if (s is null) return NotFound(new { error = "Чат не найден" });
+                var hit = await locator.LocateAsync(UserId, p, path, ChatTreeRootForAsync(p, s));
+                if (hit is null) return NotFound(new { error = "Файл не найден ни в одном дереве проекта" });
+                root = hit.Root;
+                branch = hit.Branch;
+                isAnchor = hit.IsAnchor;
             }
             else root = p.RootPath;
-            if (root is null) return NotFound(new { error = "Дерево не найдено" });
 
             if (IsDirectoryPath(root, path)) return NotFound();
 
             // Вид файла и способ отдачи — общий с агентом устройства (вертикаль Files):
             // документ base64 для клиентского рендера, картинка, видео/аудио потоком, текст.
-            return Ok(FileContentReader.Read(files, root, path));
+            var view = FileContentReader.Read(files, root, path);
+            return Ok(view with { Branch = branch, IsAnchor = isAnchor });
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
@@ -140,13 +147,23 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
-    // Хвост резолва W4-LINK-B3: ЕДИНОЕ правило заявленного дерева — его используют обе ветки
-    // GetContent (?featureId= и ?sessionId=), включая цепочку по задаче. «Дерева нет» (пустой
-    // WorktreePath — норма большинства задач) или «дерево — корень проекта» (главное дерево
-    // числится в `git worktree list`, но предикат VerifiedFeatureTreeAsync main деревом фичи
-    // не считает) — исполнитель работает в корне: читается корень. «Дерево заявлено, но не
-    // проверено» — null → 404, без тихого фолбэка на main: пользователь смотрит не то. Без Git
-    // сверить нечем — fail-closed.
+    // Шаг B2a: ЕДИНАЯ проверка владения сессией для обеих веток (?sessionId=) — content и
+    // stream. Нет владельца (нет JWT) — чат не находится: тот же приём, что в
+    // GitController.RootFor (?sessionId=), а не NRE в GetOwned. Несуществующий/чужой/чужого
+    // проекта — null → 404.
+    private ClaudeHomeServer.Models.Session? GetOwnedSession(string projectId, string sessionId)
+    {
+        if (UserId is null) return null;
+        var s = sessions.GetOwned(sessionId, UserId);
+        return s is null || s.ProjectId != projectId ? null : s;
+    }
+
+    // Хвост резолва W4-LINK-B3: ЕДИНОЕ правило строгого дерева — его использует ?featureId=
+    // (ветка остаётся строгой, смена решения W4-LINK-B на неё НЕ распространяется). «Дерева
+    // нет» (пустой WorktreePath — норма большинства задач) или «дерево — корень проекта» —
+    // читается корень. «Дерево заявлено, но не проверено» — null → 404, без тихого фолбэка
+    // на main: пользователь назвал дерево явно и смотрит именно в него. Без Git сверить
+    // нечем — fail-closed.
     private async Task<string?> TreeRootForAsync(ClaudeHomeServer.Models.Project project, string? worktreePath)
     {
         if (string.IsNullOrWhiteSpace(worktreePath)) return project.RootPath;
@@ -156,24 +173,25 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, worktreePath);
     }
 
-    // W4-LINK-B (п.14, рев.1): цепочка ?sessionId= целиком: своё дерево чата — первично (тот
-    // же полем, по которому EffectiveRoot подменяет cwd хода), цепочка по задаче — запасной
-    // вариант, дерева ни у чата, ни у задачи — корень проекта.
-    private async Task<string?> ChatTreeRootForAsync(ClaudeHomeServer.Models.Project project, ClaudeHomeServer.Models.Session session)
+    // W4-LINK-B (п.14, смена решения W4-LINK-B — шаг B2a): цепочка заявленного дерева для
+    // ?sessionId=: своё дерево чата — первично (тот же полем, по которому EffectiveRoot
+    // подменяет cwd хода), цепочка по задаче — запасной вариант. Возвращает СЫРОЙ путь без
+    // проверки: валидность анкера проверяет ProjectTreeLocator (IsLinkedWorktree +
+    // worktree list), и «заявленное, но отсутствующее» дерево само выпадает из корней —
+    // поиск продолжается по main и остальным (isAnchor=false). Дерева нет ни у чата, ни у
+    // задачи — null: поиск начинается с main.
+    private string? ChatTreeRootForAsync(ClaudeHomeServer.Models.Project project, ClaudeHomeServer.Models.Session session)
     {
-        if (!string.IsNullOrEmpty(session.WorktreePath)) return await TreeRootForAsync(project, session.WorktreePath);
-        if (session.TaskId is not null) return await TaskTreeRootForAsync(project, session.TaskId);
-        return project.RootPath;
+        if (!string.IsNullOrEmpty(session.WorktreePath)) return session.WorktreePath;
+        if (session.TaskId is not null) return TaskTreeRootForAsync(project, session.TaskId);
+        return null;
     }
 
     // W4-5B2 (п.5.2): проверенное дерево эпика для чтения. Эпик — задача с id == featureId,
-    // принадлежащая текущему владельцу и этому проекту. Дерево эпика решается общим правилом
+    // принадлежащая текущему владельцу и этому проекту. Дерево эпика решается строгой
     // TreeRootForAsync: без дерева или на корне — сам корень; заявленное, но нечислящееся —
-    // null → 404. Проверка Git — только в verified-ветке TreeRootForAsync: без Git нечем
-    // сверить заявленное дерево (404), но отсутствие дерева по-прежнему читает корень —
-    // правило единое с sessionId-веткой. Любой отказ (нет Tasks, нет эпика, чужой, другой
-    // проект) — null → 404. Маршрут только для чтения: SaveContent featureId не принимает —
-    // запись идёт в корень проекта.
+    // null → 404. По чужим деревьям featureId не ищет. Маршрут только для чтения:
+    // SaveContent featureId не принимает — запись идёт в корень проекта.
     private async Task<string?> FeatureTreeRootForAsync(ClaudeHomeServer.Models.Project project, string featureId)
     {
         if (tasks is null || UserId is null) return null;
@@ -182,15 +200,15 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         return await TreeRootForAsync(project, epic.WorktreePath);
     }
 
-    // W4-LINK-B (п.14, рев.1): запасной путь чтения — дерево задачи, к которой привязан чат,
-    // когда у самого чата своего дерева нет. Задачи нет (несуществующая/чужая/другой проект) —
-    // null → 404; дальше — общее правило TreeRootForAsync.
-    private async Task<string?> TaskTreeRootForAsync(ClaudeHomeServer.Models.Project project, string taskId)
+    // W4-LINK-B: дерево, заявленное задачей, когда у самого чата своего дерева нет. Задачи
+    // нет (несуществующая/чужая/другой проект) — null. Путь не проверяется здесь: анкер
+    // проверяет локатор (см. ChatTreeRootForAsync).
+    private string? TaskTreeRootForAsync(ClaudeHomeServer.Models.Project project, string taskId)
     {
         if (tasks is null || UserId is null) return null;
         var task = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == taskId);
         if (task is null || task.ProjectId != project.Id) return null;
-        return await TreeRootForAsync(project, task.WorktreePath);
+        return task.WorktreePath;
     }
 
     // Абсолютный путь документа с проверкой, что это просматриваемый документ (pdf/docx/xlsx/pptx).
@@ -453,16 +471,32 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
+    // Шаг B2a: у stream тот же необязательный ?sessionId= и тот же резолв дерева, что у
+    // content: заявленное дерево чата — анкер локатора, «его нет» — поиск по main и
+    // остальным worktree. Чужой/несуществующий чат — 404 (общая GetOwnedSession). Без
+    // параметра — прежнее поведение: корень проекта.
     [HttpGet("stream")]
-    public IActionResult Stream(string projectId, [FromQuery] string path)
+    public async Task<IActionResult> Stream(string projectId, [FromQuery] string path, [FromQuery] string? sessionId = null)
     {
         try
         {
-            var root = GetRoot(projectId);
-            var safePath = FileService.SafeJoinPublic(root, path);
-            if (!System.IO.File.Exists(safePath)) return NotFound();
+            string abs;
+            if (!string.IsNullOrEmpty(sessionId))
+            {
+                var p = GetProject(projectId);
+                var s = GetOwnedSession(projectId, sessionId);
+                if (s is null) return NotFound(new { error = "Чат не найден" });
+                var hit = await locator.LocateAsync(UserId, p, path, ChatTreeRootForAsync(p, s));
+                if (hit is null) return NotFound();
+                abs = hit.FullPath;
+            }
+            else
+            {
+                abs = FileService.SafeJoinPublic(GetRoot(projectId), path);
+                if (!System.IO.File.Exists(abs)) return NotFound();
+            }
             var mime = FileContentReader.StreamMime(path);
-            return PhysicalFile(safePath, mime, enableRangeProcessing: true);
+            return PhysicalFile(abs, mime, enableRangeProcessing: true);
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }

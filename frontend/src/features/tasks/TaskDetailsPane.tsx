@@ -3,7 +3,7 @@
 // сегмент статуса под шапкой (узкий контейнер) или закреплённый сегмент снизу
 // (мобила). Режим редактирования — инлайн, вместо деталей (TaskEditForm).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, SquareStack, Trash2, Unplug, X } from 'lucide-react';
 import type { Project, Session, Task, TaskStatus, TaskPriority, UpdateTaskDto } from '../../types';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
@@ -168,9 +168,20 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
   // по key={task.id}) гасит точку возврата так же, как у чата (обычный выбор чата гасит
   // указатель в WorkspacePage.tsx:1453). Возврат самим чипом гасит обработатель
   // cc-open-feature (WorkspacePage.tsx:1919) до этого unmount.
-  useEffect(() => () => {
-    const back = getBackNav();
-    if (back && back.fromKind === 'feature' && back.to.kind === 'task' && back.to.id === task.id) clearBackNav();
+  // StrictMode (dev) сразу после монтирования гоняет cleanup и повторно ставит эффект:
+  // гасим в микрозадаче и только если эффект с тем же id не переподключился.
+  const mountedTaskId = useRef<string | null>(null);
+  useEffect(() => {
+    const id = task.id;
+    mountedTaskId.current = id;
+    return () => {
+      mountedTaskId.current = null;
+      queueMicrotask(() => {
+        if (mountedTaskId.current === id) return;
+        const back = getBackNav();
+        if (back && back.fromKind === 'feature' && back.to.kind === 'task' && back.to.id === id) clearBackNav();
+      });
+    };
   }, [task.id]);
 
   const color = projectColor(project ? project.id : null);

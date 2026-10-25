@@ -6,7 +6,7 @@
 //   (1) убрать вызов FeatureBackChip в TaskDetailsPane → «чип на задаче» красный;
 //   (2) featureBackNavFromTask вернуть null для kind='task' → тот же тест красный;
 //   (3) убрать clearBackNav на unmount панели → «точка гасится при уходе» красная.
-import { act, createElement } from 'react';
+import { act, createElement, StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Project, Task } from '../../../types';
 import { TaskDetailsPane } from '../TaskDetailsPane';
@@ -93,7 +93,7 @@ describe('Возврат к фиче на экране задачи (дефек�
     expect(ev!.detail).toEqual({ featureId: 'f1', fromChat: false });
   });
 
-  it('уход с задачи (unmount панели) гасит точку, как у чата', () => {
+  it('уход с задачи (unmount панели) гасит точку, как у чата', async () => {
     setFeaturePageTab('stats');
     backNav.recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     const c = renderPane(task(), PROJECT);
@@ -101,6 +101,23 @@ describe('Возврат к фиче на экране задачи (дефек�
     const root = roots[roots.length - 1];
     roots.pop();
     act(() => { root.unmount(); });
+    await Promise.resolve();
+    expect(backNav.getBackNav(), 'точка не гасится при уходе').toBeNull();
+  });
+
+  // Дефект R-W5r: в StrictMode (dev, main.tsx) cleanup эффекта идёт сразу после монтирования —
+  // точка не должна гаситься при ОТКРЫТИИ задачи, но обязана гаситься при уходе.
+  it('StrictMode: чип остаётся после открытия задачи, а при уходе точка гасится', async () => {
+    setFeaturePageTab('stats');
+    backNav.recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
+    installFakeDom();
+    const { root, container } = mount(createElement(StrictMode, null,
+      createElement(TaskDetailsPane, { task: task(), project: PROJECT, onDeleted: () => {} })));
+    await Promise.resolve();
+    expect(findNodeByAttr(container, 'data-testid', 'feature-back-chip'), 'чип пропал при открытии').not.toBeNull();
+    expect(backNav.getBackNav(), 'точка погашена при открытии').not.toBeNull();
+    act(() => { root.unmount(); });
+    await Promise.resolve();
     expect(backNav.getBackNav(), 'точка не гасится при уходе').toBeNull();
   });
 });

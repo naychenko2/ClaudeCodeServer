@@ -257,7 +257,9 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
 
         {/* Строка 2: мини-рельса, стопка аватаров, статус, прогресс. lineHeight 17 (Р-1). */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, lineHeight: '17px', minWidth: 0 }}>
-          {!compact && <FeatureRail rail={feature.rail} closed={st.kind === 'done' || st.kind === 'closed'} label={feature.bucket === 'merged' ? 'Этап: смержена' : undefined} />}
+          {/* Очередь (feature-queue-1): при kind=queue рельса приглушена (active textMuted),
+              подпись с позицией из бэка; вне очереди — прежний вид. */}
+          {!compact && <FeatureRail rail={feature.rail} closed={st.kind === 'done' || st.kind === 'closed'} label={feature.bucket === 'merged' ? 'Этап: смержена' : undefined} waiting={st.kind === 'queue'} queue={feature.queue} />}
           {avatars.length > 0 && (
             <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
               {avatars.map((p, i) => (

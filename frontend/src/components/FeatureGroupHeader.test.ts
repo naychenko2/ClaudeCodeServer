@@ -529,4 +529,15 @@ describe('FeatureGroupHeader: очередь фич (глиф queue, «в оче
     expect(html).not.toContain('в очереди');
     expect(html).not.toContain('border-left-width:3px');
   });
+
+  it('рельса в очереди: active приглушён (textMuted), подпись с позицией; вне очереди — прежняя', () => {
+    // Провязка FeatureRail (Q5E): при kind=queue рельса получает waiting + queue с бэка.
+    const html = renderHeader(queued());
+    expect(html).toContain('aria-label="Этап: Производство · в очереди 2 из 3"');
+    expect(html).toContain('width:15px;background:var(--c-text-muted)');
+    // manual (не очередь) — прежний вид: active в цвете тона, суффикса нет.
+    const m = renderHeader(feat({ state: 'paused', holdReason: 'manual' }));
+    expect(m).toContain('aria-label="Этап: Производство"');
+    expect(m).not.toContain('width:15px;background:var(--c-text-muted)');
+  });
 });

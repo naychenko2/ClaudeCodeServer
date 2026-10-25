@@ -294,7 +294,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     // «Открыть финальное ревью» (кнопка карточки «ждёт вас», только мобила): чат задачи
     // финала — тот же переход, что у тревожного блока: запись возврата к фиче (плашка
     // в чате) + открытие чата. Финальной задачи или её чата нет — проп не передаётся,
-    // кнопка на карточке не рисуется (FeatureBriefBlock: нужен и onMerge, и onOpenFinal).
+    // кнопка на карточке не рисуется (FeatureBriefBlock: каждая кнопка — по своему пропу).
     const finalChat = okRun.final?.linkedSessionId ?? null;
     const openFinalChat = finalChat
       ? () => {

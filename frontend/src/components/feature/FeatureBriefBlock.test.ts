@@ -6,6 +6,7 @@
 // · служебные состояния: скелетон с aria-busy, «Сводка не загрузилась» + полоска,
 //   brief = null и статов нет → блока нет;
 // · «Мерж…» / «Открыть финальное ревью» — только waiting_you и только isMobile;
+//   каждая кнопка — по своему пропу независимо (R-F5 п.6);
 // · легенда — из MAIN-сегментов общей модели ленты, «⫽» — только при настоящем разрыве;
 // · Grep-сторож: в исходнике блока нет прямого обращения к полю состояния, полосе стадий
 //   и полям таймлайна — фронт ничего не пересчитывает.
@@ -317,6 +318,22 @@ describe('Кнопки «Мерж…» и «Открыть финальное р
     click(c, 'brief-merge');
     click(c, 'brief-open-final');
     expect(calls).toEqual(expect.arrayContaining(['merge', 'final']));
+  });
+
+  it('«Мерж…» рисуется при одном onMerge: без живого чата финала onOpenFinal не передан (R-F5 п.6)', () => {
+    const { c, calls } = render({ brief: waiting, nameOf, isMobile: true, onOpenFinal: undefined });
+    expect(findNodeByAttr(c, 'data-testid', 'brief-merge'), '«Мерж…» при одном onMerge').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-open-final'), 'без onOpenFinal второй кнопки нет').toBeNull();
+    click(c, 'brief-merge');
+    expect(calls, '«Мерж…» зовёт свой шов').toContain('merge');
+  });
+
+  it('«Открыть финальное ревью» рисуется при одном onOpenFinal: onMerge не передан', () => {
+    const { c, calls } = render({ brief: waiting, nameOf, isMobile: true, onMerge: undefined });
+    expect(findNodeByAttr(c, 'data-testid', 'brief-open-final'), '«Открыть финальное ревью» при одном onOpenFinal').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'brief-merge'), 'без onMerge кнопки мержа нет').toBeNull();
+    click(c, 'brief-open-final');
+    expect(calls, 'кнопка зовёт свой шов').toContain('final');
   });
 
   it('running на мобиле — кнопок мержа нет (не состояние «ждёт вас»)', () => {

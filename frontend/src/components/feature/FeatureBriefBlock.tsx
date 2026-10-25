@@ -324,11 +324,13 @@ export function FeatureBriefBlock({
             </div>
           )}
           {subText && <div data-testid="brief-now-sub" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{subText}</div>}
-          {/* Кнопки «ждёт вас» — только на мобиле (на десктопе «Мерж…» уже в шапке страницы). */}
-          {isWait && isMobile && onMerge && onOpenFinal && (
+          {/* Кнопки «ждёт вас» — только на мобиле (на десктопе «Мерж…» уже в шапке страницы).
+              Каждая рисуется по своему пропу независимо (R-F5 п.6): без живого чата финала
+              onOpenFinal не передан — «Мерж…» остаётся, путь к мержу в этом состоянии есть. */}
+          {isWait && isMobile && (onMerge || onOpenFinal) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: SP.sm }}>
-              <Button variant="primary" size="md" dataTestId="brief-merge" onClick={onMerge}>Мерж…</Button>
-              <Button variant="ghost" size="md" dataTestId="brief-open-final" onClick={onOpenFinal}>Открыть финальное ревью</Button>
+              {onMerge && <Button variant="primary" size="md" dataTestId="brief-merge" onClick={onMerge}>Мерж…</Button>}
+              {onOpenFinal && <Button variant="ghost" size="md" dataTestId="brief-open-final" onClick={onOpenFinal}>Открыть финальное ревью</Button>}
             </div>
           )}
         </div>

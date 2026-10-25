@@ -1430,6 +1430,64 @@ public class FeatureTimelineJournalTests
         doc.RootElement.GetProperty("intervalsByStage").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // Полный журнал БЕЗ ходов → интервалы посчитаны, но пусты: IntervalsByStage — ПУСТОЙ
+    // словарь, НЕ null. Это разные состояния: null = «интервалы не считались» (режим approx),
+    // пустой словарь = «считали, ходов не было». Фронт различает approx именно по null
+    // (GC-F2), поэтому различие закреплено тестом.
+    //
+    // Мутация «пустой словарь → null» (в FeatureStageIntervals.Build) краснит тест.
+    [Fact]
+    public void Build_ПолныйЖурналБезХодов_IntervalsByStage_ПустойСловарь()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+
+        // Полный журнал, в котором нет ни одного хода (только created).
+        var journal = Journal(
+            Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"));
+
+        var tl = FeatureTimeline.Build(Run(epic), journal, now);
+
+        tl.IntervalsByStage.Should().NotBeNull(
+            "полный журнал без ходов — пустой словарь, а не null (null = режим approx)");
+        tl.IntervalsByStage.Should().BeEmpty();
+
+        // В JSON — пустой объект (не null).
+        var json = JsonSerializer.Serialize(tl, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        using var doc = JsonDocument.Parse(json);
+        doc.RootElement.GetProperty("intervalsByStage").ValueKind.Should().Be(JsonValueKind.Object);
+    }
+
+    // Приблизительный режим (журнала нет / обрезан) → IntervalsByStage = null. Обе причины
+    // approx дают ОДНО состояние (null), в отличие от полного журнала без ходов (пустой
+    // словарь) — см. предыдущий кейс.
+    [Fact]
+    public void Build_ПриблизительныйРежим_IntervalsByStage_Null()
+    {
+        var now = new DateTime(2026, 10, 1, 20, 0, 0);
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 10, 0, 0));
+
+        var turn = Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
+            startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished");
+
+        // Журнала нет вовсе.
+        FeatureTimeline.Build(Run(epic, s1), null, now).IntervalsByStage
+            .Should().BeNull("журнала нет — интервалы не считались");
+
+        // Журнал обрезан (Truncated) — тоже approx.
+        var truncated = new FeatureJournalReadResult
+        {
+            StartsWithCreated = true,
+            Truncated = true,
+            Entries = [turn],
+        };
+        FeatureTimeline.Build(Run(epic, s1), truncated, now).IntervalsByStage
+            .Should().BeNull("обрезанный журнал — интервалы не считались");
+    }
+
     // Хелпер: сегменты заданного вида ───────────────────────────────────────────────────────
 
     private static List<TimelineSegment> Kinds(FeatureTimeline tl, string kind) =>

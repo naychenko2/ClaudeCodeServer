@@ -2700,7 +2700,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
 
             var winner = await Task.WhenAny(got.Task, Task.Delay(15_000));
             winner.Should().Be(got.Task, "запись голоса обязана дойти до группы владельца");
-            var msg = got.Task.Result;
+            var msg = await got.Task;
             msg.GetProperty("action").GetString().Should().Be("updated");
             msg.GetProperty("task").GetProperty("note").GetProperty("text").GetString().Should().Be("вещаем");
         }

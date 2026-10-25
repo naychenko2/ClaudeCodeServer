@@ -170,10 +170,63 @@ public class FeatureQueueTraceTests
             .Should().Be(t.ElapsedMinutes);
     }
 
+    // Хвост ревью Q6-TAIL (п.1): ветка device_wait — то же net-правило, что и waiting.
+    // device_wait 09:00–12:00 (сырые 180) и очередь 09:00–10:30: остаток 90 остаётся в waiting,
+    // longestWait = 90, а не сырые 180. Мутация «в device_wait считать сырой интервал»
+    // (FeatureTimeline.cs:388, без NetSpan) → 180 ≠ 90 → красный.
+    [Fact]
+    public void Build_ОчередьЧастьDeviceWait_LongestWaitNet()
+    {
+        var journal = Full(
+            new FeatureJournalEntry { At = T0.AddHours(1), Kind = "device_wait", TaskId = "epic" },
+            new FeatureJournalEntry { At = T0.AddHours(4), Kind = "device_wait_cleared", TaskId = "epic" },
+            Held(T0.AddHours(1), FeatureHoldReasons.Queue),
+            Cleared(T0.AddHours(2.5), FeatureHoldReasons.Queue, FeatureHoldBy.Queue));
+
+        var t = FeatureTimeline.Build(EpicRun(), journal, T0.AddHours(4)).Totals;
+
+        t.ElapsedMinutes.Should().Be(240);
+        t.QueuedMinutes.Should().Be(90);
+        t.WaitingMinutes.Should().Be(90, "остаток device_wait после перекрытой очередью части");
+        t.IdleMinutes.Should().Be(60);
+        t.WaitingCount.Should().Be(1);
+        t.LongestWaitMinutes.Should().Be(90, "net: сырые 180 минус 90 очереди — ветка device_wait net, как waiting");
+        t.LongestWait!.From.Should().Be(T0.AddHours(1));
+        (t.WorkWallMinutes + t.WaitingMinutes + t.ErrorMinutes + t.IdleMinutes + t.QueuedMinutes)
+            .Should().Be(t.ElapsedMinutes);
+    }
+
+    // Хвост ревью Q6-TAIL (п.2): NetSpan вычитает ВСЕ пересекающиеся интервалы очереди, не первый.
+    // Фича в очереди 09:00–10:00, вышла, снова в очереди 11:00–12:00; ожидание 09:00…now (15:00)
+    // длится через оба: net = 360 − 60 − 60 = 240. Мутация «учесть только первое пересечение»
+    // (break в NetSpan) → 300 ≠ 240 → красный.
+    [Fact]
+    public void Build_ОжиданиеЧерезДвеОчереди_NetВычитаетОбе()
+    {
+        var journal = Full(
+            new FeatureJournalEntry { At = T0.AddHours(1), Kind = "waiting", TaskId = "epic" },
+            Held(T0.AddHours(1), FeatureHoldReasons.Queue),
+            Cleared(T0.AddHours(2), FeatureHoldReasons.Queue, FeatureHoldBy.Queue),
+            Held(T0.AddHours(3), FeatureHoldReasons.Queue),
+            Cleared(T0.AddHours(4), FeatureHoldReasons.Queue, FeatureHoldBy.Queue));
+
+        var t = FeatureTimeline.Build(EpicRun(), journal, T0.AddHours(7)).Totals;
+
+        t.ElapsedMinutes.Should().Be(420);
+        t.QueuedMinutes.Should().Be(120, "оба интервала очереди");
+        t.WaitingMinutes.Should().Be(240, "ожидание 09:00–15:00 минус оба пересечённых интервала очереди");
+        t.IdleMinutes.Should().Be(60);
+        t.WaitingCount.Should().Be(1);
+        t.LongestWaitMinutes.Should().Be(240, "net вычитает оба интервала, а не только первый");
+        t.LongestWait!.From.Should().Be(T0.AddHours(1));
+        (t.WorkWallMinutes + t.WaitingMinutes + t.ErrorMinutes + t.IdleMinutes + t.QueuedMinutes)
+            .Should().Be(t.ElapsedMinutes);
+    }
+
     // R-Q3B-4: longestWait выбирает эпизод по net-ожиданию. Эпизод 09:00–12:00 целиком в
     // очереди (net 0), второй 13:00–13:40 вне очереди (net 40): самое долгое — 40 мин и адрес
     // второго эпизода, а не «сырые 3 ч» первого. WaitingCount = 2: очередь не отменяет факт
-    // ожидания. Мутация «сравнивать сырые интервалы» (без NetWaitingSpan) → 180 ≠ 40 → красный.
+    // ожидания. Мутация «сравнивать сырые интервалы» (без NetSpan) → 180 ≠ 40 → красный.
     [Fact]
     public void Build_LongestWaitПоNet_ЭпизодВОчередиНеПобеждает()
     {
@@ -224,12 +277,16 @@ public class FeatureQueueTraceTests
     }
 
     // R-Q3B-5 (Major-1 ревью RV-K-Q3B-2): очередь вычитается и из «агентов суммарно» — по тем же
-    // net-интервалам, что и workWall. Тот же сценарий, что выше: started 09:00…11:00 + очередь
+    // net-интервалам, что и workWall. Сценарий: ОДИН агент, started 09:00…11:00 + очередь
     // 09:00–10:00 → workWall=60, а gross-подсчёт давал agentsSum=120: плитка «работали 1 ч» с
     // подписью «агентов суммарно 2 ч» — числа противоречат друг другу. После фикса: agentsSum=60.
     // Мутация «вернуть gross-сумму started-периодов (без NetSpan)» → 120 ≠ 60 → красный.
+    // Хвост ревью Q6-TAIL (п.3): равенство agentsSum и workWall здесь — свойство ЭТОГО сценария
+    // (один агент, параллельной работы нет), а не инвариант кода: при параллельных агентах сумма
+    // законно больше workWall (в approx это закреплено Build_ПараллельныеЗадачи_ОбъединениеНеСумма,
+    // FeatureTimelineTests.cs:121). agentsSum — сумма по агентам, не min(agentsSum, workWall).
     [Fact]
-    public void Build_ОчередьПоверхStarted_AgentsSumТожеNet_НеБольшеWorkWall()
+    public void Build_ОчередьПоверхStarted_ОдинАгент_AgentsSumТожеNet()
     {
         var journal = Full(
             new FeatureJournalEntry
@@ -244,7 +301,8 @@ public class FeatureQueueTraceTests
         t.WorkWallMinutes.Should().Be(60);
         t.AgentsSumMinutes.Should().Be(60, "агентные минуты — net, как у work: минуты в очереди не работа");
         t.AgentsSumMinutes.Should().BeLessThanOrEqualTo(t.WorkWallMinutes,
-            "один агент: после вычета очереди «агентов суммарно» не больше «работали»");
+            "свойство этого сценария (один агент, параллельной работы нет), а не правило кода: " +
+            "при параллельных агентах сумма законно больше workWall");
     }
 
     [Fact]

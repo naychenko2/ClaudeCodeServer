@@ -2391,7 +2391,7 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
         var stub = new SummaryStubRunner();
         var summary = new FeatureSummaryService(stub, _factory.Services.GetRequiredService<IConfiguration>());
         var controller = BuildController(RealGit(), summary: summary);
-        var result = await controller.FeatureSummary(epicId, false);
+        var result = await controller.FeatureSummary(epicId!, false);
         var json = JsonSerializer.SerializeToElement(((OkObjectResult)result!).Value!,
             new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
 

@@ -13,6 +13,7 @@ import {
 } from './FeatureStatsBits';
 import { buildGanttModel, type GanttModel, type GanttSegmentKind } from './FeatureGanttModel';
 import { personaGroupLabel, modelGroupLabel, roleGroupLabel, formatTokens } from './FeatureStatsFormat';
+import { plural } from '../../lib/plural';
 import { usePersonas } from '../../lib/personas';
 import { useModels } from '../../lib/models';
 import { AGENT_COLORS } from '../AgentSelector';
@@ -638,7 +639,7 @@ function MoreDetails({ totals, spend, source, isMobile }: {
     rows.push(`не работали — ${approx}${formatDuration(totals.notWorkingMinutes)}`);
   }
   if (totals.errorCount != null && totals.errorCount > 0) {
-    rows.push(`ошибки: ${totals.errorCount} эпизодов`);
+    rows.push(`ошибки: ${totals.errorCount} ${plural(totals.errorCount, 'эпизод', 'эпизода', 'эпизодов')}`);
   }
   if (spend) {
     // Кэш — отдельной строкой подробно; в итог плитки «Расход» он тоже входит (tilesModel).

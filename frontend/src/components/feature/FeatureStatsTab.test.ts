@@ -1218,13 +1218,26 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
     expect(more, 'раскрывашка есть').not.toBeNull();
     const all = textNodes(more!).join('');
     expect(all).toContain('не работали — 10 ч');
-    expect(all).toContain('ошибки: 2 эпизодов');
+    expect(all).toContain('ошибки: 2 эпизода');
     expect(all).toContain('кэш: 500 тыс. чтение · 100 тыс. создание');
     expect(all).toContain('доля общих чатов');
     expect(all).toContain('150 тыс. токенов');
     expect(all).toContain('оценка, по журналу');
     expect(all).toContain('моделей без цены: Qwen');
   });
+
+  // Мутация: константа 'эпизодов' вместо plural() краснит 1/2/21.
+  it.each([[1, 'эпизод'], [2, 'эпизода'], [5, 'эпизодов'], [11, 'эпизодов'], [21, 'эпизод']])(
+    '«Подробнее»: ошибки — %i %s',
+    (n, word) => {
+      const base = mkFullStats();
+      const c = renderTab(mkFullStats({
+        timeline: { ...base.timeline, totals: { ...base.timeline.totals, errorCount: n } },
+      }));
+      const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n');
+      expect(all).toMatch(new RegExp(`ошибки: ${n} ${word}(?!\\p{L})`, 'u'));
+    },
+  );
 
   it('approx: «не работали» с «≈» (та же точность, что у работы)', () => {
     const c = renderTab(mkFullStats({ source: 'approx' }));

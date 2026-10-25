@@ -19,7 +19,7 @@ import type { CSSProperties } from 'react';
 import { Pause } from 'lucide-react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
 import { ICON_STROKE } from '../ui/icons';
-import { MERGE_PENDING_STATUS, type FeatureStatusTag } from '../../lib/chatGroups';
+import { MERGE_PENDING_STATUS, queueLabel, type FeatureStatusTag } from '../../lib/chatGroups';
 import type { FeatureQueue, FeatureState } from '../../types/featureRun';
 
 export type FeatureRunTagTone = 'notStarted' | 'run' | 'wait' | 'stop' | 'merge' | 'loop' | 'merged' | 'closed' | 'hold' | 'draft';
@@ -37,13 +37,6 @@ export const UNKNOWN_RUN_TAG: FeatureRunTag = { label: 'статус неизв�
 export interface FeatureHoldInfo {
   holdReason?: string | null;
   queue?: FeatureQueue | null;
-}
-
-// «в очереди · 2 из 3»; без queue (бэк ещё не отдал) — просто «в очереди», нулей не показываем.
-function queueLabel(queue?: FeatureQueue | null): string {
-  return queue && queue.position > 0 && queue.length > 0
-    ? `в очереди · ${queue.position} из ${queue.length}`
-    : 'в очереди';
 }
 
 export function featureRunStatusTag(state: FeatureState, stageName?: string | null, hold?: FeatureHoldInfo): FeatureRunTag {
@@ -103,7 +96,8 @@ const TAG_STYLE: Record<FeatureRunTagTone, CSSProperties> = {
   draft:    { background: 'transparent', color: C.textSecondary, border: `1px dashed ${C.textMuted}` },
 };
 
-// Тег очереди — «в очереди» или «в очереди · N из M»; признак читаем по подписи,
+// Подпись очереди строит хелпер chatGroups.queueLabel (единый формат, R-Q5C-A); здесь
+// она только разбирается, чтобы цифры уйти в моно-спан. Признак читаем по подписи,
 // чтобы не расширять контракт FeatureRunTag (его сверяют toEqual в соседних тестах).
 const QUEUE_LABEL = /^в очереди(?: · (\d+ из \d+))?$/;
 
@@ -144,9 +138,10 @@ export function StatusTag({ tag, testId }: { tag: FeatureRunTag; testId?: string
       {tag.dot && (
         <span aria-hidden style={{ width: 6, height: 6, borderRadius: R.full, background: C.info, flexShrink: 0 }} />
       )}
-      {queue && queue[1] ? (
+      {queue?.[1] ? (
         <>
-          в очереди ·{' '}
+          {/* префикс подписи — из самой строки (хелпер), не копия формата */}
+          {tag.label.slice(0, -queue[1].length)}
           <span data-testid="queue-nums" style={{ fontFamily: FONT.mono }}>{queue[1]}</span>
         </>
       ) : tag.label}

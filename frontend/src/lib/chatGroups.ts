@@ -1,5 +1,6 @@
 import type { ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureChip, FeatureIndexFeature, FeatureRailKey, FeaturesIndex } from '../types/featureIndex';
+import type { FeatureQueue } from '../types/featureRun';
 import { sortTagsByRegistry } from './tagRegistry';
 import { sortKeyOf, type ChatGroupBy, type ChatSortOrder } from './chatFilters';
 import { buildChatTreeRows, type ChatTreeRowData } from './chatTree';
@@ -349,6 +350,17 @@ export function formatDuration(minutes: number): string {
 // чтобы не разъезжалась (ревью фронта 1, major 1).
 export const MERGE_PENDING_STATUS = 'ждёт согласия на мерж';
 
+// Единая формулировка подписи очереди (макет feature-queue-1.md, «Тег и глиф»):
+// «в очереди · 2 из 3»; без queue (бэк ещё не отдал) — просто «в очереди», нулей не показываем.
+// Позицию и длину считает бэк (FeatureQueuePolicy), фронт не пересчитывает. Зовут её тег
+// статуса (FeatureStatusTag) и статус строки индекса (featureDisplayState) — один формат
+// на все места (ревью RV-Q5C, major 1).
+export function queueLabel(queue?: FeatureQueue | null): string {
+  return queue && queue.position > 0 && queue.length > 0
+    ? `в очереди · ${queue.position} из ${queue.length}`
+    : 'в очереди';
+}
+
 // enrich — необязательное «кто · сколько» (макет: «стоит · Денис · 25 мин»):
 //   personaName — имя персоны (attention.personaId / now0.personaId, резолвит вызывающий);
 //   now         — «сейчас» в мс (для стабильных тестов; не задано — Date.now()).
@@ -376,8 +388,7 @@ export function featureDisplayState(
   // Очередь фич: пауза с причиной queue — тон паузы, тревоги нет. Позицию считает бэк;
   // queue не пришёл — подпись без цифр.
   if (f.holdReason === 'queue') {
-    const q = f.queue;
-    return { kind: 'queue', alarm: null, status: q && q.position > 0 && q.length > 0 ? `в очереди · ${q.position} из ${q.length}` : 'в очереди' };
+    return { kind: 'queue', alarm: null, status: queueLabel(f.queue) };
   }
   // Источник правды — f.state (бэк Б1a/Б1b): merge_pending → «ждёт согласия на мерж»,
   // merging → «идёт», waiting → «ждёт вас», stopped → «стоит». Без state (старые данные/кеш)

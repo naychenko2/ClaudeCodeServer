@@ -3,7 +3,9 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect } from 'vitest';
 import { StatusTag, featureRunStatusTag } from './FeatureStatusTag';
+import { featureDisplayState } from '../../lib/chatGroups';
 import { FONT } from '../../lib/design';
+import type { FeatureIndexFeature } from '../../types/featureIndex';
 
 const html = (tag: ReturnType<typeof featureRunStatusTag>) => renderToStaticMarkup(createElement(StatusTag, { tag }));
 const queueHtml = html(featureRunStatusTag('paused', null, { holdReason: 'queue', queue: { position: 2, length: 3 } }));
@@ -42,5 +44,36 @@ describe('StatusTag: очередь', () => {
     const h = html(featureRunStatusTag('paused', null, { holdReason: 'manual' }));
     expect(h).not.toContain('queue-glyph');
     expect(h.replace(/<[^>]+>/g, '')).toBe('на паузе');
+  });
+});
+
+// R-Q5C-A: один источник подписи — хелпер chatGroups.queueLabel. Тег статуса и статус
+// строки индекса (featureDisplayState) для одной строки индекса дают побайтно одно и то же.
+function queuedFeature(over: Partial<FeatureIndexFeature> = {}): FeatureIndexFeature {
+  return {
+    featureId: 'f1', title: 'Фича', projectId: 'p1',
+    bucket: 'attention', attention: null, state: 'paused',
+    holdReason: 'queue', queue: { position: 2, length: 3 },
+    rail: [], chips: ['open'],
+    stepsAccepted: 0, stepsTotal: 0, loops: 0,
+    now0: null, lastActivityAt: null, summary: null,
+    keySessionId: null, keyArchived: false, keyProjectId: null, chatCount: 0,
+    ...over,
+  };
+}
+
+describe('queueLabel: единый источник подписи (тег = строка индекса)', () => {
+  it('«в очереди · 2 из 3» побайтно из featureRunStatusTag и из featureDisplayState', () => {
+    const tag = featureRunStatusTag('paused', null, { holdReason: 'queue', queue: { position: 2, length: 3 } });
+    expect(tag.label).toBe('в очереди · 2 из 3');
+    const st = featureDisplayState(queuedFeature());
+    expect(st.kind).toBe('queue');
+    expect(st.status).toBe(tag.label);
+  });
+
+  it('queue=null: «в очереди» без цифр и нулей — побайтно в обоих местах', () => {
+    const tag = featureRunStatusTag('paused', null, { holdReason: 'queue' });
+    expect(tag.label).toBe('в очереди');
+    expect(featureDisplayState(queuedFeature({ queue: null })).status).toBe(tag.label);
   });
 });

@@ -16,7 +16,7 @@
 import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FileViewer } from './FileViewer';
+import { FileViewer, __test, type WriteActionHooks } from './FileViewer';
 import { api } from '../lib/api';
 import { getFileContext, subscribeFileContext } from '../lib/ai/fileContext';
 import type { Project } from '../types';
@@ -400,6 +400,73 @@ describe('FileViewer: признак fromRoot для AI-палитры', () => {
     off();
     expect(fn, 'подписчики оповещены о сбросе').toHaveBeenCalled();
     expect(getFileContext(), 'признак снят').toBeUndefined();
+  });
+});
+
+// Хвост п.28 (карточка 790595bd): гард `fromRoot` внутри handleSave/handleDelete/handleRevert.
+// Из UI для файла из дерева чата эти обработчики не вызываются — их держат гейты рендера
+// canEdit/canDelete/canRevert (см. describe выше). Гард — как раз против «нового вызова»:
+// тест зовёт обработчики напрямую через тестовый хук __test.writeHooks — тот самый будущий
+// вызывающий. Мутации:
+//   • снять `if (!fromRoot) return false;` в handleSave → краснеет кейс save;
+//   • снять `if (!fromRoot) return;` в handleDelete → кейс delete; в handleRevert → кейс revert;
+//   • гард без условия (return всегда) → краснеет контрольный кейс «из корня».
+describe('FileViewer: гард fromRoot внутри обработчиков записи (п.28)', () => {
+  beforeEach(setupMocks);
+  afterEach(teardown);
+
+  const writeSpies = () => ({
+    save: vi.spyOn(api.files, 'saveContent').mockResolvedValue(undefined),
+    del: vi.spyOn(api.files, 'delete').mockResolvedValue(undefined),
+    revert: vi.spyOn(api.files, 'revert').mockResolvedValue(undefined),
+  });
+
+  // Смонтировать вьюер и позвать обработчик записи через тестовый хук. tree=null — дефолтный
+  // ответ getContent без branch (файл из корня); { branch } + sessionId — файл из дерева чата.
+  const runWrite = async (
+    tree: { branch?: string | null } | null,
+    extra: Record<string, unknown>,
+    call: (h: WriteActionHooks) => Promise<unknown>,
+  ) => {
+    const onClose = vi.fn();
+    if (tree) contentSpy!.mockResolvedValue({ content: 'hello world', isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 11, ...tree } as never);
+    mountViewer(onClose, false, extra);
+    await flush();
+    const hooks = __test.writeHooks.current;
+    expect(hooks, 'тестовый хук не установлен — эффект FileViewer не держит обработчики').not.toBeNull();
+    await act(async () => { await call(hooks!); });
+    await flush();
+    return { onClose };
+  };
+
+  it('файл из дерева чата: handleSave не доходит до api.files.saveContent', async () => {
+    const spies = writeSpies();
+    await runWrite({ branch: 'feat/x' }, { sessionId: 'sess-1' }, h => h.save());
+    expect(spies.save, 'запись в корень недопустима для файла из дерева чата').not.toHaveBeenCalled();
+  });
+
+  it('файл из дерева чата: handleDelete не доходит до api.files.delete, файл не закрыт', async () => {
+    const spies = writeSpies();
+    const { onClose } = await runWrite({ branch: 'feat/x' }, { sessionId: 'sess-1' }, h => h.del());
+    expect(spies.del, 'удаление корневого файла недопустимо').not.toHaveBeenCalled();
+    expect(onClose, 'файл не закрыт').not.toHaveBeenCalled();
+  });
+
+  it('файл из дерева чата: handleRevert не доходит до api.files.revert', async () => {
+    const spies = writeSpies();
+    await runWrite({ branch: 'feat/x' }, { sessionId: 'sess-1' }, h => h.revert());
+    expect(spies.revert, 'откат корневого файла недопустим').not.toHaveBeenCalled();
+  });
+
+  // Контроль: гард — не тотальный запрет. Файл из корня доходит до API (иначе три кейса
+  // выше были бы зелёны и при безусловном return без условия).
+  it('контроль: файл из корня — все три обработчика доходят до API', async () => {
+    const spies = writeSpies();
+    const { onClose } = await runWrite(null, {}, async h => { await h.save(); await h.del(); await h.revert(); });
+    expect(spies.save, 'запись из корня проходит').toHaveBeenCalledWith('p1', 'docs/readme.txt', 'hello world');
+    expect(spies.del, 'удаление из корня проходит').toHaveBeenCalledWith('p1', 'docs/readme.txt');
+    expect(spies.revert, 'откат из корня проходит').toHaveBeenCalledWith('p1', 'docs/readme.txt');
+    expect(onClose, 'удаление закрыло файл').toHaveBeenCalled();
   });
 });
 

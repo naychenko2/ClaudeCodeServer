@@ -246,6 +246,9 @@ internal static class FeatureStepAccounting
                 Title = head.Title,
                 PersonaId = head.PersonaId,
                 ChatId = LiveChat(head.LinkedSessionId),
+                // Проект задачи-шага (п.26 хвостов: переход «в задачу» из карточки) — как шапка
+                // цепочки, от головы; null — задача личная.
+                ProjectId = head.ProjectId,
                 TaskIds = ordered.Select(t => t.Id).ToList(),
                 Outcome = outcome,
                 Status = status,

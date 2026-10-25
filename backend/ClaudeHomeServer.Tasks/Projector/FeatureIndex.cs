@@ -17,6 +17,8 @@ public sealed record FeatureIndexSession(
 // ключевой чат помечает фронт по keySessionId (FeatureChatsTab).
 // modelLabel/modelFull — как у исполнителя (FeatureStageExecutor): «Авто»/короткая метка и
 // полное имя (для «Авто» — «Авто → {модель} (слот «{тир}»)»).
+// projectId — проект задачи этого чата (хвосты 5634609f п.26: переход «в задачу» берёт проект
+// эпика как приближение); null — у чата нет задачи фичи (curator/orchestrator) или задача личная.
 public sealed record FeatureChat(
     string Id,
     string Kind,
@@ -27,7 +29,8 @@ public sealed record FeatureChat(
     string? StepRef,
     string? Lane,
     string? ModelLabel,
-    string? ModelFull);
+    string? ModelFull,
+    string? ProjectId);
 
 // Индекс «чат → фичи» (GET /api/tasks/features/index, контракт С0 §1).
 // Б1 строит карту членства (Chats) и строки-заготовки фич (Features); Б2 дополнит строки

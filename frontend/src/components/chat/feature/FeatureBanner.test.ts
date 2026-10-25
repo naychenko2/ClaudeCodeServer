@@ -12,6 +12,11 @@
 //      не прямой проп): SSR (подпись/действие/тон по каждому состоянию) + mount
 //      (клик по точке → cc-open-feature, «впереди» не кликабельно).
 //
+// Очередь фич (R-Q5D-B, MAJOR-1 из RV-K-Q5D): рендер подписи — РАЗБИВКОЙ: leading-слово
+// в <b> цвета textHeading, суффикс — обычным начертанием и цветом ряда; активная точка
+// фичи в очереди приглушена (C.textMuted, как в плашке группы) и её aria — «· в очереди
+// N из M» (макет feature-queue-1.html:421-423).
+//
 // Окружение node (без jsdom): SSR — renderToStaticMarkup; mount — fakeDom.
 // Стор индекса и флаги заполняются напрямую (setIndex / setAllFlags) — useEffect-фетч
 // в SSR не идёт, компонент читает уже заполненный стор.
@@ -255,6 +260,23 @@ describe('FeatureBanner: очередь фич (подпись «В очеред
     // Тон тот же, что у обычной паузы (не wait/stop): тревоги очередь не поднимает.
     expect(html).toContain('data-banner-tone="run"');
   });
+
+  // MAJOR-1 из RV-K-Q5D: рендер — РАЗБИВКОЙ, а не одним span'ом (макет .ban .ph b):
+  // leading-слово в <b> цвета textHeading, суффикс — вне <b>, обычным начертанием.
+  // Мутация (в отчёте): вернуть {model.where} одним span'ом без <b> → тест красный
+  // (первый assert по <b>, второй — по суффиксу вне <b>).
+  it('рендер (SSR): «В очереди» в <b> цвета textHeading, post « · 2 из 3» — вне <b> (макет .ban .ph b)', () => {
+    seedIndex(queued(), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const m = html.match(/<span data-testid="feature-where"[^>]*>([\s\S]*?)<\/span>/);
+    expect(m, 'нет «где мы»').not.toBeNull();
+    const inner = m![1];
+    // Leading-слово — в <b> с явным цветом textHeading (макет .ban .ph b).
+    expect(inner, 'leading-слово не в <b> цвета textHeading').toContain(`<b style="color:${C.textHeading}">В очереди</b>`);
+    // Суффикс — вне <b>, обычным начертанием (в <b> его нет).
+    expect(inner.slice(inner.indexOf('</b>') + 4), 'post вне <b>').toBe(' · 2 из 3');
+    expect(inner.slice(0, inner.indexOf('</b>')), 'post не должен быть внутри <b>').not.toContain('2 из 3');
+  });
 });
 
 // === 2: рендер панели с настоящими данными списка (SSR) ===
@@ -375,6 +397,30 @@ describe('FeatureBanner: рендер с данными списка (SSR)', () 
     expect(html.slice(Math.max(0, i - 20), i), 'skipped design должен быть <i>').toContain('<i');
     // Заливка — C.bgInset (var(--c-bg-inset)), не дорожка pending.
     expect(html.slice(i, i + 200), 'skipped-точка залита C.bgInset').toContain(`background:${C.bgInset}`);
+  });
+
+  // R-Q5D-B (макет feature-queue-1.html:421-422, спека feature-queue-1.md:26): у фичи в
+  // очереди активная точка приглушена (C.textMuted вместо цвета тона — одно состояние
+  // выглядит одинаково в плашке группы и в рельсе чата), её aria — «Этап: {этап} · в
+  // очереди N из M». Ручная пауза (holdReason=manual) — без приглушения и без суффикса.
+  // Мутация (в отчёте): stageDotColor без ветки inQueue (тон точки) → краснеет первый
+  // блок; убрать суффикс aria → краснеет assert с aria.
+  it('очередь: активная точка приглушена (C.textMuted) с aria «· в очереди 2 из 3»; ручная пауза — цвет тона, aria без суффикса', () => {
+    // Пауза с активной стадией tone wait (как у стоящей фичи): без очереди точка была бы C.info.
+    const railWait = rail().map(s => (s.state === 'active' ? { ...s, tone: 'wait' as const } : s));
+    seedIndex(feat('paused', { holdReason: 'queue', queue: { position: 2, length: 3 }, rail: railWait }), link(), 'chat-exec', 'p1');
+    const html = renderBanner('chat-exec', 'p1');
+    const m = html.match(/<button[^>]*data-testid="feature-dot-prod"[^>]*>/);
+    expect(m, 'нет активной точки prod').not.toBeNull();
+    expect(m![0], 'aria активной точки без позиции очереди').toContain('aria-label="Этап: Производство · в очереди 2 из 3"');
+    expect(m![0], 'активная точка очереди не приглушена (C.textMuted)').toContain(`background:${C.textMuted}`);
+    // Ручная пауза — то же состояние рельсы, что прежде: цвет тона (wait → C.info), aria без суффикса.
+    seedIndex(feat('paused', { holdReason: 'manual', rail: railWait }), link(), 'chat-exec', 'p1');
+    const htmlManual = renderBanner('chat-exec', 'p1');
+    const mManual = htmlManual.match(/<button[^>]*data-testid="feature-dot-prod"[^>]*>/);
+    expect(mManual, 'нет активной точки prod (manual)').not.toBeNull();
+    expect(mManual![0], 'manual-пауза не должна быть приглушена').toContain(`background:${C.info}`);
+    expect(mManual![0], 'aria manual-паузы не должна нести очередь').toContain('aria-label="Этап: Производство"');
   });
 
   it('«· ещё N»: чат с двумя фичами → «· ещё 1» (порядок — от бэка)', () => {

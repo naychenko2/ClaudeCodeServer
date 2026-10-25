@@ -4,7 +4,7 @@ import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useFeaturesIndex, featureOf } from '../../../lib/featuresIndex';
 import { useFeatureRuns, useFeatureRunsLoading, useFeatureRunsError } from '../../../lib/featureRuns';
 import { openChatById } from '../../../lib/openChat';
-import { STAGE_NAME } from '../../../lib/chatGroups';
+import { STAGE_NAME, queueLabel } from '../../../lib/chatGroups';
 import { CHAT_ROLE_LABEL } from '../../../lib/featureChatRole';
 import { roleLabel } from '../../../lib/roleLabel';
 import { getPersonaById } from '../../../lib/personas';
@@ -13,6 +13,7 @@ import { FeatureBannerSheet } from './FeatureBannerSheet';
 import { statusPhrase, uniquePersonaNames } from './pillModel';
 import { stepProgressFromIndex, formatStepProgress } from '../../../lib/featureProgress';
 import type { FeatureIndexFeature, FeatureChatLink, FeatureRailKey, FeatureRailState, FeatureRailTone } from '../../../types/featureIndex';
+import type { FeatureQueue } from '../../../types/featureRun';
 
 // Плашка фичи в чате — ОДНА КОМПАКТНАЯ СТРОКА (макет feature-banner-1, вариант «А · Строка»
 // + кликабельные точки этапов из «Г · Мини-хронология»; записка Майи 20.10, решения Андрея).
@@ -72,10 +73,19 @@ function activeStageName(f: FeatureIndexFeature): string | null {
 //   waiting → «{этап} · ждёт вас»; stopped → «стоит · {имя}» (имя — из тревоги);
 //   merged → «смержена» (без даты, как в пилюле); merge_pending → «Мерж · ждёт согласия»;
 //   merging → «Мерж · идёт»; closed → «закрыта»; not_started/idle — своё слово;
-//   paused+queue → «В очереди · N из M» (волна 6, очередь фич; holdReason/queue — поля
-//   строки индекса, позицию считает бэк).
+//   paused+queue → «В очереди · N из M» (волна 6): ТЕКСТ — из общего хелпера
+//   queueLabel (chatGroups, R-Q5C-A/R-Q5D-B): в рельсе нет своей копии формата
+//   «N из M»; holdReason/queue — поля строки индекса, позицию считает бэк.
 // Возвращает { bold, post } — как модель statusPhrase: leading-слово и суффикс.
 function whereParts(f: FeatureIndexFeature): { bold: string; post: string } {
+  // Очередь (R-Q5D-B): строка из хелпера («в очереди · 2 из 3» | «в очереди»). Разбивка
+  // под макет .ph (feature-queue-1.html:423): leading-слово — с большой и жирным
+  // (рендерит <b>), суффикс « · 2 из 3» — как дал хелпер; без цифр — пустой.
+  if (f.state === 'paused' && f.holdReason === 'queue') {
+    const label = queueLabel(f.queue);
+    const sep = label.indexOf(' · ');
+    return { bold: 'В очереди', post: sep >= 0 ? label.slice(sep) : '' };
+  }
   const stage = activeStageName(f);
   // «Идут»: уникальные id из индекса (nowPersonaIds; фолбэк — now0.personaId).
   const nowIds = (f.nowPersonaIds && f.nowPersonaIds.length > 0)
@@ -160,9 +170,10 @@ export interface FeatureBannerRow {
   // «Где мы»: слова из statusPhrase (общий источник с пилюлей): «{этап} · {идущие}»,
   // «{этап} · ждёт вас», «стоит · {имя}», «смержена», «В очереди · N из M» и т.д.
   where: string;
-  // Разбивка подписи — та же, что поля модели statusPhrase (leading-слово и суффикс):
-  // очередь — bold «В очереди», post « · 2 из 3» (макет feature-queue-1, «Рельса в чате»).
-  // Рисует строку `where` (bold+post); разбивка — для теста и точных текстов.
+  // Разбивка подписи — leading-слово и суффикс (очередь: «В очереди» + « · 2 из 3»,
+  // текст — из queueLabel; прочие состояния — из statusPhrase). РЕНДЕРИТСЯ именно
+  // разбивкой: leading — <b> цвета C.textHeading, суффикс — рядом с рядом (макет
+  // feature-queue-1.html:423, .ban .ph b). `where` (bold+post) — для aria и точных текстов.
   whereBold: string;
   wherePost: string;
   whereTone: 'wait' | 'stop' | 'run';
@@ -204,9 +215,13 @@ function toneStyle(tone: BannerTone): React.CSSProperties {
   }
 }
 
-// Цвет активной точки по tone (макет .dots i.a.*): wait → C.info, stop → C.danger,
-// run/loop → C.textHeading. tone null у active — редкость, дефолт (textHeading).
-function activeDotColor(tone: FeatureRailTone | null): string {
+// Цвет активной точки (макет .dots i.a.*, feature-queue-1.html:193 .rail i.a.q):
+// очередь (фича в очереди) → C.textMuted — тон очереди = тон паузы, приглушение то же,
+// что у плашки группы (FeatureRail, решение постановщика по RV-K-Q5E); иначе по tone:
+// wait → C.info, stop → C.danger, run/loop → C.textHeading. tone null у active —
+// редкость, дефолт (textHeading).
+function stageDotColor(tone: FeatureRailTone | null, inQueue: boolean): string {
+  if (inQueue) return C.textMuted;
   switch (tone) {
     case 'wait': return C.info;
     case 'stopped': return C.danger;
@@ -222,26 +237,45 @@ const DOT = 6;
 const DOT_ACTIVE = 16;
 const DOT_R = 3;
 
-// Точка этапа: done — зелёная, active — вытянутая в цвет тона, pending — дорожка,
-// absent — пунктирный контур. Кликабельные (done/active) — <button>, ведут на страницу
-// фичи (вкладка «Хронология», к этому этапу); pending/absent — <i> (не кликабельны).
+// Суффикс aria активной точки фичи в очереди: « · в очереди N из M» (макет
+// feature-queue-1.html:421-422, та же строка, что у FeatureRail). Текст — из общего
+// хелпера queueLabel («в очереди · 2 из 3» | «в очереди»): в рельсе нет своей копии
+// формата «N из M»; разделитель хелпера переставляется в ведущий (у точки — перед
+// словом). Позицию считает бэк, здесь не пересчитываем.
+function queueAriaSuffix(queue: FeatureQueue | null | undefined): string {
+  const label = queueLabel(queue);
+  const sep = label.indexOf(' · ');
+  const nums = sep >= 0 ? ' ' + label.slice(sep + 3) : '';
+  return ` · ${label.slice(0, sep >= 0 ? sep : label.length)}${nums}`;
+}
+
+// Точка этапа: done — зелёная, active — вытянутая в цвет тона (фича в очереди —
+// приглушённая C.textMuted, R-Q5D-B), pending — дорожка, absent — пунктирный контур.
+// Кликабельные (done/active) — <button>, ведут на страницу фичи (вкладка
+// «Хронология», к этому этапу); pending/absent — <i> (не кликабельны).
 // data-testid — у КАЖДОЙ точки (и <i>, и <button>): тест отличает кликабельную от
 // «впереди» по тегу элемента, а не по наличию testid.
-function StageDotView({ dot, onOpen }: { dot: StageDot; onOpen: (key: FeatureRailKey) => void }) {
+function StageDotView({ dot, onOpen, inQueue = false, queue = null }: {
+  dot: StageDot;
+  onOpen: (key: FeatureRailKey) => void;
+  inQueue?: boolean;
+  queue?: FeatureQueue | null;
+}) {
   const base: React.CSSProperties = { display: 'block', height: DOT, borderRadius: DOT_R, flexShrink: 0 };
   let style: React.CSSProperties;
   if (dot.state === 'done') style = { ...base, width: DOT, background: C.success };
-  else if (dot.state === 'active') style = { ...base, width: DOT_ACTIVE, background: activeDotColor(dot.tone) };
+  else if (dot.state === 'active') style = { ...base, width: DOT_ACTIVE, background: stageDotColor(dot.tone, inQueue) };
   else if (dot.state === 'absent') style = { ...base, width: DOT, background: 'transparent', boxShadow: `inset 0 0 0 1px ${C.dashed}` };
   else if (dot.state === 'skipped') style = { ...base, width: DOT, background: C.bgInset };
   else style = { ...base, width: DOT, background: C.progressTrack };
 
   if (!dot.clickable) return <i data-testid={`feature-dot-${dot.key}`} aria-hidden="true" style={style} />;
+  const ariaLabel = `Этап: ${STAGE_NAME[dot.key]}${dot.state === 'active' && inQueue ? queueAriaSuffix(queue) : ''}`;
   return (
     <button
       type="button"
       data-testid={`feature-dot-${dot.key}`}
-      aria-label={`Этап: ${STAGE_NAME[dot.key]}`}
+      aria-label={ariaLabel}
       title={STAGE_NAME[dot.key]}
       onClick={() => onOpen(dot.key)}
       style={{ ...style, border: 'none', padding: 0, cursor: 'pointer', position: 'relative' }}
@@ -354,6 +388,9 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
 
   const model = featureBannerRow(feature, link, sessionId);
   const more = Math.max(0, entries.length - 1);
+  // Фича в очереди (holdReason=queue): точки приглушены, aria активной — с позицией
+  // (R-Q5D-B, feature-queue-1.html:421-422).
+  const inQueue = feature.state === 'paused' && feature.holdReason === 'queue';
 
   // «Фича →» / клик по точке: страница фичи на вкладке «Хронология» (cc-open-feature;
   // WorkspacePage слушает, fromChat — крошка «← К чату «…»»). stage — подсказка для Ф-pl-b.
@@ -407,7 +444,10 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
         cursor: 'pointer',
       }}
     >
-      {model.where}
+      {/* Разбивка по макету .ban .ph b (R-Q5D-B, MAJOR-1 RV-K-Q5D): leading-слово — <b>
+          цвета textHeading (для очередь — «В очереди»), суффикс — обычным начертанием
+          и цветом ряда. */}
+      <b style={{ color: C.textHeading }}>{model.whereBold}</b>{model.wherePost}
     </span>
   );
 
@@ -443,7 +483,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
       style={{ display: 'inline-flex', alignItems: 'center', gap: 3, flexShrink: 0 }}
     >
       {model.dots.map(dot => (
-        <StageDotView key={dot.key} dot={dot} onOpen={k => openFeaturePage(k)} />
+        <StageDotView key={dot.key} dot={dot} onOpen={k => openFeaturePage(k)} inQueue={inQueue} queue={feature.queue} />
       ))}
     </span>
   );

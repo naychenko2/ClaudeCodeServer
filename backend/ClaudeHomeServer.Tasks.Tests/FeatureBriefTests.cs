@@ -13,7 +13,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • брать ElapsedMinutes вместо WorkWallMinutes — тот же тест красный;
 //  • убрать Take(MaxNext) — тест лимита красный; убрать фильтр pending — тест пропусков красный;
 //  • ReviewCoefficient 0.5 → 1 — тест формулы красный (k = 9 вместо 7, remaining = 120 вместо 100);
-//  • убрать фильтр PlanState — тест «нет плана» красный; убрать фильтр состояний — тесты веток красные.
+//  • убрать фильтр PlanState — тест «нет плана» красный; убрать фильтр состояний — тесты веток красные;
+//  • B5: убрать проверку стадии в StaleOf — тест «смена стадии» красный; убрать проверку категории —
+//    тест «переход на паузу» красный; отдать в BriefNote поле BySessionId — тест контракта красный.
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -375,6 +377,102 @@ public class FeatureBriefTests
     {
         FeatureBrief.Build(RunWithPlan(FeatureStates.Draft, 1, 1, 1), null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW)
             .Estimate.Should().BeNull("draft — фичу готовят, работа не разрешена");
+    }
+
+    // ─── note (B5): голос эпика из TaskItem.Note ───────────────────────────────────────────────
+
+    // Фикстура: run с активной стадией activeStage и голосом эпика, записанным на stageAtWrite /
+    // stateAtWrite (штамп как ставит контроллер B3). bySessionId в хранимом голосе есть — наружу
+    // он не должен выйти ни при каком раскладе.
+    private static FeatureRun RunWithVoice(string activeStage, string state, FeatureHold? hold,
+        string stageAtWrite, string stateAtWrite) => new()
+    {
+        FeatureId = "ep",
+        State = state,
+        Hold = hold,
+        Epic = new TaskItem
+        {
+            Id = "ep",
+            Role = TaskRoles.Feature,
+            Note = new FeatureNote("ревью началось", NOW.AddHours(-2), "sess-1", true,
+                stageAtWrite, stateAtWrite),
+        },
+        Stages = [Stage(activeStage, "active")],
+    };
+
+    // c1: смена активной стадии после записи → stale = true (prod → review, категория та же).
+    [Fact]
+    public void Note_СменаАктивнойСтадииПослеЗаписиДаётStale()
+    {
+        var run = RunWithVoice("review", FeatureStates.Running, null, "prod", "running");
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeTrue(
+            "голос записан на стадии prod, фича уже на review");
+    }
+
+    // c1: смена категории состояния (переход на паузу) при НЕизменённой стадии → stale = true.
+    // Стадия та же (prod), поэтому краснеет ровно проверка категории, не стадии.
+    [Fact]
+    public void Note_СменаКатегорииСостоянияПриТойЖеСтадииДаётStale()
+    {
+        var run = RunWithVoice("prod", FeatureStates.Paused,
+            new FeatureHold(FeatureHoldReasons.Manual, NOW, null, true), "prod", "running");
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeTrue(
+            "stageAtWrite тот же, но категория сменилась: running → paused");
+    }
+
+    // c1: без смен → stale = false; поля контракта — как в хранимом голосе (кроме byPersonaId,
+    // его хранимый FeatureNote B3 не несёт).
+    [Fact]
+    public void Note_БезСменStaleЛожный_ПоляРовноИзХранимогоГолоса()
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running");
+
+        var note = FeatureBrief.Build(run, null, null, NOW).Note!;
+
+        note.Stale.Should().BeFalse("стадия и категория не менялись");
+        note.Text.Should().Be("ревью началось");
+        note.At.Should().Be(NOW.AddHours(-2));
+        note.ByUser.Should().BeTrue();
+        note.StageAtWrite.Should().Be("prod");
+        note.ByPersonaId.Should().BeNull("хранимый FeatureNote persona автора не несёт");
+    }
+
+    // c2: без Note поле note равно null — и у эпика без голоса, и у run без эпика (не исключение).
+    [Fact]
+    public void Note_БезГолосаNull_ИУЭпикаБезГолосаИБезЭпика()
+    {
+        var epicWithoutNote = new FeatureRun
+        {
+            State = FeatureStates.Running,
+            Epic = new TaskItem { Id = "ep", Role = TaskRoles.Feature },
+        };
+        FeatureBrief.Build(epicWithoutNote, null, null, NOW).Note.Should().BeNull();
+        // Run без эпика (частичные данные/тестовая фикстура) — тоже null, не падение.
+        FeatureBrief.Build(RunOf(FeatureStates.Running), null, null, NOW).Note.Should().BeNull();
+    }
+
+    // c3: наружу — ровно поля контракта разреза п.6; bySessionId (и stateAtWrite) в BriefNote нет.
+    // Мутация: добавить в BriefNote поле BySessionId — тест красный.
+    [Fact]
+    public void Note_НаружуРовноПоляКонтракта_БезBySessionId()
+    {
+        typeof(FeatureBrief.BriefNote)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Select(p => p.Name)
+            // bySessionId наружу не уходит; stateAtWrite служит только StaleOf.
+            .Should().BeEquivalentTo("Text", "At", "ByPersonaId", "ByUser", "StageAtWrite", "Stale");
+    }
+
+    // Категория на момент записи не подтверждается (штамп вне таблицы FeatureStates) — голос
+    // считается устаревшим (fail-closed), даже когда стадия не менялась.
+    [Fact]
+    public void Note_НеизвестныйШтампСостоянияСчитаетсяСменойКатегории()
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "фиктивное_состояние");
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeTrue();
     }
 
     // ─── заглушки и время расчёта ──────────────────────────────────────────────────────────────

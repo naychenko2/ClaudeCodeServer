@@ -11,7 +11,8 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // B2b: estimate — формула разреза п.3 над чужой выборкой: вызывающий передаёт тот же typical,
 // что пошёл в stats; своего прохода по смерженным фичам здесь нет (EstimateOf).
 //
-// B1a: без «голоса» — note всегда null (шаг Б-3); queue всегда null (за скобками этой волны).
+// B5: note — голос эпика из TaskItem.Note (NoteOf/StaleOf, разрез п.1–2); queue всегда null
+// (за скобками этой волны).
 public static class FeatureBrief
 {
     // Категории сводки (brief.kind, JSON camelCase-совместимые строки как в контракте разреза п. 4).
@@ -51,8 +52,10 @@ public static class FeatureBrief
     // квантилям выборки; sampleSize — n шаговой выборки (FeatureTypical.StepCount).
     public sealed record BriefEstimate(
         int RemainingMinutes, int P25, int P75, string Source, int SampleSize);
-    // Заглушки: queue — шов очереди (за скобками этой волны), note — голос оркестратора (шаг Б-3).
+    // Заглушка: queue — шов очереди (за скобками этой волны).
     public sealed record BriefQueue(int Position, int Total);
+    // BriefNote — контракт голоса наружу (разрез п.6): ровно эти поля. StateAtWrite хранимого
+    // FeatureNote наружу не уходит (нужен только StaleOf), BySessionId — тем более.
     public sealed record BriefNote(
         string Text, DateTime At, string? ByPersonaId, bool ByUser, string StageAtWrite, bool Stale);
 
@@ -106,7 +109,7 @@ public static class FeatureBrief
             timeline?.Totals.WorkWallMinutes,
             EstimateOf(run, typical, kind),
             Queue: null,
-            Note: null,
+            Note: NoteOf(run, kind),
             now);
     }
 
@@ -186,5 +189,42 @@ public static class FeatureBrief
             (int)Math.Round(steps.P75 * k + tails.P75),
             EstimateSource,
             typical!.StepCount);
+    }
+
+    // B5 (разрез п.1–2, п.6): голос эпика из TaskItem.Note (хранимое поле B3; доходит сюда через
+    // FeatureRun.Epic — BuildCore держит исходный TaskItem). Наружу — ровно поля контракта:
+    // text/at/byPersonaId/byUser/stageAtWrite/stale; bySessionId наружу не уходит, stateAtWrite
+    // служит только StaleOf. ByPersonaId — null: хранимый FeatureNote (B3) persona автора не несёт
+    // (только чат BySessionId); заполнить его — аддитивная правка модели, не проектора.
+    // Run без эпика (тестовая фикстура) или без голоса — null: «голоса нет → строки нет совсем».
+    private static BriefNote? NoteOf(FeatureRun run, string kind)
+    {
+        var note = run.Epic?.Note;
+        if (note is null) return null;
+
+        return new BriefNote(
+            note.Text, note.At, null, note.ByUser, note.StageAtWrite,
+            StaleOf(run, note, kind));
+    }
+
+    // Признак устаревания (разрез п.2): голос устарел, если StageAtWrite ≠ текущей активной стадии
+    // ИЛИ категория состояния (brief.kind) сменилась с момента записи.
+    // «Текущая активная стадия» — активная стадия конвейера (Stages, state == "active", та же база,
+    // что у NowOf/NextOf): на paused/waiting/idle Now пуст, и сравнение с Now[0] (из которого
+    // StageAtWrite штамповал контроллер B3) считало бы любой голос устаревшим только потому, что
+    // «сейчас ничего не идёт». Оговорка: StageAtWrite штампуется из Now[0].Stage задачи — если
+    // задача шла в стадии, отличной от активной (петля), голос с момента записи считается
+    // устаревшим; честнее штамп не восстанавливается.
+    // Категория на момент записи достраивается из StateAtWrite той же таблицей KindByState:
+    // состояния нет в таблице — категория на момент записи не подтверждается, голос устарел
+    // (fail-closed). Ограничение хранимого поля (B3): причина удержания на момент записи не
+    // хранится — голос, записанный в очереди, считается устаревшим, пока фича в очереди
+    // (paused → queued различить нечем).
+    private static bool StaleOf(FeatureRun run, FeatureNote note, string kind)
+    {
+        var activeStage = run.Stages.FirstOrDefault(s => s.State == "active")?.Key ?? "";
+        if (note.StageAtWrite != activeStage) return true;
+        if (!KindByState.TryGetValue(note.StateAtWrite, out var kindAtWrite)) return true;
+        return kindAtWrite != kind;
     }
 }

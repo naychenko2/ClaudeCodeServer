@@ -287,11 +287,13 @@ describe('R-Q5D-F: части пилюли = структура queueLabelParts'
     expect(m.post).toBe('');
   });
 
-  it('в исходнике пилюли нет разбора строки и своей константы «В очереди»', () => {
+  it('в исходнике пилюли нет разбора строки подписи и нет доступа к строке целиком', () => {
     const src = readFileSync(fileURLToPath(new URL('./pillModel.ts', import.meta.url)), 'utf8');
-    expect(src, 'пилюля разбирает строку подписи по разделителю').not.toContain("indexOf(' · ')");
-    expect(src, 'пилюля берёт строку подписи вместо частей').not.toMatch(/\bqueueLabel\(/);
-    expect(src, 'пилюля зашивает своё слово «В очереди»').not.toMatch(/'В очереди'/);
+    // Запрещаем ПРАВИЛО, а не конкретное написание: иначе возврат старой реализации
+    // (слово из кусков + разбор через split) проходит мимо сторожа.
+    expect(src, 'пилюля разбирает строку подписи по разделителю').not.toMatch(/\.(split|slice|substring|substr|indexOf|lastIndexOf)\(/);
+    expect(src, 'пилюля берёт строку подписи вместо частей').not.toMatch(/\.label\b/);
+    expect(src, 'пилюля берёт строку подписи вместо частей (хелпер)').not.toMatch(/\bqueueLabel\(/);
   });
 });
 

@@ -82,7 +82,7 @@ public class TaskPregateServiceTests : IDisposable
     }
 
     private Task<TaskPregateOutcome> Run() =>
-        new TaskPregateService(_tasks, _projects, _reader, _pregate).RunAsync(_task.OwnerId, _task.Id, "s", CancellationToken.None);
+        new TaskPregateService(_tasks, _projects, _reader, _pregate).RunAsync(_task.OwnerId!, _task.Id, "s", CancellationToken.None);
 
     [Fact]
     public async Task ГрязноеДерево_ПрогонНеНачат_РезультатНеЗаписан()

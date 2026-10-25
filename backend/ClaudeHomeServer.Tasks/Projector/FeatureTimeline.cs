@@ -42,6 +42,8 @@ public sealed record TimelineCurrent(
 // Самый долгий эпизод ожидания (ST-B2): минуты — то же число, что LongestWaitMinutes;
 // TaskId — задача, в которой был эпизод; From — начало эпизода (ISO). Сам объект null —
 // эпизодов ожидания нет или режим approx; внутри него From заполнен всегда.
+// Minutes — net-ожидание: сырой эпизод минус время внутри очереди фич (R-Q3B-4): пока фича
+// стояла в очереди, она ждала место, а не человека.
 public sealed record TimelineLongestWait(
     int Minutes,
     string? TaskId,
@@ -71,7 +73,8 @@ public sealed record TimelineTotals(
     int? IdleMinutes,
     int? WaitingCount,
     int? LongestWaitMinutes,
-    // Самый долгий эпизод ожидания с задачей и началом (ST-B2); null — эпизодов нет или approx.
+    // Самый долгий эпизод ожидания по net-ожиданию (ST-B2; net — R-Q3B-4) с задачей и началом;
+    // null — эпизодов нет или approx.
     TimelineLongestWait? LongestWait,
     int? ErrorCount,
     int? ErrorMinutes,
@@ -331,6 +334,10 @@ public sealed record FeatureTimeline(
         string LabelOf(string? taskId) =>
             taskId is not null && stageByTask.TryGetValue(taskId, out var s) ? s : "";
 
+        // Интервалы очереди фич (R-Q3B-2) считаем ДО промежутка 1: на них опираются и
+        // net-длительность эпизодов ожидания (R-Q3B-4, ниже), и вычитание из видов (итог).
+        var queueIntervals = QueueIntervals(journal.Entries, from, to, now);
+
         // Промежуток 1: интервалы ожидания (waiting + device_wait) + счётчики. Собираем ДО work:
         // started-период режем на них, чтобы work не включал минуты ожидания (major 1).
         var waitingIntervals = new List<JournalInterval>();
@@ -338,6 +345,10 @@ public sealed record FeatureTimeline(
         var longestWait = TimeSpan.Zero;
         // ST-B2: адрес самого долгого эпизода (задача + начало). Первый эпизод фиксируется
         // всегда (даже нулевой длины), дальше — строго больший; при равенстве — первый.
+        // R-Q3B-4: «больший» — по net-ожиданию (сырой эпизод минус время внутри очереди):
+        // иначе при «3 ч в очереди поверх ожидания» статистика даёт «ожидание 0 мин» рядом с
+        // «дольше всех 3 ч» — прямое противоречие. WaitingCount при этом не меняется: очередь
+        // не отменяет сам факт ожидания человека, из времени вычитается только очередь.
         string? longestWaitTaskId = null;
         DateTime? longestWaitFrom = null;
         foreach (var e in journal.Entries)
@@ -354,10 +365,11 @@ public sealed record FeatureTimeline(
                 // тянется до now, а не до закрытия — интервалы sweep'ом режутся к [from, to],
                 // поэтому и самое длинное ожидание обрезаем тем же `to` (иначе: закрыта 08:30,
                 // waiting 08:00 без cleared, now=20:00 → Waiting=30, LongestWait=720).
-                var wSpan = (wEnd <= to ? wEnd : to) - e.At;
-                if (longestWaitFrom is null || wSpan > longestWait)
+                // Net-длительность (R-Q3B-4): минуты внутри очереди — не ожидание человека.
+                var net = NetWaitingSpan(e.At, wEnd <= to ? wEnd : to, queueIntervals);
+                if (longestWaitFrom is null || net > longestWait)
                 {
-                    longestWait = wSpan;
+                    longestWait = net;
                     longestWaitTaskId = e.TaskId;
                     longestWaitFrom = e.At;
                 }
@@ -370,10 +382,10 @@ public sealed record FeatureTimeline(
             {
                 var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
                 waitingCount++;
-                var dSpan = (dEnd <= to ? dEnd : to) - e.At;
-                if (longestWaitFrom is null || dSpan > longestWait)
+                var net = NetWaitingSpan(e.At, dEnd <= to ? dEnd : to, queueIntervals);
+                if (longestWaitFrom is null || net > longestWait)
                 {
-                    longestWait = dSpan;
+                    longestWait = net;
                     longestWaitTaskId = e.TaskId;
                     longestWaitFrom = e.At;
                 }
@@ -446,7 +458,6 @@ public sealed record FeatureTimeline(
         // ноль, когда сумма ceil-ов превышала elapsed (проба: ход 30 с + ожидание 20 с + ошибка
         // 10 с в окне 2 мин → 1+1+1+0 = 3 ≠ 2).
         var elapsed = FeatureTimeMath.Minutes(from, to);
-        var queueIntervals = QueueIntervals(journal.Entries, from, to, now);
         var workSpan = TimeSpan.Zero;
         var waitingSpan = TimeSpan.Zero;
         var errorSpan = TimeSpan.Zero;
@@ -501,6 +512,7 @@ public sealed record FeatureTimeline(
         var notWorking = Math.Max(0, elapsed - workWall);
         // Хвост ревью ST-B2: самое долгое ожидание округляется один раз каноническим
         // хелпером — LongestWaitMinutes и LongestWait.Minutes берут одно и то же число.
+        // longestWait уже net (R-Q3B-4): минуты внутри очереди из него вычтены.
         var lwMinutes = FeatureTimeMath.CeilMinutes(longestWait);
         var totals = new TimelineTotals(
             ElapsedMinutes: elapsed,
@@ -575,6 +587,23 @@ public sealed record FeatureTimeline(
             if (qe > qs) result.Add((qs, qe));
         }
         return result;
+    }
+
+    // Net-длительность интервала ожидания [start, end) (R-Q3B-4): сырой интервал минус
+    // пересечения с интервалами очереди — пока фича стояла в очереди, она ждала место, а не
+    // человека. start/end уже обрезаны к [from, to]; интервалы очереди не пересекаются между
+    // собой (построение QueueIntervals), поэтому пересечения не складываются дважды и net ≥ 0.
+    private static TimeSpan NetWaitingSpan(
+        DateTime start, DateTime end, List<(DateTime Start, DateTime End)> queueIntervals)
+    {
+        var net = end - start;
+        foreach (var (qs, qe) in queueIntervals)
+        {
+            var os = start > qs ? start : qs;
+            var oe = end < qe ? end : qe;
+            if (oe > os) net -= oe - os;
+        }
+        return net;
     }
 
     internal static List<TimelineSegment> Sweep(List<JournalInterval> intervals, DateTime from, DateTime to)

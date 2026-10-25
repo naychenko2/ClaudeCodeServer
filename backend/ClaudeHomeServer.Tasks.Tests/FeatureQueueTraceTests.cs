@@ -137,6 +137,12 @@ public class FeatureQueueTraceTests
         t.QueuedMinutes.Should().Be(180, "весь интервал held(queue)..hold_cleared, а не только перекрытие с idle");
         t.WaitingMinutes.Should().Be(0, "ожидание целиком внутри очереди — его минуты вычтены из waiting");
         t.IdleMinutes.Should().Be(60);
+        // R-Q3B-4: net-ожидание того же эпизода — 0: «ожидание 0 мин» не стоит рядом с
+        // «дольше всех 3 ч». WaitingCount — счётчик событий, очередь его не меняет.
+        t.WaitingCount.Should().Be(1);
+        t.LongestWaitMinutes.Should().Be(0);
+        t.LongestWait.Should().NotBeNull("эпизод ожидания был — адрес остаётся");
+        t.LongestWait!.Minutes.Should().Be(t.LongestWaitMinutes);
         (t.WorkWallMinutes + t.WaitingMinutes + t.ErrorMinutes + t.IdleMinutes + t.QueuedMinutes)
             .Should().Be(t.ElapsedMinutes);
     }
@@ -157,6 +163,38 @@ public class FeatureQueueTraceTests
         t.QueuedMinutes.Should().Be(90);
         t.WaitingMinutes.Should().Be(90, "ожидание 09:00–12:00 минус перекрытая очередью часть 09:00–10:30");
         t.IdleMinutes.Should().Be(60);
+        // R-Q3B-4: longestWait — по тому же net-правилу: 180 − 90 = 90, а не сырые 180.
+        t.LongestWaitMinutes.Should().Be(90);
+        t.LongestWait!.Minutes.Should().Be(t.LongestWaitMinutes);
+        (t.WorkWallMinutes + t.WaitingMinutes + t.ErrorMinutes + t.IdleMinutes + t.QueuedMinutes)
+            .Should().Be(t.ElapsedMinutes);
+    }
+
+    // R-Q3B-4: longestWait выбирает эпизод по net-ожиданию. Эпизод 09:00–12:00 целиком в
+    // очереди (net 0), второй 13:00–13:40 вне очереди (net 40): самое долгое — 40 мин и адрес
+    // второго эпизода, а не «сырые 3 ч» первого. WaitingCount = 2: очередь не отменяет факт
+    // ожидания. Мутация «сравнивать сырые интервалы» (без NetWaitingSpan) → 180 ≠ 40 → красный.
+    [Fact]
+    public void Build_LongestWaitПоNet_ЭпизодВОчередиНеПобеждает()
+    {
+        var journal = Full(
+            new FeatureJournalEntry { At = T0.AddHours(1), Kind = "waiting", TaskId = "epic" },
+            new FeatureJournalEntry { At = T0.AddHours(4), Kind = "waiting_cleared", TaskId = "epic" },
+            Held(T0.AddHours(1), FeatureHoldReasons.Queue),
+            Cleared(T0.AddHours(4), FeatureHoldReasons.Queue, FeatureHoldBy.Queue),
+            new FeatureJournalEntry { At = T0.AddHours(5), Kind = "waiting", TaskId = "epic" },
+            new FeatureJournalEntry { At = T0.AddHours(5).AddMinutes(40), Kind = "waiting_cleared", TaskId = "epic" });
+
+        var t = FeatureTimeline.Build(EpicRun(), journal, T0.AddHours(6)).Totals;
+
+        t.WaitingCount.Should().Be(2);
+        t.WaitingMinutes.Should().Be(40);
+        t.QueuedMinutes.Should().Be(180);
+        t.LongestWaitMinutes.Should().Be(40, "net-максимум: 40 мин вне очереди, а не 180 мин внутри неё");
+        var lw = t.LongestWait;
+        lw.Should().NotBeNull();
+        lw!.Minutes.Should().Be(t.LongestWaitMinutes);
+        lw!.From.Should().Be(T0.AddHours(5), "адрес — эпизод с наибольшим net, а не с наибольшим сырым интервалом");
         (t.WorkWallMinutes + t.WaitingMinutes + t.ErrorMinutes + t.IdleMinutes + t.QueuedMinutes)
             .Should().Be(t.ElapsedMinutes);
     }

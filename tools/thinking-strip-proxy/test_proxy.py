@@ -3833,6 +3833,32 @@ class АтрибуцияПромахаTests(unittest.TestCase):
         a, b = proxy.fingerprint(self._doc(6)), proxy.fingerprint(self._doc(4))
         self.assertIn("разошлась на сообщении 5 из 4", proxy.miss_verdict(a, b, 0, 1000))
 
+    def test_состав_после_расхождения_без_содержимого(self):
+        a = proxy.fingerprint(self._doc(4))
+        d = self._doc(1)
+        d["messages"] = [
+            {"role": "user", "content": [{"type": "text", "text": "сводка " * 5000}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "name": "Read", "id": "t1", "input": {"file_path": "x"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "y" * 20000}]},
+        ]
+        d["tools"] = [{"name": f"t{i}", "description": "d" * 1000} for i in range(50)]
+        b = proxy.fingerprint(d)
+        вердикт = proxy.miss_verdict(a, b, 0, 1000)
+        self.assertIn("разошлась на сообщении 1 из 3", вердикт)
+        self.assertIn("#1 user 35K [text]", вердикт)
+        self.assertIn("#2 assistant 0K [tool_use Read]", вердикт)
+        self.assertIn("#3 user 20K [tool_result]", вердикт)
+        self.assertIn("tools 51K", вердикт)
+        self.assertNotIn("сводка", вердикт, "содержимого в строке быть не должно")
+
+    def test_состав_обрезается_до_шести(self):
+        a = proxy.fingerprint(self._doc(2))
+        d = self._doc(10); d["messages"][0]["content"] = "другое"
+        вердикт = proxy.miss_verdict(a, proxy.fingerprint(d), 0, 1000)
+        self.assertIn("#6 ", вердикт)
+        self.assertNotIn("#7 ", вердикт)
+        self.assertIn("… ещё 4", вердикт)
+
     def test_первый_запрос_сессии(self):
         self.assertIn("не видел", proxy.miss_verdict(None, proxy.fingerprint(self._doc(1)), 0, 10))
 

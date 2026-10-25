@@ -49,27 +49,34 @@ function gridStyle(isMobile: boolean): CSSProperties {
   };
 }
 
-// Карточка: как плитки — bgCard, borderLight, SHADOW.card, R.lg. Живая карточка 1 —
-// infoBg/info (макет .c-card.live, тот же тон, что герой в «ждёт вас»): фон C.infoBg,
-// рамка C.info. На 360 поля плотнее.
-function cardStyle(live: boolean, isMobile: boolean): CSSProperties {
+// Карточка: как плитки — bgCard, borderLight, R.lg. Тень — инлайном, кроме
+// карточки-ссылки: у неё тень и кольцо фокуса задаёт класс .cc-loss-card —
+// инлайн перебивал бы :focus-visible и снимал индикатор (MAJOR-1, ST-QA2).
+// Живая карточка 1 — infoBg/info (макет .c-card.live, тот же тон, что герой в
+// «ждёт вас»): фон C.infoBg, рамка C.info. На 360 поля плотнее.
+function cardStyle(live: boolean, isMobile: boolean, withShadow = true): CSSProperties {
   return {
     display: 'flex', flexDirection: 'column', gap: SP.xs,
     background: live ? C.infoBg : C.bgCard,
     border: `1px solid ${live ? C.info : C.borderLight}`,
     borderRadius: R.lg,
-    boxShadow: SHADOW.card,
+    ...(withShadow ? { boxShadow: SHADOW.card } : {}),
     padding: isMobile ? `${SP.md}px` : `${SP.lg}px`,
   };
 }
 
-// Кольцо фокуса клавиатуры у живой карточки (P2): инлайн-стиль не умеет :focus-visible —
-// класс инжектится один раз (тот же приём, что ui/Chip и FeatureBreakdownShared).
+// Кольцо фокуса клавиатуры у карточки-ссылки (P2): инлайн-стиль не умеет
+// :focus-visible — тень и кольцо задаёт класс, инжектится один раз при первом
+// рендере (тот же приём, что ui/Chip и FeatureBreakdownShared). Инлайновой тени
+// на карточке-ссылке нет: она перебила бы :focus-visible (MAJOR-1, ST-QA2).
 const LOSS_FOCUS_CLASS = 'cc-loss-card';
-if (typeof document !== 'undefined' && !document.getElementById('cc-loss-card-style')) {
+function ensureLossFocusStyle() {
+  if (typeof document === 'undefined' || document.getElementById('cc-loss-card-style')) return;
   const el = document.createElement('style');
   el.id = 'cc-loss-card-style';
-  el.textContent = `.${LOSS_FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  el.textContent =
+    `.${LOSS_FOCUS_CLASS}{box-shadow:${SHADOW.card};}` +
+    `.${LOSS_FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
   document.head.appendChild(el);
 }
 
@@ -177,6 +184,7 @@ function cardText(card: LossCard, personas: ReturnType<typeof usePersonas>): { b
 }
 
 export function FeatureStatsLosses({ run, stats, isMobile = false, nav, nowMs }: FeatureStatsLossesProps) {
+  ensureLossFocusStyle();
   const marks = nav?.marks ?? EMPTY_NAV_MARKS;
   const ln = stats.longestNow;
   // Хук выше любого раннего return (замечание Глеба по ST-F6): guards здесь нет —
@@ -240,7 +248,7 @@ export function FeatureStatsLosses({ run, stats, isMobile = false, nav, nowMs }:
                   className={LOSS_FOCUS_CLASS}
                   aria-label={`Открыть цепочку шага ${card.stepRef}`}
                   onClick={() => focusStep(run, card.stepRef)}
-                  style={{ ...cardStyle(false, isMobile), ...LINK_CARD_EXTRA }}
+                  style={{ ...cardStyle(false, isMobile, false), ...LINK_CARD_EXTRA }}
                 >
                   {body}
                   <span aria-hidden style={ACTION}>Цепочка шага →</span>

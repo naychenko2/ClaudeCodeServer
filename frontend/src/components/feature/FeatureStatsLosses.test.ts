@@ -11,11 +11,12 @@
 // LINK_CARD_EXTRA из стиля карточки-ссылки — краснеет тест «карточка-ссылка —
 // textAlign left, cursor pointer» (fakeDom не знает вычисленных стилей, UA-центрирование
 // без явного сброса прошёл бы молча); (5) убрать projectId из openTaskInSection — краснеет
-// тест «переход „задача“» (дефект ee6825ff).
+// тест «переход „задача“» (дефект ee6825ff); (6) вернуть тень в инлайн карточки-ссылки —
+// краснеет тест «тень и кольцо фокуса классом» (MAJOR-1, ST-QA2).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { C, R, FS, SP } from '../../lib/design';
+import { C, R, FS, SP, SHADOW } from '../../lib/design';
 import { FeatureStatsLosses } from './FeatureStatsLosses';
 import { formatTokens } from './FeatureStatsFormat';
 import { getBackNav } from '../../lib/featureBackNav';
@@ -305,14 +306,23 @@ describe('карточка 2 — витки (к1, к2)', () => {
     expect(st.cursor, 'курсор карточки-ссылки не pointer').toBe('pointer');
   });
 
-  // П2: кольцо фокуса клавиатуры на живой карточке — :focus-visible не выразить инлайн-
-  // стилем, поэтому проверяется класс инжекта (M1' — как в ChatCard).
-  it('карточка-ссылка — класс кольца фокуса (cc-loss-card)', () => {
+  // MAJOR-1 (ST-QA2): инлайн-тень перебивала :focus-visible — у карточки-ссылки не
+  // было индикатора фокуса. Проверяется не атрибут class, а правило в инжектном
+  // <style> и отсутствие тени в инлайне. Мутация (6): вернуть boxShadow в инлайн
+  // карточки-ссылки — тест краснеет (проверено прогоном).
+  it('карточка-ссылка — тень и кольцо фокуса классом, инлайн без box-shadow', () => {
     const run = mkRun({ stepChains: [mkChain()], stages: [mkStage()] });
     const { container } = mountLosses(run, mkStats());
     const card = findNodeByAttr(container, 'data-testid', 'loss-card-2');
-    // React пишет className в атрибут «class» (тот же приём, что FeatureBreakdownTable).
+    expect(card, 'карточки 2 нет').toBeTruthy();
     expect((card as unknown as { getAttribute: (k: string) => string | null }).getAttribute('class'), 'класса кольца фокуса нет').toContain('cc-loss-card');
+    // Инлайновой тени нет: иначе :focus-visible её не перебивает (MAJOR-1).
+    expect(styleOf(card!).boxShadow, 'тень осталась в инлайне — кольцо фокуса не появится').toBeUndefined();
+    // Класс задан: и базовая тень, и кольцо :focus-visible.
+    const doc = (globalThis as { document: { getElementById: (id: string) => { textContent?: string } | null } }).document;
+    const rule = doc.getElementById('cc-loss-card-style')?.textContent ?? '';
+    expect(rule, 'правило кольца фокуса не инжектится').toContain(`.cc-loss-card:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`);
+    expect(rule, 'тень карточки-ссылки не задана классом').toContain(`.cc-loss-card{box-shadow:${SHADOW.card};}`);
   });
 });
 

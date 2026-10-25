@@ -21,7 +21,7 @@
 // в общем рендере). Битые ссылки не роняют читалку: открытие само показывает «не найдено».
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, FileText, RotateCw, Scissors, MessageCircle, ChevronDown, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, FileText, RotateCw, Scissors, Palette, MessageCircle, ChevronDown, type LucideIcon } from 'lucide-react';
 import { C, R, FS, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Button } from '../ui/Button';
@@ -37,15 +37,19 @@ import { api } from '../../lib/api';
 import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
 
 // === Роль документа: подпись + цвет значка (макет §токены) ===
-// план — planLight/planText; разрез — infoBg/info; консультация — bgSelected/textSecondary.
+// план — planLight/planText; разрез — infoBg/info; дизайн — accentMuted/accent
+// (тот же паттерн «светлый фон + сильный текст той же гаммы»; подпись — как roleLabel);
+// консультация — bgSelected/textSecondary.
 export const PLAN_ROLE_LABEL: Record<FeaturePlan['role'], string> = {
   plan: 'план',
   cut: 'разрез',
+  design: 'дизайн',
   consult: 'консультация',
 };
 export const PLAN_ROLE_STYLE: Record<FeaturePlan['role'], { bg: string; fg: string; Icon: LucideIcon }> = {
   plan: { bg: C.planLight, fg: C.planText, Icon: FileText },
   cut: { bg: C.infoBg, fg: C.info, Icon: Scissors },
+  design: { bg: C.accentMuted, fg: C.accent, Icon: Palette },
   consult: { bg: C.bgSelected, fg: C.textSecondary, Icon: MessageCircle },
 };
 

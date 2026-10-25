@@ -1,6 +1,7 @@
 // Вкладка «Планы и макеты» (волна 4, вариант 5В): сетка карточек-превью (3 колонки,
 // на 360 — одна), клик по карточке — читалка/карточка на всю ширину с возвратом к сетке;
-// порядок документов (cut → plan → consult), hasText=false → «Текста пока нет»,
+// порядок документов (cut → design → plan → consult), карточка design с меткой «дизайн»,
+// неизвестная роль не роняет сетку, hasText=false → «Текста пока нет»,
 // exists=false не открывает файл, mockupsUnavailable='device', счётчик вкладки,
 // ошибка загрузки текста + «Повторить».
 //
@@ -142,12 +143,14 @@ describe('FeaturePlansTab', () => {
     vi.restoreAllMocks();
   });
 
-  // === 1. Порядок документов: cut → plan → consult ===
-  it('документы в порядке cut → plan → consult', () => {
+  // === 1. Порядок документов: cut → design → plan → consult ===
+  // Мутация «design после plan» (порядок в FeaturePlansTab) краснеет: Дизайн не rows[1].
+  it('документы в порядке cut → design → plan → consult', () => {
     const page = pageData({
       plans: [
-        plan({ taskId: 'p3', role: 'consult', title: 'Консультация' }),
+        plan({ taskId: 'p4', role: 'consult', title: 'Консультация' }),
         plan({ taskId: 'p1', role: 'plan', title: 'План' }),
+        plan({ taskId: 'p3', role: 'design', title: 'Дизайн' }),
         plan({ taskId: 'p2', role: 'cut', title: 'Разрез' }),
       ],
     });
@@ -159,10 +162,48 @@ describe('FeaturePlansTab', () => {
       for (const c of n.childNodes) collect(c, out);
       return out;
     })(container as FNode);
-    expect(rows.length).toBe(3);
+    expect(rows.length).toBe(4);
     expect(rows[0]).toContain('Разрез');
-    expect(rows[1]).toContain('План');
-    expect(rows[2]).toContain('Консультация');
+    expect(rows[1]).toContain('Дизайн');
+    expect(rows[2]).toContain('План');
+    expect(rows[3]).toContain('Консультация');
+  });
+
+  // === 1a. Роль design: карточка рендерится, глиф и метка читалки — «дизайн» ===
+  // Мутация (убрать design из PLAN_ROLE_LABEL) краснеет: aria-label и метка не «дизайн».
+  it('карточка design: глиф и метка «дизайн»', async () => {
+    const page = pageData({ plans: [plan({ taskId: 'd1', role: 'design', title: 'Дизайн интерфейса' })] });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    const rows = collectText(container, 'plan-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toContain('Дизайн интерфейса');
+    // Значок роли — с доступным именем «дизайн» (тот же текст, что в roleLabel задач).
+    const glyph = findNodeByAttr(container as FNode, 'data-testid', 'plan-role-glyph');
+    expect(glyph, 'глиф роли design не найден').not.toBeNull();
+    expect(glyph!.getAttribute('aria-label')).toBe('дизайн');
+    // Читалка: метка роли — «дизайн».
+    click(container as FNode, 'plan-row');
+    await flush();
+    const role = findNodeByAttr(container as FNode, 'data-testid', 'plan-reader-role');
+    expect(role, 'метка роли в читалке не найдена').not.toBeNull();
+    expect(textNodes(role!).join('')).toBe('дизайн');
+  });
+
+  // === 1b. Неизвестная роль из ответа не роняет сетку: её карточки нет, остальные — на месте ===
+  // Мутация «не фильтровать по роли» (рендерить все plans) краснеет: RoleGlyph падает
+  // на незнакомой роли (деструктурирование undefined в PLAN_ROLE_STYLE[role]).
+  it('неизвестная роль не роняет сетку', () => {
+    const page = pageData({
+      plans: [
+        plan({ taskId: 'p1', role: 'cut', title: 'Разрез' }),
+        plan({ taskId: 'x1', role: 'audit' as FeaturePlan['role'], title: 'Аудит' }),
+      ],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plans-grid-docs'), 'сетка документов не смонтирована').not.toBeNull();
+    const rows = collectText(container, 'plan-row');
+    expect(rows.length).toBe(1);
+    expect(rows[0]).toContain('Разрез');
   });
 
   // === 2. hasText=false → «Текста пока нет» (читалка) ===

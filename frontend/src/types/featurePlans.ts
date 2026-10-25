@@ -1,17 +1,17 @@
 // Планы и макеты фичи (волна 3 «Обзор фич») — ТОЛЬКО в ответе
 // `GET /api/tasks/features/{id}` (поля `plans` и `mockups`). Источник правды — БЭК:
-// проектор собирает планы (role=plan/cut/consult) и макеты (из шапки/linkedFiles);
+// проектор собирает планы (role=plan/cut/design/consult) и макеты (из шапки/linkedFiles);
 // фронт только показывает. Все поля nullable-терпимы: UI обязан пережить отсутствие
 // любого (старые ответы не несут plans/mockups).
 
-// Роль плановой задачи: plan — план; cut — разрез; consult — консультация.
-export type FeaturePlanRole = 'plan' | 'cut' | 'consult';
+// Роль плановой задачи: plan — план; cut — разрез; design — дизайн; consult — консультация.
+export type FeaturePlanRole = 'plan' | 'cut' | 'design' | 'consult';
 
 // План фичи: задача-план/разрез/консультация с её метаданными.
 export interface FeaturePlan {
   // Id задачи-плана.
   taskId: string;
-  // Роль: plan | cut | consult.
+  // Роль: plan | cut | design | consult.
   role: FeaturePlanRole;
   // Название плана.
   title: string;

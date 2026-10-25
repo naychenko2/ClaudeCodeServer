@@ -4,7 +4,7 @@
 // десктопе, 1 на 360). Клик по карточке — читалка или карточка макета на всю ширину
 // с «‹ Все документы» для возврата к сетке.
 //
-// Документы (plans): порядок cut → plan → consult (макет); карточка — значок роли,
+// Документы (plans): порядок cut → design → plan → consult; карточка — значок роли,
 // заголовок, автор, время, «без текста». Читалка — FeaturePlanReader (markdown через
 // общий рендер). Макеты — FeatureMockups (карточки-превью с миниатюрой-заглушкой,
 // карточка, «Прошлые версии»).
@@ -121,8 +121,9 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
     if (featureId) recordFeatureReturn(featureId, { kind: 'task', id: taskId }, page.run.epic?.title ?? null, 'plans');
     openTaskInSection({ id: taskId, projectId: taskProjectId ?? undefined });
   };
-  // Документы: порядок cut → plan → consult (макет). Дедуп планов (решение Андрея):
-  // переписанный план — показываем ПОСЛЕДНИЙ по createdAt; разрезы и консультации — все.
+  // Документы: порядок cut → design → plan → consult. Дедуп планов (решение Андрея):
+  // переписанный план — показываем ПОСЛЕДНИЙ по createdAt; разрезы, дизайны и
+  // консультации — все. Неизвестная роль в группы не попадает (сетку не роняет).
   const plans = useMemo(() => {
     const all = page.plans ?? [];
     const byRole = (role: FeaturePlan['role']) => all.filter(p => p.role === role);
@@ -131,6 +132,7 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
     const latestPlan = planTasks.length > 0 ? planTasks[planTasks.length - 1] : null;
     return [
       ...byRole('cut'),
+      ...byRole('design'),
       ...(latestPlan ? [latestPlan] : []),
       ...byRole('consult'),
     ];

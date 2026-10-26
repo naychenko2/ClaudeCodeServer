@@ -21,7 +21,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  FEW_DATA_MIN, pickHeroState, compositionRows, tilesModel, roundMarks, lossesModel,
+  FEW_DATA_MIN, pickHeroState, compositionRows, tilesModel, roundMarks, lossesModel, COMP_LABEL,
 } from './FeatureStatsPulseModel';
 import type { FeatureRun, FeatureStage, FeatureStepChain } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
@@ -181,10 +181,25 @@ describe('compositionRows', () => {
       elapsedMinutes: 400, workWallMinutes: 240, waitingMinutes: 60, idleMinutes: 60, errorMinutes: 20, queuedMinutes: 20,
     }));
     expect(r.map(x => x.kind)).toEqual(['work', 'waiting', 'idle', 'queued', 'error']);
-    expect(r.map(x => x.label)).toEqual(['работа', 'ждали вас', 'простой', 'в очереди', 'ошибки']);
+    // Метка очереди — из источника, не литералом: смена слова в COMP_LABEL меняет ожидание
+    // здесь и в тестах «Подробнее»/мини-сводки (они привязаны к тому же COMP_LABEL, Q5H-3).
+    expect(r.map(x => x.label)).toEqual(['работа', 'ждали вас', 'простой', COMP_LABEL.queued, 'ошибки']);
     expect(r.map(x => x.minutes)).toEqual([240, 60, 60, 20, 20]);
     expect(r.map(x => x.percent)).toEqual([60, 15, 15, 5, 5]);
     expect(r.map(x => x.percentText)).toEqual(['60 %', '15 %', '15 %', '5 %', '5 %']);
+  });
+
+  // Q5H-3 (R-Q5H-1, находка 1): слово вида «очередь» — единый источник для всей статистики.
+  // Значение закреплено здесь (лексика согласована: ADR-031, макет feature-stats-5) — смена
+  // слова в COMP_LABEL красит этот тест, т. е. становится осознанным решением; при этом
+  // все места меняются вместе: состав героя (ниже), «Подробнее» (FeatureStatsTab.test) и
+  // мини-сводка (FeatureMiniSummary.test) сравнивают с тем же COMP_LABEL, а не с литералом.
+  it('сторож: слово очереди — единый источник, значение закреплено (Q5H-3)', () => {
+    expect(COMP_LABEL.queued).toBe('в очереди');
+    // Строка состава героя строится из него же (потребители в FeatureStatsTab/MiniSummary —
+    // в своих тестах, привязанных к той же константе).
+    const r = compositionRows(mkTotals({ elapsedMinutes: 100, queuedMinutes: 100 }));
+    expect(r.map(x => x.label)).toEqual([COMP_LABEL.queued]);
   });
 
   // Округление по частям — поведение старое (не регресс Q5F): сумма процентов может дать

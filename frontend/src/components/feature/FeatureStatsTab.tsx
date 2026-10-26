@@ -24,6 +24,7 @@ import { FeatureStatsLosses } from './FeatureStatsLosses';
 import { FeatureBreakdownBlock } from './FeatureBreakdownBlock';
 import { FeatureAnalysisLine } from './FeatureAnalysisLine';
 import { stageLabelShort } from './FeatureAnalysisModel';
+import { COMP_LABEL } from './FeatureStatsPulseModel';
 import type { FeatureStats, FeatureSpend, FeatureStatsSource, FeatureTimeline } from '../../types/featureStats';
 import type { FeatureRun } from '../../types/featureRun';
 
@@ -643,8 +644,10 @@ function MoreDetails({ totals, spend, source, isMobile }: {
   // (queued)») — минуты отдаёт бэк (totals.queuedMinutes), фронт ничего не пересчитывает.
   // Порядок — как в составе героя (FeatureStatsPulseModel): простой → очередь → ошибки,
   // т. е. рядом с «не работали». При null/0/нет поля строки нет (прежнее поведение).
+  // Слово вида — из единого словаря составных видов COMP_LABEL (Q5H-3): герой, эта строка
+  // и мини-сводка формулируются из одного места, не разъезжаются молча.
   if (totals.queuedMinutes != null && totals.queuedMinutes > 0) {
-    rows.push(`в очереди — ${approx}${formatDuration(totals.queuedMinutes)}`);
+    rows.push(`${COMP_LABEL.queued} — ${approx}${formatDuration(totals.queuedMinutes)}`);
   }
   if (totals.errorCount != null && totals.errorCount > 0) {
     rows.push(`ошибки: ${totals.errorCount} ${plural(totals.errorCount, 'эпизод', 'эпизода', 'эпизодов')}`);

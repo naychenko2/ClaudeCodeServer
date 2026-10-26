@@ -11,6 +11,7 @@ import { C, R, FS, SP, FONT } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { formatDuration, buildTimelineModel, kindBackground, minutesSince } from './FeatureStatsBits';
 import { formatTokens, formatUsd } from './FeatureStatsFormat';
+import { COMP_LABEL } from './FeatureStatsPulseModel';
 import type { FeatureStats } from '../../types/featureStats';
 import type { FeatureHold } from '../../types/featureRun';
 
@@ -120,12 +121,14 @@ function SummaryRow({ stats, hold }: { stats: FeatureStats; hold?: FeatureHold |
   //     при null/0/нет поля строки нет, фронт не пересчитывает.
   // Формы не показываются вместе: при активном удержании — только живая (прошлые стояния в неё
   // не складываются), «простояла» — только когда удержания нет.
+  // Слово вида — из единого словаря составных видов COMP_LABEL (Q5H-3): та же лексика,
+  // что у состава героя и «Подробнее»; «простояла» — префикс к тому же слову.
   let queuePart: { label: string; minutes: number } | null = null;
   if (hold?.reason === 'queue') {
     const sinceMin = minutesSince(hold.since, Date.now());
-    if (sinceMin != null) queuePart = { label: 'в очереди', minutes: Math.max(1, sinceMin) };
+    if (sinceMin != null) queuePart = { label: COMP_LABEL.queued, minutes: Math.max(1, sinceMin) };
   } else if (t.queuedMinutes != null && t.queuedMinutes > 0) {
-    queuePart = { label: 'простояла в очереди', minutes: t.queuedMinutes };
+    queuePart = { label: `простояла ${COMP_LABEL.queued}`, minutes: t.queuedMinutes };
   }
 
   // Токены «вход+выход» (spend).

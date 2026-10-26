@@ -48,7 +48,13 @@ export interface CompositionRow {
   percentText: string; // «63 %»
 }
 
-const COMP_LABEL: Record<CompositionKind, string> = {
+// Словарь видов состава (Q5H-3): единый источник слов всей статистики. Слово queued
+// читают отсюда все три места: состав героя (compositionRows ниже), «Подробнее»
+// (FeatureStatsTab) и мини-сводка (FeatureMiniSummary) — формулировка очереди не
+// плодится по компонентам (правило волны, ср. queueLabelParts в chatGroups.ts).
+// Значение закреплено тестом «сторож: слово очереди — единый источник» — смена слова
+// становится осознанным решением (лексика согласована: ADR-031, макет feature-stats-5).
+export const COMP_LABEL: Record<CompositionKind, string> = {
   work: 'работа',
   waiting: 'ждали вас',
   idle: 'простой',

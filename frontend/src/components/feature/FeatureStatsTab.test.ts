@@ -24,6 +24,9 @@ import {
 import {
   formatTokens, formatUsd, sharePercent, roleGroupLabel, modelGroupLabel, personaGroupLabel,
 } from './FeatureStatsFormat';
+// Слово вида «очередь» — из единого источника (Q5H-3): строки «Подробнее» сравниваются
+// с COMP_LABEL, а не литералом — смена слова в источнике меняет ожидание здесь и везде.
+import { COMP_LABEL } from './FeatureStatsPulseModel';
 import { clearFeatureStageFocus, setFeaturePageTab, __test } from '../../lib/featurePage';
 import { getBackNav } from '../../lib/featureBackNav';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
@@ -1249,6 +1252,8 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
   // (totals.queuedMinutes), фронт не пересчитывает. Порядок — как в составе героя
   // (FeatureStatsPulseModel): «не работали» → «в очереди» → «ошибки».
   // Мутация: убрать блок queuedMinutes в MoreDetails → эти тесты краснеют.
+  // Q5H-3: само слово — из COMP_LABEL (единый источник), сравнение с ним же: если
+  // компонент зашьёт слово сам (разъедется с источником) — эти тесты краснеют.
   it('«Подробнее»: «в очереди» после «не работали», перед «ошибками»', () => {
     const base = mkFullStats();
     const c = renderTab(mkFullStats({
@@ -1256,12 +1261,12 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
     }));
     const nodes = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!);
     const iNot = nodes.findIndex(t => t.includes('не работали'));
-    const iQ = nodes.findIndex(t => t.includes('в очереди'));
+    const iQ = nodes.findIndex(t => t.includes(COMP_LABEL.queued));
     const iErr = nodes.findIndex(t => t.includes('ошибки:'));
     expect(iNot, 'строка «не работали»').toBeGreaterThanOrEqual(0);
     expect(iQ, 'строка «в очереди»').toBeGreaterThanOrEqual(0);
     expect(iErr, 'строка «ошибки»').toBeGreaterThanOrEqual(0);
-    expect(nodes[iQ]).toBe('в очереди — 1 ч 35 мин');
+    expect(nodes[iQ]).toBe(`${COMP_LABEL.queued} — 1 ч 35 мин`);
     expect(iQ, '«в очереди» после «не работали»').toBeGreaterThan(iNot);
     expect(iQ, '«в очереди» перед «ошибками»').toBeLessThan(iErr);
   });
@@ -1272,11 +1277,11 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
       const c = renderTab(mkFullStats({
         timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: q } },
       }));
-      expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n'), `queuedMinutes=${q}`).not.toContain('в очереди');
+      expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n'), `queuedMinutes=${q}`).not.toContain(COMP_LABEL.queued);
     }
     // Поля нет вовсе (старый ответ бэка) — то же, что null.
     const c = renderTab(mkFullStats());
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n')).not.toContain('в очереди');
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n')).not.toContain(COMP_LABEL.queued);
   });
 
   it('approx: «в очереди» с «≈» (тот же префикс, что у «не работали»)', () => {
@@ -1286,7 +1291,7 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
       timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: 35 } },
     }));
     const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('');
-    expect(all).toContain('в очереди — ≈ 35 мин');
+    expect(all).toContain(`${COMP_LABEL.queued} — ≈ 35 мин`);
   });
 
   it('«Подробнее»: только «в очереди» — раскрывашка есть', () => {
@@ -1297,7 +1302,7 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
     }));
     const more = findNodeByAttr(c, 'data-testid', 'stats-more');
     expect(more, 'строка очереди — достаточное содержимое').not.toBeNull();
-    expect(textNodes(more!).join('')).toContain('в очереди — 12 мин');
+    expect(textNodes(more!).join('')).toContain(`${COMP_LABEL.queued} — 12 мин`);
   });
 
   // Память «Подробнее»: раскрытие пишется в localStorage и читается при монтировании.

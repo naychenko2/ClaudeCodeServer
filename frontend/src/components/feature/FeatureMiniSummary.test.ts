@@ -16,6 +16,9 @@ import { act } from 'react';
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage } from './FeaturePage';
+// Слово вида «очередь» — из единого источника (Q5H-3): строки мини-сводки сравниваются
+// с COMP_LABEL, а не литералом — смена слова в источнике меняет ожидание здесь и везде.
+import { COMP_LABEL } from './FeatureStatsPulseModel';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
@@ -263,7 +266,7 @@ describe('FeatureMiniSummary (Ф8) через страницу фичи', () => 
     await settle();
     const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row')!;
     const all = textNodes(row).join('');
-    expect(all, 'живая форма «в очереди 3 ч»').toContain('в очереди 3 ч');
+    expect(all, 'живая форма «в очереди 3 ч»').toContain(`${COMP_LABEL.queued} 3 ч`);
     expect(all, 'живой факт не подписывается прошедшим').not.toContain('простояла');
   });
 
@@ -277,10 +280,10 @@ describe('FeatureMiniSummary (Ф8) через страницу фичи', () => 
     await settle();
     const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row')!;
     const all = textNodes(row).join('');
-    expect(all, 'прошедшая форма «простояла в очереди 10 ч»').toContain('простояла в очереди 10 ч');
+    expect(all, 'прошедшая форма «простояла в очереди 10 ч»').toContain(`простояла ${COMP_LABEL.queued} 10 ч`);
     // «идёт N» не дублируется: упоминание очереди ровно одно, и оно не равно «идёт 15 ч».
-    expect((all.match(/в очереди/g) ?? []).length, 'упоминание очереди одно').toBe(1);
-    expect(all, 'значение «простояла» не равно значению «идёт»').not.toContain('простояла в очереди 15 ч');
+    expect((all.match(new RegExp(COMP_LABEL.queued, 'g')) ?? []).length, 'упоминание очереди одно').toBe(1);
+    expect(all, 'значение «простояла» не равно значению «идёт»').not.toContain(`простояла ${COMP_LABEL.queued} 15 ч`);
   });
 
   // === 9. Нет удержания и нет queuedMinutes (старые данные) → строки про очередь нет ===
@@ -289,7 +292,7 @@ describe('FeatureMiniSummary (Ф8) через страницу фичи', () => 
     const c = render();
     await settle();
     const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row')!;
-    expect(textNodes(row).join(''), 'очереди нет').not.toContain('очереди');
+    expect(textNodes(row).join(''), 'очереди нет').not.toContain(COMP_LABEL.queued);
   });
 
   // === 10. hold=queue без since (старые данные) → строки нет: без даты нечего показывать ===
@@ -298,6 +301,6 @@ describe('FeatureMiniSummary (Ф8) через страницу фичи', () => 
     const c = render();
     await settle();
     const row = findNodeByAttr(c, 'data-testid', 'mini-summary-row')!;
-    expect(textNodes(row).join(''), 'без since числа нет').not.toContain('в очереди');
+    expect(textNodes(row).join(''), 'без since числа нет').not.toContain(COMP_LABEL.queued);
   });
 });

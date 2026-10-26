@@ -94,6 +94,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // сосед-облако всё равно не починит мёртвый эндпоинт. null (тесты/без DI) — проба
     // выключена, прежнее поведение (Unreachable → цепочка).
     private readonly ILocalEndpointProbe? _localProbe;
+    // Гейт допуска ходов к локальному движку (потолок N, очередь FIFO, таймаут). Слот держит
+    // ПОПЫТКА на локальном провайдере, а не ход целиком. null (тесты/без DI) — допуска нет.
+    private readonly LocalEngineBusyTracker? _localGate;
     // Шина событий хода (ADR-013, этап 1): публикация turn/completed с TurnRunPassport
     // отсюда, запись в TurnRunLog — у подписчика SessionManager.HandleTurnCompleted.
     // null (тесты) — паспорт просто не публикуется, поведение прежнее.
@@ -149,8 +152,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         TimeSpan? egressRetryDelay = null,
         ILocalEndpointProbe? localProbe = null,
         bool transcriptOnServer = true,
-        string? turnOwnerId = null)
+        string? turnOwnerId = null,
+        LocalEngineBusyTracker? localGate = null)
     {
+        _localGate = localGate;
         _inner = inner;
         _effectiveModel = effectiveModel;
         _downstream = downstream;
@@ -581,6 +586,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // restore обязан сработать по накопленному флагу). Решает в finally, что восстанавливать
         // и переносить ли транскрипт обратно — регрессия волны 2 (см. блок restore ниже).
         var anyProviderSwitch = false;
+        // Слот допуска текущей попытки на локальном провайдере (null — попытка не локальная).
+        // Освобождается по концу попытки, перед переходом на следующую пару и в finally.
+        IDisposable? attemptSlot = null;
 
         try
         {
@@ -772,6 +780,67 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
                 attempted.Add((currentModel, currentKey));
 
+                // Допуск к локальному движку — после пробы живости (мёртвый движок уже дал
+                // LocalModelDown без очереди) и по ФАКТИЧЕСКОЙ паре попытки: стартовая подмена
+                // могла уйти с локали, шаг цепочки — на неё. Слот прошлой попытки отпускаем до
+                // новой постановки в очередь, чтобы ход не занимал место дважды.
+                attemptSlot?.Dispose();
+                attemptSlot = null;
+                if (_localGate is not null && _providers?.GetByKey(currentKey) is { IsLocal: true } gated)
+                {
+                    LocalTurnAdmission admission;
+                    // Ожидание видно человеку без флага статистики: позиция в очереди и «заняты N из M».
+                    var waitShown = 0; // 0 — строки нет, 1 — показана, 2 — снята (поздние сдвиги глотаем)
+                    try
+                    {
+                        using var admitCts = CancellationTokenSource.CreateLinkedTokenSource(
+                            _cts.Token, turn.Interrupted.Token);
+                        admission = await _localGate.AcquireAsync(currentKey, gated.MaxConcurrentTurns,
+                            gated.MaxQueuedTurns, gated.TurnQueueTimeout, admitCts.Token,
+                            (pos, act, lim) =>
+                            {
+                                if (Volatile.Read(ref waitShown) == 2) return;
+                                Volatile.Write(ref waitShown, 1);
+                                _ = SafeDownstreamAsync(new LocalTurnQueueMessage(pos, act, lim));
+                            });
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        await ClearLocalWaitAsync(ref waitShown);
+                        // «Стоп» в очереди: CLI не стартовал, место в очереди уже освобождено
+                        // гейтом. Как и при остановке посреди попытки — шлём терминал сами,
+                        // иначе ход навсегда останется в Working.
+                        if (_userInterrupted)
+                        {
+                            turnOutcome = "interrupted";
+                            lock (turn.Sync)
+                            {
+                                if (!turn.Settled)
+                                {
+                                    turn.Hold(new ExitedMessage(_inner.SubmittedTurnSeq));
+                                    turn.AttemptResolved = true;
+                                }
+                            }
+                            await SettleAsync(turn);
+                        }
+                        return; // иначе _cts отменён — сессию закрыли
+                    }
+
+                    await ClearLocalWaitAsync(ref waitShown);
+                    if (admission.Slot is null)
+                    {
+                        // «Занято» — отдельный класс отказа (ADR-007): провайдер НЕ помечается в
+                        // _health и цепочка не идёт, иначе следующий ход уехал бы на платного
+                        // соседа по стартовой подмене при кулдауне.
+                        LogWarn($"Локальный движок «{currentKey}» занят ({admission.Refusal}, идут {admission.Running}) — "
+                            + "ход не запущен, цепочку не идём.");
+                        turnOutcome = "local_busy";
+                        await FailLocalBusyAsync(turn, admission.Running);
+                        return;
+                    }
+                    attemptSlot = admission.Slot;
+                }
+
                 TaskCompletionSource<AttemptEnd> attemptTcs;
                 lock (turn.Sync)
                 {
@@ -827,6 +896,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     }
                 }
                 lastEnd = end;
+                // Попытка кончилась — место на локальном движке свободно, даже если ход пойдёт
+                // дальше по цепочке (на нелокальную пару слот держать незачем).
+                attemptSlot?.Dispose();
+                attemptSlot = null;
 
                 if (_userInterrupted) { turnOutcome = "interrupted"; await SettleAsync(turn); return; }
 
@@ -1148,6 +1221,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         }
         finally
         {
+            // Слот допуска освобождается на любом выходе: исключение, отмена, «Стоп».
+            attemptSlot?.Dispose();
             // Восстановить модель/провайдер, сохранённые на старте хода, — подмена не должна
             // переписывать модель чата навсегда (инцидент 2026-08-07). Восстановление ПОКОМПОНЕНТНОЕ
             // (CAS по каждому полю отдельно): так ручная смена одного поля во время хода не блокирует
@@ -1822,6 +1897,37 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
                 orig?.Usage, orig?.TotalCostUsd,
                 ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus));
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
+            await _downstream(m);
+    }
+
+    // Снять строку ожидания (Position = 0), если она была показана; идемпотентно.
+    private Task ClearLocalWaitAsync(ref int waitShown) =>
+        Interlocked.Exchange(ref waitShown, 2) == 1
+            ? SafeDownstreamAsync(new LocalTurnQueueMessage(0, 0, 0))
+            : Task.CompletedTask;
+
+    // Информационное событие не должно ронять ход: сбой доставки глотаем.
+    private async Task SafeDownstreamAsync(ServerMessage m)
+    {
+        try { await _downstream(m); }
+        catch { /* строка ожидания — подсказка, а не часть контракта хода */ }
+    }
+
+    // Финал «локальный движок занят»: гейт допуска не пустил ход. Форма как у FailLocalDownAsync,
+    // но без кулдауна провайдера и без шагов цепочки — движок жив, он просто загружен.
+    private async Task FailLocalBusyAsync(FallbackTurn turn, int running)
+    {
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+
+        await _downstream(new ErrorMessage(TurnFailureText.LocalEngineBusy(running), ExpectResultFollows: true));
+        await _downstream(new ResultMessage("error", 0, 0, null, null));
         foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
             await _downstream(m);
     }

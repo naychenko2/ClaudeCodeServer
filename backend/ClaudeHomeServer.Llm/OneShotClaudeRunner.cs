@@ -39,7 +39,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     UserModelTierResolver? userTiers = null,
     ClaudeSubscriptionPool? subscriptionPool = null,
     SubscriptionActivityTracker? activity = null,
-    ILogger<OneShotClaudeRunner>? logger = null) : IOneShotRunner
+    ILogger<OneShotClaudeRunner>? logger = null,
+    LocalEngineBusyTracker? localGate = null) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
@@ -168,6 +169,11 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         var args = BuildArgs(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher),
             safeMode: !launcher.IsSandboxed, persistSessions: !withFlag, model, effort, streamInput: images is { Count: > 0 });
 
+        // Второй путь CLI к локальному провайдеру берёт ТОТ ЖЕ счётчик, что и ходы, но без
+        // ожидания: нет свободного слота — отказ, и вызывающий идёт по своей цепочке (то же
+        // «не лезем в занятый движок», что и LocalActionRouter.LocalBlockedByTurn).
+        using var localSlot = TryEnterLocal(model);
+
         var (env, poolSubKey) = ResolveEnv(model);
 
         // Отсчёт простоя — от ПОПЫТКИ хода, а не от успеха (как идл-пинг): это фактическая
@@ -224,6 +230,9 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
                     Console.Error.WriteLine(
                         "[OneShotClaudeRunner] CLI не знает --no-session-persistence — повторяю без него. " +
                         "Транскрипты one-shot снова будут копиться; лечится обновлением claude в образе песочницы");
+                    // Повтор сам берёт слот — свой отпускаем (Dispose идемпотентен), иначе при
+                    // потолке 1 повтор отказал бы сам себе.
+                    localSlot?.Dispose();
                     return await RunCliAsync(prompt, model, timeout, ct, ownerId, effort, label, images);
                 }
                 if (detail.Length > 500) detail = detail[..500] + "…";
@@ -254,6 +263,16 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             launcher.Kill(process, turnId);
             throw new LlmTimeoutException(TimeoutMessage(timeout, started.Elapsed));
         }
+    }
+
+    // Слот локального движка для one-shot на локальном провайдере: null — модель не локальная
+    // (или гейта нет), LocalEngineBusyException — свободного слота нет.
+    private IDisposable? TryEnterLocal(string? model)
+    {
+        if (localGate is null || llmProviders.ResolveByModel(model) is not { IsLocal: true } provider)
+            return null;
+        return localGate.TryEnter(provider.Key, provider.MaxConcurrentTurns)
+            ?? throw new LocalEngineBusyException(provider.Key);
     }
 
     // Сообщение отказа по времени: применённый лимит + сколько фактически ждали.

@@ -100,12 +100,13 @@ public class ClaudeSessionLocalEngineBusyTests : IDisposable
         var root = Path.Combine(Path.GetTempPath(), "ccs-local-busy-tests");
         Directory.CreateDirectory(root);
 
+        FallbackLlmSessionAdapter? adapter = null;
         var context = new LlmSessionContext(
             RootPath: root,
             OnMessage: m =>
             {
                 if (m is ExitedMessage) exited.TrySetResult();
-                return Task.CompletedTask;
+                return adapter is not null ? adapter.HandleMessageAsync(m) : Task.CompletedTask;
             },
             RawSystemPrompt: null,
             BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
@@ -113,9 +114,20 @@ public class ClaudeSessionLocalEngineBusyTests : IDisposable
             TasksMcp: null,
             Launcher: new SleepingLauncher(_processes, started),
             LocalEngineBusy: busy);
-        var session = new ClaudeSession(new Session { Model = model }, context, providers: Providers());
+        var providers = Providers();
+        var info = new Session { Model = model };
+        var session = new ClaudeSession(info, context, providers: providers);
+        // Признак занятости ставит адаптер (слот на попытку), а не сам ClaudeSession.
+        adapter = new FallbackLlmSessionAdapter(session, () => info.Model,
+            m =>
+            {
+                if (m is ExitedMessage) exited.TrySetResult();
+                return Task.CompletedTask;
+            },
+            new ClaudeSubscriptionPool(Helpers.TestConfig.Build(new Dictionary<string, string?>())),
+            providers, root, context.Launcher, initialProfileRoot: null, localGate: busy);
 
-        await session.SendMessageAsync("тестовый ход");
+        await adapter.SendMessageAsync("тестовый ход");
         var startedFirst = await Task.WhenAny(started.Task, Task.Delay(TimeSpan.FromSeconds(15)));
         startedFirst.Should().Be(started.Task, "процесс хода обязан стартовать");
         var during = busy.Busy;
@@ -124,7 +136,7 @@ public class ClaudeSessionLocalEngineBusyTests : IDisposable
         // — это штатный DiedEmpty-перезапуск хода новым процессом (ход продолжается, и движок
         // законно остаётся занятым). Отмена сессии завершает тело хода — ровно тот выход, на
         // котором обязан сняться признак.
-        await session.DisposeAsync();
+        await adapter.DisposeAsync();
         await Task.WhenAny(exited.Task, Task.Delay(TimeSpan.FromSeconds(5)));
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (busy.Busy && DateTime.UtcNow < deadline)

@@ -230,11 +230,13 @@ export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now
     stalledFrom = att.since;
   }
 
-  // «Ждёт» — только из timeline.current (waiting). Живые интервалы ожидающей стадии —
-  // 'wait'; задачу опознать не удалось — ждёт вся фича, 'wait' у всех живых интервалов.
+  // «Ждёт» — только из timeline.current (waiting). 'wait' ставится только тем живым интервалам,
+  // чей taskIds содержит id ждущей задачи (замечание GC-R-F2 m3): параллельная задача той же
+  // стадии остаётся 'live'. Задачу опознать не удалось (id нет) — не помечаем нигде: неизвестно,
+  // кого ждать, а молчаливая штриховка «ждёт» у всех стадий — ложь.
   const cur = finished ? null : (tl?.current ?? null);
   const waiting = cur?.kind === 'waiting';
-  const waitKey = cur && waiting ? resolveStageKey(run, cur.taskId) : null;
+  const waitTaskId = waiting ? (cur?.taskId ?? null) : null;
 
   const returnsByStage = collectReturnFlags(run);
   const nowIso = new Date(now).toISOString();
@@ -262,7 +264,7 @@ export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now
         ? 'done'
         : stoppedKey && stage.key === stoppedKey
           ? 'stalled'
-          : waiting && (waitKey === null || stage.key === waitKey)
+          : waiting && waitTaskId !== null && (iv.taskIds ?? []).includes(waitTaskId)
             ? 'wait'
             : 'live';
       intervals.push({

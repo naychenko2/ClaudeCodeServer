@@ -1,7 +1,8 @@
 // Модель дорожек «Хронологии» (GC-F2, план «Гант на Хронологии»). Чистые функции — в node, без DOM.
 //
 // Покрытие: ось и timeFrac (живая 0.86 / closed и merged 1), axisFrac (доли, clamp по окну);
-// интервалы (порядок, паузы, totalMinutes, lastOutcome); состояния (done/live/wait/stalled);
+// интервалы (порядок, паузы, totalMinutes, lastOutcome); состояния (done/live/wait/stalled;
+// wait — по задаче из current.waiting, а не по стадии, замечание GC-R-F2 m3);
 // зона «стоит» (только из attention.stopped; поиск этапа по taskId; фолбэк на текущий);
 // approx и пустой словарь — разные состояния (замечание GC-R-F1); skipped; план «N/M»
 // (prod/review из stepProgress, прочие из executors.status); возвраты (только prod);
@@ -11,7 +12,8 @@
 // Мутации (в отчёте): (1) timeFrac 1 → 0.86 у closed → краснеет «closed/merged: timeFrac 1»;
 // (2) не обрезать интервал по окну → краснеет «обрезка по окну»; (3) пустой словарь
 // считать approx → краснеет «пустой словарь — не approx»; (4) не искать стоящий этап по
-// attention.taskId (всегда текущий) → краснеет «стоит по taskId».
+// attention.taskId (всегда текущий) → краснеет «стоит по taskId»; (5) вернуть пометку wait
+// по стадии (stage.key === waitKey) → краснеет «wait по задаче, а не по стадии».
 
 import { describe, it, expect } from 'vitest';
 import { buildStageLanes, axisFrac, asStageKey, type StageLanesModel, type StageLane } from './FeatureLaneModel';
@@ -228,7 +230,30 @@ describe('состояния: live — живой хвост; wait — толь�
     expect(laneOf(model, 'qa').intervals[0]!.state).toBe('live');
   });
 
-  it('current.taskId не опознан — ждёт вся фича: wait у всех живых интервалов', () => {
+  it('wait по задаче, а не по стадии: параллельная задача той же стадии — live, ждущая — wait (мутация «по стадии» краснеет)', () => {
+    const model = buildStageLanes(
+      mkRun({
+        stages: [mkStage('prod', 'active', { taskIds: ['t-wait', 't-work'] })],
+      }),
+      mkStats(
+        {
+          prod: [
+            mkInterval('2026-10-20T11:00:00Z', AXIS_TO, { live: true, taskIds: ['t-work'] }),
+            mkInterval('2026-10-20T11:30:00Z', AXIS_TO, { live: true, taskIds: ['t-wait'] }),
+          ],
+        },
+        { kind: 'waiting', since: '2026-10-20T11:00:00Z', taskId: 't-wait' },
+      ),
+      NOW,
+    );
+    const prod = laneOf(model, 'prod');
+    // Интервал параллельно работающей задачи той же стадии — не «ждёт».
+    expect(prod.intervals[0]!.state).toBe('live');
+    // «Ждёт» только интервал, содержащий ждущую задачу.
+    expect(prod.intervals[1]!.state).toBe('wait');
+  });
+
+  it('current.taskId не опознан (id нет) — не помечаем нигде: живые интервалы остаются live', () => {
     const model = buildStageLanes(
       mkRun({
         stages: [mkStage('prod', 'active', { taskIds: ['t-prod'] }), mkStage('qa', 'active', { taskIds: ['t-qa'] })],
@@ -242,8 +267,9 @@ describe('состояния: live — живой хвост; wait — толь�
       ),
       NOW,
     );
-    expect(laneOf(model, 'prod').intervals[0]!.state).toBe('wait');
-    expect(laneOf(model, 'qa').intervals[0]!.state).toBe('wait');
+    // Неизвестно, кого ждать: молчаливая штриховка «ждёт» у всех стадий — ложь.
+    expect(laneOf(model, 'prod').intervals[0]!.state).toBe('live');
+    expect(laneOf(model, 'qa').intervals[0]!.state).toBe('live');
   });
 });
 

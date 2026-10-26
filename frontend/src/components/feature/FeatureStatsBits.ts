@@ -10,7 +10,6 @@
 
 import { C } from '../../lib/design';
 import type { FeatureTimeline } from '../../types/featureStats';
-import type { StageKey } from '../../types/featureRun';
 
 // Порог сжатия паузы (минуты): длиннее — схлопывается в «разрыв · N ч».
 export const PAUSE_BREAK_MIN = 120; // 2 ч
@@ -302,9 +301,4 @@ export function nowCompressedFraction(blocks: TimelineBlock[], at: string): numb
     acc += w;
   }
   return Math.min(1, Math.max(0, acc / total));
-}
-
-// Тип-помощник: ключ этапа как StageKey (для focusFeatureStage).
-export function asStageKey(key: string): StageKey {
-  return key as StageKey;
 }

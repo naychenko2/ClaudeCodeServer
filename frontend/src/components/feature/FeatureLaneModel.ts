@@ -126,7 +126,7 @@ function spanMinutes(from: string, to: string): number {
 const nonNeg = (n: number): number => (Number.isFinite(n) && n > 0 ? n : 0);
 
 // Флажок возврата: виток с вердиктом returned/accepted_with_remarks и закрытым completedAt.
-// (Перенесён из FeatureGanttModel без изменения поведения — GC-F2.)
+// (Перенесён из модели Ганта без изменения поведения — GC-F2.)
 export interface GanttReturnFlag {
   // completedAt витка — точка флажка на оси времени.
   at: string;
@@ -142,7 +142,7 @@ export interface GanttReturnFlag {
 
 // Витки-возвраты: цепочки шагов + стадии qa/final. «Принят с замечаниями» — тоже возврат
 // (работа вернулась к исполнителю); незакрытый виток (completedAt null) — не флажок.
-// (Перенесён из FeatureGanttModel без изменения поведения — GC-F2.)
+// (Перенесён из модели Ганта без изменения поведения — GC-F2.)
 export function collectReturnFlags(run: FeatureRun): GanttReturnFlag[] {
   const flags: GanttReturnFlag[] = [];
   const push = (r: FeatureRound, stepRef: string | null) => {
@@ -202,10 +202,10 @@ function planFromExecutors(executors: FeatureStageExecutor[]): LanePlan | null {
 }
 
 // Модель дорожек. `now` — текущее время (мс) для верха зоны «стоит»; тесты дают
-// фиксированное, в работе — Date.now() на момент построения (как у buildGanttModel).
+// фиксированное, в работе — Date.now() на момент построения.
 export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now: number): StageLanesModel {
   const closed = run.closed === true;
-  // «Живое» гаснет по state (как в баннере и Ганте): смерженная фича с открытым эпиком
+  // «Живое» гаснет по state (как в баннере и на дорожках): смерженная фича с открытым эпиком
   // не идёт; у закрытой/смерженной нет ни live, ни wait, ни «стоит», ни зоны «впереди».
   const finished = closed || run.state === 'merged' || run.state === 'closed';
   const tl = stats?.timeline;

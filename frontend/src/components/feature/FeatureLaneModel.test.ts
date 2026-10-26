@@ -26,7 +26,7 @@ const NOW = Date.parse('2026-10-20T12:00:00Z');
 const AXIS_FROM = '2026-10-20T00:00:00Z';
 const AXIS_TO = '2026-10-20T12:00:00Z';
 
-// === Фабрики данных (по образцу FeatureGanttModel.test.ts) ===
+// === Фабрики данных ===
 
 function mkRun(over: Partial<FeatureRun> = {}): FeatureRun {
   return {

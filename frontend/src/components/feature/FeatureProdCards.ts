@@ -305,8 +305,8 @@ export function buildProdCards(
   });
 
   const cards: ProdCard[] = ordered.map(({ chain }, idx) => {
-    // «Текущий» — по run.now: шаг или одна из его задач сейчас InProgress. Как в Ганте
-    // (buildGanttModel): у закрытой/смерженной фичи никакой шаг не подсвечен.
+    // «Текущий» — по run.now: шаг или одна из его задач сейчас InProgress.
+    // У закрытой/смерженной фичи никакой шаг не подсвечен.
     const finished = run.closed === true || run.state === 'merged' || run.state === 'closed';
     const now = finished ? [] : (run.now ?? []);
     const isCurrent = now.some(n => n.stepRef === chain.stepRef || chain.taskIds.includes(n.taskId));

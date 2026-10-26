@@ -63,24 +63,14 @@ export const SPEND_TIERS = COST_TIERS;
 export const TIER_KEYS = COST_TIER_KEYS;
 export type SpendTierKey = CostTierKey;
 
-// Неизвестный или null-класс → нейтральная подпись и цвет палитры (не выдуманный)
-export const tierLabel = (t?: string | null) =>
-  (t && SPEND_TIERS[t] ? SPEND_TIERS[t].label : 'Прочие');
+// Цвет класса: неизвестный или null-класс → нейтральный цвет палитры (не выдуманный)
 export const tierColor = costTierColor;
-// Текстовый вариант цвета класса — для моноширинных значений рядом с полосой
-export const tierTextColor = (t?: string | null) => {
-  if (t === 'free') return C.successText;
-  if (t === 'cheap') return C.info;
-  if (t === 'expensive') return C.warningText;
-  return C.textMuted;
-};
 
-// Сегмент столбика дня: класс + его доля в дне
+// Сегмент столбика дня: класс и его значение
 export interface SpendTierSegment {
   key: SpendTierKey;
   value: number;
   color: string;
-  share: number;   // доля сегмента в сумме классов дня
 }
 
 // Сегменты столбика дня по ценовым классам. Значения берутся ИЗ byTier
@@ -91,11 +81,65 @@ export function tierSegments(day: {
   bySource?: Record<string, number> | null;
 }): SpendTierSegment[] {
   const byTier = day.byTier ?? {};
-  const segs = TIER_KEYS.map(key => ({ key, value: byTier[key] ?? 0, color: tierColor(key) }));
+  return TIER_KEYS
+    .map(key => ({ key, value: byTier[key] ?? 0, color: tierColor(key) }))
+    .filter(s => s.value > 0);
+}
+
+// Отступ столбика дня от краёв области графика (высота самого столбика = chartH - отступ)
+const DAY_CHART_PAD = 12;
+// Минимальная высота сегмента: иначе копеечный класс не виден вовсе
+const DAY_SEG_MIN = 1;
+
+// Столбик дня: сегменты по ценовым классам и их высоты. Правило живёт здесь,
+// а не в рендере: высота столбика — от ДНЕВНОГО ИТОГА, классы лишь делят её
+// (сумма высот сегментов == высоте столбика, ровно).
+export interface SpendDaySegment {
+  key: SpendTierKey;
+  value: number;
+  color: string;
+  height: number;
+}
+
+export interface SpendDayColumn {
+  segments: SpendDaySegment[];
+  height: number;      // высота всего столбика, px
+  neutral: boolean;    // день без разбивки по классам — столбик одним нейтральным куском
+}
+
+// Собирает столбик дня: dayMax — максимум по дням (масштаб), chartH — высота
+// области графика. День без byTier (старый ответ бэка) — нейтральный столбик.
+export function dayColumn(
+  day: { total: number; byTier?: Partial<Record<SpendTierKey, number>> | null; bySource?: Record<string, number> | null },
+  dayMax: number,
+  chartH: number,
+): SpendDayColumn {
+  const scale = (chartH - DAY_CHART_PAD) / Math.max(1, dayMax);
+  const height = Math.max(2, Math.round(day.total * scale));
+  const segs = tierSegments(day);
+  if (!segs.length) return { segments: [], height, neutral: true };
+
   const sum = segs.reduce((a, s) => a + s.value, 0);
-  return segs
-    .filter(s => s.value > 0)
-    .map(s => ({ ...s, share: sum > 0 ? s.value / sum : 0 }));
+  // Границы — по накопленной доле: сумма высот ровно равна высоте столбика дня
+  let acc = 0;
+  let prev = 0;
+  const segments = segs.map(s => {
+    acc += s.value;
+    const bound = Math.round((acc / sum) * height);
+    const h = bound - prev;
+    prev = bound;
+    return { key: s.key, value: s.value, color: s.color, height: h };
+  });
+  // Копеечный класс не должен исчезать: единицу высоты берём у самого высокого
+  // сегмента (сумма высот при этом не меняется)
+  for (const seg of segments) {
+    if (seg.height >= DAY_SEG_MIN) continue;
+    const donor = segments.reduce((a, b) => (b.height > a.height ? b : a), segments[0]);
+    if (donor === seg || donor.height <= DAY_SEG_MIN) break;
+    donor.height -= DAY_SEG_MIN - seg.height;
+    seg.height = DAY_SEG_MIN;
+  }
+  return { segments, height, neutral: false };
 }
 
 // Цвет полосы строки-карточки: у разрезов «модель»/«провайдер» — по классу

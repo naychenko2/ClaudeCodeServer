@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { C } from 'aihome_shell/kit';
 import {
   GEN_SOURCES, SPEND_SOURCES, SPEND_TIERS, isGenSource, sourceColor, sourceLabel, sourceTextColor,
-  tierColor, tierLabel, tierTextColor,
+  tierColor,
 } from '../spendModel';
 
 describe('SPEND_SOURCES: серия glif', () => {
@@ -46,26 +46,15 @@ describe('SPEND_TIERS: ценовые классы моделей', () => {
     expect(SPEND_TIERS.expensive).toEqual({ label: 'Дорого', color: C.warning });
   });
 
-  it('хелперы: подпись и цвет по ключу', () => {
-    expect(tierLabel('free')).toBe('Бесплатные');
+  it('хелперы: цвет по ключу', () => {
     expect(tierColor('free')).toBe(C.success);
-    expect(tierLabel('cheap')).toBe('Дёшево');
     expect(tierColor('cheap')).toBe(C.info);
-    expect(tierLabel('expensive')).toBe('Дорого');
     expect(tierColor('expensive')).toBe(C.warning);
   });
 
-  it('неизвестный ключ и null не роняют — нейтральная подпись и цвет палитры', () => {
-    expect(tierLabel('vip')).toBe('Прочие');
+  it('неизвестный ключ и null не роняют — нейтральный цвет палитры', () => {
     expect(tierColor('vip')).toBe(C.textMuted);
-    expect(tierLabel(null)).toBe('Прочие');
     expect(tierColor(null)).toBe(C.textMuted);
     expect(tierColor(undefined)).toBe(C.textMuted);
-  });
-
-  it('текстовый цвет класса — парный токен, у неизвестного — приглушённый', () => {
-    expect(tierTextColor('free')).toBe(C.successText);
-    expect(tierTextColor('expensive')).toBe(C.warningText);
-    expect(tierTextColor('vip')).toBe(C.textMuted);
   });
 });

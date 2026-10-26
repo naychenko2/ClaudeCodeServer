@@ -5,8 +5,8 @@ import type { ReactNode } from 'react';
 import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
 import { C, FONT, R, SHADOW, SP } from 'aihome_shell/kit';
 import {
-  DIM_LABELS, SPEND_TIERS, TIER_KEYS, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong,
-  isGenSource, nodeName, rowBarColor, sourceColor, sourceLabel, tierSegments,
+  DIM_LABELS, SPEND_TIERS, TIER_KEYS, dayColumn, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong,
+  isGenSource, nodeName, rowBarColor, sourceColor, sourceLabel,
 } from './spendModel';
 import type { SpendDim, SpendFilter } from '../../lib/spendContract';
 import { Dot, EmptyBody, GhostBtn, nodeIcon } from './spendUi';
@@ -169,8 +169,8 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
       sepDone = true;
     }
     const clickable = !d.aggregated && d.total > 0;
-    // Сегменты по ценовым классам; день без byTier (старый ответ бэка) — нейтральный столбик
-    const segs = tierSegments(d);
+    // Столбик дня: сегменты по ценовым классам и их высоты (правило — в spendModel)
+    const col = dayColumn(d, dayMax, chartH);
     bars.push(
       <div
         key={d.date}
@@ -184,17 +184,17 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
       >
         {d.total === 0
           ? <i style={{ display: 'block', height: 2, background: C.track, borderRadius: 1 }} />
-          : segs.length > 0
-            ? segs.map(s => (
-              <i key={s.key} style={{
+          : col.segments.length > 0
+            ? col.segments.map(sg => (
+              <i key={sg.key} data-tier={sg.key} style={{
                 display: 'block', borderRadius: 1,
-                height: Math.max(2, Math.round(s.value / dayMax * (chartH - 12))),
-                background: s.color,
+                height: sg.height,
+                background: sg.color,
               }} />
             ))
-            : <i style={{
+            : <i data-neutral="1" style={{
               display: 'block', borderRadius: 1,
-              height: Math.max(2, Math.round(d.total / dayMax * (chartH - 12))),
+              height: col.height,
               background: C.track,
             }} />}
       </div>,

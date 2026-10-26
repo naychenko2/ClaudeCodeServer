@@ -1975,3 +1975,178 @@ describe('Q5B: очередь фич в шапке', () => {
     expect(menuLabels().some(l => l.includes('В очередь'))).toBe(expected);
   });
 });
+
+// === Q5I-2: блок «Фича в очереди» на странице фичи (макет feature-queue-1 §«Состояния») ===
+// Очередь (paused + hold.reason='queue') — отдельный блок вместо паузного: тон паузы
+// (bgInset/рамка border), глиф queue 14, позиция — готовая фраза из queuePhraseParts (Q5I-1).
+// Мутации (в отчёте): (1) убрать ветку hold.reason==='queue' в FeaturePageAlert → рендерится
+// пауза, «Фича в очереди» отсутствует → тест 1 красный; (2) собрать позицию из
+// run.queue.position/length вместо phrase хелпера → «третья из трёх» нет → тест позиции-3
+// красный; (3) снять нижнюю границу Math.max(1,…) → «0 мин» → тест свежей постановки красный;
+// (4) снять гейт position===1 → фраза первой позиции появляется при position 2 → тест 1
+// красный; (5) сменить глиф/размер (kind≠'queue' или size≠14) → тест глифа красный.
+describe('Q5I-2: блок «Фича в очереди» на странице фичи', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockHold.calls = [];
+    mockHold.pending = false;
+    mockHold.error = null;
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  const queuePage = (state: FeatureState, over: Record<string, unknown> = {}) => {
+    const pd = pageData();
+    pd.run = { ...pd.run, state, ...over } as never;
+    mockGetFeature.result = pd;
+  };
+  // position 2 при длине 3 → «вторая из трёх»; since 11:00 при NOW 12:00 → 60 мин → «1 ч».
+  const QUEUED = { hold: { reason: 'queue', since: '2026-10-19T11:00:00Z' }, queue: { position: 2, length: 3 }, now: [] };
+  const MAIN_SUB = 'Запустится сама, когда одна из идущих фич проекта закончится или уйдёт на мерж. Прерванные шаги продолжатся с того же места.';
+  const FIRST_POS = 'Если место освободилось, а фича не запустилась за минуту, запустите её вручную: ⋯ → «Запустить вне очереди».';
+
+  // Внутренний узел, чей текст ровно text (сам текст — в одном статичном узле).
+  function findExactText(n: AnyNode, text: string): AnyNode | null {
+    if (textNodes(n as never).join('') === text) return n;
+    for (const c of n.childNodes) { const hit = findExactText(c, text); if (hit) return hit; }
+    return null;
+  }
+  const blockOf = (c: ReturnType<typeof render>): AnyNode | null => {
+    const b = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    return b as unknown as AnyNode | null;
+  };
+
+  it('блок: «Фича в очереди: вторая из трёх. Поставили вы 1 ч назад. Шаги не запускается.» + sub', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const attrs = (block as unknown as { attributes: Record<string, string> }).attributes ?? {};
+    expect(attrs['data-tone'], 'тон блока — queue').toBe('queue');
+    expect(attrs['role'], 'role=status').toBe('status');
+    expect(attrs['aria-live'], 'aria-live=polite').toBe('polite');
+    const st = (block as unknown as { style: Record<string, string> }).style;
+    expect(st.background, 'фон C.bgInset').toBe('var(--c-bg-inset)');
+    expect(st.border, 'рамка 1px solid C.border').toBe('1px solid var(--c-border)');
+    expect(st.borderRadius, 'R.lg').toBe('10px');
+    const text = textNodes(block as never).join('');
+    // Главная фраза — ровно phrase хелпера целиком (не собрана потребителем).
+    expect(findExactText(block!, 'Фича в очереди: вторая из трёх.'), 'жирная фраза с позицией').not.toBeNull();
+    expect(text).toContain('Поставили вы 1 ч назад. Шаги не запускаются.');
+    // sub — FS.sm, C.textSecondary.
+    const sub = findExactText(block!, MAIN_SUB);
+    expect(sub, 'строка sub').not.toBeNull();
+    const subStyle = (sub as unknown as { style: Record<string, string> }).style;
+    expect(subStyle.fontSize, 'sub FS.sm').toBe('12px');
+    expect(subStyle.color, 'sub C.textSecondary').toBe('var(--c-text-secondary)');
+    // Это не пауза: паузных слов и кнопки нет; фразы первой позиции при position 2 нет.
+    expect(text, 'нет паузной формулировки').not.toContain('Фича на паузе');
+    expect(text, 'нет фразы первой позиции (position 2)').not.toContain('Если место освободилось');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-unpause'), 'главной кнопки нет').toBeNull();
+  });
+
+  it('позиция — из хелпера, не константа: position 3 → «третья из трёх»', async () => {
+    queuePage('paused', { ...QUEUED, queue: { position: 3, length: 3 } });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(text, 'позиция третья').toContain('Фича в очереди: третья из трёх.');
+    expect(text, 'нет фразы первой позиции').not.toContain('Если место освободилось');
+  });
+
+  it('первая позиция: к sub добавляется «Если место освободилось…»', async () => {
+    queuePage('paused', { ...QUEUED, queue: { position: 1, length: 3 } });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(text).toContain('Фича в очереди: первая из трёх.');
+    expect(text, 'вторая фраза sub').toContain(FIRST_POS);
+  });
+
+  it('свежая постановка (<1 мин): «Поставили вы 1 мин назад», не «0 мин»', async () => {
+    queuePage('paused', { hold: { reason: 'queue', since: '2026-10-19T12:00:00Z' }, queue: { position: 2, length: 3 }, now: [] });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(text).toContain('Поставили вы 1 мин назад');
+    expect(text, 'нуля нет').not.toContain('0 мин');
+  });
+
+  it('нет queue (бэк не отдал): блок без позиции, нулей и слов позиции нет', async () => {
+    queuePage('paused', { hold: { reason: 'queue', since: '2026-10-19T11:00:00Z' }, now: [] });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(findExactText(block!, 'Фича в очереди.'), 'фраза без позиции').not.toBeNull();
+    expect(text, 'слов позиции нет').not.toContain('вторая');
+    expect(text, 'чисел «N из M» нет').not.toMatch(/\d+\s*из\s*\d+/);
+    expect(text, 'фразы первой позиции нет (позиция неизвестна)').not.toContain('Если место освободилось');
+  });
+
+  it('нет hold.since (бэк не отдал): длительности нет, «0 мин» и «undefined» нет', async () => {
+    queuePage('paused', { hold: { reason: 'queue' }, queue: { position: 2, length: 3 }, now: [] });
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    const text = textNodes(block as never).join('');
+    expect(text).toContain('Поставили вы.');
+    expect(text, 'без данных нет «назад»').not.toContain('назад');
+    expect(text).not.toContain('undefined');
+  });
+
+  it('глиф блока — queue 14 (круг + три полосы), не глиф паузы', async () => {
+    queuePage('paused', QUEUED);
+    const c = render({});
+    await settle();
+    const block = blockOf(c);
+    expect(block, 'блок очереди').not.toBeNull();
+    let svg: AnyNode | null = null;
+    const walk = (x: AnyNode) => {
+      if (!svg && x.nodeName === 'SVG') svg = x;
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(block!);
+    expect(svg, 'svg глифа в блоке').not.toBeNull();
+    const attrs = (svg as unknown as { attributes: Record<string, string> }).attributes ?? {};
+    expect(attrs['width'], 'глиф 14').toBe('14');
+    expect(attrs['height'], 'глиф 14').toBe('14');
+    let rects = 0;
+    const walkRects = (x: AnyNode) => {
+      if (x.nodeName === 'RECT') rects++;
+      for (const ch of x.childNodes) walkRects(ch);
+    };
+    walkRects(svg!);
+    // Три полосы — отличие от hold (две) и других глифов.
+    expect(rects, 'три полосы глифа очереди').toBe(3);
+  });
+});

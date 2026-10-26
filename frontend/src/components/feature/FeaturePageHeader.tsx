@@ -10,20 +10,21 @@ import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { FeatureGlyph } from '../chat/feature/FeatureGlyphs';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
-import { formatDuration, queueOrdinalWord } from '../../lib/chatGroups';
+import { formatDuration, queueOrdinalWord, queuePhraseParts } from '../../lib/chatGroups';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { openChatById } from '../../lib/openChat';
 import { executorStopVisual, openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { showToast } from '../../lib/toast';
-import type { FeatureRun, FeatureState, FeatureAttention, FeatureNow, FeatureQueue } from '../../types/featureRun';
+import type { FeatureRun, FeatureState, FeatureAttention, FeatureNow, FeatureQueue, FeatureHold } from '../../types/featureRun';
 import { api } from '../../lib/api';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { taskCounters } from './featurePageBody';
 import { NavTargetButton } from './NavTargetButton';
 import { StatusTag, type FeatureRunTag } from './FeatureStatusTag';
 import { analysisLineState } from './FeatureAnalysisModel';
+import { minutesSince } from './FeatureStatsBits';
 import { setFeaturePageTab } from '../../lib/featurePage';
 
 // Статусный тег живёт в FeatureStatusTag.tsx (W5-F3a): шапка и строка анализа зовут
@@ -1186,7 +1187,67 @@ function HoldStateBlock({ run, feature, isMobile }: { run: FeatureRun; feature: 
   );
 }
 
+// === Блок «в очереди» (Q5I-2, макет feature-queue-1 §«Состояния») ===
+//
+// Очередь — пауза с причиной 'queue' (state остаётся paused): тон тот же, что у паузы
+// (bgInset + рамка border, тревоги нет), различаются глиф и слова. Признак ветки —
+// hold.reason, не state: state у очереди тот же paused.
+// Позиция — готовая фраза из queuePhraseParts (Q5I-1): потребитель берёт phrase целиком,
+// не собирает строку из ordinal/count/sep (урок R-Q5D-D). Нет queue (бэк не отдал) —
+// блок без позиции, нулей не показываем (тот же признак, что у queueLabelParts).
+// Длительность — тем же приёмом, что возраст паузы в шапке: minutesSince + formatDuration,
+// нижняя граница 1 мин (как в FeatureMiniSummary): «0 мин назад» на свежей постановке
+// бессмысленна.
+// Главного действия в блоке нет: «Запустить вне очереди» живёт в ⋯ (Q5B); «Снять паузу»
+// не показываем — это и есть «вне очереди», только без предупреждения (макет).
+// Вне тела компонента: Date.now() в рендере флагует react-hooks/purity — новых замечаний
+// файл не получает (существующие — HoldStateBlock/FeaturePageAlert — не множатся).
+function queueHoldDuration(hold?: FeatureHold | null): string | null {
+  const sinceMin = minutesSince(hold?.since, Date.now());
+  return sinceMin != null ? formatDuration(Math.max(1, sinceMin)) : null;
+}
+
+function QueueStateBlock({ run }: { run: FeatureRun }) {
+  const parts = queuePhraseParts(run.queue);
+  const dur = queueHoldDuration(run.hold);
+  return (
+    <div
+      data-testid="feature-page-alarm"
+      data-tone="queue"
+      role="status"
+      aria-live="polite"
+      style={{
+        display: 'flex', gap: SP.sm, alignItems: 'flex-start',
+        marginTop: SP.md, padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg,
+        background: C.bgInset, border: `1px solid ${C.border}`,
+        fontSize: FS.base, fontFamily: FONT.sans, color: C.textPrimary,
+      }}
+    >
+      <span style={{ paddingTop: SP.xxs, display: 'inline-flex', flexShrink: 0 }}>
+        <FeatureGlyph kind="queue" size={14} />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div>
+          <b>{parts ? `Фича в очереди: ${parts.phrase}.` : 'Фича в очереди.'}</b>
+          <span> {dur ? `Поставили вы ${dur} назад.` : 'Поставили вы.'} Шаги не запускаются.</span>
+        </div>
+        <div style={{ marginTop: SP.sm, fontSize: FS.sm, color: C.textSecondary }}>
+          <div>Запустится сама, когда одна из идущих фич проекта закончится или уйдёт на мерж. Прерванные шаги продолжатся с того же места.</div>
+          {run.queue?.position === 1 && (
+            <div>Если место освободилось, а фича не запустилась за минуту, запустите её вручную: ⋯ → «Запустить вне очереди».</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function FeaturePageAlert({ run, feature, isMobile, onMerge, marks: marksProp }: FeaturePageAlertProps) {
+  // Очередь — отдельный блок состояния (Q5I-2): стоит выше общей паузы, её признак —
+  // hold.reason === 'queue' (state при этом остаётся paused, ниже не досчитывается).
+  if (run?.hold?.reason === 'queue') {
+    return <QueueStateBlock run={run} />;
+  }
   // Пауза и черновик — блок состояния вместо тревоги: при paused тревога не рисуется
   // (paused стоит выше stopped и waiting в приоритете бэка, W4-HOLD-B1).
   if (run?.state === 'paused' || run?.state === 'draft') {

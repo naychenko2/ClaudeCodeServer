@@ -694,7 +694,9 @@ export function featureKindCounts(features: FeatureIndexFeature[]): Record<Featu
   for (const f of features) {
     if (f.chatCount <= 0) continue;
     const k = f.kind;
-    if (k) counts[k]++;
+    // Неизвестный kind (бэковый словарь обновился раньше фронтального) не считается:
+    // иначе в счётчиках десятый ключ и NaN.
+    if (k && k in counts) counts[k]++;
   }
   return counts;
 }

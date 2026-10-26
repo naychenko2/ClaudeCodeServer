@@ -529,6 +529,21 @@ describe('Ф-1.3: featureKindCounts (счётчики по kind, только р
     expect(featureKindCounts(withNull)).toEqual(featureKindCounts(base));
   });
 
+  // Ф-1.3b (R-Ф1.3, замечание 2): неизвестный kind (бэковый словарь обновился
+  // раньше фронтального) не создаёт десятого ключа и NaN в счётчиках.
+  // Мутация (в отчёте): убрать `k in counts` из featureKindCounts → этот тест
+  // красный (10 ключей, NaN); откат → зелёный.
+  it('неизвестный kind (бэк обновился раньше фронта): не считается — ровно 9 числовых ключей', () => {
+    const unknown = withKind('U', 'новое' as unknown as FeatureKind, 3);
+    const counts = featureKindCounts([unknown, withKind('A', 'running', 1), withKind('C', 'closed', 1)]);
+    const keys = Object.keys(counts);
+    expect(keys.length).toBe(9);
+    expect(new Set(keys)).toEqual(new Set(ALL_FEATURE_KINDS));
+    expect(keys.every(k => Number.isFinite(counts[k as FeatureKind]))).toBe(true);
+    expect(counts.running).toBe(1);
+    expect(counts.closed).toBe(1);
+  });
+
   it('пустой список — все нули', () => {
     const counts = featureKindCounts([]);
     expect(ALL_FEATURE_KINDS.map(k => counts[k])).toEqual(ALL_FEATURE_KINDS.map(() => 0));
@@ -610,12 +625,29 @@ describe('Ф-1.3: shownFiltersModel (строка «Показаны», 4 стр
 });
 
 // Сторож (разрез: «фронт не пересчитывает»): отбор и счётчики читают только kind из
-// индекса. Мутация (в отчёте): добавить f.bucket в featureMatchesKinds → этот тест
-// красный; откат → зелёный.
+// индекса. Ф-1.3b (R-Ф1.3, замечание 1): текстовый запрет — по идентификатору, а не
+// по доступу через точку: `const { bucket } = f` и `f['bucket']` старый regex
+// пропускал молча. Поведенческая проверка — на фиче с противоречивыми данными
+// (kind='running', bucket='closed'): принадлежность категории определяет ТОЛЬКО kind.
+// Мутация (в отчёте): в featureMatchesKinds `const k = f.kind` →
+// `const { kind: k, bucket } = f` и вернуть bucket в сравнение → оба теста красные;
+// откат → зелёный.
 describe('Ф-1.3: сторож — featureMatchesKinds/featureKindCounts не читают state/chips/bucket', () => {
-  it('исходник функций не содержит .state/.chips/.bucket', () => {
+  it('поведенчески: kind="running", bucket="closed" — видна и считается по kind', () => {
+    const f = { ...feature('X', 'closed'), kind: 'running', chatCount: 1 };
+    // Умолчание: running — открытая → видна; bucket на отбор не влияет.
+    expect(featureMatchesKinds(f, [])).toBe(true);
+    // «Только закрытые»: kind ≠ closed → скрыта; bucket её не тянет в выбор.
+    expect(featureMatchesKinds(f, ['closed'])).toBe(false);
+    // Счётчики: по kind, не по bucket.
+    const counts = featureKindCounts([f]);
+    expect(counts.running).toBe(1);
+    expect(counts.closed).toBe(0);
+  });
+
+  it('исходник функций не содержит идентификаторов state/chips/bucket', () => {
     const src = `${featureMatchesKinds.toString()}\n${featureKindCounts.toString()}`;
-    expect(src).not.toMatch(/\.state|\.chips|\.bucket/);
+    expect(src).not.toMatch(/\b(state|chips|bucket)\b/);
   });
 });
 

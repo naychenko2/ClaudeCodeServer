@@ -89,6 +89,53 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         userAssignments.GetProperty("chat-new").GetString().Should().BeNull();
     }
 
+    // Контракт /api/models: у каждого провайдера есть признак локальности
+    // (providers[].isLocal) — фронт по нему узнаёт, что провайдер локальный, даже если
+    // его ключ («local-test») фронту неизвестен. У облачного провайдера и у claude — false.
+    [Fact]
+    public async Task Get_ПризнакЛокальностиПровайдера()
+    {
+        using var factory = new TestWebApplicationFactory
+        {
+            ExtraConfig =
+            {
+                ["LlmProviders:local-test:DisplayName"] = "Локальный тестовый",
+                ["LlmProviders:local-test:IsLocal"] = "true",
+                ["LlmProviders:local-test:AnthropicBaseUrl"] = "http://127.0.0.1:8123",
+                ["LlmProviders:cloud-test:DisplayName"] = "Облачный тестовый",
+                ["LlmProviders:cloud-test:ApiKey"] = "test-key",
+                ["LlmProviders:cloud-test:AnthropicBaseUrl"] = "https://api.example.com/anthropic",
+            },
+        };
+        var client = factory.CreateAuthenticatedClient();
+
+        var response = await client.GetAsync("/api/models");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        var providers = body.GetProperty("providers");
+
+        providers.GetProperty("local-test").GetProperty("isLocal").GetBoolean().Should().BeTrue();
+        providers.GetProperty("cloud-test").GetProperty("isLocal").GetBoolean().Should().BeFalse();
+        providers.GetProperty("claude").GetProperty("isLocal").GetBoolean().Should().BeFalse();
+    }
+
+    // Контракт /api/models: ценовой класс провайдера (providers[].costTier).
+    // На нём держится пилюля «дорого» на карточке подписки (дефект 401e7e56):
+    // claude → дорого. Правило класса — в Core (SpendCostTiers).
+    [Fact]
+    public async Task Get_ЦеновойКлассПровайдера()
+    {
+        using var factory = new TestWebApplicationFactory();
+        var client = factory.CreateAuthenticatedClient();
+
+        var response = await client.GetAsync("/api/models");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        var providers = body.GetProperty("providers");
+
+        providers.GetProperty("claude").GetProperty("costTier").GetString().Should().Be("expensive");
+    }
+
     [Fact]
     public async Task Preview_ЯчейкаПерсоныБезУровня_ИдётМодельюЯчейки()
     {

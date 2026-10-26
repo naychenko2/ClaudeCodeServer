@@ -37,6 +37,17 @@ public class LocalModelStatsHistoryTests
         public override DateTimeOffset GetUtcNow() => _utc;
     }
 
+    // Файл-результат во временном каталоге: резолвер истории отдаёт путь, который тест создал
+    // сам (платформонезависимость по CLAUDE.md: жёсткий /tmp/x.png красит тест на машине, где
+    // его нет). Файл удаляется в Dispose — тест не оставляет мусора.
+    private sealed class TempFile : IDisposable
+    {
+        public string FilePath { get; } = Path.Combine(
+            Path.GetTempPath(), "lms-history-" + Guid.NewGuid().ToString("N") + ".png");
+        public TempFile() => File.WriteAllText(FilePath, "png");
+        public void Dispose() => File.Delete(FilePath);
+    }
+
     private sealed class Harness : IDisposable
     {
         public TestWebApplicationFactory Factory { get; }
@@ -297,7 +308,8 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task НеАдмин_ЧужойId_404()
     {
-        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, "/tmp/x.png", "image/png", null));
+        using var file = new TempFile();
+        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
         // Обе записи ДО первого запроса: индекс грузится один раз (Load идемпотентна).
         h.WriteRecord("p_admin", "test-source");                        // чужая (админа)
         h.WriteRecord("p_nonadmin", "test-source", ownerId: h.NonAdminId); // своя
@@ -376,7 +388,8 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task RecordIdСДвумяТочками_404()
     {
-        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, "/tmp/x.png", "image/png", null));
+        using var file = new TempFile();
+        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
         var resp = await h.Admin.GetAsync("/api/local-model/history/a..b/file");
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
@@ -385,7 +398,8 @@ public class LocalModelStatsHistoryTests
     [Fact]
     public async Task НеверныйN_404()
     {
-        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, "/tmp/x.png", "image/png", null));
+        using var file = new TempFile();
+        using var h = new Harness("test-source", (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null));
         h.WriteRecord("p1", "test-source");
         var resp = await h.Admin.GetAsync("/api/local-model/history/p1/file?n=5");
         resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -529,8 +543,9 @@ public class LocalModelStatsHistoryTests
         }
 
         // available: Reason==null, 1 вариант; неверный n=5 → 404
+        using (var file = new TempFile())
         using (var h = new Harness("test-source",
-            (r, n) => new MediaHistoryResolution(1, "/tmp/x.png", "image/png", null)))
+            (r, n) => new MediaHistoryResolution(1, file.FilePath, "image/png", null)))
         {
             h.WriteRecord("p3", "test-source");
             var resp = await h.Admin.GetAsync("/api/local-model/history/p3/file?n=5");

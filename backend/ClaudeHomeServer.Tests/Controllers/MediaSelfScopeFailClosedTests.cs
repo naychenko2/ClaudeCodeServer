@@ -22,12 +22,18 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // JwtServiceTests), поэтому контроллерная проверка — запасная, и держать её надо отдельно.
 public class MediaSelfScopeFailClosedTests : IDisposable
 {
-    // Источник результата: отдаёт «файл», чтобы без fail-closed запрос дошёл до выдачи файла
-    private sealed class FakeSource : IMediaHistoryResultSource
+    // Источник результата: отдаёт «файл», чтобы без fail-closed запрос дошёл до выдачи файла.
+    // Файл — свой, во временном каталоге (платформонезависимость по CLAUDE.md: жёсткий /tmp/x.png
+    // красит тест на машине, где его нет), и удаляется при Dispose.
+    private sealed class FakeSource : IMediaHistoryResultSource, IDisposable
     {
+        private readonly string _filePath = Path.Combine(
+            Path.GetTempPath(), "media-self-scope-" + Guid.NewGuid().ToString("N") + ".png");
+        public FakeSource() => File.WriteAllText(_filePath, "png");
         public string Source => "test-source";
         public Task<MediaHistoryResolution?> ResolveAsync(MediaHistoryRef reference, int variant, CancellationToken ct)
-            => Task.FromResult<MediaHistoryResolution?>(new MediaHistoryResolution(1, "/tmp/x.png", "image/png", null));
+            => Task.FromResult<MediaHistoryResolution?>(new MediaHistoryResolution(1, _filePath, "image/png", null));
+        public void Dispose() => File.Delete(_filePath);
     }
 
     private sealed class FakeComfyStats(ComfyMediaStatsSnapshot? snapshot) : IComfyStats
@@ -36,16 +42,21 @@ public class MediaSelfScopeFailClosedTests : IDisposable
     }
 
     private readonly TestWebApplicationFactory _factory;
+    private readonly FakeSource _source = new();
 
     public MediaSelfScopeFailClosedTests()
     {
         _factory = new TestWebApplicationFactory
         {
-            ExtraServices = s => s.AddSingleton<IMediaHistoryResultSource>(new FakeSource()),
+            ExtraServices = s => s.AddSingleton<IMediaHistoryResultSource>(_source),
         };
     }
 
-    public void Dispose() => _factory.Dispose();
+    public void Dispose()
+    {
+        _factory.Dispose();
+        _source.Dispose();
+    }
 
     // sub == null — claim отсутствует вовсе; иначе claim с этим значением (в т.ч. "" и " ")
     private static ClaimsPrincipal Principal(string? sub, bool admin = false)

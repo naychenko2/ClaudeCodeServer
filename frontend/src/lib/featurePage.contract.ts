@@ -23,8 +23,8 @@ export const BRIEF = {
   // running: бэк отдаёт null («фича не в очереди», FeatureBrief.cs QueueWaitOf) — и здесь null.
   queueWaitMinutes: null,
   note: { text: 'Идём по плану', at: '2026-10-25T09:00:00Z', byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'prod', stale: false },
-  // B6: время последнего изменения состояния; здесь — последний сдвиг состояния (старт ревью,
-  // now.since). computedAt — момент ответа — позже него.
+  // B6: время последнего ЗАПИСАННОГО события состояния; здесь — последний сдвиг состояния
+  // (старт ревью, now.since). computedAt — момент ответа — позже него.
   updatedAt: '2026-10-25T10:00:00Z',
   computedAt: '2026-10-25T10:05:00Z',
 } satisfies FeatureBrief;

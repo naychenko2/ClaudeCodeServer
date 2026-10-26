@@ -736,15 +736,19 @@ public class TaskExecutionServiceHoldTests : IDisposable
     }
 
     // Q6-TAIL2 (п.1, RV-Q3B-Q4 минор 2): тест выше проверяет только значение срока — этот фиксирует
-    // сам якорь отсчёта. Состояние после 25 ч удержания: активность чата — 25-часовой давности
-    // (модовая доставка продолжения реальной активности в чате не делает). Снятие удержания
-    // возвращает срок с якорем «сейчас» (TaskExecutionService.cs:1527 → SetExpiry внутри
-    // RestoreFrozenExpiry): ближайший реальный тик уборки чат не сносит — срок считается от
-    // момента снятия, а не от замороженной активности; границы срока от нового якоря: 9 мин —
-    // жив, 11 мин — снесён. Мутации: «RestoreFrozenExpiry возвращает срок без нового якоря»
-    // (SessionManager.cs: вместо SetExpiry — прямая запись ExpiresAfterMinutes) — краснеют
-    // абзац якоря и «пережил реальный тик»; «якорь = последняя активность» — краснеет абзац
-    // якоря (момент 25-часовой давности).
+    // сам якорь отсчёта. Состояние после 25 ч удержания: к снятию чат подходит с 25-часовой
+    // активностью — подмена ДО ClearHold/Resume (находка RV-K-Q6-TAIL: при подмене после снятия
+    // модель описывала невозможное — активность старше только что поставленного якоря). Снятие
+    // удержания возвращает срок с якорем «сейчас» (TaskExecutionService.cs:1527 → SetExpiry внутри
+    // RestoreFrozenExpiry): границы срока от момента снятия — ближайший тик и 9 мин жив, 11 мин
+    // снесён. Мутация: «RestoreFrozenExpiry возвращает срок без нового якоря» (SessionManager.cs:
+    // вместо SetExpiry — прямая запись ExpiresAfterMinutes) — краснеет абзац якоря (null).
+    // Почему регрессия «якорь = последняя активность» этим тестом не ловится (замер хвоста
+    // RV-K-Q6-TAIL): доставка продолжения сама есть активность — SendDirectAsync безусловно
+    // ставит Working (SessionManager.cs:5281 → :10890), UpdatedAt поднимается на момент снятия
+    // (замер: +15 мс к beforeClear) раньше возврата срока. В этой цепочке регрессия эквивалентна
+    // правильному коду при любом месте подмены; прежний абзац этого комментария обещал её
+    // красноту — неверно.
     [Fact]
     public async Task QueueHold_25Hours_RestoredExpiryAnchoredAtClearingNotOldActivity()
     {
@@ -761,14 +765,16 @@ public class TaskExecutionServiceHoldTests : IDisposable
         _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);
         SetIdle(chat.Id);
 
+        // Состояние после суток удержания: к снятию чат подходит с активностью 25-часовой
+        // давности — подмена ДО ClearHold/Resume (находка RV-K-Q6-TAIL). Доставка продолжения
+        // поднимет активность штатно: реальный порядок вещей после суток в очереди.
+        _sessions.GetById(chat.Id)!.UpdatedAt = DateTime.UtcNow.AddHours(-25);
+
         var beforeClear = DateTime.UtcNow;
         _tasks.ClearHold(epic.Id);
         var resumed = await _sut.ResumeFeatureTurnsAfterHold(epic.Id, user.Id, FeatureHoldReasons.Queue);
         resumed.Should().Be(1, "шаг продолжен в прежнем чате");
         SetIdle(chat.Id);
-
-        // Состояние после суток удержания: активность чата — из допаузного времени.
-        _sessions.GetById(chat.Id)!.UpdatedAt = DateTime.UtcNow.AddHours(-25);
 
         var restored = _sessions.GetById(chat.Id)!;
         restored.ExpiresAfterMinutes.Should().Be(10, "значение срока — то же, что проверяет Q4");
@@ -776,8 +782,8 @@ public class TaskExecutionServiceHoldTests : IDisposable
             .Should().BeOnOrAfter(beforeClear,
             "якорь отсчёта — момент снятия удержания, а не замороженная активность и не её отсутствие");
 
-        // Поведение: реальный тик уборки чат не сносит — срок считается от якоря, а не от
-        // 25-часовой активности (regress «якорь 25-часовой давности» здесь краснеет).
+        // Поведение: переживший сутки в очереди чат не снесён ближайшим тиком — границы
+        // срока от момента снятия, а не от замороженной активности.
         await new ChatExpiryService(_sessions, NullLogger<ChatExpiryService>.Instance)
             .TickAsync(DateTime.UtcNow);
         _sessions.GetById(chat.Id).Should().NotBeNull(

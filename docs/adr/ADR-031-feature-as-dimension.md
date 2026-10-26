@@ -373,9 +373,11 @@ Html не разбираем вовсе: прототип идёт в «Файл
   файлов в `data/` нет.
 - **TTL чата исполнителя на удержании — поведение волны 4, кода Q4 нет.** Фича может стоять
   в очереди дольше суток; срок чата прерванного шага на удержании снимается, при снятии
-  возвращается с якорем «сейчас» (`SessionManager.FreezeExpiryForHold`/`RestoreFrozenExpiry`,
-  [TaskExecutionService.cs](../../backend/ClaudeHomeServer/Services/TaskExecutionService.cs)) —
-  это уже построенное поведение паузы (волна 4, разрез
+  возвращается с якорем «сейчас»: сами методы `SessionManager.FreezeExpiryForHold`/
+  `RestoreFrozenExpiry` объявлены в
+  [SessionManager.cs](../../backend/ClaudeHomeServer/Services/SessionManager.cs) (:2439 и :2455),
+  в [TaskExecutionService.cs](../../backend/ClaudeHomeServer/Services/TaskExecutionService.cs)
+  — только вызовы этой цепочки. Это уже построенное поведение паузы (волна 4, разрез
   [feature-lifecycle-shared-chat-cut-2026-10.md](../research/feature-lifecycle-shared-chat-cut-2026-10.md)
   §«TTL чата исполнителя на паузе», W4-HOLD-J/N), очередь наследует его без нового кода.
   Трассировка «раздел ↔ код» (минор RV-Q3B-Q4): плана Q4 в коде нет — он закрыт только

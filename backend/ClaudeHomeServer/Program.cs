@@ -852,6 +852,10 @@ builder.Services.AddSingleton<IPersonaAutomationRunner>(sp => sp.GetRequiredServ
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.Backup.BackupService>());
+// Ночная уборка worktree и /tmp, тревога о нехватке места (WorktreeCleanupService)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.WorktreeCleanupService>();
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
+    sp.GetRequiredService<ClaudeHomeServer.Services.WorktreeCleanupService>());
 
 // === Канал устройства (ADR-016): агент локальных проектов на машине пользователя ===
 // Реестр устройств и хеши их токенов — единственный стор канала; живые соединения хаба

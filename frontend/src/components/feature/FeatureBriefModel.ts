@@ -128,7 +128,7 @@ export function briefNowText(brief: FeatureBrief, opts: BriefTextOptions = {}): 
     case 'merged': {
       // «Смержена в master 24.10 в 18:05» (макет) — дата мержа от вызывающего (run.summary);
       // без даты — «Закрыта» (разрез п. 4). 'merged' (Ф-1.1) — та же строка, что 'closed':
-      // для свода смерженная фича ведётся как закрытая.
+      // фича смержена, эпик ещё не закрыт (Б-1.1) — для свода ведётся так же, как 'closed'.
       const at = opts.mergedAt;
       if (at) return `Смержена в master ${formatDate(at)} в ${formatClock(at)}`;
       return 'Закрыта';

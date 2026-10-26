@@ -39,8 +39,9 @@ import type { PlanState } from './featureProgress';
 // Здесь только форма данных, логики нет.
 
 // Категория состояния блока — словарь бэка (п. 4 разреза), девять значений.
-// 'merged' — эпик смержен, ран фичи ещё открыт (Б-1.1); для свода ведётся так же,
-// как 'closed' (Ф-1.1): тот же тег, та же строка, тот же итог.
+// 'merged' — фича смержена в master (merge Done), но эпик ещё не закрыт
+// (run.Closed = false, Б-1.1): в фильтре остаётся среди открытых; для свода
+// ведётся так же, как 'closed' (Ф-1.1).
 export type FeatureBriefKind =
   | 'running' | 'waiting_you' | 'error' | 'paused'
   | 'queued' | 'draft' | 'idle' | 'closed' | 'merged';

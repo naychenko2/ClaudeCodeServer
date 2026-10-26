@@ -156,7 +156,7 @@ const CASES: Case[] = [
   { name: 'idle', kind: 'idle', tag: featureRunStatusTag('idle').label },
   { name: 'closed (смержена)', kind: 'closed', mergedAt: at(24, 18, 5), tag: featureRunStatusTag('merged').label },
   { name: 'closed (без мержа)', kind: 'closed', tag: featureRunStatusTag('closed').label },
-  { name: 'merged (смержена, ран открыт)', kind: 'merged', mergedAt: at(24, 18, 5), tag: featureRunStatusTag('merged').label },
+  { name: 'merged (смержена, эпик ещё не закрыт)', kind: 'merged', mergedAt: at(24, 18, 5), tag: featureRunStatusTag('merged').label },
 ];
 
 describe('FeatureBriefBlock: девять kind', () => {
@@ -499,8 +499,9 @@ describe('Closedность ленты и оси (R-F8)', () => {
     const mergedAt = at(24, 18, 5);
     const closed = render({ brief: brief({ kind: 'closed', elapsedMinutes: 400 }), stats: s, mergedAt });
     const merged = render({ brief: brief({ kind: 'merged', elapsedMinutes: 400 }), stats: s, mergedAt });
-    // Равенство по всем видимым частям карточки: тег, «Сейчас», сводка («Итог»/«шла …») и ось.
-    for (const id of ['brief-tag', 'brief-now-line', 'brief-facts', 'mini-timeline-axis']) {
+    // Равенство по всем видимым частям карточки: тег, глиф, «Сейчас» с подстрокой,
+    // сводка («Итог»/«шла …») и ось.
+    for (const id of ['brief-tag', 'brief-glyph', 'brief-now-line', 'brief-now-sub', 'brief-facts', 'mini-timeline-axis']) {
       const a = findNodeByAttr(closed.c, 'data-testid', id);
       const b = findNodeByAttr(merged.c, 'data-testid', id);
       expect(a, `элемент ${id} у closed`).not.toBeNull();

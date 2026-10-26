@@ -1,20 +1,31 @@
-// Признак «бесплатный» источник расхода по ключу CLI-провайдера.
-// Единая точка правды на фронте — раньше та же эвристика дублировалась локально в
-// QuotasTab. На бэке правило живёт в SpendSources.IsFree; серверный признак в ответе
-// баланса/каталоге пока не отдаётся, поэтому правило держим здесь и поддерживаем
-// идентичным серверному.
+// Признак «бесплатный» провайдера на фронте — одна точка правды.
 //
-// ВНИМАНИЕ: это правило — ТОЛЬКО для бейджа в полосе «Все провайдеры». На карточке
-// провайдера бесплатность определяется классом с бэка (costTier, см. lib/costTiers):
-// локальное правило знает freellm*, сервер — нет, и карточка называла цену дважды.
+// Класс с бэка (/api/models, costTier) решает, когда он известен: правило freellm*
+// живёт в Core (SpendCostTiers.IsFreeProviderKey), и фронт его НЕ дублирует —
+// бэк freellm* уже считает бесплатным.
+//
+// Когда класс неизвестен (каталог не пришёл: /api/models не ответил или ответил
+// без моделей), остаётся откат на локальное правило по ключу. Без отката карточка
+// бесплатного провайдера теряла бы пилюлю «бесплатный», а бейдж в полосе
+// «Все провайдеры» по-прежнему говорил бы «бесплатный» — две поверхности
+// противоречили бы друг другу.
+//
+// Слово «локально» (локальный движок) в ценовом классе отсутствует, поэтому
+// остаётся здесь — по ключу провайдера.
 
+import { isFreeCostTier } from './costTiers';
 import { isLocalEngineKey } from './localEngine';
 
-// Подпись бейджа для полосы «Все провайдеры»: null — бейджа нет.
-// локальный движок (ollama, llama-server) → «локально»,
-// FreeLLM/прямой адаптер (endsWith('-direct'), startsWith('freellm')) → «бесплатный».
-export function freeSourceLabel(key: string): string | null {
+// Признак «бесплатный» провайдера: класс с бэка, а при неизвестном классе —
+// откат на локальное правило по ключу (см. шапку модуля).
+export function isFreeProviderKey(key: string, costTier?: string | null): boolean {
+  if (costTier != null) return isFreeCostTier(costTier);
+  return isLocalEngineKey(key) || key.startsWith('freellm') || key.endsWith('-direct');
+}
+
+// Бейдж полосы «Все провайдеры»: «локально» (локальный движок), «бесплатный»
+// (признак выше) или null — бейджа нет.
+export function providerFreeBadge(key: string, costTier?: string | null): string | null {
   if (isLocalEngineKey(key)) return 'локально';
-  if (key.startsWith('freellm') || key.endsWith('-direct')) return 'бесплатный';
-  return null;
+  return isFreeProviderKey(key, costTier) ? 'бесплатный' : null;
 }

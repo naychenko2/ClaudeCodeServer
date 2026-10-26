@@ -19,8 +19,8 @@ import { rotationBadgeState } from '../../lib/rotation';
 import type { RotationBadgeState } from '../../lib/rotation';
 import { plural } from '../../lib/plural';
 import { addDaysUtc, openSpend, spendQuery, todayUtc } from '../../lib/spendContract';
-import { freeSourceLabel } from '../../lib/spendSources';
-import { COST_TIER_PILL, isFreeCostTier } from '../../lib/costTiers';
+import { isFreeProviderKey, providerFreeBadge } from '../../lib/spendSources';
+import { COST_TIER_PILL } from '../../lib/costTiers';
 import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';
 import { CLI_CHANGELOG_URL, cliChangesSummary } from '../../lib/cliChangesSummary';
@@ -457,10 +457,21 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
   };
 }
 
-// Бесплатность провайдера — по классу с бэка (costTier), как и пилюля на карточке:
-// локальное правило по ключу (lib/spendSources) с серверным расходится.
+// Бесплатность провайдера — по классу с бэка (costTier), как и пилюля на карточке.
+// При неизвестном классе (каталог /api/models не пришёл) — откат на локальное правило
+// по ключу (lib/spendSources), чтобы карточка и бейдж полосы не противоречили друг другу.
 function isFreeProvider(key: string): boolean {
-  return isFreeCostTier(providerCapsByKey(key).costTier);
+  return isFreeProviderKey(key, providerCapsByKey(key).costTier);
+}
+
+// Пилюли цены карточки провайдера — чистая функция (её дергает providerReadyCard).
+// Признак «бесплатный» — по классу с бэка; при неизвестном классе — откат на
+// локальное правило по ключу. Класс бесплатного провайдера приезжает как free —
+// тогда и пилюля одна, цену карточка называет один раз.
+export function providerPricePills(key: string, costTier: string | null): PillSpec[] {
+  return isFreeProviderKey(key, costTier)
+    ? [{ label: COST_TIER_PILL.free, tone: 'free' }]
+    : [];
 }
 
 // Квотный CLI-провайдер → общая вью-модель (готовое состояние)
@@ -491,11 +502,11 @@ function providerReadyCard(
     if (alive === 0) pills.push({ label: 'Недоступен', tone: 'danger' });
     else if (alive < total) pills.push({ label: 'Часть платформ недоступна', tone: 'warn' });
   }
-  // Бесплатность карточки — по классу с бэка (/api/models, costTier), а не по локальному
-  // правилу ключа (lib/spendSources): правило на фронте знает freellm*, сервер — нет, и
-  // карточка называла цену дважды («бесплатный» + «дёшево»). Класс бесплатного
-  // провайдера приедет как free — тогда и пилюля одна.
-  if (isFreeCostTier(costTier)) pills.push({ label: COST_TIER_PILL.free, tone: 'free' });
+  // Бесплатность карточки — по классу с бэка (/api/models, costTier); при неизвестном
+  // классе — откат на локальное правило ключа (lib/spendSources). Правило freellm*
+  // живёт в Core (SpendCostTiers), фронт его не дублирует: карточка называет цену один
+  // раз («бесплатный» вместо «бесплатный» + «дёшево»).
+  pills.push(...providerPricePills(key, costTier));
   if (hasExhausted) pills.push({ label: 'Предел', tone: 'danger' });
   const trend = snapshots.length
     ? snapshots
@@ -507,7 +518,7 @@ function providerReadyCard(
   const cabinetUrl = CABINET_URL[key];
   const expandable = countWindows.length > 0 || trend.length >= 2 || !!cabinetUrl;
   return {
-    key, name, color, state: 'ready', isFree: isFreeCostTier(costTier), dim: false, onRetry: () => {},
+    key, name, color, state: 'ready', isFree: isFreeProviderKey(key, costTier), dim: false, onRetry: () => {},
     costTier,
     windows: surfaceWindows, labelWidth: 64, pills,
     freshness: providerFreshness(bal.asOf),
@@ -784,7 +795,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
         const n = models.filter(m => m.provider === key).length;
         count = n > 0 ? plural(n, 'модель', 'модели', 'моделей') : undefined;
       }
-      return { key, name: providerLabel(key), color: sourceColor(key), off: caps.configured === false, badge: freeSourceLabel(key), count };
+      return { key, name: providerLabel(key), color: sourceColor(key), off: caps.configured === false, badge: providerFreeBadge(key, caps.costTier ?? null), count };
     });
   }, [usage]);
 

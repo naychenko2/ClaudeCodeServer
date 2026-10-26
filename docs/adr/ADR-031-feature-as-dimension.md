@@ -355,6 +355,181 @@ Html не разбираем вовсе: прототип идёт в «Файл
 (`data/feature-journal/`) — он попадает в бэкап по умолчанию, `BackupSchema.Version`
 не поднят; новых хранимых полей `Session`/`TaskItem` и SignalR-событий по-прежнему нет.
 
+## Сводка фичи (волна 6)
+
+Первая фича волны 6: блок «Сводка» на вкладке «Хронология» страницы фичи — короткий
+анонс «что с фичей происходит» вместо мини-сводки (эпик `7379c7f4`, ветка
+`feat/feature-summary-state`, макет [feature-summary-1.md](../mockups/feature-summary-1.md)).
+Разрез — Александр (заметка «Волна 6 «Обзор фич» — сводка состояния фичи, разрез
+(Александр, 25.10)»), продуктовая часть — Софья. Ниже — что зафиксировано в коде;
+каждое утверждение — файл:строка.
+
+### 1. `brief`: одно аддитивное поле ответа
+
+`GET features/{id}` ([TasksController.cs:652](../../backend/ClaudeHomeServer/Controllers/TasksController.cs))
+отдаёт прежний объект плюс `brief` (:884); индекс `features/index` и `features?sessionId=`
+его не несут — лёгкий путь (:646). Верхние ключи ответа сторожит снапшот: прежние
+девять + `brief` ([TasksControllerTests.cs:1236-1239](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs)).
+
+`brief` строит чистая функция `FeatureBrief.Build`
+([FeatureBrief.cs:115](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureBrief.cs)):
+ни чтения стора, ни журнала, ни своего вывода состояния — `kind` словарь от `run.State`,
+`now` `run.Now[0]`, `done` счётчики рана, `elapsed` сумма из `timeline` (:5-9). Поля
+([FeatureBrief.cs:72-92](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureBrief.cs)):
+
+| поле | что значит | откуда |
+|---|---|---|
+| `kind` | категория сводки | `KindByState` (:97-110) + `KindOf` (:138-146); состояние вне таблицы — исключение, не подстановка категории (:140-143) |
+| `now` | «Сейчас» | первая запись `run.Now`, иначе `Attention` (:165-176) |
+| `reason` | причина | `Attention.Reason`; у паузы/очереди без тревоги — `Hold.Reason` (:183-187) |
+| `done` | «Сделано» | счётчики рана как есть: `StepsAccepted/StepsTotal/Loops/PlanState` (:126) |
+| `next` | «Дальше» | стадии `pending` после активной, ≤ `MaxNext` = 3 (:41, :191-201) |
+| `elapsedMinutes` | «идёт N» | `timeline.Totals.WorkWallMinutes` (:128) — см. §2 |
+| `estimate` | «≈ осталось» | `EstimateOf` (:215-233) — см. §3 |
+| `queue` | позиция в очереди | всегда `null` (:130): порядок очереди — фича «Очередь фич», сводка его не вычисляет |
+| `queueWaitMinutes` | «в очереди N мин» | `QueueWaitOf` (:156-161) — см. §2 |
+| `note` | «голос оркестратора» | `NoteOf` (:241-249) — см. §4 |
+| `updatedAt` | «обновлено N мин назад» | `UpdatedAtOf` (:283-302) — см. §2 |
+| `computedAt` | свежесть снимка | момент этого ответа |
+
+Таблица `kind` — одна точка правды: одиннадцать `FeatureStates` → восемь категорий,
+`paused` расщепляется по причине удержания (`queue` → `queued`, иначе `paused`) (:143-145).
+Сторож — тест-таблица: новое `FeatureStates` без строки в таблице даёт красный тест
+(перебор констант рефлексией, [FeatureBriefTests.cs:109](../../backend/ClaudeHomeServer.Tasks.Tests/FeatureBriefTests.cs)).
+Фронт состояния сам не маппит.
+
+**Отвергнуто:** своё состояние `FeatureStates` «queued» для очереди — очередь остаётся
+`Hold.Reason = queue` (риск 5 разреза), расщепление живёт только в таблице сводки.
+
+### 2. Три часа: работа, очередь, состояние
+
+- **`elapsedMinutes` — рабочее время, а не время с момента постановки.** Это
+  `WorkWallMinutes` — работа по часам стены: объединение work-интервалов, параллельные
+  не складываются ([FeatureTimeline.cs:64-65](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureTimeline.cs)).
+  Сводка берёт готовое число из того же экземпляра `timeline`, что пошёл в `stats`
+  ([TasksController.cs:866-868](../../backend/ClaudeHomeServer/Controllers/TasksController.cs));
+  второго счёта нет (FeatureBrief.cs:128).
+- **`queueWaitMinutes` — время в очереди.** Только у `kind = queued`: от момента
+  постановки удержания (`FeatureHold.Since`, [TaskItem.cs:204](../../backend/ClaudeHomeServer.Core/Models/TaskItem.cs))
+  до `now` (FeatureBrief.cs:156-161). Отдельное поле, потому что у фичи в очереди
+  work-интервалов нет: `elapsedMinutes = 0`, и подпись «в очереди N мин» иначе была бы
+  недостижима (MAJOR-1 ревью R-F8). При пере-постановке в очередь — время ТЕКУЩЕГО
+  стояния, прошлые интервалы очереди не суммируются (:154-155).
+- **`updatedAt` — время последнего изменения состояния**, а не касания записи: максимум
+  событий состояния задач фичи (`CreatedAt`, `ClaudeStartedAt`, `ExecutorStoppedAt`,
+  `CompletedAt`, `AwaitingHumanSince`, `Hold.Since` эпика) (FeatureBrief.cs:283-302).
+  **Отвергнуто:** `TaskItem.UpdatedAt` (двигается настройками задачи — состояние от них
+  не меняется) и `LastActivityAt` (в нём только завершение/старт — «исполнитель встал»
+  и «ждёт вас» в нём не видны) (:277-279). `computedAt` остаётся отдельным полем:
+  он отвечает на «насколько свеж снимок», `updatedAt` — на «насколько old показано» (:17-19).
+
+### 3. Оценка: история проекта, ничего не хранится
+
+`estimate.remainingMinutes ≈ stepMinutes × (Work + NotCreated + 0.5 × Review) + tailMinutes`,
+где `Work/NotCreated/Review` — корзины шагов `run.StepProgress`, а `stepMinutes`/`tailMinutes` —
+медианы выборки (FeatureBrief.cs:225-231). Коэффициент «на ревью» — именованная константа
+`ReviewCoefficient = 0.5`, не настройка (:45). `p25`/`p75` — та же формула по тем же
+квантилям выборки: `p25 ≤ remaining ≤ p75` по построению (:205-207). `source` один:
+`"history"` (:48).
+
+Выборка — расширение существующей `FeatureTypical` («типичная фича» волны 5), того же
+её кэша: `StepMinutes` — медиана по смерженной фиче от средней длины её принятых цепочек,
+`TailMinutes` — от принятия последнего шага до мержа
+([FeatureTypical.cs:65-72](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureTypical.cs),
+:229-236). Длительности берутся из `run.StepChains`, которые проектор посчитал для этой
+же фичи: нового прохода по журналам и нового хранилища нет (:24-33). Считаются только
+принятые цепочки (`AcceptedAt` ненулевой ровно у них); снятый шаг вне знаменателя.
+**Отвергнуто:** `PlannedStep.EstimateMinutes` (оценка по плану) — v2, не взято без
+отдельного слова (п. 8 разреза).
+
+`estimate = null` — честное «оценки пока нет», случаи (FeatureBrief.cs:218-223):
+состояние `queued`/`paused`/`closed`/`draft` (часы стоят или фича не идёт); план не нарезан
+или нарезан частично (`PlanState = pending`/`partial`: при partial `NotCreated` считает
+только шаги нарезанных планов — обещать число по неполному плану хуже, чем не обещать
+ничего; сравнение только с константами `FeatureStepAccounting.Plan*`, FeatureRun.cs:404);
+выборка меньше трёх смерженных фич (FeatureTypical.cs:161, :179-180).
+
+### 4. «Голос оркестратора» — `TaskItem.Note`
+
+Хранимое поле только у эпика ([TaskItem.cs:151-154](../../backend/ClaudeHomeServer.Core/Models/TaskItem.cs)),
+запись `FeatureNote` (:211-215): текст ≤ 600 (`MaxTextLength`, :214), `At`, чат автора,
+`ByUser`, стадия и состояние на момент записи. Пишет `TaskManager.SetFeatureNote`
+([TaskManager.cs:1442-1456](../../backend/ClaudeHomeServer.Tasks/TaskManager.cs)):
+обрезка и усечение на сервере, пустой текст снимает голос (:1450-1452). `At` — момент
+записи, `StageAtWrite`/`StateAtWrite` штампует сервер из проекции, агент и клиент их не
+передают ([TasksController.cs:1027-1028](../../backend/ClaudeHomeServer/Controllers/TasksController.cs),
+[TasksToolset.cs:464-468](../../backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs)).
+
+**Кто вправе.** Человек — `PUT features/{featureId}/note`, тело только `text`; сервисный
+токен — 403 (:1010-1014), не-эпик — 400 (:1022-1023). Агент — параметр `featureNote` у
+`tasks_update`: право только у `curator` или `orchestrator` фичи, исполнитель
+(`executor`) получает отказ «Голос фичи пишет оркестратор или человек»
+([TasksToolset.cs:313-328](../../backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs)).
+**Обе точки проверяют одно правило `FeatureChatMembership`, локальной копии правила
+членства не заводим** (риск 6 разреза — блокер ревью). Когда писать — процессное правило
+(конвейер Софьи: на переходах этапа, на «ждёт вас», на паузе); серверной автоматики нет.
+
+**Что наружу не отдаётся.** `bySessionId` — чат автора живёт в `tasks.json`, с wire его
+снимает конвертер типа на границе сериализации — во всех четырёх выходных опциях
+(REST-списки и карточка, ответы PUT/POST, `task_changed`, MCP)
+([FeatureNoteJsonConverter.cs:25](../../backend/ClaudeHomeServer/Services/FeatureNoteJsonConverter.cs));
+из модели поле не удалено: это след автора, из него в будущем заполняется `byPersonaId`
+— аддитивная правка модели, не проектора (FeatureBrief.cs:238-239). `StateAtWrite`
+служит только признаку устаревания, наружу не уходит (FeatureBrief.cs:66-69).
+
+**Когда голос устаревший** (`brief.note.stale`): `StageAtWrite` ≠ текущей активной
+стадии конвейера ИЛИ категория состояния сменилась с момента записи
+(FeatureBrief.cs:264-270); тесты — [FeatureBriefTests.cs:508](../../backend/ClaudeHomeServer.Tasks.Tests/FeatureBriefTests.cs),
+:519, :531. Текст устаревшего голоса не прячем — это последнее слово ведущего; голоса
+нет — строки нет совсем (:240-241). **Известное ограничение:** причина удержания на
+момент записи не хранится — голос, записанный в очереди, считается устаревшим, пока
+фича в очереди (`paused` и `queued` различить нечем) (:261-263).
+
+### 5. Материалы фичи: документы и макеты, не заметки
+
+Материалы фичи в ответе — `plans` и `mockups`; поля «notes» в ответе нет (верхние ключи —
+ровно девять, [TasksControllerTests.cs:1236-1239](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs)).
+
+- **`plans` — документы:** задачи с ролью `cut`/`design`/`plan`/`consult`
+  ([FeatureRun.cs:105-122](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs),
+  `BuildPlans` [FeatureProjector.cs:718-749](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs)).
+  Порядок — cut → design → plan → consult, внутри роли по `CreatedAt` (:730-736); роль
+  `design` пришла в список этой волной. Текст в ответ не попадает: вкладка берёт список,
+  текст подгружает по клику (`GET /api/tasks/{id}`) (:708-710). `mockupPaths` — пути
+  макетов из `ResultMarkdown` (:754-770). На фронте дедуп планов (показываем последний)
+  и счётчик вкладки считает ровно видимый список ([FeaturePlansTab.tsx](../../frontend/src/components/feature/FeaturePlansTab.tsx)).
+- **`mockups` — макеты:** записка `.md` с шапкой «**Фича:** / **Статус:** / **Файлы:**»
+  (формат — раздел «Макеты фичи» выше) и её файлы: запись `MockupEntry`
+  ([DocsIndex.cs:201-210](../../backend/ClaudeHomeServer.Core/Models/DocsIndex.cs)),
+  `files` — прототипы с признаком `exists` по проверенному дереву эпика (:190-194),
+  источник — шапка записки или `linkedFiles` задач (:181). Макет блока сводки —
+  [feature-summary-1.md](../mockups/feature-summary-1.md).
+- **«Заметка» (база знаний) — не материал фичи:** связи «заметка → фича» в вертикали
+  Notes нет (поля `FeatureId` в ней нет). Единственная «note» в ответе фичи —
+  `brief.note`, голос эпика (§4): ни документ, ни заметка.
+
+### 6. Инвариант: факты из проектора, фронт не пересчитывает
+
+- `FeatureBrief.Build` — чистая функция над уже посчитанными объектами; контроллер
+  передаёт ей те же `run`/`timeline`/`typical`, что пошли в `stats`: ни второго
+  `ProjectFull`, ни второго `FeatureTimeline.Build`, ни второго `FeatureTypical.Build`
+  ([TasksController.cs:866-868, 877-880](../../backend/ClaudeHomeServer/Controllers/TasksController.cs)).
+  Новый расчёт один — `estimate`, и он живёт в одном месте.
+- Фронт — зеркало контракта: тип ([featurePage.ts:34](../../frontend/src/lib/featurePage.ts))
+  и проверямый сборкой литерал ([featurePage.contract.ts](../../frontend/src/lib/featurePage.contract.ts))
+  — переименование поля на бэке красит `tsc -b`. Блок
+  ([FeatureBriefBlock.tsx](../../frontend/src/components/feature/FeatureBriefBlock.tsx))
+  не трогает `run.state`, стадии и `stats.timeline` — grep-сторож в тесте
+  ([FeatureBriefBlock.test.ts:566-575](../../frontend/src/components/feature/FeatureBriefBlock.test.ts)).
+  Своё у фронта только перевод ключей стадий в слова и «N ч назад» из `at`/`updatedAt`.
+  Второй источник правды не заводится.
+
+**К «Последствиям» волны 1:** волна 6 добавляет одно хранимое поле — `TaskItem.Note`
+(голос эпика): nullable, старый `tasks.json` читается как `null`, `BackupSchema.Version`
+не поднят (TaskItem.cs:151-153). Новых файлов в `data/` и новых SignalR-событий нет:
+голос разносится штатным `task_changed`. Блок не под новым флагом — он заменяет
+мини-сводку на той же поверхности ([FeaturePage.tsx:333](../../frontend/src/components/feature/FeaturePage.tsx)).
+
 ## Что вынесено за волну
 
 Выкатку не блокирует ничего: флаги выключены, каждый пункт честно деградирует.

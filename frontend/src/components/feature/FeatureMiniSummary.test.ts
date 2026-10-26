@@ -282,7 +282,9 @@ describe('FeatureMiniSummary (Ф8) через страницу фичи', () => 
     const all = textNodes(row).join('');
     expect(all, 'прошедшая форма «простояла в очереди 10 ч»').toContain(`простояла ${COMP_LABEL.queued} 10 ч`);
     // «идёт N» не дублируется: упоминание очереди ровно одно, и оно не равно «идёт 15 ч».
-    expect((all.match(new RegExp(COMP_LABEL.queued, 'g')) ?? []).length, 'упоминание очереди одно').toBe(1);
+    // Счётчик — split по константе: RegExp от значения с метасимволами (скобки, «+»)
+    // считал бы не то слово.
+    expect(all.split(COMP_LABEL.queued).length - 1, 'упоминание очереди одно').toBe(1);
     expect(all, 'значение «простояла» не равно значению «идёт»').not.toContain(`простояла ${COMP_LABEL.queued} 15 ч`);
   });
 

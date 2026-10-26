@@ -420,7 +420,10 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
 
     // --- общее ---
 
-    private static long TotalOf(SpendSlice s) => s.Input + s.Output + s.CacheRead + s.CacheCreation;
+    // Формула веса — общая с разбивкой фичи (SpendCostTiers.WeightOf): класс строки в обоих API
+    // считается по одной метрике токенов.
+    private static long TotalOf(SpendSlice s) =>
+        SpendCostTiers.WeightOf(s.Input, s.Output, s.CacheRead, s.CacheCreation);
 
     private SpendTurnDto ToTurnDto(SpendRecord r, string? currentUserId)
     {

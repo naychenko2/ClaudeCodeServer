@@ -25,7 +25,8 @@ public sealed record FeatureBreakdownGroup(
     // Ценовой класс группы (free|cheap|expensive) — по записям расхода группы правилом Core
     // (SpendCostTiers: локальный/бесплатный → free, claude → expensive, прочее облачное →
     // cheap). null — записей расхода у группы нет (класс неоткуда взять) или класс неизвестен.
-    // В группе со смешанными классами берётся класс с наибольшей суммой токенов (SpendCostTiers.Dominant).
+    // В группе со смешанными классами берётся класс с наибольшим весом токенов (SpendCostTiers.Dominant;
+    // вес — все токены записей, включая кэш: SpendCostTiers.WeightOf, как в /api/spend).
     string? Tier = null);
 
 // «Дольше всех сейчас» (GET features/{id}, stats.longestNow): самая долгая сейчас идущая задача;
@@ -204,15 +205,21 @@ public sealed record FeatureBreakdown(
                     var cost = SpendCostReliability.ReliableCostOf(r);
                     // Ценовой класс записи — правилом Core (SpendCostTiers): свой словарь
                     // «claude → дорого» здесь не заводим. В группе со смешанными классами
-                    // берётся класс с наибольшей суммой токенов (SpendCostTiers.Dominant).
+                    // берётся класс с наибольшим весом токенов (SpendCostTiers.Dominant).
                     // В осях без класса (персоны/роли) класс не считаем вовсе — он там null.
                     var tier = fillTier ? SpendCostTiers.Of(r.Source, r.Provider, r.Model) : null;
                     var tokens = Math.Max(0, r.InputTokens) + Math.Max(0, r.OutputTokens);
                     var tierTokens = a.TierTokens;
                     if (tier is not null)
                     {
+                        // Вес класса — общей формулой Core (SpendCostTiers.WeightOf): вход+выход+кэш,
+                        // как в /api/spend (ревью Глеба, major: без кэша одна строка выходала «дёшево»
+                        // здесь и «дорого» там). Поле «Токены» группы при этом остаёт вход+выход —
+                        // документированный контракт разбивки, вес класса от него отделён.
+                        var weight = SpendCostTiers.WeightOf(Math.Max(0, r.InputTokens), Math.Max(0, r.OutputTokens),
+                            Math.Max(0, r.CacheReadTokens), Math.Max(0, r.CacheCreationTokens));
                         tierTokens ??= new Dictionary<string, long>();
-                        tierTokens[tier] = tierTokens.GetValueOrDefault(tier) + tokens;
+                        tierTokens[tier] = tierTokens.GetValueOrDefault(tier) + weight;
                     }
                     a = (a.Tokens + tokens,
                         a.Cost + (double)(cost ?? 0),

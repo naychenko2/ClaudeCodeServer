@@ -240,6 +240,25 @@ describe('FeatureGroupHeader: bucket merged (смержена, ждёт закр
   });
 });
 
+describe('FeatureGroupHeader: счётчик расхождений трекера', () => {
+  it('trackerIssues > 0: бейдж «расхождений: N» с пояснением в title', () => {
+    const html = renderHeader(feat({ trackerIssues: 3 }));
+    expect(html).toContain('data-testid="feature-group-tracker-issues"');
+    expect(html).toContain('расхождений: 3');
+    expect(html).toContain('Трекер расходится с работой — оркестратор поправит');
+  });
+
+  it('нет поля или 0: бейджа нет', () => {
+    expect(renderHeader(feat())).not.toContain('feature-group-tracker-issues');
+    expect(renderHeader(feat({ trackerIssues: 0 }))).not.toContain('feature-group-tracker-issues');
+  });
+
+  it('закрытая (compact): бейджа нет', () => {
+    const html = renderHeader(feat({ bucket: 'closed', trackerIssues: 2 }), { compact: true });
+    expect(html).not.toContain('feature-group-tracker-issues');
+  });
+});
+
 describe('FeatureGroupHeader: клики (шеvron vs тело)', () => {
   it('клик по шеврону: stopPropagation + onToggle, onOpen НЕ зовёт', () => {
     let toggled = 0, stopped = 0;

@@ -137,6 +137,8 @@ export interface FeatureIndexFeature {
   taskCount?: number;
   // «Сейчас»: уникальные PersonaId идущих задач, по убыванию старта; [] — фича не идёт.
   nowPersonaIds?: string[];
+  // Сверка трекера (TR): число расхождений трекера с работой; нет/0 — всё сходится.
+  trackerIssues?: number;
 }
 
 // Роль чата в фиче (контракт: «Роль чата принята и дополнена»). Сила связи:

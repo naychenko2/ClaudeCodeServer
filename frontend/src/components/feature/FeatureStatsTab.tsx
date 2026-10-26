@@ -624,7 +624,8 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-stats-more-s
 }
 
 // «Подробнее» (ST-F14a, макет feature-stats-5.md §«Правки фронта», п. 8): только то,
-// что новые блоки НЕ покрывают: «не работали» (в составе героя его нет), эпизоды
+// что новые блоки НЕ покрывают: «не работали» (в составе героя его нет), «в очереди»
+// абсолютными минутами (в составе героя — только проценты), эпизоды
 // ошибок, детали расхода (кэш, «данные с», общие чаты, модели без цены). Нечего
 // добавить — раскрывашки нет (пустой «Подробнее» не бывает).
 function MoreDetails({ totals, spend, source, isMobile }: {
@@ -637,6 +638,13 @@ function MoreDetails({ totals, spend, source, isMobile }: {
   const approx = source === 'approx' ? '≈ ' : '';
   if (totals.notWorkingMinutes != null && totals.notWorkingMinutes > 0) {
     rows.push(`не работали — ${approx}${formatDuration(totals.notWorkingMinutes)}`);
+  }
+  // «В очереди» (Q5H-1, R-Q3B-2): самостоятельный вид разряды (ADR-031 §«Время в очереди
+  // (queued)») — минуты отдаёт бэк (totals.queuedMinutes), фронт ничего не пересчитывает.
+  // Порядок — как в составе героя (FeatureStatsPulseModel): простой → очередь → ошибки,
+  // т. е. рядом с «не работали». При null/0/нет поля строки нет (прежнее поведение).
+  if (totals.queuedMinutes != null && totals.queuedMinutes > 0) {
+    rows.push(`в очереди — ${approx}${formatDuration(totals.queuedMinutes)}`);
   }
   if (totals.errorCount != null && totals.errorCount > 0) {
     rows.push(`ошибки: ${totals.errorCount} ${plural(totals.errorCount, 'эпизод', 'эпизода', 'эпизодов')}`);

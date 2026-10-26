@@ -1245,6 +1245,61 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
     expect(all).toContain('не работали — ≈ 10 ч');
   });
 
+  // Q5H-1 (R-Q3B-2): «в очереди» — самостоятельный вид разряды, минуты отдаёт бэк
+  // (totals.queuedMinutes), фронт не пересчитывает. Порядок — как в составе героя
+  // (FeatureStatsPulseModel): «не работали» → «в очереди» → «ошибки».
+  // Мутация: убрать блок queuedMinutes в MoreDetails → эти тесты краснеют.
+  it('«Подробнее»: «в очереди» после «не работали», перед «ошибками»', () => {
+    const base = mkFullStats();
+    const c = renderTab(mkFullStats({
+      timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: 95 } },
+    }));
+    const nodes = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!);
+    const iNot = nodes.findIndex(t => t.includes('не работали'));
+    const iQ = nodes.findIndex(t => t.includes('в очереди'));
+    const iErr = nodes.findIndex(t => t.includes('ошибки:'));
+    expect(iNot, 'строка «не работали»').toBeGreaterThanOrEqual(0);
+    expect(iQ, 'строка «в очереди»').toBeGreaterThanOrEqual(0);
+    expect(iErr, 'строка «ошибки»').toBeGreaterThanOrEqual(0);
+    expect(nodes[iQ]).toBe('в очереди — 1 ч 35 мин');
+    expect(iQ, '«в очереди» после «не работали»').toBeGreaterThan(iNot);
+    expect(iQ, '«в очереди» перед «ошибками»').toBeLessThan(iErr);
+  });
+
+  it('«Подробнее»: «в очереди» при null/0/нет поля — строки нет', () => {
+    const base = mkFullStats();
+    for (const q of [null, 0]) {
+      const c = renderTab(mkFullStats({
+        timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: q } },
+      }));
+      expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n'), `queuedMinutes=${q}`).not.toContain('в очереди');
+    }
+    // Поля нет вовсе (старый ответ бэка) — то же, что null.
+    const c = renderTab(mkFullStats());
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('\n')).not.toContain('в очереди');
+  });
+
+  it('approx: «в очереди» с «≈» (тот же префикс, что у «не работали»)', () => {
+    const base = mkFullStats();
+    const c = renderTab(mkFullStats({
+      source: 'approx',
+      timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: 35 } },
+    }));
+    const all = textNodes(findNodeByAttr(c, 'data-testid', 'stats-more')!).join('');
+    expect(all).toContain('в очереди — ≈ 35 мин');
+  });
+
+  it('«Подробнее»: только «в очереди» — раскрывашка есть', () => {
+    const base = mkStats();
+    const c = renderTab(mkStats({
+      source: 'journal',
+      timeline: { ...base.timeline, totals: { ...base.timeline.totals, queuedMinutes: 12 } },
+    }));
+    const more = findNodeByAttr(c, 'data-testid', 'stats-more');
+    expect(more, 'строка очереди — достаточное содержимое').not.toBeNull();
+    expect(textNodes(more!).join('')).toContain('в очереди — 12 мин');
+  });
+
   // Память «Подробнее»: раскрытие пишется в localStorage и читается при монтировании.
   // Мутация: не писать localStorage в onToggle — тест краснеет.
   it('«Подробнее» помнит раскрытие в localStorage[featureStats.moreOpen]', () => {

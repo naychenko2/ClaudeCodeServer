@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Info } from 'lucide-react';
-import { useFeatureStageFocus, clearFeatureStageFocus } from '../../lib/featurePage';
+import { useFeatureStageFocus, clearFeatureStageFocus, focusFeatureStage } from '../../lib/featurePage';
 import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { stepProgressFromRun, formatStepProgress } from '../../lib/featureProgress';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Tooltip } from '../ui/Tooltip';
+import { Button } from '../ui/Button';
+import { getPersonaById } from '../../lib/personas';
+import { recordFeatureReturn } from '../../lib/featureBackNav';
+import { openChatById } from '../../lib/openChat';
+import { openTaskInSection } from '../../lib/tasks';
+import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, stageStatusBadge, ExecutorRow, buildExecutorIndex,
@@ -14,6 +20,10 @@ import {
 import type { StepProgress } from '../../lib/featureProgress';
 import { FeatureStageLane } from './FeatureStageLane';
 import { FeatureLaneAxis } from './FeatureLaneAxis';
+import {
+  FeatureLanePopover, FeatureLanePreview, FeatureLaneSheet, LANE_TIP_ID,
+  type LaneIntervalDetails, type LaneTaskLine,
+} from './FeatureLanePopover';
 import { buildStageLanes, axisFrac, type StageLane, type LaneAxis } from './FeatureLaneModel';
 import { formatDuration, formatDateTime } from './FeatureStatsBits';
 import type { FeatureStats } from '../../types/featureStats';
@@ -61,6 +71,18 @@ function pluralIntervals(n: number): string {
   return `${n} интервалов`;
 }
 
+// Длительность интервала в минуты — та же арифметика, что у модели дорожек.
+function spanMinutes(from: string, to: string): number {
+  const a = new Date(from).getTime();
+  const b = new Date(to).getTime();
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
+  return Math.max(0, Math.round((b - a) / 60000));
+}
+
+// Выбранный интервал дорожки: этап, индекс и сам элемент кнопки (позиция поповера
+// и возврат фокуса при закрытии).
+interface LanePick { stage: StageKey; index: number; el: HTMLElement | null }
+
 // Поясняющая строка (макет §5): Info 13, 11 textSecondary, bgCard, borderLight, R.md, поля 6 10.
 function TimelineNote() {
   return (
@@ -88,7 +110,9 @@ function TimelineNote() {
 function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, featureTitle = null,
   run, showProd = false, marks = EMPTY_NAV_MARKS, isMobile = false,
   execIndex = new Map<string, FeatureStageExecutor>(), progress = null,
-  lane = null, axis = null, tabIndexAt = -1 }: {
+  lane = null, axis = null, tabIndexAt = -1,
+  expandedAt = null, hoverAt = null, laneSelected = false, flash = false,
+  onIntervalSelect, onIntervalHover, onOpenSheet }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
   now: number; featureId: string; featureTitle?: string | null;
@@ -103,6 +127,17 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   axis?: LaneAxis | null;
   // Индекс интервала с tabIndex=0 в ЭТОМ этапе; -1 — точка табуляции не здесь.
   tabIndexAt?: number;
+  // Интервал с закреплённым поповером (aria-expanded на дорожке).
+  expandedAt?: number | null;
+  // Интервал под курсором — на него вешаем aria-describedby превью.
+  hoverAt?: number | null;
+  // Кольцо выделения дорожки (клик по заголовку этапа).
+  laneSelected?: boolean;
+  // Вспышка строки после «Показать в ленте».
+  flash?: boolean;
+  onIntervalSelect?: (index: number, el: HTMLElement | null) => void;
+  onIntervalHover?: (index: number | null, el: HTMLElement | null) => void;
+  onOpenSheet?: () => void;
 }) {
   const status = stageStatusLabel(stage);
   const bounds = stageBoundsLabel(stage);
@@ -150,7 +185,14 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   const gridColumns = isMobile ? '1fr' : `${COL_NAME}px 1fr ${COL_META}px`;
 
   return (
-    <div data-testid={`timeline-stage-${stage.key}`} style={{ position: 'relative', paddingLeft: SP.xl, paddingBottom: SP.lg }}>
+    <div
+      data-testid={`timeline-stage-${stage.key}`}
+      style={{
+        position: 'relative', paddingLeft: SP.xl, paddingBottom: SP.lg,
+        // Вспышка строки после «Показать в ленте» (C.accentLight, 1,4 с).
+        ...(flash ? { background: C.accentLight, transition: 'background 0.3s' } : {}),
+      }}
+    >
       {/* Точка этапа (14) */}
       <span style={{ ...stageDotStyle(stage), position: 'absolute', left: SP.xxs, top: SP.xs }} />
       {/* Линия к следующему этапу */}
@@ -200,7 +242,28 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
               axis={axis!}
               label={stageName(stage.key)}
               tabIndexAt={tabIndexAt}
+              expandedAt={expandedAt}
+              hoverAt={hoverAt}
+              describedById={LANE_TIP_ID}
+              selected={laneSelected}
+              // На 360 интервал — не тач-цель: вход только через шторку этапа.
+              interactive={!isMobile}
+              onSelect={onIntervalSelect}
+              onHover={onIntervalHover}
             />
+          )}
+          {/* 360: вход в интервалы этапа — кнопка 44 px под дорожкой (шторка). */}
+          {isMobile && hasLane && intervals.length > 0 && onOpenSheet && (
+            <Button
+              variant="secondary"
+              size="md"
+              fullWidth
+              onClick={onOpenSheet}
+              dataTestId={`timeline-stage-intervals-${stage.key}`}
+              style={{ marginTop: SP.sm, minHeight: 44, justifyContent: 'flex-start' }}
+            >
+              {`Все интервалы этапа · ${lane!.count}`}
+            </Button>
           )}
         </div>
         {/* Колонка 3: длительность и число интервалов */}
@@ -466,6 +529,145 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   // Ось рисуется, когда есть хоть одна дорожка: у approx-фичи (журнала нет) дорожек нет.
   const hasLanes = laneStages.length > 0;
 
+  // === GC-F6: поповер интервала (1280) и шторка (360) ===
+  const reducedMotion = usePrefersReducedMotion();
+  // Закреплённый интервал (поповер) и интервал под курсором (превью).
+  const [pinned, setPinned] = useState<LanePick | null>(null);
+  const [hover, setHover] = useState<LanePick | null>(null);
+  // Мобильная шторка: этап и выбранный в ней интервал.
+  const [sheetStage, setSheetStage] = useState<StageKey | null>(null);
+  const [sheetIndex, setSheetIndex] = useState(0);
+  // Кольцо дорожки (клик по заголовку этапа) и вспышка строки («Показать в ленте»).
+  const [selectedStage, setSelectedStage] = useState<StageKey | null>(null);
+  const [flashStage, setFlashStage] = useState<StageKey | null>(null);
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+  }, []);
+
+  // Детали интервала: состояние, состав по taskIds, кто работал и модели, пауза.
+  // Собираются здесь (в родителе): только у него есть задачи, исполнители и персоны.
+  const detailsOf = useCallback((stage: StageKey, index: number): LaneIntervalDetails | null => {
+    const lane = lanesModel.lanes[stage];
+    if (!lane) return null;
+    const iv = lane.intervals[index];
+    if (!iv) return null;
+    // Кто ждёт — только из timeline.current (waiting): по нему и помечаем ждущую задачу.
+    const cur = stats?.timeline?.current ?? null;
+    const waitingTaskId = cur && cur.kind === 'waiting' ? cur.taskId ?? null : null;
+    const tasks: LaneTaskLine[] = (iv.taskIds ?? []).map(id => {
+      const ex = execIndex.get(id);
+      const task = taskMap.get(id);
+      const persona = ex?.personaId ? getPersonaById(ex.personaId)?.name ?? null : null;
+      return {
+        taskId: id,
+        title: task?.title ?? null,
+        persona,
+        model: ex?.modelLabel ?? ex?.modelFull ?? null,
+        chatId: ex?.chatId ?? null,
+        waiting: !!waitingTaskId && id === waitingTaskId,
+      };
+    });
+    return {
+      stageKey: stage,
+      stageName: stageName(stage),
+      index,
+      total: lane.intervals.length,
+      from: iv.from,
+      to: iv.to,
+      minutes: spanMinutes(iv.from, iv.to),
+      state: iv.state,
+      lastOutcome: iv.lastOutcome,
+      tasks,
+      pauseAfterMinutes: iv.pauseAfterMinutes,
+    };
+  }, [lanesModel, stats, execIndex, taskMap]);
+
+  // Клик / Enter / Space по интервалу: закрепляем поповер. Повторный клик по тому же
+  // интервалу НЕ закрывает (переключения нет — «закрепить» значит закрепить).
+  const onIntervalSelect = useCallback((stage: StageKey, index: number, el: HTMLElement | null) => {
+    setPinned({ stage, index, el });
+    setHover(null);
+    setLaneFocus({ stage, index });
+  }, []);
+
+  // Наведение: превью. Пока поповер закреплён — превью не нужно.
+  const onIntervalHover = useCallback((stage: StageKey, index: number | null, el: HTMLElement | null) => {
+    if (index === null) { setHover(null); return; }
+    if (pinned) return;
+    setHover({ stage, index, el });
+  }, [pinned]);
+
+  // Закрытие поповера: фокус возвращается на интервал, превью заново не всплывает.
+  const closePopover = useCallback(() => {
+    const el = pinned?.el ?? null;
+    setPinned(null);
+    setHover(null);
+    if (el && typeof el.focus === 'function') el.focus();
+  }, [pinned]);
+
+  // «Показать в ленте»: раскрыть этап и прокрутить к нему + вспышка строки.
+  // При prefers-reduced-motion — без вспышки и без плавной прокрутки.
+  const showInFeed = useCallback((stage: StageKey) => {
+    focusFeatureStage(stage);
+    if (reducedMotion) return;
+    setFlashStage(stage);
+    if (flashTimer.current !== null) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setFlashStage(null), 1400);
+  }, [reducedMotion]);
+
+  // Переходы из поповера/шторки: задача и чат — с записью возврата (чип «← к фиче»).
+  const openTask = useCallback((taskId: string) => {
+    const task = taskMap.get(taskId);
+    recordFeatureReturn(run.featureId, { kind: 'task', id: taskId }, featureTitle);
+    openTaskInSection({ id: taskId, projectId: task?.projectId ?? undefined });
+  }, [taskMap, run.featureId, featureTitle]);
+
+  const openChat = useCallback((chatId: string) => {
+    recordFeatureReturn(run.featureId, { kind: 'chat', id: chatId }, featureTitle);
+    void openChatById(chatId);
+  }, [run.featureId, featureTitle]);
+
+  // Мобильная шторка: этап и выбранный в ней интервал (по умолчанию — последний).
+  const openSheet = useCallback((stage: StageKey) => {
+    const lane = lanesModel.lanes[stage];
+    setSheetStage(stage);
+    setSheetIndex(Math.max(0, (lane?.intervals.length ?? 1) - 1));
+  }, [lanesModel]);
+
+  const sheetItems = useMemo<LaneIntervalDetails[]>(() => {
+    if (!sheetStage) return [];
+    const lane = lanesModel.lanes[sheetStage];
+    if (!lane) return [];
+    const out: LaneIntervalDetails[] = [];
+    for (let i = 0; i < lane.intervals.length; i += 1) {
+      const d = detailsOf(sheetStage, i);
+      if (d) out.push(d);
+    }
+    return out;
+  }, [sheetStage, lanesModel, detailsOf]);
+
+  const pinnedDetails = useMemo(
+    () => (pinned ? detailsOf(pinned.stage, pinned.index) : null),
+    [pinned, detailsOf],
+  );
+  const hoverDetails = useMemo(
+    () => (hover ? detailsOf(hover.stage, hover.index) : null),
+    [hover, detailsOf],
+  );
+
+  // Прямоугольник якоря (интервал) — из элемента: поповер меряется по нему.
+  const anchorRect = (pick: LanePick | null): { left: number; right: number; bottom: number } => {
+    const el = pick?.el ?? null;
+    if (!el || typeof el.getBoundingClientRect !== 'function') return { left: 0, right: 0, bottom: 0 };
+    const r = el.getBoundingClientRect();
+    return { left: r.left, right: r.right, bottom: r.bottom };
+  };
+  // Мемоизировано: новая ссылка на прямоугольник гоняла бы позиционирование поповера
+  // по кругу (эффект позиционирования зависит от якоря).
+  const pinnedAnchor = useMemo(() => anchorRect(pinned), [pinned]);
+  const hoverAnchor = useMemo(() => anchorRect(hover), [hover]);
+
   // Якорь этапа (Ф-pl-b): клик по точке на плашке чата открыл страницу на «Хронологии» —
   // раскрываем/прокручиваем на этот этап. One-shot по seq (тот же приём, что focusFeatureStep):
   // применённый seq запоминаем — ререндер/повторное чтение не сбрасывают ручной выбор.
@@ -475,14 +677,17 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
     if (!stageFocus || stageFocus.seq === stageFocusSeq.current) return;
     stageFocusSeq.current = stageFocus.seq;
     setExpanded(stageFocus.key as StageKey);
-    const el = document.querySelector(`[data-testid="timeline-stage-${stageFocus.key}"]`);
+    const el = typeof document.querySelector === 'function'
+      ? document.querySelector(`[data-testid="timeline-stage-${stageFocus.key}"]`)
+      : null;
     if (el && 'scrollIntoView' in el) {
-      (el as HTMLElement).scrollIntoView({ block: 'center', behavior: 'smooth' });
+      // Без плавной прокрутки, если человек просил меньше движения.
+      (el as HTMLElement).scrollIntoView({ block: 'center', behavior: reducedMotion ? 'auto' : 'smooth' });
     }
     // M4: якорь прочитан — гасим. Повторный монтаж вкладки (смена вкладки/фичи) старый
     // этап не раскроет, даже если последнее открытие было без stage.
     clearFeatureStageFocus();
-  }, [stageFocus]);
+  }, [stageFocus, reducedMotion]);
 
   return (
     <div
@@ -519,7 +724,7 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
           stage={stage}
           isLast={i === stages.length - 1}
           expanded={expanded === stage.key}
-          onToggle={() => toggle(stage.key)}
+          onToggle={() => { toggle(stage.key); setSelectedStage(stage.key); }}
           taskMap={taskMap}
           now={now}
           featureId={run.featureId}
@@ -533,8 +738,43 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
           lane={laneOf(stage.key)}
           axis={axis}
           tabIndexAt={focus?.stage === stage.key ? focus.index : -1}
+          expandedAt={pinned?.stage === stage.key ? pinned.index : null}
+          hoverAt={hover?.stage === stage.key ? hover.index : null}
+          laneSelected={selectedStage === stage.key}
+          flash={flashStage === stage.key}
+          onIntervalSelect={(idx, el) => onIntervalSelect(stage.key, idx, el)}
+          onIntervalHover={(idx, el) => onIntervalHover(stage.key, idx, el)}
+          onOpenSheet={isMobile ? () => openSheet(stage.key) : undefined}
         />
       ))}
+      {/* Превью по наведению (1280) — слой над лентой, в потоке его нет. */}
+      {!pinned && hoverDetails && (
+        <FeatureLanePreview details={hoverDetails} anchor={hoverAnchor} />
+      )}
+      {/* Закреплённый поповер (1280). */}
+      {pinnedDetails && (
+        <FeatureLanePopover
+          details={pinnedDetails}
+          anchor={pinnedAnchor}
+          anchorEl={pinned?.el ?? null}
+          onClose={closePopover}
+          onShowInFeed={() => showInFeed(pinnedDetails.stageKey)}
+          onOpenTask={openTask}
+          onOpenChat={openChat}
+        />
+      )}
+      {/* Мобильная шторка (360) — детали выбранного интервала и список всех интервалов этапа. */}
+      {sheetStage && sheetItems.length > 0 && (
+        <FeatureLaneSheet
+          items={sheetItems}
+          selectedIndex={Math.min(sheetIndex, sheetItems.length - 1)}
+          onSelect={setSheetIndex}
+          onClose={() => setSheetStage(null)}
+          onShowInFeed={() => showInFeed(sheetStage)}
+          onOpenTask={openTask}
+          onOpenChat={openChat}
+        />
+      )}
     </div>
   );
 }

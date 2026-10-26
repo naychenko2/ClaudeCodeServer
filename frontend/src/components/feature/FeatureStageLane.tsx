@@ -20,7 +20,7 @@
 // 'wait' только интервалам, чей taskIds содержит ждущую задачу. То, что склеенный интервал
 // частично занят чужой работой той же стадии, видно в деталях (GC-F6), не на дорожке.
 
-import { C, R, FS, FONT, SP } from '../../lib/design';
+import { C, R, FS, FONT, SP, SHADOW } from '../../lib/design';
 import { axisFrac, type LaneAxis, type LaneIntervalState, type StageLane } from './FeatureLaneModel';
 import { formatClock, formatDateTime, formatDuration } from './FeatureStatsBits';
 
@@ -38,9 +38,19 @@ export interface FeatureStageLaneProps {
   // Интервал с закреплённым поповером/шторкой (aria-expanded="true"); null — ничего.
   expandedAt?: number | null;
   // Клик / Enter / Space по интервалу: родитель открывает поповер (1280) или шторку (360).
-  onSelect?: (index: number) => void;
+  // Второй аргумент — элемент интервала: им поповер меряет позицию и на него возвращает фокус.
+  onSelect?: (index: number, el: HTMLElement | null) => void;
   // Наведение-превью (GC-F6); null — курсор ушёл с интервала.
-  onHover?: (index: number | null) => void;
+  onHover?: (index: number | null, el: HTMLElement | null) => void;
+  // Мобильный режим (360): интервал НЕ интерактивен — 10 px не тач-цель (GC-F6).
+  // Вход в интервал — только через шторку этапа (кнопка 44 px под дорожкой).
+  interactive?: boolean;
+  // Кольцо выделения дорожки (клик по заголовку этапа — «лента → Гант»).
+  selected?: boolean;
+  // Индекс интервала под курсором: на него вешаем aria-describedby превью.
+  hoverAt?: number | null;
+  // id превью (role=tooltip) — ссылка описания для интервала под курсором.
+  describedById?: string | null;
 }
 
 // Штриховка «без движения» (135°, та же геометрия штриховки, что у notWorking в FeatureStatsBits).
@@ -68,6 +78,7 @@ function spanMinutes(from: string, to: string): number {
 
 export function FeatureStageLane({
   lane, axis, label, tabIndexAt = 0, expandedAt = null, onSelect, onHover,
+  interactive = true, selected = false, hoverAt = null, describedById = null,
 }: FeatureStageLaneProps) {
   const n = lane.intervals.length;
   // Процент оси для момента: ровно axisFrac модели × 100 — тесты сверяют координаты
@@ -98,6 +109,8 @@ export function FeatureStageLane({
         borderRadius: R.sm,
         // Тики четвертей оси (макет .gtrack) — как в прежнем Ганте.
         background: `repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), ${C.borderLight} calc(25% - 1px) 25%)`,
+        // Кольцо выделения дорожки (клик по заголовку этапа — «лента → Гант»).
+        boxShadow: selected ? SHADOW.selected : undefined,
       }}
     >
       {lane.skipped && (
@@ -132,43 +145,60 @@ export function FeatureStageLane({
       {lane.intervals.map((iv, i) => {
         const left = pct(iv.from);
         const width = Math.max(0, pct(iv.to) - left);
+        const ariaLabel = `${label}, интервал ${i + 1} из ${n}: ${formatDateTime(iv.from)} – ${formatClock(iv.to)}, ${formatDuration(spanMinutes(iv.from, iv.to))}`;
+        const barStyle = {
+          position: 'absolute' as const,
+          left: `${left}%`,
+          width: `${width}%`,
+          // Минимальная видимая ширина (макет: 3 px) — этап в минуты не превращается
+          // в щель; left при этом остаётся точным.
+          minWidth: 3,
+          top: 2,
+          height: 10,
+          borderRadius: R.sm,
+          background: stateBackground(iv.state),
+        };
+        const risk = iv.lastOutcome ? (
+          // Риска 2 px на конце интервала с плохим исходом последнего хода.
+          <span
+            data-testid={`lane-risk-${lane.key}-${i}`}
+            aria-hidden="true"
+            style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 2, background: C.danger }}
+          />
+        ) : null;
+        // Мобильный режим: интервал — НЕ кнопка (10 px не тач-цель, критерий c4).
+        // Рисуем те же полоски, но без интерактивности; вход в интервал — шторка этапа.
+        if (!interactive) {
+          return (
+            <div
+              key={`iv-${i}`}
+              role="img"
+              data-testid={`lane-interval-${lane.key}-${i}`}
+              data-state={iv.state}
+              aria-label={ariaLabel}
+              style={barStyle}
+            >
+              {risk}
+            </div>
+          );
+        }
         return (
           <button
             key={`iv-${i}`}
             type="button"
             data-testid={`lane-interval-${lane.key}-${i}`}
             data-state={iv.state}
-            aria-label={`${label}, интервал ${i + 1} из ${n}: ${formatDateTime(iv.from)} – ${formatClock(iv.to)}, ${formatDuration(spanMinutes(iv.from, iv.to))}`}
+            aria-label={ariaLabel}
             aria-haspopup="dialog"
             aria-expanded={expandedAt === i}
+            aria-describedby={hoverAt === i ? describedById ?? undefined : undefined}
             tabIndex={i === tabIndexAt ? 0 : -1}
-            onClick={() => onSelect?.(i)}
-            onMouseEnter={() => onHover?.(i)}
-            onMouseLeave={() => onHover?.(null)}
-            style={{
-              position: 'absolute',
-              left: `${left}%`,
-              width: `${width}%`,
-              // Минимальная видимая ширина (макет: 3 px) — этап в минуты не превращается
-              // в щель; left при этом остаётся точным.
-              minWidth: 3,
-              top: 2,
-              height: 10,
-              borderRadius: R.sm,
-              background: stateBackground(iv.state),
-              border: 'none',
-              padding: 0,
-              cursor: 'pointer',
-            }}
+            onClick={(e) => onSelect?.(i, e?.currentTarget ?? null)}
+            onMouseEnter={(e) => onHover?.(i, e?.currentTarget ?? null)}
+            onMouseLeave={() => onHover?.(null, null)}
+            style={{ ...barStyle, border: 'none', padding: 0, cursor: 'pointer' }}
           >
-            {iv.lastOutcome && (
-              // Риска 2 px на конце интервала с плохим исходом последнего хода.
-              <span
-                data-testid={`lane-risk-${lane.key}-${i}`}
-                aria-hidden="true"
-                style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 2, background: C.danger }}
-              />
-            )}
+            {risk}
           </button>
         );
       })}

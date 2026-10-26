@@ -20,7 +20,7 @@ import {
   tasksCountLabel,
 } from './FeatureTimelineBits';
 import type { StepProgress } from '../../lib/featureProgress';
-import { FeatureStageLane } from './FeatureStageLane';
+import { FeatureStageLane, type LaneHighlight } from './FeatureStageLane';
 import { FeatureLaneAxis } from './FeatureLaneAxis';
 import {
   FeatureLanePopover, FeatureLanePreview, FeatureLaneSheet, LANE_TIP_ID,
@@ -141,6 +141,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   expandedAt = null, hoverAt = null, laneSelected = false, flash = false,
   tailIds = null, turnsByTask = new Map<string, StageTurn[]>(),
   prodInitialKey = null, prodExpandedKeyRef = null,
+  highlight = null, onShowIntervals,
   onIntervalSelect, onIntervalHover, onOpenSheet }: {
   stage: FeatureStage; isLast: boolean; expanded: boolean;
   onToggle: () => void; taskMap: Map<string, import('../../types/featureRun').FeatureTask>;
@@ -176,6 +177,11 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
   // Канал чтения текущего expandedKey ленты для снимка (состояние живёт в ленте, ref —
   // только чтение; на раскрытие карточки он не влияет).
   prodExpandedKeyRef?: { current: string | null } | null;
+  // Подсветка интервалов дорожки этого этапа (GC-F8R): состояние живёт во вкладке, здесь
+  // только прокидывание в дорожку. null — подсветки нет.
+  highlight?: LaneHighlight | null;
+  // «Показать интервалы на дорожке ↑» из карточки «Производства» → приёмник вкладки (GC-F8R).
+  onShowIntervals?: (taskIds: string[]) => void;
   onIntervalSelect?: (index: number, el: HTMLElement | null) => void;
   onIntervalHover?: (index: number | null, el: HTMLElement | null) => void;
   onOpenSheet?: () => void;
@@ -305,6 +311,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
               hoverAt={hoverAt}
               describedById={LANE_TIP_ID}
               selected={laneSelected}
+              highlight={highlight}
               // На 360 интервал — не тач-цель: вход только через шторку этапа.
               interactive={!isMobile}
               onSelect={onIntervalSelect}
@@ -396,7 +403,7 @@ function StageRow({ stage, isLast, expanded, onToggle, taskMap, now, featureId, 
                нет, но у стадии есть исполнители — прежние ExecutorRow, задача не
                исчезает из вкладки. Пустое состояние остаётся только когда показывать
                действительно некого. */
-            FeatureProdCardsView({ run, featureId, featureTitle, marks, isMobile, initialExpandedKey: prodInitialKey, expandedKeyRef: prodExpandedKeyRef }) ?? (stage.executors.length > 0 ? (
+            FeatureProdCardsView({ run, featureId, featureTitle, marks, isMobile, initialExpandedKey: prodInitialKey, expandedKeyRef: prodExpandedKeyRef, onShowIntervals }) ?? (stage.executors.length > 0 ? (
               stage.executors.map((x, i) => (
                 <ExecutorRow
                   key={`${x.taskId}-${i}`}
@@ -747,6 +754,28 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
     if (flashTimer.current !== null) clearTimeout(flashTimer.current);
   }, []);
 
+  // === Подсветка интервалов шага («Показать интервалы на дорожке ↑», GC-F8R) ===
+  // Приёмник колбэка ленты «Производства»: состояние живёт здесь (проп вниз, глобального
+  // стора нет). Подсвечиваются интервалы того этапа, чей taskIds пересекается с taskIds шага,
+  // — тот же смысл, что у parts в highlightCard макета feature-gantt-7 (состав ходов интервала
+  // — его taskIds; ходов на модели дорожки нет). Через 2,4 с снимается (тот же приём таймера,
+  // что у вспышки строки); повторный клик начинает отсчёт заново. Пересечения нет — подсветки
+  // нет: нечего подсвечивать, не выдумываем.
+  const [highlight, setHighlight] = useState<{ stage: StageKey; at: Set<number> } | null>(null);
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (highlightTimer.current !== null) clearTimeout(highlightTimer.current); }, []);
+  const showIntervals = useCallback((stage: StageKey, taskIds: string[]) => {
+    const lane = lanesModel.lanes[stage];
+    if (!lane) return;
+    const ids = new Set(taskIds);
+    const at = new Set<number>();
+    lane.intervals.forEach((iv, i) => { if (iv.taskIds.some(id => ids.has(id))) at.add(i); });
+    if (at.size === 0) return;
+    setHighlight({ stage, at });
+    if (highlightTimer.current !== null) clearTimeout(highlightTimer.current);
+    highlightTimer.current = setTimeout(() => setHighlight(null), 2400);
+  }, [lanesModel]);
+
   // Детали интервала: состояние, состав по taskIds, кто работал и модели, пауза.
   // Собираются здесь (в родителе): только у него есть задачи, исполнители и персоны.
   const detailsOf = useCallback((stage: StageKey, index: number): LaneIntervalDetails | null => {
@@ -956,9 +985,13 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
           turnsByTask={turnsByTask}
           prodInitialKey={prodInitialKey}
           prodExpandedKeyRef={prodExpandedKeyRef}
+          // Флаг «меньше движения» — уже посчитанный здесь: при prefers-reduced-motion
+          // затемнение без перехода (подсветка есть и снимается — тот же таймер).
+          highlight={highlight && highlight.stage === stage.key ? { at: highlight.at, animate: !reducedMotion } : null}
           onIntervalSelect={(idx, el) => onIntervalSelect(stage.key, idx, el)}
           onIntervalHover={(idx, el) => onIntervalHover(stage.key, idx, el)}
           onOpenSheet={isMobile ? () => openSheet(stage.key) : undefined}
+          onShowIntervals={(taskIds) => showIntervals(stage.key, taskIds)}
         />
       ))}
       {/* «Хвосты после мержа · N» (GC-F10a): после ленты этапов («Мерж» — последний

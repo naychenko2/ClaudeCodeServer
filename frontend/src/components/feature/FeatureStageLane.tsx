@@ -24,10 +24,24 @@
 // Состояние «ждёт» (контракт из ревью GC-R-F2R): интервал красится C.info — модель ставит
 // 'wait' только интервалам, чей taskIds содержит ждущую задачу. То, что склеенный интервал
 // частично занят чужой работой той же стадии, видно в деталях (GC-F6), не на дорожке.
+//
+// Подсветка интервалов шага (GC-F8R): состояние и таймер 2,4 с живут во вкладке
+// (FeatureTimelineTab), здесь только рисование — проп `highlight`: перечисленные интервалы
+// получают кольцо (форма .hl макета feature-gantt-7), прочие гаснут до opacity .35 (.dim);
+// prefers-reduced-motion — без перехода (флаг приходит от вызывающего). На 360 интервал
+// неинтерактивен — подсветка рисуется и там (тот же barStyle).
 
 import { C, R, FS, FONT, SP, SHADOW } from '../../lib/design';
 import { axisFrac, type LaneAxis, type LaneIntervalState, type StageLane } from './FeatureLaneModel';
 import { formatClock, formatDateTime, formatDuration } from './FeatureStatsBits';
+
+// «Какие интервалы подсвечены» (GC-F8R): множество индексов lane.intervals + флаг рисования.
+// Состояние подсветки (какой шаг, когда снять) живёт у вызывающего; здесь — только данные
+// для рисования. animate — «меньше движения» вызывающего: с ним затемнение без перехода.
+export interface LaneHighlight {
+  at: Set<number>;
+  animate: boolean;
+}
 
 export interface FeatureStageLaneProps {
   // Дорожка этапа из buildStageLanes.
@@ -56,6 +70,9 @@ export interface FeatureStageLaneProps {
   hoverAt?: number | null;
   // id превью (role=tooltip) — ссылка описания для интервала под курсором.
   describedById?: string | null;
+  // Подсветка интервалов шага («Показать интервалы на дорожке ↑», GC-F8R): null — подсветки
+  // нет. Её состояние и таймер — у вызывающего; здесь только рисование.
+  highlight?: LaneHighlight | null;
 }
 
 // Штриховка «без движения» (135°, та же геометрия штриховки, что у notWorking в FeatureStatsBits).
@@ -83,7 +100,7 @@ function spanMinutes(from: string, to: string): number {
 
 export function FeatureStageLane({
   lane, axis, label, tabIndexAt = 0, expandedAt = null, onSelect, onHover,
-  interactive = true, selected = false, hoverAt = null, describedById = null,
+  interactive = true, selected = false, hoverAt = null, describedById = null, highlight = null,
 }: FeatureStageLaneProps) {
   const n = lane.intervals.length;
   // Процент оси для момента: ровно axisFrac модели × 100 — тесты сверяют координаты
@@ -157,6 +174,12 @@ export function FeatureStageLane({
         const left = pct(iv.from);
         const width = Math.max(0, pct(iv.to) - left);
         const ariaLabel = `${label}, интервал ${i + 1} из ${n}: ${formatDateTime(iv.from)} – ${formatClock(iv.to)}, ${formatDuration(spanMinutes(iv.from, iv.to))}`;
+        // Подсветка шага (GC-F8R): кольцо — форма .hl макета (2 px подложки + 4px accent);
+        // затемнение прочих — .dim (opacity .35), оно есть при любом режиме движения;
+        // переход по opacity — только когда вызывающий не просил меньше движения
+        // (prefers-reduced-motion: подсветка есть и снимается, но ничего не анимируется).
+        const hl = highlight?.at.has(i) === true;
+        const dim = highlight !== null && !hl;
         const barStyle = {
           position: 'absolute' as const,
           left: `${left}%`,
@@ -168,6 +191,9 @@ export function FeatureStageLane({
           height: 10,
           borderRadius: R.sm,
           background: stateBackground(iv.state),
+          ...(dim ? { opacity: 0.35 } : {}),
+          ...(dim && highlight?.animate ? { transition: 'opacity 0.3s' } : {}),
+          ...(hl ? { boxShadow: `0 0 0 2px ${C.bgCard}, 0 0 0 4px ${C.accent}`, zIndex: 3 } : {}),
         };
         const risk = iv.lastOutcome ? (
           // Риска 2 px на конце интервала с плохим исходом последнего хода.

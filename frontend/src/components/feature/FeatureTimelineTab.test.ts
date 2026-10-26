@@ -30,6 +30,13 @@
 // GC-F10bR: «сейчас» вкладки — из useNow (живой ход растёт, пока вкладка открыта). Мутация:
 // (15) вернуть в FeatureTimelineTab const now = useMemo(() => Date.now(), []) вместо
 // useNow(60_000) → «живой ход растёт со временем» краснеет.
+// GC-F8R: подсветка интервалов шага — канал от карточки ленты через StageRow в дорожку
+// (без глобального стора): кнопка «Показать интервалы на дорожке ↑» → кольцо на интервалах
+// с ходами шага, прочие гаснут до opacity .35, через 2,4 с снимается; prefers-reduced-motion —
+// без перехода; на 360 работает. Мутации: (16) не передать onShowIntervals из StageRow в ленту
+// → «кнопка есть» краснеет; (17) не снять подсветку (в таймере нет setHighlight(null)) →
+// «через 2,4 с» краснеет; (18) не пересекать taskIds (подсвечивать все интервалы) →
+// «чужой затемнён, своему кольцо» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -1679,5 +1686,95 @@ describe('FeatureTimelineTab: восстановление по чипу (GC-F11
     const c2 = reopen();
     expect(findNodeByAttr(c2, 'data-testid', 'timeline-stage-body-prod'), 'этап раскрылся без возврата').toBeNull();
     expect(calls, 'прокрутка сдвинулась без возврата').toEqual([]);
+  });
+});
+
+// === GC-F8R: подсветка интервалов шага («Показать интервалы на дорожке ↑») ===
+// Канал: карточка ленты → onShowIntervals(taskIds) → приёмник вкладки → проп highlight в
+// дорожку. Тест на ПОДКЛЮЧЕНИЕ: рендер реальной вкладки, а не изолированной ленты.
+// Фикстура: шаг Ш1 (t-s1) + дорожка «Производства» из двух интервалов: первый — с ходом
+// задачи шага (taskIds ['t-s1']), второй — чужой (['t-other']). Пересечение — только первый.
+
+describe('FeatureTimelineTab: подсветка интервалов шага (GC-F8R)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    personaMap.set('p2', 'Глеб');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  function hlRun(): FeatureRun {
+    return mkRun(fullStages(), {
+      steps: [{ id: 't-s1', title: 'Модель шаблона', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }],
+      stepChains: [mkChain({ rounds: [mkRound({ n: 1, verdict: 'accepted', personaId: 'p2', reviewChatId: 'chat-r1' })] })],
+    });
+  }
+  function hlStats(): FeatureStats {
+    return mkStats({
+      prod: [
+        { from: '2026-10-20T10:00:00Z', to: '2026-10-20T10:30:00Z', minutes: 30, live: false, lastOutcome: null, taskIds: ['t-s1'], turns: [] },
+        { from: '2026-10-20T11:00:00Z', to: '2026-10-20T11:30:00Z', minutes: 30, live: false, lastOutcome: null, taskIds: ['t-other'], turns: [] },
+      ],
+    });
+  }
+
+  const styleOf = (n: FNodeLike): Record<string, string | number> => (n as unknown as { style: Record<string, string | number> }).style;
+  const interval = (c: FNodeLike, i: number): FNodeLike => findNodeByAttr(c, 'data-testid', `lane-interval-prod-${i}`)!;
+  // Кольцо — форма .hl макета feature-gantt-7: 2 px подложки + 4 px accent.
+  const RING = `0 0 0 2px ${C.bgCard}, 0 0 0 4px ${C.accent}`;
+
+  // Раскрыть карточку Ш1 и нажать «Показать интервалы на дорожке ↑».
+  function clickShowIntervals(c: FNodeLike): void {
+    const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
+    act(() => { (reactProps(findNodeByAttr(body, 'data-testid', 'prod-card-Ш1')!)!.onClick as () => void)(); });
+    const btn = findNodeByAttr(c, 'data-testid', 'step-show-intervals');
+    expect(btn, 'кнопки «Показать интервалы на дорожке ↑» в раскрытой карточке нет').not.toBeNull();
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+  }
+
+  // === c1: реальная вкладка: кнопка → подсветка своих / затемнение чужих → снятие ===
+  it('карточка реальной вкладки: кнопка есть; клик — кольцо на интервале с ходом шага, чужой гаснет; через 2,4 с снимается', () => {
+    const c = renderTabWithStats(hlRun(), hlStats());
+    // До клика на дорожке нет ни кольца, ни затемнения.
+    expect(styleOf(interval(c, 0)).boxShadow, 'кольца до клика нет').toBeUndefined();
+    expect(styleOf(interval(c, 1)).opacity, 'затемнения до клика нет').toBeUndefined();
+    clickShowIntervals(c);
+    // Интервал, чей taskIds содержит задачу шага, — кольцо; чужой — opacity .35 (.dim макета)
+    // с переходом по opacity (движение не запрещено). Мутация (18): подсветить все интервалы —
+    // этот краснеет (у чужого оказался бы кольцо вместо затемнения).
+    expect(styleOf(interval(c, 0)).boxShadow, 'кольца на интервале с ходом шага нет').toBe(RING);
+    expect(String(styleOf(interval(c, 1)).opacity), 'чужой интервал не затемнён').toBe('0.35');
+    expect(String(styleOf(interval(c, 1)).transition), 'затемнение без перехода').toContain('opacity');
+    // Через 2,4 с подсветка снимается (мутация (17): не снимать → этот шаг краснеет).
+    // Снятый стиль React оставляет '' (как в реальном DOM) — проверка на отсутствие значения.
+    act(() => { vi.advanceTimersByTime(2400); });
+    expect(styleOf(interval(c, 0)).boxShadow, 'подсветка не снялась').toBeFalsy();
+    expect(styleOf(interval(c, 1)).opacity, 'затемнение не снялось').toBeFalsy();
+    expect(styleOf(interval(c, 1)).transition, 'перехода после снятия нет').toBeFalsy();
+  });
+
+  // === c3: prefers-reduced-motion — без перехода; на 360 работает ===
+  it('prefers-reduced-motion: подсветка есть, без перехода, и снимается; на 360 (интервал неинтерактивен) работает', () => {
+    installFakeDom();
+    // Фейк matchMedia из fakeDom даёт matches:false; для этого теста — reduce.
+    (globalThis as { window: { matchMedia: (q: string) => unknown } }).window.matchMedia = () =>
+      ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FeatureTimelineTab, { run: hlRun(), stats: hlStats(), isMobile: true }));
+    clickShowIntervals(container);
+    // На 360 интервал — не кнопка (10 px не тач-цель), но подсветка рисуется та же.
+    expect(interval(container, 0).getAttribute('role'), 'на 360 интервал не обязан быть неинтерактивным').toBe('img');
+    expect(styleOf(interval(container, 0)).boxShadow, 'кольца при reduced-motion нет').toBe(RING);
+    expect(String(styleOf(interval(container, 1)).opacity), 'чужой интервал не затемнён').toBe('0.35');
+    expect(styleOf(interval(container, 1)).transition, 'при prefers-reduced-motion перехода нет').toBeUndefined();
+    // Подсветка снимается и без анимации — тем же таймером.
+    act(() => { vi.advanceTimersByTime(2400); });
+    expect(styleOf(interval(container, 0)).boxShadow, 'подсветка не снялась').toBeFalsy();
+    expect(styleOf(interval(container, 1)).opacity, 'затемнение не снялось').toBeFalsy();
   });
 });

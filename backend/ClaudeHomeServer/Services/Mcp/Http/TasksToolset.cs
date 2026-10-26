@@ -62,11 +62,13 @@ public sealed class TasksToolset(
         ("done", "Готово", TaskItemStatus.Done),
     ];
 
-    // Ответы — как у stdio-ветки (JSON.stringify): camelCase, кириллица без \u-экранирования
+    // Ответы — как у stdio-ветки (JSON.stringify): camelCase, кириллица без \u-экранирования.
+    // Чат автора голоса фичи агенту не отдаётся — тем же конвертером, что у REST и SignalR
+    // (FeatureNoteJsonConverter): по контракту voice наружу не несёт bySessionId.
     private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web)
     {
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase), new FeatureNoteJsonConverter() },
     };
 
     public string Name => ServerName;

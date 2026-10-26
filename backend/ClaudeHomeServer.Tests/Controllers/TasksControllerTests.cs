@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
@@ -2866,8 +2867,53 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             var msg = await got.Task;
             msg.GetProperty("action").GetString().Should().Be("updated");
             msg.GetProperty("task").GetProperty("note").GetProperty("text").GetString().Should().Be("вещаем");
+            // B7 (находка 4): и в WS-событии чат автора голоса не отдаётся (конвертер registered
+            // в опциях AddJsonProtocol). Мутация: снять её — TryGetProperty здесь true («null»
+            // без фильтра доезжает ключом), тест красный.
+            msg.GetProperty("task").GetProperty("note").TryGetProperty("bySessionId", out _).Should().BeFalse(
+                "task_changed не несёт чат автора голоса");
         }
         finally { await connection.DisposeAsync(); }
+    }
+
+    // B7 (ревью R-B5, находка 4): чат автора голоса (BySessionId) живёт в модели и сторе, но наружу
+    // не отдаётся (разрез п.1/п.6). Фильтр — FeatureNoteJsonConverter, зарегистрированный во всех
+    // выходных опциях TaskItem (MVC, SignalR, FeatureJsonOptions, TasksToolset). Мутации (проверены):
+    // снять регистрацию в AddJsonOptions (Program.cs) — краснеют проверки списка, карточки и run.epic;
+    // снять в FeatureJsonOptions (TasksController) — краснеет проверка ответа PUT; снять в
+    // AddJsonProtocol — краснеет проверка WS-события в PutNote_BroadcastsTaskChanged.
+    [Fact]
+    public async Task Note_BySessionIdНеУходитНаружу_СписокКарточкаRun()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.SetFeatureNote(epicId, "авторский голос", "chat-1", false, "review", "running");
+
+        // Модель и стор поле держат: это единственный след автора голоса (из него в будущем
+        // заполняется byPersonaId — аддитивная правка модели, не проектора).
+        tm.GetById(epicId)!.Note!.BySessionId.Should().Be("chat-1");
+
+        // Список задач (GET /api/tasks): голос виден, чат автора — нет.
+        var list = JsonNode.Parse(await _client.GetStringAsync("/api/tasks"))!.AsArray();
+        var inList = list.Single(n => n!["id"]!.GetValue<string>() == epicId);
+        inList["note"]!["text"]!.GetValue<string>().Should().Be("авторский голос");
+        inList["note"].AsObject().ContainsKey("bySessionId").Should().BeFalse("список не отдаёт чат автора голоса");
+
+        // Карточка задачи (GET /api/tasks/{id}).
+        var card = JsonNode.Parse(await _client.GetStringAsync($"/api/tasks/{epicId}"))!.AsObject();
+        card["note"].AsObject().ContainsKey("bySessionId").Should().BeFalse("карточка не отдаёт чат автора голоса");
+
+        // Ответ фичи: run.epic (выход SlimRun) — то же поле того же эпика.
+        var feature = JsonNode.Parse(await _client.GetStringAsync($"/api/tasks/features/{epicId}"))!.AsObject();
+        feature["run"]!["epic"]!["note"].AsObject().ContainsKey("bySessionId")
+            .Should().BeFalse("run.epic не отдаёт чат автора голоса");
+
+        // Ответ PUT /api/tasks/{id}: карточка пред-сериализуется FeatureJsonOptions (свои опции,
+        // не MVC) — та же регистрация конвертера и там.
+        var put = await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { title = "переименован" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var putJson = JsonNode.Parse(await put.Content.ReadAsStringAsync())!.AsObject();
+        putJson["note"].AsObject().ContainsKey("bySessionId").Should().BeFalse("ответ PUT не отдаёт чат автора голоса");
     }
 
     // 200 + в журнале ровно одна запись held с reason. Журнал пишет сам TaskManager (его

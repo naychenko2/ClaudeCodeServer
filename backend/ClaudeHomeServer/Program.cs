@@ -167,8 +167,14 @@ builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExc
 // кодом local_project, а не 500 (ADR-016 §4, G1)
 var mvcBuilder = builder.Services.AddControllers(o => o.Filters.Add(new LocalProjectExceptionFilter()))
     .AddJsonOptions(o =>
+    {
         o.JsonSerializerOptions.Converters.Add(
-            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+        // Чат автора голоса фичи живёт в сторе, но наружу не отдаётся — одним конвертером типа
+        // на все точки отдачи TaskItem (см. Services/FeatureNoteJsonConverter.cs). Тот же
+        // конвертер ниже у SignalR и в выходных опциях задач (FeatureJsonOptions, TasksToolset).
+        o.JsonSerializerOptions.Converters.Add(new ClaudeHomeServer.Services.FeatureNoteJsonConverter());
+    });
 // Вычисленные «связи» сессии (parentSessionId/taskDone) дописываются на границе
 // сериализации — одним конвертером типа Session на все точки отдачи (см.
 // Services/SessionJsonConverter.cs). Только в опциях MVC: стор sessions.json пишется
@@ -296,8 +302,13 @@ builder.Services.AddSignalR(o =>
         Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ProjectCapabilityHubFilter());
     })
     .AddJsonProtocol(o =>
+    {
         o.PayloadSerializerOptions.Converters.Add(
-            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+        // task_changed несёт полный TaskItem: чат автора голоса фичи фильтруется тем же
+        // конвертером, что и REST-ответы (см. Services/FeatureNoteJsonConverter.cs).
+        o.PayloadSerializerOptions.Converters.Add(new ClaudeHomeServer.Services.FeatureNoteJsonConverter());
+    });
 
 // Observability: OTel SDK (traces + metrics) с two-mode конфигурацией.
 // Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability/overview.md.

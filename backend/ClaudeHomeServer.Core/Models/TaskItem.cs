@@ -205,7 +205,9 @@ public record FeatureHold(string Reason, DateTime Since, string? BySessionId, bo
 
 // Голос фичи (TaskItem.Note): Text — не длиннее FeatureNote.MaxTextLength, At/StageAtWrite/StateAtWrite
 // штампует сервер в момент записи (по ним считается «устарело»), BySessionId — чат автора (null — из UI
-// без чата; наружу не отдаётся), ByUser — писал человек. Позиционная запись — как FeatureHold.
+// без чата; наружу не отдаётся: поле живёт в сторе, с wire его снимает конвертер типа на границе
+// сериализации — Main/Services/FeatureNoteJsonConverter.cs), ByUser — писал человек. Позиционная
+// запись — как FeatureHold.
 public record FeatureNote(string Text, DateTime At, string? BySessionId, bool ByUser,
     string StageAtWrite, string StateAtWrite)
 {

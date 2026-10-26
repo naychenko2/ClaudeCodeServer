@@ -526,12 +526,12 @@ public class TasksController(
     }
 
     // Опции сериализации TaskItem, совпадающие с MVC (AddJsonOptions: camelCase +
-    // JsonStringEnumConverter(CamelCase)). Relaxed-энкодер: кириллица не уходит в \uXXXX
-    // при пред-сериализации, иначе MVC переэкранировал бы её вторично.
+    // JsonStringEnumConverter(CamelCase), FeatureNoteJsonConverter). Relaxed-энкодер: кириллица
+    // не уходит в \uXXXX при пред-сериализации, иначе MVC переэкранировал бы её вторично.
     private static readonly JsonSerializerOptions FeatureJsonOptions = new(JsonSerializerDefaults.Web)
     {
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase), new FeatureNoteJsonConverter() },
     };
 
     // Агрегат фичи (режим «Исполнение фичи», docs/research/turn-plan-feature-mode-cut-2026-10.md):

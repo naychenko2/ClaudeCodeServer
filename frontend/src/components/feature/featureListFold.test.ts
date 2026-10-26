@@ -1,8 +1,10 @@
-// Свёртка длинных списков карточек (GC-F4): чистые функции foldProd и foldLast.
-// Проверяем: незакрытые видны всегда, из готовых — только последние, раскрытая
-// карточка не прячется никогда, showAll показывает всё, порядок видимых исходный,
-// вход не мутируется, шаг, попавший и в хвост после мержа, и в шаги стадии,
-// не считается дважды.
+// Свёртка длинных списков карточек (GC-F4 + GC-F4R): чистые функции foldProd и foldLast.
+// Проверяем: незакрытые видны всегда, снятый ('withdrawn') не считается незакрытым
+// и не показывается, готовым считается только 'done' (не бэковая корзина 'accepted'),
+// из готовых — только последние, раскрытая карточка не прячется никогда, showAll
+// показывает ровно то, что пришло, foldLast не схлопывает (длина входа сохраняется),
+// порядок видимых исходный, вход не мутируется, шаг, попавший и в хвост после мержа,
+// и в шаги стадии, не считается дважды (только в foldProd).
 
 import { describe, it, expect } from 'vitest';
 import { foldProd, foldLast, PROD_DONE_TAIL } from './featureListFold';
@@ -17,7 +19,8 @@ function card(stepRef: string, state: string, planned = false): Card {
   return { stepRef, state, planned };
 }
 
-// 48 шагов: 40 готовых (done) и 8 незакрытых (по четыре run/wait/queue/withdrawn).
+// 48 шагов: 40 готовых (done) и 8 неготовых (по четыре run/wait/queue/withdrawn).
+// Снятый Ш44 не считается незакрытым и в свёртке не показывается (GC-R-F4).
 function mixed48(): Card[] {
   const out: Card[] = [];
   for (let i = 1; i <= 40; i++) out.push(card(`Ш${i}`, 'done'));
@@ -27,13 +30,16 @@ function mixed48(): Card[] {
 }
 
 describe('foldProd: свёртка ленты шагов', () => {
-  it('48 шагов, 40 готовых: видны 8 незакрытых и последние 3 готовых, hiddenDone=37', () => {
+  it('48 шагов, 40 готовых: видны 7 незакрытых (снятый не среди них) и последние 3 готовых, hiddenDone=37', () => {
     const cards = mixed48();
     const r = foldProd(cards, null, false);
-    expect(r.visible.length).toBe(8 + 3);
+    expect(r.visible.length).toBe(7 + 3);
     expect(r.hiddenDone.length).toBe(37);
     // Готовые в хвосте — последние по порядку входа: Ш38, Ш39, Ш40.
     expect(r.visible.filter(c => c.state === 'done').map(c => c.stepRef)).toEqual(['Ш38', 'Ш39', 'Ш40']);
+    // Снятый шаг не показывается: ни как незакрытый, ни в хвосте готовых (GC-R-F4).
+    expect(r.visible.some(c => c.stepRef === 'Ш44')).toBe(false);
+    expect(r.hiddenDone.some(c => c.stepRef === 'Ш44')).toBe(false);
   });
 
   it('раскрытая старая готовая видна и уходит из hiddenDone', () => {
@@ -41,7 +47,7 @@ describe('foldProd: свёртка ленты шагов', () => {
     const r = foldProd(cards, 'Ш5', false);
     expect(r.visible.some(c => c.stepRef === 'Ш5')).toBe(true);
     expect(r.hiddenDone.some(c => c.stepRef === 'Ш5')).toBe(false);
-    expect(r.visible.length).toBe(8 + 3 + 1);
+    expect(r.visible.length).toBe(7 + 3 + 1);
     expect(r.hiddenDone.length).toBe(36);
   });
 
@@ -50,6 +56,15 @@ describe('foldProd: свёртка ленты шагов', () => {
     const r = foldProd(cards, null, true);
     expect(r.visible.length).toBe(48);
     expect(r.hiddenDone.length).toBe(0);
+  });
+
+  it('showAll показывает ровно то, что пришло: с дублем шага (GC-R-F4)', () => {
+    // Без свёртки схлопывания нет: «Показать все 3» не может показать 2.
+    const cards = [card('Ш1', 'done'), card('Ш1', 'done'), card('Ш2', 'run')];
+    const r = foldProd(cards, null, true);
+    expect(r.visible.length).toBe(3);
+    expect(r.visible.filter(c => c.stepRef === 'Ш1').length).toBe(2);
+    expect(r.hiddenDone).toEqual([]);
   });
 
   it('порядок видимых — исходный (не по датам и не по типу)', () => {
@@ -95,12 +110,21 @@ describe('foldProd: свёртка ленты шагов', () => {
     expect(r.hiddenDone).toEqual([]);
   });
 
-  it('готовость карточки — по состоянию, а не по корзине бэка', () => {
-    // 'accepted' тоже готовый; 'withdrawn' — нет (не входит в хвост, но виден как незакрытый).
-    const cards = [card('a', 'accepted'), card('b', 'withdrawn'), card('c', 'run')];
+  it('пространства состояний не смешиваются: accepted — не готовый, withdrawn — не незакрытый, queue — незакрытый', () => {
+    // 'accepted' — имя бэковой корзины, состояния карточки с ним нет (ProdCardState):
+    // готовым не считается (GC-R-F4). Сценарий с четырьмя 'done'-подобными нужен,
+    // чтобы различие было измеримым: при ≤3 готовых любой попал бы в хвост.
+    const cards = [
+      card('a', 'accepted'),
+      card('b', 'done'), card('c', 'done'), card('d', 'done'),
+      card('e', 'withdrawn'),
+      card('f', 'queue'),
+    ];
     const r = foldProd(cards, null, false);
+    // 'a' не готовый → виден как незакрытый, в hiddenDone не попадает;
+    // 'e' снятый → не показывается нигде; 'f' queue — незакрытый, виден.
+    expect(r.visible.map(c => c.stepRef)).toEqual(['a', 'b', 'c', 'd', 'f']);
     expect(r.hiddenDone).toEqual([]);
-    expect(r.visible.length).toBe(3);
   });
 });
 
@@ -112,6 +136,16 @@ describe('foldLast: свёртка общего списка', () => {
     expect(r.hiddenEarly.length).toBe(64);
     expect(r.visible[0]!.stepRef).toBe('s64');
     expect(r.visible[9]!.stepRef).toBe('s73');
+  });
+
+  it('foldLast не схлопывает: шаг и его доработка с одинаковым stepRef видны оба (GC-R-F4)', () => {
+    // У задачи шага и задачи-доработки один stepRef (FeatureStepAccounting.cs:144-146) —
+    // это разные задачи, обе должны остаться в ленте; длина входа сохраняется.
+    const items = [card('GC-F1', 'done'), card('GC-F1', 'done'), card('GC-F2', 'run')];
+    const r = foldLast(items, null, false, 10);
+    expect(r.visible.length).toBe(3);
+    expect(r.visible.filter(i => i.stepRef === 'GC-F1').length).toBe(2);
+    expect(r.hiddenEarly).toEqual([]);
   });
 
   it('showAll: видно всё, hiddenEarly пуст', () => {

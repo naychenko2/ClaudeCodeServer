@@ -21,12 +21,13 @@ internal static class FeatureStepAccounting
     private const string Work = "work";
     private const string Withdrawn = "withdrawn";
     private const string NotCreated = "notCreated";
-    // Значения PlanState — internal: FeatureBrief.EstimateOf сравнивает с ними (возврат ревью B2b):
-    // определение одно, сравнение не разъезжается с значением молча.
+    // Значения PlanState, которые сравнивает FeatureBrief.EstimateOf (pending/partial), — internal:
+    // определение одно, сравнение не разъезжается с значением молча (возврат ревью B2b).
+    // cut/done вне класса не потребляются (возврат R-DB B2b) — private.
     internal const string PlanPending = "pending";
     internal const string PlanPartial = "partial";
-    internal const string PlanCut = "cut";
-    internal const string PlanDone = "done";
+    private const string PlanCut = "cut";
+    private const string PlanDone = "done";
 
     // Единый сравнитель кодов шагов (решение 4 ревью Александра): «Б1» и «б1» — один шаг.
     // OrdinalIgnoreCase: детерминизм без зависимости от культуры; им пользуются ВСЕ ключи

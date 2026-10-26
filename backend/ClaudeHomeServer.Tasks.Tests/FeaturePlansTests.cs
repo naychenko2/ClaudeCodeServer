@@ -5,7 +5,8 @@ namespace ClaudeHomeServer.Tasks.Tests;
 
 // Золотые тесты документов фичи (волна 3 «Обзор фич», вкладка «Планы и макеты»):
 // FeatureProjector.BuildPlans — чистая проекция FeatureRun → List<FeaturePlan> БЕЗ хранилища.
-// Покрытие: порядок (роль cut → design → plan → consult, внутри роли по CreatedAt), роль как есть
+// Покрытие: порядок (роль cut → design → plan → consult, внутри роли по CreatedAt — для каждой
+// роли своей фиктурой: cut/design — тесты 1–2, plan/consult — тест 1a, R-DB M2), роль как есть
 // (step с заголовком «Разрез» не попадает), design в документах (М2: роль, hasText, mockupPaths,
 // не дедуплицируется), hasText (пустой/пробельный ResultMarkdown → false),
 // mockupPaths (путь с «..» отброшен, дубли схлопнуты, потолок 20). М5: mockupPaths несут и
@@ -13,7 +14,8 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // linkedFiles), дубли схлопнуты, пустые и «..» отброшены, потолок общий. Мутации:
 //   • BuildPlans(SlimRun(run)) → у всех hasText=false (Slim обнуляет ResultMarkdown) — краснеет;
 //   • убрать фильтр «..» → путь с «..» появляется — краснеет;
-//   • не брать LinkedFiles (старый MockupPaths) — linkedFiles-тесты краснеют.
+//   • не брать LinkedFiles (старый MockupPaths) — linkedFiles-тесты краснеют;
+//   • снять OrderBy у plan и consult — тест 1a краснеет (R-DB M2).
 public class FeaturePlansTests
 {
     // ── Хелперы сборки ──────────────────────────────────────────────────────────────────────
@@ -87,6 +89,30 @@ public class FeaturePlansTests
         plans[1].Role.Should().Be("cut");
         plans[2].Role.Should().Be("plan");
         plans[3].Role.Should().Be("consult");
+    }
+
+    // 1a (R-DB M2): порядок внутри plan и consult — тоже по CreatedAt, а не по порядку входа.
+    // В тесте 1 в этих корзинах по одной задаче, и снять OrderBy у plan/consult было незаметно.
+    // Здесь порядок входа ПРОТИВОРЕЧИТ порядку CreatedAt (p1 11:00 подан раньше p2 9:00,
+    // k1 12:00 раньше k2 10:00): без OrderBy внутри роли вышло бы «p1, p2, k1, k2» и тест покраснел.
+    [Fact]
+    public void BuildPlans_Порядок_ВнутриPlanИConsult_ПоCreatedAt()
+    {
+        var epic = Epic("epic");
+        var p1 = Child("p1", "epic", TaskRoles.Plan, "План 1",
+            createdAt: new DateTime(2026, 10, 1, 11, 0, 0));
+        var p2 = Child("p2", "epic", TaskRoles.Plan, "План 2",
+            createdAt: new DateTime(2026, 10, 1, 9, 0, 0));
+        var k1 = Child("k1", "epic", TaskRoles.Consult, "Консультация 1",
+            createdAt: new DateTime(2026, 10, 1, 12, 0, 0));
+        var k2 = Child("k2", "epic", TaskRoles.Consult, "Консультация 2",
+            createdAt: new DateTime(2026, 10, 1, 10, 0, 0));
+
+        var plans = FeatureProjector.BuildPlans(Run(epic, p1, p2, k1, k2));
+
+        // Внутри корзины — по CreatedAt: p2 (9:00) раньше p1 (11:00), k2 (10:00) раньше k1 (12:00).
+        plans.Select(p => p.TaskId).Should().Equal("p2", "p1", "k2", "k1");
+        plans.Select(p => p.Role).Should().Equal("plan", "plan", "consult", "consult");
     }
 
     // ── 2. М2: design в документах — роль, hasText и mockupPaths как у остальных ролей ────────

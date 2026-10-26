@@ -322,8 +322,12 @@ public sealed class TasksToolset(
                 {
                     if ((arguments.ContainsKey("role") ? StringArg(arguments, "role") : existing.Role) != TaskRoles.Feature)
                         return Deny("Голос пишется только у фичи (role=feature)");
-                    var membership = FeatureChatMembership.BuildDetailed(
-                        tasks.GetByOwner(context.OwnerId).ToList(), FeatureChatDoor.Snapshot(sessions, context.OwnerId));
+                    // Карта членства — боевая BuildDetailed; TestVoiceMembershipOverride — тестовый
+                    // шов (в проде null): через него тест ведёт связь вне белого списка, и решение
+                    // гейта зависит от предиката CanWriteFeatureVoice, а не от «не executor».
+                    var membership = TestVoiceMembershipOverride?.Invoke()
+                        ?? FeatureChatMembership.BuildDetailed(
+                            tasks.GetByOwner(context.OwnerId).ToList(), FeatureChatDoor.Snapshot(sessions, context.OwnerId));
                     if (!membership.TryGetValue(session.Id, out var memberFeatures)
                         || !memberFeatures.TryGetValue(existing.Id, out var voiceLink)
                         || !CanWriteFeatureVoice(voiceLink))
@@ -887,6 +891,13 @@ public sealed class TasksToolset(
     // явный вход в список, всё остальное — включая будущие виды — отказ.
     internal static bool CanWriteFeatureVoice(FeatureChatMembership.Link link) =>
         link.Kind is "curator" or "orchestrator";
+
+    // Тестовый шов (R-DB B4, минор 1): подмена карты членства для гейта голоса. В проде — null,
+    // гейт строит карту FeatureChatMembership.BuildDetailed (поведение не меняется). Тест подставляет
+    // фикстуру со связью вида вне белого списка и не «executor»: решение гейта идёт через
+    // CanWriteFeatureVoice, и тест закрепляет вызов предиката из гейта, а не предикат изолированно.
+    internal Func<IReadOnlyDictionary<string, Dictionary<string, FeatureChatMembership.Link>>>?
+        TestVoiceMembershipOverride = null;
 
     private static IEnumerable<TaskItem> ApplyFilters(IEnumerable<TaskItem> source, JsonObject arguments)
     {

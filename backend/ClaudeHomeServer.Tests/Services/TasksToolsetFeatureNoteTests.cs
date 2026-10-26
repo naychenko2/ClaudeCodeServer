@@ -22,6 +22,8 @@ namespace ClaudeHomeServer.Tests.Services;
 // • убрать проверку role=feature — тест «НеЭпик» краснеет;
 // • заменить белый список CanWriteFeatureVoice на Kind != "executor" — строка «key» в тесте
 //   «БелыйСписок» краснеет (R-B4 минор 1);
+// • откатить гейт к voiceLink.Kind == "executor" (предикат не вызывается) — тест
+//   «ГейтЗовётПредикат» краснеет: «key»-связь через шов была бы пущена (R-DB B4);
 // • заменить чтение Now.FirstOrDefault()?.Stage в штампе TasksToolset на "" — тест
 //   «АктивнаяСтадия» краснеет (R-B4 минор 2).
 [Trait("Category", "Integration")]
@@ -259,6 +261,37 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             .Should().BeFalse("ключевой чат (Б2) права не получает: только явный вход в список");
         TasksToolset.CanWriteFeatureVoice(new FeatureChatMembership.Link("future-kind", 3, null, null, null))
             .Should().BeFalse();
+    }
+
+    // c1 (R-DB B4, минор 1): решение принимает ГЕЙТ, а не изолированный предикат — тест идёт через
+    // боевой путь tasks_update. Карта членства подменена тестовым шовом TestVoiceMembershipOverride
+    // на фикстуру со связью вида вне белого списка и не «executor» («key», вид Б2): прежний гейт
+    // («не executor») пустил бы её, текущий — отказывает через CanWriteFeatureVoice. Мутация:
+    // откатить гейт к voiceLink.Kind == "executor" (предикат не вызывается) — «key» пущена, тест краснеет.
+    [Fact]
+    public async Task FeatureNote_Право_ГейтЗовётПредикат_НовыйKindОтказ()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync("keykind");
+        var epic = Tasks.Create(projectId, OwnerId, new CreateTaskRequest("Фича под ключом", Role: "feature"));
+
+        var toolset = _factory.Services.GetServices<IMcpToolset>().OfType<TasksToolset>().Single();
+        toolset.TestVoiceMembershipOverride = () =>
+            new Dictionary<string, Dictionary<string, FeatureChatMembership.Link>>
+            {
+                [sessionId] = new() { [epic.Id] = new FeatureChatMembership.Link("key", 0, null, null, null) },
+            };
+        try
+        {
+            var (text, isError) = await CallToolAsync(sessionId, "tasks_update",
+                new { id = epic.Id, featureNote = "ключевой чат пишет голос" });
+            isError.Should().BeTrue("решает гейт: «key» вне белого списка — предикат отказывает");
+            text.Should().Contain("Голос фичи пишет оркестратор или человек");
+            Tasks.GetById(epic.Id)!.Note.Should().BeNull("отказ ничего не записал");
+        }
+        finally
+        {
+            toolset.TestVoiceMembershipOverride = null;
+        }
     }
 
     // c2 (R-B4 минор 2): у фичи ЕСТЬ активная стадия (idущий шаг) — StageAtWrite в MCP-пути

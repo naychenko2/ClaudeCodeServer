@@ -19,7 +19,8 @@ import { rotationBadgeState } from '../../lib/rotation';
 import type { RotationBadgeState } from '../../lib/rotation';
 import { plural } from '../../lib/plural';
 import { addDaysUtc, openSpend, spendQuery, todayUtc } from '../../lib/spendContract';
-import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
+import { freeSourceLabel } from '../../lib/spendSources';
+import { COST_TIER_PILL, isFreeCostTier } from '../../lib/costTiers';
 import { isLocalEngineKey } from '../../lib/localEngine';
 import { showToast } from '../../lib/toast';
 import { CLI_CHANGELOG_URL, cliChangesSummary } from '../../lib/cliChangesSummary';
@@ -456,6 +457,12 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
   };
 }
 
+// Бесплатность провайдера — по классу с бэка (costTier), как и пилюля на карточке:
+// локальное правило по ключу (lib/spendSources) с серверным расходится.
+function isFreeProvider(key: string): boolean {
+  return isFreeCostTier(providerCapsByKey(key).costTier);
+}
+
 // Квотный CLI-провайдер → общая вью-модель (готовое состояние)
 function providerReadyCard(
   key: string, name: string, color: string,
@@ -471,6 +478,9 @@ function providerReadyCard(
   const surfaceWindows = windows.filter(w => w.kind !== 'count' && (w.kind !== 'alive' || !hasPlatformHealth));
   const countWindows = windows.filter(w => w.kind === 'count');
   const hasExhausted = windows.some(w => w.exhausted);
+  // Ценовой класс провайдера — с бэка (/api/models, costTier): по нему карточка называет
+  // цену (бесплатно / дёшево / дорого) и по нему же определяется бесплатность.
+  const costTier = providerCapsByKey(key).costTier ?? null;
   const pills: PillSpec[] = [];
   if (bal.planLabel) pills.push({ label: bal.planLabel, tone: 'plain' });
   // Состояние пула FreeLLM по живым платформам: всё лежит — danger, частичная
@@ -481,7 +491,11 @@ function providerReadyCard(
     if (alive === 0) pills.push({ label: 'Недоступен', tone: 'danger' });
     else if (alive < total) pills.push({ label: 'Часть платформ недоступна', tone: 'warn' });
   }
-  if (isFreeSource(key)) pills.push({ label: 'бесплатный', tone: 'free' });
+  // Бесплатность карточки — по классу с бэка (/api/models, costTier), а не по локальному
+  // правилу ключа (lib/spendSources): правило на фронте знает freellm*, сервер — нет, и
+  // карточка называла цену дважды («бесплатный» + «дёшево»). Класс бесплатного
+  // провайдера приедет как free — тогда и пилюля одна.
+  if (isFreeCostTier(costTier)) pills.push({ label: COST_TIER_PILL.free, tone: 'free' });
   if (hasExhausted) pills.push({ label: 'Предел', tone: 'danger' });
   const trend = snapshots.length
     ? snapshots
@@ -493,10 +507,8 @@ function providerReadyCard(
   const cabinetUrl = CABINET_URL[key];
   const expandable = countWindows.length > 0 || trend.length >= 2 || !!cabinetUrl;
   return {
-    key, name, color, state: 'ready', isFree: isFreeSource(key), dim: false, onRetry: () => {},
-    // Ценовой класс провайдера — с бэка (/api/models, costTier): рядом с пилюлей
-    // «бесплатный» человек видит, дёшево это или дорого.
-    costTier: providerCapsByKey(key).costTier ?? null,
+    key, name, color, state: 'ready', isFree: isFreeCostTier(costTier), dim: false, onRetry: () => {},
+    costTier,
     windows: surfaceWindows, labelWidth: 64, pills,
     freshness: providerFreshness(bal.asOf),
     health: bal.health ?? null, hasExhausted,
@@ -716,11 +728,11 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
       const bal = data?.balance ?? null;
       const isQuota = bal?.currency === '%' || (bal?.windows?.length ?? 0) > 0;
       if (data === null) {
-        out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'error', isFree: isFreeSource(key), retryAt, onRetry: () => loadProvider(key), windows: [], pills: [], hasExhausted: false, expandable: false });
+        out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'error', isFree: isFreeProvider(key), retryAt, onRetry: () => loadProvider(key), windows: [], pills: [], hasExhausted: false, expandable: false });
         continue;
       }
       if (data === undefined || !bal) {
-        out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'loading', isFree: isFreeSource(key), onRetry: () => loadProvider(key), windows: [], pills: [], hasExhausted: false, expandable: false });
+        out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'loading', isFree: isFreeProvider(key), onRetry: () => loadProvider(key), windows: [], pills: [], hasExhausted: false, expandable: false });
         continue;
       }
       if (isQuota) {
@@ -732,7 +744,7 @@ export function QuotasTab({ balances, onClose }: { balances?: BalanceChipData[];
       const c = providerCapsByKey(key);
       if (c.hasBalance || c.configured === false) continue;
       if (balanceKeys.includes(key)) continue;
-      out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'unavailable', isFree: isFreeSource(key), onRetry: () => {}, windows: [], pills: [], hasExhausted: false, expandable: false });
+      out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'unavailable', isFree: isFreeProvider(key), onRetry: () => {}, windows: [], pills: [], hasExhausted: false, expandable: false });
     }
     return out;
   }, [prov, balanceKeys, providerKeys, loadProvider, retryAt, usage, usageError, isAdmin, recheckModel]);

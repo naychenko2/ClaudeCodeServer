@@ -31,3 +31,8 @@ export const COST_TIER_PILL: Record<string, string> = {
 // Цвет класса. Неизвестный или null-класс → нейтральный цвет (не выдуманный).
 export const costTierColor = (t?: string | null) =>
   (t && COST_TIERS[t] ? COST_TIERS[t].color : C.textMuted);
+
+// Признак «бесплатный» по классу с бэка. Локальное правило по ключу провайдера
+// (lib/spendSources) расходится с серверным (бэк не знает freellm*), поэтому признак
+// бесплатности на карточке берём из поля с бэка — иначе карточка называла цену дважды.
+export const isFreeCostTier = (t?: string | null) => t === 'free';

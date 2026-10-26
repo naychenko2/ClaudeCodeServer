@@ -16,9 +16,12 @@ import { QuotaWindow, CountSegments, type QuotaWindowView } from './QuotaWindow'
 export interface PillSpec { label: string; tone: 'plain' | 'danger' | 'free' | 'warn' | 'info' | 'expensive' }
 
 // Пилюля ценового класса провайдера: класс приходит с бэка (/api/models, costTier).
-// free НЕ рисуем — бесплатность провайдера уже выражена пилюлей «бесплатный», дубль
-// заводить нельзя. Неизвестный класс — тоже без пилюли: под класс не выдумываем.
+// free → «бесплатный»: бесплатность на карточке называется ОДНОЙ пилюлей — классом.
+// Если бесплатность уже выражена пилюлей «бесплатный», пилюля класса не рисуется
+// вовсе (гард в ProviderCard — по оси «бесплатность уже названа», а не по значению
+// класса). Неизвестный класс — тоже без пилюли: под класс не выдумываем.
 export function costTierPill(costTier?: string | null): { label: string; tone: PillSpec['tone'] } | null {
+  if (costTier === 'free') return { label: COST_TIER_PILL.free, tone: 'free' };
   if (costTier === 'cheap') return { label: COST_TIER_PILL.cheap, tone: 'info' };
   if (costTier === 'expensive') return { label: COST_TIER_PILL.expensive, tone: 'expensive' };
   return null;
@@ -283,8 +286,13 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
     onPointerCancel: () => setPressed(false),
   } : {};
   const exhausted = data.hasExhausted;
-  // Пилюля ценового класса (бесплатному провайдеру она не полагается — см. costTierPill)
-  const tierPill = costTierPill(data.costTier);
+  // Пилюля ценового класса. Гард — по оси «бесплатность уже названа»: если пилюля
+  // «бесплатный» уже на карточке, цену второй раз не называем (иначе «бесплатный» и
+  // «дёшево» рядом). Раньше гард стоял на значении класса (free → пилюли нет) — от того
+  // локальное правило «бесплатный» успевало добавить свою пилюлю, и карточка показывала
+  // две противоречащие.
+  const freeNamed = data.pills.some(p => p.label === COST_TIER_PILL.free);
+  const tierPill = freeNamed ? null : costTierPill(data.costTier);
   const hasCountTrend = !data.countWindows || data.countWindows.length === 0;
 
   return (
@@ -316,8 +324,8 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
               аккаунты подписок различаются (точка у всех подписок одного цвета) */}
           <span style={{ ...nameStyle, flex: '0 1 auto', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
           {data.pills.map((p, i) => <Pill key={i} tone={p.tone}>{p.label}</Pill>)}
-          {/* Пилюля класса — рядом с «бесплатным»: у бесплатного провайдера класса
-              free нет (он уже назван пилюлей), у платного — виден сразу. */}
+          {/* Пилюля класса — рядом с «бесплатным»: бесплатность уже названа — второй
+              пилюли нет (см. гард выше), у остальных виден сразу. */}
           {tierPill && <Pill tone={tierPill.tone}>{tierPill.label}</Pill>}
           {data.routingBadge && <RoutingPill tone={data.routingBadge.tone} label={data.routingBadge.label} />}
         </div>

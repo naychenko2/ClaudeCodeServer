@@ -13,7 +13,8 @@
 //   рисуется; числа подстроки «Сейчас» — моно; «План готов» для queued; глиф у error;
 //   minWidth: 0 у значения; одно «сейчас» на ответ (перерисовка тех же данных не сдвигает
 //   относительные строки; новая ссылка данных — «сейчас» пересчитан, R-F2d3); без «Дальше»
-//   «Оценка» в правой колонке грида, середина не пустует (R-F8 минор 2);
+//   «Оценка» в правой колонке грида, середина не пустует (R-F8 минор 2); на мобили
+//   расстановки колонок нет даже без «Дальше» — гард !isMobile (F12);
 // · Grep-сторож: в исходнике блока нет прямого обращения к полю состояния, полосе стадий
 //   и полям таймлайна (включая `timeline` через деструктуризацию) — фронт ничего не
 //   пересчитывает; и нет слов модели — полный список BRIEF_MODEL_WORDS (R-F8), комментарии
@@ -360,6 +361,19 @@ describe('Порядок секций и пустые подписи (R-F8)', ()
     const cf = render({ brief: full, nameOf }).c;
     expect(cellStyle(cf, 'brief-done-line').gridColumn, 'с «Дальше» расстановки нет').toBeUndefined();
     expect(cellStyle(cf, 'brief-estimate-main').gridColumn, 'с «Дальше» расстановки нет').toBeUndefined();
+  });
+
+  it('на мобили расстановки колонок нет даже без «Дальше»: грид в одну колонку, у ячеек нет gridColumn (F12: гард !isMobile)', () => {
+    const b = brief({ now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) }, next: [] });
+    const { c } = render({ brief: b, nameOf, isMobile: true });
+    const grid = findNodeByAttr(c, 'data-testid', 'brief-facts')!;
+    expect((reactProps(grid)!.style as Record<string, unknown>).gridTemplateColumns, 'мобильный грид — одна колонка').toBe('1fr');
+    // Тот же случай, что красит десктопный тест выше (next пуст → noNext был бы true без гарда):
+    // на мобили ячейки не получают gridColumn — гард !isMobile закреплён.
+    for (const id of ['brief-done-line', 'brief-estimate-main']) {
+      const cell = findNodeByAttr(c, 'data-testid', id)!.parentElement!.parentElement!;
+      expect((reactProps(cell)!.style as Record<string, unknown>).gridColumn, `ячейка «${id}» без gridColumn`).toBeUndefined();
+    }
   });
 });
 

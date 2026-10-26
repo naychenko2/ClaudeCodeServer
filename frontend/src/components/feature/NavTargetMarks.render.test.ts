@@ -64,7 +64,19 @@ vi.mock('../../lib/models', async (importOriginal) => {
   return { ...orig, useModels: () => [], modelLabel: (v: string | null | undefined) => v ?? '' };
 });
 vi.mock('../../lib/openChat', () => ({ openChatById: async () => true }));
-vi.mock('../../lib/tasks', () => ({ openTaskInSection: () => {} }));
+// Полный мок через importOriginal (GC-F11R): FeatureStepDetails («Итог» карточки) зовёт
+// useTasks/useEnsureFullTask — тесты здесь про пометки, не про «Итог», поэтому
+// useEnsureFullTask остаётся инертным (реальный звал бы api.tasks.get, которого нет
+// в местном моке api, и менял бы общий стор между тестами). Следующие новые экспорты
+// lib/tasks этот мок не сломают.
+vi.mock('../../lib/tasks', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/tasks')>();
+  return {
+    ...orig,
+    openTaskInSection: () => {},
+    useEnsureFullTask: () => ({ state: 'ready' as const, retry: () => {} }),
+  };
+});
 
 // === Обход дерева fakeDom ===
 type N = { nodeType: number; nodeName: string; childNodes: N[]; getAttribute?: (a: string) => string | null };

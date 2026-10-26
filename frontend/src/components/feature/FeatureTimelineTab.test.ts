@@ -15,21 +15,64 @@
 // в FeatureProdCardsView (не дать stepChains) → «карточка Ш1» краснеет; (4) не передать
 // isMobile в ленту → «360: поле касания 40» краснеет; (5) убрать фолбэк на ExecutorRow
 // при пустой ленте → «сироты не исчезают» краснеет; (6) убрать ветку outside из рендера
-// «оценивает →» → «reviewOfOutside > 0 даёт нейтральную подпись» краснеет.
+// «оценивает →» → «reviewOfOutside > 0 даёт нейтральную подпись» краснеет;
+// GC-F10a: (7) tasksCountLabel → хардкод «${n} задач» → тест склонения краснеет;
+// (8) в StageRow isTail={isTail(x.taskId)} → isTail={false} → «помечен маркером» краснеет;
+// (9) условие строки хвостов tailIds.size > 0 → false → «хвосты после мержа · 2» краснеет.
+// GC-F10b: (10) в StageRow turns={turnsByTask.get(x.taskId)} → turns={null} → «ходы задачи»
+// краснеет; (11) в buildTurnsByTask убрать ветку синтеза живого хода → «живой ход» краснеет;
+// (12) в StageRow не передать axis → «Время шага на оси» краснеет.
+// GC-F10c: свёртка списков этапов кроме prod: 74 → 10 строк + «Показать все 74 (ранних
+// скрыто: 64)», клик → все; снятые (verdict 'withdrawn') — ни в N, ни в K, ни в списке;
+// короткий список — без кнопки. Мутации: (13) в StageRow убрать кнопку (условие
+// hiddenEarly.length > 0 → false) → «74 ревью» краснеет; (14) rows = stage.executors
+// без фильтра снятых → «снятые» краснеет.
+// GC-F10bR: «сейчас» вкладки — из useNow (живой ход растёт, пока вкладка открыта). Мутация:
+// (15) вернуть в FeatureTimelineTab const now = useMemo(() => Date.now(), []) вместо
+// useNow(60_000) → «живой ход растёт со временем» краснеет.
+// GC-F8R: подсветка интервалов шага — канал от карточки ленты через StageRow в дорожку
+// (без глобального стора): кнопка «Показать интервалы на дорожке ↑» → кольцо на интервалах
+// с ходами шага, прочие гаснут до opacity .35, через 2,4 с снимается; prefers-reduced-motion —
+// без перехода; на 360 работает. Мутации: (16) не передать onShowIntervals из StageRow в ленту
+// → «кнопка есть» краснеет; (17) не снять подсветку (в таймере нет setHighlight(null)) →
+// «через 2,4 с» краснеет; (18) не пересекать taskIds (подсвечивать все интервалы) →
+// «чужой затемнён, своему кольцо» краснеет.
+// GC-F8R2 (хвосты №1–2 ревью GC-R-P3): карточка «Производства» получает от вкладки те же
+// axis/turnsByTask/now, что строки исполнителей — «Время шага на оси» и ходы шага в продукте,
+// а не только в тестах карточки с явным пропсом; «сейчас» строки — nowMs из ExecutorRow.
+// Мутации: (19) не передать axis/turnsByTask/now из StageRow в ленту → «карточка с блоком
+// времени и ходами шага» краснеет; (20) не передать nowMs в ExecutorRow → «карточка и строка
+// от одного тика» краснеет.
+// GC-F11R2 (дефект 7d399549): применение снимка не зависит от перемонтирования вкладки:
+// снимок читается при ИНИЦИАЛИЗАЦИИ состояния (первый рендер), применение подтверждается
+// (pending → lastApplied) — remount вкладки (страницы 'loading'→'ok' после возврата,
+// featurePage.ts:100) читает тот же снимок, а сознательный уход его не перечитывает.
+// Прокрутка — реального контейнера (внутренняя панель страницы с overflow:auto,
+// FeaturePage.tsx:366), не window. Мутации: (21) применять только эффектом после монтажа
+// (начального состояния нет) → c4 краснеет; (22) гасить pending при чтении, без подтверждения
+// → c6 краснеет (первый инстанс прочитал и погасил — remount ничего не нашёл);
+// (23) хранить window.scrollY вместо scrollTop контейнера → c4 краснеет.
+// GC-F11R3 (мажоры ревью GC-R-P5): подтверждение идемпотентно по seq (StrictMode-двойной
+// эффект и remount не закрывают окно); окно расходует стабильный кадр после применения
+// без размонтирования вкладки — снимок не залипает между открытиями (c7). c4–c7 — и под
+// StrictMode. Мутации (24)–(26) — у описания блока GC-F11 ниже.
 
 import { act } from 'react';
-import { createElement } from 'react';
+import { createElement, StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FeatureTimelineTab } from './FeatureTimelineTab';
+import { FeatureTimelineTab, laneAxisInsets, laneScaleWidth } from './FeatureTimelineTab';
 import {
   stageName, stageStatusLabel, stageBoundsLabel, stageDurationLabel,
   stageDotStyle, stageLineStyle, buildTaskMap, minutesSince, executorStatus, stageStatusBadge,
-  stepStatusView, stepModel, buildExecutorIndex, evaluatedLine, outsideLinksLabel,
+  stepStatusView, stepModel, buildExecutorIndex, evaluatedLine, outsideLinksLabel, tasksCountLabel,
 } from './FeatureTimelineBits';
 import type { StepProgress } from '../../lib/featureProgress';
 import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
+import { __test as backNavTest } from '../../lib/featureBackNav';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureStepChain, FeatureRound, FeatureTask } from '../../types/featureRun';
+import type { FeatureStats } from '../../types/featureStats';
 
 // === Мок персон (lib/personas): id → имя; аватар — инициалы (без image) ===
 const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>() }));
@@ -41,10 +84,13 @@ vi.mock('../../lib/personas', () => ({
   usePersonasVersion: () => 0,
   personaInitials: (name: string) => (name ? name.trim().charAt(0).toUpperCase() : ''),
 }));
-// lib/api — только avatarUrl (PersonaAvatar); остальное не зовётся вкладкой.
-vi.mock('../../lib/api', () => ({
-  api: { personas: { avatarUrl: () => '' } },
-}));
+// lib/api — настоящий модуль + avatarUrl (PersonaAvatar) + tasks.get (отказ: ленивый «Итог»
+// FeatureStepDetails при раскрытой строке не должен висеть на сети).
+const { tasksGetMock } = vi.hoisted(() => ({ tasksGetMock: vi.fn() }));
+vi.mock('../../lib/api', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/api')>();
+  return { ...orig, api: { ...orig.api, personas: { ...orig.api.personas, avatarUrl: () => '' }, tasks: { ...orig.api.tasks, get: tasksGetMock } } };
+});
 vi.mock('../../lib/signalr', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/signalr')>();
   return { ...orig, onMessage: () => () => {}, onPreviewMessage: () => () => {} };
@@ -53,8 +99,25 @@ vi.mock('../../lib/toast', () => ({ showToast: (..._a: unknown[]) => {} }));
 // Навигация: журнал целей перехода (chat → openChatById, task → openTaskInSection).
 const mockOpenChat = vi.hoisted(() => ({ calls: [] as string[] }));
 vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { mockOpenChat.calls.push(id); return true; } }));
+// lib/tasks — настоящий (стор для FeatureStepDetails при раскрытой строке),
+// openTaskInSection — spy журнала целей.
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
-vi.mock('../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
+vi.mock('../../lib/tasks', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/tasks')>();
+  return { ...orig, openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } };
+});
+
+// Дефолт tasks.get: полная задача БЕЗ итога — блок «Итог» не рисуется, тесты его не видят.
+// Нужен потому, что детали (FeatureStepDetails) подняты и в карточках «Производства» (GC-F8):
+// без дефолта ленивый добор падает на vi.fn() без реализации (undefined.then).
+// В тесте «отказ» — свой mockImplementation в его beforeEach, он перекрывает этот (он идёт позже).
+beforeEach(() => {
+  tasksGetMock.mockReset();
+  tasksGetMock.mockImplementation((id: string) => Promise.resolve({
+    id, title: '', description: '', status: 'todo', priority: 'medium',
+    linkedFiles: [], subtasks: [], labels: [], order: 0, createdAt: '', updatedAt: '',
+  } as never));
+});
 
 // === Фиксированное «сейчас» (стабильные минуты) ===
 const NOW = new Date('2026-10-20T12:00:00Z').getTime();
@@ -507,12 +570,12 @@ describe('FeatureTimelineTab: рендер', () => {
     expect(textNodes(badge!).join('')).toContain('ждёт вас · 25 мин');
   });
 
-  // === 8. 360: тач-цель ≥ 40 (кнопка-заголовок этапа) ===
-  it('на 360 кнопка-заголовок этапа — minHeight 40', () => {
+  // === 8. 360: тач-цель 44 (кнопка-заголовок этапа, GC-F5c) ===
+  it('на 360 кнопка-заголовок этапа — minHeight 44', () => {
     const c = renderTab(mkRun(fullStages()), true);
     const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-prod')!;
     const st = (header as unknown as { style: Record<string, string> }).style;
-    expect(st.minHeight).toBe('40px');
+    expect(st.minHeight).toBe('44px');
   });
 });
 
@@ -837,5 +900,1339 @@ describe('FeatureTimelineTab: строка «оценивает →» (ренд�
     }));
     expect(textNodes(findNodeByAttr(openStage2(c, 'cut'), 'data-testid', 'timeline-eval-scope')!).join('')).toBe('по эпику');
     expect(textNodes(findNodeByAttr(openStage2(c, 'plan'), 'data-testid', 'timeline-eval-scope')!).join('')).toBe('по разрезу');
+  });
+});
+
+// === GC-F5c: дорожка и ось в строке этапа, roving tabindex, 360 ===
+
+// Фикстура stats: таймлайн с интервалами этапов (окно 10:00–12:00).
+function mkStats(intervalsByStage: Record<string, unknown[]> | null): FeatureStats {
+  return {
+    timeline: {
+      from: '2026-10-20T10:00:00Z',
+      to: '2026-10-20T12:00:00Z',
+      stages: [],
+      intervalsByStage,
+      segments: [],
+      current: null,
+      totals: {},
+    },
+  } as unknown as FeatureStats;
+}
+
+function iv(from: string, to: string, live = false) {
+  return { from, to, minutes: 30, live, lastOutcome: null, taskIds: ['t1'], turns: [] };
+}
+
+// Две стадии с интервалами: prod (10:00–10:30, 11:00–11:30) и review (10:20–10:40, 11:30–11:50).
+function laneStats(): FeatureStats {
+  return mkStats({
+    prod: [iv('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z'), iv('2026-10-20T11:00:00Z', '2026-10-20T11:30:00Z')],
+    review: [iv('2026-10-20T10:20:00Z', '2026-10-20T10:40:00Z'), iv('2026-10-20T11:30:00Z', '2026-10-20T11:50:00Z')],
+  });
+}
+
+// Все узлы-интервалы дорожек: [testid, tabIndex].
+function intervalNodes(c: FNodeLike): { id: string; tabIndex: number }[] {
+  const out: { id: string; tabIndex: number }[] = [];
+  const walk = (n: FNodeLike) => {
+    const at = n.attributes?.['data-testid'];
+    if (at && at.startsWith('lane-interval-')) {
+      const props = reactProps(n as never) as { tabIndex?: number } | null;
+      out.push({ id: at, tabIndex: props?.tabIndex ?? -999 });
+    }
+    for (const ch of n.childNodes) walk(ch);
+  };
+  walk(c);
+  return out;
+}
+
+// Клавиша на корне вкладки (событие всплывает от интервала к корню).
+function pressKey(c: FNodeLike, key: string) {
+  const root = findNodeByAttr(c, 'data-testid', 'feature-timeline-tab')!;
+  const props = reactProps(root as never) as { onKeyDown?: (e: unknown) => void } | null;
+  act(() => { props?.onKeyDown?.({ key, preventDefault: () => {} }); });
+}
+
+function renderTabWithStats(run: FeatureRun, stats: FeatureStats | null, isMobile = false) {
+  installFakeDom();
+  const { container } = mount(createElement(FeatureTimelineTab, { run, stats, isMobile }));
+  return container;
+}
+
+describe('FeatureTimelineTab: дорожки и ось (GC-F5c)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // === 1. Сетка строки: 250px | 1fr | 104px (критерий c2) ===
+  it('строка этапа — сетка 250px 1fr 104px до раскрытия этапа и после', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    const grid = findNodeByAttr(c, 'data-testid', 'timeline-stage-grid-prod')!;
+    const st = (grid as unknown as { style: Record<string, string> }).style;
+    expect(st.gridTemplateColumns).toBe('250px 1fr 104px');
+    // Раскрыли этап — сетка строки не поехала.
+    const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-prod')!;
+    act(() => { (reactProps(header as never)!.onClick as () => void)(); });
+    const grid2 = findNodeByAttr(c, 'data-testid', 'timeline-stage-grid-prod')!;
+    expect((grid2 as unknown as { style: Record<string, string> }).style.gridTemplateColumns).toBe('250px 1fr 104px');
+  });
+
+  // === 2. Дорожка рисуется, границы и паузы под строкой ===
+  it('дорожка этапа с интервалами; под строкой — границы и паузы', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    expect(findNodeByAttr(c, 'data-testid', 'lane-prod'), 'дорожка этапа').not.toBeNull();
+    const prod = findNodeByAttr(c, 'data-testid', 'timeline-stage-prod')!;
+    const bounds = findNodeByAttr(prod as never, 'data-testid', 'timeline-stage-bounds');
+    const t = textNodes(bounds!).join('');
+    expect(t).toContain('–');
+    expect(t, 'число интервалов под строкой').toContain('2 интервала');
+  });
+
+  // Мутация: убрать detail из границ → «2 интервала» краснеет.
+
+  it('ось над лентой: подписи шкалы и «сейчас» у открытой фичи', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    expect(findNodeByAttr(c, 'data-testid', 'lane-axis')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'lane-axis-label-now')).not.toBeNull();
+  });
+
+  it('у закрытой фичи подписи «сейчас» нет (контракт вызывающего)', () => {
+    const c = renderTabWithStats(mkRun(fullStages(), { state: 'closed' }), laneStats());
+    expect(findNodeByAttr(c, 'data-testid', 'lane-axis')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'lane-axis-label-now')).toBeNull();
+  });
+
+  // === 3. approx: журнала нет → дорожки нет, прежние границы ===
+  it('approx (журнала нет): дорожки нет, границы прежние', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), mkStats(null));
+    expect(findNodeByAttr(c, 'data-testid', 'lane-prod'), 'дорожки при approx нет').toBeNull();
+    expect(intervalNodes(c as never)).toHaveLength(0);
+    const bounds = textNodes(findNodeByAttr(c, 'data-testid', 'timeline-stage-bounds')!).join('');
+    expect(bounds, 'прежние границы этапа').toContain('·');
+  });
+
+  // === 4. Roving tabindex: одна точка табуляции (критерий c1) ===
+  it('ровно один интервал с tabIndex=0 — точка табуляции одна', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    const nodes = intervalNodes(c as never);
+    expect(nodes.length).toBeGreaterThan(1);
+    expect(nodes.filter(n => n.tabIndex === 0)).toHaveLength(1);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-0');
+  });
+
+  it('ArrowRight → следующий интервал этапа; Home/End → первый и последний', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    pressKey(c as never, 'ArrowRight');
+    let nodes = intervalNodes(c as never);
+    expect(nodes.filter(n => n.tabIndex === 0)).toHaveLength(1);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-1');
+    pressKey(c as never, 'Home');
+    nodes = intervalNodes(c as never);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-0');
+    pressKey(c as never, 'End');
+    nodes = intervalNodes(c as never);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-1');
+  });
+
+  it('ArrowDown → ближайший по x интервал соседнего этапа', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    pressKey(c as never, 'ArrowDown');
+    const nodes = intervalNodes(c as never);
+    expect(nodes.filter(n => n.tabIndex === 0)).toHaveLength(1);
+    // Ближайший к prod-0 (центр 10:15) — review-0 (10:20–10:40), а не review-1 (11:30–11:50).
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-review-0');
+  });
+
+  it('ArrowUp → ближайший по x интервал этапа выше', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    pressKey(c as never, 'ArrowDown');
+    pressKey(c as never, 'ArrowUp');
+    const nodes = intervalNodes(c as never);
+    expect(nodes.find(n => n.tabIndex === 0)!.id).toBe('lane-interval-prod-0');
+  });
+
+  // === 5. 360: строка-кнопка 44, дорожка под именем и ВНЕ кнопки ===
+  it('на 360 кнопка строки — 44 px, дорожка не внутри кнопки', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats(), true);
+    const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-prod')!;
+    expect((header as unknown as { style: Record<string, string> }).style.minHeight).toBe('44px');
+    // Внутри кнопки строки интервалов быть не может (вложенные кнопки).
+    const inside = intervalNodes(header as never);
+    expect(inside, 'в кнопке строки нет интервалов').toHaveLength(0);
+    // Дорожка есть и стоит после кнопки (под именем).
+    expect(findNodeByAttr(c, 'data-testid', 'lane-prod')).not.toBeNull();
+  });
+
+  // === 6. Счётчик: план «N/M» только у «Производства», у прочих — факт ===
+  // GC-F12R: N = принято (accepted), M = всего (total). Шаг в работе ещё не сделан —
+  // «N/M» читается как «сделано N из M»; текст несёт planCounterText() модели, та же
+  // строка, что печатает сводка «Статистики». Мутация: вернуть made=done+inWork → «2/4» краснеет.
+  it('счётчик плана «N/M» — только у prod, N = принято; у ревью — факт (число задач)', () => {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ taskId: 't-rev', status: 'running' })];
+    const c = renderTabWithStats(mkRun(stages, {
+      stepProgress: { planState: 'partial', total: 4, accepted: 2, review: 1, work: 1, notCreated: 0, withdrawn: 0, unlinkedReworks: 0 },
+    }), laneStats());
+    const counters: Record<string, string> = {};
+    for (const key of ['prod', 'review']) {
+      const stage = findNodeByAttr(c, 'data-testid', `timeline-stage-${key}`)!;
+      const counter = findNodeByAttr(stage as never, 'data-testid', 'timeline-stage-counter');
+      counters[key] = counter ? textNodes(counter).join('') : '';
+    }
+    // accepted=2, work=1, review=1 → «2/4», а не «4/4»: в работе — не «сделано».
+    expect(counters['prod'], 'у prod — план шагов, N = принято').toBe('2/4');
+    // GC-F10a: факт согласован с числом — «1 задача», а не «1 задач».
+    expect(counters['review'], 'у ревью — факт').toBe('1 задача');
+  });
+});
+
+// === GC-F5cR: ось времени по той же колонке, что и дорожка ===
+//
+// Отступы оси выводятся ЗДЕСЬ из разметки самой строки этапа (отступ строки +
+// колонки сетки + зазор), а не из констант компонента: иначе тест повторял бы
+// реализацию и зеленел бы после любой правки. Мутация: сдвинуть шкалу на 24 px
+// (вернуть insetLeft без отступа строки) — «ось по колонке дорожек» краснеет.
+describe('FeatureTimelineTab: ось по колонке дорожек (GC-F5cR)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Отступы колонки дорожек в координатах корня вкладки: считаются по стилям
+  // самой строки этапа (отступ строки + колонки сетки + зазор).
+  function laneOffsets(c: FNodeLike): { left: number; right: number } {
+    const row = findNodeByAttr(c as never, 'data-testid', 'timeline-stage-prod')!;
+    const grid = findNodeByAttr(c as never, 'data-testid', 'timeline-stage-grid-prod')!;
+    const rowStyle = (row as unknown as { style: Record<string, string> }).style;
+    const gridStyle = (grid as unknown as { style: Record<string, string> }).style;
+    const pad = Number(String(rowStyle.paddingLeft).replace('px', ''));
+    const gap = Number(String(gridStyle.gap).replace('px', ''));
+    const cols = String(gridStyle.gridTemplateColumns).split(' ');
+    const px = (s: string) => Number(s.replace('px', ''));
+    if (cols.length === 1) {
+      // 360: одна колонка — дорожка под именем, во всю ширину строки.
+      return { left: pad, right: 0 };
+    }
+    // Десктоп: колонка имени слева, колонка длительности справа, дорожка между ними.
+    return { left: pad + px(cols[0]!) + gap, right: px(cols[2]!) + gap };
+  }
+
+  function axisInsets(c: FNodeLike): { left: number; right: number } {
+    const scale = findNodeByAttr(c as never, 'data-testid', 'lane-axis-scale')!;
+    const st = (scale as unknown as { style: Record<string, string> }).style;
+    return {
+      left: Number(String(st.marginLeft).replace('px', '')),
+      right: Number(String(st.marginRight).replace('px', '')),
+    };
+  }
+
+  it('десктоп: ось начинается там же, где дорожка, и кончается там же', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats());
+    const lane = laneOffsets(c as never);
+    const axis = axisInsets(c as never);
+    expect(axis.left, 'левый край шкалы = левый край дорожки').toBe(lane.left);
+    expect(axis.right, 'правый край шкалы = правый край дорожки').toBe(lane.right);
+    // Числа — для опознания сдвига: 24 (отступ строки) + 250 (имя) + 12 (зазор).
+    expect(lane.left).toBe(286);
+    expect(lane.right).toBe(116);
+  });
+
+  it('360: ось встаёт по отступу строки, во всю ширину дорожки', () => {
+    const c = renderTabWithStats(mkRun(fullStages()), laneStats(), true);
+    const lane = laneOffsets(c as never);
+    const axis = axisInsets(c as never);
+    expect(axis.left, 'левый край шкалы = левый край дорожки').toBe(lane.left);
+    expect(axis.right, 'правый край шкалы = правый край дорожки').toBe(lane.right);
+    expect(lane.left).toBe(24);
+    expect(lane.right).toBe(0);
+  });
+
+  it('ширина шкалы = ширина дорожки (порог плотного режима меряет ту же шкалу)', () => {
+    // 1280: дорожка 878 px (286 | … | 116), шкала — та же ширина.
+    expect(laneScaleWidth(1280, false)).toBe(878);
+    expect(laneAxisInsets(false)).toEqual({ left: 286, right: 116 });
+    // 360: дорожка 336 px (24 | … | 0).
+    expect(laneScaleWidth(360, true)).toBe(336);
+    expect(laneAxisInsets(true)).toEqual({ left: 24, right: 0 });
+  });
+});
+
+// === GC-F10a: хвосты после мержа и согласование счётчика этапа ===
+
+describe('tasksCountLabel: согласование счётчика этапа (GC-F10a)', () => {
+  it('1 задача, 2 задачи, 5 задач, 11 задач, 12 задач, 21 задача, 22 задачи, 25 задач', () => {
+    expect(tasksCountLabel(1)).toBe('1 задача');
+    expect(tasksCountLabel(2)).toBe('2 задачи');
+    expect(tasksCountLabel(5)).toBe('5 задач');
+    expect(tasksCountLabel(11)).toBe('11 задач');
+    expect(tasksCountLabel(12)).toBe('12 задач');
+    expect(tasksCountLabel(21)).toBe('21 задача');
+    expect(tasksCountLabel(22)).toBe('22 задачи');
+    expect(tasksCountLabel(25)).toBe('25 задач');
+  });
+});
+
+// Смерженная фича с хвостами: открытый хвост держит свою стадию active (правило бэка,
+// FeaturePostMergeTailsTests), но тревоги бэк из него не строит и tone не даёт
+// (FeatureProjector.cs:139-141). Статус исполнителя-хвоста — данные бэка как есть
+// ('waiting' для задачи с AwaitingHumanSince): фронт его не выдумывает и не переносит
+// на этап.
+function mergedTailRun(tails: string[]): FeatureRun {
+  const stages = fullStages();
+  for (const s of stages) { s.state = 'done'; s.tone = null; s.overlapsActive = false; }
+  stages[4] = mkStage({
+    key: 'qa', state: 'active', firstStartedAt: '2026-10-20T11:40:00Z',
+    executors: [
+      mkExec({ personaId: 'p1', taskId: 't-tail1', taskRole: 'qa', status: 'waiting' }),
+      mkExec({ personaId: 'p1', taskId: 't-tail2', taskRole: 'qa', status: 'pending' }),
+    ],
+  });
+  return mkRun(stages, {
+    state: 'merged', closed: true, postMergeTails: tails,
+    qa: [
+      { id: 't-tail1', title: 'Хвост-проверка', status: 'inProgress', awaitingHumanSince: '2026-10-20T11:50:00Z' } as FeatureTask,
+      { id: 't-tail2', title: 'Хвост-дефект', status: 'inProgress' } as FeatureTask,
+    ],
+  });
+}
+
+describe('FeatureTimelineTab: хвосты после мержа (GC-F10a)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Порядок data-testid в DOM (порядок документа).
+  function testidOrder(c: FNodeLike): string[] {
+    const order: string[] = [];
+    const walk = (n: FNodeLike) => {
+      const at = n.attributes?.['data-testid'];
+      if (at) order.push(at);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(c);
+    return order;
+  }
+
+  // Все узлы с точным data-testid внутри поддерева.
+  function nodesByTestid(root: FNodeLike, testid: string): FNodeLike[] {
+    const out: FNodeLike[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === testid) out.push(n);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(root);
+    return out;
+  }
+
+  it('смерженная фича с 2 хвостами → «хвосты после мержа · 2» после этапа «Мерж»', () => {
+    const c = renderTab(mergedTailRun(['t-tail1', 't-tail2']));
+    const tails = findNodeByAttr(c, 'data-testid', 'timeline-tails');
+    expect(tails, 'сводная строка').not.toBeNull();
+    expect(textNodes(tails!).join('')).toBe('хвосты после мержа · 2');
+    // Строка стоит после ленты этапов: «Мерж» — последний этап жизненного цикла.
+    const order = testidOrder(c as never);
+    expect(order.indexOf('timeline-tails'), 'строка после «Мержа»').toBeGreaterThan(order.indexOf('timeline-stage-merge'));
+  });
+
+  // Мутация (в отчёте): условие строки tailIds.size > 0 → false → «· 2» краснеет.
+
+  it('хвосты не дают «ждёт вас» ни у одного этапа (тон этапа — только с бэка)', () => {
+    // Исполнитель-хвост со статусом 'waiting' (данные бэка): плашка этапа и шапка
+    // этапа не должны повторять это как состояние этапа.
+    const c = renderTab(mergedTailRun(['t-tail1', 't-tail2']));
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-stage-badge'), 'плашки этапа нет').toBeNull();
+    for (const key of STAGE_KEYS) {
+      const header = findNodeByAttr(c, 'data-testid', `timeline-stage-header-${key}`)!;
+      expect(textNodes(header).join(''), `шапка этапа «${key}» без «ждёт вас»`).not.toContain('ждёт вас');
+    }
+  });
+
+  it('хвост помечен «· хвост после мержа» в списке этапа и не дублируется отдельной строкой', () => {
+    const c = renderTab(mergedTailRun(['t-tail1', 't-tail2']));
+    const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-qa');
+    expect(body, 'активный этап «Проверка» раскрыт').not.toBeNull();
+    // Оба хвоста — обычные строки списка этапа (их не перенесли в отдельный список).
+    expect(nodesByTestid(body as never, 'timeline-executor').length, 'строки хвостов в списке этапа').toBe(2);
+    // Каждая помечена ровно один раз; нигде в DOM второй копии маркера нет.
+    expect(nodesByTestid(body as never, 'timeline-executor-tail').length, 'каждый хвост помечен').toBe(2);
+    expect(nodesByTestid(c as never, 'timeline-executor-tail').length, 'маркер только в строках этапа').toBe(2);
+    // Сводка — только число, без id (иначе хвост показали бы дважды).
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'timeline-tails')!).join('')).toBe('хвосты после мержа · 2');
+  });
+
+  // Мутация (в отчёте): в StageRow isTail={isTail(x.taskId)} → isTail={false} →
+  // «помечен маркером» краснеет.
+
+  it('хвостов нет в данных (старые ответы) → строки нет', () => {
+    const c = renderTab(mkRun(fullStages(), { state: 'merged' }));
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-tails')).toBeNull();
+  });
+
+  it('postMergeTails пуст → строки нет', () => {
+    const c = renderTab(mkRun(fullStages(), { state: 'merged', postMergeTails: [] }));
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-tails')).toBeNull();
+  });
+});
+
+// === GC-F10b: ходы и «Время шага на оси» в строке исполнителя ===
+//
+// Ходы считает buildTurnsByTask (единственный источник): закрытые — из intervalsByStage по
+// taskId хода; живой — синтезирован из live-интервала и run.now (контракт — комментарий в
+// types/featureStats.ts). Строка получает только ходы своей задачи; та же ось, что у дорожек,
+// питает полосу «Время шага на оси фичи» в FeatureStepDetails.
+
+describe('FeatureTimelineTab: ходы и «Время шага на оси» (GC-F10b)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    // «Итог» при раскрытой строке догружается из сети: здесь — немедленный отказ (без висения).
+    tasksGetMock.mockReset();
+    tasksGetMock.mockImplementation(() => Promise.reject(new Error('в тесте сети нет')));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Интервал с ходами — настоящая форма StageInterval.
+  function ivT(
+    from: string, to: string,
+    opts: { live?: boolean; taskIds?: string[]; turns?: { taskId: string; from: string; to: string; outcome: string | null; model: string | null }[] } = {},
+  ) {
+    return { from, to, minutes: 30, live: opts.live ?? false, lastOutcome: null, taskIds: opts.taskIds ?? [], turns: opts.turns ?? [] };
+  }
+
+  // Раскрыть этап (если не открыт) и первую строку исполнителя; вернуть её тело.
+  function openRowBody(c: FNodeLike, stageKey: string, index = 0): FNodeLike {
+    let body = findNodeByAttr(c, 'data-testid', `timeline-stage-body-${stageKey}`);
+    if (!body) {
+      const header = findNodeByAttr(c, 'data-testid', `timeline-stage-header-${stageKey}`)!;
+      act(() => { (reactProps(header as never)!.onClick as () => void)(); });
+      body = findNodeByAttr(c, 'data-testid', `timeline-stage-body-${stageKey}`)!;
+    }
+    const rows: FNodeLike[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === 'timeline-executor') rows.push(n);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(body);
+    const row = rows[index]!;
+    const head = findNodeByAttr(row, 'data-testid', 'timeline-executor-head')!;
+    act(() => { (reactProps(head as never)!.onClick as () => void)(); });
+    return findNodeByAttr(row, 'data-testid', 'timeline-executor-body')!;
+  }
+
+  const kinds = (root: FNodeLike): (string | undefined)[] => {
+    const out: (string | undefined)[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === 'step-turn') out.push(n.attributes?.['data-kind']);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(root);
+    return out;
+  };
+
+  // Инлайн-стиль узла (left/width полосы): React пишет их прямо в node.style (как в DOM).
+  const styleOf = (n: FNodeLike): Record<string, string> => (n as unknown as { style: Record<string, string> }).style;
+  // Живая полоса на полосе «Время шага на оси» (data-kind='live').
+  const liveTurn = (root: FNodeLike): FNodeLike | null => {
+    const walk = (n: FNodeLike): FNodeLike | null => {
+      if (n.attributes?.['data-testid'] === 'step-turn' && n.attributes?.['data-kind'] === 'live') return n;
+      for (const ch of n.childNodes) { const r = walk(ch); if (r) return r; }
+      return null;
+    };
+    return walk(root);
+  };
+
+  // === c1: строка и полоса получают ходы своей задачи ===
+  it('ходы задачи из intervalsByStage: в строке — ровно её ходы; «Время шага на оси» видно', () => {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ personaId: 'p1', taskId: 't-rev', taskRole: 'review', status: 'done', chatId: 'chat-r' })];
+    const c = renderTabWithStats(mkRun(stages, { reviews: [{ id: 't-rev', title: 'Ревью', status: 'done' } as FeatureTask] }), mkStats({
+      review: [
+        ivT('2026-10-20T10:20:00Z', '2026-10-20T10:40:00Z', {
+          taskIds: ['t-rev', 't-other'],
+          turns: [
+            { taskId: 't-rev', from: '2026-10-20T10:20:00Z', to: '2026-10-20T10:40:00Z', outcome: 'cancelled', model: null },
+            { taskId: 't-other', from: '2026-10-20T10:25:00Z', to: '2026-10-20T10:35:00Z', outcome: null, model: null },
+          ],
+        }),
+        ivT('2026-10-20T11:30:00Z', '2026-10-20T11:50:00Z', {
+          taskIds: ['t-rev'],
+          turns: [{ taskId: 't-rev', from: '2026-10-20T11:30:00Z', to: '2026-10-20T11:50:00Z', outcome: null, model: null }],
+        }),
+      ],
+    }));
+    const after = openRowBody(c, 'review');
+    const turnsNode = findNodeByAttr(after, 'data-testid', 'timeline-executor-turns');
+    expect(turnsNode, 'строки ходов нет').not.toBeNull();
+    expect(textNodes(turnsNode!).join('')).toBe(
+      `ходы: ${localTime('2026-10-20T10:20:00Z')}–${localTime('2026-10-20T10:40:00Z')} (cancelled) · ` +
+      `${localTime('2026-10-20T11:30:00Z')}–${localTime('2026-10-20T11:50:00Z')}`);
+    // Ход чужой задачи в строку не попал (отбор по taskId хода, не по taskIds интервала).
+    expect(textNodes(turnsNode!).join('')).not.toContain(localTime('2026-10-20T10:25:00Z'));
+    // «Время шага на оси фичи»: полоса есть, на ней — только ходы этой задачи, вид — review
+    // (роль задачи — тот же источник, что атрибуция стадий у бэка).
+    const stepTime = findNodeByAttr(after, 'data-testid', 'step-time');
+    expect(stepTime, 'блока «Время шага на оси» нет').not.toBeNull();
+    expect(kinds(after), 'ходы на полосе — только этой задачи').toEqual(['review', 'review']);
+  });
+
+  // === c2: живой ход идущей задачи ===
+  it('живой ход: у идущей задачи — «…–идёт» (синтез из live-интервала и run.now)', () => {
+    const c = renderTabWithStats(mkRun(fullStages(), {
+      stepChains: [],
+      now: [{ taskId: 't-prod', stage: 'prod', title: 'Шаг', stepRef: 'Ш1', startedAt: '2026-10-20T10:00:00Z' }],
+    }), mkStats({
+      prod: [ivT('2026-10-20T10:00:00Z', '2026-10-20T12:00:00Z', {
+        live: true,
+        taskIds: ['t-prod'],
+        turns: [{ taskId: 't-prod', from: '2026-10-20T10:00:00Z', to: '2026-10-20T11:30:00Z', outcome: 'interrupted', model: null }],
+      })],
+    }));
+    // «Производство» — текущий этап (открыт по умолчанию); карточек нет (пустые цепочки) — строка исполнителя.
+    const after = openRowBody(c, 'prod');
+    const t = textNodes(findNodeByAttr(after, 'data-testid', 'timeline-executor-turns')!).join('');
+    // Живой ход начинается с конца последнего закрытого хода (11:30), а не с старта задачи (10:00):
+    // та же формула, что у живого хвоста бэка.
+    expect(t).toBe(
+      `ходы: ${localTime('2026-10-20T10:00:00Z')}–${localTime('2026-10-20T11:30:00Z')} (interrupted) · ` +
+      `${localTime('2026-10-20T11:30:00Z')}–идёт`);
+    // На полосе живой ход — отдельный вид (live), закрытый — work (роль step).
+    expect(kinds(after)).toEqual(['work', 'live']);
+  });
+
+  // === c4: живой ход живой: «сейчас» из useNow, не заморожен (GC-F10bR) ===
+  // Вкладка рендерится условно без ключа (FeaturePage): при обновлении данных она НЕ
+  // перемонтируется — замороженный Date.now() оставил бы живой ход стоящим на минуте
+  // открытия. Окно здесь длиннее текущего момента (ось бэка уходит в 14:00): «to» живого
+  // хода лежит внутри шкалы, его движение видно по ширине полосы.
+  it('живой ход растёт со временем: через 10 минут ширина живой полосы больше, левый край тот же', () => {
+    const stats = {
+      timeline: {
+        from: '2026-10-20T10:00:00Z', to: '2026-10-20T14:00:00Z',
+        stages: [], segments: [], current: null, totals: {},
+        intervalsByStage: {
+          prod: [ivT('2026-10-20T10:00:00Z', '2026-10-20T12:00:00Z', {
+            live: true,
+            taskIds: ['t-prod'],
+            turns: [{ taskId: 't-prod', from: '2026-10-20T10:00:00Z', to: '2026-10-20T11:30:00Z', outcome: 'interrupted', model: null }],
+          })],
+        },
+      },
+    } as unknown as FeatureStats;
+    const c = renderTabWithStats(mkRun(fullStages(), {
+      stepChains: [],
+      now: [{ taskId: 't-prod', stage: 'prod', title: 'Шаг', stepRef: 'Ш1', startedAt: '2026-10-20T10:00:00Z' }],
+    }), stats);
+    const after = openRowBody(c, 'prod');
+    const live1 = liveTurn(after);
+    expect(live1, 'живой полосы на оси нет').not.toBeNull();
+    expect(kinds(after)).toEqual(['work', 'live']);
+    // Живой ход: from = конец последнего закрытого хода (11:30), to = «сейчас» (12:00).
+    const w1 = parseFloat(styleOf(live1!).width!);
+    const l1 = parseFloat(styleOf(live1!).left!);
+    // Прошло 10 минут: useNow обновляет «сейчас» по интервалу (60 с), вкладка НЕ перемонтирована.
+    act(() => { vi.advanceTimersByTime(10 * 60_000); });
+    const live2 = liveTurn(after);
+    expect(live2, 'живая полоса пропала').not.toBeNull();
+    const w2 = parseFloat(styleOf(live2!).width!);
+    expect(w2, 'ширина живой полосы обязана расти вместе с «сейчас»').toBeGreaterThan(w1);
+    expect(parseFloat(styleOf(live2!).left!), 'левый край — конец закрытого хода, он не двигается').toBeCloseTo(l1, 6);
+  });
+
+  // === c3: approx — ходам неоткуда взяться, падения нет ===
+  it('approx (intervalsByStage null): строки ходов нет, блока времени нет, не падает', () => {
+    const c = renderTabWithStats(mkRun(fullStages(), { stepChains: [] }), mkStats(null));
+    const after = openRowBody(c, 'prod');
+    expect(findNodeByAttr(after, 'data-testid', 'timeline-executor-turns'), 'при approx ходов нет').toBeNull();
+    expect(findNodeByAttr(after, 'data-testid', 'step-time'), 'при approx блока времени нет').toBeNull();
+  });
+
+  // === п.3: хвост после мержа считается один раз, живого хода у закрытой фичи нет ===
+  it('хвост после мержа: его ходы — один раз из интервалов стадии; живого хода нет', () => {
+    // Открытая хвост-задача может быть в run.Now (бэк отдаёт InProgress-задачи, пока эпик
+    // открыт). Для merged/закрытой фичи живого хода всё равно нет: ось закрыта.
+    const tailRun = mergedTailRun(['t-tail1', 't-tail2']);
+    tailRun.now = [{ taskId: 't-tail1', stage: 'qa', title: 'Хвост-проверка', startedAt: '2026-10-20T11:40:00Z' }];
+    const c = renderTabWithStats(tailRun, mkStats({
+      qa: [ivT('2026-10-20T11:40:00Z', '2026-10-20T11:55:00Z', {
+        live: true,
+        taskIds: ['t-tail1'],
+        turns: [
+          { taskId: 't-tail1', from: '2026-10-20T11:40:00Z', to: '2026-10-20T11:45:00Z', outcome: null, model: null },
+          { taskId: 't-tail1', from: '2026-10-20T11:50:00Z', to: '2026-10-20T11:55:00Z', outcome: null, model: null },
+        ],
+      })],
+    }));
+    // Хвост — обычная строка списка этапа (GC-F10a): его ходы берутся из интервалов ровно раз.
+    const after = openRowBody(c, 'qa', 0);
+    const t = textNodes(findNodeByAttr(after, 'data-testid', 'timeline-executor-turns')!).join('');
+    expect(t).toBe(
+      `ходы: ${localTime('2026-10-20T11:40:00Z')}–${localTime('2026-10-20T11:45:00Z')} · ` +
+      `${localTime('2026-10-20T11:50:00Z')}–${localTime('2026-10-20T11:55:00Z')}`);
+    expect(t, 'у закрытой фичи живого хода нет').not.toContain('идёт');
+  });
+});
+
+// === GC-F8R2: карточка «Производства» получает ось, ходы и «сейчас» вкладки ===
+//
+// Карточка — главный сценарий фичи («строки раскрываются как карточки шага: критерии,
+// итог, ходы, время шага»), и блок «Время шага» с ходами шага обязаны быть в продукте,
+// а не только в тестах карточки с явным пропсом (хвост №2). «Сейчас» строки — nowMs из
+// ExecutorRow, а не свой useNow у FeatureStepDetails: карточка и строка идут по часам
+// вкладки (хвост №1). Эталон «сейчас» вкладки — метка оси lane-axis-label-now: она
+// рисуется при любом раскрытом этапе и считается тем же useNow вкладки.
+
+describe('FeatureTimelineTab: карточка «Производства» получает ось, ходы и «сейчас» вкладки (GC-F8R2)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    personaMap.set('p2', 'Глеб');
+    // «Итог» при раскрытой карточке/строке догружается из сети: здесь — немедленный отказ.
+    tasksGetMock.mockReset();
+    tasksGetMock.mockImplementation(() => Promise.reject(new Error('в тесте сети нет')));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  function ivT(
+    from: string, to: string,
+    opts: { live?: boolean; taskIds?: string[]; turns?: { taskId: string; from: string; to: string; outcome: string | null; model: string | null }[] } = {},
+  ) {
+    return { from, to, minutes: 30, live: opts.live ?? false, lastOutcome: null, taskIds: opts.taskIds ?? [], turns: opts.turns ?? [] };
+  }
+
+  // Открытая фича: начатый шаг Ш1 (задача t-prod, inProgress, в run.now) + исполнитель
+  // ревью (t-rev, inProgress, в run.now). Журнал: закрытый ход + live-интервал каждой стадии.
+  function liveRun(): FeatureRun {
+    const stages = fullStages();
+    stages[3]!.executors = [mkExec({ personaId: 'p2', taskId: 't-rev', taskRole: 'review', status: 'running', chatId: 'chat-r' })];
+    return mkRun(stages, {
+      steps: [{ id: 't-prod', title: 'Модель шаблона', status: 'inProgress', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }],
+      reviews: [{ id: 't-rev', title: 'Ревью', status: 'inProgress' } as FeatureTask],
+      stepChains: [mkChain({ taskIds: ['t-prod'], outcome: 'running', status: 'идёт' })],
+      now: [
+        { taskId: 't-prod', stage: 'prod', title: 'Модель шаблона', stepRef: 'Ш1', startedAt: '2026-10-20T10:00:00Z' },
+        { taskId: 't-rev', stage: 'review', title: 'Ревью', startedAt: '2026-10-20T11:40:00Z' },
+      ],
+    });
+  }
+
+  // Окно оси 10:00–14:00: «сейчас» (12:00) внутри шкалы — метка живой фичи видна.
+  function liveStats(): FeatureStats {
+    return {
+      timeline: {
+        from: '2026-10-20T10:00:00Z', to: '2026-10-20T14:00:00Z',
+        stages: [], segments: [], current: null, totals: {},
+        // Живой хвост — в том же интервале, что последний закрытый ход (контракт синтеза:
+        // from живого хода = конец последнего закрытого хода этого интервала).
+        intervalsByStage: {
+          prod: [
+            ivT('2026-10-20T10:00:00Z', '2026-10-20T12:00:00Z', {
+              live: true,
+              taskIds: ['t-prod'],
+              turns: [{ taskId: 't-prod', from: '2026-10-20T10:00:00Z', to: '2026-10-20T11:30:00Z', outcome: null, model: null }],
+            }),
+          ],
+          review: [
+            ivT('2026-10-20T11:40:00Z', '2026-10-20T12:00:00Z', {
+              live: true,
+              taskIds: ['t-rev'],
+              turns: [{ taskId: 't-rev', from: '2026-10-20T11:40:00Z', to: '2026-10-20T11:50:00Z', outcome: null, model: null }],
+            }),
+          ],
+        },
+      },
+    } as unknown as FeatureStats;
+  }
+
+  // Раскрыть этап «Производство» (если схлопнут) и карточку шага Ш1; вернуть её раскрытую часть.
+  function openCardDetails(c: FNodeLike): FNodeLike {
+    let body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod');
+    if (!body) {
+      const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-prod')!;
+      act(() => { (reactProps(header)!.onClick as () => void)(); });
+      body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
+    }
+    const card = findNodeByAttr(body, 'data-testid', 'prod-card-Ш1')!;
+    act(() => { (reactProps(card)!.onClick as () => void)(); });
+    const details = findNodeByAttr(body, 'data-testid', 'prod-details');
+    expect(details, 'раскрытая часть карточки').not.toBeNull();
+    return details!;
+  }
+
+  // Раскрыть этап «Ревью» и первую строку в нём; вернуть раскрытую часть строки.
+  function openReviewRowBody(c: FNodeLike): FNodeLike {
+    let body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review');
+    if (!body) {
+      const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-review')!;
+      act(() => { (reactProps(header)!.onClick as () => void)(); });
+      body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review')!;
+    }
+    const row = findNodeByAttr(body, 'data-testid', 'timeline-executor')!;
+    const head = findNodeByAttr(row, 'data-testid', 'timeline-executor-head')!;
+    act(() => { (reactProps(head)!.onClick as () => void)(); });
+    return findNodeByAttr(row, 'data-testid', 'timeline-executor-body')!;
+  }
+
+  const kindsOf = (root: FNodeLike): (string | undefined)[] => {
+    const out: (string | undefined)[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === 'step-turn') out.push(n.attributes?.['data-kind']);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(root);
+    return out;
+  };
+
+  const styleOf = (n: FNodeLike): Record<string, string> => (n as unknown as { style: Record<string, string> }).style;
+
+  // Позиция маркера «сейчас» на полосе «Время шага» (left, % шкалы).
+  function nowMarkerLeft(root: FNodeLike): number {
+    const walk = (n: FNodeLike): FNodeLike | null => {
+      if (n.attributes?.['data-testid'] === 'step-now') return n;
+      for (const ch of n.childNodes) { const r = walk(ch); if (r) return r; }
+      return null;
+    };
+    const n = walk(root);
+    expect(n, 'маркера «сейчас» на полосе нет').not.toBeNull();
+    return parseFloat(styleOf(n!).left);
+  }
+
+  // Метка «сейчас» на оси — часы самой вкладки (тот же now, что у buildTurnsByTask и
+  // дорожек): внешний эталон, доступный при любом раскрытом этапе.
+  function axisNowLeft(c: FNodeLike): number {
+    const n = findNodeByAttr(c, 'data-testid', 'lane-axis-label-now');
+    expect(n, 'метки «сейчас» на оси нет').not.toBeNull();
+    return parseFloat(styleOf(n!).left);
+  }
+
+  // === c1: карточка получает ось и ходы шага через РЕАЛЬНУЮ вкладку ===
+  it('карточка шага «Производства»: блок «Время шага на оси фичи» и ходы шага — через реальную вкладку', () => {
+    const c = renderTabWithStats(liveRun(), liveStats());
+    const details = openCardDetails(c);
+    const stepTime = findNodeByAttr(details, 'data-testid', 'step-time');
+    expect(stepTime, 'блока «Время шага на оси фичи» в карточке нет').not.toBeNull();
+    expect(textNodes(stepTime!).join('')).toContain('Время шага на оси фичи');
+    // Ходы шага на полосе: закрытый ход (work) + живой (синтез live-интервала и run.now) —
+    // та же buildTurnsByTask, что у строк исполнителей, отбор — по задачам цепочки шага.
+    expect(kindsOf(details), 'ходы шага на полосе карточки').toEqual(['work', 'live']);
+  });
+
+  // === c2: один «сейчас» на всю вкладку: карточка и строка — от одного тика ===
+  it('«сейчас» карточки и строки исполнителя — от одного тика вкладки', () => {
+    const c = renderTabWithStats(liveRun(), liveStats());
+    const axisNow1 = axisNowLeft(c);
+    // Карточка: её маркер — по часам вкладки, не по своему монтированию ленты.
+    const cardDetails = openCardDetails(c);
+    expect(nowMarkerLeft(cardDetails), 'маркер карточки — не «сейчас» вкладки').toBe(axisNow1);
+    // +30 с: часы вкладки ещё не тикали (интервал 60 с), но реальное время ушло вперёд.
+    // Строка, открытая сейчас со своим useNow, опередила бы часы вкладки на 30 с.
+    act(() => { vi.advanceTimersByTime(30_000); });
+    expect(axisNowLeft(c), 'до тика ось стоит').toBe(axisNow1);
+    const rowBody = openReviewRowBody(c);
+    expect(kindsOf(rowBody), 'полоса строки: ход ревью + живой ход').toEqual(['review', 'live']);
+    expect(nowMarkerLeft(rowBody), 'маркер строки — не «сейчас» вкладки').toBe(axisNow1);
+    // Тик вкладки: ось и маркер строки сдвигаются на тот же момент.
+    act(() => { vi.advanceTimersByTime(60_000); });
+    const axisNow2 = axisNowLeft(c);
+    expect(axisNow2, 'ось следует тикам вкладки').toBeGreaterThan(axisNow1);
+    // (сравнение точное: та же функция от того же момента — та же доля шкалы)
+    expect(nowMarkerLeft(rowBody), 'маркер строки — от того же тика, что ось').toBe(axisNow2);
+    // Карточка при повторном раскрытии — тоже по часам вкладки, а не по своему монтированию.
+    const cardDetails2 = openCardDetails(c);
+    expect(nowMarkerLeft(cardDetails2), 'маркер карточки — от того же тика, что ось').toBe(axisNow2);
+  });
+});
+
+// === GC-F10c: свёртка длинных списков этапов, кроме prod ===
+//
+// Список этапа (кроме «Производства») — последние 10 строк, ранние скрыты; кнопка
+// «Показать все N (ранних скрыто: K)» берётся из результата свёртки (N = visible + hiddenEarly,
+// K = hiddenEarly): то, что откроется по кнопке, равно тому, что посчитано в её подписи.
+// Снятые задачи (verification.verdict 'withdrawn' — тот же признак, что у бэка,
+// FeatureStepAccounting.cs:145,190) исключены до свёртки: их нет ни в N, ни в K, ни в списке.
+
+// Фича с длинным «Ревью»: n закрытых исполнителей; withdrawnIds — задачи с вердиктом 'withdrawn'.
+function longReviewRun(n: number, withdrawnIds: string[] = []): FeatureRun {
+  const stages = fullStages();
+  const taskIds = Array.from({ length: n }, (_, i) => `t-r${i}`);
+  stages[3] = mkStage({
+    key: 'review', state: 'active', tone: 'run', firstStartedAt: '2026-10-20T11:20:00Z',
+    approxMinutes: 75, taskIds,
+    executors: taskIds.map(id => mkExec({ personaId: 'p1', taskId: id, taskRole: 'review', status: 'done', chatId: null })),
+  });
+  const reviews: FeatureTask[] = taskIds.map((id, i) => {
+    const t: FeatureTask = { id, title: `Ревью ${i + 1}`, status: 'done' };
+    if (withdrawnIds.includes(id)) t.verification = { verdict: 'withdrawn' };
+    return t;
+  });
+  return mkRun(stages, { reviews });
+}
+
+describe('FeatureTimelineTab: свёртка длинных списков этапов (GC-F10c)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Все узлы с точным data-testid внутри поддерева.
+  function nodesByTestid(root: FNodeLike, testid: string): FNodeLike[] {
+    const out: FNodeLike[] = [];
+    const walk = (n: FNodeLike) => {
+      if (n.attributes?.['data-testid'] === testid) out.push(n);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(root);
+    return out;
+  }
+
+  // Раскрыть «Ревью» (текущий по умолчанию — prod) и вернуть его тело.
+  function openReview(c: FNodeLike): FNodeLike {
+    const header = findNodeByAttr(c, 'data-testid', 'timeline-stage-header-review')!;
+    act(() => { (reactProps(header)!.onClick as () => void)(); });
+    return findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review')!;
+  }
+
+  // === п.1: 74 ревью → видно 10, кнопка с точными N и K; клик → все ===
+  it('74 ревью → видно 10 строк и кнопка «Показать все 74 (ранних скрыто: 64)»; клик — все 74, кнопки нет', () => {
+    const c = renderTab(longReviewRun(74));
+    const body = openReview(c);
+    expect(nodesByTestid(body, 'timeline-executor').length, 'свёрнутый список').toBe(10);
+    const btn = findNodeByAttr(c, 'data-testid', 'timeline-stage-showall-review');
+    expect(btn, 'кнопки свёртки нет').not.toBeNull();
+    expect(textNodes(btn!).join(''), 'подпись кнопки').toBe('Показать все 74 (ранних скрыто: 64)');
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    const opened = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review')!;
+    expect(nodesByTestid(opened, 'timeline-executor').length, 'раскрытый список').toBe(74);
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-stage-showall-review'), 'кнопки после раскрытия нет').toBeNull();
+  });
+
+  // Мутация (в отчёте): убрать кнопку (условие hiddenEarly.length > 0 → false) → п.1 краснеет.
+
+  // === п.2: снятые не входят ни в N, ни в K ===
+  it('снятые (verdict withdrawn) не входят ни в N, ни в K и не открываются по кнопке', () => {
+    const withdrawn = ['t-r0', 't-r1', 't-r2', 't-r3'];
+    const c = renderTab(longReviewRun(74, withdrawn));
+    const body = openReview(c);
+    expect(nodesByTestid(body, 'timeline-executor').length, 'свёрнутый список без снятых').toBe(10);
+    const btn = findNodeByAttr(c, 'data-testid', 'timeline-stage-showall-review')!;
+    expect(textNodes(btn!).join(''), 'N и K без снятых').toBe('Показать все 70 (ранних скрыто: 60)');
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+    const opened = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-review')!;
+    expect(nodesByTestid(opened, 'timeline-executor').length, 'снятые не открылись').toBe(70);
+  });
+
+  // Мутация (в отчёте): убрать фильтр снятых из StageRow (rows = stage.executors) → п.2 краснеет.
+
+  // === п.3: короткий список — свёртки нет ===
+  it('список из 10 строк и меньше — без кнопки, виден весь', () => {
+    const c = renderTab(longReviewRun(10));
+    const body = openReview(c);
+    expect(nodesByTestid(body, 'timeline-executor').length).toBe(10);
+    expect(findNodeByAttr(c, 'data-testid', 'timeline-stage-showall-review'), 'кнопки нет при полном списке').toBeNull();
+  });
+});
+
+// === GC-F11 / GC-F11R2: снимок вида и восстановление по чипу ===
+// Трасса: раскрыть этап + карточку → меню «Карточка задачи» (recordFeatureReturn берёт
+// снимок у зарегистрированного поставщика этой вкладки) → клик чипа (consume — сам чип
+// проверяется в FeatureBackChip.test.ts) → закрыть страницу (unmount) → открыть заново:
+// этап раскрыт, карточка раскрыта с фокусом на шапке, прокрутка — записанная. Без клика
+// чипа — ничего не применяется (открытие из списка — не возврат).
+// GC-F11R2 (дефект 7d399549): c4/c5 — перемонтирование вкладки (страница после возврата
+// сначала рисует кэш 'ok', первичный запрос сбрасывает её в 'loading' — featurePage.ts:100
+// — и вкладка unmount→mount): снимок применяется при инициализации состояния и
+// подтверждается (pending → lastApplied), remount читает тот же снимок, следующий после
+// подтверждения — уже нет. Прокрутка — контейнера (c4/c5 монтируют вкладку внутри
+// панели с overflow:auto, как страница FeaturePage.tsx:366), без контейнера — window
+// (c1/c2 остаются тестом запасного варианта).
+// Мутации (в отчёте): (1) не звать поставщика в recordFeatureReturn → c1/c2 краснеют
+// (снимка нет); (2) убрать window.scrollTo в восстановлении → c2 краснеет;
+// (3) не передать initialExpandedKey в ленту → c1 краснеет (карточка не раскрыта);
+// (4) убрать setExpanded(v.stageKey) → c1 краснеет (этап не восстановлен);
+// (21) применять снимок только эффектом после монтажа → c4 краснеет;
+// (22) гасить pending при чтении, без подтверждения → c6 краснеет (первый инстанс
+// прочитал и погасил — remount ничего не нашёл);
+// (23) хранить window.scrollY вместо scrollTop контейнера → c4 краснеет.
+// GC-F11R3 (мажоры ревью GC-R-P5): подтверждение идемпотентно по seq (двойной эффект
+// StrictMode и remount-инстанс не закрывают окно), окно расходует стабильный кадр после
+// применения; c4–c7 прогоняются и под StrictMode (dev-сборка, main.tsx:14). Мутации:
+// (24) гасить lastApplied при повторном подтверждении с тем же seq (старый механизм) →
+// c6 под strict=true краснеет (remount не находит окно); (25) никогда не расходовать окно
+// (нет scheduleConsume) → c7 краснеет (окно залипло); (26) расходовать окно при
+// размонтировании вкладки → c4 краснеет (remount-инстанс не находит подтверждённый снимок).
+// GC-F11R4 (мажор ревью GC-R-P6): размонтирование ВКЛАДКИ — не сигнал ухода (расход
+// откладывается, c9); окно гасит уход со СТРАНИЦЫ (registerFeaturePage — то, что зовёт
+// FeaturePage при монтировании; c8). Мутации: (27) «страница не гасит окно при уходе» →
+// c8 краснеет; (28) «вернуть зависимость расхода от размонтирования вкладки» (прежний
+// _unmountStamp) → «размонтирование вкладки не отменяет расход» (featureBackNav.test.ts)
+// краснеет.
+// Фикстура: все этапы pending — при монтировании не раскрыто НИЧЕГО (дефолт не маскирует
+// восстановление); шаг ST-F9 с меню (есть старт и чат цепочки).
+function returnRun(): FeatureRun {
+  return mkRun([
+    mkStage({ key: 'cut' }), mkStage({ key: 'plan' }), mkStage({ key: 'prod' }),
+    mkStage({ key: 'review' }), mkStage({ key: 'qa' }), mkStage({ key: 'final' }), mkStage({ key: 'merge' }),
+  ], {
+    steps: [{ id: 't-s9', title: 'Возврат', status: 'done', stepRef: 'ST-F9', claudeStartedAt: '2026-10-20T10:00:00Z' }],
+    stepChains: [mkChain({ stepRef: 'ST-F9', title: 'Возврат', taskIds: ['t-s9'], chatId: 'chat-s9' })],
+  });
+}
+
+describe('FeatureTimelineTab: восстановление по чипу (GC-F11)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    backNavTest.reset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Первая половина трассы (общая для c1–c3): раскрыть этап и карточку, «стоять» на
+  // прокрутке 1234, уйти в задачу из меню карточки. Возвращает root монтирования —
+  // закрытие страницы делает тест.
+  function leaveToTask(run: FeatureRun) {
+    installFakeDom();
+    const { root, container } = mount(createElement(FeatureTimelineTab, { run }));
+    const header = findNodeByAttr(container, 'data-testid', 'timeline-stage-header-prod')!;
+    act(() => { (reactProps(header)!.onClick as () => void)(); });
+    const card = findNodeByAttr(container, 'data-testid', 'prod-card-ST-F9')!;
+    act(() => { (reactProps(card)!.onClick as () => void)(); });
+    // Прокрутка в момент перехода. Вкладка смонтирована БЕЗ контейнера прокрутки
+    // (mount() не пристёгивает контейнер к документу) — поставщик идёт запасным
+    // путём через window; у фейк-DOM window.scrollY нет — ставим явно (GC-F11R2:
+    // с контейнером — c4/c5).
+    (globalThis as { window: Record<string, unknown> }).window.scrollY = 1234;
+    const code = findNodeByAttr(container, 'data-testid', 'prod-code-ST-F9')!;
+    act(() => { (reactProps(code)!.onClick as () => void)(); });
+    // Меню — портал в document.body; кликаем кнопку внутри обёртки пункта.
+    const body = (globalThis as { document: { body: never } }).document.body as never;
+    const item = findNodeByAttr(body, 'data-testid', 'prod-menu-task') as { children: never[] } | null;
+    expect(item, 'пункта меню «Карточка задачи» нет').toBeTruthy();
+    act(() => { (reactProps((item as { children: never[] }).children[0] as never)!.onClick as () => void)(); });
+    return root;
+  }
+
+  // Открыть страницу заново (тот же документ): восстановление применяется на монтировании.
+  function reopen() {
+    return mount(createElement(FeatureTimelineTab, { run: returnRun() })).container;
+  }
+
+  it('c1: возврат по чипу — этап раскрыт, карточка раскрыта, фокус на её шапке', () => {
+    const root = leaveToTask(returnRun());
+    expect(backNavTest.getBackNav()?.view, 'снимок не записан при переходе')
+      .toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 });
+    // Действие чипа (компонент чипа — в FeatureBackChip.test.ts): снимок в однократный канал.
+    expect(backNavTest.consumeFeatureViewReturn('f1'), 'снимка для забора нет').toBe(true);
+    act(() => { root.unmount(); }); // страница фичи закрыта (открыта задача)
+
+    const doc = (globalThis as { document: any }).document;
+    // focus() → activeElement (у фейк-DOM focus — no-op: без патча фокус не виден).
+    const proto = Object.getPrototypeOf(doc.createElement('div'));
+    const origFocus = proto.focus;
+    proto.focus = function (this: any) { doc.activeElement = this; };
+    const c2 = reopen();
+    proto.focus = origFocus;
+
+    const body2 = findNodeByAttr(c2, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'раскрытый этап не восстановлен').not.toBeNull();
+    const card = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card.getAttribute('aria-expanded'), 'карточка не раскрыта').toBe('true');
+    expect(findNodeByAttr(card, 'data-testid', 'prod-details'), 'раскрытой части карточки нет').not.toBeNull();
+    expect(doc.activeElement, 'фокус не встал на шапку карточки').toBe(card);
+  });
+
+  it('c2: прокрутка восстановлена ровно (window.scrollTo(0, записанное))', () => {
+    const root = leaveToTask(returnRun());
+    expect(backNavTest.consumeFeatureViewReturn('f1')).toBe(true);
+    act(() => { root.unmount(); });
+    const calls: [number, number][] = [];
+    (globalThis as { window: Record<string, unknown> }).window.scrollTo = (x: number, y: number) => { calls.push([x, y]); };
+    reopen();
+    // ±2 px допуск критерия здесь не нужен: значение проходит число в число.
+    expect(calls, 'прокрутка не восстановлена').toEqual([[0, 1234]]);
+  });
+
+  it('c3: открытие фичи БЕЗ чипа снимок не применяет', () => {
+    const root = leaveToTask(returnRun());
+    // Снимок на указателе есть (переход записан), но чип не нажат — это не «возврат».
+    expect(backNavTest.getBackNav()?.view, 'снимок не записан').not.toBeNull();
+    act(() => { root.unmount(); });
+    const calls: [number, number][] = [];
+    (globalThis as { window: Record<string, unknown> }).window.scrollTo = (x: number, y: number) => { calls.push([x, y]); };
+    const c2 = reopen();
+    expect(findNodeByAttr(c2, 'data-testid', 'timeline-stage-body-prod'), 'этап раскрылся без возврата').toBeNull();
+    expect(calls, 'прокрутка сдвинулась без возврата').toEqual([]);
+  });
+
+  // === GC-F11R2 (дефект 7d399549): перемонтирование вкладки ===
+  // Смонтировать вкладку ВНУТРИ контейнера прокрутки: реальная страница скроллится
+  // внутренней панелью с overflow:auto (FeaturePage.tsx:366), а не окном (window.scrollY
+  // на ней 0). Контейнер ни к чему не пристёгнут — цепочка предков вкладки заканчивается
+  // на нём: поставщик снимка и восстановление находят именно его.
+  // Host — узел фейк-DOM (тот же тип, что принимает findNodeByAttr) + поля прокрутки,
+  // которые есть у реального контейнера.
+  type Host = Parameters<typeof findNodeByAttr>[0] & { style: Record<string, string>; scrollTop: number };
+  // strict=true — обёртка StrictMode (dev-сборка: main.tsx:14): React дважды зовёт
+  // эффекты монтирования. Механизм окна обязан работать в обеих сборках (GC-F11R3).
+  function mountInHost(run: FeatureRun, strict = false): { host: Host; unmount: () => void } {
+    const doc = (globalThis as { document: { createElement(tag: string): Host } }).document;
+    const host = doc.createElement('div');
+    host.style.overflow = 'auto';
+    const root = createRoot(host as unknown as Element);
+    const tab = createElement(FeatureTimelineTab, { run });
+    act(() => { root.render(strict ? createElement(StrictMode, null, tab) : tab); });
+    return { host, unmount: () => { act(() => { root.unmount(); }); } };
+  }
+
+  // Пользовательская часть внутри контейнера: раскрыть этап и карточку, «стоять» на
+  // прокрутке 1234, уйти в задачу из меню карточки (recordFeatureReturn пишет снимок
+  // через поставщика — он читает scrollTop контейнера).
+  function leaveToTaskIn(run: FeatureRun, where: Host): void {
+    const header = findNodeByAttr(where, 'data-testid', 'timeline-stage-header-prod')!;
+    act(() => { (reactProps(header)!.onClick as () => void)(); });
+    const card = findNodeByAttr(where, 'data-testid', 'prod-card-ST-F9')!;
+    act(() => { (reactProps(card)!.onClick as () => void)(); });
+    where.scrollTop = 1234;
+    const code = findNodeByAttr(where, 'data-testid', 'prod-code-ST-F9')!;
+    act(() => { (reactProps(code)!.onClick as () => void)(); });
+    const body = (globalThis as { document: { body: never } }).document.body as never;
+    const item = findNodeByAttr(body, 'data-testid', 'prod-menu-task') as { children: never[] } | null;
+    expect(item, 'пункта меню «Карточка задачи» нет').toBeTruthy();
+    act(() => { (reactProps((item as { children: never[] }).children[0] as never)!.onClick as () => void)(); });
+  }
+
+  // Патч focus() → activeElement (у фейк-DOM focus — no-op: без патча фокус не виден).
+  function withFocusPatch(fn: () => void): void {
+    const doc = (globalThis as { document: { createElement(tag: string): { focus?: () => void }; activeElement: unknown } }).document;
+    const proto = Object.getPrototypeOf(doc.createElement('div')) as { focus?: () => void };
+    const origFocus = proto.focus;
+    proto.focus = function (this: unknown) { doc.activeElement = this; };
+    try { fn(); } finally { proto.focus = origFocus; }
+  }
+
+  // c4: ТЕСТ ОБЯЗАТЕЛЕН НА ПЕРЕМОНТИРОВАНИЕ — в обеих сборках (GC-F11R3): без StrictMode
+  // (прод) и под ним (dev, main.tsx:14 — двойной эффект монтирования). Механизм дефекта
+  // дословно: применение случилось (живой инстанс поднял вид), вкладка перемонтирована
+  // в том же кадре (страница после возврата рисует кэш 'ok', первичный запрос сбрасывает
+  // её в 'loading' — featurePage.ts:100 — ответ вернул 'ok') — вид обязан пережить.
+  it.each([false, true])('c4: применение на живом инстансе + remount вкладки — этап, карточка и прокрутка контейнера сохранены (strict=%s)', (strict) => {
+    installFakeDom(); // тест независим по порядку: свой документ (mountInHost монтирует без mount())
+    const run = returnRun();
+    const h1 = mountInHost(run, strict);
+    leaveToTaskIn(run, h1.host);
+    expect(backNavTest.getBackNav()?.view, 'снимок не записан при переходе')
+      .toEqual({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 });
+    // Действие чипа: снимок в однократный канал. Внутри act — как клик чипа на живой
+    // странице (обновление store запланировано из события React, а не извне).
+    let taken = false;
+    act(() => { taken = backNavTest.consumeFeatureViewReturn('f1'); });
+    expect(taken, 'снимка для забора нет').toBe(true);
+    // Живой инстанс применил снимок и подтвердил применение — это происходит на
+    // реальной странице до remount (без этого шага тест моделировал бы закрытие
+    // страницы, а не remount — как c1). Под StrictMode — и после двойного эффекта:
+    // повторное подтверждение идемпотентно, окно живо (мажор 1 GC-R-P5).
+    act(() => {});
+    expect(backNavTest.pendingFeatureView('f1'), 'применение живым инстансом не подтверждено').toBeNull();
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'подтверждённый снимок не переживает remount').not.toBeNull();
+    // Страница ушла в 'loading' (первичный запрос открытой страницы) → вкладка
+    // unmount; ответ вернул 'ok' → remount.
+    h1.unmount();
+
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), strict); });
+    const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'remount не восстановил этап').not.toBeNull();
+    const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card2.getAttribute('aria-expanded'), 'remount не раскрыл карточку').toBe('true');
+    expect(findNodeByAttr(card2, 'data-testid', 'prod-details'), 'раскрытой части карточки нет').not.toBeNull();
+    expect(h2!.host.scrollTop, 'remount не восстановил прокрутку контейнера').toBe(1234);
+    expect((globalThis as { document: { activeElement: unknown } }).document.activeElement, 'фокус не встал на шапку карточки').toBe(card2);
+    // Окно закрыто стабильным кадром после применения (GC-F11R3): remount-инстанс
+    // подтвердил тот же seq, размонтирования после его подтверждения нет → расход.
+    // Следующий (сознательный) монтаж тот же снимок не перечитывает — канал пуст.
+    vi.advanceTimersByTime(backNavTest.CONSUME_MS);
+    expect(backNavTest.pendingFeatureView('f1'), 'pending пережил подтверждение').toBeNull();
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'стабильный кадр не расходовал окно').toBeNull();
+    h2.unmount();
+    const h3 = mountInHost(returnRun(), strict);
+    expect(findNodeByAttr(h3.host, 'data-testid', 'timeline-stage-body-prod'), 'тот же снимок применён второй раз').toBeNull();
+    h3.unmount();
+  });
+
+  // c5: задача буквальна: смонтировать вкладку → записать снимок → размонтировать и
+  // смонтировать заново (как делает страница) → этап и карточка раскрыты; scrollTop
+  // контейнера восстановлен. Первый инстанс здесь снимок только записал (не применял).
+  it.each([false, true])('c5: remount после записи (без применения на первом инстансе) — вид и прокрутка контейнера восстановлены (strict=%s)', (strict) => {
+    installFakeDom(); // тест независим по порядку: свой документ
+    const run = returnRun();
+    const h1 = mountInHost(run, strict);
+    leaveToTaskIn(run, h1.host);
+    expect(backNavTest.consumeFeatureViewReturn('f1'), 'снимка для забора нет').toBe(true);
+    h1.unmount();
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), strict); });
+    const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'remount не восстановил этап').not.toBeNull();
+    const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card2.getAttribute('aria-expanded'), 'remount не раскрыл карточку').toBe('true');
+    expect(h2!.host.scrollTop, 'прокрутка контейнера не восстановлена').toBe(1234);
+    expect((globalThis as { document: { activeElement: unknown } }).document.activeElement, 'фокус не встал на шапку карточки').toBe(card2);
+    h2.unmount();
+  });
+
+  // c6: реальный порядок кадра возврата: страница закрыта переходом, чип забрал снимок,
+  // страница ОТКРЫВАЕТСЯ заново — первый её инстанс читает pending при инициализации и
+  // подтверждает применение эффектом монтажа; затем 'loading'→'ok' (тот самый remount) —
+  // второй инстанс обязан получить тот же снимок из lastApplied. Гасить pending при
+  // чтении (без подтверждения) здесь и ломается: первый прочитал и погасил, remount
+  // ничего не нашёл. Под StrictMode ломалось и «закрытие окна повторным подтверждением»
+  // (бывший механизм): двойной эффект m1 закрыл бы окно до реального remount (мажор 1).
+  it.each([false, true])('c6: первый инстанс после чипа прочитал снимок — remount получает подтверждённый (strict=%s)', (strict) => {
+    installFakeDom(); // тест независим по порядку: свой документ
+    const run = returnRun();
+    const h1 = mountInHost(run, strict);
+    leaveToTaskIn(run, h1.host);
+    h1.unmount(); // переход закрыл страницу (человек на экране задачи)
+    act(() => { backNavTest.consumeFeatureViewReturn('f1'); }); // чип нажат: снимок в канале, живой вкладки нет
+    const m1 = mountInHost(returnRun(), strict); // первый рендер открытой страницы — из кэша 'ok'
+    const body1 = findNodeByAttr(m1.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body1, 'первый инстанс не применил снимок при инициализации').not.toBeNull();
+    const card1 = findNodeByAttr(body1!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card1.getAttribute('aria-expanded'), 'первый инстанс не раскрыл карточку').toBe('true');
+    m1.unmount(); // страница ушла в 'loading' (первичный запрос)
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), strict); }); // 'ok' → remount вкладки
+    const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'remount не восстановил этап').not.toBeNull();
+    const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card2.getAttribute('aria-expanded'), 'remount не раскрыл карточку').toBe('true');
+    expect(h2!.host.scrollTop, 'remount не восстановил прокрутку контейнера').toBe(1234);
+    expect((globalThis as { document: { activeElement: unknown } }).document.activeElement, 'фокус не встал на шапку карточки').toBe(card2);
+    h2.unmount();
+  });
+
+  // c7 (GC-F11R3, мажор 2 GC-R-P5): снимок НЕ залипает между открытиями. Полный цикл
+  // одного возврата (чип → применение → remount → стабильное стояние): окно расходует
+  // стабильный кадр после применения; сознательный уход + следующее открытие БЕЗ чипа
+  // — вид дефолтный (не «чужой раскрытый этап, раскрытая карточка и старая прокрутка»).
+  it('c7: после применения окно расходуют; следующее открытие фичи без чипа снимок не применяет', () => {
+    installFakeDom();
+    const run = returnRun();
+    const h1 = mountInHost(run, true);
+    leaveToTaskIn(run, h1.host);
+    let taken = false;
+    act(() => { taken = backNavTest.consumeFeatureViewReturn('f1'); });
+    expect(taken, 'снимка для забора нет').toBe(true);
+    act(() => {}); // живой инстанс применил и подтвердил
+    h1.unmount(); // 'loading' → remount
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), true); });
+    expect(findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod'), 'remount не восстановил этап').not.toBeNull();
+    // Стабильное стояние после подтверждения (размонтирования нет) — окно расходует
+    // свой отложенный кадр: между открытиями канал пуст.
+    vi.advanceTimersByTime(backNavTest.CONSUME_MS);
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'окно залипло между открытиями').toBeNull();
+    h2.unmount(); // сознательный уход со страницы
+    const h3 = mountInHost(returnRun(), true); // следующее открытие БЕЗ чипа (consume не было)
+    expect(findNodeByAttr(h3.host, 'data-testid', 'timeline-stage-body-prod'), 'следующее открытие без чипа применило снимок').toBeNull();
+    // У фейк-DOM scrollTop нет по умолчанию (undefined = не двигали); 1234 значило бы
+    // «старая прокрутка перенеслась в новое открытие».
+    expect(h3.host.scrollTop ?? 0, 'старая прокрутка перенеслась в новое открытие').toBe(0);
+    h3.unmount();
+  });
+
+  // c8 (GC-F11R4, мажор GC-R-P6): закрытие СТРАНИЦЫ между применением и следующим
+  // открытием. c7 — уход ПОСЛЕ расхода; здесь уход ДО расхода: окно гасит не таймер, а
+  // размонтирование страницы (registerFeaturePage — его зовёт FeaturePage при монтаже;
+  // здесь вызывается вручную, т.к. в тесте смонтирована вкладка, а не страница).
+  // Следующее открытие без чипа — дефолтный вид: «чужой этап, чужая карточка, чужая
+  // прокрутка» не залипают.
+  it('c8: закрытие страницы до расхода — следующее открытие без чипа даёт дефолтный вид', () => {
+    installFakeDom();
+    const run = returnRun();
+    const offPage = backNavTest.registerFeaturePage('f1'); // страница смонтирована (FeaturePage делает это сама)
+    const h1 = mountInHost(run, true);
+    leaveToTaskIn(run, h1.host);
+    let taken = false;
+    act(() => { taken = backNavTest.consumeFeatureViewReturn('f1'); });
+    expect(taken, 'снимка для забора нет').toBe(true);
+    act(() => {}); // живой инстанс применил и подтвердил (таймер расхода поставлен)
+    h1.unmount(); // размонтирование вкладки — не сигнал ухода (GC-F11R4)
+    offPage(); // закрытие страницы: отложенная проверка — это настоящий уход
+    vi.advanceTimersByTime(0);
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'окно пережило закрытие страницы').toBeNull();
+    const h3 = mountInHost(returnRun(), true); // следующее открытие БЕЗ чипа (consume не было)
+    expect(findNodeByAttr(h3.host, 'data-testid', 'timeline-stage-body-prod'), 'следующее открытие без чипа применило снимок').toBeNull();
+    expect(h3.host.scrollTop ?? 0, 'старая прокрутка перенеслась в новое открытие').toBe(0);
+    h3.unmount();
+  });
+
+  // c9 (GC-F11R4): remont вкладки дольше CONSUME_MS (медленный ответ сервера) —
+  // подтверждённый снимок жив: пока вкладка не смонтирована, расход откладывается, а не
+  // отменяется. Прежний механизм отменял расход при размонтировании вкладки — при
+  // медленном ответе remount читал бы пустой канал.
+  it('c9: remount вкладки после CONSUME_MS — подтверждённый снимок восстановлен', () => {
+    installFakeDom();
+    const run = returnRun();
+    const h1 = mountInHost(run, true);
+    leaveToTaskIn(run, h1.host);
+    let taken = false;
+    act(() => { taken = backNavTest.consumeFeatureViewReturn('f1'); });
+    expect(taken, 'снимка для забора нет').toBe(true);
+    act(() => {}); // живой инстанс применил и подтвердил
+    h1.unmount(); // 'loading' — вкладка снята; ответ сервера медленный
+    vi.advanceTimersByTime(backNavTest.CONSUME_MS); // расход отложен, не отменён
+    expect(backNavTest.lastAppliedFeatureView('f1'), 'окно израсходовано, пока вкладка не смонтирована').not.toBeNull();
+    let h2: { host: Host; unmount: () => void } | null = null;
+    withFocusPatch(() => { h2 = mountInHost(returnRun(), true); }); // 'ok' — remount после CONSUME_MS
+    const body2 = findNodeByAttr(h2!.host, 'data-testid', 'timeline-stage-body-prod');
+    expect(body2, 'remount после CONSUME_MS не восстановил этап').not.toBeNull();
+    const card2 = findNodeByAttr(body2!, 'data-testid', 'prod-card-ST-F9')!;
+    expect(card2.getAttribute('aria-expanded'), 'remount после CONSUME_MS не раскрыл карточку').toBe('true');
+    expect(h2!.host.scrollTop, 'remount после CONSUME_MS не восстановил прокрутку').toBe(1234);
+    h2.unmount();
+  });
+});
+
+// === GC-F8R: подсветка интервалов шага («Показать интервалы на дорожке ↑») ===
+// Канал: карточка ленты → onShowIntervals(taskIds) → приёмник вкладки → проп highlight в
+// дорожку. Тест на ПОДКЛЮЧЕНИЕ: рендер реальной вкладки, а не изолированной ленты.
+// Фикстура: шаг Ш1 (t-s1) + дорожка «Производства» из двух интервалов: первый — с ходом
+// задачи шага (taskIds ['t-s1']), второй — чужой (['t-other']). Пересечение — только первый.
+
+describe('FeatureTimelineTab: подсветка интервалов шага (GC-F8R)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    personaMap.clear();
+    personaMap.set('p1', 'Денис');
+    personaMap.set('p2', 'Глеб');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  function hlRun(): FeatureRun {
+    return mkRun(fullStages(), {
+      steps: [{ id: 't-s1', title: 'Модель шаблона', status: 'done', stepRef: 'Ш1', claudeStartedAt: '2026-10-20T10:00:00Z' }],
+      stepChains: [mkChain({ rounds: [mkRound({ n: 1, verdict: 'accepted', personaId: 'p2', reviewChatId: 'chat-r1' })] })],
+    });
+  }
+  function hlStats(): FeatureStats {
+    return mkStats({
+      prod: [
+        { from: '2026-10-20T10:00:00Z', to: '2026-10-20T10:30:00Z', minutes: 30, live: false, lastOutcome: null, taskIds: ['t-s1'], turns: [] },
+        { from: '2026-10-20T11:00:00Z', to: '2026-10-20T11:30:00Z', minutes: 30, live: false, lastOutcome: null, taskIds: ['t-other'], turns: [] },
+      ],
+    });
+  }
+
+  const styleOf = (n: FNodeLike): Record<string, string | number> => (n as unknown as { style: Record<string, string | number> }).style;
+  const interval = (c: FNodeLike, i: number): FNodeLike => findNodeByAttr(c, 'data-testid', `lane-interval-prod-${i}`)!;
+  // Визуальный стиль интервала (кольцо, затемнение) — на слое полосы lane-band-* (GC-F5aR2);
+  // сам lane-interval-* на десктопе — невидимая зона касания. На 360 отдельного слоя нет:
+  // интервал и есть полоса.
+  const visual = (c: FNodeLike, i: number): FNodeLike =>
+    findNodeByAttr(c, 'data-testid', `lane-band-prod-${i}`) ?? interval(c, i);
+  // Кольцо — форма .hl макета feature-gantt-7: 2 px подложки + 4 px accent.
+  const RING = `0 0 0 2px ${C.bgCard}, 0 0 0 4px ${C.accent}`;
+
+  // Раскрыть карточку Ш1 и нажать «Показать интервалы на дорожке ↑».
+  function clickShowIntervals(c: FNodeLike): void {
+    const body = findNodeByAttr(c, 'data-testid', 'timeline-stage-body-prod')!;
+    act(() => { (reactProps(findNodeByAttr(body, 'data-testid', 'prod-card-Ш1')!)!.onClick as () => void)(); });
+    const btn = findNodeByAttr(c, 'data-testid', 'step-show-intervals');
+    expect(btn, 'кнопки «Показать интервалы на дорожке ↑» в раскрытой карточке нет').not.toBeNull();
+    act(() => { (reactProps(btn!)!.onClick as () => void)(); });
+  }
+
+  // === c1: реальная вкладка: кнопка → подсветка своих / затемнение чужих → снятие ===
+  it('карточка реальной вкладки: кнопка есть; клик — кольцо на интервале с ходом шага, чужой гаснет; через 2,4 с снимается', () => {
+    const c = renderTabWithStats(hlRun(), hlStats());
+    // До клика на дорожке нет ни кольца, ни затемнения.
+    expect(styleOf(visual(c, 0)).boxShadow, 'кольца до клика нет').toBeUndefined();
+    expect(styleOf(visual(c, 1)).opacity, 'затемнения до клика нет').toBeUndefined();
+    clickShowIntervals(c);
+    // Интервал, чей taskIds содержит задачу шага, — кольцо; чужой — opacity .35 (.dim макета)
+    // с переходом по opacity (движение не запрещено). Мутация (18): подсветить все интервалы —
+    // этот краснеет (у чужого оказался бы кольцо вместо затемнения).
+    expect(styleOf(visual(c, 0)).boxShadow, 'кольца на интервале с ходом шага нет').toBe(RING);
+    expect(String(styleOf(visual(c, 1)).opacity), 'чужой интервал не затемнён').toBe('0.35');
+    expect(String(styleOf(visual(c, 1)).transition), 'затемнение без перехода').toContain('opacity');
+    // Через 2,4 с подсветка снимается (мутация (17): не снимать → этот шаг краснеет).
+    // Снятый стиль React оставляет '' (как в реальном DOM) — проверка на отсутствие значения.
+    act(() => { vi.advanceTimersByTime(2400); });
+    expect(styleOf(visual(c, 0)).boxShadow, 'подсветка не снялась').toBeFalsy();
+    expect(styleOf(visual(c, 1)).opacity, 'затемнение не снялось').toBeFalsy();
+    expect(styleOf(visual(c, 1)).transition, 'перехода после снятия нет').toBeFalsy();
+  });
+
+  // === c3: prefers-reduced-motion — без перехода; на 360 работает ===
+  it('prefers-reduced-motion: подсветка есть, без перехода, и снимается; на 360 (интервал неинтерактивен) работает', () => {
+    installFakeDom();
+    // Фейк matchMedia из fakeDom даёт matches:false; для этого теста — reduce.
+    (globalThis as { window: { matchMedia: (q: string) => unknown } }).window.matchMedia = () =>
+      ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} });
+    const { container } = mount(createElement(FeatureTimelineTab, { run: hlRun(), stats: hlStats(), isMobile: true }));
+    clickShowIntervals(container);
+    // На 360 интервал — не кнопка (10 px не тач-цель), но подсветка рисуется та же.
+    expect(interval(container, 0).getAttribute('role'), 'на 360 интервал не обязан быть неинтерактивным').toBe('img');
+    // На 360 отдельного слоя полосы нет: visual() падает на сам интервал (GC-F5aR2).
+    expect(styleOf(visual(container, 0)).boxShadow, 'кольца при reduced-motion нет').toBe(RING);
+    expect(String(styleOf(visual(container, 1)).opacity), 'чужой интервал не затемнён').toBe('0.35');
+    expect(styleOf(visual(container, 1)).transition, 'при prefers-reduced-motion перехода нет').toBeUndefined();
+    // Подсветка снимается и без анимации — тем же таймером.
+    act(() => { vi.advanceTimersByTime(2400); });
+    expect(styleOf(visual(container, 0)).boxShadow, 'подсветка не снялась').toBeFalsy();
+    expect(styleOf(visual(container, 1)).opacity, 'затемнение не снялось').toBeFalsy();
   });
 });

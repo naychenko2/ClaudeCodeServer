@@ -8,12 +8,16 @@
 //   3. R-Ф1.3(а): индекс без kind (старый ответ) — чипы без чисел и кликабельны: нулевые
 //      счётчики неотличимы от «нет фич».
 //   4. Футер на 360 в режиме «Фичи» — «Показать N фич» (поведение прежнее, регрессия).
+//   5. R-Ф2.1 M1: сводка в title триггера без двойного «::» (знак несёт префикс модели).
+//   6. R-Ф2.1 M2: «снял и вернул Черновики» через состояние родителя → патч [], триггер
+//      не горит (состояние вернулось к умолчанию).
+//   7. R-Ф2.1 H3: клик «Сбросить» в секции → patch({featureKinds: []}).
 // Окружение node (без jsdom): fake-DOM (как в SessionList.test.ts) + createRoot/act
 // (effects идут: открытие шторки). Шторка — в document.body (портал); корень React —
 // container: клик «прицеливается» через container.fireClick(узел) — делегат React на
 // контейнере находит fiber по target, портал это не ломает.
 
-import { createElement } from 'react';
+import { createElement, useState } from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -112,13 +116,20 @@ const baseFilters: ChatFilters = {
   featureKinds: [], featureChips: [], showClosed: false,
 };
 
-// Рендер FilterBar (мобила) + открытие шторки кликом по триггеру. Возвращает body шторки
-// и click(узел) — «прицельный» клик через корень React (container), см. шапку файла.
+// Узел по префиксу title (триггер: «Фильтры и поиск» без фильтров, «Фильтры: …» с ними).
+function findTitle(n: _FakeNode, prefix: string): _FakeNode | null {
+  if ((n._attrs['title'] ?? '').startsWith(prefix)) return n;
+  for (const c of n.childNodes) { const r = findTitle(c, prefix); if (r) return r; }
+  return null;
+}
+// Рендер FilterBar (мобила) + открытие шторки кликом по триггеру. Возвращает body шторки,
+// сам триггер (для проверки его title — сводки) и click(узел) — «прицельный» клик через
+// корень React (container), см. шапку файла.
 async function renderOpenBar(
   features: FeatureIndexFeature[],
   filters: ChatFilters = baseFilters,
   patch: (p: Partial<ChatFilters>) => void = () => {},
-): Promise<{ body: _FakeNode; click: (n: _FakeNode) => Promise<void> }> {
+): Promise<{ body: _FakeNode; trigger: _FakeNode; click: (n: _FakeNode) => Promise<void> }> {
   const container = new _FakeNode();
   const root = createRoot(container);
   await act(async () => {
@@ -127,17 +138,12 @@ async function renderOpenBar(
       hiddenCount: 0, isMobile: true, features,
     }));
   });
-  // Триггер: title «Фильтры и поиск» (без фильтров) или «Фильтры: …» (с фильтрами) — ищем по префиксу.
-  const findTitle = (n: _FakeNode, prefix: string): _FakeNode | null => {
-    if ((n._attrs['title'] ?? '').startsWith(prefix)) return n;
-    for (const c of n.childNodes) { const r = findTitle(c, prefix); if (r) return r; }
-    return null;
-  };
   const trigger = findTitle(container, 'Фильтры');
   expect(trigger, 'триггер FilterBar не найден').not.toBeNull();
   await act(async () => { container.fireClick(trigger!); });
   return {
     body: _doc.body,
+    trigger: trigger!,
     // Клик по содержимому шторки: React 18 навешивает делегаты и на корень, и на контейнер
     // портала (premountPortal → listenToAllSupportedEvents), поэтому целевой узел портальной
     // шторки «доходит» через _doc.body, а не через container (триггер же — в корне).
@@ -171,6 +177,13 @@ function textOf(n: _FakeNode): string {
 function findChipButton(n: _FakeNode, label: string): _FakeNode | null {
   if (n.nodeName === 'button' && textOf(n).includes(label)) return n;
   for (const c of n.childNodes) { const r = findChipButton(c, label); if (r) return r; }
+  return null;
+}
+// Кнопка с ровно этим текстом (для «Сбросить» в секции: футер несёт «Сбросить всё»,
+// includes() схватил бы его вместо секционного).
+function findButtonExact(n: _FakeNode, exact: string): _FakeNode | null {
+  if (n.nodeName === 'button' && textOf(n).trim() === exact) return n;
+  for (const c of n.childNodes) { const r = findButtonExact(c, exact); if (r) return r; }
   return null;
 }
 // Последовательность подписей оси в кнопках-чипах, в порядке обхода DOM (document order).
@@ -285,5 +298,79 @@ describe('FilterBar: п.2 футер «Показать N фич» (360, реж�
     // «Показать 1 фич» — футер режима «Фичи»; в «Дни» его нет (ищет точную фразу,
     // не «Показать», чтобы не словить заголовок секции «Показать только»).
     expect(findByText(body, 'Показать 1 фич'), '«Показать N фич» в режиме «Дни» (только в «Фичи»)').toBeNull();
+  });
+});
+
+describe('FilterBar: сводка триггера без «::» (R-Ф2.1 M1)', () => {
+  it('выбран «Ждут вас» → title «Показаны: Ждут вас …», двойного «::» нет', async () => {
+    const { trigger } = await renderOpenBar([], { ...baseFilters, featureKinds: ['waiting_you'] });
+    const title = trigger.getAttribute('title') ?? '';
+    expect(title, `сводки «Показаны: Ждут вас» в title нет: ${title}`).toContain('Показаны: Ждут вас');
+    expect(title.includes('::'), `двойной знак в title: ${title}`).toBe(false);
+  });
+
+  it('режим «кроме» (семь открытых без «Черновиков») → title «Все открытые, кроме: Черновики», «::» нет', async () => {
+    const kinds = ALL_FEATURE_KINDS.filter(k => k !== 'closed' && k !== 'draft');
+    const { trigger } = await renderOpenBar([], { ...baseFilters, featureKinds: kinds });
+    const title = trigger.getAttribute('title') ?? '';
+    expect(title, `сводки «Все открытые, кроме: Черновики» в title нет: ${title}`).toContain('Все открытые, кроме: Черновики');
+    expect(title.includes('::'), `двойной знак в title: ${title}`).toBe(false);
+  });
+});
+
+describe('FilterBar: снял и вернул чип — возврат к умолчанию (R-Ф2.1 M2)', () => {
+  it('умолчание → снял «Черновики» → вернул: патч [] (не восемь явных), триггер не горит', async () => {
+    // Фича kind='draft' обязательна: без неё снятый нулевой чип глух к повторному клику
+    // (R-Ф1.3(а)) и цикл «вернуть» не состоится.
+    const features = [feat('w1', 'running', 'waiting_you'), feat('d1', 'draft', 'draft')];
+    const calls: Partial<ChatFilters>[] = [];
+    // Состоятельный родитель: patch пишет его собственные filters — полный цикл,
+    // как в реальной работе (снимать и возвращать можно только живой выбор).
+    const Harness = () => {
+      const [filters, setFilters] = useState<ChatFilters>(baseFilters);
+      return createElement(FilterBar, {
+        sessions: [] as Session[], allPersonas: [] as Persona[], hiddenCount: 0, isMobile: true, features,
+        filters,
+        patch: (p: Partial<ChatFilters>) => { calls.push(p); setFilters(f => ({ ...f, ...p })); },
+      });
+    };
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(Harness)); });
+    const trigger0 = findTitle(container, 'Фильтры');
+    expect(trigger0, 'триггера нет').not.toBeNull();
+    await act(async () => { container.fireClick(trigger0!); });
+    const click = async (n: _FakeNode) => { await act(async () => { _doc.body.fireClick(n); }); };
+    const axisPatches = () => calls.map(c => c.featureKinds).filter((v): v is FeatureKind[] => v !== undefined);
+
+    // Шаг 1: снятие «Черновиков» из умолчания → явные семь (выбор не равен умолчанию).
+    const draft1 = findChipButton(_doc.body, FEATURE_KIND_LABEL.draft);
+    expect(draft1, 'чипа «Черновики» нет').not.toBeNull();
+    await click(draft1!);
+    expect(axisPatches()[0], 'снятие «Черновиков» дало не семь открытых').toEqual(
+      ALL_FEATURE_KINDS.filter(k => k !== 'closed' && k !== 'draft'),
+    );
+
+    // Шаг 2: возврат «Черновиков» → выбор стал равен умолчанию → патч [], а не восемь явных.
+    const draft2 = findChipButton(_doc.body, FEATURE_KIND_LABEL.draft);
+    expect(draft2, 'чипа «Черновики» после ререндера нет').not.toBeNull();
+    await click(draft2!);
+    expect(axisPatches().at(-1), 'возврат «Черновиков» не вернул умолчание []').toEqual([]);
+
+    // Триггер не горит: состояние родителя снова дефолт → title без сводки.
+    const trigger1 = findTitle(container, 'Фильтры');
+    expect(trigger1?.getAttribute('title'), 'триггер горит после возврата к умолчанию').toBe('Фильтры и поиск');
+  });
+});
+
+describe('FilterBar: «Сбросить» в секции (R-Ф2.1 H3)', () => {
+  it('клик «Сбросить» → patch({featureKinds: []})', async () => {
+    const features = [feat('w1', 'running', 'waiting_you')];
+    const calls: Partial<ChatFilters>[] = [];
+    const { body, click } = await renderOpenBar(features, { ...baseFilters, featureKinds: ['waiting_you'] }, p => calls.push(p));
+    const btn = findButtonExact(body, 'Сбросить');
+    expect(btn, 'кнопки «Сбросить» в секции нет').not.toBeNull();
+    await click(btn!);
+    expect(calls.filter(c => c.featureKinds !== undefined), '«Сбросить» дал не []').toEqual([{ featureKinds: [] }]);
   });
 });

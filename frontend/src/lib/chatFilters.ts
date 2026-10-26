@@ -171,8 +171,10 @@ const LEGACY_CHIP_TO_KIND: Record<FeatureChip, FeatureKind | null> = {
 
 // Выбор, равный умолчанию (все восемь открытых без 'closed'), — храним как [] (разрез п. 4):
 // умолчание не дублируется явным списком, и новое значение kind у пользователей умолчания
-// появляется само.
-function isDefaultFeatureKinds(kinds: FeatureKind[]): boolean {
+// появляется само. Экспорт — тот же канон применяет FilterBar перед записью (R-Ф2.1 M2):
+// равный умолчанию выбор не должен попадать в состояние явным списком ни при чтении,
+// ни при клике.
+export function isDefaultFeatureKinds(kinds: FeatureKind[]): boolean {
   return kinds.length === ALL_FEATURE_KINDS.length - 1 && !kinds.includes('closed');
 }
 

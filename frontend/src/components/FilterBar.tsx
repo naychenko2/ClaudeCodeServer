@@ -12,7 +12,7 @@ import { useListAutoFocus } from '../lib/listAutoFocus';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
   ALL_ORIGINS, ALL_STATUS_CHIPS, ALL_FEATURE_KINDS,
-  chatStatusOf, isDefaultFilters, defaultChatFiltersKeepingView,
+  chatStatusOf, isDefaultFilters, isDefaultFeatureKinds, defaultChatFiltersKeepingView,
   type ChatFilters, type ChatStatusChip, type ChatOnlyFilter, type FeatureKind,
 } from '../lib/chatFilters';
 import { FEATURE_KIND_LABEL, featureKindCounts, featureMatchesKinds, shownFiltersModel } from '../lib/chatGroups';
@@ -255,7 +255,12 @@ function FilterContent({
         const openTotal = openKinds.reduce((s, k) => s + counts[k], 0);
         const clickKind = (k: FeatureKind) => {
           if (showCounts && counts[k] === 0 && !sel.includes(k)) return; // нулевой и не выбран — клик игнорируется
-          patch({ featureKinds: sel.includes(k) ? sel.filter(x => x !== k) : [...sel, k] });
+          const next = sel.includes(k) ? sel.filter(x => x !== k) : [...sel, k];
+          // R-Ф2.1 M2: выбор, равный умолчанию (восемь открытых без 'closed'), → [].
+          // То же правило, что в chatFilters при чтении (isDefaultFeatureKinds — один
+          // источник): иначе «снял и вернул Черновики» оставит явный список из восьми,
+          // isDefaultFilters=false — триггер горит, в шторке «Сбросить» и «8 из 8».
+          patch({ featureKinds: isDefaultFeatureKinds(next) ? [] : next });
         };
         const kindChip = (k: FeatureKind) => {
           const active = sel.includes(k);
@@ -410,7 +415,10 @@ function buildSummary(filters: ChatFilters, personaName: string | null): string 
   if (filters.groupBy === 'features') {
     const model = shownFiltersModel(filters.featureKinds);
     if (model) {
-      parts.push(`${model.prefix}: ${model.chips.map(c => `${c.andBefore ? 'и ' : ''}${FEATURE_KIND_LABEL[c.kind]}`).join(', ')}`);
+      // R-Ф2.1 M1: знак несёт сам префикс модели там, где он нужен ('Показаны:',
+      // 'Все открытые, кроме:'), а 'Показаны все открытые и' читается без знака —
+      // FilterBar добавляет только пробел: знак в сводке ровно один.
+      parts.push(`${model.prefix} ${model.chips.map(c => `${c.andBefore ? 'и ' : ''}${FEATURE_KIND_LABEL[c.kind]}`).join(', ')}`);
     }
   }
   const liveSel = (['active', 'waiting', 'error'] as ChatStatusChip[]).filter(s => filters.statuses.includes(s));

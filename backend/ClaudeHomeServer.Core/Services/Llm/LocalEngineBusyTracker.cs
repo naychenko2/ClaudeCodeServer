@@ -53,15 +53,35 @@ public sealed class LocalEngineBusyTracker
         return new Slot(this, null);
     }
 
+    // Допуск БЕЗ ожидания (one-shot действия): слот выдаётся, только если есть свободное место
+    // и в очереди никого нет — чужую очередь обгонять нельзя. null — «занято»: вызывающий
+    // действует по правилу LocalActionRouter (не лезет в движок). Слот берётся из ТОГО ЖЕ
+    // счётчика, что и у ходов, — второго семафора нет.
+    public IDisposable? TryEnter(string key, int maxConcurrent)
+    {
+        lock (_lock)
+        {
+            var state = StateFor(key);
+            state.Limit = Math.Max(1, maxConcurrent);
+            if (state.Active >= state.Limit || state.Queue.Count > 0) return null;
+            state.Active++;
+            _active++;
+            return new Slot(this, key);
+        }
+    }
+
     // Допуск хода к провайдеру key. Есть свободный слот и никто не ждёт — слот выдаётся сразу;
     // иначе ход встаёт в очередь (FIFO), если в ней есть место, и ждёт слот не дольше timeout.
     // Отмена ct убирает ход из очереди без изменения счётчика и пробрасывается как
     // OperationCanceledException. Если Slot != null — его надо освободить (Dispose).
+    // onWait — наблюдатель очереди: зовётся при постановке в очередь и при каждом сдвиге
+    // позиции (позиция 1-based, затем занято слотов и потолок); исключения наблюдателя глотаются.
     public async Task<LocalTurnAdmission> AcquireAsync(string key, int maxConcurrent, int maxQueued,
-        TimeSpan timeout, CancellationToken ct)
+        TimeSpan timeout, CancellationToken ct, Action<int, int, int>? onWait = null)
     {
         ct.ThrowIfCancellationRequested();
         Waiter waiter;
+        int position, active, limit;
         lock (_lock)
         {
             var state = StateFor(key);
@@ -74,9 +94,13 @@ public sealed class LocalEngineBusyTracker
             }
             if (state.Queue.Count >= Math.Max(0, maxQueued))
                 return LocalTurnAdmission.Rejected(LocalTurnRefusal.QueueFull, state.Active);
-            waiter = new Waiter();
+            waiter = new Waiter { OnWait = onWait };
             waiter.Node = state.Queue.AddLast(waiter);
+            position = state.Queue.Count;
+            active = state.Active;
+            limit = state.Limit;
         }
+        Notify(onWait, position, active, limit);
 
         using var timeoutCts = new CancellationTokenSource();
         using var timer = _time.CreateTimer(
@@ -113,6 +137,7 @@ public sealed class LocalEngineBusyTracker
     // Освобождение слота: ключевой слот сразу отдаёт освободившееся место голове очереди.
     private void Release(string? key)
     {
+        List<(Action<int, int, int> Cb, int Pos, int Active, int Limit)>? shifted = null;
         lock (_lock)
         {
             _active--;
@@ -127,7 +152,22 @@ public sealed class LocalEngineBusyTracker
                 _active++;
                 head.Value.Tcs.TrySetResult(new Slot(this, key));
             }
+            // Оставшимся в очереди позиция сдвинулась — сообщаем им вне лока.
+            var pos = 0;
+            foreach (var w in state.Queue)
+            {
+                pos++;
+                if (w.OnWait is { } cb) (shifted ??= []).Add((cb, pos, state.Active, state.Limit));
+            }
         }
+        if (shifted is not null)
+            foreach (var (cb, pos, act, lim) in shifted) Notify(cb, pos, act, lim);
+    }
+
+    private static void Notify(Action<int, int, int>? cb, int position, int active, int limit)
+    {
+        try { cb?.Invoke(position, active, limit); }
+        catch { /* наблюдатель очереди не должен ронять допуск */ }
     }
 
     private sealed class KeyState
@@ -140,6 +180,7 @@ public sealed class LocalEngineBusyTracker
     private sealed class Waiter
     {
         public LinkedListNode<Waiter>? Node;
+        public Action<int, int, int>? OnWait;
         public readonly TaskCompletionSource<Slot> Tcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -157,6 +198,11 @@ public sealed class LocalEngineBusyTracker
         }
     }
 }
+
+// One-shot действие не получило слот локального движка (он занят ходами): вызов не запускался.
+// Вызывающие one-shot ловят общий Exception и идут по своей цепочке — как при LocalBlockedByTurn.
+public sealed class LocalEngineBusyException(string providerKey)
+    : InvalidOperationException($"Локальный движок «{providerKey}» занят ходами — one-shot не запущен");
 
 public enum LocalTurnRefusal { None, QueueFull, Timeout }
 

@@ -789,15 +789,24 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 if (_localGate is not null && _providers?.GetByKey(currentKey) is { IsLocal: true } gated)
                 {
                     LocalTurnAdmission admission;
+                    // Ожидание видно человеку без флага статистики: позиция в очереди и «заняты N из M».
+                    var waitShown = 0; // 0 — строки нет, 1 — показана, 2 — снята (поздние сдвиги глотаем)
                     try
                     {
                         using var admitCts = CancellationTokenSource.CreateLinkedTokenSource(
                             _cts.Token, turn.Interrupted.Token);
                         admission = await _localGate.AcquireAsync(currentKey, gated.MaxConcurrentTurns,
-                            gated.MaxQueuedTurns, gated.TurnQueueTimeout, admitCts.Token);
+                            gated.MaxQueuedTurns, gated.TurnQueueTimeout, admitCts.Token,
+                            (pos, act, lim) =>
+                            {
+                                if (Volatile.Read(ref waitShown) == 2) return;
+                                Volatile.Write(ref waitShown, 1);
+                                _ = SafeDownstreamAsync(new LocalTurnQueueMessage(pos, act, lim));
+                            });
                     }
                     catch (OperationCanceledException)
                     {
+                        await ClearLocalWaitAsync(ref waitShown);
                         // «Стоп» в очереди: CLI не стартовал, место в очереди уже освобождено
                         // гейтом. Как и при остановке посреди попытки — шлём терминал сами,
                         // иначе ход навсегда останется в Working.
@@ -817,6 +826,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         return; // иначе _cts отменён — сессию закрыли
                     }
 
+                    await ClearLocalWaitAsync(ref waitShown);
                     if (admission.Slot is null)
                     {
                         // «Занято» — отдельный класс отказа (ADR-007): провайдер НЕ помечается в
@@ -1889,6 +1899,19 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus));
         foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
             await _downstream(m);
+    }
+
+    // Снять строку ожидания (Position = 0), если она была показана; идемпотентно.
+    private Task ClearLocalWaitAsync(ref int waitShown) =>
+        Interlocked.Exchange(ref waitShown, 2) == 1
+            ? SafeDownstreamAsync(new LocalTurnQueueMessage(0, 0, 0))
+            : Task.CompletedTask;
+
+    // Информационное событие не должно ронять ход: сбой доставки глотаем.
+    private async Task SafeDownstreamAsync(ServerMessage m)
+    {
+        try { await _downstream(m); }
+        catch { /* строка ожидания — подсказка, а не часть контракта хода */ }
     }
 
     // Финал «локальный движок занят»: гейт допуска не пустил ход. Форма как у FailLocalDownAsync,

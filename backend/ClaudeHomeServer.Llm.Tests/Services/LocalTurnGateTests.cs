@@ -1,7 +1,9 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 
@@ -336,5 +338,117 @@ public class LocalTurnGateTests
 
         foreach (var (sut, _) in turns) await sut.SendMessageAsync("ход");
         await WaitForAsync(() => turns.Count(t => t.inner.Started.Task.IsCompleted) == 10, "без гейта стартуют все");
+    }
+
+    // --- B1b-2: событие ожидания и one-shot в том же счётчике ---
+
+    [Fact]
+    public async Task ХодВОчереди_УходитСобытиеСПозициейИСчётчиком_ПослеСтартаСнимается()
+    {
+        var gate = new LocalEngineBusyTracker(_clock);
+        var providers = Providers(1, 4, "00:15:00");
+        var a = NewTurn(gate, providers);
+        var b = NewTurn(gate, providers);
+
+        await a.Sut.SendMessageAsync("a");
+        await WaitForAsync(() => a.Started, "A стартовал");
+        await b.Sut.SendMessageAsync("b");
+        await WaitForAsync(() => gate.QueuedFor(Local) == 1, "B в очереди");
+
+        // Событие идёт обычным потоком хода, а не LocalModelLiveMessage (тот под флагом
+        // local-model-stats): у адаптера нет зависимости от флага вовсе.
+        await WaitForAsync(() => b.Downstream().OfType<LocalTurnQueueMessage>().Any(), "событие ожидания");
+        b.Downstream().OfType<LocalTurnQueueMessage>().Single()
+            .Should().Be(new LocalTurnQueueMessage(Position: 1, Active: 1, Limit: 1));
+        b.Downstream().OfType<LocalModelLiveMessage>().Should().BeEmpty();
+        a.Downstream().OfType<LocalTurnQueueMessage>().Should().BeEmpty("A не ждал — строки нет");
+
+        a.FinishOk();
+        await WaitForAsync(() => b.Started, "B стартовал из очереди");
+        await WaitForAsync(() => b.Downstream().OfType<LocalTurnQueueMessage>().Any(m => m.Position == 0),
+            "строка снята при старте");
+        b.Downstream().OfType<LocalTurnQueueMessage>().Last().Position.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ПозицияСдвигается_ОстальнымВОчередиУходитНоваяПозиция()
+    {
+        var gate = new LocalEngineBusyTracker(_clock);
+        var seen = new List<(int Pos, int Active, int Limit)>();
+        using var first = (await gate.AcquireAsync("k", 1, 4, TimeSpan.FromMinutes(1), default)).Slot;
+        var w1 = gate.AcquireAsync("k", 1, 4, TimeSpan.FromMinutes(1), default);
+        var w2 = gate.AcquireAsync("k", 1, 4, TimeSpan.FromMinutes(1), default,
+            (p, a, l) => { lock (seen) seen.Add((p, a, l)); });
+
+        lock (seen) seen.Should().Equal([(2, 1, 1)], "второй в очереди");
+        first!.Dispose();
+        (await w1).Slot!.Dispose();
+        (await w2).Slot.Should().NotBeNull();
+        lock (seen) seen.Should().Equal([(2, 1, 1), (1, 1, 1)], "после ухода головы позиция сдвинулась");
+    }
+
+    private sealed class MarkerStartException : Exception;
+
+    // Лаунчер, который не запускает процесс: фиксирует, сколько слотов занято В МОМЕНТ запуска.
+    private sealed class RecordingLauncher(LocalEngineBusyTracker gate) : IProcessLauncher, ILauncherFactory
+    {
+        private static IProcessLauncher Real => LocalProcessRunner.Instance;
+        public int ActiveAtStart = -1;
+        public bool IsSandboxed => Real.IsSandboxed;
+        public bool TargetIsWindows => Real.TargetIsWindows;
+        public IPathMapper Paths => Real.Paths;
+        public string ClaudeCliCommand => Real.ClaudeCliCommand;
+        public string HostTempDir => Real.HostTempDir;
+        public string? McpApiUrlOverride => Real.McpApiUrlOverride;
+        public System.Diagnostics.Process Start(ProcessSpec spec)
+        {
+            ActiveAtStart = gate.ActiveFor(LocalTurnGateTests.Local);
+            throw new MarkerStartException();
+        }
+        public void Kill(System.Diagnostics.Process process, string? turnId = null) { }
+        public int EstimateCommandLineLength(ProcessSpec spec) => 0;
+        public IProcessLauncher Local => this;
+        public IProcessLauncher ForOwner(string? ownerId) => this;
+        public IProcessLauncher ForProject(Project project) => this;
+    }
+
+    private (OneShotClaudeRunner Runner, RecordingLauncher Launcher) OneShot(LocalEngineBusyTracker gate)
+    {
+        var config = TestConfig.Build(new Dictionary<string, string?>
+        {
+            [$"LlmProviders:{Local}:AnthropicBaseUrl"] = "http://127.0.0.1:8080",
+            [$"LlmProviders:{Local}:IsLocal"] = "true",
+            [$"LlmProviders:{Local}:MaxConcurrentTurns"] = "1",
+            [$"LlmProviders:{Local}:Models:0:Id"] = LocalModel,
+        });
+        var launcher = new RecordingLauncher(gate);
+        return (new OneShotClaudeRunner(new LlmProviderRegistry(config), launcher, config, localGate: gate), launcher);
+    }
+
+    [Fact]
+    public async Task OneShotНаЛокали_ДелитОдинСчётчикСХодами_ЗанятоОтказБезЗапуска()
+    {
+        var gate = new LocalEngineBusyTracker(_clock);
+        var (runner, launcher) = OneShot(gate);
+        using var turnSlot = (await gate.AcquireAsync(Local, 1, 4, TimeSpan.FromMinutes(1), default)).Slot;
+
+        var act = () => runner.RunAsync("p", LocalModel);
+
+        await act.Should().ThrowAsync<LocalEngineBusyException>("ход держит единственный слот провайдера");
+        launcher.ActiveAtStart.Should().Be(-1, "CLI one-shot не запускался");
+        gate.ActiveFor(Local).Should().Be(1, "отказанный one-shot счётчик не трогает");
+    }
+
+    [Fact]
+    public async Task OneShotНаЛокали_СлотЗанятВоВремяЗапуска_ИОсвобождаетсяПоВыходу()
+    {
+        var gate = new LocalEngineBusyTracker(_clock);
+        var (runner, launcher) = OneShot(gate);
+
+        var act = () => runner.RunAsync("p", LocalModel);
+
+        await act.Should().ThrowAsync<MarkerStartException>();
+        launcher.ActiveAtStart.Should().Be(1, "one-shot занимает слот в том же счётчике, что и ходы");
+        gate.Active.Should().Be(0, "на исключении слот отпущен");
     }
 }
